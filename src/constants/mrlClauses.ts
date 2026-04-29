@@ -66,7 +66,7 @@ export const MRL_CLAUSES_TEMPLATE: MRLClause[] = [
     id: "clause-08",
     title: "Unrestricted Access to Information",
     selected: true,
-    text: `We have provided you with:\n\n(a) Access to all information of which we are aware that is relevant to the preparation of the financial statements, such as records, documentation and other matters;\n\n(b) Additional information that you have requested from us for the purpose of the audit; and\n\n(c) Unrestricted access to persons within the entity from whom you determined it necessary to obtain audit evidence.`,
+    text: `(a) Access to all information of which we are aware that is relevant to the preparation of the financial statements, such as records, documentation and other matters;\n\n(b) Additional information that you have requested from us for the purpose of the audit; and\n\n(c) Unrestricted access to persons within the entity from whom you determined it necessary to obtain audit evidence.`,
   },
   {
     id: "clause-09",
@@ -179,4 +179,4 @@ export const MRL_CLAUSES_TEMPLATE: MRLClause[] = [
 ];
 
 /** Default opening paragraph with [YEAR] placeholder. */
-export const MRL_OPENING_PARA_TEMPLATE = `In connection with the Statutory Audit of the financial statements of our company as at 31st March, [YEAR], we acknowledge our responsibility for preparation of financial statements in accordance with the requirements of the Companies Act, 2013 and recognized accounting policies and practices, including mandatory Accounting Standards referred to in section 133 of the Companies Act, 2013. We hereby, confirm to the best of our knowledge and belief, the following representations:`;
+export const MRL_OPENING_PARA_TEMPLATE = `In connection with the Statutory Audit of the financial statements of our company as at 31st March, [YEAR], we acknowledge our responsibility for preparation of financial statements in accordance with the requirements of the Companies Act, 2013 (or other relevant statute, as applicable) and recognized accounting policies and practices, including mandatory Accounting Standards referred to in section 133 of the Companies Act, 2013 (in case of Companies) and Accounting Standards issued by the Institute of Chartered Accountants of India (in case other than companies). We hereby, confirm to the best of our knowledge and belief, the following representations:`;

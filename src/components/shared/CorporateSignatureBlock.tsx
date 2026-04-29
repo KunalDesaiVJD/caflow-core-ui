@@ -23,13 +23,12 @@ interface FirmContext {
   partnerMemNo: string;
 }
 
+interface Director { name: string; din: string; }
+
 interface DirectorContext {
-  dir1Name: string;
-  dir1Din:  string;
-  dir2Name: string;
-  dir2Din:  string;
-  place:    string;
-  date:     string;   // ISO yyyy-mm-dd
+  directors: Director[];
+  place:     string;
+  date:      string;
 }
 
 interface Props {
@@ -57,22 +56,35 @@ export function CorporateSignatureBlock({
     firmName: "", firmRegNo: "", partnerName: "", partnerMemNo: "",
   });
   const [dir, setDir] = useState<DirectorContext>(() => {
-    if (typeof window === "undefined") {
-      return { dir1Name: "", dir1Din: "", dir2Name: "", dir2Din: "", place: "Ahmedabad", date: new Date().toISOString().slice(0, 10) };
-    }
+    const fallback: DirectorContext = {
+      directors: [{ name: "", din: "" }, { name: "", din: "" }],
+      place: "Ahmedabad",
+      date: new Date().toISOString().slice(0, 10),
+    };
+    if (typeof window === "undefined") return fallback;
     try {
       const raw = localStorage.getItem(DIR_KEY(engagementId));
       const parsed = raw ? JSON.parse(raw) : {};
+      let directors: Director[];
+      if (Array.isArray(parsed.directors) && parsed.directors.length > 0) {
+        // New format
+        directors = parsed.directors;
+      } else if (parsed.dir1Name !== undefined) {
+        // Backward-compat: old flat format
+        directors = [
+          { name: parsed.dir1Name ?? "", din: parsed.dir1Din ?? "" },
+          { name: parsed.dir2Name ?? "", din: parsed.dir2Din ?? "" },
+        ];
+      } else {
+        directors = [{ name: "", din: "" }, { name: "", din: "" }];
+      }
       return {
-        dir1Name: parsed.dir1Name ?? "",
-        dir1Din:  parsed.dir1Din  ?? "",
-        dir2Name: parsed.dir2Name ?? "",
-        dir2Din:  parsed.dir2Din  ?? "",
-        place:    localStorage.getItem(PLACE_KEY(engagementId)) ?? "Ahmedabad",
-        date:     localStorage.getItem(DATE_KEY(engagementId))  ?? new Date().toISOString().slice(0, 10),
+        directors,
+        place: localStorage.getItem(PLACE_KEY(engagementId)) ?? "Ahmedabad",
+        date:  localStorage.getItem(DATE_KEY(engagementId))  ?? new Date().toISOString().slice(0, 10),
       };
     } catch {
-      return { dir1Name: "", dir1Din: "", dir2Name: "", dir2Din: "", place: "Ahmedabad", date: new Date().toISOString().slice(0, 10) };
+      return fallback;
     }
   });
 
@@ -84,7 +96,7 @@ export function CorporateSignatureBlock({
       try {
         const { data: eng } = await (supabase as any)
           .from("audit_engagements")
-          .select("audit_firm_id, signing_partner_name, signing_partner_membership_no")
+          .select("audit_firm_id, signing_partner_name, signing_partner_membership_no, questionnaire_answers")
           .eq("id", engagementId)
           .single();
         const firmId = eng?.audit_firm_id;
@@ -105,6 +117,16 @@ export function CorporateSignatureBlock({
             partnerName:  eng?.signing_partner_name ?? "",
             partnerMemNo: eng?.signing_partner_membership_no ?? "",
           });
+          // Auto-populate directors from Block C if localStorage is empty
+          const engDirs: Director[] = ((eng?.questionnaire_answers as any)?.directors ?? [])
+            .map((d: any) => ({ name: d.name ?? "", din: d.din ?? "" }));
+          if (engDirs.length > 0) {
+            setDir(prev => {
+              const anyFilled = prev.directors.some(d => d.name.trim() || d.din.trim());
+              if (anyFilled) return prev; // keep localStorage data
+              return { ...prev, directors: engDirs };
+            });
+          }
         }
       } catch { /* keep blanks */ }
     })();
@@ -116,12 +138,19 @@ export function CorporateSignatureBlock({
     setDir(prev => {
       const next = { ...prev, ...patch };
       try {
-        localStorage.setItem(DIR_KEY(engagementId), JSON.stringify({
-          dir1Name: next.dir1Name, dir1Din: next.dir1Din,
-          dir2Name: next.dir2Name, dir2Din: next.dir2Din,
-        }));
+        localStorage.setItem(DIR_KEY(engagementId), JSON.stringify({ directors: next.directors }));
         localStorage.setItem(PLACE_KEY(engagementId), next.place);
         localStorage.setItem(DATE_KEY(engagementId),  next.date);
+      } catch { /* ignore quota */ }
+      return next;
+    });
+  };
+  const updateDirectorField = (idx: number, field: keyof Director, val: string) => {
+    setDir(prev => {
+      const directors = prev.directors.map((d, i) => i === idx ? { ...d, [field]: val } : d);
+      const next = { ...prev, directors };
+      try {
+        localStorage.setItem(DIR_KEY(engagementId), JSON.stringify({ directors: next.directors }));
       } catch { /* ignore quota */ }
       return next;
     });
@@ -146,53 +175,44 @@ export function CorporateSignatureBlock({
         </div>
       </div>
 
-      {/* Three signature columns */}
-      <div className="grid grid-cols-3 gap-x-6 pt-6">
+      {/* Signature columns: Partner + N Directors */}
+      <div
+        className="gap-x-6 pt-6"
+        style={{ display: "grid", gridTemplateColumns: `repeat(${1 + Math.max(1, dir.directors.length)}, minmax(0, 1fr))` }}
+      >
         {/* Partner */}
         <div className="space-y-0.5">
           <div className="font-bold">{firm.partnerName || "[Signing Partner / Proprietor]"}</div>
           <div>Partner</div>
           <div>Membership No.: {firm.partnerMemNo || "—"}</div>
         </div>
-        {/* Director 1 */}
-        <div className="space-y-1">
-          {RW(
-            <input type="text" placeholder="[Director Name]" value={dir.dir1Name}
-              onChange={(e) => updateDir({ dir1Name: e.target.value })}
-              className={cn(editableCls, "w-full font-bold")} />,
-            dir.dir1Name)}
-          <div>Director</div>
-          <div className="flex items-center gap-1">
-            <span className="shrink-0">DIN:</span>
+        {/* Directors — dynamic */}
+        {dir.directors.map((d, idx) => (
+          <div key={idx} className="space-y-1">
             {RW(
-              <input type="text" placeholder="—" value={dir.dir1Din}
-                onChange={(e) => updateDir({ dir1Din: e.target.value })}
-                className={cn(editableCls, "flex-1")} />,
-              dir.dir1Din)}
+              <input type="text" placeholder="[Director Name]" value={d.name}
+                onChange={(e) => updateDirectorField(idx, "name", e.target.value)}
+                className={cn(editableCls, "w-full font-bold")} />,
+              d.name)}
+            <div>Director</div>
+            <div className="flex items-center gap-1">
+              <span className="shrink-0">DIN:</span>
+              {RW(
+                <input type="text" placeholder="—" value={d.din}
+                  onChange={(e) => updateDirectorField(idx, "din", e.target.value)}
+                  className={cn(editableCls, "flex-1")} />,
+                d.din)}
+            </div>
           </div>
-        </div>
-        {/* Director 2 */}
-        <div className="space-y-1">
-          {RW(
-            <input type="text" placeholder="[Director Name]" value={dir.dir2Name}
-              onChange={(e) => updateDir({ dir2Name: e.target.value })}
-              className={cn(editableCls, "w-full font-bold")} />,
-            dir.dir2Name)}
-          <div>Director</div>
-          <div className="flex items-center gap-1">
-            <span className="shrink-0">DIN:</span>
-            {RW(
-              <input type="text" placeholder="—" value={dir.dir2Din}
-                onChange={(e) => updateDir({ dir2Din: e.target.value })}
-                className={cn(editableCls, "flex-1")} />,
-              dir.dir2Din)}
-          </div>
-        </div>
+        ))}
       </div>
 
-      {/* Place + Date row — repeated under each of the three columns */}
-      <div className="grid grid-cols-3 gap-x-6 pt-2">
-        {[0, 1, 2].map(i => (
+      {/* Place + Date row — repeated under each column */}
+      <div
+        className="gap-x-6 pt-2"
+        style={{ display: "grid", gridTemplateColumns: `repeat(${1 + Math.max(1, dir.directors.length)}, minmax(0, 1fr))` }}
+      >
+        {Array.from({ length: 1 + Math.max(1, dir.directors.length) }).map((_, i) => (
           <div key={i} className="space-y-0.5">
             <div className="flex items-center gap-1">
               <span className="shrink-0">Place:</span>

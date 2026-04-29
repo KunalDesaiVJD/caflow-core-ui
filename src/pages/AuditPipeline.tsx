@@ -202,6 +202,7 @@ export default function AuditPipeline() {
     audit_type: "statutory", entity_type: "company", audit_firm_id: "", partner_id: "", partner_name: "",
   });
   const [questionnaire, setQuestionnaire] = useState<Record<string, string>>({});
+  const [directors, setDirectors] = useState<{name:string;din:string}[]>([{name:"",din:""}]);
   const [planning, setPlanning] = useState({
     materiality: "", perf_materiality_pct: "75", team_members: [] as string[],
     key_areas: "", risk_profile: "medium", risk_justification: "",
@@ -497,7 +498,11 @@ export default function AuditPipeline() {
       partner_name: engagement.partner_name || "",
     });
     if (engagement.questionnaire_answers && typeof engagement.questionnaire_answers === "object") {
-      setQuestionnaire(engagement.questionnaire_answers as Record<string, string>);
+      const qa = engagement.questionnaire_answers as any;
+      setQuestionnaire(qa as Record<string, string>);
+      if (Array.isArray(qa?.directors) && qa.directors.length > 0) {
+        setDirectors(qa.directors);
+      }
     }
     if (engagement.materiality) {
       const m = engagement.materiality as any;
@@ -589,6 +594,10 @@ export default function AuditPipeline() {
   }, [form1A.entity_type, form1A.audit_type, questionnaire]);
 
   const setQ = (key: string, val: string) => setQuestionnaire(q => ({ ...q, [key]: val }));
+  const addDirector = () => setDirectors(d => [...d, {name:"",din:""}]);
+  const removeDirector = (idx: number) => setDirectors(d => d.filter((_,i)=>i!==idx));
+  const updateDirector = (idx: number, field: "name"|"din", val: string) =>
+    setDirectors(d => d.map((item,i) => i===idx ? {...item,[field]:val} : item));
 
   // ─── Validation ───
   const block1AValid = form1A.client_id && form1A.financial_year && form1A.entity_type && form1A.audit_type && form1A.audit_firm_id;
@@ -738,7 +747,7 @@ export default function AuditPipeline() {
       period_label: form1A.period_label || null,
       audit_firm_id: form1A.audit_firm_id || null,
       partner_name:  form1A.partner_name  || null,
-      questionnaire_answers: questionnaire,
+      questionnaire_answers: { ...questionnaire, directors },
       // Sync PY data-source choice to the dedicated column so Stage 10 can
       // query it without parsing questionnaire JSON. Map questionnaire values
       // to canonical py_source strings (prior_engagement | py_shell | manual | none).
@@ -1354,6 +1363,46 @@ export default function AuditPipeline() {
                           value={questionnaire.cash_flow_applicable || ""}
                           onChange={v => setQ("cash_flow_applicable", v)}
                         />
+
+                        {/* ── Director Details ── */}
+                        <div className="space-y-2 pt-1">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <Label className="text-sm font-medium">Director Details</Label>
+                              <p className="text-xs text-muted-foreground mt-0.5">
+                                Auto-filled in Stage 7 &amp; Stage 8 signature blocks
+                              </p>
+                            </div>
+                            <Button type="button" variant="outline" size="sm" onClick={addDirector} className="gap-1">
+                              <Plus size={13} /> Add Director
+                            </Button>
+                          </div>
+                          {directors.map((dir, idx) => (
+                            <div key={idx} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
+                              <Input
+                                placeholder="Director Full Name"
+                                value={dir.name}
+                                onChange={e => updateDirector(idx, "name", e.target.value)}
+                                className="h-8 text-sm"
+                              />
+                              <Input
+                                placeholder="DIN (e.g. 02695237)"
+                                value={dir.din}
+                                onChange={e => updateDirector(idx, "din", e.target.value)}
+                                className="h-8 text-sm font-mono"
+                              />
+                              {directors.length > 1 && (
+                                <Button
+                                  type="button" variant="ghost" size="sm"
+                                  onClick={() => removeDirector(idx)}
+                                  className="h-8 w-8 p-0 text-destructive hover:bg-destructive/10"
+                                >
+                                  ×
+                                </Button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
                       </AccordionContent>
                     </AccordionItem>
                   )}

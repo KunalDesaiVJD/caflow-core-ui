@@ -12,11 +12,10 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import {
-  Save, Loader2, CheckSquare, Square, ClipboardList,
-  FileDown, FileText,
+  Save, Loader2, ClipboardList,
+  FileDown, FileText, ChevronDown, ChevronUp,
 } from "lucide-react";
 import { MRL_CLAUSES_TEMPLATE, MRL_OPENING_PARA_TEMPLATE, type MRLClause } from "@/constants/mrlClauses";
 import { getBSDate, getAuditYear } from "@/utils/entityUtils";
@@ -127,6 +126,8 @@ export function MRLTab({ engagementId, engagement }: Props) {
   const [clientDetails, setClientDetails] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [openItems, setOpenItems] = useState<string[]>([]);
+  const allExpanded = openItems.length === clauses.length;
 
   // ── Fetch client details (CIN, address) ──
   useEffect(() => {
@@ -184,14 +185,29 @@ export function MRLTab({ engagementId, engagement }: Props) {
         );
       }
       if (data.header_data) {
-        setHeader((prev) => ({ ...prev, ...data.header_data }));
+        const saved = data.header_data as Partial<HeaderData>;
+        const engDirs: {name:string;din:string}[] = (engagement as any)?.questionnaire_answers?.directors ?? [];
+        setHeader((prev) => ({
+          ...prev,
+          ...saved,
+          // Auto-populate directors from Block C if not already saved in MRL
+          director1Name: saved.director1Name || engDirs[0]?.name || "",
+          director1Din:  saved.director1Din  || engDirs[0]?.din  || "",
+          director2Name: saved.director2Name || engDirs[1]?.name || "",
+          director2Din:  saved.director2Din  || engDirs[1]?.din  || "",
+        }));
       }
     } else {
-      // First load: pre-fill opening para with year
+      // First load: pre-fill opening para with year + directors from Block C
       setClauses(buildDefaultClauses());
+      const engDirs: {name:string;din:string}[] = (engagement as any)?.questionnaire_answers?.directors ?? [];
       setHeader((prev) => ({
         ...prev,
         openingPara: MRL_OPENING_PARA_TEMPLATE.replace(/\[YEAR\]/g, auditYear),
+        director1Name: engDirs[0]?.name || "",
+        director1Din:  engDirs[0]?.din  || "",
+        director2Name: engDirs[1]?.name || "",
+        director2Din:  engDirs[1]?.din  || "",
       }));
     }
     setLoading(false);
@@ -331,13 +347,13 @@ export function MRLTab({ engagementId, engagement }: Props) {
           </Badge>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" onClick={selectAll} className="gap-1">
-            <CheckSquare className="w-4 h-4" /> Select All
+          <Button
+            variant="outline" size="sm" className="gap-1"
+            onClick={() => setOpenItems(allExpanded ? [] : clauses.map(c => c.id))}
+          >
+            {allExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+            {allExpanded ? "Collapse All" : "Expand All"}
           </Button>
-          <Button variant="outline" size="sm" onClick={deselectAll} className="gap-1">
-            <Square className="w-4 h-4" /> Deselect All
-          </Button>
-          <Separator orientation="vertical" className="h-8" />
           <Button variant="outline" size="sm" onClick={handleExportPdf} className="gap-1">
             <FileDown className="w-4 h-4" /> Export PDF
           </Button>
@@ -446,7 +462,7 @@ export function MRLTab({ engagementId, engagement }: Props) {
       </div>
 
       {/* ── Clauses ── */}
-      <Accordion type="multiple" className="space-y-2">
+      <Accordion type="multiple" value={openItems} onValueChange={setOpenItems} className="space-y-2">
         {clauses.map((clause, idx) => {
           const clauseNum = idx + 1;
           const isDisabled = !clause.selected;
@@ -492,30 +508,15 @@ export function MRLTab({ engagementId, engagement }: Props) {
                 </div>
               </AccordionTrigger>
 
-              <AccordionContent className="px-4 pb-4 pt-1 space-y-3">
-                {/* Clause text display (with orange inline input for CASH_AMOUNT) */}
-                <div className="rounded bg-muted/40 px-3 py-2">
-                  <ClauseTextDisplay
-                    text={clause.text}
-                    cashAmount={header.cashAmount}
-                    onCashAmountChange={(v) => setH("cashAmount", v)}
-                    disabled={isDisabled}
-                  />
-                </div>
-
-                {/* Editable clause text — always visible */}
-                <div>
-                  <Textarea
-                    value={clause.text}
-                    onChange={(e) => updateText(clause.id, e.target.value)}
-                    rows={6}
-                    className="text-sm resize-y font-mono"
-                    disabled={isDisabled}
-                  />
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Use <code className="text-orange-500">[CASH_AMOUNT]</code> to insert the cash inline input.
-                  </p>
-                </div>
+              <AccordionContent className="px-4 pb-3 pt-1">
+                <textarea
+                  value={clause.text}
+                  onChange={(e) => updateText(clause.id, e.target.value)}
+                  disabled={isDisabled}
+                  rows={Math.max(3, clause.text.split("\n").length + 1)}
+                  className="w-full text-sm text-foreground leading-relaxed bg-transparent resize-none border-0 p-0 focus:outline-none focus:ring-0 focus:shadow-none cursor-text disabled:opacity-40 disabled:cursor-default"
+                  style={{ outline: "none", boxShadow: "none" }}
+                />
               </AccordionContent>
             </AccordionItem>
           );
