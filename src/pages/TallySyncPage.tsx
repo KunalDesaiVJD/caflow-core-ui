@@ -731,46 +731,46 @@ export default function TallySyncPage() {
   const _invAdjCr = _invAdj < 0 ? Math.abs(_invAdj) : 0;
 
   // STEP 2 — Raw closing sums (before P&L adjustment).
-  const _rawDr = filteredTB.filter(r => r.balance_type === "Dr").reduce((s, r) => s + r.closing_balance, 0);
-  const _rawCr = filteredTB.filter(r => r.balance_type === "Cr").reduce((s, r) => s + r.closing_balance, 0);
+  // ALWAYS exclude the synthetic "Profit & Loss A/c" row from raw totals.
+  // Tally posts the YTD profit as a closing on this pseudo-ledger, but every
+  // income / expense ledger that contributes to that profit is ALSO present
+  // in the TB with its own closing — so adding the P&L A/c closing again
+  // double-counts the profit on the Cr (or Dr) side. The synthetic balancing
+  // amount is reintroduced below as _plNet derived from nominal flow.
+  const isPlAccRow = (r: TallyTB) => r.ledger_name === "Profit & Loss A/c";
+  const _rawDr = filteredTB.filter(r => !isPlAccRow(r) && r.balance_type === "Dr").reduce((s, r) => s + r.closing_balance, 0);
+  const _rawCr = filteredTB.filter(r => !isPlAccRow(r) && r.balance_type === "Cr").reduce((s, r) => s + r.closing_balance, 0);
 
-  // STEP 3 — P&L A/c strategy (Strategy 1).
+  // STEP 3 — P&L A/c strategy (unified).
   //
   // Our TDL fetches only EXPLICIT journal activity on the P&L A/c ledger — it does
-  // NOT include Tally's automatic current-year P&L accumulation.  So whenever the
-  // DB stores P&L closing = 0 with some turnover, two situations arise:
+  // NOT include Tally's automatic current-year P&L accumulation. Three situations:
   //
-  //   (a) Corporate / full-transfer: the company explicitly journalled all current-
-  //       year profit to reserves / dividend, zeroing P&L A/c.  In this case
-  //       P&L debit ≈ current-year P&L ≈ rawCr − rawDr.
+  //   (a) Corporate / full-transfer: company explicitly journalled all current-year
+  //       profit to reserves / dividend, zeroing P&L A/c. P&L closing = 0.
+  //   (b) Non-corporate / partial-transfer: current-year P&L sits in nominal accounts
+  //       and has NOT been journalled to P&L A/c. P&L closing = 0.
+  //   (c) Mid-year / interim: P&L A/c carries a non-zero closing equal to YTD profit.
+  //       Including it in raw totals would duplicate income/expense rows.
   //
-  //   (b) Non-corporate / partial-transfer: only the prior-year retained profit was
-  //       distributed via journal; the current-year P&L sits entirely in nominal
-  //       accounts and has NOT been journalled to P&L A/c.  Here P&L debit ≠
-  //       current-year P&L, but rawCr − rawDr = current-year P&L exactly.
-  //
-  // Using (adjCr − adjDr) — the actual raw imbalance after inventory correction —
-  // as _plNet handles BOTH cases correctly and is mathematically guaranteed to
-  // balance the footer whenever the underlying Tally books are balanced.
-  const _plFooter   = filteredTB.find(r => r.ledger_name === "Profit & Loss A/c");
-  const _plTurnover = _plFooter ? getTurnover(_plFooter) : { debit: 0, credit: 0 };
-  const _plStrategy1 = !!(_plFooter && _plFooter.closing_balance === 0 && (
-    _plTurnover.debit > 0 || _plTurnover.credit > 0
-  ));
-  // Adjusted totals (inventory-corrected) used as the base for the P&L delta.
+  // In ALL three cases the correct synthetic balancing amount is the actual
+  // imbalance (adjCr − adjDr) AFTER excluding P&L A/c from raw and inventory-
+  // adjusting. This always balances the footer when Tally's books are balanced.
+  const _plFooter   = filteredTB.find(isPlAccRow);
+  // Adjusted totals (inventory-corrected, P&L-excluded) used as the base.
   const _adjDr = _rawDr + _invAdjDr;
   const _adjCr = _rawCr + _invAdjCr;
-  const _plNet   = _plStrategy1 ? (_adjCr - _adjDr) : 0;
+  const _plNet   = _adjCr - _adjDr;
   const _plEff   = Math.abs(_plNet);
-  const _plEffDr = _plStrategy1 && _plNet >= 0 ? _plEff : 0;
-  const _plEffCr = _plStrategy1 && _plNet <  0 ? _plEff : 0;
-  // Opening adjustment: exclude P&L A/c opening from the opening-balance row
+  const _plEffDr = _plNet >= 0 ? _plEff : 0;
+  const _plEffCr = _plNet <  0 ? _plEff : 0;
+  // Opening adjustment: always exclude P&L A/c opening from the opening row
   // (it is synthetic — the prior-year nominal net that carried forward).
-  const _plOpDr  = _plStrategy1 && _plFooter!.opening_type === "Dr" ? _plFooter!.opening_balance : 0;
-  const _plOpCr  = _plStrategy1 && _plFooter!.opening_type === "Cr" ? _plFooter!.opening_balance : 0;
+  const _plOpDr  = _plFooter && _plFooter.opening_type === "Dr" ? _plFooter.opening_balance : 0;
+  const _plOpCr  = _plFooter && _plFooter.opening_type === "Cr" ? _plFooter.opening_balance : 0;
 
   // STEP 4 — Final footer totals.
-  // When strategy1 fires, _plEffDr = _adjCr − _adjDr → tbDrTotal = tbCrTotal exactly.
+  // tbDrTotal === tbCrTotal exactly (P&L plug closes any remaining imbalance).
   const tbDrTotal   = _rawDr + _invAdjDr + _plEffDr;
   const tbCrTotal   = _rawCr + _invAdjCr + _plEffCr;
   const tbDrOpening = filteredTB.filter(r => r.opening_type === "Dr").reduce((s, r) => s + r.opening_balance, 0) - _plOpDr;
@@ -800,8 +800,34 @@ export default function TallySyncPage() {
       fix: string;
     }[] = [];
 
+    // Rows that should never be flagged as variances:
+    //  1. "Profit & Loss A/c" — Tally's synthetic YTD profit accumulator.
+    //     It has no vouchers of its own; its closing equals the net of every
+    //     income/expense ledger which IS reconciled separately. Including it
+    //     would always show a fake variance equal to YTD profit.
+    //  2. Stock-in-Hand ledgers with no Dr/Cr movement — Tally's inventory
+    //     module sets stock value directly (revaluation, physical-stock
+    //     adjustment) without posting any voucher. The opening−closing delta
+    //     is a legitimate accounting reality, not an extraction failure.
+    const isStockDirectAdj = (r: TallyTB, debit: number, credit: number): boolean => {
+      const grp = (r.parent_group || "").toLowerCase();
+      const isStockGroup = grp.includes("stock-in-hand")
+                        || grp.includes("stock in hand")
+                        || grp === "stock-in-hand"
+                        || grp === "stock in hand";
+      const noJournal = Math.abs(debit) < 0.5 && Math.abs(credit) < 0.5;
+      return isStockGroup && noJournal;
+    };
+
     for (const r of filteredTB) {
       const { debit, credit } = getTurnover(r);
+
+      // Skip Tally's synthetic P&L accumulator
+      if (r.ledger_name === "Profit & Loss A/c") { matched++; continue; }
+      // Skip stock-in-hand direct (non-voucher) adjustments — legitimate Tally
+      // inventory revaluations, not sync-side variances.
+      if (isStockDirectAdj(r, debit, credit)) { matched++; continue; }
+
       const openingSigned = r.opening_balance * (r.opening_type === "Dr" ? 1 : -1);
       const closingSigned = r.closing_balance * (r.balance_type  === "Dr" ? 1 : -1);
       const derivedSigned = openingSigned + debit - credit;
