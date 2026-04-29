@@ -150,6 +150,30 @@ export const NOTE_SMART_MAP: Record<string, SmartRule[]> = {
     { rowId: "unsec_prepaid",  keywords: ["prepaid expense", "prepaid"] },
     { rowId: "unsec_related",  keywords: ["advance to director", "advance to partner", "advance to related", "advance to associate"] },
   ],
+
+  // ── Borrowings (Pattern A — splits into secured / unsecured sections) ────────
+  borrowings: [
+    // Secured — bank/FI term loans
+    { rowId: "sec_term_bank",   keywords: ["secured term loan", "secured bank loan", "secured tl", "term loan from bank", "bank term loan", "working capital term loan"] },
+    { rowId: "sec_demand_bank", keywords: ["cash credit", " cc ", "overdraft", " od "] },
+    { rowId: "sec_term_fi",     keywords: ["loan from nbfc", "loan from finance", "finance company loan", "nbfc loan"] },
+    { rowId: "sec_related",     keywords: ["secured loan from director", "secured loan from partner", "secured loan from promoter", "secured director", "secured partner"] },
+    // Unsecured — related parties (director/partner/family loans most specific — keep before catch-alls)
+    { rowId: "unsec_related",   keywords: [
+        "loan from director", "director loan", "director's loan",
+        "loan from partner", "partner loan", "partner's loan",
+        "loan from promoter", "promoter loan",
+        "loan from shareholder", "shareholder loan",
+        "loan from relative", "relative loan",
+        "loan from proprietor", "proprietor loan",
+        "loan from family", "family loan",
+        "loan from member", "huf loan", "loan from huf",
+        "unsecured loan from director", "unsecured loan from partner",
+      ] },
+    // Unsecured — bank/FI (less common but possible)
+    { rowId: "unsec_term_bank", keywords: ["unsecured term loan from bank", "unsecured bank loan", "unsecured tl"] },
+    { rowId: "unsec_term_fi",   keywords: ["unsecured nbfc", "unsecured finance company"] },
+  ],
 };
 
 /** Normalise a ledger name for keyword matching. */
@@ -605,10 +629,16 @@ export async function nceAutoPopulate(
         if (totalLt > 0) { newCy[id + "_lt"] = totalLt; newPy[id + "_lt"] = pyForCustomRow(noteType, id, label, "_lt"); }
         if (totalSt > 0) { newCy[id + "_st"] = totalSt; newPy[id + "_st"] = pyForCustomRow(noteType, id, label, "_st"); }
 
-        // For borrowings, all unmatched are unsecured by nature
-        const section = noteType === "borrowings" ? "unsecured" : undefined;
+        // For borrowings, all unmatched are unsecured by nature.
+        // Attach them under the "Other unsecured loans" (unsec_other) static row so
+        // they appear nested as children rather than as standalone custom rows.
+        // The section tag keeps them counted in the unsec_total formula.
+        const section    = noteType === "borrowings" ? "unsecured"   : undefined;
+        const attachedTo = noteType === "borrowings" ? "unsec_other" : undefined;
         autoRows.push({
-          id, label, source: "auto", section,
+          id, label, source: "auto",
+          ...(section    ? { section }    : {}),
+          ...(attachedTo ? { attachedTo } : {}),
           sources: ledgers.length > 1
             ? ledgers.map(l => ({
                 ledger: l.ledger,

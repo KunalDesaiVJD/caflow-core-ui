@@ -450,8 +450,8 @@ function CustomRowEditor({
         const slKey = `${row.id}::${s.ledger}`;
         const slLabel = sourceLabelOverrides?.[slKey] ?? s.ledger;
         return (
-        <TableRow key={i} className="bg-blue-50/10 hover:bg-blue-50/20">
-          <TableCell className={cn("py-0.5 pl-10 pr-1 text-xs text-muted-foreground", isPatternA && "border-r")}>
+        <TableRow key={i} className="bg-blue-50/10 border-l-2 border-l-blue-200 hover:bg-blue-50/20">
+          <TableCell className={cn("py-0.5 pl-8 pr-1 text-xs text-muted-foreground", isPatternA && "border-r")}>
             <div className="flex items-center gap-1.5">
               <Input
                 value={slLabel}
@@ -551,10 +551,11 @@ function PatternBTable({
     [config, hiddenRows, labelOverrides],
   );
   // Include OTHER custom rows so "Site Expense - 18%" can move under "Site Expense"
+  // Exclude custom rows that are already attached to something (they're not standalone headings)
   const allHeadingOptions = useMemo(
     () => [
       ...staticHeadingOptions,
-      ...customRows.map(cr => ({ id: cr.id, label: cr.label || "(unnamed row)" })),
+      ...customRows.filter(cr => !cr.attachedTo).map(cr => ({ id: cr.id, label: cr.label || "(unnamed row)" })),
     ],
     [staticHeadingOptions, customRows],
   );
@@ -842,10 +843,11 @@ function PatternATable({
     [config, hiddenRows, labelOverrides],
   );
   // Include custom rows in dropdown so items can move under other custom rows
+  // Exclude custom rows that are already attached to something (they're not standalone headings)
   const allHeadingOptions = useMemo(
     () => [
       ...staticHeadingOptions,
-      ...customRows.map(cr => ({ id: cr.id, label: cr.label || "(unnamed row)" })),
+      ...customRows.filter(cr => !cr.attachedTo).map(cr => ({ id: cr.id, label: cr.label || "(unnamed row)" })),
     ],
     [staticHeadingOptions, customRows],
   );
@@ -900,11 +902,10 @@ function PatternATable({
             : idx === grandTotalIdx
               ? (customBySection["_global"] ?? [])
               : [];
-          // headingOptions for sectionRows: exclude static rows in the same section
-          // but include all custom rows so rows can be grouped under other custom rows
-          const sectionHeadingOptions = row.sectionTag
-            ? allHeadingOptions.filter(opt => !sectionStaticIds[row.sectionTag!]?.has(opt.id))
-            : allHeadingOptions;
+          // headingOptions for sectionRows: static rows are always valid move targets
+          // (the sectionStaticIds filter was wrongly excluding same-section static rows);
+          // already-attached custom rows are already excluded from allHeadingOptions.
+          const sectionHeadingOptions = allHeadingOptions;
           const attachedHere = !row.isSectionHeader && !row.isTotal
             ? customRows.filter(cr => cr.attachedTo === row.id)
             : [];
