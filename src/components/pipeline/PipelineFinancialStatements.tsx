@@ -2634,21 +2634,47 @@ export default function PipelineFinancialStatements({
       return next;
     });
   };
-  // Auto-load directors from mrl_data.header_data once, only if the local
-  // copy is still empty (so user edits aren't clobbered on reload).
+  // Auto-load directors: Block C (questionnaire_answers.directors) takes priority;
+  // falls back to mrl_data.header_data only when Block C is empty.
+  // Always re-runs on mount so stale localStorage is replaced by the canonical source.
   useEffect(() => {
     if (!engagementId) return;
-    if (corpSigDirs.dir1Name || corpSigDirs.dir2Name) return; // already populated
     let cancelled = false;
     (async () => {
       try {
-        const { data: mrl } = await supabase
-          .from("mrl_data")
-          .select("header_data")
-          .eq("engagement_id", engagementId)
-          .maybeSingle();
-        const h = (mrl as any)?.header_data || {};
+        const [engResult, mrlResult] = await Promise.all([
+          supabase
+            .from("audit_engagements")
+            .select("questionnaire_answers")
+            .eq("id", engagementId)
+            .maybeSingle(),
+          supabase
+            .from("mrl_data")
+            .select("header_data")
+            .eq("engagement_id", engagementId)
+            .maybeSingle(),
+        ]);
         if (cancelled) return;
+
+        // Block C directors (always canonical)
+        const blockCDirs: { name: string; din: string }[] =
+          ((engResult.data?.questionnaire_answers as any)?.directors ?? [])
+            .filter((d: any) => d?.name?.trim() || d?.din?.trim());
+
+        if (blockCDirs.length > 0) {
+          const next: DirState = {
+            dir1Name: blockCDirs[0]?.name || "",
+            dir1Din:  blockCDirs[0]?.din  || "",
+            dir2Name: blockCDirs[1]?.name || "",
+            dir2Din:  blockCDirs[1]?.din  || "",
+          };
+          setCorpSigDirs(next);
+          try { window.localStorage.setItem(SIG_DIR_KEY, JSON.stringify(next)); } catch {}
+          return;
+        }
+
+        // Fallback: mrl_data.header_data (only when Block C has no directors)
+        const h = (mrlResult.data as any)?.header_data || {};
         if (h.director1Name || h.director2Name) {
           const next: DirState = {
             dir1Name: h.director1Name || "",
