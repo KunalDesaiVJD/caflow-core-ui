@@ -698,6 +698,24 @@ export async function nceAutoPopulate(
       }
     }
 
+    // Zero-out static row values for any static row that now has attached custom
+    // rows. This prevents double-counting: the formula adds the static row's own
+    // value AND the child custom rows as extras — if the static row has a stale
+    // non-zero value from an old auto-populate run, the total would be inflated.
+    // After this step the static row acts purely as a visual "heading" container.
+    const attachedStaticIds = new Set(
+      [...autoRows, ...manualRows]
+        .map(cr => cr.attachedTo)
+        .filter((id): id is string => !!id),
+    );
+    for (const staticId of attachedStaticIds) {
+      // Clear all variants: plain, _lt, _st
+      for (const suffix of ["", "_lt", "_st"]) {
+        mergedCy[staticId + suffix] = 0;
+        mergedPy[staticId + suffix] = 0;
+      }
+    }
+
     // Apply prior-year CY as PY for static rows if not already set.
     // Math.abs guards against stale negative values that may exist in old data.
     if (pyNotes[noteType]) {

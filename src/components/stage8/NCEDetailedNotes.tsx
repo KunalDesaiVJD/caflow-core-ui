@@ -686,12 +686,12 @@ function PatternBTable({
                   <TableCell className="p-1">
                     {hasAttachedB && !isOpenB
                       ? <span className="text-xs tabular-nums text-right block pr-1">{aggCyB ? fmtNum(aggCyB) : "—"}</span>
-                      : <NumInput value={rawCy[row.id] ?? 0} onChange={v => onChangeCy(row.id, v)} disabled={row.naAll} />}
+                      : <NumInput value={rawCy[row.id] ?? 0} onChange={v => onChangeCy(row.id, v)} disabled={row.naAll || hasAttachedB} />}
                   </TableCell>
                   <TableCell className="p-1">
                     {hasAttachedB && !isOpenB
                       ? <span className="text-xs tabular-nums text-right block pr-1">{aggPyB ? fmtNum(aggPyB) : "—"}</span>
-                      : <NumInput value={rawPy[row.id] ?? 0} onChange={v => onChangePy(row.id, v)} disabled={row.naAll} />}
+                      : <NumInput value={rawPy[row.id] ?? 0} onChange={v => onChangePy(row.id, v)} disabled={row.naAll || hasAttachedB} />}
                   </TableCell>
                   <TableCell className="p-1 text-center w-8">
                     <button type="button" onClick={() => onHideStatic(row.id)}
@@ -1023,26 +1023,29 @@ function PatternATable({
                       />
                     </div>
                   </TableCell>
-                  {/* When collapsed with children: show aggregate as read-only. When expanded or no children: show NumInput */}
+                  {/* When collapsed with children: show aggregate as read-only.
+                      When expanded with children: static row's own NumInput is disabled
+                      to prevent double-counting (children's amounts are separately tracked).
+                      When no children: editable NumInput as normal. */}
                   <TableCell className="p-1">
                     {hasAttachedA && !isOpenA
                       ? <span className="text-xs tabular-nums text-right block pr-1">{aggLtCy ? fmtNum(aggLtCy) : "—"}</span>
-                      : <NumInput value={rawCy[row.id + "_lt"] ?? 0} onChange={v => onChangeCy(row.id + "_lt", v)} disabled={row.naLT} />}
+                      : <NumInput value={rawCy[row.id + "_lt"] ?? 0} onChange={v => onChangeCy(row.id + "_lt", v)} disabled={row.naLT || hasAttachedA} />}
                   </TableCell>
                   <TableCell className="p-1 border-r">
                     {hasAttachedA && !isOpenA
                       ? <span className="text-xs tabular-nums text-right block pr-1">{aggLtPy ? fmtNum(aggLtPy) : "—"}</span>
-                      : <NumInput value={rawPy[row.id + "_lt"] ?? 0} onChange={v => onChangePy(row.id + "_lt", v)} disabled={row.naLT} />}
+                      : <NumInput value={rawPy[row.id + "_lt"] ?? 0} onChange={v => onChangePy(row.id + "_lt", v)} disabled={row.naLT || hasAttachedA} />}
                   </TableCell>
                   <TableCell className="p-1">
                     {hasAttachedA && !isOpenA
                       ? <span className="text-xs tabular-nums text-right block pr-1">{aggStCy ? fmtNum(aggStCy) : "—"}</span>
-                      : <NumInput value={rawCy[row.id + "_st"] ?? 0} onChange={v => onChangeCy(row.id + "_st", v)} disabled={row.naST} />}
+                      : <NumInput value={rawCy[row.id + "_st"] ?? 0} onChange={v => onChangeCy(row.id + "_st", v)} disabled={row.naST || hasAttachedA} />}
                   </TableCell>
                   <TableCell className="p-1">
                     {hasAttachedA && !isOpenA
                       ? <span className="text-xs tabular-nums text-right block pr-1">{aggStPy ? fmtNum(aggStPy) : "—"}</span>
-                      : <NumInput value={rawPy[row.id + "_st"] ?? 0} onChange={v => onChangePy(row.id + "_st", v)} disabled={row.naST} />}
+                      : <NumInput value={rawPy[row.id + "_st"] ?? 0} onChange={v => onChangePy(row.id + "_st", v)} disabled={row.naST || hasAttachedA} />}
                   </TableCell>
                   <TableCell className="p-1 text-center w-8">
                     <button type="button" onClick={() => onHideStatic(row.id)}
