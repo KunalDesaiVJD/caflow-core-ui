@@ -19,6 +19,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import EngagementHeader from "@/components/pipeline/EngagementHeader";
 import { RefreshCw, CheckCircle2, AlertTriangle, ArrowRight, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
+import TallySyncPage from "@/pages/TallySyncPage";
 
 interface Props {
   engagementId: string;
@@ -308,6 +309,28 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
           </div>
         </CardContent>
       </Card>
+
+      {/* ── PY Shell: detailed Trial Balance / Ledgers / Vouchers / Groups view ──
+         For PY shells we render the same rich detailed view that Stage 5 (CY)
+         shows on /audit/tally-sync, but scoped to THIS PY shell's engagement_id
+         (not the globally selected CY engagement). The standalone tally-sync
+         page is engagement-agnostic and would otherwise show CY data here. */}
+      {(engagement as any)?.is_py_shell && isSynced && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2">
+              <RefreshCw className="w-4 h-4" />
+              PY Shell — Detailed Trial Balance &amp; Ledgers
+              <Badge variant="outline" className="ml-2 text-[10px]">
+                FY {engagement?.financial_year ?? "—"}
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <TallySyncPage engagementOverride={engagement} hideHeader />
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

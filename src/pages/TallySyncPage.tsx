@@ -148,8 +148,22 @@ function StatusIcon({ status }: { status: string }) {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function TallySyncPage() {
-  const { selectedEngagementId, selectedEngagement } = useAuditContext();
+interface TallySyncPageProps {
+  /**
+   * Optional engagement override. When provided, the page renders Tally data for
+   * this engagement instead of the globally selected one (useful for embedding in
+   * the PY Shell pipeline so the same rich detailed view used for CY can be
+   * shown for prior-year shells, scoped to the shell's own engagement_id).
+   */
+  engagementOverride?: any | null;
+  /** Hide the EngagementHeader at the top — useful when already shown by parent. */
+  hideHeader?: boolean;
+}
+
+export default function TallySyncPage({ engagementOverride, hideHeader = false }: TallySyncPageProps = {}) {
+  const ctx = useAuditContext();
+  const selectedEngagement   = engagementOverride ?? ctx.selectedEngagement;
+  const selectedEngagementId = engagementOverride?.id ?? ctx.selectedEngagementId;
   const { user } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -1383,8 +1397,8 @@ export default function TallySyncPage() {
   }
 
   return (
-    <div className="p-6 space-y-4 max-w-7xl mx-auto">
-      <EngagementHeader engagement={selectedEngagement} stageNumber={5} stageLabel="Tally Sync" />
+    <div className={hideHeader ? "space-y-4" : "p-6 space-y-4 max-w-7xl mx-auto"}>
+      {!hideHeader && <EngagementHeader engagement={selectedEngagement} stageNumber={5} stageLabel="Tally Sync" />}
 
       {/* ── Sync Errors & Warnings ──────────────────────────────────────────
           Tally itself is internally consistent — every sync error or warning
