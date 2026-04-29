@@ -368,6 +368,22 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
           </Link>
         )}
 
+        {/* Required Documents Master */}
+        {can("Service Masters", "can_view") && (
+          <Link
+            to="/settings/required-docs"
+            className={cn(
+              "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
+              isActive("/settings/required-docs")
+                ? "bg-sidebar-gold/15 text-sidebar-gold"
+                : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+            )}
+          >
+            <FileText size={20} className="shrink-0" />
+            {!collapsed && <span>Required Docs</span>}
+          </Link>
+        )}
+
         {/* Roles & Permissions */}
         {can("Settings", "can_view") && (
           <Link

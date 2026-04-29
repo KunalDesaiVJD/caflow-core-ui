@@ -38,6 +38,7 @@ import { QueryAnalyticsSidebar }        from "./QueryAnalyticsSidebar";
 import { getDraftSuggestion }           from "./QueryDraftEngine";
 import { generateQueryProgressReport }  from "./QueryProgressReport";
 import { QueryCombobox, COMMON_REQUIRED_DOCS } from "./QueryCombobox";
+import { useRequiredDocsMaster } from "@/hooks/useRequiredDocsMaster";
 import { useQueryStatusSync } from "./hooks/useQueryStatusSync";
 import { toast } from "sonner";
 
@@ -551,6 +552,9 @@ export default function QuerySheet({
     data.engagement?.client_id, data.financialYear,
   );
 
+  // Issue 6: firm-scoped Required Documents master (falls back to defaults)
+  const { options: requiredDocOptions } = useRequiredDocsMaster();
+
   // Phase 3D: bidirectional sync
   useQueryStatusSync({ engagementId, queries, syncStatusFromClient });
 
@@ -1047,7 +1051,7 @@ export default function QuerySheet({
                     <td className="border border-border px-2 py-2 align-top">
                       <QueryCombobox value={row.required_documents}
                         onChange={v => updateQuery(row.id, "required_documents", v)}
-                        options={COMMON_REQUIRED_DOCS} placeholder="Documents needed…" />
+                        options={requiredDocOptions} placeholder="Documents needed…" />
                     </td>
 
                     {/* Remark */}
