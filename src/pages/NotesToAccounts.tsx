@@ -13,7 +13,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
-import { Save, Printer, FileText, CheckCircle2, Circle, Plus, Lock, Sparkles, Download, FileType } from "lucide-react";
+import { Save, Printer, FileText, CheckCircle2, Circle, Plus, Lock, Sparkles, Download, FileType, RefreshCw } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { exportToPdf, exportToWord } from "@/lib/exportUtils";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -448,6 +448,7 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise, isCorpor
           <h1 className="text-lg font-semibold">Note {displayNumberMap.get(activeNote) || NOTE_LIST.find((n) => n.key === activeNote)?.num} — {NOTE_LIST.find((n) => n.key === activeNote)?.title}</h1>
           <div className="flex items-center gap-2">
             <FsUnitsToggle />
+            <Button variant="outline" size="sm" onClick={() => window.location.reload()} title="Hard refresh — re-renders with the active unit scale"><RefreshCw className="h-4 w-4 mr-1" /> Refresh</Button>
             <Button variant="outline" size="sm" onClick={saveAll} disabled={saving}><Save className="h-4 w-4 mr-1" /> {saving ? "Saving..." : "Save All"}</Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
