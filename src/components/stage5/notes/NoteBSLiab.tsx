@@ -166,12 +166,15 @@ export default function NoteBSLiab({
   const cyDateLbl = `As at 31-Mar-${cyYear}`;
   const pyDateLbl = `As at 31-Mar-${pyYear}`;
 
-  // Reusable sub-total row (non-editable computed display)
+  // Reusable sub-total row (non-editable computed display).
+  // Mirrors the 6/3/2/1 grid used by ListTable + EditableRow so CY/PY values
+  // line up vertically with the breakup rows above.
   const SubTotalRow = ({ label, cVal, pVal }: { label: string; cVal: number; pVal: number }) => (
     <div className="grid grid-cols-12 gap-2 items-center py-0.5 font-semibold border-t border-dashed border-muted-foreground/30">
       <div className="col-span-6 italic text-muted-foreground text-[10px]">{label}</div>
       <div className="col-span-3 text-right tabular-nums">{formatINR(cVal)}</div>
-      <div className="col-span-3 text-right tabular-nums">{formatINR(pVal)}</div>
+      <div className="col-span-2 text-right tabular-nums">{formatINR(pVal)}</div>
+      <div className="col-span-1" />
     </div>
   );
 

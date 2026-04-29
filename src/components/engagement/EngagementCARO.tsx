@@ -27,6 +27,7 @@
  */
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { CorporateSignatureBlock } from "@/components/shared/CorporateSignatureBlock";
 import { useAuth } from "@/hooks/useAuth";
 import { useAuditTracker } from "@/hooks/useAuditTracker";
 import { Button } from "@/components/ui/button";
@@ -657,16 +658,13 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
         ))}
       </Accordion>
 
-      {/* Signature block */}
-      <Card>
-        <CardContent className="p-4">
-          <SignatureBlock
-            firmName={firmName} firmFRN={firmFRN} partnerName={partnerName}
-            membershipNo={membershipNo} place={place} setPlace={setPlace}
-            reportDate={reportDate} setReportDate={setReportDate}
-          />
-        </CardContent>
-      </Card>
+      {/* Signature block — auditor + Board of Directors (shared component) */}
+      {engagement?.id && (
+        <CorporateSignatureBlock
+          engagementId={engagement.id}
+          companyName={companyName}
+        />
+      )}
 
       {/* Hidden print area for PDF export */}
       <div id="caro-print-area" style={{ display: 'none', padding: '32px', fontFamily: 'Arial, sans-serif', fontSize: '11pt' }}>

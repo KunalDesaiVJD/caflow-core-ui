@@ -11,6 +11,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useTallyEngagementId } from "./useTallyEngagementId";
+import { cleanTallyName } from "@/lib/tallyText";
 
 interface TallyOption {
   name:  string;
@@ -41,7 +42,10 @@ export function useTallyOptions(
       .order("ledger_name")
       .then(({ data }: { data: { ledger_name: string; parent_group: string }[] | null }) => {
         if (!data) return;
-        setRaw(data.map(r => ({ name: r.ledger_name ?? "", group: r.parent_group ?? "" })));
+        setRaw(data.map(r => ({
+          name:  cleanTallyName(r.ledger_name),
+          group: cleanTallyName(r.parent_group),
+        })));
       });
   }, [tallyEngId]);
 
