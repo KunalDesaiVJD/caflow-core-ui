@@ -10,7 +10,7 @@ import { supabase } from "@/integrations/supabase/client";
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
 const EXPENSE_TOKENS = [
-  "expense","indirect","direct","purchase","creditor","manufacturing","trading",
+  "expense","indirect","direct","creditor","manufacturing","trading",
   "administrative","selling","salary","wages","rent","commission","professional",
   "maintenance","contractor","service","freight","transport","advertisement",
   "advertising","outsource","miscellaneous","other","general",
@@ -20,10 +20,23 @@ const SKIP_TOKENS = [
   "fixed assets","investment","duties & taxes","duties and taxes","sundry debtor",
   "stock-in-hand","stock in hand","current asset","loans (liability)","branch","statutory",
 ];
+// Issue 4: exclude goods/inventory purchase groups (covered only under 194Q which
+// is handled separately by section-aware logic).
+const GOODS_TOKENS = [
+  "goods","material","raw material","inventory","stock item","stores",
+  "purchase account","purchase a/c","purchases ",
+];
+function isGoodsGroup(pg: string | null): boolean {
+  if (!pg) return false;
+  const lower = pg.toLowerCase();
+  return GOODS_TOKENS.some(t => lower.includes(t));
+}
 function isExpenseGroup(pg: string | null): boolean {
   if (!pg) return false;
   const lower = pg.toLowerCase();
   if (SKIP_TOKENS.some(t => lower.includes(t))) return false;
+  // Allow services; exclude goods/inventory unless section context is 194Q (checked downstream)
+  if (isGoodsGroup(lower)) return false;
   return EXPENSE_TOKENS.some(t => lower.includes(t));
 }
 
@@ -190,7 +203,8 @@ export async function runAiMapper(params: {
     (existing || []).forEach((r: any) => alreadyMapped.add(r.tb_ledger_name));
   }
 
-  // 4. Match
+  // 4. Match — Issue 3: enforce nameScore ≥ 70; Issue 1: tighten "confirmed"
+  // to require BOTH name AND amount tie-back; Issue 4: 194Q allowed for goods.
   const upsertRows: any[] = [];
   let skipped = 0;
 
@@ -201,6 +215,8 @@ export async function runAiMapper(params: {
     for (const ded of aggDeductees) {
       if (!ded.deductee_name) continue;
       const nameScore = tokenSortRatio(tb.ledger_name, ded.deductee_name);
+      // Issue 3: Require ≥ 70% name similarity
+      if (nameScore < 70) continue;
       const tbActivity = Math.max(tb.debit_amount ?? 0, tb.credit_amount ?? 0);
       const amtScore   = amountRatioScore(tbActivity, ded.total_amount_paid);
       const secScore   = sectionContextScore(tb.parent_group, ded.section_code);
@@ -218,9 +234,12 @@ export async function runAiMapper(params: {
     if (!best) { skipped++; continue; }
 
     const tbActivity = Math.max(tb.debit_amount ?? 0, tb.credit_amount ?? 0);
+    // Issue 1: Confirmed requires BOTH name match (≥90) and amount tie-back (≥75)
+    const bothMatch = best.nameScore >= 90 && best.amtScore >= 75;
     const mapping_status =
-      best.confidence >= 80 ? "confirmed" :
-      best.confidence >= 60 ? "pending"   : "needs_review";
+      bothMatch                    ? "confirmed"   :
+      best.confidence >= 60        ? "pending"     :
+                                     "needs_review";
 
     const reasoning =
       `Name match: ${best.nameScore}%, ` +
@@ -245,19 +264,43 @@ export async function runAiMapper(params: {
     });
   }
 
-  if (upsertRows.length > 0) {
+  // Issue 2: Dedupe rows that map the same deductee from multiple TB ledgers —
+  // prefer the row whose parent group looks like a "creditor / sundry creditor"
+  // (party ledger), so the same expense doesn't appear twice.
+  const byDeductee = new Map<string, any[]>();
+  for (const r of upsertRows) {
+    const k = `${r.tds_deductee_name}|${r.tds_section_code ?? ""}`;
+    if (!byDeductee.has(k)) byDeductee.set(k, []);
+    byDeductee.get(k)!.push(r);
+  }
+  const finalRows: any[] = [];
+  for (const rows of byDeductee.values()) {
+    if (rows.length === 1) { finalRows.push(rows[0]); continue; }
+    const isCreditor = (pg: string | null) => (pg || "").toLowerCase().includes("creditor");
+    const creditorRows = rows.filter(r => isCreditor(r.tb_parent_group));
+    if (creditorRows.length > 0) {
+      // pick highest-confidence creditor row
+      creditorRows.sort((a, b) => b.match_confidence - a.match_confidence);
+      finalRows.push(creditorRows[0]);
+    } else {
+      rows.sort((a, b) => b.match_confidence - a.match_confidence);
+      finalRows.push(rows[0]);
+    }
+  }
+
+  if (finalRows.length > 0) {
     const { error: upsertErr } = await (supabase as any)
       .from("tds_tb_party_mappings")
-      .upsert(upsertRows, { onConflict: "client_id,financial_year,tb_ledger_name,tds_deductee_name" });
+      .upsert(finalRows, { onConflict: "client_id,financial_year,tb_ledger_name,tds_deductee_name" });
     if (upsertErr) throw new Error(`Upsert error: ${upsertErr.message}`);
   }
 
   return {
-    mapped:       upsertRows.length,
+    mapped:       finalRows.length,
     skipped,
-    confirmed:    upsertRows.filter(r => r.mapping_status === "confirmed").length,
-    pending:      upsertRows.filter(r => r.mapping_status === "pending").length,
-    needs_review: upsertRows.filter(r => r.mapping_status === "needs_review").length,
+    confirmed:    finalRows.filter(r => r.mapping_status === "confirmed").length,
+    pending:      finalRows.filter(r => r.mapping_status === "pending").length,
+    needs_review: finalRows.filter(r => r.mapping_status === "needs_review").length,
   };
 }
 
@@ -266,7 +309,9 @@ export async function runAiMapper(params: {
 // ══════════════════════════════════════════════════════════════════════════════
 
 const G1_VARIANCE_AMOUNT_MIN = 10_000;
-const G1_VARIANCE_PCT_MIN    = 0.15;
+// Issue 9: TB activity is GST-inclusive (typical 18%), so allow a 20% tolerance
+// before flagging a Goal-1 existence gap to prevent false positives.
+const G1_VARIANCE_PCT_MIN    = 0.20;
 const G2_TDS_VARIANCE_AMOUNT_MIN = 500;
 const G2_TDS_VARIANCE_PCT_MIN    = 0.05;
 
@@ -388,7 +433,10 @@ export async function runReconEngine(params: {
     const ded = aggDeductees.get(dedKey);
 
     if (goalNumbers.includes(1)) {
-      const bookAmt = mapping.tb_total_debit ?? 0;
+      // Issue 9: TB book amount is GST-inclusive; normalise by stripping a typical
+      // 18 % GST component so the existence comparison is on like-for-like bases.
+      const rawBook = mapping.tb_total_debit ?? 0;
+      const bookAmt = rawBook > 0 ? rawBook / 1.18 : 0;
       const tdsAmt  = ded?.total_amount_paid ?? mapping.tds_total_amount ?? 0;
       if (bookAmt > 0 || tdsAmt > 0) {
         const diff = bookAmt - tdsAmt; const absDiff = Math.abs(diff);
@@ -694,13 +742,15 @@ export async function runDemandCalculator(params: {
   const compDate = computation_date ? new Date(computation_date) : new Date();
 
   // 1. Load applicable flags
+  // Issue 7: Compute demand ONLY where the short_deduction / missing flag has
+  // been explicitly confirmed by the auditor (flag_status = 'accepted').
   const { data: flags, error: flagErr } = await (supabase as any)
     .from("tds_recon_flags")
     .select("*")
     .eq("client_id", client_id)
     .eq("financial_year", financial_year)
     .in("flag_type", ["short_deduction","missing_tds_obligation"])
-    .neq("flag_status", "disregarded");
+    .eq("flag_status", "accepted");
   if (flagErr) throw new Error(flagErr.message);
 
   const sourceFlags = (flags ?? []) as any[];

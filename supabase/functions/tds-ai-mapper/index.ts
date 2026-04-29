@@ -68,7 +68,7 @@ interface MatchResult {
 // Any parent group whose lowercase representation contains one of these tokens
 // is treated as a potential TDS-liable party ledger.
 const EXPENSE_TOKENS = [
-  "expense", "indirect", "direct", "purchase", "creditor",
+  "expense", "indirect", "direct", "creditor",
   "manufacturing", "trading", "administrative", "selling",
   "salary", "wages", "rent", "commission", "professional",
   "maintenance", "contractor", "service", "freight", "transport",
@@ -85,10 +85,17 @@ const SKIP_TOKENS = [
   "loans (liability)", "branch", "statutory",
 ];
 
+// Issue 4: exclude goods/inventory purchase groups (handled by 194Q section logic)
+const GOODS_TOKENS = [
+  "goods", "material", "raw material", "inventory", "stock item", "stores",
+  "purchase account", "purchase a/c", "purchases ",
+];
+
 function isExpenseGroup(pg: string | null): boolean {
   if (!pg) return false;
   const lower = pg.toLowerCase();
   if (SKIP_TOKENS.some(t => lower.includes(t))) return false;
+  if (GOODS_TOKENS.some(t => lower.includes(t))) return false;
   return EXPENSE_TOKENS.some(t => lower.includes(t));
 }
 
@@ -364,6 +371,8 @@ serve(async (req) => {
       for (const ded of aggDeductees) {
         if (!ded.deductee_name) continue;
         const result = computeConfidence(tb, ded);
+        // Issue 3: Require ≥ 70 % name similarity
+        if (result.name_score < 70) continue;
         if (result.confidence < 40) continue;
         if (!best || result.confidence > best.result.confidence) {
           best = { ded, result };
@@ -375,9 +384,12 @@ serve(async (req) => {
       const { ded, result } = best;
       const tbActivity = Math.max(tb.debit_amount ?? 0, tb.credit_amount ?? 0);
 
+      // Issue 1: "confirmed" only when BOTH name AND amount tie back strongly
+      const bothMatch = result.name_score >= 90 && result.amount_score >= 75;
       const mapping_status =
-        result.confidence >= 80 ? "confirmed" :
-        result.confidence >= 60 ? "pending"   : "needs_review";
+        bothMatch                 ? "confirmed" :
+        result.confidence >= 60   ? "pending"   :
+                                    "needs_review";
 
       const reasoning =
         `Name match: ${result.name_score}%, ` +
