@@ -186,15 +186,17 @@ export function MRLTab({ engagementId, engagement }: Props) {
       }
       if (data.header_data) {
         const saved = data.header_data as Partial<HeaderData>;
+        // Block C directors ALWAYS take priority — same rule as CorporateSignatureBlock.
+        // If engagement has directors from questionnaire_answers, use them unconditionally.
+        // Fall back to whatever was saved in header_data only when Block C is empty.
         const engDirs: {name:string;din:string}[] = (engagement as any)?.questionnaire_answers?.directors ?? [];
         setHeader((prev) => ({
           ...prev,
           ...saved,
-          // Auto-populate directors from Block C if not already saved in MRL
-          director1Name: saved.director1Name || engDirs[0]?.name || "",
-          director1Din:  saved.director1Din  || engDirs[0]?.din  || "",
-          director2Name: saved.director2Name || engDirs[1]?.name || "",
-          director2Din:  saved.director2Din  || engDirs[1]?.din  || "",
+          director1Name: engDirs[0]?.name || saved.director1Name || "",
+          director1Din:  engDirs[0]?.din  || saved.director1Din  || "",
+          director2Name: engDirs[1]?.name || saved.director2Name || "",
+          director2Din:  engDirs[1]?.din  || saved.director2Din  || "",
         }));
       }
     } else {
@@ -211,7 +213,8 @@ export function MRLTab({ engagementId, engagement }: Props) {
       }));
     }
     setLoading(false);
-  }, [engagementId, buildDefaultClauses, auditYear]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engagementId, buildDefaultClauses, auditYear, engagement?.questionnaire_answers]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
