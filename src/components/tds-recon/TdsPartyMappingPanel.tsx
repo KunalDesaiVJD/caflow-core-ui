@@ -22,8 +22,9 @@ import {
 } from "@/components/ui/tooltip";
 import {
   Bot, RefreshCw, CheckCircle2, XCircle, Pencil, Save, X,
-  ChevronDown, ChevronRight, Info, Loader2, Search,
+  ChevronDown, ChevronRight, Info, Loader2, Search, ExternalLink,
 } from "lucide-react";
+import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
@@ -396,8 +397,16 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
                       {m.tb_total_debit != null && (
                         <p className="text-[10px] text-muted-foreground">
                           ₹{m.tb_total_debit.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
+                          <span className="text-[9px] italic ml-1">(incl. GST)</span>
                         </p>
                       )}
+                      {/* Issue 5: ledger access link */}
+                      <Link
+                        to={`/audit/stage/5?ledger=${encodeURIComponent(m.tb_ledger_name)}`}
+                        className="inline-flex items-center gap-1 text-[10px] text-blue-600 hover:underline mt-0.5"
+                      >
+                        <ExternalLink size={9} /> View ledger
+                      </Link>
                     </div>
 
                     {/* TDS Deductee */}
