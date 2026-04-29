@@ -506,6 +506,111 @@ export function getLedgersByFsCodes(
 }
 
 // ═════════════════════════════════════════════════════════════════════════
+// Smart-merge — consolidate multiple TB ledgers with similar names into one
+// ═════════════════════════════════════════════════════════════════════════
+//
+// CAFlow auto-populate creates one breakup row per TB ledger by default. For
+// many real-world COAs that produces a long noisy list — e.g. when a firm
+// keeps a separate ledger per TDS section ("TDS Payable 192B", "TDS Payable
+// 194C", "TDS Payable 194I", "TDS Payable 192B - 2425") instead of one
+// consolidated "TDS Payable" head.
+//
+// The merger below consolidates such ledger families:
+//   1. Smart keyword rules (TDS, GST, PF, Professional Tax, ...) collapse all
+//      matching ledgers into one row labelled by the rule (e.g. "TDS Payable").
+//   2. After smart match, ledgers sharing a base head (after stripping year
+//      suffixes like "- 2425", percentages, GST classifiers) merge together.
+//   3. Single-ledger groups pass through unchanged.
+
+interface SmartMergeRule { label: string; keywords: string[] }
+
+const CORP_SMART_MERGE: Record<string, SmartMergeRule[]> = {
+  // Note 9 — Other current liabilities: consolidate statutory dues
+  bs_liab__other_curr_liab: [
+    { label: "TDS Payable", keywords: [
+        "tds", "tax deducted", "tds payable", "tds 192", "tds 194", "tds 195",
+    ] },
+    { label: "GST Payable", keywords: [
+        "gst payable", "output gst", "igst payable", "cgst payable", "sgst payable",
+        "rcm payable", "reverse charge", "gst output",
+    ] },
+    { label: "Provident Fund Payable", keywords: ["provident fund", " pf payable", " pf "] },
+    { label: "Professional Tax Payable", keywords: ["professional tax", "p tax", "ptax"] },
+    { label: "ESIC Payable", keywords: ["esic", "esi contribution"] },
+    { label: "Salary Payable", keywords: ["salary payable", "wages payable", "salary outstanding"] },
+  ],
+  // Note 8 — Trade payables: typically NOT smart-merged (each vendor stays separate)
+  // Note 28 — Other expenses: optional consolidation can be added later
+};
+
+/** Strip year suffixes ("- 2425", "- 2526"), percentages, GST classifiers
+ *  to derive the "base head" of a ledger name. */
+function deriveLedgerBaseHead(name: string): string {
+  return name.trim()
+    .replace(/\s*[-—]\s*\d{4}\s*[-—]\s*\d{2,4}\s*$/, "")  // "- 2024-25"
+    .replace(/\s*[-—]\s*\d{2}\s*[-—]\s*\d{2}\s*$/, "")     // "- 24-25"
+    .replace(/\s*[-—]\s*\d{4}\s*$/, "")                     // "- 2425"
+    .replace(/\s*[-—]\s*\d{2,3}\s*[a-z]\b.*$/i, "")         // "- 192B" left intact only if rule didn't match
+    .replace(/\s*[-—]\s*\d+\s*%.*$/i, "")                   // "- 18%"
+    .replace(/\s*[-—]\s*(urd|reg|regd|registered|unregistered|igst|cgst|sgst|exempt|nil)\b.*$/i, "")
+    .trim();
+}
+
+function smartMatchCorp(ledgerName: string, rules: SmartMergeRule[]): string | null {
+  const norm = " " + ledgerName.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim() + " ";
+  for (const rule of rules) {
+    for (const kw of rule.keywords) {
+      if (norm.includes(kw)) return rule.label;
+    }
+  }
+  return null;
+}
+
+/** Merge similar TB ledgers into consolidated synthetic ledgers. */
+function mergeSimilarLedgers(
+  ledgers: TBLedger[],
+  ruleKey: string | undefined,
+): TBLedger[] {
+  const rules = ruleKey ? CORP_SMART_MERGE[ruleKey] : undefined;
+  if (!ledgers || ledgers.length === 0) return ledgers;
+
+  const groups = new Map<string, TBLedger[]>();
+  for (const l of ledgers) {
+    let key: string;
+    const smart = rules ? smartMatchCorp(l.account_name, rules) : null;
+    if (smart) {
+      key = `__smart__${smart}`;
+    } else {
+      const base = deriveLedgerBaseHead(l.account_name).toLowerCase();
+      key = base.length >= 3 ? `__base__${base}` : `__solo__${l.account_name}`;
+    }
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(l);
+  }
+
+  const out: TBLedger[] = [];
+  for (const [key, members] of groups.entries()) {
+    if (members.length === 1) {
+      out.push(members[0]);
+      continue;
+    }
+    let label: string;
+    if (key.startsWith("__smart__")) {
+      label = key.substring(9);
+    } else {
+      label = deriveLedgerBaseHead(members[0].account_name);
+    }
+    out.push({
+      account_name:    label,
+      account_group:   members[0].account_group,
+      balance:         members.reduce((s, m) => s + (m.balance ?? 0), 0),
+      opening_balance: members.reduce((s, m) => s + (m.opening_balance ?? 0), 0),
+    });
+  }
+  return out;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
 // Fuzzy ledger ↔ template-head matching
 // ═════════════════════════════════════════════════════════════════════════
 
@@ -918,7 +1023,16 @@ export async function autoPopulateNotes(
       // is what drives the editable line items shown under each note (Note
       // 5 lists individual borrowings, Note 29 lists each expense head, etc.)
       // Manual rows from `existing.breakup` are preserved verbatim.
-      const ledgers   = getLedgersByFsCodes(tb, mapping, spec.fsCodes);
+      const rawLedgers = getLedgersByFsCodes(tb, mapping, spec.fsCodes);
+      // Smart-merge similar ledgers (e.g. TDS 192B + TDS 194I → "TDS Payable")
+      // before passing to buildBreakup. Rule key format: `${section}__${rowKey}`.
+      // Same for prior-year TB so merged labels match year-on-year.
+      const ruleKey = `${section}__${rowKey}`;
+      const ledgers = mergeSimilarLedgers(rawLedgers, ruleKey);
+      const pyTBmerged = pyTB ? mergeSimilarLedgers(
+        getLedgersByFsCodes(pyTB, mapping, spec.fsCodes),
+        ruleKey,
+      ) : undefined;
       const rowExist  = options.existing?.[section]?.[rowKey] as any;
       let existingBreak = rowExist?.breakup as BreakupRow[] | undefined;
       // One-time legacy migration: if the engagement was created before the
@@ -931,7 +1045,7 @@ export async function autoPopulateNotes(
       }
       // Pass prior-year TB so PY amounts use FY-1 closing balances, not
       // current-year opening balances (which are 0 for P&L accounts).
-      const breakup = buildBreakup(ledgers, spec.template, existingBreak, pyTB);
+      const breakup = buildBreakup(ledgers, spec.template, existingBreak, pyTBmerged);
 
       out[section][rowKey] = { cy, py, breakup };
     }
