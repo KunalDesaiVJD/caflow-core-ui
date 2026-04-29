@@ -3,12 +3,11 @@ import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
-import { ArrowRight, BookMarked, Shield, Loader2, ClipboardList, Droplets, FileText } from 'lucide-react';
+import { ArrowRight, BookMarked, Shield, Loader2, ClipboardList, FileText } from 'lucide-react';
 import { EngagementCARO } from '@/components/engagement/EngagementCARO';
 import { MRLTab } from '@/components/stage7/MRLTab';
 import { IFCReportTab } from '@/components/stage7/IFCReportTab';
 import { EngagementNotesToAccounts } from '@/components/engagement/EngagementNotesToAccounts';
-import { CashFlowNotesTab } from '@/components/stage7/CashFlowNotesTab';
 import { isCompanyEntity } from '@/utils/entityUtils';
 import { CorporateNTA } from '@/components/engagement/CorporateNTA';
 import EngagementHeader from '@/components/pipeline/EngagementHeader';
@@ -142,13 +141,10 @@ function CorporateStage7Tabs({ engagementId, engagement, activeTab, setActiveTab
       { id: 'iar',      label: 'IAR',               icon: FileText,      show: true },
       { id: 'caro',     label: 'CARO 2020',         icon: Shield,        show: visible(engagement?.caro_applicable) },
       { id: 'ifc',      label: 'IFC Report',        icon: Shield,        show: visible(engagement?.ifc_applicable) },
-      // Cash Flow applies to corporate only; NCE entities use Receipts & Payments format.
-      // This component only mounts when isCorporate === true (see parent), so no extra guard needed.
-      { id: 'cashflow', label: 'Cash Flow Notes',   icon: Droplets,      show: visible(engagement?.cash_flow_applicable) },
       { id: 'mrl',      label: 'MRL',               icon: ClipboardList, show: true },
     ];
     return all.filter(t => t.show);
-  }, [engagement?.caro_applicable, engagement?.ifc_applicable, engagement?.cash_flow_applicable]);
+  }, [engagement?.caro_applicable, engagement?.ifc_applicable]);
 
   // If activeTab vanished (Block C toggled), reset to first available.
   useEffect(() => {
@@ -194,11 +190,6 @@ function CorporateStage7Tabs({ engagementId, engagement, activeTab, setActiveTab
       {tabs.some(t => t.id === 'ifc') && (
         <TabsContent value="ifc" className="mt-4">
           <IFCReportTab engagementId={engagementId} engagement={engagement} />
-        </TabsContent>
-      )}
-      {tabs.some(t => t.id === 'cashflow') && (
-        <TabsContent value="cashflow" className="mt-4">
-          <CashFlowNotesTab engagementId={engagementId} engagement={engagement} />
         </TabsContent>
       )}
       {tabs.some(t => t.id === 'mrl') && (

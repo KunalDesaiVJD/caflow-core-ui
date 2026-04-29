@@ -139,7 +139,47 @@ const CARO_DEFAULT_CONTENT: Record<number, string> = {
   21: `The reporting under Clause 3(xxi) is not applicable in respect of audit of standalone financial statements. Accordingly, this clause is not applicable to the company.`,
 };
 
-// ─── NOT-APPLICABLE paragraph (verbatim from WITHOUT-CARO word file, p.3) ───
+// ─── Default intro text for CARO = Yes (verbatim from CARO word file) ────────
+const CARO_INTRO_DEFAULT =
+`Report on Other Legal and Regulatory Requirements
+
+As required by the Companies (Auditor's Report) Order, 2020 ("the Order") issued by the Central Government in terms Section 143(11) of the Act, we give in the Annexure-A, a statement on the matters specified in paragraphs 3 and 4 of the Order, to the extent applicable.
+
+As required by section 143(3) of the Act, we further report that:
+(a) We have sought and obtained all the information and explanations which to the best of our knowledge and belief were necessary for the purpose of our audit;
+(b) In our opinion proper books of account as required by law have been kept by the Company so far as it appears from our examination of those books;
+(c) The company does not have any branch, this para is not applicable.
+(d) The Balance Sheet and Statement of Profit and Loss and the Cash flow Statement dealt with by this Report are in agreement with the books of account;
+(e) In our opinion, the aforesaid financial statements comply with the Accounting Standards specified under Section 133 of the Act, read with Rule 7 of the Companies (Accounts) Rules 2014.
+(f) On the basis of written representations received from the directors as on March 31, 20XX, and taken on record by the Board of Directors, none of the directors is disqualified as on March 31, 20XX, from being appointed as a director in terms of Section 164(2) of the Act.
+(g) With respect to the adequacy of the internal financial control over financial reporting of the Company and the operating effectiveness of such controls, refer to our separate report in Annexure-B.
+(h) In our opinion and to the best of our information and according to the explanations given to us, we report with respect to other matters to be included in the Auditor's Report in accordance with Rule 11 of the Companies (Audit and Auditors) Rules, 2014 as under:
+(i) The Company does not have any pending litigations which would impact on its financial position.
+(ii) The Company did not have any long-term contracts including derivative contracts for which there were any material foreseeable losses.
+(iii) There were no amounts which were required to be transferred to the Investor Education and Protection Fund by the Company.
+(iv) Based on our examination, the Company has used accounting software for maintaining its books of account, which has a feature of recording audit trail (edit log) facility and as informed by the management the same has operated throughout the year for all relevant transactions recorded in the software.`;
+
+// ─── Full NOT-APPLICABLE text (verbatim from WITHOUT-CARO word file) ─────────
+const CARO_NOT_APPLICABLE_FULL =
+`Report on Other Legal and Regulatory Requirements
+
+The Company is a private limited and falls within exemptions specified under paragraph 2(iv) of the Companies (Auditors Report) Order, 2020. Hence matters specified in paragraph 3 and 4 of the said order issued by the Central Government of India in terms of sub-section (11) of section 143 of the Act, are not enclosed.
+
+As required by section 143(3) of the Act, we further report that:
+(a) We have sought and obtained all the information and explanations which to the best of our knowledge and belief were necessary for the purpose of our audit;
+(b) In our opinion proper books of account as required by law have been kept by the Company so far as it appears from our examination of those books;
+(c) The company does not have any branch, this para is not applicable.
+(d) The Balance Sheet and Statement of Profit and Loss dealt with by this Report are in agreement with the books of account;
+(e) In our opinion, the aforesaid financial statements comply with the Accounting Standards specified under Section 133 of the Act, read with Rule 7 of the Companies (Accounts) Rules 2014.
+(f) On the basis of written representations received from the directors as on March 31, 20XX, and taken on record by the Board of Directors, none of the directors is disqualified as on March 31, 20XX, from being appointed as a director in terms of Section 164(2) of the Act.
+(g) The report on adequacy of the internal financial control over financial reporting is not applicable as the company falls within the exemptions specified under sub-section 3(1) of section 143 of the Act.
+(h) In our opinion and to the best of our information and according to the explanations given to us, we report with respect to other matters to be included in the Auditor's Report in accordance with Rule 11 of the Companies (Audit and Auditors) Rules, 2014 as under:
+(i) The Company does not have any pending litigations which would impact on its financial position.
+(ii) The Company did not have any long-term contracts including derivative contracts for which there were any material foreseeable losses.
+(iii) There were no amounts which were required to be transferred to the Investor Education and Protection Fund by the Company.
+(iv) Based on our examination, the Company has used accounting software for maintaining its books of account, which has a feature of recording audit trail (edit log) facility and as informed by the management the same has operated throughout the year for all relevant transactions recorded in the software.`;
+
+// ─── Legacy single-paragraph NOT-APPLICABLE text (kept for backward-compat) ──
 const CARO_NOT_APPLICABLE_TEXT =
   `The Company is a private limited and falls within exemptions specified ` +
   `under paragraph 2(iv) of the Companies (Auditors Report) Order, 2020. ` +
@@ -182,6 +222,37 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
   );
 
   const isApplicable = engagement?.caro_applicable !== false; // null/undefined → applicable
+
+  // ── Editable intro / 143(3) section ────────────────────────────────────────
+  const introLsKey = `caro_intro_${engagement?.id}`;
+  const [introText, setIntroText] = useState<string>(() => {
+    if (typeof window === "undefined") return "";
+    try {
+      const saved = localStorage.getItem(`caro_intro_${engagement?.id}`);
+      return saved ?? "";
+    } catch { return ""; }
+  });
+  const [editingIntro, setEditingIntro] = useState(false);
+
+  // Load correct default if nothing saved yet
+  useEffect(() => {
+    if (!engagement?.id) return;
+    try {
+      const saved = localStorage.getItem(introLsKey);
+      if (!saved) {
+        const def = isApplicable ? CARO_INTRO_DEFAULT : CARO_NOT_APPLICABLE_FULL;
+        setIntroText(def);
+      } else {
+        setIntroText(saved);
+      }
+    } catch { /**/ }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engagement?.id, isApplicable]);
+
+  const saveIntro = (text: string) => {
+    setIntroText(text);
+    try { localStorage.setItem(introLsKey, text); } catch { /**/ }
+  };
 
   // ── Load firm + partner for signature block ──
   useEffect(() => {
@@ -421,7 +492,7 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
     : "[Date]";
 
   // ════════════════════════════════════════════════════════════════════════
-  // BRANCH 1: NOT APPLICABLE — single fixed paragraph, no editor.
+  // BRANCH 1: NOT APPLICABLE — full WITHOUT-CARO text, editable.
   // ════════════════════════════════════════════════════════════════════════
   if (!isApplicable) {
     return (
@@ -433,51 +504,56 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
               Marked Not Applicable in Stage 1 Block C (paragraph 2(iv) exemption).
             </p>
           </div>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="gap-1">
-                <Download className="w-4 h-4" /> Export
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => {
-                const el = document.getElementById('caro-na-print-area');
-                if (el) {
-                  el.style.display = 'block';
-                  exportToPdf(el, `CARO-NotApplicable_${companyName}_${engagement?.financial_year || ''}.pdf`)
-                    .then(() => { el.style.display = 'none'; });
-                }
-              }}>
-                <Download className="h-4 w-4 mr-2" /> Export PDF
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => {
-                const html =
-                  `<h2 style="text-align:center;">${companyName}</h2>` +
-                  `<p style="font-style:italic;">Annexure-A referred to paragraph under the heading "Report on Other Legal and Regulatory" of our independent Auditor's Report of even date</p>` +
-                  `<p>${CARO_NOT_APPLICABLE_TEXT}</p>` +
-                  `<br/><p>For, ${firmName}<br/>Chartered Accountants<br/>Firm Regi. No.: ${firmFRN}</p>` +
-                  `<p>Place: ${place || '[Place]'} &nbsp; Date: ${reportDateDisplay}</p>` +
-                  `<p>${partnerName}<br/>Partner &nbsp; Membership No.: ${membershipNo}</p>`;
-                exportToWord(html, `CARO-NotApplicable_${companyName}_${engagement?.financial_year || ''}.doc`);
-              }}>
-                <FileType className="h-4 w-4 mr-2" /> Export Word
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={() => setEditingIntro(v => !v)} className="gap-1 text-xs">
+              {editingIntro ? "Done Editing" : "Edit Text"}
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="gap-1">
+                  <Download className="w-4 h-4" /> Export
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => {
+                  const el = document.getElementById('caro-na-print-area');
+                  if (el) {
+                    el.style.display = 'block';
+                    exportToPdf(el, `CARO-NotApplicable_${companyName}_${engagement?.financial_year || ''}.pdf`)
+                      .then(() => { el.style.display = 'none'; });
+                  }
+                }}>
+                  <Download className="h-4 w-4 mr-2" /> Export PDF
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => {
+                  const body = (introText || CARO_NOT_APPLICABLE_FULL).replace(/\n/g, '<br/>');
+                  const html =
+                    `<p style="white-space:pre-wrap;">${body}</p>` +
+                    `<br/><p>For, ${firmName}<br/>Chartered Accountants<br/>Firm Regi. No.: ${firmFRN}</p>` +
+                    `<p>Place: ${place || '[Place]'} &nbsp; Date: ${reportDateDisplay}</p>` +
+                    `<p>${partnerName}<br/>Partner &nbsp; Membership No.: ${membershipNo}</p>`;
+                  exportToWord(html, `CARO-NotApplicable_${companyName}_${engagement?.financial_year || ''}.doc`);
+                }}>
+                  <FileType className="h-4 w-4 mr-2" /> Export Word
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
 
         <Card>
           <CardContent className="p-6 space-y-4">
-            <div className="text-center">
-              <h3 className="font-bold text-base">{companyName}</h3>
-              <p className="text-xs italic text-muted-foreground mt-1">
-                Annexure-A referred to paragraph under the heading "Report on Other
-                Legal and Regulatory" of our independent Auditor's Report of even date
-              </p>
-            </div>
-            <div className="rounded-md border bg-muted/30 p-4 text-sm leading-relaxed">
-              {CARO_NOT_APPLICABLE_TEXT}
-            </div>
+            {editingIntro ? (
+              <Textarea
+                value={introText}
+                onChange={e => saveIntro(e.target.value)}
+                className="text-xs min-h-[400px] font-mono leading-relaxed"
+              />
+            ) : (
+              <div className="rounded-md border bg-muted/30 p-4 text-sm leading-relaxed whitespace-pre-wrap">
+                {introText || CARO_NOT_APPLICABLE_FULL}
+              </div>
+            )}
             <SignatureBlock
               firmName={firmName} firmFRN={firmFRN} partnerName={partnerName}
               membershipNo={membershipNo} place={place} setPlace={setPlace}
@@ -496,11 +572,7 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
 
         {/* Hidden print area for PDF */}
         <div id="caro-na-print-area" style={{ display: 'none', padding: '32px', fontFamily: 'Arial, sans-serif', fontSize: '11pt' }}>
-          <h2 style={{ textAlign: 'center', fontSize: '14pt' }}>{companyName}</h2>
-          <p style={{ fontStyle: 'italic', textAlign: 'center', marginBottom: '24px' }}>
-            Annexure-A referred to paragraph under the heading "Report on Other Legal and Regulatory" of our independent Auditor's Report of even date
-          </p>
-          <p>{CARO_NOT_APPLICABLE_TEXT}</p>
+          <p style={{ whiteSpace: 'pre-wrap' }}>{introText || CARO_NOT_APPLICABLE_FULL}</p>
           <div style={{ marginTop: '36px' }}>
             <p>For, {firmName}<br />Chartered Accountants<br />Firm Regi. No.: {firmFRN}</p>
             <p>Place: {place || '[Place]'} &nbsp; Date: {reportDateDisplay}</p>
@@ -529,6 +601,9 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
           </div>
         </div>
         <div className="flex gap-2 flex-wrap">
+          <Button variant="outline" size="sm" onClick={() => setEditingIntro(v => !v)} className="gap-1 text-xs">
+            {editingIntro ? "Done Editing Intro" : "Edit Intro Text"}
+          </Button>
           <Button onClick={autoFillAll} disabled={autoFilling} variant="outline" className="gap-1">
             {autoFilling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
             Auto-Fill All
@@ -585,7 +660,29 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
         </div>
       </div>
 
-      {/* Header block */}
+      {/* Editable intro — "Report on Other Legal and Regulatory Requirements" */}
+      <Card>
+        <CardContent className="p-4 space-y-2">
+          <div className="flex items-center justify-between mb-1">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+              Report on Other Legal and Regulatory Requirements
+            </p>
+          </div>
+          {editingIntro ? (
+            <Textarea
+              value={introText}
+              onChange={e => saveIntro(e.target.value)}
+              className="text-xs min-h-[320px] font-mono leading-relaxed"
+            />
+          ) : (
+            <div className="rounded-md border bg-muted/30 p-4 text-sm leading-relaxed whitespace-pre-wrap">
+              {introText || CARO_INTRO_DEFAULT}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Annexure-A header */}
       <Card>
         <CardContent className="p-4 text-center">
           <h3 className="font-bold text-base">{companyName}</h3>

@@ -96,22 +96,26 @@ const buildDefaults = (companyName: string, fyEnd: string): SectionMap => ({
     `Internal Financial Controls Over Financial Reporting (the "Guidance Note") ` +
     `and the Standards on Auditing, issued by ICAI and deemed to be prescribed ` +
     `under section 143(10) of the Companies Act, 2013, to the extent applicable ` +
-    `to an audit of internal financial controls. Those Standards and the ` +
-    `Guidance Note require that we comply with ethical requirements and plan ` +
-    `and perform the audit to obtain reasonable assurance about whether ` +
-    `adequate internal financial controls over financial reporting was ` +
-    `established and maintained and if such controls operated effectively in ` +
-    `all material respects.\n\n` +
+    `to an audit of internal financial controls, both applicable to an audit of ` +
+    `Internal Financial Controls and, both issued by the Institute of Chartered ` +
+    `Accountants of India. Those Standards and the Guidance Note require that ` +
+    `we comply with ethical requirements and plan and perform the audit to obtain ` +
+    `reasonable assurance about whether adequate internal financial controls over ` +
+    `financial reporting was established and maintained and if such controls ` +
+    `operated effectively in all material respects.\n\n` +
     `Our audit involves performing procedures to obtain audit evidence about ` +
     `the adequacy of the internal financial controls system over financial ` +
     `reporting and their operating effectiveness. Our audit of internal ` +
     `financial controls over financial reporting included obtaining an ` +
-    `understanding of internal financial controls, assessing the risk that a ` +
-    `material weakness exists, and testing and evaluating the design and ` +
-    `operating effectiveness of internal control based on the assessed risk. ` +
-    `The procedures selected depend on the auditor's judgement, including the ` +
-    `assessment of the risks of material misstatement of the financial ` +
-    `statements, whether due to fraud or error.`,
+    `understanding of internal financial controls over financial reporting, ` +
+    `assessing the risk that a material weakness exists, and testing and ` +
+    `evaluating the design and operating effectiveness of internal control ` +
+    `based on the assessed risk. The procedures selected depend on the ` +
+    `auditor's judgment, including the assessment of the risks of material ` +
+    `misstatement of the financial statements, whether due to fraud or error. ` +
+    `We believe that the audit evidence I/we have obtained is sufficient and ` +
+    `appropriate to provide a basis for our audit opinion on the Company's ` +
+    `internal financial controls system over financial reporting.`,
 
   meaning:
     `A company's internal financial control over financial reporting is a ` +
