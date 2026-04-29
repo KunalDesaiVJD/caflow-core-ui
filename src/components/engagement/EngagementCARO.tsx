@@ -277,18 +277,26 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
   };
 
   // ── Load firm + partner for signature block ──
+  // Pattern matches PipelineFinancialStatements.tsx (the canonical signature
+  // block source): partner name comes from engagement.partner_name, and the
+  // membership number is looked up from firms.membership_numbers JSON array.
+  // Fallback to users-table partner_id lookup for legacy engagements.
   useEffect(() => {
     if (!engagement?.firm_id) return;
     supabase
       .from("firms")
-      .select("name, display_name, icai_firm_reg_no, icai_reg_no, address, state")
+      .select("name, display_name, icai_firm_reg_no, icai_reg_no, address, state, membership_numbers")
       .eq("id", engagement.firm_id)
-      .single()
+      .maybeSingle()
       .then(({ data }) => {
         if (data) {
           setFirm(data);
-          // Place defaults to "Ahmedabad" (firm's primary city). Don't override
-          // unless user has explicitly typed something different.
+          // Place defaults to "Ahmedabad". If firm has a city in address.json, prefer it.
+          const addrCity = (data.address as any)?.city;
+          if (addrCity && typeof addrCity === "string" && addrCity.trim()) {
+            // Only override default if user hasn't typed yet
+            setPlace(prev => prev === "Ahmedabad" ? addrCity : prev);
+          }
         }
       });
   }, [engagement?.firm_id]);
@@ -516,11 +524,23 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
   };
 
   // Resolved display values
+  // Partner data sources (in priority order):
+  //   1. engagement.partner_name      (direct field, set in Stage 1 form)
+  //   2. firm.membership_numbers      (JSON: [{partner_name, membership_no}, ...])
+  //   3. users table (legacy partner_id lookup)
   const companyName = client?.name || engagement?.client_name || "[Company Name]";
   const firmName = firm?.display_name || firm?.name || "[Firm Name]";
   const firmFRN = firm?.icai_firm_reg_no || firm?.icai_reg_no || "[FRN]";
-  const partnerName = partner?.name || "[Partner Name]";
-  const membershipNo = partner?.icai_reg_no || "[Membership No.]";
+  const engPartnerName = ((engagement as any)?.partner_name || "").trim();
+  const firmMnoEntry = Array.isArray((firm as any)?.membership_numbers)
+    ? ((firm as any).membership_numbers as any[]).find(
+        (m: any) => (m?.partner_name || "").trim() === engPartnerName
+      )
+    : null;
+  const partnerName = engPartnerName || partner?.name || "[Partner Name]";
+  const membershipNo = firmMnoEntry?.membership_no
+    || partner?.icai_reg_no
+    || "[Membership No.]";
   const reportDateDisplay = reportDate
     ? new Date(reportDate).toLocaleDateString("en-IN")
     : "[Date]";

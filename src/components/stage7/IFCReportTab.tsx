@@ -184,17 +184,23 @@ export function IFCReportTab({ engagementId, engagement }: Props) {
   const isApplicable = engagement?.ifc_applicable !== false; // null/undefined → render template
 
   // ── Load firm + partner ──
+  // Pattern matches PipelineFinancialStatements.tsx: partner name comes from
+  // engagement.partner_name, membership number from firms.membership_numbers.
   useEffect(() => {
     if (!engagement?.firm_id) return;
     supabase
       .from('firms')
-      .select('name, display_name, icai_firm_reg_no, icai_reg_no, address, state')
+      .select('name, display_name, icai_firm_reg_no, icai_reg_no, address, state, membership_numbers')
       .eq('id', engagement.firm_id)
-      .single()
+      .maybeSingle()
       .then(({ data }) => {
         if (data) {
           setFirm(data);
-          // Default place stays as "Ahmedabad" — don't override with firm.state
+          // If firm has city in address JSON, override default "Ahmedabad"
+          const addrCity = (data.address as any)?.city;
+          if (addrCity && typeof addrCity === "string" && addrCity.trim()) {
+            setPlace(prev => prev === "Ahmedabad" ? addrCity : prev);
+          }
         }
       });
   }, [engagement?.firm_id]);
@@ -278,10 +284,19 @@ export function IFCReportTab({ engagementId, engagement }: Props) {
   }
 
   // ── Display values for header / signature ──
+  // Partner sources: engagement.partner_name → firm.membership_numbers JSON → users
   const firmName = firm?.display_name || firm?.name || '[Firm Name]';
   const firmFRN = firm?.icai_firm_reg_no || firm?.icai_reg_no || '[FRN]';
-  const partnerName = partner?.name || '[Partner Name]';
-  const membershipNo = partner?.icai_reg_no || '[Membership No.]';
+  const engPartnerName = ((engagement as any)?.partner_name || "").trim();
+  const firmMnoEntry = Array.isArray((firm as any)?.membership_numbers)
+    ? ((firm as any).membership_numbers as any[]).find(
+        (m: any) => (m?.partner_name || "").trim() === engPartnerName
+      )
+    : null;
+  const partnerName = engPartnerName || partner?.name || '[Partner Name]';
+  const membershipNo = firmMnoEntry?.membership_no
+    || partner?.icai_reg_no
+    || '[Membership No.]';
   const reportDateDisplay = reportDate
     ? new Date(reportDate).toLocaleDateString('en-IN')
     : '[Date]';
