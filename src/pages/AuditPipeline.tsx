@@ -804,7 +804,7 @@ export default function AuditPipeline() {
     refetchEng();
     queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] });
     setSaving(false);
-  }, [selectedEngId, form1A, questionnaire, planning, autoFlags, stageStatuses, isCorporateForBlockC]);
+  }, [selectedEngId, form1A, questionnaire, directors, planning, autoFlags, stageStatuses, isCorporateForBlockC]);
 
   const partners = (firmUsers || []).filter(u => ["partner_ca", "firm_admin"].includes(u.role));
   const grouped = useMemo(() => {
