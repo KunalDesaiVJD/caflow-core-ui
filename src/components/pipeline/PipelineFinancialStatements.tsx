@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import { FsUnitsProvider, FsUnitsToggle } from "@/lib/fsUnits";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
@@ -4826,6 +4827,7 @@ export default function PipelineFinancialStatements({
   ) : null;
 
   return (
+    <FsUnitsProvider engagementId={engagementId}>
     <div className="max-w-6xl space-y-4">
       <EngagementHeader engagement={engagement} stageNumber={7} stageLabel="Financial Statements" />
       {/* Header */}
@@ -4834,7 +4836,8 @@ export default function PipelineFinancialStatements({
           <h1 className="text-lg font-bold text-foreground">Stage 7 — Financial Statements</h1>
           <p className="text-xs text-muted-foreground">Generated from mapped trial balance</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          <FsUnitsToggle />
           <Button variant="outline" size="sm" onClick={exportToExcel} className="gap-1">
             <Download size={14} /> Export Excel
           </Button>
@@ -5638,5 +5641,6 @@ export default function PipelineFinancialStatements({
         </DialogContent>
       </Dialog>
     </div>
+    </FsUnitsProvider>
   );
 }

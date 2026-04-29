@@ -14,15 +14,22 @@ import { Button } from "@/components/ui/button";
 import {
   Popover, PopoverTrigger, PopoverContent,
 } from "@/components/ui/popover";
+import { useFsUnits, formatINRWhole } from "@/lib/fsUnits";
 
-// Indian numbering: 1,23,45,678.00 with parens for negatives, "-" for zero.
+// Indian numbering — whole numbers only (no paise) per audit-presentation
+// requirement.  The number itself is also scaled (Actual / '000 / Lakhs /
+// Crores) according to the active FS units context.
+//
+// Standalone (non-React) callers can keep using `formatINR()` as before; it
+// gracefully falls back to "Actual" units when no provider is mounted.
 export function formatINR(n: number | null | undefined): string {
-  const v = Number(n);
-  if (!Number.isFinite(v) || Math.abs(v) < 0.005) return "-";
-  const abs = Math.abs(v).toLocaleString("en-IN", {
-    minimumFractionDigits: 2, maximumFractionDigits: 2,
-  });
-  return v < 0 ? `(${abs})` : abs;
+  return formatINRWhole(n);
+}
+
+/** React hook variant — applies the active FS units scaling + rounding. */
+export function useFormatINR(): (n: number | null | undefined) => string {
+  const { format } = useFsUnits();
+  return format;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -49,10 +56,18 @@ export function EditableCell({
 }: EditableCellProps) {
   const [focused, setFocused] = useState(false);
   const [draft,   setDraft]   = useState<string>("");
+  const fsUnits = useFsUnits();
 
+  // Display rules:
+  //   • text cells           → raw text
+  //   • number, focused      → user types in the ACTIVE scale (e.g. '000)
+  //   • number, blurred      → scaled + rounded INR (whole numbers, no paise)
+  // When the user commits a value typed under a non-actual scale we multiply
+  // by the divisor before persisting so the underlying store always stays in
+  // actual rupees.
   const display = focused
     ? draft
-    : (type === "number" ? formatINR(Number(value || 0)) : (value ?? ""));
+    : (type === "number" ? fsUnits.format(Number(value || 0)) : (value ?? ""));
 
   if (disabled) {
     return <span className={cn("tabular-nums", className)}>{String(display)}</span>;
@@ -80,7 +95,11 @@ export function EditableCell({
         setFocused(true);
         const v = value;
         const raw = type === "number"
-          ? (v === 0 || v === null || v === undefined ? "" : String(v))
+          ? (v === 0 || v === null || v === undefined
+              ? ""
+              // Under '000 / lakhs / crores show the SCALED number for editing
+              // so what the user sees and what they type are in the same units.
+              : String(fsUnits.scaleAmount(Number(v))))
           : String(v ?? "");
         setDraft(raw);
         e.currentTarget.select();
@@ -93,7 +112,12 @@ export function EditableCell({
         if (t === "") { onCommit(null); return; }
         if (type === "number") {
           const parsed = Number(t.replace(/,/g, ""));
-          if (Number.isFinite(parsed)) onCommit(parsed);
+          if (Number.isFinite(parsed)) {
+            // Scale UP back to actual rupees before persisting so the store
+            // stays in the canonical unit regardless of display scale.
+            const actual = parsed * fsUnits.meta.divisor;
+            onCommit(actual);
+          }
         } else {
           onCommit(t);
         }
@@ -116,7 +140,7 @@ export function EditableCell({
           type="button"
           onClick={onResetToAuto}
           className="p-0.5 rounded hover:bg-amber-100 text-amber-700"
-          title={`Reset to auto value: ${type === "number" ? formatINR(Number(autoValue || 0)) : (autoValue ?? "—")}`}
+          title={`Reset to auto value: ${type === "number" ? fsUnits.format(Number(autoValue || 0)) : (autoValue ?? "—")}`}
         >
           <X size={11} />
         </button>
@@ -194,6 +218,7 @@ export function EditableRow({
   isOverriddenCy, isOverriddenPy,
   onCommitCy, onCommitPy, onResetCy, onResetPy,
   bold,
+  actionGutter = true,
 }: {
   label:           string;
   indent?:         number;
@@ -208,11 +233,22 @@ export function EditableRow({
   onResetCy?:      () => void;
   onResetPy?:      () => void;
   bold?:           boolean;
+  /**
+   * Set to false ONLY when this row is rendered standalone (not under a
+   * ListTable). Default true keeps the CY/PY columns aligned with the
+   * breakup rows above (which reserve a 1-col action gutter for ⋮).
+   */
+  actionGutter?:   boolean;
 }) {
+  // Layout: label | CY | PY | (gutter)
+  //   actionGutter=true  → 6 / 3 / 2 / 1   (matches ListTable rows)
+  //   actionGutter=false → 6 / 3 / 3       (legacy / standalone)
+  const cyCol = "col-span-3";
+  const pyCol = actionGutter ? "col-span-2" : "col-span-3";
   return (
     <div className={cn("grid grid-cols-12 gap-2 items-center py-0.5", bold && "font-semibold")}>
       <div className="col-span-6" style={{ paddingLeft: indent * 12 }}>{label}</div>
-      <div className="col-span-3">
+      <div className={cyCol}>
         <EditableCell
           value={cy ?? 0}
           autoValue={autoCY ?? null}
@@ -222,7 +258,7 @@ export function EditableRow({
           onResetToAuto={onResetCy}
         />
       </div>
-      <div className="col-span-3">
+      <div className={pyCol}>
         <EditableCell
           value={py ?? 0}
           autoValue={autoPY ?? null}
@@ -232,17 +268,23 @@ export function EditableRow({
           onResetToAuto={onResetPy}
         />
       </div>
+      {actionGutter && <div className="col-span-1" />}
     </div>
   );
 }
 
-/** Header row matching EditableRow column layout. */
-export function NoteHeaderRow({ cyLabel, pyLabel }: { cyLabel: string; pyLabel: string }) {
+/** Header row matching EditableRow column layout (incl. action gutter). */
+export function NoteHeaderRow({
+  cyLabel, pyLabel, actionGutter = true,
+}: { cyLabel: string; pyLabel: string; actionGutter?: boolean }) {
+  const cyCol = "col-span-3";
+  const pyCol = actionGutter ? "col-span-2" : "col-span-3";
   return (
     <div className="grid grid-cols-12 gap-2 text-[10px] font-semibold text-muted-foreground border-b pb-1 mb-1">
       <div className="col-span-6">Particulars</div>
-      <div className="col-span-3 text-right">{cyLabel}</div>
-      <div className="col-span-3 text-right">{pyLabel}</div>
+      <div className={cn(cyCol, "text-right")}>{cyLabel}</div>
+      <div className={cn(pyCol, "text-right")}>{pyLabel}</div>
+      {actionGutter && <div className="col-span-1" />}
     </div>
   );
 }

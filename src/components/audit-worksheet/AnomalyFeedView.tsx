@@ -28,6 +28,7 @@ import {
 } from "@/lib/anomalyEngine";
 import { LedgerSidePanel }    from "./LedgerSidePanel";
 import { getDraftSuggestion } from "./QueryDraftEngine";
+import { cleanTallyName }     from "@/lib/tallyText";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -308,8 +309,17 @@ export function AnomalyFeedView({ tallyEngId, financialYear, clientId, onRaiseQu
           .eq("engagement_id", tallyEngId),
       ]);
 
-      setVouchers((vRes.data as VoucherRow[]) ?? []);
-      setTb((tbRes.data as TBRow[]) ?? []);
+      const cleanedTb = ((tbRes.data as TBRow[]) ?? []).map(r => ({
+        ...r,
+        ledger_name:  cleanTallyName(r.ledger_name),
+        parent_group: cleanTallyName(r.parent_group),
+      }));
+      const cleanedVouchers = ((vRes.data as VoucherRow[]) ?? []).map(v => ({
+        ...v,
+        party_ledger: cleanTallyName((v as any).party_ledger),
+      }));
+      setVouchers(cleanedVouchers);
+      setTb(cleanedTb);
     } finally {
       setLoading(false);
       setScanDone(true);

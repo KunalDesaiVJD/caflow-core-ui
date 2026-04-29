@@ -19,6 +19,7 @@
  */
 
 import { supabase } from "@/integrations/supabase/client";
+import { cleanTallyName } from "@/lib/tallyText";
 
 // ═════════════════════════════════════════════════════════════════════════
 // Types
@@ -255,8 +256,8 @@ function normalizeTB(rows: any[]): TBLedger[] {
     const ob   = Math.abs(Number(l.opening_balance ?? 0));
     const isObCr = String(l.opening_type ?? "").toUpperCase() === "CR";
     return {
-      account_name:    String(l.ledger_name || "").trim(),
-      account_group:   l.parent_group || "",
+      account_name:    cleanTallyName(l.ledger_name),
+      account_group:   cleanTallyName(l.parent_group),
       balance:         isDr   ? cb :  -cb,
       opening_balance: isObCr ? -ob :  ob,
     };

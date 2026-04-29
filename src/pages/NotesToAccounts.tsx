@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import { FsUnitsProvider, FsUnitsToggle } from "@/lib/fsUnits";
+import { CorporateSignatureBlock } from "@/components/shared/CorporateSignatureBlock";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -406,6 +408,7 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise, isCorpor
   if (showPrint) return <PrintView notes={stateMap} onClose={() => setShowPrint(false)} />;
 
   return (
+    <FsUnitsProvider engagementId={engagementId}>
     <div className="flex h-[calc(100vh-4rem)]">
       <div className="w-64 border-r border-border bg-card flex-shrink-0">
        <div className="p-4 border-b border-border">
@@ -443,7 +446,8 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise, isCorpor
       <div className="flex-1 flex flex-col min-w-0">
         <div className="flex items-center justify-between px-6 py-3 border-b border-border bg-card">
           <h1 className="text-lg font-semibold">Note {displayNumberMap.get(activeNote) || NOTE_LIST.find((n) => n.key === activeNote)?.num} — {NOTE_LIST.find((n) => n.key === activeNote)?.title}</h1>
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
+            <FsUnitsToggle />
             <Button variant="outline" size="sm" onClick={saveAll} disabled={saving}><Save className="h-4 w-4 mr-1" /> {saving ? "Saving..." : "Save All"}</Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -487,9 +491,21 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise, isCorpor
             </AlertDialog>
           </div>
         </div>
-        <ScrollArea className="flex-1 p-6">{renderNote()}</ScrollArea>
+        <ScrollArea className="flex-1 p-6">
+          {renderNote()}
+          {/* Audit-report signature block — appears at the bottom of every note
+              page so the user can sign-off Notes alongside the BS / P&L. */}
+          {engagementId && isCorporate && (
+            <CorporateSignatureBlock
+              engagementId={engagementId}
+              companyName={clientData?.name ?? ""}
+              className="mt-6 max-w-3xl"
+            />
+          )}
+        </ScrollArea>
       </div>
     </div>
+    </FsUnitsProvider>
   );
 }
 
