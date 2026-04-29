@@ -23,6 +23,7 @@ Tag, Link2, RefreshCw, ArrowUpDown } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { loadStage5Notes, saveStage5Notes, DEFAULT_FA_ROWS, type FARow } from '@/lib/notesAutoPopulate';
 
 // ── Phase 1: Correct default FY on page open ──────────────────────────────
 // Indian FY runs Apr 1 – Mar 31. Auditors typically work on the year that
@@ -700,6 +701,70 @@ try {
 
   const { error: insErr } = await supabase.from('nce_ppe_schedule').insert(rows as any);
   if (insErr) throw insErr;
+
+  // ── Mirror into stage5_notes.fa.rows so the corporate (Schedule III)
+  // Note 11 ON-SCREEN grid (FAGrid component) shows the pushed values.
+  // The grid reads from audit_engagements.stage5_notes JSONB, NOT from
+  // nce_ppe_schedule (that table is only for Non-Corporate Entities).
+  // Fuzzy-match by particulars name; rows already present in DEFAULT_FA_ROWS
+  // (Land, Factory Building, Plant & Machinery, Computers, Electric
+  // Equipments, Office Equipment, Furniture and Fixtures, Vehicles, Software)
+  // get updated in-place; unmatched register categories are appended.
+  try {
+    const notes = await loadStage5Notes(engagement.id);
+    const norm = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const existing = Array.isArray(notes.fa?.rows) ? notes.fa.rows.slice() : DEFAULT_FA_ROWS.map(r => ({ ...r }));
+
+    // Zero out existing rows first so a re-push doesn't double-count
+    const cleared: FARow[] = existing.map(r => ({
+      ...r, gross_open: 0, additions: 0, disposals: 0,
+      depn_open: 0, depn_add: 0, depn_disp: 0,
+    }));
+
+    for (const s of (summary || [])) {
+      const target = norm(s.category_name);
+      const idx = cleared.findIndex(r => norm(r.particulars) === target || norm(r.id) === target);
+      const accDepClose = Number(s.acc_dep_closing ?? ((s.acc_dep_opening || 0) + (s.depreciation || 0)));
+      const grossOpen   = Number(s.gross_block_opening || 0);
+      const additions   = Number(s.additions || 0);
+      const disposals   = Number(s.disposals || 0);
+      const depnOpen    = Number(s.acc_dep_opening || 0);
+      const depnAdd     = Number(s.depreciation || 0);
+      // depn on disposed assets = (open + for_year) - close
+      const depnDisp    = Math.max(0, Math.round(((depnOpen + depnAdd) - accDepClose) * 100) / 100);
+      const patch: Partial<FARow> = {
+        gross_open: Math.round(grossOpen * 100) / 100,
+        additions:  Math.round(additions  * 100) / 100,
+        disposals:  Math.round(disposals  * 100) / 100,
+        depn_open:  Math.round(depnOpen   * 100) / 100,
+        depn_add:   Math.round(depnAdd    * 100) / 100,
+        depn_disp:  depnDisp,
+      };
+      if (idx >= 0) {
+        cleared[idx] = { ...cleared[idx], ...patch };
+      } else {
+        cleared.push({
+          id:          `dep_${norm(s.category_name)}_${Date.now()}`,
+          particulars: s.category_name,
+          useful_life: s.useful_life_years || 0,
+          gross_open: 0, additions: 0, disposals: 0,
+          depn_open: 0, depn_add: 0, depn_disp: 0,
+          ...patch,
+        } as FARow);
+      }
+    }
+
+    await saveStage5Notes(engagement.id, {
+      ...notes,
+      fa: { rows: cleared },
+      auto_synced_at: new Date().toISOString(),
+    });
+    qc.invalidateQueries({ queryKey: ['stage5-notes', engagement.id] });
+  } catch (mirrorErr: any) {
+    // Non-fatal — nce_ppe_schedule was already updated. Surface a warning.
+    console.warn('[push-note-11] stage5_notes mirror failed:', mirrorErr?.message);
+    toast.warning('Note 11 pushed, but on-screen FS grid mirror failed. Open Notes & click Re-sync from COA to refresh.');
+  }
 
   toast.success(`Note 11 updated — ${rows.length} category row(s) pushed to Financial Statements.`);
   refetchNote11();
@@ -1985,33 +2050,45 @@ return (
       </CardHeader>
       <CardContent className='p-0'>
         {(() => {
-          // Build category-level reconciliation rows
+          // Build category-level reconciliation rows.
+          // Mode-aware: in Gross mode every column compares GROSS BLOCK CLOSING;
+          // in Net mode every column compares NET BLOCK CLOSING. This way
+          // A-B and A-C are apples-to-apples (was incorrectly comparing
+          // Register Gross vs Note 11 NET previously).
           const rows: {
             catName: string;
-            regWdv: number;          // Depreciation register WDV closing (from summary)
-            tbBalance: number | null;// TB closing balance sum for tagged ledgers
-            note11Wdv: number | null;// Note 11 closing balance
+            regWdv: number;
+            tbBalance: number | null;
+            note11Wdv: number | null;
           }[] = [];
 
-          // Map category name → register value from summary (Gross or Net depending on mode)
           for (const s of (summary || [])) {
-            const regWdv = recoMode === 'gross'
-              ? Math.round(s.gross_block_closing * 100) / 100
-              : Math.round(s.net_block * 100) / 100;
+            const regGross = Math.round(s.gross_block_closing * 100) / 100;
+            const regNet   = Math.round(s.net_block * 100) / 100;
+            const regWdv   = recoMode === 'gross' ? regGross : regNet;
 
-            // TB: sum closing_balance of all ledgers tagged to this category
+            // Tally TB ledgers tagged to this category are GROSS block ledgers.
+            // In Net mode we derive implied net = gross - register acc.dep closing.
             const taggedLedgerIds = Object.entries(ppeTags)
               .filter(([, catId]) => catId === (cats || []).find((c: any) => c.name === s.category_name)?.id)
               .map(([lid]) => lid);
-            const tbBalance = taggedLedgerIds.length === 0 ? null :
+            const tbGross = taggedLedgerIds.length === 0 ? null :
               (tbLedgers || [])
                 .filter((l: any) => taggedLedgerIds.includes(l.id))
                 .reduce((sum: number, l: any) => sum + Math.abs(l.closing_balance ?? 0), 0);
+            const tbBalance = tbGross === null ? null
+              : recoMode === 'gross'
+                ? Math.round(tbGross * 100) / 100
+                : Math.round((tbGross - (s.acc_dep_closing ?? 0)) * 100) / 100;
 
-            // Note 11: find matching row by category name
+            // Note 11: nce_ppe_schedule.total = gross block closing,
+            //         nce_ppe_schedule.closing_balance = net block closing.
             const n11Row = (note11Rows || []).find((r: any) =>
               r.asset_name?.toLowerCase() === s.category_name.toLowerCase());
-            const note11Wdv = n11Row ? (n11Row.closing_balance ?? null) : null;
+            const note11Wdv = !n11Row ? null
+              : recoMode === 'gross'
+                ? (n11Row.total ?? null)
+                : (n11Row.closing_balance ?? null);
 
             rows.push({ catName: s.category_name, regWdv, tbBalance, note11Wdv });
           }
@@ -2046,11 +2123,15 @@ return (
                 <TableHeader><TableRow className='bg-muted/50 text-xs'>
                   <TableHead>Category</TableHead>
                   <TableHead className='text-right'>
-                    {recoMode === 'gross' ? 'Register Gross Block (A)' : 'Register WDV (A)'}
+                    {recoMode === 'gross' ? 'Register Gross Block (A)' : 'Register Net Block (A)'}
                   </TableHead>
-                  <TableHead className='text-right'>Tally TB Gross (B)</TableHead>
+                  <TableHead className='text-right'>
+                    {recoMode === 'gross' ? 'Tally TB Gross (B)' : 'Tally TB Net (B)'}
+                  </TableHead>
                   <TableHead className='text-right'>A–B Diff</TableHead>
-                  <TableHead className='text-right'>Note 11 WDV (C)</TableHead>
+                  <TableHead className='text-right'>
+                    {recoMode === 'gross' ? 'Note 11 Gross Block (C)' : 'Note 11 Net Block (C)'}
+                  </TableHead>
                   <TableHead className='text-right'>A–C Diff</TableHead>
                   <TableHead className='text-center w-24'>Check A</TableHead>
                   <TableHead className='text-center w-24'>Check B</TableHead>
@@ -2128,9 +2209,9 @@ return (
               <div className='px-4 py-2 text-xs text-muted-foreground border-t'>
                 {recoMode === 'gross'
                   ? <><strong>Check A</strong> = Register Gross Block vs Tally TB Gross (both gross — should be ~0). &nbsp;
-                    <strong>Check B</strong> = Register Gross Block vs Note 11 WDV (expects difference = Acc. Dep.).</>
-                  : <><strong>Check A</strong> = Register WDV vs Tally TB balance (requires PPE ledger tags). &nbsp;
-                    <strong>Check B</strong> = Register WDV vs Note 11 WDV (requires pushing to Note 11 first).</>}
+                    <strong>Check B</strong> = Register Gross Block vs Note 11 Gross Block (both gross — should be ~0).</>
+                  : <><strong>Check A</strong> = Register Net Block vs Tally TB Net (Tally Gross − Reg. Acc. Dep. — should be ~0). &nbsp;
+                    <strong>Check B</strong> = Register Net Block vs Note 11 Net Block (both net — should be ~0).</>}
               </div>
             </>
           );
