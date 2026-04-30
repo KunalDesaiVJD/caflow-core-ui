@@ -682,12 +682,30 @@ export async function nceAutoPopulate(
       }
     }
 
+    // ── Silent absorption: re-attach manual rows under matching auto-groups ──
+    // When a manual row is attached to the same static parent as a multi-ledger
+    // auto-group (e.g. parent_group "Unsecured Loans"), re-route the manual
+    // row's attachedTo from the static parent to the auto-group itself. This
+    // makes the manual row render as a nested child of the auto-group instead
+    // of as a sibling — matching the user's mental model: "Babulal H Patel
+    // (HUF)" is part of the Unsecured Loans list and should sit underneath it,
+    // not at the same indentation level. Amounts and identity are preserved.
+    const absorbedManualRows: NCECustomRow[] = manualRows.map(mr => {
+      if (!mr.attachedTo) return mr;
+      const target = autoRows.find(ar =>
+        ar.attachedTo === mr.attachedTo && (ar.sources?.length ?? 0) > 1
+      );
+      if (!target) return mr;
+      // Re-attach to the auto-group; drop section tag (it inherits via parent).
+      return { ...mr, attachedTo: target.id, section: undefined };
+    });
+
     // ── Merge auto + manual ─────────────────────────────────────────────
     const mergedCy: Record<string, number> = { ...newCy };
     const mergedPy: Record<string, number> = { ...newPy };
 
     // Restore manual custom row amounts
-    for (const mr of manualRows) {
+    for (const mr of absorbedManualRows) {
       for (const suffix of ["", "_lt", "_st"]) {
         const k = mr.id + suffix;
         if (prev.cy[k] !== undefined) mergedCy[k] = prev.cy[k];
@@ -722,7 +740,7 @@ export async function nceAutoPopulate(
     // non-zero value from an old auto-populate run, the total would be inflated.
     // After this step the static row acts purely as a visual "heading" container.
     const attachedStaticIds = new Set(
-      [...autoRows, ...manualRows]
+      [...autoRows, ...absorbedManualRows]
         .map(cr => cr.attachedTo)
         .filter((id): id is string => !!id),
     );
@@ -745,7 +763,7 @@ export async function nceAutoPopulate(
     out[noteType] = {
       cy:         mergedCy,
       py:         mergedPy,
-      customRows: [...autoRows, ...manualRows],
+      customRows: [...autoRows, ...absorbedManualRows],
       // Preserve user settings that survive re-sync
       hiddenRows:     prev.hiddenRows ?? [],
       labelOverrides: prev.labelOverrides ?? {},
