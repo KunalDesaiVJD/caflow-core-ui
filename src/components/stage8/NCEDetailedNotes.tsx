@@ -235,8 +235,21 @@ function NoteCard({
 function NumInput({
   value, onChange, disabled, placeholder,
 }: { value: number; onChange: (v: number) => void; disabled?: boolean; placeholder?: string }) {
-  const [local, setLocal] = useState(value === 0 ? "" : String(value));
-  useEffect(() => { setLocal(value === 0 ? "" : String(value)); }, [value]);
+  // Whole-rupee Indian formatting: Schedule III auditor presentation must
+  // never show paise. Rounding happens both on initial display AND on blur,
+  // so even if the underlying TB closing has decimals (Tally returns paise
+  // on some ledgers), the displayed/saved figure is always a whole rupee.
+  const formatDisplay = (v: number): string => {
+    if (!Number.isFinite(v) || v === 0) return "";
+    return Math.round(v).toLocaleString("en-IN", {
+      minimumFractionDigits: 0, maximumFractionDigits: 0,
+    });
+  };
+  const [local, setLocal] = useState(formatDisplay(value));
+  const [focused, setFocused] = useState(false);
+  useEffect(() => {
+    if (!focused) setLocal(formatDisplay(value));
+  }, [value, focused]);
   return (
     <Input
       type="text" inputMode="decimal"
@@ -247,10 +260,18 @@ function NumInput({
       disabled={disabled}
       value={local}
       placeholder={placeholder ?? "—"}
+      onFocus={() => {
+        // While editing show the plain rounded integer (no commas) so typing/
+        // backspace works naturally; on blur we re-apply Indian formatting.
+        setFocused(true);
+        const v = parseFloat(local.replace(/,/g, "")) || 0;
+        setLocal(v === 0 ? "" : String(Math.round(v)));
+      }}
       onChange={e => setLocal(e.target.value)}
       onBlur={() => {
-        const parsed = parseFloat(local.replace(/,/g, "")) || 0;
-        setLocal(parsed === 0 ? "" : String(parsed));
+        const parsed = Math.round(parseFloat(local.replace(/,/g, "")) || 0);
+        setLocal(formatDisplay(parsed));
+        setFocused(false);
         onChange(parsed);
       }}
     />
