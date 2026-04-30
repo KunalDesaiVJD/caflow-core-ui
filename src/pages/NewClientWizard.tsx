@@ -742,8 +742,12 @@ const NewClientWizard = () => {
     } as any, { onConflict: "client_id,financial_year" });
     // Also mirror into clients.* direct columns so AuditPipeline Source 1 picks this up
     // and ClientDetail card shows the correct state without needing a merge.
+    // tax_audit_applicable (canonical boolean, migration 20260430130000) MUST
+    // be written here so the Create Engagement dropdown sees it without
+    // having to merge across client_fy_audit_setup.
     await supabase.from("clients").update({
       statutory_audit_applicable: auditSetup.statutory_audit_applicable,
+      tax_audit_applicable: auditSetup.tax_audit_applicable,
       caro_applicable: auditSetup.caro_applicable,
       internal_audit_applicable: auditSetup.internal_audit_applicable,
       stock_audit_applicable: auditSetup.stock_audit_applicable,

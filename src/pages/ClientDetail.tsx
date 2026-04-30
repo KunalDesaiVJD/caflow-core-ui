@@ -289,19 +289,24 @@ const ClientDetail = () => {
       setClientItrProfile(itrData);
 
       if (c) {
-        // Merge source 1 (clients.* direct columns) with source 2 (client_fy_audit_setup).
-        // NewClientWizard saves to client_fy_audit_setup, not to clients.* direct columns,
-        // so we must check both to show the correct ON/OFF state in the Audit Setup card.
+        // The canonical source for every audit-applicability flag is now the
+        // clients.* direct columns. Migration 20260430130000 added
+        // tax_audit_applicable and backfilled it from BOTH legacy sources
+        // (clients.tax_audit_type IS NOT NULL, OR any client_fy_audit_setup
+        // row with tax_audit_applicable = TRUE), so reading the direct column
+        // is always correct after the migration.
+        //
+        // We still OR-merge the FY row as a safety net in case a flag was
+        // toggled in the wizard for a future FY but not yet propagated to
+        // clients.* (the wizard does mirror, but defence-in-depth).
         const fySetup = fySetupRes?.data ?? null;
         setAuditForm({
-          statutory_audit_applicable: c.statutory_audit_applicable || fySetup?.statutory_audit_applicable || false,
+          statutory_audit_applicable: !!(c as any).statutory_audit_applicable || !!fySetup?.statutory_audit_applicable,
           tax_audit_type: c.tax_audit_type || "",
-          // tax_audit_applicable covers wizard-based setup where tax_audit_type may be null
-          // but client_fy_audit_setup.tax_audit_applicable = true
-          tax_audit_applicable: !!c.tax_audit_type || !!fySetup?.tax_audit_applicable,
-          caro_applicable: c.caro_applicable || fySetup?.caro_applicable || false,
-          internal_audit_applicable: c.internal_audit_applicable || fySetup?.internal_audit_applicable || false,
-          stock_audit_applicable: c.stock_audit_applicable || fySetup?.stock_audit_applicable || false,
+          tax_audit_applicable: !!(c as any).tax_audit_applicable || !!c.tax_audit_type || !!fySetup?.tax_audit_applicable,
+          caro_applicable: !!(c as any).caro_applicable || !!fySetup?.caro_applicable,
+          internal_audit_applicable: !!(c as any).internal_audit_applicable || !!fySetup?.internal_audit_applicable,
+          stock_audit_applicable: !!(c as any).stock_audit_applicable || !!fySetup?.stock_audit_applicable,
           audit_turnover: (c as any).audit_turnover ? String((c as any).audit_turnover) : "",
         });
       }
@@ -692,12 +697,37 @@ const ClientDetail = () => {
     try {
       await supabase.from("clients").update({
         statutory_audit_applicable: auditForm.statutory_audit_applicable,
+        // tax_audit_applicable is the canonical boolean (migration
+        // 20260430130000_clients_tax_audit_applicable.sql added this column).
+        // tax_audit_type holds the SUB-TYPE (3CA / 3CB) and may be null when
+        // the user enabled tax audit but hasn't picked a sub-type yet.
+        tax_audit_applicable: auditForm.tax_audit_applicable,
         tax_audit_type: auditForm.tax_audit_type || null,
         caro_applicable: auditForm.caro_applicable,
         internal_audit_applicable: auditForm.internal_audit_applicable,
         stock_audit_applicable: auditForm.stock_audit_applicable,
         audit_turnover: auditForm.audit_turnover ? Number(auditForm.audit_turnover) : null,
       } as any).eq("id", clientId);
+
+      // Mirror the toggle into client_fy_audit_setup for the current FY so
+      // FY-scoped consumers (Stage 7 audit flags, billing) stay in sync.
+      // Best-effort — failure here doesn't block the clients update above.
+      try {
+        const fy = (client as any)?.financial_year
+                ?? (client as any)?.classification_year
+                ?? new Date().getFullYear() + "-" + String((new Date().getFullYear() + 1) % 100).padStart(2, "0");
+        await (supabase as any).from("client_fy_audit_setup").upsert({
+          client_id: clientId,
+          financial_year: fy,
+          statutory_audit_applicable: auditForm.statutory_audit_applicable,
+          tax_audit_applicable:       auditForm.tax_audit_applicable,
+          caro_applicable:            auditForm.caro_applicable,
+          internal_audit_applicable:  auditForm.internal_audit_applicable,
+          stock_audit_applicable:     auditForm.stock_audit_applicable,
+        }, { onConflict: "client_id,financial_year" });
+      } catch (e) {
+        console.warn("[ClientDetail] FY audit setup mirror failed:", e);
+      }
       toast({ title: "Audit setup saved" });
       // ROOT CAUSE A/B fix: check if client can now be promoted to final
       await tryPromoteToFinal();

@@ -241,7 +241,7 @@ export default function AuditPipeline() {
       // applicability or active engagements, which is the correct gate.
       let clientQuery = supabase
         .from("clients")
-        .select("id, name, entity_type, statutory_audit_applicable, internal_audit_applicable, tax_audit_type, is_draft")
+        .select("id, name, entity_type, statutory_audit_applicable, tax_audit_applicable, internal_audit_applicable, tax_audit_type, is_draft")
         .is("deleted_at", null)
         .order("name", { ascending: true });
       if (firmId) clientQuery = clientQuery.eq("firm_id", firmId);
@@ -341,9 +341,12 @@ export default function AuditPipeline() {
           // Columns that do NOT exist on clients (only on client_fy_audit_setup):
           //   tax_audit_applicable, stock_audit_applicable
           const hasStatDirect     = !!c.statutory_audit_applicable;
-          // tax_audit_type is the legacy "3CA"/"3CB" string saved directly on clients.
-          // tax_audit_applicable lives only on client_fy_audit_setup → use setupMap.
-          const hasTaxDirect      = !!c.tax_audit_type;
+          // tax_audit_applicable is now a real boolean column on clients
+          // (migration 20260430130000) — backfilled from BOTH legacy sources
+          // so it's the single source of truth.  The legacy tax_audit_type
+          // (sub-type "3CA"/"3CB") is kept as a fallback for any pre-migration
+          // row whose backfill might have missed.
+          const hasTaxDirect      = !!(c as any).tax_audit_applicable || !!c.tax_audit_type;
           const hasInternalDirect = !!c.internal_audit_applicable;
           return {
             id:          c.id as string,
