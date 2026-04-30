@@ -461,31 +461,44 @@ const FS_CODE_TO_NOTE_KEY: Readonly<Record<string, string>> = {
   BS_CA_OCA:  "other_current_assets",
 };
 
-// ── NCE BS FS code → registry note key ──────────────────────────────────────
-// Used by NCEBalanceSheetView's NoteCell.
+// ── NCE FS code → registry note key (BS + P&L) ───────────────────────────────
+// Shared by NCEBalanceSheetView and NCEPLView.
 // CWIP and Intangibles share the "ppe" note (shown in NCEPPESchedule).
 // Short-term loans (NCE_STLA) have their own registry key per NCE_NOTE_ORDER.
+// NCE_PART_REM (partners' remuneration) has no note → renders "—".
 const NCE_CODE_TO_NOTE_KEY: Readonly<Record<string, string>> = {
-  NCE_CAP:   "owners_capital",
-  NCE_LTB:   "lt_borrowings",
-  NCE_OLTL:  "other_lt_liab",
-  NCE_LTP:   "lt_provisions",
-  NCE_STB:   "st_borrowings",
-  NCE_TP:    "trade_payables",
-  NCE_OCL:   "other_current_liab",
-  NCE_STP:   "st_provisions",
-  NCE_PPE:   "ppe",
-  NCE_CWIP:  "ppe",              // Capital WIP presented under PPE note
-  NCE_INTG:  "ppe",              // Intangibles presented under PPE note
-  NCE_NCINV: "nc_investments",
-  NCE_LTLA:  "lt_loans_advances",
-  NCE_ONCA:  "other_nc_assets",
-  NCE_CINV:  "current_investments",
-  NCE_STCK:  "inventories",
-  NCE_TR:    "trade_receivables",
-  NCE_CASH:  "cash_bank",
-  NCE_STLA:  "st_loans_advances",
-  NCE_OCA:   "other_current_assets",
+  // BS — Equity & Liabilities
+  NCE_CAP:      "owners_capital",
+  NCE_LTB:      "lt_borrowings",
+  NCE_OLTL:     "other_lt_liab",
+  NCE_LTP:      "lt_provisions",
+  NCE_STB:      "st_borrowings",
+  NCE_TP:       "trade_payables",
+  NCE_OCL:      "other_current_liab",
+  NCE_STP:      "st_provisions",
+  // BS — Assets
+  NCE_PPE:      "ppe",
+  NCE_CWIP:     "ppe",              // Capital WIP presented under PPE note
+  NCE_INTG:     "ppe",              // Intangibles presented under PPE note
+  NCE_NCINV:    "nc_investments",
+  NCE_LTLA:     "lt_loans_advances",
+  NCE_ONCA:     "other_nc_assets",
+  NCE_CINV:     "current_investments",
+  NCE_STCK:     "inventories",
+  NCE_TR:       "trade_receivables",
+  NCE_CASH:     "cash_bank",
+  NCE_STLA:     "st_loans_advances",
+  NCE_OCA:      "other_current_assets",
+  // P&L — Income
+  NCE_REV_OPS:  "nce_revenue_from_ops",
+  NCE_REV_OTH:  "nce_other_income",
+  // P&L — Expenses
+  NCE_COGS:     "nce_cost_goods",
+  NCE_EMP_EXP:  "nce_employee_benefits",
+  NCE_FIN_COST: "nce_finance_costs",
+  NCE_DEPR:     "nce_depreciation",
+  NCE_OTH_EXP:  "nce_other_expenses",
+  // NCE_PART_REM intentionally absent — no note defined in NCE_NOTE_ORDER
 };
 
 // ── P&L FS code → registry note key ─────────────────────────────────────────
@@ -1105,6 +1118,7 @@ function NCEBalanceSheetView({
 }
 
 interface NCEPLViewProps {
+  engagementId: string;
   cyAmounts:  Record<string, number>;
   pyAmounts:  Record<string, number>;
   cyYear:     number;
@@ -1118,8 +1132,43 @@ interface NCEPLViewProps {
 }
 
 function NCEPLView({
-  cyAmounts, pyAmounts, cyYear, pyYear, entityName, pyLocked, onCommitCY, onCommitPY, onNavigateToNote,
+  engagementId, cyAmounts, pyAmounts, cyYear, pyYear, entityName,
+  pyLocked, onCommitCY, onCommitPY, onNavigateToNote,
 }: NCEPLViewProps) {
+  const { getNoteLabel } = useDynamicNoteRegistry(engagementId);
+
+  /**
+   * Renders the Note No. cell for an NCE P&L row.
+   * Same two-signal design as NCEBalanceSheetView's NoteCell:
+   *   display  → dynamic label (N{n}) via getNoteLabel; "—" if note suppressed
+   *   navigate → original static noteNo passed to onNavigateToNote so
+   *              NCENotesTab can resolve via dynamicNoteMap
+   */
+  const NoteCell = ({ code, noteNo }: { code?: string | null; noteNo?: number | null }) => {
+    const noteKey = code ? NCE_CODE_TO_NOTE_KEY[code] : undefined;
+    const label   = noteKey ? getNoteLabel(noteKey) : undefined;
+    if (!label) {
+      return <td className="text-center py-0.5 px-2 text-muted-foreground/40 text-[11px]">—</td>;
+    }
+    return (
+      <td className="text-center py-0.5 px-2">
+        {noteNo != null && onNavigateToNote ? (
+          <button
+            type="button"
+            onClick={() => onNavigateToNote(noteNo)}
+            className="inline-flex items-center gap-0.5 text-primary hover:underline font-medium text-[11px]"
+            title={`Go to Note ${label}`}
+          >
+            {label}
+            <ArrowRight className="h-2.5 w-2.5" />
+          </button>
+        ) : (
+          <span className="text-primary font-medium text-[11px]">{label}</span>
+        )}
+      </td>
+    );
+  };
+
   const rows = buildNCEPLRows(cyAmounts, pyAmounts);
   return (
     <div className="rounded-lg border bg-card overflow-hidden">
@@ -1175,19 +1224,7 @@ function NCEPLView({
               <tr key={idx} className="hover:bg-muted/10">
                 <td className={`text-center py-0.5 px-1 ${boldCls} text-[11px]`}>{row.roman || ""}</td>
                 <td className={`py-0.5 px-3 ${boldCls} text-[11px]`} style={{ paddingLeft: 12 + indentPx }}>{row.label}</td>
-                <td className="text-center py-0.5 px-2 text-muted-foreground">
-                  {row.noteNo != null && onNavigateToNote ? (
-                    <button
-                      type="button"
-                      onClick={() => onNavigateToNote(row.noteNo!)}
-                      className="inline-flex items-center gap-0.5 text-primary hover:underline font-medium"
-                      title={`Go to Note ${row.noteNo}`}
-                    >
-                      {row.noteNo}
-                      <ArrowRight className="h-2.5 w-2.5" />
-                    </button>
-                  ) : (row.noteNo ?? "")}
-                </td>
+                <NoteCell code={row.code} noteNo={row.noteNo} />
                 <td className={`text-right tabular-nums py-0.5 px-1 ${boldCls} text-[11px]`}>
                   {editableCY
                     ? <EditableMoneyCell value={row.cy ?? 0} onCommit={(v) => onCommitCY!(row.code!, v === null ? null : isInc ? -v : v)} />
@@ -5418,6 +5455,7 @@ export default function PipelineFinancialStatements({
             ) : isNonCorporate ? (
               <>
                 <NCEPLView
+                  engagementId={engagementId}
                   cyAmounts={computedAmounts}
                   pyAmounts={mergedPY}
                   cyYear={cyYear}
