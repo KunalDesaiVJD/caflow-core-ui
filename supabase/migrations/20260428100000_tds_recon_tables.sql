@@ -83,16 +83,19 @@ CREATE INDEX IF NOT EXISTS tds_recon_flags_client_fy_goal
 ALTER TABLE public.tds_tb_party_mappings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.tds_recon_flags       ENABLE ROW LEVEL SECURITY;
 
--- Service-role bypass (edge functions)
+-- Service-role bypass (edge functions) — idempotent
+DROP POLICY IF EXISTS "service_role_all_mappings" ON public.tds_tb_party_mappings;
 CREATE POLICY "service_role_all_mappings"
   ON public.tds_tb_party_mappings FOR ALL TO service_role
   USING (true) WITH CHECK (true);
 
+DROP POLICY IF EXISTS "service_role_all_flags" ON public.tds_recon_flags;
 CREATE POLICY "service_role_all_flags"
   ON public.tds_recon_flags FOR ALL TO service_role
   USING (true) WITH CHECK (true);
 
--- Authenticated users: firm-scoped via users.firm_id
+-- Authenticated users: firm-scoped via users.firm_id — idempotent
+DROP POLICY IF EXISTS "auth_firm_mappings" ON public.tds_tb_party_mappings;
 CREATE POLICY "auth_firm_mappings"
   ON public.tds_tb_party_mappings FOR ALL TO authenticated
   USING (
@@ -102,6 +105,7 @@ CREATE POLICY "auth_firm_mappings"
     firm_id = (SELECT firm_id FROM public.users WHERE id = auth.uid())
   );
 
+DROP POLICY IF EXISTS "auth_firm_flags" ON public.tds_recon_flags;
 CREATE POLICY "auth_firm_flags"
   ON public.tds_recon_flags FOR ALL TO authenticated
   USING (
@@ -117,10 +121,12 @@ RETURNS TRIGGER LANGUAGE plpgsql AS $$
 BEGIN NEW.updated_at = now(); RETURN NEW; END;
 $$;
 
+DROP TRIGGER IF EXISTS tds_tb_party_mappings_updated_at ON public.tds_tb_party_mappings;
 CREATE TRIGGER tds_tb_party_mappings_updated_at
   BEFORE UPDATE ON public.tds_tb_party_mappings
   FOR EACH ROW EXECUTE FUNCTION public.tds_set_updated_at();
 
+DROP TRIGGER IF EXISTS tds_recon_flags_updated_at ON public.tds_recon_flags;
 CREATE TRIGGER tds_recon_flags_updated_at
   BEFORE UPDATE ON public.tds_recon_flags
   FOR EACH ROW EXECUTE FUNCTION public.tds_set_updated_at();
