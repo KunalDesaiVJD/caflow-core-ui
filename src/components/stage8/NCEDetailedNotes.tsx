@@ -665,7 +665,7 @@ function PatternBTable({
                 </TableRow>
               ) : (() => {
                 const hasAttachedB = attachedHere.length > 0;
-                const hasSrcsB = (cySources[row.id]?.length ?? 0) > 0;
+                const hasSrcsB = (cySources[row.id]?.filter(s => s.amountCy !== 0).length ?? 0) > 0;
                 const showToggleB = hasAttachedB || hasSrcsB;
                 const isOpenB = openSources.has(row.id);
                 const aggCyB = (rawCy[row.id] ?? 0) + (hasAttachedB ? attachedHere.reduce((s, cr) => s + (rawCy[cr.id] ?? 0), 0) : 0);
@@ -717,7 +717,7 @@ function PatternBTable({
 
               {/* Inline source-ledger sub-rows for static rows */}
               {!row.isSectionHeader && !row.isTotal && openSources.has(row.id) &&
-                cySources[row.id]?.map((s, i) => {
+                cySources[row.id]?.filter(s => s.amountCy !== 0).map((s, i) => {
                   const slKey = `${row.id}::${s.ledger}`;
                   const slLabel = sourceLabelOverrides[slKey] ?? s.ledger;
                   return (
@@ -1001,7 +1001,7 @@ function PatternATable({
               ) : (() => {
                 /* Aggregate values: own static value + any attached custom rows */
                 const hasAttachedA = attachedHere.length > 0;
-                const hasSrcsA     = (cySources[row.id]?.length ?? 0) > 0;
+                const hasSrcsA     = (cySources[row.id]?.filter(s => s.amountCy !== 0).length ?? 0) > 0;
                 const showToggleA  = hasSrcsA || hasAttachedA;
                 const isOpenA      = openSources.has(row.id);
 
@@ -1071,7 +1071,7 @@ function PatternATable({
 
               {/* Inline source-ledger sub-rows for Pattern A static rows */}
               {!row.isSectionHeader && !row.isTotal && openSources.has(row.id) &&
-                cySources[row.id]?.map((s, i) => {
+                cySources[row.id]?.filter(s => s.amountCy !== 0).map((s, i) => {
                   const slKey = `${row.id}::${s.ledger}`;
                   const slLabel = sourceLabelOverrides[slKey] ?? s.ledger;
                   return (
