@@ -150,6 +150,42 @@ function applyFont(cell: ExcelJS.Cell, opts: { bold?: boolean; italic?: boolean;
   cell.font = { name: FONT, size: opts.size ?? 10, bold: !!opts.bold, italic: !!opts.italic };
 }
 
+/**
+ * Iterate every cell within a `<startCol,startRow>:<endCol,endRow>` rect and
+ * call the visitor. Used to clear borders on slave cells of a merge so
+ * Excel doesn't render internal divider lines between merged cells.
+ */
+function forEachCellInRange(
+  ws: ExcelJS.Worksheet,
+  startRow: number, startCol: number,
+  endRow:   number, endCol:   number,
+  fn: (cell: ExcelJS.Cell) => void,
+): void {
+  for (let r = startRow; r <= endRow; r++) {
+    for (let c = startCol; c <= endCol; c++) {
+      fn(ws.getCell(r, c));
+    }
+  }
+}
+
+/**
+ * Clear any border styles on slave cells of a merged range. The MASTER
+ * cell (top-left) keeps its border; the others get an empty border object
+ * so Excel renders the merge as a single seamless box without internal
+ * thin divider lines between the merged cells.
+ */
+function clearSlaveBorders(
+  ws: ExcelJS.Worksheet,
+  startRow: number, startCol: number,
+  endRow:   number, endCol:   number,
+): void {
+  forEachCellInRange(ws, startRow, startCol, endRow, endCol, (cell) => {
+    if (cell.row === startRow && cell.col === startCol) return; // skip master
+    // Empty border object — neutralises any inherited or default border
+    cell.border = {} as ExcelJS.Borders;
+  });
+}
+
 // ─── Public entry ────────────────────────────────────────────────────────────
 
 export function writeRatiosSheets(
@@ -159,9 +195,12 @@ export function writeRatiosSheets(
 ): void {
   const noteNo = getNoteNo("ratios") ?? 22;
 
+  // Sheet order MUST match the template: RATIO first, then Current Year,
+  // then Previous Year. Cross-sheet formulas in RATIO reference the other
+  // sheets by name so resolve order doesn't matter — only display order.
+  writeRatioSheet(wb, ctx, data, noteNo);
   writeCYSheet(wb, ctx, data, noteNo);
   writePYSheet(wb, ctx, data, noteNo);
-  writeRatioSheet(wb, ctx, data, noteNo); // RATIO last so cross-refs resolve
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -187,13 +226,17 @@ function writeYearSheet(ws: ExcelJS.Worksheet, companyName: string, yearEnd: num
   c.value = companyName;
   applyFont(c, { bold: true, size: 12 });
   c.alignment = { horizontal: "center", vertical: "middle" };
+  clearSlaveBorders(ws, 2, 2, 3, 8);
 
-  // ── Row 5-6: "Ratio for F.Y. <YYYY-YY>" (merged) ──────────────────────────
+  // ── Row 5-6: ANNEXURE heading (merged) ────────────────────────────────────
+  // Template wording at B5: "ANNEXURE : A (YYYY-YYYY)" — full year span.
+  // The user explicitly wants this exact heading shown.
   ws.mergeCells("B5:H6");
   const t = ws.getCell("B5");
-  t.value = `Ratio for F.Y. ${fyStr(yearEnd)}`;
-  applyFont(t, { bold: true, italic: true, size: 11 });
+  t.value = `ANNEXURE : A (${yearEnd - 1}-${yearEnd})`;
+  applyFont(t, { bold: true, size: 11 });
   t.alignment = { horizontal: "center", vertical: "middle" };
+  clearSlaveBorders(ws, 5, 2, 6, 8);
 
   // ── Row 8: Header band ────────────────────────────────────────────────────
   const r8 = ws.getRow(8);
@@ -315,11 +358,16 @@ function writeDscrBlock(ws: ExcelJS.Worksheet, inp: RatioInputs | null): void {
   noC.value = "3";
   applyFont(noC, { bold: true, size: 10 });
   noC.alignment = { horizontal: "center", vertical: "middle" };
+  noC.border = FULL_BDR;
 
   const nmC = ws.getCell(r0, 3);
   nmC.value = "DEBT SERVICE COVERAGE RATIO";
   applyFont(nmC, { bold: true, size: 10 });
   nmC.alignment = { horizontal: "left", vertical: "middle", wrapText: true };
+  nmC.border = FULL_BDR;
+
+  clearSlaveBorders(ws, r0, 2, r0 + 5, 2);
+  clearSlaveBorders(ws, r0, 3, r0 + 5, 3);
 
   // Header row (r0): NUM and DEN section labels in cols D, F
   setLabel(ws, r0, 4, "EARNING AVAILABLE FOR DEBT SERVICE", { bold: true, italic: true });
@@ -375,11 +423,16 @@ function writeRoceBlock(ws: ExcelJS.Worksheet, inp: RatioInputs | null): void {
   noC.value = "10";
   applyFont(noC, { bold: true, size: 10 });
   noC.alignment = { horizontal: "center", vertical: "middle" };
+  noC.border = FULL_BDR;
 
   const nmC = ws.getCell(r0, 3);
   nmC.value = "RETURN ON CAPITAL EMPLOYED";
   applyFont(nmC, { bold: true, size: 10 });
   nmC.alignment = { horizontal: "left", vertical: "middle", wrapText: true };
+  nmC.border = FULL_BDR;
+
+  clearSlaveBorders(ws, r0, 2, r0 + 7, 2);
+  clearSlaveBorders(ws, r0, 3, r0 + 7, 3);
 
   setLabel(ws, r0, 4, "EARNINGS BEFORE INTEREST AND TAXES", { bold: true, italic: true });
   setLabel(ws, r0, 6, "CAPITAL EMPLOYED",                   { bold: true, italic: true });
@@ -480,6 +533,7 @@ function writeRatioSheet(wb: ExcelJS.Workbook, ctx: Ctx, data: Stage7Ratios | nu
   cn.value = companyName;
   applyFont(cn, { bold: true, size: 12 });
   cn.alignment = { horizontal: "center", vertical: "middle" };
+  clearSlaveBorders(ws, 2, 2, 2, 8);
   ws.getRow(2).height = 22.5;
 
   ws.getRow(3).height = 9;
@@ -514,6 +568,13 @@ function writeRatioSheet(wb: ExcelJS.Workbook, ctx: Ctx, data: Stage7Ratios | nu
   hd("F6", `Current Year ${fyStr(cyYear)}`);
   hd("G6", `Previous Year ${fyStr(pyYear)}`);
   hd("H6", "Variance");
+
+  // Clear slave-cell borders so merged ranges render as one box (no
+  // internal divider line between row 6 and row 7).
+  for (const colIdx of [2, 3, 5, 6, 7, 8]) {
+    clearSlaveBorders(ws, 6, colIdx, 7, colIdx);
+  }
+
   ws.getRow(6).height = 20.25;
   ws.getRow(7).height = 20.25;
 
@@ -564,6 +625,9 @@ function writeRatioBlock(
   nmC.alignment = { horizontal: "left", vertical: "middle", wrapText: true };
   nmC.border = FULL_BDR;
 
+  clearSlaveBorders(ws, numR, 2, denR, 2);
+  clearSlaveBorders(ws, numR, 3, denR, 3);
+
   // ── Col D (numerator label) — top half ──────────────────────────────────
   const numLbl = ws.getCell(numR, 4);
   numLbl.value = f(`+'${cySheet}'!D${lay.cyRow}`);
@@ -602,6 +666,7 @@ function writeRatioBlock(
   applyFont(cyR, { bold: true, size: 10 });
   cyR.alignment = { horizontal: "center", vertical: "middle" };
   cyR.border = FULL_BDR;
+  clearSlaveBorders(ws, numR, 6, denR, 6);
 
   // ── Col G (PY ratio) — merged across num + den rows ─────────────────────
   ws.mergeCells(`G${numR}:G${denR}`);
@@ -611,6 +676,7 @@ function writeRatioBlock(
   applyFont(pyR, { bold: true, size: 10 });
   pyR.alignment = { horizontal: "center", vertical: "middle" };
   pyR.border = FULL_BDR;
+  clearSlaveBorders(ws, numR, 7, denR, 7);
 
   // ── Col H (Variance) — merged across num + den rows ─────────────────────
   // Template formula: (F-G)/G  (no ABS, no IFERROR)
@@ -623,6 +689,7 @@ function writeRatioBlock(
   applyFont(vR, { size: 10 });
   vR.alignment = { horizontal: "center", vertical: "middle" };
   vR.border = FULL_BDR;
+  clearSlaveBorders(ws, numR, 8, denR, 8);
 
   // ── Text/commentary row — full-width merge ──────────────────────────────
   ws.mergeCells(`B${txtR}:H${txtR}`);
@@ -631,6 +698,7 @@ function writeRatioBlock(
   applyFont(txtC, { italic: true, size: 9 });
   txtC.alignment = { horizontal: "left", vertical: "middle", wrapText: true };
   txtC.border = FULL_BDR;
+  clearSlaveBorders(ws, txtR, 2, txtR, 8);
 
   // ── Spacer row — thin side borders only ─────────────────────────────────
   for (let col = 2; col <= 8; col++) {
