@@ -92,28 +92,47 @@ function wBr(opts: RunOpts = {}): string {
 // ─── Paragraph builders ───────────────────────────────────────────────────────
 
 /**
- * Standard body paragraph:
- *   w:left="150" w:right="150"  — template body indentation
- *   jc=both, after="0", line="240"
- *   keepNext — prevents orphan heading/body splits at page breaks
+ * Standard body paragraph — matches the template's 2.x body layout exactly.
  *
- * Text is split on "\n" (single) → <w:br/>. Caller must split on "\n\n" first.
+ *   w:left="150" w:right="150"  — template body indentation
+ *   keepNext, after="0", line="240"
+ *
+ * Justification is applied ONLY to paragraphs with no internal line breaks.
+ * The template's multi-line body paragraphs (e.g. the "(i)/(ii)/(iii)…"
+ * list inside 2.9 Trade Receivables) do not set <w:jc>; if we forced
+ * jc="both" on them Word would visually justify each line, scattering the
+ * short list items across the column ("(i)        Secured" etc.).
+ *
+ * Within a paragraph: every "\n" produces one <w:br/>; consecutive
+ * newlines therefore produce consecutive <w:br/> markers, which Word
+ * renders as a blank line — matching the template's pattern of double
+ * <w:br/> for sub-paragraph gaps inside one <w:p>.
  */
 function bodyPara(text: string, keepNext = true): string {
+  const hasLineBreaks = text.includes("\n");
   const pPr =
     `<w:pPr>` +
-    `<w:jc w:val="both"/>` +
+    (hasLineBreaks ? `` : `<w:jc w:val="both"/>`) +
     (keepNext ? `<w:keepNext/>` : ``) +
     `<w:spacing w:after="0" w:line="240" w:lineRule="auto"/>` +
     `<w:ind w:left="150" w:right="150"/>` +
     `</w:pPr>`;
 
-  const segments = text.split("\n");
+  // Walk the text emitting one run per text segment and one <w:br/> for
+  // every "\n". This preserves consecutive newlines as consecutive line
+  // breaks, the way the template does it.
   const runs: string[] = [];
-  for (let i = 0; i < segments.length; i++) {
-    if (i > 0) runs.push(wBr());
-    if (segments[i]) runs.push(wRun(segments[i]));
+  let buf = "";
+  for (const ch of text) {
+    if (ch === "\n") {
+      if (buf) { runs.push(wRun(buf)); buf = ""; }
+      runs.push(wBr());
+    } else {
+      buf += ch;
+    }
   }
+  if (buf) runs.push(wRun(buf));
+
   return `<w:p>${pPr}${runs.join("")}</w:p>`;
 }
 
@@ -150,13 +169,17 @@ function blank(): string {
 }
 
 /**
- * Render a block of policy body text.
- *   "\n\n" → separate bodyPara elements
- *   "\n"   → <w:br/> within a paragraph (handled inside bodyPara)
+ * Render a block of policy body text as a SINGLE paragraph, matching the
+ * template. Multiple newlines remain inside one <w:p> as consecutive
+ * <w:br/> markers — that's what gives the template its visual sub-
+ * paragraph gaps inside, e.g., the 2.9 Trade Receivables block.
+ *
+ * Splitting on \n\n into separate <w:p> elements (the previous behaviour)
+ * forced every chunk to inherit jc="both", which justified short list
+ * lines like "(i) Secured" across the full column width.
  */
 function bodyBlock(text: string): string[] {
-  const chunks = text.split(/\n\n+/);
-  return chunks.map(chunk => bodyPara(chunk));
+  return [bodyPara(text)];
 }
 
 /**
@@ -305,11 +328,18 @@ export async function exportNtaToDocx(
       <w:pgSz w:w="11906" w:h="16838"/>
       <w:pgMar w:top="0" w:right="849" w:bottom="851" w:left="993"
                w:header="765" w:footer="850" w:gutter="0"/>
-      <w:pgBorders w:offsetFrom="page">
-        <w:top    w:val="single" w:sz="10" w:space="24" w:color="auto"/>
-        <w:left   w:val="single" w:sz="10" w:space="24" w:color="auto"/>
-        <w:bottom w:val="single" w:sz="10" w:space="24" w:color="auto"/>
-        <w:right  w:val="single" w:sz="10" w:space="24" w:color="auto"/>
+      <w:pgBorders>
+        <!--
+          offsetFrom defaults to "text" (omitted), so the border tracks the
+          text-margin edge instead of being inset 24 pt from the page edge.
+          The previous offsetFrom="page" with w:space="24" pushed the border
+          ~480 twips inside the left/right margins (993/849), which made
+          long body lines overflow visibly past the border.
+        -->
+        <w:top    w:val="single" w:sz="10" w:space="1" w:color="auto"/>
+        <w:left   w:val="single" w:sz="10" w:space="0" w:color="auto"/>
+        <w:bottom w:val="single" w:sz="10" w:space="1" w:color="auto"/>
+        <w:right  w:val="single" w:sz="10" w:space="0" w:color="auto"/>
       </w:pgBorders>
     </w:sectPr>
   </w:body>
