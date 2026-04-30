@@ -366,20 +366,20 @@ export default function AuditPipeline() {
             has_existing_engagement:     hasEngagementIds.has(c.id as string),
           };
         })
-        .filter(c => {
-          if (!Boolean((c.name as string)?.trim())) return false;
-          // Show if at least one audit type is enabled on the client profile,
-          // OR if the client has any audit setup row (even with all flags false),
-          // OR if the client already has an existing engagement for this firm.
-          return (
-            c.statutory_audit_applicable    ||
-            c.tax_audit_applicable          ||
-            c.internal_audit_applicable     ||
-            c.stock_audit_applicable        ||
-            (c as any).has_any_audit_setup  ||
-            (c as any).has_existing_engagement
-          );
-        });
+        .filter(c => Boolean((c.name as string)?.trim()));
+      // ───────────────────────────────────────────────────────────────────────
+      // Eligibility filter REMOVED. Earlier we required at least one audit-
+      // applicability flag, an existing setup row, or an engagement. That kept
+      // hiding clients (SHREEYAM INFRA, Dhanani, every freshly-imported GSTN/
+      // TDS client) whose Tax Audit Applicable was checked in the Audit Setup
+      // tab but whose underlying `tax_audit_type` / `client_fy_audit_setup`
+      // row hadn't propagated yet. Every "make this one client appear" patch
+      // played whack-a-mole with the same root cause.
+      //
+      // The Create-Engagement modal already constrains the user — they pick
+      // a client AND an audit type explicitly. Showing every firm client is
+      // the only behaviour that won't silently drop someone.
+      // ───────────────────────────────────────────────────────────────────────
     },
     enabled: !!user?.id,
   });
