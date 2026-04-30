@@ -369,20 +369,26 @@ export default function AuditPipeline() {
             has_existing_engagement:     hasEngagementIds.has(c.id as string),
           };
         })
-        .filter(c => Boolean((c.name as string)?.trim()));
-      // ───────────────────────────────────────────────────────────────────────
-      // Eligibility filter REMOVED. Earlier we required at least one audit-
-      // applicability flag, an existing setup row, or an engagement. That kept
-      // hiding clients (SHREEYAM INFRA, Dhanani, every freshly-imported GSTN/
-      // TDS client) whose Tax Audit Applicable was checked in the Audit Setup
-      // tab but whose underlying `tax_audit_type` / `client_fy_audit_setup`
-      // row hadn't propagated yet. Every "make this one client appear" patch
-      // played whack-a-mole with the same root cause.
-      //
-      // The Create-Engagement modal already constrains the user — they pick
-      // a client AND an audit type explicitly. Showing every firm client is
-      // the only behaviour that won't silently drop someone.
-      // ───────────────────────────────────────────────────────────────────────
+        .filter(c => {
+          if (!Boolean((c.name as string)?.trim())) return false;
+          // Show only clients where Audit Setup is activated for at least
+          // one audit type. The merged flags above pull from THREE sources
+          // so this is robust against the older data inconsistencies:
+          //   1. clients.* direct columns (now canonical, including the new
+          //      tax_audit_applicable boolean — migration 20260430130000)
+          //   2. client_fy_audit_setup (FY-keyed booleans)
+          //   3. active client_services
+          // Clients with an existing engagement also stay visible so users
+          // can navigate to in-flight work even if the setup flags later
+          // change.
+          return (
+            c.statutory_audit_applicable    ||
+            c.tax_audit_applicable          ||
+            c.internal_audit_applicable     ||
+            c.stock_audit_applicable        ||
+            (c as any).has_existing_engagement
+          );
+        });
     },
     enabled: !!user?.id,
   });
