@@ -434,8 +434,9 @@ function EditableNoteCell({
   );
 }
 
-// FS item code → registry note key (reverse of CORP_KEY_TO_FS_CODES in noteNumberRegistry).
-// Used by CorporateBalanceSheetView's NoteCell to resolve dynamic note numbers.
+// ── BS FS code → registry note key ──────────────────────────────────────────
+// Reverse of CORP_KEY_TO_FS_CODES in noteNumberRegistry.
+// Used by CorporateBalanceSheetView's NoteCell.
 const FS_CODE_TO_NOTE_KEY: Readonly<Record<string, string>> = {
   BS_EQ_SC:   "share_capital",
   BS_EQ_RS:   "reserves_surplus",
@@ -458,6 +459,21 @@ const FS_CODE_TO_NOTE_KEY: Readonly<Record<string, string>> = {
   BS_CA_CCE:  "cash_bank",
   BS_CA_SLA:  "st_loans_advances",
   BS_CA_OCA:  "other_current_assets",
+};
+
+// ── P&L FS code → registry note key ─────────────────────────────────────────
+// Used by CorporatePLView's NoteCell.
+const PL_CODE_TO_NOTE_KEY: Readonly<Record<string, string>> = {
+  PL_REV_OPS: "revenue_from_ops",
+  PL_REV_OI:  "other_income",
+  PL_EXP_MAT: "cost_materials",
+  PL_EXP_SIT: "purchases_stock",
+  PL_EXP_CII: "changes_inventories",
+  PL_EXP_EMP: "employee_benefits",
+  PL_EXP_FIN: "finance_costs",
+  PL_EXP_DEP: "depreciation",
+  PL_EXP_OTH: "other_expenses",
+  PL_EPS_B:   "eps",   // EPS header row (Basic used as the key carrier)
 };
 
 interface CorporateBalanceSheetViewProps {
@@ -681,7 +697,7 @@ function buildPLRows(pl: PLRowData): PLDisplayRow[] {
     { kind: "subnote", label: "(XII-XIII)", bold: true },
     { kind: "total",  roman: "XV.",  label: "Profit / (Loss) for the period (XI+XIV)", cy: profitCy, py: profitPy },
     { kind: "spacer" },
-    { kind: "item",   label: "Earnings per equity share ;", noteNo: pl.eps.noteNo, bold: true },
+    { kind: "item",   label: "Earnings per equity share ;", noteNo: pl.eps.noteNo, bold: true, code: "PL_EPS_B" },
     { kind: "item",   label: "(1) Basic",   cy: epsBasicCy, py: epsBasicPy, indent: 2 },
     { kind: "item",   label: "(2) Diluted", indent: 2 },
     { kind: "footer", label: "The accompanying notes form an integral part of the financial statements." },
@@ -689,6 +705,7 @@ function buildPLRows(pl: PLRowData): PLDisplayRow[] {
 }
 
 interface CorporatePLViewProps {
+  engagementId: string;
   pl:           PLRowData;
   cyYear:       number;
   pyYear:       number;
@@ -700,8 +717,22 @@ interface CorporatePLViewProps {
 }
 
 function CorporatePLView({
-  pl, cyYear, pyYear, companyName, pyLocked, lockedCodes, onCommitCY, onCommitPY,
+  engagementId, pl, cyYear, pyYear, companyName, pyLocked, lockedCodes,
+  onCommitCY, onCommitPY,
 }: CorporatePLViewProps) {
+  const { getNoteLabel } = useDynamicNoteRegistry(engagementId);
+
+  /** Renders the Note No. cell for a P&L row using the dynamic registry. */
+  const NoteCell = ({ code }: { code?: string | null }) => {
+    if (!code) return <td className="text-center py-0.5 px-2 text-muted-foreground/40 text-[11px]">—</td>;
+    const noteKey = PL_CODE_TO_NOTE_KEY[code];
+    if (!noteKey) return <td className="text-center py-0.5 px-2 text-muted-foreground/40 text-[11px]">—</td>;
+    const label = getNoteLabel(noteKey);
+    return label
+      ? <td className="text-center py-0.5 px-2 text-primary font-medium text-[11px] cursor-default">{label}</td>
+      : <td className="text-center py-0.5 px-2 text-muted-foreground/40 text-[11px]">—</td>;
+  };
+
   const rows = buildPLRows(pl);
   return (
     <div className="rounded-lg border bg-card overflow-hidden">
@@ -783,7 +814,7 @@ function CorporatePLView({
               <tr key={idx} className="hover:bg-muted/10">
                 <td className={`text-center py-0.5 px-1 ${boldCls} text-[11px]`}>{row.roman || ""}</td>
                 <td className={`py-0.5 px-3 ${boldCls} text-[11px]`} style={{ paddingLeft: 12 + indentPx }}>{row.label}</td>
-                <td className="text-center py-0.5 px-2 text-muted-foreground">{row.noteNo ?? ""}</td>
+                <NoteCell code={row.code} />
                 <td className={`text-right tabular-nums py-0.5 px-3 ${boldCls} text-[11px]`}>
                   {editableCY
                     ? <EditableMoneyCell value={row.cy ?? 0} onCommit={(v) => onCommitCY!(row.code!, v)} />
@@ -5281,6 +5312,7 @@ export default function PipelineFinancialStatements({
             {!isNonCorporate && fsDisplayData.pl ? (
               <>
                 <CorporatePLView
+                  engagementId={engagementId}
                   pl={fsDisplayData.pl}
                   cyYear={cyYear}
                   pyYear={pyYear}
