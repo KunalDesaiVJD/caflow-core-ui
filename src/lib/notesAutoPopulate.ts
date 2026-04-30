@@ -608,16 +608,24 @@ function mergeSimilarLedgers(
     } else {
       label = deriveLedgerBaseHead(members[0].account_name);
     }
+    // Build sub-ledger source list, BUT drop entries where both CY and PY
+    // are zero — they clutter the info expander without adding signal.
+    // Per user feedback: blank year-suffix variants (e.g. "TDS Payable
+    // 192B - 1920", "TDS Payable 192B - 2021") that have no balance in
+    // either year should not appear under the merged head.
+    const sources = members
+      .map(m => ({
+        ledger:    m.account_name,
+        amount_cy: Math.abs(Math.round((m.balance ?? 0) * 100) / 100),
+        amount_py: Math.abs(Math.round((m.opening_balance ?? 0) * 100) / 100),
+      }))
+      .filter(s => s.amount_cy !== 0 || s.amount_py !== 0);
     out.push({
       account_name:    label,
       account_group:   members[0].account_group,
       balance:         members.reduce((s, m) => s + (m.balance ?? 0), 0),
       opening_balance: members.reduce((s, m) => s + (m.opening_balance ?? 0), 0),
-      _sources:        members.map(m => ({
-        ledger:    m.account_name,
-        amount_cy: Math.abs(Math.round((m.balance ?? 0) * 100) / 100),
-        amount_py: Math.abs(Math.round((m.opening_balance ?? 0) * 100) / 100),
-      })),
+      _sources:        sources,
     });
   }
   return out;

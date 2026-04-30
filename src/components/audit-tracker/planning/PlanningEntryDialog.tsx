@@ -125,7 +125,7 @@ export default function PlanningEntryDialog({
     setEmpNames(ns => ns.filter((_,i) => i !== idx));
   }
 
-  async function handleSave() {
+  async function handleSave(keepOpen: boolean = false) {
     if (!from || !to) return;
     setSaving(true);
     // safeISO strips any time/TZ suffix — keeps value as pure "YYYY-MM-DD"
@@ -134,7 +134,18 @@ export default function PlanningEntryDialog({
       isEdit ? entry!.id : undefined
     );
     setSaving(false);
-    onOpenChange(false);
+    if (keepOpen) {
+      // Save & Add Another: preserve date range, reset client + employees so the
+      // user can quickly assign another (client, employees) combo on the same
+      // date(s) — e.g. Gautam+Soumil → Dhanani, then someone else → DBS Realty
+      // on the same 30/04/2026. Each call creates an independent audit_planning row.
+      setClientId("");
+      setClientName("");
+      setEmpIds([]);
+      setEmpNames([]);
+    } else {
+      onOpenChange(false);
+    }
   }
 
   async function handleDelete() {
@@ -298,8 +309,16 @@ export default function PlanningEntryDialog({
               onClick={() => onOpenChange(false)} disabled={saving}>
               Cancel
             </Button>
+            {!isEdit && (
+              <Button size="sm" variant="outline" className="h-7 text-xs gap-1"
+                title="Save this assignment and keep the dialog open to add another client on the same date range"
+                onClick={() => handleSave(true)} disabled={saving || !valid || !clientName}>
+                {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+                Save &amp; Add Another
+              </Button>
+            )}
             <Button size="sm" className="bg-indigo-600 hover:bg-indigo-700 gap-1 h-7 text-xs"
-              onClick={handleSave} disabled={saving || !valid || !clientName}>
+              onClick={() => handleSave(false)} disabled={saving || !valid || !clientName}>
               {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
               {isEdit ? "Update" : "Save"}
             </Button>
