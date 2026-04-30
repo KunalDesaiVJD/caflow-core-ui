@@ -9,7 +9,7 @@
 
 import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
-import { Pencil, X, Plus, Trash2, ChevronDown, ChevronRight, MoreVertical } from "lucide-react";
+import { Pencil, X, Plus, Trash2, ChevronDown, ChevronRight, MoreVertical, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Popover, PopoverTrigger, PopoverContent,
@@ -340,6 +340,106 @@ export interface ListRow {
   amount_py?:      number;
   source?:         "linked" | "manual";
   linked_ledger?:  string;
+  /** When this row consolidates multiple TB ledgers (smart-merge — e.g.
+   *  "TDS Payable" rolling up TDS 192B / 194I / 194C), this lists the
+   *  underlying ledgers + amounts. The "i" expander reveals them. */
+  sources?: { ledger: string; amount_cy: number; amount_py: number }[];
+}
+
+/** Renders a single ListTable row plus, when the row has multiple smart-merged
+ *  source ledgers, an expandable list showing each source ledger with its
+ *  CY/PY amount — so the auditor can see exactly what was bundled into
+ *  e.g. "TDS Payable" (TDS 192B + TDS 194I + TDS 194C + ...). */
+function ListRowWithSources({
+  r, origIdx, isLinked, isManual, hasSources, descPlaceholder, update, remove,
+}: {
+  r: ListRow;
+  origIdx: number;
+  isLinked: boolean;
+  isManual: boolean;
+  hasSources: boolean;
+  descPlaceholder: string;
+  update: (i: number, patch: Partial<ListRow>) => void;
+  remove: (i: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <div className="grid grid-cols-12 gap-2 items-center">
+        <div className="col-span-6 flex items-center gap-1.5">
+          {hasSources ? (
+            <button
+              type="button"
+              className="shrink-0 inline-flex items-center justify-center w-4 h-4 rounded border border-blue-300 bg-blue-50 text-blue-600 hover:bg-blue-100"
+              title={`${r.sources!.length} ledgers merged — click to expand`}
+              onClick={() => setOpen(o => !o)}
+            >
+              {open ? <ChevronDown className="w-3 h-3" /> : <Info className="w-3 h-3" />}
+            </button>
+          ) : (
+            <div className="w-4 shrink-0" />
+          )}
+          <div className="flex-1 min-w-0">
+            <EditableCell
+              type="text"
+              value={r.description ?? ""}
+              placeholder={descPlaceholder}
+              isAutoFilled={isLinked}
+              isOverridden={isManual && !!r.description}
+              onCommit={(v) => update(origIdx, { description: String(v ?? "") })}
+            />
+          </div>
+          {isLinked && (
+            <span
+              title={r.linked_ledger ? `Linked from COA ledger: ${r.linked_ledger}` : "Linked from COA mapping"}
+              className="shrink-0 inline-flex items-center px-1 py-[1px] rounded text-[8px] font-semibold uppercase tracking-wide border border-blue-300 bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-200"
+            >
+              Linked
+            </span>
+          )}
+          {isManual && (
+            <span
+              title="Manually entered — re-sync from COA will not change this row"
+              className="shrink-0 inline-flex items-center px-1 py-[1px] rounded text-[8px] font-semibold uppercase tracking-wide border border-amber-300 bg-amber-50 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200"
+            >
+              Manual
+            </span>
+          )}
+        </div>
+        <div className="col-span-3">
+          <EditableCell
+            value={r.amount_cy ?? 0}
+            isAutoFilled={isLinked}
+            isOverridden={isManual && (r.amount_cy ?? 0) !== 0}
+            onCommit={(v) => update(origIdx, { amount_cy: v == null ? 0 : Number(v) })}
+          />
+        </div>
+        <div className="col-span-2">
+          <EditableCell
+            value={r.amount_py ?? 0}
+            isAutoFilled={isLinked}
+            isOverridden={isManual && (r.amount_py ?? 0) !== 0}
+            onCommit={(v) => update(origIdx, { amount_py: v == null ? 0 : Number(v) })}
+          />
+        </div>
+        <div className="col-span-1 flex justify-end">
+          <ListRowActionsMenu onDelete={() => remove(origIdx)} />
+        </div>
+      </div>
+      {hasSources && open && (
+        <div className="ml-6 pl-2 border-l-2 border-blue-200 space-y-0.5 py-1">
+          {r.sources!.map((s, idx) => (
+            <div key={idx} className="grid grid-cols-12 gap-2 items-center text-[10px] text-muted-foreground italic">
+              <div className="col-span-6 truncate" title={s.ledger}>↳ {s.ledger}</div>
+              <div className="col-span-3 text-right tabular-nums pr-2">{formatINR(s.amount_cy)}</div>
+              <div className="col-span-2 text-right tabular-nums pr-2">{formatINR(s.amount_py)}</div>
+              <div className="col-span-1" />
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
 }
 
 export function ListTable({
@@ -404,58 +504,21 @@ export function ListTable({
       {displayRows.map((r, i) => {
         const isLinked = r.source === "linked";
         const isManual = r.source === "manual";
+        const hasSources = Array.isArray(r.sources) && r.sources.length > 1;
         // Map display index back to original rows array for edits/deletes
         const origIdx = rows.indexOf(r);
         return (
-          <div key={i} className="grid grid-cols-12 gap-2 items-center">
-            <div className="col-span-6 flex items-center gap-1.5">
-              <div className="flex-1 min-w-0">
-                <EditableCell
-                  type="text"
-                  value={r.description ?? ""}
-                  placeholder={descPlaceholder}
-                  isAutoFilled={isLinked}
-                  isOverridden={isManual && !!r.description}
-                  onCommit={(v) => update(origIdx, { description: String(v ?? "") })}
-                />
-              </div>
-              {isLinked && (
-                <span
-                  title={r.linked_ledger ? `Linked from COA ledger: ${r.linked_ledger}` : "Linked from COA mapping"}
-                  className="shrink-0 inline-flex items-center px-1 py-[1px] rounded text-[8px] font-semibold uppercase tracking-wide border border-blue-300 bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-200"
-                >
-                  Linked
-                </span>
-              )}
-              {isManual && (
-                <span
-                  title="Manually entered — re-sync from COA will not change this row"
-                  className="shrink-0 inline-flex items-center px-1 py-[1px] rounded text-[8px] font-semibold uppercase tracking-wide border border-amber-300 bg-amber-50 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200"
-                >
-                  Manual
-                </span>
-              )}
-            </div>
-            <div className="col-span-3">
-              <EditableCell
-                value={r.amount_cy ?? 0}
-                isAutoFilled={isLinked}
-                isOverridden={isManual && (r.amount_cy ?? 0) !== 0}
-                onCommit={(v) => update(origIdx, { amount_cy: v == null ? 0 : Number(v) })}
-              />
-            </div>
-            <div className="col-span-2">
-              <EditableCell
-                value={r.amount_py ?? 0}
-                isAutoFilled={isLinked}
-                isOverridden={isManual && (r.amount_py ?? 0) !== 0}
-                onCommit={(v) => update(origIdx, { amount_py: v == null ? 0 : Number(v) })}
-              />
-            </div>
-            <div className="col-span-1 flex justify-end">
-              <ListRowActionsMenu onDelete={() => remove(origIdx)} />
-            </div>
-          </div>
+          <ListRowWithSources
+            key={i}
+            r={r}
+            origIdx={origIdx}
+            isLinked={isLinked}
+            isManual={isManual}
+            hasSources={hasSources}
+            descPlaceholder={descPlaceholder}
+            update={update}
+            remove={remove}
+          />
         );
       })}
 

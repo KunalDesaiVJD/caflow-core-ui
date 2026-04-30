@@ -566,11 +566,19 @@ function smartMatchCorp(ledgerName: string, rules: SmartMergeRule[]): string | n
   return null;
 }
 
-/** Merge similar TB ledgers into consolidated synthetic ledgers. */
+/** Sub-ledger record carried on a synthetic merged ledger so the UI can
+ *  render an info button listing what was bundled together. */
+export interface MergedSource { ledger: string; amount_cy: number; amount_py: number }
+
+type TBLedgerWithSources = TBLedger & { _sources?: MergedSource[] };
+
+/** Merge similar TB ledgers into consolidated synthetic ledgers. Synthetic
+ *  ledgers carry a `_sources` array describing the originals so the breakup
+ *  row can show an "i" expander listing the underlying ledgers. */
 function mergeSimilarLedgers(
   ledgers: TBLedger[],
   ruleKey: string | undefined,
-): TBLedger[] {
+): TBLedgerWithSources[] {
   const rules = ruleKey ? CORP_SMART_MERGE[ruleKey] : undefined;
   if (!ledgers || ledgers.length === 0) return ledgers;
 
@@ -588,7 +596,7 @@ function mergeSimilarLedgers(
     groups.get(key)!.push(l);
   }
 
-  const out: TBLedger[] = [];
+  const out: TBLedgerWithSources[] = [];
   for (const [key, members] of groups.entries()) {
     if (members.length === 1) {
       out.push(members[0]);
@@ -605,6 +613,11 @@ function mergeSimilarLedgers(
       account_group:   members[0].account_group,
       balance:         members.reduce((s, m) => s + (m.balance ?? 0), 0),
       opening_balance: members.reduce((s, m) => s + (m.opening_balance ?? 0), 0),
+      _sources:        members.map(m => ({
+        ledger:    m.account_name,
+        amount_cy: Math.abs(Math.round((m.balance ?? 0) * 100) / 100),
+        amount_py: Math.abs(Math.round((m.opening_balance ?? 0) * 100) / 100),
+      })),
     });
   }
   return out;
@@ -674,6 +687,11 @@ export interface BreakupRow {
   amount_py?:      number;
   source?:         "linked" | "manual";
   linked_ledger?:  string;
+  /** When this row was synthesised from multiple TB ledgers (via the
+   *  CORP_SMART_MERGE rules — e.g. "TDS Payable" rolling up TDS 192B,
+   *  TDS 194I, TDS 194C, ...), this lists the underlying ledgers + their
+   *  amounts. The ListTable shows an "i" button that expands these. */
+  sources?: MergedSource[];
 }
 
 export function buildBreakup(
@@ -752,12 +770,14 @@ export function buildBreakup(
   // 3) Append remaining (un-matched) ledgers as fresh linked rows
   for (const l of ledgers) {
     if (usedLedgers.has(l.account_name)) continue;
+    const sources = (l as TBLedgerWithSources)._sources;
     result.push({
       description:   l.account_name,
       amount_cy:     Math.abs(round2(l.balance)),
       amount_py:     resolvePY(l.account_name, l.opening_balance),
       source:        "linked",
       linked_ledger: l.account_name,
+      ...(sources && sources.length > 1 ? { sources } : {}),
     });
   }
 
@@ -970,7 +990,22 @@ export async function autoPopulateNotes(
         any = true;
       }
     }
-    return any ? Math.round(total * 100) / 100 : 0;
+    if (any) return Math.round(total * 100) / 100;
+    // 3) Last-resort fallback — sum opening_balance of CY trial balance ledgers
+    //    mapped to this spec's FS codes. Mirrors what PipelineFinancialStatements
+    //    uses for BS PY amounts (computedAmountsPY). Ensures Note 8/18 etc. show
+    //    PY totals even when no prior engagement / fa_financial_statements exist.
+    const codeSet = new Set(spec.fsCodes);
+    let openTotal = 0;
+    let anyOpen = false;
+    for (const ledger of tb) {
+      const ledgerCode = mapping[ledger.account_name]?.code;
+      if (ledgerCode && codeSet.has(ledgerCode)) {
+        const ob = ledger.opening_balance ?? 0;
+        if (ob !== 0) { openTotal += Math.abs(ob); anyOpen = true; }
+      }
+    }
+    return anyOpen ? Math.round(openTotal * 100) / 100 : 0;
   };
 
   // Seed FA from canonical 9-row default, then carry forward existing
