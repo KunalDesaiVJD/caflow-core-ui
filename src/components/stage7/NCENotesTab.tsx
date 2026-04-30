@@ -40,10 +40,19 @@ export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteM
 
   useEffect(() => {
     if (navigateToNote != null) {
+      // Static ref 2 = Owners' Capital Account → Capital Account tab
+      if (navigateToNote === 2) {
+        setActiveSubTab("capital_account");
+        return;
+      }
+      // Static ref 10 = PPE / Property, Plant & Equipment → PPE Schedule tab
+      if (navigateToNote === 10) {
+        setActiveSubTab("ppe_schedule");
+        return;
+      }
+      // All other notes → Notes to Accounts tab + scroll to note
       setActiveSubTab("notes_to_accounts");
-      // Wait for tab content to render then scroll.
-      // IDs now use the dynamic number (from dynamicNoteMap) so we check both
-      // the dynamic-mapped number and the original static number as fallback.
+      // IDs use the dynamic number (from dynamicNoteMap); fall back to static ref.
       const timer = setTimeout(() => {
         const dynamicNo = dynamicNoteMap?.get(navigateToNote);
         const el =

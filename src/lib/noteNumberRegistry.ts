@@ -462,10 +462,10 @@ export function useDynamicNoteRegistry(
   const getDynamicNoteNo = (key: string): number | undefined =>
     registry.get(key);
 
-  /** Return "N{n}" when the note has data, else undefined. */
+  /** Return "{n}" when the note has data, else undefined. */
   const getNoteLabel = (key: string): string | undefined => {
     const n = registry.get(key);
-    return n !== undefined ? `N${n}` : undefined;
+    return n !== undefined ? `${n}` : undefined;
   };
 
   /**

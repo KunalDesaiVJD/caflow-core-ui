@@ -1009,15 +1009,19 @@ function NCEBalanceSheetView({
   /**
    * Renders the Note No. cell for an NCE BS row.
    *
-   * Display  — dynamic label (N2, N5 …) from the registry; "—" if note has no data.
+   * Display  — dynamic label ({n}) from the registry; "—" if note has no data.
    * Navigate — preserves the existing click-to-jump-to-notes behaviour by passing
    *            the original static noteNo (from buildNCEBSRows via sn()) to
    *            onNavigateToNote, which NCENotesTab resolves via dynamicNoteMap.
+   *
+   * Zero-suppression gate: noteNo comes from sn() which returns null when both
+   * CY and PY are 0 — so even if the dynamic registry assigns a label via COA
+   * mapping, we honour the row-level null and show "—".
    */
   const NoteCell = ({ code, noteNo }: { code?: string | null; noteNo?: number | null }) => {
     const noteKey = code ? NCE_CODE_TO_NOTE_KEY[code] : undefined;
     const label   = noteKey ? getNoteLabel(noteKey) : undefined;
-    if (!label) {
+    if (!label || noteNo == null) {
       return <td className="text-center py-0.5 px-2 text-muted-foreground/40 text-[11px]">—</td>;
     }
     return (
@@ -1140,14 +1144,17 @@ function NCEPLView({
   /**
    * Renders the Note No. cell for an NCE P&L row.
    * Same two-signal design as NCEBalanceSheetView's NoteCell:
-   *   display  → dynamic label (N{n}) via getNoteLabel; "—" if note suppressed
+   *   display  → dynamic label ({n}) via getNoteLabel; "—" if note suppressed
    *   navigate → original static noteNo passed to onNavigateToNote so
    *              NCENotesTab can resolve via dynamicNoteMap
+   *
+   * Zero-suppression gate: noteNo from sn() is null when CY=PY=0, so we
+   * show "—" even if the registry assigned a label via COA mapping.
    */
   const NoteCell = ({ code, noteNo }: { code?: string | null; noteNo?: number | null }) => {
     const noteKey = code ? NCE_CODE_TO_NOTE_KEY[code] : undefined;
     const label   = noteKey ? getNoteLabel(noteKey) : undefined;
-    if (!label) {
+    if (!label || noteNo == null) {
       return <td className="text-center py-0.5 px-2 text-muted-foreground/40 text-[11px]">—</td>;
     }
     return (
