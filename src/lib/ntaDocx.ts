@@ -4,14 +4,18 @@
  * Generates Notes to Accounts (Note No : 1 — Accounting Policies) as a
  * properly formatted .docx file using JSZip.
  *
- * Formatting exactly matches the corporate template:
- *   Font     : Times New Roman 10 pt throughout
- *   Body     : fully justified
- *   Headings : bold (same 10 pt size, no extra spacing tricks)
- *   Multi-para policy text : split on "\n\n" → separate <w:p> elements
- *   Inline line-breaks     : "\n" within a paragraph → <w:br/>
+ * ALL formatting values are taken directly from the unpacked XML of the
+ * official corporate template ("Notes to accounts for Corporate.docx"):
  *
- * Data source : audit_engagements.stage8_nta_data (Stage 8 NTA screen)
+ *   Font         : Cambria 10 pt (w:sz="20") on all body + heading runs
+ *   Normal style : sz=17 (8.5 pt) — matches template, overridden per run
+ *   docDefaults  : w:after="160" w:line="278" (NO justify at doc level)
+ *   Body paras   : w:left="150" w:right="150", jc=both, after="0", line=240
+ *   Headings     : w:left="650" w:hanging="488", bold, after="0", keepNext
+ *   Numbered     : w:left="720" w:hanging="360", tab stop at 720, after="60"
+ *   Page size    : A4 (11906 × 16838)
+ *   Page margins : top=0, right=849, bottom=851, left=993
+ *   Page border  : single sz=10 on all four sides
  */
 
 import JSZip from "jszip";
@@ -48,24 +52,23 @@ function getActYear(dateStr: string | null | undefined): string {
   return yr >= 2014 ? "2013" : "1956";
 }
 
-// ─── Run / paragraph builders ─────────────────────────────────────────────────
+// ─── Run builder ──────────────────────────────────────────────────────────────
 
 interface RunOpts {
   bold?: boolean;
   italic?: boolean;
   underline?: boolean;
-  /** Point size — defaults to 10 */
-  fontSize?: number;
 }
 
-/** Build a single <w:r> run with Times New Roman 10 pt. */
+/**
+ * Build a <w:r> using Cambria 10 pt — the exact font and size in the template.
+ * Inline \n in `text` is NOT handled here; split before calling.
+ */
 function wRun(text: string, opts: RunOpts = {}): string {
-  if (text === "") return "";
-  const pt = opts.fontSize ?? 10;
-  const sz = pt * 2;
+  if (!text) return "";
   const rPrParts: string[] = [
-    `<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>`,
-    `<w:sz w:val="${sz}"/><w:szCs w:val="${sz}"/>`,
+    `<w:rFonts w:ascii="Cambria" w:hAnsi="Cambria" w:cs="Cambria"/>`,
+    `<w:sz w:val="20"/><w:szCs w:val="20"/>`,
   ];
   if (opts.bold)      rPrParts.push("<w:b/><w:bCs/>");
   if (opts.italic)    rPrParts.push("<w:i/><w:iCs/>");
@@ -76,144 +79,130 @@ function wRun(text: string, opts: RunOpts = {}): string {
   );
 }
 
-/** Inline line-break run (used for single \n within a paragraph). */
-function wBr(): string {
-  return "<w:r><w:br/></w:r>";
+/** Inline line-break run — used for single \n within a paragraph. */
+function wBr(opts: RunOpts = {}): string {
+  const rPrParts: string[] = [
+    `<w:rFonts w:ascii="Cambria" w:hAnsi="Cambria" w:cs="Cambria"/>`,
+    `<w:sz w:val="20"/><w:szCs w:val="20"/>`,
+  ];
+  if (opts.bold) rPrParts.push("<w:b/><w:bCs/>");
+  return `<w:r><w:rPr>${rPrParts.join("")}</w:rPr><w:br/></w:r>`;
 }
 
-interface ParaOpts extends RunOpts {
-  centered?: boolean;
-  leftAlign?: boolean;
-  /** Space after paragraph in twips (1 pt = 20 twips). Defaults to 0. */
-  spaceAfter?: number;
-  spaceBefore?: number;
-  /** Hanging indent: left margin in twips. */
-  indLeft?: number;
-  /** First-line hanging (subtracted from indLeft). */
-  indHanging?: number;
-}
+// ─── Paragraph builders ───────────────────────────────────────────────────────
 
 /**
- * Build a <w:p> with a single text string.
- * Single \n within `text` → <w:br/>; \n\n must be split BEFORE calling.
+ * Standard body paragraph:
+ *   w:left="150" w:right="150"  — template body indentation
+ *   jc=both, after="0", line="240"
+ *   keepNext — prevents orphan heading/body splits at page breaks
+ *
+ * Text is split on "\n" (single) → <w:br/>. Caller must split on "\n\n" first.
  */
-function wPara(text: string, opts: ParaOpts = {}): string {
-  const pPrParts: string[] = [];
+function bodyPara(text: string, keepNext = true): string {
+  const pPr =
+    `<w:pPr>` +
+    `<w:jc w:val="both"/>` +
+    (keepNext ? `<w:keepNext/>` : ``) +
+    `<w:spacing w:after="0" w:line="240" w:lineRule="auto"/>` +
+    `<w:ind w:left="150" w:right="150"/>` +
+    `</w:pPr>`;
 
-  if (opts.centered) {
-    pPrParts.push('<w:jc w:val="center"/>');
-  } else if (opts.leftAlign) {
-    pPrParts.push('<w:jc w:val="left"/>');
-  } else {
-    pPrParts.push('<w:jc w:val="both"/>');
-  }
-
-  const before = opts.spaceBefore;
-  const after  = opts.spaceAfter ?? 0;
-  pPrParts.push(
-    `<w:spacing${before !== undefined ? ` w:before="${before}"` : ""} w:after="${after}" w:line="240" w:lineRule="auto"/>`,
-  );
-
-  if (opts.indLeft !== undefined) {
-    const hanging = opts.indHanging ?? 0;
-    pPrParts.push(
-      hanging
-        ? `<w:ind w:left="${opts.indLeft}" w:hanging="${hanging}"/>`
-        : `<w:ind w:left="${opts.indLeft}"/>`,
-    );
-  }
-
-  const pPr = `<w:pPr>${pPrParts.join("")}</w:pPr>`;
-
-  // Inline \n → <w:br/>
   const segments = text.split("\n");
   const runs: string[] = [];
   for (let i = 0; i < segments.length; i++) {
     if (i > 0) runs.push(wBr());
-    if (segments[i]) runs.push(wRun(segments[i], opts));
+    if (segments[i]) runs.push(wRun(segments[i]));
   }
-
   return `<w:p>${pPr}${runs.join("")}</w:p>`;
 }
 
-/** Empty paragraph (blank line between sections). */
-function blank(): string {
-  return `<w:p><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr></w:p>`;
+/**
+ * Section heading paragraph (e.g. "2.9  Trade and Other Receivables"):
+ *   w:left="650" w:hanging="488"  — number hangs, title text wraps at 650
+ *   bold, after="0", keepNext
+ */
+function headingPara(label: string, title: string): string {
+  const pPr =
+    `<w:pPr>` +
+    `<w:jc w:val="both"/>` +
+    `<w:keepNext/>` +
+    `<w:spacing w:after="0" w:line="240" w:lineRule="auto"/>` +
+    `<w:ind w:left="650" w:hanging="488"/>` +
+    `</w:pPr>`;
+  const labelRun = wRun(label, { bold: true });
+  const sep      = label && title ? wRun("  ", { bold: true }) : "";
+  const titleRun = title ? wRun(title, { bold: true }) : "";
+  return `<w:p>${pPr}${labelRun}${sep}${titleRun}</w:p>`;
 }
 
 /**
- * Render a block of policy body text.
- * Splits on \n\n → separate paragraphs; single \n → <w:br/> within a para.
- * All body paragraphs are indented by 720 twips (matching template layout).
+ * Empty divider paragraph — small visual gap between sections.
+ * Template uses w:left="150", after="0".
  */
-function bodyParas(text: string, spaceAfter = 0): string[] {
-  const chunks = text.split(/\n\n+/);
-  return chunks.map((chunk, i) =>
-    wPara(chunk, {
-      spaceAfter: i < chunks.length - 1 ? 80 : spaceAfter,
-      indLeft: 720,
-    }),
+function blank(): string {
+  return (
+    `<w:p><w:pPr>` +
+    `<w:spacing w:after="0" w:line="240" w:lineRule="auto"/>` +
+    `<w:ind w:left="150"/>` +
+    `</w:pPr></w:p>`
   );
 }
 
 /**
- * Section heading: "2.x  Title" bold, no extra indent.
- * keepNext prevents orphaned headings at page breaks.
+ * Render a block of policy body text.
+ *   "\n\n" → separate bodyPara elements
+ *   "\n"   → <w:br/> within a paragraph (handled inside bodyPara)
  */
-function sectionHeading(label: string, title: string): string {
-  const pPr =
-    `<w:pPr>` +
-    `<w:jc w:val="both"/>` +
-    `<w:spacing w:before="120" w:after="60" w:line="240" w:lineRule="auto"/>` +
-    `<w:keepNext/>` +
-    `</w:pPr>`;
-  const run = wRun(label + (title ? "  " + title : ""), { bold: true });
-  return `<w:p>${pPr}${run}</w:p>`;
+function bodyBlock(text: string): string[] {
+  const chunks = text.split(/\n\n+/);
+  return chunks.map(chunk => bodyPara(chunk));
 }
 
 /**
- * Numbered general-note paragraph with hanging indent.
- *   "N.  [text]" where N. is bold and text is normal.
+ * Numbered general-note paragraph with hanging indent matching the template:
+ *   w:left="720" w:hanging="360"
+ *   tab stop at 720 — after the "N." number
+ *   after="60" (matches template's small gap between notes)
+ *
+ * Multi-paragraph notes (split on \n\n) get continuation paras indented at
+ * w:left="720" (aligns with text, not number).
  */
-function numberedPara(num: number, text: string): string[] {
-  const indLeft    = 720;  // 36 pt
-  const indHanging = 360;  // 18 pt (first line pulls back to 18 pt)
-  const pPr =
+function numberedParas(num: number, text: string): string[] {
+  const indLeft    = 720;
+  const indHanging = 360;
+
+  const firstPPr =
     `<w:pPr>` +
     `<w:jc w:val="both"/>` +
+    `<w:keepNext/>` +
     `<w:tabs><w:tab w:val="left" w:pos="${indLeft}"/></w:tabs>` +
     `<w:ind w:left="${indLeft}" w:hanging="${indHanging}"/>` +
     `<w:spacing w:after="60" w:line="240" w:lineRule="auto"/>` +
     `</w:pPr>`;
 
-  // Split on \n\n for multi-paragraph notes; first chunk gets the number
+  const contPPr =
+    `<w:pPr>` +
+    `<w:jc w:val="both"/>` +
+    `<w:spacing w:after="60" w:line="240" w:lineRule="auto"/>` +
+    `<w:ind w:left="${indLeft}"/>` +
+    `</w:pPr>`;
+
   const chunks = text.split(/\n\n+/);
-
   const paras: string[] = [];
-  for (let ci = 0; ci < chunks.length; ci++) {
-    const chunk = chunks[ci];
-    const segments = chunk.split("\n");
 
+  for (let ci = 0; ci < chunks.length; ci++) {
+    const segments = chunks[ci].split("\n");
+    const runs: string[] = [];
     if (ci === 0) {
-      // First chunk: "N.\t[text]" with hanging indent
-      const runs: string[] = [
-        wRun(`${num}.`, { bold: true }),
-        "<w:r><w:tab/></w:r>",
-      ];
+      runs.push(wRun(`${num}.`, { bold: true }));
+      runs.push(`<w:r><w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria" w:cs="Cambria"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:tab/></w:r>`);
       for (let si = 0; si < segments.length; si++) {
         if (si > 0) runs.push(wBr());
         if (segments[si]) runs.push(wRun(segments[si]));
       }
-      paras.push(`<w:p>${pPr}${runs.join("")}</w:p>`);
+      paras.push(`<w:p>${firstPPr}${runs.join("")}</w:p>`);
     } else {
-      // Continuation paragraphs — indented to align with text (not the number)
-      const contPPr =
-        `<w:pPr>` +
-        `<w:jc w:val="both"/>` +
-        `<w:ind w:left="${indLeft}"/>` +
-        `<w:spacing w:after="60" w:line="240" w:lineRule="auto"/>` +
-        `</w:pPr>`;
-      const runs: string[] = [];
       for (let si = 0; si < segments.length; si++) {
         if (si > 0) runs.push(wBr());
         if (segments[si]) runs.push(wRun(segments[si]));
@@ -246,23 +235,23 @@ export async function exportNtaToDocx(
     companyName, cin, incDateIso, regAddress, bizActivity, data,
   } = params;
 
-  const incDate  = fmtDate(incDateIso);
-  const actYear  = getActYear(incDateIso);
+  const incDate = fmtDate(incDateIso);
+  const actYear = getActYear(incDateIso);
   const paras: string[] = [];
 
   // ── 1. Main heading ──────────────────────────────────────────────────────────
-  // "Note No : 1   DISCLOSURE OF ACCOUNTING POLICIES & NOTES FORMING PART..."
-  paras.push(
-    wPara(
-      "Note No : 1   DISCLOSURE OF ACCOUNTING POLICIES & NOTES FORMING PART OF THE ANNUAL ACCOUNTS",
-      { bold: true, spaceAfter: 120 },
-    ),
-  );
+  // Template: "Note No : 1   DISCLOSURE OF ACCOUNTING POLICIES & NOTES FORMING
+  //            PART OF THE ANNUAL ACCOUNTS" — bold, heading indentation
+  paras.push(headingPara(
+    "Note No : 1",
+    "DISCLOSURE OF ACCOUNTING POLICIES & NOTES FORMING PART OF THE ANNUAL ACCOUNTS",
+  ));
+  paras.push(blank());
 
-  // ── 2. Overview of the Reporting Entity ──────────────────────────────────────
-  // Matches template wording exactly:
+  // ── 2. Overview paragraph ────────────────────────────────────────────────────
+  // Template wording exactly:
   // "[Name] ('the company') was incorporated on [Date] under the Companies Act,
-  //  [actYear] vide CIN [cin] having its registered office at [address] and
+  //  [year] vide CIN [cin] having its registered office at [address] and
   //  engaged in business of [activity]."
   const overviewText =
     `${companyName || "[Name of Company]"} ('the company') was incorporated on ` +
@@ -271,11 +260,11 @@ export async function exportNtaToDocx(
     `${regAddress || "___________________"} and engaged in business of ` +
     `${bizActivity || "___________________"}.`;
 
-  paras.push(wPara(overviewText, { spaceAfter: 120 }));
+  paras.push(bodyPara(overviewText));
   paras.push(blank());
 
-  // ── 3. Section heading: Significant Accounting Policies ──────────────────────
-  paras.push(sectionHeading("2", "Significant Accounting Policies"));
+  // ── 3. "2 Significant Accounting Policies" section heading ───────────────────
+  paras.push(headingPara("2", "Significant Accounting Policies"));
   paras.push(blank());
 
   // ── 4. Policies 2.1 – 2.n ────────────────────────────────────────────────────
@@ -285,24 +274,25 @@ export async function exportNtaToDocx(
     const title = p.title || "";
     const body  = resolvePolicy(p.id, p.body);
 
-    paras.push(sectionHeading(label, title));
-    bodyParas(body, 80).forEach(bp => paras.push(bp));
+    paras.push(headingPara(label, title));
+    bodyBlock(body).forEach(bp => paras.push(bp));
     paras.push(blank());
   }
 
-  // ── 5. Section 2.19 — General Notes ─────────────────────────────────────────
-  paras.push(sectionHeading("2.19", "General notes"));
+  // ── 5. 2.19 General Notes ─────────────────────────────────────────────────────
+  paras.push(headingPara("2.19", "General notes"));
 
   for (let idx = 0; idx < data.general_notes.length; idx++) {
     const note = data.general_notes[idx];
     const body = resolveGeneralNote(idx, note.body);
-    numberedPara(idx + 1, body).forEach(p => paras.push(p));
+    numberedParas(idx + 1, body).forEach(p => paras.push(p));
   }
 
   paras.push(blank());
 
-  // ─── Assemble document.xml ───────────────────────────────────────────────────
-
+  // ─── document.xml ─────────────────────────────────────────────────────────────
+  //
+  // Page border matches template: single sz=10 on all sides, space=24
   const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -313,42 +303,46 @@ export async function exportNtaToDocx(
     ${paras.join("\n    ")}
     <w:sectPr>
       <w:pgSz w:w="11906" w:h="16838"/>
-      <w:pgMar w:top="1080" w:right="1080" w:bottom="1080" w:left="1080"
-               w:header="708" w:footer="708" w:gutter="0"/>
+      <w:pgMar w:top="0" w:right="849" w:bottom="851" w:left="993"
+               w:header="765" w:footer="850" w:gutter="0"/>
+      <w:pgBorders w:offsetFrom="page">
+        <w:top    w:val="single" w:sz="10" w:space="24" w:color="auto"/>
+        <w:left   w:val="single" w:sz="10" w:space="24" w:color="auto"/>
+        <w:bottom w:val="single" w:sz="10" w:space="24" w:color="auto"/>
+        <w:right  w:val="single" w:sz="10" w:space="24" w:color="auto"/>
+      </w:pgBorders>
     </w:sectPr>
   </w:body>
 </w:document>`;
 
-  // ─── styles.xml — Times New Roman 10 pt as document default ─────────────────
-
+  // ─── styles.xml ───────────────────────────────────────────────────────────────
+  //
+  // docDefaults: Cambria, no justify at doc level, line=278 after=160 (template)
+  // Normal:      Cambria 8.5 pt (sz=17) — matches template Normal style
   const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
           xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <w:docDefaults>
     <w:rPrDefault>
       <w:rPr>
-        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
-        <w:sz w:val="20"/>
-        <w:szCs w:val="20"/>
+        <w:rFonts w:ascii="Cambria" w:hAnsi="Cambria" w:cs="Cambria"/>
+        <w:sz w:val="17"/>
+        <w:szCs w:val="17"/>
+        <w:lang w:val="en-IN" w:eastAsia="en-IN" w:bidi="ar-SA"/>
       </w:rPr>
     </w:rPrDefault>
     <w:pPrDefault>
       <w:pPr>
-        <w:jc w:val="both"/>
-        <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+        <w:spacing w:after="160" w:line="278" w:lineRule="auto"/>
       </w:pPr>
     </w:pPrDefault>
   </w:docDefaults>
   <w:style w:type="paragraph" w:default="1" w:styleId="Normal">
     <w:name w:val="Normal"/>
-    <w:pPr>
-      <w:jc w:val="both"/>
-      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
-    </w:pPr>
     <w:rPr>
-      <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
-      <w:sz w:val="20"/>
-      <w:szCs w:val="20"/>
+      <w:rFonts w:ascii="Cambria" w:hAnsi="Cambria" w:cs="Cambria"/>
+      <w:sz w:val="17"/>
+      <w:szCs w:val="17"/>
     </w:rPr>
   </w:style>
 </w:styles>`;
