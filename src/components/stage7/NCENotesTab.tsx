@@ -25,26 +25,37 @@ import { NCEPPESchedule }    from "@/components/stage8/NCEPPESchedule";
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface Props {
-  engagementId: string;
+  engagementId:   string;
   navigateToNote?: number | null;
+  /** Dynamic note number map from PipelineFinancialStatements.
+   *  Maps originalNoteRef → dynamicSequentialNoteNo so the Notes tab headings
+   *  stay in sync with the note numbers shown in the BS/PL columns. */
+  dynamicNoteMap?: Map<number, number>;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function NCENotesTab({ engagementId, navigateToNote }: Props) {
+export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteMap }: Props) {
   const [activeSubTab, setActiveSubTab] = useState("capital_account");
 
   useEffect(() => {
     if (navigateToNote != null) {
       setActiveSubTab("notes_to_accounts");
-      // Wait for tab content to render then scroll
+      // Wait for tab content to render then scroll.
+      // IDs now use the dynamic number (from dynamicNoteMap) so we check both
+      // the dynamic-mapped number and the original static number as fallback.
       const timer = setTimeout(() => {
-        document.getElementById(`nce-note-${navigateToNote}`)
-          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+        const dynamicNo = dynamicNoteMap?.get(navigateToNote);
+        const el =
+          (dynamicNo != null
+            ? document.getElementById(`nce-note-${dynamicNo}`)
+            : null) ??
+          document.getElementById(`nce-note-${navigateToNote}`);
+        el?.scrollIntoView({ behavior: "smooth", block: "start" });
       }, 250);
       return () => clearTimeout(timer);
     }
-  }, [navigateToNote]);
+  }, [navigateToNote, dynamicNoteMap]);
 
   return (
     <div className="space-y-3">
@@ -73,7 +84,7 @@ export default function NCENotesTab({ engagementId, navigateToNote }: Props) {
         </TabsContent>
 
         <TabsContent value="notes_to_accounts" className="mt-3">
-          <NCEDetailedNotes engagementId={engagementId} />
+          <NCEDetailedNotes engagementId={engagementId} dynamicNoteMap={dynamicNoteMap} />
         </TabsContent>
 
         <TabsContent value="ppe_schedule" className="mt-3">

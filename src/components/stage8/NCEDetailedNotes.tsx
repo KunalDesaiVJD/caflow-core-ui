@@ -35,10 +35,19 @@ import {
   NCECustomRow, NCENoteData,
   nceAutoPopulate, deserialiseNoteData, serialiseNoteData,
 } from "@/lib/nceAutoPopulate";
+import { getDynamicNoteDisplay } from "@/lib/nceDynamicNoteNumbers";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
-interface Props { engagementId: string; }
+interface Props {
+  engagementId: string;
+  /** Dynamic note number map from PipelineFinancialStatements.
+   *  Maps originalNoteRef → dynamicNoteNo so NoteCard headings stay in
+   *  sync with the numbers shown in the BS/PL columns.
+   *  When omitted (e.g. when rendered standalone from Stage 8), falls back
+   *  to parsing the static number from NOTES_CONFIG title strings. */
+  dynamicNoteMap?: Map<number, number>;
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -164,21 +173,23 @@ function SubLedgerActionsMenu({
 // ─── Note card (collapsible) ──────────────────────────────────────────────────
 
 function NoteCard({
-  noteNumber, title, autoCount, manualCount, children, collapseControl,
+  noteNumber, title, autoCount, manualCount, children, collapseControl, anchorId,
 }: {
-  noteNumber: string;
-  title:      string;
-  autoCount:  number;
+  noteNumber:  string;
+  title:       string;
+  autoCount:   number;
   manualCount: number;
-  children:   React.ReactNode;
+  children:    React.ReactNode;
   collapseControl?: boolean;
+  /** Stable DOM id for scroll-to-note. Falls back to noteNumber when omitted. */
+  anchorId?: string;
 }) {
   const [open, setOpen] = useState(true);
   useEffect(() => {
     if (collapseControl !== undefined) setOpen(!collapseControl);
   }, [collapseControl]);
   return (
-    <div id={`nce-note-${noteNumber}`} className="border rounded-lg overflow-hidden bg-background">
+    <div id={anchorId ?? `nce-note-${noteNumber}`} className="border rounded-lg overflow-hidden bg-background">
       {/* Header strip — click to collapse/expand */}
       <div
         className="bg-muted/40 px-4 py-2 border-b flex items-center gap-2 flex-wrap cursor-pointer select-none hover:bg-muted/60 transition-colors"
@@ -1145,7 +1156,7 @@ function PatternATable({
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export function NCEDetailedNotes({ engagementId }: Props) {
+export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
   const [noteData,    setNoteData]    = useState<Record<string, NCENoteData>>({});
   const [loading,     setLoading]     = useState(true);
   const [saving,      setSaving]      = useState(false);
@@ -1638,9 +1649,13 @@ export function NCEDetailedNotes({ engagementId }: Props) {
           const d          = noteData[nc.noteType] ?? { cy: {}, py: {}, customRows: [] };
           const autoCount  = d.customRows.filter(r => r.source === "auto").length;
           const manuCount  = d.customRows.filter(r => r.source === "manual").length;
-          // Extract note number from title like "Note 3: Borrowings"
-          const noteNum    = nc.title.match(/Note\s+([\d\s&]+):/i)?.[1]?.trim() ?? "";
-          const noteTitle  = nc.title.replace(/^Note\s+[\d\s&]+:\s*/i, "");
+
+          // Dynamic note number: use the map when available (cross-tab sync),
+          // else fall back to parsing from the title string (standalone Stage 8).
+          const noteNum = dynamicNoteMap
+            ? (getDynamicNoteDisplay(nc.noteType, dynamicNoteMap) ?? "")
+            : (nc.title.match(/Note\s+([\d\s&]+):/i)?.[1]?.trim() ?? "");
+          const noteTitle = nc.title.replace(/^Note\s+[\d\s&]+:\s*/i, "");
 
           return (
             <NoteCard
@@ -1650,6 +1665,7 @@ export function NCEDetailedNotes({ engagementId }: Props) {
               autoCount={autoCount}
               manualCount={manuCount}
               collapseControl={collapseAll}
+              anchorId={noteNum ? `nce-note-${noteNum}` : `nce-note-type-${nc.noteType}`}
             >
               <div className="overflow-x-auto">
                 {nc.pattern === "A" ? (

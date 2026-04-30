@@ -45,6 +45,7 @@ import {
   computeDisplayData,
   type NoteConfig,
 } from "@/config/nceNotesConfig";
+import { computeNceDynamicNoteMap } from "@/lib/nceDynamicNoteNumbers";
 
 // ═══════════════════════════════════════
 // Schedule III Line Item Definitions
@@ -2331,6 +2332,15 @@ export default function PipelineFinancialStatements({
     for (const item of activeTree) computePL(item);
     return merged;
   }, [computedAmountsPY, pyAmounts, pyManualAmounts, noPriorEngagement, activeFlatItems, activeTree, pyInvCII]);
+
+  // ─── NCE Dynamic Note Number Map ────────────────────────────────────────────
+  // Maps originalNoteRef → dynamicSequentialNoteNo for NCE entities.
+  // Only notes with non-zero CY or PY FS amounts (plus always-active notes 1,2,10)
+  // get a dynamic number. Inactive notes return undefined → suppressed in display.
+  const nceDynamicNoteMap = useMemo(
+    () => computeNceDynamicNoteMap(computedAmounts, mergedPY),
+    [computedAmounts, mergedPY],
+  );
 
   // ─── Phase UI-1: Shared FS display data ─────────────────────────────────
   // Hoisted out of exportToExcel() so both the Export Excel button AND the
@@ -4716,9 +4726,11 @@ export default function PipelineFinancialStatements({
             )}
           </TableCell>
 
-          {/* Note No. */}
+          {/* Note No. — dynamic for NCE (zero-suppressed + sequential) */}
           <TableCell className="text-xs text-center text-muted-foreground tabular-nums">
-            {item.noteRef && !isHeader && !isTotalRow ? item.noteRef : ""}
+            {item.noteRef && !isHeader && !isTotalRow
+              ? (nceDynamicNoteMap.get(item.noteRef) ?? "")
+              : ""}
           </TableCell>
 
           {/* CY amount + pencil
@@ -5423,7 +5435,11 @@ export default function PipelineFinancialStatements({
           {/* ── NCE Notes (UI-7) — Capital Account / Notes to Accounts / PPE ── */}
           {isNonCorporate && (
             <TabsContent value="notes" className="mt-3">
-              <NCENotesTab engagementId={engagementId} navigateToNote={nceNavNote} />
+              <NCENotesTab
+                engagementId={engagementId}
+                navigateToNote={nceNavNote}
+                dynamicNoteMap={nceDynamicNoteMap}
+              />
             </TabsContent>
           )}
         </Tabs>
