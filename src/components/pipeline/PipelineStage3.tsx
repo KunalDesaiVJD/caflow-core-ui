@@ -1408,15 +1408,41 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     // Revenue (PL_REV, credit = negative) and Expenses (PL_EXP, debit = positive)
     // live in P&L codes.  The current-year net profit must be credited to Reserves &
     // Surplus so the Balance Sheet balances — mirrors the closing journal entry.
+    //
+    // BOOKS-CLOSED DETECTION (client-agnostic):
+    //   In some Tally configurations the firm closes books mid-year and posts the
+    //   current-year P&L directly into the retained-earnings ledger (e.g. into
+    //   "Profit & Loss A/c (BxS)" or "Reserves & Surplus" itself).  In that case
+    //   the closing balance of that ledger ALREADY includes the current-year
+    //   profit/loss — adding netPL again would double-count.
+    //
+    //   We detect this by looking for any ledger mapped to BS_EQ_RS that has
+    //   current-year journal activity (tally_debit + tally_credit > 0), EXCLUDING
+    //   the "auto-flow" current-year accumulator ledger (Tally's "Profit & Loss
+    //   A/c" with opening=0, whose movement IS the current-year P&L still pending
+    //   transfer).  If such a non-accumulator ledger has movement → books are
+    //   closed → skip the netPL auto-flow.
     if (!isNonCorporate) {
-      const rev   = amounts["PL_REV"] || 0; // negative (credit)
-      const exp   = amounts["PL_EXP"] || 0; // positive (debit)
-      const netPL = Math.round((-rev - exp) * 100) / 100;
-      if (Math.abs(netPL) > 0.005) {
-        amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) - netPL;
-        // Re-run the full tree so every parent (BS_EQ → BS root) picks up the change
-        for (const item of activeTree) {
-          computeTotal(item);
+      const reservesLedgers = tbAccounts.filter(a => coaMapping[a.account_name]?.code === "BS_EQ_RS");
+      const booksClosed = reservesLedgers.some(a => {
+        const isAutoFlowAccumulator =
+          isTallyPLAccount(a.account_name) && Math.abs(a.opening_balance ?? 0) < 0.005;
+        if (isAutoFlowAccumulator) return false; // current-year accumulator, not a closure indicator
+        const dr = Number(a.tally_debit  || 0);
+        const cr = Number(a.tally_credit || 0);
+        return Math.abs(dr) > 0.005 || Math.abs(cr) > 0.005;
+      });
+
+      if (!booksClosed) {
+        const rev   = amounts["PL_REV"] || 0; // negative (credit)
+        const exp   = amounts["PL_EXP"] || 0; // positive (debit)
+        const netPL = Math.round((-rev - exp) * 100) / 100;
+        if (Math.abs(netPL) > 0.005) {
+          amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) - netPL;
+          // Re-run the full tree so every parent (BS_EQ → BS root) picks up the change
+          for (const item of activeTree) {
+            computeTotal(item);
+          }
         }
       }
     }
