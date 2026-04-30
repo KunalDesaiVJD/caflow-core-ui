@@ -227,18 +227,22 @@ export default function AuditPipeline() {
     queryFn: async () => {
       const firmId = user?.firm_id ?? "";
 
-      // ── Step 1: Non-draft clients + clients with existing engagements ─────────
-      // API-imported clients (e.g. synced from GSTN/TDS portals) often have
-      // is_draft = true even when they have active audit engagements. We run TWO
-      // parallel initial fetches so that such clients always appear:
-      //   A. Non-draft clients for this firm (the normal path).
-      //   B. Engagement client IDs — bypasses is_draft so any client with an
-      //      existing engagement appears regardless of draft status.
+      // ── Step 1: Fetch ALL firm clients (no is_draft filter) ──────────────────
+      // Previously we excluded `is_draft = true` clients (API-imported from
+      // GSTN/TDS portals) and patched in those with engagements. This left
+      // gaps: e.g. clients freshly imported via the GST/TDS sync who hadn't
+      // had an engagement created yet (SHREEYAM INFRA, etc.) silently
+      // disappeared from the dropdown despite having Tax/Statutory Audit
+      // applicable flags set.
+      //
+      // The dropdown's job is "show every client this firm could create an
+      // audit engagement for" — draft status is unrelated to that decision.
+      // The eligibility filter below already restricts to clients with audit
+      // applicability or active engagements, which is the correct gate.
       let clientQuery = supabase
         .from("clients")
         .select("id, name, entity_type, statutory_audit_applicable, internal_audit_applicable, tax_audit_type, is_draft")
         .is("deleted_at", null)
-        .eq("is_draft", false)
         .order("name", { ascending: true });
       if (firmId) clientQuery = clientQuery.eq("firm_id", firmId);
 
@@ -248,38 +252,19 @@ export default function AuditPipeline() {
         .or("is_py_shell.is.null,is_py_shell.eq.false");
       if (firmId) engIdQuery = engIdQuery.eq("firm_id", firmId);
 
-      const [{ data: nonDraftClients }, { data: engIdRows }] = await Promise.all([
+      const [{ data: allClients }, { data: engIdRows }] = await Promise.all([
         clientQuery,
         engIdQuery,
       ]);
 
-      // Unique client IDs from existing engagements
-      const engagementClientIds = [
-        ...new Set((engIdRows ?? []).map((r: any) => r.client_id).filter(Boolean)),
-      ] as string[];
-
-      // Find engagement client IDs that are NOT already in the non-draft list
-      const nonDraftIdSet = new Set((nonDraftClients ?? []).map((c: any) => c.id));
-      const extraClientIds = engagementClientIds.filter(id => !nonDraftIdSet.has(id));
-
-      // Fetch the draft/imported clients that have engagements (no is_draft filter)
-      let extraClients: any[] = [];
-      if (extraClientIds.length > 0) {
-        const { data } = await supabase
-          .from("clients")
-          .select("id, name, entity_type, statutory_audit_applicable, internal_audit_applicable, tax_audit_type, is_draft")
-          .is("deleted_at", null)
-          .in("id", extraClientIds);
-        extraClients = data ?? [];
-      }
-
-      // Combined client list — non-draft first (sorted), draft-with-engagement appended
-      const allFirmClients = [...(nonDraftClients ?? []), ...extraClients];
+      const allFirmClients = allClients ?? [];
       if (!allFirmClients.length) return [];
 
       const clientIds = allFirmClients.map((c: any) => c.id as string);
       // Set of all engagement client IDs for use in the eligibility filter
-      const hasEngagementIds = new Set<string>(engagementClientIds);
+      const hasEngagementIds = new Set<string>(
+        ((engIdRows ?? []) as any[]).map(r => r.client_id).filter(Boolean),
+      );
 
       // ── Step 2: Parallel eligibility sources ───────────────────────────────
       const [classRes, classHistRes, auditSetupRes, auditSvcRes] = await Promise.all([
@@ -411,14 +396,21 @@ export default function AuditPipeline() {
   });
 
   // ─── Audit firms (for engagement creation) ───
+  // ALL active audit firms are visible to every authenticated user, regardless
+  // of role or practice firm_id. The previous behaviour scoped the list to the
+  // user's own practice firm_id for non-superadmins, which hid co-firms (e.g.
+  // "K Desai and Associates") from team members who legitimately needed to
+  // sign engagements under those firms. Practice partnerships routinely
+  // share staff across multiple registered audit firms — restricting the
+  // dropdown by firm_id breaks that workflow.
   const { data: auditFirmsForEng } = useQuery({
-    queryKey: ["audit-firms-eng", user?.firm_id, user?.role],
+    queryKey: ["audit-firms-eng-all"],
     queryFn: async () => {
-      let query = supabase.from("audit_firms").select("id, name").neq("active", false).order("name");
-      if (user?.role !== "superadmin" && user?.firm_id) {
-        query = query.eq("firm_id", user.firm_id) as typeof query;
-      }
-      const { data } = await query;
+      const { data } = await supabase
+        .from("audit_firms")
+        .select("id, name")
+        .neq("active", false)
+        .order("name");
       return data || [];
     },
     enabled: !!user?.id,
