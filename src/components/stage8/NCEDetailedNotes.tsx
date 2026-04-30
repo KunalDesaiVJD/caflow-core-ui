@@ -1263,6 +1263,19 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
                   if ((d.py[pid + sfx] ?? 0) !== 0) { d.py[pid + sfx] = 0; healed = true; }
                 }
               }
+              // Strip stale custom_* keys: cy/py values that belong to a
+              // customRow ID that no longer exists in the customRows array
+              // (e.g. a previously-deleted parent_group wrapper). Otherwise
+              // these get picked up via extras in section totals and inflate
+              // the math.
+              const validIds = new Set((d.customRows || []).map(cr => cr.id));
+              for (const map of [d.cy, d.py]) {
+                for (const k of Object.keys(map)) {
+                  if (!k.startsWith("custom_")) continue;
+                  const base = k.replace(/_lt$|_st$/, "");
+                  if (!validIds.has(base)) { delete map[k]; healed = true; }
+                }
+              }
             }
             if (healed) {
               persistNotes(built, fy).catch(() => {/* best-effort */});

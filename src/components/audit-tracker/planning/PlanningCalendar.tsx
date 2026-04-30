@@ -127,9 +127,9 @@ function CalCell({ dateISO, employee, entries, onClick }: CellProps) {
   return (
     <td
       onClick={() => onClick(dateISO, employee, null)}
-      className="border border-border/60 w-[90px] min-w-[90px] p-[2px] cursor-pointer align-top hover:bg-muted/10 transition-colors"
+      className="border border-border/60 w-[90px] min-w-[90px] max-w-[90px] p-[2px] cursor-pointer align-top hover:bg-muted/10 transition-colors overflow-hidden"
     >
-      <div className="space-y-[2px]">
+      <div className="space-y-[2px] w-full max-w-full overflow-hidden">
         {hits.map(entry => {
           const isLeave  = entry.client_name?.toLowerCase() === "leave";
           const color    = clientColor(entry.client_name || "");
@@ -140,13 +140,13 @@ function CalCell({ dateISO, employee, entries, onClick }: CellProps) {
             <div
               key={entry.id}
               className={cn(
-                "px-1.5 rounded border text-[10px] font-medium flex items-center overflow-hidden h-5",
+                "px-1.5 rounded border text-[10px] font-medium overflow-hidden h-5 leading-5 w-full max-w-full",
                 color
               )}
               onClick={e => { e.stopPropagation(); onClick(dateISO, employee, entry); }}
               title={`${entry.client_name || "—"}  ·  ${dateHint}  —  click to edit`}
             >
-              <span className="truncate">{isLeave ? "Leave" : entry.client_name}</span>
+              <span className="block truncate w-full">{isLeave ? "Leave" : entry.client_name}</span>
             </div>
           );
         })}
@@ -173,20 +173,20 @@ function WeekCell({ dateISO, employee, entries, onClick }: CellProps) {
   return (
     <td
       onClick={() => onClick(dateISO, employee, null)}
-      className="border border-border/60 w-[90px] min-w-[90px] min-h-[64px] cursor-pointer p-1 align-top hover:bg-muted/10 transition-colors"
+      className="border border-border/60 w-[90px] min-w-[90px] max-w-[90px] min-h-[64px] cursor-pointer p-1 align-top hover:bg-muted/10 transition-colors overflow-hidden"
     >
-      <div className="space-y-[3px]">
+      <div className="space-y-[3px] w-full max-w-full overflow-hidden">
         {hits.map(entry => {
           const isLeave = entry.client_name?.toLowerCase() === "leave";
           const color   = clientColor(entry.client_name || "");
           return (
             <div
               key={entry.id}
-              className={cn("px-1.5 py-0.5 rounded border text-[10px] font-medium space-y-0.5", color)}
+              className={cn("px-1.5 py-0.5 rounded border text-[10px] font-medium space-y-0.5 w-full max-w-full overflow-hidden", color)}
               onClick={e => { e.stopPropagation(); onClick(dateISO, employee, entry); }}
               title={`${entry.client_name || ""} — click to edit`}
             >
-              <p className="truncate font-semibold">{isLeave ? "Leave" : entry.client_name}</p>
+              <p className="truncate font-semibold w-full">{isLeave ? "Leave" : entry.client_name}</p>
               <p className="text-[9px] opacity-70">
                 {entry.planned_from === entry.planned_to
                   ? entry.planned_from

@@ -718,6 +718,26 @@ export async function nceAutoPopulate(
       }
     }
 
+    // ── Strip stale custom_* cy/py keys ────────────────────────────────────
+    // After re-sync the customRows array is rebuilt from scratch
+    // (autoRows + absorbedManualRows). Any prev.cy / prev.py keys that
+    // belonged to customRows that no longer exist (e.g. a deleted
+    // parent_group wrapper "Unsecured Loans" from before Issue 2 was fixed)
+    // would otherwise remain in mergedCy → still picked up by extras filter
+    // in computeDisplayData → inflate Total (B) and Total (A+B).
+    const validCustomIds = new Set(
+      [...autoRows, ...absorbedManualRows].map(cr => cr.id),
+    );
+    const purgeStale = (m: Record<string, number>) => {
+      for (const k of Object.keys(m)) {
+        if (!k.startsWith("custom_")) continue;
+        const baseId = k.replace(/_lt$|_st$/, "");
+        if (!validCustomIds.has(baseId)) delete m[k];
+      }
+    };
+    purgeStale(mergedCy);
+    purgeStale(mergedPy);
+
     out[noteType] = {
       cy:         mergedCy,
       py:         mergedPy,
