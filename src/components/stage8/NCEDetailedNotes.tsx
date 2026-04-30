@@ -1240,29 +1240,27 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
             await persistNotes(populated, fy);
             toast.success("Notes populated from COA mapping");
           } else {
-            // ── Self-heal stale parent static-row values (Issue 3) ──
-            // If a static row has child custom rows attached, its OWN value
-            // must be 0 — otherwise the section/grand totals double-count
-            // (formulaAdd sums the static row + its children separately).
-            // Older saved data may have a non-zero static value left over
-            // from before children were attached. Zero-out + persist silently.
+            // ── Self-heal: migrate legacy borrowings data ──────────────────
+            // Old data may have unsecured borrowing custom rows with
+            // section:"unsecured" but no attachedTo. These should be
+            // attachedTo:"unsec_other" so the static row shows the correct
+            // aggregate when collapsed. computeDisplayData already excludes
+            // attached rows from section extras to prevent double-counting.
             let healed = false;
-            for (const [, d] of Object.entries(built)) {
-              const attachedParents = new Set(
-                (d.customRows || [])
-                  .map(cr => cr.attachedTo)
-                  .filter((id): id is string => !!id),
+            if (built["borrowings"]) {
+              const b = built["borrowings"];
+              const patched = b.customRows.map(cr =>
+                cr.section === "unsecured" && !cr.attachedTo
+                  ? { ...cr, attachedTo: "unsec_other" as string }
+                  : cr,
               );
-              for (const pid of attachedParents) {
-                // CUSTOM rows (auto-groups, manual rows) carry the meaningful sum
-                // of their sources/children — never zero them. Only static-row IDs
-                // (e.g. "unsec_other") get zeroed when they have children attached.
-                if (pid.startsWith("custom_")) continue;
-                for (const sfx of ["", "_lt", "_st"]) {
-                  if ((d.cy[pid + sfx] ?? 0) !== 0) { d.cy[pid + sfx] = 0; healed = true; }
-                  if ((d.py[pid + sfx] ?? 0) !== 0) { d.py[pid + sfx] = 0; healed = true; }
-                }
+              if (patched.some((cr, i) => cr !== b.customRows[i])) {
+                built["borrowings"] = { ...b, customRows: patched };
+                healed = true;
               }
+            }
+
+            for (const [, d] of Object.entries(built)) {
               // Strip stale custom_* keys: cy/py values that belong to a
               // customRow ID that no longer exists in the customRows array
               // (e.g. a previously-deleted parent_group wrapper). Otherwise

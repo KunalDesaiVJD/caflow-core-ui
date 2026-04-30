@@ -366,7 +366,7 @@ export function deserialiseNoteData(
   }
   const py: Record<string, number> = {};
   for (const [k, v] of Object.entries(rawPy)) {
-    if (!META_KEYS.has(k) && typeof v === "number") py[k] = v;
+    if (!META_KEYS.has(k) && typeof v === "number") py[k] = Math.abs(v);
   }
   return { cy, py, customRows, hiddenRows, labelOverrides, cy_sources, ejectedLedgers };
 }
