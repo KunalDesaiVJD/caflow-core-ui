@@ -38,7 +38,7 @@ import {
 } from "lucide-react";
 import { NCE_FS_ITEMS } from "@/config/nceLineItems";
 import type { FSLineItem } from "@/config/nceLineItems";
-import { getNoteNo, useDynamicNoteRegistry, buildDynamicRegistry } from "@/lib/noteNumberRegistry";
+import { getNoteNo, buildDynamicRegistry } from "@/lib/noteNumberRegistry";
 import {
   NOTES_CONFIG,
   NOTE_META,
@@ -499,6 +499,23 @@ const NCE_CODE_TO_NOTE_KEY: Readonly<Record<string, string>> = {
   NCE_DEPR:     "nce_depreciation",
   NCE_OTH_EXP:  "nce_other_expenses",
   // NCE_PART_REM intentionally absent — no note defined in NCE_NOTE_ORDER
+};
+
+/**
+ * Maps NCE FS item codes to their STATIC noteRef (from nceLineItems.ts).
+ * Used by NoteCell to look up sequential dynamic note numbers from nceDynamicNoteMap
+ * (which is keyed by static noteRef).  Keeping both BS and Notes tab using the
+ * same nceDynamicNoteMap ensures note numbers are always in sync.
+ */
+const NCE_CODE_TO_STATIC_REF: Readonly<Record<string, number>> = {
+  NCE_CAP: 2,
+  NCE_LTB: 3, NCE_OLTL: 4, NCE_LTP: 5,
+  NCE_STB: 6, NCE_TP: 7, NCE_OCL: 8, NCE_STP: 9,
+  NCE_PPE: 10, NCE_CWIP: 11, NCE_INTG: 12,
+  NCE_NCINV: 13, NCE_LTLA: 14, NCE_ONCA: 15,
+  NCE_CINV: 16, NCE_STCK: 17, NCE_TR: 18, NCE_CASH: 19, NCE_STLA: 20, NCE_OCA: 21,
+  NCE_REV_OPS: 22, NCE_REV_OTH: 23,
+  NCE_COGS: 24, NCE_EMP_EXP: 25, NCE_FIN_COST: 26, NCE_DEPR: 27, NCE_OTH_EXP: 28,
 };
 
 // ── P&L FS code → registry note key ─────────────────────────────────────────
@@ -1060,29 +1077,30 @@ interface NCEBalanceSheetViewProps {
   onCommitPY?: (code: string, value: number | null) => void;
   /** Navigate to NCE Notes tab scrolled to a specific note number */
   onNavigateToNote?: (noteNo: number) => void;
+  /** Same map passed to NCEDetailedNotes — keeps BS and Notes tab in sync */
+  nceDynamicNoteMap?: Map<number, number>;
 }
 
 function NCEBalanceSheetView({
   engagementId, cyAmounts, pyAmounts, cyYear, pyYear, entityName,
-  pyLocked, onCommitCY, onCommitPY, onNavigateToNote,
+  pyLocked, onCommitCY, onCommitPY, onNavigateToNote, nceDynamicNoteMap,
 }: NCEBalanceSheetViewProps) {
-  const { getNoteLabel } = useDynamicNoteRegistry(engagementId);
 
   /**
    * Renders the Note No. cell for an NCE BS row.
    *
-   * Display  — dynamic label ({n}) from the registry; "—" if note has no data.
-   * Navigate — preserves the existing click-to-jump-to-notes behaviour by passing
-   *            the original static noteNo (from buildNCEBSRows via sn()) to
-   *            onNavigateToNote, which NCENotesTab resolves via dynamicNoteMap.
+   * Display  — sequential note number from nceDynamicNoteMap (same source as
+   *             NCEDetailedNotes) so BS column numbers match Notes tab headings.
+   * Navigate — passes the original static noteNo to onNavigateToNote so
+   *             NCENotesTab can resolve via dynamicNoteMap.
    *
-   * Zero-suppression gate: noteNo comes from sn() which returns null when both
-   * CY and PY are 0 — so even if the dynamic registry assigns a label via COA
-   * mapping, we honour the row-level null and show "—".
+   * Zero-suppression gate: noteNo is null when CY=PY=0 (from sn()), so we
+   * show "—" even if the note map has an entry for this row.
    */
   const NoteCell = ({ code, noteNo }: { code?: string | null; noteNo?: number | null }) => {
-    const noteKey = code ? NCE_CODE_TO_NOTE_KEY[code] : undefined;
-    const label   = noteKey ? getNoteLabel(noteKey) : undefined;
+    const staticRef = code ? NCE_CODE_TO_STATIC_REF[code] : undefined;
+    const dynamicNum = (staticRef != null) ? nceDynamicNoteMap?.get(staticRef) : undefined;
+    const label = dynamicNum != null ? String(dynamicNum) : undefined;
     if (!label || noteNo == null) {
       return <td className="text-center py-0.5 px-2 text-muted-foreground/40 text-[11px]">—</td>;
     }
@@ -1197,27 +1215,24 @@ interface NCEPLViewProps {
   onCommitPY?: (code: string, value: number | null) => void;
   /** Navigate to NCE Notes tab scrolled to a specific note number */
   onNavigateToNote?: (noteNo: number) => void;
+  /** Same map passed to NCEDetailedNotes — keeps P&L and Notes tab in sync */
+  nceDynamicNoteMap?: Map<number, number>;
 }
 
 function NCEPLView({
   engagementId, cyAmounts, pyAmounts, cyYear, pyYear, entityName,
-  pyLocked, onCommitCY, onCommitPY, onNavigateToNote,
+  pyLocked, onCommitCY, onCommitPY, onNavigateToNote, nceDynamicNoteMap,
 }: NCEPLViewProps) {
-  const { getNoteLabel } = useDynamicNoteRegistry(engagementId);
 
   /**
    * Renders the Note No. cell for an NCE P&L row.
-   * Same two-signal design as NCEBalanceSheetView's NoteCell:
-   *   display  → dynamic label ({n}) via getNoteLabel; "—" if note suppressed
-   *   navigate → original static noteNo passed to onNavigateToNote so
-   *              NCENotesTab can resolve via dynamicNoteMap
-   *
-   * Zero-suppression gate: noteNo from sn() is null when CY=PY=0, so we
-   * show "—" even if the registry assigned a label via COA mapping.
+   * Uses nceDynamicNoteMap (same source as NCEDetailedNotes) so P&L column
+   * numbers match the Notes tab headings.
    */
   const NoteCell = ({ code, noteNo }: { code?: string | null; noteNo?: number | null }) => {
-    const noteKey = code ? NCE_CODE_TO_NOTE_KEY[code] : undefined;
-    const label   = noteKey ? getNoteLabel(noteKey) : undefined;
+    const staticRef  = code ? NCE_CODE_TO_STATIC_REF[code] : undefined;
+    const dynamicNum = (staticRef != null) ? nceDynamicNoteMap?.get(staticRef) : undefined;
+    const label      = dynamicNum != null ? String(dynamicNum) : undefined;
     if (!label || noteNo == null) {
       return <td className="text-center py-0.5 px-2 text-muted-foreground/40 text-[11px]">—</td>;
     }
@@ -5386,6 +5401,7 @@ export default function PipelineFinancialStatements({
                   pyYear={pyYear}
                   entityName={engagement?.clients?.name || ""}
                   pyLocked={pyLocked}
+                  nceDynamicNoteMap={nceDynamicNoteMap}
                   onCommitCY={(code, value) => {
                     setManualOverrides(prev => {
                       const next = { ...prev };
@@ -5560,6 +5576,7 @@ export default function PipelineFinancialStatements({
                   pyYear={pyYear}
                   entityName={engagement?.clients?.name || ""}
                   pyLocked={pyLocked}
+                  nceDynamicNoteMap={nceDynamicNoteMap}
                   onCommitCY={(code, value) => {
                     setManualOverrides(prev => {
                       const next = { ...prev };
