@@ -29,12 +29,14 @@ import FAGrid from "./notes/FAGrid";
 import { supabase } from "@/integrations/supabase/client";
 
 interface Props {
-  engagementId: string;
-  cyYear:       number;
-  pyYear:       number;
+  engagementId:    string;
+  cyYear:          number;
+  pyYear:          number;
+  /** When set, switch to the given sub-tab and scroll to note-{noteNo}. */
+  navigateToNote?: { noteNo: number; subTab: "bs_liab" | "bs_asset" | "pl" | "fa" } | null;
 }
 
-export default function NotesTab({ engagementId, cyYear, pyYear }: Props) {
+export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote }: Props) {
   const [notes,         setNotes]         = useState<Stage5Notes | null>(null);
   const [loading,       setLoading]       = useState(true);
   const [syncing,       setSyncing]       = useState(false);
@@ -42,6 +44,18 @@ export default function NotesTab({ engagementId, cyYear, pyYear }: Props) {
   // undefined = uncontrolled, true = all collapsed, false = all expanded
   const [collapseAll,   setCollapseAll]   = useState<boolean | undefined>(undefined);
   const [pyFaRows, setPyFaRows] = useState<FARow[] | null>(null);
+
+  // ── Navigate to a specific note from BS / P&L click ──────────────────
+  useEffect(() => {
+    if (!navigateToNote) return;
+    setActiveTab(navigateToNote.subTab);
+    const timer = setTimeout(() => {
+      document
+        .getElementById(`note-${navigateToNote.noteNo}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [navigateToNote]);
 
   // ── Initial load + auto-populate-if-needed ────────────────────────────
   useEffect(() => {

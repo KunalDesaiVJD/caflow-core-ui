@@ -177,7 +177,10 @@ export function NoteCard({
   }, [collapseControl]);
 
   return (
-    <section className="rounded-lg border bg-card mb-4">
+    <section
+      id={noteNo != null ? `note-${noteNo}` : undefined}
+      className="rounded-lg border bg-card mb-4"
+    >
       <header
         className="border-b bg-muted/30 px-3 py-1.5 flex items-center gap-1.5 cursor-pointer select-none hover:bg-muted/50 transition-colors"
         onClick={() => setCollapsed((c) => !c)}

@@ -516,38 +516,70 @@ const PL_CODE_TO_NOTE_KEY: Readonly<Record<string, string>> = {
   PL_EPS_B:   "eps",   // EPS header row (Basic used as the key carrier)
 };
 
+/** Maps every corporate FS code to the Notes sub-tab that owns its NoteCard. */
+const FS_CODE_TO_NOTES_SUBTAB: Readonly<Record<string, "bs_liab" | "bs_asset" | "pl">> = {
+  BS_EQ_SC: "bs_liab", BS_EQ_RS: "bs_liab",
+  BS_NCL_LTB: "bs_liab", BS_NCL_DTL: "bs_liab", BS_NCL_OLT: "bs_liab", BS_NCL_LTP: "bs_liab",
+  BS_CL_STB: "bs_liab", BS_CL_TP: "bs_liab", BS_CL_OCL: "bs_liab", BS_CL_STP: "bs_liab",
+  BS_NCA_FA: "bs_asset", BS_NCA_INV: "bs_asset", BS_NCA_DTA: "bs_asset",
+  BS_NCA_LLA: "bs_asset", BS_NCA_ONA: "bs_asset",
+  BS_CA_CI: "bs_asset", BS_CA_INV: "bs_asset", BS_CA_TR: "bs_asset",
+  BS_CA_CCE: "bs_asset", BS_CA_SLA: "bs_asset", BS_CA_OCA: "bs_asset",
+  PL_REV_OPS: "pl", PL_REV_OI: "pl", PL_EXP_MAT: "pl", PL_EXP_SIT: "pl",
+  PL_EXP_CII: "pl", PL_EXP_EMP: "pl", PL_EXP_FIN: "pl", PL_EXP_DEP: "pl",
+  PL_EXP_OTH: "pl", PL_EPS_B: "pl",
+};
+
 interface CorporateBalanceSheetViewProps {
-  engagementId:  string;
-  bs:            BSRowData;
-  cyYear:        number;
-  pyYear:        number;
-  companyName:   string;
-  pyLocked?:     boolean;
-  onCommitCY?:   (code: string, value: number | null) => void;
-  onCommitPY?:   (code: string, value: number | null) => void;
-  onEditNote?:   (code: string, value: number | null) => void;
+  engagementId:      string;
+  bs:                BSRowData;
+  cyYear:            number;
+  pyYear:            number;
+  companyName:       string;
+  pyLocked?:         boolean;
+  onCommitCY?:       (code: string, value: number | null) => void;
+  onCommitPY?:       (code: string, value: number | null) => void;
+  onEditNote?:       (code: string, value: number | null) => void;
+  /** Click a note number → jump to that note in the Notes tab. */
+  onNavigateToNote?: (noteNo: number, subTab: "bs_liab" | "bs_asset" | "pl" | "fa") => void;
 }
 
 function CorporateBalanceSheetView({
   engagementId, bs, cyYear, pyYear, companyName, pyLocked,
-  onCommitCY, onCommitPY, onEditNote,
+  onCommitCY, onCommitPY, onEditNote, onNavigateToNote,
 }: CorporateBalanceSheetViewProps) {
   const { getNoteLabel } = useDynamicNoteRegistry(engagementId);
 
   /**
    * Renders the Note No. cell for a corporate BS row.
-   * noteNo comes from sn() in buildBSRows — it is null when CY=PY=0, so
-   * we use it as the zero-suppression gate even if the registry has a label
-   * via COA mapping.
+   * noteNo from sn() is null when CY=PY=0 (zero-suppression gate).
+   * When onNavigateToNote is wired, the cell becomes a clickable button
+   * that switches to the Notes tab and scrolls to the NoteCard.
    */
   const NoteCell = ({ code, noteNo }: { code?: string | null; noteNo?: number | null }) => {
     if (!code) return <td className="text-center py-1 px-2 text-muted-foreground/40 text-[11px]">—</td>;
     const noteKey = FS_CODE_TO_NOTE_KEY[code];
     if (!noteKey) return <td className="text-center py-1 px-2 text-muted-foreground/40 text-[11px]">—</td>;
     const label = getNoteLabel(noteKey);
-    return (label && noteNo != null)
-      ? <td className="text-center py-1 px-2 text-primary font-medium text-[11px] cursor-default">{label}</td>
-      : <td className="text-center py-1 px-2 text-muted-foreground/40 text-[11px]">—</td>;
+    if (!label || noteNo == null) return <td className="text-center py-1 px-2 text-muted-foreground/40 text-[11px]">—</td>;
+    const subTab = FS_CODE_TO_NOTES_SUBTAB[code];
+    return (
+      <td className="text-center py-1 px-2">
+        {onNavigateToNote && subTab ? (
+          <button
+            type="button"
+            onClick={() => onNavigateToNote(noteNo, subTab)}
+            className="inline-flex items-center gap-0.5 text-primary hover:underline font-medium text-[11px]"
+            title={`Go to Note ${label}`}
+          >
+            {label}
+            <ArrowRight className="h-2.5 w-2.5" />
+          </button>
+        ) : (
+          <span className="text-primary font-medium text-[11px] cursor-default">{label}</span>
+        )}
+      </td>
+    );
   };
 
   const rows = buildBSRows(bs);
@@ -752,36 +784,54 @@ function buildPLRows(pl: PLRowData): PLDisplayRow[] {
 }
 
 interface CorporatePLViewProps {
-  engagementId: string;
-  pl:           PLRowData;
-  cyYear:       number;
-  pyYear:       number;
-  companyName:  string;
-  pyLocked?:    boolean;
-  lockedCodes?: Set<string>;
-  onCommitCY?:  (code: string, value: number | null) => void;
-  onCommitPY?:  (code: string, value: number | null) => void;
+  engagementId:      string;
+  pl:                PLRowData;
+  cyYear:            number;
+  pyYear:            number;
+  companyName:       string;
+  pyLocked?:         boolean;
+  lockedCodes?:      Set<string>;
+  onCommitCY?:       (code: string, value: number | null) => void;
+  onCommitPY?:       (code: string, value: number | null) => void;
+  /** Click a note number → jump to that note in the Notes tab. */
+  onNavigateToNote?: (noteNo: number, subTab: "bs_liab" | "bs_asset" | "pl" | "fa") => void;
 }
 
 function CorporatePLView({
   engagementId, pl, cyYear, pyYear, companyName, pyLocked, lockedCodes,
-  onCommitCY, onCommitPY,
+  onCommitCY, onCommitPY, onNavigateToNote,
 }: CorporatePLViewProps) {
   const { getNoteLabel } = useDynamicNoteRegistry(engagementId);
 
   /**
    * Renders the Note No. cell for a corporate P&L row.
-   * noteNo from sn() in buildPLRows is null when CY=PY=0 — used as zero-
-   * suppression gate so mapped-but-empty rows don't show a note number.
+   * noteNo from sn() is null when CY=PY=0 (zero-suppression gate).
+   * Becomes a clickable button when onNavigateToNote is wired.
    */
   const NoteCell = ({ code, noteNo }: { code?: string | null; noteNo?: number | null }) => {
     if (!code) return <td className="text-center py-0.5 px-2 text-muted-foreground/40 text-[11px]">—</td>;
     const noteKey = PL_CODE_TO_NOTE_KEY[code];
     if (!noteKey) return <td className="text-center py-0.5 px-2 text-muted-foreground/40 text-[11px]">—</td>;
     const label = getNoteLabel(noteKey);
-    return (label && noteNo != null)
-      ? <td className="text-center py-0.5 px-2 text-primary font-medium text-[11px] cursor-default">{label}</td>
-      : <td className="text-center py-0.5 px-2 text-muted-foreground/40 text-[11px]">—</td>;
+    if (!label || noteNo == null) return <td className="text-center py-0.5 px-2 text-muted-foreground/40 text-[11px]">—</td>;
+    const subTab = FS_CODE_TO_NOTES_SUBTAB[code];
+    return (
+      <td className="text-center py-0.5 px-2">
+        {onNavigateToNote && subTab ? (
+          <button
+            type="button"
+            onClick={() => onNavigateToNote(noteNo, subTab)}
+            className="inline-flex items-center gap-0.5 text-primary hover:underline font-medium text-[11px]"
+            title={`Go to Note ${label}`}
+          >
+            {label}
+            <ArrowRight className="h-2.5 w-2.5" />
+          </button>
+        ) : (
+          <span className="text-primary font-medium text-[11px] cursor-default">{label}</span>
+        )}
+      </td>
+    );
   };
 
   const rows = buildPLRows(pl);
@@ -1789,6 +1839,12 @@ export default function PipelineFinancialStatements({
 
   // ─── NCE note navigation state ────────────────────────────────────────────
   const [nceNavNote, setNceNavNote] = useState<number | null>(null);
+
+  // ─── Corporate note navigation state ─────────────────────────────────────
+  const [corpNavNote, setCorpNavNote] = useState<{
+    noteNo: number;
+    subTab: "bs_liab" | "bs_asset" | "pl" | "fa";
+  } | null>(null);
 
   // ─── NCE Signature block editable state ──────────────────────────────────
   const [sigSignatoryName, setSigSignatoryName] = useState("");
@@ -5295,6 +5351,11 @@ export default function PipelineFinancialStatements({
                     setPyManualDirty(true);
                   }}
                   onEditNote={updateNoteOverride}
+                  onNavigateToNote={(noteNo, subTab) => {
+                    setActiveTab("notes");
+                    setCorpNavNote({ noteNo, subTab });
+                    setTimeout(() => setCorpNavNote(null), 1000);
+                  }}
                 />
                 <CorporateSignatureBlock
                   firmName={sigFirmName}
@@ -5464,6 +5525,11 @@ export default function PipelineFinancialStatements({
                     });
                     setPyManualDirty(true);
                   }}
+                  onNavigateToNote={(noteNo, subTab) => {
+                    setActiveTab("notes");
+                    setCorpNavNote({ noteNo, subTab });
+                    setTimeout(() => setCorpNavNote(null), 1000);
+                  }}
                 />
                 <CorporateSignatureBlock
                   firmName={sigFirmName}
@@ -5606,7 +5672,12 @@ export default function PipelineFinancialStatements({
               {/* UI-6 Phase 3 — full Notes UI lives in src/components/stage5/NotesTab.tsx
                   Renders 4 sub-tabs (Note BS-Liab → Note BS-Asset → FA → Note PL),
                   uses notesAutoPopulate service for auto-fill, persists on every edit. */}
-              <NotesTab engagementId={engagementId} cyYear={cyYear} pyYear={pyYear} />
+              <NotesTab
+                engagementId={engagementId}
+                cyYear={cyYear}
+                pyYear={pyYear}
+                navigateToNote={corpNavNote}
+              />
             </TabsContent>
           )}
 
