@@ -230,7 +230,7 @@ export default function AuditPipeline() {
       // Fetch all non-deleted, non-draft clients for this firm
       let clientQuery = supabase
         .from("clients")
-        .select("id, name, entity_type, statutory_audit_applicable, tax_audit_applicable, tax_audit_type, is_draft")
+        .select("id, name, entity_type, statutory_audit_applicable, internal_audit_applicable, tax_audit_type, is_draft")
         .is("deleted_at", null)
         .eq("is_draft", false)
         .order("name", { ascending: true });
@@ -316,13 +316,15 @@ export default function AuditPipeline() {
           const setup = setupMap[c.id] ?? {};
           const svc   = serviceMap[c.id] ?? {};
           // Source 1: direct columns on clients table
-          const hasStatDirect = !!c.statutory_audit_applicable;
-          // tax_audit_applicable is stored directly on the clients table by
-          // the client wizard (StepAuditSetup).  tax_audit_type is the legacy
-          // "3CA"/"3CB" string — check both so neither path is missed.
-          const hasTaxDirect  = !!c.tax_audit_applicable || !!c.tax_audit_type;
-          // internal_audit_applicable and stock_audit_applicable are NOT columns
-          // on the clients table — they live on client_fy_audit_setup only.
+          // Columns confirmed to exist on the clients table:
+          //   statutory_audit_applicable, internal_audit_applicable, tax_audit_type
+          // Columns that do NOT exist on clients (only on client_fy_audit_setup):
+          //   tax_audit_applicable, stock_audit_applicable
+          const hasStatDirect     = !!c.statutory_audit_applicable;
+          // tax_audit_type is the legacy "3CA"/"3CB" string saved directly on clients.
+          // tax_audit_applicable lives only on client_fy_audit_setup → use setupMap.
+          const hasTaxDirect      = !!c.tax_audit_type;
+          const hasInternalDirect = !!c.internal_audit_applicable;
           return {
             id:          c.id as string,
             name:        (c.name as string) ?? "",
@@ -330,10 +332,10 @@ export default function AuditPipeline() {
             is_draft:    !!c.is_draft,
             tax_audit_type:              (c.tax_audit_type as string) ?? null,
             // merge all sources
-            statutory_audit_applicable:  hasStatDirect || !!setup.statutory_audit_applicable || !!svc.hasStat,
-            tax_audit_applicable:        hasTaxDirect  || !!setup.tax_audit_applicable        || !!svc.hasTax,
-            internal_audit_applicable:               !!setup.internal_audit_applicable   || !!svc.hasInternal,
-            stock_audit_applicable:                  !!setup.stock_audit_applicable,
+            statutory_audit_applicable:  hasStatDirect     || !!setup.statutory_audit_applicable || !!svc.hasStat,
+            tax_audit_applicable:        hasTaxDirect      || !!setup.tax_audit_applicable        || !!svc.hasTax,
+            internal_audit_applicable:   hasInternalDirect || !!setup.internal_audit_applicable   || !!svc.hasInternal,
+            stock_audit_applicable:                           !!setup.stock_audit_applicable,
             has_statutory_service:       !!svc.hasStat,
             has_tax_audit_service:       !!svc.hasTax,
             has_internal_audit_service:  !!svc.hasInternal,
