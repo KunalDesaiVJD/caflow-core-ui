@@ -1254,6 +1254,10 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
                   .filter((id): id is string => !!id),
               );
               for (const pid of attachedParents) {
+                // CUSTOM rows (auto-groups, manual rows) carry the meaningful sum
+                // of their sources/children — never zero them. Only static-row IDs
+                // (e.g. "unsec_other") get zeroed when they have children attached.
+                if (pid.startsWith("custom_")) continue;
                 for (const sfx of ["", "_lt", "_st"]) {
                   if ((d.cy[pid + sfx] ?? 0) !== 0) { d.cy[pid + sfx] = 0; healed = true; }
                   if ((d.py[pid + sfx] ?? 0) !== 0) { d.py[pid + sfx] = 0; healed = true; }

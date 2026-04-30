@@ -533,42 +533,17 @@ export async function nceAutoPopulate(
         }
       }
 
-      // Stage 2: group unmatched ledgers.
-      // Priority: use Tally parent_group when available (e.g. "Purchase Accounts"
-      // → all purchase ledgers merge into one row labelled by the group).
-      // Fallback: group by common name head (strips GST-rate / month suffixes).
-      const groupsB = new Map<string, { ledger: string; amt: number; parentGroup?: string }[]>();
-      for (const um of unmatchedB) {
-        // Use parent_group key when non-trivial (not the ledger's own name)
-        const pg = (um as any).parentGroup;
-        const k = (pg && pg.trim()) ? pg.trim().toLowerCase() : groupKey(um.ledger);
-        if (!groupsB.has(k)) groupsB.set(k, []);
-        groupsB.get(k)!.push(um);
-      }
+      // Stage 2: per-ledger rows (no parent_group wrapping).
+      // Notes show ledger-level detail; synthetic group wrappers like
+      // "Purchase Accounts" or "Unsecured Loans" pulled from Tally
+      // parent_group are not appropriate for Schedule III breakups.
       let idx = 0;
-      for (const [groupK, ledgers] of groupsB.entries()) {
-        const totalAmt = ledgers.reduce((s, l) => s + l.amt, 0);
-        // When grouped by parent_group, use the parent group name as label
-        // (cleaned up: "Purchase Accounts" → "Purchase Accounts").
-        // When grouped by name similarity, pick the most common base head.
-        const hasPg = ledgers.length > 1 && ledgers[0].parentGroup;
-        const baseHeads = ledgers.map(l => deriveBaseHead(l.ledger));
-        const label = hasPg
-          ? (ledgers[0].parentGroup as string)
-          : (ledgers.length === 1 ? ledgers[0].ledger : pickMergedLabel(baseHeads));
-        const id = makeCustomId(label, idx++);
-        newCy[id] = totalAmt;
-        // Match PY by label (stable across re-syncs) rather than by generated ID
-        // (which shifts when group order changes → old behaviour gave PY = 0)
+      for (const um of unmatchedB) {
+        const label = um.ledger;
+        const id    = makeCustomId(label, idx++);
+        newCy[id] = um.amt;
         newPy[id] = pyForCustomRow(noteType, id, label);
-        autoRows.push({
-          id,
-          label,
-          source: "auto",
-          sources: ledgers.length > 1
-            ? ledgers.map(l => ({ ledger: l.ledger, amountCy: l.amt }))
-            : undefined,
-        });
+        autoRows.push({ id, label, source: "auto" });
       }
 
       // Fallback: if nothing was populated at all, use FS-code totals
@@ -620,50 +595,33 @@ export async function nceAutoPopulate(
         }
       }
 
-      // Group unmatched Pattern-A ledgers by parent_group (primary) or common
-      // name head (fallback). LT/ST sides are summed independently per group.
-      const groupsA = new Map<string, typeof unmatchedA>();
-      for (const um of unmatchedA) {
-        const pg = (um as any).parentGroup;
-        const k = (pg && pg.trim()) ? pg.trim().toLowerCase() : groupKey(um.ledger);
-        if (!groupsA.has(k)) groupsA.set(k, []);
-        groupsA.get(k)!.push(um);
-      }
+      // Per-ledger rows (no parent_group wrapping).
+      // Per user feedback: in Notes to Accounts, only ledgers should appear —
+      // not synthetic group wrappers like "Unsecured Loans" derived from Tally
+      // parent_group. Each TB ledger becomes its own customRow attached to
+      // the appropriate static parent. This keeps Total (B) math correct and
+      // matches the auditor's expectation that BS notes show ledger-level
+      // detail rather than account-group categories.
       let idx = 0;
-      for (const [, ledgers] of groupsA.entries()) {
-        const hasPg = ledgers.length > 1 && (ledgers[0] as any).parentGroup;
-        const baseHeads = ledgers.map(l => deriveBaseHead(l.ledger));
-        const label = hasPg
-          ? ((ledgers[0] as any).parentGroup as string)
-          : (ledgers.length === 1 ? ledgers[0].ledger : pickMergedLabel(baseHeads));
-        const id = makeCustomId(label, idx++);
-
-        let totalLt = 0, totalSt = 0;
-        for (const l of ledgers) {
-          if (l.isLT) totalLt += l.amt;
-          if (l.isST) totalSt += l.amt;
+      // For borrowings, all unmatched ledgers are unsecured by nature →
+      // attach them under "Other unsecured loans" static row in the unsecured section.
+      const section    = noteType === "borrowings" ? "unsecured"   : undefined;
+      const attachedTo = noteType === "borrowings" ? "unsec_other" : undefined;
+      for (const um of unmatchedA) {
+        const label = um.ledger; // ledger name verbatim
+        const id    = makeCustomId(label, idx++);
+        if (um.isLT) {
+          newCy[id + "_lt"] = um.amt;
+          newPy[id + "_lt"] = pyForCustomRow(noteType, id, label, "_lt");
         }
-        // PY: match prior-year row by label (robust against group-order changes)
-        if (totalLt > 0) { newCy[id + "_lt"] = totalLt; newPy[id + "_lt"] = pyForCustomRow(noteType, id, label, "_lt"); }
-        if (totalSt > 0) { newCy[id + "_st"] = totalSt; newPy[id + "_st"] = pyForCustomRow(noteType, id, label, "_st"); }
-
-        // For borrowings, all unmatched are unsecured by nature.
-        // Attach them under the "Other unsecured loans" (unsec_other) static row so
-        // they appear nested as children rather than as standalone custom rows.
-        // The section tag keeps them counted in the unsec_total formula.
-        const section    = noteType === "borrowings" ? "unsecured"   : undefined;
-        const attachedTo = noteType === "borrowings" ? "unsec_other" : undefined;
+        if (um.isST) {
+          newCy[id + "_st"] = um.amt;
+          newPy[id + "_st"] = pyForCustomRow(noteType, id, label, "_st");
+        }
         autoRows.push({
           id, label, source: "auto",
           ...(section    ? { section }    : {}),
           ...(attachedTo ? { attachedTo } : {}),
-          sources: ledgers.length > 1
-            ? ledgers.map(l => ({
-                ledger: l.ledger,
-                amountCy: l.amt,
-                column: l.isLT ? "lt" : "st",
-              }))
-            : undefined,
         });
       }
 
