@@ -330,7 +330,7 @@ function buildBSRows(bs: BSRowData): BSDisplayRow[] {
     { kind: "section", label: "II  ASSETS", size: 10 },
     { kind: "subhead", label: "(1) Non-Current Assets" },
     { kind: "subhead", label: "(a) Property, Plant & Equipment and Intangible Assets", indent: 1 },
-    { kind: "item", label: "(i) Property, plant and equipment and Intangible Assets", noteNo: sn(bs.ppe.noteNo, bs.ppe.cy, bs.ppe.py), cy: bs.ppe.cy || 0, py: bs.ppe.py || 0, indent: 2, code: "BS_NCA_FA" },
+    { kind: "item", label: "(i) Property, plant and equipment and Intangible Assets", noteNo: bs.ppe.noteNo ?? null, cy: bs.ppe.cy || 0, py: bs.ppe.py || 0, indent: 2, code: "BS_NCA_FA" },
     { kind: "item", label: "(ii) Intangible assets",          cy: 0, py: 0, indent: 2 },
     { kind: "item", label: "(iii) Capital work-in-Progress",  cy: 0, py: 0, indent: 2 },
     { kind: "item", label: "(b) Non-current investments",        noteNo: sn(bs.ncInvestments.noteNo, bs.ncInvestments.cy, bs.ncInvestments.py), cy: bs.ncInvestments.cy || 0, py: bs.ncInvestments.py || 0, indent: 1, size: 10, code: "BS_NCA_INV" },
@@ -517,11 +517,11 @@ const PL_CODE_TO_NOTE_KEY: Readonly<Record<string, string>> = {
 };
 
 /** Maps every corporate FS code to the Notes sub-tab that owns its NoteCard. */
-const FS_CODE_TO_NOTES_SUBTAB: Readonly<Record<string, "bs_liab" | "bs_asset" | "pl">> = {
+const FS_CODE_TO_NOTES_SUBTAB: Readonly<Record<string, "bs_liab" | "bs_asset" | "pl" | "fa">> = {
   BS_EQ_SC: "bs_liab", BS_EQ_RS: "bs_liab",
   BS_NCL_LTB: "bs_liab", BS_NCL_DTL: "bs_liab", BS_NCL_OLT: "bs_liab", BS_NCL_LTP: "bs_liab",
   BS_CL_STB: "bs_liab", BS_CL_TP: "bs_liab", BS_CL_OCL: "bs_liab", BS_CL_STP: "bs_liab",
-  BS_NCA_FA: "bs_asset", BS_NCA_INV: "bs_asset", BS_NCA_DTA: "bs_asset",
+  BS_NCA_FA: "fa",      BS_NCA_INV: "bs_asset", BS_NCA_DTA: "bs_asset",
   BS_NCA_LLA: "bs_asset", BS_NCA_ONA: "bs_asset",
   BS_CA_CI: "bs_asset", BS_CA_INV: "bs_asset", BS_CA_TR: "bs_asset",
   BS_CA_CCE: "bs_asset", BS_CA_SLA: "bs_asset", BS_CA_OCA: "bs_asset",
@@ -2680,6 +2680,7 @@ export default function PipelineFinancialStatements({
         mergedPY,
         coaMapping as Record<string, { code: string }>,
         false,
+        false, // skip COA signal — use real amounts only (prevents gap from zero-balance mapped ledgers)
       );
       const dn = (key: string): number | null => dynReg.get(key) ?? null;
 

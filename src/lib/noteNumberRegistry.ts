@@ -303,6 +303,10 @@ export function hasData(
   mergedPY:        Record<string, number>,
   coaMapping:      Record<string, { code: string }>,
   isNce:           boolean,
+  /** When false, signal 3 (COA mapping) is skipped — only CY/PY amounts count.
+   *  Pass false from buildDynamicRegistry when real amounts are provided so
+   *  zero-balance mapped ledgers don't ghost-consume sequential note numbers. */
+  useCoaSignal = true,
 ): boolean {
   const fsCodes = getKeyFsCodes(key, isNce);
   if (fsCodes.length === 0) return false;
@@ -313,7 +317,10 @@ export function hasData(
     if ((mergedPY[code] ?? 0) !== 0) return true;
   }
 
-  // 3 — COA mapping check (any ledger mapped to one of this key's FS codes)
+  // 3 — COA mapping check (any ledger mapped to one of this key's FS codes).
+  // Skipped when useCoaSignal = false so that zero-balance mapped ledgers do
+  // not consume a sequential note number and cause numbering gaps in the FS.
+  if (!useCoaSignal) return false;
   const codeSet = new Set(fsCodes);
   for (const mapping of Object.values(coaMapping)) {
     if (mapping?.code && codeSet.has(mapping.code)) return true;
@@ -340,11 +347,23 @@ export function hasData(
  * @param coaMapping       Ledger → {code} map from engagement.coa_mapping
  * @param isNonCorporate   True for non-corporate entity types
  */
+/**
+ * Keys that always receive a note number regardless of amounts or COA mapping.
+ * "ppe" is always active because the FA schedule is rendered unconditionally —
+ * there is always a PPE / Fixed Assets note even when the BS amount is zero.
+ */
+const CORP_ALWAYS_ACTIVE = new Set<string>(["ppe"]);
+const NCE_ALWAYS_ACTIVE  = new Set<string>(["ppe"]);
+
 export function buildDynamicRegistry(
   computedAmounts:  Record<string, number>,
   mergedPY:         Record<string, number>,
   coaMapping:       Record<string, { code: string }>,
   isNonCorporate:   boolean,
+  /** When false, signal 3 (COA mapping) is skipped inside hasData().
+   *  Pass false when real CY/PY amounts are available (e.g. the FS outer
+   *  component) so zero-balance mapped ledgers don't create numbering gaps. */
+  useCoaSignal = true,
 ): Map<string, number> {
   const registry = new Map<string, number>();
 
@@ -354,11 +373,15 @@ export function buildDynamicRegistry(
     : NOTE_KEYS.ACCOUNTING_POLICIES;
   registry.set(policiesKey, 1);
 
+  const alwaysActive = isNonCorporate ? NCE_ALWAYS_ACTIVE : CORP_ALWAYS_ACTIVE;
   const order = isNonCorporate ? NCE_NOTE_ORDER : CORPORATE_NOTE_ORDER;
   let nextNote = 2;
 
   for (const key of order) {
-    if (hasData(key, computedAmounts, mergedPY, coaMapping, isNonCorporate)) {
+    if (
+      alwaysActive.has(key) ||
+      hasData(key, computedAmounts, mergedPY, coaMapping, isNonCorporate, useCoaSignal)
+    ) {
       registry.set(key, nextNote);
       nextNote++;   // only increments when the note has data → no gaps
     }
