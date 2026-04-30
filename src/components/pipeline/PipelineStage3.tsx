@@ -2698,6 +2698,15 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                               const opening = a.opening_balance ?? 0;
                               const isNew    = Math.abs(opening) < 0.005 && Math.abs(a.balance) >= 0.005;
                               const isClosed = Math.abs(opening) >= 0.005 && Math.abs(a.balance) < 0.005;
+                              // P&L A/c (non-BxS) mapped to a BS code: closing balance is NOT added
+                              // to the FS — its current-year movement auto-flows via netPL from
+                              // PL_REV+PL_EXP into BS_EQ_RS.  Show an "AUTO-FLOW" badge to make
+                              // this explicit so users don't see it as double-counting next to a
+                              // sibling "Profit & Loss A/c (BxS)" carry-forward ledger.
+                              const isPLAutoFlow =
+                                isTallyPLAccount(a.account_name) &&
+                                (m?.code || "").startsWith("BS_") &&
+                                Math.abs(opening) < 0.005;
                               return (
                                 <div
                                   key={a.account_name}
@@ -2711,6 +2720,12 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                                     </Badge>
                                     {isNew && <Badge className="text-[8px] px-1 bg-primary/10 text-primary border-primary/30 shrink-0">NEW</Badge>}
                                     {isClosed && <Badge className="text-[8px] px-1 bg-slate-200 text-slate-700 border-slate-400 shrink-0">CLOSED</Badge>}
+                                    {isPLAutoFlow && (
+                                      <Badge
+                                        className="text-[8px] px-1 bg-amber-100 text-amber-800 border-amber-300 shrink-0"
+                                        title="This ledger's closing is NOT added — current-year P&L auto-flows via Net Profit (PL_REV + PL_EXP) into Reserves & Surplus.  The retained-earnings carry-forward is captured by the sibling 'Profit & Loss A/c (BxS)' ledger."
+                                      >AUTO-FLOW</Badge>
+                                    )}
                                     {aliases[a.account_name] && (
                                       <Badge
                                         className="text-[8px] px-1 bg-violet-100 text-violet-700 border-violet-300 shrink-0 cursor-pointer"
