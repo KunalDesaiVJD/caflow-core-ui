@@ -636,7 +636,7 @@ export function computeDisplayData(
         if (customRows) {
           for (const cr of customRows) {
             if (cr.attachedTo !== id) continue;
-            ltC += outCy[cr.id + "_lt"] ?? 0; ltP += outPy[cr.id + "_lt"] ?? 0;
+            ltC += outCy[cr.id + "_lt"] ?? outCy[cr.id] ?? 0; ltP += outPy[cr.id + "_lt"] ?? outPy[cr.id] ?? 0;
             stC += outCy[cr.id + "_st"] ?? 0; stP += outPy[cr.id + "_st"] ?? 0;
           }
         }
@@ -646,7 +646,7 @@ export function computeDisplayData(
         stC -= outCy[id + "_st"] ?? 0; stP -= outPy[id + "_st"] ?? 0;
       }
       for (const id of extras) {
-        ltC += outCy[id + "_lt"] ?? 0; ltP += outPy[id + "_lt"] ?? 0;
+        ltC += outCy[id + "_lt"] ?? outCy[id] ?? 0; ltP += outPy[id + "_lt"] ?? outPy[id] ?? 0;
         stC += outCy[id + "_st"] ?? 0; stP += outPy[id + "_st"] ?? 0;
       }
       outCy[row.id + "_lt"] = Math.round(ltC * 100) / 100;
