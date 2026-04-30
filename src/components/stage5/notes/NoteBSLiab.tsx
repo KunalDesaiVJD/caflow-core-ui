@@ -20,7 +20,7 @@ import {
   type ListRow, type AgeingMatrix,
 } from "./EditableCell";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
-import { getNoteNo } from "@/lib/noteNumberRegistry";
+import { useDynamicNoteRegistry } from "@/lib/noteNumberRegistry";
 import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -67,11 +67,12 @@ interface Props {
   updatePath:      (path: string, value: any) => void;
   resetPath:       (path: string) => void;
   isOverridden:    (path: string) => boolean;
+  engagementId:    string;
   collapseControl?: boolean;
 }
 
 export default function NoteBSLiab({
-  notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl,
+  engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl,
 }: Props) {
   const cy  = (key: string) => Number(notes.bs_liab[key]?.cy ?? 0);
   const py  = (key: string) => Number(notes.bs_liab[key]?.py ?? 0);
@@ -90,8 +91,9 @@ export default function NoteBSLiab({
   // Smart note: only show a note number when at least one year has data.
   // dataKey = key into notes.bs_liab; regKey = key into noteNumberRegistry
   // (defaults to dataKey when they match, e.g. lt_borrowings → lt_borrowings).
-  const sn = (dataKey: string, regKey: string = dataKey): number | null =>
-    cy(dataKey) !== 0 || py(dataKey) !== 0 ? (getNoteNo(regKey) ?? null) : null;
+  const { getNoteNo: dn } = useDynamicNoteRegistry(engagementId);
+  const sn = (_dataKey: string, regKey: string = _dataKey): number | null =>
+    dn(regKey) ?? null;
 
   // ── Trade Payables ageing schemas ─────────────────────────────────────────
   const TP_ROWS = [

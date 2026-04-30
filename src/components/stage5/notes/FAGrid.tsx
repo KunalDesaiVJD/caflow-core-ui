@@ -15,12 +15,13 @@ import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EditableCell, formatINR } from "./EditableCell";
 import type { FARow, Stage5Notes } from "@/lib/notesAutoPopulate";
-import { getNoteNo } from "@/lib/noteNumberRegistry";
+import { useDynamicNoteRegistry } from "@/lib/noteNumberRegistry";
 
 interface Props {
-  rows:       FARow[];
-  pyRows?:    FARow[] | null;       // for the "Total — Previous year" row
-  onChange:   (rows: FARow[]) => void;
+  engagementId: string;
+  rows:         FARow[];
+  pyRows?:      FARow[] | null;       // for the "Total — Previous year" row
+  onChange:     (rows: FARow[]) => void;
 }
 
 const blankRow = (): FARow => ({
@@ -40,7 +41,7 @@ const depnClose  = (r: FARow) => (r.depn_open  || 0) + (r.depn_add   || 0) - (r.
 const netCY      = (r: FARow) => grossClose(r) - depnClose(r);
 const netPY      = (r: FARow) => (r.gross_open || 0) - (r.depn_open || 0);
 
-export default function FAGrid({ rows, pyRows, onChange }: Props) {
+export default function FAGrid({ engagementId, rows, pyRows, onChange }: Props) {
   const update = (i: number, patch: Partial<FARow>) => {
     const next = rows.slice();
     next[i] = { ...next[i], ...patch };
@@ -52,6 +53,8 @@ export default function FAGrid({ rows, pyRows, onChange }: Props) {
     onChange(next);
   };
   const add = () => onChange([...rows, blankRow()]);
+
+  const { getNoteNo: dn } = useDynamicNoteRegistry(engagementId);
 
   // Totals
   const sumOf = (rs: FARow[], k: keyof FARow): number =>
@@ -75,7 +78,7 @@ export default function FAGrid({ rows, pyRows, onChange }: Props) {
   return (
     <div className="rounded-lg border bg-card mb-4">
       <header className="border-b bg-muted/30 px-3 py-1.5 flex items-center justify-between">
-        <h3 className="text-xs font-semibold">Note {getNoteNo("ppe")} — Property, Plant &amp; Equipment and Intangible Assets (AS-10)</h3>
+        <h3 className="text-xs font-semibold">Note {dn("ppe") ?? "—"} — Property, Plant &amp; Equipment and Intangible Assets (AS-10)</h3>
         <Button type="button" variant="outline" size="sm" onClick={add} className="h-6 text-[10px] gap-1">
           <Plus size={11} /> Add Asset
         </Button>

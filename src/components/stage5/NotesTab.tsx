@@ -274,6 +274,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear }: Props) {
 
         <TabsContent value="bs_liab" className="mt-3">
           <NoteBSLiab
+            engagementId={engagementId}
             notes={notes} cyYear={cyYear} pyYear={pyYear}
             updatePath={updatePath} resetPath={resetPath} isOverridden={isOverridden}
             collapseControl={collapseAll}
@@ -281,6 +282,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear }: Props) {
         </TabsContent>
         <TabsContent value="bs_asset" className="mt-3">
           <NoteBSAsset
+            engagementId={engagementId}
             notes={notes} cyYear={cyYear} pyYear={pyYear}
             updatePath={updatePath} resetPath={resetPath} isOverridden={isOverridden}
             collapseControl={collapseAll}
@@ -288,13 +290,14 @@ export default function NotesTab({ engagementId, cyYear, pyYear }: Props) {
         </TabsContent>
         <TabsContent value="pl" className="mt-3">
           <NotePL
+            engagementId={engagementId}
             notes={notes} cyYear={cyYear} pyYear={pyYear}
             updatePath={updatePath} resetPath={resetPath} isOverridden={isOverridden}
             collapseControl={collapseAll}
           />
         </TabsContent>
         <TabsContent value="fa" className="mt-3">
-          <FAGrid rows={notes.fa.rows} pyRows={pyFaRows} onChange={updateFaRows} />
+          <FAGrid engagementId={engagementId} rows={notes.fa.rows} pyRows={pyFaRows} onChange={updateFaRows} />
         </TabsContent>
       </Tabs>
     </div>

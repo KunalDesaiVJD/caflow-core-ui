@@ -9,7 +9,7 @@ import {
   type ListRow, type AgeingMatrix,
 } from "./EditableCell";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
-import { getNoteNo } from "@/lib/noteNumberRegistry";
+import { useDynamicNoteRegistry } from "@/lib/noteNumberRegistry";
 
 interface Props {
   notes:           Stage5Notes;
@@ -18,11 +18,12 @@ interface Props {
   updatePath:      (path: string, value: any) => void;
   resetPath:       (path: string) => void;
   isOverridden:    (path: string) => boolean;
+  engagementId:    string;
   collapseControl?: boolean;
 }
 
 export default function NoteBSAsset({
-  notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl,
+  engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl,
 }: Props) {
   const cy = (key: string) => Number(notes.bs_asset[key]?.cy ?? 0);
   const py = (key: string) => Number(notes.bs_asset[key]?.py ?? 0);
@@ -39,8 +40,9 @@ export default function NoteBSAsset({
   };
 
   // Smart note: only show a note number when at least one year has data.
-  const sn = (dataKey: string, regKey: string = dataKey): number | null =>
-    cy(dataKey) !== 0 || py(dataKey) !== 0 ? (getNoteNo(regKey) ?? null) : null;
+  const { getNoteNo: dn } = useDynamicNoteRegistry(engagementId);
+  const sn = (_dataKey: string, regKey: string = _dataKey): number | null =>
+    dn(regKey) ?? null;
 
   // Trade Receivables ageing schemas
   const TR_ROWS = [

@@ -12,7 +12,7 @@ import {
   type ListRow,
 } from "./EditableCell";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
-import { getNoteNo } from "@/lib/noteNumberRegistry";
+import { useDynamicNoteRegistry } from "@/lib/noteNumberRegistry";
 
 interface Props {
   notes:           Stage5Notes;
@@ -21,11 +21,12 @@ interface Props {
   updatePath:      (path: string, value: any) => void;
   resetPath:       (path: string) => void;
   isOverridden:    (path: string) => boolean;
+  engagementId:    string;
   collapseControl?: boolean;
 }
 
 export default function NotePL({
-  notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl,
+  engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl,
 }: Props) {
   const cy = (key: string) => Number(notes.pl[key]?.cy ?? 0);
   const py = (key: string) => Number(notes.pl[key]?.py ?? 0);
@@ -41,8 +42,9 @@ export default function NotePL({
   };
 
   // Smart note: only show a note number when at least one year has data.
-  const sn = (dataKey: string, regKey: string = dataKey): number | null =>
-    cy(dataKey) !== 0 || py(dataKey) !== 0 ? (getNoteNo(regKey) ?? null) : null;
+  const { getNoteNo: dn } = useDynamicNoteRegistry(engagementId);
+  const sn = (_dataKey: string, regKey: string = _dataKey): number | null =>
+    dn(regKey) ?? null;
 
   // Breakup rows now come from autoPopulateNotes (notesAutoPopulate.ts):
   // each note's `.breakup` array is built from COA-mapped TB ledgers, with
@@ -228,7 +230,7 @@ export default function NotePL({
         "Other expense particulars")}
 
       {/* EPS — Note 30 per NOTE_REGISTRY; always visible for corporate entities */}
-      <NoteCard collapseControl={collapseControl} noteNo={getNoteNo("eps")} title="Earnings per share (EPS)">
+      <NoteCard collapseControl={collapseControl} noteNo={sn("eps")} title="Earnings per share (EPS)">
         <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
         <EditableRow
           label="Net Profit After Tax (NPAT)"
