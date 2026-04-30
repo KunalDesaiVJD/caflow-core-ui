@@ -284,8 +284,13 @@ export function NCECapitalAccount({ engagementId }: Props) {
   };
 
   // ── Formatting ────────────────────────────────────────────────────────────
-  const fmt = (n: number) =>
-    n === 0 ? "—" : n.toLocaleString("en-IN");
+  // Whole-rupee Indian formatting — Schedule III auditor-friendly (no paise).
+  const fmt = (n: number) => {
+    if (!Number.isFinite(n) || Math.abs(n) < 0.5) return "—";
+    return Math.round(n).toLocaleString("en-IN", {
+      minimumFractionDigits: 0, maximumFractionDigits: 0,
+    });
+  };
 
   // ── Loading guard ─────────────────────────────────────────────────────────
   if (loading) {

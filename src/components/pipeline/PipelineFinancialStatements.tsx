@@ -4728,7 +4728,7 @@ export default function PipelineFinancialStatements({
             <div className="flex items-center justify-end gap-1">
               {(isHeader && !isTotalRow) ? null : amount !== 0 ? (
                 <span className={amount < 0 ? "text-destructive" : ""}>
-                  {amount < 0 ? "(" : ""}₹{Math.abs(amount).toLocaleString("en-IN")}{amount < 0 ? ")" : ""}
+                  {amount < 0 ? "(" : ""}₹{Math.round(Math.abs(amount)).toLocaleString("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}{amount < 0 ? ")" : ""}
                 </span>
               ) : (
                 <span className="text-muted-foreground">—</span>
@@ -4758,7 +4758,7 @@ export default function PipelineFinancialStatements({
               )}
               {(isHeader && !isTotalRow) ? null : py !== 0 ? (
                 <span className={hasPyOverride ? "text-amber-700 dark:text-amber-400" : ""}>
-                  {py < 0 ? "(" : ""}₹{Math.abs(py).toLocaleString("en-IN")}{py < 0 ? ")" : ""}
+                  {py < 0 ? "(" : ""}₹{Math.round(Math.abs(py)).toLocaleString("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}{py < 0 ? ")" : ""}
                 </span>
               ) : (
                 <span>—</span>
