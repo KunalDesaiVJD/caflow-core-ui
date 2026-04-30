@@ -227,7 +227,13 @@ export default function AuditPipeline() {
     queryFn: async () => {
       const firmId = user?.firm_id ?? "";
 
-      // Fetch all non-deleted, non-draft clients for this firm
+      // ── Step 1: Non-draft clients + clients with existing engagements ─────────
+      // API-imported clients (e.g. synced from GSTN/TDS portals) often have
+      // is_draft = true even when they have active audit engagements. We run TWO
+      // parallel initial fetches so that such clients always appear:
+      //   A. Non-draft clients for this firm (the normal path).
+      //   B. Engagement client IDs — bypasses is_draft so any client with an
+      //      existing engagement appears regardless of draft status.
       let clientQuery = supabase
         .from("clients")
         .select("id, name, entity_type, statutory_audit_applicable, internal_audit_applicable, tax_audit_type, is_draft")
@@ -235,13 +241,48 @@ export default function AuditPipeline() {
         .eq("is_draft", false)
         .order("name", { ascending: true });
       if (firmId) clientQuery = clientQuery.eq("firm_id", firmId);
-      const { data: allFirmClients } = await clientQuery;
-      if (!allFirmClients?.length) return [];
+
+      let engIdQuery = supabase
+        .from("audit_engagements")
+        .select("client_id")
+        .or("is_py_shell.is.null,is_py_shell.eq.false");
+      if (firmId) engIdQuery = engIdQuery.eq("firm_id", firmId);
+
+      const [{ data: nonDraftClients }, { data: engIdRows }] = await Promise.all([
+        clientQuery,
+        engIdQuery,
+      ]);
+
+      // Unique client IDs from existing engagements
+      const engagementClientIds = [
+        ...new Set((engIdRows ?? []).map((r: any) => r.client_id).filter(Boolean)),
+      ] as string[];
+
+      // Find engagement client IDs that are NOT already in the non-draft list
+      const nonDraftIdSet = new Set((nonDraftClients ?? []).map((c: any) => c.id));
+      const extraClientIds = engagementClientIds.filter(id => !nonDraftIdSet.has(id));
+
+      // Fetch the draft/imported clients that have engagements (no is_draft filter)
+      let extraClients: any[] = [];
+      if (extraClientIds.length > 0) {
+        const { data } = await supabase
+          .from("clients")
+          .select("id, name, entity_type, statutory_audit_applicable, internal_audit_applicable, tax_audit_type, is_draft")
+          .is("deleted_at", null)
+          .in("id", extraClientIds);
+        extraClients = data ?? [];
+      }
+
+      // Combined client list — non-draft first (sorted), draft-with-engagement appended
+      const allFirmClients = [...(nonDraftClients ?? []), ...extraClients];
+      if (!allFirmClients.length) return [];
 
       const clientIds = allFirmClients.map((c: any) => c.id as string);
+      // Set of all engagement client IDs for use in the eligibility filter
+      const hasEngagementIds = new Set<string>(engagementClientIds);
 
-      // Parallel fetches for all eligibility sources
-      const [classRes, classHistRes, auditSetupRes, auditSvcRes, engRes] = await Promise.all([
+      // ── Step 2: Parallel eligibility sources ───────────────────────────────
+      const [classRes, classHistRes, auditSetupRes, auditSvcRes] = await Promise.all([
         // Source 3: FY classification snapshot — exact "Audit" only.
         // Wildcards like %audit% wrongly match "Non-Audit" and "Partner in
         // Audited Firm", so a client reclassified to Non-Audit would still
@@ -268,30 +309,7 @@ export default function AuditPipeline() {
           .select("client_id, is_active, service_categories(name, linked_module)")
           .in("client_id", clientIds)
           .eq("is_active", true),
-        // Source 6: existing audit engagements — any client that already has an
-        // engagement for this firm should always appear so the firm can create
-        // additional engagements (e.g. a different FY or audit type).
-        supabase
-          .from("audit_engagements")
-          .select("client_id")
-          .in("client_id", clientIds)
-          .eq("firm_id", firmId)
-          .or("is_py_shell.is.null,is_py_shell.eq.false"),
       ]);
-
-      // Build Audit-classified ID set (sources 3 + 4)
-      const auditClassifiedIds = new Set<string>([
-        ...(classRes.data    ?? []).map((r: any) => r.client_id).filter(Boolean),
-        ...(classHistRes?.data ?? []).map((r: any) => r.client_id).filter(Boolean),
-      ]);
-
-      // Build existing-engagement ID set (source 6).
-      // Any client who already has an audit engagement for this firm should
-      // always appear — e.g. Dhanani Realty whose setup is stored on the
-      // engagement questionnaire rather than on client_fy_audit_setup.
-      const hasEngagementIds = new Set<string>(
-        (engRes.data ?? []).map((r: any) => r.client_id).filter(Boolean),
-      );
 
       // Build per-client flags from setup table (source 2).
       // OR-aggregate across all FY rows — if ANY financial year has a flag set,

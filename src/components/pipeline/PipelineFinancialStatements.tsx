@@ -752,7 +752,7 @@ function buildPLRows(pl: PLRowData): PLDisplayRow[] {
     { kind: "total",  roman: "III.", label: "Total Income (I+II)",     cy: totalIncomeCy, py: totalIncomePy },
     { kind: "spacer" },
     { kind: "header", roman: "IV.",  label: "Expenses" },
-    { kind: "item",   label: "Cost of materials consumed",            noteNo: pl.costMaterials.noteNo, indent: 1, code: "PL_EXP_MAT" },
+    { kind: "item",   label: "Cost of materials consumed",            noteNo: sn(pl.costMaterials.noteNo, pl.costMaterials.cy, pl.costMaterials.py), cy: pl.costMaterials.cy, py: pl.costMaterials.py, indent: 1, code: "PL_EXP_MAT" },
     { kind: "item",   label: "Purchases of Stock-in-Trade",           noteNo: sn(pl.purchasesStock.noteNo, pl.purchasesStock.cy, pl.purchasesStock.py),             cy: pl.purchasesStock.cy, py: pl.purchasesStock.py, indent: 1, code: "PL_EXP_SIT" },
     { kind: "item",   label: "Changes in inventories of finished goods, Work-in-progress and Stock-in-Trade", noteNo: sn(pl.changesInventories.noteNo, pl.changesInventories.cy, pl.changesInventories.py), cy: pl.changesInventories.cy, py: pl.changesInventories.py, indent: 1, code: "PL_EXP_CII" },
     { kind: "item",   label: "Employee benefits expense",             noteNo: sn(pl.employeeBenefits.noteNo, pl.employeeBenefits.cy, pl.employeeBenefits.py),         cy: pl.employeeBenefits.cy, py: pl.employeeBenefits.py, indent: 1, code: "PL_EXP_EMP" },
@@ -2724,7 +2724,7 @@ export default function PipelineFinancialStatements({
       pl = {
         revFromOps:         { noteNo: dn("revenue_from_ops"),   cy: cyOf("PL_REV_OPS"), py: pyOf("PL_REV_OPS") },
         otherIncome:        { noteNo: dn("other_income"),        cy: cyOf("PL_REV_OI"),  py: pyOf("PL_REV_OI")  },
-        costMaterials:      { noteNo: dn("cost_materials")      },
+        costMaterials:      { noteNo: dn("cost_materials"),      cy: cyOf("PL_EXP_MAT"), py: pyOf("PL_EXP_MAT") },
         purchasesStock:     { noteNo: dn("purchases_stock"),     cy: cyOf("PL_EXP_SIT"), py: pyOf("PL_EXP_SIT") },
         changesInventories: { noteNo: dn("changes_inventories"), cy: cyOf("PL_EXP_CII"), py: pyOf("PL_EXP_CII") },
         employeeBenefits:   { noteNo: dn("employee_benefits"),   cy: cyOf("PL_EXP_EMP"), py: pyOf("PL_EXP_EMP") },
