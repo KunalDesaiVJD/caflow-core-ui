@@ -240,8 +240,8 @@ export default function AuditPipeline() {
 
       const clientIds = allFirmClients.map((c: any) => c.id as string);
 
-      // Parallel fetches for all four eligibility sources
-      const [classRes, classHistRes, auditSetupRes, auditSvcRes] = await Promise.all([
+      // Parallel fetches for all eligibility sources
+      const [classRes, classHistRes, auditSetupRes, auditSvcRes, engRes] = await Promise.all([
         // Source 3: FY classification snapshot — exact "Audit" only.
         // Wildcards like %audit% wrongly match "Non-Audit" and "Partner in
         // Audited Firm", so a client reclassified to Non-Audit would still
@@ -268,6 +268,15 @@ export default function AuditPipeline() {
           .select("client_id, is_active, service_categories(name, linked_module)")
           .in("client_id", clientIds)
           .eq("is_active", true),
+        // Source 6: existing audit engagements — any client that already has an
+        // engagement for this firm should always appear so the firm can create
+        // additional engagements (e.g. a different FY or audit type).
+        supabase
+          .from("audit_engagements")
+          .select("client_id")
+          .in("client_id", clientIds)
+          .eq("firm_id", firmId)
+          .or("is_py_shell.is.null,is_py_shell.eq.false"),
       ]);
 
       // Build Audit-classified ID set (sources 3 + 4)
@@ -275,6 +284,14 @@ export default function AuditPipeline() {
         ...(classRes.data    ?? []).map((r: any) => r.client_id).filter(Boolean),
         ...(classHistRes?.data ?? []).map((r: any) => r.client_id).filter(Boolean),
       ]);
+
+      // Build existing-engagement ID set (source 6).
+      // Any client who already has an audit engagement for this firm should
+      // always appear — e.g. Dhanani Realty whose setup is stored on the
+      // engagement questionnaire rather than on client_fy_audit_setup.
+      const hasEngagementIds = new Set<string>(
+        (engRes.data ?? []).map((r: any) => r.client_id).filter(Boolean),
+      );
 
       // Build per-client flags from setup table (source 2).
       // OR-aggregate across all FY rows — if ANY financial year has a flag set,
@@ -342,18 +359,22 @@ export default function AuditPipeline() {
             has_any_service:             !!serviceMap[c.id],
             // true if ANY client_fy_audit_setup row exists for this client
             has_any_audit_setup:         !!setupMap[c.id],
+            // true if client already has at least one audit engagement for this firm
+            has_existing_engagement:     hasEngagementIds.has(c.id as string),
           };
         })
         .filter(c => {
           if (!Boolean((c.name as string)?.trim())) return false;
           // Show if at least one audit type is enabled on the client profile,
-          // OR if the client has any audit setup row (even with all flags false)
+          // OR if the client has any audit setup row (even with all flags false),
+          // OR if the client already has an existing engagement for this firm.
           return (
-            c.statutory_audit_applicable ||
-            c.tax_audit_applicable       ||
-            c.internal_audit_applicable  ||
-            c.stock_audit_applicable     ||
-            (c as any).has_any_audit_setup
+            c.statutory_audit_applicable    ||
+            c.tax_audit_applicable          ||
+            c.internal_audit_applicable     ||
+            c.stock_audit_applicable        ||
+            (c as any).has_any_audit_setup  ||
+            (c as any).has_existing_engagement
           );
         });
     },

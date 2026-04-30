@@ -545,10 +545,13 @@ interface CorporateBalanceSheetViewProps {
 }
 
 function CorporateBalanceSheetView({
-  engagementId, bs, cyYear, pyYear, companyName, pyLocked,
+  engagementId: _engagementId, bs, cyYear, pyYear, companyName, pyLocked,
   onCommitCY, onCommitPY, onEditNote, onNavigateToNote,
 }: CorporateBalanceSheetViewProps) {
-  const { getNoteLabel } = useDynamicNoteRegistry(engagementId);
+  // NOTE: Do NOT call useDynamicNoteRegistry here — that hook (without amounts)
+  // uses COA signal and produces different sequential numbers than the outer
+  // buildDynamicRegistry call.  The note number to display is already embedded
+  // in each BSRow.noteNo by the outer component; derive the label from it directly.
 
   /**
    * Renders the Note No. cell for a corporate BS row.
@@ -557,12 +560,11 @@ function CorporateBalanceSheetView({
    * that switches to the Notes tab and scrolls to the NoteCard.
    */
   const NoteCell = ({ code, noteNo }: { code?: string | null; noteNo?: number | null }) => {
-    if (!code) return <td className="text-center py-1 px-2 text-muted-foreground/40 text-[11px]">—</td>;
-    const noteKey = FS_CODE_TO_NOTE_KEY[code];
-    if (!noteKey) return <td className="text-center py-1 px-2 text-muted-foreground/40 text-[11px]">—</td>;
-    const label = getNoteLabel(noteKey);
-    if (!label || noteNo == null) return <td className="text-center py-1 px-2 text-muted-foreground/40 text-[11px]">—</td>;
-    const subTab = FS_CODE_TO_NOTES_SUBTAB[code];
+    // noteNo is the authoritative number from the outer buildDynamicRegistry.
+    // Use it directly as the label so display always matches the outer registry.
+    if (noteNo == null) return <td className="text-center py-1 px-2 text-muted-foreground/40 text-[11px]">—</td>;
+    const label = String(noteNo);
+    const subTab = code ? FS_CODE_TO_NOTES_SUBTAB[code] : undefined;
     return (
       <td className="text-center py-1 px-2">
         {onNavigateToNote && subTab ? (
@@ -798,10 +800,12 @@ interface CorporatePLViewProps {
 }
 
 function CorporatePLView({
-  engagementId, pl, cyYear, pyYear, companyName, pyLocked, lockedCodes,
+  engagementId: _engagementId, pl, cyYear, pyYear, companyName, pyLocked, lockedCodes,
   onCommitCY, onCommitPY, onNavigateToNote,
 }: CorporatePLViewProps) {
-  const { getNoteLabel } = useDynamicNoteRegistry(engagementId);
+  // NOTE: Do NOT call useDynamicNoteRegistry here — same reason as CorporateBalanceSheetView.
+  // The noteNo embedded in each PLRow is already from the outer buildDynamicRegistry;
+  // use it directly as the display label to avoid mismatched sequential numbers.
 
   /**
    * Renders the Note No. cell for a corporate P&L row.
@@ -809,12 +813,9 @@ function CorporatePLView({
    * Becomes a clickable button when onNavigateToNote is wired.
    */
   const NoteCell = ({ code, noteNo }: { code?: string | null; noteNo?: number | null }) => {
-    if (!code) return <td className="text-center py-0.5 px-2 text-muted-foreground/40 text-[11px]">—</td>;
-    const noteKey = PL_CODE_TO_NOTE_KEY[code];
-    if (!noteKey) return <td className="text-center py-0.5 px-2 text-muted-foreground/40 text-[11px]">—</td>;
-    const label = getNoteLabel(noteKey);
-    if (!label || noteNo == null) return <td className="text-center py-0.5 px-2 text-muted-foreground/40 text-[11px]">—</td>;
-    const subTab = FS_CODE_TO_NOTES_SUBTAB[code];
+    if (noteNo == null) return <td className="text-center py-0.5 px-2 text-muted-foreground/40 text-[11px]">—</td>;
+    const label = String(noteNo);
+    const subTab = code ? FS_CODE_TO_NOTES_SUBTAB[code] : undefined;
     return (
       <td className="text-center py-0.5 px-2">
         {onNavigateToNote && subTab ? (
