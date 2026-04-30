@@ -1,4 +1,6 @@
 import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -16,6 +18,13 @@ interface EngagementHeaderProps {
  * Persistent engagement banner shown across all 9 pipeline stages.
  * Displays: Client Name, Entity type, PAN, GSTIN, CIN, FY, AY, Pipeline stage.
  * Derives Assessment Year from Financial Year.
+ *
+ * Resilience: Some upstream callers pass an engagement object whose joined
+ * `clients(...)` row was fetched with a narrower SELECT (e.g. only `name`
+ * and `entity_type`). When that happens, this header silently fetches the
+ * missing fields directly from the `clients` table using engagement.client_id,
+ * so PAN / GSTIN / CIN / state / TAN never disappear depending on which stage
+ * the user is on.
  */
 export default function EngagementHeader({
   engagement,
@@ -24,7 +33,50 @@ export default function EngagementHeader({
   compact = false,
   className,
 }: EngagementHeaderProps) {
-  const client = engagement?.clients ?? {};
+  const joinedClient = engagement?.clients ?? {};
+  const clientId     = engagement?.client_id ?? joinedClient?.id;
+
+  // Detect a narrow join — name/entity_type present but the rest absent.
+  // When detected, fetch the missing fields once.
+  const needsClientFetch =
+    !!clientId &&
+    !joinedClient?.pan &&
+    !joinedClient?.gstin &&
+    !joinedClient?.cin &&
+    !joinedClient?.tan_number &&
+    !joinedClient?.registered_state;
+
+  const { data: fetchedClient } = useQuery({
+    queryKey: ["engagement-header-client", clientId],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("clients")
+        .select("id, name, entity_type, pan, gstin, cin, registered_state, tan_number, date_of_incorporation")
+        .eq("id", clientId!)
+        .maybeSingle();
+      return (data as any) ?? null;
+    },
+    enabled: needsClientFetch,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  // Merge the joined data with the fallback fetch. Joined values win when
+  // both are non-empty so we never overwrite richer data with stale data.
+  const client = useMemo(() => {
+    const j: Record<string, any> = joinedClient || {};
+    const f: Record<string, any> = fetchedClient || {};
+    return {
+      ...f,
+      ...j,
+      pan:               j.pan               || f.pan,
+      gstin:             j.gstin             || f.gstin,
+      cin:               j.cin               || f.cin,
+      tan_number:        j.tan_number        || f.tan_number,
+      registered_state:  j.registered_state  || f.registered_state,
+      name:              j.name              || f.name,
+      entity_type:       j.entity_type       || f.entity_type,
+    };
+  }, [joinedClient, fetchedClient]);
   const fy = engagement?.financial_year || "—";
   const entityType = engagement?.entity_type || client?.entity_type || "—";
 
