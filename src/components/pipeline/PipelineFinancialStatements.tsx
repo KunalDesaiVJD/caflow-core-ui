@@ -461,6 +461,33 @@ const FS_CODE_TO_NOTE_KEY: Readonly<Record<string, string>> = {
   BS_CA_OCA:  "other_current_assets",
 };
 
+// ── NCE BS FS code → registry note key ──────────────────────────────────────
+// Used by NCEBalanceSheetView's NoteCell.
+// CWIP and Intangibles share the "ppe" note (shown in NCEPPESchedule).
+// Short-term loans (NCE_STLA) have their own registry key per NCE_NOTE_ORDER.
+const NCE_CODE_TO_NOTE_KEY: Readonly<Record<string, string>> = {
+  NCE_CAP:   "owners_capital",
+  NCE_LTB:   "lt_borrowings",
+  NCE_OLTL:  "other_lt_liab",
+  NCE_LTP:   "lt_provisions",
+  NCE_STB:   "st_borrowings",
+  NCE_TP:    "trade_payables",
+  NCE_OCL:   "other_current_liab",
+  NCE_STP:   "st_provisions",
+  NCE_PPE:   "ppe",
+  NCE_CWIP:  "ppe",              // Capital WIP presented under PPE note
+  NCE_INTG:  "ppe",              // Intangibles presented under PPE note
+  NCE_NCINV: "nc_investments",
+  NCE_LTLA:  "lt_loans_advances",
+  NCE_ONCA:  "other_nc_assets",
+  NCE_CINV:  "current_investments",
+  NCE_STCK:  "inventories",
+  NCE_TR:    "trade_receivables",
+  NCE_CASH:  "cash_bank",
+  NCE_STLA:  "st_loans_advances",
+  NCE_OCA:   "other_current_assets",
+};
+
 // ── P&L FS code → registry note key ─────────────────────────────────────────
 // Used by CorporatePLView's NoteCell.
 const PL_CODE_TO_NOTE_KEY: Readonly<Record<string, string>> = {
@@ -947,6 +974,7 @@ function buildNCEPLRows(
 }
 
 interface NCEBalanceSheetViewProps {
+  engagementId: string;
   cyAmounts:  Record<string, number>;
   pyAmounts:  Record<string, number>;
   cyYear:     number;
@@ -960,8 +988,44 @@ interface NCEBalanceSheetViewProps {
 }
 
 function NCEBalanceSheetView({
-  cyAmounts, pyAmounts, cyYear, pyYear, entityName, pyLocked, onCommitCY, onCommitPY, onNavigateToNote,
+  engagementId, cyAmounts, pyAmounts, cyYear, pyYear, entityName,
+  pyLocked, onCommitCY, onCommitPY, onNavigateToNote,
 }: NCEBalanceSheetViewProps) {
+  const { getNoteLabel } = useDynamicNoteRegistry(engagementId);
+
+  /**
+   * Renders the Note No. cell for an NCE BS row.
+   *
+   * Display  — dynamic label (N2, N5 …) from the registry; "—" if note has no data.
+   * Navigate — preserves the existing click-to-jump-to-notes behaviour by passing
+   *            the original static noteNo (from buildNCEBSRows via sn()) to
+   *            onNavigateToNote, which NCENotesTab resolves via dynamicNoteMap.
+   */
+  const NoteCell = ({ code, noteNo }: { code?: string | null; noteNo?: number | null }) => {
+    const noteKey = code ? NCE_CODE_TO_NOTE_KEY[code] : undefined;
+    const label   = noteKey ? getNoteLabel(noteKey) : undefined;
+    if (!label) {
+      return <td className="text-center py-0.5 px-2 text-muted-foreground/40 text-[11px]">—</td>;
+    }
+    return (
+      <td className="text-center py-0.5 px-2">
+        {noteNo != null && onNavigateToNote ? (
+          <button
+            type="button"
+            onClick={() => onNavigateToNote(noteNo)}
+            className="inline-flex items-center gap-0.5 text-primary hover:underline font-medium text-[11px]"
+            title={`Go to Note ${label}`}
+          >
+            {label}
+            <ArrowRight className="h-2.5 w-2.5" />
+          </button>
+        ) : (
+          <span className="text-primary font-medium text-[11px]">{label}</span>
+        )}
+      </td>
+    );
+  };
+
   const rows = buildNCEBSRows(cyAmounts, pyAmounts);
   return (
     <div className="rounded-lg border bg-card overflow-hidden">
@@ -1008,7 +1072,7 @@ function NCEBalanceSheetView({
             if (row.kind === "footer")  return (
               <tr key={idx}>
                 <td className="font-semibold py-1 px-3 text-[11px] italic text-muted-foreground" colSpan={3}>{row.label}</td>
-                <td className="text-center py-1 px-2 text-muted-foreground italic">{row.noteNo ?? ""}</td>
+                <td className="text-center py-1 px-2 text-primary font-medium text-[11px] italic">N1</td>
               </tr>
             );
             // item row
@@ -1020,19 +1084,7 @@ function NCEBalanceSheetView({
             return (
               <tr key={idx} className="hover:bg-muted/10">
                 <td className="py-0.5 px-3 text-[11px]" style={{ paddingLeft: 12 + indentPx }}>{row.label}</td>
-                <td className="text-center py-0.5 px-2 text-muted-foreground">
-                  {row.noteNo != null && onNavigateToNote ? (
-                    <button
-                      type="button"
-                      onClick={() => onNavigateToNote(row.noteNo!)}
-                      className="inline-flex items-center gap-0.5 text-primary hover:underline font-medium"
-                      title={`Go to Note ${row.noteNo}`}
-                    >
-                      {row.noteNo}
-                      <ArrowRight className="h-2.5 w-2.5" />
-                    </button>
-                  ) : (row.noteNo ?? "")}
-                </td>
+                <NoteCell code={row.code} noteNo={row.noteNo} />
                 <td className="text-right tabular-nums py-0.5 px-1 text-[11px]">
                   {editableCY
                     ? <EditableMoneyCell value={row.cy} onCommit={(v) => onCommitCY!(row.code!, v === null ? null : isLiab ? -v : v)} />
@@ -5197,6 +5249,7 @@ export default function PipelineFinancialStatements({
             ) : isNonCorporate ? (
               <>
                 <NCEBalanceSheetView
+                  engagementId={engagementId}
                   cyAmounts={computedAmounts}
                   pyAmounts={mergedPY}
                   cyYear={cyYear}
