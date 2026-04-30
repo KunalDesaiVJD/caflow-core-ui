@@ -158,16 +158,37 @@ function sigRow(left: string, right: string, opts: RunOpts = {}): string {
  *   w:hanging="360" → first line (the number) is at 36 pt − 18 pt = 18 pt
  *   tab stop @720   → tab after "N." jumps text to the 36 pt indent
  */
-function clausePara(num: number, text: string, spaceAfterTwips: number): string {
+function clausePara(num: number, text: string, _spaceAfterTwips: number): string {
   const indLeft = 720;  // 36 pt
   const indHang = 360;  // 18 pt
+  // Template clause paragraphs carry NO inline w:spacing — visual gaps
+  // between clauses come from an explicit empty <w:p> spacer (see
+  // clauseSpacer below) so the rhythm matches the format file. The
+  // digit itself is NOT bold in the template, only the body text style
+  // is preserved.
   const pPr = `<w:pPr>` +
     `<w:jc w:val="both"/>` +
     `<w:tabs><w:tab w:val="left" w:pos="${indLeft}"/></w:tabs>` +
     `<w:ind w:left="${indLeft}" w:hanging="${indHang}"/>` +
-    `<w:spacing w:after="${spaceAfterTwips}" w:line="240" w:lineRule="auto"/>` +
     `</w:pPr>`;
-  return `<w:p>${pPr}${wRun(`${num}.`, { bold: true })}${wTab()}${wRun(text)}</w:p>`;
+  return `<w:p>${pPr}${wRun(`${num}.`)}${wTab()}${wRun(text)}</w:p>`;
+}
+
+/**
+ * Empty paragraph used between numbered clauses — matches the template's
+ * idiom of a sz=14 blank line (≈7 pt visual gap) instead of inline
+ * w:spacing w:after on the clause itself.
+ */
+function clauseSpacer(): string {
+  return (
+    `<w:p>` +
+      `<w:pPr>` +
+        `<w:ind w:left="360"/>` +
+        `<w:jc w:val="both"/>` +
+        `<w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:sz w:val="14"/><w:szCs w:val="14"/></w:rPr>` +
+      `</w:pPr>` +
+    `</w:p>`
+  );
 }
 
 /**
@@ -178,13 +199,14 @@ function clausePara(num: number, text: string, spaceAfterTwips: number): string 
  *   w:left="1260"   → wrapped lines start at 63 pt
  *   w:hanging="360" → first line label "(a)" is at 63 pt − 18 pt = 45 pt
  */
-function subClausePara(text: string, spaceAfterTwips: number): string {
+function subClausePara(text: string, _spaceAfterTwips: number): string {
   const indLeft = 1260; // 63 pt
   const indHang = 360;  // 18 pt
+  // No inline w:spacing — the parent clause + clauseSpacer provides the
+  // surrounding rhythm.
   const pPr = `<w:pPr>` +
     `<w:jc w:val="both"/>` +
     `<w:ind w:left="${indLeft}" w:hanging="${indHang}"/>` +
-    `<w:spacing w:after="${spaceAfterTwips}" w:line="240" w:lineRule="auto"/>` +
     `</w:pPr>`;
   return `<w:p>${pPr}${wRun(text)}</w:p>`;
 }
@@ -283,9 +305,15 @@ export async function exportMrlToDocx(params: MRLDocxParams, filename: string): 
   paras.push(blank());
 
   // ── 8. Clauses ────────────────────────────────────────────────────────────
-  // Format: "N.  [first line of text]" inline — number bold, text normal.
-  // Additional lines (sub-clauses like (a),(b),(c)) are indented below.
+  // Format: "N.  [first line of text]" inline — digit is plain text (NOT
+  // bold) to match the template. Additional lines (sub-clauses like
+  // (a),(b),(c)) are indented below.
+  // Visual spacing between clauses comes from an explicit empty
+  // <w:p> spacer (clauseSpacer) — matches the template's idiom of using
+  // a sz=14 blank line between numbered items rather than inline
+  // w:spacing w:after on each clause paragraph.
   let clauseNum = 1;
+  let firstClauseEmitted = false;
   for (const clause of selectedClauses) {
     // Replace [CASH_AMOUNT] token with actual amount
     const clauseText = clause.text.replace(/\[CASH_AMOUNT\]/g, cashAmount || "______");
@@ -293,10 +321,13 @@ export async function exportMrlToDocx(params: MRLDocxParams, filename: string): 
     const lines = clauseText.split("\n").filter((l) => l.trim() !== "");
     if (lines.length === 0) { clauseNum++; continue; }
 
+    // Spacer between this clause and the previous one (skip before #1)
+    if (firstClauseEmitted) paras.push(clauseSpacer());
+    firstClauseEmitted = true;
+
     // First line: numbered clause with hanging indent matching template's
     // ol>li margin-left:36pt; text-indent:-18pt; tab-stops:list 36.0pt
-    // spaceAfter 140 twips ≈ 7pt blank paragraph gap used between clauses in template.
-    paras.push(clausePara(clauseNum, lines[0], lines.length > 1 ? 20 : 140));
+    paras.push(clausePara(clauseNum, lines[0], 0));
 
     // Remaining lines (sub-clauses like (a),(b),(c)) — hanging indent matching
     // template's margin-left:63pt; text-indent:-18pt
@@ -350,9 +381,14 @@ export async function exportMrlToDocx(params: MRLDocxParams, filename: string): 
   <w:body>
     ${paras.join("\n    ")}
     <w:sectPr>
-      <w:pgSz w:w="11906" w:h="16838"/>
-      <w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720"
-               w:header="708" w:footer="708" w:gutter="0"/>
+      <w:pgSz w:w="11906" w:h="16838" w:code="9"/>
+      <!-- Top margin matches the template (142 twips ≈ 0.1") so the
+           letterhead sits high on the page; previous 720 (0.5") pushed
+           every section down by ~0.4". -->
+      <w:pgMar w:top="142" w:right="720" w:bottom="720" w:left="720"
+               w:header="709" w:footer="709" w:gutter="0"/>
+      <w:cols w:space="708"/>
+      <w:docGrid w:linePitch="360"/>
     </w:sectPr>
   </w:body>
 </w:document>`;
