@@ -534,13 +534,18 @@ function CorporateBalanceSheetView({
 }: CorporateBalanceSheetViewProps) {
   const { getNoteLabel } = useDynamicNoteRegistry(engagementId);
 
-  /** Renders the Note No. cell for a BS row using the dynamic registry. */
-  const NoteCell = ({ code }: { code?: string | null }) => {
+  /**
+   * Renders the Note No. cell for a corporate BS row.
+   * noteNo comes from sn() in buildBSRows — it is null when CY=PY=0, so
+   * we use it as the zero-suppression gate even if the registry has a label
+   * via COA mapping.
+   */
+  const NoteCell = ({ code, noteNo }: { code?: string | null; noteNo?: number | null }) => {
     if (!code) return <td className="text-center py-1 px-2 text-muted-foreground/40 text-[11px]">—</td>;
     const noteKey = FS_CODE_TO_NOTE_KEY[code];
     if (!noteKey) return <td className="text-center py-1 px-2 text-muted-foreground/40 text-[11px]">—</td>;
     const label = getNoteLabel(noteKey);
-    return label
+    return (label && noteNo != null)
       ? <td className="text-center py-1 px-2 text-primary font-medium text-[11px] cursor-default">{label}</td>
       : <td className="text-center py-1 px-2 text-muted-foreground/40 text-[11px]">—</td>;
   };
@@ -597,7 +602,7 @@ function CorporateBalanceSheetView({
               return (
                 <tr key={idx}>
                   <td className="font-semibold py-1 px-3" style={{ paddingLeft: 12 + indentPx }}>{row.label}</td>
-                  <NoteCell code={row.code} />
+                  <NoteCell code={row.code} noteNo={row.noteNo} />
                   <td />
                   <td />
                 </tr>
@@ -616,7 +621,9 @@ function CorporateBalanceSheetView({
               return (
                 <tr key={idx}>
                   <td className="font-semibold py-1 px-3 text-[11px] italic text-muted-foreground" colSpan={3}>{row.label}</td>
-                  <td className="text-center py-1 px-2 text-primary font-medium text-[11px] italic">N1</td>
+                  {row.noteNo != null
+                    ? <td className="text-center py-1 px-2 text-primary font-medium text-[11px] italic">{row.noteNo}</td>
+                    : <td />}
                 </tr>
               );
             }
@@ -628,7 +635,7 @@ function CorporateBalanceSheetView({
             return (
               <tr key={idx} className="hover:bg-muted/10">
                 <td className={`py-0.5 px-3 ${fontSize}`} style={{ paddingLeft: 12 + indentPx }}>{row.label}</td>
-                <NoteCell code={row.code} />
+                <NoteCell code={row.code} noteNo={row.noteNo} />
                 <td className={`text-right tabular-nums py-0.5 px-3 ${fontSize}`}>
                   {editableCY
                     ? <EditableMoneyCell value={row.cy} onCommit={(v) => onCommitCY!(row.code!, v)} />
@@ -762,13 +769,17 @@ function CorporatePLView({
 }: CorporatePLViewProps) {
   const { getNoteLabel } = useDynamicNoteRegistry(engagementId);
 
-  /** Renders the Note No. cell for a P&L row using the dynamic registry. */
-  const NoteCell = ({ code }: { code?: string | null }) => {
+  /**
+   * Renders the Note No. cell for a corporate P&L row.
+   * noteNo from sn() in buildPLRows is null when CY=PY=0 — used as zero-
+   * suppression gate so mapped-but-empty rows don't show a note number.
+   */
+  const NoteCell = ({ code, noteNo }: { code?: string | null; noteNo?: number | null }) => {
     if (!code) return <td className="text-center py-0.5 px-2 text-muted-foreground/40 text-[11px]">—</td>;
     const noteKey = PL_CODE_TO_NOTE_KEY[code];
     if (!noteKey) return <td className="text-center py-0.5 px-2 text-muted-foreground/40 text-[11px]">—</td>;
     const label = getNoteLabel(noteKey);
-    return label
+    return (label && noteNo != null)
       ? <td className="text-center py-0.5 px-2 text-primary font-medium text-[11px] cursor-default">{label}</td>
       : <td className="text-center py-0.5 px-2 text-muted-foreground/40 text-[11px]">—</td>;
   };
@@ -854,7 +865,7 @@ function CorporatePLView({
               <tr key={idx} className="hover:bg-muted/10">
                 <td className={`text-center py-0.5 px-1 ${boldCls} text-[11px]`}>{row.roman || ""}</td>
                 <td className={`py-0.5 px-3 ${boldCls} text-[11px]`} style={{ paddingLeft: 12 + indentPx }}>{row.label}</td>
-                <NoteCell code={row.code} />
+                <NoteCell code={row.code} noteNo={row.noteNo} />
                 <td className={`text-right tabular-nums py-0.5 px-3 ${boldCls} text-[11px]`}>
                   {editableCY
                     ? <EditableMoneyCell value={row.cy ?? 0} onCommit={(v) => onCommitCY!(row.code!, v)} />
@@ -1089,7 +1100,9 @@ function NCEBalanceSheetView({
             if (row.kind === "footer")  return (
               <tr key={idx}>
                 <td className="font-semibold py-1 px-3 text-[11px] italic text-muted-foreground" colSpan={3}>{row.label}</td>
-                <td className="text-center py-1 px-2 text-primary font-medium text-[11px] italic">N1</td>
+                {row.noteNo != null
+                  ? <td className="text-center py-1 px-2 text-primary font-medium text-[11px] italic">{row.noteNo}</td>
+                  : <td />}
               </tr>
             );
             // item row
