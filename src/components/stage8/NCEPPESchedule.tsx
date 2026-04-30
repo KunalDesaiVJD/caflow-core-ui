@@ -97,7 +97,10 @@ function calcClosing(r: AssetRow): number {
 }
 
 function fmtNum(v: number): string {
-  return v !== 0 ? v.toLocaleString("en-IN") : "—";
+  if (!Number.isFinite(v) || Math.abs(v) < 0.5) return "—";
+  return Math.round(v).toLocaleString("en-IN", {
+    minimumFractionDigits: 0, maximumFractionDigits: 0,
+  });
 }
 
 // ─── NumInput ─────────────────────────────────────────────────────────────────
@@ -120,7 +123,7 @@ function NumInput({
   if (readOnly) {
     return (
       <div className="h-7 flex items-center justify-end px-2 text-xs font-medium rounded bg-muted/40 text-foreground/70 select-none">
-        {value !== 0 ? value.toLocaleString("en-IN") : "—"}
+        {fmtNum(value)}
       </div>
     );
   }

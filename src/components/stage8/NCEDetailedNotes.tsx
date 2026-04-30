@@ -69,7 +69,13 @@ function parseFY(fy: string): { cy: number; py: number } {
 }
 
 function fmtNum(v: number): string {
-  return v !== 0 ? v.toLocaleString("en-IN") : "—";
+  // Whole-rupee Indian formatting — Schedule III FS / Notes / Annexures must
+  // never show paise (auditor-friendly). Round-half-away-from-zero so totals
+  // tie to BS/PL even after individual rows are rounded.
+  if (!Number.isFinite(v) || Math.abs(v) < 0.5) return "—";
+  return Math.round(v).toLocaleString("en-IN", {
+    minimumFractionDigits: 0, maximumFractionDigits: 0,
+  });
 }
 
 function newCustomId(): string {

@@ -562,6 +562,115 @@ export async function nceAutoPopulate(
         }
       }
 
+      // ── Cogs/Inventory special: populate pc_open/pc_close + raw_/pack_/other_
+      //
+      // Schedule III "Changes in Inventories of Finished Goods, WIP & Stock-in-Trade"
+      // requires fixed row IDs (pc_open_trade/wip/fg, pc_close_trade/wip/fg) and
+      // material consumption rows (raw_open/close, pack_open/close, other_open/close)
+      // that the generic Pattern-B grouping cannot fill — those IDs are not in
+      // NOTE_SMART_MAP and inventory ledgers usually map to BS_CA_INV (BS Note 17),
+      // not the P&L codes. Result: the "Closing Inventories (II)" rows render blank
+      // even when Tally has Stock-in-Hand data.
+      //
+      // Robust fix: walk TB rows whose parent_group is an inventory group
+      // (Stock-in-Hand / Stock-in-Trade / Inventories) and route them by ledger
+      // name into the correct fixed row.
+      // Opening side (pc_open_*, *_open) sources from PY closings — first the
+      // prior-year notes' cy_data (if user has run cogs auto-populate before),
+      // then a PY-shell-TB fallback (handles first-time cold-start).
+      // Client-agnostic: pure name-pattern + parent_group matching.
+      if (noteType === "cogs") {
+        const INVENTORY_PG_TOKENS = [
+          "stock-in-hand", "stock in hand",
+          "stock-in-trade", "stock in trade",
+          "inventories", "inventory",
+        ];
+        const isInventoryParent = (pg: string | null | undefined): boolean => {
+          const lower = (pg || "").toLowerCase();
+          return INVENTORY_PG_TOKENS.some(t => lower.includes(t));
+        };
+        const classifyInv = (name: string): "wip"|"fg"|"raw"|"pack"|"other"|"trade" => {
+          const lower = (name || "").toLowerCase();
+          if (/\b(wip|work[-\s]?in[-\s]?progress)\b/.test(lower))     return "wip";
+          if (/finished/.test(lower))                                  return "fg";
+          if (/raw[-\s]?material|raw[-\s]?stock|raw[-\s]?good/.test(lower)) return "raw";
+          if (/packing/.test(lower))                                   return "pack";
+          if (/other.*(material|stock)/.test(lower))                   return "other";
+          return "trade";
+        };
+        const closeKeyFor = (cls: ReturnType<typeof classifyInv>): string => ({
+          wip: "pc_close_wip", fg: "pc_close_fg", trade: "pc_close_trade",
+          raw: "raw_close", pack: "pack_close", other: "other_close",
+        }[cls]);
+        const openKeyFor  = (cls: ReturnType<typeof classifyInv>): string => ({
+          wip: "pc_open_wip", fg: "pc_open_fg", trade: "pc_open_trade",
+          raw: "raw_open", pack: "pack_open", other: "other_open",
+        }[cls]);
+
+        // CY closings → pc_close_*/raw_close/pack_close/other_close
+        for (const row of tb) {
+          if (!isInventoryParent(row.parent_group)) continue;
+          const amt = ledgerAmt(row.closing_balance);
+          if (amt === 0) continue;
+          if (ejectedSet.has(row.ledger_name)) continue;
+          const key = closeKeyFor(classifyInv(row.ledger_name));
+          newCy[key] = (newCy[key] ?? 0) + amt;
+          if (!staticSources[key]) staticSources[key] = [];
+          staticSources[key].push({ ledger: row.ledger_name, amountCy: amt });
+        }
+
+        // CY openings (= PY closings): prefer prior-year cogs note's cy_data
+        const pyCogs: Record<string, number> = pyNotes["cogs"] ?? {};
+        const openMap: Record<string, string> = {
+          pc_open_trade: "pc_close_trade",
+          pc_open_wip:   "pc_close_wip",
+          pc_open_fg:    "pc_close_fg",
+          raw_open:      "raw_close",
+          pack_open:     "pack_close",
+          other_open:    "other_close",
+        };
+        for (const [openKey, closeSrcKey] of Object.entries(openMap)) {
+          const v = pyCogs[closeSrcKey];
+          if (typeof v === "number" && Math.abs(v) > 0) {
+            newCy[openKey] = Math.abs(v);
+          }
+        }
+
+        // PY-shell-TB fallback: cold-start case where prior-year cogs note
+        // wasn't auto-populated yet, but PY-shell sync DID populate the prior
+        // engagement's tally_trial_balance with Stock-in-Hand ledgers.
+        const noOpenings = Object.keys(openMap).every(k => !newCy[k]);
+        if (noOpenings && financialYear && clientId) {
+          const parts = String(financialYear).split("-");
+          if (parts.length === 2) {
+            const startYr = parseInt(parts[0], 10);
+            const prevFy  = `${startYr - 1}-${String(startYr).slice(-2)}`;
+            // Look in BOTH the regular prior engagement AND a PY shell — either
+            // may hold the prior-year TB depending on how the user set up.
+            const { data: prevEngList } = await supabase
+              .from("audit_engagements")
+              .select("id, is_py_shell")
+              .eq("client_id", clientId)
+              .eq("financial_year", prevFy);
+            const prevIds = ((prevEngList ?? []) as Array<{ id: string }>)
+              .map(e => e.id);
+            if (prevIds.length > 0) {
+              const { data: prevTb } = await supabase
+                .from("tally_trial_balance")
+                .select("ledger_name, closing_balance, balance_type, parent_group, engagement_id")
+                .in("engagement_id", prevIds);
+              for (const row of (prevTb ?? []) as TBRow[]) {
+                if (!isInventoryParent((row as any).parent_group)) continue;
+                const amt = ledgerAmt(row.closing_balance);
+                if (amt === 0) continue;
+                const key = openKeyFor(classifyInv(row.ledger_name));
+                newCy[key] = (newCy[key] ?? 0) + amt;
+              }
+            }
+          }
+        }
+      }
+
     } else {
       // ── Pattern A (LT / ST columns) ────────────────────────────────────
       const ltSet      = new Set(noteFs.lt ?? []);
