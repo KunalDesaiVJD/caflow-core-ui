@@ -309,14 +309,12 @@ export default function PlanningEntryDialog({
               onClick={() => onOpenChange(false)} disabled={saving}>
               Cancel
             </Button>
-            {!isEdit && (
-              <Button size="sm" variant="outline" className="h-7 text-xs gap-1"
-                title="Save this assignment and keep the dialog open to add another client on the same date range"
-                onClick={() => handleSave(true)} disabled={saving || !valid || !clientName}>
-                {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
-                Save &amp; Add Another
-              </Button>
-            )}
+            <Button size="sm" variant="outline" className="h-7 text-xs gap-1"
+              title="Save this assignment and keep the dialog open to add another client on the same date range"
+              onClick={() => handleSave(true)} disabled={saving || !valid || !clientName}>
+              {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+              Save &amp; Add Another
+            </Button>
             <Button size="sm" className="bg-indigo-600 hover:bg-indigo-700 gap-1 h-7 text-xs"
               onClick={() => handleSave(false)} disabled={saving || !valid || !clientName}>
               {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}

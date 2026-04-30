@@ -62,7 +62,7 @@ export const NOTE_META: Record<string, NoteMeta> = {
   other_cl:          { noteNumber: "8",       shortName: "Other Current Liabilities",     section: "BS" },
   cwip:              { noteNumber: "11",      shortName: "Capital Work-in-Progress",      section: "BS" },
   investments:       { noteNumber: "13",      shortName: "Non-Current Investments",       section: "BS" },
-  loans_advances:    { noteNumber: "14",      shortName: "Long-Term Loans and Advances",  section: "BS" },
+  loans_advances:    { noteNumber: "14 & 20",  shortName: "Loans and Advances",            section: "BS" },
   other_nc_assets:   { noteNumber: "15",      shortName: "Other Non-Current Assets",      section: "BS" },
   inventories:       { noteNumber: "17",      shortName: "Inventories",                   section: "BS" },
   trade_receivables: { noteNumber: "18",      shortName: "Trade Receivables",             section: "BS" },
@@ -606,13 +606,17 @@ export function computeDisplayData(
 
     // Determine which custom rows contribute to THIS total:
     //   • Section-total (sectionTag set)  → custom rows tagged with that section
+    //     BUT only rows NOT already attached to a static parent (those are counted
+    //     via the parent's own contribution in formulaAdd, avoiding double-count).
     //   • Grand-total (last isTotal)       → custom rows with NO section tag
     //   • Intermediate sub-totals          → no custom rows (avoids double-count)
     let extras: string[] = [];
     if (row.sectionTag && customRows?.length) {
-      extras = customRows.filter(cr => cr.section === row.sectionTag).map(cr => cr.id);
+      extras = customRows
+        .filter(cr => cr.section === row.sectionTag && !cr.attachedTo)
+        .map(cr => cr.id);
     } else if (row.id === grandTotalId && customRows?.length) {
-      extras = customRows.filter(cr => !cr.section).map(cr => cr.id);
+      extras = customRows.filter(cr => !cr.section && !cr.attachedTo).map(cr => cr.id);
     }
 
     if (config.pattern === "B") {
@@ -627,6 +631,15 @@ export function computeDisplayData(
       for (const id of adds) {
         ltC += outCy[id + "_lt"] ?? 0; ltP += outPy[id + "_lt"] ?? 0;
         stC += outCy[id + "_st"] ?? 0; stP += outPy[id + "_st"] ?? 0;
+        // Also include custom rows formally attached to this static row.
+        // These are excluded from extras (see above) to prevent double-counting.
+        if (customRows) {
+          for (const cr of customRows) {
+            if (cr.attachedTo !== id) continue;
+            ltC += outCy[cr.id + "_lt"] ?? 0; ltP += outPy[cr.id + "_lt"] ?? 0;
+            stC += outCy[cr.id + "_st"] ?? 0; stP += outPy[cr.id + "_st"] ?? 0;
+          }
+        }
       }
       for (const id of subs) {
         ltC -= outCy[id + "_lt"] ?? 0; ltP -= outPy[id + "_lt"] ?? 0;
