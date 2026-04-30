@@ -35,7 +35,7 @@ import {
   NCECustomRow, NCENoteData,
   nceAutoPopulate, deserialiseNoteData, serialiseNoteData,
 } from "@/lib/nceAutoPopulate";
-import { useDynamicNoteRegistry } from "@/lib/noteNumberRegistry";
+import { getDynamicNoteDisplay } from "@/lib/nceDynamicNoteNumbers";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -1170,9 +1170,6 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
   const clientName    = (eng?.clients?.name  as string) || "";
   const { cy: cyYear, py: pyYear } = useMemo(() => parseFY(financialYear), [financialYear]);
 
-  // Same registry as NCEBalanceSheetView — COA-mapping signal ensures note
-  // numbers in the Notes tab headings match what's shown in the BS/PL columns.
-  const { getNoteLabel } = useDynamicNoteRegistry(engagementId);
 
   // ── Persist helper ──────────────────────────────────────────────────────
   const persistNotes = useCallback(async (
@@ -1692,9 +1689,11 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
           const autoCount  = d.customRows.filter(r => r.source === "auto").length;
           const manuCount  = d.customRows.filter(r => r.source === "manual").length;
 
-          // Dynamic note number — same registry as NCEBalanceSheetView so
-          // BS column numbers and Notes tab headings are always in sync.
-          const noteNum = getNoteLabel(nc.noteType) ?? "";
+          // Dynamic note number: use the map when available (cross-tab sync),
+          // else fall back to parsing from the title string (standalone Stage 8).
+          const noteNum = dynamicNoteMap
+            ? (getDynamicNoteDisplay(nc.noteType, dynamicNoteMap) ?? "")
+            : (nc.title.match(/Note\s+([\d\s&]+):/i)?.[1]?.trim() ?? "");
           const noteTitle = nc.title.replace(/^Note\s+[\d\s&]+:\s*/i, "");
 
           return (
