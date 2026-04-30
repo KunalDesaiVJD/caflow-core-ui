@@ -38,7 +38,7 @@ import {
 } from "lucide-react";
 import { NCE_FS_ITEMS } from "@/config/nceLineItems";
 import type { FSLineItem } from "@/config/nceLineItems";
-import { getNoteNo } from "@/lib/noteNumberRegistry";
+import { getNoteNo, useDynamicNoteRegistry } from "@/lib/noteNumberRegistry";
 import {
   NOTES_CONFIG,
   NOTE_META,
@@ -434,7 +434,34 @@ function EditableNoteCell({
   );
 }
 
+// FS item code → registry note key (reverse of CORP_KEY_TO_FS_CODES in noteNumberRegistry).
+// Used by CorporateBalanceSheetView's NoteCell to resolve dynamic note numbers.
+const FS_CODE_TO_NOTE_KEY: Readonly<Record<string, string>> = {
+  BS_EQ_SC:   "share_capital",
+  BS_EQ_RS:   "reserves_surplus",
+  BS_NCL_LTB: "lt_borrowings",
+  BS_NCL_DTL: "deferred_tax_liab",
+  BS_NCL_OLT: "other_lt_liab",
+  BS_NCL_LTP: "lt_provisions",
+  BS_CL_STB:  "st_borrowings",
+  BS_CL_TP:   "trade_payables",
+  BS_CL_OCL:  "other_current_liab",
+  BS_CL_STP:  "st_provisions",
+  BS_NCA_FA:  "ppe",
+  BS_NCA_INV: "nc_investments",
+  BS_NCA_DTA: "deferred_tax_assets",
+  BS_NCA_LLA: "lt_loans_advances",
+  BS_NCA_ONA: "other_nc_assets",
+  BS_CA_CI:   "current_investments",
+  BS_CA_INV:  "inventories",
+  BS_CA_TR:   "trade_receivables",
+  BS_CA_CCE:  "cash_bank",
+  BS_CA_SLA:  "st_loans_advances",
+  BS_CA_OCA:  "other_current_assets",
+};
+
 interface CorporateBalanceSheetViewProps {
+  engagementId:  string;
   bs:            BSRowData;
   cyYear:        number;
   pyYear:        number;
@@ -446,9 +473,22 @@ interface CorporateBalanceSheetViewProps {
 }
 
 function CorporateBalanceSheetView({
-  bs, cyYear, pyYear, companyName, pyLocked,
+  engagementId, bs, cyYear, pyYear, companyName, pyLocked,
   onCommitCY, onCommitPY, onEditNote,
 }: CorporateBalanceSheetViewProps) {
+  const { getNoteLabel } = useDynamicNoteRegistry(engagementId);
+
+  /** Renders the Note No. cell for a BS row using the dynamic registry. */
+  const NoteCell = ({ code }: { code?: string | null }) => {
+    if (!code) return <td className="text-center py-1 px-2 text-muted-foreground/40 text-[11px]">—</td>;
+    const noteKey = FS_CODE_TO_NOTE_KEY[code];
+    if (!noteKey) return <td className="text-center py-1 px-2 text-muted-foreground/40 text-[11px]">—</td>;
+    const label = getNoteLabel(noteKey);
+    return label
+      ? <td className="text-center py-1 px-2 text-primary font-medium text-[11px] cursor-default">{label}</td>
+      : <td className="text-center py-1 px-2 text-muted-foreground/40 text-[11px]">—</td>;
+  };
+
   const rows = buildBSRows(bs);
   return (
     <div className="rounded-lg border bg-card overflow-hidden">
@@ -457,10 +497,10 @@ function CorporateBalanceSheetView({
         <div className="font-bold text-sm">{companyName}</div>
         <div className="text-xs mt-0.5">Balance Sheet as at 31st March, {cyYear}</div>
         <div className="text-[10px] text-muted-foreground italic mt-0.5">(Amount in ₹)</div>
-        {(onCommitCY || onCommitPY || onEditNote) && (
+        {(onCommitCY || onCommitPY) && (
           <div className="text-[10px] text-primary mt-1">
             <Pencil className="inline w-2.5 h-2.5 mr-0.5" />
-            Click any dashed cell (Note No. / CY / PY) to edit · Enter / Tab to save · clear to revert
+            Click any dashed cell (CY / PY) to edit · Enter / Tab to save · clear to revert
           </div>
         )}
       </div>
@@ -501,11 +541,7 @@ function CorporateBalanceSheetView({
               return (
                 <tr key={idx}>
                   <td className="font-semibold py-1 px-3" style={{ paddingLeft: 12 + indentPx }}>{row.label}</td>
-                  <td className="text-center py-1 px-2 text-muted-foreground">
-                    {row.code && onEditNote ? (
-                      <EditableNoteCell value={row.noteNo ?? null} onCommit={(v) => onEditNote(row.code!, v)} />
-                    ) : (row.noteNo ?? "")}
-                  </td>
+                  <NoteCell code={row.code} />
                   <td />
                   <td />
                 </tr>
@@ -524,24 +560,19 @@ function CorporateBalanceSheetView({
               return (
                 <tr key={idx}>
                   <td className="font-semibold py-1 px-3 text-[11px] italic text-muted-foreground" colSpan={3}>{row.label}</td>
-                  <td className="text-center py-1 px-2 text-muted-foreground italic">{row.noteNo ?? ""}</td>
+                  <td className="text-center py-1 px-2 text-primary font-medium text-[11px] italic">N1</td>
                 </tr>
               );
             }
             // item
             const indentPx = (row.indent || 0) * 16;
             const fontSize = row.size === 10 ? "text-[12px]" : "text-[11px]";
-            const editableNote = !!row.code && !!onEditNote;
             const editableCY   = !!row.code && !!onCommitCY;
             const editablePY   = !!row.code && !!onCommitPY && !pyLocked;
             return (
               <tr key={idx} className="hover:bg-muted/10">
                 <td className={`py-0.5 px-3 ${fontSize}`} style={{ paddingLeft: 12 + indentPx }}>{row.label}</td>
-                <td className="text-center py-0.5 px-2 text-muted-foreground">
-                  {editableNote
-                    ? <EditableNoteCell value={row.noteNo ?? null} onCommit={(v) => onEditNote!(row.code!, v)} />
-                    : (row.noteNo ?? "")}
-                </td>
+                <NoteCell code={row.code} />
                 <td className={`text-right tabular-nums py-0.5 px-3 ${fontSize}`}>
                   {editableCY
                     ? <EditableMoneyCell value={row.cy} onCommit={(v) => onCommitCY!(row.code!, v)} />
@@ -5082,6 +5113,7 @@ export default function PipelineFinancialStatements({
             {!isNonCorporate && fsDisplayData.bs ? (
               <>
                 <CorporateBalanceSheetView
+                  engagementId={engagementId}
                   bs={fsDisplayData.bs}
                   cyYear={cyYear}
                   pyYear={pyYear}
