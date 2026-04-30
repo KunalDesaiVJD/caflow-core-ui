@@ -28,7 +28,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Save, RotateCcw, FileDown, Plus, Loader2 } from "lucide-react";
-import { exportToWord } from "@/lib/exportUtils";
+import { exportNtaToDocx } from "@/lib/ntaDocx";
 import {
   NTA_POLICY_META,
   NTA_POLICY_DEFAULTS,
@@ -396,36 +396,20 @@ export function CorporateNTA({ engagement, client, onUpdate }: Props) {
 
   // ── Export Word ───────────────────────────────────────────────────────────
   function handleExportWord() {
-    const policiesHtml = data.policies.map((p, i) => {
-      const num = `2.${i + 1}`;
-      const body = resolvePolicy(p);
-      return `<h3>${num} ${p.title || ""}</h3><p>${body.replace(/\n/g, "<br/>")}</p>`;
-    }).join("");
-
-    const generalNotesHtml = data.general_notes.map((n, i) => {
-      const body = resolveGeneralNote(n);
-      return `<p><strong>${i + 1}.</strong> ${body.replace(/\n/g, "<br/>")}</p>`;
-    }).join("");
-
-    const incDateFormatted = fmtDate(incDateIso) || "____";
-
-    const html = `
-      <h1>Note No: 1 — DISCLOSURE OF ACCOUNTING POLICIES &amp; NOTES FORMING PART OF THE ANNUAL ACCOUNTS</h1>
-      <h2>Section (a) — Overview of the Reporting Entity</h2>
-      <p>
-        <strong>${companyName || "[Company Name]"}</strong> (hereinafter referred to as "the Company")
-        is a company incorporated under the Companies Act, ${actYear} on ${incDateFormatted}.
-        The Company's CIN is <strong>${cin || "____"}</strong>.
-        Its registered office is situated at ${regAddress || "____"}.
-        The Company is primarily engaged in ${bizActivity || "____"}.
-      </p>
-      <h2>Section (b) — Significant Accounting Policies</h2>
-      ${policiesHtml}
-      <h2>Section (c) — General Notes</h2>
-      ${generalNotesHtml}
-    `;
     const fyLabel = (engagement?.financial_year ?? "").replace("/", "-");
-    exportToWord(html, `Notes_to_Accounts_${companyName}_FY${fyLabel}.doc`);
+    const safeName = (companyName || "Company").replace(/[^a-zA-Z0-9_\- ]/g, "_");
+    exportNtaToDocx(
+      {
+        companyName,
+        cin,
+        incDateIso,
+        regAddress,
+        bizActivity,
+        financialYear: fyLabel,
+        data,
+      },
+      `Notes_to_Accounts_${safeName}_FY${fyLabel}.docx`,
+    );
   }
 
   // ── Add-policy inline form ─────────────────────────────────────────────────
