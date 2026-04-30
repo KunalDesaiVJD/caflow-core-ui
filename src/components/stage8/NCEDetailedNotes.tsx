@@ -1229,6 +1229,29 @@ export function NCEDetailedNotes({ engagementId }: Props) {
             await persistNotes(populated, fy);
             toast.success("Notes populated from COA mapping");
           } else {
+            // ── Self-heal stale parent static-row values (Issue 3) ──
+            // If a static row has child custom rows attached, its OWN value
+            // must be 0 — otherwise the section/grand totals double-count
+            // (formulaAdd sums the static row + its children separately).
+            // Older saved data may have a non-zero static value left over
+            // from before children were attached. Zero-out + persist silently.
+            let healed = false;
+            for (const [, d] of Object.entries(built)) {
+              const attachedParents = new Set(
+                (d.customRows || [])
+                  .map(cr => cr.attachedTo)
+                  .filter((id): id is string => !!id),
+              );
+              for (const pid of attachedParents) {
+                for (const sfx of ["", "_lt", "_st"]) {
+                  if ((d.cy[pid + sfx] ?? 0) !== 0) { d.cy[pid + sfx] = 0; healed = true; }
+                  if ((d.py[pid + sfx] ?? 0) !== 0) { d.py[pid + sfx] = 0; healed = true; }
+                }
+              }
+            }
+            if (healed) {
+              persistNotes(built, fy).catch(() => {/* best-effort */});
+            }
             if (!cancelled) setNoteData(built);
             // Back-fill cy_sources for engagements saved before the feature was added
             const needsCySources = Object.values(built).some(
