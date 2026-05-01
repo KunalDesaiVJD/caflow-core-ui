@@ -346,10 +346,27 @@ export default function TallySyncPage({ engagementOverride, hideHeader = false }
       trial_balance: (tbRes as any).count ?? 0,
       vouchers: (vchRes as any).count ?? 0,
     });
-    // Dedupe groups by group_name
+    // Dedupe groups by decoded group_name.
+    //
+    // CLIENT-AGNOSTIC FIX (Ambica Plastic regression): Tally stores group
+    // names verbatim from the company's Group masters, which on many
+    // installations contain the literal HTML entity "&amp;" (e.g.
+    // "Duties &amp; Taxes"). Ledger rows in tally_trial_balance are written
+    // with the DECODED parent_group ("Duties & Taxes"). If we keep
+    // group_name encoded, `groupInfoMap.get(ledger.parent_group)` misses,
+    // and the TB grid pushes the entire sub-group out of its parent (it
+    // shows up as a separate top-level row instead of nested under
+    // Current Liabilities). Decode group_name AND parent_group at load
+    // so all downstream lookups use a single, decoded namespace.
     if (grpData.data) {
       const seen = new Map<string, TallyGroup>();
-      for (const g of grpData.data as TallyGroup[]) {
+      for (const raw of grpData.data as TallyGroup[]) {
+        const g: TallyGroup = {
+          ...raw,
+          group_name:    decodeHtml(raw.group_name),
+          parent_group:  raw.parent_group ? decodeHtml(raw.parent_group) : raw.parent_group,
+          primary_group: raw.primary_group ? decodeHtml(raw.primary_group) : raw.primary_group,
+        };
         if (!seen.has(g.group_name)) seen.set(g.group_name, g);
       }
       setGroups(Array.from(seen.values()));
