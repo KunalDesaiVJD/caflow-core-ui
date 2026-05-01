@@ -139,14 +139,26 @@ function mrlSeparator(): string {
 
 /**
  * Build a two-column signature row using a tab stop.
- * Col 1 at left margin, Col 2 at ~4320 twips (3 inches from margin).
+ * Col 1 at left margin, Col 2 at ~5040 twips (3.5 inches from margin).
+ *
+ * FIX: previous version had no <w:jc>, so the paragraph inherited
+ * `jc="both"` from pPrDefault. Justified-text rendering would collapse
+ * the tab between the two columns and produce "DirectorDirector" stacked
+ * together. Forcing <w:jc w:val="left"/> guarantees the tab stays a
+ * visible gap and the second column lands at its declared position.
+ * Tab raised from 4320 → 5040 for a slightly more even visual centring
+ * of two short labels in the ~11500-twip text width.
  */
 function sigRow(left: string, right: string, opts: RunOpts = {}): string {
-  const tabStop = `<w:pPr><w:tabs><w:tab w:val="left" w:pos="4320"/></w:tabs></w:pPr>`;
+  const pPr =
+    `<w:pPr>` +
+    `<w:jc w:val="left"/>` +
+    `<w:tabs><w:tab w:val="left" w:pos="5040"/></w:tabs>` +
+    `</w:pPr>`;
   const leftRun  = wRun(left, opts);
   const tabRun   = wTab();
   const rightRun = wRun(right, opts);
-  return `<w:p>${tabStop}${leftRun}${tabRun}${rightRun}</w:p>`;
+  return `<w:p>${pPr}${leftRun}${tabRun}${rightRun}</w:p>`;
 }
 
 /**
@@ -166,12 +178,18 @@ function clausePara(num: number, text: string, _spaceAfterTwips: number): string
   // clauseSpacer below) so the rhythm matches the format file. The
   // digit itself is NOT bold in the template, only the body text style
   // is preserved.
+  //
+  // FIX: previously emitted `"N."` + <w:tab/> + body, but the tab stop
+  // was set at the same position as the body indent (720), so the tab
+  // collapsed to zero width and Word rendered "1.The accounting…" with
+  // no space. Switch to a literal trailing space after the digit so the
+  // visual gap between "1." and "The" is always present, and drop the
+  // now-unused <w:tabs> element.
   const pPr = `<w:pPr>` +
     `<w:jc w:val="both"/>` +
-    `<w:tabs><w:tab w:val="left" w:pos="${indLeft}"/></w:tabs>` +
     `<w:ind w:left="${indLeft}" w:hanging="${indHang}"/>` +
     `</w:pPr>`;
-  return `<w:p>${pPr}${wRun(`${num}.`)}${wTab()}${wRun(text)}</w:p>`;
+  return `<w:p>${pPr}${wRun(`${num}. `)}${wRun(text)}</w:p>`;
 }
 
 /**
