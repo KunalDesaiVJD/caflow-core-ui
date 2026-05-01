@@ -255,17 +255,20 @@ function blank(): string {
 }
 
 /**
- * Render a block of policy body text as a SINGLE paragraph, matching the
- * template. Multiple newlines remain inside one <w:p> as consecutive
- * <w:br/> markers — that's what gives the template its visual sub-
- * paragraph gaps inside, e.g., the 2.9 Trade Receivables block.
+ * Render a block of policy body text. Template style:
+ *   * "\n\n" → SEPARATE <w:p> paragraphs (gives proper paragraph-level
+ *      spacing between sub-paragraphs of policies like 2.3, 2.5, 2.6,
+ *      2.7, 2.14, 2.16)
+ *   * "\n"   → <w:br/> within the same paragraph (handled by bodyPara
+ *      via the no-jc branch — used by 2.9's "(i) Secured / (ii) …")
  *
- * Splitting on \n\n into separate <w:p> elements (the previous behaviour)
- * forced every chunk to inherit jc="both", which justified short list
- * lines like "(i) Secured" across the full column width.
+ * Earlier the whole body was emitted in one <w:p> with <w:br/> chains,
+ * which broke template's vertical rhythm because Word doesn't space
+ * around <w:br/> the way it spaces around paragraph marks.
  */
 function bodyBlock(text: string): string[] {
-  return [bodyPara(text)];
+  const chunks = text.split(/\n\n+/);
+  return chunks.map(chunk => bodyPara(chunk));
 }
 
 /**
@@ -305,7 +308,10 @@ function numberedParas(num: number, text: string): string[] {
     const segments = chunks[ci].split("\n");
     const runs: string[] = [];
     if (ci === 0) {
-      runs.push(wRun(`${num}.`, { bold: true }));
+      // Template's "1.", "2.", ... prefix on each general-note item is
+      // PLAIN (not bold). Earlier the digit was emitted bold, which
+      // didn't match the template.
+      runs.push(wRun(`${num}.`));
       runs.push(`<w:r><w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:tab/></w:r>`);
       for (let si = 0; si < segments.length; si++) {
         if (si > 0) runs.push(wBr());
