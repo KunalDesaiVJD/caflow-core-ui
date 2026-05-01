@@ -110,11 +110,13 @@ function wBr(opts: RunOpts = {}): string {
  */
 function bodyPara(text: string, keepNext = true): string {
   const hasLineBreaks = text.includes("\n");
+  // Template has NO <w:spacing> on body paragraphs — pPrDefault provides
+  // line height. Earlier versions emitted line=240/lineRule=auto on every
+  // paragraph which the user perceived as wrong spacing.
   const pPr =
     `<w:pPr>` +
     (hasLineBreaks ? `` : `<w:jc w:val="both"/>`) +
     (keepNext ? `<w:keepNext/>` : ``) +
-    `<w:spacing w:after="0" w:line="240" w:lineRule="auto"/>` +
     `<w:ind w:left="150" w:right="150"/>` +
     `</w:pPr>`;
 
@@ -148,11 +150,13 @@ function bodyPara(text: string, keepNext = true): string {
  */
 function headingPara(label: string, title: string, opts: { titleSize?: number; underline?: boolean; spaceBefore?: number } = {}): string {
   const before = opts.spaceBefore ?? 0;
+  // Template heading paragraphs have NO w:jc and NO w:line/lineRule —
+  // just bare w:after="0". Forcing jc="both" caused the visible spacing
+  // mismatch. Bare spacing element only.
   const pPr =
     `<w:pPr>` +
-    `<w:jc w:val="both"/>` +
     `<w:keepNext/>` +
-    `<w:spacing${before ? ` w:before="${before}"` : ""} w:after="0" w:line="240" w:lineRule="auto"/>` +
+    `<w:spacing${before ? ` w:before="${before}"` : ""} w:after="0"/>` +
     `<w:ind w:left="650" w:hanging="488"/>` +
     `</w:pPr>`;
   // Template detail: ONLY the title run (e.g. "DISCLOSURE OF...") gets the
@@ -176,10 +180,13 @@ function headingPara(label: string, title: string, opts: { titleSize?: number; u
  * plain bold paragraph.
  */
 function outerHeading(prefix: string, title: string): string {
+  // Template uses pStyle=ListParagraph + numId for these headings; we
+  // hard-code "1." / "2." prefixes for renderer parity. Spacing kept
+  // minimal — just w:after="0" — matching the template's heading rhythm.
   const pPr =
     `<w:pPr>` +
     `<w:keepNext/>` +
-    `<w:spacing w:after="0" w:line="240" w:lineRule="auto"/>` +
+    `<w:spacing w:after="0"/>` +
     `<w:ind w:left="720" w:hanging="360"/>` +
     `</w:pPr>`;
   return `<w:p>${pPr}${wRun(prefix, { bold: true })}${wRun(" ", { bold: true })}${wRun(title, { bold: true })}</w:p>`;
@@ -208,11 +215,11 @@ function hrPara(): string {
  * where "[Company Name]" is bold + underlined and the rest is plain.
  */
 function bodyParaRich(parts: Array<{ text: string; opts?: RunOpts }>): string {
+  // Match bodyPara: NO <w:spacing>, jc=both, slim ind L=150 R=150.
   const pPr =
     `<w:pPr>` +
     `<w:jc w:val="both"/>` +
     `<w:keepNext/>` +
-    `<w:spacing w:after="0" w:line="240" w:lineRule="auto"/>` +
     `<w:ind w:left="150" w:right="150"/>` +
     `</w:pPr>`;
   const runs = parts.map(p => wRun(p.text, p.opts ?? {})).join("");
@@ -226,7 +233,7 @@ function bodyParaRich(parts: Array<{ text: string; opts?: RunOpts }>): string {
 function blank(): string {
   return (
     `<w:p><w:pPr>` +
-    `<w:spacing w:after="0" w:line="240" w:lineRule="auto"/>` +
+    `<w:spacing w:after="0"/>` +
     `<w:ind w:left="150"/>` +
     `</w:pPr></w:p>`
   );
@@ -256,22 +263,23 @@ function bodyBlock(text: string): string[] {
  * w:left="720" (aligns with text, not number).
  */
 function numberedParas(num: number, text: string): string[] {
-  const indLeft    = 720;
-  const indHanging = 360;
+  // Template values (from P79–P95 in the template doc): w:left="650"
+  // w:hanging="488", spacing=after=0 with w:line="240" w:lineRule="auto",
+  // and NO w:jc. Earlier we used after="60" which template never has.
+  const indLeft    = 650;
+  const indHanging = 488;
 
   const firstPPr =
     `<w:pPr>` +
-    `<w:jc w:val="both"/>` +
     `<w:keepNext/>` +
     `<w:tabs><w:tab w:val="left" w:pos="${indLeft}"/></w:tabs>` +
     `<w:ind w:left="${indLeft}" w:hanging="${indHanging}"/>` +
-    `<w:spacing w:after="60" w:line="240" w:lineRule="auto"/>` +
+    `<w:spacing w:after="0" w:line="240" w:lineRule="auto"/>` +
     `</w:pPr>`;
 
   const contPPr =
     `<w:pPr>` +
-    `<w:jc w:val="both"/>` +
-    `<w:spacing w:after="60" w:line="240" w:lineRule="auto"/>` +
+    `<w:spacing w:after="0" w:line="240" w:lineRule="auto"/>` +
     `<w:ind w:left="${indLeft}"/>` +
     `</w:pPr>`;
 
@@ -335,11 +343,14 @@ export async function exportNtaToDocx(
   paras.push(blank());
 
   // Template: "Note No : 1   DISCLOSURE OF ACCOUNTING POLICIES & NOTES FORMING
-  //            PART OF THE ANNUAL ACCOUNTS" — bold, sz=22 (11pt), underlined.
+  //            PART OF THE ANNUAL ACCOUNTS"
+  // Label "Note No : 1" runs at body sz=20 (10pt); only the title run is
+  // sz=22 (11pt) underlined — matching the only sz=22 occurrence in the
+  // template. No spaceBefore (template has no before on this paragraph).
   paras.push(headingPara(
     "Note No : 1",
     "DISCLOSURE OF ACCOUNTING POLICIES & NOTES FORMING PART OF THE ANNUAL ACCOUNTS",
-    { titleSize: 11, underline: true, spaceBefore: 120 },
+    { titleSize: 11, underline: true },
   ));
   paras.push(blank());
 
