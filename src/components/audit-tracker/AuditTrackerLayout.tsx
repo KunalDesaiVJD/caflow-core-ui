@@ -33,7 +33,6 @@ interface Props {
 }
 
 export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Props) {
-  const { clients }    = useClients(firmId, isSuperadmin);
   const { users }      = useUsers(firmId, isSuperadmin);
   const { auditFirms } = useFirms(firmId);
 
@@ -48,6 +47,12 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
 
   // ── Audit Status: FY selector ──────────────────────────────────────────────
   const [selectedFY, setSelectedFY] = useState(DEFAULT_FY);
+
+  // Issue 2: dropdown is FY-scoped — show clients flagged audit-applicable for
+  // selectedFY in Edit Client → Audit Setup, plus those with an active
+  // engagement for selectedFY. Without this, freshly flagged clients never
+  // appear in the picker because they don't have an engagement yet.
+  const { clients } = useClients(firmId, isSuperadmin, selectedFY);
 
   // ── Audit Status client filter ─────────────────────────────────────────────
   const [selectedClientId,   setSelectedClientId]   = useState<string | null>(null);
