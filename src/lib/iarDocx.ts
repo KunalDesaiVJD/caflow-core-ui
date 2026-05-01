@@ -129,15 +129,25 @@ function bullet(text: string): string {
   return `<w:p>${pPr}${wRun("•")}<w:r><w:tab/></w:r>${wRun(text)}</w:p>`;
 }
 
-/** Section heading: bold, sometimes underlined. */
+/**
+ * Section heading: bold 11pt with template's exact spacing rhythm.
+ *
+ * Template (IAR.doc) heading runs use `<w:b/><w:sz w:val="22"/>`
+ * (11pt) with `<w:spacing w:before="266"/>` and `<w:ind w:left="180"/>`.
+ * Earlier code used 10pt with no `before`/`indent`, making headings
+ * look indistinguishable from the body — matching the template's 11pt
+ * + before/indent restores the visual hierarchy.
+ */
 function heading(text: string, opts: { underline?: boolean; before?: number } = {}): string {
   return wPara(text, {
     leftAlign: true,
     bold: true,
     underline: opts.underline,
-    spaceBefore: opts.before ?? 200,
+    fontSize: 11,
+    spaceBefore: opts.before ?? 266,
     spaceAfter:  120,
-    keepNext: true,
+    indLeft:     180,
+    keepNext:    true,
   });
 }
 
@@ -236,19 +246,28 @@ export async function exportIarToDocx(
   const paras: string[] = [];
 
   // ── 1. Title ──────────────────────────────────────────────────────────────
+  // Template wraps the title with the built-in "Title" pStyle which
+  // renders italic + underline + centered + bold. Match by emitting
+  // those properties explicitly so the export looks the same regardless
+  // of whether the consuming Word installation has Title style defined.
   paras.push(wPara("INDEPENDENT AUDITOR'S REPORT", {
-    centered: true, bold: true, fontSize: 12, spaceAfter: 240,
+    centered: true, bold: true, italic: true, underline: true,
+    fontSize: 12, spaceAfter: 240,
   }));
   paras.push(blank());
 
   // ── 2. Addressee ──────────────────────────────────────────────────────────
-  paras.push(wPara("To",                          { leftAlign: true, spaceAfter: 0 }));
-  paras.push(wPara("The Members of",              { leftAlign: true, spaceAfter: 0 }));
-  paras.push(wPara(company,                       { leftAlign: true, bold: true, spaceAfter: 200 }));
+  // Template wording is "The Shareholders of" (NOT "Members"). Template
+  // also wraps these lines in the Subtitle style — centered, sz=22 (11pt).
+  paras.push(wPara("To",                  { centered: true, fontSize: 11, spaceAfter: 0 }));
+  paras.push(wPara("The Shareholders of", { centered: true, fontSize: 11, spaceAfter: 0 }));
+  paras.push(wPara(company,               { centered: true, fontSize: 11, bold: true, spaceAfter: 200 }));
   paras.push(blank());
 
   // ── 3. "Report on the Financial Statements" ─────────────────────────────
-  paras.push(heading("Report on the Audit of the Financial Statements", { underline: true }));
+  // Template wording is "Report on the Financial Statements" — NOT
+  // "Report on the Audit of the Financial Statements". Restored verbatim.
+  paras.push(heading("Report on the Financial Statements", { underline: true }));
 
   // ── 4. Opinion ────────────────────────────────────────────────────────────
   paras.push(heading(OPINION_LABEL[opinionType]));
@@ -263,7 +282,8 @@ export async function exportIarToDocx(
     `In our opinion and to the best of our information and according to the explanations given to us, ` +
     `the aforesaid financial statements give the information required by the Act in the manner so required ` +
     `and give a true and fair view in conformity with the accounting principles generally accepted in India, ` +
-    `of the state of affairs of the Company as at ${fyEndDate}, and ${profitOrLoss} and its cash flows ` +
+    // Template uses lowercase "company" here ("...state of affairs of the company..."). Restored.
+    `of the state of affairs of the company as at ${fyEndDate}, and ${profitOrLoss} and its cash flows ` +
     `for the year ended on that date.`,
     { spaceAfter: 200 },
   ));
@@ -281,7 +301,8 @@ export async function exportIarToDocx(
     `Auditor's Responsibilities for the Audit of the Financial Statements section of our report. We are ` +
     `independent of the Company in accordance with the Code of Ethics issued by the Institute of Chartered ` +
     `Accountants of India together with the ethical requirements that are relevant to our audit of the ` +
-    `financial statements under the provisions of the Companies Act, 2013 and the Rules thereunder, and we ` +
+    // Template renders "there under" as TWO words. Restored.
+    `financial statements under the provisions of the Companies Act, 2013 and the Rules there under, and we ` +
     `have fulfilled our other ethical responsibilities in accordance with these requirements and the Code of ` +
     `Ethics. We believe that the audit evidence we have obtained is sufficient and appropriate to provide a ` +
     `basis for our opinion.`,
