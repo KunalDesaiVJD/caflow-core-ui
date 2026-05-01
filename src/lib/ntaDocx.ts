@@ -67,7 +67,7 @@ interface RunOpts {
 function wRun(text: string, opts: RunOpts = {}): string {
   if (!text) return "";
   const rPrParts: string[] = [
-    `<w:rFonts w:ascii="Cambria" w:hAnsi="Cambria" w:cs="Cambria"/>`,
+    `<w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/>`,
     `<w:sz w:val="20"/><w:szCs w:val="20"/>`,
   ];
   if (opts.bold)      rPrParts.push("<w:b/><w:bCs/>");
@@ -82,7 +82,7 @@ function wRun(text: string, opts: RunOpts = {}): string {
 /** Inline line-break run — used for single \n within a paragraph. */
 function wBr(opts: RunOpts = {}): string {
   const rPrParts: string[] = [
-    `<w:rFonts w:ascii="Cambria" w:hAnsi="Cambria" w:cs="Cambria"/>`,
+    `<w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/>`,
     `<w:sz w:val="20"/><w:szCs w:val="20"/>`,
   ];
   if (opts.bold) rPrParts.push("<w:b/><w:bCs/>");
@@ -197,11 +197,13 @@ function outerHeading(prefix: string, title: string): string {
  * Renders as a thin line (paragraph with just a top border).
  */
 function hrPara(): string {
+  // Template's first paragraph carries a top border with w:space="0"
+  // (not "1"). Subtle visual delta but matches the template byte-for-byte.
   return (
     `<w:p>` +
       `<w:pPr>` +
         `<w:pBdr>` +
-          `<w:top w:val="single" w:sz="10" w:space="1" w:color="auto"/>` +
+          `<w:top w:val="single" w:sz="10" w:space="0" w:color="auto"/>` +
         `</w:pBdr>` +
         `<w:spacing w:before="120" w:after="0" w:line="240" w:lineRule="auto"/>` +
       `</w:pPr>` +
@@ -231,22 +233,16 @@ function bodyParaRich(parts: Array<{ text: string; opts?: RunOpts }>): string {
  * Template uses w:left="150", after="0".
  */
 function blank(): string {
-  // Empty paragraph used as a between-section spacer. We need this gap
-  // small enough that all of Notes 1 through 2.5 fit on the first A4
-  // page — including 2.5's three-paragraph body which the user reported
-  // was overflowing to page 2.
-  //
-  // Why "exactly 100 twips" not just sz=14:
-  //   pPrDefault has w:line="278" w:lineRule="auto" which would inflate
-  //   the empty paragraph to ~1.16× the font size regardless of how
-  //   small we make the rPr. Using w:lineRule="exactly" w:line="100"
-  //   pins the spacer at a fixed 5 pt rendered height, independent of
-  //   inherited line spacing.
+  // Empty paragraph used as a between-section spacer. Matches the template
+  // verbatim: no explicit line override, an empty Cambria sz=20 rPr on
+  // the paragraph mark, and after=0. Rendered height ≈ 12pt thanks to
+  // pPrDefault w:line="278" w:lineRule="auto" (1.158× of the 10pt run).
+  // This restores the template's inter-section breathing room.
   return (
     `<w:p><w:pPr>` +
-    `<w:spacing w:after="0" w:line="100" w:lineRule="exact"/>` +
+    `<w:spacing w:after="0"/>` +
     `<w:ind w:left="150"/>` +
-    `<w:rPr><w:sz w:val="10"/><w:szCs w:val="10"/></w:rPr>` +
+    `<w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>` +
     `</w:pPr></w:p>`
   );
 }
@@ -303,7 +299,7 @@ function numberedParas(num: number, text: string): string[] {
     const runs: string[] = [];
     if (ci === 0) {
       runs.push(wRun(`${num}.`, { bold: true }));
-      runs.push(`<w:r><w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria" w:cs="Cambria"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:tab/></w:r>`);
+      runs.push(`<w:r><w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:tab/></w:r>`);
       for (let si = 0; si < segments.length; si++) {
         if (si > 0) runs.push(wBr());
         if (segments[si]) runs.push(wRun(segments[si]));
@@ -496,7 +492,7 @@ export async function exportNtaToDocx(
   <w:docDefaults>
     <w:rPrDefault>
       <w:rPr>
-        <w:rFonts w:ascii="Cambria" w:hAnsi="Cambria" w:cs="Cambria"/>
+        <w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/>
         <w:sz w:val="17"/>
         <w:szCs w:val="17"/>
         <w:lang w:val="en-IN" w:eastAsia="en-IN" w:bidi="ar-SA"/>
@@ -511,7 +507,7 @@ export async function exportNtaToDocx(
   <w:style w:type="paragraph" w:default="1" w:styleId="Normal">
     <w:name w:val="Normal"/>
     <w:rPr>
-      <w:rFonts w:ascii="Cambria" w:hAnsi="Cambria" w:cs="Cambria"/>
+      <w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/>
       <w:sz w:val="17"/>
       <w:szCs w:val="17"/>
     </w:rPr>
