@@ -65,6 +65,7 @@ export default function NoteBSAsset({
     key: string,
     breakupPath: string,
     breakupHint: string,
+    enableSubgroup?: boolean,
   ) => {
     const effPY = effectivePY(key, breakupPath);
     return (
@@ -75,6 +76,7 @@ export default function NoteBSAsset({
           onChange={(next) => updatePath(breakupPath, next)}
           descPlaceholder={breakupHint}
           addLabel="Add row"
+          enableSubgroup={enableSubgroup}
         />
         <EditableRow
           label={`Total — ${title} (per BS)`}
@@ -207,7 +209,7 @@ export default function NoteBSAsset({
       {renderSingleNote(sn("st_loans", "st_loans_advances"), "Short-term loans and advances", "st_loans",
         "bs_asset.st_loans.breakup", "Loan particulars")}
       {renderSingleNote(sn("other_curr_assets", "other_current_assets"), "Other current assets", "other_curr_assets",
-        "bs_asset.other_curr_assets.breakup", "Particulars")}
+        "bs_asset.other_curr_assets.breakup", "Particulars", true)}
     </div>
   );
 }

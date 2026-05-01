@@ -2817,17 +2817,33 @@ export default function PipelineFinancialStatements({
   ]);
 
   // ─── Corporate BS check + P&L summary ───
-  // Sign convention: Tally exports credit balances (liabilities, income) as NEGATIVE.
-  //   Assets     → positive  (debit)
-  //   Liabilities → negative (credit) → bsDiff = Assets + Liabilities (not Assets − Liabilities)
-  //   Revenue    → negative (credit) → netProfit = −Revenue − Expenses (not Revenue − Expenses)
-  const totalAssets = (computedAmounts["BS_NCA"] || 0) + (computedAmounts["BS_CA"] || 0);
+  // IMPORTANT: Use fsDisplayData.bs (cyOf-resolved, includes saved overrides)
+  // for the balance check so it agrees with the numbers shown on the face of the BS.
+  // Raw computedAmounts miss saves such as the current-year P&L added to reserves
+  // via the Notes, which causes a spurious mismatch equal to the net profit.
+  const corpBsData = fsDisplayData?.bs;
+  const totalAssets: number = corpBsData
+    ? (corpBsData.ppe.cy || 0) + (corpBsData.ncInvestments.cy || 0) + (corpBsData.dtAssets.cy || 0)
+      + (corpBsData.ltLoans.cy || 0) + (corpBsData.otherNcAssets.cy || 0)
+      + (corpBsData.currInvestments.cy || 0) + (corpBsData.inventories.cy || 0) + (corpBsData.tradeRec.cy || 0)
+      + (corpBsData.cashBank.cy || 0) + (corpBsData.stLoans.cy || 0) + (corpBsData.otherCurrAssets.cy || 0)
+    : (computedAmounts["BS_NCA"] || 0) + (computedAmounts["BS_CA"] || 0);
+  // Liabilities are stored negative (Tally CR); negate each to get positive total
+  const totalELDisplay: number = corpBsData
+    ? -(corpBsData.shareCap.cy || 0) - (corpBsData.reserves.cy || 0)
+      - (corpBsData.ltBorrowings.cy || 0) - (corpBsData.dtLiab.cy || 0)
+      - (corpBsData.otherLtLiab.cy || 0) - (corpBsData.ltProvisions.cy || 0)
+      - (corpBsData.stBorrowings.cy || 0)
+      - (corpBsData.tradePayMSME.cy || 0) - (corpBsData.tradePayOthers.cy || 0)
+      - (corpBsData.otherCurrLiab.cy || 0) - (corpBsData.stProvisions.cy || 0)
+    : -((computedAmounts["BS_EQ"] || 0) + (computedAmounts["BS_NCL"] || 0) + (computedAmounts["BS_CL"] || 0));
+  // bsDiff = 0 when both sides balance
+  const bsDiff = Math.round((totalAssets - totalELDisplay) * 100) / 100;
+  // Keep totalLiabilities (raw) for activeTotalLiabilities display stat card
   const totalLiabilities =
     (computedAmounts["BS_EQ"] || 0) +
     (computedAmounts["BS_NCL"] || 0) +
     (computedAmounts["BS_CL"] || 0);
-  // totalLiabilities is already negative → adding gives the true diff (0 when balanced)
-  const bsDiff = Math.round((totalAssets + totalLiabilities) * 100) / 100;
   const totalRevenue = (computedAmounts["PL_REV"] || 0);   // negative (credit)
   const totalExpenses = (computedAmounts["PL_EXP"] || 0);  // positive (debit)
   const netProfit = Math.round((-totalRevenue - totalExpenses) * 100) / 100;

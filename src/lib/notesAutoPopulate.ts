@@ -700,6 +700,13 @@ export interface BreakupRow {
    *  TDS 194I, TDS 194C, ...), this lists the underlying ledgers + their
    *  amounts. The ListTable shows an "i" button that expands these. */
   sources?: MergedSource[];
+  /** Sub-group support.
+   *  is_subgroup=true → this row is a collapsible group header.
+   *     amount_cy/amount_py are computed from children and read-only.
+   *  subgroup_id → links child rows to their parent header (same string value).
+   *  Both fields are optional; absence means a regular flat line item. */
+  is_subgroup?: boolean;
+  subgroup_id?:    string;
 }
 
 export function buildBreakup(
@@ -927,12 +934,29 @@ export async function loadStage5Notes(engagementId: string): Promise<Stage5Notes
     // already present (e.g. legacy engagements created against the 4-row
     // migration default) without overwriting user-entered amounts.
     const existingFa = raw.fa && Array.isArray(raw.fa.rows) ? raw.fa.rows : [];
-    return {
+    const merged = {
       ...DEFAULT_STAGE5_NOTES,
       ...(raw as Partial<Stage5Notes>),
       fa: { rows: mergeFaDefaults(existingFa) },
       manual_edits: Array.isArray(raw.manual_edits) ? raw.manual_edits : [],
     } as Stage5Notes;
+
+    // ── Migration guard: bs_liab PY values stored before the sectionSign fix ──
+    // may be negative (Tally CR convention). Normalise to positive on load so
+    // notes like "Total — Reserves and surplus (per BS)" never show in red brackets.
+    // This is a one-off in-memory correction; the fix is persisted next time the
+    // user edits or re-syncs. Accumulated-loss scenarios (genuine Dr balance) are
+    // rare and the user can override manually.
+    if (merged.bs_liab && typeof merged.bs_liab === "object") {
+      for (const key of Object.keys(merged.bs_liab)) {
+        const row = (merged.bs_liab as any)[key];
+        if (row && typeof row === "object" && typeof row.py === "number" && row.py < 0) {
+          row.py = Math.abs(row.py);
+        }
+      }
+    }
+
+    return merged;
   }
   return JSON.parse(JSON.stringify(DEFAULT_STAGE5_NOTES));
 }

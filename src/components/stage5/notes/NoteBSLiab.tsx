@@ -867,6 +867,7 @@ export default function NoteBSLiab({
           onChange={(next) => updatePath("bs_liab.other_curr_liab.breakup", next)}
           descPlaceholder="Current maturities / Interest accrued / Statutory dues / Advance / Provision for tax"
           addLabel="Add row"
+          enableSubgroup
         />
         <EditableRow
           label="Total (per BS)"
