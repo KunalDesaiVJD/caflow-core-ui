@@ -386,6 +386,12 @@ export async function exportNtaToDocx(
   paras.push(blank());
 
   // ── 4. Policies 2.1 – 2.n ────────────────────────────────────────────────────
+  // Template pattern (e.g. 2.1):
+  //   P10 → heading "2.1 Basis of Preparation of Financial statements"
+  //   P11 → empty spacer paragraph (gives breathing room under the heading)
+  //   P12 → body "The financial statements of the Company..."
+  // Missing the inter-spacer (P11) was the cause of the "no space between
+  // subpoints and their paragraph" the user reported.
   for (let idx = 0; idx < data.policies.length; idx++) {
     const p     = data.policies[idx];
     const label = p.id || `2.${idx + 1}`;
@@ -393,8 +399,9 @@ export async function exportNtaToDocx(
     const body  = resolvePolicy(p.id, p.body);
 
     paras.push(headingPara(label, title));
+    paras.push(blank()); // spacer between heading and body — matches template P11
     bodyBlock(body).forEach(bp => paras.push(bp));
-    paras.push(blank());
+    paras.push(blank()); // spacer between this policy's body and next heading
   }
 
   // ── 5. 2.19 General Notes ─────────────────────────────────────────────────────
