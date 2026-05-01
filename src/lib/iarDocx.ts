@@ -470,9 +470,13 @@ export async function exportIarToDocx(
   // CARO sections — they're integrated here per the new corporate
   // template (FORMAT_AR2526 without CARO, IFC and Cash Flow).
   //
-  // Page break before this section — template starts page 3 with this
-  // heading. Without the break, items can spill across pages 2/3.
+  // Page break before this section so page 2 starts cleanly. The
+  // template marks the new page with a literal ": : 2 : :" centered
+  // band — emitted as an actual paragraph (not a Word PAGE field)
+  // since field rendering fails in some viewers (Protected View,
+  // Google Docs, etc.) and shows the static fallback instead.
   paras.push(pageBreakPara());
+  paras.push(wPara(": :  2  : :", { centered: true, fontSize: 11, spaceAfter: 240 }));
   paras.push(heading("Report on Other Legal and Regulatory Requirements"));
   paras.push(wPara(
     `The Company is a private limited and falls within exemptions specified under paragraph 2(iv) of the ` +
@@ -620,19 +624,19 @@ export async function exportIarToDocx(
     ${paras.join("\n    ")}
     <w:sectPr>
       <!--
-        Header references — page 1 uses an empty first-page header
-        (rId10) so the title page has no number; pages 2+ use the
-        default header (rId11) which renders ":: <PAGE> ::" centered.
-        <w:titlePg/> below activates "different first page".
+        Headers removed — replaced with a literal ": : 2 : :" band
+        emitted inline as a centered paragraph immediately after the
+        page break (see "Page-number band" comment in the body
+        builder above). This matches how the template encodes its
+        page numbers (typed text, not a Word PAGE field — fields
+        sometimes fail to render in protected-view / non-Word viewers
+        and show the static fallback instead of the live page number).
       -->
-      <w:headerReference w:type="first"   r:id="rId10"/>
-      <w:headerReference w:type="default" r:id="rId11"/>
       <w:pgSz w:w="11906" w:h="16838" w:code="9"/>
       <w:pgMar w:top="720" w:right="720" w:bottom="1080" w:left="1151"
                w:header="720" w:footer="720" w:gutter="0"/>
       <w:cols w:space="708"/>
       <w:docGrid w:linePitch="360"/>
-      <w:titlePg/>
     </w:sectPr>
   </w:body>
 </w:document>`;
@@ -671,35 +675,10 @@ export async function exportIarToDocx(
   </w:style>
 </w:styles>`;
 
-  // ─── Header parts ─────────────────────────────────────────────────────────
-  // header1.xml — first-page header (empty so page 1 has no number).
-  // header2.xml — default header showing ": :  <PAGE>  : :" centered,
-  //               used on pages 2+ via <w:titlePg/> in sectPr. Matches
-  //               the template's manual ": : 2 : :" page-number bands.
-  const header1Xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-  <w:p><w:pPr><w:spacing w:after="0"/></w:pPr></w:p>
-</w:hdr>`;
-
-  const pageRunRPr = `<w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr>`;
-  const header2Xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-  <w:p>
-    <w:pPr>
-      <w:jc w:val="center"/>
-      <w:spacing w:after="0"/>
-    </w:pPr>
-    <w:r>${pageRunRPr}<w:t xml:space="preserve">: :  </w:t></w:r>
-    <w:r>${pageRunRPr}<w:fldChar w:fldCharType="begin"/></w:r>
-    <w:r>${pageRunRPr}<w:instrText xml:space="preserve">PAGE   \\* MERGEFORMAT </w:instrText></w:r>
-    <w:r>${pageRunRPr}<w:fldChar w:fldCharType="separate"/></w:r>
-    <w:r>${pageRunRPr}<w:t>2</w:t></w:r>
-    <w:r>${pageRunRPr}<w:fldChar w:fldCharType="end"/></w:r>
-    <w:r>${pageRunRPr}<w:t xml:space="preserve">  : :</w:t></w:r>
-  </w:p>
-</w:hdr>`;
-
   // ─── Build ZIP ────────────────────────────────────────────────────────────
+  // Header parts not used — page-number band is emitted inline as a
+  // body paragraph immediately after the page break, matching the
+  // template's literal ": : 2 : :" idiom.
   const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
@@ -708,10 +687,6 @@ export async function exportIarToDocx(
     ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
   <Override PartName="/word/styles.xml"
     ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
-  <Override PartName="/word/header1.xml"
-    ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
-  <Override PartName="/word/header2.xml"
-    ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
 </Types>`;
 
   const rootRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -726,12 +701,6 @@ export async function exportIarToDocx(
   <Relationship Id="rId1"
     Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles"
     Target="styles.xml"/>
-  <Relationship Id="rId10"
-    Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header"
-    Target="header1.xml"/>
-  <Relationship Id="rId11"
-    Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header"
-    Target="header2.xml"/>
 </Relationships>`;
 
   const zip = new JSZip();
@@ -739,8 +708,6 @@ export async function exportIarToDocx(
   zip.file("_rels/.rels", rootRels);
   zip.file("word/document.xml", documentXml);
   zip.file("word/styles.xml", stylesXml);
-  zip.file("word/header1.xml", header1Xml);
-  zip.file("word/header2.xml", header2Xml);
   zip.file("word/_rels/document.xml.rels", docRels);
 
   const blob = await zip.generateAsync({
