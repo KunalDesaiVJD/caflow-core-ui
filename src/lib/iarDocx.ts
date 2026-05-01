@@ -114,6 +114,11 @@ function blank(): string {
   return `<w:p><w:pPr><w:spacing w:after="0" w:line="282" w:lineRule="atLeast"/></w:pPr></w:p>`;
 }
 
+/** Hard page break paragraph — forces the next paragraph onto a new page. */
+function pageBreakPara(): string {
+  return `<w:p><w:r><w:br w:type="page"/></w:r></w:p>`;
+}
+
 /** Bullet paragraph using a hanging indent + bullet glyph. */
 function bullet(text: string): string {
   const indLeft = 720;   // 36 pt
@@ -372,6 +377,13 @@ export async function exportIarToDocx(
     { spaceAfter: 60 },
   ));
 
+  // Hard page break — template ends page 1 right after Management's
+  // Responsibility's last paragraph. Without this break, the bottom of
+  // page 1 would carry 2–3 lines of the next section, which the user
+  // explicitly asked to remove. With the explicit break, page 1 caps
+  // at the MR closing paragraph.
+  paras.push(pageBreakPara());
+
   // ── 9. Auditor's Responsibility ───────────────────────────────────────────
   // Template renders this heading with TWO spaces between "Auditor's"
   // and "Responsibility" — preserved verbatim.
@@ -447,6 +459,10 @@ export async function exportIarToDocx(
   // for Rule 11 reporting. No separate Going Concern, Audit Trail, or
   // CARO sections — they're integrated here per the new corporate
   // template (FORMAT_AR2526 without CARO, IFC and Cash Flow).
+  //
+  // Page break before this section — template starts page 3 with this
+  // heading. Without the break, items can spill across pages 2/3.
+  paras.push(pageBreakPara());
   paras.push(heading("Report on Other Legal and Regulatory Requirements"));
   paras.push(wPara(
     `The Company is a private limited and falls within exemptions specified under paragraph 2(iv) of the ` +
