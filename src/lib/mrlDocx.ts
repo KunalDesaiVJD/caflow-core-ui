@@ -170,6 +170,30 @@ function sigRow(left: string, right: string, opts: RunOpts = {}): string {
  *   w:hanging="360" → first line (the number) is at 36 pt − 18 pt = 18 pt
  *   tab stop @720   → tab after "N." jumps text to the 36 pt indent
  */
+/**
+ * Hard page-break paragraph. Forces the next paragraph onto a new page.
+ * Used between clause 11 and clause 12 to mirror the template's
+ * "Contd. on next page…" / "Contd. from prev. page…" two-page split.
+ */
+function pageBreakPara(): string {
+  return `<w:p><w:r><w:br w:type="page"/></w:r></w:p>`;
+}
+
+/**
+ * Continuation marker line — boxed, bold "Contd. on next page…" or
+ * "Contd. from prev. page…" — emitted at the bottom of page 1 and the
+ * top of page 2 to match the template.
+ */
+function contdMarker(text: string): string {
+  const pPr =
+    `<w:pPr>` +
+    `<w:jc w:val="left"/>` +
+    `<w:spacing w:before="120" w:after="120"/>` +
+    `<w:ind w:left="360"/>` +
+    `</w:pPr>`;
+  return `<w:p>${pPr}${wRun(text, { bold: true })}</w:p>`;
+}
+
 function clausePara(num: number, text: string, _spaceAfterTwips: number): string {
   const indLeft = 720;  // 36 pt
   const indHang = 360;  // 18 pt
@@ -266,6 +290,11 @@ export async function exportMrlToDocx(params: MRLDocxParams, filename: string): 
   const selectedClauses = clauses.filter((c) => c.selected);
   const paras: string[] = [];
 
+  // ── 0. Top-of-page-1 leading line ─────────────────────────────────────────
+  // User asked for a single line of breathing room at the top of page 1
+  // before the company letterhead block starts.
+  paras.push(blank());
+
   // ── 1. Company Letterhead ──────────────────────────────────────────────────
   // Company name: 16 pt bold centered (matches template 16pt Cambria bold)
   paras.push(wPara([{ text: companyName, bold: true, fontSize: 16 }], { centered: true, spaceAfter: 40 }));
@@ -351,6 +380,15 @@ export async function exportMrlToDocx(params: MRLDocxParams, filename: string): 
     // template's margin-left:63pt; text-indent:-18pt
     for (let i = 1; i < lines.length; i++) {
       paras.push(subClausePara(lines[i], i === lines.length - 1 ? 140 : 20));
+    }
+
+    // After clause 11, emit "Contd. on next page…" then a hard page break
+    // then "Contd. from prev. page…" — exactly matching the template's
+    // page-1/page-2 split (template inserts these markers around clause 11).
+    if (clauseNum === 11) {
+      paras.push(contdMarker("Contd. on next page…"));
+      paras.push(pageBreakPara());
+      paras.push(contdMarker("Contd. from prev. page…"));
     }
 
     clauseNum++;
