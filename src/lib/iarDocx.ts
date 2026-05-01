@@ -145,14 +145,15 @@ function bullet(text: string): string {
  */
 function heading(text: string, opts: { underline?: boolean; before?: number } = {}): string {
   // Headings flush-left to match body paragraphs and addressee block.
-  // Spacing tightened (before 140 → 80, after 60 → 40) so the full
-  // Management's Responsibility section + everything above lands on
-  // page 1, matching the template's page-1 contents.
+  // Size lowered from 11pt → 10pt (sz=22 → sz=20) to match the
+  // template — most section headings (Basis for Opinion, Management's
+  // Responsibility, Auditor's Responsibility, Other Legal & Regulatory)
+  // render at body-size 10pt with bold weight as the only differentiator.
   return wPara(text, {
     leftAlign: true,
     bold: true,
     underline: opts.underline,
-    fontSize: 11,
+    fontSize: 10,
     spaceBefore: opts.before ?? 80,
     spaceAfter:  40,
     keepNext:    true,
