@@ -290,11 +290,11 @@ export async function exportIarToDocx(
   // ── 4. Opinion ────────────────────────────────────────────────────────────
   paras.push(heading(OPINION_LABEL[opinionType]));
   paras.push(wPara(
-    // Smart quotes around "the Company"; lowercase "statement"; no "a"
-    // before "summary of" — all per template's verbatim wording.
+    // New template wording — drops "Cash Flow Statement" (without-CARO/IFC/CF
+    // template excludes the Cash Flow reference entirely).
     `We have audited the accompanying financial statements of ${company} (“the Company”), ` +
-    `which comprise the Balance Sheet as at ${fyEndDate}, the statement of Profit and Loss and ` +
-    `Cash Flow Statement for the year then ended, and notes to the financial statements ` +
+    `which comprise the Balance Sheet as at ${fyEndDate}, and the statement of Profit and Loss ` +
+    `for the year then ended, and notes to the financial statements ` +
     `including summary of significant accounting policies and other explanatory information.`,
     { spaceAfter: 60 },
   ));
@@ -302,9 +302,8 @@ export async function exportIarToDocx(
     `In our opinion and to the best of our information and according to the explanations given to us, ` +
     `the aforesaid financial statements give the information required by the Act in the manner so required ` +
     `and give a true and fair view in conformity with the accounting principles generally accepted in India, ` +
-    // Template uses lowercase "company" here ("...state of affairs of the company..."). Restored.
-    `of the state of affairs of the company as at ${fyEndDate}, and ${profitOrLoss} and its cash flows ` +
-    `for the year ended on that date.`,
+    // Template drops "and its cash flows" and uses lowercase "company".
+    `of the state of affairs of the company as at ${fyEndDate}, and ${profitOrLoss} for the year ended on that date.`,
     { spaceAfter: 60 },
   ));
 
@@ -375,7 +374,9 @@ export async function exportIarToDocx(
   ));
 
   // ── 9. Auditor's Responsibility ───────────────────────────────────────────
-  paras.push(heading("Auditor’s Responsibility"));
+  // Template renders this heading with TWO spaces between "Auditor's"
+  // and "Responsibility" — preserved verbatim.
+  paras.push(heading("Auditor’s  Responsibility"));
   paras.push(wPara(
     `Our objectives are to obtain reasonable assurance about whether the financial statements as a whole ` +
     `are free from material misstatement, whether due to fraud or error, and to issue an auditor’s report ` +
@@ -441,99 +442,139 @@ export async function exportIarToDocx(
     { spaceAfter: 240 },
   ));
 
-  // ── 10. Going Concern (engagement-specific) ───────────────────────────────
-  paras.push(heading("Going Concern"));
+  // ── 10. Report on Other Legal and Regulatory Requirements ────────────────
+  // Template emits a fixed paragraph that handles CARO exemption + IFC
+  // exemption inline, plus a lettered (a)-(h) list with sub-items i-iv
+  // for Rule 11 reporting. No separate Going Concern, Audit Trail, or
+  // CARO sections — they're integrated here per the new corporate
+  // template (FORMAT_AR2526 without CARO, IFC and Cash Flow).
+  paras.push(heading("Report on Other Legal and Regulatory Requirements"));
   paras.push(wPara(
-    goingConcernStd
-      ? "We have nothing to report in regard to the Company's ability to continue as a going concern."
-      : (goingConcernText.trim() || "We have nothing to report in regard to the Company's ability to continue as a going concern."),
-    { spaceAfter: 60 },
+    `The Company is a private limited and falls within exemptions specified under paragraph 2(iv) of the ` +
+    `Companies (Auditor’s Report) Order, 2020. Hence matters specified in paragraph 3 and 4 of the said order ` +
+    `issued by the Central Government of India in terms of sub-section (11) of section143 of the Act, are not enclosed`,
+    { spaceAfter: 100 },
+  ));
+  paras.push(wPara(
+    `As required by section 143(3) of the Act, we further report that:`,
+    { spaceAfter: 80 },
   ));
 
-  // ── 11. Audit Trail ───────────────────────────────────────────────────────
-  if (auditTrailText && auditTrailText.trim()) {
-    paras.push(heading("Audit Trail (Edit Log)"));
-    paras.push(wPara(auditTrailText, { spaceAfter: 60 }));
-  }
+  // (a)-(h) lettered list — literal text prefixes per template style.
+  const letterItem = (label: string, text: string): string =>
+    wPara(`${label} ${text}`, { spaceAfter: 60, indLeft: 360, indHanging: 360 });
 
-  // ── 12. Other Legal & Regulatory Requirements ─────────────────────────────
-  paras.push(heading("Report on Other Legal and Regulatory Requirements"));
-  if (branchText && branchText.trim()) {
-    paras.push(wPara(branchText, { spaceAfter: 60 }));
-  }
-  if (pointD && pointD.trim()) {
-    paras.push(wPara(pointD, { spaceAfter: 60 }));
-  }
-  if (pointG && pointG.trim()) {
-    paras.push(wPara(pointG, { spaceAfter: 60 }));
-  }
+  paras.push(letterItem("a)",
+    `We have sought and obtained all the information and explanations which to the best of our knowledge and ` +
+    `belief were necessary for the purpose of our audit;`));
+  paras.push(letterItem("b)",
+    `In our opinion proper books of account as required by law have been kept by the Company so far as it ` +
+    `appears from our examination of those books;`));
+  paras.push(letterItem("c)",
+    branchText && branchText.trim()
+      ? branchText
+      : `The company does not have any branch, this para is not applicable.`));
+  paras.push(letterItem("d)",
+    `The Balance Sheet and Statement of Profit and Loss dealt with by this Report are in agreement with the ` +
+    `books of account;`));
+  paras.push(letterItem("e)",
+    `In our opinion, the aforesaid financial statements comply with the Accounting Standards specified under ` +
+    `Section 133 of the Act, read with Rule 7 of the Companies (Accounts) Rules 2014.`));
+  paras.push(letterItem("f)",
+    `On the basis of written representations received from the directors as on ${fyEndDate}, and taken on record ` +
+    `by the Board of Directors, none of the directors is disqualified as on ${fyEndDate}, from being appointed ` +
+    `as a director in terms of Section 164(2) of the Act.`));
+  paras.push(letterItem("g)",
+    `The report on adequacy of the internal financial control over financial reporting is not applicable as the ` +
+    `company is falls within the exemptions specified under sub-section 3(1) of section 143 of the Act.`));
+  paras.push(letterItem("h)",
+    `In our opinion and to the best of our information and according to the explanations given to us, we report ` +
+    `with respect to other matters to be included in the Auditor’s Report in accordance with Rule 11 of the ` +
+    `Companies (Audit and Auditors) Rules, 2014 as under:`));
 
-  // ── 13. CARO 2020 ─────────────────────────────────────────────────────────
-  if (caroPara && caroPara.trim()) {
-    paras.push(heading("Annexure to the Auditors' Report — CARO 2020"));
-    paras.push(wPara(caroPara, { spaceAfter: 60 }));
-  }
+  // Roman sub-items i. - iv. under (h)
+  const romanItem = (label: string, text: string): string =>
+    wPara(`${label} ${text}`, { spaceAfter: 60, indLeft: 720, indHanging: 360 });
 
-  // ── 14. Pending Litigation table ──────────────────────────────────────────
-  const liveRows = (litigationRows || []).filter(r => (r.statute || r.amount || r.forum));
-  if (liveRows.length > 0) {
-    paras.push(heading("Pending Litigation"));
+  paras.push(romanItem("i.",
+    `The Company does not have any pending litigations which would impact on its financial position.`));
+  paras.push(romanItem("ii.",
+    `The Company did not have any long-term contracts including derivative contracts for which there were any ` +
+    `material foreseeable losses.`));
+  paras.push(romanItem("iii.",
+    `There were no amounts which were required to be transferred to the Investor Education and Protection Fund ` +
+    `by the Company.`));
+  paras.push(romanItem("iv.",
+    auditTrailText && auditTrailText.trim()
+      ? `Based on our examination, ${auditTrailText}`
+      : `Based on our examination, the Company has used accounting software for maintaining its books of account, ` +
+        `which has a feature of recording audit trail (edit log) facility and as informed by the management the ` +
+        `same has operated throughout the year for all relevant transactions recorded in the software.`));
 
-    // Column widths sum to ~9000 dxa; A4 with template's tight margins gives
-    // ~9100 dxa of body width, so 9000 fits comfortably.
-    const widths = [600, 3400, 1600, 1200, 2200];
-    const totalDxa = widths.reduce((a, b) => a + b, 0);
-
-    const header = tableRow([
-      tableCell("Sr",               { bold: true, widthDxa: widths[0] }),
-      tableCell("Statute / Nature", { bold: true, widthDxa: widths[1] }),
-      tableCell("Amount",           { bold: true, widthDxa: widths[2] }),
-      tableCell("FY",               { bold: true, widthDxa: widths[3] }),
-      tableCell("Forum",            { bold: true, widthDxa: widths[4] }),
-    ]);
-    const dataRows = liveRows.map(r => tableRow([
-      tableCell(String(r.sr),       { widthDxa: widths[0] }),
-      tableCell(r.statute || "—",   { widthDxa: widths[1] }),
-      tableCell(r.amount  || "—",   { widthDxa: widths[2] }),
-      tableCell(r.fy      || "—",   { widthDxa: widths[3] }),
-      tableCell(r.forum   || "—",   { widthDxa: widths[4] }),
-    ]));
-
-    const tbl =
-      `<w:tbl>` +
-        `<w:tblPr>` +
-          `<w:tblW w:w="${totalDxa}" w:type="dxa"/>` +
-          `<w:tblBorders>` +
-            `<w:top w:val="single" w:sz="4" w:color="000000"/>` +
-            `<w:left w:val="single" w:sz="4" w:color="000000"/>` +
-            `<w:bottom w:val="single" w:sz="4" w:color="000000"/>` +
-            `<w:right w:val="single" w:sz="4" w:color="000000"/>` +
-            `<w:insideH w:val="single" w:sz="4" w:color="000000"/>` +
-            `<w:insideV w:val="single" w:sz="4" w:color="000000"/>` +
-          `</w:tblBorders>` +
-          `<w:tblLayout w:type="fixed"/>` +
-        `</w:tblPr>` +
-        `<w:tblGrid>${widths.map(w => `<w:gridCol w:w="${w}"/>`).join("")}</w:tblGrid>` +
-        header + dataRows.join("") +
-      `</w:tbl>`;
-    paras.push(tbl);
-    paras.push(blank());
-  }
-
-  // ── 15. Signature Block ───────────────────────────────────────────────────
-  paras.push(blank());
-  paras.push(wPara(`For ${firmName || "[Firm Name]"},`,                   { leftAlign: true, bold: true, spaceAfter: 0 }));
-  paras.push(wPara(`Chartered Accountants`,                                { leftAlign: true, italic: true, spaceAfter: 0 }));
-  if (firmRegNo) paras.push(wPara(`Firm Registration No.: ${firmRegNo}`,   { leftAlign: true, spaceAfter: 60 }));
   paras.push(blank());
   paras.push(blank());
-  paras.push(wPara(partnerName || "[Partner Name]",                        { leftAlign: true, bold: true, spaceAfter: 0 }));
-  paras.push(wPara(`Partner`,                                              { leftAlign: true, spaceAfter: 0 }));
-  if (partnerMemNo) paras.push(wPara(`Membership No.: ${partnerMemNo}`,    { leftAlign: true, spaceAfter: 0 }));
-  if (udin) paras.push(wPara(`UDIN: ${udin}`,                              { leftAlign: true, spaceAfter: 60 }));
-  paras.push(blank());
-  paras.push(wPara(`Place: ${firmCity || ""}`,                              { leftAlign: true, spaceAfter: 0 }));
-  paras.push(wPara(`Date: ${reportDate || ""}`,                             { leftAlign: true, spaceAfter: 0 }));
+
+  // ── 11. Signature block — 2-column borderless table ──────────────────────
+  // Template uses a 2-column borderless table:
+  //   Left  | Right
+  //   For, V. J. Desai & Co. | (empty)
+  //   Chartered Accountants  | (empty)
+  //   Firm Regi.No.<frn>     | (empty)
+  //   (empty)                | Place:  <city>
+  //   (empty)                | Date:   <date>
+  //   <partner name>         | (empty)
+  //   Partner                | UDIN: <udin>
+  //   Membership No.<memno>  | (empty)
+  const sigCell = (text: string, widthDxa: number): string => {
+    const tcPr =
+      `<w:tcPr>` +
+      `<w:tcW w:w="${widthDxa}" w:type="dxa"/>` +
+      `<w:tcBorders>` +
+        `<w:top    w:val="nil"/>` +
+        `<w:left   w:val="nil"/>` +
+        `<w:bottom w:val="nil"/>` +
+        `<w:right  w:val="nil"/>` +
+      `</w:tcBorders>` +
+      `</w:tcPr>`;
+    const para = wPara(text, { leftAlign: true, bold: true, fontSize: 11, spaceAfter: 0 });
+    return `<w:tc>${tcPr}${para}</w:tc>`;
+  };
+  const sigRow2 = (left: string, right: string): string =>
+    `<w:tr>${sigCell(left, 6030)}${sigCell(right, 3526)}</w:tr>`;
+
+  const firmDisplay     = firmName    ? `For, ${firmName}`               : `For, [Firm Name]`;
+  const frnLine         = firmRegNo   ? `Firm Regi.No.${firmRegNo}`      : `Firm Regi.No.____`;
+  const partnerDisplay  = partnerName || `[Partner Name]`;
+  const memberDisplay   = partnerMemNo ? `Membership No.${partnerMemNo}` : `Membership No.____`;
+  const placeLine       = `Place:  ${firmCity || ""}`;
+  const dateLine        = `Date:   ${reportDate || ""}`;
+  const udinLine        = udin ? `UDIN: ${udin}` : `UDIN:`;
+
+  const sigTbl =
+    `<w:tbl>` +
+      `<w:tblPr>` +
+        `<w:tblW w:w="9556" w:type="dxa"/>` +
+        `<w:tblBorders>` +
+          `<w:top    w:val="nil"/>` +
+          `<w:left   w:val="nil"/>` +
+          `<w:bottom w:val="nil"/>` +
+          `<w:right  w:val="nil"/>` +
+          `<w:insideH w:val="nil"/>` +
+          `<w:insideV w:val="nil"/>` +
+        `</w:tblBorders>` +
+        `<w:tblLayout w:type="fixed"/>` +
+      `</w:tblPr>` +
+      `<w:tblGrid><w:gridCol w:w="6030"/><w:gridCol w:w="3526"/></w:tblGrid>` +
+      sigRow2(firmDisplay,         "") +
+      sigRow2("Chartered Accountants", "") +
+      sigRow2(frnLine,             "") +
+      sigRow2("",                  placeLine) +
+      sigRow2("",                  dateLine) +
+      sigRow2(partnerDisplay,      "") +
+      sigRow2("Partner",           udinLine) +
+      sigRow2(memberDisplay,       "") +
+    `</w:tbl>`;
+  paras.push(sigTbl);
 
   // ─── Build document.xml ──────────────────────────────────────────────────
   // Page margins from template (twips):
