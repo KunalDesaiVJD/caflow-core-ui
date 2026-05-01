@@ -113,11 +113,14 @@ const Index = () => {
 
     // Audit planning reminders — entries where this user is an employee and audit hasn't ended yet
     const today = now.toISOString().split("T")[0];
+    // Issue 3: leaves are personal time-off, not audit reminders. Filter them
+    // out at DB-level (`is_leave=false` OR null for any pre-migration row).
     let auditReminderQ = supabase
       .from("audit_planning")
       .select("*")
       .contains("employee_ids", [user.id])
       .gte("planned_to", today)
+      .or("is_leave.is.null,is_leave.eq.false")
       .order("planned_from", { ascending: true })
       .limit(5);
 
