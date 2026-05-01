@@ -1908,26 +1908,93 @@ export default function TallySyncPage({ engagementOverride, hideHeader = false }
                       </TableBody>
                     </Table>
                   </div>
-                  {/* Balance check strip */}
-                  <div className="border-t bg-muted/30 px-4 py-1.5 text-[11px] font-semibold flex justify-end gap-4">
-                    <span className={cn(Math.abs(tbDrTotal - tbCrTotal) < 1 ? "text-emerald-600" : "text-amber-600")}
-                      title={
-                        Math.abs(tbDrTotal - tbCrTotal) >= 1 && Math.abs(tbDebitTotal - tbCreditTotal) < 1
-                          ? "Movement is balanced ✓ but opening balances are unbalanced. Tally may have a hidden 'Difference in Opening Balances' entry absorbing this. Fix opening balances in Tally to resolve."
-                          : undefined
-                      }>
-                      {Math.abs(tbDrTotal - tbCrTotal) < 1
-                        ? "✓ Closing Balanced"
-                        : Math.abs(tbDebitTotal - tbCreditTotal) < 1
-                          ? `⚠ Opening Imbalance: ${fmtAmt(Math.abs(tbDrTotal - tbCrTotal))} — Movement balanced ✓`
-                          : `⚠ Closing Diff: ${fmtAmt(Math.abs(tbDrTotal - tbCrTotal))}`}
-                    </span>
-                    {hasDebitCredit && (
-                      <span className={cn(Math.abs(tbDebitTotal - tbCreditTotal) < 1 ? "text-emerald-600" : "text-amber-600")}>
-                        {Math.abs(tbDebitTotal - tbCreditTotal) < 1 ? "✓ Movement Balanced" : `⚠ Movement Diff: ${fmtAmt(Math.abs(tbDebitTotal - tbCreditTotal))}`}
-                      </span>
-                    )}
-                  </div>
+                  {/* ── Balance check strip ─────────────────────────────────
+                      Three independent checks, each with its own meaning:
+
+                      1. Closing balanced    — Σ(Dr_close) = Σ(Cr_close)
+                                               Tautological after the P&L plug;
+                                               shown for user assurance.
+                      2. Opening balanced    — Σ(Dr_open)  = Σ(Cr_open)
+                                               Real invariant — fails only if
+                                               Tally has a "Difference in
+                                               Opening Balances" entry.
+                      3. Net P&L (period)    — INFORMATIONAL, NOT A WARNING.
+                                               In any operating business with
+                                               non-zero profit, Σ(Dr_period) ≠
+                                               Σ(Cr_period) — they differ by
+                                               exactly the period's net P&L
+                                               (current-year profit lives in
+                                               nominal accounts and is closed
+                                               to Capital only at year-end;
+                                               P&L A/c is virtual until then).
+                      4. Books reconcile     — TRUE invariant:
+                                               closing_diff = movement_diff
+                                                            + inventory_adj
+                                               If this holds, Tally is
+                                               internally consistent and the
+                                               residual IS the period's P&L,
+                                               not a sync/extraction bug.
+
+                      Was previously: "Movement Diff" rendered as ⚠ with
+                      amber colour — false alarm equal to the company's
+                      real profit/loss.  Hit KWIKTEAM and Ambica repeatedly
+                      because the label conflated "movement imbalance"
+                      (correct accounting reality) with "movement bug"
+                      (something the user should fix). */}
+
+                  {(() => {
+                    const openingDiff   = tbDrOpening - tbCrOpening;
+                    const closingDiff   = tbDrTotal   - tbCrTotal;
+                    const movementDiff  = tbDebitTotal - tbCreditTotal;
+                    // Inventory revaluation = stock OB − CB (signed). Decrease
+                    // in stock implicitly reduces P&L (Dr cost) without any
+                    // voucher Dr/Cr; we already track it as _invAdj above.
+                    const invAdjSigned  = _invAdjDr - _invAdjCr;
+                    // Net P&L = Cr_period − Dr_period − inventory_adj.
+                    // Positive = profit (Cr-side surplus net of inventory cost).
+                    const netPL         = -movementDiff - invAdjSigned;
+                    // True invariant: closing_diff − opening_diff = movement_diff + invAdj
+                    const reconcileResidual = (closingDiff - openingDiff) - movementDiff - invAdjSigned;
+                    const tol = Math.max(1, Math.abs(netPL) * 0.0001);
+                    const reconciles = Math.abs(reconcileResidual) <= tol;
+
+                    return (
+                      <div className="border-t bg-muted/30 px-4 py-1.5 text-[11px] font-semibold flex justify-end gap-4 flex-wrap">
+                        {/* Closing */}
+                        <span className={cn(Math.abs(closingDiff) < 1 ? "text-emerald-600" : "text-amber-600")}>
+                          {Math.abs(closingDiff) < 1
+                            ? "✓ Closing Balanced"
+                            : `⚠ Closing Diff: ${fmtAmt(Math.abs(closingDiff))}`}
+                        </span>
+
+                        {/* Opening */}
+                        <span className={cn(Math.abs(openingDiff) < 1 ? "text-emerald-600" : "text-amber-600")}
+                          title={Math.abs(openingDiff) >= 1
+                            ? "Opening balances unequal. Tally may have a 'Difference in Opening Balances' entry — fix in Tally."
+                            : undefined}>
+                          {Math.abs(openingDiff) < 1
+                            ? "✓ Opening Balanced"
+                            : `⚠ Opening Diff: ${fmtAmt(Math.abs(openingDiff))}`}
+                        </span>
+
+                        {/* Net P&L — informational, not a warning */}
+                        {hasDebitCredit && Math.abs(netPL) >= 1 && (
+                          <span className="text-blue-700"
+                            title="Net Profit/Loss for the period derived from voucher movement and inventory revaluation. This is NOT a sync error — it is the real economic result of the period. It only equals zero when revenue = expenses (no profit, no loss).">
+                            ℹ Net P&L (period): {fmtAmt(Math.abs(netPL))} {netPL >= 0 ? "Profit" : "Loss"}
+                          </span>
+                        )}
+
+                        {/* True reconciliation invariant */}
+                        <span className={cn(reconciles ? "text-emerald-600" : "text-red-600")}
+                          title={reconciles
+                            ? "Books tie: Σ(closing_signed) − Σ(opening_signed) = Σ(Dr_period) − Σ(Cr_period) + inventory_adj.  Tally is internally consistent — any residual visible in this strip is the company's real net P&L, not a sync bug."
+                            : `Books DON'T tie. Residual ₹${fmtAmt(Math.abs(reconcileResidual))} after accounting for movement + inventory. This indicates an extraction-side bug — please re-sync or run heal-stock.bat.`}>
+                          {reconciles ? "✓ Books Reconcile" : `⚠ Reconciliation Residual: ${fmtAmt(Math.abs(reconcileResidual))}`}
+                        </span>
+                      </div>
+                    );
+                  })()}
                 </>
               )}
             </CardContent>
