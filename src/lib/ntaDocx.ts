@@ -238,15 +238,16 @@ function bodyParaRich(parts: Array<{ text: string; opts?: RunOpts }>): string {
  */
 function blank(): string {
   // Empty paragraph used as a between-section spacer.
-  // Template's blank rows explicitly set line=240 lineRule="auto" so the
-  // row height is locked to the standard line-spacing multiplier instead
-  // of inheriting pPrDefault's 1.158× value. Without it the spacer
-  // varies in height from renderer to renderer.
-  // Cambria sz=20 paragraph-mark rPr keeps the empty-line height tied
-  // to the body font.
+  // Use lineRule="exact" with line=200 (= 10pt) to LOCK the spacer
+  // height regardless of which renderer opens the file. With
+  // lineRule="auto" some renderers compute 1.158× of the font size
+  // (~11.6pt) which adds ~1.6pt per spacer; across the ~10 spacers
+  // between Note 1 and the end of 2.5 that's ~16pt of drift — enough
+  // to push the last 2.5 paragraph off page 1 in some renderers.
+  // exact=200 pins every spacer to a deterministic 10pt height.
   return (
     `<w:p><w:pPr>` +
-    `<w:spacing w:after="0" w:line="240" w:lineRule="auto"/>` +
+    `<w:spacing w:after="0" w:line="200" w:lineRule="exact"/>` +
     `<w:ind w:left="150"/>` +
     `<w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>` +
     `</w:pPr></w:p>`
