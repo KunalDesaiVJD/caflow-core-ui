@@ -194,6 +194,28 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
     }
   }, [engagementId, notes]);
 
+  // ── Remap a ledger to a new FS code ──────────────────────────────────
+  const handleRemapLedger = useCallback(async (ledgerName: string, newCode: string) => {
+    try {
+      const { data: eng } = await supabase
+        .from("audit_engagements")
+        .select("coa_mapping")
+        .eq("id", engagementId)
+        .maybeSingle();
+      const current = (eng as any)?.coa_mapping ?? {};
+      const updated = { ...current, [ledgerName]: { ...(current[ledgerName] ?? {}), code: newCode } };
+      const { error } = await supabase
+        .from("audit_engagements")
+        .update({ coa_mapping: updated } as any)
+        .eq("id", engagementId);
+      if (error) throw error;
+      toast.success(`Remapped "${ledgerName}" → ${newCode}. Re-syncing…`);
+      await handleResync();
+    } catch (e: any) {
+      toast.error(`Remap failed: ${e?.message || e}`);
+    }
+  }, [engagementId, handleResync]);
+
   // Browser print — print CSS hides toolbar etc. Uses the tab content as-is.
   const handlePrint = useCallback(() => window.print(), []);
 
@@ -292,6 +314,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
             notes={notes} cyYear={cyYear} pyYear={pyYear}
             updatePath={updatePath} resetPath={resetPath} isOverridden={isOverridden}
             collapseControl={collapseAll}
+            onRemapLedger={handleRemapLedger}
           />
         </TabsContent>
         <TabsContent value="bs_asset" className="mt-3">
@@ -300,6 +323,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
             notes={notes} cyYear={cyYear} pyYear={pyYear}
             updatePath={updatePath} resetPath={resetPath} isOverridden={isOverridden}
             collapseControl={collapseAll}
+            onRemapLedger={handleRemapLedger}
           />
         </TabsContent>
         <TabsContent value="pl" className="mt-3">
@@ -308,10 +332,18 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
             notes={notes} cyYear={cyYear} pyYear={pyYear}
             updatePath={updatePath} resetPath={resetPath} isOverridden={isOverridden}
             collapseControl={collapseAll}
+            onRemapLedger={handleRemapLedger}
           />
         </TabsContent>
         <TabsContent value="fa" className="mt-3">
-          <FAGrid engagementId={engagementId} rows={notes.fa.rows} pyRows={pyFaRows} onChange={updateFaRows} />
+          <FAGrid
+            engagementId={engagementId}
+            rows={notes.fa.rows}
+            pyRows={pyFaRows}
+            pyManual={notes.fa.py_manual ?? null}
+            onChangePyManual={(f, v) => updatePath(`fa.py_manual.${f}`, v)}
+            onChange={updateFaRows}
+          />
         </TabsContent>
       </Tabs>
     </div>

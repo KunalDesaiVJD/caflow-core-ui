@@ -20,7 +20,9 @@ import { useDynamicNoteRegistry } from "@/lib/noteNumberRegistry";
 interface Props {
   engagementId: string;
   rows:         FARow[];
-  pyRows?:      FARow[] | null;       // for the "Total — Previous year" row
+  pyRows?:      FARow[] | null;
+  pyManual?:    Record<string, number | null> | null;
+  onChangePyManual?: (field: string, value: number | null) => void;
   onChange:     (rows: FARow[]) => void;
 }
 
@@ -41,7 +43,7 @@ const depnClose  = (r: FARow) => (r.depn_open  || 0) + (r.depn_add   || 0) - (r.
 const netCY      = (r: FARow) => grossClose(r) - depnClose(r);
 const netPY      = (r: FARow) => (r.gross_open || 0) - (r.depn_open || 0);
 
-export default function FAGrid({ engagementId, rows, pyRows, onChange }: Props) {
+export default function FAGrid({ engagementId, rows, pyRows, pyManual, onChangePyManual, onChange }: Props) {
   const update = (i: number, patch: Partial<FARow>) => {
     const next = rows.slice();
     next[i] = { ...next[i], ...patch };
@@ -75,6 +77,37 @@ export default function FAGrid({ engagementId, rows, pyRows, onChange }: Props) 
     netPY:      sumDerived(rows, netPY),
   };
 
+  // PY Total row — prefer pyRows sums, then pyManual overrides, then 0
+  const pyTotals = {
+    gross_open: pyRows && pyRows.length > 0 ? sumOf(pyRows, "gross_open")        : (pyManual?.["gross_open"] ?? 0),
+    additions:  pyRows && pyRows.length > 0 ? sumOf(pyRows, "additions")         : (pyManual?.["additions"]  ?? 0),
+    disposals:  pyRows && pyRows.length > 0 ? sumOf(pyRows, "disposals")         : (pyManual?.["disposals"]  ?? 0),
+    grossClose: pyRows && pyRows.length > 0 ? sumDerived(pyRows, grossClose)     : (pyManual?.["grossClose"] ?? 0),
+    depn_open:  pyRows && pyRows.length > 0 ? sumOf(pyRows, "depn_open")         : (pyManual?.["depn_open"]  ?? 0),
+    depn_add:   pyRows && pyRows.length > 0 ? sumOf(pyRows, "depn_add")          : (pyManual?.["depn_add"]   ?? 0),
+    depn_disp:  pyRows && pyRows.length > 0 ? sumOf(pyRows, "depn_disp")         : (pyManual?.["depn_disp"]  ?? 0),
+    depnClose:  pyRows && pyRows.length > 0 ? sumDerived(pyRows, depnClose)      : (pyManual?.["depnClose"]  ?? 0),
+    netCY:      pyRows && pyRows.length > 0 ? sumDerived(pyRows, netCY)          : (pyManual?.["netCY"]      ?? 0),
+    netPY:      pyRows && pyRows.length > 0 ? sumDerived(pyRows, netPY)          : (pyManual?.["netPY"]      ?? 0),
+  };
+
+  const hasPyData = pyRows && pyRows.length > 0;
+
+  const pyCell = (field: string, val: number) => {
+    if (hasPyData) {
+      return <td className="p-1 border text-right tabular-nums text-muted-foreground">{formatINR(val)}</td>;
+    }
+    return (
+      <td className="p-0.5 border">
+        <EditableCell
+          value={pyManual?.[field] ?? 0}
+          onCommit={(v) => onChangePyManual?.(field, v == null ? null : Number(v))}
+          placeholder="—"
+        />
+      </td>
+    );
+  };
+
   return (
     <div className="rounded-lg border bg-card mb-4">
       <header className="border-b bg-muted/30 px-3 py-1.5 flex items-center justify-between">
@@ -85,33 +118,33 @@ export default function FAGrid({ engagementId, rows, pyRows, onChange }: Props) 
       </header>
 
       <div className="overflow-x-auto">
-        <table className="w-full text-[10px] border-collapse">
+        <table className="w-full text-[11px] border-collapse">
           <thead className="sticky top-0 bg-muted/40 z-10">
             <tr>
-              <th rowSpan={2} className="p-1 border text-left min-w-[140px]">Particulars</th>
-              <th rowSpan={2} className="p-1 border text-center w-[60px]">Useful<br />Life</th>
-              <th colSpan={4} className="p-1 border text-center bg-blue-50/50">Gross Block</th>
-              <th colSpan={4} className="p-1 border text-center bg-amber-50/50">Depreciation</th>
-              <th colSpan={2} className="p-1 border text-center bg-green-50/50">Net Block</th>
+              <th rowSpan={2} className="p-1 border text-left min-w-[140px] text-[11px]">Particulars</th>
+              <th rowSpan={2} className="p-1 border text-center w-[60px] text-[11px]">Useful<br />Life</th>
+              <th colSpan={4} className="p-1 border text-center bg-blue-50/50 text-[11px]">Gross Block</th>
+              <th colSpan={4} className="p-1 border text-center bg-amber-50/50 text-[11px]">Depreciation</th>
+              <th colSpan={2} className="p-1 border text-center bg-green-50/50 text-[11px]">Net Block</th>
               <th rowSpan={2} className="p-1 border w-[24px]"></th>
             </tr>
             <tr>
-              <th className="p-1 border text-right">Open</th>
-              <th className="p-1 border text-right">Additions</th>
-              <th className="p-1 border text-right">Disposals</th>
-              <th className="p-1 border text-right bg-blue-50/30">Closing</th>
-              <th className="p-1 border text-right">Open</th>
-              <th className="p-1 border text-right">For year</th>
-              <th className="p-1 border text-right">Disposals</th>
-              <th className="p-1 border text-right bg-amber-50/30">Closing</th>
-              <th className="p-1 border text-right bg-green-50/30">CY</th>
-              <th className="p-1 border text-right bg-green-50/30">PY</th>
+              <th className="p-1 border text-right text-[11px]">Open</th>
+              <th className="p-1 border text-right text-[11px]">Additions</th>
+              <th className="p-1 border text-right text-[11px]">Disposals</th>
+              <th className="p-1 border text-right bg-blue-50/30 text-[11px]">Closing</th>
+              <th className="p-1 border text-right text-[11px]">Open</th>
+              <th className="p-1 border text-right text-[11px]">For year</th>
+              <th className="p-1 border text-right text-[11px]">Disposals</th>
+              <th className="p-1 border text-right bg-amber-50/30 text-[11px]">Closing</th>
+              <th className="p-1 border text-right bg-green-50/30 text-[11px]">CY</th>
+              <th className="p-1 border text-right bg-green-50/30 text-[11px]">PY</th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 && (
               <tr>
-                <td colSpan={13} className="p-2 italic text-muted-foreground text-center">
+                <td colSpan={13} className="p-2 italic text-muted-foreground text-center text-[11px]">
                   No assets yet — click "Add Asset" to start.
                 </td>
               </tr>
@@ -124,7 +157,7 @@ export default function FAGrid({ engagementId, rows, pyRows, onChange }: Props) 
                     value={r.particulars}
                     placeholder="Asset name"
                     onCommit={(v) => update(i, { particulars: String(v ?? "") })}
-                    className="text-left"
+                    className="text-left text-[11px]"
                   />
                 </td>
                 <td className="p-0.5 border">
@@ -137,7 +170,7 @@ export default function FAGrid({ engagementId, rows, pyRows, onChange }: Props) 
                       const n = Number(s);
                       update(i, { useful_life: Number.isFinite(n) && s !== "" ? n : (s || 0) });
                     }}
-                    className="text-center"
+                    className="text-center text-[11px]"
                   />
                 </td>
                 <td className="p-0.5 border">
@@ -149,7 +182,7 @@ export default function FAGrid({ engagementId, rows, pyRows, onChange }: Props) 
                 <td className="p-0.5 border">
                   <EditableCell value={r.disposals}  onCommit={(v) => update(i, { disposals:  v == null ? 0 : Number(v) })} />
                 </td>
-                <td className="p-1 border text-right tabular-nums bg-blue-50/30 font-semibold">{formatINR(grossClose(r))}</td>
+                <td className="p-1 border text-right tabular-nums bg-blue-50/30 font-semibold text-[11px]">{formatINR(grossClose(r))}</td>
                 <td className="p-0.5 border">
                   <EditableCell value={r.depn_open} onCommit={(v) => update(i, { depn_open: v == null ? 0 : Number(v) })} />
                 </td>
@@ -159,9 +192,15 @@ export default function FAGrid({ engagementId, rows, pyRows, onChange }: Props) 
                 <td className="p-0.5 border">
                   <EditableCell value={r.depn_disp} onCommit={(v) => update(i, { depn_disp: v == null ? 0 : Number(v) })} />
                 </td>
-                <td className="p-1 border text-right tabular-nums bg-amber-50/30 font-semibold">{formatINR(depnClose(r))}</td>
-                <td className="p-1 border text-right tabular-nums bg-green-50/30 font-semibold">{formatINR(netCY(r))}</td>
-                <td className="p-1 border text-right tabular-nums bg-green-50/30">{formatINR(netPY(r))}</td>
+                <td className="p-1 border text-right tabular-nums bg-amber-50/30 font-semibold text-[11px]">{formatINR(depnClose(r))}</td>
+                <td className="p-1 border text-right tabular-nums bg-green-50/30 font-semibold text-[11px]">{formatINR(netCY(r))}</td>
+                <td className="p-0.5 border bg-green-50/30">
+                  <EditableCell
+                    value={r.net_py ?? netPY(r)}
+                    onCommit={(v) => update(i, { net_py: v == null ? null : Number(v) })}
+                    placeholder="—"
+                  />
+                </td>
                 <td className="p-0.5 border text-center">
                   <button
                     type="button" onClick={() => remove(i)}
@@ -175,7 +214,7 @@ export default function FAGrid({ engagementId, rows, pyRows, onChange }: Props) 
             ))}
 
             {/* Totals — current year */}
-            <tr className="bg-muted/40 font-semibold">
+            <tr className="bg-muted/40 font-semibold text-[11px]">
               <td className="p-1 border" colSpan={2}>Total — Current year</td>
               <td className="p-1 border text-right tabular-nums">{formatINR(totalsCY.gross_open)}</td>
               <td className="p-1 border text-right tabular-nums">{formatINR(totalsCY.additions)}</td>
@@ -190,23 +229,24 @@ export default function FAGrid({ engagementId, rows, pyRows, onChange }: Props) 
               <td className="p-1 border"></td>
             </tr>
 
-            {/* Totals — previous year (from PY engagement, if available) */}
-            {pyRows && pyRows.length > 0 && (
-              <tr className="bg-muted/20 italic text-muted-foreground">
-                <td className="p-1 border" colSpan={2}>Total — Previous year</td>
-                <td className="p-1 border text-right tabular-nums">{formatINR(sumOf(pyRows, "gross_open"))}</td>
-                <td className="p-1 border text-right tabular-nums">{formatINR(sumOf(pyRows, "additions"))}</td>
-                <td className="p-1 border text-right tabular-nums">{formatINR(sumOf(pyRows, "disposals"))}</td>
-                <td className="p-1 border text-right tabular-nums">{formatINR(sumDerived(pyRows, grossClose))}</td>
-                <td className="p-1 border text-right tabular-nums">{formatINR(sumOf(pyRows, "depn_open"))}</td>
-                <td className="p-1 border text-right tabular-nums">{formatINR(sumOf(pyRows, "depn_add"))}</td>
-                <td className="p-1 border text-right tabular-nums">{formatINR(sumOf(pyRows, "depn_disp"))}</td>
-                <td className="p-1 border text-right tabular-nums">{formatINR(sumDerived(pyRows, depnClose))}</td>
-                <td className="p-1 border text-right tabular-nums">{formatINR(sumDerived(pyRows, netCY))}</td>
-                <td className="p-1 border text-right tabular-nums">{formatINR(sumDerived(pyRows, netPY))}</td>
-                <td className="p-1 border"></td>
-              </tr>
-            )}
+            {/* Totals — previous year (always shown; editable when no PY engagement data) */}
+            <tr className={`text-[11px] ${hasPyData ? "bg-muted/20 italic text-muted-foreground" : "bg-blue-50/20"}`}>
+              <td className="p-1 border font-semibold" colSpan={2}>
+                Total — Previous year
+                {!hasPyData && <span className="ml-1 text-[9px] font-normal text-blue-600">(enter manually)</span>}
+              </td>
+              {pyCell("gross_open", pyTotals.gross_open)}
+              {pyCell("additions",  pyTotals.additions)}
+              {pyCell("disposals",  pyTotals.disposals)}
+              {pyCell("grossClose", pyTotals.grossClose)}
+              {pyCell("depn_open",  pyTotals.depn_open)}
+              {pyCell("depn_add",   pyTotals.depn_add)}
+              {pyCell("depn_disp",  pyTotals.depn_disp)}
+              {pyCell("depnClose",  pyTotals.depnClose)}
+              {pyCell("netCY",      pyTotals.netCY)}
+              {pyCell("netPY",      pyTotals.netPY)}
+              <td className="p-1 border"></td>
+            </tr>
           </tbody>
         </table>
       </div>

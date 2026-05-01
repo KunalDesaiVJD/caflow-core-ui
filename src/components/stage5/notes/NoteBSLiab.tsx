@@ -69,10 +69,11 @@ interface Props {
   isOverridden:    (path: string) => boolean;
   engagementId:    string;
   collapseControl?: boolean;
+  onRemapLedger?:  (ledgerName: string, newCode: string) => void;
 }
 
 export default function NoteBSLiab({
-  engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl,
+  engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl, onRemapLedger,
 }: Props) {
   const cy  = (key: string) => Number(notes.bs_liab[key]?.cy ?? 0);
   const py  = (key: string) => Number(notes.bs_liab[key]?.py ?? 0);
@@ -684,6 +685,7 @@ export default function NoteBSLiab({
           descPlaceholder="Bank / party / loan particulars (Secured / Unsecured)"
           addLabel="Add row"
           showSubtotal
+          onRemapLedger={onRemapLedger}
         />
         <EditableRow
           label="Total — Long-term borrowings (per BS)"
@@ -715,6 +717,7 @@ export default function NoteBSLiab({
           onChange={(next) => updatePath("bs_liab.deferred_tax_liab.breakup", next)}
           descPlaceholder="Other timing differences"
           addLabel="Add row"
+          onRemapLedger={onRemapLedger}
         />
         <EditableRow
           label="Total — Deferred tax liabilities (per BS)"
@@ -737,6 +740,7 @@ export default function NoteBSLiab({
           onChange={(next) => updatePath("bs_liab.other_lt_liabilities.breakup", next)}
           descPlaceholder="(a) Trade payables / (b) Rent deposit / (c) Others"
           addLabel="Add row"
+          onRemapLedger={onRemapLedger}
         />
         <EditableRow
           label="Total (per BS)"
@@ -759,6 +763,7 @@ export default function NoteBSLiab({
           onChange={(next) => updatePath("bs_liab.lt_provisions.breakup", next)}
           descPlaceholder="(a) Provision for employee benefits / (b) Others"
           addLabel="Add row"
+          onRemapLedger={onRemapLedger}
         />
         <EditableRow
           label="Total (per BS)"
@@ -782,6 +787,7 @@ export default function NoteBSLiab({
           descPlaceholder="Bank OD / CC / Term loan / party (Secured / Unsecured)"
           addLabel="Add row"
           showSubtotal
+          onRemapLedger={onRemapLedger}
         />
         <EditableRow
           label="Total — Short-term borrowings (per BS)"
@@ -867,7 +873,7 @@ export default function NoteBSLiab({
           onChange={(next) => updatePath("bs_liab.other_curr_liab.breakup", next)}
           descPlaceholder="Current maturities / Interest accrued / Statutory dues / Advance / Provision for tax"
           addLabel="Add row"
-          enableSubgroup
+          onRemapLedger={onRemapLedger}
         />
         <EditableRow
           label="Total (per BS)"
@@ -890,6 +896,7 @@ export default function NoteBSLiab({
           onChange={(next) => updatePath("bs_liab.st_provisions.breakup", next)}
           descPlaceholder="(a) Employee benefits / (b) Income tax / (c) Expenses"
           addLabel="Add row"
+          onRemapLedger={onRemapLedger}
         />
         <EditableRow
           label="Total (per BS)"

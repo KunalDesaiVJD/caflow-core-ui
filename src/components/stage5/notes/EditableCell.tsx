@@ -32,6 +32,42 @@ export function useFormatINR(): (n: number | null | undefined) => string {
   return format;
 }
 
+/** All mappable FS line-item codes with human-readable labels, grouped by section. */
+export const FS_CODE_OPTIONS: { code: string; label: string; section: string }[] = [
+  { code: "BS_EQ_SC",   label: "Share Capital",                section: "BS — Equity" },
+  { code: "BS_EQ_RS",   label: "Reserves and Surplus",         section: "BS — Equity" },
+  { code: "BS_NCL_LTB", label: "Long-term Borrowings",         section: "BS — Non-Current Liabilities" },
+  { code: "BS_NCL_DTL", label: "Deferred Tax Liabilities",     section: "BS — Non-Current Liabilities" },
+  { code: "BS_NCL_OLT", label: "Other Long-term Liabilities",  section: "BS — Non-Current Liabilities" },
+  { code: "BS_NCL_LTP", label: "Long-term Provisions",         section: "BS — Non-Current Liabilities" },
+  { code: "BS_CL_STB",  label: "Short-term Borrowings",        section: "BS — Current Liabilities" },
+  { code: "BS_CL_TP",   label: "Trade Payables",               section: "BS — Current Liabilities" },
+  { code: "BS_CL_OCL",  label: "Other Current Liabilities",    section: "BS — Current Liabilities" },
+  { code: "BS_CL_STP",  label: "Short-term Provisions",        section: "BS — Current Liabilities" },
+  { code: "BS_NCA_FA",  label: "PP&E / Fixed Assets",          section: "BS — Non-Current Assets" },
+  { code: "BS_NCA_INV", label: "Non-current Investments",      section: "BS — Non-Current Assets" },
+  { code: "BS_NCA_DTA", label: "Deferred Tax Assets",          section: "BS — Non-Current Assets" },
+  { code: "BS_NCA_LLA", label: "Long-term Loans & Advances",   section: "BS — Non-Current Assets" },
+  { code: "BS_NCA_ONA", label: "Other Non-current Assets",     section: "BS — Non-Current Assets" },
+  { code: "BS_CA_CI",   label: "Current Investments",          section: "BS — Current Assets" },
+  { code: "BS_CA_INV",  label: "Inventories",                  section: "BS — Current Assets" },
+  { code: "BS_CA_TR",   label: "Trade Receivables",            section: "BS — Current Assets" },
+  { code: "BS_CA_CCE",  label: "Cash & Bank Equivalents",      section: "BS — Current Assets" },
+  { code: "BS_CA_SLA",  label: "Short-term Loans & Advances",  section: "BS — Current Assets" },
+  { code: "BS_CA_OCA",  label: "Other Current Assets",         section: "BS — Current Assets" },
+  { code: "PL_REV_OPS", label: "Revenue from Operations",      section: "P&L — Income" },
+  { code: "PL_REV_OI",  label: "Other Income",                 section: "P&L — Income" },
+  { code: "PL_EXP_MAT", label: "Cost of Materials Consumed",   section: "P&L — Expenses" },
+  { code: "PL_EXP_SIT", label: "Purchases of Stock-in-Trade",  section: "P&L — Expenses" },
+  { code: "PL_EXP_CII", label: "Changes in Inventories",       section: "P&L — Expenses" },
+  { code: "PL_EXP_EMP", label: "Employee Benefits Expense",    section: "P&L — Expenses" },
+  { code: "PL_EXP_FIN", label: "Finance Costs",                section: "P&L — Expenses" },
+  { code: "PL_EXP_DEP", label: "Depreciation & Amortisation",  section: "P&L — Expenses" },
+  { code: "PL_EXP_OTH", label: "Other Expenses",               section: "P&L — Expenses" },
+  { code: "PL_TAX_CUR", label: "Current Tax",                  section: "P&L — Tax" },
+  { code: "PL_TAX_DEF", label: "Deferred Tax",                 section: "P&L — Tax" },
+];
+
 // ─────────────────────────────────────────────────────────────────────────
 // EditableCell — text or number input with auto/manual tinting
 // ─────────────────────────────────────────────────────────────────────────
@@ -296,11 +332,89 @@ export function NoteHeaderRow({
 function ListRowActionsMenu({
   onDelete,
   onRemoveFromGroup,
+  linkedLedger,
+  onChangeMapping,
+  subGroups,
+  onMoveToGroup,
 }: {
   onDelete: () => void;
   onRemoveFromGroup?: () => void;
+  linkedLedger?: string;
+  onChangeMapping?: (ledgerName: string, newCode: string) => void;
+  subGroups?: { id: string; name: string }[];
+  onMoveToGroup?: (groupId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [mappingOpen, setMappingOpen] = useState(false);
+  const [mappingSearch, setMappingSearch] = useState("");
+  const [groupMenuOpen, setGroupMenuOpen] = useState(false);
+
+  const filteredCodes = FS_CODE_OPTIONS.filter(
+    (opt) =>
+      opt.label.toLowerCase().includes(mappingSearch.toLowerCase()) ||
+      opt.section.toLowerCase().includes(mappingSearch.toLowerCase()) ||
+      opt.code.toLowerCase().includes(mappingSearch.toLowerCase()),
+  );
+
+  // Group by section for display
+  const bySection: Record<string, typeof FS_CODE_OPTIONS> = {};
+  for (const opt of filteredCodes) {
+    if (!bySection[opt.section]) bySection[opt.section] = [];
+    bySection[opt.section].push(opt);
+  }
+
+  if (mappingOpen && linkedLedger && onChangeMapping) {
+    return (
+      <Popover open={mappingOpen} onOpenChange={(o) => { setMappingOpen(o); if (!o) setOpen(false); }}>
+        <PopoverTrigger asChild>
+          <button type="button" className="p-0.5 rounded text-muted-foreground hover:text-foreground">
+            <MoreVertical size={12} />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent side="left" align="start" className="w-64 p-2 space-y-1.5">
+          <div className="text-[10px] font-semibold text-muted-foreground truncate">
+            Change mapping: <span className="text-foreground">{linkedLedger}</span>
+          </div>
+          <input
+            type="text"
+            placeholder="Search FS line item…"
+            value={mappingSearch}
+            onChange={(e) => setMappingSearch(e.target.value)}
+            autoFocus
+            className="w-full text-xs border rounded px-2 py-1 bg-background outline-none focus:ring-1 focus:ring-primary"
+          />
+          <div className="max-h-52 overflow-y-auto space-y-1 pr-0.5">
+            {Object.entries(bySection).map(([section, opts]) => (
+              <div key={section}>
+                <div className="text-[9px] font-semibold text-muted-foreground px-1 py-0.5 uppercase tracking-wide">{section}</div>
+                {opts.map((opt) => (
+                  <button
+                    key={opt.code}
+                    type="button"
+                    className="w-full text-left px-2 py-1 rounded text-xs hover:bg-primary/10 hover:text-primary transition-colors"
+                    onClick={() => { onChangeMapping(linkedLedger, opt.code); setMappingOpen(false); setOpen(false); }}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            ))}
+            {filteredCodes.length === 0 && (
+              <div className="text-[10px] italic text-muted-foreground px-2 py-1">No match</div>
+            )}
+          </div>
+          <button
+            type="button"
+            className="w-full text-left px-2 py-1 rounded text-xs hover:bg-muted text-muted-foreground"
+            onClick={() => { setMappingOpen(false); setOpen(true); }}
+          >
+            ← Back
+          </button>
+        </PopoverContent>
+      </Popover>
+    );
+  }
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -312,7 +426,42 @@ function ListRowActionsMenu({
           <MoreVertical size={12} />
         </button>
       </PopoverTrigger>
-      <PopoverContent side="bottom" align="end" className="w-44 p-1">
+      <PopoverContent side="bottom" align="end" className="w-48 p-1">
+        {/* Change Mapping — only for linked rows */}
+        {linkedLedger && onChangeMapping && (
+          <button
+            type="button"
+            className="w-full text-left px-2 py-1 rounded text-xs hover:bg-blue-50 text-blue-700 flex items-center gap-1.5 transition-colors"
+            onClick={() => { setOpen(false); setMappingOpen(true); }}
+          >
+            <Pencil size={11} className="shrink-0" /> Change Mapping
+          </button>
+        )}
+        {/* Move to Sub Group */}
+        {subGroups && subGroups.length > 0 && onMoveToGroup && (
+          <Popover open={groupMenuOpen} onOpenChange={setGroupMenuOpen}>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className="w-full text-left px-2 py-1 rounded text-xs hover:bg-muted flex items-center gap-1.5 transition-colors"
+              >
+                <ChevronDown size={11} className="shrink-0" /> Move to Sub Group
+              </button>
+            </PopoverTrigger>
+            <PopoverContent side="left" align="start" className="w-44 p-1">
+              {subGroups.map((g) => (
+                <button
+                  key={g.id}
+                  type="button"
+                  className="w-full text-left px-2 py-1 rounded text-xs hover:bg-purple-50 text-purple-700 flex items-center gap-1.5 transition-colors"
+                  onClick={() => { onMoveToGroup(g.id); setGroupMenuOpen(false); setOpen(false); }}
+                >
+                  <span className="truncate">{g.name || "(unnamed group)"}</span>
+                </button>
+              ))}
+            </PopoverContent>
+          </Popover>
+        )}
         {onRemoveFromGroup && (
           <button
             type="button"
@@ -334,121 +483,13 @@ function ListRowActionsMenu({
   );
 }
 
-// ─── Sub-group header row ──────────────────────────────────────────────────────
-function SubGroupHeaderRow({
-  r,
-  origIdx,
-  childCY,
-  childPY,
-  collapsed,
-  onToggle,
-  onRename,
-  onDelete,
-}: {
-  r: ListRow;
-  origIdx: number;
-  childCY: number;
-  childPY: number;
-  collapsed: boolean;
-  onToggle: () => void;
-  onRename: (name: string) => void;
-  onDelete: () => void;
-}) {
-  const fmt = useFormatINR();
-  const [menuOpen, setMenuOpen] = useState(false);
-  return (
-    <div className="grid grid-cols-12 gap-2 items-center bg-purple-50/50 dark:bg-purple-900/10 rounded px-1 py-1 border border-purple-200/50">
-      <div className="col-span-6 flex items-center gap-1">
-        <button
-          type="button"
-          onClick={onToggle}
-          className="shrink-0 p-0.5 hover:bg-purple-100 rounded text-purple-600"
-          title={collapsed ? "Expand sub-group" : "Collapse sub-group"}
-        >
-          {collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
-        </button>
-        <input
-          type="text"
-          value={r.description ?? ""}
-          placeholder="Sub-group name"
-          className="flex-1 min-w-0 text-xs font-semibold bg-transparent border-none outline-none px-1 text-purple-900 dark:text-purple-200"
-          onChange={(e) => onRename(e.target.value)}
-        />
-        <span className="shrink-0 inline-flex items-center px-1 py-[1px] rounded text-[8px] font-semibold uppercase tracking-wide border border-purple-300 bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">
-          Group
-        </span>
-      </div>
-      <div className="col-span-3 text-right text-[10px] font-semibold tabular-nums pr-1 text-purple-800 dark:text-purple-300">
-        {fmt(childCY)}
-      </div>
-      <div className="col-span-2 text-right text-[10px] font-semibold tabular-nums pr-1 text-purple-800 dark:text-purple-300">
-        {fmt(childPY)}
-      </div>
-      <div className="col-span-1 flex justify-end">
-        <Popover open={menuOpen} onOpenChange={setMenuOpen}>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              className="p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors"
-              title="Group actions"
-            >
-              <MoreVertical size={12} />
-            </button>
-          </PopoverTrigger>
-          <PopoverContent side="bottom" align="end" className="w-44 p-1">
-            <button
-              type="button"
-              className="w-full text-left px-2 py-1 rounded text-xs hover:bg-red-50 text-destructive flex items-center gap-1.5 transition-colors"
-              onClick={() => { onDelete(); setMenuOpen(false); }}
-            >
-              <Trash2 size={11} className="shrink-0" /> Delete group
-            </button>
-          </PopoverContent>
-        </Popover>
-      </div>
-    </div>
-  );
-}
-
-/**
- * ListTable — managed list of {description, amount_cy, amount_py} rows.
- * Used for note line-items where the user adds rows freely (e.g. ledger
- * break-ups under a note). Persisted as an array under a single dot-path.
- *
- * Row provenance:
- *   - source = "linked" — auto-built from a COA-mapped ledger; row shows a
- *     small "Linked" badge and renders the description / amount in the
- *     blue auto-fill tint.
- *   - source = "manual" — user-typed row (or a linked row the user has
- *     edited). Renders in the amber override tint. Re-sync from COA never
- *     overwrites manual rows.
- *   - source = undefined — legacy rows from before the breakup was wired
- *     to COA mapping. Treated as manual (preserved on re-sync).
- *
- * Editing the description or either amount of a "linked" row flips it to
- * "manual" automatically (and clears `linked_ledger`).
- */
-export interface ListRow {
-  description?:    string;
-  amount_cy?:      number;
-  amount_py?:      number;
-  source?:         "linked" | "manual";
-  linked_ledger?:  string;
-  /** When this row consolidates multiple TB ledgers (smart-merge — e.g.
-   *  "TDS Payable" rolling up TDS 192B / 194I / 194C), this lists the
-   *  underlying ledgers + amounts. The "i" expander reveals them. */
-  sources?: { ledger: string; amount_cy: number; amount_py: number }[];
-  /** Sub-group support */
-  is_subgroup?: boolean;
-  subgroup_id?:    string;
-}
-
 /** Renders a single ListTable row plus, when the row has multiple smart-merged
  *  source ledgers, an expandable list showing each source ledger with its
  *  CY/PY amount — so the auditor can see exactly what was bundled into
  *  e.g. "TDS Payable" (TDS 192B + TDS 194I + TDS 194C + ...). */
 function ListRowWithSources({
-  r, origIdx, isLinked, isManual, hasSources, descPlaceholder, update, remove, removeFromGroup,
+  r, origIdx, isLinked, isManual, hasSources, descPlaceholder, update, remove,
+  onChangeMapping, subGroups, onMoveToGroup,
 }: {
   r: ListRow;
   origIdx: number;
@@ -458,7 +499,9 @@ function ListRowWithSources({
   descPlaceholder: string;
   update: (i: number, patch: Partial<ListRow>) => void;
   remove: (i: number) => void;
-  removeFromGroup?: (i: number) => void;
+  onChangeMapping?: (ledgerName: string, newCode: string) => void;
+  subGroups?: { id: string; name: string }[];
+  onMoveToGroup?: (i: number, groupId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -523,7 +566,10 @@ function ListRowWithSources({
         <div className="col-span-1 flex justify-end">
           <ListRowActionsMenu
             onDelete={() => remove(origIdx)}
-            onRemoveFromGroup={removeFromGroup ? () => removeFromGroup(origIdx) : undefined}
+            linkedLedger={r.linked_ledger}
+            onChangeMapping={onChangeMapping}
+            subGroups={subGroups}
+            onMoveToGroup={onMoveToGroup ? (groupId) => onMoveToGroup(origIdx, groupId) : undefined}
           />
         </div>
       </div>
@@ -543,13 +589,44 @@ function ListRowWithSources({
   );
 }
 
+/**
+ * ListTable — managed list of {description, amount_cy, amount_py} rows.
+ * Used for note line-items where the user adds rows freely (e.g. ledger
+ * break-ups under a note). Persisted as an array under a single dot-path.
+ *
+ * Row provenance:
+ *   - source = "linked" — auto-built from a COA-mapped ledger; row shows a
+ *     small "Linked" badge and renders the description / amount in the
+ *     blue auto-fill tint.
+ *   - source = "manual" — user-typed row (or a linked row the user has
+ *     edited). Renders in the amber override tint. Re-sync from COA never
+ *     overwrites manual rows.
+ *   - source = undefined — legacy rows from before the breakup was wired
+ *     to COA mapping. Treated as manual (preserved on re-sync).
+ *
+ * Editing the description or either amount of a "linked" row flips it to
+ * "manual" automatically (and clears `linked_ledger`).
+ */
+export interface ListRow {
+  description?:    string;
+  amount_cy?:      number;
+  amount_py?:      number;
+  source?:         "linked" | "manual";
+  linked_ledger?:  string;
+  subgroup_id?:    string;
+  /** When this row consolidates multiple TB ledgers (smart-merge — e.g.
+   *  "TDS Payable" rolling up TDS 192B / 194I / 194C), this lists the
+   *  underlying ledgers + amounts. The "i" expander reveals them. */
+  sources?: { ledger: string; amount_cy: number; amount_py: number }[];
+}
+
 export function ListTable({
   rows,
   onChange,
   addLabel = "Add row",
   descPlaceholder = "Particulars",
   showSubtotal = false,
-  enableSubgroup = false,
+  onRemapLedger,
 }: {
   rows:             ListRow[];
   onChange:         (next: ListRow[]) => void;
@@ -562,25 +639,10 @@ export function ListTable({
    * note — the user can see their combined value at a glance.
    */
   showSubtotal?:    boolean;
-  /**
-   * When true, the "Add row" button becomes a dropdown offering
-   * "Add Line Item" and "Add Sub Group". Sub-groups allow items to be
-   * collected under a named header with a computed total.
-   */
-  enableSubgroup?:  boolean;
+  onRemapLedger?:   (ledgerName: string, newCode: string) => void;
 }) {
-  const fmt = useFormatINR();
-
-  // Sub-group collapse state (keyed by subgroup_id)
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
-  // "Add row" dropdown state
-  const [addMenuOpen, setAddMenuOpen] = useState(false);
-  // "Add Sub Group" panel state
-  const [addGroupOpen, setAddGroupOpen] = useState(false);
-  const [newGroupName, setNewGroupName] = useState("");
-  const [selectedForGroup, setSelectedForGroup] = useState<Set<number>>(new Set());
-
-  // ── Helpers ────────────────────────────────────────────────────────────────
+  const [dragRow,     setDragRow]     = useState<number | null>(null);
+  const [dragOverRow, setDragOverRow] = useState<number | null>(null);
 
   // Patch a row. If the row is currently "linked" and the user touched any
   // user-visible field (description / amount), flip it to "manual" and
@@ -600,294 +662,122 @@ export function ListTable({
     };
     onChange(next);
   };
-
   const remove = (i: number) => {
     const next = rows.slice();
     next.splice(i, 1);
     onChange(next);
   };
+  const add = () => onChange([
+    ...rows,
+    { description: "", amount_cy: 0, amount_py: 0, source: "manual" },
+  ]);
 
-  /** Remove a sub-group header and un-group its children (they stay as rows). */
-  const removeGroupAndUngroup = (subgroupId: string) => {
-    const next = rows
-      .filter((r) => !(r.is_subgroup && r.subgroup_id === subgroupId))
-      .map((r) => r.subgroup_id === subgroupId ? { ...r, subgroup_id: undefined } : r);
-    onChange(next);
-  };
-
-  /** Remove a row from its group (keep the row, just clear its subgroup_id). */
-  const removeFromGroup = (i: number) => {
+  const moveToGroup = (i: number, groupId: string) => {
     const next = rows.slice();
-    next[i] = { ...next[i], subgroup_id: undefined };
+    next[i] = { ...next[i], subgroup_id: groupId };
     onChange(next);
   };
 
-  const addLineItem = () => {
-    onChange([...rows, { description: "", amount_cy: 0, amount_py: 0, source: "manual" }]);
-    setAddMenuOpen(false);
+  // Drag & drop handlers
+  const handleDragStart = (origIdx: number) => setDragRow(origIdx);
+  const handleDragOver  = (e: React.DragEvent, origIdx: number) => {
+    e.preventDefault();
+    setDragOverRow(origIdx);
   };
-
-  const createSubGroup = () => {
-    if (!newGroupName.trim()) return;
-    const subgroupId = `sg_${Date.now()}`;
-    const next = rows.map((r, i) =>
-      selectedForGroup.has(i) ? { ...r, subgroup_id: subgroupId } : r,
-    );
-    // Insert header before the first selected row; if none selected, append.
-    const selectedArr = Array.from(selectedForGroup).sort((a, b) => a - b);
-    const insertAt = selectedArr.length > 0 ? selectedArr[0] : next.length;
-    const headerRow: ListRow = {
-      description: newGroupName.trim(),
-      is_subgroup: true,
-      subgroup_id: subgroupId,
-      source: "manual",
-      amount_cy: 0,
-      amount_py: 0,
-    };
-    next.splice(insertAt, 0, headerRow);
-    onChange(next);
-    setNewGroupName("");
-    setSelectedForGroup(new Set());
-    setAddGroupOpen(false);
-    setAddMenuOpen(false);
-  };
-
-  // ── Display logic ──────────────────────────────────────────────────────────
-
-  // Pre-compute child totals per sub-group so headers can show them.
-  const groupTotals: Record<string, { cy: number; py: number }> = {};
-  for (const r of rows) {
-    if (!r.is_subgroup && r.subgroup_id) {
-      if (!groupTotals[r.subgroup_id]) groupTotals[r.subgroup_id] = { cy: 0, py: 0 };
-      groupTotals[r.subgroup_id].cy += r.amount_cy ?? 0;
-      groupTotals[r.subgroup_id].py += r.amount_py ?? 0;
+  const handleDrop = (origIdx: number) => {
+    if (dragRow === null || dragRow === origIdx) {
+      setDragRow(null); setDragOverRow(null);
+      return;
     }
-  }
+    const next = rows.slice();
+    const [moved] = next.splice(dragRow, 1);
+    next.splice(origIdx, 0, moved);
+    onChange(next);
+    setDragRow(null); setDragOverRow(null);
+  };
+  const handleDragEnd = () => { setDragRow(null); setDragOverRow(null); };
 
-  // Rows available to be assigned to a new sub-group (ungrouped, not a header).
-  const groupableRows = rows
-    .map((r, i) => ({ r, i }))
-    .filter(({ r }) => !r.is_subgroup && !r.subgroup_id);
-
-  // Walk rows in array order; child rows are rendered inline under their parent
-  // header and skipped when encountered at the top level.
-  let subtotalCY = 0;
-  let subtotalPY = 0;
-  let visibleCount = 0;
-  const elements: React.ReactNode[] = [];
-
-  for (let origIdx = 0; origIdx < rows.length; origIdx++) {
-    const r = rows[origIdx];
-
-    // Child rows are rendered under their sub-group header — skip here.
-    if (!r.is_subgroup && r.subgroup_id) continue;
-
-    // Hide linked rows with zero amounts (they clutter the note).
-    if (r.source === "linked" && !r.is_subgroup &&
-        (r.amount_cy ?? 0) === 0 && (r.amount_py ?? 0) === 0) continue;
-
-    visibleCount++;
-
-    if (r.is_subgroup && r.subgroup_id) {
-      // ── Sub-group header ─────────────────────────────────────────────────
-      const sgId = r.subgroup_id;
-      const totals = groupTotals[sgId] || { cy: 0, py: 0 };
-      subtotalCY += totals.cy;
-      subtotalPY += totals.py;
-      const isCollapsed = collapsedGroups.has(sgId);
-
-      elements.push(
-        <SubGroupHeaderRow
-          key={`sg-${origIdx}`}
-          r={r}
-          origIdx={origIdx}
-          childCY={totals.cy}
-          childPY={totals.py}
-          collapsed={isCollapsed}
-          onToggle={() =>
-            setCollapsedGroups((prev) => {
-              const next = new Set(prev);
-              if (next.has(sgId)) next.delete(sgId); else next.add(sgId);
-              return next;
-            })
-          }
-          onRename={(name) => update(origIdx, { description: name })}
-          onDelete={() => removeGroupAndUngroup(sgId)}
-        />,
-      );
-
-      if (!isCollapsed) {
-        // Render children indented under the header.
-        const children = rows
-          .map((cr, ci) => ({ cr, ci }))
-          .filter(({ cr }) => !cr.is_subgroup && cr.subgroup_id === sgId);
-
-        for (const { cr, ci } of children) {
-          const isLinked = cr.source === "linked";
-          const isManual = cr.source === "manual";
-          const hasSources = Array.isArray(cr.sources) && cr.sources.length > 1;
-          elements.push(
-            <div key={`child-${ci}`} className="ml-4 pl-2 border-l-2 border-purple-200">
-              <ListRowWithSources
-                r={cr}
-                origIdx={ci}
-                isLinked={isLinked}
-                isManual={isManual}
-                hasSources={hasSources}
-                descPlaceholder={descPlaceholder}
-                update={update}
-                remove={remove}
-                removeFromGroup={removeFromGroup}
-              />
-            </div>,
-          );
-        }
+  // Compute subGroups from rows (rows with a subgroup_id act as group anchors)
+  const subGroups = rows
+    .filter((r) => r.subgroup_id)
+    .reduce<{ id: string; name: string }[]>((acc, r) => {
+      const id = r.subgroup_id!;
+      if (!acc.find((g) => g.id === id)) {
+        acc.push({ id, name: r.description ?? id });
       }
-    } else {
-      // ── Regular top-level row ────────────────────────────────────────────
-      subtotalCY += r.amount_cy ?? 0;
-      subtotalPY += r.amount_py ?? 0;
-      const isLinked = r.source === "linked";
-      const isManual = r.source === "manual";
-      const hasSources = Array.isArray(r.sources) && r.sources.length > 1;
-      elements.push(
-        <ListRowWithSources
-          key={`row-${origIdx}`}
-          r={r}
-          origIdx={origIdx}
-          isLinked={isLinked}
-          isManual={isManual}
-          hasSources={hasSources}
-          descPlaceholder={descPlaceholder}
-          update={update}
-          remove={remove}
-        />,
-      );
-    }
-  }
+      return acc;
+    }, []);
 
-  // ── Add-button (plain or dropdown) ────────────────────────────────────────
-  const addButton = enableSubgroup ? (
-    <Popover open={addMenuOpen} onOpenChange={setAddMenuOpen}>
-      <PopoverTrigger asChild>
-        <Button type="button" variant="outline" size="sm" className="h-6 text-[10px] gap-1 mt-1">
-          <Plus size={11} /> {addLabel}
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent side="bottom" align="start" className="w-44 p-1">
-        <button
-          type="button"
-          className="w-full text-left px-2 py-1.5 rounded text-xs hover:bg-muted flex items-center gap-2 transition-colors"
-          onClick={addLineItem}
-        >
-          <Plus size={11} className="shrink-0" /> Add Line Item
-        </button>
-        <button
-          type="button"
-          className="w-full text-left px-2 py-1.5 rounded text-xs hover:bg-muted flex items-center gap-2 transition-colors"
-          onClick={() => { setAddGroupOpen(true); setAddMenuOpen(false); }}
-        >
-          <ChevronDown size={11} className="shrink-0" /> Add Sub Group
-        </button>
-      </PopoverContent>
-    </Popover>
-  ) : (
-    <Button
-      type="button" variant="outline" size="sm"
-      onClick={addLineItem}
-      className="h-6 text-[10px] gap-1 mt-1"
-    >
-      <Plus size={11} /> {addLabel}
-    </Button>
-  );
-
-  // ── "Add Sub Group" inline panel ──────────────────────────────────────────
-  const addGroupPanel = addGroupOpen && (
-    <div className="border border-purple-200 rounded-lg p-3 bg-purple-50/30 dark:bg-purple-900/10 space-y-2 mt-1">
-      <div className="text-xs font-semibold text-purple-900 dark:text-purple-200">Create Sub Group</div>
-      <input
-        type="text"
-        placeholder="Sub-group name"
-        value={newGroupName}
-        onChange={(e) => setNewGroupName(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && createSubGroup()}
-        className="w-full text-xs border rounded px-2 py-1 bg-background outline-none focus:ring-1 focus:ring-purple-300"
-        autoFocus
-      />
-      {groupableRows.length > 0 && (
-        <div className="space-y-0.5">
-          <div className="text-[10px] text-muted-foreground font-medium">Select items to include:</div>
-          <div className="max-h-40 overflow-y-auto space-y-0.5 pr-1">
-            {groupableRows.map(({ r, i }) => (
-              <label
-                key={i}
-                className="flex items-center gap-2 text-xs cursor-pointer hover:bg-purple-100/50 rounded px-1 py-0.5 select-none"
-              >
-                <input
-                  type="checkbox"
-                  checked={selectedForGroup.has(i)}
-                  onChange={(e) => {
-                    const next = new Set(selectedForGroup);
-                    if (e.target.checked) next.add(i); else next.delete(i);
-                    setSelectedForGroup(next);
-                  }}
-                  className="h-3 w-3 accent-purple-600"
-                />
-                <span className="truncate flex-1">{r.description || "(unnamed)"}</span>
-                <span className="text-muted-foreground tabular-nums shrink-0 text-[10px]">{fmt(r.amount_cy ?? 0)}</span>
-              </label>
-            ))}
-          </div>
-        </div>
-      )}
-      {groupableRows.length === 0 && (
-        <div className="text-[10px] italic text-muted-foreground">
-          No ungrouped items yet — add line items first, then group them.
-        </div>
-      )}
-      <div className="flex gap-2">
-        <Button
-          type="button" size="sm"
-          className="h-6 text-[10px] bg-purple-600 hover:bg-purple-700 text-white"
-          onClick={createSubGroup}
-          disabled={!newGroupName.trim()}
-        >
-          Create Group
-        </Button>
-        <Button
-          type="button" size="sm" variant="ghost"
-          className="h-6 text-[10px]"
-          onClick={() => {
-            setAddGroupOpen(false);
-            setNewGroupName("");
-            setSelectedForGroup(new Set());
-          }}
-        >
-          Cancel
-        </Button>
-      </div>
-    </div>
+  // Issue 3: hide linked rows where both years are zero — they clutter the note
+  // without adding information. Manual rows (user-added) are always shown so
+  // the user can see and edit what they typed, even if still at zero.
+  const displayRows = rows.filter(
+    (r) => r.source !== "linked" || (r.amount_cy || 0) !== 0 || (r.amount_py || 0) !== 0,
   );
 
   return (
     <div className="space-y-1">
-      {visibleCount === 0 && (
+      {displayRows.length === 0 && (
         <div className="text-[10px] italic text-muted-foreground py-1">No entries yet.</div>
       )}
-      {elements}
+      {displayRows.map((r, i) => {
+        const isLinked = r.source === "linked";
+        const isManual = r.source === "manual";
+        const hasSources = Array.isArray(r.sources) && r.sources.length > 1;
+        // Map display index back to original rows array for edits/deletes
+        const origIdx = rows.indexOf(r);
+        return (
+          <div
+            key={i}
+            draggable
+            onDragStart={() => handleDragStart(origIdx)}
+            onDragOver={(e) => handleDragOver(e, origIdx)}
+            onDrop={() => handleDrop(origIdx)}
+            onDragEnd={handleDragEnd}
+            className={dragOverRow === origIdx ? "ring-1 ring-primary rounded" : undefined}
+          >
+            <ListRowWithSources
+              r={r}
+              origIdx={origIdx}
+              isLinked={isLinked}
+              isManual={isManual}
+              hasSources={hasSources}
+              descPlaceholder={descPlaceholder}
+              update={update}
+              remove={remove}
+              onChangeMapping={
+                r.linked_ledger && onRemapLedger
+                  ? (ledger, code) => onRemapLedger(ledger, code)
+                  : undefined
+              }
+              subGroups={subGroups.length > 0 ? subGroups : undefined}
+              onMoveToGroup={moveToGroup}
+            />
+          </div>
+        );
+      })}
 
-      {/* Sub-total row — shown when showSubtotal=true and ≥ 2 visible items */}
-      {showSubtotal && visibleCount >= 2 && (
-        <div className="grid grid-cols-12 gap-2 items-center border-t border-muted pt-1 mt-0.5">
-          <div className="col-span-6 text-[10px] font-semibold text-muted-foreground">Sub-total</div>
-          <div className="col-span-3 text-right text-[10px] font-semibold tabular-nums pr-1">{fmt(subtotalCY)}</div>
-          <div className="col-span-2 text-right text-[10px] font-semibold tabular-nums pr-1">{fmt(subtotalPY)}</div>
-          <div className="col-span-1" />
-        </div>
-      )}
+      {/* Sub-total row — shown when showSubtotal=true and ≥ 2 rows exist */}
+      {showSubtotal && displayRows.length >= 2 && (() => {
+        const totalCY = displayRows.reduce((s, r) => s + (r.amount_cy ?? 0), 0);
+        const totalPY = displayRows.reduce((s, r) => s + (r.amount_py ?? 0), 0);
+        return (
+          <div className="grid grid-cols-12 gap-2 items-center border-t border-muted pt-1 mt-0.5">
+            <div className="col-span-6 text-[10px] font-semibold text-muted-foreground">Sub-total</div>
+            <div className="col-span-3 text-right text-[10px] font-semibold tabular-nums pr-1">{formatINR(totalCY)}</div>
+            <div className="col-span-2 text-right text-[10px] font-semibold tabular-nums pr-1">{formatINR(totalPY)}</div>
+            <div className="col-span-1" />
+          </div>
+        );
+      })()}
 
-      {addButton}
-      {addGroupPanel}
+      <Button
+        type="button" variant="outline" size="sm"
+        onClick={add}
+        className="h-6 text-[10px] gap-1 mt-1"
+      >
+        <Plus size={11} /> {addLabel}
+      </Button>
     </div>
   );
 }

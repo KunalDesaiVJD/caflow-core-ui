@@ -23,10 +23,11 @@ interface Props {
   isOverridden:    (path: string) => boolean;
   engagementId:    string;
   collapseControl?: boolean;
+  onRemapLedger?:  (ledgerName: string, newCode: string) => void;
 }
 
 export default function NotePL({
-  engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl,
+  engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl, onRemapLedger,
 }: Props) {
   const cy = (key: string) => Number(notes.pl[key]?.cy ?? 0);
   const py = (key: string) => Number(notes.pl[key]?.py ?? 0);
@@ -57,7 +58,6 @@ export default function NotePL({
     title: string,
     key: string,
     breakupHint: string,
-    enableSubgroup?: boolean,
   ) => {
     const path = `pl.${key}.breakup`;
     const rows: ListRow[] = (get(path) ?? []) as ListRow[];
@@ -71,7 +71,7 @@ export default function NotePL({
           descPlaceholder={breakupHint}
           addLabel="Add row"
           showSubtotal
-          enableSubgroup={enableSubgroup}
+          onRemapLedger={onRemapLedger}
         />
         <EditableRow
           label={`Total — ${title} (per P&L)`}
@@ -101,7 +101,7 @@ export default function NotePL({
       {renderListNote(sn("revenue_from_ops"), "Revenue from operations", "revenue_from_ops",
         "(a) Sale of products (net of returns) / (b) Sale of services / (c) Commission")}
       {renderListNote(sn("other_income"), "Other Income", "other_income",
-        "Interest / Forex gain / Misc income", true)}
+        "Interest / Forex gain / Misc income")}
 
       <NoteCard collapseControl={collapseControl} noteNo={sn("cost_materials")} title="Cost of materials consumed">
         <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
@@ -229,7 +229,7 @@ export default function NotePL({
 
       {/* Note 29 — Other expenses; 37-head template lives in NOTE_ROW_REGISTRY */}
       {renderListNote(sn("other_expenses"), "Other expenses", "other_expenses",
-        "Other expense particulars", true)}
+        "Other expense particulars")}
 
       {/* EPS — Note 30 per NOTE_REGISTRY; always visible for corporate entities */}
       <NoteCard collapseControl={collapseControl} noteNo={sn("eps")} title="Earnings per share (EPS)">

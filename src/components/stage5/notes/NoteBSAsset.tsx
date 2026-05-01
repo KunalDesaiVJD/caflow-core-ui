@@ -20,10 +20,11 @@ interface Props {
   isOverridden:    (path: string) => boolean;
   engagementId:    string;
   collapseControl?: boolean;
+  onRemapLedger?:  (ledgerName: string, newCode: string) => void;
 }
 
 export default function NoteBSAsset({
-  engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl,
+  engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl, onRemapLedger,
 }: Props) {
   const cy = (key: string) => Number(notes.bs_asset[key]?.cy ?? 0);
   const py = (key: string) => Number(notes.bs_asset[key]?.py ?? 0);
@@ -65,7 +66,6 @@ export default function NoteBSAsset({
     key: string,
     breakupPath: string,
     breakupHint: string,
-    enableSubgroup?: boolean,
   ) => {
     const effPY = effectivePY(key, breakupPath);
     return (
@@ -76,7 +76,7 @@ export default function NoteBSAsset({
           onChange={(next) => updatePath(breakupPath, next)}
           descPlaceholder={breakupHint}
           addLabel="Add row"
-          enableSubgroup={enableSubgroup}
+          onRemapLedger={onRemapLedger}
         />
         <EditableRow
           label={`Total — ${title} (per BS)`}
@@ -104,6 +104,7 @@ export default function NoteBSAsset({
           onChange={(next) => updatePath("bs_asset.nc_investments.breakup", next)}
           descPlaceholder="Investment particulars"
           addLabel="Add investment"
+          onRemapLedger={onRemapLedger}
         />
         <EditableRow
           label="Total — Non-current investments (per BS)"
@@ -209,7 +210,7 @@ export default function NoteBSAsset({
       {renderSingleNote(sn("st_loans", "st_loans_advances"), "Short-term loans and advances", "st_loans",
         "bs_asset.st_loans.breakup", "Loan particulars")}
       {renderSingleNote(sn("other_curr_assets", "other_current_assets"), "Other current assets", "other_curr_assets",
-        "bs_asset.other_curr_assets.breakup", "Particulars", true)}
+        "bs_asset.other_curr_assets.breakup", "Particulars")}
     </div>
   );
 }
