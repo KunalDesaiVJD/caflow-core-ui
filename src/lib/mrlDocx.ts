@@ -180,9 +180,9 @@ function pageBreakPara(): string {
 }
 
 /**
- * Continuation marker line — boxed, bold "Contd. on next page…" or
- * "Contd. from prev. page…" — emitted at the bottom of page 1 and the
- * top of page 2 to match the template.
+ * Continuation marker line — "Contd. on next page…" or
+ * "Contd. from prev. page…" — emitted at the bottom of page 1 and
+ * the top of page 2. Plain (non-bold) Cambria 10pt, left-aligned.
  */
 function contdMarker(text: string): string {
   const pPr =
@@ -191,7 +191,7 @@ function contdMarker(text: string): string {
     `<w:spacing w:before="120" w:after="120"/>` +
     `<w:ind w:left="360"/>` +
     `</w:pPr>`;
-  return `<w:p>${pPr}${wRun(text, { bold: true })}</w:p>`;
+  return `<w:p>${pPr}${wRun(text)}</w:p>`;
 }
 
 function clausePara(num: number, text: string, _spaceAfterTwips: number): string {
@@ -382,12 +382,15 @@ export async function exportMrlToDocx(params: MRLDocxParams, filename: string): 
       paras.push(subClausePara(lines[i], i === lines.length - 1 ? 140 : 20));
     }
 
-    // After clause 11, emit "Contd. on next page…" then a hard page break
+    // After clause 11, emit "Contd. on next page…" then a hard page break,
+    // then 3 blank paragraphs of breathing room at the top of page 2,
     // then "Contd. from prev. page…" — exactly matching the template's
-    // page-1/page-2 split (template inserts these markers around clause 11).
+    // page-1/page-2 split. The blanks at the top of page 2 are what the
+    // user asked for as "add some space in the top of the second page".
     if (clauseNum === 11) {
       paras.push(contdMarker("Contd. on next page…"));
       paras.push(pageBreakPara());
+      for (let i = 0; i < 3; i++) paras.push(blank());
       paras.push(contdMarker("Contd. from prev. page…"));
     }
 
