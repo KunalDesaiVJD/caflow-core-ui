@@ -74,7 +74,15 @@ interface TallyTB {
   balance_type: string;
   debit_amount?: number;
   credit_amount?: number;
+  sync_code_version?: string | null;
 }
+
+// ─── Sync code version (mirror of SYNC_CODE_VERSION in tally-sync/sync-step.js) ──
+// Bump this together with the constant on the agent side whenever a TB-affecting
+// bug-fix lands.  The page compares each TB row's stamp against this and shows
+// a banner when any row was synced under older code.  Closes the gap where
+// deployed fixes don't retroactively heal existing DB rows.
+const LATEST_SYNC_CODE_VERSION = "2026.05.01";
 
 interface VoucherLineItem {
   ledger_name: string;
@@ -335,7 +343,7 @@ export default function TallySyncPage({ engagementOverride, hideHeader = false }
       supabase.from("tally_vouchers" as any).select("id", { count: "exact", head: true }).eq("engagement_id", engId),
       supabase.from("tally_groups" as any).select("id,group_name,parent_group,primary_group,is_revenue,is_primary").eq("engagement_id", engId).order("group_name"),
       fetchAllFrom("tally_ledgers", "id,ledger_name,parent_group,opening_balance,opening_type,closing_balance,closing_type", "ledger_name"),
-      fetchAllFrom("tally_trial_balance", "id,ledger_name,parent_group,opening_balance,opening_type,closing_balance,balance_type,debit_amount,credit_amount", "parent_group"),
+      fetchAllFrom("tally_trial_balance", "id,ledger_name,parent_group,opening_balance,opening_type,closing_balance,balance_type,debit_amount,credit_amount,sync_code_version", "parent_group"),
       fetchAllVouchers(),
     ]);
 
@@ -1413,9 +1421,51 @@ export default function TallySyncPage({ engagementOverride, hideHeader = false }
     );
   }
 
+  // ── Stale-data detection (sync_code_version) ────────────────────────────
+  // If any TB row was synced under an older code version (or has no version
+  // stamp at all — pre-migration rows), surface a banner. Bug-fixes in
+  // sync-step.js (Stock-in-Hand opening, parent-group decoding, etc.) only
+  // act during a sync run, so existing rows from older syncs need a refresh.
+  const staleTBCount = tbRows.filter(
+    r => !r.sync_code_version || r.sync_code_version < LATEST_SYNC_CODE_VERSION
+  ).length;
+  const hasStockRows = tbRows.some(r => /stock-in-hand/i.test(r.parent_group || ""));
+
   return (
     <div className={hideHeader ? "space-y-4" : "p-6 space-y-4 max-w-7xl mx-auto"}>
       {!hideHeader && <EngagementHeader engagement={selectedEngagement} stageNumber={5} stageLabel="Tally Sync" />}
+
+      {/* ── Stale Sync Data Banner (sync_code_version mismatch) ───────────
+          Closes the code-fix-vs-data-fix gap. */}
+      {staleTBCount > 0 && tbRows.length > 0 && (
+        <Card className="border-amber-300 bg-amber-50/60 dark:bg-amber-950/20">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2 text-amber-900 dark:text-amber-200">
+              <AlertTriangle className="h-4 w-4" />
+              Trial-balance data is out of date — please re-sync
+            </CardTitle>
+            <CardDescription className="text-xs text-amber-800/90 dark:text-amber-300/80 leading-relaxed">
+              {staleTBCount} of {tbRows.length} TB row(s) were written by an older sync agent
+              (latest fix version: <code className="font-mono">{LATEST_SYNC_CODE_VERSION}</code>).
+              Bug-fixes deployed since then — including the Stock-in-Hand opening-balance fix and
+              Duties &amp; Taxes parent-group decoding — only act during a sync run, so existing rows
+              may show wrong opening balances or be misclassified until you re-sync.
+              <br />
+              <span className="block mt-2 font-medium">
+                Fix on the client's machine:
+              </span>
+              <span className="block">
+                • Run <code className="font-mono bg-amber-100 dark:bg-amber-900/40 px-1 rounded">sync-now.bat</code> for a full re-sync (~2 min), <em>or</em>
+              </span>
+              {hasStockRows && (
+                <span className="block">
+                  • Run <code className="font-mono bg-amber-100 dark:bg-amber-900/40 px-1 rounded">heal-stock.bat</code> to patch only Stock-in-Hand opening balances (~5 sec).
+                </span>
+              )}
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      )}
 
       {/* ── Sync Errors & Warnings ──────────────────────────────────────────
           Tally itself is internally consistent — every sync error or warning
@@ -1858,26 +1908,106 @@ export default function TallySyncPage({ engagementOverride, hideHeader = false }
                       </TableBody>
                     </Table>
                   </div>
-                  {/* Balance check strip */}
-                  <div className="border-t bg-muted/30 px-4 py-1.5 text-[11px] font-semibold flex justify-end gap-4">
-                    <span className={cn(Math.abs(tbDrTotal - tbCrTotal) < 1 ? "text-emerald-600" : "text-amber-600")}
-                      title={
-                        Math.abs(tbDrTotal - tbCrTotal) >= 1 && Math.abs(tbDebitTotal - tbCreditTotal) < 1
-                          ? "Movement is balanced ✓ but opening balances are unbalanced. Tally may have a hidden 'Difference in Opening Balances' entry absorbing this. Fix opening balances in Tally to resolve."
-                          : undefined
-                      }>
-                      {Math.abs(tbDrTotal - tbCrTotal) < 1
-                        ? "✓ Closing Balanced"
-                        : Math.abs(tbDebitTotal - tbCreditTotal) < 1
-                          ? `⚠ Opening Imbalance: ${fmtAmt(Math.abs(tbDrTotal - tbCrTotal))} — Movement balanced ✓`
-                          : `⚠ Closing Diff: ${fmtAmt(Math.abs(tbDrTotal - tbCrTotal))}`}
-                    </span>
-                    {hasDebitCredit && (
-                      <span className={cn(Math.abs(tbDebitTotal - tbCreditTotal) < 1 ? "text-emerald-600" : "text-amber-600")}>
-                        {Math.abs(tbDebitTotal - tbCreditTotal) < 1 ? "✓ Movement Balanced" : `⚠ Movement Diff: ${fmtAmt(Math.abs(tbDebitTotal - tbCreditTotal))}`}
-                      </span>
-                    )}
-                  </div>
+                  {/* ── Balance check strip ─────────────────────────────────
+                      Three independent checks, each with its own meaning:
+
+                      1. Closing balanced    — Σ(Dr_close) = Σ(Cr_close)
+                                               Tautological after the P&L plug;
+                                               shown for user assurance.
+                      2. Opening balanced    — Σ(Dr_open)  = Σ(Cr_open)
+                                               Real invariant — fails only if
+                                               Tally has a "Difference in
+                                               Opening Balances" entry.
+                      3. Net P&L (period)    — INFORMATIONAL, NOT A WARNING.
+                                               In any operating business with
+                                               non-zero profit, Σ(Dr_period) ≠
+                                               Σ(Cr_period) — they differ by
+                                               exactly the period's net P&L
+                                               (current-year profit lives in
+                                               nominal accounts and is closed
+                                               to Capital only at year-end;
+                                               P&L A/c is virtual until then).
+                      4. Books reconcile     — TRUE invariant:
+                                               closing_diff = movement_diff
+                                                            + inventory_adj
+                                               If this holds, Tally is
+                                               internally consistent and the
+                                               residual IS the period's P&L,
+                                               not a sync/extraction bug.
+
+                      Was previously: "Movement Diff" rendered as ⚠ with
+                      amber colour — false alarm equal to the company's
+                      real profit/loss.  Hit KWIKTEAM and Ambica repeatedly
+                      because the label conflated "movement imbalance"
+                      (correct accounting reality) with "movement bug"
+                      (something the user should fix). */}
+
+                  {(() => {
+                    const openingDiff   = tbDrOpening - tbCrOpening;
+                    // closingDiff (post-plug) is what users see on the strip —
+                    // post-plug it is ALWAYS zero by construction, so it's only
+                    // useful for the "✓ Closing Balanced" UX chip.
+                    const closingDiff   = tbDrTotal   - tbCrTotal;
+                    // closingDiffRaw is the *real* signed gap on Tally's side
+                    // before we add inventory + P&L plug. This is the value
+                    // that participates in the accounting invariant below.
+                    const closingDiffRaw = _rawDr - _rawCr;
+                    const movementDiff  = tbDebitTotal - tbCreditTotal;
+                    // Inventory revaluation = stock OB − CB (signed). Positive
+                    // (Dr) when stock decreased — implicit Dr to COGS without
+                    // any voucher Dr/Cr movement.
+                    const invAdjSigned  = _invAdjDr - _invAdjCr;
+                    // Net P&L = Cr_period − Dr_period − inventory_adj.
+                    // Positive = profit (Cr-side surplus net of inventory cost).
+                    const netPL         = -movementDiff - invAdjSigned;
+                    // True accounting invariant (excluding P&L plug row):
+                    //   closing_diff_raw − opening_diff = movement_diff − invAdj_signed
+                    // Rearranged so residual = 0 when books tie:
+                    //   residual = (closing_diff_raw − opening_diff) − movement_diff + invAdj_signed
+                    // Earlier code subtracted invAdj here, which double-counted
+                    // the stock-decrease leg and produced false "residual" warnings
+                    // for any client with inventory movement (Ambica, KWIKTEAM).
+                    const reconcileResidual = (closingDiffRaw - openingDiff) - movementDiff + invAdjSigned;
+                    const tol = Math.max(1, Math.abs(netPL) * 0.0001);
+                    const reconciles = Math.abs(reconcileResidual) <= tol;
+
+                    return (
+                      <div className="border-t bg-muted/30 px-4 py-1.5 text-[11px] font-semibold flex justify-end gap-4 flex-wrap">
+                        {/* Closing */}
+                        <span className={cn(Math.abs(closingDiff) < 1 ? "text-emerald-600" : "text-amber-600")}>
+                          {Math.abs(closingDiff) < 1
+                            ? "✓ Closing Balanced"
+                            : `⚠ Closing Diff: ${fmtAmt(Math.abs(closingDiff))}`}
+                        </span>
+
+                        {/* Opening */}
+                        <span className={cn(Math.abs(openingDiff) < 1 ? "text-emerald-600" : "text-amber-600")}
+                          title={Math.abs(openingDiff) >= 1
+                            ? "Opening balances unequal. Tally may have a 'Difference in Opening Balances' entry — fix in Tally."
+                            : undefined}>
+                          {Math.abs(openingDiff) < 1
+                            ? "✓ Opening Balanced"
+                            : `⚠ Opening Diff: ${fmtAmt(Math.abs(openingDiff))}`}
+                        </span>
+
+                        {/* Net P&L — informational, not a warning */}
+                        {hasDebitCredit && Math.abs(netPL) >= 1 && (
+                          <span className="text-blue-700"
+                            title="Net Profit/Loss for the period derived from voucher movement and inventory revaluation. This is NOT a sync error — it is the real economic result of the period. It only equals zero when revenue = expenses (no profit, no loss).">
+                            ℹ Net P&L (period): {fmtAmt(Math.abs(netPL))} {netPL >= 0 ? "Profit" : "Loss"}
+                          </span>
+                        )}
+
+                        {/* True reconciliation invariant */}
+                        <span className={cn(reconciles ? "text-emerald-600" : "text-red-600")}
+                          title={reconciles
+                            ? "Books tie: Σ(closing_signed) − Σ(opening_signed) = Σ(Dr_period) − Σ(Cr_period) + inventory_adj.  Tally is internally consistent — any residual visible in this strip is the company's real net P&L, not a sync bug."
+                            : `Books DON'T tie. Residual ₹${fmtAmt(Math.abs(reconcileResidual))} after accounting for movement + inventory. This indicates an extraction-side bug — please re-sync or run heal-stock.bat.`}>
+                          {reconciles ? "✓ Books Reconcile" : `⚠ Reconciliation Residual: ${fmtAmt(Math.abs(reconcileResidual))}`}
+                        </span>
+                      </div>
+                    );
+                  })()}
                 </>
               )}
             </CardContent>
