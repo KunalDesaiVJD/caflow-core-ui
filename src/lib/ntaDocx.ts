@@ -315,7 +315,14 @@ export async function exportNtaToDocx(
 
   // ─── document.xml ─────────────────────────────────────────────────────────────
   //
-  // Page border matches template: single sz=10 on all sides, space=24
+  // Section properties match the template byte-for-byte, INCLUDING the
+  // headerReference / footerReference that point at empty header1.xml /
+  // footer1.xml stubs added below. Without those references Word treats
+  // a top margin of 0 + page borders + no header as a no-printable-area
+  // section and clips the top page border, which is exactly what the user
+  // saw — the side and bottom borders rendered but the top line vanished.
+  // Adding empty header/footer parts gives Word the section frame it
+  // needs and the full border now renders.
   const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -325,25 +332,36 @@ export async function exportNtaToDocx(
   <w:body>
     ${paras.join("\n    ")}
     <w:sectPr>
-      <w:pgSz w:w="11906" w:h="16838"/>
+      <w:headerReference w:type="default" r:id="rId2"/>
+      <w:footerReference w:type="default" r:id="rId3"/>
+      <w:pgSz w:w="11906" w:h="16838" w:code="9"/>
       <w:pgMar w:top="0" w:right="849" w:bottom="851" w:left="993"
                w:header="765" w:footer="850" w:gutter="0"/>
       <w:pgBorders>
-        <!--
-          offsetFrom defaults to "text" (omitted), so the border tracks the
-          text-margin edge instead of being inset 24 pt from the page edge.
-          The previous offsetFrom="page" with w:space="24" pushed the border
-          ~480 twips inside the left/right margins (993/849), which made
-          long body lines overflow visibly past the border.
-        -->
         <w:top    w:val="single" w:sz="10" w:space="1" w:color="auto"/>
         <w:left   w:val="single" w:sz="10" w:space="0" w:color="auto"/>
         <w:bottom w:val="single" w:sz="10" w:space="1" w:color="auto"/>
         <w:right  w:val="single" w:sz="10" w:space="0" w:color="auto"/>
       </w:pgBorders>
+      <w:cols w:space="708"/>
+      <w:docGrid w:linePitch="360"/>
     </w:sectPr>
   </w:body>
 </w:document>`;
+
+  // ─── header1.xml / footer1.xml ────────────────────────────────────────────────
+  // Minimal empty-paragraph header and footer. Required so Word renders the
+  // page border with w:top="0" — without these references the top border is
+  // clipped at the page edge.
+  const headerXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:p><w:pPr><w:pStyle w:val="Normal"/></w:pPr></w:p>
+</w:hdr>`;
+
+  const footerXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:p><w:pPr><w:pStyle w:val="Normal"/></w:pPr></w:p>
+</w:ftr>`;
 
   // ─── styles.xml ───────────────────────────────────────────────────────────────
   //
@@ -387,6 +405,10 @@ export async function exportNtaToDocx(
     ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
   <Override PartName="/word/styles.xml"
     ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+  <Override PartName="/word/header1.xml"
+    ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
+  <Override PartName="/word/footer1.xml"
+    ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
 </Types>`;
 
   const rootRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -401,6 +423,12 @@ export async function exportNtaToDocx(
   <Relationship Id="rId1"
     Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles"
     Target="styles.xml"/>
+  <Relationship Id="rId2"
+    Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header"
+    Target="header1.xml"/>
+  <Relationship Id="rId3"
+    Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer"
+    Target="footer1.xml"/>
 </Relationships>`;
 
   const zip = new JSZip();
@@ -408,6 +436,8 @@ export async function exportNtaToDocx(
   zip.file("_rels/.rels", rootRels);
   zip.file("word/document.xml", documentXml);
   zip.file("word/styles.xml", stylesXml);
+  zip.file("word/header1.xml", headerXml);
+  zip.file("word/footer1.xml", footerXml);
   zip.file("word/_rels/document.xml.rels", docRels);
 
   const blob = await zip.generateAsync({
