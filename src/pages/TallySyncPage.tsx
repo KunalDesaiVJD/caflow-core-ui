@@ -1426,10 +1426,10 @@ export default function TallySyncPage({ engagementOverride, hideHeader = false }
   // stamp at all — pre-migration rows), surface a banner. Bug-fixes in
   // sync-step.js (Stock-in-Hand opening, parent-group decoding, etc.) only
   // act during a sync run, so existing rows from older syncs need a refresh.
-  const staleTBCount = trialBalance.filter(
+  const staleTBCount = tbRows.filter(
     r => !r.sync_code_version || r.sync_code_version < LATEST_SYNC_CODE_VERSION
   ).length;
-  const hasStockRows = trialBalance.some(r => /stock-in-hand/i.test(r.parent_group || ""));
+  const hasStockRows = tbRows.some(r => /stock-in-hand/i.test(r.parent_group || ""));
 
   return (
     <div className={hideHeader ? "space-y-4" : "p-6 space-y-4 max-w-7xl mx-auto"}>
@@ -1437,7 +1437,7 @@ export default function TallySyncPage({ engagementOverride, hideHeader = false }
 
       {/* ── Stale Sync Data Banner (sync_code_version mismatch) ───────────
           Closes the code-fix-vs-data-fix gap. */}
-      {staleTBCount > 0 && trialBalance.length > 0 && (
+      {staleTBCount > 0 && tbRows.length > 0 && (
         <Card className="border-amber-300 bg-amber-50/60 dark:bg-amber-950/20">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm flex items-center gap-2 text-amber-900 dark:text-amber-200">
@@ -1445,7 +1445,7 @@ export default function TallySyncPage({ engagementOverride, hideHeader = false }
               Trial-balance data is out of date — please re-sync
             </CardTitle>
             <CardDescription className="text-xs text-amber-800/90 dark:text-amber-300/80 leading-relaxed">
-              {staleTBCount} of {trialBalance.length} TB row(s) were written by an older sync agent
+              {staleTBCount} of {tbRows.length} TB row(s) were written by an older sync agent
               (latest fix version: <code className="font-mono">{LATEST_SYNC_CODE_VERSION}</code>).
               Bug-fixes deployed since then — including the Stock-in-Hand opening-balance fix and
               Duties &amp; Taxes parent-group decoding — only act during a sync run, so existing rows
