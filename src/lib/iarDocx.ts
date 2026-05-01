@@ -265,13 +265,12 @@ export async function exportIarToDocx(
   const paras: string[] = [];
 
   // ── 0. Top-of-page spacing ────────────────────────────────────────────────
-  // Template renders the title roughly 2½" below the page top edge.
-  // 6 leading blank paragraphs (~1") combined with a 720-twip top page
-  // margin (~0.5", set in sectPr below) give the visible 1.5" top
-  // whitespace the user is asking for. Tighter than the original 8–10
-  // blanks, leaving room for Management's Responsibility to land on
-  // page 1 alongside everything before it.
-  for (let i = 0; i < 6; i++) paras.push(blank());
+  // 3 leading blank paragraphs (~½" of additional air) combined with
+  // the 720-twip top page margin (~0.5", set in sectPr below) give
+  // about 1" of visible top whitespace before the title — closer to
+  // the template's ruler position. Earlier 6-blank version pushed the
+  // title ~1" too far down vs the template.
+  for (let i = 0; i < 3; i++) paras.push(blank());
 
   // ── 1. Title ──────────────────────────────────────────────────────────────
   // Template wraps the title with the built-in "Title" pStyle which
@@ -627,7 +626,12 @@ export async function exportIarToDocx(
         renders on any page.
       -->
       <w:pgSz w:w="11906" w:h="16838" w:code="9"/>
-      <w:pgMar w:top="1080" w:right="720" w:bottom="1080" w:left="1151"
+      <!--
+        Top margin reduced 1080 → 720 (~0.5") so the title sits at
+        approximately the same ruler position as the template (~ruler 4).
+        Bottom margin remains at 1080 for visible bottom whitespace.
+      -->
+      <w:pgMar w:top="720" w:right="720" w:bottom="1080" w:left="1151"
                w:header="720" w:footer="720" w:gutter="0"/>
       <w:cols w:space="708"/>
       <w:docGrid w:linePitch="360"/>
