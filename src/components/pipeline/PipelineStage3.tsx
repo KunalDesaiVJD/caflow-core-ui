@@ -1408,15 +1408,41 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     // Revenue (PL_REV, credit = negative) and Expenses (PL_EXP, debit = positive)
     // live in P&L codes.  The current-year net profit must be credited to Reserves &
     // Surplus so the Balance Sheet balances — mirrors the closing journal entry.
+    //
+    // BOOKS-CLOSED DETECTION (client-agnostic):
+    //   In some Tally configurations the firm closes books mid-year and posts the
+    //   current-year P&L directly into the retained-earnings ledger (e.g. into
+    //   "Profit & Loss A/c (BxS)" or "Reserves & Surplus" itself).  In that case
+    //   the closing balance of that ledger ALREADY includes the current-year
+    //   profit/loss — adding netPL again would double-count.
+    //
+    //   We detect this by looking for any ledger mapped to BS_EQ_RS that has
+    //   current-year journal activity (tally_debit + tally_credit > 0), EXCLUDING
+    //   the "auto-flow" current-year accumulator ledger (Tally's "Profit & Loss
+    //   A/c" with opening=0, whose movement IS the current-year P&L still pending
+    //   transfer).  If such a non-accumulator ledger has movement → books are
+    //   closed → skip the netPL auto-flow.
     if (!isNonCorporate) {
-      const rev   = amounts["PL_REV"] || 0; // negative (credit)
-      const exp   = amounts["PL_EXP"] || 0; // positive (debit)
-      const netPL = Math.round((-rev - exp) * 100) / 100;
-      if (Math.abs(netPL) > 0.005) {
-        amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) - netPL;
-        // Re-run the full tree so every parent (BS_EQ → BS root) picks up the change
-        for (const item of activeTree) {
-          computeTotal(item);
+      const reservesLedgers = tbAccounts.filter(a => coaMapping[a.account_name]?.code === "BS_EQ_RS");
+      const booksClosed = reservesLedgers.some(a => {
+        const isAutoFlowAccumulator =
+          isTallyPLAccount(a.account_name) && Math.abs(a.opening_balance ?? 0) < 0.005;
+        if (isAutoFlowAccumulator) return false; // current-year accumulator, not a closure indicator
+        const dr = Number(a.tally_debit  || 0);
+        const cr = Number(a.tally_credit || 0);
+        return Math.abs(dr) > 0.005 || Math.abs(cr) > 0.005;
+      });
+
+      if (!booksClosed) {
+        const rev   = amounts["PL_REV"] || 0; // negative (credit)
+        const exp   = amounts["PL_EXP"] || 0; // positive (debit)
+        const netPL = Math.round((-rev - exp) * 100) / 100;
+        if (Math.abs(netPL) > 0.005) {
+          amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) - netPL;
+          // Re-run the full tree so every parent (BS_EQ → BS root) picks up the change
+          for (const item of activeTree) {
+            computeTotal(item);
+          }
         }
       }
     }
@@ -2698,6 +2724,15 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                               const opening = a.opening_balance ?? 0;
                               const isNew    = Math.abs(opening) < 0.005 && Math.abs(a.balance) >= 0.005;
                               const isClosed = Math.abs(opening) >= 0.005 && Math.abs(a.balance) < 0.005;
+                              // P&L A/c (non-BxS) mapped to a BS code: closing balance is NOT added
+                              // to the FS — its current-year movement auto-flows via netPL from
+                              // PL_REV+PL_EXP into BS_EQ_RS.  Show an "AUTO-FLOW" badge to make
+                              // this explicit so users don't see it as double-counting next to a
+                              // sibling "Profit & Loss A/c (BxS)" carry-forward ledger.
+                              const isPLAutoFlow =
+                                isTallyPLAccount(a.account_name) &&
+                                (m?.code || "").startsWith("BS_") &&
+                                Math.abs(opening) < 0.005;
                               return (
                                 <div
                                   key={a.account_name}
@@ -2711,6 +2746,12 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                                     </Badge>
                                     {isNew && <Badge className="text-[8px] px-1 bg-primary/10 text-primary border-primary/30 shrink-0">NEW</Badge>}
                                     {isClosed && <Badge className="text-[8px] px-1 bg-slate-200 text-slate-700 border-slate-400 shrink-0">CLOSED</Badge>}
+                                    {isPLAutoFlow && (
+                                      <Badge
+                                        className="text-[8px] px-1 bg-amber-100 text-amber-800 border-amber-300 shrink-0"
+                                        title="This ledger's closing is NOT added — current-year P&L auto-flows via Net Profit (PL_REV + PL_EXP) into Reserves & Surplus.  The retained-earnings carry-forward is captured by the sibling 'Profit & Loss A/c (BxS)' ledger."
+                                      >AUTO-FLOW</Badge>
+                                    )}
                                     {aliases[a.account_name] && (
                                       <Badge
                                         className="text-[8px] px-1 bg-violet-100 text-violet-700 border-violet-300 shrink-0 cursor-pointer"

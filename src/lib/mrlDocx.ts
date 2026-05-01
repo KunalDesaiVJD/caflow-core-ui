@@ -139,14 +139,26 @@ function mrlSeparator(): string {
 
 /**
  * Build a two-column signature row using a tab stop.
- * Col 1 at left margin, Col 2 at ~4320 twips (3 inches from margin).
+ * Col 1 at left margin, Col 2 at ~5040 twips (3.5 inches from margin).
+ *
+ * FIX: previous version had no <w:jc>, so the paragraph inherited
+ * `jc="both"` from pPrDefault. Justified-text rendering would collapse
+ * the tab between the two columns and produce "DirectorDirector" stacked
+ * together. Forcing <w:jc w:val="left"/> guarantees the tab stays a
+ * visible gap and the second column lands at its declared position.
+ * Tab raised from 4320 → 5040 for a slightly more even visual centring
+ * of two short labels in the ~11500-twip text width.
  */
 function sigRow(left: string, right: string, opts: RunOpts = {}): string {
-  const tabStop = `<w:pPr><w:tabs><w:tab w:val="left" w:pos="4320"/></w:tabs></w:pPr>`;
+  const pPr =
+    `<w:pPr>` +
+    `<w:jc w:val="left"/>` +
+    `<w:tabs><w:tab w:val="left" w:pos="5040"/></w:tabs>` +
+    `</w:pPr>`;
   const leftRun  = wRun(left, opts);
   const tabRun   = wTab();
   const rightRun = wRun(right, opts);
-  return `<w:p>${tabStop}${leftRun}${tabRun}${rightRun}</w:p>`;
+  return `<w:p>${pPr}${leftRun}${tabRun}${rightRun}</w:p>`;
 }
 
 /**
@@ -158,16 +170,67 @@ function sigRow(left: string, right: string, opts: RunOpts = {}): string {
  *   w:hanging="360" → first line (the number) is at 36 pt − 18 pt = 18 pt
  *   tab stop @720   → tab after "N." jumps text to the 36 pt indent
  */
-function clausePara(num: number, text: string, spaceAfterTwips: number): string {
+/**
+ * Hard page-break paragraph. Forces the next paragraph onto a new page.
+ * Used between clause 11 and clause 12 to mirror the template's
+ * "Contd. on next page…" / "Contd. from prev. page…" two-page split.
+ */
+function pageBreakPara(): string {
+  return `<w:p><w:r><w:br w:type="page"/></w:r></w:p>`;
+}
+
+/**
+ * Continuation marker line — "Contd. on next page…" or
+ * "Contd. from prev. page…" — emitted at the bottom of page 1 and
+ * the top of page 2. Plain (non-bold) Cambria 10pt, left-aligned.
+ */
+function contdMarker(text: string): string {
+  const pPr =
+    `<w:pPr>` +
+    `<w:jc w:val="left"/>` +
+    `<w:spacing w:before="120" w:after="120"/>` +
+    `<w:ind w:left="360"/>` +
+    `</w:pPr>`;
+  return `<w:p>${pPr}${wRun(text)}</w:p>`;
+}
+
+function clausePara(num: number, text: string, _spaceAfterTwips: number): string {
   const indLeft = 720;  // 36 pt
   const indHang = 360;  // 18 pt
+  // Template clause paragraphs carry NO inline w:spacing — visual gaps
+  // between clauses come from an explicit empty <w:p> spacer (see
+  // clauseSpacer below) so the rhythm matches the format file. The
+  // digit itself is NOT bold in the template, only the body text style
+  // is preserved.
+  //
+  // FIX: previously emitted `"N."` + <w:tab/> + body, but the tab stop
+  // was set at the same position as the body indent (720), so the tab
+  // collapsed to zero width and Word rendered "1.The accounting…" with
+  // no space. Switch to a literal trailing space after the digit so the
+  // visual gap between "1." and "The" is always present, and drop the
+  // now-unused <w:tabs> element.
   const pPr = `<w:pPr>` +
     `<w:jc w:val="both"/>` +
-    `<w:tabs><w:tab w:val="left" w:pos="${indLeft}"/></w:tabs>` +
     `<w:ind w:left="${indLeft}" w:hanging="${indHang}"/>` +
-    `<w:spacing w:after="${spaceAfterTwips}" w:line="240" w:lineRule="auto"/>` +
     `</w:pPr>`;
-  return `<w:p>${pPr}${wRun(`${num}.`, { bold: true })}${wTab()}${wRun(text)}</w:p>`;
+  return `<w:p>${pPr}${wRun(`${num}. `)}${wRun(text)}</w:p>`;
+}
+
+/**
+ * Empty paragraph used between numbered clauses — matches the template's
+ * idiom of a sz=14 blank line (≈7 pt visual gap) instead of inline
+ * w:spacing w:after on the clause itself.
+ */
+function clauseSpacer(): string {
+  return (
+    `<w:p>` +
+      `<w:pPr>` +
+        `<w:ind w:left="360"/>` +
+        `<w:jc w:val="both"/>` +
+        `<w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:sz w:val="14"/><w:szCs w:val="14"/></w:rPr>` +
+      `</w:pPr>` +
+    `</w:p>`
+  );
 }
 
 /**
@@ -178,13 +241,14 @@ function clausePara(num: number, text: string, spaceAfterTwips: number): string 
  *   w:left="1260"   → wrapped lines start at 63 pt
  *   w:hanging="360" → first line label "(a)" is at 63 pt − 18 pt = 45 pt
  */
-function subClausePara(text: string, spaceAfterTwips: number): string {
+function subClausePara(text: string, _spaceAfterTwips: number): string {
   const indLeft = 1260; // 63 pt
   const indHang = 360;  // 18 pt
+  // No inline w:spacing — the parent clause + clauseSpacer provides the
+  // surrounding rhythm.
   const pPr = `<w:pPr>` +
     `<w:jc w:val="both"/>` +
     `<w:ind w:left="${indLeft}" w:hanging="${indHang}"/>` +
-    `<w:spacing w:after="${spaceAfterTwips}" w:line="240" w:lineRule="auto"/>` +
     `</w:pPr>`;
   return `<w:p>${pPr}${wRun(text)}</w:p>`;
 }
@@ -225,6 +289,11 @@ export async function exportMrlToDocx(params: MRLDocxParams, filename: string): 
 
   const selectedClauses = clauses.filter((c) => c.selected);
   const paras: string[] = [];
+
+  // ── 0. Top-of-page-1 leading line ─────────────────────────────────────────
+  // User asked for a single line of breathing room at the top of page 1
+  // before the company letterhead block starts.
+  paras.push(blank());
 
   // ── 1. Company Letterhead ──────────────────────────────────────────────────
   // Company name: 16 pt bold centered (matches template 16pt Cambria bold)
@@ -283,9 +352,15 @@ export async function exportMrlToDocx(params: MRLDocxParams, filename: string): 
   paras.push(blank());
 
   // ── 8. Clauses ────────────────────────────────────────────────────────────
-  // Format: "N.  [first line of text]" inline — number bold, text normal.
-  // Additional lines (sub-clauses like (a),(b),(c)) are indented below.
+  // Format: "N.  [first line of text]" inline — digit is plain text (NOT
+  // bold) to match the template. Additional lines (sub-clauses like
+  // (a),(b),(c)) are indented below.
+  // Visual spacing between clauses comes from an explicit empty
+  // <w:p> spacer (clauseSpacer) — matches the template's idiom of using
+  // a sz=14 blank line between numbered items rather than inline
+  // w:spacing w:after on each clause paragraph.
   let clauseNum = 1;
+  let firstClauseEmitted = false;
   for (const clause of selectedClauses) {
     // Replace [CASH_AMOUNT] token with actual amount
     const clauseText = clause.text.replace(/\[CASH_AMOUNT\]/g, cashAmount || "______");
@@ -293,15 +368,30 @@ export async function exportMrlToDocx(params: MRLDocxParams, filename: string): 
     const lines = clauseText.split("\n").filter((l) => l.trim() !== "");
     if (lines.length === 0) { clauseNum++; continue; }
 
+    // Spacer between this clause and the previous one (skip before #1)
+    if (firstClauseEmitted) paras.push(clauseSpacer());
+    firstClauseEmitted = true;
+
     // First line: numbered clause with hanging indent matching template's
     // ol>li margin-left:36pt; text-indent:-18pt; tab-stops:list 36.0pt
-    // spaceAfter 140 twips ≈ 7pt blank paragraph gap used between clauses in template.
-    paras.push(clausePara(clauseNum, lines[0], lines.length > 1 ? 20 : 140));
+    paras.push(clausePara(clauseNum, lines[0], 0));
 
     // Remaining lines (sub-clauses like (a),(b),(c)) — hanging indent matching
     // template's margin-left:63pt; text-indent:-18pt
     for (let i = 1; i < lines.length; i++) {
       paras.push(subClausePara(lines[i], i === lines.length - 1 ? 140 : 20));
+    }
+
+    // After clause 11, emit "Contd. on next page…" then a hard page break,
+    // then 3 blank paragraphs of breathing room at the top of page 2,
+    // then "Contd. from prev. page…" — exactly matching the template's
+    // page-1/page-2 split. The blanks at the top of page 2 are what the
+    // user asked for as "add some space in the top of the second page".
+    if (clauseNum === 11) {
+      paras.push(contdMarker("Contd. on next page…"));
+      paras.push(pageBreakPara());
+      for (let i = 0; i < 3; i++) paras.push(blank());
+      paras.push(contdMarker("Contd. from prev. page…"));
     }
 
     clauseNum++;
@@ -350,9 +440,14 @@ export async function exportMrlToDocx(params: MRLDocxParams, filename: string): 
   <w:body>
     ${paras.join("\n    ")}
     <w:sectPr>
-      <w:pgSz w:w="11906" w:h="16838"/>
-      <w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720"
-               w:header="708" w:footer="708" w:gutter="0"/>
+      <w:pgSz w:w="11906" w:h="16838" w:code="9"/>
+      <!-- Top margin matches the template (142 twips ≈ 0.1") so the
+           letterhead sits high on the page; previous 720 (0.5") pushed
+           every section down by ~0.4". -->
+      <w:pgMar w:top="142" w:right="720" w:bottom="720" w:left="720"
+               w:header="709" w:footer="709" w:gutter="0"/>
+      <w:cols w:space="708"/>
+      <w:docGrid w:linePitch="360"/>
     </w:sectPr>
   </w:body>
 </w:document>`;

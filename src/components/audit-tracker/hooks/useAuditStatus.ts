@@ -270,11 +270,19 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
       //     Used ONLY for employee-name backfill so staff names always appear
       //     even if planned_from is slightly outside the FY boundary.
       // (B) FY-scoped query — date-filtered entries used for creating virtual rows.
+      // Issue 3: leaves must NEVER influence audit status / employee aggregates.
+      // Filter at source — both DB-level (`is_leave=false`) and client-side
+      // legacy fallback (case-insensitive client_name !== 'leave') for any
+      // pre-migration row that wasn't backfilled.
       let planAllQ = (supabase as any)
         .from("audit_planning")
-        .select("id, client_id, client_name, planned_from, planned_to, employee_names");
+        .select("id, client_id, client_name, planned_from, planned_to, employee_names, is_leave")
+        .or("is_leave.is.null,is_leave.eq.false");
       if (!isSuperadmin) planAllQ = planAllQ.eq("firm_id", firmId);
-      const { data: planAllData } = await planAllQ;
+      const { data: planAllDataRaw } = await planAllQ;
+      const planAllData = ((planAllDataRaw as any[]) || []).filter(
+        (p: any) => (p.client_name || "").trim().toLowerCase() !== "leave"
+      );
 
       // FY-scoped subset (for virtual row creation)
       const planData = ((planAllData as any[]) || []).filter((p: any) => {
@@ -373,6 +381,14 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
         allKnownClientIds.add(plan.client_id);  // prevent duplicates within same loop
       }
     }
+
+    // Issue 3 defence-in-depth: drop any row whose party_name still reads
+    // "Leave" (case-insensitive). Such rows are personal time-off and must
+    // never appear in the audit-status grid. The migration purged historical
+    // rows, but this guard prevents any stragglers from surfacing.
+    statusRows = statusRows.filter(
+      r => (r.party_name || "").trim().toLowerCase() !== "leave"
+    );
 
     // Sort: virtual rows last (pending), then alphabetically by party_name
     statusRows.sort((a, b) => {

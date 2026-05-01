@@ -1031,7 +1031,10 @@ export async function autoPopulateNotes(
     auto_synced_at: new Date().toISOString(),
   };
   if (options.existing?.fa?.rows) {
-    out.fa.rows = mergeFaDefaults(options.existing.fa.rows);
+    const existRows = options.existing.fa.rows;
+    // If user already has rows stored, preserve them exactly (don't re-add deleted defaults).
+    // Only use mergeFaDefaults for a truly empty FA (new engagement).
+    out.fa.rows = existRows.length > 0 ? existRows : mergeFaDefaults(existRows);
   }
 
   for (const section of ["bs_liab", "bs_asset", "pl"] as const) {

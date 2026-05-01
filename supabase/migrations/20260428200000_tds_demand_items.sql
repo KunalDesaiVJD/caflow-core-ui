@@ -53,10 +53,12 @@ CREATE TRIGGER trg_tds_demand_items_updated_at
 
 ALTER TABLE public.tds_demand_items ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "service_role_full_tds_demand_items" ON public.tds_demand_items;
 CREATE POLICY "service_role_full_tds_demand_items"
   ON public.tds_demand_items FOR ALL TO service_role
   USING (true) WITH CHECK (true);
 
+DROP POLICY IF EXISTS "firm_users_tds_demand_items" ON public.tds_demand_items;
 CREATE POLICY "firm_users_tds_demand_items"
   ON public.tds_demand_items FOR ALL TO authenticated
   USING (

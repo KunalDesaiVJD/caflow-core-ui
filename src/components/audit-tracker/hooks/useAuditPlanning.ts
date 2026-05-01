@@ -21,6 +21,7 @@ export interface PlanEntry {
   planned_to:     string;
   employee_ids:   string[];
   employee_names: string[];
+  is_leave:       boolean;        // Issue 3: explicit "leave taken by employee" flag
   created_by:     string | null;
   created_at:     string;
 }
@@ -93,8 +94,13 @@ export function useAuditPlanning(firmId: string, userId?: string, isSuperadmin?:
     // (e.g. entries created before the auto-create logic was added, or where the
     // insert silently failed) gets one created now.
     const linkedPlanIds = new Set(existingComms.map(c => c.planning_id).filter(Boolean));
+    // Issue 3: skip leaves with the explicit flag (defensive: keep legacy
+    // string match as fallback for any pre-migration row that wasn't backfilled)
     const missing = ((planData as PlanEntry[]) || []).filter(
-      p => p.client_name && p.client_name.toLowerCase() !== "leave" && !linkedPlanIds.has(p.id)
+      p => p.client_name
+        && !p.is_leave
+        && p.client_name.toLowerCase() !== "leave"
+        && !linkedPlanIds.has(p.id)
     );
     if (missing.length > 0) {
       const inserts = missing.map(p => ({
@@ -112,7 +118,11 @@ export function useAuditPlanning(firmId: string, userId?: string, isSuperadmin?:
       if (newComms) existingComms.push(...(newComms as CommEntry[]));
     }
 
-    setComms(existingComms);
+    // Issue 3 defence-in-depth: any historical audit_communication row whose
+    // client_name reads "Leave" (case-insensitive) is filtered before reaching
+    // the UI. Belt-and-suspenders against legacy rows that the cleanup
+    // migration may have missed (e.g. trailing whitespace variants).
+    setComms(existingComms.filter(c => (c.client_name || "").trim().toLowerCase() !== "leave"));
     setLoading(false);
   }, [firmId, isSuperadmin]);
 
@@ -121,10 +131,13 @@ export function useAuditPlanning(firmId: string, userId?: string, isSuperadmin?:
   // ── Planning CRUD ──────────────────────────────────────────────────────────
 
   async function addEntry(
-    input: Pick<PlanEntry, "client_id"|"client_name"|"planned_from"|"planned_to"|"employee_ids"|"employee_names"> & { financial_year?: string }
+    input: Pick<PlanEntry, "client_id"|"client_name"|"planned_from"|"planned_to"|"employee_ids"|"employee_names"> & { financial_year?: string; is_leave?: boolean }
   ): Promise<PlanEntry | null> {
+    // Issue 3: derive is_leave defensively if caller didn't pass it explicitly
+    const isLeave = input.is_leave ?? ((input.client_name || "").trim().toLowerCase() === "leave");
     const draft: PlanEntry = {
       ...input,
+      is_leave:   isLeave,
       id:         crypto.randomUUID(),
       firm_id:    firmId,
       created_by: userId || null,
@@ -167,14 +180,23 @@ export function useAuditPlanning(firmId: string, userId?: string, isSuperadmin?:
         planned_to:     input.planned_to,
         employee_ids:   input.employee_ids,
         employee_names: input.employee_names,
+        is_leave:       isLeave,
         created_by:     userId || null,
-      })
+      } as any)
       .select()
       .single();
 
     if (error) { toast.error(error.message); return null; }
 
     const newEntry = data as PlanEntry;
+
+    // Issue 3: leaves never propagate to audit_communication / audit_status /
+    // user_notifications. They live ONLY on the planning calendar.
+    if (isLeave) {
+      toast.success("Leave added");
+      await load();
+      return newEntry;
+    }
 
     // Part B — Auto-insert into communication log (audit_communication)
     {

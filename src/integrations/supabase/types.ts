@@ -903,6 +903,7 @@ export type Database = {
           employee_names: string[] | null
           firm_id: string | null
           id: string
+          is_leave: boolean
           planned_from: string
           planned_to: string
         }
@@ -915,6 +916,7 @@ export type Database = {
           employee_names?: string[] | null
           firm_id?: string | null
           id?: string
+          is_leave?: boolean
           planned_from: string
           planned_to: string
         }
@@ -927,6 +929,7 @@ export type Database = {
           employee_names?: string[] | null
           firm_id?: string | null
           id?: string
+          is_leave?: boolean
           planned_from?: string
           planned_to?: string
         }
@@ -2651,6 +2654,7 @@ export type Database = {
           stock_audit_applicable: boolean | null
           tally_company_name: string | null
           tan_number: string | null
+          tax_audit_applicable: boolean
           tax_audit_type: string | null
           user_id: string | null
           work_group_type: string | null
@@ -2693,6 +2697,7 @@ export type Database = {
           stock_audit_applicable?: boolean | null
           tally_company_name?: string | null
           tan_number?: string | null
+          tax_audit_applicable?: boolean
           tax_audit_type?: string | null
           user_id?: string | null
           work_group_type?: string | null
@@ -2735,6 +2740,7 @@ export type Database = {
           stock_audit_applicable?: boolean | null
           tally_company_name?: string | null
           tan_number?: string | null
+          tax_audit_applicable?: boolean
           tax_audit_type?: string | null
           user_id?: string | null
           work_group_type?: string | null

@@ -1,48 +1,46 @@
 /**
  * fsRatiosWriter
- * ─────────────────────────────────────────────────────────────────────────
- * Phase UI-8 / Phase 7 — Appends 3 ratio sheets to the FS workbook:
+ * ────────────────────────────────────────────────────────────────────────────
+ * Appends three ratio sheets to a workbook, formatted to match the official
+ * `Ratio.xlsx` template (file: `format/Ratio.xlsx`):
  *
- *   "RATIO"           — 11-ratio summary table (matches Excel "RATIO" sheet)
- *   "Current Year "   — Detailed CY inputs with IFERROR/SUM formulas
- *   "Previous Year "  — Identical structure, PY data
+ *   "RATIO"          — 11-ratio summary, 4-row block per ratio
+ *   "Current Year "  — Detailed CY inputs with SUM/IFERROR formulas
+ *                       (NB: the template uses a TRAILING SPACE in this name)
+ *   "Previous Year " — Identical structure with PY data (also trailing space)
  *
- * Sheet names follow Ratio.xlsx exactly (incl. trailing spaces on CY/PY).
- * Cross-sheet formula targets:
- *   RATIO!E8  = 'Current Year '!E9              (Ratio 1 numerator amount)
- *   RATIO!E9  = 'Current Year '!G9              (Ratio 1 denominator amount)
- *   RATIO!F8  = IFERROR('Current Year '!H9,"N.A.")
- *   RATIO!G8  = IFERROR('Previous Year '!H9,"N.A.")
- *   RATIO!H8  = IFERROR((F8-G8)/ABS(G8),"N.A.") (Variance formula)
- *   … and so on for all 11 ratios.
+ * Cross-sheet wiring:
+ *   RATIO!E<numRow> = +'Current Year '!E<cyTotalRow>      (numerator amount)
+ *   RATIO!E<denRow> = +'Current Year '!G<cyTotalRow>      (denominator amount)
+ *   RATIO!F        = IFERROR('Current Year '!H<cyRow>, "N.A.")
+ *   RATIO!G        = IFERROR('Previous Year '!H<cyRow>, "N.A.")
+ *   RATIO!H        = IFERROR((F-G)/G, "N.A.")              (variance, %)
  *
- * SUM formulas for multi-row ratios:
- *   Ratio 3 (DSCR)  Num TOTAL E15 = SUM(E11:E14); Den TOTAL G13 = SUM(G11:G12)
- *   Ratio 10 (ROCE) Num TOTAL E24 = SUM(E22:E23); Den TOTAL G24 = SUM(G22:G23)
- *
- * Input values are pulled from stage7_ratios.cy / .py  RatioInputs objects.
- * When ratiosData is null all input cells default to 0 and formulas still
- * evaluate to "N.A." (division by zero protection).
+ * The template uses NO fills — only thin black borders. Header band stretches
+ * across rows 6-7 of the RATIO sheet (rowspan 2). Each ratio occupies four
+ * rows on the RATIO sheet (numerator / denominator / "Text" comment /
+ * spacer), and on the CY/PY sheets uses one row + one spacer for simple
+ * ratios, or a multi-row vertically-merged block for DSCR (rows 13-18) and
+ * ROCE (rows 32-39).
  */
 
 import type ExcelJS from "exceljs";
 import type { Stage7Ratios, RatioInputs } from "./ratioAutoPopulate";
 import { getNoteNo } from "./noteNumberRegistry";
 
-// ─── Formatting ───────────────────────────────────────────────────────────────
+// ─── Formatting constants ────────────────────────────────────────────────────
 
 const MONEY_FMT  = '#,##0.00;(#,##0.00);"-"';
+const PCT_FMT    = "0.00%";
+const RATIO_FMT  = "0.00";
+
 const THIN_BLACK = { style: "thin" as const, color: { argb: "FF000000" } };
-const FULL_BDR   = { top: THIN_BLACK, bottom: THIN_BLACK, left: THIN_BLACK, right: THIN_BLACK };
-const SIDE_BDR   = { left: THIN_BLACK, right: THIN_BLACK };
-const TOP_BDR    = { top: THIN_BLACK, left: THIN_BLACK, right: THIN_BLACK };
-const BOT_BDR    = { bottom: THIN_BLACK, left: THIN_BLACK, right: THIN_BLACK };
+const FULL_BDR   = { top: THIN_BLACK, bottom: THIN_BLACK, left: THIN_BLACK, right: THIN_BLACK } as ExcelJS.Borders;
+const SIDE_BDR   = { left: THIN_BLACK, right: THIN_BLACK } as ExcelJS.Borders;
+const TOP_SIDE   = { top: THIN_BLACK, left: THIN_BLACK, right: THIN_BLACK } as ExcelJS.Borders;
+const BOT_SIDE   = { bottom: THIN_BLACK, left: THIN_BLACK, right: THIN_BLACK } as ExcelJS.Borders;
 
-const HEAD_FILL: ExcelJS.Fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9E1F2" } };
-const SUB_FILL:  ExcelJS.Fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEFF2FF" } };
-const TOT_FILL:  ExcelJS.Fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2EFDA" } };
-
-// ─── Context ──────────────────────────────────────────────────────────────────
+const FONT       = "Cambria";
 
 interface Ctx {
   cyYear:      number;
@@ -50,81 +48,89 @@ interface Ctx {
   companyName: string;
 }
 
-// ─── Column definitions ───────────────────────────────────────────────────────
+// Number of rows per ratio block on the RATIO sheet (num / den / text / spacer)
+const RATIO_BLOCK_ROWS = 4;
+// First ratio row on the RATIO sheet (after the header band rows 6-7)
+const RATIO_FIRST_ROW  = 8;
 
-/** "Current Year " / "Previous Year " sheets: A-H */
-const CY_COLS: Partial<ExcelJS.Column>[] = [
-  { width: 2.0  },   // A  spacer
-  { width: 5.0  },   // B  NO
-  { width: 24.0 },   // C  PARTICULARS
-  { width: 29.0 },   // D  NUMERATOR label
-  { width: 16.0 },   // E  Amount (Rs.) — numerator
-  { width: 29.0 },   // F  DENOMINATOR label
-  { width: 16.0 },   // G  Amount (Rs.) — denominator
-  { width: 11.0 },   // H  Ratio
-];
+// ─── Column widths (match template Ratio.xlsx) ───────────────────────────────
 
-/** RATIO sheet: A-H */
+/**
+ * RATIO summary sheet — A through I.
+ * From Ratio.xlsx: A=1.71, B=5.0, C=18.0, D=27.57, E=13.71, F=12.14, G=12.29, H=10, I=1.71
+ */
 const RAT_COLS: Partial<ExcelJS.Column>[] = [
-  { width: 2.0  },   // A  spacer
-  { width: 5.0  },   // B  NO
-  { width: 24.0 },   // C  PARTICULARS (ratio name)
-  { width: 32.0 },   // D  NUMERATOR / DENOMINATOR label
-  { width: 16.0 },   // E  Amount (Rs.)
-  { width: 11.0 },   // F  CY Ratio
-  { width: 11.0 },   // G  PY Ratio
-  { width: 12.0 },   // H  Variance
+  { width: 1.71  }, // A spacer
+  { width: 5.0   }, // B NO
+  { width: 18.0  }, // C PARTICULARS
+  { width: 27.57 }, // D NUMERATOR / DENOMINATOR
+  { width: 13.71 }, // E Amount (Rs.)
+  { width: 12.14 }, // F Current Year ratio
+  { width: 12.29 }, // G Previous Year ratio
+  { width: 10.0  }, // H Variance
+  { width: 1.71  }, // I spacer
 ];
 
-// ─── Row map for "Current Year " / "Previous Year " sheets ───────────────────
-//
-//  Rows 1-8  = headers + column-header row
-//  Row 9     = Ratio 1  (Current Ratio) — 1 row
-//  Row 10    = Ratio 2  (Debt-Equity)   — 1 row
-//  Rows 11-15 = Ratio 3 (DSCR)         — 5 rows (4 num inputs + num TOTAL; 2 den inputs + den TOTAL + 2 blanks)
-//  Row 16    = Ratio 4  (ROE)           — 1 row
-//  Row 17    = Ratio 5  (Inventory)     — 1 row
-//  Row 18    = Ratio 6  (Trade Rec)     — 1 row
-//  Row 19    = Ratio 7  (Trade Pay)     — 1 row
-//  Row 20    = Ratio 8  (Net Capital)   — 1 row
-//  Row 21    = Ratio 9  (Net Profit)    — 1 row
-//  Rows 22-24 = Ratio 10 (ROCE)        — 3 rows (2 inputs + TOTAL each side)
-//  Row 25    = Ratio 11 (ROI)           — 1 row
+/**
+ * Current Year / Previous Year sheets — A through H.
+ * From Ratio.xlsx: A=2.43, B=6.86, C=34.29, D=37.71, E=14.29, F=34.14, G=14.57, H=12.71
+ */
+const CY_COLS: Partial<ExcelJS.Column>[] = [
+  { width: 2.43  }, // A spacer
+  { width: 6.86  }, // B NO
+  { width: 34.29 }, // C PARTICULARS
+  { width: 37.71 }, // D NUMERATOR
+  { width: 14.29 }, // E Amount (Rs.)
+  { width: 34.14 }, // F DENOMINATOR
+  { width: 14.57 }, // G Amount (Rs.)
+  { width: 12.71 }, // H Ratio
+];
+
+// ─── Layout map ─────────────────────────────────────────────────────────────
 
 interface RatioLayout {
-  id:        number;
-  name:      string;
-  unit:      "times" | "%";
-  // CY/PY sheet: row that holds the RATIO formula in col H (and amounts in E, G)
-  cyRow:     number;
-  // For multi-row ratios, the num total row and den total row differ from cyRow
-  numTotRow: number;   // row of E (numerator amount or TOTAL)
-  denTotRow: number;   // row of G (denominator amount or TOTAL)
+  id:           number;
+  name:         string;
+  unit:         "times" | "%";
+  /** CY/PY sheet: row that holds the ratio formula (col H) */
+  cyRow:        number;
+  /** CY/PY sheet: row that holds the numerator total amount (col E) */
+  numTotRow:    number;
+  /** CY/PY sheet: row that holds the denominator total amount (col G) */
+  denTotRow:    number;
 }
 
+/**
+ * Row layout matches the template:
+ *   Row  9  → Ratio 1 (Current Ratio)         + blank row 10
+ *   Row 11  → Ratio 2 (Debt-Equity)           + blank row 12
+ *   Rows 13-18  → Ratio 3 (DSCR, merged) — TOTAL on row 18
+ *   Row 19  → blank
+ *   Row 20  → Ratio 4 (ROE)                   + blank row 21
+ *   Row 22  → Ratio 5 (Inventory)             + blank row 23
+ *   Row 24  → Ratio 6 (Trade Receivables)     + blank row 25
+ *   Row 26  → Ratio 7 (Trade Payable)         + blank row 27
+ *   Row 28  → Ratio 8 (Net Capital)           + blank row 29
+ *   Row 30  → Ratio 9 (Net Profit)            + blank row 31
+ *   Rows 32-39 → Ratio 10 (ROCE, merged) — TOTAL on row 39
+ *   Row 40  → blank
+ *   Row 41  → Ratio 11 (ROI)
+ */
 const LAYOUTS: RatioLayout[] = [
   { id: 1,  name: "CURRENT RATIO",                    unit: "times", cyRow:  9, numTotRow:  9, denTotRow:  9 },
-  { id: 2,  name: "DEBT-EQUITY RATIO",                unit: "times", cyRow: 10, numTotRow: 10, denTotRow: 10 },
-  { id: 3,  name: "DEBT SERVICE COVERAGE RATIO",      unit: "times", cyRow: 11, numTotRow: 15, denTotRow: 13 },
-  { id: 4,  name: "RETURN ON EQUITY RATIO",           unit: "%",     cyRow: 16, numTotRow: 16, denTotRow: 16 },
-  { id: 5,  name: "INVENTORY TURNOVER RATIO",         unit: "times", cyRow: 17, numTotRow: 17, denTotRow: 17 },
-  { id: 6,  name: "TRADE RECEIVABLES TURNOVER RATIO", unit: "times", cyRow: 18, numTotRow: 18, denTotRow: 18 },
-  { id: 7,  name: "TRADE PAYABLE TURNOVER RATIO",     unit: "times", cyRow: 19, numTotRow: 19, denTotRow: 19 },
-  { id: 8,  name: "NET CAPITAL TURNOVER RATIO",       unit: "times", cyRow: 20, numTotRow: 20, denTotRow: 20 },
-  { id: 9,  name: "NET PROFIT RATIO",                 unit: "%",     cyRow: 21, numTotRow: 21, denTotRow: 21 },
-  { id: 10, name: "RETURN ON CAPITAL EMPLOYED",       unit: "%",     cyRow: 22, numTotRow: 24, denTotRow: 24 },
-  { id: 11, name: "RETURN ON INVESTMENT",             unit: "%",     cyRow: 25, numTotRow: 25, denTotRow: 25 },
+  { id: 2,  name: "DEBT-EQUITY RATIO",                unit: "times", cyRow: 11, numTotRow: 11, denTotRow: 11 },
+  { id: 3,  name: "DEBT SERVICE COVERAGE RATIO",      unit: "times", cyRow: 18, numTotRow: 18, denTotRow: 18 },
+  { id: 4,  name: "RETURN ON EQUITY RATIO",           unit: "%",     cyRow: 20, numTotRow: 20, denTotRow: 20 },
+  { id: 5,  name: "INVENTORY TURNOVER RATIO",         unit: "times", cyRow: 22, numTotRow: 22, denTotRow: 22 },
+  { id: 6,  name: "TRADE RECEIVABLES TURNOVER RATIO", unit: "times", cyRow: 24, numTotRow: 24, denTotRow: 24 },
+  { id: 7,  name: "TRADE PAYABLE TURNOVER RATIO",     unit: "times", cyRow: 26, numTotRow: 26, denTotRow: 26 },
+  { id: 8,  name: "NET CAPITAL TURNOVER RATIO",       unit: "times", cyRow: 28, numTotRow: 28, denTotRow: 28 },
+  { id: 9,  name: "NET PROFIT RATIO",                 unit: "%",     cyRow: 30, numTotRow: 30, denTotRow: 30 },
+  { id: 10, name: "RETURN ON CAPITAL EMPLOYED",       unit: "%",     cyRow: 39, numTotRow: 39, denTotRow: 39 },
+  { id: 11, name: "RETURN ON INVESTMENT",             unit: "%",     cyRow: 41, numTotRow: 41, denTotRow: 41 },
 ];
 
-// RATIO sheet: each ratio occupies 2 data rows + 1 commentary row = 3 rows
-// Ratio 1 starts at row 8 (7 header rows above)
-const RATIO_HDR_ROWS = 7;
-function ratioSheetRow(ratioId: number): number {
-  return RATIO_HDR_ROWS + 1 + (ratioId - 1) * 3;  // numerator row
-}
-// denominator row = ratioSheetRow + 1; commentary row = ratioSheetRow + 2
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function v(inputs: RatioInputs | null, field: keyof RatioInputs): number {
   if (!inputs) return 0;
@@ -132,728 +138,575 @@ function v(inputs: RatioInputs | null, field: keyof RatioInputs): number {
   return typeof val === "number" && Number.isFinite(val) ? val : 0;
 }
 
-function formula(f: string): ExcelJS.CellFormulaValue {
-  return { formula: f, result: 0 } as ExcelJS.CellFormulaValue;
+function f(formula: string): ExcelJS.CellFormulaValue {
+  return { formula, result: 0 } as ExcelJS.CellFormulaValue;
 }
 
-function pct(unit: "times" | "%"): boolean { return unit === "%"; }
-
-// ─── Ratio formula for CY/PY sheet col H ─────────────────────────────────────
-// Multiples by 100 for % ratios so Excel displays the same value as the UI.
-function ratioFormula(numCell: string, denCell: string, unit: "times" | "%"): ExcelJS.CellFormulaValue {
-  const calc = pct(unit)
-    ? `IFERROR(${numCell}/${denCell}*100,"N.A.")`
-    : `IFERROR(${numCell}/${denCell},"N.A.")`;
-  return formula(calc);
+function fyStr(yearEnd: number): string {
+  return `${yearEnd - 1}-${String(yearEnd).slice(-2)}`;
 }
 
-function mergeWrite(
+function applyFont(cell: ExcelJS.Cell, opts: { bold?: boolean; italic?: boolean; size?: number } = {}) {
+  cell.font = { name: FONT, size: opts.size ?? 10, bold: !!opts.bold, italic: !!opts.italic };
+}
+
+/**
+ * Iterate every cell within a `<startCol,startRow>:<endCol,endRow>` rect and
+ * call the visitor. Used to clear borders on slave cells of a merge so
+ * Excel doesn't render internal divider lines between merged cells.
+ */
+function forEachCellInRange(
   ws: ExcelJS.Worksheet,
-  range: string,
-  value: string | ExcelJS.CellFormulaValue | number,
-  style: Partial<ExcelJS.Style> = {},
-) {
-  ws.mergeCells(range);
-  const cell = ws.getCell(range.split(":")[0]);
-  cell.value = value;
-  Object.assign(cell, style);
+  startRow: number, startCol: number,
+  endRow:   number, endCol:   number,
+  fn: (cell: ExcelJS.Cell) => void,
+): void {
+  for (let r = startRow; r <= endRow; r++) {
+    for (let c = startCol; c <= endCol; c++) {
+      fn(ws.getCell(r, c));
+    }
+  }
 }
 
-function setStyle(cell: ExcelJS.Cell, style: Partial<ExcelJS.Style>) {
-  Object.assign(cell, style);
+/**
+ * Clear any border styles on slave cells of a merged range. The MASTER
+ * cell (top-left) keeps its border; the others get an empty border object
+ * so Excel renders the merge as a single seamless box without internal
+ * thin divider lines between the merged cells.
+ */
+function clearSlaveBorders(
+  ws: ExcelJS.Worksheet,
+  startRow: number, startCol: number,
+  endRow:   number, endCol:   number,
+): void {
+  forEachCellInRange(ws, startRow, startCol, endRow, endCol, (cell) => {
+    if (cell.row === startRow && cell.col === startCol) return; // skip master
+    // Empty border object — neutralises any inherited or default border
+    cell.border = {} as ExcelJS.Borders;
+  });
 }
 
-// ─── Main writer ─────────────────────────────────────────────────────────────
+// ─── Public entry ────────────────────────────────────────────────────────────
 
 export function writeRatiosSheets(
   wb:   ExcelJS.Workbook,
   ctx:  Ctx,
   data: Stage7Ratios | null,
 ): void {
-  const noteNo = getNoteNo("ratios") ?? 31;
+  const noteNo = getNoteNo("ratios") ?? 22;
 
+  // Sheet order MUST match the template: RATIO first, then Current Year,
+  // then Previous Year. Cross-sheet formulas in RATIO reference the other
+  // sheets by name so resolve order doesn't matter — only display order.
+  writeRatioSheet(wb, ctx, data, noteNo);
   writeCYSheet(wb, ctx, data, noteNo);
   writePYSheet(wb, ctx, data, noteNo);
-  writeRatioSheet(wb, ctx, data, noteNo);   // RATIO last (cross-refs CY/PY)
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// "Current Year " sheet
-// ═════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
+// CY / PY sheet writers
+// ════════════════════════════════════════════════════════════════════════════
 
-function writeCYSheet(
-  wb:     ExcelJS.Workbook,
-  ctx:    Ctx,
-  data:   Stage7Ratios | null,
-  noteNo: number,
-): void {
+function writeCYSheet(wb: ExcelJS.Workbook, ctx: Ctx, data: Stage7Ratios | null, _noteNo: number): void {
   const ws = wb.addWorksheet("Current Year ", { views: [{ showGridLines: false }] });
   ws.columns = CY_COLS;
+  writeYearSheet(ws, ctx.companyName, ctx.cyYear, data?.cy ?? null);
+}
 
-  const inputs = data?.cy ?? null;
-  const { cyYear, pyYear, companyName } = ctx;
-  const fyStr = `${cyYear - 1}-${String(cyYear).slice(-2)}`;
+function writePYSheet(wb: ExcelJS.Workbook, ctx: Ctx, data: Stage7Ratios | null, _noteNo: number): void {
+  const ws = wb.addWorksheet("Previous Year ", { views: [{ showGridLines: false }] });
+  ws.columns = CY_COLS;
+  writeYearSheet(ws, ctx.companyName, ctx.pyYear, data?.py ?? null);
+}
 
-  // ── Header rows (1-8) ─────────────────────────────────────────────────────
-  // Row 1: Company name
-  ws.mergeCells("B1:H1");
-  const r1 = ws.getCell("B1");
-  r1.value = companyName;
-  r1.font  = { bold: true, size: 12 };
-  r1.alignment = { horizontal: "center", vertical: "middle" };
-  ws.getRow(1).height = 18;
+function writeYearSheet(ws: ExcelJS.Worksheet, companyName: string, yearEnd: number, inp: RatioInputs | null): void {
+  // ── Row 2-3: Company name (merged) ────────────────────────────────────────
+  ws.mergeCells("B2:H3");
+  const c = ws.getCell("B2");
+  c.value = companyName;
+  applyFont(c, { bold: true, size: 12 });
+  c.alignment = { horizontal: "center", vertical: "middle" };
+  clearSlaveBorders(ws, 2, 2, 3, 8);
 
-  // Row 2: Title
-  ws.mergeCells("B2:H2");
-  const r2 = ws.getCell("B2");
-  r2.value = `ANNEXURE : A (CY ${fyStr})`;
-  r2.font  = { bold: true, size: 11 };
-  r2.alignment = { horizontal: "center" };
-  ws.getRow(2).height = 16;
+  // ── Row 5-6: ANNEXURE heading (merged) ────────────────────────────────────
+  // Template wording at B5: "ANNEXURE : A (YYYY-YYYY)" — full year span.
+  // The user explicitly wants this exact heading shown.
+  ws.mergeCells("B5:H6");
+  const t = ws.getCell("B5");
+  t.value = `ANNEXURE : A (${yearEnd - 1}-${yearEnd})`;
+  applyFont(t, { bold: true, size: 11 });
+  t.alignment = { horizontal: "center", vertical: "middle" };
+  clearSlaveBorders(ws, 5, 2, 6, 8);
 
-  // Row 3: Note reference
-  ws.mergeCells("B3:H3");
-  ws.getCell("B3").value = `Note - ${noteNo} : RATIO`;
-  ws.getCell("B3").font  = { bold: true, size: 10 };
-  ws.getCell("B3").alignment = { horizontal: "center" };
-
-  // Rows 4-6: spacer / info
-  ws.getRow(4).height = 6;
-  ws.mergeCells("B5:H5");
-  ws.getCell("B5").value = `For the year ended 31st March, ${cyYear}`;
-  ws.getCell("B5").font  = { italic: true, size: 9 };
-  ws.getRow(6).height = 6;
-
-  // Row 7: Amount unit note
-  ws.mergeCells("B7:H7");
-  ws.getCell("B7").value = "(Amount in Rs.)";
-  ws.getCell("B7").font  = { italic: true, size: 9 };
-  ws.getCell("B7").alignment = { horizontal: "right" };
-
-  // Row 8: Column headers
-  writeCYColHeaders(ws, 8);
+  // ── Row 8: Header band ────────────────────────────────────────────────────
+  const r8 = ws.getRow(8);
+  r8.height = 30;
+  const hd = (col: number, val: string) => {
+    const cell = ws.getCell(8, col);
+    cell.value = val;
+    applyFont(cell, { bold: true, size: 10 });
+    cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    cell.border = FULL_BDR;
+  };
+  hd(2, "NO");
+  hd(3, "PARTICULARS");
+  hd(4, "NUMERATOR");
+  hd(5, "Amount (Rs.)");
+  hd(6, "DENOMINATOR");
+  hd(7, "Amount (Rs.)");
+  hd(8, "Ratio");
 
   // ── Data rows ─────────────────────────────────────────────────────────────
-  writeR1(ws, inputs, 9);   // Ratio 1
-  writeR2(ws, inputs, 10);  // Ratio 2
-  writeR3(ws, inputs, 11);  // Ratio 3 (DSCR, 5 rows: 11-15)
-  writeR4(ws, inputs, 16);  // Ratio 4
-  writeR5(ws, inputs, 17);  // Ratio 5
-  writeR6(ws, inputs, 18);  // Ratio 6
-  writeR7(ws, inputs, 19);  // Ratio 7
-  writeR8(ws, inputs, 20);  // Ratio 8
-  writeR9(ws, inputs, 21);  // Ratio 9
-  writeR10(ws, inputs, 22); // Ratio 10 (ROCE, 3 rows: 22-24)
-  writeR11(ws, inputs, 25); // Ratio 11
+  writeSimpleYearRow(ws,  9, "1", "CURRENT RATIO",
+    "Total Current Assets",      v(inp, "current_assets"),
+    "Total Current Liabilities", v(inp, "current_liabilities"),
+    "times");
+
+  writeSimpleYearRow(ws, 11, "2", "DEBT-EQUITY RATIO",
+    "Total Debt",           v(inp, "total_debt"),
+    "Shareholder's Equity", v(inp, "shareholders_equity"),
+    "times");
+
+  writeDscrBlock(ws, inp); // rows 13..18
+
+  writeSimpleYearRow(ws, 20, "4", "RETURN ON EQUITY RATIO",
+    "Net Profit After Tax",        v(inp, "npat"),
+    "Average Shareholders Equity", v(inp, "avg_shareholders_equity"),
+    "%");
+
+  writeSimpleYearRow(ws, 22, "5", "INVENTORY TURNOVER RATIO",
+    "Cost Of Goods Sold (Revenue from Operations)", v(inp, "revenue_ops"),
+    "Average Inventories",                          v(inp, "avg_inventories"),
+    "times");
+
+  writeSimpleYearRow(ws, 24, "6", "TRADE RECEIVABLES TURNOVER RATIO",
+    "Revenue from Operations",  v(inp, "revenue_ops"),
+    "Average Trade Receivables", v(inp, "avg_trade_receivables"),
+    "times");
+
+  writeSimpleYearRow(ws, 26, "7", "TRADE PAYABLE TURNOVER RATIO",
+    "Net Credit Purchases",   v(inp, "net_credit_purchases"),
+    "Average Trade Payables", v(inp, "avg_trade_payables"),
+    "times");
+  // Footnote off the print area in col I — matches template's I26 cell
+  const fn = ws.getCell("I26");
+  fn.value = ">> Net Credit Purchase will include both RM Purchase and Stock-in trade purchase";
+  applyFont(fn, { italic: true, size: 8 });
+  fn.alignment = { wrapText: true, vertical: "middle" };
+
+  writeSimpleYearRow(ws, 28, "8", "NET CAPITAL TURNOVER RATIO",
+    "Revenue from Operations", v(inp, "revenue_ops"),
+    "Working Capital",         v(inp, "working_capital"),
+    "times");
+
+  writeSimpleYearRow(ws, 30, "9", "NET PROFIT RATIO",
+    "Net Profit After Tax",    v(inp, "npat"),
+    "Revenue from Operations", v(inp, "revenue_ops"),
+    "%");
+
+  writeRoceBlock(ws, inp); // rows 32..39
+
+  writeSimpleYearRow(ws, 41, "11", "RETURN ON INVESTMENT",
+    "Return / Profit / Earning", v(inp, "return_profit"),
+    "Average Investment Fund",   v(inp, "avg_investment_fund"),
+    "%");
 }
 
-// ─── Column header row ────────────────────────────────────────────────────────
-
-function writeCYColHeaders(ws: ExcelJS.Worksheet, row: number): void {
-  const r = ws.getRow(row);
-  r.height = 28;
-
-  const hdStyle = (col: number, val: string) => {
-    const c = ws.getCell(row, col);
-    c.value = val;
-    c.font  = { bold: true, size: 9 };
-    c.fill  = HEAD_FILL;
-    c.border = FULL_BDR as ExcelJS.Borders;
-    c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-  };
-
-  hdStyle(2, "NO");
-  hdStyle(3, "PARTICULARS");
-  hdStyle(4, "NUMERATOR");
-  hdStyle(5, "Amount (Rs.)");
-  hdStyle(6, "DENOMINATOR");
-  hdStyle(7, "Amount (Rs.)");
-  hdStyle(8, "Ratio");
-}
-
-// ─── Per-ratio writers for "Current Year " / "Previous Year " ────────────────
-
-/** Write one simple ratio row (single num + single den on same Excel row). */
-function writeSimpleRow(
+/** One simple ratio row + blank spacer underneath. */
+function writeSimpleYearRow(
   ws:        ExcelJS.Worksheet,
-  inputs:    RatioInputs | null,
   r:         number,
   no:        string,
   name:      string,
   numLabel:  string,
-  numField:  keyof RatioInputs,
+  numAmt:    number,
   denLabel:  string,
-  denField:  keyof RatioInputs,
+  denAmt:    number,
   unit:      "times" | "%",
-  footnote?: string,
 ): void {
-  const row   = ws.getRow(r);
-  row.height  = 18;
+  ws.getRow(r).height = 18;
 
-  const no_c  = ws.getCell(r, 2);
-  const nm_c  = ws.getCell(r, 3);
-  const nl_c  = ws.getCell(r, 4);
-  const na_c  = ws.getCell(r, 5);
-  const dl_c  = ws.getCell(r, 6);
-  const da_c  = ws.getCell(r, 7);
-  const rt_c  = ws.getCell(r, 8);
+  const setCell = (col: number, value: any, opts: { bold?: boolean; align?: ExcelJS.Alignment["horizontal"]; numFmt?: string } = {}) => {
+    const cell = ws.getCell(r, col);
+    cell.value = value;
+    applyFont(cell, { bold: opts.bold, size: 10 });
+    cell.alignment = { horizontal: opts.align ?? "left", vertical: "middle", wrapText: true };
+    if (opts.numFmt) cell.numFmt = opts.numFmt;
+    cell.border = FULL_BDR;
+  };
 
-  no_c.value = no;
-  no_c.font  = { bold: true, size: 9 };
-  no_c.alignment = { horizontal: "center", vertical: "middle" };
-  no_c.border = FULL_BDR as ExcelJS.Borders;
+  setCell(2, no,        { bold: true,  align: "center" });
+  setCell(3, name,      { bold: true,  align: "left"   });
+  setCell(4, numLabel,  { align: "left"   });
+  setCell(5, numAmt,    { align: "right", numFmt: MONEY_FMT });
+  setCell(6, denLabel,  { align: "left"   });
+  setCell(7, denAmt,    { align: "right", numFmt: MONEY_FMT });
 
-  nm_c.value = footnote ? `${name}\n${footnote}` : name;
-  nm_c.font  = { bold: true, size: 9 };
-  nm_c.alignment = { wrapText: true, vertical: "middle" };
-  nm_c.border = FULL_BDR as ExcelJS.Borders;
-
-  nl_c.value = numLabel;
-  nl_c.font  = { size: 9 };
-  nl_c.alignment = { vertical: "middle", wrapText: true };
-  nl_c.border = FULL_BDR as ExcelJS.Borders;
-
-  na_c.value = v(inputs, numField);
-  na_c.numFmt = MONEY_FMT;
-  na_c.font   = { size: 9 };
-  na_c.alignment = { horizontal: "right", vertical: "middle" };
-  na_c.border = FULL_BDR as ExcelJS.Borders;
-
-  dl_c.value = denLabel;
-  dl_c.font  = { size: 9 };
-  dl_c.alignment = { vertical: "middle", wrapText: true };
-  dl_c.border = FULL_BDR as ExcelJS.Borders;
-
-  da_c.value = v(inputs, denField);
-  da_c.numFmt = MONEY_FMT;
-  da_c.font   = { size: 9 };
-  da_c.alignment = { horizontal: "right", vertical: "middle" };
-  da_c.border = FULL_BDR as ExcelJS.Borders;
-
-  rt_c.value  = ratioFormula(`E${r}`, `G${r}`, unit);
-  rt_c.numFmt = pct(unit) ? '0.00"%"' : '0.00';
-  rt_c.font   = { bold: true, size: 9 };
-  rt_c.alignment = { horizontal: "center", vertical: "middle" };
-  rt_c.border = FULL_BDR as ExcelJS.Borders;
+  // Ratio = num/den. % ratios are stored as raw decimal (template behaviour).
+  setCell(8, f(`IFERROR(E${r}/G${r}${unit === "%" ? "" : ""},"N.A.")`),
+    { bold: true, align: "center", numFmt: unit === "%" ? PCT_FMT : RATIO_FMT });
 }
 
-// Ratio 1 — Current Ratio
-function writeR1(ws: ExcelJS.Worksheet, inp: RatioInputs | null, startRow: number): void {
-  writeSimpleRow(ws, inp, startRow, "1", "CURRENT RATIO",
-    "Total Current Assets",      "current_assets",
-    "Total Current Liabilities", "current_liabilities",
-    "times");
+/** DSCR ratio — rows 13..18 (B13:B18 / C13:C18 merged). */
+function writeDscrBlock(ws: ExcelJS.Worksheet, inp: RatioInputs | null): void {
+  const r0 = 13;
+  // Merge NO + PARTICULARS for the whole block
+  ws.mergeCells(`B${r0}:B${r0 + 5}`);
+  ws.mergeCells(`C${r0}:C${r0 + 5}`);
+
+  const noC = ws.getCell(r0, 2);
+  noC.value = "3";
+  applyFont(noC, { bold: true, size: 10 });
+  noC.alignment = { horizontal: "center", vertical: "middle" };
+  noC.border = FULL_BDR;
+
+  const nmC = ws.getCell(r0, 3);
+  nmC.value = "DEBT SERVICE COVERAGE RATIO";
+  applyFont(nmC, { bold: true, size: 10 });
+  nmC.alignment = { horizontal: "left", vertical: "middle", wrapText: true };
+  nmC.border = FULL_BDR;
+
+  clearSlaveBorders(ws, r0, 2, r0 + 5, 2);
+  clearSlaveBorders(ws, r0, 3, r0 + 5, 3);
+
+  // Header row (r0): NUM and DEN section labels in cols D, F
+  setLabel(ws, r0, 4, "EARNING AVAILABLE FOR DEBT SERVICE", { bold: true, italic: true });
+  setLabel(ws, r0, 6, "DEBT SERVICE",                       { bold: true, italic: true });
+  emptyAmt(ws, r0, 5);
+  emptyAmt(ws, r0, 7);
+  // Ratio cell on TOTAL row only
+  ws.getCell(r0, 8).border = FULL_BDR;
+
+  // Detail rows
+  // r0+1: Net Profit After Taxes      | Interest & Lease Payment
+  // r0+2: Non Cash Operating Expenses | Principal Repayments
+  // r0+3: Interest                    | (blank)
+  // r0+4: Other Non Cash Adjustment   | (blank)
+  // r0+5: TOTAL = SUM(E14:E17) / SUM(G14:G15)
+  setDetail(ws, r0 + 1, "Net Profit After Taxes",      v(inp, "npat"),                "Interest & Lease Payment", v(inp, "interest_lease"));
+  setDetail(ws, r0 + 2, "Non Cash Operating Expenses", v(inp, "non_cash_op_exp"),     "Principal Repayments",     v(inp, "principal_repayments"));
+  setDetail(ws, r0 + 3, "Interest",                    v(inp, "interest"),            "",                          null);
+  setDetail(ws, r0 + 4, "Other Non Cash Adjustment",   v(inp, "other_non_cash_adj"),  "",                          null);
+
+  // TOTAL row
+  setLabel(ws, r0 + 5, 4, "TOTAL", { bold: true });
+  const numTot = ws.getCell(r0 + 5, 5);
+  numTot.value = f(`SUM(E${r0 + 1}:E${r0 + 4})`);
+  numTot.numFmt = MONEY_FMT;
+  applyFont(numTot, { bold: true, size: 10 });
+  numTot.alignment = { horizontal: "right", vertical: "middle" };
+  numTot.border = FULL_BDR;
+
+  setLabel(ws, r0 + 5, 6, "TOTAL", { bold: true });
+  const denTot = ws.getCell(r0 + 5, 7);
+  denTot.value = f(`SUM(G${r0 + 1}:G${r0 + 2})`);
+  denTot.numFmt = MONEY_FMT;
+  applyFont(denTot, { bold: true, size: 10 });
+  denTot.alignment = { horizontal: "right", vertical: "middle" };
+  denTot.border = FULL_BDR;
+
+  const ratioCell = ws.getCell(r0 + 5, 8);
+  ratioCell.value = f(`IFERROR(E${r0 + 5}/G${r0 + 5},"N.A.")`);
+  ratioCell.numFmt = RATIO_FMT;
+  applyFont(ratioCell, { bold: true, size: 10 });
+  ratioCell.alignment = { horizontal: "center", vertical: "middle" };
+  ratioCell.border = FULL_BDR;
 }
 
-// Ratio 2 — Debt-Equity Ratio
-function writeR2(ws: ExcelJS.Worksheet, inp: RatioInputs | null, startRow: number): void {
-  writeSimpleRow(ws, inp, startRow, "2", "DEBT-EQUITY RATIO",
-    "Total Debt",           "total_debt",
-    "Shareholder's Equity", "shareholders_equity",
-    "times");
+/** ROCE ratio — rows 32..39 (B32:B39 / C32:C39 merged). */
+function writeRoceBlock(ws: ExcelJS.Worksheet, inp: RatioInputs | null): void {
+  const r0 = 32;
+  ws.mergeCells(`B${r0}:B${r0 + 7}`);
+  ws.mergeCells(`C${r0}:C${r0 + 7}`);
+
+  const noC = ws.getCell(r0, 2);
+  noC.value = "10";
+  applyFont(noC, { bold: true, size: 10 });
+  noC.alignment = { horizontal: "center", vertical: "middle" };
+  noC.border = FULL_BDR;
+
+  const nmC = ws.getCell(r0, 3);
+  nmC.value = "RETURN ON CAPITAL EMPLOYED";
+  applyFont(nmC, { bold: true, size: 10 });
+  nmC.alignment = { horizontal: "left", vertical: "middle", wrapText: true };
+  nmC.border = FULL_BDR;
+
+  clearSlaveBorders(ws, r0, 2, r0 + 7, 2);
+  clearSlaveBorders(ws, r0, 3, r0 + 7, 3);
+
+  setLabel(ws, r0, 4, "EARNINGS BEFORE INTEREST AND TAXES", { bold: true, italic: true });
+  setLabel(ws, r0, 6, "CAPITAL EMPLOYED",                   { bold: true, italic: true });
+  emptyAmt(ws, r0, 5);
+  emptyAmt(ws, r0, 7);
+  ws.getCell(r0, 8).border = FULL_BDR;
+
+  // Detail rows
+  // r0+1: NET PROFIT BEFORE TAX | NET WORTH
+  // r0+2: INTEREST              | LONG-TERM BORROWINGS
+  // r0+3..r0+6: blank reserved rows
+  // r0+7: TOTAL = SUM(E33:E38) / SUM(G33:G38)
+  setDetail(ws, r0 + 1, "Net Profit Before Tax", v(inp, "npbt"),     "Net Worth",            v(inp, "net_worth"));
+  setDetail(ws, r0 + 2, "Interest",              v(inp, "interest"), "Long-Term Borrowings", v(inp, "lt_borrowings"));
+  for (let i = 3; i <= 6; i++) setDetail(ws, r0 + i, "", null, "", null);
+
+  setLabel(ws, r0 + 7, 4, "TOTAL", { bold: true });
+  const numTot = ws.getCell(r0 + 7, 5);
+  numTot.value = f(`SUM(E${r0 + 1}:E${r0 + 6})`);
+  numTot.numFmt = MONEY_FMT;
+  applyFont(numTot, { bold: true, size: 10 });
+  numTot.alignment = { horizontal: "right", vertical: "middle" };
+  numTot.border = FULL_BDR;
+
+  setLabel(ws, r0 + 7, 6, "TOTAL", { bold: true });
+  const denTot = ws.getCell(r0 + 7, 7);
+  denTot.value = f(`SUM(G${r0 + 1}:G${r0 + 6})`);
+  denTot.numFmt = MONEY_FMT;
+  applyFont(denTot, { bold: true, size: 10 });
+  denTot.alignment = { horizontal: "right", vertical: "middle" };
+  denTot.border = FULL_BDR;
+
+  const ratioCell = ws.getCell(r0 + 7, 8);
+  ratioCell.value = f(`IFERROR(E${r0 + 7}/G${r0 + 7},"N.A.")`);
+  ratioCell.numFmt = PCT_FMT;
+  applyFont(ratioCell, { bold: true, size: 10 });
+  ratioCell.alignment = { horizontal: "center", vertical: "middle" };
+  ratioCell.border = FULL_BDR;
 }
 
-// Ratio 3 — DSCR (5 rows: rows startRow..startRow+4)
-// Row layout:
-//   +0: NPAT (num)          | Interest & Lease Payment (den)
-//   +1: Non Cash Op Exp     | Principal Repayments
-//   +2: Interest            | TOTAL DEN  = SUM(G+0:G+1)
-//   +3: Other Non Cash Adj  | (blank)
-//   +4: TOTAL NUM = SUM(E+0:E+3) | (blank) | Ratio = IFERROR(E+4/G+2,"N.A.")
-function writeR3(ws: ExcelJS.Worksheet, inp: RatioInputs | null, startRow: number): void {
-  const r = startRow;
-  const ht = 16;
-
-  type RowDef = [
-    numLabel: string, numField: keyof RatioInputs | null,
-    denLabel: string, denField: keyof RatioInputs | null
-  ];
-
-  const rows: RowDef[] = [
-    ["Net Profit After Taxes",      "npat",              "Interest & Lease Payment", "interest_lease"],
-    ["Non Cash Operating Expenses", "non_cash_op_exp",   "Principal Repayments",     "principal_repayments"],
-    ["Interest",                    "interest",          "TOTAL",                    null],
-    ["Other Non Cash Adjustment",   "other_non_cash_adj",null,                       null],
-    ["TOTAL",                       null,                null,                       null],
-  ];
-
-  rows.forEach(([nl, nf, dl, df], i) => {
-    const ri = r + i;
-    ws.getRow(ri).height = ht;
-
-    // NO and PARTICULARS only on first sub-row
-    if (i === 0) {
-      const no_c = ws.getCell(ri, 2);
-      no_c.value = "3";
-      no_c.font  = { bold: true, size: 9 };
-      no_c.alignment = { horizontal: "center", vertical: "middle" };
-      no_c.border = TOP_BDR as ExcelJS.Borders;
-
-      const nm_c = ws.getCell(ri, 3);
-      nm_c.value = "DEBT SERVICE COVERAGE RATIO";
-      nm_c.font  = { bold: true, size: 9 };
-      nm_c.alignment = { vertical: "top", wrapText: true };
-      nm_c.border = TOP_BDR as ExcelJS.Borders;
-    } else if (i < 4) {
-      ws.getCell(ri, 2).border = SIDE_BDR as ExcelJS.Borders;
-      ws.getCell(ri, 3).border = SIDE_BDR as ExcelJS.Borders;
-    } else {
-      // last row: close borders
-      ws.getCell(ri, 2).border = BOT_BDR as ExcelJS.Borders;
-      ws.getCell(ri, 3).border = BOT_BDR as ExcelJS.Borders;
-    }
-
-    // Numerator label
-    const nl_c = ws.getCell(ri, 4);
-    const isNumTot = nf === null;
-    nl_c.value = nl;
-    nl_c.font  = { bold: isNumTot, size: 9 };
-    nl_c.fill  = isNumTot ? TOT_FILL : undefined as any;
-    nl_c.alignment = { vertical: "middle", wrapText: true };
-    nl_c.border = FULL_BDR as ExcelJS.Borders;
-
-    // Numerator amount
-    const na_c = ws.getCell(ri, 5);
-    if (nf !== null) {
-      na_c.value  = v(inp, nf);
-      na_c.numFmt = MONEY_FMT;
-    } else {
-      // TOTAL = SUM(E(r)..E(r+3))
-      na_c.value  = formula(`SUM(E${r}:E${r + 3})`);
-      na_c.numFmt = MONEY_FMT;
-      na_c.font   = { bold: true, size: 9 };
-      na_c.fill   = TOT_FILL;
-    }
-    na_c.alignment = { horizontal: "right", vertical: "middle" };
-    na_c.border = FULL_BDR as ExcelJS.Borders;
-
-    // Denominator label
-    const dl_c = ws.getCell(ri, 6);
-    if (dl) {
-      const isDenTot = df === null && dl === "TOTAL";
-      dl_c.value = dl;
-      dl_c.font  = { bold: isDenTot, size: 9 };
-      dl_c.fill  = isDenTot ? TOT_FILL : undefined as any;
-    }
-    dl_c.alignment = { vertical: "middle", wrapText: true };
-    dl_c.border = FULL_BDR as ExcelJS.Borders;
-
-    // Denominator amount
-    const da_c = ws.getCell(ri, 7);
-    if (df !== null) {
-      da_c.value  = v(inp, df);
-      da_c.numFmt = MONEY_FMT;
-    } else if (dl === "TOTAL") {
-      // TOTAL den = SUM(G(r)..G(r+1))
-      da_c.value  = formula(`SUM(G${r}:G${r + 1})`);
-      da_c.numFmt = MONEY_FMT;
-      da_c.font   = { bold: true, size: 9 };
-      da_c.fill   = TOT_FILL;
-    }
-    da_c.alignment = { horizontal: "right", vertical: "middle" };
-    da_c.border = FULL_BDR as ExcelJS.Borders;
-
-    // Ratio formula — only on the TOTAL row (last row)
-    if (i === 4) {
-      const rt_c = ws.getCell(ri, 8);
-      // numTotRow = r+4 (col E), denTotRow = r+2 (col G)
-      rt_c.value  = formula(`IFERROR(E${r + 4}/G${r + 2},"N.A.")`);
-      rt_c.font   = { bold: true, size: 9 };
-      rt_c.alignment = { horizontal: "center", vertical: "middle" };
-      rt_c.border = FULL_BDR as ExcelJS.Borders;
-    } else {
-      ws.getCell(ri, 8).border = FULL_BDR as ExcelJS.Borders;
-    }
-  });
+function setLabel(ws: ExcelJS.Worksheet, r: number, c: number, val: string, opts: { bold?: boolean; italic?: boolean } = {}): void {
+  const cell = ws.getCell(r, c);
+  cell.value = val;
+  applyFont(cell, { bold: !!opts.bold, italic: !!opts.italic, size: 10 });
+  cell.alignment = { horizontal: "left", vertical: "middle", wrapText: true };
+  cell.border = FULL_BDR;
 }
 
-// Ratios 4-9: simple single-row each
-function writeR4(ws: ExcelJS.Worksheet, inp: RatioInputs | null, r: number): void {
-  writeSimpleRow(ws, inp, r, "4", "RETURN ON EQUITY RATIO",
-    "Net Profit After Tax", "npat",
-    "Average Shareholders Equity", "avg_shareholders_equity", "%");
-}
-function writeR5(ws: ExcelJS.Worksheet, inp: RatioInputs | null, r: number): void {
-  writeSimpleRow(ws, inp, r, "5", "INVENTORY TURNOVER RATIO",
-    "Cost Of Goods Sold (Revenue from Ops)", "revenue_ops",
-    "Average Inventories", "avg_inventories", "times");
-}
-function writeR6(ws: ExcelJS.Worksheet, inp: RatioInputs | null, r: number): void {
-  writeSimpleRow(ws, inp, r, "6", "TRADE RECEIVABLES TURNOVER RATIO",
-    "Revenue from Operations", "revenue_ops",
-    "Average Trade Receivables", "avg_trade_receivables", "times");
-}
-function writeR7(ws: ExcelJS.Worksheet, inp: RatioInputs | null, r: number): void {
-  writeSimpleRow(ws, inp, r, "7",
-    "TRADE PAYABLE TURNOVER RATIO\n>> Net Credit Purchase includes RM + Stock-in-trade purchase",
-    "Net Credit Purchases", "net_credit_purchases",
-    "Average Trade Payables", "avg_trade_payables", "times");
-}
-function writeR8(ws: ExcelJS.Worksheet, inp: RatioInputs | null, r: number): void {
-  writeSimpleRow(ws, inp, r, "8", "NET CAPITAL TURNOVER RATIO",
-    "Revenue from Operations", "revenue_ops",
-    "Working Capital", "working_capital", "times");
-}
-function writeR9(ws: ExcelJS.Worksheet, inp: RatioInputs | null, r: number): void {
-  writeSimpleRow(ws, inp, r, "9", "NET PROFIT RATIO",
-    "Net Profit After Tax", "npat",
-    "Revenue from Operations", "revenue_ops", "%");
+function emptyAmt(ws: ExcelJS.Worksheet, r: number, c: number): void {
+  const cell = ws.getCell(r, c);
+  cell.border = FULL_BDR;
 }
 
-// Ratio 10 — ROCE (3 rows: startRow..startRow+2)
-// Row layout:
-//   +0: NPBT (num)          | Net Worth (den)
-//   +1: Interest (num)      | LT Borrowings (den)
-//   +2: TOTAL NUM           | TOTAL DEN      | Ratio
-function writeR10(ws: ExcelJS.Worksheet, inp: RatioInputs | null, startRow: number): void {
-  const r  = startRow;
-  const ht = 16;
+function setDetail(ws: ExcelJS.Worksheet, r: number, numLabel: string, numAmt: number | null, denLabel: string, denAmt: number | null): void {
+  ws.getRow(r).height = 16;
 
-  type RowDef = [string, keyof RatioInputs | null, string, keyof RatioInputs | null];
-  const rows: RowDef[] = [
-    ["Net Profit Before Tax", "npbt",     "Net Worth",           "net_worth"],
-    ["Interest",              "interest", "Long-Term Borrowings", "lt_borrowings"],
-    ["TOTAL",                 null,       "TOTAL",               null],
-  ];
+  // Cols B/C are merged in the parent block — leave them with just side borders
+  ws.getCell(r, 2).border = SIDE_BDR;
+  ws.getCell(r, 3).border = SIDE_BDR;
 
-  rows.forEach(([nl, nf, dl, df], i) => {
-    const ri = r + i;
-    ws.getRow(ri).height = ht;
+  setLabel(ws, r, 4, numLabel);
+  const eC = ws.getCell(r, 5);
+  if (numAmt !== null) {
+    eC.value = numAmt;
+    eC.numFmt = MONEY_FMT;
+    applyFont(eC, { size: 10 });
+    eC.alignment = { horizontal: "right", vertical: "middle" };
+  }
+  eC.border = FULL_BDR;
 
-    // NO and PARTICULARS
-    if (i === 0) {
-      const no_c = ws.getCell(ri, 2);
-      no_c.value = "10";
-      no_c.font  = { bold: true, size: 9 };
-      no_c.alignment = { horizontal: "center", vertical: "middle" };
-      no_c.border = TOP_BDR as ExcelJS.Borders;
-      const nm_c = ws.getCell(ri, 3);
-      nm_c.value = "RETURN ON CAPITAL EMPLOYED";
-      nm_c.font  = { bold: true, size: 9 };
-      nm_c.alignment = { vertical: "top", wrapText: true };
-      nm_c.border = TOP_BDR as ExcelJS.Borders;
-    } else if (i === 1) {
-      ws.getCell(ri, 2).border = SIDE_BDR as ExcelJS.Borders;
-      ws.getCell(ri, 3).border = SIDE_BDR as ExcelJS.Borders;
-    } else {
-      ws.getCell(ri, 2).border = BOT_BDR as ExcelJS.Borders;
-      ws.getCell(ri, 3).border = BOT_BDR as ExcelJS.Borders;
-    }
+  setLabel(ws, r, 6, denLabel);
+  const gC = ws.getCell(r, 7);
+  if (denAmt !== null) {
+    gC.value = denAmt;
+    gC.numFmt = MONEY_FMT;
+    applyFont(gC, { size: 10 });
+    gC.alignment = { horizontal: "right", vertical: "middle" };
+  }
+  gC.border = FULL_BDR;
 
-    const isTotal = nf === null;
-
-    // Num label
-    const nl_c = ws.getCell(ri, 4);
-    nl_c.value = nl;
-    nl_c.font  = { bold: isTotal, size: 9 };
-    nl_c.fill  = isTotal ? TOT_FILL : undefined as any;
-    nl_c.alignment = { vertical: "middle" };
-    nl_c.border = FULL_BDR as ExcelJS.Borders;
-
-    // Num amount
-    const na_c = ws.getCell(ri, 5);
-    if (nf !== null) {
-      na_c.value = v(inp, nf);
-    } else {
-      na_c.value = formula(`SUM(E${r}:E${r + 1})`);
-      na_c.font  = { bold: true, size: 9 };
-      na_c.fill  = TOT_FILL;
-    }
-    na_c.numFmt = MONEY_FMT;
-    na_c.alignment = { horizontal: "right", vertical: "middle" };
-    na_c.border = FULL_BDR as ExcelJS.Borders;
-
-    // Den label
-    const dl_c = ws.getCell(ri, 6);
-    dl_c.value = dl;
-    dl_c.font  = { bold: isTotal, size: 9 };
-    dl_c.fill  = isTotal ? TOT_FILL : undefined as any;
-    dl_c.alignment = { vertical: "middle" };
-    dl_c.border = FULL_BDR as ExcelJS.Borders;
-
-    // Den amount
-    const da_c = ws.getCell(ri, 7);
-    if (df !== null) {
-      da_c.value = v(inp, df);
-    } else {
-      da_c.value = formula(`SUM(G${r}:G${r + 1})`);
-      da_c.font  = { bold: true, size: 9 };
-      da_c.fill  = TOT_FILL;
-    }
-    da_c.numFmt = MONEY_FMT;
-    da_c.alignment = { horizontal: "right", vertical: "middle" };
-    da_c.border = FULL_BDR as ExcelJS.Borders;
-
-    // Ratio (TOTAL row only)
-    if (isTotal) {
-      const rt_c = ws.getCell(ri, 8);
-      rt_c.value  = formula(`IFERROR(E${r + 2}/G${r + 2}*100,"N.A.")`);
-      rt_c.font   = { bold: true, size: 9 };
-      rt_c.alignment = { horizontal: "center", vertical: "middle" };
-      rt_c.border = FULL_BDR as ExcelJS.Borders;
-    } else {
-      ws.getCell(ri, 8).border = FULL_BDR as ExcelJS.Borders;
-    }
-  });
+  // H column placeholder border so the right column closes properly
+  ws.getCell(r, 8).border = FULL_BDR;
 }
 
-// Ratio 11 — Return On Investment
-function writeR11(ws: ExcelJS.Worksheet, inp: RatioInputs | null, r: number): void {
-  writeSimpleRow(ws, inp, r, "11", "RETURN ON INVESTMENT\nOpening + Closing Investments / 2",
-    "Return / Profit / Earning", "return_profit",
-    "Average Investment Fund",   "avg_investment_fund", "%");
-}
+// ════════════════════════════════════════════════════════════════════════════
+// RATIO summary sheet
+// ════════════════════════════════════════════════════════════════════════════
 
-// ═════════════════════════════════════════════════════════════════════════════
-// "Previous Year " sheet  (identical structure, PY inputs)
-// ═════════════════════════════════════════════════════════════════════════════
-
-function writePYSheet(
-  wb:     ExcelJS.Workbook,
-  ctx:    Ctx,
-  data:   Stage7Ratios | null,
-  noteNo: number,
-): void {
-  const ws = wb.addWorksheet("Previous Year ", { views: [{ showGridLines: false }] });
-  ws.columns = CY_COLS;
-
-  const inputs = data?.py ?? null;
-  const { cyYear, companyName } = ctx;
-  const pyYear = cyYear - 1;
-  const pyStr  = `${pyYear - 1}-${String(pyYear).slice(-2)}`;
-
-  // ── Header rows (1-8) ─────────────────────────────────────────────────────
-  ws.mergeCells("B1:H1");
-  const r1 = ws.getCell("B1");
-  r1.value = companyName;
-  r1.font  = { bold: true, size: 12 };
-  r1.alignment = { horizontal: "center", vertical: "middle" };
-  ws.getRow(1).height = 18;
-
-  ws.mergeCells("B2:H2");
-  const r2 = ws.getCell("B2");
-  r2.value = `ANNEXURE : A (PY ${pyStr})`;
-  r2.font  = { bold: true, size: 11 };
-  r2.alignment = { horizontal: "center" };
-
-  ws.mergeCells("B3:H3");
-  ws.getCell("B3").value = `Note - ${noteNo} : RATIO (Previous Year)`;
-  ws.getCell("B3").font  = { bold: true, size: 10 };
-  ws.getCell("B3").alignment = { horizontal: "center" };
-
-  ws.getRow(4).height = 6;
-  ws.mergeCells("B5:H5");
-  ws.getCell("B5").value = `For the year ended 31st March, ${pyYear}`;
-  ws.getCell("B5").font  = { italic: true, size: 9 };
-  ws.getRow(6).height = 6;
-
-  ws.mergeCells("B7:H7");
-  ws.getCell("B7").value = "(Amount in Rs.)";
-  ws.getCell("B7").font  = { italic: true, size: 9 };
-  ws.getCell("B7").alignment = { horizontal: "right" };
-
-  writeCYColHeaders(ws, 8);
-
-  // ── Data rows — same helpers as CY, bound to PY inputs ───────────────────
-  writeR1(ws, inputs, 9);
-  writeR2(ws, inputs, 10);
-  writeR3(ws, inputs, 11);
-  writeR4(ws, inputs, 16);
-  writeR5(ws, inputs, 17);
-  writeR6(ws, inputs, 18);
-  writeR7(ws, inputs, 19);
-  writeR8(ws, inputs, 20);
-  writeR9(ws, inputs, 21);
-  writeR10(ws, inputs, 22);
-  writeR11(ws, inputs, 25);
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-// "RATIO" sheet  (summary with cross-sheet formulas)
-// ═════════════════════════════════════════════════════════════════════════════
-
-function writeRatioSheet(
-  wb:     ExcelJS.Workbook,
-  ctx:    Ctx,
-  data:   Stage7Ratios | null,
-  noteNo: number,
-): void {
+function writeRatioSheet(wb: ExcelJS.Workbook, ctx: Ctx, data: Stage7Ratios | null, noteNo: number): void {
   const ws = wb.addWorksheet("RATIO", { views: [{ showGridLines: false }] });
   ws.columns = RAT_COLS;
 
-  const { cyYear, companyName } = ctx;
-  const pyYear = cyYear - 1;
-  const cyStr  = `${cyYear - 1}-${String(cyYear).slice(-2)}`;
-  const pyStr  = `${pyYear - 1}-${String(pyYear).slice(-2)}`;
+  const { cyYear, pyYear, companyName } = ctx;
 
-  // ── Header rows (1-7) ─────────────────────────────────────────────────────
-  ws.mergeCells("B1:H1");
-  const r1 = ws.getCell("B1");
-  r1.value = companyName;
-  r1.font  = { bold: true, size: 12 };
-  r1.alignment = { horizontal: "center", vertical: "middle" };
-  ws.getRow(1).height = 18;
-
+  // ── Row 2: Company name (merged B2:H2) ──────────────────────────────────
   ws.mergeCells("B2:H2");
-  const r2 = ws.getCell("B2");
-  r2.value = `NOTE - ${noteNo} : RATIO`;
-  r2.font  = { bold: true, size: 12 };
-  r2.alignment = { horizontal: "center" };
-  ws.getRow(2).height = 16;
+  const cn = ws.getCell("B2");
+  cn.value = companyName;
+  applyFont(cn, { bold: true, size: 12 });
+  cn.alignment = { horizontal: "center", vertical: "middle" };
+  clearSlaveBorders(ws, 2, 2, 2, 8);
+  ws.getRow(2).height = 22.5;
 
-  ws.getRow(3).height = 6;
+  ws.getRow(3).height = 9;
 
-  ws.mergeCells("B4:H4");
-  ws.getCell("B4").value = `For the year ended 31st March, ${cyYear}`;
-  ws.getCell("B4").font  = { italic: true, size: 9 };
+  // ── Row 4: NOTE - NN : RATIO ────────────────────────────────────────────
+  const nt = ws.getCell("B4");
+  nt.value = `NOTE - ${noteNo} : RATIO`;
+  applyFont(nt, { bold: true, size: 11 });
+  nt.alignment = { horizontal: "left", vertical: "middle" };
+  ws.getRow(4).height = 15.75;
 
-  ws.mergeCells("B5:H5");
-  ws.getCell("B5").value = "(Amount in Rs.)";
-  ws.getCell("B5").font  = { italic: true, size: 9 };
-  ws.getCell("B5").alignment = { horizontal: "right" };
+  ws.getRow(5).height = 5.25;
 
-  ws.getRow(6).height = 6;
+  // ── Rows 6-7: Header band (rowspan-2 merges) ────────────────────────────
+  ws.mergeCells("B6:B7"); ws.mergeCells("C6:C7");
+  ws.mergeCells("E6:E7"); ws.mergeCells("F6:F7");
+  ws.mergeCells("G6:G7"); ws.mergeCells("H6:H7");
 
-  // Row 7: Column headers
-  writeRatioColHeaders(ws, 7, cyStr, pyStr);
+  const hd = (cellRef: string, val: string) => {
+    const c = ws.getCell(cellRef);
+    c.value = val;
+    applyFont(c, { bold: true, size: 10 });
+    c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    c.border = FULL_BDR;
+  };
+  hd("B6", "NO");
+  hd("C6", "PARTICULARS");
+  // D6 / D7 are NOT merged — they hold "NUMERATOR" / "DENOMINATOR" stacked
+  hd("D6", "NUMERATOR");
+  hd("D7", "DENOMINATOR");
+  hd("E6", "Amount (Rs.)");
+  hd("F6", `Current Year ${fyStr(cyYear)}`);
+  hd("G6", `Previous Year ${fyStr(pyYear)}`);
+  hd("H6", "Variance");
 
-  // ── Data rows ─────────────────────────────────────────────────────────────
+  // Clear slave-cell borders so merged ranges render as one box (no
+  // internal divider line between row 6 and row 7).
+  for (const colIdx of [2, 3, 5, 6, 7, 8]) {
+    clearSlaveBorders(ws, 6, colIdx, 7, colIdx);
+  }
+
+  ws.getRow(6).height = 20.25;
+  ws.getRow(7).height = 20.25;
+
+  // ── Ratio data blocks ───────────────────────────────────────────────────
   LAYOUTS.forEach((lay) => {
-    const numSheetRow = ratioSheetRow(lay.id);    // RATIO sheet row for numerator
-    const denSheetRow = numSheetRow + 1;          // RATIO sheet row for denominator
-    const cmtSheetRow = numSheetRow + 2;          // RATIO sheet text/commentary row
+    const numRow = RATIO_FIRST_ROW + (lay.id - 1) * RATIO_BLOCK_ROWS; // num + den + text + spacer
+    const denRow = numRow + 1;
+    const txtRow = numRow + 2;
+    const spcRow = numRow + 3;
 
-    const cmt = data?.commentary.find(c => c.ratioId === lay.id)?.text ?? "";
+    const cmt = data?.commentary?.find((c) => c.ratioId === lay.id)?.text ?? "";
 
-    writeRatioDataRows(
-      ws, lay, numSheetRow, denSheetRow, cmtSheetRow, cmt,
-    );
+    writeRatioBlock(ws, lay, numRow, denRow, txtRow, spcRow, cmt);
   });
 }
 
-// ─── RATIO sheet column headers ───────────────────────────────────────────────
-
-function writeRatioColHeaders(ws: ExcelJS.Worksheet, row: number, cyStr: string, pyStr: string): void {
-  ws.getRow(row).height = 30;
-
-  const hd = (col: number, val: string) => {
-    const c = ws.getCell(row, col);
-    c.value = val;
-    c.font  = { bold: true, size: 9 };
-    c.fill  = HEAD_FILL;
-    c.border = FULL_BDR as ExcelJS.Borders;
-    c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-  };
-
-  hd(2, "NO");
-  hd(3, "PARTICULARS");
-  hd(4, "NUMERATOR / DENOMINATOR");
-  hd(5, "Amount (Rs.)");
-  hd(6, `CY ${cyStr}`);
-  hd(7, `PY ${pyStr}`);
-  hd(8, "Variance");
-}
-
-// ─── Write one ratio's rows in the RATIO sheet ────────────────────────────────
-
-function writeRatioDataRows(
-  ws:          ExcelJS.Worksheet,
-  lay:         RatioLayout,
-  numRow:      number,
-  denRow:      number,
-  cmtRow:      number,
-  commentary:  string,
+/** Write one ratio's 4-row block on the RATIO sheet. */
+function writeRatioBlock(
+  ws:    ExcelJS.Worksheet,
+  lay:   RatioLayout,
+  numR:  number,
+  denR:  number,
+  txtR:  number,
+  spcR:  number,
+  cmt:   string,
 ): void {
-  ws.getRow(numRow).height = 16;
-  ws.getRow(denRow).height = 16;
-  ws.getRow(cmtRow).height = 22;
+  ws.getRow(numR).height = 16;
+  ws.getRow(denR).height = 16;
+  ws.getRow(txtR).height = 18;
+  ws.getRow(spcR).height = 5;
 
-  // ── Numerator row ─────────────────────────────────────────────────────────
   const cySheet = "Current Year ";
   const pySheet = "Previous Year ";
 
-  // Column B (NO) — rowspan 2
-  const no_c = ws.getCell(numRow, 2);
-  no_c.value = lay.id;
-  no_c.font  = { bold: true, size: 9 };
-  no_c.alignment = { horizontal: "center", vertical: "middle" };
-  no_c.border = TOP_BDR as ExcelJS.Borders;
+  // ── Col B (NO) & C (PARTICULARS) — merged across num + den rows ─────────
+  ws.mergeCells(`B${numR}:B${denR}`);
+  ws.mergeCells(`C${numR}:C${denR}`);
 
-  // Column C (PARTICULARS) — rowspan 2
-  const nm_c = ws.getCell(numRow, 3);
-  nm_c.value = lay.name;
-  nm_c.font  = { bold: true, size: 9 };
-  nm_c.alignment = { vertical: "middle", wrapText: true };
-  nm_c.border = TOP_BDR as ExcelJS.Borders;
+  const noC = ws.getCell(numR, 2);
+  noC.value = lay.id;
+  applyFont(noC, { bold: true, size: 10 });
+  noC.alignment = { horizontal: "center", vertical: "middle" };
+  noC.border = FULL_BDR;
 
-  // Column D (NUMERATOR label) — cross-sheet ref to CY col D
-  const numl_c = ws.getCell(numRow, 4);
-  numl_c.value = formula(`'${cySheet}'!D${lay.cyRow}`);
-  numl_c.font  = { size: 9 };
-  numl_c.alignment = { vertical: "middle", wrapText: true };
-  numl_c.border = FULL_BDR as ExcelJS.Borders;
+  const nmC = ws.getCell(numR, 3);
+  nmC.value = lay.name;
+  applyFont(nmC, { bold: true, size: 10 });
+  nmC.alignment = { horizontal: "left", vertical: "middle", wrapText: true };
+  nmC.border = FULL_BDR;
 
-  // Column E (Amount Rs.) — cross-sheet ref to CY col E (num total row)
-  const numa_c = ws.getCell(numRow, 5);
-  numa_c.value  = formula(`'${cySheet}'!E${lay.numTotRow}`);
-  numa_c.numFmt = MONEY_FMT;
-  numa_c.font   = { size: 9 };
-  numa_c.alignment = { horizontal: "right", vertical: "middle" };
-  numa_c.border = FULL_BDR as ExcelJS.Borders;
+  clearSlaveBorders(ws, numR, 2, denR, 2);
+  clearSlaveBorders(ws, numR, 3, denR, 3);
 
-  // Column F (CY Ratio) — spans num+den rows; ref to CY col H
-  const cyr_c = ws.getCell(numRow, 6);
-  cyr_c.value  = formula(`IFERROR('${cySheet}'!H${lay.numTotRow},"N.A.")`);
-  cyr_c.font   = { bold: true, size: 9 };
-  cyr_c.fill   = SUB_FILL;
-  cyr_c.alignment = { horizontal: "center", vertical: "middle" };
-  cyr_c.border = TOP_BDR as ExcelJS.Borders;
+  // ── Col D (numerator label) — top half ──────────────────────────────────
+  const numLbl = ws.getCell(numR, 4);
+  numLbl.value = f(`+'${cySheet}'!D${lay.cyRow}`);
+  applyFont(numLbl, { size: 10 });
+  numLbl.alignment = { horizontal: "left", vertical: "middle", wrapText: true };
+  numLbl.border = FULL_BDR;
 
-  // Column G (PY Ratio) — ref to PY col H
-  const pyr_c = ws.getCell(numRow, 7);
-  pyr_c.value  = formula(`IFERROR('${pySheet}'!H${lay.numTotRow},"N.A.")`);
-  pyr_c.font   = { bold: true, size: 9 };
-  pyr_c.fill   = SUB_FILL;
-  pyr_c.alignment = { horizontal: "center", vertical: "middle" };
-  pyr_c.border = TOP_BDR as ExcelJS.Borders;
+  // ── Col D (denominator label) — bottom half ─────────────────────────────
+  const denLbl = ws.getCell(denR, 4);
+  denLbl.value = f(`+'${cySheet}'!F${lay.cyRow}`);
+  applyFont(denLbl, { size: 10 });
+  denLbl.alignment = { horizontal: "left", vertical: "middle", wrapText: true };
+  denLbl.border = FULL_BDR;
 
-  // Column H (Variance) — (CY-PY)/ABS(PY)
-  const var_c = ws.getCell(numRow, 8);
-  var_c.value  = formula(`IFERROR((F${numRow}-G${numRow})/ABS(G${numRow}),"N.A.")`);
-  var_c.numFmt = '0.00"%"';
-  var_c.font   = { size: 9 };
-  var_c.alignment = { horizontal: "center", vertical: "middle" };
-  var_c.border = TOP_BDR as ExcelJS.Borders;
+  // ── Col E (numerator amount) — top half ─────────────────────────────────
+  const numAmt = ws.getCell(numR, 5);
+  numAmt.value = f(`+'${cySheet}'!E${lay.numTotRow}`);
+  numAmt.numFmt = MONEY_FMT;
+  applyFont(numAmt, { size: 10 });
+  numAmt.alignment = { horizontal: "right", vertical: "middle" };
+  numAmt.border = FULL_BDR;
 
-  // ── Denominator row ───────────────────────────────────────────────────────
-  ws.getCell(denRow, 2).border = BOT_BDR as ExcelJS.Borders;
-  ws.getCell(denRow, 3).border = BOT_BDR as ExcelJS.Borders;
+  // ── Col E (denominator amount) — bottom half ────────────────────────────
+  const denAmt = ws.getCell(denR, 5);
+  denAmt.value = f(`+'${cySheet}'!G${lay.denTotRow}`);
+  denAmt.numFmt = MONEY_FMT;
+  applyFont(denAmt, { size: 10 });
+  denAmt.alignment = { horizontal: "right", vertical: "middle" };
+  denAmt.border = FULL_BDR;
 
-  // Column D (DENOMINATOR label)
-  const denl_c = ws.getCell(denRow, 4);
-  denl_c.value  = formula(`'${cySheet}'!F${lay.cyRow}`);
-  denl_c.font   = { size: 9 };
-  denl_c.alignment = { vertical: "middle", wrapText: true };
-  denl_c.border = FULL_BDR as ExcelJS.Borders;
+  // ── Col F (CY ratio) — merged across num + den rows ─────────────────────
+  ws.mergeCells(`F${numR}:F${denR}`);
+  const cyR = ws.getCell(numR, 6);
+  cyR.value = f(`IFERROR('${cySheet}'!H${lay.cyRow},"N.A.")`);
+  cyR.numFmt = lay.unit === "%" ? PCT_FMT : RATIO_FMT;
+  applyFont(cyR, { bold: true, size: 10 });
+  cyR.alignment = { horizontal: "center", vertical: "middle" };
+  cyR.border = FULL_BDR;
+  clearSlaveBorders(ws, numR, 6, denR, 6);
 
-  // Column E (Amount Rs. — denominator)
-  const dena_c = ws.getCell(denRow, 5);
-  dena_c.value  = formula(`'${cySheet}'!G${lay.denTotRow}`);
-  dena_c.numFmt = MONEY_FMT;
-  dena_c.font   = { size: 9 };
-  dena_c.alignment = { horizontal: "right", vertical: "middle" };
-  dena_c.border = FULL_BDR as ExcelJS.Borders;
+  // ── Col G (PY ratio) — merged across num + den rows ─────────────────────
+  ws.mergeCells(`G${numR}:G${denR}`);
+  const pyR = ws.getCell(numR, 7);
+  pyR.value = f(`IFERROR('${pySheet}'!H${lay.cyRow},"N.A.")`);
+  pyR.numFmt = lay.unit === "%" ? PCT_FMT : RATIO_FMT;
+  applyFont(pyR, { bold: true, size: 10 });
+  pyR.alignment = { horizontal: "center", vertical: "middle" };
+  pyR.border = FULL_BDR;
+  clearSlaveBorders(ws, numR, 7, denR, 7);
 
-  // Columns F/G/H — close the borders on den row
-  ws.getCell(denRow, 6).border = BOT_BDR as ExcelJS.Borders;
-  ws.getCell(denRow, 7).border = BOT_BDR as ExcelJS.Borders;
-  ws.getCell(denRow, 8).border = BOT_BDR as ExcelJS.Borders;
+  // ── Col H (Variance) — merged across num + den rows ─────────────────────
+  // Template formula: (F-G)/G  (no ABS, no IFERROR)
+  // We wrap in IFERROR for safety — template's lack of guard renders #DIV/0
+  // when PY=0 which is jarring to auditors.
+  ws.mergeCells(`H${numR}:H${denR}`);
+  const vR = ws.getCell(numR, 8);
+  vR.value = f(`IFERROR((F${numR}-G${numR})/G${numR},"N.A.")`);
+  vR.numFmt = PCT_FMT;
+  applyFont(vR, { size: 10 });
+  vR.alignment = { horizontal: "center", vertical: "middle" };
+  vR.border = FULL_BDR;
+  clearSlaveBorders(ws, numR, 8, denR, 8);
 
-  // ── Commentary row ────────────────────────────────────────────────────────
-  ws.mergeCells(cmtRow, 2, cmtRow, 8);
-  const cmt_c = ws.getCell(cmtRow, 2);
-  cmt_c.value = commentary ? `Text: ${commentary}` : "";
-  cmt_c.font  = { italic: true, size: 9, color: { argb: "FF444444" } };
-  cmt_c.alignment = { vertical: "middle", wrapText: true };
-  ws.getRow(cmtRow).height = commentary ? 30 : 16;
+  // ── Text/commentary row — full-width merge ──────────────────────────────
+  ws.mergeCells(`B${txtR}:H${txtR}`);
+  const txtC = ws.getCell(txtR, 2);
+  txtC.value = cmt || "Text";
+  applyFont(txtC, { italic: true, size: 9 });
+  txtC.alignment = { horizontal: "left", vertical: "middle", wrapText: true };
+  txtC.border = FULL_BDR;
+  clearSlaveBorders(ws, txtR, 2, txtR, 8);
+
+  // ── Spacer row — thin side borders only ─────────────────────────────────
+  for (let col = 2; col <= 8; col++) {
+    ws.getCell(spcR, col).border = SIDE_BDR;
+  }
 }
+
+// Re-exports — keep backward-compatible names if any external callers rely
+// on the legacy helpers. None do at the time of this rewrite, but TypeScript
+// `unused` warnings would otherwise fire on the imports above.
+export { TOP_SIDE as _TOP_SIDE, BOT_SIDE as _BOT_SIDE };

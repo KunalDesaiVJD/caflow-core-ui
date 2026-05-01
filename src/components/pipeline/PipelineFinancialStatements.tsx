@@ -2817,20 +2817,39 @@ export default function PipelineFinancialStatements({
   ]);
 
   // ─── Corporate BS check + P&L summary ───
-  // Sign convention: Tally exports credit balances (liabilities, income) as NEGATIVE.
-  //   Assets     → positive  (debit)
-  //   Liabilities → negative (credit) → bsDiff = Assets + Liabilities (not Assets − Liabilities)
-  //   Revenue    → negative (credit) → netProfit = −Revenue − Expenses (not Revenue − Expenses)
-  const totalAssets = (computedAmounts["BS_NCA"] || 0) + (computedAmounts["BS_CA"] || 0);
-  const totalLiabilities =
-    (computedAmounts["BS_EQ"] || 0) +
-    (computedAmounts["BS_NCL"] || 0) +
-    (computedAmounts["BS_CL"] || 0);
-  // totalLiabilities is already negative → adding gives the true diff (0 when balanced)
-  const bsDiff = Math.round((totalAssets + totalLiabilities) * 100) / 100;
+  // IMPORTANT: Use fsDisplayData.bs (cyOf-resolved, includes saved overrides)
+  // for the balance check so it agrees with the numbers shown on the face of the BS.
+  // Raw computedAmounts miss saves such as the current-year P&L added to reserves
+  // via the Notes, which causes a spurious mismatch equal to the net profit.
+  const corpBsData = fsDisplayData?.bs;
+  const totalAssets: number = corpBsData
+    ? (corpBsData.ppe.cy || 0) + (corpBsData.ncInvestments.cy || 0) + (corpBsData.dtAssets.cy || 0)
+      + (corpBsData.ltLoans.cy || 0) + (corpBsData.otherNcAssets.cy || 0)
+      + (corpBsData.currInvestments.cy || 0) + (corpBsData.inventories.cy || 0) + (corpBsData.tradeRec.cy || 0)
+      + (corpBsData.cashBank.cy || 0) + (corpBsData.stLoans.cy || 0) + (corpBsData.otherCurrAssets.cy || 0)
+    : (computedAmounts["BS_NCA"] || 0) + (computedAmounts["BS_CA"] || 0);
+  // Liabilities are stored negative (Tally CR); negate each to get positive total
+  const totalELDisplay: number = corpBsData
+    ? -(corpBsData.shareCap.cy || 0) - (corpBsData.reserves.cy || 0)
+      - (corpBsData.ltBorrowings.cy || 0) - (corpBsData.dtLiab.cy || 0)
+      - (corpBsData.otherLtLiab.cy || 0) - (corpBsData.ltProvisions.cy || 0)
+      - (corpBsData.stBorrowings.cy || 0)
+      - (corpBsData.tradePayMSME.cy || 0) - (corpBsData.tradePayOthers.cy || 0)
+      - (corpBsData.otherCurrLiab.cy || 0) - (corpBsData.stProvisions.cy || 0)
+    : -((computedAmounts["BS_EQ"] || 0) + (computedAmounts["BS_NCL"] || 0) + (computedAmounts["BS_CL"] || 0));
+  // bsDiff = 0 when both sides balance
+  const bsDiff = Math.round((totalAssets - totalELDisplay) * 100) / 100;
   const totalRevenue = (computedAmounts["PL_REV"] || 0);   // negative (credit)
   const totalExpenses = (computedAmounts["PL_EXP"] || 0);  // positive (debit)
+  // netProfit = PBT (pre-tax); PL_EXP excludes PL_TAX_CUR / PL_TAX_DEF
   const netProfit = Math.round((-totalRevenue - totalExpenses) * 100) / 100;
+  // corpNetPAT: deduct taxes using same sign logic as buildPLRows (line ~760):
+  //   profitCy = pbtCy - currentTax + deferredTax
+  // currentTax is stored DR (positive); deferredTax is stored CR (negative) in Tally.
+  const corpPlData = fsDisplayData?.pl;
+  const corpNetPAT = corpPlData
+    ? Math.round((netProfit - (corpPlData.currentTax.cy || 0) + (corpPlData.deferredTax.cy || 0)) * 100) / 100
+    : netProfit;
 
   // ─── NCE stats bar ───────────────────────────────────────────────────────────
   // Sum individual leaf codes so the stats bar is independent of computeTotal
@@ -2847,8 +2866,11 @@ export default function PipelineFinancialStatements({
   const activeBsDiff      = isNonCorporate ? nceBsDiff      : bsDiff;
   const activeBsBalanced  = isNonCorporate ? nceBsBalanced  : corpBsBalanced;
   const activeTotalAssets      = isNonCorporate ? nceTotalAssets      : totalAssets;
-  const activeTotalLiabilities = isNonCorporate ? nceTotalLiabilities : totalLiabilities;
-  const activeNetProfit        = isNonCorporate ? nceNetProfit        : netProfit;
+  // Use fsDisplayData-resolved totalELDisplay (same as bsDiff) so stat card
+  // matches the "TOTAL EQUITY AND LIABILITIES" row shown on the BS face.
+  const activeTotalLiabilities = isNonCorporate ? nceTotalLiabilities : totalELDisplay;
+  // Use after-tax PAT so stat card matches "Profit/(Loss) for the period" on P&L.
+  const activeNetProfit        = isNonCorporate ? nceNetProfit        : corpNetPAT;
 
   // ─── NCE Signature — derived values ─────────────────────────────────────
   // Partner name comes from the engagement (Stage 1 form selection). The
@@ -4994,7 +5016,7 @@ export default function PipelineFinancialStatements({
             <div className="flex items-center justify-end gap-1">
               {(isHeader && !isTotalRow) ? null : amount !== 0 ? (
                 <span className={amount < 0 ? "text-destructive" : ""}>
-                  {amount < 0 ? "(" : ""}₹{Math.abs(amount).toLocaleString("en-IN")}{amount < 0 ? ")" : ""}
+                  {amount < 0 ? "(" : ""}₹{Math.round(Math.abs(amount)).toLocaleString("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}{amount < 0 ? ")" : ""}
                 </span>
               ) : (
                 <span className="text-muted-foreground">—</span>
@@ -5024,7 +5046,7 @@ export default function PipelineFinancialStatements({
               )}
               {(isHeader && !isTotalRow) ? null : py !== 0 ? (
                 <span className={hasPyOverride ? "text-amber-700 dark:text-amber-400" : ""}>
-                  {py < 0 ? "(" : ""}₹{Math.abs(py).toLocaleString("en-IN")}{py < 0 ? ")" : ""}
+                  {py < 0 ? "(" : ""}₹{Math.round(Math.abs(py)).toLocaleString("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}{py < 0 ? ")" : ""}
                 </span>
               ) : (
                 <span>—</span>

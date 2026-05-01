@@ -123,24 +123,24 @@ export default function FAGrid({ engagementId, rows, pyRows, pyManual, onChangeP
         <table className="w-full text-xs border-collapse">
           <thead className="sticky top-0 bg-muted/40 z-10">
             <tr>
-              <th rowSpan={2} className="p-1 border text-left min-w-[140px]">Particulars</th>
-              <th rowSpan={2} className="p-1 border text-center w-[60px]">Useful<br />Life</th>
-              <th colSpan={4} className="p-1 border text-center bg-blue-50/50">Gross Block</th>
-              <th colSpan={4} className="p-1 border text-center bg-amber-50/50">Depreciation</th>
-              <th colSpan={2} className="p-1 border text-center bg-green-50/50">Net Block</th>
+              <th rowSpan={2} className="p-1 border text-left min-w-[140px] text-[11px]">Particulars</th>
+              <th rowSpan={2} className="p-1 border text-center w-[60px] text-[11px]">Useful<br />Life</th>
+              <th colSpan={4} className="p-1 border text-center bg-blue-50/50 text-[11px]">Gross Block</th>
+              <th colSpan={4} className="p-1 border text-center bg-amber-50/50 text-[11px]">Depreciation</th>
+              <th colSpan={2} className="p-1 border text-center bg-green-50/50 text-[11px]">Net Block</th>
               <th rowSpan={2} className="p-1 border w-[24px]"></th>
             </tr>
             <tr>
-              <th className="p-1 border text-right">Open</th>
-              <th className="p-1 border text-right">Additions</th>
-              <th className="p-1 border text-right">Disposals</th>
-              <th className="p-1 border text-right bg-blue-50/30">Closing</th>
-              <th className="p-1 border text-right">Open</th>
-              <th className="p-1 border text-right">For year</th>
-              <th className="p-1 border text-right">Disposals</th>
-              <th className="p-1 border text-right bg-amber-50/30">Closing</th>
-              <th className="p-1 border text-right bg-green-50/30">CY</th>
-              <th className="p-1 border text-right bg-green-50/30">PY</th>
+              <th className="p-1 border text-right text-[11px]">Open</th>
+              <th className="p-1 border text-right text-[11px]">Additions</th>
+              <th className="p-1 border text-right text-[11px]">Disposals</th>
+              <th className="p-1 border text-right bg-blue-50/30 text-[11px]">Closing</th>
+              <th className="p-1 border text-right text-[11px]">Open</th>
+              <th className="p-1 border text-right text-[11px]">For year</th>
+              <th className="p-1 border text-right text-[11px]">Disposals</th>
+              <th className="p-1 border text-right bg-amber-50/30 text-[11px]">Closing</th>
+              <th className="p-1 border text-right bg-green-50/30 text-[11px]">CY</th>
+              <th className="p-1 border text-right bg-green-50/30 text-[11px]">PY</th>
             </tr>
           </thead>
           <tbody>
@@ -184,7 +184,7 @@ export default function FAGrid({ engagementId, rows, pyRows, pyManual, onChangeP
                 <td className="p-0.5 border">
                   <EditableCell value={r.disposals}  onCommit={(v) => update(i, { disposals:  v == null ? 0 : Number(v) })} />
                 </td>
-                <td className="p-1 border text-right tabular-nums bg-blue-50/30 font-semibold">{formatINR(grossClose(r))}</td>
+                <td className="p-1 border text-right tabular-nums bg-blue-50/30 font-semibold text-[11px]">{formatINR(grossClose(r))}</td>
                 <td className="p-0.5 border">
                   <EditableCell value={r.depn_open} onCommit={(v) => update(i, { depn_open: v == null ? 0 : Number(v) })} />
                 </td>

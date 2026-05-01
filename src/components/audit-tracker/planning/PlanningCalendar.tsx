@@ -83,6 +83,13 @@ function mondayOf(d: Date): Date {
   return r;
 }
 
+/** Issue 3: detect leave preferring explicit is_leave flag, with legacy
+ *  string fallback so any pre-migration row still renders correctly. */
+function entryIsLeave(e: { is_leave?: boolean | null; client_name?: string | null }): boolean {
+  if (e.is_leave) return true;
+  return (e.client_name || "").trim().toLowerCase() === "leave";
+}
+
 /** Stable colour for a client name (same name → same colour) */
 function clientColor(name: string): string {
   if (!name || name.toLowerCase() === "leave") return LEAVE_COLOR;
@@ -131,8 +138,8 @@ function CalCell({ dateISO, employee, entries, onClick }: CellProps) {
     >
       <div className="space-y-[2px] w-full max-w-full overflow-hidden">
         {hits.map(entry => {
-          const isLeave  = entry.client_name?.toLowerCase() === "leave";
-          const color    = clientColor(entry.client_name || "");
+          const isLeave  = entryIsLeave(entry);
+          const color    = isLeave ? LEAVE_COLOR : clientColor(entry.client_name || "");
           const dateHint = entry.planned_from === entry.planned_to
             ? entry.planned_from
             : `${entry.planned_from} → ${entry.planned_to}`;
@@ -177,8 +184,8 @@ function WeekCell({ dateISO, employee, entries, onClick }: CellProps) {
     >
       <div className="space-y-[3px] w-full max-w-full overflow-hidden">
         {hits.map(entry => {
-          const isLeave = entry.client_name?.toLowerCase() === "leave";
-          const color   = clientColor(entry.client_name || "");
+          const isLeave = entryIsLeave(entry);
+          const color   = isLeave ? LEAVE_COLOR : clientColor(entry.client_name || "");
           return (
             <div
               key={entry.id}
@@ -294,7 +301,7 @@ export default function PlanningCalendar({
   const empClientOptions = useMemo(() => {
     const map: Record<string, string[]> = {};
     for (const entry of entries) {
-      if (!entry.client_name || entry.client_name.toLowerCase() === "leave") continue;
+      if (!entry.client_name || entryIsLeave(entry)) continue;
       for (const empId of (entry.employee_ids || [])) {
         if (!map[empId]) map[empId] = [];
         if (!map[empId].includes(entry.client_name)) map[empId].push(entry.client_name);
