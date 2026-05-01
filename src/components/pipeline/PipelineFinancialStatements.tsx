@@ -2839,14 +2839,17 @@ export default function PipelineFinancialStatements({
     : -((computedAmounts["BS_EQ"] || 0) + (computedAmounts["BS_NCL"] || 0) + (computedAmounts["BS_CL"] || 0));
   // bsDiff = 0 when both sides balance
   const bsDiff = Math.round((totalAssets - totalELDisplay) * 100) / 100;
-  // Keep totalLiabilities (raw) for activeTotalLiabilities display stat card
-  const totalLiabilities =
-    (computedAmounts["BS_EQ"] || 0) +
-    (computedAmounts["BS_NCL"] || 0) +
-    (computedAmounts["BS_CL"] || 0);
   const totalRevenue = (computedAmounts["PL_REV"] || 0);   // negative (credit)
   const totalExpenses = (computedAmounts["PL_EXP"] || 0);  // positive (debit)
+  // netProfit = PBT (pre-tax); PL_EXP excludes PL_TAX_CUR / PL_TAX_DEF
   const netProfit = Math.round((-totalRevenue - totalExpenses) * 100) / 100;
+  // corpNetPAT: deduct taxes using same sign logic as buildPLRows (line ~760):
+  //   profitCy = pbtCy - currentTax + deferredTax
+  // currentTax is stored DR (positive); deferredTax is stored CR (negative) in Tally.
+  const corpPlData = fsDisplayData?.pl;
+  const corpNetPAT = corpPlData
+    ? Math.round((netProfit - (corpPlData.currentTax.cy || 0) + (corpPlData.deferredTax.cy || 0)) * 100) / 100
+    : netProfit;
 
   // ─── NCE stats bar ───────────────────────────────────────────────────────────
   // Sum individual leaf codes so the stats bar is independent of computeTotal
@@ -2863,8 +2866,11 @@ export default function PipelineFinancialStatements({
   const activeBsDiff      = isNonCorporate ? nceBsDiff      : bsDiff;
   const activeBsBalanced  = isNonCorporate ? nceBsBalanced  : corpBsBalanced;
   const activeTotalAssets      = isNonCorporate ? nceTotalAssets      : totalAssets;
-  const activeTotalLiabilities = isNonCorporate ? nceTotalLiabilities : totalLiabilities;
-  const activeNetProfit        = isNonCorporate ? nceNetProfit        : netProfit;
+  // Use fsDisplayData-resolved totalELDisplay (same as bsDiff) so stat card
+  // matches the "TOTAL EQUITY AND LIABILITIES" row shown on the BS face.
+  const activeTotalLiabilities = isNonCorporate ? nceTotalLiabilities : totalELDisplay;
+  // Use after-tax PAT so stat card matches "Profit/(Loss) for the period" on P&L.
+  const activeNetProfit        = isNonCorporate ? nceNetProfit        : corpNetPAT;
 
   // ─── NCE Signature — derived values ─────────────────────────────────────
   // Partner name comes from the engagement (Stage 1 form selection). The
