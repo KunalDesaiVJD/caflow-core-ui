@@ -531,7 +531,7 @@ function ListRowWithSources({
   onMoveToGroup?: (groupId: string) => void;
   onCreateGroup?: (groupName: string) => void;
   onRemoveFromGroup?: () => void;
-  handleDragStart?: (origIdx: number) => void;
+  handleDragStart?: (e: React.DragEvent, origIdx: number) => void;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -543,8 +543,10 @@ function ListRowWithSources({
             className="drag-handle shrink-0 cursor-grab text-muted-foreground/30 hover:text-muted-foreground/70 py-1 select-none"
             draggable
             onDragStart={(e) => {
+              e.dataTransfer.setData('text/plain', String(origIdx));
+              e.dataTransfer.effectAllowed = 'move';
               e.stopPropagation();
-              handleDragStart?.(origIdx);
+              handleDragStart?.(e, origIdx);
             }}
             title="Drag to reorder"
           >
@@ -751,19 +753,23 @@ export function ListTable({
   };
 
   // ── Drag & drop — only starts from the .drag-handle span ──────────────────
-  const handleDragStart = (origIdx: number) => setDragRow(origIdx);
+  const handleDragStart = (_e: React.DragEvent, origIdx: number) => setDragRow(origIdx);
   const handleDragOver  = (e: React.DragEvent, origIdx: number) => {
     e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
     setDragOverRow(origIdx);
   };
-  const handleDrop = (origIdx: number) => {
-    if (dragRow === null || dragRow === origIdx) {
+  const handleDrop = (e: React.DragEvent, origIdx: number) => {
+    e.preventDefault();
+    const fromStr = e.dataTransfer.getData('text/plain');
+    const from = fromStr !== '' ? parseInt(fromStr, 10) : dragRow;
+    if (from === null || from === undefined || isNaN(from as number) || from === origIdx) {
       setDragRow(null); setDragOverRow(null);
       return;
     }
     const next = rows.slice();
-    const [moved] = next.splice(dragRow, 1);
-    next.splice(origIdx > dragRow ? origIdx - 1 : origIdx, 0, moved);
+    const [moved] = next.splice(from as number, 1);
+    next.splice(origIdx > (from as number) ? origIdx - 1 : origIdx, 0, moved);
     onChange(next);
     setDragRow(null); setDragOverRow(null);
   };
@@ -848,7 +854,7 @@ export function ListTable({
             <div
               key={`grp_${groupId}`}
               onDragOver={(e) => handleDragOver(e, origIdx)}
-              onDrop={() => handleDrop(origIdx)}
+              onDrop={(e) => handleDrop(e,origIdx)}
               onDragEnd={handleDragEnd}
               className={cn("rounded", dragOverRow === origIdx && "ring-1 ring-primary")}
             >
@@ -859,7 +865,7 @@ export function ListTable({
                   <span
                     className="drag-handle shrink-0 cursor-grab text-purple-300 hover:text-purple-500 py-1 select-none"
                     draggable
-                    onDragStart={(e) => { e.stopPropagation(); handleDragStart(origIdx); }}
+                    onDragStart={(e) => { e.dataTransfer.setData('text/plain', String(origIdx)); e.dataTransfer.effectAllowed = 'move'; e.stopPropagation(); handleDragStart(e, origIdx); }}
                     title="Drag group to reorder"
                   >
                     <GripVertical size={11} />
@@ -915,7 +921,7 @@ export function ListTable({
                     <div
                       key={mr.id || mi}
                       onDragOver={(e) => handleDragOver(e, mi)}
-                      onDrop={() => handleDrop(mi)}
+                      onDrop={(e) => handleDrop(e,mi)}
                       onDragEnd={handleDragEnd}
                       className={cn("rounded", dragOverRow === mi && "ring-1 ring-primary")}
                     >
@@ -952,7 +958,7 @@ export function ListTable({
           <div
             key={origIdx}
             onDragOver={(e) => handleDragOver(e, origIdx)}
-            onDrop={() => handleDrop(origIdx)}
+            onDrop={(e) => handleDrop(e,origIdx)}
             onDragEnd={handleDragEnd}
             className={cn("rounded", dragOverRow === origIdx && "ring-1 ring-primary")}
           >
