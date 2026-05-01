@@ -344,13 +344,18 @@ export async function exportNtaToDocx(
 
   // Template: "Note No : 1   DISCLOSURE OF ACCOUNTING POLICIES & NOTES FORMING
   //            PART OF THE ANNUAL ACCOUNTS"
-  // Label "Note No : 1" runs at body sz=20 (10pt); only the title run is
-  // sz=22 (11pt) underlined — matching the only sz=22 occurrence in the
-  // template. No spaceBefore (template has no before on this paragraph).
+  // Visually the template renders the entire title on ONE line at a uniform
+  // size with only the DISCLOSURE… portion underlined. The XML carries an
+  // sz=22 marker on that run, but mixing sz=20 + sz=22 in the same paragraph
+  // pushes the rendered line past the right border and wraps to two lines —
+  // exactly the "font size doesn't match" symptom the user reported.
+  // Use uniform sz=20 (10pt body size); only the title run gets the
+  // underline. This matches the visual appearance of the template even
+  // though it diverges from the XML's sz=22 marker.
   paras.push(headingPara(
     "Note No : 1",
     "DISCLOSURE OF ACCOUNTING POLICIES & NOTES FORMING PART OF THE ANNUAL ACCOUNTS",
-    { titleSize: 11, underline: true },
+    { underline: true },
   ));
   paras.push(blank());
 
