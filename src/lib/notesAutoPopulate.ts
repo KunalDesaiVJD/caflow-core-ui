@@ -929,8 +929,9 @@ export async function loadStage5Notes(engagementId: string): Promise<Stage5Notes
     // migration default) without overwriting user-entered amounts.
     const existingFa = raw.fa && Array.isArray(raw.fa.rows) ? raw.fa.rows : [];
     const rawManualEdits = Array.isArray(raw.manual_edits) ? raw.manual_edits : [];
-    // If user has explicitly edited fa.rows (including deleting defaults), preserve exactly as-is.
-    const faRows = rawManualEdits.includes("fa.rows") ? existingFa : mergeFaDefaults(existingFa);
+    // If ANY rows are stored, preserve them exactly — do NOT merge back deleted defaults.
+    // mergeFaDefaults is only run for truly new/empty engagements (existingFa is empty).
+    const faRows = existingFa.length > 0 ? existingFa : mergeFaDefaults(existingFa);
     return {
       ...DEFAULT_STAGE5_NOTES,
       ...(raw as Partial<Stage5Notes>),
@@ -1031,7 +1032,10 @@ export async function autoPopulateNotes(
     auto_synced_at: new Date().toISOString(),
   };
   if (options.existing?.fa?.rows) {
-    out.fa.rows = mergeFaDefaults(options.existing.fa.rows);
+    const existRows = options.existing.fa.rows;
+    // If user already has rows stored, preserve them exactly (don't re-add deleted defaults).
+    // Only use mergeFaDefaults for a truly empty FA (new engagement).
+    out.fa.rows = existRows.length > 0 ? existRows : mergeFaDefaults(existRows);
   }
 
   for (const section of ["bs_liab", "bs_asset", "pl"] as const) {
