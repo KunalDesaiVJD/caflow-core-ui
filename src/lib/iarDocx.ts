@@ -88,6 +88,14 @@ function wPara(text: string, opts: ParaOpts = {}): string {
     `<w:spacing${before !== undefined ? ` w:before="${before}"` : ""} w:after="${after}" w:line="282" w:lineRule="atLeast"/>`,
   );
   if (opts.keepNext) pPrParts.push("<w:keepNext/>");
+
+  // Indent rules:
+  //   - Centered paragraphs (title) get NO indent so they centre on the
+  //     full text width.
+  //   - Explicit indLeft from caller wins.
+  //   - Otherwise apply the template's default body indent
+  //     (left=180 right=365) so every body and heading paragraph sits
+  //     at the same template-style ~0.125" left / ~0.25" right inset.
   if (opts.indLeft !== undefined) {
     const hanging = opts.indHanging ?? 0;
     pPrParts.push(
@@ -95,6 +103,8 @@ function wPara(text: string, opts: ParaOpts = {}): string {
         ? `<w:ind w:left="${opts.indLeft}" w:hanging="${hanging}"/>`
         : `<w:ind w:left="${opts.indLeft}"/>`,
     );
+  } else if (!opts.centered) {
+    pPrParts.push(`<w:ind w:left="180" w:right="365"/>`);
   }
   const pPr = `<w:pPr>${pPrParts.join("")}</w:pPr>`;
 
