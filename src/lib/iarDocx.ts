@@ -245,6 +245,14 @@ export async function exportIarToDocx(
   const company = companyName || "[ Company Name ]";
   const paras: string[] = [];
 
+  // ── 0. Top-of-page spacing ────────────────────────────────────────────────
+  // Template renders the title roughly 3 inches below the top edge of the
+  // page (page top margin is only 289 twips ≈ 0.2", so the visible top
+  // whitespace comes from blank-paragraph runners at the start of the body).
+  // Word ignores `w:before` on the very first paragraph, so we push the
+  // gap via real empty paragraphs.
+  for (let i = 0; i < 8; i++) paras.push(blank());
+
   // ── 1. Title ──────────────────────────────────────────────────────────────
   // Template wraps the title with the built-in "Title" pStyle which
   // renders italic + underline + centered + bold. Match by emitting
