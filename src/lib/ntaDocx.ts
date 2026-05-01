@@ -155,11 +155,34 @@ function headingPara(label: string, title: string, opts: { titleSize?: number; u
     `<w:spacing${before ? ` w:before="${before}"` : ""} w:after="0" w:line="240" w:lineRule="auto"/>` +
     `<w:ind w:left="650" w:hanging="488"/>` +
     `</w:pPr>`;
-  const sz = opts.titleSize;
-  const labelRun = wRun(label, { bold: true, fontSize: sz });
-  const sep      = label && title ? wRun("  ", { bold: true, fontSize: sz }) : "";
-  const titleRun = title ? wRun(title, { bold: true, fontSize: sz, underline: opts.underline }) : "";
+  // Template detail: ONLY the title run (e.g. "DISCLOSURE OF...") gets the
+  // larger size + underline. The label run ("Note No : 1") stays at body
+  // size 20 (10pt) and unstyled-bold. Earlier code applied titleSize to
+  // both runs, which made "Note No : 1" oversized too.
+  const labelRun = wRun(label, { bold: true });
+  const sep      = label && title ? wRun("  ", { bold: true }) : "";
+  const titleRun = title ? wRun(title, { bold: true, fontSize: opts.titleSize, underline: opts.underline }) : "";
   return `<w:p>${pPr}${labelRun}${sep}${titleRun}</w:p>`;
+}
+
+/**
+ * Outer-level heading ("1. Overview of the Reporting Entity",
+ * "2. Significant Accounting Policies") — bold, sz=20, slight left indent
+ * mimicking the template's auto-numbered ListParagraph rendering.
+ *
+ * Template uses w:numPr/numId=4 for these and lets Word inject the "1."
+ * and "2." prefixes from numbering.xml. Replicating the numbering machinery
+ * is fragile across renderers, so we hard-code the prefix and emit a
+ * plain bold paragraph.
+ */
+function outerHeading(prefix: string, title: string): string {
+  const pPr =
+    `<w:pPr>` +
+    `<w:keepNext/>` +
+    `<w:spacing w:after="0" w:line="240" w:lineRule="auto"/>` +
+    `<w:ind w:left="720" w:hanging="360"/>` +
+    `</w:pPr>`;
+  return `<w:p>${pPr}${wRun(prefix, { bold: true })}${wRun(" ", { bold: true })}${wRun(title, { bold: true })}</w:p>`;
 }
 
 /**
@@ -320,7 +343,13 @@ export async function exportNtaToDocx(
   ));
   paras.push(blank());
 
-  // ── 2. Overview paragraph ────────────────────────────────────────────────────
+  // ── 2. "1. Overview of the Reporting Entity" heading ────────────────────────
+  // Template paragraph P5 (ListParagraph + numId=4) — Word renders the
+  // "1." prefix from auto-numbering. Hard-coded here for renderer parity.
+  paras.push(outerHeading("1.", "Overview of the Reporting Entity"));
+  paras.push(blank());
+
+  // ── 3. Overview paragraph ────────────────────────────────────────────────────
   // Template wording exactly:
   // "[Name] ('the company') was incorporated on [Date] under the Companies Act,
   //  [year] vide CIN [cin] having its registered office at [address] and
@@ -334,8 +363,10 @@ export async function exportNtaToDocx(
   ]));
   paras.push(blank());
 
-  // ── 3. "2 Significant Accounting Policies" section heading ───────────────────
-  paras.push(headingPara("2", "Significant Accounting Policies"));
+  // ── 4. "2. Significant Accounting Policies" heading ─────────────────────────
+  // Template paragraph P8 (ListParagraph + numId=4) — auto-numbered "2."
+  // hard-coded for renderer parity, matching outer-heading style.
+  paras.push(outerHeading("2.", "Significant Accounting Policies"));
   paras.push(blank());
 
   // ── 4. Policies 2.1 – 2.n ────────────────────────────────────────────────────
