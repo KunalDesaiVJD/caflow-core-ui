@@ -74,7 +74,15 @@ interface TallyTB {
   balance_type: string;
   debit_amount?: number;
   credit_amount?: number;
+  sync_code_version?: string | null;
 }
+
+// ─── Sync code version (mirror of SYNC_CODE_VERSION in tally-sync/sync-step.js) ──
+// Bump this together with the constant on the agent side whenever a TB-affecting
+// bug-fix lands.  The page compares each TB row's stamp against this and shows
+// a banner when any row was synced under older code.  Closes the gap where
+// deployed fixes don't retroactively heal existing DB rows.
+const LATEST_SYNC_CODE_VERSION = "2026.05.01";
 
 interface VoucherLineItem {
   ledger_name: string;
@@ -335,7 +343,7 @@ export default function TallySyncPage({ engagementOverride, hideHeader = false }
       supabase.from("tally_vouchers" as any).select("id", { count: "exact", head: true }).eq("engagement_id", engId),
       supabase.from("tally_groups" as any).select("id,group_name,parent_group,primary_group,is_revenue,is_primary").eq("engagement_id", engId).order("group_name"),
       fetchAllFrom("tally_ledgers", "id,ledger_name,parent_group,opening_balance,opening_type,closing_balance,closing_type", "ledger_name"),
-      fetchAllFrom("tally_trial_balance", "id,ledger_name,parent_group,opening_balance,opening_type,closing_balance,balance_type,debit_amount,credit_amount", "parent_group"),
+      fetchAllFrom("tally_trial_balance", "id,ledger_name,parent_group,opening_balance,opening_type,closing_balance,balance_type,debit_amount,credit_amount,sync_code_version", "parent_group"),
       fetchAllVouchers(),
     ]);
 
@@ -1413,9 +1421,51 @@ export default function TallySyncPage({ engagementOverride, hideHeader = false }
     );
   }
 
+  // ── Stale-data detection (sync_code_version) ────────────────────────────
+  // If any TB row was synced under an older code version (or has no version
+  // stamp at all — pre-migration rows), surface a banner. Bug-fixes in
+  // sync-step.js (Stock-in-Hand opening, parent-group decoding, etc.) only
+  // act during a sync run, so existing rows from older syncs need a refresh.
+  const staleTBCount = trialBalance.filter(
+    r => !r.sync_code_version || r.sync_code_version < LATEST_SYNC_CODE_VERSION
+  ).length;
+  const hasStockRows = trialBalance.some(r => /stock-in-hand/i.test(r.parent_group || ""));
+
   return (
     <div className={hideHeader ? "space-y-4" : "p-6 space-y-4 max-w-7xl mx-auto"}>
       {!hideHeader && <EngagementHeader engagement={selectedEngagement} stageNumber={5} stageLabel="Tally Sync" />}
+
+      {/* ── Stale Sync Data Banner (sync_code_version mismatch) ───────────
+          Closes the code-fix-vs-data-fix gap. */}
+      {staleTBCount > 0 && trialBalance.length > 0 && (
+        <Card className="border-amber-300 bg-amber-50/60 dark:bg-amber-950/20">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2 text-amber-900 dark:text-amber-200">
+              <AlertTriangle className="h-4 w-4" />
+              Trial-balance data is out of date — please re-sync
+            </CardTitle>
+            <CardDescription className="text-xs text-amber-800/90 dark:text-amber-300/80 leading-relaxed">
+              {staleTBCount} of {trialBalance.length} TB row(s) were written by an older sync agent
+              (latest fix version: <code className="font-mono">{LATEST_SYNC_CODE_VERSION}</code>).
+              Bug-fixes deployed since then — including the Stock-in-Hand opening-balance fix and
+              Duties &amp; Taxes parent-group decoding — only act during a sync run, so existing rows
+              may show wrong opening balances or be misclassified until you re-sync.
+              <br />
+              <span className="block mt-2 font-medium">
+                Fix on the client's machine:
+              </span>
+              <span className="block">
+                • Run <code className="font-mono bg-amber-100 dark:bg-amber-900/40 px-1 rounded">sync-now.bat</code> for a full re-sync (~2 min), <em>or</em>
+              </span>
+              {hasStockRows && (
+                <span className="block">
+                  • Run <code className="font-mono bg-amber-100 dark:bg-amber-900/40 px-1 rounded">heal-stock.bat</code> to patch only Stock-in-Hand opening balances (~5 sec).
+                </span>
+              )}
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      )}
 
       {/* ── Sync Errors & Warnings ──────────────────────────────────────────
           Tally itself is internally consistent — every sync error or warning
