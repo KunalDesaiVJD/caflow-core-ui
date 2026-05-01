@@ -23,10 +23,11 @@ interface Props {
   isOverridden:    (path: string) => boolean;
   engagementId:    string;
   collapseControl?: boolean;
+  onRemapLedger?:  (ledgerName: string, newCode: string) => void;
 }
 
 export default function NotePL({
-  engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl,
+  engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl, onRemapLedger,
 }: Props) {
   const cy = (key: string) => Number(notes.pl[key]?.cy ?? 0);
   const py = (key: string) => Number(notes.pl[key]?.py ?? 0);
@@ -70,6 +71,7 @@ export default function NotePL({
           descPlaceholder={breakupHint}
           addLabel="Add row"
           showSubtotal
+          onRemapLedger={onRemapLedger}
         />
         <EditableRow
           label={`Total — ${title} (per P&L)`}

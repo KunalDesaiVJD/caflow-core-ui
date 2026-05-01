@@ -42,13 +42,14 @@ export interface FARow {
   depn_open:    number;
   depn_add:     number;
   depn_disp:    number;
+  net_py?:      number | null;   // manual override for PY Net Block column
 }
 
 export interface Stage5Notes {
   bs_liab:        Record<string, NoteRowValue>;
   bs_asset:       Record<string, NoteRowValue>;
   pl:             Record<string, NoteRowValue>;
-  fa:             { rows: FARow[] };
+  fa:             { rows: FARow[]; py_manual?: Record<string, number | null> | null };
   manual_edits:   string[];        // dot-paths e.g. "bs_liab.share_capital.cy"
   auto_synced_at: string | null;   // ISO timestamp
 }
@@ -927,11 +928,14 @@ export async function loadStage5Notes(engagementId: string): Promise<Stage5Notes
     // already present (e.g. legacy engagements created against the 4-row
     // migration default) without overwriting user-entered amounts.
     const existingFa = raw.fa && Array.isArray(raw.fa.rows) ? raw.fa.rows : [];
+    const rawManualEdits = Array.isArray(raw.manual_edits) ? raw.manual_edits : [];
+    // If user has explicitly edited fa.rows (including deleting defaults), preserve exactly as-is.
+    const faRows = rawManualEdits.includes("fa.rows") ? existingFa : mergeFaDefaults(existingFa);
     return {
       ...DEFAULT_STAGE5_NOTES,
       ...(raw as Partial<Stage5Notes>),
-      fa: { rows: mergeFaDefaults(existingFa) },
-      manual_edits: Array.isArray(raw.manual_edits) ? raw.manual_edits : [],
+      fa: { rows: faRows, py_manual: raw.fa?.py_manual ?? null },
+      manual_edits: rawManualEdits,
     } as Stage5Notes;
   }
   return JSON.parse(JSON.stringify(DEFAULT_STAGE5_NOTES));

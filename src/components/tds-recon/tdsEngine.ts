@@ -363,10 +363,23 @@ export async function runAiMapper(params: {
   }
 
   if (finalRows.length > 0) {
+    // Try upsert with tds_tds_amount (requires migration 20260501000002 applied).
+    // If the column doesn't exist yet, fall back gracefully by stripping it.
     const { error: upsertErr } = await (supabase as any)
       .from("tds_tb_party_mappings")
       .upsert(finalRows, { onConflict: "client_id,financial_year,tb_ledger_name,tds_deductee_name" });
-    if (upsertErr) throw new Error(`Upsert error: ${upsertErr.message}`);
+    if (upsertErr) {
+      if (upsertErr.message?.includes("tds_tds_amount")) {
+        // Column not yet added — upsert without it (migration pending)
+        const fallbackRows = finalRows.map(({ tds_tds_amount: _omit, ...r }: any) => r);
+        const { error: fallbackErr } = await (supabase as any)
+          .from("tds_tb_party_mappings")
+          .upsert(fallbackRows, { onConflict: "client_id,financial_year,tb_ledger_name,tds_deductee_name" });
+        if (fallbackErr) throw new Error(`Upsert error: ${fallbackErr.message}`);
+      } else {
+        throw new Error(`Upsert error: ${upsertErr.message}`);
+      }
+    }
   }
 
   return {
