@@ -1944,17 +1944,30 @@ export default function TallySyncPage({ engagementOverride, hideHeader = false }
 
                   {(() => {
                     const openingDiff   = tbDrOpening - tbCrOpening;
+                    // closingDiff (post-plug) is what users see on the strip —
+                    // post-plug it is ALWAYS zero by construction, so it's only
+                    // useful for the "✓ Closing Balanced" UX chip.
                     const closingDiff   = tbDrTotal   - tbCrTotal;
+                    // closingDiffRaw is the *real* signed gap on Tally's side
+                    // before we add inventory + P&L plug. This is the value
+                    // that participates in the accounting invariant below.
+                    const closingDiffRaw = _rawDr - _rawCr;
                     const movementDiff  = tbDebitTotal - tbCreditTotal;
-                    // Inventory revaluation = stock OB − CB (signed). Decrease
-                    // in stock implicitly reduces P&L (Dr cost) without any
-                    // voucher Dr/Cr; we already track it as _invAdj above.
+                    // Inventory revaluation = stock OB − CB (signed). Positive
+                    // (Dr) when stock decreased — implicit Dr to COGS without
+                    // any voucher Dr/Cr movement.
                     const invAdjSigned  = _invAdjDr - _invAdjCr;
                     // Net P&L = Cr_period − Dr_period − inventory_adj.
                     // Positive = profit (Cr-side surplus net of inventory cost).
                     const netPL         = -movementDiff - invAdjSigned;
-                    // True invariant: closing_diff − opening_diff = movement_diff + invAdj
-                    const reconcileResidual = (closingDiff - openingDiff) - movementDiff - invAdjSigned;
+                    // True accounting invariant (excluding P&L plug row):
+                    //   closing_diff_raw − opening_diff = movement_diff − invAdj_signed
+                    // Rearranged so residual = 0 when books tie:
+                    //   residual = (closing_diff_raw − opening_diff) − movement_diff + invAdj_signed
+                    // Earlier code subtracted invAdj here, which double-counted
+                    // the stock-decrease leg and produced false "residual" warnings
+                    // for any client with inventory movement (Ambica, KWIKTEAM).
+                    const reconcileResidual = (closingDiffRaw - openingDiff) - movementDiff + invAdjSigned;
                     const tol = Math.max(1, Math.abs(netPL) * 0.0001);
                     const reconciles = Math.abs(reconcileResidual) <= tol;
 
