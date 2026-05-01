@@ -38,7 +38,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { Save, Plus, Trash2, Loader2, FileText, FileDown } from "lucide-react";
-import { exportToWord } from "@/lib/exportUtils";
+import { exportIarToDocx } from "@/lib/iarDocx";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
@@ -392,63 +392,52 @@ export function IARTab({ engagement, client, onUpdate }: Props) {
   };
 
   // ── Export Word ───────────────────────────────────────────────────────────
+  // Generates a real .docx that mirrors the corporate template
+  // (format/IAR.doc): Cambria 10pt, A4, justified, template-exact wording
+  // for the standard sections + dynamic conditional sections.
   const handleExportWord = () => {
-    const litigationRows = state.litigation_rows
-      .filter(r => r.statute || r.amount)
-      .map(r => `<tr><td>${r.sr}</td><td>${r.statute}</td><td>${r.amount}</td><td>${r.fy}</td><td>${r.forum}</td></tr>`)
-      .join("");
-
-    const litigationTable = litigationRows
-      ? `<h3>Pending Litigation</h3>
-         <table border="1" cellpadding="4" cellspacing="0" style="border-collapse:collapse;width:100%">
-           <tr><th>Sr</th><th>Statute / Nature</th><th>Amount</th><th>FY</th><th>Forum</th></tr>
-           ${litigationRows}
-         </table>`
-      : "";
-
-    const html = `
-      <h1>INDEPENDENT AUDITOR'S REPORT</h1>
-      <p><strong>To the Members of ${companyName}</strong></p>
-
-      <h2>Report on the Audit of the Financial Statements</h2>
-      <h3>Opinion</h3>
-      <p>${fragments.opinionPara || ""}</p>
-      ${state.qualification_para ? `<p><em>Qualification:</em> ${state.qualification_para}</p>` : ""}
-      <p>${fragments.opinionConclusion || ""}</p>
-
-      <h3>Basis for ${OPINION_LABEL[state.opinion_type]}</h3>
-      <p>We conducted our audit in accordance with the Standards on Auditing (SAs) specified under section 143(10) of the Companies Act, 2013.</p>
-
-      ${state.emphasis_toggle && state.emphasis_text ? `<h3>Emphasis of Matter</h3><p>${state.emphasis_text}</p>` : ""}
-      ${state.kam_toggle && state.kam_text ? `<h3>Key Audit Matters</h3><p>${state.kam_text}</p>` : ""}
-
-      <h3>Going Concern</h3>
-      <p>${state.going_concern_std
-        ? `We have nothing to report in regard to the company's ability to continue as a going concern.`
-        : state.going_concern_text}</p>
-
-      <h3>Audit Trail</h3>
-      <p>${state.audit_trail_text}</p>
-
-      <h3>Report on Other Legal and Regulatory Requirements</h3>
-      <p>${state.branch_text}</p>
-      ${fragments.pointD || ""}
-      ${fragments.pointG || ""}
-
-      ${fragments.caroPara ? `<h3>CARO 2020</h3><p>${fragments.caroPara}</p>` : ""}
-
-      ${litigationTable}
-
-      <h3>For ${firmName}</h3>
-      <p>Firm Registration No.: ${firmRegNo}<br/>
-      ${partnerName}<br/>
-      Partner, Membership No.: ${partnerMemNo}<br/>
-      UDIN: ${udinValue}<br/>
-      Place: ${firmCity}<br/>
-      Date: ${reportDate}</p>
-    `;
     const fyLabel = (engagement?.financial_year ?? "").replace("/", "-");
-    exportToWord(html, `IAR_${companyName}_FY${fyLabel}.doc`);
+    const safeName = (companyName || "Company").replace(/[^a-zA-Z0-9_\- ]/g, "_");
+
+    // Strip any HTML tags out of the auto-generated fragments — the IAR
+    // template is plain prose so any <p>/<br> from auditReportGenerator
+    // would render as literal text.
+    const plain = (s: string | undefined) =>
+      (s || "").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim();
+
+    exportIarToDocx({
+      companyName,
+      financialYear:    engagement?.financial_year || "",
+      fyEndDate,        // "March 31, 2026"
+      fyEndShort,       // "31st March, 2026"
+      profitOrLoss:     "Profit",   // engagement may not expose net result yet — default Profit
+
+      opinionType:        state.opinion_type,
+      qualificationPara:  state.qualification_para,
+
+      emphasisToggle:    state.emphasis_toggle,
+      emphasisText:      state.emphasis_text,
+      kamToggle:         state.kam_toggle,
+      kamText:           state.kam_text,
+      goingConcernStd:   state.going_concern_std,
+      goingConcernText:  state.going_concern_text,
+      auditTrailText:    state.audit_trail_text,
+      branchText:        state.branch_text,
+
+      pointD:    plain(fragments.pointD),
+      pointG:    plain(fragments.pointG),
+      caroPara:  plain(fragments.caroPara),
+
+      litigationRows: state.litigation_rows,
+
+      firmName,
+      firmRegNo,
+      partnerName,
+      partnerMemNo,
+      udin:        udinValue,
+      firmCity,
+      reportDate,
+    }, `IAR_${safeName}_FY${fyLabel}.docx`);
   };
 
   // ─────────────────────────────────────────────────────────────────────────
