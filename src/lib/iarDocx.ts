@@ -620,21 +620,19 @@ export async function exportIarToDocx(
     ${paras.join("\n    ")}
     <w:sectPr>
       <!--
-        Header references removed — user asked to remove the
-        ":: 2 ::" page-number band that was appearing at the top of
-        page 2. With no headerReference and no titlePg, no header
-        renders on any page.
+        Header references — page 1 uses an empty first-page header
+        (rId10) so the title page has no number; pages 2+ use the
+        default header (rId11) which renders ":: <PAGE> ::" centered.
+        <w:titlePg/> below activates "different first page".
       -->
+      <w:headerReference w:type="first"   r:id="rId10"/>
+      <w:headerReference w:type="default" r:id="rId11"/>
       <w:pgSz w:w="11906" w:h="16838" w:code="9"/>
-      <!--
-        Top margin reduced 1080 → 720 (~0.5") so the title sits at
-        approximately the same ruler position as the template (~ruler 4).
-        Bottom margin remains at 1080 for visible bottom whitespace.
-      -->
       <w:pgMar w:top="720" w:right="720" w:bottom="1080" w:left="1151"
                w:header="720" w:footer="720" w:gutter="0"/>
       <w:cols w:space="708"/>
       <w:docGrid w:linePitch="360"/>
+      <w:titlePg/>
     </w:sectPr>
   </w:body>
 </w:document>`;
@@ -673,8 +671,35 @@ export async function exportIarToDocx(
   </w:style>
 </w:styles>`;
 
+  // ─── Header parts ─────────────────────────────────────────────────────────
+  // header1.xml — first-page header (empty so page 1 has no number).
+  // header2.xml — default header showing ": :  <PAGE>  : :" centered,
+  //               used on pages 2+ via <w:titlePg/> in sectPr. Matches
+  //               the template's manual ": : 2 : :" page-number bands.
+  const header1Xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:p><w:pPr><w:spacing w:after="0"/></w:pPr></w:p>
+</w:hdr>`;
+
+  const pageRunRPr = `<w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr>`;
+  const header2Xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:p>
+    <w:pPr>
+      <w:jc w:val="center"/>
+      <w:spacing w:after="0"/>
+    </w:pPr>
+    <w:r>${pageRunRPr}<w:t xml:space="preserve">: :  </w:t></w:r>
+    <w:r>${pageRunRPr}<w:fldChar w:fldCharType="begin"/></w:r>
+    <w:r>${pageRunRPr}<w:instrText xml:space="preserve">PAGE   \\* MERGEFORMAT </w:instrText></w:r>
+    <w:r>${pageRunRPr}<w:fldChar w:fldCharType="separate"/></w:r>
+    <w:r>${pageRunRPr}<w:t>2</w:t></w:r>
+    <w:r>${pageRunRPr}<w:fldChar w:fldCharType="end"/></w:r>
+    <w:r>${pageRunRPr}<w:t xml:space="preserve">  : :</w:t></w:r>
+  </w:p>
+</w:hdr>`;
+
   // ─── Build ZIP ────────────────────────────────────────────────────────────
-  // Header parts removed — user asked to remove the page-number band.
   const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
@@ -683,6 +708,10 @@ export async function exportIarToDocx(
     ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
   <Override PartName="/word/styles.xml"
     ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+  <Override PartName="/word/header1.xml"
+    ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
+  <Override PartName="/word/header2.xml"
+    ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
 </Types>`;
 
   const rootRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -697,6 +726,12 @@ export async function exportIarToDocx(
   <Relationship Id="rId1"
     Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles"
     Target="styles.xml"/>
+  <Relationship Id="rId10"
+    Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header"
+    Target="header1.xml"/>
+  <Relationship Id="rId11"
+    Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header"
+    Target="header2.xml"/>
 </Relationships>`;
 
   const zip = new JSZip();
@@ -704,6 +739,8 @@ export async function exportIarToDocx(
   zip.file("_rels/.rels", rootRels);
   zip.file("word/document.xml", documentXml);
   zip.file("word/styles.xml", stylesXml);
+  zip.file("word/header1.xml", header1Xml);
+  zip.file("word/header2.xml", header2Xml);
   zip.file("word/_rels/document.xml.rels", docRels);
 
   const blob = await zip.generateAsync({
