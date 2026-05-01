@@ -140,19 +140,60 @@ function bodyPara(text: string, keepNext = true): string {
  * Section heading paragraph (e.g. "2.9  Trade and Other Receivables"):
  *   w:left="650" w:hanging="488"  — number hangs, title text wraps at 650
  *   bold, after="0", keepNext
+ *
+ * `opts.titleSize` lets the main "Note No : 1" heading use 11 pt
+ * (template's sz=22) instead of body 10 pt; `opts.underline` underlines
+ * the title (template's "DISCLOSURE OF ACCOUNTING POLICIES..." has
+ * <w:u w:val="single"/>).
  */
-function headingPara(label: string, title: string): string {
+function headingPara(label: string, title: string, opts: { titleSize?: number; underline?: boolean; spaceBefore?: number } = {}): string {
+  const before = opts.spaceBefore ?? 0;
+  const pPr =
+    `<w:pPr>` +
+    `<w:jc w:val="both"/>` +
+    `<w:keepNext/>` +
+    `<w:spacing${before ? ` w:before="${before}"` : ""} w:after="0" w:line="240" w:lineRule="auto"/>` +
+    `<w:ind w:left="650" w:hanging="488"/>` +
+    `</w:pPr>`;
+  const sz = opts.titleSize;
+  const labelRun = wRun(label, { bold: true, fontSize: sz });
+  const sep      = label && title ? wRun("  ", { bold: true, fontSize: sz }) : "";
+  const titleRun = title ? wRun(title, { bold: true, fontSize: sz, underline: opts.underline }) : "";
+  return `<w:p>${pPr}${labelRun}${sep}${titleRun}</w:p>`;
+}
+
+/**
+ * Horizontal-rule paragraph — matches template's leading divider line.
+ * Renders as a thin line (paragraph with just a top border).
+ */
+function hrPara(): string {
+  return (
+    `<w:p>` +
+      `<w:pPr>` +
+        `<w:pBdr>` +
+          `<w:top w:val="single" w:sz="10" w:space="1" w:color="auto"/>` +
+        `</w:pBdr>` +
+        `<w:spacing w:before="120" w:after="0" w:line="240" w:lineRule="auto"/>` +
+      `</w:pPr>` +
+    `</w:p>`
+  );
+}
+
+/**
+ * Mixed-styling body paragraph: each segment is its own run with its own
+ * formatting opts (bold/italic/underline). Used for the overview paragraph
+ * where "[Company Name]" is bold + underlined and the rest is plain.
+ */
+function bodyParaRich(parts: Array<{ text: string; opts?: RunOpts }>): string {
   const pPr =
     `<w:pPr>` +
     `<w:jc w:val="both"/>` +
     `<w:keepNext/>` +
     `<w:spacing w:after="0" w:line="240" w:lineRule="auto"/>` +
-    `<w:ind w:left="650" w:hanging="488"/>` +
+    `<w:ind w:left="150" w:right="150"/>` +
     `</w:pPr>`;
-  const labelRun = wRun(label, { bold: true });
-  const sep      = label && title ? wRun("  ", { bold: true }) : "";
-  const titleRun = title ? wRun(title, { bold: true }) : "";
-  return `<w:p>${pPr}${labelRun}${sep}${titleRun}</w:p>`;
+  const runs = parts.map(p => wRun(p.text, p.opts ?? {})).join("");
+  return `<w:p>${pPr}${runs}</w:p>`;
 }
 
 /**
@@ -262,12 +303,20 @@ export async function exportNtaToDocx(
   const actYear = getActYear(incDateIso);
   const paras: string[] = [];
 
-  // ── 1. Main heading ──────────────────────────────────────────────────────────
+  // ── 1. Leading divider + Note 1 heading ─────────────────────────────────────
+  // Template begins with a horizontal-rule paragraph (top-bordered <w:p>
+  // with w:before="120") plus a blank spacer ABOVE the Note 1 heading.
+  // Without those leaders the heading sits flush to the page top and gets
+  // visually clipped/hidden by the page border the way the user reported.
+  paras.push(hrPara());
+  paras.push(blank());
+
   // Template: "Note No : 1   DISCLOSURE OF ACCOUNTING POLICIES & NOTES FORMING
-  //            PART OF THE ANNUAL ACCOUNTS" — bold, heading indentation
+  //            PART OF THE ANNUAL ACCOUNTS" — bold, sz=22 (11pt), underlined.
   paras.push(headingPara(
     "Note No : 1",
     "DISCLOSURE OF ACCOUNTING POLICIES & NOTES FORMING PART OF THE ANNUAL ACCOUNTS",
+    { titleSize: 11, underline: true, spaceBefore: 120 },
   ));
   paras.push(blank());
 
@@ -276,14 +325,13 @@ export async function exportNtaToDocx(
   // "[Name] ('the company') was incorporated on [Date] under the Companies Act,
   //  [year] vide CIN [cin] having its registered office at [address] and
   //  engaged in business of [activity]."
-  const overviewText =
-    `${companyName || "[Name of Company]"} ('the company') was incorporated on ` +
-    `${incDate} under the Companies Act, ${actYear} vide CIN ` +
-    `${cin || "___________________"} having its registered office at ` +
-    `${regAddress || "___________________"} and engaged in business of ` +
-    `${bizActivity || "___________________"}.`;
-
-  paras.push(bodyPara(overviewText));
+  //
+  // The company name is rendered as a BOLD + UNDERLINED run (template style);
+  // the rest of the sentence is plain.
+  paras.push(bodyParaRich([
+    { text: companyName || "[Name of Company]", opts: { bold: true, underline: true } },
+    { text: ` ('the company') was incorporated on ${incDate} under the Companies Act, ${actYear} vide CIN ${cin || "___________________"} having its registered office at ${regAddress || "___________________"} and engaged in business of ${bizActivity || "___________________"}.` },
+  ]));
   paras.push(blank());
 
   // ── 3. "2 Significant Accounting Policies" section heading ───────────────────
