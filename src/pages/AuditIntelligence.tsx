@@ -115,9 +115,6 @@ export default function AuditIntelligence() {
   const [partnersForFirm, setPartnersForFirm] = useState<{ partner_name: string; membership_no: string | null }[]>([]);
   const [metrics, setMetrics] = useState({ ledgers: 0, queriesRaised: 0, queriesPending: 0, workpapers: 0, caroCompleted: 0 });
 
-  // #1 — clients from context are already filtered to audit-eligible (see useAuditContext)
-  const auditClients = clients;
-
   // Dialogs
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -127,6 +124,26 @@ export default function AuditIntelligence() {
   const [filterAuditType, setFilterAuditType] = useState<string>("all");
   const [filterFY, setFilterFY] = useState<string>("all");
   const [filterPeriodType, setFilterPeriodType] = useState<string>("all");
+
+  // #1 — clients from context are already filtered to audit-eligible (see useAuditContext).
+  // Issue 1: when a Financial Year is selected, narrow the picker to clients
+  // flagged audit-applicable IN THAT FY (per client_fy_audit_setup). With
+  // filterFY="all" we keep the legacy "ever-audit" list so historical
+  // engagements stay reachable. We always retain clients that already have
+  // an engagement for the selected FY so the dropdown stays consistent with
+  // engagements the user can still open.
+  const auditClients = useMemo(() => {
+    if (!filterFY || filterFY === "all") return clients;
+    const engagedInFY = new Set<string>(
+      engagements
+        .filter((e: any) => e.financial_year === filterFY && e.status !== "archived")
+        .map((e: any) => e.client_id)
+    );
+    return clients.filter(c =>
+      ((c as any).applicable_fys && (c as any).applicable_fys.includes(filterFY)) ||
+      engagedInFY.has(c.id)
+    );
+  }, [clients, engagements, filterFY]);
 
   // Searchable client dropdown
   const [clientOpen, setClientOpen] = useState(false);
