@@ -118,7 +118,11 @@ export function useAuditPlanning(firmId: string, userId?: string, isSuperadmin?:
       if (newComms) existingComms.push(...(newComms as CommEntry[]));
     }
 
-    setComms(existingComms);
+    // Issue 3 defence-in-depth: any historical audit_communication row whose
+    // client_name reads "Leave" (case-insensitive) is filtered before reaching
+    // the UI. Belt-and-suspenders against legacy rows that the cleanup
+    // migration may have missed (e.g. trailing whitespace variants).
+    setComms(existingComms.filter(c => (c.client_name || "").trim().toLowerCase() !== "leave"));
     setLoading(false);
   }, [firmId, isSuperadmin]);
 

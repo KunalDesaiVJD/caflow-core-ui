@@ -382,6 +382,14 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
       }
     }
 
+    // Issue 3 defence-in-depth: drop any row whose party_name still reads
+    // "Leave" (case-insensitive). Such rows are personal time-off and must
+    // never appear in the audit-status grid. The migration purged historical
+    // rows, but this guard prevents any stragglers from surfacing.
+    statusRows = statusRows.filter(
+      r => (r.party_name || "").trim().toLowerCase() !== "leave"
+    );
+
     // Sort: virtual rows last (pending), then alphabetically by party_name
     statusRows.sort((a, b) => {
       if (a.isVirtual && !b.isVirtual) return 1;
