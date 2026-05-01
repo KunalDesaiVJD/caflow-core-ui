@@ -7,7 +7,7 @@ interface AuditContextType {
   selectedEngagementId: string;
   setSelectedClientId: (id: string) => void;
   setSelectedEngagementId: (id: string) => void;
-  clients: { id: string; name: string | null; entity_type: string | null; statutory_audit_applicable?: boolean | null; tax_audit_applicable?: boolean | null; internal_audit_applicable?: boolean | null; stock_audit_applicable?: boolean | null; has_statutory_service?: boolean; has_tax_audit_service?: boolean; has_internal_audit_service?: boolean }[];
+  clients: { id: string; name: string | null; entity_type: string | null; statutory_audit_applicable?: boolean | null; tax_audit_applicable?: boolean | null; internal_audit_applicable?: boolean | null; stock_audit_applicable?: boolean | null; has_statutory_service?: boolean; has_tax_audit_service?: boolean; has_internal_audit_service?: boolean; applicable_fys?: string[] }[];
   engagements: any[];
   selectedEngagement: any | null;
   loading: boolean;
@@ -24,7 +24,7 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
   const [selectedEngagementId, setSelectedEngagementId] = useState<string>(
     () => localStorage.getItem(ENGAGEMENT_STORAGE_KEY) || ""
   );
-  const [clients, setClients] = useState<{ id: string; name: string | null; entity_type: string | null; statutory_audit_applicable?: boolean | null; tax_audit_applicable?: boolean | null; internal_audit_applicable?: boolean | null; stock_audit_applicable?: boolean | null; has_statutory_service?: boolean; has_tax_audit_service?: boolean; has_internal_audit_service?: boolean }[]>([]);
+  const [clients, setClients] = useState<{ id: string; name: string | null; entity_type: string | null; statutory_audit_applicable?: boolean | null; tax_audit_applicable?: boolean | null; internal_audit_applicable?: boolean | null; stock_audit_applicable?: boolean | null; has_statutory_service?: boolean; has_tax_audit_service?: boolean; has_internal_audit_service?: boolean; applicable_fys?: string[] }[]>([]);
   const [engagements, setEngagements] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -71,10 +71,13 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
       .select("client_id")
       .ilike("new_classification", "audit");
 
-    // Fetch audit setup flags from client_fy_audit_setup
+    // Fetch audit setup flags from client_fy_audit_setup.
+    // Include financial_year so we can build a per-client set of FYs the
+    // client is audit-applicable for (Issue 1: Audit Intelligence dropdown
+    // must be gated by selected FY).
     let auditSetupQuery: any = supabase
       .from("client_fy_audit_setup")
-      .select("client_id, statutory_audit_applicable, tax_audit_applicable, internal_audit_applicable, stock_audit_applicable");
+      .select("client_id, financial_year, statutory_audit_applicable, tax_audit_applicable, internal_audit_applicable, stock_audit_applicable, caro_applicable");
 
     // Fetch audit-linked service category IDs (linked_module = "audit")
     let auditCatQuery: any = supabase
@@ -115,10 +118,32 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
       ...(classHistoryRes?.data || []).map((r: any) => r.client_id).filter(Boolean),
     ]);
 
-    // Build per-client audit setup flags
+    // Build per-client audit setup flags (collapsed across FYs — for the
+    // legacy "is this client ever audit-applicable" decision) AND a per-client
+    // set of FYs in which the client is audit-applicable (used by callers
+    // that need FY-scoped filtering, e.g. Audit Intelligence dropdown).
     const setupMap: Record<string, any> = {};
+    const fyMap: Record<string, Set<string>> = {};
     for (const row of (auditSetupRes.data || []) as any[]) {
-      setupMap[row.client_id] = row;
+      const cid = row.client_id;
+      const anyFlag = !!(
+        row.statutory_audit_applicable ||
+        row.tax_audit_applicable ||
+        row.internal_audit_applicable ||
+        row.stock_audit_applicable ||
+        row.caro_applicable
+      );
+      // Collapse: OR every flag across every FY for the legacy boolean.
+      if (!setupMap[cid]) setupMap[cid] = { client_id: cid };
+      setupMap[cid].statutory_audit_applicable = setupMap[cid].statutory_audit_applicable || row.statutory_audit_applicable;
+      setupMap[cid].tax_audit_applicable       = setupMap[cid].tax_audit_applicable       || row.tax_audit_applicable;
+      setupMap[cid].internal_audit_applicable  = setupMap[cid].internal_audit_applicable  || row.internal_audit_applicable;
+      setupMap[cid].stock_audit_applicable     = setupMap[cid].stock_audit_applicable     || row.stock_audit_applicable;
+      // Per-FY membership: only count FYs where at least one flag is true.
+      if (anyFlag && row.financial_year) {
+        if (!fyMap[cid]) fyMap[cid] = new Set<string>();
+        fyMap[cid].add(row.financial_year as string);
+      }
     }
 
     // Build per-client flags from active audit services
@@ -161,6 +186,9 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
           has_statutory_service:       !!svc.hasStat,
           has_tax_audit_service:       !!svc.hasTax,
           has_internal_audit_service:  !!svc.hasInternal,
+          // Per-FY applicability list — Audit Intelligence uses this to gate
+          // the client picker by the selected Financial Year (Issue 1).
+          applicable_fys:              fyMap[c.id] ? [...fyMap[c.id]] : [],
         };
       });
 
