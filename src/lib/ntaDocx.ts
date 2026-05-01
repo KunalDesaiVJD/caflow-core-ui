@@ -198,7 +198,10 @@ function outerHeading(prefix: string, title: string): string {
  */
 function hrPara(): string {
   // Template's first paragraph carries a top border with w:space="0"
-  // (not "1"). Subtle visual delta but matches the template byte-for-byte.
+  // and a Cambria sz=20 paragraph-mark rPr. WITHOUT the rPr, Word
+  // renders the empty paragraph at the default 11pt line height,
+  // inflating the top band by ~2pt. Adding the rPr matches the
+  // template's exact row height.
   return (
     `<w:p>` +
       `<w:pPr>` +
@@ -206,6 +209,7 @@ function hrPara(): string {
           `<w:top w:val="single" w:sz="10" w:space="0" w:color="auto"/>` +
         `</w:pBdr>` +
         `<w:spacing w:before="120" w:after="0" w:line="240" w:lineRule="auto"/>` +
+        `<w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>` +
       `</w:pPr>` +
     `</w:p>`
   );
@@ -233,14 +237,16 @@ function bodyParaRich(parts: Array<{ text: string; opts?: RunOpts }>): string {
  * Template uses w:left="150", after="0".
  */
 function blank(): string {
-  // Empty paragraph used as a between-section spacer. Matches the template
-  // verbatim: no explicit line override, an empty Cambria sz=20 rPr on
-  // the paragraph mark, and after=0. Rendered height ≈ 12pt thanks to
-  // pPrDefault w:line="278" w:lineRule="auto" (1.158× of the 10pt run).
-  // This restores the template's inter-section breathing room.
+  // Empty paragraph used as a between-section spacer.
+  // Template's blank rows explicitly set line=240 lineRule="auto" so the
+  // row height is locked to the standard line-spacing multiplier instead
+  // of inheriting pPrDefault's 1.158× value. Without it the spacer
+  // varies in height from renderer to renderer.
+  // Cambria sz=20 paragraph-mark rPr keeps the empty-line height tied
+  // to the body font.
   return (
     `<w:p><w:pPr>` +
-    `<w:spacing w:after="0"/>` +
+    `<w:spacing w:after="0" w:line="240" w:lineRule="auto"/>` +
     `<w:ind w:left="150"/>` +
     `<w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>` +
     `</w:pPr></w:p>`
