@@ -903,6 +903,7 @@ export type Database = {
           employee_names: string[] | null
           firm_id: string | null
           id: string
+          is_leave: boolean
           planned_from: string
           planned_to: string
         }
@@ -915,6 +916,7 @@ export type Database = {
           employee_names?: string[] | null
           firm_id?: string | null
           id?: string
+          is_leave?: boolean
           planned_from: string
           planned_to: string
         }
@@ -927,6 +929,7 @@ export type Database = {
           employee_names?: string[] | null
           firm_id?: string | null
           id?: string
+          is_leave?: boolean
           planned_from?: string
           planned_to?: string
         }

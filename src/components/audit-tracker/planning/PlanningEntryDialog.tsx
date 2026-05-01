@@ -50,6 +50,7 @@ export interface PlanSaveData {
   planned_to:     string;
   employee_ids:   string[];
   employee_names: string[];
+  is_leave:       boolean;
 }
 
 interface Props {
@@ -129,8 +130,12 @@ export default function PlanningEntryDialog({
     if (!from || !to) return;
     setSaving(true);
     // safeISO strips any time/TZ suffix — keeps value as pure "YYYY-MM-DD"
+    // Issue 3: explicit is_leave flag — leaves must never affect audit_status,
+    // audit_communication, or dashboard reminders. Detected from the special
+    // "Leave" combobox option (client_id=null + client_name="Leave").
+    const isLeave = (clientName || "").trim().toLowerCase() === "leave";
     await onSave(
-      { client_id: clientId || null, client_name: clientName || null, planned_from: safeISO(from), planned_to: safeISO(to), employee_ids: empIds, employee_names: empNames },
+      { client_id: clientId || null, client_name: clientName || null, planned_from: safeISO(from), planned_to: safeISO(to), employee_ids: empIds, employee_names: empNames, is_leave: isLeave },
       isEdit ? entry!.id : undefined
     );
     setSaving(false);
