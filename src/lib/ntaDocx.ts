@@ -231,10 +231,18 @@ function bodyParaRich(parts: Array<{ text: string; opts?: RunOpts }>): string {
  * Template uses w:left="150", after="0".
  */
 function blank(): string {
+  // Empty paragraph used between sections. Its vertical size = pPrDefault
+  // line height (~14 pt) unless we narrow the run-properties font on the
+  // paragraph mark. Setting sz=14 (7 pt) on <w:pPr><w:rPr> halves the
+  // spacer's rendered height (~7 pt instead of ~14 pt) — preserves a
+  // visible gap between heading/body/next-heading while letting Notes 1
+  // through 2.5 fit on the first A4 page. Format unchanged; only the
+  // space between paragraphs is more compact.
   return (
     `<w:p><w:pPr>` +
     `<w:spacing w:after="0"/>` +
     `<w:ind w:left="150"/>` +
+    `<w:rPr><w:sz w:val="14"/><w:szCs w:val="14"/></w:rPr>` +
     `</w:pPr></w:p>`
   );
 }
