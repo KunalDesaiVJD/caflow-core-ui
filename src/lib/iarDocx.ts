@@ -140,17 +140,17 @@ function bullet(text: string): string {
  */
 function heading(text: string, opts: { underline?: boolean; before?: number } = {}): string {
   // Headings flush-left to match body paragraphs and addressee block.
-  // (The template carries indLeft=180 on heading paragraphs, but that
-  // pushed every heading half-a-character right of the body paragraphs,
-  // making the document visually unaligned. User explicitly asked for
-  // every line to start at the same column — drop the indent.)
+  // Reduced spaceBefore from 266 → 140 so several more lines fit on
+  // page 1 — required so that the Management's Responsibility section
+  // doesn't overflow to page 2. Visual hierarchy preserved by sz=11
+  // bold + small breathing room above.
   return wPara(text, {
     leftAlign: true,
     bold: true,
     underline: opts.underline,
     fontSize: 11,
-    spaceBefore: opts.before ?? 266,
-    spaceAfter:  120,
+    spaceBefore: opts.before ?? 140,
+    spaceAfter:  60,
     keepNext:    true,
   });
 }
@@ -250,14 +250,12 @@ export async function exportIarToDocx(
   const paras: string[] = [];
 
   // ── 0. Top-of-page spacing ────────────────────────────────────────────────
-  // Template renders the title roughly 3 inches below the top edge of the
-  // page (page top margin is only 289 twips ≈ 0.2", so the visible top
-  // whitespace comes from blank-paragraph runners at the start of the body).
-  // Word ignores `w:before` on the very first paragraph, so we push the
-  // gap via real empty paragraphs. 10 blanks ≈ 1.7" of vertical air
-  // before the title — matches the template's visual position closer
-  // than the previous 8 blanks did. No format/wording changes.
-  for (let i = 0; i < 10; i++) paras.push(blank());
+  // Earlier rounds had 8–10 leading blank paragraphs to push the title
+  // down to match the template visually. User now wants the top
+  // whitespace removed AND the Management's Responsibility section to
+  // fit on page 1 — both require reclaiming vertical space, so the
+  // leading blanks are dropped entirely. The page top margin (289 twips)
+  // alone provides the minimal breathing room.
 
   // ── 1. Title ──────────────────────────────────────────────────────────────
   // Template wraps the title with the built-in "Title" pStyle which
@@ -277,7 +275,7 @@ export async function exportIarToDocx(
   // it to the page centre.
   paras.push(wPara("To",                  { leftAlign: true, fontSize: 11, spaceAfter: 0 }));
   paras.push(wPara("The Shareholders of", { leftAlign: true, fontSize: 11, spaceAfter: 0 }));
-  paras.push(wPara(company,               { leftAlign: true, fontSize: 11, bold: true, spaceAfter: 200 }));
+  paras.push(wPara(company,               { leftAlign: true, fontSize: 11, bold: true, spaceAfter: 100 }));
   paras.push(blank());
 
   // ── 3. "Report on the Financial Statements" ─────────────────────────────
@@ -292,7 +290,7 @@ export async function exportIarToDocx(
     `which comprise the Balance Sheet as at ${fyEndDate}, the Statement of Profit and Loss and ` +
     `Cash Flow Statement for the year then ended, and notes to the financial statements ` +
     `including a summary of significant accounting policies and other explanatory information.`,
-    { spaceAfter: 200 },
+    { spaceAfter: 100 },
   ));
   paras.push(wPara(
     `In our opinion and to the best of our information and according to the explanations given to us, ` +
@@ -301,12 +299,12 @@ export async function exportIarToDocx(
     // Template uses lowercase "company" here ("...state of affairs of the company..."). Restored.
     `of the state of affairs of the company as at ${fyEndDate}, and ${profitOrLoss} and its cash flows ` +
     `for the year ended on that date.`,
-    { spaceAfter: 200 },
+    { spaceAfter: 100 },
   ));
 
   // Optional Qualification para — slotted directly under Opinion
   if (qualificationPara && qualificationPara.trim()) {
-    paras.push(wPara(qualificationPara, { italic: true, spaceAfter: 200 }));
+    paras.push(wPara(qualificationPara, { italic: true, spaceAfter: 100 }));
   }
 
   // ── 5. Basis for Opinion ──────────────────────────────────────────────────
@@ -322,19 +320,19 @@ export async function exportIarToDocx(
     `have fulfilled our other ethical responsibilities in accordance with these requirements and the Code of ` +
     `Ethics. We believe that the audit evidence we have obtained is sufficient and appropriate to provide a ` +
     `basis for our opinion.`,
-    { spaceAfter: 200 },
+    { spaceAfter: 100 },
   ));
 
   // ── 6. Emphasis of Matter (optional) ──────────────────────────────────────
   if (emphasisToggle && emphasisText.trim()) {
     paras.push(heading("Emphasis of Matter"));
-    paras.push(wPara(emphasisText, { spaceAfter: 200 }));
+    paras.push(wPara(emphasisText, { spaceAfter: 100 }));
   }
 
   // ── 7. Key Audit Matters (optional) ───────────────────────────────────────
   if (kamToggle && kamText.trim()) {
     paras.push(heading("Key Audit Matters"));
-    paras.push(wPara(kamText, { spaceAfter: 200 }));
+    paras.push(wPara(kamText, { spaceAfter: 100 }));
   }
 
   // ── 8. Management's Responsibility ────────────────────────────────────────
@@ -352,18 +350,18 @@ export async function exportIarToDocx(
     `that are operating effectively for ensuring the accuracy and completeness of the accounting records, ` +
     `relevant to the preparation and presentation of the financial statements that give a true and fair view ` +
     `and are free from material misstatement, whether due to fraud or error.`,
-    { spaceAfter: 200 },
+    { spaceAfter: 100 },
   ));
   paras.push(wPara(
     `In preparing the financial statements, management is responsible for assessing the Company's ability to ` +
     `continue as a going concern, disclosing, as applicable, matters related to going concern and using the ` +
     `going concern basis of accounting unless management either intends to liquidate the Company or to cease ` +
     `operations, or has no realistic alternative but to do so.`,
-    { spaceAfter: 200 },
+    { spaceAfter: 100 },
   ));
   paras.push(wPara(
     `That Board of Directors is also responsible for overseeing the Company's financial reporting process.`,
-    { spaceAfter: 200 },
+    { spaceAfter: 100 },
   ));
 
   // ── 9. Auditor's Responsibility ───────────────────────────────────────────
@@ -376,7 +374,7 @@ export async function exportIarToDocx(
     `Misstatements can arise from fraud or error and are considered material if, individually or in aggregate, ` +
     `they could reasonably be expected to influence the economic decisions of users taken on the basis of ` +
     `these financial statements.`,
-    { spaceAfter: 200 },
+    { spaceAfter: 100 },
   ));
   paras.push(wPara(
     `As part of an audit in accordance with Standards on Auditing, we exercise professional judgment and ` +
@@ -422,7 +420,7 @@ export async function exportIarToDocx(
     `We communicate with those charged with governance regarding, among other matters, the planned scope and timing of ` +
     `the audit and significant audit findings, including any significant deficiencies in internal control that we identify ` +
     `during our audit.`,
-    { spaceAfter: 200 },
+    { spaceAfter: 100 },
   ));
   paras.push(wPara(
     `We also provide those charged with governance with a statement that we have complied with relevant ethical ` +
@@ -437,31 +435,31 @@ export async function exportIarToDocx(
     goingConcernStd
       ? "We have nothing to report in regard to the Company's ability to continue as a going concern."
       : (goingConcernText.trim() || "We have nothing to report in regard to the Company's ability to continue as a going concern."),
-    { spaceAfter: 200 },
+    { spaceAfter: 100 },
   ));
 
   // ── 11. Audit Trail ───────────────────────────────────────────────────────
   if (auditTrailText && auditTrailText.trim()) {
     paras.push(heading("Audit Trail (Edit Log)"));
-    paras.push(wPara(auditTrailText, { spaceAfter: 200 }));
+    paras.push(wPara(auditTrailText, { spaceAfter: 100 }));
   }
 
   // ── 12. Other Legal & Regulatory Requirements ─────────────────────────────
   paras.push(heading("Report on Other Legal and Regulatory Requirements"));
   if (branchText && branchText.trim()) {
-    paras.push(wPara(branchText, { spaceAfter: 200 }));
+    paras.push(wPara(branchText, { spaceAfter: 100 }));
   }
   if (pointD && pointD.trim()) {
-    paras.push(wPara(pointD, { spaceAfter: 200 }));
+    paras.push(wPara(pointD, { spaceAfter: 100 }));
   }
   if (pointG && pointG.trim()) {
-    paras.push(wPara(pointG, { spaceAfter: 200 }));
+    paras.push(wPara(pointG, { spaceAfter: 100 }));
   }
 
   // ── 13. CARO 2020 ─────────────────────────────────────────────────────────
   if (caroPara && caroPara.trim()) {
     paras.push(heading("Annexure to the Auditors' Report — CARO 2020"));
-    paras.push(wPara(caroPara, { spaceAfter: 200 }));
+    paras.push(wPara(caroPara, { spaceAfter: 100 }));
   }
 
   // ── 14. Pending Litigation table ──────────────────────────────────────────
@@ -514,13 +512,13 @@ export async function exportIarToDocx(
   paras.push(blank());
   paras.push(wPara(`For ${firmName || "[Firm Name]"},`,                   { leftAlign: true, bold: true, spaceAfter: 0 }));
   paras.push(wPara(`Chartered Accountants`,                                { leftAlign: true, italic: true, spaceAfter: 0 }));
-  if (firmRegNo) paras.push(wPara(`Firm Registration No.: ${firmRegNo}`,   { leftAlign: true, spaceAfter: 200 }));
+  if (firmRegNo) paras.push(wPara(`Firm Registration No.: ${firmRegNo}`,   { leftAlign: true, spaceAfter: 100 }));
   paras.push(blank());
   paras.push(blank());
   paras.push(wPara(partnerName || "[Partner Name]",                        { leftAlign: true, bold: true, spaceAfter: 0 }));
   paras.push(wPara(`Partner`,                                              { leftAlign: true, spaceAfter: 0 }));
   if (partnerMemNo) paras.push(wPara(`Membership No.: ${partnerMemNo}`,    { leftAlign: true, spaceAfter: 0 }));
-  if (udin) paras.push(wPara(`UDIN: ${udin}`,                              { leftAlign: true, spaceAfter: 200 }));
+  if (udin) paras.push(wPara(`UDIN: ${udin}`,                              { leftAlign: true, spaceAfter: 100 }));
   paras.push(blank());
   paras.push(wPara(`Place: ${firmCity || ""}`,                              { leftAlign: true, spaceAfter: 0 }));
   paras.push(wPara(`Date: ${reportDate || ""}`,                             { leftAlign: true, spaceAfter: 0 }));
@@ -538,7 +536,12 @@ export async function exportIarToDocx(
     ${paras.join("\n    ")}
     <w:sectPr>
       <w:pgSz w:w="11906" w:h="16838" w:code="9"/>
-      <w:pgMar w:top="289" w:right="720" w:bottom="346" w:left="1151"
+      <!--
+        Bottom margin bumped from 346 (~0.24") to 1080 (~0.75") so the
+        last line of body content sits visibly above the page edge —
+        user requested space at the bottom of the page.
+      -->
+      <w:pgMar w:top="289" w:right="720" w:bottom="1080" w:left="1151"
                w:header="720" w:footer="720" w:gutter="0"/>
       <w:cols w:space="708"/>
       <w:docGrid w:linePitch="360"/>
