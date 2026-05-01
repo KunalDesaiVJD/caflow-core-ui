@@ -20,6 +20,8 @@ export interface TbPartyMapping {
   tds_deductee_name: string;
   tds_section_code: string | null;
   tds_total_amount: number | null;
+  /** TDS deducted amount per filing (sum of tds_deductees.tds_amount). Added in migration 20260501000001. */
+  tds_tds_amount: number | null;
   tds_filing_ids: string[] | null;
   match_confidence: number | null;
   match_method: string | null;

@@ -23,6 +23,7 @@ import {
 import {
   Bot, RefreshCw, CheckCircle2, XCircle, Pencil, Save, X,
   ChevronDown, ChevronRight, Info, Loader2, Search, ExternalLink,
+  AlertTriangle, BadgeCheck,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
@@ -361,7 +362,7 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
           {/* Table header */}
           <div className="grid grid-cols-[1fr_1fr_80px_100px_110px_130px] gap-2 px-4 py-2 text-[10px] uppercase tracking-wide text-muted-foreground bg-muted/30 border-b">
             <span>TB Ledger (Tally)</span>
-            <span>TDS Deductee</span>
+            <span>TDS Deductee (Gross / TDS Deducted)</span>
             <span>Section</span>
             <span>Confidence</span>
             <span>Method</span>
@@ -409,15 +410,51 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
                       </Link>
                     </div>
 
-                    {/* TDS Deductee */}
-                    <div>
+                    {/* TDS Deductee — shows gross amount + TDS deducted + match indicators */}
+                    <div className="space-y-0.5">
                       <p className="text-xs truncate" title={m.tds_deductee_name}>
                         {m.tds_deductee_name}
                       </p>
-                      {m.tds_total_amount != null && (
-                        <p className="text-[10px] text-muted-foreground">
-                          ₹{m.tds_total_amount.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
-                        </p>
+
+                      {/* Gross amount row with match indicator */}
+                      {m.tds_total_amount != null && (() => {
+                        const tbGross = m.tb_total_debit ?? 0;
+                        const tdsGross = m.tds_total_amount;
+                        const ratio = tbGross > 0 ? tdsGross / tbGross : 0;
+                        const ratioNet = tbGross > 0 ? tdsGross / (tbGross / 1.18) : 0;
+                        const grossMatch = (ratio >= 0.75 && ratio <= 1.35) || (Math.abs(ratioNet - 1) < 0.10);
+                        const gstCause  = !grossMatch && ratio < 0.75 && Math.abs(ratioNet - 1) < 0.15;
+                        return (
+                          <div className="flex items-center gap-1">
+                            {grossMatch
+                              ? <BadgeCheck size={9} className="text-green-500 shrink-0" />
+                              : <AlertTriangle size={9} className={cn("shrink-0", gstCause ? "text-amber-500" : "text-red-400")} />}
+                            <span className="text-[10px] text-muted-foreground">
+                              Gross: ₹{tdsGross.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
+                            </span>
+                            {!grossMatch && gstCause && (
+                              <span className="text-[9px] text-amber-600 italic">+GST?</span>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      {/* TDS deducted row */}
+                      {m.tds_tds_amount != null ? (
+                        <div className="flex items-center gap-1">
+                          {m.tds_tds_amount > 0
+                            ? <BadgeCheck size={9} className="text-green-500 shrink-0" />
+                            : <AlertTriangle size={9} className="text-red-400 shrink-0" />}
+                          <span className="text-[10px] text-muted-foreground">
+                            TDS: ₹{m.tds_tds_amount.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
+                            {m.tds_tds_amount <= 0 && (
+                              <span className="text-red-400 ml-1 italic">no TDS filed</span>
+                            )}
+                          </span>
+                        </div>
+                      ) : (
+                        /* Older row without tds_tds_amount — show neutral placeholder */
+                        <span className="text-[10px] text-muted-foreground/50 italic">TDS: —</span>
                       )}
                     </div>
 
