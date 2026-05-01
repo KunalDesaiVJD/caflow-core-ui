@@ -388,12 +388,12 @@ export async function exportIarToDocx(
     { spaceAfter: 60 },
   ));
 
-  // Hard page break — template ends page 1 right after Management's
-  // Responsibility's last paragraph. Without this break, the bottom of
-  // page 1 would carry 2–3 lines of the next section, which the user
-  // explicitly asked to remove. With the explicit break, page 1 caps
-  // at the MR closing paragraph.
-  paras.push(pageBreakPara());
+  // No page break between Management's Responsibility and Auditor's
+  // Responsibility — user asked to remove page 2 and let the body
+  // sections flow continuously. Total pages: 2.
+  // (Page 1 = title → ... → Auditor's Responsibility + bullets +
+  //          communication paragraphs; Page 2 = Other Legal &
+  //          Regulatory + lettered list + signature.)
 
   // ── 9. Auditor's Responsibility ───────────────────────────────────────────
   // Template renders this heading with TWO spaces between "Auditor's"
