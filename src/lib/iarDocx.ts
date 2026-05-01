@@ -262,7 +262,10 @@ export async function exportIarToDocx(
   // renders italic + underline + centered + bold. Match by emitting
   // those properties explicitly so the export looks the same regardless
   // of whether the consuming Word installation has Title style defined.
-  paras.push(wPara("INDEPENDENT AUDITOR'S REPORT", {
+  // Apostrophe is U+2019 (right single quotation mark) — template uses
+  // smart quotes throughout; ASCII U+0027 in earlier rounds rendered
+  // as a straight tick instead of the curly typographer's apostrophe.
+  paras.push(wPara("INDEPENDENT AUDITOR’S REPORT", {
     centered: true, bold: true, italic: true, underline: true,
     fontSize: 12, spaceAfter: 240,
   }));
@@ -286,10 +289,12 @@ export async function exportIarToDocx(
   // ── 4. Opinion ────────────────────────────────────────────────────────────
   paras.push(heading(OPINION_LABEL[opinionType]));
   paras.push(wPara(
-    `We have audited the accompanying financial statements of ${company} ("the Company"), ` +
-    `which comprise the Balance Sheet as at ${fyEndDate}, the Statement of Profit and Loss and ` +
+    // Smart quotes around "the Company"; lowercase "statement"; no "a"
+    // before "summary of" — all per template's verbatim wording.
+    `We have audited the accompanying financial statements of ${company} (“the Company”), ` +
+    `which comprise the Balance Sheet as at ${fyEndDate}, the statement of Profit and Loss and ` +
     `Cash Flow Statement for the year then ended, and notes to the financial statements ` +
-    `including a summary of significant accounting policies and other explanatory information.`,
+    `including summary of significant accounting policies and other explanatory information.`,
     { spaceAfter: 100 },
   ));
   paras.push(wPara(
@@ -312,7 +317,7 @@ export async function exportIarToDocx(
   paras.push(wPara(
     `We conducted our audit in accordance with the Standards on Auditing (SAs) specified under section 143(10) ` +
     `of the Companies Act, 2013. Our responsibilities under those Standards are further described in the ` +
-    `Auditor's Responsibilities for the Audit of the Financial Statements section of our report. We are ` +
+    `Auditor’s Responsibilities for the Audit of the Financial Statements section of our report. We are ` +
     `independent of the Company in accordance with the Code of Ethics issued by the Institute of Chartered ` +
     `Accountants of India together with the ethical requirements that are relevant to our audit of the ` +
     // Template renders "there under" as TWO words. Restored.
@@ -338,10 +343,13 @@ export async function exportIarToDocx(
   // ── 8. Management's Responsibility ────────────────────────────────────────
   paras.push(heading("Management's Responsibility for the Financial Statements"));
   paras.push(wPara(
+    // Template uses smart-quote 'the act' and lowercase "company" in
+    // "cash flows of the company" (the second occurrence is a generic
+    // reference, not the defined term "the Company").
     `The management and Board of Directors of the Company are responsible for the matters stated in ` +
-    `Section 134(5) of the Companies Act, 2013 ('the act') with respect to the preparation of these ` +
+    `Section 134(5) of the Companies Act, 2013 (‘the act’) with respect to the preparation of these ` +
     `financial statements that give a true and fair view of the financial position, financial performance ` +
-    `and cash flows of the Company in accordance with the accounting principles generally accepted in India, ` +
+    `and cash flows of the company in accordance with the accounting principles generally accepted in India, ` +
     `including the Accounting Standards specified under Section 133 of the Act. This responsibility also ` +
     `includes maintenance of adequate accounting records in accordance with the provisions of the Act for ` +
     `safeguarding the assets of the Company and for preventing and detecting frauds and other irregularities; ` +
@@ -353,22 +361,23 @@ export async function exportIarToDocx(
     { spaceAfter: 100 },
   ));
   paras.push(wPara(
-    `In preparing the financial statements, management is responsible for assessing the Company's ability to ` +
+    `In preparing the financial statements, management is responsible for assessing the Company’s ability to ` +
     `continue as a going concern, disclosing, as applicable, matters related to going concern and using the ` +
     `going concern basis of accounting unless management either intends to liquidate the Company or to cease ` +
     `operations, or has no realistic alternative but to do so.`,
     { spaceAfter: 100 },
   ));
   paras.push(wPara(
-    `That Board of Directors is also responsible for overseeing the Company's financial reporting process.`,
+    // Template uses lowercase "company's" here (generic, not defined term).
+    `That Board of Directors is also responsible for overseeing the company’s financial reporting process.`,
     { spaceAfter: 100 },
   ));
 
   // ── 9. Auditor's Responsibility ───────────────────────────────────────────
-  paras.push(heading("Auditor's Responsibility"));
+  paras.push(heading("Auditor’s Responsibility"));
   paras.push(wPara(
     `Our objectives are to obtain reasonable assurance about whether the financial statements as a whole ` +
-    `are free from material misstatement, whether due to fraud or error, and to issue an auditor's report ` +
+    `are free from material misstatement, whether due to fraud or error, and to issue an auditor’s report ` +
     `that includes our opinion. Reasonable assurance is a high level of assurance but is not a guarantee ` +
     `that an audit conducted in accordance with SAs will always detect a material misstatement when it exists. ` +
     `Misstatements can arise from fraud or error and are considered material if, individually or in aggregate, ` +
@@ -377,8 +386,9 @@ export async function exportIarToDocx(
     { spaceAfter: 100 },
   ));
   paras.push(wPara(
+    // Template wording: comma + lowercase "we also" (not period).
     `As part of an audit in accordance with Standards on Auditing, we exercise professional judgment and ` +
-    `maintain professional skepticism throughout the audit. We also:`,
+    `maintain professional skepticism throughout the audit, we also:`,
     { spaceAfter: 120 },
   ));
 
@@ -391,8 +401,9 @@ export async function exportIarToDocx(
     "misrepresentations, or the override of internal control."
   ));
   paras.push(bullet(
+    // Template uses "Section 143(3) (i)" with a SPACE before "(i)".
     "Obtain an understanding of internal control relevant to the audit in order to design audit procedures that are " +
-    "appropriate in the circumstances. Under Section 143(3)(i) of the Act, we are also responsible for explaining our " +
+    "appropriate in the circumstances. Under Section 143(3) (i) of the Act, we are also responsible for explaining our " +
     "opinion on whether the Company has adequate internal financial controls system in place and the operating " +
     "effectiveness of such controls."
   ));
@@ -401,12 +412,12 @@ export async function exportIarToDocx(
     "disclosures made by management."
   ));
   paras.push(bullet(
-    "Conclude on the appropriateness of management's use of the going concern basis of accounting and, based on the audit " +
+    "Conclude on the appropriateness of management’s use of the going concern basis of accounting and, based on the audit " +
     "evidence obtained, whether a material uncertainty exists related to events or conditions that may cast significant " +
-    "doubt on the Company's ability to continue as a going concern. If we conclude that a material uncertainty exists, we " +
-    "are required to draw attention in our auditor's report to the related disclosures in the financial statements or, if " +
+    "doubt on the Company’s ability to continue as a going concern. If we conclude that a material uncertainty exists, we " +
+    "are required to draw attention in our auditor’s report to the related disclosures in the financial statements or, if " +
     "such disclosures are inadequate, to modify our opinion. Our conclusions are based on the audit evidence obtained up " +
-    "to the date of our auditor's report. However, future events or conditions may cause the Company to cease to continue " +
+    "to the date of our auditor’s report. However, future events or conditions may cause the Company to cease to continue " +
     "as a going concern."
   ));
   paras.push(bullet(
@@ -537,11 +548,12 @@ export async function exportIarToDocx(
     <w:sectPr>
       <w:pgSz w:w="11906" w:h="16838" w:code="9"/>
       <!--
-        Bottom margin bumped from 346 (~0.24") to 1080 (~0.75") so the
-        last line of body content sits visibly above the page edge —
-        user requested space at the bottom of the page.
+        Bottom margin restored to the template's exact value (346 ≈ 0.24").
+        A larger bottom margin pushed body content onto a third page in
+        the previous round; the template uses 346 and renders cleanly on
+        2 pages, which the user is now asking for.
       -->
-      <w:pgMar w:top="289" w:right="720" w:bottom="1080" w:left="1151"
+      <w:pgMar w:top="289" w:right="720" w:bottom="346" w:left="1151"
                w:header="720" w:footer="720" w:gutter="0"/>
       <w:cols w:space="708"/>
       <w:docGrid w:linePitch="360"/>
