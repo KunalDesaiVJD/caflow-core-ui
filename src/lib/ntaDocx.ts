@@ -231,18 +231,22 @@ function bodyParaRich(parts: Array<{ text: string; opts?: RunOpts }>): string {
  * Template uses w:left="150", after="0".
  */
 function blank(): string {
-  // Empty paragraph used between sections. Its vertical size = pPrDefault
-  // line height (~14 pt) unless we narrow the run-properties font on the
-  // paragraph mark. Setting sz=14 (7 pt) on <w:pPr><w:rPr> halves the
-  // spacer's rendered height (~7 pt instead of ~14 pt) — preserves a
-  // visible gap between heading/body/next-heading while letting Notes 1
-  // through 2.5 fit on the first A4 page. Format unchanged; only the
-  // space between paragraphs is more compact.
+  // Empty paragraph used as a between-section spacer. We need this gap
+  // small enough that all of Notes 1 through 2.5 fit on the first A4
+  // page — including 2.5's three-paragraph body which the user reported
+  // was overflowing to page 2.
+  //
+  // Why "exactly 100 twips" not just sz=14:
+  //   pPrDefault has w:line="278" w:lineRule="auto" which would inflate
+  //   the empty paragraph to ~1.16× the font size regardless of how
+  //   small we make the rPr. Using w:lineRule="exactly" w:line="100"
+  //   pins the spacer at a fixed 5 pt rendered height, independent of
+  //   inherited line spacing.
   return (
     `<w:p><w:pPr>` +
-    `<w:spacing w:after="0"/>` +
+    `<w:spacing w:after="0" w:line="100" w:lineRule="exact"/>` +
     `<w:ind w:left="150"/>` +
-    `<w:rPr><w:sz w:val="14"/><w:szCs w:val="14"/></w:rPr>` +
+    `<w:rPr><w:sz w:val="10"/><w:szCs w:val="10"/></w:rPr>` +
     `</w:pPr></w:p>`
   );
 }
