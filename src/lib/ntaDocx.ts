@@ -385,7 +385,8 @@ export async function exportNtaToDocx(
     { text: companyName || "[Name of Company]", opts: { bold: true, underline: true } },
     { text: ` ('the company') was incorporated on ${incDate} under the Companies Act, ${actYear} vide CIN ${cin || "___________________"} having its registered office at ${regAddress || "___________________"} and engaged in business of ${bizActivity || "___________________"}.` },
   ]));
-  paras.push(blank());
+  // No spacer here — template P7 (overview body) flows directly into P8
+  // ("2. Significant Accounting Policies" heading).
 
   // ── 4. "2. Significant Accounting Policies" heading ─────────────────────────
   // Template paragraph P8 (ListParagraph + numId=4) — auto-numbered "2."
@@ -394,12 +395,17 @@ export async function exportNtaToDocx(
   paras.push(blank());
 
   // ── 4. Policies 2.1 – 2.n ────────────────────────────────────────────────────
-  // Template pattern (e.g. 2.1):
+  // Template pattern (e.g. 2.1 → 2.2):
   //   P10 → heading "2.1 Basis of Preparation of Financial statements"
   //   P11 → empty spacer paragraph (gives breathing room under the heading)
   //   P12 → body "The financial statements of the Company..."
-  // Missing the inter-spacer (P11) was the cause of the "no space between
-  // subpoints and their paragraph" the user reported.
+  //   P13 → heading "2.2 Use of Estimates"  (DIRECTLY after P12 — no spacer)
+  //   P14 → empty spacer
+  //   P15 → 2.2 body
+  // So we emit heading → spacer → body, and let the next iteration's
+  // heading follow directly without an inter-section spacer. This matches
+  // the template byte-for-byte AND lets Notes 1 → 2.5 fit on the first
+  // A4 page.
   for (let idx = 0; idx < data.policies.length; idx++) {
     const p     = data.policies[idx];
     const label = p.id || `2.${idx + 1}`;
@@ -409,8 +415,11 @@ export async function exportNtaToDocx(
     paras.push(headingPara(label, title));
     paras.push(blank()); // spacer between heading and body — matches template P11
     bodyBlock(body).forEach(bp => paras.push(bp));
-    paras.push(blank()); // spacer between this policy's body and next heading
+    // No body→next-heading spacer — template flows directly into next heading.
   }
+  // After the LAST policy body, add a single spacer before the 2.19 heading
+  // (matches the template gap before "General notes").
+  paras.push(blank());
 
   // ── 5. 2.19 General Notes ─────────────────────────────────────────────────────
   paras.push(headingPara("2.19", "General notes"));
