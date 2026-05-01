@@ -120,6 +120,62 @@ function amountRatioScore(tbActivity: number, tdsAmount: number): number {
   return 5;
 }
 
+// GST_FACTOR: Indian B2B invoices typically carry 18% GST. When the TB ledger
+// is an expense/creditor account the debit includes GST, whereas the TDS
+// deductee amount_paid_credited in the filing reflects the BASE amount only.
+// Dividing by 1.18 normalises the TB figure before comparing.
+const GST_FACTOR = 1.18;
+
+/**
+ * Returns a tuple [grossScore, gstAdjusted] where gstAdjusted=true means we
+ * had to normalise the TB figure by ÷1.18 to get a good score.
+ */
+function grossAmountScore(tbActivity: number, tdsGross: number): { score: number; gstAdjusted: boolean } {
+  const rawScore = amountRatioScore(tbActivity, tdsGross);
+  if (rawScore >= 75) return { score: rawScore, gstAdjusted: false };
+  // Try GST-normalised comparison: TB (incl. GST) ÷ 1.18 ≈ TDS gross
+  const tbNet = tbActivity / GST_FACTOR;
+  const netScore = amountRatioScore(tbNet, tdsGross);
+  if (netScore > rawScore) return { score: netScore, gstAdjusted: true };
+  return { score: rawScore, gstAdjusted: false };
+}
+
+/**
+ * Produce a human-readable explanation for any gross-amount difference between
+ * the TB ledger and the TDS filing.
+ */
+function grossDifferenceReason(tbActivity: number, tdsGross: number, tdsTds: number): string {
+  if (tbActivity <= 0 || tdsGross <= 0) return "";
+  const ratio = tdsGross / tbActivity;
+  const ratioNet = tdsGross / (tbActivity / GST_FACTOR);
+  const diff = tbActivity - tdsGross;
+
+  const lines: string[] = [];
+
+  // Explain gross difference
+  if (ratio < 0.75 || ratio > 1.35) {
+    if (Math.abs(ratioNet - 1) < 0.05) {
+      lines.push(`TB ₹${tbActivity.toFixed(0)} includes GST; net-of-GST ₹${(tbActivity / GST_FACTOR).toFixed(0)} ≈ TDS gross ₹${tdsGross.toFixed(0)} — GST inclusion explains the difference.`);
+    } else if (diff > 0 && diff / tbActivity < 0.25) {
+      lines.push(`TB exceeds TDS gross by ₹${diff.toFixed(0)} (${(diff / tbActivity * 100).toFixed(1)}%). Possible cause: GST-inclusive booking, advance payment, or timing difference.`);
+    } else if (diff < 0) {
+      lines.push(`TDS gross ₹${tdsGross.toFixed(0)} exceeds TB ₹${tbActivity.toFixed(0)} by ₹${Math.abs(diff).toFixed(0)}. Possible cause: partial-year TB, multiple TB ledgers, or incorrect party mapping.`);
+    } else {
+      lines.push(`Gross amount mismatch: TB ₹${tbActivity.toFixed(0)} vs TDS ₹${tdsGross.toFixed(0)} (ratio ${(ratio * 100).toFixed(0)}%). Review for split ledgers or wrong party match.`);
+    }
+  }
+
+  // Explain TDS amount
+  if (tdsTds <= 0) {
+    lines.push("No TDS deducted in filing — TDS obligation may be unmet.");
+  } else {
+    const impliedRate = (tdsTds / tdsGross) * 100;
+    lines.push(`TDS deducted per filing: ₹${tdsTds.toFixed(0)} (effective rate ${impliedRate.toFixed(1)}% on ₹${tdsGross.toFixed(0)}).`);
+  }
+
+  return lines.join(" ");
+}
+
 interface AggDeductee {
   deductee_name: string;
   section_code: string | null;
@@ -210,7 +266,10 @@ export async function runAiMapper(params: {
 
   for (const tb of expenseLedgers) {
     if (alreadyMapped.has(tb.ledger_name)) { skipped++; continue; }
-    let best: { ded: AggDeductee; confidence: number; nameScore: number; amtScore: number; secScore: number; method: string } | null = null;
+    let best: {
+      ded: AggDeductee; confidence: number; nameScore: number; amtScore: number;
+      secScore: number; method: string; gstAdjusted: boolean;
+    } | null = null;
 
     for (const ded of aggDeductees) {
       if (!ded.deductee_name) continue;
@@ -218,7 +277,8 @@ export async function runAiMapper(params: {
       // Issue 3: Require ≥ 70% name similarity
       if (nameScore < 70) continue;
       const tbActivity = Math.max(tb.debit_amount ?? 0, tb.credit_amount ?? 0);
-      const amtScore   = amountRatioScore(tbActivity, ded.total_amount_paid);
+      // Use GST-normalised gross comparison to avoid spurious mismatches
+      const { score: amtScore, gstAdjusted } = grossAmountScore(tbActivity, ded.total_amount_paid);
       const secScore   = sectionContextScore(tb.parent_group, ded.section_code);
       const confidence = Math.round(nameScore * 0.50 + amtScore * 0.30 + secScore * 0.20);
       if (confidence < 40) continue;
@@ -227,25 +287,38 @@ export async function runAiMapper(params: {
         if (nameScore >= 70) methods.push("name_similarity");
         if (amtScore  >= 75) methods.push("amount_ratio");
         if (secScore  >= 80) methods.push("section_context");
-        best = { ded, confidence, nameScore, amtScore, secScore, method: methods.join("+") || "ai_partial" };
+        best = { ded, confidence, nameScore, amtScore, secScore, method: methods.join("+") || "ai_partial", gstAdjusted };
       }
     }
 
     if (!best) { skipped++; continue; }
 
     const tbActivity = Math.max(tb.debit_amount ?? 0, tb.credit_amount ?? 0);
-    // Issue 1: Confirmed requires BOTH name match (≥90) and amount tie-back (≥75)
-    const bothMatch = best.nameScore >= 90 && best.amtScore >= 75;
+
+    // "Confirmed" requires ALL three:
+    //   1. Strong name match (≥ 90%)
+    //   2. Gross amount match (≥ 75%) — GST-normalised so TB (incl. GST) ÷ 1.18 is also accepted
+    //   3. TDS was actually deducted in the filing (total_tds > 0)
+    const grossOk  = best.amtScore >= 75;
+    const tdsOk    = best.ded.total_tds > 0;
+    const bothMatch = best.nameScore >= 90 && grossOk && tdsOk;
     const mapping_status =
       bothMatch                    ? "confirmed"   :
       best.confidence >= 60        ? "pending"     :
                                      "needs_review";
 
+    // Build rich reasoning with difference explanation
+    const diffNote = grossDifferenceReason(tbActivity, best.ded.total_amount_paid, best.ded.total_tds);
+    const grossLabel = best.gstAdjusted
+      ? `TB ₹${tbActivity.toFixed(0)} (incl. GST) ≈ TDS ₹${best.ded.total_amount_paid.toFixed(0)} after ÷1.18`
+      : `TB ₹${tbActivity.toFixed(0)} vs TDS ₹${best.ded.total_amount_paid.toFixed(0)}`;
     const reasoning =
-      `Name match: ${best.nameScore}%, ` +
-      `Amount match: ${best.amtScore}% (TB ₹${tbActivity.toFixed(0)} vs TDS ₹${best.ded.total_amount_paid.toFixed(0)}), ` +
-      `Section context: ${best.secScore}% (group: "${tb.parent_group}", section: ${best.ded.section_code ?? "n/a"}). ` +
-      `Composite: ${best.confidence}%.`;
+      `Name: ${best.nameScore}%, ` +
+      `Gross amount: ${best.amtScore}% (${grossLabel}), ` +
+      `TDS deducted: ₹${best.ded.total_tds.toFixed(0)}, ` +
+      `Section: ${best.secScore}% (group: "${tb.parent_group}", section: ${best.ded.section_code ?? "n/a"}). ` +
+      `Composite: ${best.confidence}%.` +
+      (diffNote ? ` Analysis: ${diffNote}` : "");
 
     upsertRows.push({
       client_id, firm_id, financial_year,
@@ -255,6 +328,7 @@ export async function runAiMapper(params: {
       tds_deductee_name: best.ded.deductee_name,
       tds_section_code:  best.ded.section_code,
       tds_total_amount:  best.ded.total_amount_paid || null,
+      tds_tds_amount:    best.ded.total_tds || null,   // TDS deducted per filing
       tds_filing_ids:    best.ded.filing_ids,
       match_confidence:  best.confidence,
       match_method:      best.method,

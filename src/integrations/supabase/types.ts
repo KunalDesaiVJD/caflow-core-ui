@@ -7768,6 +7768,7 @@ export type Database = {
           tds_deductee_name: string
           tds_section_code: string | null
           tds_total_amount: number | null
+          tds_tds_amount: number | null
           tds_filing_ids: string[] | null
           match_confidence: number | null
           match_method: string | null
@@ -7789,6 +7790,7 @@ export type Database = {
           tds_deductee_name: string
           tds_section_code?: string | null
           tds_total_amount?: number | null
+          tds_tds_amount?: number | null
           tds_filing_ids?: string[] | null
           match_confidence?: number | null
           match_method?: string | null
@@ -7810,6 +7812,7 @@ export type Database = {
           tds_deductee_name?: string
           tds_section_code?: string | null
           tds_total_amount?: number | null
+          tds_tds_amount?: number | null
           tds_filing_ids?: string[] | null
           match_confidence?: number | null
           match_method?: string | null
