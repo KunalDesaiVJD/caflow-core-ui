@@ -139,6 +139,11 @@ function bullet(text: string): string {
  * + before/indent restores the visual hierarchy.
  */
 function heading(text: string, opts: { underline?: boolean; before?: number } = {}): string {
+  // Headings flush-left to match body paragraphs and addressee block.
+  // (The template carries indLeft=180 on heading paragraphs, but that
+  // pushed every heading half-a-character right of the body paragraphs,
+  // making the document visually unaligned. User explicitly asked for
+  // every line to start at the same column — drop the indent.)
   return wPara(text, {
     leftAlign: true,
     bold: true,
@@ -146,7 +151,6 @@ function heading(text: string, opts: { underline?: boolean; before?: number } = 
     fontSize: 11,
     spaceBefore: opts.before ?? 266,
     spaceAfter:  120,
-    indLeft:     180,
     keepNext:    true,
   });
 }
@@ -265,11 +269,13 @@ export async function exportIarToDocx(
   paras.push(blank());
 
   // ── 2. Addressee ──────────────────────────────────────────────────────────
-  // Template wording is "The Shareholders of" (NOT "Members"). Template
-  // also wraps these lines in the Subtitle style — centered, sz=22 (11pt).
-  paras.push(wPara("To",                  { centered: true, fontSize: 11, spaceAfter: 0 }));
-  paras.push(wPara("The Shareholders of", { centered: true, fontSize: 11, spaceAfter: 0 }));
-  paras.push(wPara(company,               { centered: true, fontSize: 11, bold: true, spaceAfter: 200 }));
+  // Template wording is "The Shareholders of" (NOT "Members"). User
+  // requested left-alignment to match the original template's layout.
+  // sz=11 keeps the addressee block visually distinct without forcing
+  // it to the page centre.
+  paras.push(wPara("To",                  { leftAlign: true, fontSize: 11, spaceAfter: 0 }));
+  paras.push(wPara("The Shareholders of", { leftAlign: true, fontSize: 11, spaceAfter: 0 }));
+  paras.push(wPara(company,               { leftAlign: true, fontSize: 11, bold: true, spaceAfter: 200 }));
   paras.push(blank());
 
   // ── 3. "Report on the Financial Statements" ─────────────────────────────
