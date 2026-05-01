@@ -13,7 +13,7 @@ const toLocalDateStr = (dt: Date): string => {
   const dd = String(dt.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
 };
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -66,6 +66,11 @@ const asRecord = (value: unknown): Record<string, any> => {
 const NewClientWizard = () => {
   const navigate = useNavigate();
   const { clientId } = useParams<{ clientId: string }>();
+  // FY persistence across refresh — encoded in URL (?fy=2025-26).
+  // Without this, refreshing Edit Client always snaps the FY dropdown back to
+  // the latest-FY row in client_fy_classifications, masking per-FY edits.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlFY = searchParams.get("fy");
   const { toast } = useToast();
   const { user } = useAuth();
   const isSuperadmin = user?.role === "superadmin";
@@ -219,6 +224,18 @@ const NewClientWizard = () => {
       setLoadingClient(true);
       setClientMissing(false);
 
+      // If the URL pins a specific FY (?fy=2025-26) load that row; otherwise
+      // fall back to the latest-FY row.  Pinning lets users land directly on
+      // a per-FY edit screen and survives page refresh.
+      const baseClassQuery = supabase
+        .from("client_fy_classifications")
+        .select("*")
+        .eq("client_id", clientId);
+      const baseAuditQuery = supabase
+        .from("client_fy_audit_setup")
+        .select("*")
+        .eq("client_id", clientId);
+
       const [clientRes, profileRes, fyClassRes, fyAuditRes] = await Promise.all([
         supabase
           .from("clients")
@@ -231,18 +248,12 @@ const NewClientWizard = () => {
           .eq("client_id", clientId)
           .order("id", { ascending: false })
           .limit(1),
-        supabase
-          .from("client_fy_classifications")
-          .select("*")
-          .eq("client_id", clientId)
-          .order("financial_year", { ascending: false })
-          .limit(1),
-        supabase
-          .from("client_fy_audit_setup")
-          .select("*")
-          .eq("client_id", clientId)
-          .order("financial_year", { ascending: false })
-          .limit(1),
+        urlFY
+          ? baseClassQuery.eq("financial_year", urlFY).limit(1)
+          : baseClassQuery.order("financial_year", { ascending: false }).limit(1),
+        urlFY
+          ? baseAuditQuery.eq("financial_year", urlFY).limit(1)
+          : baseAuditQuery.order("financial_year", { ascending: false }).limit(1),
       ]);
 
       if (!mounted) return;
@@ -314,9 +325,14 @@ const NewClientWizard = () => {
       // Remember the DB-saved classification for the warning modal
       setSavedClassification(fyClass?.classification || "");
 
+      // FY priority: URL param → row's FY → app default.  When the URL pins
+      // an FY that has no row yet, we still want the form to land on that FY
+      // so the next Save creates the per-FY row.
+      const initialFY = urlFY || fyClass?.financial_year || defaultAdvancedInfo.financial_year;
+
       setAdvancedInfo({
         ...defaultAdvancedInfo,
-        financial_year: fyClass?.financial_year || defaultAdvancedInfo.financial_year,
+        financial_year: initialFY,
         classification: fyClass?.classification || "",
         audit_firm_id: fyClass?.audit_firm_id || "",
         responsible_person_id: client.responsible_person_id || "",
@@ -411,6 +427,20 @@ const NewClientWizard = () => {
 
     return () => { mounted = false; };
   }, [clientId, isEditMode, toast]);
+
+  /* ───── EDIT MODE: mirror the picked FY into the URL (?fy=...) so refresh
+   *  lands the user back on the same FY they were editing rather than snapping
+   *  back to the latest-FY row.  Skipped during the initial load. */
+  useEffect(() => {
+    if (!isEditMode || !clientId || loadingClient) return;
+    const fy = advancedInfo.financial_year;
+    if (!fy) return;
+    if (searchParams.get("fy") === fy) return;
+    const next = new URLSearchParams(searchParams);
+    next.set("fy", fy);
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [advancedInfo.financial_year, isEditMode, clientId, loadingClient]);
 
   /* ───── EDIT MODE: re-fetch FY-specific snapshot when user picks a different FY
    *
