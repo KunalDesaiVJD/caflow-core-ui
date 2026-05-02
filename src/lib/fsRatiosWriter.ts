@@ -44,11 +44,13 @@ const BOT_SIDE   = { bottom: THIN_BLACK, left: THIN_BLACK, right: THIN_BLACK } a
  *  heading boxes on the CY/PY sheets. Matches the template's bold rule. */
 const HEAD_BDR   = { top: MED_BLACK,  bottom: MED_BLACK,  left: MED_BLACK,  right: MED_BLACK }  as ExcelJS.Borders;
 
-// Match the Ratio.xlsx template — it uses Aptos Display (the "major"
-// scheme font in modern Office workbooks) for every data label, header
-// and total. Falls back gracefully on systems where Aptos isn't
-// installed (Excel substitutes the closest available sans-serif).
-const FONT       = "Aptos Display";
+// Match the Ratio.xlsx template — data cells use Aptos Display (the
+// "major" scheme font), while the CY/PY heading rows use Aptos Narrow
+// at size 16 (the "minor" scheme bold heading font).
+// Falls back gracefully on systems where Aptos isn't installed
+// (Excel substitutes the closest available sans-serif).
+const FONT          = "Aptos Display";  // data cells, RATIO-sheet headings
+const HEAD_FONT     = "Aptos Narrow";   // CY/PY company-name + ANNEXURE rows
 
 interface Ctx {
   cyYear:      number;
@@ -344,21 +346,21 @@ function writePYSheet(wb: ExcelJS.Workbook, ctx: Ctx, data: Stage7Ratios | null,
 }
 
 function writeYearSheet(ws: ExcelJS.Worksheet, companyName: string, yearEnd: number, inp: RatioInputs | null): void {
-  // ── Row 2-3: Company name (merged) — bold heading box per template ───────
+  // ── Row 2-3: Company name (merged) — Aptos Narrow size 16 bold per template
   ws.mergeCells("B2:H3");
   const c = ws.getCell("B2");
   c.value = companyName;
-  applyFont(c, { bold: true, size: 12 });
+  c.font = { name: HEAD_FONT, size: 16, bold: true };
   c.alignment = { horizontal: "center", vertical: "middle" };
-  c.border = HEAD_BDR;                       // medium-weight perimeter
+  c.border = HEAD_BDR;                        // medium-weight perimeter
   clearSlaveBorders(ws, 2, 2, 3, 8);          // propagate so bottom/right edges render
 
-  // ── Row 5-6: ANNEXURE heading (merged) — bold heading box per template ───
+  // ── Row 5-6: ANNEXURE heading (merged) — Aptos Narrow size 16 bold ───────
   // Template wording at B5: "ANNEXURE : A (YYYY-YYYY)" — full year span.
   ws.mergeCells("B5:H6");
   const t = ws.getCell("B5");
   t.value = `ANNEXURE : A (${yearEnd - 1}-${yearEnd})`;
-  applyFont(t, { bold: true, size: 11 });
+  t.font = { name: HEAD_FONT, size: 16, bold: true };
   t.alignment = { horizontal: "center", vertical: "middle" };
   t.border = HEAD_BDR;                        // medium-weight perimeter
   clearSlaveBorders(ws, 5, 2, 6, 8);          // propagate to render bottom/right edges
@@ -685,10 +687,10 @@ function writeRatioSheet(wb: ExcelJS.Workbook, ctx: Ctx, data: Stage7Ratios | nu
 
   ws.getRow(3).height = 9;
 
-  // ── Row 4: NOTE - NN : RATIO (bold + underline per template) ────────────
+  // ── Row 4: NOTE - NN : RATIO (Aptos Display size 12 bold + underline) ───
   const nt = ws.getCell("B4");
   nt.value = `NOTE - ${noteNo} : RATIO`;
-  nt.font = { name: FONT, size: 11, bold: true, underline: true };
+  nt.font = { name: FONT, size: 12, bold: true, underline: true };
   nt.alignment = { horizontal: "left", vertical: "middle" };
   ws.getRow(4).height = 15.75;
 
