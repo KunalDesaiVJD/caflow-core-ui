@@ -339,8 +339,14 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
 
     const getTitle = (n: number) =>
       CARO_CLAUSE_TITLES[n] || masterMap.get(n)?.title || `Clause ${n}`;
+    // Substitute "20XX" placeholders with the actual FY end year so
+    // clause body text (e.g. clause 7(a) — "outstanding as on 31st
+    // March, 20XX") auto-populates with the engagement's year. Mirrors
+    // the same substitution we already do for the CARO intro text.
+    const subYear = (s: string) =>
+      fyEndYear !== "20XX" ? s.replace(/20XX/g, fyEndYear) : s;
     const getContent = (n: number) =>
-      CARO_DEFAULT_CONTENT[n] || masterMap.get(n)?.content || "";
+      subYear(CARO_DEFAULT_CONTENT[n] || masterMap.get(n)?.content || "");
     const getApplicable = (n: number) => masterMap.get(n)?.applicable ?? true;
 
     const { data } = await supabase
