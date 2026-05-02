@@ -767,10 +767,13 @@ export function buildBreakup(
         // Template head with no matching ledger — check if it exists in PY TB
         const pyMatch = pyMap.get(head.toLowerCase().trim());
         result.push({
-          description: head,
-          amount_cy:   0,
-          amount_py:   pyMatch ? Math.abs(round2(pyMatch.balance)) : 0,
-          source:      "linked",
+          description:   head,
+          amount_cy:     0,
+          amount_py:     pyMatch ? Math.abs(round2(pyMatch.balance)) : 0,
+          source:        "linked",
+          // Issue-3: Always set linked_ledger so user can "Restore Link" after
+          // editing — even for template heads with no current-year TB match.
+          linked_ledger: head,
         });
       }
     }
