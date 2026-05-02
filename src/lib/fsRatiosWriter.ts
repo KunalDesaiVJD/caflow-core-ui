@@ -233,6 +233,13 @@ export function writeRatiosSheets(
 ): void {
   const noteNo = getNoteNo("ratios") ?? 22;
 
+  // Force Excel to recalculate every formula when the file is opened.
+  // Without this, cells using cross-sheet formulas (RATIO!E,F,G,H) keep
+  // their cached `result: 0` and the MONEY/PCT formats render them as
+  // "-" / "0.00", which looks like the data wasn't auto-populated.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (wb as any).calcProperties = { ...(wb as any).calcProperties, fullCalcOnLoad: true };
+
   // Sheet order MUST match the template: RATIO first, then Current Year,
   // then Previous Year. Cross-sheet formulas in RATIO reference the other
   // sheets by name so resolve order doesn't matter — only display order.
@@ -354,6 +361,18 @@ function writeYearSheet(ws: ExcelJS.Worksheet, companyName: string, yearEnd: num
     "Return / Profit / Earning", v(inp, "return_profit"),
     "Average Investment Fund",   v(inp, "avg_investment_fund"),
     "%");
+
+  // ── Spacer rows: extend vertical column lines through the gaps ──────────
+  // Without this, the CY/PY table looks broken: each ratio block has a
+  // bordered top and bottom but the columns don't visually connect to
+  // the next block. Template shows continuous vertical rules.
+  const spacerRows = [10, 12, 19, 21, 23, 25, 27, 29, 31, 40];
+  for (const r of spacerRows) {
+    ws.getRow(r).height = 6;
+    for (let col = 2; col <= 8; col++) {
+      ws.getCell(r, col).border = SIDE_BDR;
+    }
+  }
 }
 
 /** One simple ratio row + blank spacer underneath. */
@@ -586,10 +605,10 @@ function writeRatioSheet(wb: ExcelJS.Workbook, ctx: Ctx, data: Stage7Ratios | nu
 
   ws.getRow(3).height = 9;
 
-  // ── Row 4: NOTE - NN : RATIO ────────────────────────────────────────────
+  // ── Row 4: NOTE - NN : RATIO (bold + underline per template) ────────────
   const nt = ws.getCell("B4");
   nt.value = `NOTE - ${noteNo} : RATIO`;
-  applyFont(nt, { bold: true, size: 11 });
+  nt.font = { name: FONT, size: 11, bold: true, underline: true };
   nt.alignment = { horizontal: "left", vertical: "middle" };
   ws.getRow(4).height = 15.75;
 
