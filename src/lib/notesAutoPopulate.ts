@@ -931,9 +931,28 @@ export async function loadStage5Notes(engagementId: string): Promise<Stage5Notes
     const rawManualEdits = Array.isArray(raw.manual_edits) ? raw.manual_edits : [];
     // If user has explicitly edited fa.rows (including deleting defaults), preserve exactly as-is.
     const faRows = rawManualEdits.includes("fa.rows") ? existingFa : mergeFaDefaults(existingFa);
+
+    // One-time migration: bs_liab notes store POSITIVE magnitudes by convention.
+    // Old data (pre-sectionSign fix) may have stored negative py/amount_py values.
+    // Sanitize them here so the UI always shows correct positive figures.
+    const bsLiab = raw.bs_liab ?? {};
+    for (const key of Object.keys(bsLiab)) {
+      const node = bsLiab[key];
+      if (!node || typeof node !== "object") continue;
+      if (typeof node.py === "number" && node.py < 0) node.py = Math.abs(node.py);
+      if (Array.isArray(node.breakup)) {
+        node.breakup = node.breakup.map((r: any) =>
+          r && typeof r === "object" && typeof r.amount_py === "number" && r.amount_py < 0
+            ? { ...r, amount_py: Math.abs(r.amount_py) }
+            : r,
+        );
+      }
+    }
+
     return {
       ...DEFAULT_STAGE5_NOTES,
       ...(raw as Partial<Stage5Notes>),
+      bs_liab: bsLiab,
       fa: { rows: faRows, py_manual: raw.fa?.py_manual ?? null },
       manual_edits: rawManualEdits,
     } as Stage5Notes;
@@ -1014,7 +1033,7 @@ export async function autoPopulateNotes(
       const ledgerCode = mapping[ledger.account_name]?.code;
       if (ledgerCode && codeSet.has(ledgerCode)) {
         const ob = ledger.opening_balance ?? 0;
-        if (ob !== 0) { openTotal += Math.abs(ob); anyOpen = true; }
+        if (ob !== 0) { openTotal += ob; anyOpen = true; }  // signed: let sectionSign flip
       }
     }
     return anyOpen ? Math.round(openTotal * 100) / 100 : 0;

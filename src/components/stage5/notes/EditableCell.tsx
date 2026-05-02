@@ -767,6 +767,16 @@ export function ListTable({
       setDragRow(null); setDragOverRow(null);
       return;
     }
+    const destRow = rows[origIdx];
+    // If dropping onto a group header: move the dragged row INTO that group
+    if (destRow?.is_group && destRow?.id) {
+      const next = rows.slice();
+      next[from as number] = { ...next[from as number], subgroup_id: destRow.id };
+      onChange(next);
+      setDragRow(null); setDragOverRow(null);
+      return;
+    }
+    // Otherwise: reorder
     const next = rows.slice();
     const [moved] = next.splice(from as number, 1);
     next.splice(origIdx > (from as number) ? origIdx - 1 : origIdx, 0, moved);
