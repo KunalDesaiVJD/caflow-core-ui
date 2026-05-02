@@ -244,18 +244,18 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
       await supabase
         .from("audit_human_actions" as any)
         .insert({
-          engagement_id:  engagementId,
-          firm_id:        firmId,
-          client_id:      clientId,
-          action_type:    "coa_remap",
-          action_data:    {
+          engagement_id:   engagementId,
+          firm_id:         firmId,
+          action_type:     "coa_remap",
+          action_context:  {
             ledger_name: ledgerName,
             old_code:    oldCode,
             new_code:    newCode,
             source:      "financial_statements",
+            client_id:   clientId,
           },
-          performed_by:   user?.id ?? null,
-          performed_at:   new Date().toISOString(),
+          user_id:         user?.id ?? null,
+          human_override:  true,
         });
 
       toast.success(`Remapped "${ledgerName}" → ${newCode}. Re-syncing…`);
