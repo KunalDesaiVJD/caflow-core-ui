@@ -580,44 +580,16 @@ export async function exportNtaToDocx(
     const title = p.title || "";
     const body  = resolvePolicy(p.id, p.body);
 
-    // 2.6: heading already emitted inline at the end of 2.5 body. Skip heading+spacer.
-    if (label === "2.6") {
-      bodyBlock(body).forEach(bp => paras.push(bp));
-      continue;
-    }
-
+    // Per user requirement, 2.6 must land on page 2 as its own section.
+    // Earlier versions inlined the 2.6 heading at the end of 2.5's last
+    // body paragraph (matching the template's P26 quirk), but that
+    // forced 2.6 onto whichever page 2.5 ended on. Treat every policy
+    // — including 2.6 — as a normal heading + body block so the
+    // keepNext chain naturally pushes 2.6 to the next page when 2.5
+    // (already on page 1) leaves no room for it.
     paras.push(headingPara(label, title));
     paras.push(blankAfterHeading());
-
-    if (label === "2.5") {
-      // Append 2.6 heading inline to the LAST body paragraph of 2.5.
-      const nextP     = data.policies[idx + 1];
-      const nextLabel = nextP?.id ?? "2.6";
-      const nextTitle = nextP?.title ?? "Depreciation /Amortization and Impairment";
-
-      // Only inline if the following policy is actually 2.6.
-      if (nextLabel === "2.6") {
-        const chunks = body.split(/\n\n+/);
-        // All body chunks except the last get keepNext so the entire
-        // 2.5 + inline-2.6 chain stays on one page.
-        for (let ci = 0; ci < chunks.length - 1; ci++) {
-          paras.push(bodyPara(chunks[ci], /* keepNext */ true));
-        }
-        // Last chunk gets the 2.6 heading appended inline. The function
-        // already sets keepNext + keepLines so it links forward to 2.6's
-        // body and never splits across a page.
-        paras.push(bodyParaWithInlineHeading(
-          chunks[chunks.length - 1] ?? "",
-          nextLabel,
-          nextTitle,
-        ));
-      } else {
-        // 2.6 is absent or reordered — fall back to normal body block.
-        bodyBlock(body).forEach(bp => paras.push(bp));
-      }
-    } else {
-      bodyBlock(body).forEach(bp => paras.push(bp));
-    }
+    bodyBlock(body).forEach(bp => paras.push(bp));
     // Next heading follows directly — no inter-section spacer.
   }
   // Template P75: right-indented border spacer before "2.19 General notes".
