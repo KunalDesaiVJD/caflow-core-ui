@@ -41,9 +41,16 @@ export function exportToExcel(data: { sheetName: string; rows: Record<string, an
 
 /**
  * Export HTML content as a Word (.doc) file
- * Uses HTML-in-doc approach which Word opens natively
+ * Uses HTML-in-doc approach which Word opens natively.
+ *
+ * @param extraHeadCss optional extra CSS appended INSIDE the <head>
+ *   <style> block. Word's HTML renderer only reliably parses CSS from
+ *   <head>, so callers that need to override the default table /
+ *   font rules (e.g. CARO export, where the signature block must
+ *   render flush without gridlines) should pass their overrides here
+ *   instead of embedding a body-level <style>.
  */
-export function exportToWord(htmlContent: string, filename: string) {
+export function exportToWord(htmlContent: string, filename: string, extraHeadCss?: string) {
   const fullHtml = `
     <html xmlns:o="urn:schemas-microsoft-com:office:office"
           xmlns:w="urn:schemas-microsoft-com:office:word"
@@ -62,6 +69,7 @@ export function exportToWord(htmlContent: string, filename: string) {
         p { margin: 4pt 0; }
         .declaration { margin-top: 30pt; padding-top: 12pt; border-top: 2px solid #333; }
         @page { size: A4; margin: 2cm; }
+        ${extraHeadCss || ""}
       </style>
     </head>
     <body>${htmlContent}</body>

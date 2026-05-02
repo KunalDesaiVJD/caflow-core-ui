@@ -581,42 +581,43 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => {
                   // Same serif typography and signature-block layout as the
-                  // applicable-CARO export. The leading <style> block scopes
-                  // a "no border / no padding" override to .caro-sig so the
-                  // signature table doesn't pick up the global gridlines that
-                  // exportToWord() injects into <head>.
+                  // applicable-CARO export. Override CSS goes through the new
+                  // exportToWord(extraHeadCss) parameter so it lands in <head>
+                  // where Word's HTML parser will actually honour it.
                   const SERIF = "'Times New Roman', Times, serif";
-                  const TD_TOP = `style="vertical-align:top;"`;
-                  const TD_PARTNER = `style="vertical-align:top;padding-top:24pt !important;"`;
+                  const TD = `style="vertical-align:top;"`;
+                  const HEAD_CSS = `
+                    body { font-family: ${SERIF}; font-size: 12pt; }
+                    .caro-sig, .caro-sig tr, .caro-sig td {
+                      border: none !important;
+                      padding: 0 !important;
+                      background: transparent !important;
+                      font-family: ${SERIF} !important;
+                      font-size: 12pt !important;
+                    }
+                    .caro-sig td.partner { padding-top: 24pt !important; }
+                  `;
                   const body = (introText || CARO_NOT_APPLICABLE_FULL).replace(/\n/g, '<br/>');
                   const html =
-                    `<style>` +
-                      `.caro-doc { font-family:${SERIF}; font-size:12pt; }` +
-                      `.caro-sig, .caro-sig tr, .caro-sig td {` +
-                        ` border:none !important;` +
-                        ` padding:0 !important;` +
-                        ` background:transparent !important;` +
-                        ` font-family:${SERIF} !important;` +
-                        ` font-size:12pt !important;` +
-                      `}` +
-                    `</style>` +
-                    `<div class="caro-doc">` +
                     `<p style="font-family:${SERIF};font-size:12pt;line-height:1.4;` +
                     `text-align:justify;margin:0 0 12pt 0;">${body}</p>` +
-                    `<table class="caro-sig" style="width:100%;margin-top:30pt;` +
-                    `border-collapse:collapse;"><tr>` +
-                      `<td ${TD_TOP}>For, ${firmName}<br/>Chartered Accountants<br/>` +
+                    `<table class="caro-sig" style="width:100%;margin-top:30pt;"><tr>` +
+                      `<td ${TD}>For, ${firmName}<br/>Chartered Accountants<br/>` +
                       `Firm Regi.No.${firmFRN}</td>` +
-                      `<td ${TD_TOP}>Place : ${place || '[Place]'}</td>` +
+                      `<td ${TD}>Place : ${place || '[Place]'}</td>` +
                     `</tr><tr>` +
-                      `<td ${TD_TOP}>&nbsp;</td>` +
-                      `<td ${TD_TOP}>Date&nbsp;&nbsp;: ${reportDateDisplay}</td>` +
+                      `<td ${TD}>&nbsp;</td>` +
+                      `<td ${TD}>Date&nbsp;&nbsp;: ${reportDateDisplay}</td>` +
                     `</tr><tr>` +
-                      `<td ${TD_PARTNER}>${partnerName}<br/>Partner<br/>` +
+                      `<td ${TD} class="partner">${partnerName}<br/>Partner<br/>` +
                       `Membership No.${membershipNo}</td>` +
-                      `<td ${TD_TOP}>&nbsp;</td>` +
-                    `</tr></table></div>`;
-                  exportToWord(html, `CARO-NotApplicable_${companyName}_${engagement?.financial_year || ''}.doc`);
+                      `<td ${TD}>&nbsp;</td>` +
+                    `</tr></table>`;
+                  exportToWord(
+                    html,
+                    `CARO-NotApplicable_${companyName}_${engagement?.financial_year || ''}.doc`,
+                    HEAD_CSS,
+                  );
                 }}>
                   <FileType className="h-4 w-4 mr-2" /> Export Word
                 </DropdownMenuItem>
@@ -720,39 +721,37 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => {
                 // ─── CARO Word export — matches the template Annexure-A format ───
-                // - Times New Roman serif font throughout
-                // - Centered company-name title + centered subtitle ("Annexure - A …")
+                // - Times New Roman serif font throughout (forced via head CSS)
+                // - Centered company-name title + centered subtitle
                 // - Each clause is one hanging-indent paragraph "N.  body" (no title)
-                // - Signature block uses a borderless 2-column table for the
-                //   template's "Firm Regi.No. … Place / Date" alignment.
-                //
-                // IMPORTANT: exportToWord() injects a global `th, td { border:
-                // 1px solid #999 }` rule into <head>. That overrides any
-                // inline border:none we put on the signature table cells, so
-                // the table renders with visible gridlines. We embed a leading
-                // <style> block scoped to .caro-doc that explicitly disables
-                // borders/padding on the signature table — !important wins
-                // against the head-level rules.
+                // - Signature block: borderless 2-column table; the global
+                //   "th, td { border: 1px solid #999 }" rule that exportToWord
+                //   injects into <head> would otherwise draw gridlines around
+                //   every signature row. We pass an `extraHeadCss` override
+                //   that scopes .caro-sig to "border:none !important" so the
+                //   signature renders flush like the template.
                 const SERIF = "'Times New Roman', Times, serif";
                 const CLAUSE_STYLE =
                   `font-family:${SERIF};font-size:12pt;line-height:1.4;` +
                   `text-align:justify;margin:0 0 8pt 0;` +
                   `padding-left:28pt;text-indent:-28pt;`;
 
+                // Head-level overrides — Word's HTML parser only reliably
+                // applies CSS from <head>, so we let the wrapper inject these
+                // there rather than embedding a body-level <style>.
+                const HEAD_CSS = `
+                  body { font-family: ${SERIF}; font-size: 12pt; }
+                  .caro-sig, .caro-sig tr, .caro-sig td {
+                    border: none !important;
+                    padding: 0 !important;
+                    background: transparent !important;
+                    font-family: ${SERIF} !important;
+                    font-size: 12pt !important;
+                  }
+                  .caro-sig td.partner { padding-top: 24pt !important; }
+                `;
+
                 let html =
-                  `<style>` +
-                    `.caro-doc { font-family:${SERIF}; font-size:12pt; }` +
-                    // Kill the global table border/padding/font-size for our
-                    // signature block so it renders flush like the template.
-                    `.caro-sig, .caro-sig tr, .caro-sig td {` +
-                      ` border:none !important;` +
-                      ` padding:0 !important;` +
-                      ` background:transparent !important;` +
-                      ` font-family:${SERIF} !important;` +
-                      ` font-size:12pt !important;` +
-                    `}` +
-                  `</style>` +
-                  `<div class="caro-doc">` +
                   `<p style="text-align:center;font-family:${SERIF};font-size:12pt;` +
                   `font-weight:bold;margin:0 0 10pt 0;">${companyName}</p>` +
                   `<p style="text-align:center;font-family:${SERIF};font-size:11pt;` +
@@ -775,27 +774,29 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   }
                 });
 
-                // Signature block — borderless 2-column table mirroring the
-                // template layout (Firm Regi.No on left, Place / Date on right).
-                // Template uses "Firm Regi.No." and "Membership No." WITHOUT
-                // a colon — preserved verbatim.
-                const TD_TOP = `style="vertical-align:top;"`;
-                const TD_PARTNER = `style="vertical-align:top;padding-top:24pt !important;"`;
+                // Signature block — class on the partner-row TD so its
+                // padding-top:24pt comes from head CSS (Word ignores the
+                // second of two inline style attributes, so we can't put
+                // it inline alongside vertical-align).
+                const TD = `style="vertical-align:top;"`;
                 html +=
-                  `<table class="caro-sig" style="width:100%;margin-top:30pt;` +
-                  `border-collapse:collapse;"><tr>` +
-                    `<td ${TD_TOP}>For, ${firmName}<br/>Chartered Accountants<br/>` +
+                  `<table class="caro-sig" style="width:100%;margin-top:30pt;"><tr>` +
+                    `<td ${TD}>For, ${firmName}<br/>Chartered Accountants<br/>` +
                     `Firm Regi.No.${firmFRN}</td>` +
-                    `<td ${TD_TOP}>Place : ${place || "[Place]"}</td>` +
+                    `<td ${TD}>Place : ${place || "[Place]"}</td>` +
                   `</tr><tr>` +
-                    `<td ${TD_TOP}>&nbsp;</td>` +
-                    `<td ${TD_TOP}>Date&nbsp;&nbsp;: ${reportDateDisplay}</td>` +
+                    `<td ${TD}>&nbsp;</td>` +
+                    `<td ${TD}>Date&nbsp;&nbsp;: ${reportDateDisplay}</td>` +
                   `</tr><tr>` +
-                    `<td ${TD_PARTNER}>${partnerName}<br/>Partner<br/>` +
+                    `<td ${TD} class="partner">${partnerName}<br/>Partner<br/>` +
                     `Membership No.${membershipNo}</td>` +
-                    `<td ${TD_TOP}>&nbsp;</td>` +
-                  `</tr></table></div>`;
-                exportToWord(html, `CARO-2020_${companyName}_${engagement?.financial_year || ''}.doc`);
+                    `<td ${TD}>&nbsp;</td>` +
+                  `</tr></table>`;
+                exportToWord(
+                  html,
+                  `CARO-2020_${companyName}_${engagement?.financial_year || ''}.doc`,
+                  HEAD_CSS,
+                );
               }}>
                 <FileType className="h-4 w-4 mr-2" /> Export Word
               </DropdownMenuItem>
