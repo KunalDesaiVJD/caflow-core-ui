@@ -156,14 +156,18 @@ function bodyPara(text: string, keepNext = false): string {
  * the title (template's "DISCLOSURE OF ACCOUNTING POLICIES..." has
  * <w:u w:val="single"/>).
  */
-function headingPara(label: string, title: string, opts: { titleSize?: number; underline?: boolean; spaceBefore?: number } = {}): string {
+function headingPara(label: string, title: string, opts: { titleSize?: number; underline?: boolean; spaceBefore?: number; pageBreakBefore?: boolean } = {}): string {
   const before = opts.spaceBefore ?? 0;
   // Template heading paragraphs have NO w:jc and NO w:line/lineRule —
   // just bare w:after="0". Forcing jc="both" caused the visible spacing
   // mismatch. Bare spacing element only.
+  // pageBreakBefore: forces this paragraph to start on a fresh page —
+  // used when a specific section must land on a particular page (e.g.
+  // 2.10 must start page 3).
   const pPr =
     `<w:pPr>` +
     `<w:keepNext/>` +
+    (opts.pageBreakBefore ? `<w:pageBreakBefore/>` : ``) +
     `<w:spacing${before ? ` w:before="${before}"` : ""} w:after="0"/>` +
     `<w:ind w:left="650" w:hanging="488"/>` +
     `</w:pPr>`;
@@ -580,13 +584,16 @@ export async function exportNtaToDocx(
     const title = p.title || "";
     const body  = resolvePolicy(p.id, p.body);
 
-    // Every policy — including 2.6 — flows through the standard heading
-    // + body pipeline. The keepNext-on-all-but-last chain on the body
-    // block keeps each section together; if a section can't fit on the
-    // current page Word naturally pushes it to the next page. No hard
-    // page breaks are inserted, so the document never grows by an extra
-    // empty page.
-    paras.push(headingPara(label, title));
+    // Every policy flows through the standard heading + body pipeline.
+    // The keepNext-on-all-but-last chain keeps each section together;
+    // if a section can't fit on the current page Word naturally pushes
+    // it to the next page.
+    //
+    // 2.10 carries pageBreakBefore so it always starts on page 3 per
+    // user requirement. This is a content-shift (not a section break),
+    // so it does not introduce an extra blank page — the page that 2.10
+    // starts is the same page that would have followed naturally.
+    paras.push(headingPara(label, title, label === "2.10" ? { pageBreakBefore: true } : {}));
     paras.push(blankAfterHeading());
     bodyBlock(body).forEach(bp => paras.push(bp));
     // Next heading follows directly — no inter-section spacer.
