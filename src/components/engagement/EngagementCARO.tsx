@@ -616,7 +616,13 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     }
                     .caro-sig td.partner { padding-top: 24pt !important; }
                   `;
-                  const body = (introText || CARO_NOT_APPLICABLE_FULL).replace(/\n/g, '<br/>');
+                  // Run the same 20XX → fyEndYear substitution at export time
+                  // — older intros saved before the seed-time substitution
+                  // still carry the literal placeholder.
+                  const yearSub = (s: string) =>
+                    fyEndYear !== "20XX" ? s.replace(/20XX/g, fyEndYear) : s;
+                  const body = yearSub(introText || CARO_NOT_APPLICABLE_FULL)
+                    .replace(/\n/g, '<br/>');
                   // Same Place / Date spacing + DD.MM.YYYY date format as
                   // the applicable-CARO export.
                   const html =
@@ -780,6 +786,15 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   `heading &quot;Report on Other Legal and Regulatory&quot; of our ` +
                   `independent Auditor&#39;s Report of even date</p>`;
 
+                // Substitute the "20XX" placeholder with the actual FY end
+                // year at export time. Existing rows in audit_caro_responses
+                // were saved before the seed-time substitution was added, so
+                // their user_response / auto_draft still contains literal
+                // "20XX" (e.g. clause 7(a) — "outstanding as on 31st March,
+                // 20XX"). Running the regex here guarantees the export shows
+                // the real year regardless of when the row was seeded.
+                const yearSub = (s: string) =>
+                  fyEndYear !== "20XX" ? s.replace(/20XX/g, fyEndYear) : s;
                 rows.forEach(r => {
                   if (!r.is_applicable) {
                     const reason = r.inapplicability_reason
@@ -788,7 +803,7 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     html += `<p style="${CLAUSE_STYLE}">` +
                       `${r.clause_number}.&nbsp;&nbsp;Not Applicable${reason}</p>`;
                   } else {
-                    const text = (r.user_response || r.auto_draft || "")
+                    const text = yearSub(r.user_response || r.auto_draft || "")
                       .replace(/\n/g, "<br/>");
                     html += `<p style="${CLAUSE_STYLE}">` +
                       `${r.clause_number}.&nbsp;&nbsp;${text}</p>`;
