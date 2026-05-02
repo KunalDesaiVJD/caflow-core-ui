@@ -395,15 +395,20 @@ function bodyParaWithInlineHeading(
   headingLabel: string,
   headingTitle: string,
 ): string {
-  // <w:keepLines/> stops Word from splitting this paragraph across a page
-  // boundary. Without it, when the body fits on page N but the inline 2.6
-  // heading text overflows, Word breaks the paragraph and pushes the bold
-  // heading text alone to page N+1 — making it look like an orphaned
-  // standalone heading. Pairing keepLines with keepNext means body + inline
-  // heading + first 2.6 body paragraph all stay on the same page.
+  // <w:keepLines/> stops Word from splitting THIS paragraph across a page
+  // boundary, so the body text + inline 2.6 heading runs always render
+  // together as one block.
+  //
+  // We deliberately DO NOT set <w:keepNext/> here. With keepNext the
+  // 2.5 keepNext-chain would extend through the inline-heading paragraph
+  // into the 2.6 body paragraphs, making Word treat all of 2.5 + 2.6 as
+  // one unbreakable unit. Combined with the leading 2.1–2.4 content,
+  // that block becomes taller than a single page, so Word pushes the
+  // entire 2.5–2.6 chunk to page 2 — leaving page 1 short and 2.5
+  // missing. Dropping keepNext closes the 2.5 chain after this paragraph
+  // and lets 2.6's body start fresh on the next page.
   const pPr =
     `<w:pPr>` +
-    `<w:keepNext/>` +
     `<w:keepLines/>` +
     `<w:ind w:left="150" w:right="150"/>` +
     `</w:pPr>`;
