@@ -580,20 +580,29 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   <Download className="h-4 w-4 mr-2" /> Export PDF
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => {
-                  // Same serif typography as the applicable-CARO export so
-                  // both branches share the template's Times New Roman look.
+                  // Same serif typography and 2-column signature-block table
+                  // as the applicable-CARO export so both branches match the
+                  // template's Times New Roman look + Place/Date layout.
                   const SERIF = "'Times New Roman', Times, serif";
-                  const SIG = `font-family:${SERIF};font-size:12pt;margin:0;`;
+                  const SIG = `font-family:${SERIF};font-size:12pt;`;
+                  const TD = `style="${SIG}vertical-align:top;padding:0;border:none;"`;
                   const body = (introText || CARO_NOT_APPLICABLE_FULL).replace(/\n/g, '<br/>');
                   const html =
                     `<p style="font-family:${SERIF};font-size:12pt;line-height:1.4;` +
                     `text-align:justify;margin:0 0 12pt 0;">${body}</p>` +
-                    `<p style="${SIG}margin-top:30pt;">For, ${firmName}<br/>` +
-                    `Chartered Accountants<br/>Firm Regi. No.: ${firmFRN}</p>` +
-                    `<p style="${SIG}margin-top:18pt;">Place: ${place || '[Place]'}` +
-                    `&nbsp;&nbsp;&nbsp;Date: ${reportDateDisplay}</p>` +
-                    `<p style="${SIG}margin-top:30pt;">${partnerName}<br/>` +
-                    `Partner<br/>Membership No.: ${membershipNo}</p>`;
+                    `<table style="${SIG}width:100%;margin-top:30pt;` +
+                    `border-collapse:collapse;border:none;"><tr>` +
+                      `<td ${TD}>For, ${firmName}<br/>Chartered Accountants<br/>` +
+                      `Firm Regi.No.${firmFRN}</td>` +
+                      `<td ${TD}>Place : ${place || '[Place]'}</td>` +
+                    `</tr><tr>` +
+                      `<td ${TD}>&nbsp;</td>` +
+                      `<td ${TD}>Date&nbsp;&nbsp;: ${reportDateDisplay}</td>` +
+                    `</tr><tr>` +
+                      `<td ${TD} style="${SIG}padding-top:24pt;border:none;">` +
+                      `${partnerName}<br/>Partner<br/>Membership No.${membershipNo}</td>` +
+                      `<td ${TD}>&nbsp;</td>` +
+                    `</tr></table>`;
                   exportToWord(html, `CARO-NotApplicable_${companyName}_${engagement?.financial_year || ''}.doc`);
                 }}>
                   <FileType className="h-4 w-4 mr-2" /> Export Word
@@ -736,15 +745,35 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   }
                 });
 
-                // Signature block — left aligned, serif, no separator border.
-                const SIG = `font-family:${SERIF};font-size:12pt;margin:0;`;
+                // Signature block — uses a 2-column table to mirror the
+                // template's layout exactly:
+                //   ┌─────────────────────────────┬──────────────────────┐
+                //   │ For, [Firm]                 │                      │
+                //   │ Chartered Accountants       │                      │
+                //   │ Firm Regi.No.[FRN]          │ Place : [Place]      │
+                //   │                             │ Date  : [Date]       │
+                //   │ [Partner]                   │                      │
+                //   │ Partner                     │                      │
+                //   │ Membership No.[Number]      │                      │
+                //   └─────────────────────────────┴──────────────────────┘
+                // Note: template uses "Firm Regi.No." and "Membership No."
+                // WITHOUT a colon — preserved verbatim.
+                const SIG = `font-family:${SERIF};font-size:12pt;`;
+                const TD = `style="${SIG}vertical-align:top;padding:0;border:none;"`;
                 html +=
-                  `<p style="${SIG}margin-top:30pt;">For, ${firmName}<br/>` +
-                  `Chartered Accountants<br/>Firm Regi. No.: ${firmFRN}</p>` +
-                  `<p style="${SIG}margin-top:18pt;">Place: ${place || "[Place]"}` +
-                  `&nbsp;&nbsp;&nbsp;Date: ${reportDateDisplay}</p>` +
-                  `<p style="${SIG}margin-top:30pt;">${partnerName}<br/>` +
-                  `Partner<br/>Membership No.: ${membershipNo}</p>`;
+                  `<table style="${SIG}width:100%;margin-top:30pt;` +
+                  `border-collapse:collapse;border:none;"><tr>` +
+                    `<td ${TD}>For, ${firmName}<br/>Chartered Accountants<br/>` +
+                    `Firm Regi.No.${firmFRN}</td>` +
+                    `<td ${TD}>Place : ${place || "[Place]"}</td>` +
+                  `</tr><tr>` +
+                    `<td ${TD}>&nbsp;</td>` +
+                    `<td ${TD}>Date&nbsp;&nbsp;: ${reportDateDisplay}</td>` +
+                  `</tr><tr>` +
+                    `<td ${TD} style="${SIG}padding-top:24pt;border:none;">` +
+                    `${partnerName}<br/>Partner<br/>Membership No.${membershipNo}</td>` +
+                    `<td ${TD}>&nbsp;</td>` +
+                  `</tr></table>`;
                 exportToWord(html, `CARO-2020_${companyName}_${engagement?.financial_year || ''}.doc`);
               }}>
                 <FileType className="h-4 w-4 mr-2" /> Export Word
