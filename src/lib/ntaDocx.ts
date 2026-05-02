@@ -333,15 +333,36 @@ function blankAfterGenNotesHeading(): string {
 
 /**
  * Spacer between individual general-note items (template P79 style).
- * keepNext + spacing after=0 line=240 lineRule=auto + no indent.
- * Template P79 has keepNext — ensures the spacer travels with the next note.
+ * keepNext + spacing after=0 line=240 lineRule=auto +
+ * ind left=650 hanging=488 (matches numberedParas — the template's empty
+ * inter-note rows carry the same hanging indent as the numbered notes
+ * themselves, so the visual whitespace lines up under the note text).
  */
 function blankBetweenNotes(): string {
   return (
     `<w:p><w:pPr>` +
     `<w:keepNext/>` +
     `<w:spacing w:after="0" w:line="240" w:lineRule="auto"/>` +
+    `<w:ind w:left="650" w:hanging="488"/>` +
     BLANK_RPR +
+    `</w:pPr></w:p>`
+  );
+}
+
+/**
+ * Bold-rPr trailing spacer (template P96 style).
+ * Same shape as blankBetweenNotes but the paragraph-mark rPr carries
+ * <w:b/><w:bCs/>, exactly as in the template's penultimate paragraph.
+ * Used immediately after the very last general note, before the final
+ * right-indent border spacer.
+ */
+function blankBetweenNotesBold(): string {
+  return (
+    `<w:p><w:pPr>` +
+    `<w:keepNext/>` +
+    `<w:spacing w:after="0" w:line="240" w:lineRule="auto"/>` +
+    `<w:ind w:left="650" w:hanging="488"/>` +
+    `<w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:b/><w:bCs/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>` +
     `</w:pPr></w:p>`
   );
 }
@@ -593,6 +614,13 @@ export async function exportNtaToDocx(
       paras.push(blankBetweenNotes());
     }
   }
+
+  // Template P95-P96: two trailing blanks in numbered-note style after the
+  // very last general note. The second one uses a bold paragraph-mark rPr.
+  // These give the document its characteristic bottom whitespace before
+  // the closing page border.
+  paras.push(blankBetweenNotes());
+  paras.push(blankBetweenNotesBold());
 
   // Template P97: right-indented border spacer at end of document.
   paras.push(blankRightIndent());
