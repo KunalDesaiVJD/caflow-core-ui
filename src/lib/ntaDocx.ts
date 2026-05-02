@@ -317,29 +317,66 @@ function blankRightIndent(): string {
 /**
  * Spacer after the "2.19 General notes" heading (template P77 style).
  * spacing after=0 + ind left=650 hanging=488 + keepNext (no border, no line=).
+ * Template P77 carries bold on its paragraph-mark rPr — replicated here.
  */
 function blankAfterGenNotesHeading(): string {
+  const boldRPR = `<w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:b/><w:bCs/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>`;
   return (
     `<w:p><w:pPr>` +
     `<w:keepNext/>` +
     `<w:spacing w:after="0"/>` +
     `<w:ind w:left="650" w:hanging="488"/>` +
-    BLANK_RPR +
+    boldRPR +
     `</w:pPr></w:p>`
   );
 }
 
 /**
  * Spacer between individual general-note items (template P79 style).
- * spacing after=0 line=240 lineRule=auto + no indent.
+ * keepNext + spacing after=0 line=240 lineRule=auto + no indent.
+ * Template P79 has keepNext — ensures the spacer travels with the next note.
  */
 function blankBetweenNotes(): string {
   return (
     `<w:p><w:pPr>` +
+    `<w:keepNext/>` +
     `<w:spacing w:after="0" w:line="240" w:lineRule="auto"/>` +
     BLANK_RPR +
     `</w:pPr></w:p>`
   );
+}
+
+/**
+ * Last body paragraph of policy 2.5, with the 2.6 heading appended inline.
+ *
+ * Template P26 is a single <w:p> (body indent left=150 right=150) that contains:
+ *   1. The "Assets which are not ready…" body text
+ *   2. Two consecutive <w:br/> elements (equivalent to \n\n within a paragraph)
+ *   3. Bold runs: "2.6  Depreciation /Amortization and Impairment"
+ *
+ * This matches exactly: keeping the 2.6 heading in the same paragraph as the
+ * 2.5 body means it inherits the body indent (left=150), not the heading indent
+ * (left=650 hanging=488), and no blankAfterHeading spacer sits between the
+ * inline heading and the 2.6 body paragraphs. Template uses keepNext=true here.
+ */
+function bodyParaWithInlineHeading(
+  bodyText: string,
+  headingLabel: string,
+  headingTitle: string,
+): string {
+  const pPr =
+    `<w:pPr>` +
+    `<w:keepNext/>` +
+    `<w:ind w:left="150" w:right="150"/>` +
+    `</w:pPr>`;
+  const runs: string[] = [];
+  if (bodyText) runs.push(wRun(bodyText));
+  // Two line breaks before the inline heading (matching template's double <w:br/>).
+  runs.push(wBr());
+  runs.push(wBr());
+  // Bold heading text inline.
+  runs.push(wRun(`${headingLabel}  ${headingTitle}`, { bold: true }));
+  return `<w:p>${pPr}${runs.join("")}</w:p>`;
 }
 
 /**
@@ -482,22 +519,60 @@ export async function exportNtaToDocx(
   paras.push(blankSpacer(true));      // P8: between "2." and first policy heading
 
   // ── 5. Policies 2.1 – 2.n ────────────────────────────────────────────────────
-  // Template pattern (e.g. 2.1 → 2.2):
+  // Standard pattern (e.g. 2.1 → 2.2):
   //   heading  "2.1 Basis of Preparation…"   (P9)
   //   spacer   blankAfterHeading — border + line=240, ind left=150  (P10)
   //   body     "The financial statements…"  (P11)
-  //   heading  "2.2 Use of Estimates"  DIRECTLY after body — no inter-section spacer (P12)
+  //   heading  "2.2 Use of Estimates"  DIRECTLY after body (P12)
   //   spacer   blankAfterHeading  (P13)
   //   body…
+  //
+  // Special case — 2.5 / 2.6 (template P26):
+  //   The "2.6 Depreciation /Amortization and Impairment" heading is NOT a
+  //   separate paragraph in the template. It appears as bold inline runs at the
+  //   END of the last body paragraph of 2.5, preceded by two <w:br/> elements.
+  //   The 2.6 body paragraphs then follow directly — no blankAfterHeading spacer.
   for (let idx = 0; idx < data.policies.length; idx++) {
     const p     = data.policies[idx];
     const label = p.id || `2.${idx + 1}`;
     const title = p.title || "";
     const body  = resolvePolicy(p.id, p.body);
 
+    // 2.6: heading already emitted inline at the end of 2.5 body. Skip heading+spacer.
+    if (label === "2.6") {
+      bodyBlock(body).forEach(bp => paras.push(bp));
+      continue;
+    }
+
     paras.push(headingPara(label, title));
-    paras.push(blankAfterHeading());  // P10/P16… style
-    bodyBlock(body).forEach(bp => paras.push(bp));
+    paras.push(blankAfterHeading());
+
+    if (label === "2.5") {
+      // Append 2.6 heading inline to the LAST body paragraph of 2.5.
+      const nextP     = data.policies[idx + 1];
+      const nextLabel = nextP?.id ?? "2.6";
+      const nextTitle = nextP?.title ?? "Depreciation /Amortization and Impairment";
+
+      // Only inline if the following policy is actually 2.6.
+      if (nextLabel === "2.6") {
+        const chunks = body.split(/\n\n+/);
+        // All body chunks except the last emit normally.
+        for (let ci = 0; ci < chunks.length - 1; ci++) {
+          paras.push(bodyPara(chunks[ci]));
+        }
+        // Last chunk gets the 2.6 heading appended inline.
+        paras.push(bodyParaWithInlineHeading(
+          chunks[chunks.length - 1] ?? "",
+          nextLabel,
+          nextTitle,
+        ));
+      } else {
+        // 2.6 is absent or reordered — fall back to normal body block.
+        bodyBlock(body).forEach(bp => paras.push(bp));
+      }
+    } else {
+      bodyBlock(body).forEach(bp => paras.push(bp));
+    }
     // Next heading follows directly — no inter-section spacer.
   }
   // Template P75: right-indented border spacer before "2.19 General notes".
