@@ -156,18 +156,14 @@ function bodyPara(text: string, keepNext = false): string {
  * the title (template's "DISCLOSURE OF ACCOUNTING POLICIES..." has
  * <w:u w:val="single"/>).
  */
-function headingPara(label: string, title: string, opts: { titleSize?: number; underline?: boolean; spaceBefore?: number; pageBreakBefore?: boolean } = {}): string {
+function headingPara(label: string, title: string, opts: { titleSize?: number; underline?: boolean; spaceBefore?: number } = {}): string {
   const before = opts.spaceBefore ?? 0;
   // Template heading paragraphs have NO w:jc and NO w:line/lineRule —
   // just bare w:after="0". Forcing jc="both" caused the visible spacing
   // mismatch. Bare spacing element only.
-  // pageBreakBefore: forces this paragraph to start on a fresh page —
-  // used when a specific section must land on a particular page (e.g.
-  // 2.10 must start page 3).
   const pPr =
     `<w:pPr>` +
     `<w:keepNext/>` +
-    (opts.pageBreakBefore ? `<w:pageBreakBefore/>` : ``) +
     `<w:spacing${before ? ` w:before="${before}"` : ""} w:after="0"/>` +
     `<w:ind w:left="650" w:hanging="488"/>` +
     `</w:pPr>`;
@@ -336,6 +332,24 @@ function blankAfterGenNotesHeading(): string {
     `<w:spacing w:after="0"/>` +
     `<w:ind w:left="650" w:hanging="488"/>` +
     boldRPR +
+    `</w:pPr></w:p>`
+  );
+}
+
+/**
+ * One blank line of whitespace at the body line height (no border, no
+ * indent). Used to construct the 2-line top/bottom whitespace bands
+ * around the user-required page anchors.
+ *
+ * `pageBreakBefore=true` makes this paragraph start a fresh page —
+ * use it as the FIRST of the 2 top-of-page whitespace paragraphs.
+ */
+function whitespacePara(opts: { pageBreakBefore?: boolean } = {}): string {
+  return (
+    `<w:p><w:pPr>` +
+    (opts.pageBreakBefore ? `<w:pageBreakBefore/>` : ``) +
+    `<w:spacing w:after="0"/>` +
+    BLANK_RPR +
     `</w:pPr></w:p>`
   );
 }
@@ -592,12 +606,34 @@ export async function exportNtaToDocx(
     //   Page 2: 2.6 → 2.9      ← 2.6 starts a new page
     //   Page 3: 2.10 → 2.17    ← 2.10 starts a new page
     //   Page 4: 2.18 → 2.19    ← 2.18 starts a new page
-    // Each of these three "page-anchor" headings carries
-    // <w:pageBreakBefore/> so the page boundaries land deterministically.
-    const pageBreak = label === "2.6" || label === "2.10" || label === "2.18";
-    paras.push(headingPara(label, title, pageBreak ? { pageBreakBefore: true } : {}));
+    //
+    // Plus two lines of whitespace at the top AND bottom of pages 2-4.
+    //
+    // Implementation:
+    //   • Before each page-anchor heading (2.6 / 2.10 / 2.18) emit:
+    //       whitespacePara({ pageBreakBefore: true })  // line 1, starts new page
+    //       whitespacePara()                            // line 2
+    //     The page-break flag now lives on the first whitespace para
+    //     so the heading itself is plain — and the heading is preceded
+    //     by exactly two empty lines on the new page.
+    //   • After each page-tail body (2.5 / 2.9 / 2.17) emit two
+    //     whitespacePara()s — they sit at the very bottom of the
+    //     current page, providing the matching bottom whitespace.
+    const isPageAnchor = label === "2.6" || label === "2.10" || label === "2.18";
+    if (isPageAnchor) {
+      paras.push(whitespacePara({ pageBreakBefore: true }));
+      paras.push(whitespacePara());
+    }
+
+    paras.push(headingPara(label, title));
     paras.push(blankAfterHeading());
     bodyBlock(body).forEach(bp => paras.push(bp));
+
+    const isPageTail = label === "2.5" || label === "2.9" || label === "2.17";
+    if (isPageTail) {
+      paras.push(whitespacePara());
+      paras.push(whitespacePara());
+    }
     // Next heading follows directly — no inter-section spacer.
   }
   // Template P75: right-indented border spacer before "2.19 General notes".
@@ -651,10 +687,12 @@ export async function exportNtaToDocx(
       <w:headerReference w:type="default" r:id="rId2"/>
       <w:footerReference w:type="default" r:id="rId3"/>
       <w:pgSz w:w="11906" w:h="16838" w:code="9"/>
-      <!-- Bottom margin bumped from 851 → 1411 (~28pt extra) so every
-           page has the two lines of white space at the bottom that the
-           user requires. -->
-      <w:pgMar w:top="0" w:right="849" w:bottom="1411" w:left="993"
+      <!-- Bottom margin restored to the template's 851. The 2-line top
+           and bottom whitespace on pages 2-4 is provided by explicit
+           empty paragraphs around the page-anchor headings, NOT by
+           the page margin (so page 1 has its full content height back
+           and 2.5 fits without overflowing to page 2). -->
+      <w:pgMar w:top="0" w:right="849" w:bottom="851" w:left="993"
                w:header="765" w:footer="850" w:gutter="0"/>
       <w:pgBorders>
         <w:top    w:val="single" w:sz="10" w:space="1" w:color="auto"/>
