@@ -250,18 +250,18 @@ const BLANK_BDR = `<w:pBdr><w:top w:val="none" w:sz="2" w:space="0" w:color="aut
 
 /**
  * Generic section spacer (template P1, P3, P8 style).
- * border top/bottom:none + spacing after=0 (uses pPrDefault line height) + ind left=150.
  *
- * Matches the template byte-for-byte: the doc-default line height
- * (line=278 lineRule=auto, ~14pt) gives the same vertical breathing
- * room the template uses between sections.
+ * Compressed from the template's natural ~14pt line height down to a
+ * fixed 6pt (line=120 lineRule=exact) to remove extra whitespace
+ * between sections per user request — still leaves a visible separator
+ * but reclaims roughly half the vertical space across the ~6 spacers.
  */
 function blankSpacer(keepNext = false): string {
   return (
     `<w:p><w:pPr>` +
     (keepNext ? `<w:keepNext/>` : ``) +
     BLANK_BDR +
-    `<w:spacing w:after="0"/>` +
+    `<w:spacing w:after="0" w:line="120" w:lineRule="exact"/>` +
     `<w:ind w:left="150"/>` +
     BLANK_RPR +
     `</w:pPr></w:p>`
@@ -270,15 +270,17 @@ function blankSpacer(keepNext = false): string {
 
 /**
  * Spacer after a policy heading (template P10, P16, P20, P31… style).
- * border + spacing after=0 line=240 lineRule=auto + ind left=150 + keepNext.
- * Sits between a "2.x Title" heading and its body text.
+ *
+ * Compressed to 6pt (line=120 lineRule=exact). Sits between the
+ * "2.x Title" heading and the first body paragraph; preserves a hair
+ * of separation without inflating vertical space.
  */
 function blankAfterHeading(): string {
   return (
     `<w:p><w:pPr>` +
     `<w:keepNext/>` +
     BLANK_BDR +
-    `<w:spacing w:after="0" w:line="240" w:lineRule="auto"/>` +
+    `<w:spacing w:after="0" w:line="120" w:lineRule="exact"/>` +
     `<w:ind w:left="150"/>` +
     BLANK_RPR +
     `</w:pPr></w:p>`
@@ -288,14 +290,13 @@ function blankAfterHeading(): string {
 /**
  * Spacer after the "1. Overview of the Reporting Entity" outer heading
  * (template P5 style — ListParagraph indent carry-over).
- * spacing after=0 + ind left=522 + keepNext (no border).
- * Uses the doc-default line height to match the template exactly.
+ * Compressed to 6pt to match the other section spacers.
  */
 function blankListSpacer(): string {
   return (
     `<w:p><w:pPr>` +
     `<w:keepNext/>` +
-    `<w:spacing w:after="0"/>` +
+    `<w:spacing w:after="0" w:line="120" w:lineRule="exact"/>` +
     `<w:ind w:left="522"/>` +
     BLANK_RPR +
     `</w:pPr></w:p>`
