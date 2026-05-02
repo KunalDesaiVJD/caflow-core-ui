@@ -599,14 +599,13 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   <Download className="h-4 w-4 mr-2" /> Export PDF
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => {
-                  // Same serif typography and signature-block layout as the
-                  // applicable-CARO export. Override CSS goes through the new
-                  // exportToWord(extraHeadCss) parameter so it lands in <head>
-                  // where Word's HTML parser will actually honour it.
+                  // Same serif typography, reduced margins and signature-block
+                  // layout as the applicable-CARO export.
                   const SERIF = "'Times New Roman', Times, serif";
                   const TD = `style="vertical-align:top;"`;
                   const HEAD_CSS = `
-                    body { font-family: ${SERIF}; font-size: 12pt; }
+                    @page { size: A4; margin: 1.5cm 2cm 2cm 2cm; }
+                    body { font-family: ${SERIF}; font-size: 12pt; margin: 0; }
                     .caro-sig, .caro-sig tr, .caro-sig td {
                       border: none !important;
                       padding: 0 !important;
@@ -625,9 +624,11 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     .replace(/\n/g, '<br/>');
                   // Same Place / Date spacing + DD.MM.YYYY date format as
                   // the applicable-CARO export.
+                  // Body uses LEFT alignment (not justified) — template uses
+                  // ragged right; justified produced wide stretched gaps.
                   const html =
                     `<p style="font-family:${SERIF};font-size:12pt;line-height:1.4;` +
-                    `text-align:justify;margin:0 0 12pt 0;">${body}</p>` +
+                    `text-align:left;margin:0 0 12pt 0;">${body}</p>` +
                     `<table class="caro-sig" style="width:100%;margin-top:30pt;"><tr>` +
                       `<td ${TD}>For, ${firmName}<br/>Chartered Accountants<br/>` +
                       `Firm Regi.No.${firmFRN}</td>` +
@@ -749,25 +750,26 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
               <DropdownMenuItem onClick={() => {
                 // ─── CARO Word export — matches the template Annexure-A format ───
                 // - Times New Roman serif font throughout (forced via head CSS)
-                // - Centered company-name title + centered subtitle
-                // - Each clause is one hanging-indent paragraph "N.  body" (no title)
-                // - Signature block: borderless 2-column table; the global
-                //   "th, td { border: 1px solid #999 }" rule that exportToWord
-                //   injects into <head> would otherwise draw gridlines around
-                //   every signature row. We pass an `extraHeadCss` override
-                //   that scopes .caro-sig to "border:none !important" so the
-                //   signature renders flush like the template.
+                // - Centered + UNDERLINED bold company-name title and subtitle
+                //   (template renders both with text-decoration:underline).
+                // - Each clause is one hanging-indent paragraph "N.  body".
+                //   Body is LEFT-ALIGNED (not justified) — justified caused
+                //   ugly stretched word spacing on short last lines.
+                // - Page margins reduced via head CSS: the wrapper's default
+                //   2cm body{margin} + 2cm @page{margin} pushed the title way
+                //   down the page; template starts much higher.
                 const SERIF = "'Times New Roman', Times, serif";
                 const CLAUSE_STYLE =
                   `font-family:${SERIF};font-size:12pt;line-height:1.4;` +
-                  `text-align:justify;margin:0 0 8pt 0;` +
+                  `text-align:left;margin:0 0 8pt 0;` +
                   `padding-left:28pt;text-indent:-28pt;`;
 
                 // Head-level overrides — Word's HTML parser only reliably
                 // applies CSS from <head>, so we let the wrapper inject these
                 // there rather than embedding a body-level <style>.
                 const HEAD_CSS = `
-                  body { font-family: ${SERIF}; font-size: 12pt; }
+                  @page { size: A4; margin: 1.5cm 2cm 2cm 2cm; }
+                  body { font-family: ${SERIF}; font-size: 12pt; margin: 0; }
                   .caro-sig, .caro-sig tr, .caro-sig td {
                     border: none !important;
                     padding: 0 !important;
@@ -779,10 +781,14 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                 `;
 
                 let html =
+                  // Title — bold + UNDERLINE per template
                   `<p style="text-align:center;font-family:${SERIF};font-size:12pt;` +
-                  `font-weight:bold;margin:0 0 10pt 0;">${companyName}</p>` +
-                  `<p style="text-align:center;font-family:${SERIF};font-size:11pt;` +
-                  `margin:0 0 18pt 0;">Annexure - A referred to paragraph under the ` +
+                  `font-weight:bold;text-decoration:underline;margin:0 0 14pt 0;">` +
+                  `${companyName}</p>` +
+                  // Subtitle — also bold + UNDERLINE per template
+                  `<p style="text-align:center;font-family:${SERIF};font-size:12pt;` +
+                  `font-weight:bold;text-decoration:underline;margin:0 0 18pt 0;` +
+                  `padding:0 36pt;">Annexure - A referred to paragraph under the ` +
                   `heading &quot;Report on Other Legal and Regulatory&quot; of our ` +
                   `independent Auditor&#39;s Report of even date</p>`;
 
