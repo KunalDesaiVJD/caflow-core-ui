@@ -585,15 +585,17 @@ export async function exportNtaToDocx(
     const body  = resolvePolicy(p.id, p.body);
 
     // Every policy flows through the standard heading + body pipeline.
-    // The keepNext-on-all-but-last chain keeps each section together;
-    // if a section can't fit on the current page Word naturally pushes
-    // it to the next page.
+    // The keepNext-on-all-but-last chain keeps each section together.
     //
-    // 2.10 carries pageBreakBefore so it always starts on page 3 per
-    // user requirement. This is a content-shift (not a section break),
-    // so it does not introduce an extra blank page — the page that 2.10
-    // starts is the same page that would have followed naturally.
-    paras.push(headingPara(label, title, label === "2.10" ? { pageBreakBefore: true } : {}));
+    // Per user-specified pagination:
+    //   Page 1: 1 → 2.5
+    //   Page 2: 2.6 → 2.9      ← 2.6 starts a new page
+    //   Page 3: 2.10 → 2.17    ← 2.10 starts a new page
+    //   Page 4: 2.18 → 2.19    ← 2.18 starts a new page
+    // Each of these three "page-anchor" headings carries
+    // <w:pageBreakBefore/> so the page boundaries land deterministically.
+    const pageBreak = label === "2.6" || label === "2.10" || label === "2.18";
+    paras.push(headingPara(label, title, pageBreak ? { pageBreakBefore: true } : {}));
     paras.push(blankAfterHeading());
     bodyBlock(body).forEach(bp => paras.push(bp));
     // Next heading follows directly — no inter-section spacer.
@@ -649,7 +651,10 @@ export async function exportNtaToDocx(
       <w:headerReference w:type="default" r:id="rId2"/>
       <w:footerReference w:type="default" r:id="rId3"/>
       <w:pgSz w:w="11906" w:h="16838" w:code="9"/>
-      <w:pgMar w:top="0" w:right="849" w:bottom="851" w:left="993"
+      <!-- Bottom margin bumped from 851 → 1411 (~28pt extra) so every
+           page has the two lines of white space at the bottom that the
+           user requires. -->
+      <w:pgMar w:top="0" w:right="849" w:bottom="1411" w:left="993"
                w:header="765" w:footer="850" w:gutter="0"/>
       <w:pgBorders>
         <w:top    w:val="single" w:sz="10" w:space="1" w:color="auto"/>
