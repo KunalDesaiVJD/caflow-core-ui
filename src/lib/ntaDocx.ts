@@ -250,20 +250,18 @@ const BLANK_BDR = `<w:pBdr><w:top w:val="none" w:sz="2" w:space="0" w:color="aut
 
 /**
  * Generic section spacer (template P1, P3, P8 style).
+ * border top/bottom:none + spacing after=0 (uses pPrDefault line height) + ind left=150.
  *
- * NOTE: previously used the doc-default line height (~14pt). To honour
- * the user requirement that points 1 through 2.5 all fit on page 1, the
- * spacer height is now pinned to lineRule="exact" line="80" (4pt) —
- * tall enough to preserve visible separation between sections, but
- * compact enough that the cumulative whitespace across ~6 spacers
- * doesn't push 2.5 onto page 2.
+ * Matches the template byte-for-byte: the doc-default line height
+ * (line=278 lineRule=auto, ~14pt) gives the same vertical breathing
+ * room the template uses between sections.
  */
 function blankSpacer(keepNext = false): string {
   return (
     `<w:p><w:pPr>` +
     (keepNext ? `<w:keepNext/>` : ``) +
     BLANK_BDR +
-    `<w:spacing w:after="0" w:line="80" w:lineRule="exact"/>` +
+    `<w:spacing w:after="0"/>` +
     `<w:ind w:left="150"/>` +
     BLANK_RPR +
     `</w:pPr></w:p>`
@@ -272,18 +270,15 @@ function blankSpacer(keepNext = false): string {
 
 /**
  * Spacer after a policy heading (template P10, P16, P20, P31… style).
- *
- * Compressed to lineRule="exact" line="80" (4pt) for the same reason as
- * blankSpacer above — preserves a hairline visual gap between the
- * "2.x Title" heading and its body without consuming the ~14pt the
- * doc-default line height would otherwise produce.
+ * border + spacing after=0 line=240 lineRule=auto + ind left=150 + keepNext.
+ * Sits between a "2.x Title" heading and its body text.
  */
 function blankAfterHeading(): string {
   return (
     `<w:p><w:pPr>` +
     `<w:keepNext/>` +
     BLANK_BDR +
-    `<w:spacing w:after="0" w:line="80" w:lineRule="exact"/>` +
+    `<w:spacing w:after="0" w:line="240" w:lineRule="auto"/>` +
     `<w:ind w:left="150"/>` +
     BLANK_RPR +
     `</w:pPr></w:p>`
@@ -293,15 +288,14 @@ function blankAfterHeading(): string {
 /**
  * Spacer after the "1. Overview of the Reporting Entity" outer heading
  * (template P5 style — ListParagraph indent carry-over).
- *
- * Compressed to lineRule="exact" line="80" (4pt) so points 1 → 2.5 all
- * fit on page 1 (see note on blankSpacer above).
+ * spacing after=0 + ind left=522 + keepNext (no border).
+ * Uses the doc-default line height to match the template exactly.
  */
 function blankListSpacer(): string {
   return (
     `<w:p><w:pPr>` +
     `<w:keepNext/>` +
-    `<w:spacing w:after="0" w:line="80" w:lineRule="exact"/>` +
+    `<w:spacing w:after="0"/>` +
     `<w:ind w:left="522"/>` +
     BLANK_RPR +
     `</w:pPr></w:p>`
