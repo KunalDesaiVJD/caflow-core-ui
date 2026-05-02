@@ -108,11 +108,19 @@ function wBr(opts: RunOpts = {}): string {
  * renders as a blank line — matching the template's pattern of double
  * <w:br/> for sub-paragraph gaps inside one <w:p>.
  */
-function bodyPara(text: string, keepNext = true): string {
+function bodyPara(text: string, keepNext = false): string {
   const hasLineBreaks = text.includes("\n");
   // Template has NO <w:spacing> on body paragraphs — pPrDefault provides
   // line height. Earlier versions emitted line=240/lineRule=auto on every
   // paragraph which the user perceived as wrong spacing.
+  //
+  // keepNext defaults to FALSE for body paragraphs. The heading → spacer →
+  // first-body chain (via keepNext on headingPara and blankAfterHeading) is
+  // sufficient to keep the heading with the start of its section. Adding
+  // keepNext to every body paragraph creates an impossibly long chain across
+  // multi-paragraph policies (2.5 has 6 sub-paragraphs) which Word may
+  // break unpredictably — producing the "heading at page bottom, body on
+  // next page" layout the user reported.
   const pPr =
     `<w:pPr>` +
     (hasLineBreaks ? `` : `<w:jc w:val="both"/>`) +
@@ -347,6 +355,9 @@ function blankBetweenNotes(): string {
  * around <w:br/> the way it spaces around paragraph marks.
  */
 function bodyBlock(text: string): string[] {
+  // keepNext is not passed (defaults to false) so body paragraphs can flow
+  // freely across pages. The heading → blankAfterHeading → first-body chain
+  // already ensures the heading stays with the beginning of the section.
   const chunks = text.split(/\n\n+/);
   return chunks.map(chunk => bodyPara(chunk));
 }
@@ -556,9 +567,20 @@ export async function exportNtaToDocx(
   <w:p><w:pPr><w:pStyle w:val="Normal"/></w:pPr></w:p>
 </w:hdr>`;
 
+  // Footer contains a centred PAGE field so every page is numbered.
+  // Using the standard fldChar begin/instrText/end pattern, which Word
+  // resolves correctly when the file is opened normally (not Protected View).
   const footerXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-  <w:p><w:pPr><w:pStyle w:val="Normal"/></w:pPr></w:p>
+  <w:p>
+    <w:pPr>
+      <w:jc w:val="center"/>
+      <w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>
+    </w:pPr>
+    <w:r><w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:fldChar w:fldCharType="begin"/></w:r>
+    <w:r><w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>
+    <w:r><w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:fldChar w:fldCharType="end"/></w:r>
+  </w:p>
 </w:ftr>`;
 
   // ─── styles.xml ───────────────────────────────────────────────────────────────
