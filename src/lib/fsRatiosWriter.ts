@@ -384,39 +384,42 @@ function writeYearSheet(ws: ExcelJS.Worksheet, companyName: string, yearEnd: num
   hd(8, `Ratio for F.Y.${fyStr(yearEnd)}`);
 
   // ── Data rows ─────────────────────────────────────────────────────────────
+  // All numerator/denominator labels are UPPERCASE per template.
+  // Template typos preserved verbatim ("SHREHOLDERS" missing 'A',
+  // "RECEIVALES" missing 'B').
   writeSimpleYearRow(ws,  9, "1", "CURRENT RATIO",
-    "Total Current Assets",      v(inp, "current_assets"),
-    "Total Current Liabilities", v(inp, "current_liabilities"),
+    "TOTAL CURRENT ASSETS",      v(inp, "current_assets"),
+    "TOTAL CURRENT LIABILITIES", v(inp, "current_liabilities"),
     "times");
 
   writeSimpleYearRow(ws, 11, "2", "DEBT-EQUITY RATIO",
-    "Total Debt",           v(inp, "total_debt"),
-    "Shareholder's Equity", v(inp, "shareholders_equity"),
+    "TOTAL DEBT",           v(inp, "total_debt"),
+    "SHAREHOLDER'S EQUITY", v(inp, "shareholders_equity"),
     "times");
 
   writeDscrBlock(ws, inp); // rows 13..18
 
   writeSimpleYearRow(ws, 20, "4", "RETURN ON EQUITY RATIO",
-    "Net Profit After Tax",        v(inp, "npat"),
-    "Average Shareholders Equity", v(inp, "avg_shareholders_equity"),
+    "NET PROFIT AFTER TAX",       v(inp, "npat"),
+    "AVERAGE SHREHOLDERS EQUITY", v(inp, "avg_shareholders_equity"),
     "%");
   // Template cross-ref: ROE numerator (NPAT) = DSCR detail row E14
   ws.getCell(20, 5).value = f("+E14");
 
   writeSimpleYearRow(ws, 22, "5", "INVENTORY TURNOVER RATIO",
     "REVENUE FROM OPERATIONS", v(inp, "revenue_ops"),
-    "Average Inventories",     v(inp, "avg_inventories"),
+    "AVERAGE INVENTORIES",     v(inp, "avg_inventories"),
     "times");
 
   // Note: "TRADE RECEIVALES" (missing 'B') is the exact spelling in the template (C24)
   writeSimpleYearRow(ws, 24, "6", "TRADE RECEIVALES TURNOVER RATIO",
-    "Revenue from Operations",   v(inp, "revenue_ops"),
-    "Average Trade Receivables", v(inp, "avg_trade_receivables"),
+    "REVENUE FROM OPERATIONS",   v(inp, "revenue_ops"),
+    "AVERAGE TRADE RECEIVABLES", v(inp, "avg_trade_receivables"),
     "times");
 
   writeSimpleYearRow(ws, 26, "7", "TRADE PAYABLE TURNOVER RATIO",
-    "Net Credit Purchases",   v(inp, "net_credit_purchases"),
-    "Average Trade Payables", v(inp, "avg_trade_payables"),
+    "NET CREDIT PURCHASES",   v(inp, "net_credit_purchases"),
+    "AVERAGE TRADE PAYABLES", v(inp, "avg_trade_payables"),
     "times");
   // Footnote off the print area in col I — matches template's I26 cell
   const fn = ws.getCell("I26");
@@ -425,13 +428,13 @@ function writeYearSheet(ws: ExcelJS.Worksheet, companyName: string, yearEnd: num
   fn.alignment = { wrapText: true, vertical: "middle" };
 
   writeSimpleYearRow(ws, 28, "8", "NET CAPITAL TURNOVER RATIO",
-    "Revenue from Operations", v(inp, "revenue_ops"),
-    "Working Capital",         v(inp, "working_capital"),
+    "REVENUE FROM OPERATIONS", v(inp, "revenue_ops"),
+    "WORKING CAPITAL",         v(inp, "working_capital"),
     "times");
 
   writeSimpleYearRow(ws, 30, "9", "NET PROFIT RATIO",
-    "Net Profit After Tax",    v(inp, "npat"),
-    "Revenue from Operations", v(inp, "revenue_ops"),
+    "NET PROFIT AFTER TAX",    v(inp, "npat"),
+    "REVENUE FROM OPERATIONS", v(inp, "revenue_ops"),
     "%");
   // Template cross-refs: Net Profit num = ROE num (E20 = NPAT); den = Inventory num (E22 = Revenue)
   ws.getCell(30, 5).value = f("+E20");
@@ -440,8 +443,8 @@ function writeYearSheet(ws: ExcelJS.Worksheet, companyName: string, yearEnd: num
   writeRoceBlock(ws, inp); // rows 32..39
 
   writeSimpleYearRow(ws, 41, "11", "RETURN ON INVESTMENT",
-    "Return / Profit / Earning", v(inp, "return_profit"),
-    "Average Investment Fund",   v(inp, "avg_investment_fund"),
+    "RETURN / PROFIT / EARNING", v(inp, "return_profit"),
+    "AVERAGE INVESTMENT FUND",   v(inp, "avg_investment_fund"),
     "%");
 
   // ── Spacer rows: extend vertical column lines through the gaps ──────────
@@ -529,10 +532,10 @@ function writeDscrBlock(ws: ExcelJS.Worksheet, inp: RatioInputs | null): void {
   // r0+3: Interest                    | (blank)
   // r0+4: Other Non Cash Adjustment   | (blank)
   // r0+5: TOTAL = SUM(E14:E17) / SUM(G14:G15)
-  setDetail(ws, r0 + 1, "Net Profit After Taxes",      v(inp, "npat"),                "Interest & Lease Payment", v(inp, "interest_lease"));
-  setDetail(ws, r0 + 2, "Non Cash Operating Expenses", v(inp, "non_cash_op_exp"),     "Principal Repayments",     v(inp, "principal_repayments"));
-  setDetail(ws, r0 + 3, "Interest",                    v(inp, "interest"),            "",                          null);
-  setDetail(ws, r0 + 4, "Other Non Cash Adjustment",   v(inp, "other_non_cash_adj"),  "",                          null);
+  setDetail(ws, r0 + 1, "NET PROFIT AFTER TAXES",   v(inp, "npat"),                "INTEREST & LEASE PAYMENT", v(inp, "interest_lease"));
+  setDetail(ws, r0 + 2, "NON CASH OPERATING EXP",   v(inp, "non_cash_op_exp"),     "PRINCIPAL REPAYMENTS",     v(inp, "principal_repayments"));
+  setDetail(ws, r0 + 3, "INTEREST",                 v(inp, "interest"),            "",                         null);
+  setDetail(ws, r0 + 4, "OTHER NON CASH ADJUSTMENT", v(inp, "other_non_cash_adj"), "",                         null);
 
   // TOTAL row
   setLabel(ws, r0 + 5, 4, "TOTAL", { bold: true });
@@ -592,8 +595,8 @@ function writeRoceBlock(ws: ExcelJS.Worksheet, inp: RatioInputs | null): void {
   // r0+2: INTEREST              | LONG-TERM BORROWINGS
   // r0+3..r0+6: blank reserved rows
   // r0+7: TOTAL = SUM(E33:E38) / SUM(G33:G38)
-  setDetail(ws, r0 + 1, "Net Profit Before Tax", v(inp, "npbt"),     "Net Worth",            v(inp, "net_worth"));
-  setDetail(ws, r0 + 2, "Interest",              v(inp, "interest"), "Long-Term Borrowings", v(inp, "lt_borrowings"));
+  setDetail(ws, r0 + 1, "NET PROFIT BEFORE TAX", v(inp, "npbt"),     "NET WORTH",            v(inp, "net_worth"));
+  setDetail(ws, r0 + 2, "INTEREST",              v(inp, "interest"), "LONG-TERM BORROWINGS", v(inp, "lt_borrowings"));
   // Template cross-ref: ROCE Interest (E34) = DSCR Interest row E16
   ws.getCell(r0 + 2, 5).value = f("E16");
   for (let i = 3; i <= 6; i++) setDetail(ws, r0 + i, "", null, "", null);
