@@ -665,25 +665,22 @@ export async function exportNtaToDocx(
   // Minimal empty-paragraph header and footer. Required so Word renders the
   // page border with w:top="0" — without these references the top border is
   // clipped at the page edge.
+  // Header: empty paragraph using the Header pStyle (zero spacing) so the
+  // header zone collapses to its minimum height. Using "Normal" inherits
+  // the doc-level after=160 / line=278 defaults, which adds ~14pt of
+  // unwanted whitespace above the page content.
   const headerXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-  <w:p><w:pPr><w:pStyle w:val="Normal"/></w:pPr></w:p>
+  <w:p><w:pPr><w:pStyle w:val="Header"/></w:pPr></w:p>
 </w:hdr>`;
 
-  // Footer contains a centred PAGE field so every page is numbered.
-  // Using the standard fldChar begin/instrText/end pattern, which Word
-  // resolves correctly when the file is opened normally (not Protected View).
+  // Footer: empty paragraph with the Footer pStyle. The template carries
+  // NO page number, so we drop the previous PAGE field. Keeping the empty
+  // <w:p> is required so Word still renders the section's bottom page
+  // border correctly.
   const footerXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-  <w:p>
-    <w:pPr>
-      <w:jc w:val="center"/>
-      <w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>
-    </w:pPr>
-    <w:r><w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:fldChar w:fldCharType="begin"/></w:r>
-    <w:r><w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>
-    <w:r><w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:fldChar w:fldCharType="end"/></w:r>
-  </w:p>
+  <w:p><w:pPr><w:pStyle w:val="Footer"/></w:pPr></w:p>
 </w:ftr>`;
 
   // ─── styles.xml ───────────────────────────────────────────────────────────────
@@ -714,6 +711,34 @@ export async function exportNtaToDocx(
       <w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/>
       <w:sz w:val="17"/>
       <w:szCs w:val="17"/>
+    </w:rPr>
+  </w:style>
+  <!-- Header / Footer styles override the doc-default after=160 / line=278
+       so the header and footer zones collapse to their minimum height.
+       Without these the empty header paragraph adds ~14pt of unwanted
+       whitespace above the body content. -->
+  <w:style w:type="paragraph" w:styleId="Header">
+    <w:name w:val="header"/>
+    <w:basedOn w:val="Normal"/>
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+    </w:pPr>
+    <w:rPr>
+      <w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/>
+      <w:sz w:val="20"/>
+      <w:szCs w:val="20"/>
+    </w:rPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="Footer">
+    <w:name w:val="footer"/>
+    <w:basedOn w:val="Normal"/>
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+    </w:pPr>
+    <w:rPr>
+      <w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/>
+      <w:sz w:val="20"/>
+      <w:szCs w:val="20"/>
     </w:rPr>
   </w:style>
 </w:styles>`;
