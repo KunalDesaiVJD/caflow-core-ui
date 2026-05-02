@@ -788,19 +788,21 @@ export function ListTable({
   const membersByGroup  = new Map<string, { row: ListRow; origIdx: number }[]>();
 
   rows.forEach((r, i) => {
+    if (!r) return;
     if (r.is_group && r.id) {
       groupHeaderMap.set(r.id, { row: r, origIdx: i });
       membersByGroup.set(r.id, []);
     }
   });
   rows.forEach((r, i) => {
+    if (!r) return;
     if (r.subgroup_id && groupHeaderMap.has(r.subgroup_id)) {
       membersByGroup.get(r.subgroup_id)!.push({ row: r, origIdx: i });
     }
   });
 
   // Rows already shown inside a group — skip at flat level
-  const isMember = (r: ListRow) => !!(r.subgroup_id && groupHeaderMap.has(r.subgroup_id));
+  const isMember = (r: ListRow | null) => !!(r?.subgroup_id && groupHeaderMap.has(r.subgroup_id!));
 
   // All group headers (for "Move to Sub Group" sub-menu in every row)
   const allSubGroups = [...groupHeaderMap.entries()].map(([id, { row }]) => ({
@@ -808,10 +810,11 @@ export function ListTable({
     name: row.description ?? id,
   }));
 
-  // Flat display list: excludes members and zero-amount linked non-group rows
+  // Flat display list: excludes nulls, members, and zero-amount linked non-group rows
   const displayItems = rows
     .map((r, origIdx) => ({ r, origIdx }))
     .filter(({ r }) =>
+      r != null &&
       !(!r.is_group && r.source === "linked" && (r.amount_cy || 0) === 0 && (r.amount_py || 0) === 0) &&
       !isMember(r)
     );
