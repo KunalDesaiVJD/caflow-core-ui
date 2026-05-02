@@ -195,20 +195,69 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
   }, [engagementId, notes]);
 
   // ── Remap a ledger to a new FS code ──────────────────────────────────
+  // Issue-4b: Also syncs to coa_mapping_intelligence for cross-client learning.
+  // Issue-5: Logs audit trail to audit_human_actions.
   const handleRemapLedger = useCallback(async (ledgerName: string, newCode: string) => {
     try {
+      // 1. Fetch current engagement + firm context
       const { data: eng } = await supabase
         .from("audit_engagements")
-        .select("coa_mapping")
+        .select("coa_mapping, firm_id, client_id, financial_year")
         .eq("id", engagementId)
         .maybeSingle();
-      const current = (eng as any)?.coa_mapping ?? {};
+      const current    = (eng as any)?.coa_mapping ?? {};
+      const oldCode    = current[ledgerName]?.code ?? null;
+      const firmId     = (eng as any)?.firm_id     ?? null;
+      const clientId   = (eng as any)?.client_id   ?? null;
+
+      // 2. Update audit_engagements.coa_mapping (primary source of truth)
       const updated = { ...current, [ledgerName]: { ...(current[ledgerName] ?? {}), code: newCode } };
       const { error } = await supabase
         .from("audit_engagements")
         .update({ coa_mapping: updated } as any)
         .eq("id", engagementId);
       if (error) throw error;
+
+      // 3. Issue-4b / Issue-6: Upsert into coa_mapping_intelligence so it appears
+      //    in the AI Skills page and trains future auto-mappings.
+      const normalizedName = ledgerName.toLowerCase().trim();
+      await supabase
+        .from("coa_mapping_intelligence" as any)
+        .upsert(
+          {
+            normalized_name:  normalizedName,
+            account_head:     newCode,
+            entity_type:      "corporate",
+            scope:            "global",
+            is_party_name:    false,
+            confidence_score: 95,
+            times_confirmed:  1,
+            times_overridden: 0,
+            last_used_at:     new Date().toISOString(),
+          },
+          { onConflict: "normalized_name,entity_type" },
+        )
+        .select();
+
+      // 4. Issue-5: Log audit trail to audit_human_actions
+      const { data: { user } } = await supabase.auth.getUser();
+      await supabase
+        .from("audit_human_actions" as any)
+        .insert({
+          engagement_id:  engagementId,
+          firm_id:        firmId,
+          client_id:      clientId,
+          action_type:    "coa_remap",
+          action_data:    {
+            ledger_name: ledgerName,
+            old_code:    oldCode,
+            new_code:    newCode,
+            source:      "financial_statements",
+          },
+          performed_by:   user?.id ?? null,
+          performed_at:   new Date().toISOString(),
+        });
+
       toast.success(`Remapped "${ledgerName}" → ${newCode}. Re-syncing…`);
       await handleResync();
     } catch (e: any) {
