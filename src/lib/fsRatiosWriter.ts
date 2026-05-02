@@ -670,11 +670,11 @@ function writeRatioSheet(wb: ExcelJS.Workbook, ctx: Ctx, data: Stage7Ratios | nu
 
   const { cyYear, pyYear, companyName } = ctx;
 
-  // ── Row 2: Company name (merged B2:H2) ──────────────────────────────────
+  // ── Row 2: Company name (merged B2:H2) — bold + underlined per template ─
   ws.mergeCells("B2:H2");
   const cn = ws.getCell("B2");
   cn.value = companyName;
-  applyFont(cn, { bold: true, size: 12 });
+  cn.font = { name: FONT, size: 12, bold: true, underline: true };
   cn.alignment = { horizontal: "center", vertical: "middle" };
   clearSlaveBorders(ws, 2, 2, 2, 8);
   ws.getRow(2).height = 22.5;
