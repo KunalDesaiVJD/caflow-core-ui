@@ -86,7 +86,7 @@ export default function NoteBSLiab({
     const autoPy = py(key);
     if (autoPy !== 0) return autoPy;
     const breakup = (get(`bs_liab.${key}.breakup`) ?? []) as ListRow[];
-    return breakup.reduce((s, r) => s + (r.amount_py ?? 0), 0);
+    return breakup.reduce((s, r) => s + (r?.amount_py ?? 0), 0);
   };
 
   // Smart note: only show a note number when at least one year has data.

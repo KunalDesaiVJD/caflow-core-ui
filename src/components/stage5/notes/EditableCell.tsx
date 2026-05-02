@@ -820,15 +820,15 @@ export function ListTable({
   const computeGroupAmounts = (groupId: string) => {
     const members = membersByGroup.get(groupId) ?? [];
     return {
-      cy: members.reduce((s, m) => s + (m.row.amount_cy ?? 0), 0),
-      py: members.reduce((s, m) => s + (m.row.amount_py ?? 0), 0),
+      cy: members.reduce((s, m) => s + (m?.row?.amount_cy ?? 0), 0),
+      py: members.reduce((s, m) => s + (m?.row?.amount_py ?? 0), 0),
     };
   };
 
   const subTotalCY = displayItems.reduce((s, { r }) =>
-    r.is_group && r.id ? s + computeGroupAmounts(r.id).cy : s + (r.amount_cy ?? 0), 0);
+    r?.is_group && r?.id ? s + computeGroupAmounts(r.id).cy : s + (r?.amount_cy ?? 0), 0);
   const subTotalPY = displayItems.reduce((s, { r }) =>
-    r.is_group && r.id ? s + computeGroupAmounts(r.id).py : s + (r.amount_py ?? 0), 0);
+    r?.is_group && r?.id ? s + computeGroupAmounts(r.id).py : s + (r?.amount_py ?? 0), 0);
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
