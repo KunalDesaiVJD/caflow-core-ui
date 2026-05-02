@@ -180,14 +180,15 @@ function headingPara(label: string, title: string, opts: { titleSize?: number; u
  * plain bold paragraph.
  */
 function outerHeading(prefix: string, title: string): string {
-  // Template uses pStyle=ListParagraph + numId for these headings; we
-  // hard-code "1." / "2." prefixes for renderer parity. Spacing kept
-  // minimal — just w:after="0" — matching the template's heading rhythm.
+  // Template uses pStyle=ListParagraph + numId=4 (abstractNumId=2) for these
+  // headings. abstractNumId=2 defines level-0 indent as left=522 hanging=360.
+  // We hard-code "1." / "2." prefixes for renderer parity and replicate the
+  // exact indent so the text aligns at the same position as the template.
   const pPr =
     `<w:pPr>` +
     `<w:keepNext/>` +
     `<w:spacing w:after="0"/>` +
-    `<w:ind w:left="720" w:hanging="360"/>` +
+    `<w:ind w:left="522" w:hanging="360"/>` +
     `</w:pPr>`;
   return `<w:p>${pPr}${wRun(prefix, { bold: true })}${wRun(" ", { bold: true })}${wRun(title, { bold: true })}</w:p>`;
 }
@@ -232,24 +233,103 @@ function bodyParaRich(parts: Array<{ text: string; opts?: RunOpts }>): string {
   return `<w:p>${pPr}${runs}</w:p>`;
 }
 
+// ─── Blank / spacer paragraph variants ───────────────────────────────────────
+// The template uses several distinct spacer styles depending on context.
+// Replicating them exactly preserves the visual rhythm of the template.
+
+const BLANK_RPR = `<w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>`;
+const BLANK_BDR = `<w:pBdr><w:top w:val="none" w:sz="2" w:space="0" w:color="auto"/><w:bottom w:val="none" w:sz="2" w:space="2" w:color="auto"/></w:pBdr>`;
+
 /**
- * Empty divider paragraph — small visual gap between sections.
- * Template uses w:left="150", after="0".
+ * Generic section spacer (template P1, P3, P8 style).
+ * border top/bottom:none + spacing after=0 (uses pPrDefault line height) + ind left=150.
+ * Pass keepNext=true when the spacer precedes a paragraph that must stay on the same page.
  */
-function blank(): string {
-  // Empty paragraph used as a between-section spacer.
-  // Use lineRule="exact" with line=200 (= 10pt) to LOCK the spacer
-  // height regardless of which renderer opens the file. With
-  // lineRule="auto" some renderers compute 1.158× of the font size
-  // (~11.6pt) which adds ~1.6pt per spacer; across the ~10 spacers
-  // between Note 1 and the end of 2.5 that's ~16pt of drift — enough
-  // to push the last 2.5 paragraph off page 1 in some renderers.
-  // exact=200 pins every spacer to a deterministic 10pt height.
+function blankSpacer(keepNext = false): string {
   return (
     `<w:p><w:pPr>` +
-    `<w:spacing w:after="0" w:line="200" w:lineRule="exact"/>` +
+    (keepNext ? `<w:keepNext/>` : ``) +
+    BLANK_BDR +
+    `<w:spacing w:after="0"/>` +
     `<w:ind w:left="150"/>` +
-    `<w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>` +
+    BLANK_RPR +
+    `</w:pPr></w:p>`
+  );
+}
+
+/**
+ * Spacer after a policy heading (template P10, P16, P20, P31… style).
+ * border + spacing after=0 line=240 lineRule=auto + ind left=150 + keepNext.
+ * Sits between a "2.x Title" heading and its body text.
+ */
+function blankAfterHeading(): string {
+  return (
+    `<w:p><w:pPr>` +
+    `<w:keepNext/>` +
+    BLANK_BDR +
+    `<w:spacing w:after="0" w:line="240" w:lineRule="auto"/>` +
+    `<w:ind w:left="150"/>` +
+    BLANK_RPR +
+    `</w:pPr></w:p>`
+  );
+}
+
+/**
+ * Spacer after the "1. Overview of the Reporting Entity" outer heading
+ * (template P5 style — ListParagraph indent carry-over).
+ * spacing after=0 + ind left=522 + keepNext (no border).
+ */
+function blankListSpacer(): string {
+  return (
+    `<w:p><w:pPr>` +
+    `<w:keepNext/>` +
+    `<w:spacing w:after="0"/>` +
+    `<w:ind w:left="522"/>` +
+    BLANK_RPR +
+    `</w:pPr></w:p>`
+  );
+}
+
+/**
+ * Right-indented border spacer used before "2.19 General notes" and at the
+ * very end of the document (template P75 / P97 style).
+ * border + spacing after=0 + ind right=200.
+ */
+function blankRightIndent(): string {
+  return (
+    `<w:p><w:pPr>` +
+    `<w:pBdr><w:top w:val="none" w:sz="2" w:space="0" w:color="auto"/><w:bottom w:val="none" w:sz="2" w:space="0" w:color="auto"/></w:pBdr>` +
+    `<w:spacing w:after="0"/>` +
+    `<w:ind w:right="200"/>` +
+    BLANK_RPR +
+    `</w:pPr></w:p>`
+  );
+}
+
+/**
+ * Spacer after the "2.19 General notes" heading (template P77 style).
+ * spacing after=0 + ind left=650 hanging=488 + keepNext (no border, no line=).
+ */
+function blankAfterGenNotesHeading(): string {
+  return (
+    `<w:p><w:pPr>` +
+    `<w:keepNext/>` +
+    `<w:spacing w:after="0"/>` +
+    `<w:ind w:left="650" w:hanging="488"/>` +
+    BLANK_RPR +
+    `</w:pPr></w:p>`
+  );
+}
+
+/**
+ * Spacer between individual general-note items (template P79 style).
+ * spacing after=0 line=240 lineRule=auto + no indent.
+ */
+function blankBetweenNotes(): string {
+  return (
+    `<w:p><w:pPr>` +
+    `<w:spacing w:after="0" w:line="240" w:lineRule="auto"/>` +
+    BLANK_RPR +
     `</w:pPr></w:p>`
   );
 }
@@ -356,69 +436,48 @@ export async function exportNtaToDocx(
   const paras: string[] = [];
 
   // ── 1. Leading divider + Note 1 heading ─────────────────────────────────────
-  // Template begins with a horizontal-rule paragraph (top-bordered <w:p>
-  // with w:before="120") plus a blank spacer ABOVE the Note 1 heading.
-  // Without those leaders the heading sits flush to the page top and gets
-  // visually clipped/hidden by the page border the way the user reported.
+  // Template P0: hrPara (top-border rule), P1: blankSpacer, P2: Note1 heading,
+  // P3: blankSpacer (keepNext=true — keeps it on the same page as "1.").
   paras.push(hrPara());
-  paras.push(blank());
+  paras.push(blankSpacer());          // P1: between hr and Note1
 
-  // Template: "Note No : 1   DISCLOSURE OF ACCOUNTING POLICIES & NOTES FORMING
-  //            PART OF THE ANNUAL ACCOUNTS"
-  // Visually the template renders the entire title on ONE line at a uniform
-  // size with only the DISCLOSURE… portion underlined. The XML carries an
-  // sz=22 marker on that run, but mixing sz=20 + sz=22 in the same paragraph
-  // pushes the rendered line past the right border and wraps to two lines —
-  // exactly the "font size doesn't match" symptom the user reported.
-  // Use uniform sz=20 (10pt body size); only the title run gets the
-  // underline. This matches the visual appearance of the template even
-  // though it diverges from the XML's sz=22 marker.
+  // Template title run for "DISCLOSURE…" uses sz=22 but we keep sz=20 so
+  // the full heading fits on one line within the narrow page margins.
   paras.push(headingPara(
     "Note No : 1",
     "DISCLOSURE OF ACCOUNTING POLICIES & NOTES FORMING PART OF THE ANNUAL ACCOUNTS",
     { underline: true },
   ));
-  paras.push(blank());
+  paras.push(blankSpacer(true));      // P3: between Note1 and "1." (keepNext)
 
   // ── 2. "1. Overview of the Reporting Entity" heading ────────────────────────
-  // Template paragraph P5 (ListParagraph + numId=4) — Word renders the
-  // "1." prefix from auto-numbering. Hard-coded here for renderer parity.
+  // Template P4: ListParagraph numId=4 (left=522 hanging=360 from abstractNumId=2).
+  // P5: blank with ind left=522 carrying the ListParagraph indent.
   paras.push(outerHeading("1.", "Overview of the Reporting Entity"));
-  paras.push(blank());
+  paras.push(blankListSpacer());      // P5: list-indent spacer (ind left=522)
 
   // ── 3. Overview paragraph ────────────────────────────────────────────────────
-  // Template wording exactly:
-  // "[Name] ('the company') was incorporated on [Date] under the Companies Act,
-  //  [year] vide CIN [cin] having its registered office at [address] and
-  //  engaged in business of [activity]."
-  //
-  // The company name is rendered as a BOLD + UNDERLINED run (template style);
-  // the rest of the sentence is plain.
+  // Template P6: "[Name] bold+underlined, rest plain, jc=both, ind left/right=150".
   paras.push(bodyParaRich([
     { text: companyName || "[Name of Company]", opts: { bold: true, underline: true } },
     { text: ` ('the company') was incorporated on ${incDate} under the Companies Act, ${actYear} vide CIN ${cin || "___________________"} having its registered office at ${regAddress || "___________________"} and engaged in business of ${bizActivity || "___________________"}.` },
   ]));
-  // No spacer here — template P7 (overview body) flows directly into P8
-  // ("2. Significant Accounting Policies" heading).
+  // Template P7 follows directly (no spacer between overview body and "2." heading).
 
   // ── 4. "2. Significant Accounting Policies" heading ─────────────────────────
-  // Template paragraph P8 (ListParagraph + numId=4) — auto-numbered "2."
-  // hard-coded for renderer parity, matching outer-heading style.
+  // Template P7: ListParagraph numId=4 (same style as "1." heading).
+  // P8: blankSpacer (keepNext, no ind) before first policy heading.
   paras.push(outerHeading("2.", "Significant Accounting Policies"));
-  paras.push(blank());
+  paras.push(blankSpacer(true));      // P8: between "2." and first policy heading
 
-  // ── 4. Policies 2.1 – 2.n ────────────────────────────────────────────────────
+  // ── 5. Policies 2.1 – 2.n ────────────────────────────────────────────────────
   // Template pattern (e.g. 2.1 → 2.2):
-  //   P10 → heading "2.1 Basis of Preparation of Financial statements"
-  //   P11 → empty spacer paragraph (gives breathing room under the heading)
-  //   P12 → body "The financial statements of the Company..."
-  //   P13 → heading "2.2 Use of Estimates"  (DIRECTLY after P12 — no spacer)
-  //   P14 → empty spacer
-  //   P15 → 2.2 body
-  // So we emit heading → spacer → body, and let the next iteration's
-  // heading follow directly without an inter-section spacer. This matches
-  // the template byte-for-byte AND lets Notes 1 → 2.5 fit on the first
-  // A4 page.
+  //   heading  "2.1 Basis of Preparation…"   (P9)
+  //   spacer   blankAfterHeading — border + line=240, ind left=150  (P10)
+  //   body     "The financial statements…"  (P11)
+  //   heading  "2.2 Use of Estimates"  DIRECTLY after body — no inter-section spacer (P12)
+  //   spacer   blankAfterHeading  (P13)
+  //   body…
   for (let idx = 0; idx < data.policies.length; idx++) {
     const p     = data.policies[idx];
     const label = p.id || `2.${idx + 1}`;
@@ -426,24 +485,31 @@ export async function exportNtaToDocx(
     const body  = resolvePolicy(p.id, p.body);
 
     paras.push(headingPara(label, title));
-    paras.push(blank()); // spacer between heading and body — matches template P11
+    paras.push(blankAfterHeading());  // P10/P16… style
     bodyBlock(body).forEach(bp => paras.push(bp));
-    // No body→next-heading spacer — template flows directly into next heading.
+    // Next heading follows directly — no inter-section spacer.
   }
-  // After the LAST policy body, add a single spacer before the 2.19 heading
-  // (matches the template gap before "General notes").
-  paras.push(blank());
+  // Template P75: right-indented border spacer before "2.19 General notes".
+  paras.push(blankRightIndent());
 
-  // ── 5. 2.19 General Notes ─────────────────────────────────────────────────────
+  // ── 6. 2.19 General Notes ─────────────────────────────────────────────────────
+  // Template P76: "2.19 General notes" heading (same headingPara style).
+  // Template P77: blankAfterGenNotesHeading — ind left=650 hanging=488, no border.
   paras.push(headingPara("2.19", "General notes"));
+  paras.push(blankAfterGenNotesHeading());  // P77 style
 
   for (let idx = 0; idx < data.general_notes.length; idx++) {
     const note = data.general_notes[idx];
     const body = resolveGeneralNote(idx, note.body);
     numberedParas(idx + 1, body).forEach(p => paras.push(p));
+    // Add a blank between notes (template P79/P81 style) — not after the last.
+    if (idx < data.general_notes.length - 1) {
+      paras.push(blankBetweenNotes());
+    }
   }
 
-  paras.push(blank());
+  // Template P97: right-indented border spacer at end of document.
+  paras.push(blankRightIndent());
 
   // ─── document.xml ─────────────────────────────────────────────────────────────
   //
