@@ -168,8 +168,79 @@ function v(inputs: RatioInputs | null, field: keyof RatioInputs): number {
   return typeof val === "number" && Number.isFinite(val) ? val : 0;
 }
 
-function f(formula: string): ExcelJS.CellFormulaValue {
-  return { formula, result: 0 } as ExcelJS.CellFormulaValue;
+/**
+ * Build an ExcelJS formula value. The `result` field is the cached
+ * value Excel displays without recalculating — providing a real number
+ * (instead of always 0) means the data appears correctly even on
+ * Excel versions / settings that don't honour `fullCalcOnLoad`.
+ */
+function f(formula: string, result: number | string = 0): ExcelJS.CellFormulaValue {
+  return { formula, result } as ExcelJS.CellFormulaValue;
+}
+
+/**
+ * Compute the numerator, denominator, and ratio for a given ratio ID
+ * from raw inputs. This mirrors the formulas in the CY/PY sheets so we
+ * can supply pre-evaluated `result` values to every cross-sheet
+ * formula in the RATIO sheet — guaranteeing the displayed amount
+ * matches the source data even before Excel triggers a recalculation.
+ */
+function ratioComputed(
+  ratioId: number,
+  inp:     RatioInputs | null,
+): { num: number; den: number; ratio: number } {
+  if (!inp) return { num: 0, den: 0, ratio: 0 };
+  let num = 0;
+  let den = 0;
+  switch (ratioId) {
+    case 1:  // Current Ratio
+      num = v(inp, "current_assets");
+      den = v(inp, "current_liabilities");
+      break;
+    case 2:  // Debt-Equity
+      num = v(inp, "total_debt");
+      den = v(inp, "shareholders_equity");
+      break;
+    case 3:  // DSCR — TOTAL = SUM(E14:E17) / SUM(G14:G15)
+      num = v(inp, "npat") + v(inp, "non_cash_op_exp")
+          + v(inp, "interest") + v(inp, "other_non_cash_adj");
+      den = v(inp, "interest_lease") + v(inp, "principal_repayments");
+      break;
+    case 4:  // Return On Equity
+      num = v(inp, "npat");
+      den = v(inp, "avg_shareholders_equity");
+      break;
+    case 5:  // Inventory Turnover (uses revenue_ops as numerator per writeYearSheet)
+      num = v(inp, "revenue_ops");
+      den = v(inp, "avg_inventories");
+      break;
+    case 6:  // Trade Receivables Turnover
+      num = v(inp, "revenue_ops");
+      den = v(inp, "avg_trade_receivables");
+      break;
+    case 7:  // Trade Payables Turnover
+      num = v(inp, "net_credit_purchases");
+      den = v(inp, "avg_trade_payables");
+      break;
+    case 8:  // Net Capital Turnover
+      num = v(inp, "revenue_ops");
+      den = v(inp, "working_capital");
+      break;
+    case 9:  // Net Profit Ratio
+      num = v(inp, "npat");
+      den = v(inp, "revenue_ops");
+      break;
+    case 10: // Return On Capital Employed — TOTAL = SUM(E33:E38) / SUM(G33:G38)
+      num = v(inp, "npbt") + v(inp, "interest");
+      den = v(inp, "net_worth") + v(inp, "lt_borrowings");
+      break;
+    case 11: // Return On Investment
+      num = v(inp, "return_profit");
+      den = v(inp, "avg_investment_fund");
+      break;
+  }
+  const ratio = den !== 0 ? num / den : 0;
+  return { num, den, ratio };
 }
 
 function fyStr(yearEnd: number): string {
@@ -654,7 +725,13 @@ function writeRatioSheet(wb: ExcelJS.Workbook, ctx: Ctx, data: Stage7Ratios | nu
 
     const cmt = data?.commentary?.find((c) => c.ratioId === lay.id)?.text ?? "";
 
-    writeRatioBlock(ws, lay, numRow, denRow, txtRow, spcRow, cmt);
+    // Pre-compute CY/PY numerator/denominator/ratio so the cross-sheet
+    // formulas have a correct cached `result` and display real values
+    // immediately — even before Excel triggers recalculation.
+    const cyComp = ratioComputed(lay.id, data?.cy ?? null);
+    const pyComp = ratioComputed(lay.id, data?.py ?? null);
+
+    writeRatioBlock(ws, lay, numRow, denRow, txtRow, spcRow, cmt, cyComp, pyComp);
   });
 }
 
@@ -667,6 +744,8 @@ function writeRatioBlock(
   txtR:  number,
   spcR:  number,
   cmt:   string,
+  cyComp: { num: number; den: number; ratio: number },
+  pyComp: { num: number; den: number; ratio: number },
 ): void {
   ws.getRow(numR).height = 16;
   ws.getRow(denR).height = 16;
@@ -711,8 +790,11 @@ function writeRatioBlock(
   denLbl.border = FULL_BDR;
 
   // ── Col E (numerator amount) — top half ─────────────────────────────────
+  // Pre-computed `cyComp.num` is supplied as the formula's cached result,
+  // so the value renders correctly even when Excel doesn't recalculate
+  // cross-sheet refs on open.
   const numAmt = ws.getCell(numR, 5);
-  numAmt.value = f(`+'${cySheet}'!E${lay.numTotRow}`);
+  numAmt.value = f(`'${cySheet}'!E${lay.numTotRow}`, cyComp.num);
   numAmt.numFmt = MONEY_FMT;
   applyFont(numAmt, { size: 10 });
   numAmt.alignment = { horizontal: "right", vertical: "middle" };
@@ -720,7 +802,7 @@ function writeRatioBlock(
 
   // ── Col E (denominator amount) — bottom half ────────────────────────────
   const denAmt = ws.getCell(denR, 5);
-  denAmt.value = f(`+'${cySheet}'!G${lay.denTotRow}`);
+  denAmt.value = f(`'${cySheet}'!G${lay.denTotRow}`, cyComp.den);
   denAmt.numFmt = MONEY_FMT;
   applyFont(denAmt, { size: 10 });
   denAmt.alignment = { horizontal: "right", vertical: "middle" };
@@ -729,7 +811,7 @@ function writeRatioBlock(
   // ── Col F (CY ratio) — merged across num + den rows ─────────────────────
   ws.mergeCells(`F${numR}:F${denR}`);
   const cyR = ws.getCell(numR, 6);
-  cyR.value = f(`IFERROR('${cySheet}'!H${lay.cyRow},"N.A.")`);
+  cyR.value = f(`IFERROR('${cySheet}'!H${lay.cyRow},"N.A.")`, cyComp.ratio);
   cyR.numFmt = lay.unit === "%" ? PCT_FMT : RATIO_FMT;
   applyFont(cyR, { bold: true, size: 10 });
   cyR.alignment = { horizontal: "center", vertical: "middle" };
@@ -739,7 +821,7 @@ function writeRatioBlock(
   // ── Col G (PY ratio) — merged across num + den rows ─────────────────────
   ws.mergeCells(`G${numR}:G${denR}`);
   const pyR = ws.getCell(numR, 7);
-  pyR.value = f(`IFERROR('${pySheet}'!H${lay.cyRow},"N.A.")`);
+  pyR.value = f(`IFERROR('${pySheet}'!H${lay.cyRow},"N.A.")`, pyComp.ratio);
   pyR.numFmt = lay.unit === "%" ? PCT_FMT : RATIO_FMT;
   applyFont(pyR, { bold: true, size: 10 });
   pyR.alignment = { horizontal: "center", vertical: "middle" };
@@ -752,7 +834,8 @@ function writeRatioBlock(
   // when PY=0 which is jarring to auditors.
   ws.mergeCells(`H${numR}:H${denR}`);
   const vR = ws.getCell(numR, 8);
-  vR.value = f(`IFERROR((F${numR}-G${numR})/G${numR},"N.A.")`);
+  const variance = pyComp.ratio !== 0 ? (cyComp.ratio - pyComp.ratio) / pyComp.ratio : 0;
+  vR.value = f(`IFERROR((F${numR}-G${numR})/G${numR},"N.A.")`, variance);
   vR.numFmt = PCT_FMT;
   applyFont(vR, { size: 10 });
   vR.alignment = { horizontal: "center", vertical: "middle" };
