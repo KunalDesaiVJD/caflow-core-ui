@@ -156,17 +156,14 @@ function bodyPara(text: string, keepNext = false): string {
  * the title (template's "DISCLOSURE OF ACCOUNTING POLICIES..." has
  * <w:u w:val="single"/>).
  */
-function headingPara(label: string, title: string, opts: { titleSize?: number; underline?: boolean; spaceBefore?: number; pageBreakBefore?: boolean } = {}): string {
+function headingPara(label: string, title: string, opts: { titleSize?: number; underline?: boolean; spaceBefore?: number } = {}): string {
   const before = opts.spaceBefore ?? 0;
   // Template heading paragraphs have NO w:jc and NO w:line/lineRule —
   // just bare w:after="0". Forcing jc="both" caused the visible spacing
   // mismatch. Bare spacing element only.
-  // pageBreakBefore: pushes the heading to the start of a new page —
-  // used for 2.6 which the user requires to land on page 2.
   const pPr =
     `<w:pPr>` +
     `<w:keepNext/>` +
-    (opts.pageBreakBefore ? `<w:pageBreakBefore/>` : ``) +
     `<w:spacing${before ? ` w:before="${before}"` : ""} w:after="0"/>` +
     `<w:ind w:left="650" w:hanging="488"/>` +
     `</w:pPr>`;
@@ -583,13 +580,13 @@ export async function exportNtaToDocx(
     const title = p.title || "";
     const body  = resolvePolicy(p.id, p.body);
 
-    // Per user requirement, 2.6 must land on page 2 as its own section.
-    // Earlier versions inlined the 2.6 heading at the end of 2.5's last
-    // body paragraph (matching the template's P26 quirk), but that
-    // forced 2.6 onto whichever page 2.5 ended on. We now force 2.6 to
-    // start on a new page via <w:pageBreakBefore/>; every other policy
-    // flows naturally with the keepNext chain.
-    paras.push(headingPara(label, title, label === "2.6" ? { pageBreakBefore: true } : {}));
+    // Every policy — including 2.6 — flows through the standard heading
+    // + body pipeline. The keepNext-on-all-but-last chain on the body
+    // block keeps each section together; if a section can't fit on the
+    // current page Word naturally pushes it to the next page. No hard
+    // page breaks are inserted, so the document never grows by an extra
+    // empty page.
+    paras.push(headingPara(label, title));
     paras.push(blankAfterHeading());
     bodyBlock(body).forEach(bp => paras.push(bp));
     // Next heading follows directly — no inter-section spacer.
