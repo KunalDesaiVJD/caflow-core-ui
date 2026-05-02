@@ -78,7 +78,7 @@ const CARO_CLAUSE_TITLES: Record<number, string> = {
 // These are the standard "clean" responses. Auditor edits per-engagement
 // where facts differ. Multi-paragraph clauses use \n\n separators.
 const CARO_DEFAULT_CONTENT: Record<number, string> = {
-  1: `(a)(A) The Company has maintained proper records showing full particulars including, quantitative details and situation of the Property, Plant and Equipment.
+  1: `(a) (A) The Company has maintained proper records showing full particular including, quantitative details and situation of the Property, Plant and Equipment.
 
 (B) The company has maintained proper records of showing full particulars of intangible assets.
 
@@ -793,14 +793,25 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   `independent Auditor&#39;s Report of even date</p>`;
 
                 // Substitute the "20XX" placeholder with the actual FY end
-                // year at export time. Existing rows in audit_caro_responses
-                // were saved before the seed-time substitution was added, so
-                // their user_response / auto_draft still contains literal
-                // "20XX" (e.g. clause 7(a) — "outstanding as on 31st March,
-                // 20XX"). Running the regex here guarantees the export shows
-                // the real year regardless of when the row was seeded.
+                // year at export time.
                 const yearSub = (s: string) =>
                   fyEndYear !== "20XX" ? s.replace(/20XX/g, fyEndYear) : s;
+                // Wording corrections — the old defaults (saved into
+                // audit_caro_responses for engagements that were created
+                // before the defaults were updated) carry several mismatches
+                // vs the master CARO.doc template. Patch them at export time
+                // so existing engagements pick up the correct wording without
+                // having to lose the auditor's other edits. New engagements
+                // get the corrected wording from the seeded defaults.
+                const wordingFix = (s: string) =>
+                  s
+                    // Clause 1: template uses "(a) (A)" with a space and the
+                    // singular "particular" (not "particulars")
+                    .replace(/\(a\)\(A\)/g, "(a) (A)")
+                    .replace(
+                      /full particulars including, quantitative details/g,
+                      "full particular including, quantitative details",
+                    );
                 rows.forEach(r => {
                   if (!r.is_applicable) {
                     const reason = r.inapplicability_reason
@@ -809,7 +820,7 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     html += `<p style="${CLAUSE_STYLE}">` +
                       `${r.clause_number}.&nbsp;&nbsp;Not Applicable${reason}</p>`;
                   } else {
-                    const text = yearSub(r.user_response || r.auto_draft || "")
+                    const text = wordingFix(yearSub(r.user_response || r.auto_draft || ""))
                       .replace(/\n/g, "<br/>");
                     html += `<p style="${CLAUSE_STYLE}">` +
                       `${r.clause_number}.&nbsp;&nbsp;${text}</p>`;
