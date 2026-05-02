@@ -90,7 +90,12 @@ const CY_COLS: Partial<ExcelJS.Column>[] = [
 
 interface RatioLayout {
   id:           number;
+  /** Display name shown in RATIO sheet col C (title-case with unit suffix) */
   name:         string;
+  /** Numerator label shown in RATIO sheet col D (top half) — hardcoded from template */
+  numLabel:     string;
+  /** Denominator label shown in RATIO sheet col D (bottom half) — hardcoded from template */
+  denLabel:     string;
   unit:         "times" | "%";
   /** CY/PY sheet: row that holds the ratio formula (col H) */
   cyRow:        number;
@@ -117,17 +122,42 @@ interface RatioLayout {
  *   Row 41  → Ratio 11 (ROI)
  */
 const LAYOUTS: RatioLayout[] = [
-  { id: 1,  name: "CURRENT RATIO",                    unit: "times", cyRow:  9, numTotRow:  9, denTotRow:  9 },
-  { id: 2,  name: "DEBT-EQUITY RATIO",                unit: "times", cyRow: 11, numTotRow: 11, denTotRow: 11 },
-  { id: 3,  name: "DEBT SERVICE COVERAGE RATIO",      unit: "times", cyRow: 18, numTotRow: 18, denTotRow: 18 },
-  { id: 4,  name: "RETURN ON EQUITY RATIO",           unit: "%",     cyRow: 20, numTotRow: 20, denTotRow: 20 },
-  { id: 5,  name: "INVENTORY TURNOVER RATIO",         unit: "times", cyRow: 22, numTotRow: 22, denTotRow: 22 },
-  { id: 6,  name: "TRADE RECEIVABLES TURNOVER RATIO", unit: "times", cyRow: 24, numTotRow: 24, denTotRow: 24 },
-  { id: 7,  name: "TRADE PAYABLE TURNOVER RATIO",     unit: "times", cyRow: 26, numTotRow: 26, denTotRow: 26 },
-  { id: 8,  name: "NET CAPITAL TURNOVER RATIO",       unit: "times", cyRow: 28, numTotRow: 28, denTotRow: 28 },
-  { id: 9,  name: "NET PROFIT RATIO",                 unit: "%",     cyRow: 30, numTotRow: 30, denTotRow: 30 },
-  { id: 10, name: "RETURN ON CAPITAL EMPLOYED",       unit: "%",     cyRow: 39, numTotRow: 39, denTotRow: 39 },
-  { id: 11, name: "RETURN ON INVESTMENT",             unit: "%",     cyRow: 41, numTotRow: 41, denTotRow: 41 },
+  // Names, numLabel, and denLabel are hardcoded verbatim from the Ratio.xlsx template
+  // (including any trailing spaces or capitalisation quirks in the template).
+  { id: 1,  name: "Current Ratio (In times)",
+    numLabel: "Total Current Assets",               denLabel: "Total Current Liabilities",
+    unit: "times", cyRow:  9, numTotRow:  9, denTotRow:  9 },
+  { id: 2,  name: "Debt-Equity Ratio (In times)",
+    numLabel: "Total Debt",                         denLabel: "Shareholder'S Equity",
+    unit: "times", cyRow: 11, numTotRow: 11, denTotRow: 11 },
+  { id: 3,  name: "Debt Service Coverage Ratio (In Times)",
+    numLabel: "Earning Available for Debt Service ", denLabel: "Debt Service",
+    unit: "times", cyRow: 18, numTotRow: 18, denTotRow: 18 },
+  { id: 4,  name: "Return On Equity Ratio (In % )",
+    numLabel: "Net Profit After Tax",               denLabel: "Averages Shareholders Equity",
+    unit: "%",     cyRow: 20, numTotRow: 20, denTotRow: 20 },
+  { id: 5,  name: "Inventory Turnover Ratio (In Times)",
+    numLabel: "Cost Of Goods Sold ",                denLabel: "Average Inventories",
+    unit: "times", cyRow: 22, numTotRow: 22, denTotRow: 22 },
+  { id: 6,  name: "Trade Receivables Turnover Ratio (In Times)",
+    numLabel: "Revenue from Operations",            denLabel: "Average Trade Receivables",
+    unit: "times", cyRow: 24, numTotRow: 24, denTotRow: 24 },
+  { id: 7,  name: "Trade Payables Turnover Ratio (In Times)",
+    numLabel: "Net Credit Purchases",               denLabel: "Average Trade Payables",
+    unit: "times", cyRow: 26, numTotRow: 26, denTotRow: 26 },
+  { id: 8,  name: "Net Capital Turnover Ratio (In Times)",
+    numLabel: "Revenue from Operations",            denLabel: "Working Capital ",
+    unit: "times", cyRow: 28, numTotRow: 28, denTotRow: 28 },
+  { id: 9,  name: "Net Profit Ratio (In % )",
+    numLabel: "Net Profit After Tax",               denLabel: "Revenue from Operations",
+    unit: "%",     cyRow: 30, numTotRow: 30, denTotRow: 30 },
+  { id: 10, name: "Return On Capital Employed (In % )",
+    // "Interst" is the template's spelling — preserved verbatim
+    numLabel: "Earnings Before Interst & Taxes",   denLabel: "Capital Employed",
+    unit: "%",     cyRow: 39, numTotRow: 39, denTotRow: 39 },
+  { id: 11, name: "Return On Investment (In % )",
+    numLabel: "Return/ Profit/ Earnings",           denLabel: "Average Investment Fund",
+    unit: "%",     cyRow: 41, numTotRow: 41, denTotRow: 41 },
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -169,20 +199,28 @@ function forEachCellInRange(
 }
 
 /**
- * Clear any border styles on slave cells of a merged range. The MASTER
- * cell (top-left) keeps its border; the others get an empty border object
- * so Excel renders the merge as a single seamless box without internal
- * thin divider lines between the merged cells.
+ * Propagate the MASTER cell's border style to every slave cell in the
+ * merged range. This ensures merged regions render with the correct outer
+ * perimeter (Excel needs the bottom/right borders to live on the
+ * bottom-row / right-column cells, which the master can't provide alone).
+ *
+ * Internal borders within a merged region are hidden by Excel
+ * automatically, so this never produces visible divider lines.
+ *
+ * If the master has no border set, slaves get an empty border object —
+ * preserving the no-border behaviour required by the company name and
+ * ANNEXURE heading merges.
  */
 function clearSlaveBorders(
   ws: ExcelJS.Worksheet,
   startRow: number, startCol: number,
   endRow:   number, endCol:   number,
 ): void {
+  const master = ws.getCell(startRow, startCol);
+  const masterBdr = master.border ?? ({} as ExcelJS.Borders);
   forEachCellInRange(ws, startRow, startCol, endRow, endCol, (cell) => {
-    if (cell.row === startRow && cell.col === startCol) return; // skip master
-    // Empty border object — neutralises any inherited or default border
-    cell.border = {} as ExcelJS.Borders;
+    if (cell.row === startRow && cell.col === startCol) return;
+    cell.border = masterBdr;
   });
 }
 
@@ -254,7 +292,7 @@ function writeYearSheet(ws: ExcelJS.Worksheet, companyName: string, yearEnd: num
   hd(5, "Amount (Rs.)");
   hd(6, "DENOMINATOR");
   hd(7, "Amount (Rs.)");
-  hd(8, "Ratio");
+  hd(8, `Ratio for F.Y.${fyStr(yearEnd)}`);
 
   // ── Data rows ─────────────────────────────────────────────────────────────
   writeSimpleYearRow(ws,  9, "1", "CURRENT RATIO",
@@ -273,14 +311,17 @@ function writeYearSheet(ws: ExcelJS.Worksheet, companyName: string, yearEnd: num
     "Net Profit After Tax",        v(inp, "npat"),
     "Average Shareholders Equity", v(inp, "avg_shareholders_equity"),
     "%");
+  // Template cross-ref: ROE numerator (NPAT) = DSCR detail row E14
+  ws.getCell(20, 5).value = f("+E14");
 
   writeSimpleYearRow(ws, 22, "5", "INVENTORY TURNOVER RATIO",
-    "Cost Of Goods Sold (Revenue from Operations)", v(inp, "revenue_ops"),
-    "Average Inventories",                          v(inp, "avg_inventories"),
+    "REVENUE FROM OPERATIONS", v(inp, "revenue_ops"),
+    "Average Inventories",     v(inp, "avg_inventories"),
     "times");
 
-  writeSimpleYearRow(ws, 24, "6", "TRADE RECEIVABLES TURNOVER RATIO",
-    "Revenue from Operations",  v(inp, "revenue_ops"),
+  // Note: "TRADE RECEIVALES" (missing 'B') is the exact spelling in the template (C24)
+  writeSimpleYearRow(ws, 24, "6", "TRADE RECEIVALES TURNOVER RATIO",
+    "Revenue from Operations",   v(inp, "revenue_ops"),
     "Average Trade Receivables", v(inp, "avg_trade_receivables"),
     "times");
 
@@ -303,6 +344,9 @@ function writeYearSheet(ws: ExcelJS.Worksheet, companyName: string, yearEnd: num
     "Net Profit After Tax",    v(inp, "npat"),
     "Revenue from Operations", v(inp, "revenue_ops"),
     "%");
+  // Template cross-refs: Net Profit num = ROE num (E20 = NPAT); den = Inventory num (E22 = Revenue)
+  ws.getCell(30, 5).value = f("+E20");
+  ws.getCell(30, 7).value = f("+E22");
 
   writeRoceBlock(ws, inp); // rows 32..39
 
@@ -370,8 +414,9 @@ function writeDscrBlock(ws: ExcelJS.Worksheet, inp: RatioInputs | null): void {
   clearSlaveBorders(ws, r0, 3, r0 + 5, 3);
 
   // Header row (r0): NUM and DEN section labels in cols D, F
-  setLabel(ws, r0, 4, "EARNING AVAILABLE FOR DEBT SERVICE", { bold: true, italic: true });
-  setLabel(ws, r0, 6, "DEBT SERVICE",                       { bold: true, italic: true });
+  // Trailing spaces on both labels are verbatim from the template
+  setLabel(ws, r0, 4, "EARNING AVAILABLE FOR DEBT SERVICE ", { bold: true, italic: true });
+  setLabel(ws, r0, 6, "DEBT SERVICE ",                       { bold: true, italic: true });
   emptyAmt(ws, r0, 5);
   emptyAmt(ws, r0, 7);
   // Ratio cell on TOTAL row only
@@ -434,8 +479,9 @@ function writeRoceBlock(ws: ExcelJS.Worksheet, inp: RatioInputs | null): void {
   clearSlaveBorders(ws, r0, 2, r0 + 7, 2);
   clearSlaveBorders(ws, r0, 3, r0 + 7, 3);
 
-  setLabel(ws, r0, 4, "EARNINGS BEFORE INTEREST AND TAXES", { bold: true, italic: true });
-  setLabel(ws, r0, 6, "CAPITAL EMPLOYED",                   { bold: true, italic: true });
+  // "INTERST" is the template's spelling — preserved verbatim
+  setLabel(ws, r0, 4, "EARNINGS BEFORE INTERST AND TAXES", { bold: true, italic: true });
+  setLabel(ws, r0, 6, "CAPITAL EMPLOYED",                  { bold: true, italic: true });
   emptyAmt(ws, r0, 5);
   emptyAmt(ws, r0, 7);
   ws.getCell(r0, 8).border = FULL_BDR;
@@ -447,6 +493,8 @@ function writeRoceBlock(ws: ExcelJS.Worksheet, inp: RatioInputs | null): void {
   // r0+7: TOTAL = SUM(E33:E38) / SUM(G33:G38)
   setDetail(ws, r0 + 1, "Net Profit Before Tax", v(inp, "npbt"),     "Net Worth",            v(inp, "net_worth"));
   setDetail(ws, r0 + 2, "Interest",              v(inp, "interest"), "Long-Term Borrowings", v(inp, "lt_borrowings"));
+  // Template cross-ref: ROCE Interest (E34) = DSCR Interest row E16
+  ws.getCell(r0 + 2, 5).value = f("E16");
   for (let i = 3; i <= 6; i++) setDetail(ws, r0 + i, "", null, "", null);
 
   setLabel(ws, r0 + 7, 4, "TOTAL", { bold: true });
@@ -629,15 +677,16 @@ function writeRatioBlock(
   clearSlaveBorders(ws, numR, 3, denR, 3);
 
   // ── Col D (numerator label) — top half ──────────────────────────────────
+  // Use literal text from the template (via lay.numLabel) — not a formula
   const numLbl = ws.getCell(numR, 4);
-  numLbl.value = f(`+'${cySheet}'!D${lay.cyRow}`);
+  numLbl.value = lay.numLabel;
   applyFont(numLbl, { size: 10 });
   numLbl.alignment = { horizontal: "left", vertical: "middle", wrapText: true };
   numLbl.border = FULL_BDR;
 
   // ── Col D (denominator label) — bottom half ─────────────────────────────
   const denLbl = ws.getCell(denR, 4);
-  denLbl.value = f(`+'${cySheet}'!F${lay.cyRow}`);
+  denLbl.value = lay.denLabel;
   applyFont(denLbl, { size: 10 });
   denLbl.alignment = { horizontal: "left", vertical: "middle", wrapText: true };
   denLbl.border = FULL_BDR;
@@ -700,9 +749,10 @@ function writeRatioBlock(
   txtC.border = FULL_BDR;
   clearSlaveBorders(ws, txtR, 2, txtR, 8);
 
-  // ── Spacer row — thin side borders only ─────────────────────────────────
+  // ── Spacer row — NO borders (template shows a clean gap between blocks) ──
+  // Explicitly clear so neighbouring cells' borders don't bleed into this row.
   for (let col = 2; col <= 8; col++) {
-    ws.getCell(spcR, col).border = SIDE_BDR;
+    ws.getCell(spcR, col).border = {} as ExcelJS.Borders;
   }
 }
 
