@@ -420,11 +420,15 @@ function bodyParaWithInlineHeading(
  * around <w:br/> the way it spaces around paragraph marks.
  */
 function bodyBlock(text: string): string[] {
-  // keepNext is not passed (defaults to false) so body paragraphs can flow
-  // freely across pages. The heading → blankAfterHeading → first-body chain
-  // already ensures the heading stays with the beginning of the section.
+  // Per user requirement: each policy point (heading + all of its body
+  // paragraphs) must stay together on a single page — no section should
+  // split across pages. To enforce this, every body paragraph carries
+  // keepNext EXCEPT the very last one, forming a chain that links the
+  // section heading → spacer → body 1 → body 2 → ... → body N. Word
+  // will move the entire chain to the next page if it can't fit
+  // together, which produces the no-orphan layout the user wants.
   const chunks = text.split(/\n\n+/);
-  return chunks.map(chunk => bodyPara(chunk));
+  return chunks.map((chunk, i) => bodyPara(chunk, /* keepNext */ i < chunks.length - 1));
 }
 
 /**
@@ -584,11 +588,14 @@ export async function exportNtaToDocx(
       // Only inline if the following policy is actually 2.6.
       if (nextLabel === "2.6") {
         const chunks = body.split(/\n\n+/);
-        // All body chunks except the last emit normally.
+        // All body chunks except the last get keepNext so the entire
+        // 2.5 + inline-2.6 chain stays on one page.
         for (let ci = 0; ci < chunks.length - 1; ci++) {
-          paras.push(bodyPara(chunks[ci]));
+          paras.push(bodyPara(chunks[ci], /* keepNext */ true));
         }
-        // Last chunk gets the 2.6 heading appended inline.
+        // Last chunk gets the 2.6 heading appended inline. The function
+        // already sets keepNext + keepLines so it links forward to 2.6's
+        // body and never splits across a page.
         paras.push(bodyParaWithInlineHeading(
           chunks[chunks.length - 1] ?? "",
           nextLabel,
