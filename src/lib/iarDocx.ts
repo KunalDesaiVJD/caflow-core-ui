@@ -387,12 +387,11 @@ export async function exportIarToDocx(
     { spaceAfter: 60 },
   ));
 
-  // No page break between Management's Responsibility and Auditor's
-  // Responsibility — user asked to remove page 2 and let the body
-  // sections flow continuously. Total pages: 2.
-  // (Page 1 = title → ... → Auditor's Responsibility + bullets +
-  //          communication paragraphs; Page 2 = Other Legal &
-  //          Regulatory + lettered list + signature.)
+  // Page break before Auditor's Responsibility — template puts a
+  // ": :  2  : :" marker between Management's Responsibility and
+  // Auditor's Responsibility (i.e. page 2 of the 3-page template).
+  paras.push(pageBreakPara());
+  paras.push(wPara(": :  2  : :", { centered: true, fontSize: 11, spaceAfter: 240 }));
 
   // ── 9. Auditor's Responsibility ───────────────────────────────────────────
   // Template renders this heading with TWO spaces between "Auditor's"
@@ -470,13 +469,11 @@ export async function exportIarToDocx(
   // CARO sections — they're integrated here per the new corporate
   // template (FORMAT_AR2526 without CARO, IFC and Cash Flow).
   //
-  // Page break before this section so page 2 starts cleanly. The
-  // template marks the new page with a literal ": : 2 : :" centered
-  // band — emitted as an actual paragraph (not a Word PAGE field)
-  // since field rendering fails in some viewers (Protected View,
-  // Google Docs, etc.) and shows the static fallback instead.
+  // Page break before this section — template marks page 3 with a
+  // literal ": :  3  : :" centered band immediately before "Report on
+  // Other Legal and Regulatory Requirements".
   paras.push(pageBreakPara());
-  paras.push(wPara(": :  2  : :", { centered: true, fontSize: 11, spaceAfter: 240 }));
+  paras.push(wPara(": :  3  : :", { centered: true, fontSize: 11, spaceAfter: 240 }));
   paras.push(heading("Report on Other Legal and Regulatory Requirements"));
   paras.push(wPara(
     `The Company is a private limited and falls within exemptions specified under paragraph 2(iv) of the ` +
