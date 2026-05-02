@@ -816,6 +816,15 @@ export default function TallySyncPage({ engagementOverride, hideHeader = false }
   const tbCrOpening = filteredTB.filter(r => r.opening_type === "Cr").reduce((s, r) => s + r.opening_balance, 0) - _plOpCr;
   const tbDebitTotal  = filteredTB.reduce((s, r) => s + getTurnover(r).debit,  0);
   const tbCreditTotal = filteredTB.reduce((s, r) => s + getTurnover(r).credit, 0);
+  // Movement totals EXCLUDING the synthetic "Profit & Loss A/c" row.
+  // Tally's TDL posts the YTD profit as auto-balancing turnover on the PL
+  // ledger; this turnover has no opening / closing counterpart in our raw
+  // sums (we exclude PL there to avoid double-counting nominal flow). Failing
+  // to exclude PL here too created a "movement vs closing" asymmetry equal
+  // to the YTD profit — which surfaced as a phantom Reconciliation Residual
+  // on every client with a non-zero P&L (Ambica Plastic, KWIKTEAM).
+  const tbDebitTotalExclPL  = filteredTB.filter(r => !isPlAccRow(r)).reduce((s, r) => s + getTurnover(r).debit,  0);
+  const tbCreditTotalExclPL = filteredTB.filter(r => !isPlAccRow(r)).reduce((s, r) => s + getTurnover(r).credit, 0);
   const hasDebitCredit = tbDebitTotal > 0 || tbCreditTotal > 0;
 
   // Per-ledger reconciliation against Tally's authoritative closing.
@@ -1949,24 +1958,32 @@ export default function TallySyncPage({ engagementOverride, hideHeader = false }
                     // useful for the "✓ Closing Balanced" UX chip.
                     const closingDiff   = tbDrTotal   - tbCrTotal;
                     // closingDiffRaw is the *real* signed gap on Tally's side
-                    // before we add inventory + P&L plug. This is the value
-                    // that participates in the accounting invariant below.
+                    // before we add inventory + P&L plug, EXCLUDING the synthetic
+                    // PL A/c row (consistent with how movement is computed below).
                     const closingDiffRaw = _rawDr - _rawCr;
-                    const movementDiff  = tbDebitTotal - tbCreditTotal;
+                    // Movement diff EXCLUDING the PL A/c row. Must mirror the
+                    // PL-exclusion applied to closing/opening totals — otherwise
+                    // Tally's auto-balancing PL turnover creates a phantom gap.
+                    const movementDiff  = tbDebitTotalExclPL - tbCreditTotalExclPL;
                     // Inventory revaluation = stock OB − CB (signed). Positive
-                    // (Dr) when stock decreased — implicit Dr to COGS without
-                    // any voucher Dr/Cr movement.
+                    // when stock decreased — implicit Dr to COGS without any
+                    // voucher Dr/Cr movement.
                     const invAdjSigned  = _invAdjDr - _invAdjCr;
-                    // Net P&L = Cr_period − Dr_period − inventory_adj.
-                    // Positive = profit (Cr-side surplus net of inventory cost).
-                    const netPL         = -movementDiff - invAdjSigned;
-                    // True accounting invariant (excluding P&L plug row):
-                    //   closing_diff_raw − opening_diff = movement_diff − invAdj_signed
-                    // Rearranged so residual = 0 when books tie:
-                    //   residual = (closing_diff_raw − opening_diff) − movement_diff + invAdj_signed
-                    // Earlier code subtracted invAdj here, which double-counted
-                    // the stock-decrease leg and produced false "residual" warnings
-                    // for any client with inventory movement (Ambica, KWIKTEAM).
+                    // Net P&L = canonical figure as Tally itself reports it on
+                    // the synthetic Profit & Loss A/c row's closing balance.
+                    // This always equals the value shown on Tally's P&L A/c
+                    // statement (e.g. Ambica Plastic ₹11,90,775 Profit), so the
+                    // chip is identical to what the user sees inside Tally —
+                    // no derivation, no drift.
+                    const _plClose = _plFooter
+                      ? _plFooter.closing_balance * ((_plFooter.balance_type ?? "Cr").toUpperCase() === "CR" ? -1 : 1)
+                      : 0;
+                    const netPL = -_plClose; // +ve = Profit, -ve = Loss
+                    // True accounting invariant (PL row excluded from all three
+                    // legs — closing, opening, movement):
+                    //   closing_diff_raw − opening_diff = movement_diff_excl_PL − invAdj_signed
+                    // Rearranged so residual = 0 when Tally is internally consistent:
+                    //   residual = (closing_diff_raw − opening_diff) − movement_diff_excl_PL + invAdj_signed
                     const reconcileResidual = (closingDiffRaw - openingDiff) - movementDiff + invAdjSigned;
                     const tol = Math.max(1, Math.abs(netPL) * 0.0001);
                     const reconciles = Math.abs(reconcileResidual) <= tol;
