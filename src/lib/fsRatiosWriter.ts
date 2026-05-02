@@ -34,11 +34,15 @@ const MONEY_FMT  = '#,##0.00;(#,##0.00);"-"';
 const PCT_FMT    = "0.00%";
 const RATIO_FMT  = "0.00";
 
-const THIN_BLACK = { style: "thin" as const, color: { argb: "FF000000" } };
+const THIN_BLACK = { style: "thin"   as const, color: { argb: "FF000000" } };
+const MED_BLACK  = { style: "medium" as const, color: { argb: "FF000000" } };
 const FULL_BDR   = { top: THIN_BLACK, bottom: THIN_BLACK, left: THIN_BLACK, right: THIN_BLACK } as ExcelJS.Borders;
 const SIDE_BDR   = { left: THIN_BLACK, right: THIN_BLACK } as ExcelJS.Borders;
 const TOP_SIDE   = { top: THIN_BLACK, left: THIN_BLACK, right: THIN_BLACK } as ExcelJS.Borders;
 const BOT_SIDE   = { bottom: THIN_BLACK, left: THIN_BLACK, right: THIN_BLACK } as ExcelJS.Borders;
+/** Heavier full-perimeter border used by the company-name and ANNEXURE
+ *  heading boxes on the CY/PY sheets. Matches the template's bold rule. */
+const HEAD_BDR   = { top: MED_BLACK,  bottom: MED_BLACK,  left: MED_BLACK,  right: MED_BLACK }  as ExcelJS.Borders;
 
 const FONT       = "Cambria";
 
@@ -336,23 +340,24 @@ function writePYSheet(wb: ExcelJS.Workbook, ctx: Ctx, data: Stage7Ratios | null,
 }
 
 function writeYearSheet(ws: ExcelJS.Worksheet, companyName: string, yearEnd: number, inp: RatioInputs | null): void {
-  // ── Row 2-3: Company name (merged) ────────────────────────────────────────
+  // ── Row 2-3: Company name (merged) — bold heading box per template ───────
   ws.mergeCells("B2:H3");
   const c = ws.getCell("B2");
   c.value = companyName;
   applyFont(c, { bold: true, size: 12 });
   c.alignment = { horizontal: "center", vertical: "middle" };
-  clearSlaveBorders(ws, 2, 2, 3, 8);
+  c.border = HEAD_BDR;                       // medium-weight perimeter
+  clearSlaveBorders(ws, 2, 2, 3, 8);          // propagate so bottom/right edges render
 
-  // ── Row 5-6: ANNEXURE heading (merged) ────────────────────────────────────
+  // ── Row 5-6: ANNEXURE heading (merged) — bold heading box per template ───
   // Template wording at B5: "ANNEXURE : A (YYYY-YYYY)" — full year span.
-  // The user explicitly wants this exact heading shown.
   ws.mergeCells("B5:H6");
   const t = ws.getCell("B5");
   t.value = `ANNEXURE : A (${yearEnd - 1}-${yearEnd})`;
   applyFont(t, { bold: true, size: 11 });
   t.alignment = { horizontal: "center", vertical: "middle" };
-  clearSlaveBorders(ws, 5, 2, 6, 8);
+  t.border = HEAD_BDR;                        // medium-weight perimeter
+  clearSlaveBorders(ws, 5, 2, 6, 8);          // propagate to render bottom/right edges
 
   // ── Row 8: Header band ────────────────────────────────────────────────────
   const r8 = ws.getRow(8);
