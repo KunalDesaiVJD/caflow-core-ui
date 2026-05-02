@@ -92,8 +92,8 @@ const CARO_DEFAULT_CONTENT: Record<number, string> = {
   2: `(a) The Inventory was physically verified by the management during the year at reasonable interval. No material discrepancies were noticed on such verification.
 
 (b) The company has been sanctioned working capital limits in excess of five crore rupees, in aggregate, from banks or financial institutions on the basis of security of current assets and quarterly returns or statements filed by the company with such banks or financial institutions are not available for verification.`,
-  3: `The company has not made Investments, provided any guarantee or security or granted any loans or advances in the nature of loans, secured or unsecured, to companies, firms, Limited liability Partnerships or any other parties. Hence, sub-paragraphs (a) to (f) of paragraph J(iii) of the Companies (Auditors Report) Order, 2020 are not applicable.`,
-  4: `The company has not granted any loans or made any investments or provided any guarantees or securities to the parties covered under sections 185 and 186 Act. Accordingly, the provisions of paragraph 3(iv) of the order are not applicable to the company.`,
+  3: `The company has not made Investments, provided any guarantee or security or granted any loans or advances in the nature of loans, secured or unsecured, to companies, firms, Limited liability Partnerships or any other parties. Hence, sub-paragraphs (a) to (f) of paragraph J(iii) of the Companies (Auditor's Report) Order, 2020 ('the order') are not applicable.`,
+  4: `The company has not granted any loans or made any investments or provided any guarantees or securities to the parties covered under sections 185 and 186 Act. Accordingly, the provisions or paragraph 3(iv) of the order are not applicable to the company.`,
   5: `The company has neither accepted any deposits from the public nor accepted any amounts which are deemed to be deposits within the meaning of sections 73 to 76 of the Companies Act and the rules made thereunder, to the extent applicable. Therefore, the provisions of paragraph 3(v) of the order are not applicable to the Company.`,
   6: `As informed and explained to us, the maintenance of Cost records u/s. 148(1) of the Act is not applicable to the company.`,
   7: `(a) According to information and explanations given to us, the company is generally regular in depositing with Appropriate Authorities undisputed statutory dues including Income Tax, Provident fund, Employees State Insurance, VAT/Sales Tax, Excise-duty, Custom Duty, Service Tax, Goods and Services Tax and other material statutory dues applicable to it. According to the information and explanations given to us, there were no undisputed amounts payable in respect of such dues which were outstanding as on 31st March, 20XX for a period of more than six months from the date they became payable.
@@ -101,26 +101,29 @@ const CARO_DEFAULT_CONTENT: Record<number, string> = {
 (b) According to the records of the company, there are no dues of Sales tax, Income tax, Custom duty, Goods & Service Tax which have not been deposited on account of any disputes except Excise duty demand.
 
 [Sr No | Name of Statute | Amount | Financial Year | Forum]`,
-  8: `The company has not surrendered or disclosed any transaction, previously unrecorded in the books of account, in the tax assessments under the Income Tax Act, 1961 as income during the year. Accordingly, the requirement to report on clause 3(vii) of the order is not applicable.`,
-  9: `(a) In our opinion and according to the information and explanations given by the management, the Company has not defaulted in repayment of loans or other borrowings or in the payment of interest thereon to any lender.
+  8: `The company has not surrendered or disclosed any transaction, previously unrecorded in the books of account, in the tax assessments under the Income Tax Act, 1961 as income during the year. Accordingly, the requirement to report on clause 3(vii) of the order is not applicable to the company.`,
+  // Clauses 9, 10, 11 use "a) b) c)" sub-letters in the template
+  // (no opening parenthesis), unlike clauses 1/2/7 which use "(a)".
+  // "payment or interest" in 9(a) is a verbatim template typo.
+  9: `a) In our opinion and according to the information and explanations given by the management, the Company has not defaulted in repayment of loans or other borrowings or in the payment or interest thereon to any lender.
 
-(b) The company has not been declared willful defaulter by any bank or financial institution or government or any government authority.
+b) The company has not been declared willful defaulter by any bank or financial institution or government or any government authority.
 
-(c) In our opinion, and according to the information and explanations given to us, the term loans have been applied for the purposes for which they were obtained.
+c) In our opinion, and according to the information and explanations given to us, the term loans have been applied for the purposes for which they were obtained.
 
-(d) On an overall examination of the financial Statements of the company, no funds raised on short-term basis have been used for long term purposes by the Company.
+d) On an overall examination of the financial Statements of the company, no funds raised on short-term basis have been used for long term purposes by the Company.
 
-(e) On an overall examination of the financial Statements of the company, the company has not taken any funds from any entity or person on account of or to meet the obligations of its subsidiaries, associates or joint ventures.
+e) On an overall examination of the financial Statements of the company, the company has not taken any funds from any entity or person on account of or to meet the obligations of its subsidiaries, associates or joint ventures.
 
-(f) The company has not raised loans during the year on the pledge of securities held in its subsidiaries, joint ventures or associate companies.`,
-  10: `(a) The company has not raised any funds through IPO or FPO (including debt instruments) or has not made any preferential allotment or private placement of shares or convertible debentures and therefore the question for utilization thereof does not arise.
+f) The company has not raised loans during the year on the pledge of securities held in its subsidiaries, joint ventures or associate companies.`,
+  10: `a) The company has not raised any funds through IPO or FPO (including debt instruments) or has not made any preferential allotment or private placement of shares or convertible debentures and therefore the question for utilization thereof does not arise.
 
-(b) The company has not made any preferential allotment or private placement of shares / fully or partially or optionally convertible debentures during the year under audit and hence, the requirement to report on clause 3(x)(b) of the order is not applicable to the Company.`,
-  11: `(a) During the course of our examination of the books and records of the company, carried out in accordance with the generally accepted auditing practices in India and according to the information and explanations given to us, we have neither come across any instance of fraud on or by the company, noticed or reported during the year, nor we have been informed of such case by the management.
+b) The company has not made any preferential allotment or private placement of shares / fully or partially or optionally convertible debentures during the year under audit and hence, the requirement to report on clause 3(x)(b) of the order is not applicable to the Company.`,
+  11: `a) During the course of our examination of the books and records of the company, carried out in accordance with the generally accepted auditing practices in India and according to the information and explanations given to us, we have neither come across any instance of fraud on or by the company, noticed or reported during the year, nor we have been informed of such case by the management.
 
-(b) During the year, no report under sub-section (12) of section 143 of the Companies Act, 2013 has been filed by auditors in Form ADT-4 as prescribed under Rule 13 of Companies (Audit and Auditors) Rules, 2014 with the Central Government.
+b) During the year, no report under sub-section (12) of section 143 of the Companies Act, 2013 has been filed by auditors in Form ADT-4 as prescribed under Rule 13 of Companies (Audit and Auditors) Rules, 2014 with the Central Government.
 
-(c) As represented to us by the management, there are no whistle blower complaints received by the Company during the year.`,
+c) As represented to us by the management, there are no whistle blower complaints received by the Company during the year.`,
   12: `The company is not a Nidhi Company as per the provisions of the Companies Act, 2013. Therefore, the requirement to report on clause 3(xii)(a)(b) and (c) is not applicable.`,
   13: `According to the information and explanations given to us and based on our examinations of the records, related party transactions are in compliance with sections 177 and 188 of Companies Act, wherever applicable, the details of the same have been disclosed in the financial statements as required by applicable accounting standards.`,
   14: `The company does not have an internal audit system and based on our examination, company does not require to have an internal audit system as per provisions of the Companies Act 2013. Accordingly, the reporting under Clause 3(xiv)(a) and (b) is not applicable.`,
@@ -805,13 +808,62 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                 // get the corrected wording from the seeded defaults.
                 const wordingFix = (s: string) =>
                   s
-                    // Clause 1: template uses "(a) (A)" with a space and the
-                    // singular "particular" (not "particulars")
+                    // Clause 1: "(a)(A)" → "(a) (A)" + singular "particular"
                     .replace(/\(a\)\(A\)/g, "(a) (A)")
                     .replace(
                       /full particulars including, quantitative details/g,
                       "full particular including, quantitative details",
-                    );
+                    )
+                    // Clause 3: missing apostrophe + missing "('the order')"
+                    .replace(
+                      /Companies \(Auditors Report\) Order, 2020 are not applicable\./g,
+                      "Companies (Auditor's Report) Order, 2020 ('the order') are not applicable.",
+                    )
+                    // Clause 4: template typo "provisions or paragraph" (not "of")
+                    .replace(
+                      /the provisions of paragraph 3\(iv\) of the order/g,
+                      "the provisions or paragraph 3(iv) of the order",
+                    )
+                    // Clause 8: missing "to the company" tail
+                    .replace(
+                      /clause 3\(vii\) of the order is not applicable\.(?!\s+to)/g,
+                      "clause 3(vii) of the order is not applicable to the company.",
+                    )
+                    // Clause 9 (a)-(f), 10 (a)-(b), 11 (a)-(c) — template
+                    // uses "a)" "b)" "c)" without the leading parenthesis.
+                    // Targeted to the specific clause-9/10/11 leading
+                    // phrases to avoid mangling unrelated "(a)"/"(b)" usage.
+                    .replace(
+                      /\(a\) In our opinion and according to the information and explanations given by the management/g,
+                      "a) In our opinion and according to the information and explanations given by the management",
+                    )
+                    .replace(/\(b\) The company has not been declared willful defaulter/g,
+                             "b) The company has not been declared willful defaulter")
+                    .replace(/\(c\) In our opinion, and according to the information and explanations given to us, the term loans/g,
+                             "c) In our opinion, and according to the information and explanations given to us, the term loans")
+                    .replace(/\(d\) On an overall examination of the financial Statements of the company, no funds/g,
+                             "d) On an overall examination of the financial Statements of the company, no funds")
+                    .replace(/\(e\) On an overall examination of the financial Statements of the company, the company has not taken/g,
+                             "e) On an overall examination of the financial Statements of the company, the company has not taken")
+                    .replace(/\(f\) The company has not raised loans during the year on the pledge/g,
+                             "f) The company has not raised loans during the year on the pledge")
+                    // Clause 9(a) template typo "payment or interest" (not "of")
+                    .replace(
+                      /in the payment of interest thereon to any lender/g,
+                      "in the payment or interest thereon to any lender",
+                    )
+                    // Clause 10
+                    .replace(/\(a\) The company has not raised any funds through IPO or FPO/g,
+                             "a) The company has not raised any funds through IPO or FPO")
+                    .replace(/\(b\) The company has not made any preferential allotment or private placement of shares/g,
+                             "b) The company has not made any preferential allotment or private placement of shares")
+                    // Clause 11
+                    .replace(/\(a\) During the course of our examination of the books and records/g,
+                             "a) During the course of our examination of the books and records")
+                    .replace(/\(b\) During the year, no report under sub-section/g,
+                             "b) During the year, no report under sub-section")
+                    .replace(/\(c\) As represented to us by the management, there are no whistle blower/g,
+                             "c) As represented to us by the management, there are no whistle blower");
                 rows.forEach(r => {
                   if (!r.is_applicable) {
                     const reason = r.inapplicability_reason
