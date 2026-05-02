@@ -580,12 +580,20 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   <Download className="h-4 w-4 mr-2" /> Export PDF
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => {
+                  // Same serif typography as the applicable-CARO export so
+                  // both branches share the template's Times New Roman look.
+                  const SERIF = "'Times New Roman', Times, serif";
+                  const SIG = `font-family:${SERIF};font-size:12pt;margin:0;`;
                   const body = (introText || CARO_NOT_APPLICABLE_FULL).replace(/\n/g, '<br/>');
                   const html =
-                    `<p style="white-space:pre-wrap;">${body}</p>` +
-                    `<br/><p>For, ${firmName}<br/>Chartered Accountants<br/>Firm Regi. No.: ${firmFRN}</p>` +
-                    `<p>Place: ${place || '[Place]'} &nbsp; Date: ${reportDateDisplay}</p>` +
-                    `<p>${partnerName}<br/>Partner &nbsp; Membership No.: ${membershipNo}</p>`;
+                    `<p style="font-family:${SERIF};font-size:12pt;line-height:1.4;` +
+                    `text-align:justify;margin:0 0 12pt 0;">${body}</p>` +
+                    `<p style="${SIG}margin-top:30pt;">For, ${firmName}<br/>` +
+                    `Chartered Accountants<br/>Firm Regi. No.: ${firmFRN}</p>` +
+                    `<p style="${SIG}margin-top:18pt;">Place: ${place || '[Place]'}` +
+                    `&nbsp;&nbsp;&nbsp;Date: ${reportDateDisplay}</p>` +
+                    `<p style="${SIG}margin-top:30pt;">${partnerName}<br/>` +
+                    `Partner<br/>Membership No.: ${membershipNo}</p>`;
                   exportToWord(html, `CARO-NotApplicable_${companyName}_${engagement?.financial_year || ''}.doc`);
                 }}>
                   <FileType className="h-4 w-4 mr-2" /> Export Word
@@ -689,24 +697,54 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                 <Download className="h-4 w-4 mr-2" /> Export PDF
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => {
+                // ─── CARO Word export — matches the template Annexure-A format ───
+                // - Times New Roman serif font (template uses Times New Roman)
+                // - Centered company-name title, centered subtitle
+                // - Subtitle uses "Annexure - A" (spaces around dash) per template
+                // - Each clause is a single hanging-indent paragraph: "N.  body".
+                //   The clause TITLE (e.g. "Property, Plant and Equipment") is
+                //   NOT rendered — the template shows clause number + body only.
+                // - No separator borders between clauses.
+                // - Body text is auto-populated from software (user_response /
+                //   auto_draft) with newlines preserved as <br/>.
+                const SERIF = "'Times New Roman', Times, serif";
+                const CLAUSE_STYLE =
+                  `font-family:${SERIF};font-size:12pt;line-height:1.4;` +
+                  `text-align:justify;margin:0 0 8pt 0;` +
+                  `padding-left:28pt;text-indent:-28pt;`;
+
                 let html =
-                  `<h2 style="text-align:center;">${companyName}</h2>` +
-                  `<p style="font-style:italic;text-align:center;margin-bottom:16px;">Annexure-A referred to paragraph under the heading "Report on Other Legal and Regulatory" of our independent Auditor's Report of even date</p>`;
+                  `<p style="text-align:center;font-family:${SERIF};font-size:12pt;` +
+                  `font-weight:bold;margin:0 0 10pt 0;">${companyName}</p>` +
+                  `<p style="text-align:center;font-family:${SERIF};font-size:11pt;` +
+                  `margin:0 0 18pt 0;">Annexure - A referred to paragraph under the ` +
+                  `heading &quot;Report on Other Legal and Regulatory&quot; of our ` +
+                  `independent Auditor&#39;s Report of even date</p>`;
+
                 rows.forEach(r => {
-                  html += `<div style="margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #ddd;page-break-inside:avoid;">`;
-                  html += `<h3 style="font-size:12pt;font-weight:bold;margin-bottom:4px;">${r.clause_number}. ${r.clause_title}</h3>`;
                   if (!r.is_applicable) {
-                    html += `<p style="color:#888;font-style:italic;">Not Applicable${r.inapplicability_reason ? ` — ${r.inapplicability_reason}` : ''}</p>`;
+                    const reason = r.inapplicability_reason
+                      ? ` &mdash; ${r.inapplicability_reason}`
+                      : "";
+                    html += `<p style="${CLAUSE_STYLE}">` +
+                      `${r.clause_number}.&nbsp;&nbsp;Not Applicable${reason}</p>`;
                   } else {
-                    const text = (r.user_response || r.auto_draft || 'No response').replace(/\n/g, '<br/>');
-                    html += `<p style="white-space:pre-wrap;font-size:10pt;">${text}</p>`;
+                    const text = (r.user_response || r.auto_draft || "")
+                      .replace(/\n/g, "<br/>");
+                    html += `<p style="${CLAUSE_STYLE}">` +
+                      `${r.clause_number}.&nbsp;&nbsp;${text}</p>`;
                   }
-                  html += `</div>`;
                 });
+
+                // Signature block — left aligned, serif, no separator border.
+                const SIG = `font-family:${SERIF};font-size:12pt;margin:0;`;
                 html +=
-                  `<br/><p>For, ${firmName}<br/>Chartered Accountants<br/>Firm Regi. No.: ${firmFRN}</p>` +
-                  `<p>Place: ${place || '[Place]'} &nbsp; Date: ${reportDateDisplay}</p>` +
-                  `<p style="margin-top:24px;">${partnerName}<br/>Partner &nbsp; Membership No.: ${membershipNo}</p>`;
+                  `<p style="${SIG}margin-top:30pt;">For, ${firmName}<br/>` +
+                  `Chartered Accountants<br/>Firm Regi. No.: ${firmFRN}</p>` +
+                  `<p style="${SIG}margin-top:18pt;">Place: ${place || "[Place]"}` +
+                  `&nbsp;&nbsp;&nbsp;Date: ${reportDateDisplay}</p>` +
+                  `<p style="${SIG}margin-top:30pt;">${partnerName}<br/>` +
+                  `Partner<br/>Membership No.: ${membershipNo}</p>`;
                 exportToWord(html, `CARO-2020_${companyName}_${engagement?.financial_year || ''}.doc`);
               }}>
                 <FileType className="h-4 w-4 mr-2" /> Export Word
