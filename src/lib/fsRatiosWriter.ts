@@ -44,7 +44,11 @@ const BOT_SIDE   = { bottom: THIN_BLACK, left: THIN_BLACK, right: THIN_BLACK } a
  *  heading boxes on the CY/PY sheets. Matches the template's bold rule. */
 const HEAD_BDR   = { top: MED_BLACK,  bottom: MED_BLACK,  left: MED_BLACK,  right: MED_BLACK }  as ExcelJS.Borders;
 
-const FONT       = "Cambria";
+// Match the Ratio.xlsx template — it uses Aptos Display (the "major"
+// scheme font in modern Office workbooks) for every data label, header
+// and total. Falls back gracefully on systems where Aptos isn't
+// installed (Excel substitutes the closest available sans-serif).
+const FONT       = "Aptos Display";
 
 interface Ctx {
   cyYear:      number;
