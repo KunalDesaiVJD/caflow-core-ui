@@ -545,6 +545,19 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
     ? new Date(reportDate).toLocaleDateString("en-IN")
     : "[Date]";
 
+  // Template uses DD.MM.YYYY with dots ("XX.XX.20XX"). Build a separate
+  // display string for the Word export's signature block so the on-screen
+  // preview can keep its locale format unchanged.
+  const reportDateDocx = (() => {
+    if (!reportDate) return "[Date]";
+    const d = new Date(reportDate);
+    if (Number.isNaN(d.getTime())) return reportDate;
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const yy = String(d.getFullYear());
+    return `${dd}.${mm}.${yy}`;
+  })();
+
   // ════════════════════════════════════════════════════════════════════════
   // BRANCH 1: NOT APPLICABLE — full WITHOUT-CARO text, editable.
   // ════════════════════════════════════════════════════════════════════════
@@ -598,16 +611,18 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     .caro-sig td.partner { padding-top: 24pt !important; }
                   `;
                   const body = (introText || CARO_NOT_APPLICABLE_FULL).replace(/\n/g, '<br/>');
+                  // Same Place / Date spacing + DD.MM.YYYY date format as
+                  // the applicable-CARO export.
                   const html =
                     `<p style="font-family:${SERIF};font-size:12pt;line-height:1.4;` +
                     `text-align:justify;margin:0 0 12pt 0;">${body}</p>` +
                     `<table class="caro-sig" style="width:100%;margin-top:30pt;"><tr>` +
                       `<td ${TD}>For, ${firmName}<br/>Chartered Accountants<br/>` +
                       `Firm Regi.No.${firmFRN}</td>` +
-                      `<td ${TD}>Place : ${place || '[Place]'}</td>` +
+                      `<td ${TD}>Place :&nbsp;&nbsp;${place || '[Place]'}</td>` +
                     `</tr><tr>` +
                       `<td ${TD}>&nbsp;</td>` +
-                      `<td ${TD}>Date&nbsp;&nbsp;: ${reportDateDisplay}</td>` +
+                      `<td ${TD}>Date&nbsp;&nbsp;:&nbsp;&nbsp;${reportDateDocx}</td>` +
                     `</tr><tr>` +
                       `<td ${TD} class="partner">${partnerName}<br/>Partner<br/>` +
                       `Membership No.${membershipNo}</td>` +
@@ -779,14 +794,19 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                 // second of two inline style attributes, so we can't put
                 // it inline alongside vertical-align).
                 const TD = `style="vertical-align:top;"`;
+                // Template label spacing (verbatim):
+                //   "Place :  Ahmedabad"  → 1 space before colon, 2 spaces after
+                //   "Date  :  XX.XX.20XX" → 2 spaces before colon (aligns the
+                //                            colon under "Place :"), 2 spaces after
+                // Date value is formatted DD.MM.YYYY per template.
                 html +=
                   `<table class="caro-sig" style="width:100%;margin-top:30pt;"><tr>` +
                     `<td ${TD}>For, ${firmName}<br/>Chartered Accountants<br/>` +
                     `Firm Regi.No.${firmFRN}</td>` +
-                    `<td ${TD}>Place : ${place || "[Place]"}</td>` +
+                    `<td ${TD}>Place :&nbsp;&nbsp;${place || "[Place]"}</td>` +
                   `</tr><tr>` +
                     `<td ${TD}>&nbsp;</td>` +
-                    `<td ${TD}>Date&nbsp;&nbsp;: ${reportDateDisplay}</td>` +
+                    `<td ${TD}>Date&nbsp;&nbsp;:&nbsp;&nbsp;${reportDateDocx}</td>` +
                   `</tr><tr>` +
                     `<td ${TD} class="partner">${partnerName}<br/>Partner<br/>` +
                     `Membership No.${membershipNo}</td>` +
