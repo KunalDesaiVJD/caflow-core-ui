@@ -442,10 +442,20 @@ function writeYearSheet(ws: ExcelJS.Worksheet, companyName: string, yearEnd: num
 
   writeRoceBlock(ws, inp); // rows 32..39
 
+  // Note: "AVERAGE INVESTMENT  FUND" has TWO spaces between INVESTMENT
+  // and FUND — preserved verbatim from the template's shared strings.
   writeSimpleYearRow(ws, 41, "11", "RETURN ON INVESTMENT",
     "RETURN / PROFIT / EARNING", v(inp, "return_profit"),
-    "AVERAGE INVESTMENT FUND",   v(inp, "avg_investment_fund"),
+    "AVERAGE INVESTMENT  FUND",  v(inp, "avg_investment_fund"),
     "%");
+
+  // ── Row 42 F42: italic clarification note for Average Investment Fund ───
+  // Sits directly below the denominator label and explains how the
+  // figure is computed. Template places this text at F42.
+  const oc = ws.getCell("F42");
+  oc.value = "Opening+Closing Investments";
+  oc.font = { name: FONT, size: 10, italic: true };
+  oc.alignment = { horizontal: "left", vertical: "middle" };
 
   // ── Spacer rows: extend vertical column lines through the gaps ──────────
   // Without this, the CY/PY table looks broken: each ratio block has a
@@ -518,9 +528,10 @@ function writeDscrBlock(ws: ExcelJS.Worksheet, inp: RatioInputs | null): void {
   clearSlaveBorders(ws, r0, 3, r0 + 5, 3);
 
   // Header row (r0): NUM and DEN section labels in cols D, F
-  // Trailing spaces on both labels are verbatim from the template
-  setLabel(ws, r0, 4, "EARNING AVAILABLE FOR DEBT SERVICE ", { bold: true, italic: true });
-  setLabel(ws, r0, 6, "DEBT SERVICE ",                       { bold: true, italic: true });
+  // Bold (NOT italic — template uses fontId=2 which is bold-only).
+  // Trailing spaces on both labels are verbatim from the template.
+  setLabel(ws, r0, 4, "EARNING AVAILABLE FOR DEBT SERVICE ", { bold: true });
+  setLabel(ws, r0, 6, "DEBT SERVICE ",                       { bold: true });
   emptyAmt(ws, r0, 5);
   emptyAmt(ws, r0, 7);
   // Ratio cell on TOTAL row only
@@ -583,9 +594,10 @@ function writeRoceBlock(ws: ExcelJS.Worksheet, inp: RatioInputs | null): void {
   clearSlaveBorders(ws, r0, 2, r0 + 7, 2);
   clearSlaveBorders(ws, r0, 3, r0 + 7, 3);
 
-  // "INTERST" is the template's spelling — preserved verbatim
-  setLabel(ws, r0, 4, "EARNINGS BEFORE INTERST AND TAXES", { bold: true, italic: true });
-  setLabel(ws, r0, 6, "CAPITAL EMPLOYED",                  { bold: true, italic: true });
+  // Bold (NOT italic — template uses fontId=2 which is bold-only).
+  // "INTERST" is the template's spelling — preserved verbatim.
+  setLabel(ws, r0, 4, "EARNINGS BEFORE INTERST AND TAXES", { bold: true });
+  setLabel(ws, r0, 6, "CAPITAL EMPLOYED",                  { bold: true });
   emptyAmt(ws, r0, 5);
   emptyAmt(ws, r0, 7);
   ws.getCell(r0, 8).border = FULL_BDR;
