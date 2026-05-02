@@ -10,6 +10,10 @@
 import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EditableCell, formatINR } from "./EditableCell";
+
+/** Convert ALL-CAPS Tally ledger names to Title Case for display. */
+const toTitleCase = (s: string): string =>
+  s.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
 import type { FARow, Stage5Notes } from "@/lib/notesAutoPopulate";
 import { useDynamicNoteRegistry } from "@/lib/noteNumberRegistry";
 
@@ -156,9 +160,9 @@ export default function FAGrid({ engagementId, rows, pyRows, pyManual, onChangeP
                 <td className="p-0.5 border">
                   <EditableCell
                     type="text"
-                    value={r.particulars}
+                    value={toTitleCase(r.particulars ?? "")}
                     placeholder="Asset name"
-                    onCommit={(v) => update(i, { particulars: String(v ?? "") })}
+                    onCommit={(v) => update(i, { particulars: toTitleCase(String(v ?? "")) })}
                     className="text-left text-foreground"
                   />
                 </td>

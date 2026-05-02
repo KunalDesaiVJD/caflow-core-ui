@@ -8,7 +8,8 @@
 import { useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { CalendarDays, TableProperties } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { CalendarDays, TableProperties, Maximize2, Minimize2 } from "lucide-react";
 
 import { useAuditPlanning }   from "./hooks/useAuditPlanning";
 import { useClients }          from "./hooks/useClients";
@@ -44,6 +45,10 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
     addEntry, updateEntry, removeEntry,
     addComm, updateComm, removeComm,
   } = useAuditPlanning(firmId, userId, isSuperadmin);
+
+  // ── Planning & Communication: maximize state ───────────────────────────────
+  const [commMaximized, setCommMaximized] = useState(false);
+  const [calMaximized,  setCalMaximized]  = useState(false);
 
   // ── Audit Status: FY selector ──────────────────────────────────────────────
   const [selectedFY, setSelectedFY] = useState(DEFAULT_FY);
@@ -90,27 +95,66 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
 
         {/* ── Tab 1: Planning & Communication ── */}
         <TabsContent value="planning" className="mt-4 space-y-4">
-          <CommunicationTable
-            comms={comms}
-            entries={entries}
-            clients={clients}
-            onAdd={addComm}
-            onUpdate={updateComm}
-            onRemove={removeComm}
-          />
-          <PlanningCalendar
-            entries={entries}
-            loading={loading}
-            clients={clients}
-            users={users}
-            planningStaff={planningStaff}
-            onAddEntry={handleAdd}
-            onUpdateEntry={handleUpdate}
-            onDeleteEntry={handleDelete}
-            onAddStaff={addStaff}
-            onRemoveStaff={removeStaff}
-            onReorderStaff={reorderStaff}
-          />
+
+          {/* Communication Log section */}
+          {!calMaximized && (
+            <div className="rounded-lg border bg-card shadow-sm overflow-hidden">
+              <div className="flex items-center justify-between px-3 py-2 border-b bg-muted/30">
+                <span className="text-xs font-semibold tracking-wide">Communication Log</span>
+                <Button
+                  variant="ghost" size="sm"
+                  className="h-6 w-6 p-0"
+                  title={commMaximized ? "Restore" : "Maximize"}
+                  onClick={() => setCommMaximized(v => !v)}
+                >
+                  {commMaximized ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+                </Button>
+              </div>
+              <div className={commMaximized ? "max-h-[calc(100vh-180px)] overflow-y-auto" : ""}>
+                <CommunicationTable
+                  comms={comms}
+                  entries={entries}
+                  clients={clients}
+                  onAdd={addComm}
+                  onUpdate={updateComm}
+                  onRemove={removeComm}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Planning Calendar section */}
+          {!commMaximized && (
+            <div className="rounded-lg border bg-card shadow-sm overflow-hidden">
+              <div className="flex items-center justify-between px-3 py-2 border-b bg-muted/30">
+                <span className="text-xs font-semibold tracking-wide">Planning Calendar</span>
+                <Button
+                  variant="ghost" size="sm"
+                  className="h-6 w-6 p-0"
+                  title={calMaximized ? "Restore" : "Maximize"}
+                  onClick={() => setCalMaximized(v => !v)}
+                >
+                  {calMaximized ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+                </Button>
+              </div>
+              <div className={calMaximized ? "max-h-[calc(100vh-180px)] overflow-y-auto" : ""}>
+                <PlanningCalendar
+                  entries={entries}
+                  loading={loading}
+                  clients={clients}
+                  users={users}
+                  planningStaff={planningStaff}
+                  onAddEntry={handleAdd}
+                  onUpdateEntry={handleUpdate}
+                  onDeleteEntry={handleDelete}
+                  onAddStaff={addStaff}
+                  onRemoveStaff={removeStaff}
+                  onReorderStaff={reorderStaff}
+                />
+              </div>
+            </div>
+          )}
+
         </TabsContent>
 
         {/* ── Tab 2: Audit Status ── */}
