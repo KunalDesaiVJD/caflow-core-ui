@@ -385,9 +385,16 @@ function bodyParaWithInlineHeading(
   headingLabel: string,
   headingTitle: string,
 ): string {
+  // <w:keepLines/> stops Word from splitting this paragraph across a page
+  // boundary. Without it, when the body fits on page N but the inline 2.6
+  // heading text overflows, Word breaks the paragraph and pushes the bold
+  // heading text alone to page N+1 — making it look like an orphaned
+  // standalone heading. Pairing keepLines with keepNext means body + inline
+  // heading + first 2.6 body paragraph all stay on the same page.
   const pPr =
     `<w:pPr>` +
     `<w:keepNext/>` +
+    `<w:keepLines/>` +
     `<w:ind w:left="150" w:right="150"/>` +
     `</w:pPr>`;
   const runs: string[] = [];
@@ -713,32 +720,33 @@ export async function exportNtaToDocx(
       <w:szCs w:val="17"/>
     </w:rPr>
   </w:style>
-  <!-- Header / Footer styles override the doc-default after=160 / line=278
-       so the header and footer zones collapse to their minimum height.
-       Without these the empty header paragraph adds ~14pt of unwanted
-       whitespace above the body content. -->
+  <!-- Header / Footer styles force a near-zero line height so the empty
+       header / footer paragraphs collapse to almost no vertical space.
+       lineRule="exact" + line="40" pins the line to 2pt regardless of the
+       paragraph's font size, which prevents the visible "header
+       rectangle" gap above the body content the user reported. -->
   <w:style w:type="paragraph" w:styleId="Header">
     <w:name w:val="header"/>
     <w:basedOn w:val="Normal"/>
     <w:pPr>
-      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:spacing w:after="0" w:line="40" w:lineRule="exact"/>
     </w:pPr>
     <w:rPr>
       <w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/>
-      <w:sz w:val="20"/>
-      <w:szCs w:val="20"/>
+      <w:sz w:val="2"/>
+      <w:szCs w:val="2"/>
     </w:rPr>
   </w:style>
   <w:style w:type="paragraph" w:styleId="Footer">
     <w:name w:val="footer"/>
     <w:basedOn w:val="Normal"/>
     <w:pPr>
-      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:spacing w:after="0" w:line="40" w:lineRule="exact"/>
     </w:pPr>
     <w:rPr>
       <w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/>
-      <w:sz w:val="20"/>
-      <w:szCs w:val="20"/>
+      <w:sz w:val="2"/>
+      <w:szCs w:val="2"/>
     </w:rPr>
   </w:style>
 </w:styles>`;
