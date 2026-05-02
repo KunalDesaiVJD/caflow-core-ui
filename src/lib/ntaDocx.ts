@@ -607,18 +607,27 @@ export async function exportNtaToDocx(
     //   Page 3: 2.10 → 2.17    ← 2.10 starts a new page
     //   Page 4: 2.18 → 2.19    ← 2.18 starts a new page
     //
-    // Plus two lines of whitespace at the top AND bottom of pages 2-4.
+    // Plus two lines of whitespace at the TOP of pages 2-4 (the
+    // bottom of pages 1-3 is the natural unused space below the last
+    // body paragraph, since pageBreakBefore on the next anchor moves
+    // subsequent content to a new page).
     //
     // Implementation:
     //   • Before each page-anchor heading (2.6 / 2.10 / 2.18) emit:
     //       whitespacePara({ pageBreakBefore: true })  // line 1, starts new page
     //       whitespacePara()                            // line 2
-    //     The page-break flag now lives on the first whitespace para
-    //     so the heading itself is plain — and the heading is preceded
-    //     by exactly two empty lines on the new page.
-    //   • After each page-tail body (2.5 / 2.9 / 2.17) emit two
-    //     whitespacePara()s — they sit at the very bottom of the
-    //     current page, providing the matching bottom whitespace.
+    //     The page-break flag lives on the first whitespace paragraph
+    //     so the two empties + heading all land on the new page.
+    //
+    // NOTE: the previous version also emitted two trailing
+    // whitespacePara()s after 2.5 / 2.9 / 2.17 to enforce a bottom
+    // whitespace band. That caused a blank page at the end of the
+    // document — when 2.17's trailing whitespaces had no room left on
+    // page 3 they overflowed to a new page BEFORE the pageBreakBefore
+    // on 2.18, so 2.18 then forced ANOTHER new page (page 5). Removing
+    // them eliminates the blank page; the visible bottom whitespace on
+    // each page is now simply the residual unused space below the
+    // section's last body paragraph.
     const isPageAnchor = label === "2.6" || label === "2.10" || label === "2.18";
     if (isPageAnchor) {
       paras.push(whitespacePara({ pageBreakBefore: true }));
@@ -628,12 +637,6 @@ export async function exportNtaToDocx(
     paras.push(headingPara(label, title));
     paras.push(blankAfterHeading());
     bodyBlock(body).forEach(bp => paras.push(bp));
-
-    const isPageTail = label === "2.5" || label === "2.9" || label === "2.17";
-    if (isPageTail) {
-      paras.push(whitespacePara());
-      paras.push(whitespacePara());
-    }
     // Next heading follows directly — no inter-section spacer.
   }
   // Template P75: right-indented border spacer before "2.19 General notes".
