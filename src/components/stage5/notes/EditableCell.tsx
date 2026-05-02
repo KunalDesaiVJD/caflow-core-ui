@@ -304,6 +304,7 @@ function ListRowActionsMenu({
   subGroups,
   onMoveToGroup,
   onCreateGroup,
+  onRestoreLink,
 }: {
   onDelete: () => void;
   onRemoveFromGroup?: () => void;
@@ -312,6 +313,8 @@ function ListRowActionsMenu({
   subGroups?: { id: string; name: string }[];
   onMoveToGroup?: (groupId: string) => void;
   onCreateGroup?: (groupName: string) => void;
+  /** When set, the row is MANUAL but was previously LINKED — shows "Restore Link" option. */
+  onRestoreLink?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [mappingOpen, setMappingOpen] = useState(false);
@@ -397,6 +400,17 @@ function ListRowActionsMenu({
         </button>
       </PopoverTrigger>
       <PopoverContent side="bottom" align="end" className="w-48 p-1">
+        {/* Restore Link — for manual rows that were previously linked */}
+        {onRestoreLink && (
+          <button
+            type="button"
+            className="w-full text-left px-2 py-1 rounded text-xs hover:bg-green-50 text-green-700 flex items-center gap-1.5 transition-colors"
+            onClick={() => { onRestoreLink(); setOpen(false); }}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            Restore Link
+          </button>
+        )}
         {/* Change Mapping — only for linked rows */}
         {linkedLedger && onChangeMapping && (
           <button
@@ -408,7 +422,7 @@ function ListRowActionsMenu({
           </button>
         )}
 
-        {/* Move to Sub Group — always shown */}
+        {/* Move to Sub Group — only shown when handlers are provided (not for group headers) */}
         {(onMoveToGroup || onCreateGroup) && (
           <Popover open={groupMenuOpen} onOpenChange={(o) => { setGroupMenuOpen(o); if (!o) { setShowNewGroupInput(false); setNewGroupName(""); } }}>
             <PopoverTrigger asChild>
@@ -516,7 +530,7 @@ function ListRowActionsMenu({
 function ListRowWithSources({
   r, origIdx, isLinked, isManual, hasSources, descPlaceholder, update, remove,
   onChangeMapping, subGroups, onMoveToGroup, onCreateGroup, onRemoveFromGroup,
-  handleDragStart,
+  handleDragStart, onRestoreLink,
 }: {
   r: ListRow;
   origIdx: number;
@@ -532,6 +546,8 @@ function ListRowWithSources({
   onCreateGroup?: (groupName: string) => void;
   onRemoveFromGroup?: () => void;
   handleDragStart?: (e: React.DragEvent, origIdx: number) => void;
+  /** Issue-3: When manual row has an original linked_ledger, call this to re-link. */
+  onRestoreLink?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -616,6 +632,7 @@ function ListRowWithSources({
             subGroups={subGroups}
             onMoveToGroup={onMoveToGroup}
             onCreateGroup={onCreateGroup}
+            onRestoreLink={onRestoreLink}
           />
         </div>
       </div>
@@ -695,7 +712,9 @@ export function ListTable({
     next[i] = {
       ...cur,
       ...patch,
-      ...(flipsToManual ? { source: "manual", linked_ledger: undefined } : {}),
+      // Issue-3: Keep linked_ledger when flipping to manual so user can restore later.
+      // We intentionally do NOT clear linked_ledger here.
+      ...(flipsToManual ? { source: "manual" } : {}),
     };
     onChange(next);
   };
@@ -768,6 +787,8 @@ export function ListTable({
       return;
     }
     const destRow = rows[origIdx];
+    const sourceRow = rows[from as number];
+
     // If dropping onto a group header: move the dragged row INTO that group
     if (destRow?.is_group && destRow?.id) {
       const next = rows.slice();
@@ -776,10 +797,26 @@ export function ListTable({
       setDragRow(null); setDragOverRow(null);
       return;
     }
-    // Otherwise: reorder
+
+    // If source was in a group and destination is in a DIFFERENT group: move to new group
+    if (sourceRow?.subgroup_id && destRow?.subgroup_id && sourceRow.subgroup_id !== destRow.subgroup_id) {
+      const next = rows.slice();
+      next[from as number] = { ...next[from as number], subgroup_id: destRow.subgroup_id };
+      onChange(next);
+      setDragRow(null); setDragOverRow(null);
+      return;
+    }
+
+    // Issue-1: If source was in a group but destination is NOT in any group,
+    // remove the source from its group (clear subgroup_id) and reorder.
     const next = rows.slice();
-    const [moved] = next.splice(from as number, 1);
-    next.splice(origIdx > (from as number) ? origIdx - 1 : origIdx, 0, moved);
+    const movedRow = {
+      ...next[from as number],
+      // Clear subgroup_id only when dropping outside the group (flat area)
+      ...(sourceRow?.subgroup_id && !destRow?.subgroup_id ? { subgroup_id: undefined } : {}),
+    };
+    next.splice(from as number, 1);
+    next.splice(origIdx > (from as number) ? origIdx - 1 : origIdx, 0, movedRow);
     onChange(next);
     setDragRow(null); setDragOverRow(null);
   };
@@ -915,11 +952,9 @@ export function ListTable({
                   {groupAmts.py !== 0 ? formatINR(groupAmts.py) : <span className="text-muted-foreground">—</span>}
                 </div>
                 <div className="col-span-1 flex justify-end">
+                  {/* Issue-2: Group headers do NOT get "Move to Sub Group" option */}
                   <ListRowActionsMenu
                     onDelete={() => removeGroupWithUngroup(origIdx)}
-                    subGroups={allSubGroups.filter((g) => g.id !== groupId)}
-                    onMoveToGroup={(targetId) => moveToGroup(origIdx, targetId)}
-                    onCreateGroup={(name) => createGroupForRow(origIdx, name)}
                   />
                 </div>
               </div>
@@ -957,6 +992,11 @@ export function ListTable({
                         onCreateGroup={(name) => createGroupForRow(mi, name)}
                         onRemoveFromGroup={() => removeFromGroup(mi)}
                         handleDragStart={handleDragStart}
+                        onRestoreLink={
+                          mr.source === "manual" && mr.linked_ledger
+                            ? () => update(mi, { source: "linked" })
+                            : undefined
+                        }
                       />
                     </div>
                   ))}
@@ -993,6 +1033,11 @@ export function ListTable({
               onMoveToGroup={(targetId) => moveToGroup(origIdx, targetId)}
               onCreateGroup={(name) => createGroupForRow(origIdx, name)}
               handleDragStart={handleDragStart}
+              onRestoreLink={
+                isManual && r.linked_ledger
+                  ? () => update(origIdx, { source: "linked" })
+                  : undefined
+              }
             />
           </div>
         );

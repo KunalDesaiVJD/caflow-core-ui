@@ -376,10 +376,13 @@ type CoaHead = { account_head: string; bs_pl: string | null; group_name: string 
 function CoaIntelligencePanel() {
   const [rows, setRows] = useState<IntelRow[]>([]);
   const [heads, setHeads] = useState<CoaHead[]>([]);
+  const [clientMap, setClientMap] = useState<Record<string, string>>({}); // client_id → client name
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState("");
   const [entity, setEntity] = useState<"all" | "corporate" | "llp" | "nce">("all");
   const [scopeFilter, setScopeFilter] = useState<"all" | "global" | "engagement">("all");
+  /** Issue-7: Default true — hide person/party names; only show income/expense accounts */
+  const [excludePartyNames, setExcludePartyNames] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -394,6 +397,16 @@ function CoaIntelligencePanel() {
       .select("account_head, bs_pl, group_name, entity_type")
       .limit(5000);
     setHeads((hd as CoaHead[]) ?? []);
+    // Issue-6: Load client names for client-scoped entries
+    const { data: clients } = await supabase
+      .from("clients" as any)
+      .select("id, name")
+      .limit(2000);
+    if (clients) {
+      const map: Record<string, string> = {};
+      for (const c of clients as { id: string; name: string }[]) map[c.id] = c.name;
+      setClientMap(map);
+    }
     setLoading(false);
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -401,12 +414,16 @@ function CoaIntelligencePanel() {
   const filtered = rows.filter((r) => {
     if (entity !== "all" && r.entity_type !== entity) return false;
     if (scopeFilter !== "all" && (r.scope ?? "global") !== scopeFilter) return false;
+    // Issue-7: Exclude party/person names by default
+    if (excludePartyNames && r.is_party_name) return false;
     if (!q.trim()) return true;
     const qq = q.toLowerCase();
     return (
       r.normalized_name.toLowerCase().includes(qq) ||
       r.account_head.toLowerCase().includes(qq) ||
-      (r.account_group ?? "").toLowerCase().includes(qq)
+      (r.account_group ?? "").toLowerCase().includes(qq) ||
+      // Issue-6: Also search by client name
+      (r.client_id && (clientMap[r.client_id] ?? "").toLowerCase().includes(qq))
     );
   });
 
@@ -478,6 +495,16 @@ function CoaIntelligencePanel() {
             <option value="global">🌐 Global only</option>
             <option value="engagement">🔒 Client-scoped only</option>
           </select>
+          {/* Issue-7: Toggle to exclude person/party names */}
+          <label className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={excludePartyNames}
+              onChange={(e) => setExcludePartyNames(e.target.checked)}
+              className="accent-primary"
+            />
+            <span className="text-muted-foreground text-xs">Hide party names</span>
+          </label>
         </div>
       </CardHeader>
       <CardContent className="p-0">
@@ -508,7 +535,13 @@ function CoaIntelligencePanel() {
                   <TableRow key={r.id}>
                     <TableCell>
                       <div className="font-mono text-xs">{r.normalized_name}</div>
-                      {isParty && (
+                      {/* Issue-6: Show client name for client-scoped entries */}
+                      {isParty && r.client_id && clientMap[r.client_id] && (
+                        <div className="text-[10px] text-amber-700 mt-0.5 font-medium">
+                          👤 {clientMap[r.client_id]}
+                        </div>
+                      )}
+                      {isParty && (!r.client_id || !clientMap[r.client_id]) && (
                         <div className="text-[10px] text-amber-600 mt-0.5">
                           👤 Party/business name — client-scoped only
                         </div>

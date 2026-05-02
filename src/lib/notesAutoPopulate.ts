@@ -1120,6 +1120,71 @@ export async function autoPopulateNotes(
     }
   }
 
+  // ── Issue-4a: Share Capital sub-table carry-forward from prior year ──────────
+  // The main BS amount (cy/py) is handled above via the note registry.
+  // The sub-tables (shareholders, promoters, reconciliation) live as extra
+  // fields on the share_capital node. When a new year is opened, carry the
+  // prior year's CY data into the current year's PY columns so the auditor
+  // doesn't have to re-enter shareholders/promoters each year.
+  if (pyNotes?.bs_liab) {
+    const priorSC = (pyNotes.bs_liab.share_capital ?? {}) as any;
+    const existSC = ((options?.existing?.bs_liab ?? {}) as any).share_capital ?? {};
+    const outSC   = (out.bs_liab.share_capital ?? {}) as any;
+
+    // Text descriptions — propagate from prior year if not yet filled
+    if (!existSC.authorised_text && priorSC.authorised_text)
+      outSC.authorised_text = priorSC.authorised_text;
+    if (!existSC.issued_text && priorSC.issued_text)
+      outSC.issued_text = priorSC.issued_text;
+
+    // Authorised amount: prior CY → current PY
+    if (!(existSC.authorised_py > 0) && priorSC.authorised_cy > 0)
+      outSC.authorised_py = Number(priorSC.authorised_cy);
+
+    // Reconciliation opening PY = prior year's closing CY
+    // (closing = opening + movement for both num and amt fields)
+    const parseShareNum = (v: any): number => {
+      if (v == null || v === "") return 0;
+      return Number(String(v).replace(/,/g, "").trim()) || 0;
+    };
+    if (!existSC.recon_open_py_num) {
+      const closeCyNum = parseShareNum(priorSC.recon_open_cy_num) + parseShareNum(priorSC.recon_move_cy_num);
+      outSC.recon_open_py_num = closeCyNum > 0 ? String(closeCyNum) : "";
+    }
+    if (!(existSC.recon_open_py_amt > 0)) {
+      const closeCyAmt = Number(priorSC.recon_open_cy_amt ?? 0) + Number(priorSC.recon_move_cy_amt ?? 0);
+      if (closeCyAmt > 0) outSC.recon_open_py_amt = closeCyAmt;
+    }
+
+    // Shareholders: prior CY → current PY (only when current year has no data yet)
+    const priorSH = Array.isArray(priorSC.shareholders) ? priorSC.shareholders : [];
+    const existSH = Array.isArray(existSC.shareholders)  ? existSC.shareholders  : [];
+    if (priorSH.length > 0 && existSH.length === 0) {
+      outSC.shareholders = priorSH.map((r: any) => ({
+        name:      r.name ?? "",
+        cy_shares: "",          // current year — blank for auditor to fill
+        cy_pct:    0,
+        py_shares: r.cy_shares ?? "",  // prior CY shares → current PY
+        py_pct:    Number(r.cy_pct ?? 0),
+      }));
+    }
+
+    // Promoters: prior CY → current PY
+    const priorPR = Array.isArray(priorSC.promoters) ? priorSC.promoters : [];
+    const existPR = Array.isArray(existSC.promoters)  ? existSC.promoters  : [];
+    if (priorPR.length > 0 && existPR.length === 0) {
+      outSC.promoters = priorPR.map((r: any) => ({
+        name:      r.name ?? "",
+        cy_shares: "",
+        cy_pct:    0,
+        py_shares: r.cy_shares ?? "",
+        py_pct:    Number(r.cy_pct ?? 0),
+      }));
+    }
+
+    out.bs_liab.share_capital = outSC;
+  }
+
   // ── Note 30 EPS — auto-populate NPAT from P&L computation ─────────────────
   // The EPS note needs Net Profit After Tax (NPAT). Compute it from the current
   // TB + COA mapping (same logic as PipelineFinancialStatements computedAmounts).
