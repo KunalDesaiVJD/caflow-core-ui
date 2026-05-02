@@ -82,7 +82,7 @@ interface TallyTB {
 // bug-fix lands.  The page compares each TB row's stamp against this and shows
 // a banner when any row was synced under older code.  Closes the gap where
 // deployed fixes don't retroactively heal existing DB rows.
-const LATEST_SYNC_CODE_VERSION = "2026.05.01";
+const LATEST_SYNC_CODE_VERSION = "2026.05.02";
 
 interface VoucherLineItem {
   ledger_name: string;
