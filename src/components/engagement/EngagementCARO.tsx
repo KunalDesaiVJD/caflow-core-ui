@@ -637,25 +637,28 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   // Same Place / Date spacing + DD.MM.YYYY date format as
                   // the applicable-CARO export.
                   // Body uses LEFT alignment (not justified) — template uses
-                  // ragged right; justified produced wide stretched gaps.
-                  // Wrapped in Section1 div so the named-section page setup
-                  // (declared in HEAD_CSS) applies the tight margins.
+                  // ragged right. Signature block matches the same multi-row
+                  // bold layout as the applicable-CARO export so Place sits
+                  // on the same line as Firm Regi.No and Date on the line
+                  // below it. All signature text is BOLD per template.
+                  const SIGTD = `style="vertical-align:top;font-weight:bold;"`;
+                  const blank = `<td ${SIGTD}>&nbsp;</td>`;
                   const html =
                     `<div class="Section1">` +
                     `<p style="font-family:${SERIF};font-size:11pt;line-height:1.4;` +
                     `text-align:left;margin:0 0 12pt 0;">${body}</p>` +
-                    `<table class="caro-sig" style="width:100%;margin-top:30pt;"><tr>` +
-                      `<td ${TD}>For, ${firmName}<br/>Chartered Accountants<br/>` +
-                      `Firm Regi.No.${firmFRN}</td>` +
-                      `<td ${TD}>Place :&nbsp;&nbsp;${place || '[Place]'}</td>` +
-                    `</tr><tr>` +
-                      `<td ${TD}>&nbsp;</td>` +
-                      `<td ${TD}>Date&nbsp;&nbsp;:&nbsp;&nbsp;${reportDateDocx}</td>` +
-                    `</tr><tr>` +
-                      `<td ${TD} class="partner">${partnerName}<br/>Partner<br/>` +
-                      `Membership No.${membershipNo}</td>` +
-                      `<td ${TD}>&nbsp;</td>` +
-                    `</tr></table>` +
+                    `<table class="caro-sig" style="width:100%;margin-top:30pt;">` +
+                      `<tr><td ${SIGTD}>For, ${firmName}</td>${blank}</tr>` +
+                      `<tr><td ${SIGTD}>Chartered Accountants</td>${blank}</tr>` +
+                      `<tr><td ${SIGTD}>Firm Regi.No.${firmFRN}</td>` +
+                        `<td ${SIGTD}>Place :&nbsp;&nbsp;${place || '[Place]'}</td></tr>` +
+                      `<tr>${blank}` +
+                        `<td ${SIGTD}>Date&nbsp;&nbsp;:&nbsp;&nbsp;${reportDateDocx}</td></tr>` +
+                      `<tr><td ${SIGTD} style="height:18pt;">&nbsp;</td>${blank}</tr>` +
+                      `<tr><td ${SIGTD}>${partnerName}</td>${blank}</tr>` +
+                      `<tr><td ${SIGTD}>Partner</td>${blank}</tr>` +
+                      `<tr><td ${SIGTD}>Membership No.${membershipNo}</td>${blank}</tr>` +
+                    `</table>` +
                     `</div>`;
                   exportToWord(
                     html,
@@ -1046,24 +1049,33 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                 // second of two inline style attributes, so we can't put
                 // it inline alongside vertical-align).
                 const TD = `style="vertical-align:top;"`;
-                // Template label spacing (verbatim):
-                //   "Place :  Ahmedabad"  → 1 space before colon, 2 spaces after
-                //   "Date  :  XX.XX.20XX" → 2 spaces before colon (aligns the
-                //                            colon under "Place :"), 2 spaces after
-                // Date value is formatted DD.MM.YYYY per template.
+                // Template signature block layout (per user screenshot):
+                //   Row 1: For, [Firm]                        | (empty)
+                //   Row 2: Chartered Accountants              | (empty)
+                //   Row 3: Firm Regi.No.[FRN]                 | Place : [city]
+                //   Row 4: (empty)                            | Date  : [date]
+                //   Row 5: (spacer)                           | (spacer)
+                //   Row 6: [Partner Name]                     | (empty)
+                //   Row 7: Partner                            | (empty)
+                //   Row 8: Membership No.[No]                 | (empty)
+                // All cells render BOLD (template is fully bold).
+                // Each line gets its own row so Place lands on the same
+                // line as Firm Regi.No and Date on the line below it.
+                const SIGTD = `style="vertical-align:top;font-weight:bold;"`;
+                const blank = `<td ${SIGTD}>&nbsp;</td>`;
                 html +=
-                  `<table class="caro-sig" style="width:100%;margin-top:30pt;"><tr>` +
-                    `<td ${TD}>For, ${firmName}<br/>Chartered Accountants<br/>` +
-                    `Firm Regi.No.${firmFRN}</td>` +
-                    `<td ${TD}>Place :&nbsp;&nbsp;${place || "[Place]"}</td>` +
-                  `</tr><tr>` +
-                    `<td ${TD}>&nbsp;</td>` +
-                    `<td ${TD}>Date&nbsp;&nbsp;:&nbsp;&nbsp;${reportDateDocx}</td>` +
-                  `</tr><tr>` +
-                    `<td ${TD} class="partner">${partnerName}<br/>Partner<br/>` +
-                    `Membership No.${membershipNo}</td>` +
-                    `<td ${TD}>&nbsp;</td>` +
-                  `</tr></table>` +
+                  `<table class="caro-sig" style="width:100%;margin-top:30pt;">` +
+                    `<tr><td ${SIGTD}>For, ${firmName}</td>${blank}</tr>` +
+                    `<tr><td ${SIGTD}>Chartered Accountants</td>${blank}</tr>` +
+                    `<tr><td ${SIGTD}>Firm Regi.No.${firmFRN}</td>` +
+                      `<td ${SIGTD}>Place :&nbsp;&nbsp;${place || "[Place]"}</td></tr>` +
+                    `<tr>${blank}` +
+                      `<td ${SIGTD}>Date&nbsp;&nbsp;:&nbsp;&nbsp;${reportDateDocx}</td></tr>` +
+                    `<tr><td ${SIGTD} style="height:18pt;">&nbsp;</td>${blank}</tr>` +
+                    `<tr><td ${SIGTD}>${partnerName}</td>${blank}</tr>` +
+                    `<tr><td ${SIGTD}>Partner</td>${blank}</tr>` +
+                    `<tr><td ${SIGTD}>Membership No.${membershipNo}</td>${blank}</tr>` +
+                  `</table>` +
                   // Close the Section1 div opened at the top
                   `</div>`;
                 exportToWord(
