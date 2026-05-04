@@ -613,9 +613,9 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   const SERIF = "'Times New Roman', Times, serif";
                   const TD = `style="vertical-align:top;"`;
                   const HEAD_CSS = `
-                    @page Section1 { size: A4; margin: 1.2cm 0.8cm 1.5cm 0.8cm; mso-header-margin: 0; mso-footer-margin: 0; }
+                    @page Section1 { size: A4; margin: 1.2cm 0.8cm 1.5cm 1.5cm; mso-header-margin: 0; mso-footer-margin: 0; }
                     div.Section1 { page: Section1; }
-                    @page { size: A4; margin: 1.2cm 0.8cm 1.5cm 0.8cm; }
+                    @page { size: A4; margin: 1.2cm 0.8cm 1.5cm 1.5cm; }
                     html, body { margin: 0 !important; padding: 0 !important; }
                     body { font-family: ${SERIF}; font-size: 12pt; }
                     .caro-sig, .caro-sig tr, .caro-sig td {
@@ -808,10 +808,17 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                 //        Office's reliable page-setup directive. Word
                 //        ignores plain @page rules sometimes; the named
                 //        section is honoured.
+                // Page margins: left = 1.5cm so the negative text-indent
+                // (FIRST_STYLE -36pt) doesn't push the clause number "1."
+                // off the printable area. With the previous 0.8cm left
+                // margin Word clipped the leading "1." entirely. Right
+                // margin stays at 0.8cm so the content area is still wide
+                // enough (~18.7cm) to wrap clause 1's first line at
+                // "quantitative details" like the template.
                 const HEAD_CSS = `
-                  @page Section1 { size: A4; margin: 1.2cm 0.8cm 1.5cm 0.8cm; mso-header-margin: 0; mso-footer-margin: 0; }
+                  @page Section1 { size: A4; margin: 1.2cm 0.8cm 1.5cm 1.5cm; mso-header-margin: 0; mso-footer-margin: 0; }
                   div.Section1 { page: Section1; }
-                  @page { size: A4; margin: 1.2cm 0.8cm 1.5cm 0.8cm; }
+                  @page { size: A4; margin: 1.2cm 0.8cm 1.5cm 1.5cm; }
                   html, body { margin: 0 !important; padding: 0 !important; }
                   body { font-family: ${SERIF}; font-size: 12pt; }
                   .caro-sig, .caro-sig tr, .caro-sig td {
