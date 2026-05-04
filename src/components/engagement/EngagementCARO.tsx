@@ -124,22 +124,28 @@ b) The company has not made any preferential allotment or private placement of s
 b) During the year, no report under sub-section (12) of section 143 of the Companies Act, 2013 has been filed by auditors in Form ADT-4 as prescribed under Rule 13 of Companies (Audit and Auditors) Rules, 2014 with the Central Government.
 
 c) As represented to us by the management, there are no whistle blower complaints received by the Company during the year.`,
-  12: `The company is not a Nidhi Company as per the provisions of the Companies Act, 2013. Therefore, the requirement to report on clause 3(xii)(a)(b) and (c) is not applicable.`,
-  13: `According to the information and explanations given to us and based on our examinations of the records, related party transactions are in compliance with sections 177 and 188 of Companies Act, wherever applicable, the details of the same have been disclosed in the financial statements as required by applicable accounting standards.`,
-  14: `The company does not have an internal audit system and based on our examination, company does not require to have an internal audit system as per provisions of the Companies Act 2013. Accordingly, the reporting under Clause 3(xiv)(a) and (b) is not applicable.`,
-  15: `In our opinion and according to the information given to us, during the year the Company has not entered into any non-cash transactions with its directors or persons connected to its directors and hence reporting under clause 3(xv) is not applicable.`,
-  16: `(a) The company is not required to be registered under section 45-IA of the Reserve Bank of India Act, 1934.
+  12: `The company is not a Nidhi Company as per the provisions of the Companies Act, 2013. Therefore, the requirement to report on clause 3(xii)(a) (b) and (c) of the order is not applicable to the Company.`,
+  // Template typo "examinations or the records" preserved verbatim ("or" should be "of")
+  13: `According to the information and explanations given to us and based on our examinations or the records of the company, related parties transactions are in compliance with sections 177 and 188 of Companies Act, where ever applicable, the details of the same have been disclosed in the financial statements etc., as required by the applicable accounting standards;`,
+  // Template typo "does not required" preserved verbatim
+  14: `The company does not have an internal audit system and based on our examination, company does not required to have an internal audit system as per provisions of the Companies Act 2013. Accordingly, the reporting under Clause 3(xiv)(a) and (b) of the order is not applicable to the Company.`,
+  15: `In our opinion and according to the information and explanations given to us, during the year the Company has not entered into any non-cash transactions with its directors or persons connected to its directors and hence reporting under clause 3(xv) of the order is not applicable to the Company.`,
+  // Clause 16 uses "a)/b)/c)/d)" without opening paren; template (c) uses
+  // lowercase "Core investment Company"; template (b) writes "financial /housing"
+  // without a space after the slash.
+  16: `a) The company is not required to be registered under section 45-IA of the Reserve Bank of India Act, 1934. Accordingly, the reporting under Clause 3(xvi)(a) of the order is not applicable to the Company.
 
-(b) The company has not conducted non-banking financial / housing finance activities during the year.
+b) The company has not conducted non-banking financial /housing finance activities during the year. Accordingly, the reporting under Clause 3(xvi)(b) of the order is not applicable to the company.
 
-(c) The company is not a Core Investment Company (CIC) as defined in the regulations made by the Reserve Bank of India.
+c) The company is not a Core investment Company (CIC) as defined in the regulations made by the Reserve Bank of India. Accordingly, the reporting under Clause 3(xvi)(c) of the order is not applicable to the Company.
 
-(d) There is no Core Investment Company as part of the Group.`,
+d) There is no Core Investment Company as a part of the Group, hence, the requirement to report on clause 3(xvi)(d) of the order is not applicable to the company.`,
   17: `The company has not incurred cash losses in the financial year and in the immediately preceding financial year, this para is not applicable.`,
   18: `There has been no resignation of the statutory auditors during the year.`,
-  19: `On the basis of the financial ratios disclosed in the financial Statements, ageing and expected dates of realization of financial assets and payment of financial liabilities, and based on our examination of the evidence supporting the assumptions, nothing has come to our attention which causes us to believe that any material uncertainty exists as on the date of the audit report that Company is not capable of meeting its liabilities existing at the date of balance sheet as and when they fall due within a period of one year from the balance sheet date. We, however, state that this is not an assurance as to the future viability of the company.`,
-  20: `According to the information and explanations given to us, the company does not fulfil the criteria as specified under section 135(1) of the Act and accordingly reporting under clause 3(xx) is not applicable.`,
-  21: `The reporting under Clause 3(xxi) is not applicable in respect of audit of standalone financial statements. Accordingly, this clause is not applicable to the company.`,
+  // Template typo "labilities" (should be "liabilities") preserved verbatim
+  19: `On the basis of the financial ratios disclosed in the financial Statements, ageing and expected dates of realization of financial assets and payment of financial labilities, other information accompanying the financial Statements, our knowledge of the Board of Directors and management plans and based on our examination of the evidence supporting the assumptions, nothing has come to our attention, which causes us to believe that any material uncertainty exists as on the date of the audit report that Company is not capable of meeting its liabilities existing at the date of balance sheet as and when they fall due within a period of one year from the balance sheet date. We, however, state that this is not an assurance as to the future viability of the company. We further state that our reporting is based on the facts up to the date of the audit report and we neither give any guarantee nor any assurance that all liabilities falling due within a period of one year from the balance sheet date, will get discharged by the Company as and when they fall due.`,
+  20: `According to the information and explanations given to us, the company does not fulfil the criteria as specified under section 135(1) of the Act read with the Companies (Corporate Social Responsibility Policy) Rules, 2014 and accordingly reporting under clause 3(xx) of the order is not applicable to the company.`,
+  21: `The reporting under Clause 3(xxi) of the order is not applicable in respect of audit of standalone financial statements. Accordingly, this clause is not applicable to the company.`,
 };
 
 // ─── Default intro text for CARO = Yes (verbatim from CARO word file) ────────
@@ -863,7 +869,63 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     .replace(/\(b\) During the year, no report under sub-section/g,
                              "b) During the year, no report under sub-section")
                     .replace(/\(c\) As represented to us by the management, there are no whistle blower/g,
-                             "c) As represented to us by the management, there are no whistle blower");
+                             "c) As represented to us by the management, there are no whistle blower")
+                    // Clause 12
+                    .replace(
+                      /clause 3\(xii\)\(a\)\(b\) and \(c\) is not applicable\./g,
+                      "clause 3(xii)(a) (b) and (c) of the order is not applicable to the Company.",
+                    )
+                    // Clause 13
+                    .replace(
+                      /based on our examinations of the records, related party transactions are in compliance with sections 177 and 188 of Companies Act, wherever applicable, the details of the same have been disclosed in the financial statements as required by applicable accounting standards\./g,
+                      "based on our examinations or the records of the company, related parties transactions are in compliance with sections 177 and 188 of Companies Act, where ever applicable, the details of the same have been disclosed in the financial statements etc., as required by the applicable accounting standards;",
+                    )
+                    // Clause 14
+                    .replace(
+                      /company does not require to have an internal audit system as per provisions of the Companies Act 2013\. Accordingly, the reporting under Clause 3\(xiv\)\(a\) and \(b\) is not applicable\./g,
+                      "company does not required to have an internal audit system as per provisions of the Companies Act 2013. Accordingly, the reporting under Clause 3(xiv)(a) and (b) of the order is not applicable to the Company.",
+                    )
+                    // Clause 15
+                    .replace(
+                      /In our opinion and according to the information given to us, during the year the Company has not entered into any non-cash transactions with its directors or persons connected to its directors and hence reporting under clause 3\(xv\) is not applicable\./g,
+                      "In our opinion and according to the information and explanations given to us, during the year the Company has not entered into any non-cash transactions with its directors or persons connected to its directors and hence reporting under clause 3(xv) of the order is not applicable to the Company.",
+                    )
+                    // Clause 16: drop opening parens, fix wording, append "Accordingly..." sentences
+                    .replace(
+                      /\(a\) The company is not required to be registered under section 45-IA of the Reserve Bank of India Act, 1934\.(?!\s+Accordingly)/g,
+                      "a) The company is not required to be registered under section 45-IA of the Reserve Bank of India Act, 1934. Accordingly, the reporting under Clause 3(xvi)(a) of the order is not applicable to the Company.",
+                    )
+                    .replace(
+                      /\(b\) The company has not conducted non-banking financial \/ housing finance activities during the year\.(?!\s+Accordingly)/g,
+                      "b) The company has not conducted non-banking financial /housing finance activities during the year. Accordingly, the reporting under Clause 3(xvi)(b) of the order is not applicable to the company.",
+                    )
+                    .replace(
+                      /\(c\) The company is not a Core Investment Company \(CIC\) as defined in the regulations made by the Reserve Bank of India\.(?!\s+Accordingly)/g,
+                      "c) The company is not a Core investment Company (CIC) as defined in the regulations made by the Reserve Bank of India. Accordingly, the reporting under Clause 3(xvi)(c) of the order is not applicable to the Company.",
+                    )
+                    .replace(
+                      /\(d\) There is no Core Investment Company as part of the Group\.(?!\s+hence)/g,
+                      "d) There is no Core Investment Company as a part of the Group, hence, the requirement to report on clause 3(xvi)(d) of the order is not applicable to the company.",
+                    )
+                    // Clause 19: insert template's longer wording + typo
+                    .replace(
+                      /payment of financial liabilities, and based on our examination/g,
+                      "payment of financial labilities, other information accompanying the financial Statements, our knowledge of the Board of Directors and management plans and based on our examination",
+                    )
+                    .replace(
+                      /not an assurance as to the future viability of the company\.$/g,
+                      "not an assurance as to the future viability of the company. We further state that our reporting is based on the facts up to the date of the audit report and we neither give any guarantee nor any assurance that all liabilities falling due within a period of one year from the balance sheet date, will get discharged by the Company as and when they fall due.",
+                    )
+                    // Clause 20: insert "read with the Companies..." + "of the order...to the company"
+                    .replace(
+                      /the company does not fulfil the criteria as specified under section 135\(1\) of the Act and accordingly reporting under clause 3\(xx\) is not applicable\./g,
+                      "the company does not fulfil the criteria as specified under section 135(1) of the Act read with the Companies (Corporate Social Responsibility Policy) Rules, 2014 and accordingly reporting under clause 3(xx) of the order is not applicable to the company.",
+                    )
+                    // Clause 21
+                    .replace(
+                      /The reporting under Clause 3\(xxi\) is not applicable in respect of audit of standalone financial statements\./g,
+                      "The reporting under Clause 3(xxi) of the order is not applicable in respect of audit of standalone financial statements.",
+                    );
                 rows.forEach(r => {
                   if (!r.is_applicable) {
                     const reason = r.inapplicability_reason
