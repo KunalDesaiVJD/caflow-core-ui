@@ -200,7 +200,7 @@ async function loadLogoBase64(url: string): Promise<string | null> {
 function ClientLedgerView() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const [clients, setClients] = useState<{ id: string; name: string; email?: string | null; extra_emails?: string[] | null }[]>([]);
+  const [clients, setClients] = useState<{ id: string; name: string; email?: string | null; compliance_flags?: Record<string, any> | null }[]>([]);
   const [firms, setFirms] = useState<{ id: string; name: string; logo_url?: string; legal_name_changes?: LegalNameChange[] | null }[]>([]);
   const [clientId, setClientId] = useState("");
   const [firmId, setFirmId] = useState("");
@@ -225,14 +225,15 @@ function ClientLedgerView() {
     if (!c) return [];
     const arr: string[] = [];
     if (c.email) arr.push(c.email);
-    if (Array.isArray(c.extra_emails)) c.extra_emails.forEach(e => { if (e && !arr.includes(e)) arr.push(e); });
+    const extra = Array.isArray((c.compliance_flags as any)?.extra_emails) ? (c.compliance_flags as any).extra_emails as string[] : [];
+    extra.forEach(e => { if (e && !arr.includes(e)) arr.push(e); });
     return arr;
   }, [clients, clientId]);
 
   useEffect(() => {
     (async () => {
       const [{ data: c }, { data: f }] = await Promise.all([
-        supabase.from("clients").select("id, name, email, extra_emails").eq("is_draft", false).is("deleted_at", null).order("name"),
+        supabase.from("clients").select("id, name, email, compliance_flags").eq("is_draft", false).is("deleted_at", null).order("name"),
         supabase.from("firms").select("id, name, logo_url, legal_name_changes").order("name"),
       ]);
       setClients(c || []);

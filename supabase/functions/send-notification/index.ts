@@ -472,6 +472,8 @@ async function sendToRecipient(
           to: toEmail,
           subject: customSubject || payload.custom_subject || subjects[type],
           ...(ccList.length > 0 ? { cc: ccList.join(", ") } : {}),
+          ...(payload.custom_message ? { body: payload.custom_message } : {}),
+          ...(r.error ? { error: r.error } : {}),
         },
         status: r.success ? "sent" : "failed",
         provider_id: r.providerId || null,

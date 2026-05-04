@@ -326,7 +326,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     if (firmFilter !== "all") iQuery = iQuery.eq("firm_id", firmFilter);
     const { data: invData } = await iQuery;
 
-    let cQuery = supabase.from("clients").select("id, name, entity_type, email, mobile, extra_emails, responsible_person_id").eq("is_draft", false).is("deleted_at", null);
+    let cQuery = supabase.from("clients").select("id, name, entity_type, email, mobile, compliance_flags, responsible_person_id").eq("is_draft", false).is("deleted_at", null);
     if (!isSuperadmin && firmId) cQuery = cQuery.eq("firm_id", firmId);
     const { data: clientData } = await cQuery;
 
@@ -338,10 +338,10 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     const { data: usersData } = await usersQuery;
 
     const cMap: ClientMap = {};
-    const cdMap: Record<string, { email: string | null; mobile: string | null; extra_emails?: string[] | null; responsible_person_id: string | null }> = {};
+    const cdMap: Record<string, { email: string | null; mobile: string | null; compliance_flags?: Record<string, any> | null; responsible_person_id: string | null }> = {};
     (clientData || []).forEach((c: any) => {
       cMap[c.id] = { name: c.name || "Unknown", entity_type: c.entity_type };
-      cdMap[c.id] = { email: c.email, mobile: c.mobile, extra_emails: c.extra_emails, responsible_person_id: c.responsible_person_id };
+      cdMap[c.id] = { email: c.email, mobile: c.mobile, compliance_flags: c.compliance_flags, responsible_person_id: c.responsible_person_id };
     });
     setClientDetailsMap(cdMap);
 
@@ -473,7 +473,11 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     if (!d) return [];
     const arr: string[] = [];
     if (d.email) arr.push(d.email);
-    if (Array.isArray(d.extra_emails)) d.extra_emails.forEach(e => { if (e && !arr.includes(e)) arr.push(e); });
+    // Extra emails stored in compliance_flags.extra_emails (workaround: extra_emails column not in production)
+    const extra = Array.isArray((d.compliance_flags as any)?.extra_emails)
+      ? (d.compliance_flags as any).extra_emails as string[]
+      : [];
+    extra.forEach(e => { if (e && !arr.includes(e)) arr.push(e); });
     return arr;
   };
 
@@ -931,7 +935,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
   const colCount = documentType === "quotation_proforma" ? 10 : 9;
 
   const renderInvoiceRow = (inv: Invoice & { effectiveStatus: string }) => {
-    const clientName = clientMap[inv.client_id || ""]?.name || "—";
+    const clientName = clientMap[inv.client_id || ""]?.name || (inv as any).to_name || "—";
     const firmName = firmMap[inv.firm_id || ""] || "—";
     const total = inv.total_amount || (inv.amount || 0) + (inv.gst_amount || 0);
     return (
