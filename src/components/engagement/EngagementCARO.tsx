@@ -828,16 +828,25 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     line-height: 1.4 !important;
                   }
                   .caro-clause { width: 100% !important; border-collapse: collapse !important; margin: 0 0 8pt 0 !important; }
-                  /* 2-column layout (num | body): clause number column
-                     shrinks to fit; body cell holds the inline sub-letter
-                     prefix + body text + wrapped lines. Per user — "every
-                     paragraph in same left side margin" — every body cell
-                     uses the SAME zero left-padding, so all sub-letters
-                     ("(a)" / "(b)" / "(c)" / "(B)" alike) and all
-                     wrapped body sentences align at the identical left
-                     margin column. */
+                  /* 3-column layout per template screenshot:
+                     - num: clause number "1." / "2." / "3." — shrinks
+                            to fit (~18pt).
+                     - sl:  sub-letter "(a)" / "(b)" / "(c)" — fixed
+                            36pt so all sub-letters across all clauses
+                            align in a vertical column. "(a) (A)"
+                            (multi) also fits within this width.
+                     - sl.subsub: sub-sub-letters "(A)" / "(B)" get
+                            +14pt left-padding so they sit deeper than
+                            letter-level "(b)" / "(c)".
+                     - bd:  body text — wraps INSIDE its own column,
+                            so wrapped lines auto-align at the body
+                            column edge (same column as the first body
+                            line of that row). Hanging-indent feel
+                            without text-indent gymnastics. */
                   .caro-clause td.num { width: 1% !important; padding-right: 2pt !important; white-space: nowrap !important; }
-                  .caro-clause td.bd  { padding-left: 0 !important; padding-bottom: 6pt !important; }
+                  .caro-clause td.sl  { width: 36pt !important; padding-right: 4pt !important; white-space: nowrap !important; }
+                  .caro-clause td.sl.subsub { padding-left: 14pt !important; }
+                  .caro-clause td.bd  { padding-bottom: 6pt !important; }
                   .caro-sig, .caro-sig tr, .caro-sig td {
                     border: none !important;
                     padding: 0 !important;
@@ -1023,40 +1032,43 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   // No sub-letter prefix — clause body is bare prose.
                   return { sl: "", body: chunk, isSubSub: false };
                 };
-                // Per user — "every paragraph in same left side margin"
-                // — render every clause line as a single paragraph that
-                // starts at column 0 of the page content area. The first
-                // paragraph carries "N.  (a) (A) body…"; subsequent
-                // sub-letter paragraphs start with the bare sub-letter
-                // ("(B)…", "(b)…", etc.) — both at the SAME left margin.
-                // Wrapped lines in any paragraph wrap back to column 0 of
-                // the same paragraph, so every wrapped sentence also
-                // shares that left margin.
-                const PARA_STYLE =
-                  `font-family:${SERIF};font-size:11pt;line-height:1.4;` +
-                  `text-align:left;margin:0 0 6pt 0;padding:0;`;
+                // Render each clause as a 3-column borderless table.
+                // num | sl | body — see HEAD_CSS for column widths.
+                // Sub-letter "(a)/(b)/(c)" sits in col 2 vertically
+                // aligned across all rows of the clause; "(B)" gets
+                // .subsub class for extra left-padding (deeper than
+                // letter-level). Body wraps inside its own column.
                 rows.forEach(r => {
                   const raw = r.is_applicable
                     ? wordingFix(yearSub(r.user_response || r.auto_draft || ""))
                     : `Not Applicable${r.inapplicability_reason ? ` — ${r.inapplicability_reason}` : ""}`;
                   const chunks = raw.split(/\n{2,}/);
+                  let tableRows = "";
                   chunks.forEach((chunk, idx) => {
                     const { sl, body, isSubSub } = splitChunk(chunk);
-                    void isSubSub;
+                    // Empty num cells use &nbsp; so the column reserves
+                    // the same width as the populated row 0 — keeps
+                    // sub-letters aligned vertically across rows.
+                    const numCell = idx === 0 ? `${r.clause_number}.` : "&nbsp;";
                     const bodyHtml = body.replace(/\n/g, "<br/>");
-                    // First chunk: prefix with clause number "N." +
-                    // (sub-letter if any) + body, all on one line.
-                    // Subsequent chunks: just sub-letter + body.
-                    let line: string;
-                    if (idx === 0) {
-                      line = sl
-                        ? `${r.clause_number}. ${sl} ${bodyHtml}`
-                        : `${r.clause_number}. ${bodyHtml}`;
+                    if (sl) {
+                      const slClass = isSubSub ? "sl subsub" : "sl";
+                      tableRows += `<tr>` +
+                        `<td class="num">${numCell}</td>` +
+                        `<td class="${slClass}">${sl}</td>` +
+                        `<td class="bd">${bodyHtml}</td>` +
+                      `</tr>`;
                     } else {
-                      line = sl ? `${sl} ${bodyHtml}` : bodyHtml;
+                      // No sub-letter (clauses 3, 4, 5, 6, 8, 12-15,
+                      // 17-21) — body spans sl + bd columns so prose
+                      // starts right after the clause number.
+                      tableRows += `<tr>` +
+                        `<td class="num">${numCell}</td>` +
+                        `<td class="bd" colspan="2">${bodyHtml}</td>` +
+                      `</tr>`;
                     }
-                    html += `<p style="${PARA_STYLE}">${line}</p>`;
                   });
+                  html += `<table class="caro-clause">${tableRows}</table>`;
                 });
 
                 // Signature block — class on the partner-row TD so its
