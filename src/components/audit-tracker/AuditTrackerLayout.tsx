@@ -53,10 +53,6 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
   // ── Audit Status: FY selector ──────────────────────────────────────────────
   const [selectedFY, setSelectedFY] = useState(DEFAULT_FY);
 
-  // Issue 2: dropdown is FY-scoped — show clients flagged audit-applicable for
-  // selectedFY in Edit Client → Audit Setup, plus those with an active
-  // engagement for selectedFY. Without this, freshly flagged clients never
-  // appear in the picker because they don't have an engagement yet.
   const { clients } = useClients(firmId, isSuperadmin, selectedFY);
 
   // ── Audit Status client filter ─────────────────────────────────────────────
@@ -81,6 +77,42 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
+  // Planning Calendar card — rendered either inline or as a fullscreen overlay
+  const planningCalendarCard = (
+    <div className={calMaximized
+      ? "fixed inset-0 z-50 bg-background flex flex-col"
+      : "rounded-lg border bg-card shadow-sm overflow-hidden"
+    }>
+      <div className="flex items-center justify-between px-3 py-2 border-b bg-muted/30 shrink-0">
+        <span className="text-xs font-semibold tracking-wide">Planning Calendar</span>
+        <Button
+          variant="ghost" size="sm"
+          className="h-6 w-6 p-0"
+          title={calMaximized ? "Restore" : "Maximize (fit to screen)"}
+          onClick={() => setCalMaximized(v => !v)}
+        >
+          {calMaximized ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+        </Button>
+      </div>
+      <div className={calMaximized ? "flex-1 overflow-auto p-2" : ""}>
+        <PlanningCalendar
+          entries={entries}
+          loading={loading}
+          clients={clients}
+          users={users}
+          planningStaff={planningStaff}
+          isSuperadmin={isSuperadmin}
+          onAddEntry={handleAdd}
+          onUpdateEntry={handleUpdate}
+          onDeleteEntry={handleDelete}
+          onAddStaff={addStaff}
+          onRemoveStaff={removeStaff}
+          onReorderStaff={reorderStaff}
+        />
+      </div>
+    </div>
+  );
+
   return (
     <div className="space-y-4">
       <Tabs defaultValue="planning">
@@ -96,7 +128,10 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
         {/* ── Tab 1: Planning & Communication ── */}
         <TabsContent value="planning" className="mt-4 space-y-4">
 
-          {/* Communication Log section */}
+          {/* Planning Calendar — FIRST as requested; fullscreen overlay when maximized */}
+          {!commMaximized && planningCalendarCard}
+
+          {/* Communication Log — AFTER Planning Calendar */}
           {!calMaximized && (
             <div className="rounded-lg border bg-card shadow-sm overflow-hidden">
               <div className="flex items-center justify-between px-3 py-2 border-b bg-muted/30">
@@ -118,38 +153,6 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
                   onAdd={addComm}
                   onUpdate={updateComm}
                   onRemove={removeComm}
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Planning Calendar section */}
-          {!commMaximized && (
-            <div className="rounded-lg border bg-card shadow-sm overflow-hidden">
-              <div className="flex items-center justify-between px-3 py-2 border-b bg-muted/30">
-                <span className="text-xs font-semibold tracking-wide">Planning Calendar</span>
-                <Button
-                  variant="ghost" size="sm"
-                  className="h-6 w-6 p-0"
-                  title={calMaximized ? "Restore" : "Maximize"}
-                  onClick={() => setCalMaximized(v => !v)}
-                >
-                  {calMaximized ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
-                </Button>
-              </div>
-              <div className={calMaximized ? "max-h-[calc(100vh-180px)] overflow-y-auto" : ""}>
-                <PlanningCalendar
-                  entries={entries}
-                  loading={loading}
-                  clients={clients}
-                  users={users}
-                  planningStaff={planningStaff}
-                  onAddEntry={handleAdd}
-                  onUpdateEntry={handleUpdate}
-                  onDeleteEntry={handleDelete}
-                  onAddStaff={addStaff}
-                  onRemoveStaff={removeStaff}
-                  onReorderStaff={reorderStaff}
                 />
               </div>
             </div>

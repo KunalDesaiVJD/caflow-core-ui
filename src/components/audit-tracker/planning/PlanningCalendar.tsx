@@ -15,6 +15,9 @@
 import { useState, useMemo, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import { ChevronLeft, ChevronRight, Plus, Calendar, AlignJustify, UserPlus, X as XIcon, Search, Filter } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { PlanEntry } from "../hooks/useAuditPlanning";
@@ -115,18 +118,22 @@ interface CellProps {
   dateISO:   string;
   employee:  UserOption;
   entries:   PlanEntry[];
+  isSunday:  boolean;
   onClick:   (dateISO: string, emp: UserOption, entry: PlanEntry | null) => void;
 }
 
 /** CP-08: All entries stacked vertically. Click chip → edit; click empty area → create new. */
-function CalCell({ dateISO, employee, entries, onClick }: CellProps) {
+function CalCell({ dateISO, employee, entries, isSunday, onClick }: CellProps) {
   const hits = cellEntries(entries, dateISO, employee.id);
 
   if (hits.length === 0) {
     return (
       <td
         onClick={() => onClick(dateISO, employee, null)}
-        className="border border-border/60 w-[90px] min-w-[90px] h-8 cursor-pointer hover:bg-indigo-50/40 transition-colors"
+        className={cn(
+          "border border-border/60 w-[90px] min-w-[90px] h-8 cursor-pointer transition-colors",
+          isSunday ? "bg-red-50/70 hover:bg-red-100/60" : "hover:bg-indigo-50/40"
+        )}
       />
     );
   }
@@ -134,7 +141,10 @@ function CalCell({ dateISO, employee, entries, onClick }: CellProps) {
   return (
     <td
       onClick={() => onClick(dateISO, employee, null)}
-      className="border border-border/60 w-[90px] min-w-[90px] max-w-[90px] p-[2px] cursor-pointer align-top hover:bg-muted/10 transition-colors overflow-hidden"
+      className={cn(
+        "border border-border/60 w-[90px] min-w-[90px] max-w-[90px] p-[2px] cursor-pointer align-top transition-colors overflow-hidden",
+        isSunday ? "bg-red-50/70 hover:bg-red-100/60" : "hover:bg-muted/10"
+      )}
     >
       <div className="space-y-[2px] w-full max-w-full overflow-hidden">
         {hits.map(entry => {
@@ -165,14 +175,17 @@ function CalCell({ dateISO, employee, entries, onClick }: CellProps) {
 // ─── Week-view cell (taller, shows date range info) ──────────────────────────
 
 /** CP-08: All entries stacked in week view too — each card: client name + date range label. */
-function WeekCell({ dateISO, employee, entries, onClick }: CellProps) {
+function WeekCell({ dateISO, employee, entries, isSunday, onClick }: CellProps) {
   const hits = cellEntries(entries, dateISO, employee.id);
 
   if (hits.length === 0) {
     return (
       <td
         onClick={() => onClick(dateISO, employee, null)}
-        className="border border-border/60 w-[90px] min-w-[90px] h-16 cursor-pointer hover:bg-indigo-50/40 transition-colors align-top p-1"
+        className={cn(
+          "border border-border/60 w-[90px] min-w-[90px] h-16 cursor-pointer transition-colors align-top p-1",
+          isSunday ? "bg-red-50/70 hover:bg-red-100/60" : "hover:bg-indigo-50/40"
+        )}
       />
     );
   }
@@ -180,7 +193,10 @@ function WeekCell({ dateISO, employee, entries, onClick }: CellProps) {
   return (
     <td
       onClick={() => onClick(dateISO, employee, null)}
-      className="border border-border/60 w-[90px] min-w-[90px] max-w-[90px] min-h-[64px] cursor-pointer p-1 align-top hover:bg-muted/10 transition-colors overflow-hidden"
+      className={cn(
+        "border border-border/60 w-[90px] min-w-[90px] max-w-[90px] min-h-[64px] cursor-pointer p-1 align-top transition-colors overflow-hidden",
+        isSunday ? "bg-red-50/70 hover:bg-red-100/60" : "hover:bg-muted/10"
+      )}
     >
       <div className="space-y-[3px] w-full max-w-full overflow-hidden">
         {hits.map(entry => {
@@ -215,6 +231,7 @@ interface Props {
   clients:          ClientOption[];
   users:            UserOption[];          // all firm users (for add-employee picker)
   planningStaff:    PlanningStaffMember[]; // only these show as calendar columns
+  isSuperadmin?:    boolean;
   onAddEntry:       (data: PlanSaveData) => Promise<void>;
   onUpdateEntry:    (id: string, data: Partial<PlanEntry>) => Promise<void>;
   onDeleteEntry:    (id: string) => Promise<void>;
@@ -227,6 +244,7 @@ interface Props {
 
 export default function PlanningCalendar({
   entries, loading, clients, users, planningStaff,
+  isSuperadmin,
   onAddEntry, onUpdateEntry, onDeleteEntry,
   onAddStaff, onRemoveStaff, onReorderStaff,
 }: Props) {
@@ -251,6 +269,18 @@ export default function PlanningCalendar({
   const [addEmpSearch,    setAddEmpSearch]    = useState("");
   const [addEmpOpen,      setAddEmpOpen]      = useState(false);
   const addEmpInputRef = useRef<HTMLInputElement>(null);
+
+  // ── Global client filter ────────────────────────────────────────────────────
+  const [globalClientFilter, setGlobalClientFilter] = useState<string>("__all__");
+
+  // All unique non-leave client names across all entries
+  const allClientNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const e of entries) {
+      if (e.client_name && !entryIsLeave(e)) names.add(e.client_name);
+    }
+    return Array.from(names).sort();
+  }, [entries]);
 
   // Users not yet in planningStaff
   const availableToAdd = useMemo(() =>
@@ -333,20 +363,35 @@ export default function PlanningCalendar({
     return weekDates(weekStart);
   }, [view, year, month, weekStart]);
 
-  // Filter dates based on per-column client filters
+  // Apply global client filter + per-column filters to dates
   const dates = useMemo<Date[]>(() => {
-    const activeFilters = Object.entries(columnFilters).filter(([, v]) => v.trim());
-    if (activeFilters.length === 0) return allDates;
-    return allDates.filter(date => {
+    let filtered = allDates;
+
+    // Global client filter
+    if (globalClientFilter !== "__all__") {
+      filtered = filtered.filter(date => {
+        const iso = toISO(date);
+        return entries.some(e =>
+          e.client_name === globalClientFilter &&
+          e.planned_from <= iso &&
+          e.planned_to   >= iso
+        );
+      });
+    }
+
+    // Per-column filters
+    const activeColFilters = Object.entries(columnFilters).filter(([, v]) => v.trim());
+    if (activeColFilters.length === 0) return filtered;
+    return filtered.filter(date => {
       const iso = toISO(date);
-      return activeFilters.every(([empId, filterVal]) => {
+      return activeColFilters.every(([empId, filterVal]) => {
         const hits = cellEntries(entries, iso, empId);
         return hits.some(e =>
           (e.client_name || "").toLowerCase().includes(filterVal.toLowerCase())
         );
       });
     });
-  }, [allDates, columnFilters, entries]);
+  }, [allDates, globalClientFilter, columnFilters, entries]);
 
   const todayISO = toISO(now);
 
@@ -420,8 +465,34 @@ export default function PlanningCalendar({
           </Button>
         </div>
 
-        {/* Right: view toggle + add new + add employee */}
+        {/* Right: global client filter + view toggle + add new + add employee */}
         <div className="flex items-center gap-1.5 flex-wrap">
+
+          {/* Global client filter */}
+          <div className="flex items-center gap-1">
+            <Filter size={12} className="text-muted-foreground shrink-0" />
+            <Select value={globalClientFilter} onValueChange={setGlobalClientFilter}>
+              <SelectTrigger className="h-8 text-xs w-[160px]">
+                <SelectValue placeholder="All clients" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__" className="text-xs text-muted-foreground">— All clients —</SelectItem>
+                {allClientNames.map(name => (
+                  <SelectItem key={name} value={name} className="text-xs">{name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {globalClientFilter !== "__all__" && (
+              <button
+                onClick={() => setGlobalClientFilter("__all__")}
+                className="text-amber-600 hover:text-amber-800"
+                title="Clear client filter"
+              >
+                <XIcon size={13} />
+              </button>
+            )}
+          </div>
+
           <Button size="sm" variant={view === "month" ? "default" : "outline"}
             className="h-8 text-xs gap-1" onClick={() => setView("month")}>
             <AlignJustify size={12} /> Month
@@ -520,13 +591,15 @@ export default function PlanningCalendar({
                     title={`${s.name} — drag to reorder`}>
                     <div className="flex items-center justify-center gap-1 mb-1">
                       <span className="truncate text-[11px]">{s.name.split(" ")[0].toUpperCase()}</span>
-                      <button
-                        onClick={() => onRemoveStaff(s.id)}
-                        title={`Remove ${s.name} from planning`}
-                        className="shrink-0 text-indigo-300 hover:text-red-300 transition-colors"
-                      >
-                        <XIcon size={10} />
-                      </button>
+                      {isSuperadmin && (
+                        <button
+                          onClick={() => onRemoveStaff(s.id)}
+                          title={`Remove ${s.name} from planning`}
+                          className="shrink-0 text-indigo-300 hover:text-red-300 transition-colors"
+                        >
+                          <XIcon size={10} />
+                        </button>
+                      )}
                     </div>
                     {/* Per-column client filter with dropdown */}
                     <div className="relative" onClick={e => e.stopPropagation()}>
@@ -600,21 +673,30 @@ export default function PlanningCalendar({
                 </tr>
               ) : (
                 dates.map(date => {
-                  const iso  = toISO(date);
-                  const isToday = iso === todayISO;
+                  const iso      = toISO(date);
+                  const isToday  = iso === todayISO;
+                  const isSunday = date.getDay() === 0;
                   const dayLabel = `${DAY_ABR[date.getDay()]} ${date.getDate()}`;
 
                   return (
-                    <tr key={iso} className={cn(isToday && "bg-indigo-50/40")}>
+                    <tr key={iso} className={cn(
+                      isToday  && "bg-indigo-50/40",
+                      isSunday && "bg-red-50/50",
+                    )}>
                       {/* Sticky date cell */}
                       <td className={cn(
                         "sticky left-0 z-10 border border-border/60 px-2 align-middle select-none",
                         view === "month" ? "h-8" : "h-16",
-                        isToday ? "bg-indigo-50 font-bold text-indigo-700" : "bg-card text-muted-foreground"
+                        isSunday  ? "bg-red-100 text-red-700 font-semibold"
+                        : isToday ? "bg-indigo-50 font-bold text-indigo-700"
+                                  : "bg-card text-muted-foreground"
                       )}>
                         <div className="flex items-center gap-1.5">
-                          {isToday && (
+                          {isToday && !isSunday && (
                             <span className="h-1.5 w-1.5 rounded-full bg-indigo-500 shrink-0" />
+                          )}
+                          {isSunday && (
+                            <span className="h-1.5 w-1.5 rounded-full bg-red-400 shrink-0" />
                           )}
                           <span className="text-[11px] whitespace-nowrap">{dayLabel}</span>
                         </div>
@@ -629,6 +711,7 @@ export default function PlanningCalendar({
                             dateISO={iso}
                             employee={emp}
                             entries={entries}
+                            isSunday={isSunday}
                             onClick={handleCellClick}
                           />
                         );
@@ -658,6 +741,7 @@ export default function PlanningCalendar({
         initialEmployeeName={dialogEmpName}
         clients={clients}
         users={users}
+        entries={entries}
         onSave={handleSave}
         onDelete={onDeleteEntry}
       />
