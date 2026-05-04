@@ -629,7 +629,8 @@ const NewClientWizard = () => {
       gstin_states,
       gstin_addresses,
       email: basicInfo.email || null,
-      extra_emails: (basicInfo.extra_emails || []).filter(e => e.trim()),
+      // extra_emails saved separately below — kept out of main payload so saves
+      // work even before the DB migration (20260504120000) has been applied.
       contact_person: advancedInfo.contact_person?.trim() || null,
       mobile: basicInfo.mobile || null,
       address: basicInfo.address || null,
@@ -646,6 +647,18 @@ const NewClientWizard = () => {
       is_active: true,
       updated_at: new Date().toISOString(),
     };
+  };
+
+  // Saves extra_emails after the main client row is safely written.
+  // Silently no-ops if the DB column doesn't exist yet (pre-migration).
+  const saveExtraEmails = async (targetClientId: string) => {
+    const emails = (basicInfo.extra_emails || []).filter(e => e.trim());
+    if (!emails.length && !targetClientId) return;
+    try {
+      await supabase.from("clients").update({ extra_emails: emails } as any).eq("id", targetClientId);
+    } catch (_) {
+      // Column not yet migrated — safe to ignore; primary email is already saved.
+    }
   };
 
   const saveServiceBillingData = async (targetClientId: string) => {
@@ -989,13 +1002,14 @@ const NewClientWizard = () => {
             gstin_states,
             gstin_addresses,
             email: basicInfo.email || null,
-            extra_emails: (basicInfo.extra_emails || []).filter(e => e.trim()),
             mobile: basicInfo.mobile || null,
             address: basicInfo.address || null,
             tan_number: basicInfo.tan_number || null,
           } as any)
           .eq("id", clientId);
         if (error) throw error;
+        // extra_emails — separate update, safe-fails if column not yet migrated
+        await saveExtraEmails(clientId);
         // Save group memberships
         await supabase.from("client_group_memberships").delete().eq("client_id", clientId);
         const groupIds = basicInfo.selectedGroupIds || [];
@@ -1104,6 +1118,9 @@ const NewClientWizard = () => {
 
       // 5-7. Services, packages, billing reminders
       await saveServiceBillingData(newId);
+
+      // extra_emails — saved after main row; safe-fails if column not yet migrated
+      await saveExtraEmails(newId);
 
       // 8. Group memberships
       const groupIds = basicInfo.selectedGroupIds || [];
