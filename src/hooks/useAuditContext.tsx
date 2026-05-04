@@ -45,7 +45,8 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
       .from("clients")
       .select("id, name, entity_type, statutory_audit_applicable, tax_audit_type")
       .eq("is_draft", false)
-      .is("deleted_at", null);
+      .is("deleted_at", null)
+      .neq("is_active", false);
 
     if (user?.firm_id) {
       engQuery = engQuery.eq("firm_id", user.firm_id);

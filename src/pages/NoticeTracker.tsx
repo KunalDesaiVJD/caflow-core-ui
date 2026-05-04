@@ -91,7 +91,7 @@ export default function NoticeTracker() {
   const { data: clients = [] } = useQuery({
     queryKey: ["clients_list"],
     queryFn: async () => {
-      const { data } = await supabase.from("clients").select("id, name").eq("is_draft", false).is("deleted_at", null).order("name");
+      const { data } = await supabase.from("clients").select("id, name").eq("is_draft", false).is("deleted_at", null).neq("is_active", false).order("name");
       return data || [];
     },
   });

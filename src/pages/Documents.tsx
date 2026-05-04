@@ -95,7 +95,7 @@ export default function Documents() {
 
   // Load clients
   useEffect(() => {
-    supabase.from("clients").select("id, name").eq("is_draft", false).is("deleted_at", null).order("name").then(({ data }) => {
+    supabase.from("clients").select("id, name").eq("is_draft", false).is("deleted_at", null).neq("is_active", false).order("name").then(({ data }) => {
       setClients((data as ClientOption[]) || []);
     });
   }, []);
