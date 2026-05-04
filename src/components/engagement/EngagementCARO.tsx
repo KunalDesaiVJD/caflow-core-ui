@@ -613,9 +613,9 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   const SERIF = "'Times New Roman', Times, serif";
                   const TD = `style="vertical-align:top;"`;
                   const HEAD_CSS = `
-                    @page Section1 { size: A4; margin: 1.2cm 1cm 1.5cm 2.2cm; mso-header-margin: 0; mso-footer-margin: 0; }
+                    @page Section1 { size: A4; margin: 1.2cm 1cm 1.5cm 1.5cm; mso-header-margin: 0; mso-footer-margin: 0; }
                     div.Section1 { page: Section1; }
-                    @page { size: A4; margin: 1.2cm 1cm 1.5cm 2.2cm; }
+                    @page { size: A4; margin: 1.2cm 1cm 1.5cm 1.5cm; }
                     html, body { margin: 0 !important; padding: 0 !important; }
                     body { font-family: ${SERIF}; font-size: 12pt; }
                     .caro-sig, .caro-sig tr, .caro-sig td {
@@ -793,19 +793,17 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                 //        Office's reliable page-setup directive. Word
                 //        ignores plain @page rules sometimes; the named
                 //        section is honoured.
-                // Page margins: left = 2.2cm so each line begins with a
-                // visible left whitespace band before the clause number
-                // "1." (per user — "maintain space before line is start").
-                // text-indent of -36pt is comfortably absorbed (2.2cm =
-                // ~62pt > 36pt), so "1." sits at ~26pt inside the
-                // printable area instead of right against the edge.
-                // Right margin stays at 1cm so the content area is still
-                // wide enough (~17.8cm) to fit the template's first-line
-                // wrap point ("quantitative details").
+                // Page margins: left = 1.5cm gives a clear whitespace band
+                // before the clause-number column. The 3-column TABLE
+                // layout (num | sl | body) doesn't rely on negative
+                // text-indent, so we don't need extra margin to absorb it.
+                // Right margin = 1cm. Total content area ~18.5cm, body
+                // column ~440pt — wide enough for clause 1's first line
+                // to wrap at "quantitative details" like the template.
                 const HEAD_CSS = `
-                  @page Section1 { size: A4; margin: 1.2cm 1cm 1.5cm 2.2cm; mso-header-margin: 0; mso-footer-margin: 0; }
+                  @page Section1 { size: A4; margin: 1.2cm 1cm 1.5cm 1.5cm; mso-header-margin: 0; mso-footer-margin: 0; }
                   div.Section1 { page: Section1; }
-                  @page { size: A4; margin: 1.2cm 1cm 1.5cm 2.2cm; }
+                  @page { size: A4; margin: 1.2cm 1cm 1.5cm 1.5cm; }
                   html, body { margin: 0 !important; padding: 0 !important; }
                   body { font-family: ${SERIF}; font-size: 12pt; }
                   /* Each clause is rendered as a 3-column borderless table:
@@ -823,8 +821,8 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   }
                   .caro-clause { width: 100% !important; border-collapse: collapse !important; margin: 0 0 8pt 0 !important; }
                   .caro-clause td.num { width: 28pt !important; }
-                  .caro-clause td.sl  { width: 50pt !important; padding-right: 4pt !important; }
-                  .caro-clause td.sl.subsub { padding-left: 22pt !important; }
+                  .caro-clause td.sl  { width: 36pt !important; padding-right: 4pt !important; }
+                  .caro-clause td.sl.subsub { padding-left: 18pt !important; }
                   .caro-clause td.bd  { padding-bottom: 6pt !important; }
                   .caro-sig, .caro-sig tr, .caro-sig td {
                     border: none !important;
@@ -1020,13 +1018,25 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   chunks.forEach((chunk, idx) => {
                     const { sl, body, isSubSub } = splitChunk(chunk);
                     const numCell = idx === 0 ? `${r.clause_number}.` : "";
-                    const slClass = isSubSub ? "sl subsub" : "sl";
                     const bodyHtml = body.replace(/\n/g, "<br/>");
-                    tableRows += `<tr>` +
-                      `<td class="num">${numCell}</td>` +
-                      `<td class="${slClass}">${sl}</td>` +
-                      `<td class="bd">${bodyHtml}</td>` +
-                    `</tr>`;
+                    if (sl) {
+                      // Sub-letter row: 3 cells (num | sl | body)
+                      const slClass = isSubSub ? "sl subsub" : "sl";
+                      tableRows += `<tr>` +
+                        `<td class="num">${numCell}</td>` +
+                        `<td class="${slClass}">${sl}</td>` +
+                        `<td class="bd">${bodyHtml}</td>` +
+                      `</tr>`;
+                    } else {
+                      // No sub-letter (e.g. clause 3 / 4 / 5 / 6 / 8 / 12 …
+                      // body starts right after the number). Span the
+                      // body across the sl + body columns so there's no
+                      // empty 36pt gap between number and prose.
+                      tableRows += `<tr>` +
+                        `<td class="num">${numCell}</td>` +
+                        `<td class="bd" colspan="2">${bodyHtml}</td>` +
+                      `</tr>`;
+                    }
                   });
                   html += `<table class="caro-clause">${tableRows}</table>`;
                 });
