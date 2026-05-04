@@ -828,25 +828,21 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     line-height: 1.4 !important;
                   }
                   .caro-clause { width: 100% !important; border-collapse: collapse !important; margin: 0 0 8pt 0 !important; }
-                  /* 3-column layout per template screenshot:
-                     - num: clause number "1." / "2." / "3." — shrinks
-                            to fit (~18pt).
-                     - sl:  sub-letter "(a)" / "(b)" / "(c)" — fixed
-                            36pt so all sub-letters across all clauses
-                            align in a vertical column. "(a) (A)"
-                            (multi) also fits within this width.
-                     - sl.subsub: sub-sub-letters "(A)" / "(B)" get
-                            +14pt left-padding so they sit deeper than
-                            letter-level "(b)" / "(c)".
-                     - bd:  body text — wraps INSIDE its own column,
-                            so wrapped lines auto-align at the body
-                            column edge (same column as the first body
-                            line of that row). Hanging-indent feel
-                            without text-indent gymnastics. */
-                  .caro-clause td.num { width: 1% !important; padding-right: 2pt !important; white-space: nowrap !important; }
-                  .caro-clause td.sl  { width: 36pt !important; padding-right: 4pt !important; white-space: nowrap !important; }
-                  .caro-clause td.sl.subsub { padding-left: 14pt !important; }
-                  .caro-clause td.bd  { padding-bottom: 6pt !important; }
+                  /* Each clause line is a <p> with per-row hanging
+                     indent — sub-letter and body separated by ONE
+                     regular space, wrapped lines align under the
+                     first body character. No table, no fixed sl
+                     column → no visible gap between short sub-letters
+                     like "(b)" and the body text. */
+                  .caro-clause-p {
+                    font-family: ${SERIF} !important;
+                    font-size: 11pt !important;
+                    line-height: 1.4 !important;
+                    text-align: left !important;
+                    margin: 0 0 6pt 0 !important;
+                    padding-left: 0 !important;
+                    text-indent: 0 !important;
+                  }
                   .caro-sig, .caro-sig tr, .caro-sig td {
                     border: none !important;
                     padding: 0 !important;
@@ -1032,43 +1028,51 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   // No sub-letter prefix — clause body is bare prose.
                   return { sl: "", body: chunk, isSubSub: false };
                 };
-                // Render each clause as a 3-column borderless table.
-                // num | sl | body — see HEAD_CSS for column widths.
-                // Sub-letter "(a)/(b)/(c)" sits in col 2 vertically
-                // aligned across all rows of the clause; "(B)" gets
-                // .subsub class for extra left-padding (deeper than
-                // letter-level). Body wraps inside its own column.
+                // Approximate visual width (pt) of a text prefix at
+                // 11pt Times New Roman. Used to compute per-row hanging
+                // indent so wrapped lines align under the first body
+                // character.
+                const pxWidth = (s: string): number => {
+                  let w = 0;
+                  for (const ch of s) {
+                    if (ch === "(" || ch === ")") w += 3;
+                    else if (ch === " " || ch === " ") w += 3;
+                    else if (ch === "." || ch === ",") w += 2.5;
+                    else w += 6;
+                  }
+                  return Math.round(w);
+                };
+                // Render each clause line as a <p> with per-row hanging
+                // indent. Single space between sub-letter and body.
+                // Wrapped lines align under the first body character.
                 rows.forEach(r => {
                   const raw = r.is_applicable
                     ? wordingFix(yearSub(r.user_response || r.auto_draft || ""))
                     : `Not Applicable${r.inapplicability_reason ? ` — ${r.inapplicability_reason}` : ""}`;
                   const chunks = raw.split(/\n{2,}/);
-                  let tableRows = "";
                   chunks.forEach((chunk, idx) => {
                     const { sl, body, isSubSub } = splitChunk(chunk);
-                    // Empty num cells use &nbsp; so the column reserves
-                    // the same width as the populated row 0 — keeps
-                    // sub-letters aligned vertically across rows.
-                    const numCell = idx === 0 ? `${r.clause_number}.` : "&nbsp;";
                     const bodyHtml = body.replace(/\n/g, "<br/>");
-                    if (sl) {
-                      const slClass = isSubSub ? "sl subsub" : "sl";
-                      tableRows += `<tr>` +
-                        `<td class="num">${numCell}</td>` +
-                        `<td class="${slClass}">${sl}</td>` +
-                        `<td class="bd">${bodyHtml}</td>` +
-                      `</tr>`;
-                    } else {
-                      // No sub-letter (clauses 3, 4, 5, 6, 8, 12-15,
-                      // 17-21) — body spans sl + bd columns so prose
-                      // starts right after the clause number.
-                      tableRows += `<tr>` +
-                        `<td class="num">${numCell}</td>` +
-                        `<td class="bd" colspan="2">${bodyHtml}</td>` +
-                      `</tr>`;
-                    }
+                    // Build the prefix that appears before the body text
+                    // — clause number on row 0, sub-letter on every row.
+                    const numPrefix = idx === 0 ? `${r.clause_number}. ` : "";
+                    const slPrefix  = sl ? `${sl} ` : "";
+                    const fullPrefix = numPrefix + slPrefix;
+                    // Hanging indent = visual width of the prefix.
+                    // First line starts at col 0 of the paragraph; wrap
+                    // aligns at the prefix width — so wrapped text sits
+                    // exactly under the first body character.
+                    const hang = pxWidth(fullPrefix);
+                    // Sub-sub-letter rows ("(B)") sit deeper than
+                    // letter-level — add extra left margin.
+                    const extra = isSubSub && idx > 0 ? 18 : 0;
+                    const padLeft = hang + extra;
+                    const textIndent = -hang;
+                    const styleStr =
+                      `padding-left:${padLeft}pt;text-indent:${textIndent}pt;`;
+                    html += `<p class="caro-clause-p" style="${styleStr}">` +
+                      `${fullPrefix}${bodyHtml}</p>`;
                   });
-                  html += `<table class="caro-clause">${tableRows}</table>`;
                 });
 
                 // Signature block — class on the partner-row TD so its
