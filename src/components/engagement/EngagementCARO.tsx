@@ -613,8 +613,11 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   const SERIF = "'Times New Roman', Times, serif";
                   const TD = `style="vertical-align:top;"`;
                   const HEAD_CSS = `
-                    @page { size: A4; margin: 1.5cm 1.2cm 2cm 1.2cm; }
-                    body { font-family: ${SERIF}; font-size: 12pt; margin: 0; }
+                    @page Section1 { size: A4; margin: 1.2cm 0.8cm 1.5cm 0.8cm; mso-header-margin: 0; mso-footer-margin: 0; }
+                    div.Section1 { page: Section1; }
+                    @page { size: A4; margin: 1.2cm 0.8cm 1.5cm 0.8cm; }
+                    html, body { margin: 0 !important; padding: 0 !important; }
+                    body { font-family: ${SERIF}; font-size: 12pt; }
                     .caro-sig, .caro-sig tr, .caro-sig td {
                       border: none !important;
                       padding: 0 !important;
@@ -635,7 +638,10 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   // the applicable-CARO export.
                   // Body uses LEFT alignment (not justified) — template uses
                   // ragged right; justified produced wide stretched gaps.
+                  // Wrapped in Section1 div so the named-section page setup
+                  // (declared in HEAD_CSS) applies the tight margins.
                   const html =
+                    `<div class="Section1">` +
                     `<p style="font-family:${SERIF};font-size:12pt;line-height:1.4;` +
                     `text-align:left;margin:0 0 12pt 0;">${body}</p>` +
                     `<table class="caro-sig" style="width:100%;margin-top:30pt;"><tr>` +
@@ -649,7 +655,8 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                       `<td ${TD} class="partner">${partnerName}<br/>Partner<br/>` +
                       `Membership No.${membershipNo}</td>` +
                       `<td ${TD}>&nbsp;</td>` +
-                    `</tr></table>`;
+                    `</tr></table>` +
+                    `</div>`;
                   exportToWord(
                     html,
                     `CARO-NotApplicable_${companyName}_${engagement?.financial_year || ''}.doc`,
@@ -785,18 +792,28 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                 const SUBSUB_STYLE = `${BASE_PARA}padding-left:84pt;text-indent:-24pt;`;
 
                 // Head-level overrides — Word's HTML parser only reliably
-                // applies CSS from <head>, so we let the wrapper inject these
-                // there rather than embedding a body-level <style>.
+                // applies CSS from <head>.
                 //
-                // Page margins: tightened from 2cm to 1.2cm horizontally so
-                // the content area matches the template's wider line width.
-                // The template fits "…full particular including, quantitative
-                // details" on the first line of clause 1; with our previous
-                // 2cm side margins the content area was narrower and the
-                // line wrapped early at "…full particular including,".
+                // Content-area sizing for clause 1's first line:
+                //   Template fits "…full particular including, quantitative
+                //   details" on line 1 — our previous output wrapped at
+                //   "…particular includin" because the wrapper's
+                //   `body { margin: 2cm }` rule was reducing the printable
+                //   area below the template's line width.
+                //   Two layers of override needed:
+                //     1. body { margin: 0 !important; padding: 0 !important; }
+                //        — wins against the wrapper's `margin: 2cm`.
+                //     2. @page Section1 { margin: 1.2cm 0.8cm 1.5cm 0.8cm; }
+                //        + div.Section1 { page: Section1; } — Microsoft
+                //        Office's reliable page-setup directive. Word
+                //        ignores plain @page rules sometimes; the named
+                //        section is honoured.
                 const HEAD_CSS = `
-                  @page { size: A4; margin: 1.5cm 1.2cm 2cm 1.2cm; }
-                  body { font-family: ${SERIF}; font-size: 12pt; margin: 0; }
+                  @page Section1 { size: A4; margin: 1.2cm 0.8cm 1.5cm 0.8cm; mso-header-margin: 0; mso-footer-margin: 0; }
+                  div.Section1 { page: Section1; }
+                  @page { size: A4; margin: 1.2cm 0.8cm 1.5cm 0.8cm; }
+                  html, body { margin: 0 !important; padding: 0 !important; }
+                  body { font-family: ${SERIF}; font-size: 12pt; }
                   .caro-sig, .caro-sig tr, .caro-sig td {
                     border: none !important;
                     padding: 0 !important;
@@ -808,6 +825,10 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                 `;
 
                 let html =
+                  // Wrap entire body in Section1 div so the named-section
+                  // page setup in HEAD_CSS applies (Word's reliable way to
+                  // control page margins via HTML).
+                  `<div class="Section1">` +
                   // Title — bold + UNDERLINE per template
                   `<p style="text-align:center;font-family:${SERIF};font-size:12pt;` +
                   `font-weight:bold;text-decoration:underline;margin:0 0 14pt 0;">` +
@@ -1001,7 +1022,9 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     `<td ${TD} class="partner">${partnerName}<br/>Partner<br/>` +
                     `Membership No.${membershipNo}</td>` +
                     `<td ${TD}>&nbsp;</td>` +
-                  `</tr></table>`;
+                  `</tr></table>` +
+                  // Close the Section1 div opened at the top
+                  `</div>`;
                 exportToWord(
                   html,
                   `CARO-2020_${companyName}_${engagement?.financial_year || ''}.doc`,
