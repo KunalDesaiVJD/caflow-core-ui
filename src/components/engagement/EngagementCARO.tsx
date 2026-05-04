@@ -1063,9 +1063,11 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     // aligns at the prefix width — so wrapped text sits
                     // exactly under the first body character.
                     const hang = pxWidth(fullPrefix);
-                    // Sub-sub-letter rows ("(B)") sit deeper than
-                    // letter-level — add extra left margin.
-                    const extra = isSubSub && idx > 0 ? 18 : 0;
+                    // Sub-sub-letter rows ("(B)") sit slightly deeper
+                    // than letter-level. Template uses ~2-3 char widths
+                    // — keep this nudge subtle (12pt ≈ 2 chars at 11pt
+                    // Times New Roman).
+                    const extra = isSubSub && idx > 0 ? 12 : 0;
                     const padLeft = hang + extra;
                     const textIndent = -hang;
                     const styleStr =
