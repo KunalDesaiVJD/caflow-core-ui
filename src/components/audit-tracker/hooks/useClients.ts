@@ -91,6 +91,7 @@ export function useClients(
         .from("clients")
         .select("id, name, entity_type")
         .is("deleted_at", null)
+        .neq("is_active", false)
         .eq("is_draft", false)
         .in("id", clientIds)
         .order("name");

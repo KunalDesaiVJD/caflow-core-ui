@@ -38,7 +38,7 @@ const ErpLedger = () => {
   const loadData = useCallback(async () => {
     setLoading(true);
     const [clientsRes] = await Promise.all([
-      supabase.from("clients").select("id, name").eq("is_draft", false).is("deleted_at", null).order("name"),
+      supabase.from("clients").select("id, name").eq("is_draft", false).is("deleted_at", null).neq("is_active", false).order("name"),
     ]);
     setClients(clientsRes.data || []);
     setSnapshots([]); // trial_balance_snapshots removed — ERP Ledger now reads from Tally TB

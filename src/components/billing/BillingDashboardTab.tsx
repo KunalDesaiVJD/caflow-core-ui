@@ -65,7 +65,7 @@ export default function BillingDashboardTab({ firmId }: { firmId: string | null 
       if (!isSuperadmin && resolvedFirmId) iq = iq.eq("firm_id", resolvedFirmId);
       const { data: invData } = await iq;
 
-      let cq = supabase.from("clients").select("id,name").eq("is_draft", false).is("deleted_at", null);
+      let cq = supabase.from("clients").select("id,name").eq("is_draft", false).is("deleted_at", null).neq("is_active", false);
       if (!isSuperadmin && resolvedFirmId) cq = (cq as any).eq("firm_id", resolvedFirmId);
       const { data: cData } = await cq;
 

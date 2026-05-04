@@ -379,6 +379,7 @@ const ItReturns = () => {
         .select("id, name, pan, entity_type, email, mobile, responsible_person_id, work_group_type, responsible_person:users!clients_responsible_person_id_fkey(id, name)")
         .eq("is_draft", false)
         .is("deleted_at", null)
+        .neq("is_active", false)
         .order("name");
       if (!isSuperadmin && firmId) cQ = cQ.eq("firm_id", firmId);
       const { data: cData } = await cQ;
@@ -775,7 +776,7 @@ function FilingTab({
     const { data: cs } = await supabase.from("client_services").select("client_id").in("service_category_id", catIds).eq("is_active", true);
     const clientIds = [...new Set((cs || []).map(c => c.client_id))];
     if (!clientIds.length) { toast({ title: "No clients with ITR service enabled", variant: "destructive" }); return; }
-    const { data: clients } = await supabase.from("clients").select("id, name, pan, entity_type").eq("is_draft", false).is("deleted_at", null).in("id", clientIds).order("name");
+    const { data: clients } = await supabase.from("clients").select("id, name, pan, entity_type").eq("is_draft", false).is("deleted_at", null).neq("is_active", false).in("id", clientIds).order("name");
     const availableClients = (clients || []).filter((client: any) => !representedClientIds.has(client.id));
     if (availableClients.length === 0) {
       toast({ title: "All ITR service clients already appear automatically" });

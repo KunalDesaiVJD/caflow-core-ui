@@ -572,7 +572,8 @@ export default function BillingRemindersTab({
           .select("id, name")
           .eq("firm_id", resolvedFirmId)
           .eq("is_draft", false)
-          .is("deleted_at", null);
+          .is("deleted_at", null)
+          .neq("is_active", false);
 
         if (cErr) throw cErr;
         const list = clients || [];

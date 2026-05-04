@@ -173,6 +173,9 @@ queryFn: async () => {
     .from('clients')
     .select('id, name, entity_type')
     .in('entity_type', COMPANY_TYPES)
+    .eq('is_draft', false)
+    .is('deleted_at', null)
+    .neq('is_active', false)
     .order('name');
 if (user?.role !== 'superadmin' && user?.firm_id) q = q.eq('firm_id', user.firm_id);
 const { data } = await q;
