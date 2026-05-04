@@ -778,18 +778,13 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                 const BASE_PARA =
                   `font-family:${SERIF};font-size:12pt;line-height:1.4;` +
                   `text-align:left;margin:0 0 6pt 0;`;
-                // First chunk — carries the clause number "N." at the left
-                // margin. Wrap aligns at 36pt (under the body text).
-                const FIRST_STYLE = `${BASE_PARA}padding-left:36pt;text-indent:-36pt;`;
-                // Subsequent sub-letter chunks for "(a)" / "(b)" / "a)" /
-                // "b)" — letter level. Sits at the same column as "(a)"
-                // on the first row (36pt), wraps at 60pt under body text.
-                const LETTER_STYLE = `${BASE_PARA}padding-left:60pt;text-indent:-24pt;`;
-                // Sub-sub-letter chunks for "(A)" / "(B)" — these are
-                // INDENTED FURTHER than letter-level so they visually
-                // sit under the body of the parent letter. "(B)" begins
-                // at 60pt (under the body of (a)), wraps at 84pt.
-                const SUBSUB_STYLE = `${BASE_PARA}padding-left:84pt;text-indent:-24pt;`;
+                // Inside the clause-body TD, sub-letter paragraphs use a
+                // hanging indent of 24pt: "(a)" sits at column 0 of the
+                // body cell, body text wraps at column 24pt (under the
+                // body of "(a)"). Sub-sub-letters "(B)" go deeper —
+                // start at 24pt (under body of (a)), wrap at 48pt.
+                const LETTER_STYLE = `${BASE_PARA}padding-left:24pt;text-indent:-24pt;`;
+                const SUBSUB_STYLE = `${BASE_PARA}padding-left:48pt;text-indent:-24pt;`;
 
                 // Head-level overrides — Word's HTML parser only reliably
                 // applies CSS from <head>.
@@ -823,6 +818,20 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   @page { size: A4; margin: 1.2cm 1cm 1.5cm 2.2cm; }
                   html, body { margin: 0 !important; padding: 0 !important; }
                   body { font-family: ${SERIF}; font-size: 12pt; }
+                  /* Each clause is rendered as a 2-column borderless table
+                     so the clause-number column lines up across all 21
+                     clauses and the body column holds its own per-sub-letter
+                     paragraphs with hanging indents. */
+                  .caro-clause, .caro-clause tr, .caro-clause td {
+                    border: none !important;
+                    padding: 0 !important;
+                    background: transparent !important;
+                    font-family: ${SERIF} !important;
+                    font-size: 12pt !important;
+                    vertical-align: top !important;
+                  }
+                  .caro-clause { width: 100% !important; border-collapse: collapse !important; margin: 0 0 8pt 0 !important; }
+                  .caro-clause td.num { width: 32pt !important; }
                   .caro-sig, .caro-sig tr, .caro-sig td {
                     border: none !important;
                     padding: 0 !important;
@@ -974,39 +983,39 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                       /The reporting under Clause 3\(xxi\) is not applicable in respect of audit of standalone financial statements\./g,
                       "The reporting under Clause 3(xxi) of the order is not applicable in respect of audit of standalone financial statements.",
                     );
+                // Render each clause as a 2-column borderless table:
+                //   Col 1 (32pt): clause number "N." (top-aligned).
+                //   Col 2 (rest): clause body — one <p> per sub-letter
+                //                 chunk with hanging indent.
+                // This guarantees the clause-number column aligns across
+                // all 21 clauses (Word can't clip it the way a hanging
+                // <p> with negative text-indent can be clipped), and
+                // wrapped body text inside each sub-letter <p> aligns
+                // under its own first-line text — not under "N." or "(a)".
+                const renderBody = (raw: string): string => {
+                  const chunks = raw.split(/\n{2,}/);
+                  return chunks.map(chunk => {
+                    const body = chunk.replace(/\n/g, "<br/>");
+                    const isSubSub = /^\([A-Z]\)\s/.test(chunk);
+                    const style = isSubSub ? SUBSUB_STYLE : LETTER_STYLE;
+                    return `<p style="${style}">${body}</p>`;
+                  }).join("");
+                };
                 rows.forEach(r => {
+                  let bodyHtml: string;
                   if (!r.is_applicable) {
                     const reason = r.inapplicability_reason
                       ? ` &mdash; ${r.inapplicability_reason}`
                       : "";
-                    html += `<p style="${FIRST_STYLE}">` +
-                      `${r.clause_number}.&nbsp;&nbsp;Not Applicable${reason}</p>`;
+                    bodyHtml = `<p style="${LETTER_STYLE}">Not Applicable${reason}</p>`;
                   } else {
                     const raw = wordingFix(yearSub(r.user_response || r.auto_draft || ""));
-                    // Split each clause's body on blank lines so each
-                    // sub-letter "(a)" / "(b)" / "a)" / "b)" etc. is its
-                    // own paragraph with its own hanging indent. This is
-                    // what gives the template's clean column alignment
-                    // where wrapped text lines up under the sub-letter's
-                    // body, not under the clause number.
-                    const chunks = raw.split(/\n{2,}/);
-                    chunks.forEach((chunk, idx) => {
-                      const body = chunk.replace(/\n/g, "<br/>");
-                      if (idx === 0) {
-                        // First chunk carries the clause number on the
-                        // same line ("N.  (a) (A) The Company…").
-                        html += `<p style="${FIRST_STYLE}">` +
-                          `${r.clause_number}.&nbsp;&nbsp;${body}</p>`;
-                      } else {
-                        // Detect sub-sub-letters like "(A) " / "(B) " —
-                        // they get a deeper indent than letter-level
-                        // sub-clauses like "(a) " / "a) ".
-                        const isSubSub = /^\([A-Z]\)\s/.test(chunk);
-                        const style = isSubSub ? SUBSUB_STYLE : LETTER_STYLE;
-                        html += `<p style="${style}">${body}</p>`;
-                      }
-                    });
+                    bodyHtml = renderBody(raw);
                   }
+                  html += `<table class="caro-clause"><tr>` +
+                    `<td class="num">${r.clause_number}.</td>` +
+                    `<td>${bodyHtml}</td>` +
+                  `</tr></table>`;
                 });
 
                 // Signature block — class on the partner-row TD so its
