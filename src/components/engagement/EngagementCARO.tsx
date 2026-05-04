@@ -821,7 +821,12 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     line-height: 1.4 !important;
                   }
                   .caro-clause { width: 100% !important; border-collapse: collapse !important; margin: 0 0 8pt 0 !important; }
-                  .caro-clause td.num { width: 28pt !important; }
+                  /* num column trimmed to 20pt — just wide enough for the
+                     two-digit "21." with a 4pt buffer — so the sub-letter
+                     "(a)" sits directly next to the clause number with
+                     only that small gap. Per user: "remove the space
+                     between subpoint and point". */
+                  .caro-clause td.num { width: 20pt !important; padding-right: 4pt !important; }
                   .caro-clause td.bd  { padding-bottom: 6pt !important; }
                   .caro-clause td.bd.subsub { padding-left: 24pt !important; }
                   .caro-sig, .caro-sig tr, .caro-sig td {
