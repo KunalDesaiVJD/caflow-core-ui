@@ -318,7 +318,11 @@ const NewClientWizard = () => {
           return saved;
         })(),
         email: client.email || "",
-        extra_emails: Array.isArray(client.extra_emails) ? client.extra_emails : [],
+        extra_emails: Array.isArray(client.extra_emails)
+          ? client.extra_emails
+          : Array.isArray((client.compliance_flags as any)?.extra_emails)
+            ? (client.compliance_flags as any).extra_emails
+            : [],
         mobile: client.mobile || "",
         address: client.address || "",
         tan_number: client.tan_number || "",
@@ -649,16 +653,20 @@ const NewClientWizard = () => {
     };
   };
 
-  // Saves extra_emails after the main client row is safely written.
-  // Silently no-ops if the DB column doesn't exist yet (pre-migration).
+  // Saves extra_emails inside compliance_flags JSONB (works without any migration).
   const saveExtraEmails = async (targetClientId: string) => {
+    if (!targetClientId) return;
     const emails = (basicInfo.extra_emails || []).filter(e => e.trim());
-    if (!emails.length && !targetClientId) return;
-    try {
-      await supabase.from("clients").update({ extra_emails: emails } as any).eq("id", targetClientId);
-    } catch (_) {
-      // Column not yet migrated — safe to ignore; primary email is already saved.
-    }
+    const { data: current } = await supabase
+      .from("clients")
+      .select("compliance_flags")
+      .eq("id", targetClientId)
+      .single();
+    const existing = (current?.compliance_flags as Record<string, unknown>) || {};
+    await supabase
+      .from("clients")
+      .update({ compliance_flags: { ...existing, extra_emails: emails } })
+      .eq("id", targetClientId);
   };
 
   const saveServiceBillingData = async (targetClientId: string) => {
