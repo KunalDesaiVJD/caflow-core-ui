@@ -613,7 +613,7 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   const SERIF = "'Times New Roman', Times, serif";
                   const TD = `style="vertical-align:top;"`;
                   const HEAD_CSS = `
-                    @page { size: A4; margin: 1.5cm 2cm 2cm 2cm; }
+                    @page { size: A4; margin: 1.5cm 1.2cm 2cm 1.2cm; }
                     body { font-family: ${SERIF}; font-size: 12pt; margin: 0; }
                     .caro-sig, .caro-sig tr, .caro-sig td {
                       border: none !important;
@@ -787,8 +787,15 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                 // Head-level overrides — Word's HTML parser only reliably
                 // applies CSS from <head>, so we let the wrapper inject these
                 // there rather than embedding a body-level <style>.
+                //
+                // Page margins: tightened from 2cm to 1.2cm horizontally so
+                // the content area matches the template's wider line width.
+                // The template fits "…full particular including, quantitative
+                // details" on the first line of clause 1; with our previous
+                // 2cm side margins the content area was narrower and the
+                // line wrapped early at "…full particular including,".
                 const HEAD_CSS = `
-                  @page { size: A4; margin: 1.5cm 2cm 2cm 2cm; }
+                  @page { size: A4; margin: 1.5cm 1.2cm 2cm 1.2cm; }
                   body { font-family: ${SERIF}; font-size: 12pt; margin: 0; }
                   .caro-sig, .caro-sig tr, .caro-sig td {
                     border: none !important;
