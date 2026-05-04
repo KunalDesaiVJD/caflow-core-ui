@@ -999,67 +999,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
 
   return (
     <div className="space-y-4">
-      {/* Billing Reminders (invoices tab only) */}
-      {documentType === "invoice" && reminders.length > 0 && (
-        <Card className="border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20">
-          <CardHeader className="pb-2 pt-3 px-4">
-            <CardTitle className="text-sm font-semibold flex items-center justify-between text-amber-700 dark:text-amber-400">
-              <span className="flex items-center gap-2"><Bell size={16} /> Billing Reminders Due ({reminders.length})</span>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 px-2 text-xs gap-1 text-amber-700 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-900/30"
-                onClick={() => setRemindersCollapsed(v => !v)}
-              >
-                {remindersCollapsed ? <><ChevronDown size={13} /> Show</> : <><ChevronUp size={13} /> Hide</>}
-              </Button>
-            </CardTitle>
-          </CardHeader>
-          {!remindersCollapsed && (
-            <CardContent className="px-4 pb-3 pt-0">
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {reminders.map((r: any) => (
-                  <div key={r.id} className="flex items-center justify-between border rounded-lg p-3 bg-background">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium truncate">{reminderClientMap[r.client_id] || "Client"}</p>
-                      <p className="text-xs text-muted-foreground">₹{Number(r.billing_amount || 0).toLocaleString("en-IN")} · Due {r.next_due_date ? format(new Date(r.next_due_date), "dd MMM") : "—"}</p>
-                    </div>
-                    <div className="flex items-center gap-2 ml-2">
-                      <Badge variant="outline" className={cn("text-[10px]", r.invoice_gen_type === "auto" ? "border-blue-300 text-blue-600" : "border-orange-300 text-orange-600")}>
-                        {r.invoice_gen_type === "auto" ? "Auto" : "Reminder"}
-                      </Badge>
-                      {r.invoice_gen_type === "reminder" ? (
-                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => navigate(
-                          "/billing/new?type=invoice",
-                          {
-                            state: {
-                              prefill: {
-                                client_id:    r.client_id,
-                                client_name:  reminderClientMap[r.client_id] || "",
-                                amount:       r.billing_amount,
-                                period:       r.frequency,
-                                due_date:     r.next_due_date,
-                                service_name: (r as any).service_categories?.name || "",
-                                reminder_id:  r.id,
-                              },
-                            },
-                          }
-                        )}>
-                          Create Invoice
-                        </Button>
-                      ) : (
-                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => navigate(`/billing?tab=invoices`)}>
-                          View Draft
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          )}
-        </Card>
-      )}
+      {/* Billing Reminders — paused; re-enable by setting REMINDERS_ENABLED = true above */}
 
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
