@@ -1038,7 +1038,11 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     const inner = sl
                       ? `${sl}&nbsp;&nbsp;${bodyHtml}`
                       : bodyHtml;
-                    const subsubExtra = isSubSub ? 22 : 0; // (B) deeper
+                    // Sub-sub-letter "(B)" indent: template puts (B) only
+                    // ~2 chars to the right of letter-level "(a)"/"(b)" —
+                    // not a wide column gap. 12pt = ~2 character widths
+                    // at 12pt Times New Roman, matching the template.
+                    const subsubExtra = isSubSub ? 12 : 0;
                     const cellStyle = subsubExtra
                       ? `padding-left:${subsubExtra}pt;`
                       : "";
