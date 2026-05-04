@@ -768,10 +768,23 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                 //   2cm body{margin} + 2cm @page{margin} pushed the title way
                 //   down the page; template starts much higher.
                 const SERIF = "'Times New Roman', Times, serif";
-                const CLAUSE_STYLE =
+                // Hanging indent for the FIRST sub-letter line (carries
+                // the clause number "N."): 36pt indent, first line pulled
+                // back 36pt so "N." sits at the left margin and "(a)" /
+                // body align after it.
+                const FIRST_STYLE =
                   `font-family:${SERIF};font-size:12pt;line-height:1.4;` +
-                  `text-align:left;margin:0 0 8pt 0;` +
-                  `padding-left:28pt;text-indent:-28pt;`;
+                  `text-align:left;margin:0 0 6pt 0;` +
+                  `padding-left:36pt;text-indent:-36pt;`;
+                // Hanging indent for SUBSEQUENT sub-letter paragraphs
+                // (after the clause-number row). The paragraph starts
+                // indented to the same column as the body text under the
+                // clause number, so "(b) text…" lines up visually under
+                // "(a) text…" and wraps cleanly under its own body text.
+                const SUB_STYLE =
+                  `font-family:${SERIF};font-size:12pt;line-height:1.4;` +
+                  `text-align:left;margin:0 0 6pt 0;` +
+                  `padding-left:60pt;text-indent:-24pt;`;
 
                 // Head-level overrides — Word's HTML parser only reliably
                 // applies CSS from <head>, so we let the wrapper inject these
@@ -931,13 +944,31 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     const reason = r.inapplicability_reason
                       ? ` &mdash; ${r.inapplicability_reason}`
                       : "";
-                    html += `<p style="${CLAUSE_STYLE}">` +
+                    html += `<p style="${FIRST_STYLE}">` +
                       `${r.clause_number}.&nbsp;&nbsp;Not Applicable${reason}</p>`;
                   } else {
-                    const text = wordingFix(yearSub(r.user_response || r.auto_draft || ""))
-                      .replace(/\n/g, "<br/>");
-                    html += `<p style="${CLAUSE_STYLE}">` +
-                      `${r.clause_number}.&nbsp;&nbsp;${text}</p>`;
+                    const raw = wordingFix(yearSub(r.user_response || r.auto_draft || ""));
+                    // Split each clause's body on blank lines so each
+                    // sub-letter "(a)" / "(b)" / "a)" / "b)" etc. is its
+                    // own paragraph with its own hanging indent. This is
+                    // what gives the template's clean column alignment
+                    // where wrapped text lines up under the sub-letter's
+                    // body, not under the clause number.
+                    const chunks = raw.split(/\n{2,}/);
+                    chunks.forEach((chunk, idx) => {
+                      const body = chunk.replace(/\n/g, "<br/>");
+                      if (idx === 0) {
+                        // First chunk carries the clause number on the
+                        // same line ("N.  (a) (A) The Company…").
+                        html += `<p style="${FIRST_STYLE}">` +
+                          `${r.clause_number}.&nbsp;&nbsp;${body}</p>`;
+                      } else {
+                        // Subsequent chunks are sub-letters under the
+                        // clause; render them indented under the body
+                        // column of the first chunk.
+                        html += `<p style="${SUB_STYLE}">${body}</p>`;
+                      }
+                    });
                   }
                 });
 
