@@ -14,7 +14,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow, TableFooter,
 } from "@/components/ui/table";
 import { format } from "date-fns";
-import { BookOpen, Download, Archive, Users, Building2, Share2, Mail, Phone } from "lucide-react";
+import { BookOpen, Download, Archive, Users, Building2, Share2, Mail, Phone, X } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -200,7 +200,7 @@ async function loadLogoBase64(url: string): Promise<string | null> {
 function ClientLedgerView() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const [clients, setClients] = useState<{ id: string; name: string; email?: string | null }[]>([]);
+  const [clients, setClients] = useState<{ id: string; name: string; email?: string | null; extra_emails?: string[] | null }[]>([]);
   const [firms, setFirms] = useState<{ id: string; name: string; logo_url?: string; legal_name_changes?: LegalNameChange[] | null }[]>([]);
   const [clientId, setClientId] = useState("");
   const [firmId, setFirmId] = useState("");
@@ -214,15 +214,25 @@ function ClientLedgerView() {
   // ── Email dialog state ────────────────────────────────────────────────
   const [emailOpen,    setEmailOpen]    = useState(false);
   const [emailTo,      setEmailTo]      = useState("");
-  const [emailCC,      setEmailCC]      = useState("");
+  const [emailCCList,  setEmailCCList]  = useState<string[]>([]);
+  const [emailCCInput, setEmailCCInput] = useState("");
   const [emailSubject, setEmailSubject] = useState("");
   const [emailMsg,     setEmailMsg]     = useState("");
   const [emailSending, setEmailSending] = useState(false);
 
+  const selectedClientEmails = useMemo(() => {
+    const c = clients.find(x => x.id === clientId);
+    if (!c) return [];
+    const arr: string[] = [];
+    if (c.email) arr.push(c.email);
+    if (Array.isArray(c.extra_emails)) c.extra_emails.forEach(e => { if (e && !arr.includes(e)) arr.push(e); });
+    return arr;
+  }, [clients, clientId]);
+
   useEffect(() => {
     (async () => {
       const [{ data: c }, { data: f }] = await Promise.all([
-        supabase.from("clients").select("id, name, email").eq("is_draft", false).is("deleted_at", null).order("name"),
+        supabase.from("clients").select("id, name, email, extra_emails").eq("is_draft", false).is("deleted_at", null).order("name"),
         supabase.from("firms").select("id, name, logo_url, legal_name_changes").order("name"),
       ]);
       setClients(c || []);
@@ -517,9 +527,10 @@ function ClientLedgerView() {
   // ── Open email compose dialog ─────────────────────────────────────────
   const openEmailDialog = () => {
     const cName = clients.find(c => c.id === clientId)?.name || "Client";
-    const clientEmail = clients.find(c => c.id === clientId)?.email || "";
-    setEmailTo(clientEmail);
-    setEmailCC("");
+    const allEmails = selectedClientEmails;
+    setEmailTo(allEmails[0] || "");
+    setEmailCCList(allEmails.slice(1));
+    setEmailCCInput("");
     setEmailSubject(`Ledger Statement — ${cName} — ${fy}`);
     setEmailMsg(
       `Dear Sir/Madam,\n\nPlease find attached the Ledger Statement for ${cName} for the period ${format(new Date(fromDate), "dd/MM/yyyy")} to ${format(new Date(toDate), "dd/MM/yyyy")}.\n\nKindly review and confirm the balances at your earliest convenience.\n\nRegards`
@@ -542,26 +553,24 @@ function ClientLedgerView() {
       );
       const cName = clients.find(c => c.id === clientId)?.name || "Client";
       const safeClient = cName.replace(/[^a-zA-Z0-9]/g, "_");
-      const toAddresses = emailTo.split(",").map(e => e.trim()).filter(Boolean);
+      const allCC = [...emailCCList, ...(emailCCInput.trim() ? [emailCCInput.trim()] : [])].filter(e => e && e !== emailTo.trim());
 
-      for (const addr of toAddresses) {
-        await supabase.functions.invoke("send-notification", {
-          body: {
-            type: "ledger_statement",
-            firm_id: firmId !== "all" ? firmId : undefined,
-            direct_email: addr,
-            payload: {
-              client_name: cName,
-              custom_subject: emailSubject || `Ledger Statement — ${cName} — ${fy}`,
-              custom_message: emailMsg,
-              pdf_base64: pdfBase64,
-              pdf_filename: pdfFilename || `Ledger_${safeClient}_${fromDate}_${toDate}.pdf`,
-              cc_note: emailCC.trim() ? `CC: ${emailCC}` : undefined,
-            },
+      await supabase.functions.invoke("send-notification", {
+        body: {
+          type: "ledger_statement",
+          firm_id: firmId !== "all" ? firmId : undefined,
+          direct_email: emailTo.trim(),
+          custom_cc: allCC,
+          payload: {
+            client_name: cName,
+            custom_subject: emailSubject || `Ledger Statement — ${cName} — ${fy}`,
+            custom_message: emailMsg,
+            pdf_base64: pdfBase64,
+            pdf_filename: pdfFilename || `Ledger_${safeClient}_${fromDate}_${toDate}.pdf`,
           },
-        });
-      }
-      toast({ title: `Ledger emailed to ${toAddresses.join(", ")}` });
+        },
+      });
+      toast({ title: `Ledger emailed to ${emailTo.trim()}${allCC.length ? ` + ${allCC.length} CC` : ""}` });
       setEmailOpen(false);
     } catch (err: any) {
       console.error("[ClientLedgerEmail]", err);
@@ -689,24 +698,69 @@ function ClientLedgerView() {
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
-            <div className="space-y-1">
-              <Label htmlFor="cl-email-to">To <span className="text-destructive">*</span></Label>
+            {/* To field with chip selection */}
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold uppercase text-muted-foreground">To <span className="text-destructive">*</span></Label>
+              {selectedClientEmails.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {selectedClientEmails.map(email => (
+                    <button
+                      key={email}
+                      type="button"
+                      onClick={() => setEmailTo(email)}
+                      className={`px-3 py-1 rounded-full text-xs border transition-colors ${emailTo === email ? "bg-primary text-primary-foreground border-primary" : "bg-muted text-muted-foreground border-border hover:border-primary"}`}
+                    >
+                      {email}
+                    </button>
+                  ))}
+                </div>
+              )}
               <Input
-                id="cl-email-to"
                 type="email"
-                placeholder="client@example.com"
+                placeholder="Or type a custom To address..."
                 value={emailTo}
                 onChange={e => setEmailTo(e.target.value)}
               />
             </div>
-            <div className="space-y-1">
-              <Label htmlFor="cl-email-cc">CC <span className="text-muted-foreground text-xs">(optional)</span></Label>
+            {/* CC field with chip selection */}
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold uppercase text-muted-foreground">CC <span className="text-muted-foreground text-xs font-normal">(optional)</span></Label>
+              {selectedClientEmails.filter(e => e !== emailTo).length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {selectedClientEmails.filter(e => e !== emailTo).map(email => (
+                    <button
+                      key={email}
+                      type="button"
+                      onClick={() => setEmailCCList(prev => prev.includes(email) ? prev.filter(x => x !== email) : [...prev, email])}
+                      className={`px-3 py-1 rounded-full text-xs border transition-colors ${emailCCList.includes(email) ? "bg-blue-600 text-white border-blue-600" : "bg-muted text-muted-foreground border-border hover:border-blue-400"}`}
+                    >
+                      {email}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {emailCCList.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {emailCCList.map(email => (
+                    <span key={email} className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs">
+                      {email}
+                      <button type="button" onClick={() => setEmailCCList(prev => prev.filter(e => e !== email))}><X size={10} /></button>
+                    </span>
+                  ))}
+                </div>
+              )}
               <Input
-                id="cl-email-cc"
-                type="email"
-                placeholder="cc@example.com"
-                value={emailCC}
-                onChange={e => setEmailCC(e.target.value)}
+                placeholder="Add CC address and press Enter..."
+                value={emailCCInput}
+                onChange={e => setEmailCCInput(e.target.value)}
+                onKeyDown={e => {
+                  if ((e.key === "Enter" || e.key === ",") && emailCCInput.trim()) {
+                    e.preventDefault();
+                    const email = emailCCInput.trim().replace(/,$/, "");
+                    if (email && !emailCCList.includes(email)) setEmailCCList(prev => [...prev, email]);
+                    setEmailCCInput("");
+                  }
+                }}
               />
             </div>
             <div className="space-y-1">

@@ -292,6 +292,7 @@ async function sendEmail(
   toEmail: string,
   payload: Record<string, any>,
   customSubject?: string,
+  ccEmails?: string[],
 ): Promise<{ success: boolean; providerId?: string; error?: string }> {
   const fromEmail = Deno.env.get("SMTP_SENDER") || "accounts@vjdesai.com";
   const firmName  = payload.firm_name || "V J Desai & Co. LLP";
@@ -300,6 +301,10 @@ async function sendEmail(
 
   try {
     const token = await getGraphToken();
+
+    const ccRecipients = (ccEmails || [])
+      .filter(e => e && e !== toEmail)
+      .map(e => ({ emailAddress: { address: e } }));
 
     const res = await fetch(
       `https://graph.microsoft.com/v1.0/users/${fromEmail}/sendMail`,
@@ -314,6 +319,7 @@ async function sendEmail(
             subject,
             body:         { contentType: "HTML", content: html },
             toRecipients: [{ emailAddress: { address: toEmail } }],
+            ...(ccRecipients.length > 0 ? { ccRecipients } : {}),
             from:         { emailAddress: { name: firmName, address: fromEmail } },
             // Attach PDF when base64 data is supplied by the caller
             ...(payload.pdf_base64 ? {
@@ -429,6 +435,7 @@ async function sendToRecipient(
   payload: Record<string, any>,
   channels: ("whatsapp" | "email")[],
   customSubject?: string,
+  ccEmails?: string[],
 ): Promise<Record<string, { status: string; error?: string; provider_id?: string }>> {
   const results: Record<string, { status: string; error?: string; provider_id?: string }> = {};
 
@@ -450,6 +457,7 @@ async function sendToRecipient(
         toEmail,
         { ...payload, client_name: payload.client_name || recipient.name },
         customSubject || payload.custom_subject,
+        ccEmails,
       );
 
       results.email = {
@@ -457,9 +465,14 @@ async function sendToRecipient(
         ...(r.error      && { error:       r.error }),
         ...(r.providerId && { provider_id: r.providerId }),
       };
+      const ccList = (ccEmails || []).filter(e => e && e !== toEmail);
       await logNotification(adminClient, {
         firm_id, recipient_id: recipient.id, channel: "email", type,
-        content: { to: toEmail, subject: customSubject || payload.custom_subject || subjects[type] },
+        content: {
+          to: toEmail,
+          subject: customSubject || payload.custom_subject || subjects[type],
+          ...(ccList.length > 0 ? { cc: ccList.join(", ") } : {}),
+        },
         status: r.success ? "sent" : "failed",
         provider_id: r.providerId || null,
       });
@@ -510,6 +523,7 @@ Deno.serve(async (req) => {
       recipient_id,
       direct_email,        // bypass client lookup — send to this address directly
       direct_whatsapp,     // Phase 4B — send WhatsApp to this number directly
+      custom_cc,           // array of CC email addresses
     } = await req.json();
 
     if (!type || !firm_id)
@@ -551,7 +565,7 @@ Deno.serve(async (req) => {
         if (contact) {
           allResults.client = await sendToRecipient(
             adminClient, contact, type, firm_id, enrichedPayload,
-            channels, enrichedPayload.custom_subject,
+            channels, enrichedPayload.custom_subject, custom_cc,
           );
         } else {
           allResults.client = { error: "Client contact not found" };
@@ -588,7 +602,7 @@ Deno.serve(async (req) => {
       };
       allResults.direct = await sendToRecipient(
         adminClient, directContact, type, firm_id, enrichedPayload, ["email"],
-        enrichedPayload.custom_subject,
+        enrichedPayload.custom_subject, custom_cc,
       );
     }
 

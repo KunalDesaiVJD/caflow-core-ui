@@ -48,6 +48,8 @@ function statusBadge(status: string | null) {
     return <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 text-xs gap-1"><CheckCircle2 size={11} />Sent</Badge>;
   if (status === "failed" || status === "error")
     return <Badge variant="destructive" className="text-xs gap-1"><XCircle size={11} />Failed</Badge>;
+  if (status === "draft")
+    return <Badge variant="outline" className="text-xs gap-1 border-amber-300 text-amber-700 dark:text-amber-400">Draft</Badge>;
   return <Badge variant="outline" className="text-xs capitalize">{status ?? "Unknown"}</Badge>;
 }
 
@@ -173,6 +175,7 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
               <SelectItem value="sent">Sent</SelectItem>
               <SelectItem value="delivered">Delivered</SelectItem>
               <SelectItem value="failed">Failed</SelectItem>
+              <SelectItem value="draft">Draft</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -277,22 +280,22 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
                       <TableRow key={log.id + "-expanded"} className="bg-muted/30">
                         <TableCell colSpan={7} className="p-4">
                           <div className="space-y-2 text-sm">
-                            <div className="flex gap-6 flex-wrap">
-                              <div>
-                                <span className="font-medium text-muted-foreground text-xs uppercase">To:</span>
-                                <span className="ml-2">{log.content?.to ?? "—"}</span>
-                              </div>
+                            <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 items-start text-sm">
+                              <span className="font-semibold text-muted-foreground text-xs uppercase pt-0.5">To</span>
+                              <span className="font-medium">{log.content?.to ?? "—"}</span>
                               {log.content?.cc && (
-                                <div>
-                                  <span className="font-medium text-muted-foreground text-xs uppercase">CC:</span>
-                                  <span className="ml-2">{log.content.cc}</span>
-                                </div>
+                                <>
+                                  <span className="font-semibold text-muted-foreground text-xs uppercase pt-0.5">CC</span>
+                                  <span className="text-muted-foreground">{log.content.cc}</span>
+                                </>
                               )}
+                              <span className="font-semibold text-muted-foreground text-xs uppercase pt-0.5">Status</span>
+                              <span>{statusBadge(log.status)}</span>
                               {log.provider_id && (
-                                <div>
-                                  <span className="font-medium text-muted-foreground text-xs uppercase">Provider ID:</span>
-                                  <span className="ml-2 font-mono text-xs">{log.provider_id}</span>
-                                </div>
+                                <>
+                                  <span className="font-semibold text-muted-foreground text-xs uppercase pt-0.5">Ref ID</span>
+                                  <span className="font-mono text-xs text-muted-foreground">{log.provider_id}</span>
+                                </>
                               )}
                             </div>
                             {log.content?.body && (
@@ -305,8 +308,9 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
                               </div>
                             )}
                             {log.content?.error && (
-                              <div className="text-destructive text-xs">
-                                <span className="font-medium">Error: </span>{log.content.error}
+                              <div className="flex items-start gap-1.5 text-destructive text-xs mt-1 p-2 rounded bg-destructive/10 border border-destructive/20">
+                                <XCircle size={12} className="shrink-0 mt-0.5" />
+                                <span><span className="font-medium">Error: </span>{log.content.error}</span>
                               </div>
                             )}
                           </div>
