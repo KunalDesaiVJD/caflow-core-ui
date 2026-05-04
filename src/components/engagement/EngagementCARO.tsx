@@ -617,13 +617,13 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     div.Section1 { page: Section1; }
                     @page { size: A4; margin: 1.2cm 1cm 1.5cm 1.5cm; }
                     html, body { margin: 0 !important; padding: 0 !important; }
-                    body { font-family: ${SERIF}; font-size: 12pt; }
+                    body { font-family: ${SERIF}; font-size: 11pt; }
                     .caro-sig, .caro-sig tr, .caro-sig td {
                       border: none !important;
                       padding: 0 !important;
                       background: transparent !important;
                       font-family: ${SERIF} !important;
-                      font-size: 12pt !important;
+                      font-size: 11pt !important;
                     }
                     .caro-sig td.partner { padding-top: 24pt !important; }
                   `;
@@ -642,7 +642,7 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   // (declared in HEAD_CSS) applies the tight margins.
                   const html =
                     `<div class="Section1">` +
-                    `<p style="font-family:${SERIF};font-size:12pt;line-height:1.4;` +
+                    `<p style="font-family:${SERIF};font-size:11pt;line-height:1.4;` +
                     `text-align:left;margin:0 0 12pt 0;">${body}</p>` +
                     `<table class="caro-sig" style="width:100%;margin-top:30pt;"><tr>` +
                       `<td ${TD}>For, ${firmName}<br/>Chartered Accountants<br/>` +
@@ -805,7 +805,7 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   div.Section1 { page: Section1; }
                   @page { size: A4; margin: 1.2cm 1cm 1.5cm 1.5cm; }
                   html, body { margin: 0 !important; padding: 0 !important; }
-                  body { font-family: ${SERIF}; font-size: 12pt; }
+                  body { font-family: ${SERIF}; font-size: 11pt; }
                   /* Each clause is rendered as a 2-column borderless table:
                      col 1 = clause number, col 2 = body (with sub-letter
                      prefixed inline, separated by a small non-breaking
@@ -816,32 +816,27 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     padding: 0 !important;
                     background: transparent !important;
                     font-family: ${SERIF} !important;
-                    font-size: 12pt !important;
+                    font-size: 11pt !important;
                     vertical-align: top !important;
                     line-height: 1.4 !important;
                   }
                   .caro-clause { width: 100% !important; border-collapse: collapse !important; margin: 0 0 8pt 0 !important; }
-                  /* 3-column layout (num | sl | body):
-                     - num: shrinks to fit "1." / "21."
-                     - sl:  fixed 38pt — wide enough for the longest
-                            sub-letter prefix "(a) (A)" so the body
-                            column starts at the same x for every row,
-                            giving a consistent left margin for all body
-                            text and wraps.
-                     - sl.subsub: extra 12pt left-padding so "(B)" sits
-                            slightly deeper than letter-level "(b)".
-                     - bd:  body text — wraps inside this column so every
-                            wrapped line aligns at the same left margin. */
+                  /* 2-column layout (num | body) where the sub-letter is
+                     prefixed inline at the start of the body cell with
+                     just a single regular space between sub-letter and
+                     body — per user, "only one space" between subpoint
+                     and body text. Sub-sub-letter "(B)" rows get a
+                     12pt left-padding via the .subsub class so they
+                     sit slightly deeper than letter-level. */
                   .caro-clause td.num { width: 1% !important; padding-right: 2pt !important; white-space: nowrap !important; }
-                  .caro-clause td.sl  { width: 38pt !important; padding-right: 4pt !important; white-space: nowrap !important; }
-                  .caro-clause td.sl.subsub { padding-left: 12pt !important; }
                   .caro-clause td.bd  { padding-bottom: 6pt !important; }
+                  .caro-clause td.bd.subsub { padding-left: 12pt !important; }
                   .caro-sig, .caro-sig tr, .caro-sig td {
                     border: none !important;
                     padding: 0 !important;
                     background: transparent !important;
                     font-family: ${SERIF} !important;
-                    font-size: 12pt !important;
+                    font-size: 11pt !important;
                   }
                   .caro-sig td.partner { padding-top: 24pt !important; }
                 `;
@@ -851,12 +846,12 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   // page setup in HEAD_CSS applies (Word's reliable way to
                   // control page margins via HTML).
                   `<div class="Section1">` +
-                  // Title — bold + UNDERLINE per template
-                  `<p style="text-align:center;font-family:${SERIF};font-size:12pt;` +
+                  // Title — bold + UNDERLINE per template (11pt)
+                  `<p style="text-align:center;font-family:${SERIF};font-size:11pt;` +
                   `font-weight:bold;text-decoration:underline;margin:0 0 14pt 0;">` +
                   `${companyName}</p>` +
-                  // Subtitle — also bold + UNDERLINE per template
-                  `<p style="text-align:center;font-family:${SERIF};font-size:12pt;` +
+                  // Subtitle — also bold + UNDERLINE per template (11pt)
+                  `<p style="text-align:center;font-family:${SERIF};font-size:11pt;` +
                   `font-weight:bold;text-decoration:underline;margin:0 0 18pt 0;` +
                   `padding:0 36pt;">Annexure - A referred to paragraph under the ` +
                   `heading &quot;Report on Other Legal and Regulatory&quot; of our ` +
@@ -1031,28 +1026,17 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     const { sl, body, isSubSub } = splitChunk(chunk);
                     const numCell = idx === 0 ? `${r.clause_number}.` : "";
                     const bodyHtml = body.replace(/\n/g, "<br/>");
-                    if (sl) {
-                      // Sub-letter row: sub-letter in its OWN cell so
-                      // the body cell starts at a consistent left
-                      // margin (same column for every row of every
-                      // clause). Wrapped body text wraps inside the
-                      // body cell — auto-aligned at that same column.
-                      const slClass = isSubSub ? "sl subsub" : "sl";
-                      tableRows += `<tr>` +
-                        `<td class="num">${numCell}</td>` +
-                        `<td class="${slClass}">${sl}</td>` +
-                        `<td class="bd">${bodyHtml}</td>` +
-                      `</tr>`;
-                    } else {
-                      // No sub-letter (e.g. clause 3, 4, 5, 6, 8, 12,
-                      // 13, 14, 15, 17, 18, 19, 20, 21) — body spans
-                      // the sub-letter + body columns so prose starts
-                      // right after the clause number.
-                      tableRows += `<tr>` +
-                        `<td class="num">${numCell}</td>` +
-                        `<td class="bd" colspan="2">${bodyHtml}</td>` +
-                      `</tr>`;
-                    }
+                    // Combine sub-letter and body inline with EXACTLY ONE
+                    // regular space between them — per user requirement.
+                    // Sub-sub-letter rows get the .subsub class which
+                    // adds 12pt left-padding so "(B)" sits slightly
+                    // deeper than letter-level "(b)" / "(c)" / etc.
+                    const inner = sl ? `${sl} ${bodyHtml}` : bodyHtml;
+                    const bdClass = isSubSub ? "bd subsub" : "bd";
+                    tableRows += `<tr>` +
+                      `<td class="num">${numCell}</td>` +
+                      `<td class="${bdClass}">${inner}</td>` +
+                    `</tr>`;
                   });
                   html += `<table class="caro-clause">${tableRows}</table>`;
                 });
