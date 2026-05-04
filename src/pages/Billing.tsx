@@ -359,9 +359,10 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  // Fetch billing reminders (only for invoices tab)
+  // Billing reminders — temporarily paused; re-enable by setting REMINDERS_ENABLED = true
+  const REMINDERS_ENABLED = false;
   useEffect(() => {
-    if (documentType !== "invoice" || !firmId) return;
+    if (!REMINDERS_ENABLED || documentType !== "invoice" || !firmId) { setReminders([]); return; }
     (async () => {
       const today = format(new Date(), "yyyy-MM-dd");
       const { data } = await supabase.from("billing_reminders")
@@ -382,7 +383,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
         setReminders([]);
       }
     })();
-  }, [documentType, firmId]);
+  }, [documentType, firmId, REMINDERS_ENABLED]);
 
   // Fetch group client ids when group filter changes
   useEffect(() => {
