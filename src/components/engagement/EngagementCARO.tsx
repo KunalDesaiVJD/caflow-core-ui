@@ -806,10 +806,11 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   @page { size: A4; margin: 1.2cm 1cm 1.5cm 1.5cm; }
                   html, body { margin: 0 !important; padding: 0 !important; }
                   body { font-family: ${SERIF}; font-size: 12pt; }
-                  /* Each clause is rendered as a 3-column borderless table:
-                     col 1 = clause number, col 2 = sub-letter "(a)" / "(b)",
-                     col 3 = body text. Sub-sub-letters "(B)" get extra
-                     left padding in col 2 to sit deeper than letter-level. */
+                  /* Each clause is rendered as a 2-column borderless table:
+                     col 1 = clause number, col 2 = body (with sub-letter
+                     prefixed inline, separated by a small non-breaking
+                     space — no big sub-letter-column gap). Sub-sub-letters
+                     "(B)" get a row-level left-padding so they sit deeper. */
                   .caro-clause, .caro-clause tr, .caro-clause td {
                     border: none !important;
                     padding: 0 !important;
@@ -821,9 +822,8 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   }
                   .caro-clause { width: 100% !important; border-collapse: collapse !important; margin: 0 0 8pt 0 !important; }
                   .caro-clause td.num { width: 28pt !important; }
-                  .caro-clause td.sl  { width: 36pt !important; padding-right: 4pt !important; }
-                  .caro-clause td.sl.subsub { padding-left: 18pt !important; }
                   .caro-clause td.bd  { padding-bottom: 6pt !important; }
+                  .caro-clause td.bd.subsub { padding-left: 24pt !important; }
                   .caro-sig, .caro-sig tr, .caro-sig td {
                     border: none !important;
                     padding: 0 !important;
@@ -1019,24 +1019,19 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     const { sl, body, isSubSub } = splitChunk(chunk);
                     const numCell = idx === 0 ? `${r.clause_number}.` : "";
                     const bodyHtml = body.replace(/\n/g, "<br/>");
-                    if (sl) {
-                      // Sub-letter row: 3 cells (num | sl | body)
-                      const slClass = isSubSub ? "sl subsub" : "sl";
-                      tableRows += `<tr>` +
-                        `<td class="num">${numCell}</td>` +
-                        `<td class="${slClass}">${sl}</td>` +
-                        `<td class="bd">${bodyHtml}</td>` +
-                      `</tr>`;
-                    } else {
-                      // No sub-letter (e.g. clause 3 / 4 / 5 / 6 / 8 / 12 …
-                      // body starts right after the number). Span the
-                      // body across the sl + body columns so there's no
-                      // empty 36pt gap between number and prose.
-                      tableRows += `<tr>` +
-                        `<td class="num">${numCell}</td>` +
-                        `<td class="bd" colspan="2">${bodyHtml}</td>` +
-                      `</tr>`;
-                    }
+                    // Combine sub-letter and body in ONE cell with just a
+                    // small space between them (no wide column gap). Sub-
+                    // sub-letters get an extra .subsub class which adds
+                    // 24pt left padding to the row so "(B)" sits deeper
+                    // than letter-level "(a)" / "(b)".
+                    const inner = sl
+                      ? `${sl}&nbsp;&nbsp;${bodyHtml}`
+                      : bodyHtml;
+                    const bdClass = isSubSub ? "bd subsub" : "bd";
+                    tableRows += `<tr>` +
+                      `<td class="num">${numCell}</td>` +
+                      `<td class="${bdClass}">${inner}</td>` +
+                    `</tr>`;
                   });
                   html += `<table class="caro-clause">${tableRows}</table>`;
                 });
