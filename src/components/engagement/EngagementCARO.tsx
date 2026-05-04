@@ -829,19 +829,18 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   }
                   .caro-clause { width: 100% !important; border-collapse: collapse !important; margin: 0 0 8pt 0 !important; }
                   /* Each clause line is a <p> with per-row hanging
-                     indent — sub-letter and body separated by ONE
-                     regular space, wrapped lines align under the
-                     first body character. No table, no fixed sl
-                     column → no visible gap between short sub-letters
-                     like "(b)" and the body text. */
+                     indent applied via INLINE style. The class only
+                     sets typography defaults — DO NOT include
+                     padding-left or text-indent here, otherwise the
+                     !important rules would override the inline
+                     hanging-indent style and every paragraph would
+                     render flush-left with no hanging indent. */
                   .caro-clause-p {
                     font-family: ${SERIF} !important;
                     font-size: 11pt !important;
                     line-height: 1.4 !important;
                     text-align: left !important;
                     margin: 0 0 6pt 0 !important;
-                    padding-left: 0 !important;
-                    text-indent: 0 !important;
                   }
                   .caro-sig, .caro-sig tr, .caro-sig td {
                     border: none !important;
