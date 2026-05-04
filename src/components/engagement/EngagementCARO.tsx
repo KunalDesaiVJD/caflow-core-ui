@@ -821,11 +821,14 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     line-height: 1.4 !important;
                   }
                   .caro-clause { width: 100% !important; border-collapse: collapse !important; margin: 0 0 8pt 0 !important; }
-                  /* num column tightened so "1." and "(a)" sit flush:
-                       width  = 18pt — barely fits "21." (~18pt) at 12pt TNR
-                       padding-right = 2pt — single-pixel gap, not a space.
+                  /* num column shrinks to fit the actual number ("1." or
+                     "21.") with no fixed width — the sub-letter "(a)"
+                     then sits immediately after the number with only the
+                     2pt right-padding between them. Width: 1% in an HTML
+                     table forces the column to its minimum content width
+                     while letting the body column expand to fill the row.
                      Per user: "remove space between point and subpoint". */
-                  .caro-clause td.num { width: 18pt !important; padding-right: 2pt !important; white-space: nowrap !important; }
+                  .caro-clause td.num { width: 1% !important; padding-right: 2pt !important; white-space: nowrap !important; }
                   .caro-clause td.bd  { padding-bottom: 6pt !important; }
                   .caro-clause td.bd.subsub { padding-left: 24pt !important; }
                   .caro-sig, .caro-sig tr, .caro-sig td {
