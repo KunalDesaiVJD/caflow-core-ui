@@ -407,15 +407,21 @@ async function getResponsiblePersonContact(adminClient: any, clientId: string) {
 async function logNotification(
   adminClient: any,
   params: {
-    firm_id: string; recipient_id: string; channel: string; type: string;
+    firm_id: string; recipient_id: string | null; channel: string; type: string;
     content: Record<string, any>; status: string; provider_id: string | null;
   }
 ) {
-  // Skip log for synthetic "direct" recipient IDs (group ledger emails, etc.)
-  if (!params.recipient_id || params.recipient_id === "direct") return;
+  // "direct" and "direct_wa" are synthetic IDs — log with null recipient_id
+  const recipient_id =
+    !params.recipient_id ||
+    params.recipient_id === "direct" ||
+    params.recipient_id === "direct_wa"
+      ? null
+      : params.recipient_id;
+
   await adminClient.from("notification_log").insert({
     firm_id:      params.firm_id,
-    recipient_id: params.recipient_id,
+    recipient_id,
     channel:      params.channel,
     type:         params.type,
     content:      params.content,
