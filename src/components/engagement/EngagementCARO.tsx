@@ -1023,35 +1023,40 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   // No sub-letter prefix — clause body is bare prose.
                   return { sl: "", body: chunk, isSubSub: false };
                 };
+                // Per user — "every paragraph in same left side margin"
+                // — render every clause line as a single paragraph that
+                // starts at column 0 of the page content area. The first
+                // paragraph carries "N.  (a) (A) body…"; subsequent
+                // sub-letter paragraphs start with the bare sub-letter
+                // ("(B)…", "(b)…", etc.) — both at the SAME left margin.
+                // Wrapped lines in any paragraph wrap back to column 0 of
+                // the same paragraph, so every wrapped sentence also
+                // shares that left margin.
+                const PARA_STYLE =
+                  `font-family:${SERIF};font-size:11pt;line-height:1.4;` +
+                  `text-align:left;margin:0 0 6pt 0;padding:0;`;
                 rows.forEach(r => {
                   const raw = r.is_applicable
                     ? wordingFix(yearSub(r.user_response || r.auto_draft || ""))
                     : `Not Applicable${r.inapplicability_reason ? ` — ${r.inapplicability_reason}` : ""}`;
                   const chunks = raw.split(/\n{2,}/);
-                  let tableRows = "";
                   chunks.forEach((chunk, idx) => {
                     const { sl, body, isSubSub } = splitChunk(chunk);
-                    // Empty num cells use &nbsp; so the column reserves
-                    // the same width as the populated row. Without this,
-                    // the empty cell collapses to 0pt and the body cell
-                    // on subsequent rows shifts ~18pt to the left,
-                    // misaligning sub-letters across rows of the clause.
-                    const numCell = idx === 0 ? `${r.clause_number}.` : "&nbsp;";
+                    void isSubSub;
                     const bodyHtml = body.replace(/\n/g, "<br/>");
-                    // Combine sub-letter and body inline with EXACTLY ONE
-                    // regular space between them. Per user requirement:
-                    // every body cell — letter-level "(a)" / "(b)" AND
-                    // sub-sub "(B)" — uses the SAME zero left-padding so
-                    // every sentence and every wrapped line aligns at the
-                    // identical left margin column.
-                    void isSubSub; // marker no longer used for indent
-                    const inner = sl ? `${sl} ${bodyHtml}` : bodyHtml;
-                    tableRows += `<tr>` +
-                      `<td class="num">${numCell}</td>` +
-                      `<td class="bd">${inner}</td>` +
-                    `</tr>`;
+                    // First chunk: prefix with clause number "N." +
+                    // (sub-letter if any) + body, all on one line.
+                    // Subsequent chunks: just sub-letter + body.
+                    let line: string;
+                    if (idx === 0) {
+                      line = sl
+                        ? `${r.clause_number}. ${sl} ${bodyHtml}`
+                        : `${r.clause_number}. ${bodyHtml}`;
+                    } else {
+                      line = sl ? `${sl} ${bodyHtml}` : bodyHtml;
+                    }
+                    html += `<p style="${PARA_STYLE}">${line}</p>`;
                   });
-                  html += `<table class="caro-clause">${tableRows}</table>`;
                 });
 
                 // Signature block — class on the partner-row TD so its
