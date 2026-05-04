@@ -1031,7 +1031,12 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   let tableRows = "";
                   chunks.forEach((chunk, idx) => {
                     const { sl, body, isSubSub } = splitChunk(chunk);
-                    const numCell = idx === 0 ? `${r.clause_number}.` : "";
+                    // Empty num cells use &nbsp; so the column reserves
+                    // the same width as the populated row. Without this,
+                    // the empty cell collapses to 0pt and the body cell
+                    // on subsequent rows shifts ~18pt to the left,
+                    // misaligning sub-letters across rows of the clause.
+                    const numCell = idx === 0 ? `${r.clause_number}.` : "&nbsp;";
                     const bodyHtml = body.replace(/\n/g, "<br/>");
                     // Combine sub-letter and body inline with EXACTLY ONE
                     // regular space between them. Per user requirement:
