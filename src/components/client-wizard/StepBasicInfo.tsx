@@ -38,6 +38,7 @@ export interface BasicInfoData {
   pan: string;
   entity_type: string;
   email: string;
+  extra_emails: string[];
   mobile: string;
   address: string;
   gstins: string[];
@@ -246,15 +247,59 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
         {errors.entity_type && <p className="text-xs text-destructive">{errors.entity_type}</p>}
       </div>
 
-      {/* 6. Email ID */}
+      {/* 6. Email ID(s) */}
       <div className="space-y-1.5">
-        <Label>Email ID</Label>
-        <Input
-          type="email"
-          value={data.email}
-          onChange={(e) => update("email", e.target.value)}
-          placeholder="client@example.com"
-        />
+        <div className="flex items-center justify-between">
+          <Label>Email ID</Label>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-6 text-xs gap-1 text-muted-foreground hover:text-foreground"
+            onClick={() => update("extra_emails", [...(data.extra_emails || []), ""])}
+          >
+            <Plus size={12} /> Add another email
+          </Button>
+        </div>
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <Input
+              type="email"
+              value={data.email}
+              onChange={(e) => update("email", e.target.value)}
+              placeholder="client@example.com"
+              className="flex-1"
+            />
+            <span className="text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded font-medium shrink-0">Primary</span>
+          </div>
+          {(data.extra_emails || []).map((em, idx) => (
+            <div key={idx} className="flex items-center gap-2">
+              <Input
+                type="email"
+                value={em}
+                onChange={e => {
+                  const arr = [...(data.extra_emails || [])];
+                  arr[idx] = e.target.value;
+                  update("extra_emails", arr);
+                }}
+                placeholder={`Additional email ${idx + 1}`}
+                className="flex-1"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0"
+                onClick={() => {
+                  const arr = (data.extra_emails || []).filter((_, i) => i !== idx);
+                  update("extra_emails", arr);
+                }}
+              >
+                <Trash2 size={14} />
+              </Button>
+            </div>
+          ))}
+        </div>
         {errors.email && <p className="text-xs text-destructive">{errors.email}</p>}
       </div>
 

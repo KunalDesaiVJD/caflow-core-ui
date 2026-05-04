@@ -44,7 +44,7 @@ import {
   CheckCircle2, Eye, Copy, Trash2, ChevronLeft, ChevronRight,
   BarChart3, Percent, Upload, Download, Pencil, Settings2,
   Receipt, BookOpen, FileSpreadsheet, Bell, Mail, MessageSquare,
-  Archive, ChevronDown, User, RefreshCw, Share2, Phone, History,
+  Archive, ChevronDown, ChevronUp, User, RefreshCw, Share2, Phone, History, X,
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import * as XLSX from "xlsx";
@@ -283,6 +283,8 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
   const [shareOpen, setShareOpen] = useState(false);
   const [shareInvoice, setShareInvoice] = useState<Invoice | null>(null);
   const [shareEmail, setShareEmail] = useState("");
+  const [shareCC, setShareCC] = useState<string[]>([]);
+  const [shareCCInput, setShareCCInput] = useState("");
   const [sharePhone, setSharePhone] = useState("");
   const [shareSubject, setShareSubject] = useState("");
   const [shareMessage, setShareMessage] = useState("");
@@ -290,8 +292,11 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
   const [shareViaWhatsApp, setShareViaWhatsApp] = useState(false);
   const [shareSending, setShareSending] = useState(false);
 
+  // Reminders collapsed state (default collapsed)
+  const [remindersCollapsed, setRemindersCollapsed] = useState(true);
+
   // Client details cache for email/phone
-  const [clientDetailsMap, setClientDetailsMap] = useState<Record<string, { email: string | null; mobile: string | null }>>({});
+  const [clientDetailsMap, setClientDetailsMap] = useState<Record<string, { email: string | null; mobile: string | null; extra_emails?: string[] | null }>>({});
 
   // Billing reminders
   const [reminders, setReminders] = useState<any[]>([]);
@@ -321,7 +326,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     if (firmFilter !== "all") iQuery = iQuery.eq("firm_id", firmFilter);
     const { data: invData } = await iQuery;
 
-    let cQuery = supabase.from("clients").select("id, name, entity_type, email, mobile, responsible_person_id").eq("is_draft", false).is("deleted_at", null);
+    let cQuery = supabase.from("clients").select("id, name, entity_type, email, mobile, extra_emails, responsible_person_id").eq("is_draft", false).is("deleted_at", null);
     if (!isSuperadmin && firmId) cQuery = cQuery.eq("firm_id", firmId);
     const { data: clientData } = await cQuery;
 
@@ -333,10 +338,10 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     const { data: usersData } = await usersQuery;
 
     const cMap: ClientMap = {};
-    const cdMap: Record<string, { email: string | null; mobile: string | null; responsible_person_id: string | null }> = {};
+    const cdMap: Record<string, { email: string | null; mobile: string | null; extra_emails?: string[] | null; responsible_person_id: string | null }> = {};
     (clientData || []).forEach((c: any) => {
       cMap[c.id] = { name: c.name || "Unknown", entity_type: c.entity_type };
-      cdMap[c.id] = { email: c.email, mobile: c.mobile, responsible_person_id: c.responsible_person_id };
+      cdMap[c.id] = { email: c.email, mobile: c.mobile, extra_emails: c.extra_emails, responsible_person_id: c.responsible_person_id };
     });
     setClientDetailsMap(cdMap);
 
@@ -462,13 +467,25 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     return result;
   }, [filtered, viewBy, clientDetailsMap, clientMap, firmMap, responsiblePersons]);
 
+  const getClientAllEmails = (clientId: string): string[] => {
+    const d = clientDetailsMap[clientId];
+    if (!d) return [];
+    const arr: string[] = [];
+    if (d.email) arr.push(d.email);
+    if (Array.isArray(d.extra_emails)) d.extra_emails.forEach(e => { if (e && !arr.includes(e)) arr.push(e); });
+    return arr;
+  };
+
   // Open share dialog for a single invoice
   const openShareDialog = (inv: Invoice) => {
     const clientName = clientMap[inv.client_id || ""]?.name || "";
     const details = clientDetailsMap[inv.client_id || ""];
     const fName = firmMap[inv.firm_id || ""] || "";
+    const allEmails = getClientAllEmails(inv.client_id || "");
     setShareInvoice(inv);
-    setShareEmail(details?.email || "");
+    setShareEmail(allEmails[0] || details?.email || "");
+    setShareCC(allEmails.slice(1));
+    setShareCCInput("");
     setSharePhone(details?.mobile || "");
     setShareSubject(`${inv.invoice_no || "Invoice"} from ${fName}`);
     setShareMessage(`Dear ${clientName},\n\nPlease find attached ${inv.invoice_no || "Invoice"} for ₹${(inv.total_amount || inv.amount || 0).toLocaleString("en-IN")}.\n\nRegards,\n${fName}`);
@@ -507,12 +524,14 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
       }
 
       if (shareViaEmail && shareEmail) {
+        const allCC = [...shareCC, ...(shareCCInput.trim() ? [shareCCInput.trim()] : [])].filter(e => e && e !== shareEmail);
         await supabase.functions.invoke("send-notification", {
           body: {
             type: "invoice_generated",
             firm_id: shareInvoice.firm_id,
             client_id: shareInvoice.client_id,
             send_to_client: true,
+            custom_cc: allCC,
             payload: {
               invoice_no: shareInvoice.invoice_no,
               amount: shareInvoice.total_amount || shareInvoice.amount || 0,
@@ -957,7 +976,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuItem onClick={() => handleSend(inv, false)} className="gap-2">
+                  <DropdownMenuItem onClick={() => openShareDialog(inv)} className="gap-2">
                     <Mail size={14} /> Send to Client
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => handleSend(inv, true)} className="gap-2">
@@ -983,51 +1002,61 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
       {documentType === "invoice" && reminders.length > 0 && (
         <Card className="border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20">
           <CardHeader className="pb-2 pt-3 px-4">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2 text-amber-700 dark:text-amber-400">
-              <Bell size={16} /> Billing Reminders Due ({reminders.length})
+            <CardTitle className="text-sm font-semibold flex items-center justify-between text-amber-700 dark:text-amber-400">
+              <span className="flex items-center gap-2"><Bell size={16} /> Billing Reminders Due ({reminders.length})</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-xs gap-1 text-amber-700 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-900/30"
+                onClick={() => setRemindersCollapsed(v => !v)}
+              >
+                {remindersCollapsed ? <><ChevronDown size={13} /> Show</> : <><ChevronUp size={13} /> Hide</>}
+              </Button>
             </CardTitle>
           </CardHeader>
-          <CardContent className="px-4 pb-3 pt-0">
-            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-              {reminders.map((r: any) => (
-                <div key={r.id} className="flex items-center justify-between border rounded-lg p-3 bg-background">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium truncate">{reminderClientMap[r.client_id] || "Client"}</p>
-                    <p className="text-xs text-muted-foreground">₹{Number(r.billing_amount || 0).toLocaleString("en-IN")} · Due {r.next_due_date ? format(new Date(r.next_due_date), "dd MMM") : "—"}</p>
-                  </div>
-                  <div className="flex items-center gap-2 ml-2">
-                    <Badge variant="outline" className={cn("text-[10px]", r.invoice_gen_type === "auto" ? "border-blue-300 text-blue-600" : "border-orange-300 text-orange-600")}>
-                      {r.invoice_gen_type === "auto" ? "Auto" : "Reminder"}
-                    </Badge>
-                    {r.invoice_gen_type === "reminder" ? (
-                      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => navigate(
-                        "/billing/new?type=invoice",
-                        {
-                          state: {
-                            prefill: {
-                              client_id:    r.client_id,
-                              client_name:  reminderClientMap[r.client_id] || "",
-                              amount:       r.billing_amount,
-                              period:       r.frequency,
-                              due_date:     r.next_due_date,
-                              service_name: (r as any).service_categories?.name || "",
-                              reminder_id:  r.id,
+          {!remindersCollapsed && (
+            <CardContent className="px-4 pb-3 pt-0">
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {reminders.map((r: any) => (
+                  <div key={r.id} className="flex items-center justify-between border rounded-lg p-3 bg-background">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">{reminderClientMap[r.client_id] || "Client"}</p>
+                      <p className="text-xs text-muted-foreground">₹{Number(r.billing_amount || 0).toLocaleString("en-IN")} · Due {r.next_due_date ? format(new Date(r.next_due_date), "dd MMM") : "—"}</p>
+                    </div>
+                    <div className="flex items-center gap-2 ml-2">
+                      <Badge variant="outline" className={cn("text-[10px]", r.invoice_gen_type === "auto" ? "border-blue-300 text-blue-600" : "border-orange-300 text-orange-600")}>
+                        {r.invoice_gen_type === "auto" ? "Auto" : "Reminder"}
+                      </Badge>
+                      {r.invoice_gen_type === "reminder" ? (
+                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => navigate(
+                          "/billing/new?type=invoice",
+                          {
+                            state: {
+                              prefill: {
+                                client_id:    r.client_id,
+                                client_name:  reminderClientMap[r.client_id] || "",
+                                amount:       r.billing_amount,
+                                period:       r.frequency,
+                                due_date:     r.next_due_date,
+                                service_name: (r as any).service_categories?.name || "",
+                                reminder_id:  r.id,
+                              },
                             },
-                          },
-                        }
-                      )}>
-                        Create Invoice
-                      </Button>
-                    ) : (
-                      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => navigate(`/billing?tab=invoices`)}>
-                        View Draft
-                      </Button>
-                    )}
+                          }
+                        )}>
+                          Create Invoice
+                        </Button>
+                      ) : (
+                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => navigate(`/billing?tab=invoices`)}>
+                          View Draft
+                        </Button>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          </CardContent>
+                ))}
+              </div>
+            </CardContent>
+          )}
         </Card>
       )}
 
@@ -1325,9 +1354,84 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
+            {/* To field */}
             <div>
-              <Label>To (Email)</Label>
-              <Input value={shareEmail} onChange={e => setShareEmail(e.target.value)} placeholder="client@example.com" />
+              <Label className="text-xs font-semibold uppercase text-muted-foreground mb-1.5 block">To</Label>
+              {shareInvoice && getClientAllEmails(shareInvoice.client_id || "").length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {getClientAllEmails(shareInvoice.client_id || "").map(email => (
+                    <button
+                      key={email}
+                      type="button"
+                      onClick={() => setShareEmail(email)}
+                      className={cn(
+                        "px-3 py-1 rounded-full text-xs border transition-colors",
+                        shareEmail === email
+                          ? "bg-primary text-primary-foreground border-primary"
+                          : "bg-muted text-muted-foreground border-border hover:border-primary"
+                      )}
+                    >
+                      {email}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <Input value={shareEmail} onChange={e => setShareEmail(e.target.value)} placeholder="client@example.com" />
+              )}
+              {shareInvoice && getClientAllEmails(shareInvoice.client_id || "").length > 0 && (
+                <Input
+                  className="mt-2"
+                  value={shareEmail === getClientAllEmails(shareInvoice.client_id || "")[0] ? "" : shareEmail}
+                  onChange={e => setShareEmail(e.target.value)}
+                  placeholder="Or type a custom To address..."
+                />
+              )}
+            </div>
+            {/* CC field */}
+            <div>
+              <Label className="text-xs font-semibold uppercase text-muted-foreground mb-1.5 block">CC</Label>
+              {shareInvoice && getClientAllEmails(shareInvoice.client_id || "").length > 1 && (
+                <div className="flex flex-wrap gap-2 mb-2">
+                  {getClientAllEmails(shareInvoice.client_id || "").filter(e => e !== shareEmail).map(email => (
+                    <button
+                      key={email}
+                      type="button"
+                      onClick={() => setShareCC(prev => prev.includes(email) ? prev.filter(e => e !== email) : [...prev, email])}
+                      className={cn(
+                        "px-3 py-1 rounded-full text-xs border transition-colors",
+                        shareCC.includes(email)
+                          ? "bg-blue-600 text-white border-blue-600"
+                          : "bg-muted text-muted-foreground border-border hover:border-blue-400"
+                      )}
+                    >
+                      {email}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {shareCC.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {shareCC.map(email => (
+                    <span key={email} className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs">
+                      {email}
+                      <button type="button" onClick={() => setShareCC(prev => prev.filter(e => e !== email))}><X size={10} /></button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <Input
+                value={shareCCInput}
+                onChange={e => setShareCCInput(e.target.value)}
+                onKeyDown={e => {
+                  if ((e.key === "Enter" || e.key === ",") && shareCCInput.trim()) {
+                    e.preventDefault();
+                    const email = shareCCInput.trim().replace(/,$/, "");
+                    if (email && !shareCC.includes(email)) setShareCC(prev => [...prev, email]);
+                    setShareCCInput("");
+                  }
+                }}
+                placeholder="Add CC address and press Enter..."
+              />
             </div>
             <div>
               <Label>WhatsApp Number</Label>
