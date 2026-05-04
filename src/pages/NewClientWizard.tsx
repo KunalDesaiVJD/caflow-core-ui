@@ -769,29 +769,7 @@ const NewClientWizard = () => {
         .eq("is_active", true);
     }
 
-    // Create billing reminders
-    const allActiveServiceIds = Object.keys(serviceBilling.activeServices);
-    for (const serviceId of allActiveServiceIds) {
-      const cfg = serviceBilling.activeServices[serviceId];
-      const nextDue = new Date();
-      nextDue.setDate(cfg.reminder_date);
-      if (nextDue <= new Date()) nextDue.setMonth(nextDue.getMonth() + 1);
-
-      const { error: reminderError } = await supabase.from("billing_reminders").insert({
-        client_id: targetClientId,
-        firm_id: firmId,
-        service_category_id: serviceId,
-        billing_amount: cfg.billing_amount,
-        frequency: cfg.frequency,
-        reminder_date: cfg.reminder_date,
-        next_due_date: nextDue.toISOString().split("T")[0],
-        invoice_gen_type: cfg.invoice_gen_type,
-      } as any);
-      if (reminderError) {
-        console.error("[Services] billing_reminders insert error:", reminderError);
-        // Non-fatal — log but don't abort (RLS may block this for non-superadmin)
-      }
-    }
+    // Billing reminders creation paused — re-enable when REMINDERS_ENABLED is turned back on
   };
 
   const saveFYClassification = async (targetClientId: string, authUserId?: string) => {
