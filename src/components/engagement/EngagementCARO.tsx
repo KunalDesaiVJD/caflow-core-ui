@@ -821,20 +821,21 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     line-height: 1.4 !important;
                   }
                   .caro-clause { width: 100% !important; border-collapse: collapse !important; margin: 0 0 8pt 0 !important; }
-                  /* num column shrinks to fit the actual number ("1." or
-                     "21.") with no fixed width — the sub-letter "(a)"
-                     then sits immediately after the number with only the
-                     2pt right-padding between them. Width: 1% in an HTML
-                     table forces the column to its minimum content width
-                     while letting the body column expand to fill the row.
-                     Per user: "remove space between point and subpoint". */
+                  /* 3-column layout (num | sl | body):
+                     - num: shrinks to fit "1." / "21."
+                     - sl:  fixed 38pt — wide enough for the longest
+                            sub-letter prefix "(a) (A)" so the body
+                            column starts at the same x for every row,
+                            giving a consistent left margin for all body
+                            text and wraps.
+                     - sl.subsub: extra 12pt left-padding so "(B)" sits
+                            slightly deeper than letter-level "(b)".
+                     - bd:  body text — wraps inside this column so every
+                            wrapped line aligns at the same left margin. */
                   .caro-clause td.num { width: 1% !important; padding-right: 2pt !important; white-space: nowrap !important; }
+                  .caro-clause td.sl  { width: 38pt !important; padding-right: 4pt !important; white-space: nowrap !important; }
+                  .caro-clause td.sl.subsub { padding-left: 12pt !important; }
                   .caro-clause td.bd  { padding-bottom: 6pt !important; }
-                  /* sub-sub indent and per-row hanging indent are now
-                     applied via inline style on each .bd cell so wrapped
-                     body text lines up under the first body character.
-                     The .subsub class remains as a marker for downstream
-                     styling but the padding is set inline. */
                   .caro-sig, .caro-sig tr, .caro-sig td {
                     border: none !important;
                     padding: 0 !important;
@@ -1030,27 +1031,28 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     const { sl, body, isSubSub } = splitChunk(chunk);
                     const numCell = idx === 0 ? `${r.clause_number}.` : "";
                     const bodyHtml = body.replace(/\n/g, "<br/>");
-                    // Combine sub-letter and body inline so the sub-letter
-                    // sits flush against the body. No negative text-indent
-                    // (Word clips text that overflows a TD on the left,
-                    // so a hanging indent inside a cell would hide the
-                    // sub-letter entirely).
-                    const inner = sl
-                      ? `${sl}&nbsp;&nbsp;${bodyHtml}`
-                      : bodyHtml;
-                    // Sub-sub-letter "(B)" indent: template puts (B) only
-                    // ~2 chars to the right of letter-level "(a)"/"(b)" —
-                    // not a wide column gap. 12pt = ~2 character widths
-                    // at 12pt Times New Roman, matching the template.
-                    const subsubExtra = isSubSub ? 12 : 0;
-                    const cellStyle = subsubExtra
-                      ? `padding-left:${subsubExtra}pt;`
-                      : "";
-                    const bdClass = isSubSub ? "bd subsub" : "bd";
-                    tableRows += `<tr>` +
-                      `<td class="num">${numCell}</td>` +
-                      `<td class="${bdClass}" style="${cellStyle}">${inner}</td>` +
-                    `</tr>`;
+                    if (sl) {
+                      // Sub-letter row: sub-letter in its OWN cell so
+                      // the body cell starts at a consistent left
+                      // margin (same column for every row of every
+                      // clause). Wrapped body text wraps inside the
+                      // body cell — auto-aligned at that same column.
+                      const slClass = isSubSub ? "sl subsub" : "sl";
+                      tableRows += `<tr>` +
+                        `<td class="num">${numCell}</td>` +
+                        `<td class="${slClass}">${sl}</td>` +
+                        `<td class="bd">${bodyHtml}</td>` +
+                      `</tr>`;
+                    } else {
+                      // No sub-letter (e.g. clause 3, 4, 5, 6, 8, 12,
+                      // 13, 14, 15, 17, 18, 19, 20, 21) — body spans
+                      // the sub-letter + body columns so prose starts
+                      // right after the clause number.
+                      tableRows += `<tr>` +
+                        `<td class="num">${numCell}</td>` +
+                        `<td class="bd" colspan="2">${bodyHtml}</td>` +
+                      `</tr>`;
+                    }
                   });
                   html += `<table class="caro-clause">${tableRows}</table>`;
                 });
