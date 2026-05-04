@@ -830,7 +830,11 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                      Per user: "remove space between point and subpoint". */
                   .caro-clause td.num { width: 1% !important; padding-right: 2pt !important; white-space: nowrap !important; }
                   .caro-clause td.bd  { padding-bottom: 6pt !important; }
-                  .caro-clause td.bd.subsub { padding-left: 24pt !important; }
+                  /* sub-sub indent and per-row hanging indent are now
+                     applied via inline style on each .bd cell so wrapped
+                     body text lines up under the first body character.
+                     The .subsub class remains as a marker for downstream
+                     styling but the padding is set inline. */
                   .caro-sig, .caro-sig tr, .caro-sig td {
                     border: none !important;
                     padding: 0 !important;
@@ -1016,6 +1020,25 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   // No sub-letter prefix — clause body is bare prose.
                   return { sl: "", body: chunk, isSubSub: false };
                 };
+                // Approximate visual width of a sub-letter prefix at 12pt
+                // Times New Roman. Used to compute per-row hanging indent
+                // so wrapped body text lines up under the first body
+                // character — not back at column 0 of the body cell.
+                //   "(a) (A)" → ~32pt    "(B)" → ~14pt
+                //   "(b)" → ~14pt        "a)" → ~10pt
+                // Add a small constant for the trailing two non-breaking
+                // spaces between sub-letter and body.
+                const slPxWidth = (sl: string): number => {
+                  if (!sl) return 0;
+                  // Rough char widths (parens are slim, letters wider)
+                  let w = 0;
+                  for (const ch of sl) {
+                    if (ch === "(" || ch === ")") w += 3.5;
+                    else if (ch === " ") w += 3;
+                    else w += 6.5;
+                  }
+                  return Math.round(w + 8); // +8pt for two &nbsp;&nbsp;
+                };
                 rows.forEach(r => {
                   const raw = r.is_applicable
                     ? wordingFix(yearSub(r.user_response || r.auto_draft || ""))
@@ -1026,18 +1049,22 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     const { sl, body, isSubSub } = splitChunk(chunk);
                     const numCell = idx === 0 ? `${r.clause_number}.` : "";
                     const bodyHtml = body.replace(/\n/g, "<br/>");
-                    // Combine sub-letter and body in ONE cell with just a
-                    // small space between them (no wide column gap). Sub-
-                    // sub-letters get an extra .subsub class which adds
-                    // 24pt left padding to the row so "(B)" sits deeper
-                    // than letter-level "(a)" / "(b)".
+                    // Combine sub-letter and body inline — no column gap.
+                    // Per-row hanging indent (padding-left + negative
+                    // text-indent of the same value) so wrapped body
+                    // text aligns under the first body character.
                     const inner = sl
                       ? `${sl}&nbsp;&nbsp;${bodyHtml}`
                       : bodyHtml;
+                    const hang = slPxWidth(sl);
+                    const subsubExtra = isSubSub ? 22 : 0; // (B) deeper
+                    const hangStyle = sl
+                      ? `padding-left:${hang + subsubExtra}pt;text-indent:-${hang}pt;`
+                      : (subsubExtra > 0 ? `padding-left:${subsubExtra}pt;` : "");
                     const bdClass = isSubSub ? "bd subsub" : "bd";
                     tableRows += `<tr>` +
                       `<td class="num">${numCell}</td>` +
-                      `<td class="${bdClass}">${inner}</td>` +
+                      `<td class="${bdClass}" style="${hangStyle}">${inner}</td>` +
                     `</tr>`;
                   });
                   html += `<table class="caro-clause">${tableRows}</table>`;
