@@ -7,8 +7,11 @@
  * Edit mode (entry provided):
  *   - Pre-fills from existing entry, shows Delete button
  *
- * onSave(data, entryId?) — entryId present means UPDATE
- * onDelete(id)           — triggered by Delete button in edit mode
+ * Conflict rules:
+ *   • Selecting "Leave" for an employee who already has an audit on those dates
+ *     → blocked with "The Employee is in Audit"
+ *   • Selecting a client for an employee who already has Leave on those dates
+ *     → blocked with "The Employee is in Leave"
  */
 import { useState, useMemo, useEffect } from "react";
 import {
@@ -23,7 +26,7 @@ import {
   CommandInput, CommandItem, CommandList,
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Save, Loader2, ChevronsUpDown, Check, X, Trash2 } from "lucide-react";
+import { Save, Loader2, ChevronsUpDown, Check, X, Trash2, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { PlanEntry } from "../hooks/useAuditPlanning";
 import type { ClientOption } from "../hooks/useClients";
@@ -31,14 +34,18 @@ import type { UserOption }   from "../hooks/useUsers";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/**
- * Ensure a date value is a plain "YYYY-MM-DD" string with no time/TZ component.
- * <input type="date"> already returns this format, but guard against any
- * runtime value that could carry a timestamp or TZ suffix.
- */
 function safeISO(raw: string): string {
   if (!raw) return raw;
-  return raw.slice(0, 10);          // take only the date part, drop anything after
+  return raw.slice(0, 10);
+}
+
+function entryIsLeave(e: { is_leave?: boolean | null; client_name?: string | null }): boolean {
+  if (e.is_leave) return true;
+  return (e.client_name || "").trim().toLowerCase() === "leave";
+}
+
+function datesOverlap(aFrom: string, aTo: string, bFrom: string, bTo: string): boolean {
+  return aFrom <= bTo && aTo >= bFrom;
 }
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -56,12 +63,13 @@ export interface PlanSaveData {
 interface Props {
   open:               boolean;
   onOpenChange:       (v: boolean) => void;
-  entry?:             PlanEntry | null;          // null/undef = create
-  initialDate?:       string;                    // pre-fill for create from cell
+  entry?:             PlanEntry | null;
+  initialDate?:       string;
   initialEmployeeId?:   string;
   initialEmployeeName?: string;
   clients:            ClientOption[];
   users:              UserOption[];
+  entries:            PlanEntry[];
   onSave:             (data: PlanSaveData, entryId?: string) => Promise<void>;
   onDelete?:          (id: string) => Promise<void>;
 }
@@ -71,12 +79,11 @@ interface Props {
 export default function PlanningEntryDialog({
   open, onOpenChange,
   entry, initialDate, initialEmployeeId, initialEmployeeName,
-  clients, users,
+  clients, users, entries,
   onSave, onDelete,
 }: Props) {
   const isEdit = !!entry;
 
-  // Form state
   const [clientOpen,  setClientOpen]  = useState(false);
   const [clientId,    setClientId]    = useState("");
   const [clientName,  setClientName]  = useState("");
@@ -88,8 +95,8 @@ export default function PlanningEntryDialog({
   const [saving,      setSaving]      = useState(false);
   const [deleting,    setDeleting]    = useState(false);
   const [confirmDel,  setConfirmDel]  = useState(false);
+  const [conflictMsg, setConflictMsg] = useState<string | null>(null);
 
-  // Initialise form whenever dialog opens / entry changes
   useEffect(() => {
     if (!open) return;
     if (isEdit && entry) {
@@ -108,7 +115,10 @@ export default function PlanningEntryDialog({
       setEmpNames(initialEmployeeName ? [initialEmployeeName] : []);
     }
     setConfirmDel(false);
+    setConflictMsg(null);
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { setConflictMsg(null); }, [clientName, from, to, empIds.length]);
 
   const unselected = useMemo(
     () => users.filter(u => !empIds.includes(u.id)),
@@ -126,24 +136,49 @@ export default function PlanningEntryDialog({
     setEmpNames(ns => ns.filter((_,i) => i !== idx));
   }
 
+  function checkConflicts(isLeave: boolean, fromStr: string, toStr: string): string | null {
+    for (let i = 0; i < empIds.length; i++) {
+      const empId   = empIds[i];
+      const empName = empNames[i] || "This employee";
+
+      const overlapping = entries.filter(e =>
+        e.id !== entry?.id &&
+        (e.employee_ids || []).includes(empId) &&
+        datesOverlap(fromStr, toStr, e.planned_from, e.planned_to)
+      );
+
+      if (isLeave) {
+        const hasAudit = overlapping.some(e => !entryIsLeave(e));
+        if (hasAudit)
+          return `${empName} is already assigned to an audit on these dates. The Employee is in Audit.`;
+      } else {
+        const hasLeave = overlapping.some(e => entryIsLeave(e));
+        if (hasLeave)
+          return `${empName} is on leave on these dates. The Employee is in Leave.`;
+      }
+    }
+    return null;
+  }
+
   async function handleSave(keepOpen: boolean = false) {
     if (!from || !to) return;
-    setSaving(true);
-    // safeISO strips any time/TZ suffix — keeps value as pure "YYYY-MM-DD"
-    // Issue 3: explicit is_leave flag — leaves must never affect audit_status,
-    // audit_communication, or dashboard reminders. Detected from the special
-    // "Leave" combobox option (client_id=null + client_name="Leave").
+
     const isLeave = (clientName || "").trim().toLowerCase() === "leave";
+    const fromStr = safeISO(from);
+    const toStr   = safeISO(to);
+
+    if (empIds.length > 0 && clientName) {
+      const conflict = checkConflicts(isLeave, fromStr, toStr);
+      if (conflict) { setConflictMsg(conflict); return; }
+    }
+
+    setSaving(true);
     await onSave(
-      { client_id: clientId || null, client_name: clientName || null, planned_from: safeISO(from), planned_to: safeISO(to), employee_ids: empIds, employee_names: empNames, is_leave: isLeave },
+      { client_id: clientId || null, client_name: clientName || null, planned_from: fromStr, planned_to: toStr, employee_ids: empIds, employee_names: empNames, is_leave: isLeave },
       isEdit ? entry!.id : undefined
     );
     setSaving(false);
     if (keepOpen) {
-      // Save & Add Another: preserve date range, reset client + employees so the
-      // user can quickly assign another (client, employees) combo on the same
-      // date(s) — e.g. Gautam+Soumil → Dhanani, then someone else → DBS Realty
-      // on the same 30/04/2026. Each call creates an independent audit_planning row.
       setClientId("");
       setClientName("");
       setEmpIds([]);
@@ -172,6 +207,14 @@ export default function PlanningEntryDialog({
 
         <div className="space-y-4 py-2">
 
+          {/* Conflict error banner */}
+          {conflictMsg && (
+            <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+              <AlertTriangle size={13} className="shrink-0 mt-0.5" />
+              <span>{conflictMsg}</span>
+            </div>
+          )}
+
           {/* Client — searchable combobox */}
           <div>
             <Label className="text-xs mb-1.5 block">
@@ -193,7 +236,6 @@ export default function PlanningEntryDialog({
                       No client found
                     </CommandEmpty>
                     <CommandGroup>
-                      {/* Special: Leave */}
                       <CommandItem value="Leave" onSelect={() => { setClientId(""); setClientName("Leave"); setClientOpen(false); }} className="text-xs">
                         <Check size={12} className={cn("mr-2", clientName === "Leave" ? "opacity-100" : "opacity-0")} />
                         <span className="text-gray-500 font-medium">Leave</span>
@@ -273,7 +315,6 @@ export default function PlanningEntryDialog({
             </Popover>
           </div>
 
-          {/* Duration preview */}
           {from && to && from !== to && (
             <p className="text-[11px] text-muted-foreground bg-muted/50 rounded px-2 py-1.5">
               📅 Creates blocks for <strong>{Math.ceil((new Date(to).getTime() - new Date(from).getTime()) / 86400000) + 1}</strong> days
@@ -283,7 +324,6 @@ export default function PlanningEntryDialog({
         </div>
 
         <DialogFooter className="flex items-center justify-between gap-2 sm:justify-between">
-          {/* Delete (edit mode only) */}
           {isEdit && onDelete && (
             confirmDel ? (
               <div className="flex items-center gap-1.5">
@@ -306,7 +346,6 @@ export default function PlanningEntryDialog({
               </Button>
             )
           )}
-          {/* Spacer when no delete button */}
           {!(isEdit && onDelete) && <div />}
 
           <div className="flex gap-2">
@@ -315,7 +354,6 @@ export default function PlanningEntryDialog({
               Cancel
             </Button>
             <Button size="sm" variant="outline" className="h-7 text-xs gap-1"
-              title="Save this assignment and keep the dialog open to add another client on the same date range"
               onClick={() => handleSave(true)} disabled={saving || !valid || !clientName}>
               {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
               Save &amp; Add Another
