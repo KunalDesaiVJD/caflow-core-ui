@@ -830,13 +830,14 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   .caro-clause { width: 100% !important; border-collapse: collapse !important; margin: 0 0 8pt 0 !important; }
                   /* 2-column layout (num | body): clause number column
                      shrinks to fit; body cell holds the inline sub-letter
-                     prefix + body text + wrapped lines. Per user — "every
-                     paragraph in same left side margin" — every body cell
-                     uses the SAME zero left-padding so all sub-letters
-                     "(a)" / "(b)" / "(c)" / "(B)" and all wrapped body
-                     text align at the identical left margin column. */
+                     prefix + body text + wrapped lines. Letter-level
+                     "(a)" / "(b)" / "(c)" sit at the same left margin;
+                     sub-sub "(B)" rows get an extra 18pt left-padding
+                     via the .subsub class so they sit visibly deeper
+                     than letter-level — matching the template. */
                   .caro-clause td.num { width: 1% !important; padding-right: 2pt !important; white-space: nowrap !important; }
                   .caro-clause td.bd  { padding-left: 0 !important; padding-bottom: 6pt !important; }
+                  .caro-clause td.bd.subsub { padding-left: 18pt !important; }
                   .caro-sig, .caro-sig tr, .caro-sig td {
                     border: none !important;
                     padding: 0 !important;
@@ -1033,16 +1034,17 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     const numCell = idx === 0 ? `${r.clause_number}.` : "";
                     const bodyHtml = body.replace(/\n/g, "<br/>");
                     // Combine sub-letter and body inline with EXACTLY ONE
-                    // regular space between them — per user requirement.
-                    // Every body cell — letter-level "(a)" / "(b)" AND
-                    // sub-sub "(B)" — uses the SAME zero left-padding so
-                    // every sentence and every wrapped line aligns at the
-                    // identical left margin column.
-                    void isSubSub; // marker no longer used for indent
+                    // regular space between them. Letter-level rows
+                    // ("(a)" / "(b)" / "(c)" …) use plain `bd` class —
+                    // all start at the same left margin. Sub-sub rows
+                    // ("(B)") add the `subsub` class which applies an
+                    // extra 18pt left-padding so they sit visibly
+                    // deeper than letter-level, matching the template.
                     const inner = sl ? `${sl} ${bodyHtml}` : bodyHtml;
+                    const bdClass = isSubSub ? "bd subsub" : "bd";
                     tableRows += `<tr>` +
                       `<td class="num">${numCell}</td>` +
-                      `<td class="bd">${inner}</td>` +
+                      `<td class="${bdClass}">${inner}</td>` +
                     `</tr>`;
                   });
                   html += `<table class="caro-clause">${tableRows}</table>`;
