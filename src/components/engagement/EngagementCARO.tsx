@@ -768,23 +768,21 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                 //   2cm body{margin} + 2cm @page{margin} pushed the title way
                 //   down the page; template starts much higher.
                 const SERIF = "'Times New Roman', Times, serif";
-                // Hanging indent for the FIRST sub-letter line (carries
-                // the clause number "N."): 36pt indent, first line pulled
-                // back 36pt so "N." sits at the left margin and "(a)" /
-                // body align after it.
-                const FIRST_STYLE =
+                const BASE_PARA =
                   `font-family:${SERIF};font-size:12pt;line-height:1.4;` +
-                  `text-align:left;margin:0 0 6pt 0;` +
-                  `padding-left:36pt;text-indent:-36pt;`;
-                // Hanging indent for SUBSEQUENT sub-letter paragraphs
-                // (after the clause-number row). The paragraph starts
-                // indented to the same column as the body text under the
-                // clause number, so "(b) text…" lines up visually under
-                // "(a) text…" and wraps cleanly under its own body text.
-                const SUB_STYLE =
-                  `font-family:${SERIF};font-size:12pt;line-height:1.4;` +
-                  `text-align:left;margin:0 0 6pt 0;` +
-                  `padding-left:60pt;text-indent:-24pt;`;
+                  `text-align:left;margin:0 0 6pt 0;`;
+                // First chunk — carries the clause number "N." at the left
+                // margin. Wrap aligns at 36pt (under the body text).
+                const FIRST_STYLE = `${BASE_PARA}padding-left:36pt;text-indent:-36pt;`;
+                // Subsequent sub-letter chunks for "(a)" / "(b)" / "a)" /
+                // "b)" — letter level. Sits at the same column as "(a)"
+                // on the first row (36pt), wraps at 60pt under body text.
+                const LETTER_STYLE = `${BASE_PARA}padding-left:60pt;text-indent:-24pt;`;
+                // Sub-sub-letter chunks for "(A)" / "(B)" — these are
+                // INDENTED FURTHER than letter-level so they visually
+                // sit under the body of the parent letter. "(B)" begins
+                // at 60pt (under the body of (a)), wraps at 84pt.
+                const SUBSUB_STYLE = `${BASE_PARA}padding-left:84pt;text-indent:-24pt;`;
 
                 // Head-level overrides — Word's HTML parser only reliably
                 // applies CSS from <head>, so we let the wrapper inject these
@@ -963,10 +961,12 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                         html += `<p style="${FIRST_STYLE}">` +
                           `${r.clause_number}.&nbsp;&nbsp;${body}</p>`;
                       } else {
-                        // Subsequent chunks are sub-letters under the
-                        // clause; render them indented under the body
-                        // column of the first chunk.
-                        html += `<p style="${SUB_STYLE}">${body}</p>`;
+                        // Detect sub-sub-letters like "(A) " / "(B) " —
+                        // they get a deeper indent than letter-level
+                        // sub-clauses like "(a) " / "a) ".
+                        const isSubSub = /^\([A-Z]\)\s/.test(chunk);
+                        const style = isSubSub ? SUBSUB_STYLE : LETTER_STYLE;
+                        html += `<p style="${style}">${body}</p>`;
                       }
                     });
                   }
