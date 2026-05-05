@@ -310,21 +310,134 @@ export function IFCReportTab({ engagementId, engagement }: Props) {
       .then(() => { el.style.display = 'none'; });
   }
 
+  // ── Word export: match the IFC.doc template exactly ──
+  // Layout (mirrors the supplied template):
+  //   • Centered bold + underlined company name
+  //   • Centered bold "Annexure-B to the Auditors' Report"
+  //   • Centered bold "Report on the Internal Financial Controls under
+  //     Clause (i) of Sub-section 3 of Section 143 of the Companies Act, 2013"
+  //   • Justified intro paragraph
+  //   • Bold section headings followed by their justified body text
+  //   • Hard page break inside the "Meaning" section between item (2) and (3)
+  //     with a "Contd. on next page…" footer + repeated "Contd. from prev.
+  //     page…" header — matches the template page break exactly
+  //   • Two-column signature block: left = firm + partner stack, right =
+  //     place + date stack — bold, no borders
   function exportWord() {
-    let html =
-      `<h2 style="text-align:center;">${companyName} — Annexure-B to the Auditors' Report</h2>` +
-      `<p style="font-style:italic;text-align:center;margin-bottom:16px;">` +
-      `Report on the Internal Financial Controls under Clause (i) of Sub-section 3 of Section 143 of the Companies Act, 2013` +
-      `</p>`;
-    SECTIONS.forEach((s, i) => {
-      html += `<h3 style="font-size:12pt;font-weight:bold;margin-top:16px;">${i + 1}. ${s.title}</h3>`;
-      html += `<p style="white-space:pre-wrap;">${(sections[s.key] || '').replace(/\n/g, '<br/>')}</p>`;
+    const SERIF = `'Times New Roman', Times, serif`;
+    // DD.MM.YYYY
+    const reportDateDocx = (() => {
+      if (!reportDate) return '[Date]';
+      const d = new Date(reportDate);
+      const dd = String(d.getDate()).padStart(2, '0');
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const yy = d.getFullYear();
+      return `${dd}.${mm}.${yy}`;
+    })();
+    // FY end "31st March, 20XX" → year token for inline replacement
+    const fyEndYear = (() => {
+      const m = String(engagement?.financial_year || '').match(/\d{4}\s*[-–]\s*(\d{2,4})/);
+      if (!m) return '20XX';
+      return m[1].length === 2 ? '20' + m[1].slice(-2) : m[1];
+    })();
+    const yearSub = (s: string) =>
+      fyEndYear !== '20XX' ? s.replace(/20XX/g, fyEndYear) : s;
+    // Convert plain text → HTML paragraph(s). Splits on blank lines so each
+    // paragraph in the user's textarea becomes a separate <p>.
+    const para = (text: string, cls = 'ifc-clause') => {
+      if (!text) return '';
+      return text.split(/\n{2,}/)
+        .map(p => `<p class="${cls}">${yearSub(p).replace(/\n/g, '<br/>')}</p>`)
+        .join('');
+    };
+    // Split the "Meaning" section so (3) lands on page 2 (matches template).
+    const meaningParas = (sections.meaning || '').split(/\n{2,}/);
+    const meaningPage1: string[] = [];
+    const meaningPage2: string[] = [];
+    meaningParas.forEach(p => {
+      // (3) and anything after it → page 2
+      if (/^\s*\(3\)/.test(p) || meaningPage2.length > 0) meaningPage2.push(p);
+      else meaningPage1.push(p);
     });
+    const PAGEBREAK =
+      `<br clear="all" style="mso-special-character:line-break;page-break-before:always;" />`;
+    const HEAD_CSS = `
+      @page Section1 { size: A4; margin: 1.5cm 2cm 2cm 2cm; mso-header-margin: 0; mso-footer-margin: 0; }
+      div.Section1 { page: Section1; }
+      @page { size: A4; margin: 1.5cm 2cm 2cm 2cm; }
+      html, body { margin: 0 !important; padding: 0 !important; }
+      html, body, p, div, span, td, th, li { font-family: ${SERIF} !important; font-size: 11pt !important; }
+      body { font-family: ${SERIF}; font-size: 11pt; }
+      .ifc-title    { text-align:center; font-weight:bold; text-decoration:underline; margin: 0 0 12pt 0; }
+      .ifc-sub      { text-align:center; font-weight:bold; margin: 0 0 6pt 0; }
+      .ifc-sub2     { text-align:center; font-weight:bold; margin: 0 0 14pt 0; }
+      .ifc-section  { font-weight:bold; margin: 14pt 0 6pt 0; }
+      .ifc-clause   { text-align:justify; margin: 0 0 8pt 0; line-height: 1.4; }
+      .ifc-contd    { text-align:right; font-style:italic; margin: 18pt 0 0 0; }
+      .ifc-contd-from { text-align:left; font-style:italic; margin: 0 0 12pt 0; }
+      .ifc-page2-hdr  { text-align:center; font-weight:bold; text-decoration:underline; margin: 0 0 6pt 0; }
+      .ifc-sig, .ifc-sig tr, .ifc-sig td {
+        border: none !important; padding: 0 !important; background: transparent !important;
+        font-family: ${SERIF} !important; font-size: 11pt !important;
+        vertical-align: top !important; line-height: 1.4 !important;
+      }
+      .ifc-sig { width: 100% !important; border-collapse: collapse !important; margin-top: 24pt !important; }
+      .ifc-sig td.left  { width: 60% !important; font-weight: bold !important; }
+      .ifc-sig td.right { width: 40% !important; font-weight: bold !important; }
+    `;
+    let html =
+      `<div class="Section1">` +
+      // Title row — company name (per template: centered, bold, underlined)
+      `<p class="ifc-title">${companyName}</p>` +
+      // "Annexure-B to the Auditors' Report"
+      `<p class="ifc-sub">Annexure-B to the Auditors&#39; Report</p>` +
+      // The full clause-(i) sub-heading
+      `<p class="ifc-sub2">Report on the Internal Financial Controls under ` +
+      `Clause (i) of Sub-section 3 of Section 143 of the Companies Act, 2013</p>` +
+      // Intro paragraph
+      para(sections.intro) +
+      // Management's Responsibility
+      `<p class="ifc-section">Management&#39;s Responsibility for Internal Financial Controls</p>` +
+      para(sections.mgmt_responsibility) +
+      // Auditors' Responsibility
+      `<p class="ifc-section">Auditors&#39; Responsibility</p>` +
+      para(sections.auditors_responsibility) +
+      // Meaning of IFC over FR — split: intro + (1) + (2) on page 1
+      `<p class="ifc-section">Meaning of Internal Financial Controls over Financial Reporting</p>` +
+      meaningPage1.map(p => `<p class="ifc-clause">${yearSub(p).replace(/\n/g, '<br/>')}</p>`).join('') +
+      // "Contd. on next page…" footer
+      `<p class="ifc-contd">Contd. on next page&hellip;</p>` +
+      // ── Page break ──
+      PAGEBREAK +
+      // Page 2 header — repeated company name + "Contd. from prev. page…"
+      `<p class="ifc-page2-hdr">${companyName}</p>` +
+      `<p class="ifc-contd-from">Contd. from prev. page&hellip;</p>` +
+      // (3) and the rest of "Meaning"
+      meaningPage2.map(p => `<p class="ifc-clause">${yearSub(p).replace(/\n/g, '<br/>')}</p>`).join('') +
+      // Inherent Limitations
+      `<p class="ifc-section">Inherent Limitations of Internal Financial Controls over Financial Reporting</p>` +
+      para(sections.inherent_limitations) +
+      // Opinion
+      `<p class="ifc-section">Opinion</p>` +
+      para(sections.opinion);
+    // Signature block — 2-cell single-row table, bold on both sides
+    const left =
+      `For, ${firmName}<br/>Chartered Accountants<br/>Firm Regi.No.${firmFRN}` +
+      `<br/><br/><br/><br/>` +
+      `${partnerName}<br/>Partner<br/>Membership No.${membershipNo}`;
+    const right =
+      `<br/><br/>Place&nbsp;:&nbsp;&nbsp;${place || '[Place]'}` +
+      `<br/>Date&nbsp;&nbsp;:&nbsp;&nbsp;${reportDateDocx}`;
     html +=
-      `<br/><p>For, ${firmName}<br/>Chartered Accountants<br/>Firm Regi. No.: ${firmFRN}</p>` +
-      `<p>Place: ${place || '[Place]'} &nbsp; Date: ${reportDateDisplay}</p>` +
-      `<p style="margin-top:24px;">${partnerName}<br/>Partner &nbsp; Membership No.: ${membershipNo}</p>`;
-    exportToWord(html, `IFC-Report_${companyName}_${engagement?.financial_year || ''}.doc`);
+      `<table class="ifc-sig"><tr>` +
+      `<td class="left">${left}</td>` +
+      `<td class="right">${right}</td>` +
+      `</tr></table></div>`;
+    exportToWord(
+      html,
+      `IFC-Report_${companyName}_${engagement?.financial_year || ''}.doc`,
+      HEAD_CSS,
+    );
   }
 
   if (loading) {
