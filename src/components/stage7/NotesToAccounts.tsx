@@ -700,53 +700,67 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
       }
     };
 
+    // Page setup matching template (NOTW 1_NCE.xlsx)
+    ws.pageSetup.paperSize     = 9;
+    ws.pageSetup.orientation   = "portrait";
+    ws.pageSetup.fitToPage     = true;
+    ws.pageSetup.fitToWidth    = 1;
+    ws.pageSetup.fitToHeight   = 0;
+    ws.pageSetup.showGridLines = false;
+    ws.pageSetup.margins = { left: 0.35, right: 0.35, top: 0.55, bottom: 0.55, header: 0.2, footer: 0.2 };
+
     let r = 1;
 
     // ── Row 1: intentionally NO borders ──────────────────────────────────────
     r++;
 
-    // ── Row 2: Entity name — B2:J2 merged ────────────────────────────────────
+    // ── Row 2: Entity name — B2:J2 merged, h=27.75 (template) ────────────────
     preBorderRow(r);                               // ← borders BEFORE merge
     ws.mergeCells(`B${r}:J${r}`);
     ws.getCell(`B${r}`).value     = header.entityNameOverride || displayEntityName;
-    ws.getCell(`B${r}`).font      = { bold: true, size: 11 };
+    ws.getCell(`B${r}`).font      = { name: "Calibri", bold: true, size: 11 };
     ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "middle" };
+    ws.getRow(r).height = 27.75;
     r++;
 
-    // ── Row 3: Notes heading — B3:H3 merged; I3 = year ───────────────────────
+    // ── Row 3: Notes heading — B3:H3 merged; I3 = year — h=22.5 (template) ───
     preBorderRow(r);                               // ← borders BEFORE merge
     ws.mergeCells(`B${r}:H${r}`);
     ws.getCell(`B${r}`).value     = `Notes forming part of the Financial Statements  for the year ended, 31st March, `;
-    ws.getCell(`B${r}`).font      = { bold: true, size: 11 };
+    ws.getCell(`B${r}`).font      = { name: "Calibri", bold: true, size: 11 };
     ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
     ws.getCell(`I${r}`).value     = auditYear;
-    ws.getCell(`I${r}`).font      = { bold: true, size: 11 };
+    ws.getCell(`I${r}`).font      = { name: "Calibri", bold: true, size: 11 };
     ws.getCell(`I${r}`).alignment = { vertical: "middle" };
+    ws.getRow(r).height = 22.5;
     r++;
 
-    // ── Row 4: blank row — B4:J4 merged ──────────────────────────────────────
+    // ── Row 4: blank row — B4:J4 merged, h=5.25 (template) ──────────────────
     preBorderRow(r);                               // ← borders BEFORE merge
     ws.mergeCells(`B${r}:J${r}`);
     ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "top" };
+    ws.getRow(r).height = 5.25;
     r++;
 
     // ── Row 5: "Note :" + summary title — B5 standalone; D5:J5 merged ────────
     preBorderRow(r);                               // ← borders BEFORE any merge
     ws.getCell(`B${r}`).value     = "Note :";
-    ws.getCell(`B${r}`).font      = { bold: true, size: 11 };
+    ws.getCell(`B${r}`).font      = { name: "Calibri", bold: true, size: 11 };
     ws.getCell(`B${r}`).alignment = { vertical: "middle" };
-    ws.getCell(`C${r}`).font      = { bold: true, size: 11 };
+    ws.getCell(`C${r}`).value     = 1;     // Note number
+    ws.getCell(`C${r}`).font      = { name: "Calibri", bold: true, size: 11 };
     ws.getCell(`C${r}`).alignment = { horizontal: "left", vertical: "middle" };
     ws.mergeCells(`D${r}:J${r}`);
     ws.getCell(`D${r}`).value     = "Summary of Significant accounting policies";
-    ws.getCell(`D${r}`).font      = { bold: true, size: 11 };
+    ws.getCell(`D${r}`).font      = { name: "Calibri", bold: true, size: 11 };
     ws.getCell(`D${r}`).alignment = { horizontal: "left", vertical: "middle" };
     r++;
 
-    // ── Row 6: blank separator — only left (B) and right (J) side lines ──────
+    // ── Row 6: blank separator — h=6.75 (template) ──
     // No merges in row 6 → cells are always standalone, border assignment is safe.
     ws.getRow(r).getCell(2).border  = { left:  thin };   // B — left edge
     ws.getRow(r).getCell(10).border = { right: thin };   // J — right edge
+    ws.getRow(r).height = 6.75;
     r++;
 
     // ── Notes rows (starting at r = 7) ────────────────────────────────────────
@@ -766,21 +780,28 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
       // Content row: B:C merged = number, D:J merged = text — NO borders
       ws.mergeCells(`B${r}:C${r}`);
       ws.getCell(`B${r}`).value     = num;
-      ws.getCell(`B${r}`).font      = { size: 11 };
+      ws.getCell(`B${r}`).font      = { name: "Calibri", size: 11 };
       ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "top", wrapText: true };
       ws.mergeCells(`D${r}:J${r}`);
       ws.getCell(`D${r}`).value     = body;
-      ws.getCell(`D${r}`).font      = { size: 11 };
-      ws.getCell(`D${r}`).alignment = { horizontal: "justify", vertical: "top", wrapText: true };
-      const lines = Math.max(1, Math.ceil(body.length / 90) + (body.match(/\n/g)?.length ?? 0));
-      ws.getRow(r).height = Math.max(18, lines * 15);
+      ws.getCell(`D${r}`).font      = { name: "Calibri", size: 11 };
+      // Left-aligned (template doesn't justify) so words don't get
+      // stretched to fill partially-empty lines.
+      ws.getCell(`D${r}`).alignment = { horizontal: "left", vertical: "top", wrapText: true };
+      // Auto-size based on wrapped lines. D:J merged ≈ 80 char-units.
+      const segments = body.split('\n');
+      const wrappedLines = segments.reduce(
+        (s, seg) => s + Math.max(1, Math.ceil(seg.length / 80)), 0,
+      );
+      ws.getRow(r).height = Math.max(18, wrappedLines * 15);
       r++;
 
-      // Blank continuation row — NO borders
+      // Spacer row between notes — h=4.5 (matches template's even-row pattern)
       ws.mergeCells(`B${r}:C${r}`);
       ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "top" };
       ws.mergeCells(`D${r}:J${r}`);
-      ws.getCell(`D${r}`).alignment = { horizontal: "justify", vertical: "top" };
+      ws.getCell(`D${r}`).alignment = { horizontal: "left", vertical: "top" };
+      ws.getRow(r).height = 4.5;
       r++;
     });
 
