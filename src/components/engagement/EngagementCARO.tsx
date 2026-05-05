@@ -1049,25 +1049,29 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     ? wordingFix(yearSub(r.user_response || r.auto_draft || ""))
                     : `Not Applicable${r.inapplicability_reason ? ` — ${r.inapplicability_reason}` : ""}`;
                   const chunks = raw.split(/\n{2,}/);
+                  // Width of the clause-number prefix "N. " (e.g. "1. "
+                  // ≈ 12pt) — used to indent sub-letter rows so they
+                  // start to the RIGHT of where the clause number was,
+                  // matching the template's visual hierarchy.
+                  const numColWidth = pxWidth(`${r.clause_number}. `);
                   chunks.forEach((chunk, idx) => {
                     const { sl, body, isSubSub } = splitChunk(chunk);
                     const bodyHtml = body.replace(/\n/g, "<br/>");
-                    // Build the prefix that appears before the body text
-                    // — clause number on row 0, sub-letter on every row.
+                    // Row 0 carries the clause number; subsequent rows
+                    // start with just the sub-letter prefix.
                     const numPrefix = idx === 0 ? `${r.clause_number}. ` : "";
                     const slPrefix  = sl ? `${sl} ` : "";
                     const fullPrefix = numPrefix + slPrefix;
                     // Hanging indent = visual width of the prefix.
-                    // First line starts at col 0 of the paragraph; wrap
-                    // aligns at the prefix width — so wrapped text sits
-                    // exactly under the first body character.
                     const hang = pxWidth(fullPrefix);
-                    // Sub-sub-letter rows ("(B)") sit slightly deeper
-                    // than letter-level. Template uses ~2-3 char widths
-                    // — keep this nudge subtle (12pt ≈ 2 chars at 11pt
-                    // Times New Roman).
-                    const extra = isSubSub && idx > 0 ? 12 : 0;
-                    const padLeft = hang + extra;
+                    // Subsequent rows: shift the WHOLE line right by
+                    // the number-column width so the sub-letter sits
+                    // visibly indented from where "N." was on row 0.
+                    const rowIndent = idx === 0 ? 0 : numColWidth;
+                    // Sub-sub-letter rows ("(B)") get an extra nudge
+                    // so they sit deeper than letter-level "(b)/(c)".
+                    const subsubExtra = isSubSub && idx > 0 ? 12 : 0;
+                    const padLeft = rowIndent + hang + subsubExtra;
                     const textIndent = -hang;
                     const styleStr =
                       `padding-left:${padLeft}pt;text-indent:${textIndent}pt;`;
