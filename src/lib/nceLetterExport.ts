@@ -386,8 +386,11 @@ export async function exportManagementLetter(
     header: 0.3, footer: 0.3,
   };
   // Hide gridlines in the viewport too — only the explicit heading
-  // borders on B2:H2 and B3:H3 should be visible.
-  ws.views = [{ state: "normal", showGridLines: false } as any];
+  // borders on B2:H2 and B3:H3 should be visible. Use the same
+  // pageBreakPreview view as Client Certificate so the rendering
+  // matches exactly (in normal view some Excel versions still show
+  // gridlines despite showGridLines:false).
+  ws.views = [{ state: "normal", showGridLines: false, view: "pageBreakPreview" } as any];
 
   // ── Column widths — exact match to template ──
   ws.columns = [
