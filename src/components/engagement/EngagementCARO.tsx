@@ -613,9 +613,9 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   const SERIF = "'Times New Roman', Times, serif";
                   const TD = `style="vertical-align:top;"`;
                   const HEAD_CSS = `
-                    @page Section1 { size: A4; margin: 1.2cm 1cm 1.5cm 1.5cm; mso-header-margin: 0; mso-footer-margin: 0; }
+                    @page Section1 { size: A4; margin: 1.5cm 2cm 2cm 2cm; mso-header-margin: 0; mso-footer-margin: 0; }
                     div.Section1 { page: Section1; }
-                    @page { size: A4; margin: 1.2cm 1cm 1.5cm 1.5cm; }
+                    @page { size: A4; margin: 1.5cm 2cm 2cm 2cm; }
                     html, body { margin: 0 !important; padding: 0 !important; }
                     body { font-family: ${SERIF}; font-size: 11pt; }
                     .caro-sig, .caro-sig tr, .caro-sig td {
@@ -800,17 +800,20 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                 //        Office's reliable page-setup directive. Word
                 //        ignores plain @page rules sometimes; the named
                 //        section is honoured.
-                // Page margins: left = 1.5cm gives a clear whitespace band
-                // before the clause-number column. The 3-column TABLE
-                // layout (num | sl | body) doesn't rely on negative
-                // text-indent, so we don't need extra margin to absorb it.
-                // Right margin = 1cm. Total content area ~18.5cm, body
-                // column ~440pt — wide enough for clause 1's first line
-                // to wrap at "quantitative details" like the template.
+                // Page margins per template — visible whitespace bands
+                // before each clause line ("before the point") and
+                // before the right edge ("ending of line"):
+                //   top:    1.5cm
+                //   right:  2cm  (line ending — text wraps before this)
+                //   bottom: 2cm
+                //   left:   2cm  (clause number sits 2cm in from page edge)
+                // Content area ~17cm wide which still fits clause 1's
+                // first line to wrap at "quantitative details" like the
+                // template.
                 const HEAD_CSS = `
-                  @page Section1 { size: A4; margin: 1.2cm 1cm 1.5cm 1.5cm; mso-header-margin: 0; mso-footer-margin: 0; }
+                  @page Section1 { size: A4; margin: 1.5cm 2cm 2cm 2cm; mso-header-margin: 0; mso-footer-margin: 0; }
                   div.Section1 { page: Section1; }
-                  @page { size: A4; margin: 1.2cm 1cm 1.5cm 1.5cm; }
+                  @page { size: A4; margin: 1.5cm 2cm 2cm 2cm; }
                   html, body { margin: 0 !important; padding: 0 !important; }
                   body { font-family: ${SERIF}; font-size: 11pt; }
                   /* Each clause is rendered as a 2-column borderless table:
