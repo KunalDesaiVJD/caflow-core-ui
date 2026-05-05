@@ -1102,10 +1102,10 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   } else if (cn === "15") {
                     // 2 blank lines on page 2 -> break -> 4 blank lines on page 3
                     pageMarker = blank(2) + PAGEBREAK + blank(4);
-                  } else if (cn === "21") {
-                    // 5 blank lines at bottom of page 3 (before signature)
-                    pageMarker = blank(5);
                   }
+                  // No padding after clause 21 — the signature block
+                  // follows directly on the same page; any trailing
+                  // blank lines pushed an extra empty page in Word.
                   html += `<table class="caro-clause">${tableRows}</table>${pageMarker}`;
                 });
 
