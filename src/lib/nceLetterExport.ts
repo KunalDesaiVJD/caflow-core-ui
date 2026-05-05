@@ -232,10 +232,10 @@ export async function exportClientCertificate(
   ws.getRow(15).height = 11.25;
   ws.getRow(17).height = 11.25;
 
-  // ── Row 16 — Cash on hand ──
+  // ── Row 16 — Cash on hand (point #1) ──
   // D16 text overflows naturally into empty E-H — NO merge, NO wrapText.
   // Row height = 18 to match template.
-  ws.getCell("B16").value = "Cash on hand  Rs..";
+  ws.getCell("B16").value = "1.  Cash on hand  Rs..";
   n(ws.getCell("B16"));
   ws.getCell("B16").alignment = { vertical: "top", wrapText: true };
   const coh = data.cashOnHand ? parseFloat(data.cashOnHand) : 0;
@@ -248,9 +248,9 @@ export async function exportClientCertificate(
   ws.getCell("D16").alignment = { vertical: "top" }; // NO wrapText — let overflow
   // Don't force a height — template uses default so the row sizes naturally
 
-  // ── Row 18 — Closing stock (B18:D18 merged) ──
+  // ── Row 18 — Closing stock (point #2) (B18:D18 merged) ──
   ws.mergeCells("B18:D18");
-  ws.getCell("B18").value = "Approxi. Value of the Closing stock is Rs.";
+  ws.getCell("B18").value = "2.  Approxi. Value of the Closing stock is Rs.";
   n(ws.getCell("B18"));
   ws.getCell("B18").alignment = { horizontal: "left", vertical: "top", wrapText: true };
   const cs = data.closingStock ? parseFloat(data.closingStock) : 0;
@@ -296,12 +296,14 @@ export async function exportClientCertificate(
 
     ws.mergeCells(`B${row}:H${row}`);
     const cell = ws.getCell(`B${row}`);
-    cell.value = text;
+    // Cash on hand is #1, closing stock is #2 — dynamic points start at #3
+    const numbered = `${i + 3}.  ${text}`;
+    cell.value = numbered;
     n(cell);
     cell.alignment = { wrapText: true, horizontal: "justify", vertical: "top" };
 
     // Auto-grow content row to fit all wrapped lines
-    ws.getRow(row).height = heightForText(text);
+    ws.getRow(row).height = heightForText(numbered);
 
     // Spacer row immediately before this content row (even row = row-1 for rows 21+)
     if (row > 19) ws.getRow(row - 1).height = 11.25;
