@@ -272,18 +272,22 @@ export async function exportClientCertificate(
   // Template fixed rows for points (up to 7): 19, 21, 23, 25, 27, 29, 31.
   // Odd rows = content; even rows between them = spacers at h=11.25pt.
   //
-  // Excel can auto-fit wrapped text only when the file has been opened
-  // and Excel re-computes layout — but our exports are read straight from
-  // disk, so wrapped lines get clipped to the default 14.25pt row height.
-  // Compute the row height from the text length and the merged column
-  // width (B:H = ~85 character units at 11pt). Height = lines * 15pt.
-  const CHARS_PER_LINE = 85;          // B:H merged width in character units
+  // Layout per row (HANGING INDENT — wrapped lines align under body text):
+  //   B${row}            = "N." (right-aligned, narrow)
+  //   C${row}:H${row}    = body text (wrapped, left-aligned)
+  // Putting the number in its own column and the body in a separate
+  // merged range means every wrapped continuation starts at column C —
+  // visually aligned under the first body character of line 1.
+  //
+  // Excel can auto-fit wrapped text only after the file is opened, so
+  // we pre-compute row height from text length and the body-merge width.
+  // C:H merged ≈ 10.14+9.57+9.14+5.71+7.86+31 = 73.42 char-units → ~73 chars/line.
+  const CHARS_PER_LINE = 73;          // C:H merged width in character units
   const LINE_PT        = 15;          // ≈ 11pt font + leading
   const heightForText  = (text: string) => {
-    const explicitBreaks = (text.match(/\n/g) || []).length;
     const wrapped = text.split('\n')
       .reduce((sum, segment) => sum + Math.max(1, Math.ceil(segment.length / CHARS_PER_LINE)), 0);
-    return Math.max(15, (wrapped + explicitBreaks * 0) * LINE_PT);
+    return Math.max(15, wrapped * LINE_PT);
   };
   const FIXED_ROWS = [19, 21, 23, 25, 27, 29, 31];
   const points = data.points || [];
@@ -294,18 +298,21 @@ export async function exportClientCertificate(
       ? FIXED_ROWS[i]
       : 31 + (i - FIXED_ROWS.length + 1) * 2;
 
-    ws.mergeCells(`B${row}:H${row}`);
-    const cell = ws.getCell(`B${row}`);
-    // Cash on hand is #1, closing stock is #2 — dynamic points start at #3
-    const numbered = `${i + 3}.  ${text}`;
-    cell.value = numbered;
-    n(cell);
-    // Use LEFT (not justify) so every clause begins at the same column
-    // and Excel doesn't stretch words apart on partially-filled lines.
-    cell.alignment = { wrapText: true, horizontal: "left", vertical: "top" };
+    // Number cell (B) — narrow, top-aligned
+    const numCell = ws.getCell(`B${row}`);
+    numCell.value = `${i + 3}.`;     // Cash=1, Closing stock=2, points start at 3
+    n(numCell);
+    numCell.alignment = { vertical: "top", horizontal: "left" };
+
+    // Body cell (C:H merged) — wraps with consistent left edge at column C
+    ws.mergeCells(`C${row}:H${row}`);
+    const bodyCell = ws.getCell(`C${row}`);
+    bodyCell.value = text;
+    n(bodyCell);
+    bodyCell.alignment = { wrapText: true, horizontal: "left", vertical: "top" };
 
     // Auto-grow content row to fit all wrapped lines
-    ws.getRow(row).height = heightForText(numbered);
+    ws.getRow(row).height = heightForText(text);
 
     // Spacer row immediately before this content row (even row = row-1 for rows 21+)
     if (row > 19) ws.getRow(row - 1).height = 11.25;
