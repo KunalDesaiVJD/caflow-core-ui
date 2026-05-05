@@ -324,7 +324,7 @@ export function IFCReportTab({ engagementId, engagement }: Props) {
   //   • Two-column signature block: left = firm + partner stack, right =
   //     place + date stack — bold, no borders
   function exportWord() {
-    const SERIF = `'Times New Roman', Times, serif`;
+    const SERIF = `'Cambria', Georgia, 'Times New Roman', serif`;
     // DD.MM.YYYY
     const reportDateDocx = (() => {
       if (!reportDate) return '[Date]';
@@ -369,12 +369,14 @@ export function IFCReportTab({ engagementId, engagement }: Props) {
       html, body, p, div, span, td, th, li { font-family: ${SERIF} !important; font-size: 11pt !important; }
       body { font-family: ${SERIF}; font-size: 11pt; }
       .ifc-title    { text-align:center; font-weight:bold; text-decoration:underline; margin: 0 0 12pt 0; }
-      .ifc-sub      { text-align:center; font-weight:bold; margin: 0 0 6pt 0; }
-      .ifc-sub2     { text-align:center; font-weight:bold; margin: 0 0 14pt 0; }
+      /* Annexure-B + clause-(i) sub-heading: LEFT-aligned + underlined per template */
+      .ifc-sub      { text-align:left; font-weight:bold; text-decoration:underline; margin: 0 0 6pt 0; }
+      .ifc-sub2     { text-align:left; font-weight:bold; text-decoration:underline; margin: 0 0 14pt 0; }
       .ifc-section  { font-weight:bold; margin: 14pt 0 6pt 0; }
       .ifc-clause   { text-align:justify; margin: 0 0 8pt 0; line-height: 1.4; }
-      .ifc-contd    { text-align:right; font-style:italic; margin: 18pt 0 0 0; }
-      .ifc-contd-from { text-align:left; font-style:italic; margin: 0 0 12pt 0; }
+      /* "Contd. on next page…" — LEFT-aligned per template (not right) */
+      .ifc-contd    { text-align:left; margin: 18pt 0 0 0; }
+      .ifc-contd-from { text-align:left; margin: 0 0 12pt 0; }
       .ifc-page2-hdr  { text-align:center; font-weight:bold; text-decoration:underline; margin: 0 0 6pt 0; }
       .ifc-sig, .ifc-sig tr, .ifc-sig td {
         border: none !important; padding: 0 !important; background: transparent !important;
