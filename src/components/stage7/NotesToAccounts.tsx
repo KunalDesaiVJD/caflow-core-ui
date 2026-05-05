@@ -681,19 +681,20 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
     // ── Pre-merge border helper ───────────────────────────────────────────────
     // MUST be called BEFORE ws.mergeCells() for the same row.
     //
-    // ExcelJS preserves each cell's border object even after it becomes a merge
-    // slave (when borders are set first). When saved to XLSX, J's .right is
-    // present in the slave cell's XML, and Excel renders it as the right edge
-    // of the merged region — giving a clean outer box with no internal dividers.
-    //
-    // Column layout for the outer box:
-    //   col B  (2): top + bottom + LEFT   ← left edge
-    //   col C–I (3–9): top + bottom only  ← interior (no side borders)
-    //   col J  (10): top + bottom + RIGHT ← right edge
-    const preBorderRow = (rn: number) => {
+    // We render the heading area (rows 2 through 6) as ONE continuous outer
+    // box with no internal dividers — so each row passes a `pos` flag:
+    //   "top"    → top + left + right    (row 2)
+    //   "middle" → left + right          (rows 3/4/5)
+    //   "bottom" → bottom + left + right (row 6)
+    // Columns: col B(2) carries the LEFT edge, col J(10) carries the RIGHT
+    // edge, columns C..I (3..9) only get top/bottom on the boundary rows.
+    const preBorderRow = (rn: number, pos: "top" | "middle" | "bottom" = "middle") => {
+      const wantTop    = pos === "top";
+      const wantBottom = pos === "bottom";
       for (let c = 2; c <= 10; c++) {
-        const b: { top: typeof thin; bottom: typeof thin; left?: typeof thin; right?: typeof thin } =
-          { top: thin, bottom: thin };
+        const b: { top?: typeof thin; bottom?: typeof thin; left?: typeof thin; right?: typeof thin } = {};
+        if (wantTop)    b.top    = thin;
+        if (wantBottom) b.bottom = thin;
         if (c === 2)  b.left  = thin;
         if (c === 10) b.right = thin;
         ws.getRow(rn).getCell(c).border = b;
@@ -715,7 +716,7 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
     r++;
 
     // ── Row 2: Entity name — B2:J2 merged, h=27.75 (template) ────────────────
-    preBorderRow(r);                               // ← borders BEFORE merge
+    preBorderRow(r, "top");                        // top edge of outer box
     ws.mergeCells(`B${r}:J${r}`);
     ws.getCell(`B${r}`).value     = header.entityNameOverride || displayEntityName;
     ws.getCell(`B${r}`).font      = { name: "Calibri", bold: true, size: 11 };
@@ -726,11 +727,9 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
     // ── Row 3: Notes heading — B3:H3 merged with year inline; I3 + J3 empty ─
     // Per user requirement: merge spans only B:H (NOT B:J), and the year
     // is embedded INSIDE that merged text — not as a separate I3 cell.
-    // Borders are set on every cell B..J via preBorderRow BEFORE the merge,
-    // so the outer rectangle (left=B, right=J, top+bottom=all) stays
-    // aligned with rows 2/4/5/6. Cells I3 and J3 are empty inside the
-    // bordered box.
-    preBorderRow(r);                               // ← borders BEFORE merge
+    // Side borders only (no top/bottom) so this row sits inside the outer
+    // box of rows 2-6 without an internal divider line above or below it.
+    preBorderRow(r, "middle");                     // side edges only
     ws.mergeCells(`B${r}:H${r}`);
     ws.getCell(`B${r}`).value     = `Notes forming part of the Financial Statements  for the year ended, 31st March, ${auditYear}`;
     ws.getCell(`B${r}`).font      = { name: "Calibri", bold: true, size: 11 };
@@ -739,14 +738,14 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
     r++;
 
     // ── Row 4: blank row — B4:J4 merged, h=5.25 (template) ──────────────────
-    preBorderRow(r);                               // ← borders BEFORE merge
+    preBorderRow(r, "middle");                     // side edges only
     ws.mergeCells(`B${r}:J${r}`);
     ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "top" };
     ws.getRow(r).height = 5.25;
     r++;
 
     // ── Row 5: "Note :" + summary title — B5 standalone; D5:J5 merged ────────
-    preBorderRow(r);                               // ← borders BEFORE any merge
+    preBorderRow(r, "middle");                     // side edges only — NO horizontal divider
     ws.getCell(`B${r}`).value     = "Note :";
     ws.getCell(`B${r}`).font      = { name: "Calibri", bold: true, size: 11 };
     ws.getCell(`B${r}`).alignment = { vertical: "middle" };
@@ -759,10 +758,8 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
     ws.getCell(`D${r}`).alignment = { horizontal: "left", vertical: "middle" };
     r++;
 
-    // ── Row 6: blank separator — h=6.75 (template) ──
-    // No merges in row 6 → cells are always standalone, border assignment is safe.
-    ws.getRow(r).getCell(2).border  = { left:  thin };   // B — left edge
-    ws.getRow(r).getCell(10).border = { right: thin };   // J — right edge
+    // ── Row 6: blank separator — h=6.75 — closes the outer box (bottom edge)
+    preBorderRow(r, "bottom");                     // bottom + left + right
     ws.getRow(r).height = 6.75;
     r++;
 
