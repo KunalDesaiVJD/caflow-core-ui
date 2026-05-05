@@ -232,10 +232,9 @@ export async function exportClientCertificate(
   ws.getRow(15).height = 11.25;
   ws.getRow(17).height = 11.25;
 
-  // ── Row 16 — Cash on hand (point #1) ──
+  // ── Row 16 — Cash on hand ──
   // D16 text overflows naturally into empty E-H — NO merge, NO wrapText.
-  // Row height = 18 to match template.
-  ws.getCell("B16").value = "1.  Cash on hand  Rs..";
+  ws.getCell("B16").value = "Cash on hand  Rs..";
   n(ws.getCell("B16"));
   ws.getCell("B16").alignment = { vertical: "top", wrapText: true };
   const coh = data.cashOnHand ? parseFloat(data.cashOnHand) : 0;
@@ -248,9 +247,9 @@ export async function exportClientCertificate(
   ws.getCell("D16").alignment = { vertical: "top" }; // NO wrapText — let overflow
   // Don't force a height — template uses default so the row sizes naturally
 
-  // ── Row 18 — Closing stock (point #2) (B18:D18 merged) ──
+  // ── Row 18 — Closing stock (B18:D18 merged) ──
   ws.mergeCells("B18:D18");
-  ws.getCell("B18").value = "2.  Approxi. Value of the Closing stock is Rs.";
+  ws.getCell("B18").value = "Approxi. Value of the Closing stock is Rs.";
   n(ws.getCell("B18"));
   ws.getCell("B18").alignment = { horizontal: "left", vertical: "top", wrapText: true };
   const cs = data.closingStock ? parseFloat(data.closingStock) : 0;
@@ -271,19 +270,13 @@ export async function exportClientCertificate(
   // ── Rows 19+ — Dynamic points ──
   // Template fixed rows for points (up to 7): 19, 21, 23, 25, 27, 29, 31.
   // Odd rows = content; even rows between them = spacers at h=11.25pt.
-  //
-  // Layout per row (HANGING INDENT — wrapped lines align under body text):
-  //   B${row}            = "N." (right-aligned, narrow)
-  //   C${row}:H${row}    = body text (wrapped, left-aligned)
-  // Putting the number in its own column and the body in a separate
-  // merged range means every wrapped continuation starts at column C —
-  // visually aligned under the first body character of line 1.
+  // No clause numbering — text goes directly into the merged B:H cell.
   //
   // Excel can auto-fit wrapped text only after the file is opened, so
-  // we pre-compute row height from text length and the body-merge width.
-  // C:H merged ≈ 10.14+9.57+9.14+5.71+7.86+31 = 73.42 char-units → ~73 chars/line.
-  const CHARS_PER_LINE = 73;          // C:H merged width in character units
-  const LINE_PT        = 15;          // ≈ 11pt font + leading
+  // we pre-compute row height from text length and the merged width
+  // (B:H ≈ 16.86+10.14+9.57+9.14+5.71+7.86+31 = ~90 chars/line, conservative 85).
+  const CHARS_PER_LINE = 85;
+  const LINE_PT        = 15;
   const heightForText  = (text: string) => {
     const wrapped = text.split('\n')
       .reduce((sum, segment) => sum + Math.max(1, Math.ceil(segment.length / CHARS_PER_LINE)), 0);
@@ -298,23 +291,16 @@ export async function exportClientCertificate(
       ? FIXED_ROWS[i]
       : 31 + (i - FIXED_ROWS.length + 1) * 2;
 
-    // Number cell (B) — narrow, top-aligned
-    const numCell = ws.getCell(`B${row}`);
-    numCell.value = `${i + 3}.`;     // Cash=1, Closing stock=2, points start at 3
-    n(numCell);
-    numCell.alignment = { vertical: "top", horizontal: "left" };
-
-    // Body cell (C:H merged) — wraps with consistent left edge at column C
-    ws.mergeCells(`C${row}:H${row}`);
-    const bodyCell = ws.getCell(`C${row}`);
-    bodyCell.value = text;
-    n(bodyCell);
-    bodyCell.alignment = { wrapText: true, horizontal: "left", vertical: "top" };
+    ws.mergeCells(`B${row}:H${row}`);
+    const cell = ws.getCell(`B${row}`);
+    cell.value = text;
+    n(cell);
+    cell.alignment = { wrapText: true, horizontal: "left", vertical: "top" };
 
     // Auto-grow content row to fit all wrapped lines
     ws.getRow(row).height = heightForText(text);
 
-    // Spacer row immediately before this content row (even row = row-1 for rows 21+)
+    // Spacer row immediately before this content row
     if (row > 19) ws.getRow(row - 1).height = 11.25;
 
     lastPointRow = row;
