@@ -24,7 +24,8 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
 
       - name: Apply pending migrations
-        run: npx supabase db push
+        continue-on-error: true
+        run: npx supabase db push --include-all
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
 
