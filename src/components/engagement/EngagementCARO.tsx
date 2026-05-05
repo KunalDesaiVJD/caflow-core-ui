@@ -1099,13 +1099,15 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   if (cn === "7") {
                     // end of page 1 -> page break -> 4 blank lines on page 2
                     pageMarker = PAGEBREAK + blank(4);
-                  } else if (cn === "15") {
-                    // 2 blank lines on page 2 -> break -> 4 blank lines on page 3
-                    pageMarker = blank(2) + PAGEBREAK + blank(4);
                   }
-                  // No padding after clause 21 — the signature block
-                  // follows directly on the same page; any trailing
-                  // blank lines pushed an extra empty page in Word.
+                  // After clause 15: no explicit page break or padding.
+                  // The previous PAGEBREAK + 4-blank-line combo created
+                  // a blank page 3 in Word (Word was already breaking the
+                  // page naturally, so the explicit break left the next
+                  // page nearly empty). Let Word flow clauses 16-21
+                  // naturally onto the next page.
+                  // Also no padding after clause 21 — the signature block
+                  // follows directly on the same page.
                   html += `<table class="caro-clause">${tableRows}</table>${pageMarker}`;
                 });
 
