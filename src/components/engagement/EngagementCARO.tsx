@@ -827,9 +827,9 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     padding: 0 !important;
                     background: transparent !important;
                     font-family: ${SERIF} !important;
-                    font-size: 11pt !important;
+                    font-size: 10pt !important;
                     vertical-align: top !important;
-                    line-height: 1.4 !important;
+                    line-height: 1.35 !important;
                   }
                   .caro-clause { width: 100% !important; border-collapse: collapse !important; margin: 0 0 8pt 0 !important; }
                   /* 3-column borderless table per clause:
@@ -844,9 +844,9 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     padding: 0 !important;
                     background: transparent !important;
                     font-family: ${SERIF} !important;
-                    font-size: 11pt !important;
+                    font-size: 10pt !important;
                     vertical-align: top !important;
-                    line-height: 1.4 !important;
+                    line-height: 1.35 !important;
                   }
                   .caro-clause { width: 100% !important; border-collapse: collapse !important; margin: 0 0 6pt 0 !important; }
                   .caro-clause td.num { width: 1% !important; padding: 0 !important; white-space: nowrap !important; }
@@ -1080,7 +1080,15 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                       `</tr>`;
                     }
                   });
-                  html += `<table class="caro-clause">${tableRows}</table>`;
+                  // Force a hard page break AFTER clause 7 so the first
+                  // page contains exactly clauses 1-7 (no orphan page).
+                  // Word reads mso-special-character:line-break + page-break-before
+                  // on a paragraph; the bare CSS page-break also helps in
+                  // browser-rendered fallbacks.
+                  const pageBreak = String(r.clause_number) === "7"
+                    ? `<br clear="all" style="mso-special-character:line-break;page-break-before:always;" />`
+                    : "";
+                  html += `<table class="caro-clause">${tableRows}</table>${pageBreak}`;
                 });
 
                                 // Signature block — class on the partner-row TD so its
