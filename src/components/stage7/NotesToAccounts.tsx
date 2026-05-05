@@ -723,18 +723,15 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
     ws.getRow(r).height = 27.75;
     r++;
 
-    // ── Row 3: Notes heading — B3:J3 merged with the year inline ────────────
-    // Previously B3:H3 was merged + I3 held the year as a separate cell.
-    // Two problems with that:
-    //   (a) "year appearing in the I column" — the year visibly separated
-    //       from the heading text instead of flowing inside it.
-    //   (b) the bordered box only spanned B:H, so I3 sat outside the box
-    //       and J3's right edge no longer met the heading's right edge —
-    //       borders looked misaligned.
-    // Fix: merge the whole B3:J3 range and embed the year directly in the
-    // text so it appears as a continuous bordered heading.
+    // ── Row 3: Notes heading — B3:H3 merged with year inline; I3 + J3 empty ─
+    // Per user requirement: merge spans only B:H (NOT B:J), and the year
+    // is embedded INSIDE that merged text — not as a separate I3 cell.
+    // Borders are set on every cell B..J via preBorderRow BEFORE the merge,
+    // so the outer rectangle (left=B, right=J, top+bottom=all) stays
+    // aligned with rows 2/4/5/6. Cells I3 and J3 are empty inside the
+    // bordered box.
     preBorderRow(r);                               // ← borders BEFORE merge
-    ws.mergeCells(`B${r}:J${r}`);
+    ws.mergeCells(`B${r}:H${r}`);
     ws.getCell(`B${r}`).value     = `Notes forming part of the Financial Statements  for the year ended, 31st March, ${auditYear}`;
     ws.getCell(`B${r}`).font      = { name: "Calibri", bold: true, size: 11 };
     ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
