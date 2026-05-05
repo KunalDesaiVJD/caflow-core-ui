@@ -1080,10 +1080,10 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                       `</tr>`;
                     }
                   });
-                  // Page layout (21 CARO clauses split 7 / 7 / 7):
+                  // Page layout (21 CARO clauses split 7 / 8 / 6):
                   //   Page 1 = clauses 1-7
-                  //   Page 2 = clauses 8-14   (4 blank lines top, 5 bottom)
-                  //   Page 3 = clauses 15-21  (4 blank lines top, 5 bottom)
+                  //   Page 2 = clauses 8-15   (4 blank lines top, 2 bottom)
+                  //   Page 3 = clauses 16-21  (4 blank lines top, 5 bottom)
                   // Word page break: <br ... mso-special-character:line-break;
                   //                          page-break-before:always />
                   // Empty paragraphs use &nbsp; so Word actually renders them
@@ -1099,9 +1099,9 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   if (cn === "7") {
                     // end of page 1 -> page break -> 4 blank lines on page 2
                     pageMarker = PAGEBREAK + blank(4);
-                  } else if (cn === "14") {
-                    // 5 blank lines on page 2 -> break -> 4 blank lines on page 3
-                    pageMarker = blank(5) + PAGEBREAK + blank(4);
+                  } else if (cn === "15") {
+                    // 2 blank lines on page 2 -> break -> 4 blank lines on page 3
+                    pageMarker = blank(2) + PAGEBREAK + blank(4);
                   } else if (cn === "21") {
                     // 5 blank lines at bottom of page 3 (before signature)
                     pageMarker = blank(5);
