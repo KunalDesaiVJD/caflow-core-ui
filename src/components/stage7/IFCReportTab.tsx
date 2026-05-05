@@ -112,7 +112,7 @@ const buildDefaults = (companyName: string, fyEnd: string): SectionMap => ({
     `evaluating the design and operating effectiveness of internal control ` +
     `based on the assessed risk. The procedures selected depend on the ` +
     `auditor's judgment, including the assessment of the risks of material ` +
-    `misstatement of the financial statements, whether due to fraud or error. ` +
+    `misstatement of the financial statements, whether due to fraud or error.\n\n` +
     `We believe that the audit evidence I/we have obtained is sufficient and ` +
     `appropriate to provide a basis for our audit opinion on the Company's ` +
     `internal financial controls system over financial reporting.`,
@@ -402,9 +402,14 @@ export function IFCReportTab({ engagementId, engagement }: Props) {
       // Management's Responsibility
       `<p class="ifc-section">Management&#39;s Responsibility for Internal Financial Controls</p>` +
       para(sections.mgmt_responsibility) +
-      // Auditors' Responsibility
+      // Auditors' Responsibility — force "We believe..." onto its own
+      // paragraph (template format) even if the saved text has it stuck
+      // to the prior "fraud or error." sentence.
       `<p class="ifc-section">Auditors&#39; Responsibility</p>` +
-      para(sections.auditors_responsibility) +
+      para((sections.auditors_responsibility || '').replace(
+        /(fraud or error\.)\s+(We believe)/,
+        '$1\n\n$2',
+      )) +
       // Meaning of IFC over FR — split: intro + (1) + (2) on page 1
       `<p class="ifc-section">Meaning of Internal Financial Controls over Financial Reporting</p>` +
       meaningPage1.map(p => `<p class="ifc-clause">${yearSub(p).replace(/\n/g, '<br/>')}</p>`).join('') +
