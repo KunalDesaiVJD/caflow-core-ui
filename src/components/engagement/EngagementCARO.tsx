@@ -848,8 +848,8 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     line-height: 1.4 !important;
                   }
                   .caro-clause { width: 100% !important; border-collapse: collapse !important; margin: 0 0 6pt 0 !important; }
-                  .caro-clause td.num { width: 1% !important; padding-right: 4pt !important; white-space: nowrap !important; }
-                  .caro-clause td.sl  { width: 1% !important; padding-right: 4pt !important; white-space: nowrap !important; }
+                  .caro-clause td.num { width: 1% !important; padding: 0 !important; white-space: nowrap !important; }
+                  .caro-clause td.sl  { width: 1% !important; padding: 0 !important; white-space: nowrap !important; }
                   .caro-clause td.sl.subsub { padding-left: 0 !important; }
                   .caro-clause td.bd  { padding-bottom: 6pt !important; }
                   .caro-sig, .caro-sig tr, .caro-sig td {
@@ -1055,12 +1055,12 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   chunks.forEach((chunk, idx) => {
                     const { sl, body, isSubSub } = splitChunk(chunk);
                     const bodyHtml = body.replace(/\n/g, "<br/>");
-                    const numCell = idx === 0 ? `${r.clause_number}.` : "&nbsp;";
+                    const numCell = idx === 0 ? `${r.clause_number}.&nbsp;` : "&nbsp;";
                     if (sl) {
                       const slClass = isSubSub ? "sl subsub" : "sl";
                       tableRows += `<tr>` +
                         `<td class="num">${numCell}</td>` +
-                        `<td class="${slClass}">${sl}</td>` +
+                        `<td class="${slClass}">${sl}&nbsp;</td>` +
                         `<td class="bd">${bodyHtml}</td>` +
                       `</tr>`;
                     } else {
