@@ -171,7 +171,13 @@ export async function exportClientCertificate(
   ws.getCell("B3").value = data.clientAddress || "[ENTITY ADDRESS]";
   b(ws.getCell("B3"));
   ws.getCell("B3").alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-  ws.getRow(3).height = 18;
+  // Auto-grow row 3 to fit wrapped address (B3:H3 = ~90 char-units wide).
+  // ExcelJS won't auto-size; set height = ceil(len/85) * 15pt with 18pt min.
+  {
+    const addr = data.clientAddress || "[ENTITY ADDRESS]";
+    const lines = Math.max(1, Math.ceil(addr.length / 85));
+    ws.getRow(3).height = Math.max(18, lines * 15);
+  }
 
   // ── Row 5 — Date ──
   ws.mergeCells("B5:H5");
@@ -264,9 +270,21 @@ export async function exportClientCertificate(
 
   // ── Rows 19+ — Dynamic points ──
   // Template fixed rows for points (up to 7): 19, 21, 23, 25, 27, 29, 31.
-  // Odd rows = content; even rows between them = spacers at height 11.25pt.
-  // Per template: content rows DON'T have a fixed height — they auto-fit
-  // to the wrapped text length. Only the spacer rows are explicitly h=11.25.
+  // Odd rows = content; even rows between them = spacers at h=11.25pt.
+  //
+  // Excel can auto-fit wrapped text only when the file has been opened
+  // and Excel re-computes layout — but our exports are read straight from
+  // disk, so wrapped lines get clipped to the default 14.25pt row height.
+  // Compute the row height from the text length and the merged column
+  // width (B:H = ~85 character units at 11pt). Height = lines * 15pt.
+  const CHARS_PER_LINE = 85;          // B:H merged width in character units
+  const LINE_PT        = 15;          // ≈ 11pt font + leading
+  const heightForText  = (text: string) => {
+    const explicitBreaks = (text.match(/\n/g) || []).length;
+    const wrapped = text.split('\n')
+      .reduce((sum, segment) => sum + Math.max(1, Math.ceil(segment.length / CHARS_PER_LINE)), 0);
+    return Math.max(15, (wrapped + explicitBreaks * 0) * LINE_PT);
+  };
   const FIXED_ROWS = [19, 21, 23, 25, 27, 29, 31];
   const points = data.points || [];
 
@@ -281,6 +299,9 @@ export async function exportClientCertificate(
     cell.value = text;
     n(cell);
     cell.alignment = { wrapText: true, horizontal: "justify", vertical: "top" };
+
+    // Auto-grow content row to fit all wrapped lines
+    ws.getRow(row).height = heightForText(text);
 
     // Spacer row immediately before this content row (even row = row-1 for rows 21+)
     if (row > 19) ws.getRow(row - 1).height = 11.25;
