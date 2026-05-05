@@ -530,7 +530,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
 
       if (shareViaEmail && shareEmail) {
         const allCC = [...shareCC, ...(shareCCInput.trim() ? [shareCCInput.trim()] : [])].filter(e => e && e !== shareEmail);
-        await supabase.functions.invoke("send-notification", {
+        const { error: invokeError } = await supabase.functions.invoke("send-notification", {
           body: {
             type: "invoice_generated",
             firm_id: shareInvoice.firm_id,
@@ -549,6 +549,28 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
             },
           },
         });
+        // Frontend-side audit log — ensures Email Log tab always shows every send,
+        // regardless of which edge function version is deployed.
+        try {
+          await (supabase.from("notification_log") as any).insert({
+            firm_id:      shareInvoice.firm_id,
+            recipient_id: shareInvoice.client_id,
+            channel:      "email",
+            type:         "invoice_generated",
+            content: {
+              to:      shareEmail,
+              subject: shareSubject,
+              ...(allCC.length > 0 ? { cc: allCC.join(", ") } : {}),
+              ...(shareMessage      ? { body: shareMessage }   : {}),
+              ...(invokeError       ? { error: invokeError.message ?? String(invokeError) } : {}),
+            },
+            status:      invokeError ? "failed" : "sent",
+            provider_id: null,
+            sent_at:     new Date().toISOString(),
+          });
+        } catch (logErr) {
+          console.error("[EmailLog] Failed to write notification log:", logErr);
+        }
         await supabase.from("invoices").update({ status: "sent", sent_at: new Date().toISOString() }).eq("id", shareInvoice.id);
         toast({ title: pdfBase64 ? "Email sent with PDF attachment" : "Email sent successfully" });
       }
