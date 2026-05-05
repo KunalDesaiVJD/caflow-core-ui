@@ -815,6 +815,7 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   div.Section1 { page: Section1; }
                   @page { size: A4; margin: 1.5cm 2cm 2cm 2cm; }
                   html, body { margin: 0 !important; padding: 0 !important; }
+                  html, body, p, div, span, td, th, li { font-family: ${SERIF} !important; font-size: 11pt !important; }
                   body { font-family: ${SERIF}; font-size: 11pt; }
                   /* Each clause is rendered as a 2-column borderless table:
                      col 1 = clause number, col 2 = body (with sub-letter
