@@ -87,14 +87,15 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
   ];
 
   const fetchLogs = useCallback(async () => {
-    if (!resolvedFirmId) { setLoading(false); return; }
     setLoading(true);
 
     let q = (supabase.from("notification_log") as any)
       .select("*", { count: "exact" })
-      .eq("firm_id", resolvedFirmId)
       .order("sent_at", { ascending: false })
       .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+
+    // Filter by firm when available; super-admins without a firm_id see all logs
+    if (resolvedFirmId) q = q.eq("firm_id", resolvedFirmId);
 
     if (statusFilter !== "all") q = q.eq("status", statusFilter);
     if (channelFilter !== "all") q = q.eq("channel", channelFilter);
