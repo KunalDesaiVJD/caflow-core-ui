@@ -367,21 +367,21 @@ export function IFCReportTab({ engagementId, engagement }: Props) {
       @page { size: A4; margin: 1.5cm 2cm 2cm 2cm; }
       html, body { margin: 0 !important; padding: 0 !important; }
       /* Uniform 11pt for body and headings */
-      html, body, p, div, span, td, th, li { font-family: ${SERIF} !important; font-size: 11pt !important; }
-      body { font-family: ${SERIF}; font-size: 11pt; }
-      .ifc-title    { text-align:center; font-weight:bold; text-decoration:underline; font-size:11pt !important; margin: 0 0 12pt 0; }
+      html, body, p, div, span, td, th, li { font-family: ${SERIF} !important; font-size: 10pt !important; }
+      body { font-family: ${SERIF}; font-size: 10pt; }
+      .ifc-title    { text-align:center; font-weight:bold; text-decoration:underline; font-size:10pt !important; margin: 0 0 12pt 0; }
       /* Annexure-B + clause-(i) sub-heading: LEFT-aligned + underlined per template */
-      .ifc-sub      { text-align:left; font-weight:bold; text-decoration:underline; font-size:11pt !important; margin: 0 0 6pt 0; }
-      .ifc-sub2     { text-align:left; font-weight:bold; text-decoration:underline; font-size:11pt !important; margin: 0 0 14pt 0; }
-      .ifc-section  { font-weight:bold; font-size:11pt !important; margin: 14pt 0 6pt 0; }
-      .ifc-clause   { text-align:justify; font-size:11pt !important; margin: 0 0 8pt 0; line-height: 1.4; }
+      .ifc-sub      { text-align:left; font-weight:bold; text-decoration:underline; font-size:10pt !important; margin: 0 0 6pt 0; }
+      .ifc-sub2     { text-align:left; font-weight:bold; text-decoration:underline; font-size:10pt !important; margin: 0 0 14pt 0; }
+      .ifc-section  { font-weight:bold; font-size:10pt !important; margin: 14pt 0 6pt 0; }
+      .ifc-clause   { text-align:justify; font-size:10pt !important; margin: 0 0 8pt 0; line-height: 1.4; }
       /* "Contd. on next page…" — LEFT-aligned per template (not right) */
-      .ifc-contd    { text-align:left; font-size:11pt !important; margin: 18pt 0 0 0; }
-      .ifc-contd-from { text-align:left; font-size:11pt !important; margin: 0 0 12pt 0; }
-      .ifc-page2-hdr  { text-align:center; font-weight:bold; text-decoration:underline; font-size:11pt !important; margin: 0 0 6pt 0; }
+      .ifc-contd    { text-align:left; font-size:10pt !important; margin: 18pt 0 0 0; }
+      .ifc-contd-from { text-align:left; font-size:10pt !important; margin: 0 0 12pt 0; }
+      .ifc-page2-hdr  { text-align:center; font-weight:bold; text-decoration:underline; font-size:10pt !important; margin: 0 0 6pt 0; }
       .ifc-sig, .ifc-sig tr, .ifc-sig td {
         border: none !important; padding: 0 !important; background: transparent !important;
-        font-family: ${SERIF} !important; font-size: 11pt !important;
+        font-family: ${SERIF} !important; font-size: 10pt !important;
         vertical-align: top !important; line-height: 1.4 !important;
       }
       .ifc-sig { width: 100% !important; border-collapse: collapse !important; margin-top: 24pt !important; }
