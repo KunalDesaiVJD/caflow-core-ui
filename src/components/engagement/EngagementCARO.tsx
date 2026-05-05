@@ -1080,15 +1080,33 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                       `</tr>`;
                     }
                   });
-                  // Force a hard page break AFTER clause 7 so the first
-                  // page contains exactly clauses 1-7 (no orphan page).
-                  // Word reads mso-special-character:line-break + page-break-before
-                  // on a paragraph; the bare CSS page-break also helps in
-                  // browser-rendered fallbacks.
-                  const pageBreak = String(r.clause_number) === "7"
-                    ? `<br clear="all" style="mso-special-character:line-break;page-break-before:always;" />`
-                    : "";
-                  html += `<table class="caro-clause">${tableRows}</table>${pageBreak}`;
+                  // Page layout (21 CARO clauses split 7 / 7 / 7):
+                  //   Page 1 = clauses 1-7
+                  //   Page 2 = clauses 8-14   (4 blank lines top, 5 bottom)
+                  //   Page 3 = clauses 15-21  (4 blank lines top, 5 bottom)
+                  // Word page break: <br ... mso-special-character:line-break;
+                  //                          page-break-before:always />
+                  // Empty paragraphs use &nbsp; so Word actually renders them
+                  // (a bare empty <p> collapses to height 0).
+                  const blank = (n: number) =>
+                    Array.from({ length: n }, () =>
+                      `<p style="margin:0;line-height:1.35;font-size:10pt;">&nbsp;</p>`
+                    ).join("");
+                  const PAGEBREAK =
+                    `<br clear="all" style="mso-special-character:line-break;page-break-before:always;" />`;
+                  let pageMarker = "";
+                  const cn = String(r.clause_number);
+                  if (cn === "7") {
+                    // end of page 1 -> page break -> 4 blank lines on page 2
+                    pageMarker = PAGEBREAK + blank(4);
+                  } else if (cn === "14") {
+                    // 5 blank lines on page 2 -> break -> 4 blank lines on page 3
+                    pageMarker = blank(5) + PAGEBREAK + blank(4);
+                  } else if (cn === "21") {
+                    // 5 blank lines at bottom of page 3 (before signature)
+                    pageMarker = blank(5);
+                  }
+                  html += `<table class="caro-clause">${tableRows}</table>${pageMarker}`;
                 });
 
                                 // Signature block — class on the partner-row TD so its
