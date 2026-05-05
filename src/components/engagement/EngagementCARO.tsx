@@ -878,7 +878,10 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   `padding:0 36pt;"><span style="font-size:11pt !important;">` +
                   `Annexure - A referred to paragraph under the ` +
                   `heading &quot;Report on Other Legal and Regulatory&quot; of our ` +
-                  `independent Auditor&#39;s Report of even date</span></p>`;
+                  `independent Auditor&#39;s Report of even date</span></p>` +
+                  // Two blank lines between heading and first clause
+                  `<p style="margin:0;line-height:1.4;">&nbsp;</p>` +
+                  `<p style="margin:0;line-height:1.4;">&nbsp;</p>`;
 
                 // Substitute the "20XX" placeholder with the actual FY end
                 // year at export time.
