@@ -3943,46 +3943,74 @@ export default function PipelineFinancialStatements({
 
     if (isNonCorporate) {
       // ─────────────────────── NOTE 1: Notes to Accounts ─────────────────────
-      // Source: user-edited rows in `notes_to_accounts_data` (Stage 7 →
-      // "Note 1" tab). Each selected note becomes a numbered paragraph, with
-      // inline tokens (cash amount, closing stock, FA note refs, last note)
-      // substituted from the same header_overrides the user filled in on-screen.
+      // Layout matches the supplied template at C:\Users\Admin\Downloads\NOTW 1_NCE.xlsx
+      //   • Cols A(margin) B(note#) C(small) D-J body H is widest (29.14)
+      //   • R2 = entity name centered (bold, big)
+      //   • R3 = "Notes forming part of the Financial Statements..." centered
+      //   • R5 = "Note : 1   Summary of Significant accounting policies"
+      //   • Each saved note: B${row}=N, D${row}:J${row}=body (wrapped, justify top)
+      //     with a h=4.5 spacer row between every two notes
+      //   • Signature block: 2-column layout — left = assessee/place/date,
+      //     right = firm/partner/membership
       const n1 = wb.addWorksheet("Note 1", { views: [{ showGridLines: false }] });
       n1.columns = [
-        { width: 2 },    // A spacer
-        { width: 10 },   // B  "Note N"
-        { width: 32 },   // C  Title
-        { width: 70 },   // D  Body
+        { width: 2.29 },   // A — left margin
+        { width: 5.57 },   // B — note number
+        { width: 2.14 },   // C — small gap
+        { width: 11.57 }, // D
+        { width: 10.71 }, // E
+        { width: 6.57 },  // F
+        { width: 12.29 }, // G
+        { width: 29.14 }, // H — widest body column
+        { width: 7.86 },  // I
+        { width: 3.71 },  // J — right edge of body
+        { width: 3.29 },  // K — right margin
       ];
+      // Page setup to match template
+      n1.pageSetup.paperSize     = 9;
+      n1.pageSetup.orientation   = "portrait";
+      n1.pageSetup.fitToPage     = true;
+      n1.pageSetup.fitToWidth    = 1;
+      n1.pageSetup.fitToHeight   = 0;
+      n1.pageSetup.showGridLines = false;
+      n1.pageSetup.margins = { left: 0.35, right: 0.35, top: 0.55, bottom: 0.55, header: 0.2, footer: 0.2 };
+
       let n1r = 2;
       const n1EntityName = notesToAccountsData?.header_overrides?.entityNameOverride
         || clientName;
+      // ── Row 2 — Entity name (B2:J2 merged, h=27.75) ──
+      n1.mergeCells(`B${n1r}:J${n1r}`);
       n1.getCell(`B${n1r}`).value = n1EntityName;
-      n1.getCell(`B${n1r}`).font = { bold: true, size: 13 };
-      n1.mergeCells(`B${n1r}:D${n1r}`);
-      n1.getCell(`B${n1r}`).alignment = { horizontal: "center" };
+      n1.getCell(`B${n1r}`).font = { name: "Calibri", bold: true, size: 14 };
+      n1.getCell(`B${n1r}`).alignment = { horizontal: "center", vertical: "middle" };
+      n1.getRow(n1r).height = 27.75;
       n1r++;
+      // ── Row 3 — "Notes forming part..." (B3:J3 merged, h=22.5) ──
+      n1.mergeCells(`B${n1r}:J${n1r}`);
       n1.getCell(`B${n1r}`).value =
-        `Notes forming part of the Financial Statements for the year ended 31st March, ${cyYear}`;
-      n1.getCell(`B${n1r}`).font = { bold: true, size: 11 };
-      n1.mergeCells(`B${n1r}:D${n1r}`);
-      n1.getCell(`B${n1r}`).alignment = { horizontal: "center" };
+        `Notes forming part of the Financial Statements  for the year ended, 31st March, ${cyYear}`;
+      n1.getCell(`B${n1r}`).font = { name: "Calibri", bold: true, size: 11 };
+      n1.getCell(`B${n1r}`).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+      n1.getRow(n1r).height = 22.5;
       n1r++;
-      n1.getCell(`B${n1r}`).value = "Note: Summary of Significant Accounting Policies";
-      n1.getCell(`B${n1r}`).font = { italic: true, size: 10 };
-      n1.mergeCells(`B${n1r}:D${n1r}`);
-      n1.getCell(`B${n1r}`).alignment = { horizontal: "center" };
-      n1r += 2;
-
-      // Table header
-      n1.getCell(`B${n1r}`).value = "Note";
-      n1.getCell(`C${n1r}`).value = "Title";
-      n1.getCell(`D${n1r}`).value = "Particulars";
-      for (const a of ["B","C","D"]) {
-        n1.getCell(`${a}${n1r}`).font = { bold: true };
-        n1.getCell(`${a}${n1r}`).alignment = { horizontal: "center", vertical: "middle" };
-        n1.getCell(`${a}${n1r}`).border = fullBorder;
-      }
+      // ── Row 4 — small spacer (h=5.25) ──
+      n1.mergeCells(`B${n1r}:J${n1r}`);
+      n1.getRow(n1r).height = 5.25;
+      n1r++;
+      // ── Row 5 — "Note :  1  Summary of Significant accounting policies" ──
+      n1.getCell(`B${n1r}`).value = "Note :";
+      n1.getCell(`B${n1r}`).font = { name: "Calibri", bold: true, size: 11 };
+      n1.getCell(`B${n1r}`).alignment = { horizontal: "left", vertical: "middle" };
+      n1.getCell(`C${n1r}`).value = 1;
+      n1.getCell(`C${n1r}`).font = { name: "Calibri", bold: true, size: 11 };
+      n1.getCell(`C${n1r}`).alignment = { horizontal: "left", vertical: "middle" };
+      n1.mergeCells(`D${n1r}:J${n1r}`);
+      n1.getCell(`D${n1r}`).value = "Summary of Significant accounting policies";
+      n1.getCell(`D${n1r}`).font = { name: "Calibri", bold: true, size: 11 };
+      n1.getCell(`D${n1r}`).alignment = { horizontal: "left", vertical: "middle" };
+      n1r++;
+      // ── Row 6 — small spacer (h=6.75) ──
+      n1.getRow(n1r).height = 6.75;
       n1r++;
 
       // Resolve saved notes (or fall back to the built-in template so the
@@ -4006,6 +4034,31 @@ export default function PipelineFinancialStatements({
 
       const selectedNotes = stage7Notes.filter((n: any) => n.selected !== false);
 
+      // Helper: emit one note row (B = number, D:J merged = body) plus a 4.5pt spacer below.
+      // D:J merged width ≈ 11.57 + 10.71 + 6.57 + 12.29 + 29.14 + 7.86 + 3.71 = 81.85 char-units
+      const CHARS_PER_LINE = 80;
+      const writeNoteRow = (num: number | "", body: string) => {
+        if (num !== "") {
+          n1.getCell(`B${n1r}`).value = num;
+          n1.getCell(`B${n1r}`).font = { name: "Calibri", bold: true, size: 11 };
+          n1.getCell(`B${n1r}`).alignment = { horizontal: "center", vertical: "top" };
+        }
+        n1.mergeCells(`D${n1r}:J${n1r}`);
+        n1.getCell(`D${n1r}`).value = body;
+        n1.getCell(`D${n1r}`).font = { name: "Calibri", size: 11 };
+        n1.getCell(`D${n1r}`).alignment = { horizontal: "left", vertical: "top", wrapText: true };
+        const segments = body.split('\n');
+        const wrappedLines = segments.reduce(
+          (s, seg) => s + Math.max(1, Math.ceil(seg.length / CHARS_PER_LINE)),
+          0,
+        );
+        n1.getRow(n1r).height = Math.max(18, wrappedLines * 15);
+        n1r++;
+        // 4.5pt spacer between notes (matches template's even-row pattern)
+        n1.getRow(n1r).height = 4.5;
+        n1r++;
+      };
+
       if (selectedNotes.length > 0) {
         selectedNotes.forEach((note: any, idx: number) => {
           const num = idx + 1;
@@ -4016,42 +4069,58 @@ export default function PipelineFinancialStatements({
           if (note.id === "note-3" && note3Variant !== "none" && header.note3VariantText) {
             body += "\n\n" + resolveTokens(header.note3VariantText, selectedNotes.length);
           }
-          n1.getCell(`B${n1r}`).value = `Note ${num}`;
-          n1.getCell(`B${n1r}`).font = { bold: true };
-          n1.getCell(`B${n1r}`).alignment = { vertical: "top", horizontal: "center" };
-          n1.getCell(`C${n1r}`).value = note.title || "";
-          n1.getCell(`C${n1r}`).font = { bold: true };
-          n1.getCell(`C${n1r}`).alignment = { vertical: "top", wrapText: true };
-          n1.getCell(`D${n1r}`).value = body;
-          n1.getCell(`D${n1r}`).alignment = { vertical: "top", wrapText: true };
-          for (const a of ["B","C","D"]) n1.getCell(`${a}${n1r}`).border = fullBorder;
-          const lines = Math.max(1,
-            Math.ceil((body.length || 0) / 80) + (body.match(/\n/g)?.length ?? 0),
-          );
-          n1.getRow(n1r).height = Math.max(18, lines * 15);
-          n1r++;
+          // Prepend the note title to the body if title exists (templates in
+          // the saved data may not embed the title in the text itself)
+          if (note.title) body = `${note.title}\n${body}`;
+          writeNoteRow(num, body);
         });
 
-        // Signature block after the notes
-        n1r += 2;
-        n1.getCell(`B${n1r}`).value = "For,";
-        n1.getCell(`C${n1r}`).value = sigFirmName || "[CA FIRM NAME]";
-        n1.getCell(`C${n1r}`).font = { bold: true };
-        n1r++;
-        n1.getCell(`B${n1r}`).value = "Chartered Accountants";
-        n1.getCell(`B${n1r}`).font = { italic: true };
-        n1.mergeCells(`B${n1r}:C${n1r}`);
-        n1r++;
-        n1.getCell(`B${n1r}`).value = "FRN:";
-        n1.getCell(`C${n1r}`).value = sigFirmFRN || "[FRN]";
-        n1r += 3;
-        n1.getCell(`B${n1r}`).value = sigPartnerName || "[Partner Name]";
-        n1.getCell(`B${n1r}`).font = { bold: true };
-        n1r++;
-        n1.getCell(`B${n1r}`).value = "Partner";
-        n1r++;
-        n1.getCell(`B${n1r}`).value = "Membership No.";
-        n1.getCell(`C${n1r}`).value = sigMembershipNo || "";
+        // ── Signature block — 2-column layout matching template ──
+        // Add some breathing room (one extra spacer row)
+        n1.getRow(n1r).height = 9; n1r++;
+        // Left column starts at B, right column starts at G
+        const sigStart = n1r;
+        const setLeft  = (row: number, text: string, opts: { bold?: boolean } = {}) => {
+          n1.getCell(`B${row}`).value = text;
+          n1.getCell(`B${row}`).font = { name: "Calibri", size: 11, bold: !!opts.bold };
+          n1.getCell(`B${row}`).alignment = { horizontal: "left", vertical: "top" };
+        };
+        const setRight = (row: number, text: string, opts: { bold?: boolean } = {}) => {
+          n1.getCell(`G${row}`).value = text;
+          n1.getCell(`G${row}`).font = { name: "Calibri", size: 11, bold: !!opts.bold };
+          n1.getCell(`G${row}`).alignment = { horizontal: "left", vertical: "top" };
+        };
+        // Row 1: For, [Entity Name]   |   For [CA Firm Name]
+        setLeft (sigStart,     `For, ${n1EntityName}`,                  { bold: true });
+        setRight(sigStart,     `For, ${sigFirmName || "[CA Firm Name]"}`, { bold: true });
+        n1.getRow(sigStart).height = 15;
+        // Row 2: (blank)            |   Chartered Accountants
+        setRight(sigStart + 1, "Chartered Accountants");
+        n1.getRow(sigStart + 1).height = 15;
+        // Row 3: (blank)            |   FRN: <num>
+        setRight(sigStart + 2, `FRN: ${sigFirmFRN || "_______"}`);
+        n1.getRow(sigStart + 2).height = 15;
+        // Rows 4-6: gap for physical signatures
+        n1.getRow(sigStart + 3).height = 15;
+        n1.getRow(sigStart + 4).height = 15;
+        // Row 6: x_______          |   [Partner Name]
+        setLeft (sigStart + 5, "x_____________________");
+        setRight(sigStart + 5, sigPartnerName || "[Partner Name]", { bold: true });
+        n1.getRow(sigStart + 5).height = 15;
+        // Row 7: Signature of assessee | Partner
+        setLeft (sigStart + 6, "Signature of assessee");
+        setRight(sigStart + 6, "Partner");
+        n1.getRow(sigStart + 6).height = 15;
+        // Row 8: Place: ____         | Membership No.: ____
+        setLeft (sigStart + 7, `Place : ${sigPlace || "______"}`);
+        setRight(sigStart + 7, `Membership No.: ${sigMembershipNo || "_______"}`);
+        n1.getRow(sigStart + 7).height = 15;
+        // Row 9: Date : DD/MM/YYYY  | (blank)
+        const today = new Date();
+        const todayStr = `${String(today.getDate()).padStart(2,'0')}/${String(today.getMonth()+1).padStart(2,'0')}/${today.getFullYear()}`;
+        setLeft (sigStart + 8, `Date  : ${todayStr}`);
+        n1.getRow(sigStart + 8).height = 15;
+        n1r = sigStart + 9;
       } else {
         // Fallback: hardcoded accounting policies when no Stage-7 notes exist.
         // Emitted in the same `Note | Title | Particulars` three-column
@@ -4073,40 +4142,43 @@ export default function PipelineFinancialStatements({
         ];
 
         for (const p of policies) {
-          n1.getCell(`B${n1r}`).value = p.num;
-          n1.getCell(`B${n1r}`).font = { bold: true };
-          n1.getCell(`B${n1r}`).alignment = { vertical: "top", horizontal: "center" };
-          n1.getCell(`C${n1r}`).value = p.title;
-          n1.getCell(`C${n1r}`).font = { bold: true };
-          n1.getCell(`C${n1r}`).alignment = { vertical: "top", wrapText: true };
-          n1.getCell(`D${n1r}`).value = p.text;
-          n1.getCell(`D${n1r}`).alignment = { wrapText: true, vertical: "top" };
-          for (const a of ["B","C","D"]) n1.getCell(`${a}${n1r}`).border = fullBorder;
-          const lines = Math.max(1, Math.ceil((p.text.length || 0) / 80));
-          n1.getRow(n1r).height = Math.max(32, lines * 15);
-          n1r++;
+          // Use the same template-matched layout as the saved-notes branch
+          // so both code paths render identically.
+          const numAsInt = parseInt(p.num) || "";
+          writeNoteRow(numAsInt as number, `${p.title}\n${p.text}`);
         }
 
-        // Signature block
-        n1r += 1;
-        n1.getCell(`B${n1r}`).value = "For,";
-        n1.getCell(`C${n1r}`).value = sigFirmName || "[CA FIRM NAME]";
-        n1.getCell(`C${n1r}`).font = { bold: true };
-        n1r++;
-        n1.getCell(`B${n1r}`).value = "Chartered Accountants";
-        n1.getCell(`B${n1r}`).font = { italic: true };
-        n1.mergeCells(`B${n1r}:C${n1r}`);
-        n1r++;
-        n1.getCell(`B${n1r}`).value = "FRN:";
-        n1.getCell(`C${n1r}`).value = sigFirmFRN || "[FRN]";
-        n1r += 3;
-        n1.getCell(`B${n1r}`).value = sigPartnerName || "[Partner Name]";
-        n1.getCell(`B${n1r}`).font = { bold: true };
-        n1r++;
-        n1.getCell(`B${n1r}`).value = "Partner";
-        n1r++;
-        n1.getCell(`B${n1r}`).value = "Membership No.";
-        n1.getCell(`C${n1r}`).value = sigMembershipNo || "";
+        // ── Signature block — 2-column layout matching template ──
+        n1.getRow(n1r).height = 9; n1r++;
+        const sigStart = n1r;
+        const setLeft  = (row: number, text: string, opts: { bold?: boolean } = {}) => {
+          n1.getCell(`B${row}`).value = text;
+          n1.getCell(`B${row}`).font = { name: "Calibri", size: 11, bold: !!opts.bold };
+          n1.getCell(`B${row}`).alignment = { horizontal: "left", vertical: "top" };
+        };
+        const setRight = (row: number, text: string, opts: { bold?: boolean } = {}) => {
+          n1.getCell(`G${row}`).value = text;
+          n1.getCell(`G${row}`).font = { name: "Calibri", size: 11, bold: !!opts.bold };
+          n1.getCell(`G${row}`).alignment = { horizontal: "left", vertical: "top" };
+        };
+        setLeft (sigStart,     `For, ${n1EntityName}`,                  { bold: true });
+        setRight(sigStart,     `For, ${sigFirmName || "[CA Firm Name]"}`, { bold: true });
+        setRight(sigStart + 1, "Chartered Accountants");
+        setRight(sigStart + 2, `FRN: ${sigFirmFRN || "_______"}`);
+        for (let r = 0; r < 5; r++) n1.getRow(sigStart + r).height = 15;
+        n1.getRow(sigStart + 3).height = 15;
+        n1.getRow(sigStart + 4).height = 15;
+        setLeft (sigStart + 5, "x_____________________");
+        setRight(sigStart + 5, sigPartnerName || "[Partner Name]", { bold: true });
+        setLeft (sigStart + 6, "Signature of assessee");
+        setRight(sigStart + 6, "Partner");
+        setLeft (sigStart + 7, `Place : ${sigPlace || "______"}`);
+        setRight(sigStart + 7, `Membership No.: ${sigMembershipNo || "_______"}`);
+        const today2 = new Date();
+        const todayStr2 = `${String(today2.getDate()).padStart(2,'0')}/${String(today2.getMonth()+1).padStart(2,'0')}/${today2.getFullYear()}`;
+        setLeft (sigStart + 8, `Date  : ${todayStr2}`);
+        for (let r = 5; r < 9; r++) n1.getRow(sigStart + r).height = 15;
+        n1r = sigStart + 9;
       }
 
       // ─────────────────── NOTES TO ACCOUNTS — CAPITAL ───────────────────────
