@@ -397,6 +397,10 @@ export function IFCReportTab({ engagementId, engagement }: Props) {
       // The full clause-(i) sub-heading
       `<p class="ifc-sub2">Report on the Internal Financial Controls under ` +
       `Clause (i) of Sub-section 3 of Section 143 of the Companies Act, 2013</p>` +
+      // Two blank lines between this heading and the intro paragraph.
+      // Use &nbsp; so Word actually renders the <p> (empty <p> collapses).
+      `<p style="margin:0;line-height:1.4;font-size:10pt;">&nbsp;</p>` +
+      `<p style="margin:0;line-height:1.4;font-size:10pt;">&nbsp;</p>` +
       // Intro paragraph
       para(sections.intro) +
       // Management's Responsibility
