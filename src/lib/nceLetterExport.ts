@@ -416,7 +416,13 @@ export async function exportManagementLetter(
   ws.getCell("B3").value = data.clientAddress || "[ENTITY ADDRESS]";
   b(ws.getCell("B3"));
   ws.getCell("B3").alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-  ws.getRow(3).height = 19.5;
+  // Auto-grow row 3 to fit wrapped address (B3:H3 ≈ 80 char-units at Arial 11pt).
+  // Without this, long addresses get clipped to the 19.5pt single-line height.
+  {
+    const addr = data.clientAddress || "[ENTITY ADDRESS]";
+    const lines = Math.max(1, Math.ceil(addr.length / 80));
+    ws.getRow(3).height = Math.max(19.5, lines * 15);
+  }
 
   // ── Spacer rows — exact heights from template ──
   ws.getRow(4).height  = 4.9;   // tiny gap after address
@@ -498,8 +504,15 @@ export async function exportManagementLetter(
   ws.mergeCells("B18:H18");
   ws.getCell("B18").value = row18text;
   n(ws.getCell("B18"));
-  ws.getCell("B18").alignment = { horizontal: "justify", vertical: "top", wrapText: true };
-  ws.getRow(18).height = 30.75;
+  // Left-align (not justify) so words don't get stretched to fill the
+  // line — keeps inter-word spacing identical to the saved text.
+  ws.getCell("B18").alignment = { horizontal: "left", vertical: "top", wrapText: true };
+  // Auto-grow body row to fit all wrapped lines
+  // B:H merged at Arial 11pt ≈ 80 chars per line.
+  {
+    const lines = Math.max(1, Math.ceil(row18text.length / 80));
+    ws.getRow(18).height = Math.max(30.75, lines * 15);
+  }
 
   ws.mergeCells("B20:G20");
   ws.getCell("B20").value = row20label;
