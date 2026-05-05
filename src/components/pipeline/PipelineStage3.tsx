@@ -2634,9 +2634,9 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                     })();
                     return (
                       <div className="sticky top-0 z-10 bg-muted/60 border-b px-2 py-1 grid grid-cols-[1fr_90px_90px_60px] gap-0 text-[10px] text-muted-foreground uppercase tracking-wide font-semibold">
-                        <span className="border-r border-border pr-2">FS Line Item</span>
-                        <span className="text-right border-r border-border px-2" title="Closing balance for current engagement period">{cyLabel}</span>
-                        <span className="text-right border-r border-border px-2" title="Opening balance (prior year closing)">{pyLabel}</span>
+                        <span className="border-r-2 border-slate-300 dark:border-slate-700 pr-2">FS Line Item</span>
+                        <span className="text-right border-r-2 border-slate-300 dark:border-slate-700 px-2" title="Closing balance for current engagement period">{cyLabel}</span>
+                        <span className="text-right border-r-2 border-slate-300 dark:border-slate-700 px-2" title="Opening balance (prior year closing)">{pyLabel}</span>
                         <span className="text-right pl-2">Δ %</span>
                       </div>
                     );
@@ -2676,7 +2676,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                           )}
                           style={{ paddingLeft: `${item.depth * 16 + 8}px` }}
                         >
-                          <div className="flex items-center gap-1.5 min-w-0 border-r border-border/60 pr-2">
+                          <div className="flex items-center gap-1.5 min-w-0 border-r-2 border-slate-300 dark:border-slate-700 pr-2">
                             {isHeader && <ChevronDown size={12} />}
                             {!isHeader && mappedAccounts.length > 0 && (
                               isExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />
@@ -2687,12 +2687,12 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                               <Badge className="text-[8px] px-1 bg-primary/10 text-primary">{mappedAccounts.length}</Badge>
                             )}
                           </div>
-                          <span className={cn("font-mono text-[10px] text-right border-r border-border/60 px-2 flex items-center justify-end", amountCY >= 0 ? "text-foreground" : "text-destructive")}>
+                          <span className={cn("font-mono text-[10px] text-right border-r-2 border-slate-300 dark:border-slate-700 px-2 flex items-center justify-end", amountCY >= 0 ? "text-foreground" : "text-destructive")}>
                             {Math.abs(amountCY) > 0.005 ? (
                               <>₹{Math.abs(amountCY).toLocaleString("en-IN")}<span className="ml-0.5 text-[9px] opacity-70">{amountCY >= 0 ? "Dr" : "Cr"}</span></>
                             ) : <span className="text-muted-foreground/40">—</span>}
                           </span>
-                          <span className={cn("font-mono text-[10px] text-right border-r border-border/60 px-2 flex items-center justify-end", amountPY >= 0 ? "text-foreground" : "text-destructive", "opacity-80")}>
+                          <span className={cn("font-mono text-[10px] text-right border-r-2 border-slate-300 dark:border-slate-700 px-2 flex items-center justify-end", amountPY >= 0 ? "text-foreground" : "text-destructive", "opacity-80")}>
                             {Math.abs(amountPY) > 0.005 ? (
                               <>₹{Math.abs(amountPY).toLocaleString("en-IN")}<span className="ml-0.5 text-[9px] opacity-70">{amountPY >= 0 ? "Dr" : "Cr"}</span></>
                             ) : <span className="text-muted-foreground/40">—</span>}
@@ -2739,7 +2739,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                                   className="grid grid-cols-[1fr_90px_90px_28px] gap-0 items-stretch px-3 py-1 text-[11px] hover:bg-background"
                                   style={{ paddingLeft: `${item.depth * 16 + 28}px` }}
                                 >
-                                  <div className="flex items-center gap-1.5 min-w-0 border-r border-border/60 pr-2">
+                                  <div className="flex items-center gap-1.5 min-w-0 border-r-2 border-slate-300 dark:border-slate-700 pr-2">
                                     <span className="truncate">{a.account_name}</span>
                                     <Badge variant="outline" className={cn("text-[8px] px-1 shrink-0", confClass)}>
                                       {confBadgeLabel(m?.confidence || "low")}
@@ -2767,12 +2767,12 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                                       >🔗 Link</button>
                                     )}
                                   </div>
-                                  <span className={cn("font-mono text-[10px] text-right border-r border-border/60 px-2 flex items-center justify-end", a.balance >= 0 ? "text-foreground" : "text-destructive")}>
+                                  <span className={cn("font-mono text-[10px] text-right border-r-2 border-slate-300 dark:border-slate-700 px-2 flex items-center justify-end", a.balance >= 0 ? "text-foreground" : "text-destructive")}>
                                     {Math.abs(a.balance) > 0.005 ? (
                                       <>₹{Math.abs(a.balance).toLocaleString("en-IN")}<span className="ml-0.5 text-[9px]">{a.balance >= 0 ? "Dr" : "Cr"}</span></>
                                     ) : <span className="text-muted-foreground/40">—</span>}
                                   </span>
-                                  <span className={cn("font-mono text-[10px] text-right border-r border-border/60 px-2 flex items-center justify-end opacity-80", opening >= 0 ? "text-foreground" : "text-destructive")}>
+                                  <span className={cn("font-mono text-[10px] text-right border-r-2 border-slate-300 dark:border-slate-700 px-2 flex items-center justify-end opacity-80", opening >= 0 ? "text-foreground" : "text-destructive")}>
                                     {Math.abs(opening) > 0.005 ? (
                                       <>₹{Math.abs(opening).toLocaleString("en-IN")}<span className="ml-0.5 text-[9px]">{opening >= 0 ? "Dr" : "Cr"}</span></>
                                     ) : <span className="text-muted-foreground/40">—</span>}
