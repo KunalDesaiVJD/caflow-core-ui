@@ -713,42 +713,53 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
     // ── Row 1: intentionally NO borders ──────────────────────────────────────
     r++;
 
-    // ── Row 2: Entity name — B2:J2 merged, h=27.75 (template) ───────────────
-    // Per template: thin top+bottom+sides, B=left, J=right, C-I top+bottom.
+    // ── Border strategy: build ONE bordered rectangle around rows 2-5 ──────
+    // Two complementary techniques applied together so Excel always draws
+    // a closed rectangle no matter how it interprets the merge:
+    //   (1) preBorderRow on every heading row  → puts top+bottom on EVERY
+    //       cell in B..J, with left on B and right on J. This keeps the
+    //       cells around the perimeter consistent even if some end up as
+    //       merge slaves.
+    //   (2) Re-assert FULL BOX border (top+bottom+left+right) on the master
+    //       cell AFTER each merge. Excel draws this around the entire
+    //       merged range, so the row's left and right edges are guaranteed
+    //       even if ExcelJS strips slave cell borders.
+    const fullBoxThin = { top: thin, bottom: thin, left: thin, right: thin };
+
+    // ── Row 2: Entity name — B2:J2 merged, h=27.75 ──────────────────────────
     preBorderRow(r);
     ws.mergeCells(`B${r}:J${r}`);
     ws.getCell(`B${r}`).value     = header.entityNameOverride || displayEntityName;
     ws.getCell(`B${r}`).font      = { name: "Calibri", bold: true, size: 11 };
     ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "middle" };
-    // Re-assert master cell border after merge (B carries left + top + bottom)
-    ws.getCell(`B${r}`).border    = { top: thin, bottom: thin, left: thin };
+    ws.getCell(`B${r}`).border    = fullBoxThin;
     ws.getRow(r).height = 27.75;
     r++;
 
-    // ── Row 3: Notes heading — B3:J3 merged with year inline ────────────────
+    // ── Row 3: Notes heading — B3:J3 merged ─────────────────────────────────
     preBorderRow(r);
     ws.mergeCells(`B${r}:J${r}`);
     ws.getCell(`B${r}`).value     = `Notes forming part of the Financial Statements  for the year ended, 31st March, ${auditYear}`;
     ws.getCell(`B${r}`).font      = { name: "Calibri", bold: true, size: 11 };
     ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-    ws.getCell(`B${r}`).border    = { top: thin, bottom: thin, left: thin };
+    ws.getCell(`B${r}`).border    = fullBoxThin;
     ws.getRow(r).height = 22.5;
     r++;
 
-    // ── Row 4: small spacer h=5.25 — ALSO bordered per template ─────────────
+    // ── Row 4: spacer h=5.25 — bordered per template ────────────────────────
     preBorderRow(r);
     ws.mergeCells(`B${r}:J${r}`);
-    ws.getCell(`B${r}`).border = { top: thin, bottom: thin, left: thin };
+    ws.getCell(`B${r}`).border = fullBoxThin;
     ws.getRow(r).height = 5.25;
     r++;
 
-    // ── Row 5: "Note :" + "1" + "Summary..." — three cells, no merge of B:C
-    // Per template:
-    //   B5 = "Note :"  (own cell, left-aligned)
-    //   C5 = 1         (own cell, the note number — separate from B!)
+    // ── Row 5: "Note :" + "1" + "Summary..." — three cells (no B:C merge) ───
+    // Layout (matches template exactly):
+    //   B5 = "Note :"
+    //   C5 = 1   (note number as its own cell)
     //   D5:J5 merged = "Summary of Significant accounting policies"
-    // No vertical divider lines between B5/C5/D5 (template only has top+bottom
-    // on those cells, plus left on B and right on J).
+    // Each cell carries the borders it needs to keep the outer rectangle
+    // closed — B has left, J has right, all have top+bottom.
     preBorderRow(r);
     ws.getCell(`B${r}`).value     = "Note :";
     ws.getCell(`B${r}`).font      = { name: "Calibri", bold: true, size: 11 };
@@ -762,11 +773,14 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
     ws.getCell(`D${r}`).value     = "Summary of Significant accounting policies";
     ws.getCell(`D${r}`).font      = { name: "Calibri", bold: true, size: 11 };
     ws.getCell(`D${r}`).alignment = { horizontal: "left", vertical: "middle" };
-    ws.getCell(`D${r}`).border    = { top: thin, bottom: thin };
+    // Master cell of D:J merge gets right border too (so the merge has its right edge)
+    ws.getCell(`D${r}`).border    = { top: thin, bottom: thin, right: thin };
     r++;
 
-    // ── Row 6: side-only borders (extends box walls below row 5) — h=6.75 ───
-    sidesOnlyRow(r);
+    // ── Row 6: NO borders (cleanly close the box at row 5's bottom) ─────────
+    // Earlier the spacer row used side-only borders, but that left visible
+    // dangling vertical stubs below the rectangle. Empty row keeps the
+    // outer box neatly closed at row 5's bottom border.
     ws.getRow(r).height = 6.75;
     r++;
 
