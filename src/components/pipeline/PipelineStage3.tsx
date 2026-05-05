@@ -2719,7 +2719,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                           </span>
                         </div>
                         {!isHeader && isExpanded && mappedAccounts.length > 0 && (
-                          <div className="bg-muted/20 border-l-2 border-primary/30 ml-2">
+                          <div className="bg-muted/20 border-l-2 border-primary/30">
                             {mappedAccounts.map(a => {
                               const m = coaMapping[a.account_name];
                               const confClass = confChipClass(m?.confidence || "low");
@@ -2738,7 +2738,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                               return (
                                 <div
                                   key={a.account_name}
-                                  className="grid grid-cols-[1fr_90px_90px_28px] gap-0 items-stretch py-1 pr-3 text-[11px] hover:bg-background"
+                                  className="grid grid-cols-[1fr_90px_90px_60px] gap-0 items-stretch py-1 pr-2 text-[11px] hover:bg-background"
                                 >
                                   <div
                                     className="flex items-center gap-1.5 min-w-0 border-r-2 border-slate-300 dark:border-slate-700 pr-2"
