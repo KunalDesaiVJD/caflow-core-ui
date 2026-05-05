@@ -831,20 +831,27 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     line-height: 1.4 !important;
                   }
                   .caro-clause { width: 100% !important; border-collapse: collapse !important; margin: 0 0 8pt 0 !important; }
-                  /* Each clause line is a <p> with per-row hanging
-                     indent applied via INLINE style. The class only
-                     sets typography defaults — DO NOT include
-                     padding-left or text-indent here, otherwise the
-                     !important rules would override the inline
-                     hanging-indent style and every paragraph would
-                     render flush-left with no hanging indent. */
-                  .caro-clause-p {
+                  /* 3-column borderless table per clause:
+                       num | sl | body
+                     Word renders table cell positions deterministically
+                     across rows — guarantees clause numbers align in
+                     col 1, sub-letters align in col 2, body wraps
+                     inside col 3 (so wrapped lines line up under the
+                     first body character of that row). */
+                  .caro-clause, .caro-clause tr, .caro-clause td {
+                    border: none !important;
+                    padding: 0 !important;
+                    background: transparent !important;
                     font-family: ${SERIF} !important;
                     font-size: 11pt !important;
+                    vertical-align: top !important;
                     line-height: 1.4 !important;
-                    text-align: left !important;
-                    margin: 0 0 6pt 0 !important;
                   }
+                  .caro-clause { width: 100% !important; border-collapse: collapse !important; margin: 0 0 6pt 0 !important; }
+                  .caro-clause td.num { width: 24pt !important; padding-right: 4pt !important; white-space: nowrap !important; }
+                  .caro-clause td.sl  { width: 32pt !important; padding-right: 4pt !important; white-space: nowrap !important; }
+                  .caro-clause td.sl.subsub { padding-left: 12pt !important; }
+                  .caro-clause td.bd  { padding-bottom: 6pt !important; }
                   .caro-sig, .caro-sig tr, .caro-sig td {
                     border: none !important;
                     padding: 0 !important;
@@ -1030,65 +1037,43 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   // No sub-letter prefix — clause body is bare prose.
                   return { sl: "", body: chunk, isSubSub: false };
                 };
-                // Approximate visual width (pt) of a text prefix at
-                // 11pt Times New Roman. Used to compute per-row hanging
-                // indent so wrapped lines align under the first body
-                // character.
-                const pxWidth = (s: string): number => {
-                  let w = 0;
-                  for (const ch of s) {
-                    if (ch === "(" || ch === ")") w += 3;
-                    else if (ch === " " || ch === " ") w += 3;
-                    else if (ch === "." || ch === ",") w += 2.5;
-                    else w += 6;
-                  }
-                  return Math.round(w);
-                };
-                // Render each clause line as a <p> with per-row hanging
-                // indent. Single space between sub-letter and body.
-                // Wrapped lines align under the first body character.
+                // Render each clause as a 3-column borderless table.
+                // Word renders cell positions deterministically:
+                //   - all clause numbers line up in col 1 (24pt)
+                //   - all sub-letters line up in col 2 (32pt)
+                //   - body wraps inside col 3 — wrapped lines align
+                //     under the first body character of that row
+                // Sub-sub "(B)" rows add the .subsub class which puts
+                // 12pt extra padding-left on the sl cell so (B) sits
+                // visibly deeper than (a)/(b)/(c).
                 rows.forEach(r => {
                   const raw = r.is_applicable
                     ? wordingFix(yearSub(r.user_response || r.auto_draft || ""))
                     : `Not Applicable${r.inapplicability_reason ? ` — ${r.inapplicability_reason}` : ""}`;
                   const chunks = raw.split(/\n{2,}/);
-                  // Width of "N.  " (clause number + 2 spaces) computed
-                  // from PLAIN TEXT (not HTML) so each char counts once.
-                  const numColWidth = pxWidth(`${r.clause_number}.  `);
+                  let tableRows = "";
                   chunks.forEach((chunk, idx) => {
                     const { sl, body, isSubSub } = splitChunk(chunk);
                     const bodyHtml = body.replace(/\n/g, "<br/>");
-                    // Plain-text prefixes for width calculation only.
-                    // Two spaces after clause number — template style.
-                    const numPrefixText = idx === 0 ? `${r.clause_number}.  ` : "";
-                    const slPrefixText  = sl ? `${sl} ` : "";
-                    const fullPrefixText = numPrefixText + slPrefixText;
-                    // HTML prefix uses &nbsp; so the spaces don't
-                    // collapse and the prefix doesn't break across lines.
-                    const numPrefix = idx === 0 ? `${r.clause_number}.&nbsp;&nbsp;` : "";
-                    const slPrefix  = sl ? `${sl}&nbsp;` : "";
-                    const fullPrefix = numPrefix + slPrefix;
-                    // Hanging indent = visual width of the PLAIN-TEXT
-                    // prefix. (Passing the HTML version with &nbsp;
-                    // would count each '&n;b;s;p;' char individually.)
-                    const hang = pxWidth(fullPrefixText);
-                    // Subsequent rows: shift the WHOLE line right by
-                    // the number-column width so the sub-letter sits
-                    // visibly indented from where "N." was on row 0.
-                    const rowIndent = idx === 0 ? 0 : numColWidth;
-                    // Sub-sub-letter rows ("(B)") get an extra nudge
-                    // so they sit deeper than letter-level "(b)/(c)".
-                    const subsubExtra = isSubSub && idx > 0 ? 12 : 0;
-                    const padLeft = rowIndent + hang + subsubExtra;
-                    const textIndent = -hang;
-                    const styleStr =
-                      `padding-left:${padLeft}pt;text-indent:${textIndent}pt;`;
-                    html += `<p class="caro-clause-p" style="${styleStr}">` +
-                      `${fullPrefix}${bodyHtml}</p>`;
+                    const numCell = idx === 0 ? `${r.clause_number}.` : "&nbsp;";
+                    if (sl) {
+                      const slClass = isSubSub ? "sl subsub" : "sl";
+                      tableRows += `<tr>` +
+                        `<td class="num">${numCell}</td>` +
+                        `<td class="${slClass}">${sl}</td>` +
+                        `<td class="bd">${bodyHtml}</td>` +
+                      `</tr>`;
+                    } else {
+                      tableRows += `<tr>` +
+                        `<td class="num">${numCell}</td>` +
+                        `<td class="bd" colspan="2">${bodyHtml}</td>` +
+                      `</tr>`;
+                    }
                   });
+                  html += `<table class="caro-clause">${tableRows}</table>`;
                 });
 
-                // Signature block — class on the partner-row TD so its
+                                // Signature block — class on the partner-row TD so its
                 // padding-top:24pt comes from head CSS (Word ignores the
                 // second of two inline style attributes, so we can't put
                 // it inline alongside vertical-align).
