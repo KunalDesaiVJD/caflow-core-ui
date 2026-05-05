@@ -712,25 +712,27 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
     // ── Row 1: intentionally NO borders ──────────────────────────────────────
     r++;
 
+    const fullBox = { top: thin, bottom: thin, left: thin, right: thin };
+
     // ── Row 2: Entity name — B2:J2 merged, h=27.75 (template) ────────────────
-    preBorderRow(r);                               // full thin box
+    preBorderRow(r);                               // full thin box on all cells
     ws.mergeCells(`B${r}:J${r}`);
     ws.getCell(`B${r}`).value     = header.entityNameOverride || displayEntityName;
     ws.getCell(`B${r}`).font      = { name: "Calibri", bold: true, size: 11 };
     ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "middle" };
+    ws.getCell(`B${r}`).border    = fullBox;       // re-assert after merge
     ws.getRow(r).height = 27.75;
     r++;
 
     // ── Row 3: Notes heading — B3:H3 merged with year inline; I3 + J3 empty ─
-    // Per user requirement: merge spans only B:H (NOT B:J), and the year
-    // is embedded INSIDE that merged text — not as a separate I3 cell.
-    // Side borders only (no top/bottom) so this row sits inside the outer
-    // box of rows 2-6 without an internal divider line above or below it.
-    preBorderRow(r);                               // full thin box
+    // Border on every cell B..J so the bordered rectangle stays full-width
+    // and aligns with row 2 (which spans B:J).
+    preBorderRow(r);                               // full thin box on all cells
     ws.mergeCells(`B${r}:H${r}`);
     ws.getCell(`B${r}`).value     = `Notes forming part of the Financial Statements  for the year ended, 31st March, ${auditYear}`;
     ws.getCell(`B${r}`).font      = { name: "Calibri", bold: true, size: 11 };
     ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    ws.getCell(`B${r}`).border    = fullBox;       // re-assert after merge
     ws.getRow(r).height = 22.5;
     r++;
 
@@ -744,28 +746,28 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
     // Per screenshot:
     //   left  cell = "Note : 1"                    (B:C merged)
     //   right cell = "Summary of Significant accounting policies" (D:J merged)
-    // Both cells get a complete thin box (top+bottom+left+right), so there's
-    // a visible vertical divider between them.
+    // Both cells get a complete thin box. Borders are set on EVERY cell
+    // (B..J) BEFORE merge AND again on the merge masters AFTER merge —
+    // belt-and-braces so neither ExcelJS quirks nor merge-slave stripping
+    // can drop them.
     {
-      // Left cell (B:C) — full thin box
-      ws.getRow(r).getCell(2).border = { top: thin, bottom: thin, left: thin, right: thin };
-      ws.getRow(r).getCell(3).border = { top: thin, bottom: thin, left: thin, right: thin };
+      const fullBox = { top: thin, bottom: thin, left: thin, right: thin };
+      // Pre-merge: every individual cell gets the full box
+      for (let c = 2; c <= 10; c++) {
+        ws.getRow(r).getCell(c).border = fullBox;
+      }
+      // Left cell (B:C) merged + value
       ws.mergeCells(`B${r}:C${r}`);
       ws.getCell(`B${r}`).value     = "Note : 1";
       ws.getCell(`B${r}`).font      = { name: "Calibri", bold: true, size: 11 };
       ws.getCell(`B${r}`).alignment = { horizontal: "left", vertical: "middle", indent: 1 };
-      // Right cell (D:J) — full thin box (its left edge meets C's right edge → one divider line)
-      for (let c = 4; c <= 10; c++) {
-        const b: { top: typeof thin; bottom: typeof thin; left?: typeof thin; right?: typeof thin } =
-          { top: thin, bottom: thin };
-        if (c === 4)  b.left  = thin;
-        if (c === 10) b.right = thin;
-        ws.getRow(r).getCell(c).border = b;
-      }
+      ws.getCell(`B${r}`).border    = fullBox;     // re-assert border after merge
+      // Right cell (D:J) merged + value
       ws.mergeCells(`D${r}:J${r}`);
       ws.getCell(`D${r}`).value     = "Summary of Significant accounting policies";
       ws.getCell(`D${r}`).font      = { name: "Calibri", bold: true, size: 11 };
       ws.getCell(`D${r}`).alignment = { horizontal: "left", vertical: "middle", indent: 1 };
+      ws.getCell(`D${r}`).border    = fullBox;     // re-assert border after merge
     }
     r++;
 
