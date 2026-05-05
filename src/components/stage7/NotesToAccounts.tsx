@@ -678,29 +678,13 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
 
     const thin = { style: "thin" as const };
 
-    // ── Border helper — per template screenshot the heading is ONE outer
-    // bold rectangle with thin internal divider lines. Each heading row
-    // sits directly under the previous (no spacer rows between).
-    //   • Outer perimeter: MEDIUM weight  (top of row 2, bottom of last
-    //     heading row, left edge of column B, right edge of column J)
-    //   • Internal dividers: THIN weight
-    // Pass `pos` = "first" | "middle" | "last" — outer top is medium on
-    // "first", outer bottom is medium on "last", everything else thin.
-    const medium = { style: "medium" as const };
-    const setHeadingRowBorders = (rn: number, pos: "first" | "middle" | "last") => {
-      for (let c = 2; c <= 10; c++) {
-        const isLeft  = c === 2;
-        const isRight = c === 10;
-        const b: { top: typeof thin; bottom: typeof thin; left?: typeof thin; right?: typeof thin } = {
-          top:    pos === "first" ? medium : thin,
-          bottom: pos === "last"  ? medium : thin,
-        };
-        if (isLeft)  b.left  = medium;
-        if (isRight) b.right = medium;
-        ws.getRow(rn).getCell(c).border = b as any;
-      }
-    };
-    // Legacy alias for code paths still using the simple full-thin box
+    // ── Border helpers — match template (NOTW 1_NCE.xlsx) exactly ──────────
+    // Template defines THIN borders only on rows 2-5, with this pattern per row:
+    //   B  : left + top + bottom
+    //   C-I: top + bottom only
+    //   J  : right + top + bottom
+    // Row 6 has side-only borders (no top, no bottom) to continue the box
+    // walls below row 5. All borders are thin — no medium/bold weight.
     const preBorderRow = (rn: number) => {
       for (let c = 2; c <= 10; c++) {
         const b: { top: typeof thin; bottom: typeof thin; left?: typeof thin; right?: typeof thin } =
@@ -709,6 +693,10 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
         if (c === 10) b.right = thin;
         ws.getRow(rn).getCell(c).border = b;
       }
+    };
+    const sidesOnlyRow = (rn: number) => {
+      ws.getRow(rn).getCell(2).border  = { left: thin };
+      ws.getRow(rn).getCell(10).border = { right: thin };
     };
 
     // Page setup matching template (NOTW 1_NCE.xlsx)
@@ -725,79 +713,60 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
     // ── Row 1: intentionally NO borders ──────────────────────────────────────
     r++;
 
-    // ── Row 2: Entity name — first heading row (medium top + sides) ─────────
-    setHeadingRowBorders(r, "first");
+    // ── Row 2: Entity name — B2:J2 merged, h=27.75 (template) ───────────────
+    // Per template: thin top+bottom+sides, B=left, J=right, C-I top+bottom.
+    preBorderRow(r);
     ws.mergeCells(`B${r}:J${r}`);
     ws.getCell(`B${r}`).value     = header.entityNameOverride || displayEntityName;
     ws.getCell(`B${r}`).font      = { name: "Calibri", bold: true, size: 11 };
     ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "middle" };
-    // Re-assert the master cell's border after merge (medium left+right+top, thin bottom)
-    ws.getCell(`B${r}`).border = {
-      top: medium, bottom: thin, left: medium, right: medium,
-    } as any;
+    // Re-assert master cell border after merge (B carries left + top + bottom)
+    ws.getCell(`B${r}`).border    = { top: thin, bottom: thin, left: thin };
     ws.getRow(r).height = 27.75;
     r++;
 
-    // ── Row 3: Notes-forming-part — middle heading row ──────────────────────
-    setHeadingRowBorders(r, "middle");
-    ws.mergeCells(`B${r}:H${r}`);
+    // ── Row 3: Notes heading — B3:J3 merged with year inline ────────────────
+    preBorderRow(r);
+    ws.mergeCells(`B${r}:J${r}`);
     ws.getCell(`B${r}`).value     = `Notes forming part of the Financial Statements  for the year ended, 31st March, ${auditYear}`;
     ws.getCell(`B${r}`).font      = { name: "Calibri", bold: true, size: 11 };
     ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-    // Master border: thin top+bottom, medium left (B is leftmost)
-    ws.getCell(`B${r}`).border = {
-      top: thin, bottom: thin, left: medium, right: thin,
-    } as any;
+    ws.getCell(`B${r}`).border    = { top: thin, bottom: thin, left: thin };
     ws.getRow(r).height = 22.5;
     r++;
 
-    // ── Row 5 (was, now is row 4): "Note : 1" + "Summary..." — last heading row
-    // Two bordered cells side-by-side (B:C + D:J) with vertical divider.
-    // This is the LAST heading row, so its bottom border is medium.
-    {
-      // First set every cell's box: top thin, bottom medium (last row),
-      // left medium on B, right medium on J. Internal cells (C..I) get
-      // top thin + bottom medium only.
-      for (let c = 2; c <= 10; c++) {
-        const isLeft  = c === 2;
-        const isRight = c === 10;
-        const b: { top: typeof thin; bottom: typeof medium; left?: any; right?: any } = {
-          top: thin, bottom: medium,
-        };
-        if (isLeft)  b.left  = medium;
-        if (isRight) b.right = medium;
-        ws.getRow(r).getCell(c).border = b as any;
-      }
-      // Add vertical divider between the "Note : 1" cell (B:C) and
-      // "Summary..." cell (D:J): right border on C, left border on D.
-      ws.getRow(r).getCell(3).border = {
-        top: thin, bottom: medium, right: thin,
-      } as any;
-      ws.getRow(r).getCell(4).border = {
-        top: thin, bottom: medium, left: thin,
-      } as any;
-      // Left cell (B:C) merged with literal "Note : 1" so the "1" is
-      // part of an atomic string and cannot be lost.
-      ws.mergeCells(`B${r}:C${r}`);
-      ws.getCell(`B${r}`).value     = "Note : 1";
-      ws.getCell(`B${r}`).font      = { name: "Calibri", bold: true, size: 11 };
-      ws.getCell(`B${r}`).alignment = { horizontal: "left", vertical: "middle", indent: 1 };
-      ws.getCell(`B${r}`).border    = {
-        top: thin, bottom: medium, left: medium, right: thin,
-      } as any;
-      // Right cell (D:J) merged with the title.
-      ws.mergeCells(`D${r}:J${r}`);
-      ws.getCell(`D${r}`).value     = "Summary of Significant accounting policies";
-      ws.getCell(`D${r}`).font      = { name: "Calibri", bold: true, size: 11 };
-      ws.getCell(`D${r}`).alignment = { horizontal: "left", vertical: "middle", indent: 1 };
-      ws.getCell(`D${r}`).border    = {
-        top: thin, bottom: medium, left: thin, right: medium,
-      } as any;
-      ws.getRow(r).height = 18;
-    }
+    // ── Row 4: small spacer h=5.25 — ALSO bordered per template ─────────────
+    preBorderRow(r);
+    ws.mergeCells(`B${r}:J${r}`);
+    ws.getCell(`B${r}`).border = { top: thin, bottom: thin, left: thin };
+    ws.getRow(r).height = 5.25;
     r++;
 
-    // ── Spacer row — NO borders, just visual gap before the notes table ─────
+    // ── Row 5: "Note :" + "1" + "Summary..." — three cells, no merge of B:C
+    // Per template:
+    //   B5 = "Note :"  (own cell, left-aligned)
+    //   C5 = 1         (own cell, the note number — separate from B!)
+    //   D5:J5 merged = "Summary of Significant accounting policies"
+    // No vertical divider lines between B5/C5/D5 (template only has top+bottom
+    // on those cells, plus left on B and right on J).
+    preBorderRow(r);
+    ws.getCell(`B${r}`).value     = "Note :";
+    ws.getCell(`B${r}`).font      = { name: "Calibri", bold: true, size: 11 };
+    ws.getCell(`B${r}`).alignment = { horizontal: "left", vertical: "middle", indent: 1 };
+    ws.getCell(`B${r}`).border    = { top: thin, bottom: thin, left: thin };
+    ws.getCell(`C${r}`).value     = 1;
+    ws.getCell(`C${r}`).font      = { name: "Calibri", bold: true, size: 11 };
+    ws.getCell(`C${r}`).alignment = { horizontal: "left", vertical: "middle" };
+    ws.getCell(`C${r}`).border    = { top: thin, bottom: thin };
+    ws.mergeCells(`D${r}:J${r}`);
+    ws.getCell(`D${r}`).value     = "Summary of Significant accounting policies";
+    ws.getCell(`D${r}`).font      = { name: "Calibri", bold: true, size: 11 };
+    ws.getCell(`D${r}`).alignment = { horizontal: "left", vertical: "middle" };
+    ws.getCell(`D${r}`).border    = { top: thin, bottom: thin };
+    r++;
+
+    // ── Row 6: side-only borders (extends box walls below row 5) — h=6.75 ───
+    sidesOnlyRow(r);
     ws.getRow(r).height = 6.75;
     r++;
 
