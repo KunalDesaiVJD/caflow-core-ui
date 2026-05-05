@@ -849,8 +849,8 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   }
                   .caro-clause { width: 100% !important; border-collapse: collapse !important; margin: 0 0 6pt 0 !important; }
                   .caro-clause td.num { width: 24pt !important; padding-right: 4pt !important; white-space: nowrap !important; }
-                  .caro-clause td.sl  { width: 32pt !important; padding-right: 4pt !important; white-space: nowrap !important; }
-                  .caro-clause td.sl.subsub { padding-left: 12pt !important; }
+                  .caro-clause td.sl  { width: 1% !important; padding-right: 4pt !important; white-space: nowrap !important; }
+                  .caro-clause td.sl.subsub { padding-left: 0 !important; }
                   .caro-clause td.bd  { padding-bottom: 6pt !important; }
                   .caro-sig, .caro-sig tr, .caro-sig td {
                     border: none !important;
