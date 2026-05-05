@@ -379,11 +379,15 @@ export async function exportManagementLetter(
   ws.pageSetup.fitToPage        = false;
   ws.pageSetup.scale            = 100;
   ws.pageSetup.printArea        = "A1:I33";
+  ws.pageSetup.showGridLines    = false;      // hide gridlines on print
   ws.pageSetup.margins = {
     left: 0.7, right: 0.7,
     top:  0.75, bottom: 0.75,
     header: 0.3, footer: 0.3,
   };
+  // Hide gridlines in the viewport too — only the explicit heading
+  // borders on B2:H2 and B3:H3 should be visible.
+  ws.views = [{ state: "normal", showGridLines: false } as any];
 
   // ── Column widths — exact match to template ──
   ws.columns = [
