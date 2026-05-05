@@ -2633,8 +2633,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                       return "Prior Yr";
                     })();
                     return (
-                      <div className="sticky top-0 z-10 bg-muted/60 border-b px-2 py-1 grid grid-cols-[1fr_90px_90px_60px] gap-0 text-[10px] text-muted-foreground uppercase tracking-wide font-semibold">
-                        <span className="border-r-2 border-slate-300 dark:border-slate-700 pr-2">FS Line Item</span>
+                      <div className="sticky top-0 z-10 bg-muted/60 border-b pr-2 py-1 grid grid-cols-[1fr_90px_90px_60px] gap-0 text-[10px] text-muted-foreground uppercase tracking-wide font-semibold">
+                        <span className="border-r-2 border-slate-300 dark:border-slate-700 pl-2 pr-2">FS Line Item</span>
                         <span className="text-right border-r-2 border-slate-300 dark:border-slate-700 px-2" title="Closing balance for current engagement period">{cyLabel}</span>
                         <span className="text-right border-r-2 border-slate-300 dark:border-slate-700 px-2" title="Opening balance (prior year closing)">{pyLabel}</span>
                         <span className="text-right pl-2">Δ %</span>
@@ -2670,13 +2670,15 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                             }
                           }}
                           className={cn(
-                            "px-2 py-1.5 text-xs rounded-sm transition-colors grid grid-cols-[1fr_90px_90px_60px] gap-0 items-stretch",
+                            "py-1.5 text-xs rounded-sm transition-colors grid grid-cols-[1fr_90px_90px_60px] gap-0 items-stretch pr-2",
                             isHeader ? "font-bold text-foreground mt-2 bg-muted/30" : "hover:bg-primary/10 cursor-pointer",
                             !isHeader && selectedAccount && "ring-1 ring-transparent hover:ring-primary/40",
                           )}
-                          style={{ paddingLeft: `${item.depth * 16 + 8}px` }}
                         >
-                          <div className="flex items-center gap-1.5 min-w-0 border-r-2 border-slate-300 dark:border-slate-700 pr-2">
+                          <div
+                            className="flex items-center gap-1.5 min-w-0 border-r-2 border-slate-300 dark:border-slate-700 pr-2"
+                            style={{ paddingLeft: `${item.depth * 16 + 8}px` }}
+                          >
                             {isHeader && <ChevronDown size={12} />}
                             {!isHeader && mappedAccounts.length > 0 && (
                               isExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />
@@ -2736,10 +2738,12 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                               return (
                                 <div
                                   key={a.account_name}
-                                  className="grid grid-cols-[1fr_90px_90px_28px] gap-0 items-stretch px-3 py-1 text-[11px] hover:bg-background"
-                                  style={{ paddingLeft: `${item.depth * 16 + 28}px` }}
+                                  className="grid grid-cols-[1fr_90px_90px_28px] gap-0 items-stretch py-1 pr-3 text-[11px] hover:bg-background"
                                 >
-                                  <div className="flex items-center gap-1.5 min-w-0 border-r-2 border-slate-300 dark:border-slate-700 pr-2">
+                                  <div
+                                    className="flex items-center gap-1.5 min-w-0 border-r-2 border-slate-300 dark:border-slate-700 pr-2"
+                                    style={{ paddingLeft: `${item.depth * 16 + 28}px` }}
+                                  >
                                     <span className="truncate">{a.account_name}</span>
                                     <Badge variant="outline" className={cn("text-[8px] px-1 shrink-0", confClass)}>
                                       {confBadgeLabel(m?.confidence || "low")}
@@ -2798,8 +2802,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                             })}
                             {mappedAccounts.length > 1 && (
                               <div
-                                className="flex items-center justify-end px-3 py-1 text-[10px] text-destructive hover:underline cursor-pointer"
-                                style={{ paddingLeft: `${item.depth * 16 + 28}px` }}
+                                className="flex items-center justify-end pr-3 py-1 text-[10px] text-destructive hover:underline cursor-pointer"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   if (!window.confirm(`Unmap all ${mappedAccounts.length} ledgers from "${item.name}"?`)) return;
