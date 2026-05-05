@@ -1052,21 +1052,26 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     ? wordingFix(yearSub(r.user_response || r.auto_draft || ""))
                     : `Not Applicable${r.inapplicability_reason ? ` — ${r.inapplicability_reason}` : ""}`;
                   const chunks = raw.split(/\n{2,}/);
-                  // Width of the clause-number prefix "N. " (e.g. "1. "
-                  // ≈ 12pt) — used to indent sub-letter rows so they
-                  // start to the RIGHT of where the clause number was,
-                  // matching the template's visual hierarchy.
-                  const numColWidth = pxWidth(`${r.clause_number}. `);
+                  // Width of "N.  " (clause number + 2 spaces) computed
+                  // from PLAIN TEXT (not HTML) so each char counts once.
+                  const numColWidth = pxWidth(`${r.clause_number}.  `);
                   chunks.forEach((chunk, idx) => {
                     const { sl, body, isSubSub } = splitChunk(chunk);
                     const bodyHtml = body.replace(/\n/g, "<br/>");
-                    // Row 0 carries the clause number; subsequent rows
-                    // start with just the sub-letter prefix.
-                    const numPrefix = idx === 0 ? `${r.clause_number}. ` : "";
-                    const slPrefix  = sl ? `${sl} ` : "";
+                    // Plain-text prefixes for width calculation only.
+                    // Two spaces after clause number — template style.
+                    const numPrefixText = idx === 0 ? `${r.clause_number}.  ` : "";
+                    const slPrefixText  = sl ? `${sl} ` : "";
+                    const fullPrefixText = numPrefixText + slPrefixText;
+                    // HTML prefix uses &nbsp; so the spaces don't
+                    // collapse and the prefix doesn't break across lines.
+                    const numPrefix = idx === 0 ? `${r.clause_number}.&nbsp;&nbsp;` : "";
+                    const slPrefix  = sl ? `${sl}&nbsp;` : "";
                     const fullPrefix = numPrefix + slPrefix;
-                    // Hanging indent = visual width of the prefix.
-                    const hang = pxWidth(fullPrefix);
+                    // Hanging indent = visual width of the PLAIN-TEXT
+                    // prefix. (Passing the HTML version with &nbsp;
+                    // would count each '&n;b;s;p;' char individually.)
+                    const hang = pxWidth(fullPrefixText);
                     // Subsequent rows: shift the WHOLE line right by
                     // the number-column width so the sub-letter sits
                     // visibly indented from where "N." was on row 0.
