@@ -617,13 +617,13 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     div.Section1 { page: Section1; }
                     @page { size: A4; margin: 1.5cm 2cm 2cm 2cm; }
                     html, body { margin: 0 !important; padding: 0 !important; }
-                    body { font-family: ${SERIF}; font-size: 10pt; }
+                    body { font-family: ${SERIF}; font-size: 11pt; }
                     .caro-sig, .caro-sig tr, .caro-sig td {
                       border: none !important;
                       padding: 0 !important;
                       background: transparent !important;
                       font-family: ${SERIF} !important;
-                      font-size: 10pt !important;
+                      font-size: 11pt !important;
                     }
                     .caro-sig td.partner { padding-top: 24pt !important; }
                   `;
@@ -655,7 +655,7 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     `Date&nbsp;&nbsp;:&nbsp;&nbsp;${reportDateDocx}`;
                   const html =
                     `<div class="Section1">` +
-                    `<p style="font-family:${SERIF};font-size:10pt;line-height:1.4;` +
+                    `<p style="font-family:${SERIF};font-size:11pt;line-height:1.4;` +
                     `text-align:left;margin:0 0 12pt 0;">${body}</p>` +
                     `<table class="caro-sig" style="width:100%;margin-top:30pt;">` +
                       `<tr>` +
@@ -708,7 +708,7 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
         </Card>
 
         {/* Hidden print area for PDF */}
-        <div id="caro-na-print-area" style={{ display: 'none', padding: '32px', fontFamily: 'Arial, sans-serif', fontSize: '10pt' }}>
+        <div id="caro-na-print-area" style={{ display: 'none', padding: '32px', fontFamily: 'Arial, sans-serif', fontSize: '11pt' }}>
           <p style={{ whiteSpace: 'pre-wrap' }}>{introText || CARO_NOT_APPLICABLE_FULL}</p>
           <div style={{ marginTop: '36px' }}>
             <p>For, {firmName}<br />Chartered Accountants<br />Firm Regi. No.: {firmFRN}</p>
@@ -815,8 +815,8 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   div.Section1 { page: Section1; }
                   @page { size: A4; margin: 1.5cm 2cm 2cm 2cm; }
                   html, body { margin: 0 !important; padding: 0 !important; }
-                  html, body, p, div, span, td, th, li { font-family: ${SERIF} !important; font-size: 10pt !important; }
-                  body { font-family: ${SERIF}; font-size: 10pt; }
+                  html, body, p, div, span, td, th, li { font-family: ${SERIF} !important; font-size: 11pt !important; }
+                  body { font-family: ${SERIF}; font-size: 11pt; }
                   /* Each clause is rendered as a 2-column borderless table:
                      col 1 = clause number, col 2 = body (with sub-letter
                      prefixed inline, separated by a small non-breaking
@@ -827,7 +827,7 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     padding: 0 !important;
                     background: transparent !important;
                     font-family: ${SERIF} !important;
-                    font-size: 10pt !important;
+                    font-size: 11pt !important;
                     vertical-align: top !important;
                     line-height: 1.4 !important;
                   }
@@ -844,7 +844,7 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     padding: 0 !important;
                     background: transparent !important;
                     font-family: ${SERIF} !important;
-                    font-size: 10pt !important;
+                    font-size: 11pt !important;
                     vertical-align: top !important;
                     line-height: 1.4 !important;
                   }
@@ -858,7 +858,7 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     padding: 0 !important;
                     background: transparent !important;
                     font-family: ${SERIF} !important;
-                    font-size: 10pt !important;
+                    font-size: 11pt !important;
                   }
                   .caro-sig td.partner { padding-top: 24pt !important; }
                 `;
@@ -1254,7 +1254,7 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
       )}
 
       {/* Hidden print area for PDF export */}
-      <div id="caro-print-area" style={{ display: 'none', padding: '32px', fontFamily: 'Arial, sans-serif', fontSize: '10pt' }}>
+      <div id="caro-print-area" style={{ display: 'none', padding: '32px', fontFamily: 'Arial, sans-serif', fontSize: '11pt' }}>
         <h2 style={{ textAlign: 'center', fontSize: '14pt' }}>{companyName}</h2>
         <p style={{ fontStyle: 'italic', textAlign: 'center', marginBottom: '24px' }}>
           Annexure-A referred to paragraph under the heading "Report on Other Legal and Regulatory" of our independent Auditor's Report of even date
@@ -1269,7 +1269,7 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                 Not Applicable{r.inapplicability_reason ? ` — ${r.inapplicability_reason}` : ''}
               </p>
             ) : (
-              <p style={{ whiteSpace: 'pre-wrap', fontSize: '10pt' }}>
+              <p style={{ whiteSpace: 'pre-wrap', fontSize: '11pt' }}>
                 {r.user_response || r.auto_draft || 'No response'}
               </p>
             )}
