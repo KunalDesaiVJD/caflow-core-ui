@@ -1024,7 +1024,12 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                 //   "(B) "      → "(B)"     + body  (treated as sub-sub)
                 //   "(b) "      → "(b)"     + body
                 //   "a) "       → "a)"      + body
-                const SUBLETTER_RE = /^((?:\([a-zA-Z]\)\s*)+|[a-zA-Z]\)\s*)\s*([\s\S]*)$/;
+                // Capture EXACTLY ONE sub-letter prefix. If the chunk
+                // starts with multiple — e.g. "(a) (A) The Company..." in
+                // CARO clause 1 — only "(a)" goes in the sl cell and
+                // "(A) The Company..." stays in the body, so point 1
+                // renders with the same single-prefix layout as (b)/(c)/etc.
+                const SUBLETTER_RE = /^(\([a-zA-Z]\)|[a-zA-Z]\))\s*([\s\S]*)$/;
                 const splitChunk = (chunk: string): { sl: string; body: string; isSubSub: boolean } => {
                   const m = chunk.match(SUBLETTER_RE);
                   if (m) {
