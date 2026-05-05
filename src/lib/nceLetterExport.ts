@@ -300,7 +300,9 @@ export async function exportClientCertificate(
     const numbered = `${i + 3}.  ${text}`;
     cell.value = numbered;
     n(cell);
-    cell.alignment = { wrapText: true, horizontal: "justify", vertical: "top" };
+    // Use LEFT (not justify) so every clause begins at the same column
+    // and Excel doesn't stretch words apart on partially-filled lines.
+    cell.alignment = { wrapText: true, horizontal: "left", vertical: "top" };
 
     // Auto-grow content row to fit all wrapped lines
     ws.getRow(row).height = heightForText(numbered);
