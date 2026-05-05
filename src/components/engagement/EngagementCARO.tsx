@@ -868,16 +868,17 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   // page setup in HEAD_CSS applies (Word's reliable way to
                   // control page margins via HTML).
                   `<div class="Section1">` +
-                  // Title — bold + UNDERLINE per template (10pt)
-                  `<p style="text-align:center;font-family:${SERIF};font-size:10pt;` +
+                  // Title — bold + UNDERLINE per template (11pt heading)
+                  `<p style="text-align:center;font-family:${SERIF};font-size:11pt !important;` +
                   `font-weight:bold;text-decoration:underline;margin:0 0 14pt 0;">` +
-                  `${companyName}</p>` +
-                  // Subtitle — also bold + UNDERLINE per template (10pt)
-                  `<p style="text-align:center;font-family:${SERIF};font-size:10pt;` +
+                  `<span style="font-size:11pt !important;">${companyName}</span></p>` +
+                  // Subtitle — also bold + UNDERLINE per template (11pt heading)
+                  `<p style="text-align:center;font-family:${SERIF};font-size:11pt !important;` +
                   `font-weight:bold;text-decoration:underline;margin:0 0 18pt 0;` +
-                  `padding:0 36pt;">Annexure - A referred to paragraph under the ` +
+                  `padding:0 36pt;"><span style="font-size:11pt !important;">` +
+                  `Annexure - A referred to paragraph under the ` +
                   `heading &quot;Report on Other Legal and Regulatory&quot; of our ` +
-                  `independent Auditor&#39;s Report of even date</p>`;
+                  `independent Auditor&#39;s Report of even date</span></p>`;
 
                 // Substitute the "20XX" placeholder with the actual FY end
                 // year at export time.
