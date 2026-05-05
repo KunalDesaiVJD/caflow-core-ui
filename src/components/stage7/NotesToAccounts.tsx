@@ -678,16 +678,29 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
 
     const thin = { style: "thin" as const };
 
-    // ── Pre-merge border helper ───────────────────────────────────────────────
-    // MUST be called BEFORE ws.mergeCells() for the same row.
-    //
-    // Per template screenshot the heading area is THREE separate bordered
-    // boxes (entity name, notes-forming-part, Note:1 Summary) with empty
-    // un-bordered spacer rows in between. Every "boxed" row gets a complete
-    // top + bottom + left + right thin border on every cell B..J. Excel
-    // collapses adjacent rows' borders into a single line so rows 2 and 3
-    // (both fully bordered, no spacer between) appear as two stacked
-    // boxes sharing one divider — matching the screenshot.
+    // ── Border helper — per template screenshot the heading is ONE outer
+    // bold rectangle with thin internal divider lines. Each heading row
+    // sits directly under the previous (no spacer rows between).
+    //   • Outer perimeter: MEDIUM weight  (top of row 2, bottom of last
+    //     heading row, left edge of column B, right edge of column J)
+    //   • Internal dividers: THIN weight
+    // Pass `pos` = "first" | "middle" | "last" — outer top is medium on
+    // "first", outer bottom is medium on "last", everything else thin.
+    const medium = { style: "medium" as const };
+    const setHeadingRowBorders = (rn: number, pos: "first" | "middle" | "last") => {
+      for (let c = 2; c <= 10; c++) {
+        const isLeft  = c === 2;
+        const isRight = c === 10;
+        const b: { top: typeof thin; bottom: typeof thin; left?: typeof thin; right?: typeof thin } = {
+          top:    pos === "first" ? medium : thin,
+          bottom: pos === "last"  ? medium : thin,
+        };
+        if (isLeft)  b.left  = medium;
+        if (isRight) b.right = medium;
+        ws.getRow(rn).getCell(c).border = b as any;
+      }
+    };
+    // Legacy alias for code paths still using the simple full-thin box
     const preBorderRow = (rn: number) => {
       for (let c = 2; c <= 10; c++) {
         const b: { top: typeof thin; bottom: typeof thin; left?: typeof thin; right?: typeof thin } =
@@ -712,66 +725,79 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
     // ── Row 1: intentionally NO borders ──────────────────────────────────────
     r++;
 
-    const fullBox = { top: thin, bottom: thin, left: thin, right: thin };
-
-    // ── Row 2: Entity name — B2:J2 merged, h=27.75 (template) ────────────────
-    preBorderRow(r);                               // full thin box on all cells
+    // ── Row 2: Entity name — first heading row (medium top + sides) ─────────
+    setHeadingRowBorders(r, "first");
     ws.mergeCells(`B${r}:J${r}`);
     ws.getCell(`B${r}`).value     = header.entityNameOverride || displayEntityName;
     ws.getCell(`B${r}`).font      = { name: "Calibri", bold: true, size: 11 };
     ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "middle" };
-    ws.getCell(`B${r}`).border    = fullBox;       // re-assert after merge
+    // Re-assert the master cell's border after merge (medium left+right+top, thin bottom)
+    ws.getCell(`B${r}`).border = {
+      top: medium, bottom: thin, left: medium, right: medium,
+    } as any;
     ws.getRow(r).height = 27.75;
     r++;
 
-    // ── Row 3: Notes heading — B3:H3 merged with year inline; I3 + J3 empty ─
-    // Border on every cell B..J so the bordered rectangle stays full-width
-    // and aligns with row 2 (which spans B:J).
-    preBorderRow(r);                               // full thin box on all cells
+    // ── Row 3: Notes-forming-part — middle heading row ──────────────────────
+    setHeadingRowBorders(r, "middle");
     ws.mergeCells(`B${r}:H${r}`);
     ws.getCell(`B${r}`).value     = `Notes forming part of the Financial Statements  for the year ended, 31st March, ${auditYear}`;
     ws.getCell(`B${r}`).font      = { name: "Calibri", bold: true, size: 11 };
     ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-    ws.getCell(`B${r}`).border    = fullBox;       // re-assert after merge
+    // Master border: thin top+bottom, medium left (B is leftmost)
+    ws.getCell(`B${r}`).border = {
+      top: thin, bottom: thin, left: medium, right: thin,
+    } as any;
     ws.getRow(r).height = 22.5;
     r++;
 
-    // ── Row 4: blank spacer — NO borders (gap between boxes per screenshot) ──
-    ws.mergeCells(`B${r}:J${r}`);
-    ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "top" };
-    ws.getRow(r).height = 5.25;
-    r++;
-
-    // ── Row 5: "Note : 1" + "Summary..." as TWO bordered cells side by side ─
-    // Per screenshot:
-    //   left  cell = "Note : 1"                    (B:C merged)
-    //   right cell = "Summary of Significant accounting policies" (D:J merged)
-    // Both cells get a complete thin box. Borders are set on EVERY cell
-    // (B..J) BEFORE merge AND again on the merge masters AFTER merge —
-    // belt-and-braces so neither ExcelJS quirks nor merge-slave stripping
-    // can drop them.
+    // ── Row 5 (was, now is row 4): "Note : 1" + "Summary..." — last heading row
+    // Two bordered cells side-by-side (B:C + D:J) with vertical divider.
+    // This is the LAST heading row, so its bottom border is medium.
     {
-      const fullBox = { top: thin, bottom: thin, left: thin, right: thin };
-      // Pre-merge: every individual cell gets the full box
+      // First set every cell's box: top thin, bottom medium (last row),
+      // left medium on B, right medium on J. Internal cells (C..I) get
+      // top thin + bottom medium only.
       for (let c = 2; c <= 10; c++) {
-        ws.getRow(r).getCell(c).border = fullBox;
+        const isLeft  = c === 2;
+        const isRight = c === 10;
+        const b: { top: typeof thin; bottom: typeof medium; left?: any; right?: any } = {
+          top: thin, bottom: medium,
+        };
+        if (isLeft)  b.left  = medium;
+        if (isRight) b.right = medium;
+        ws.getRow(r).getCell(c).border = b as any;
       }
-      // Left cell (B:C) merged + value
+      // Add vertical divider between the "Note : 1" cell (B:C) and
+      // "Summary..." cell (D:J): right border on C, left border on D.
+      ws.getRow(r).getCell(3).border = {
+        top: thin, bottom: medium, right: thin,
+      } as any;
+      ws.getRow(r).getCell(4).border = {
+        top: thin, bottom: medium, left: thin,
+      } as any;
+      // Left cell (B:C) merged with literal "Note : 1" so the "1" is
+      // part of an atomic string and cannot be lost.
       ws.mergeCells(`B${r}:C${r}`);
       ws.getCell(`B${r}`).value     = "Note : 1";
       ws.getCell(`B${r}`).font      = { name: "Calibri", bold: true, size: 11 };
       ws.getCell(`B${r}`).alignment = { horizontal: "left", vertical: "middle", indent: 1 };
-      ws.getCell(`B${r}`).border    = fullBox;     // re-assert border after merge
-      // Right cell (D:J) merged + value
+      ws.getCell(`B${r}`).border    = {
+        top: thin, bottom: medium, left: medium, right: thin,
+      } as any;
+      // Right cell (D:J) merged with the title.
       ws.mergeCells(`D${r}:J${r}`);
       ws.getCell(`D${r}`).value     = "Summary of Significant accounting policies";
       ws.getCell(`D${r}`).font      = { name: "Calibri", bold: true, size: 11 };
       ws.getCell(`D${r}`).alignment = { horizontal: "left", vertical: "middle", indent: 1 };
-      ws.getCell(`D${r}`).border    = fullBox;     // re-assert border after merge
+      ws.getCell(`D${r}`).border    = {
+        top: thin, bottom: medium, left: thin, right: medium,
+      } as any;
+      ws.getRow(r).height = 18;
     }
     r++;
 
-    // ── Row 6: blank spacer — NO borders (gap below Note row per screenshot)
+    // ── Spacer row — NO borders, just visual gap before the notes table ─────
     ws.getRow(r).height = 6.75;
     r++;
 
