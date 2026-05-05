@@ -549,24 +549,27 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
             },
           },
         });
-        // Frontend-side audit log — ensures Email Log tab always shows every send,
-        // regardless of which edge function version is deployed.
+        // Frontend-side audit log via Vercel serverless function (bypasses Supabase RLS).
+        // Ensures Email Log tab always shows every send, regardless of edge function version.
         try {
-          await (supabase.from("notification_log") as any).insert({
-            firm_id:      shareInvoice.firm_id,
-            recipient_id: shareInvoice.client_id,
-            channel:      "email",
-            type:         "invoice_generated",
-            content: {
-              to:      shareEmail,
-              subject: shareSubject,
-              ...(allCC.length > 0 ? { cc: allCC.join(", ") } : {}),
-              ...(shareMessage      ? { body: shareMessage }   : {}),
-              ...(invokeError       ? { error: invokeError.message ?? String(invokeError) } : {}),
-            },
-            status:      invokeError ? "failed" : "sent",
-            provider_id: null,
-            sent_at:     new Date().toISOString(),
+          await fetch("/api/log-email", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              firm_id:      shareInvoice.firm_id,
+              recipient_id: shareInvoice.client_id || null,
+              channel:      "email",
+              type:         "invoice_generated",
+              content: {
+                to:      shareEmail,
+                subject: shareSubject,
+                ...(allCC.length > 0 ? { cc: allCC.join(", ") } : {}),
+                ...(shareMessage      ? { body: shareMessage }   : {}),
+                ...(invokeError       ? { error: invokeError.message ?? String(invokeError) } : {}),
+              },
+              status:  invokeError ? "failed" : "sent",
+              sent_at: new Date().toISOString(),
+            }),
           });
         } catch (logErr) {
           console.error("[EmailLog] Failed to write notification log:", logErr);
