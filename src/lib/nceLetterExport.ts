@@ -136,6 +136,8 @@ export async function exportClientCertificate(
     top:  0.55, bottom: 0.55,
     header: 0.2, footer: 0.2,
   };
+  // Match template's initial view (Page Break Preview)
+  ws.views = [{ state: "normal", showGridLines: false, view: "pageBreakPreview" } as any];
 
   // ── Column widths — exact match to template ──
   ws.columns = [
@@ -238,7 +240,7 @@ export async function exportClientCertificate(
   ws.getCell("D16").value = "was with the firm and same was tallied with the cash book.";
   n(ws.getCell("D16"));
   ws.getCell("D16").alignment = { vertical: "top" }; // NO wrapText — let overflow
-  ws.getRow(16).height = 18;
+  // Don't force a height — template uses default so the row sizes naturally
 
   // ── Row 18 — Closing stock (B18:D18 merged) ──
   ws.mergeCells("B18:D18");
@@ -263,9 +265,9 @@ export async function exportClientCertificate(
   // ── Rows 19+ — Dynamic points ──
   // Template fixed rows for points (up to 7): 19, 21, 23, 25, 27, 29, 31.
   // Odd rows = content; even rows between them = spacers at height 11.25pt.
-  // Template-exact heights for the 7 fixed content rows:
-  const FIXED_ROWS        = [19,   21,   23,    25,    27,   29, 31];
-  const FIXED_ROW_HEIGHTS = [undefined, 31.5, 32.25, 17.25, 31.5, 48, 48];
+  // Per template: content rows DON'T have a fixed height — they auto-fit
+  // to the wrapped text length. Only the spacer rows are explicitly h=11.25.
+  const FIXED_ROWS = [19, 21, 23, 25, 27, 29, 31];
   const points = data.points || [];
 
   let lastPointRow = 18;
@@ -279,12 +281,6 @@ export async function exportClientCertificate(
     cell.value = text;
     n(cell);
     cell.alignment = { wrapText: true, horizontal: "justify", vertical: "top" };
-
-    // Use template-exact height for the 7 fixed rows; formula for extras
-    const h = i < FIXED_ROW_HEIGHTS.length
-      ? FIXED_ROW_HEIGHTS[i]
-      : (text.length > 150 ? 48 : text.length > 80 ? 32 : 17.25);
-    if (h !== undefined) ws.getRow(row).height = h;
 
     // Spacer row immediately before this content row (even row = row-1 for rows 21+)
     if (row > 19) ws.getRow(row - 1).height = 11.25;
