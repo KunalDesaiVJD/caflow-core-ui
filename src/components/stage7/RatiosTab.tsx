@@ -228,14 +228,16 @@ export function RatiosTab({ engagementId, engagement }: Props) {
       // Auto-populate from BS/P&L before export so values are always fresh.
       // This mirrors the "Re-sync" button but is silent on failure (falls back
       // to whatever is currently in state).
+      // Export uses a snapshot of current ratios — auto-populate CY from TB
+      // but do NOT update React state or save to DB so the PY tab stays intact.
       let exportRatios = ratios;
       try {
-        const { autoPopulateRatios: _autoPop, saveStage7Ratios: _save } =
+        const { autoPopulateRatios: _autoPop } =
           await import("@/lib/ratioAutoPopulate");
+        // Merge auto-populated CY into existing ratios, preserving all manual
+        // PY entries (manual_overrides ensures they are not clobbered).
         exportRatios = await _autoPop(engagementId, { existing: ratios });
-        setRatios(exportRatios);
-        await _save(engagementId, exportRatios);
-        setLastSynced(new Date().toLocaleTimeString("en-IN"));
+        // Do NOT call setRatios() or _save() — export is read-only.
       } catch {
         // TB data unavailable — export with current state values
       }

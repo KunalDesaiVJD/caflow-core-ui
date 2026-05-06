@@ -140,7 +140,17 @@ export function CommunicationLogTab({ data, engagementId }: Props) {
       .select("id,subject,body,channel,template_used,query_ids,dispatch_ref,dispatched_at,dispatched_by")
       .eq("engagement_id", engagementId)
       .order("dispatched_at", { ascending: false });
-    setLogs((rows as DispatchLog[]) || []);
+
+    // Deduplicate: if the same dispatch_ref appears more than once (e.g. double
+    // logging from a retry), show only the first (most-recent) occurrence.
+    const seen = new Set<string>();
+    const deduped = ((rows as DispatchLog[]) || []).filter(log => {
+      const key = log.dispatch_ref || log.id;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    setLogs(deduped);
     setLoading(false);
   }, [engagementId]);
 

@@ -16,9 +16,10 @@ import { useState, useMemo, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
-import { ChevronLeft, ChevronRight, Plus, Calendar, AlignJustify, UserPlus, X as XIcon, Search, Filter } from "lucide-react";
+  Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
+} from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ChevronLeft, ChevronRight, Plus, Calendar, AlignJustify, UserPlus, X as XIcon, Search, Filter, Check, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { PlanEntry } from "../hooks/useAuditPlanning";
 import type { ClientOption } from "../hooks/useClients";
@@ -272,6 +273,7 @@ export default function PlanningCalendar({
 
   // ── Global client filter ────────────────────────────────────────────────────
   const [globalClientFilter, setGlobalClientFilter] = useState<string>("__all__");
+  const [clientFilterOpen,   setClientFilterOpen]   = useState(false);
 
   // All unique non-leave client names across all entries
   const allClientNames = useMemo(() => {
@@ -468,20 +470,57 @@ export default function PlanningCalendar({
         {/* Right: global client filter + view toggle + add new + add employee */}
         <div className="flex items-center gap-1.5 flex-wrap">
 
-          {/* Global client filter */}
+          {/* Global client filter — searchable combobox */}
           <div className="flex items-center gap-1">
             <Filter size={12} className="text-muted-foreground shrink-0" />
-            <Select value={globalClientFilter} onValueChange={setGlobalClientFilter}>
-              <SelectTrigger className="h-8 text-xs w-[160px]">
-                <SelectValue placeholder="All clients" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__all__" className="text-xs text-muted-foreground">— All clients —</SelectItem>
-                {allClientNames.map(name => (
-                  <SelectItem key={name} value={name} className="text-xs">{name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Popover open={clientFilterOpen} onOpenChange={setClientFilterOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  role="combobox"
+                  className={cn(
+                    "h-8 text-xs w-[160px] justify-between font-normal",
+                    globalClientFilter !== "__all__" && "border-amber-400 text-amber-800"
+                  )}
+                >
+                  <span className="truncate">
+                    {globalClientFilter === "__all__" ? "All clients" : globalClientFilter}
+                  </span>
+                  <ChevronsUpDown size={11} className="ml-1 shrink-0 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="p-0 w-[220px]" align="start">
+                <Command>
+                  <CommandInput placeholder="Search client…" className="h-8 text-xs" />
+                  <CommandList className="max-h-52">
+                    <CommandEmpty className="py-2 text-xs text-center text-muted-foreground">
+                      No client found
+                    </CommandEmpty>
+                    <CommandGroup>
+                      <CommandItem
+                        value="__all__"
+                        onSelect={() => { setGlobalClientFilter("__all__"); setClientFilterOpen(false); }}
+                        className="text-xs text-muted-foreground"
+                      >
+                        <Check size={11} className={cn("mr-2", globalClientFilter === "__all__" ? "opacity-100" : "opacity-0")} />
+                        — All clients —
+                      </CommandItem>
+                      {allClientNames.map(name => (
+                        <CommandItem
+                          key={name}
+                          value={name}
+                          onSelect={() => { setGlobalClientFilter(name); setClientFilterOpen(false); }}
+                          className="text-xs"
+                        >
+                          <Check size={11} className={cn("mr-2", globalClientFilter === name ? "opacity-100" : "opacity-0")} />
+                          {name}
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
             {globalClientFilter !== "__all__" && (
               <button
                 onClick={() => setGlobalClientFilter("__all__")}
@@ -566,7 +605,7 @@ export default function PlanningCalendar({
       <div className="border rounded-lg overflow-hidden">
         <div
           className="overflow-auto"
-          style={{ maxHeight: view === "month" ? "calc(100vh - 340px)" : "auto" }}
+          style={{ maxHeight: "none" }}
         >
           <table className="border-collapse text-xs" style={{ tableLayout: "fixed" }}>
             {/* Sticky header */}

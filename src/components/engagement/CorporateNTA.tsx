@@ -275,7 +275,15 @@ export function CorporateNTA({ engagement, client, onUpdate }: Props) {
     ?? client?.date_of_incorporation ?? "") as string;
   const actYear     = getActYear(incDateIso);
 
-  const regAddress  = (data.overview.registered_address_override  ?? client?.registered_office  ?? "") as string;
+  // registered_office is the dedicated column; fall back to general address
+  // if it is not set (client wizard saves address into the `address` column,
+  // while registered_office may be populated separately or via migration).
+  const regAddress  = (data.overview.registered_address_override
+    ?? client?.registered_office
+    ?? client?.address
+    ?? "") as string;
+  // business_activity maps to the "Business Nature" field in advanced info of
+  // the client management wizard (saved as clients.business_activity).
   const bizActivity = (data.overview.business_activity_override   ?? client?.business_activity  ?? "") as string;
 
   // ── Persistence ────────────────────────────────────────────────────────────

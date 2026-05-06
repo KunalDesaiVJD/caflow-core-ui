@@ -126,6 +126,26 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
       });
     }
 
+    // Dedup real status rows: if the same client has multiple rows for this FY,
+    // keep only one per client — prefer the row with an engagement_id, then the
+    // most recently created one. This prevents duplicate rows in the grid.
+    {
+      const seenRealClientIds = new Set<string>();
+      // Sort so rows with engagement_id come first, then by created_at desc
+      statusRows.sort((a, b) => {
+        const aHasEng = a.engagement_id ? 1 : 0;
+        const bHasEng = b.engagement_id ? 1 : 0;
+        if (aHasEng !== bHasEng) return bHasEng - aHasEng; // engagement rows first
+        return (b.created_at || "").localeCompare(a.created_at || ""); // newest first
+      });
+      statusRows = statusRows.filter(r => {
+        if (!r.client_id) return true; // keep rows without a client_id
+        if (seenRealClientIds.has(r.client_id)) return false;
+        seenRealClientIds.add(r.client_id);
+        return true;
+      });
+    }
+
     const engagementIdsWithStatus = new Set(
       statusRows.filter(r => r.engagement_id).map(r => r.engagement_id!)
     );

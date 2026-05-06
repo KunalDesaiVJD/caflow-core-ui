@@ -653,13 +653,13 @@ export default function AuditPipeline() {
   // ─── Validation ───
   const block1AValid = form1A.client_id && form1A.financial_year && form1A.entity_type && form1A.audit_type && form1A.audit_firm_id;
 
-  const blockAFields = ["constitution_confirmed", "registered_address", "agm_dates", "board_changes", "regulatory_actions"];
-  const blockBFields = ["turnover_cy", "turnover_py", "total_assets", "has_inventory", "capital_transactions", "long_term_borrowings", "director_loans"];
+  const blockAFields = ["board_changes"];
+  const blockBFields = ["turnover_cy", "turnover_py", "total_assets", "has_inventory", "long_term_borrowings", "director_loans"];
   const blockAValid = blockAFields.every(f => questionnaire[f]);
   const blockBValid = blockBFields.every(f => questionnaire[f]);
 
   const isTaxAuditReq = form1A.audit_type === "tax_audit" || form1A.audit_type === "both";
-  const blockDFields = ["turnover_exceeds_limit", "accounting_method", "stock_valuation", "section_40a3", "donations_80g"];
+  const blockDFields = ["turnover_exceeds_limit", "accounting_method"];
   const blockDValid = !isTaxAuditReq || blockDFields.every(f => questionnaire[f]);
 
   // Block C — Audit Applicability (corporate-only). Pre-filled by the effect
@@ -1106,11 +1106,7 @@ export default function AuditPipeline() {
                       {blockAValid && <CheckCircle2 size={14} className="ml-2 text-primary" />}
                     </AccordionTrigger>
                     <AccordionContent className="space-y-4 pt-2">
-                      <YesNo label="Constitution confirmed as per records?" value={questionnaire.constitution_confirmed || ""} onChange={v => setQ("constitution_confirmed", v)} />
-                      <YesNo label="Registered address verified?" value={questionnaire.registered_address || ""} onChange={v => setQ("registered_address", v)} />
-                      <YesNo label="AGM / Meeting dates available?" value={questionnaire.agm_dates || ""} onChange={v => setQ("agm_dates", v)} />
                       <YesNo label="Any board composition changes during the year?" value={questionnaire.board_changes || ""} onChange={v => setQ("board_changes", v)} />
-                      <YesNo label="Any regulatory actions / show-cause notices?" value={questionnaire.regulatory_actions || ""} onChange={v => setQ("regulatory_actions", v)} />
                       {/* Non-corporate only: determines 3CA vs 3CB selection in Stage 8 */}
                       {!["company", "private ltd", "public ltd", "opc", "pvt_ltd", "public_ltd"].includes((form1A.entity_type || "").toLowerCase().trim()) && (
                         <div className="space-y-3 border-t pt-3 mt-2">
@@ -1156,7 +1152,6 @@ export default function AuditPipeline() {
                       </div>
                       <div><Label>Total Assets ₹</Label><Input type="number" value={questionnaire.total_assets || ""} onChange={e => setQ("total_assets", e.target.value)} /></div>
                       <YesNo label="Inventory held at year end?" value={questionnaire.has_inventory || ""} onChange={v => setQ("has_inventory", v)} />
-                      <YesNo label="Any capital transactions (issue/buyback of shares, debentures)?" value={questionnaire.capital_transactions || ""} onChange={v => setQ("capital_transactions", v)} />
                       <YesNo label="Long-term borrowings outstanding?" value={questionnaire.long_term_borrowings || ""} onChange={v => setQ("long_term_borrowings", v)} />
                       <YesNo label="Loans to/from directors or related parties?" value={questionnaire.director_loans || ""} onChange={v => setQ("director_loans", v)} />
                     </AccordionContent>
@@ -1478,20 +1473,6 @@ export default function AuditPipeline() {
                             </SelectContent>
                           </Select>
                         </div>
-                        <div>
-                          <Label>Stock Valuation Method</Label>
-                          <Select value={questionnaire.stock_valuation || ""} onValueChange={v => setQ("stock_valuation", v)}>
-                            <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="fifo">FIFO</SelectItem>
-                              <SelectItem value="weighted_avg">Weighted Average</SelectItem>
-                              <SelectItem value="specific_id">Specific Identification</SelectItem>
-                              <SelectItem value="na">N/A</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <YesNo label="Any Section 40A(3) cash payments > ₹10,000?" value={questionnaire.section_40a3 || ""} onChange={v => setQ("section_40a3", v)} />
-                        <YesNo label="Donations eligible u/s 80G?" value={questionnaire.donations_80g || ""} onChange={v => setQ("donations_80g", v)} />
                       </AccordionContent>
                     </AccordionItem>
                   )}

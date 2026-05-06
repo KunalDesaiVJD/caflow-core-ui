@@ -167,6 +167,24 @@ export default function PlanningEntryDialog({
     const fromStr = safeISO(from);
     const toStr   = safeISO(to);
 
+    // Issue 3: In edit mode, block changing from Leave → Client or Client → Leave.
+    // The user must delete and re-create to change type.
+    if (isEdit && entry) {
+      const wasLeave = entryIsLeave(entry);
+      if (wasLeave && !isLeave) {
+        setConflictMsg(
+          "This entry was created as Leave. To assign a client instead, please delete this entry and create a new one."
+        );
+        return;
+      }
+      if (!wasLeave && isLeave) {
+        setConflictMsg(
+          "This entry was created as a client assignment. To mark as Leave instead, please delete this entry and create a new one."
+        );
+        return;
+      }
+    }
+
     if (empIds.length > 0 && clientName) {
       const conflict = checkConflicts(isLeave, fromStr, toStr);
       if (conflict) { setConflictMsg(conflict); return; }
