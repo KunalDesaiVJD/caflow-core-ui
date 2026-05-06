@@ -454,7 +454,7 @@ export default function AuditPipeline() {
     queryFn: async () => {
       const { data } = await supabase
         .from("audit_engagements")
-        .select("*, clients(name, entity_type, caro_applicable, tax_audit_type, pan, gstin, cin, registered_state, date_of_incorporation, tan_number)")
+        .select("*, clients(name, entity_type, caro_applicable, tax_audit_type, pan, gstin, cin, registered_state, date_of_incorporation, tan_number, address, registered_office, business_activity)")
         .eq("id", selectedEngId)
         .single();
       return data as any;
