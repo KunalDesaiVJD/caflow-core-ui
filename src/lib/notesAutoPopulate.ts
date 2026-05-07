@@ -717,7 +717,11 @@ export function buildBreakup(
   //    Legacy rows persisted before this feature have no `source` field;
   //    treat anything not explicitly "linked" as manual so existing data
   //    survives the first re-sync.
-  const manualRows: BreakupRow[] = (existing || []).filter(r => r.source !== "linked");
+  //    DEFENSIVE: filter out null/undefined entries first — corrupt JSONB or
+  //    sparse arrays from legacy partial-saves can otherwise crash the re-sync
+  //    with "Cannot read properties of null (reading 'source')".
+  const manualRows: BreakupRow[] = (existing || [])
+    .filter((r): r is BreakupRow => r != null && r.source !== "linked");
 
   // 2) Build linked rows
   const result: BreakupRow[] = [];
@@ -1106,7 +1110,11 @@ export async function autoPopulateNotes(
         ruleKey,
       ) : undefined;
       const rowExist  = options.existing?.[section]?.[rowKey] as any;
-      let existingBreak = rowExist?.breakup as BreakupRow[] | undefined;
+      // Coerce to array and drop null/undefined slots up-front so the rest of
+      // the pipeline never sees corrupt rows from legacy JSONB.
+      let existingBreak: BreakupRow[] | undefined = Array.isArray(rowExist?.breakup)
+        ? (rowExist.breakup as any[]).filter((r): r is BreakupRow => r != null)
+        : undefined;
       // One-time legacy migration: if the engagement was created before the
       // unified .breakup refactor, seed manual rows from the deprecated
       // paths (general_reserve_cy/py, secured_term_loans[], etc.) so we
