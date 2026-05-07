@@ -1222,7 +1222,10 @@ function writeProfitAndLoss(
   sheet.getCell("C37").value = "(XII-XIII)";
   sheet.getCell("C37").font = { bold: true, size: 9 };
 
-  // Row 38 — XV. Profit / (Loss) for the period  (asymmetric CY vs PY formula per spec)
+  // Row 38 — XV. Profit / (Loss) for the period
+  // Both CY and PY use: XV = PBT − currentTax + deferredTax
+  // deferredTax is the signed value (negative for DTL, positive for DTA).
+  // Using + instead of SUM(G30:G31) preserves the sign naturally.
   sheet.getCell("B38").value = "XV.";
   sheet.getCell("B38").font = { bold: true, size: 9 };
   sheet.getCell("B38").alignment = { horizontal: "center" };
@@ -1231,7 +1234,7 @@ function writeProfitAndLoss(
   sheet.getCell("G38").value = { formula: "G28-G30+G31" };
   sheet.getCell("G38").font = { bold: true, size: 9 };
   sheet.getCell("G38").alignment = { horizontal: "right" };
-  sheet.getCell("H38").value = { formula: "H28-SUM(H30:H31)" };
+  sheet.getCell("H38").value = { formula: "H28-H30+H31" };  // Phase G fix: was H28-SUM(H30:H31)
   sheet.getCell("H38").font = { bold: true, size: 9 };
   sheet.getCell("H38").alignment = { horizontal: "right" };
 

@@ -759,9 +759,11 @@ function buildPLRows(pl: PLRowData): PLDisplayRow[] {
   const currentTaxPy = pl.currentTax.py || 0;
   const deferredTaxCy = pl.deferredTax.cy || 0;
   const deferredTaxPy = pl.deferredTax.py || 0;
-  // Match Excel: CY = IX - currentTax + deferredTax ; PY = IX - currentTax - deferredTax
+  // XV = IX − currentTax + deferredTax  (same formula for both CY and PY)
+  // deferredTax is the signed TB value: negative for DTL (reduces profit),
+  // positive for DTA (adds to profit). + preserves the sign naturally.
   const profitCy = pbtCy - currentTaxCy + deferredTaxCy;           // XV
-  const profitPy = pbtPy - currentTaxPy - deferredTaxPy;
+  const profitPy = pbtPy - currentTaxPy + deferredTaxPy;           // XV (Phase G fix: was -deferredTaxPy)
   const epsDivisor = pl.shareCap.noteNo || 1;
   const epsBasicCy = profitCy / epsDivisor;
   const epsBasicPy = profitPy / epsDivisor;
