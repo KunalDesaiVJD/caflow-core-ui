@@ -216,6 +216,17 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
   const [editId,      setEditId]      = useState<string | null>(null);
   const [savingId,    setSavingId]    = useState<string | null>(null);
   const [expandedId,  setExpandedId]  = useState<string | null>(null);
+  // Issue 1 — track which rows have their full expense-ledger list expanded.
+  // Default = collapsed (top 3); clicking "+N more" adds the row to this set.
+  const [expandedExpenses, setExpandedExpenses] = useState<Set<string>>(new Set());
+  const toggleExpenses = useCallback((mappingId: string) => {
+    setExpandedExpenses(prev => {
+      const next = new Set(prev);
+      if (next.has(mappingId)) next.delete(mappingId);
+      else next.add(mappingId);
+      return next;
+    });
+  }, []);
 
   // ── Run AI Mapper ────────────────────────────────────────────────────────────
   const runMapper = useCallback(async (force = false) => {
@@ -411,14 +422,19 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
                           <span className="text-[9px] italic ml-1">(incl. GST)</span>
                         </p>
                       )}
-                      {/* Expense ledgers booked against this party (top 3) */}
+                      {/* Issue 1 — expense ledgers list with click-to-expand
+                          when there are more than 3.  Default shows top 3
+                          (sorted by amount desc); clicking the "+N more" /
+                          "Show fewer" button reveals/collapses the full list. */}
                       {(() => {
                         const expenses = partyExpenses.get((m.tb_ledger_name || "").toLowerCase().trim()) ?? [];
                         if (expenses.length === 0) return null;
-                        const top = expenses.slice(0, 3);
+                        const isExpanded = expandedExpenses.has(m.id);
+                        const visible = isExpanded ? expenses : expenses.slice(0, 3);
+                        const hidden  = expenses.length - 3;
                         return (
                           <div className="mt-1 pl-2 border-l-2 border-blue-200 space-y-0.5">
-                            {top.map(e => (
+                            {visible.map(e => (
                               <p key={e.ledger} className="text-[10px] text-blue-700/90 truncate" title={`${e.ledger} · ${e.count} voucher${e.count === 1 ? "" : "s"}`}>
                                 ↳ {e.ledger}
                                 <span className="text-[9px] text-blue-700/60 ml-1">
@@ -426,10 +442,15 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
                                 </span>
                               </p>
                             ))}
-                            {expenses.length > 3 && (
-                              <p className="text-[9px] text-muted-foreground italic">
-                                + {expenses.length - 3} more
-                              </p>
+                            {hidden > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => toggleExpenses(m.id)}
+                                className="text-[9px] text-blue-600 hover:text-blue-800 hover:underline italic cursor-pointer focus:outline-none focus:underline"
+                                title={isExpanded ? "Collapse list" : `Show all ${expenses.length} expense ledgers`}
+                              >
+                                {isExpanded ? "Show fewer" : `+ ${hidden} more`}
+                              </button>
                             )}
                           </div>
                         );
@@ -453,9 +474,10 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
                       </p>
 
                       {/* Gross amount row with match indicator + GST breakup.
-                          Issue 1: when the TB amount equals tdsGross × 1.18,
-                          show the explicit taxable + GST 18% split so the
-                          auditor sees exactly why the figures reconcile. */}
+                          Issue 4: when mapping_status === "confirmed", always
+                          show the green check — auditor has reviewed and
+                          accepted the mapping (including any gross gap).  The
+                          warning indicator is only useful pre-confirmation. */}
                       {m.tds_total_amount != null && (() => {
                         const tbGross = m.tb_total_debit ?? 0;
                         const tdsGross = m.tds_total_amount;
@@ -463,7 +485,10 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
                         const ratioNet = tbGross > 0 ? tdsGross / (tbGross / 1.18) : 0;
                         // Treat as "GST-included" when TB÷1.18 ≈ TDS gross
                         const gstIncluded = Math.abs(ratioNet - 1) < 0.05;
-                        const grossMatch  = (ratio >= 0.75 && ratio <= 1.35) || gstIncluded;
+                        const isConfirmed = m.mapping_status === "confirmed";
+                        const grossMatch  = isConfirmed
+                          || (ratio >= 0.75 && ratio <= 1.35)
+                          || gstIncluded;
                         const gstCause    = !grossMatch && ratio < 0.75 && Math.abs(ratioNet - 1) < 0.15;
                         const gstAmount   = gstIncluded ? Math.round(tbGross - tdsGross) : 0;
                         return (

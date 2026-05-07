@@ -89,14 +89,56 @@ export function useTdsPartyMappings(
       .order("match_confidence", { ascending: false });
     if (err) setError(err.message);
     else {
-      // Issue 3 (root-cause fix, part 2): filter out stale non-party rows that
-      // were stored before EXPENSE_TOKENS was tightened. Only rows whose
-      // tb_parent_group satisfies isPartyLedgerGroup() (currently "creditor"
-      // groups) are surfaced to the UI. Auditors can still see rejected rows
-      // because Rejected rows are still party-group rows that were declined.
       const all = (data ?? []) as TbPartyMapping[];
-      const filtered = all.filter(m => isPartyLedgerGroup(m.tb_parent_group));
-      setMappings(filtered);
+      // ── Issue 3 (party-group filter) — same as before ─────────────────────
+      const partyOnly = all.filter(m => isPartyLedgerGroup(m.tb_parent_group));
+
+      // ── Issue 3 (name-match >= 70 %) ───────────────────────────────────────
+      // The mapper now requires name_score ≥ 70 before storing a row, but old
+      // rows may have been stored before that filter existed.  Since name_score
+      // is not stored as its own column, we use match_method as a proxy: when
+      // the mapper accepted a row at name ≥ 70 %, it appended "name_similarity"
+      // to match_method.  Rows lacking that token were stored with a weaker
+      // name match and are hidden here.  Manual confirmations bypass the
+      // filter — auditors may have intentionally accepted a low-name match.
+      const nameMatched = partyOnly.filter(m => {
+        if (m.mapped_by === "auditor") return true;
+        const methods = (m.match_method || "").split("+");
+        return methods.includes("name_similarity");
+      });
+
+      // ── Issue 2 (dedupe by deductee) ──────────────────────────────────────
+      // When two TB ledgers map to the same TDS deductee + section pair, only
+      // surface the best fit — preventing two parties showing the SAME gross
+      // (e.g. "Sruthy Ramanan" and "Sruthy Ramanan - HR" both pointing at the
+      // same SRUTHY RAMANAN deductee).  Existing duplicates from before the
+      // mapper added its own dedupe step are cleaned up at read time.
+      // Ranking: manually confirmed > auto confirmed > pending; creditor
+      // parent group preferred; higher match_confidence wins.
+      const byDeductee = new Map<string, TbPartyMapping[]>();
+      for (const m of nameMatched) {
+        const k = `${(m.tds_deductee_name || "").toLowerCase().trim()}|${m.tds_section_code || ""}`;
+        if (!byDeductee.has(k)) byDeductee.set(k, []);
+        byDeductee.get(k)!.push(m);
+      }
+      const deduped: TbPartyMapping[] = [];
+      for (const rows of byDeductee.values()) {
+        if (rows.length === 1) { deduped.push(rows[0]); continue; }
+        rows.sort((a, b) => {
+          const aManual   = a.mapped_by === "auditor"        ? 1 : 0;
+          const bManual   = b.mapped_by === "auditor"        ? 1 : 0;
+          if (aManual !== bManual)   return bManual   - aManual;
+          const aConfirm  = a.mapping_status === "confirmed" ? 1 : 0;
+          const bConfirm  = b.mapping_status === "confirmed" ? 1 : 0;
+          if (aConfirm !== bConfirm) return bConfirm  - aConfirm;
+          const aCred     = (a.tb_parent_group || "").toLowerCase().includes("creditor") ? 1 : 0;
+          const bCred     = (b.tb_parent_group || "").toLowerCase().includes("creditor") ? 1 : 0;
+          if (aCred !== bCred)       return bCred     - aCred;
+          return (b.match_confidence || 0) - (a.match_confidence || 0);
+        });
+        deduped.push(rows[0]);
+      }
+      setMappings(deduped);
     }
     setLoading(false);
   }, [clientId, financialYear]);
