@@ -532,7 +532,10 @@ const NCE_CODE_TO_STATIC_REF: Readonly<Record<string, number>> = {
   NCE_NCINV: 13, NCE_LTLA: 14, NCE_ONCA: 15,
   NCE_CINV: 16, NCE_STCK: 17, NCE_TR: 18, NCE_CASH: 19, NCE_STLA: 20, NCE_OCA: 21,
   NCE_REV_OPS: 22, NCE_REV_OTH: 23,
-  NCE_COGS: 24, NCE_EMP_EXP: 25, NCE_FIN_COST: 26, NCE_DEPR: 27, NCE_OTH_EXP: 28,
+  // Issue 1 — NCE Depreciation row shares the PPE note number (10) so the
+  // FA Schedule serves both BS PPE and P&L Depreciation.  Clicks navigate
+  // to the same Note 10 (FA grid) in the NCE Notes tab.
+  NCE_COGS: 24, NCE_EMP_EXP: 25, NCE_FIN_COST: 26, NCE_DEPR: 10, NCE_OTH_EXP: 28,
 };
 
 // ── P&L FS code → registry note key ─────────────────────────────────────────
@@ -560,7 +563,10 @@ const FS_CODE_TO_NOTES_SUBTAB: Readonly<Record<string, "bs_liab" | "bs_asset" | 
   BS_CA_CI: "bs_asset", BS_CA_INV: "bs_asset", BS_CA_TR: "bs_asset",
   BS_CA_CCE: "bs_asset", BS_CA_SLA: "bs_asset", BS_CA_OCA: "bs_asset",
   PL_REV_OPS: "pl", PL_REV_OI: "pl", PL_EXP_MAT: "pl", PL_EXP_SIT: "pl",
-  PL_EXP_CII: "pl", PL_EXP_EMP: "pl", PL_EXP_FIN: "pl", PL_EXP_DEP: "pl",
+  PL_EXP_CII: "pl", PL_EXP_EMP: "pl", PL_EXP_FIN: "pl",
+  // Issue 1 — Depreciation routes to the FA Schedule sub-tab, not P&L.
+  // The FA grid is the underlying source for both BS PPE and P&L Depreciation.
+  PL_EXP_DEP: "fa",
   PL_EXP_OTH: "pl", PL_EPS_B: "pl",
 };
 
@@ -1075,7 +1081,8 @@ function buildNCEPLRows(
     { kind: "item", label: "(a) Cost of goods sold",           noteNo: sn(24, cogsCy, cogsPy),                              cy: cogsCy,               py: cogsPy,                 indent: 1, code: "NCE_COGS" },
     { kind: "item", label: "(b) Employee benefits expense",    noteNo: sn(25, cy["NCE_EMP_EXP"],  py["NCE_EMP_EXP"]),  cy: pos("NCE_EMP_EXP"),  py: pospy("NCE_EMP_EXP"),  indent: 1, code: "NCE_EMP_EXP" },
     { kind: "item", label: "(c) Finance costs",                noteNo: sn(26, cy["NCE_FIN_COST"], py["NCE_FIN_COST"]), cy: pos("NCE_FIN_COST"), py: pospy("NCE_FIN_COST"), indent: 1, code: "NCE_FIN_COST" },
-    { kind: "item", label: "(d) Depreciation and amortisation",noteNo: sn(27, cy["NCE_DEPR"],     py["NCE_DEPR"]),     cy: pos("NCE_DEPR"),     py: pospy("NCE_DEPR"),     indent: 1, code: "NCE_DEPR" },
+    // Issue 1 — Depreciation note number aligned with PPE (10) — same FA Schedule.
+    { kind: "item", label: "(d) Depreciation and amortisation",noteNo: sn(10, cy["NCE_DEPR"],     py["NCE_DEPR"]),     cy: pos("NCE_DEPR"),     py: pospy("NCE_DEPR"),     indent: 1, code: "NCE_DEPR" },
     { kind: "item", label: "(e) Other expenses",               noteNo: sn(28, cy["NCE_OTH_EXP"],  py["NCE_OTH_EXP"]), cy: pos("NCE_OTH_EXP"),  py: pospy("NCE_OTH_EXP"),  indent: 1, code: "NCE_OTH_EXP" },
     { kind: "total", label: "Total Expenses (IV)", cy: pos("NCE_PL_EXP"), py: pospy("NCE_PL_EXP") },
     { kind: "spacer" },
@@ -2957,7 +2964,10 @@ export default function PipelineFinancialStatements({
         })(),
         employeeBenefits:   { noteNo: dn("employee_benefits"),   cy: ncyOf("pl","employee_benefits","PL_EXP_EMP"),  py: npyOf("pl","employee_benefits","PL_EXP_EMP")  },
         financeCosts:       { noteNo: dn("finance_costs"),       cy: ncyOf("pl","finance_costs","PL_EXP_FIN"),      py: npyOf("pl","finance_costs","PL_EXP_FIN")      },
-        depreciation:       { noteNo: null,                      cy: ncyOf("pl","depreciation","PL_EXP_DEP"),       py: npyOf("pl","depreciation","PL_EXP_DEP")       },
+        // Issue 1 — Depreciation row points at the PPE / FA Schedule note
+        // (same number as Property, Plant & Equipment).  A single FA grid
+        // serves both the BS PPE line and the P&L Depreciation line.
+        depreciation:       { noteNo: dn("ppe"),                  cy: ncyOf("pl","depreciation","PL_EXP_DEP"),       py: npyOf("pl","depreciation","PL_EXP_DEP")       },
         otherExpenses:      { noteNo: dn("other_expenses"),      cy: ncyOf("pl","other_expenses","PL_EXP_OTH"),     py: npyOf("pl","other_expenses","PL_EXP_OTH")     },
         taxExpense:         { noteNo: null },
         currentTax:         { cy: cyOf("PL_TAX_CUR"), py: pyOf("PL_TAX_CUR") },

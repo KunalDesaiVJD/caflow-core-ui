@@ -351,8 +351,13 @@ export function hasData(
  * Keys that always receive a note number regardless of amounts or COA mapping.
  * "ppe" is always active because the FA schedule is rendered unconditionally —
  * there is always a PPE / Fixed Assets note even when the BS amount is zero.
+ * "ratios" is always active because the Ratios disclosure is mandated by
+ * Schedule III (Sch III Note 11) — and because it carries no FS codes the
+ * generic hasData() check would otherwise skip it.  As "ratios" sits last in
+ * CORPORATE_NOTE_ORDER, it receives the FINAL note number after every
+ * other corporate note has been assigned.
  */
-const CORP_ALWAYS_ACTIVE = new Set<string>(["ppe"]);
+const CORP_ALWAYS_ACTIVE = new Set<string>(["ppe", "ratios"]);
 const NCE_ALWAYS_ACTIVE  = new Set<string>(["ppe"]);
 
 export function buildDynamicRegistry(

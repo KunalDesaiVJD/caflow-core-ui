@@ -263,6 +263,20 @@ export function CorporateNTA({ engagement, client, onUpdate }: Props) {
   const { getNoteNo } = useDynamicNoteRegistry(engagement?.id ?? "");
   const accountingPoliciesNoteNo = getNoteNo("accounting_policies") ?? 1;
 
+  // Issue 2 — Auto-substitute the Ratios note number into general-note 9
+  // ("Disclosure of the Accounting Ratio is attached as per Note-XX.").
+  // The placeholder lives in the static default text; we swap it with
+  // the dynamic registry value at render time so the number stays in sync
+  // even when other notes are suppressed (which shifts ratios up the list).
+  const ratiosNoteNo = getNoteNo("ratios");
+  const resolveGeneralNoteWithRatios = (idx: number, body: string): string => {
+    const txt = resolveGeneralNote(idx, body);
+    if (ratiosNoteNo == null) return txt;
+    return txt
+      .replace(/Note-XX/g, `Note ${ratiosNoteNo}`)
+      .replace(/Note-X\b/g, `Note ${ratiosNoteNo}`);
+  };
+
   // Re-initialise when the user switches engagement
   useEffect(() => {
     setData(initData(engagement?.stage8_nta_data));
@@ -568,7 +582,7 @@ export function CorporateNTA({ engagement, client, onUpdate }: Props) {
               </span>
               <div className="flex-1 min-w-0">
                 <AutoGrowTextarea
-                  value={resolveGeneralNote(idx, note.body)}
+                  value={resolveGeneralNoteWithRatios(idx, note.body)}
                   onChange={v => updateGeneralNote(idx, v)}
                   placeholder={NTA_GENERAL_NOTES_DEFAULTS[idx] ?? "Enter note text…"}
                   className="text-sm"

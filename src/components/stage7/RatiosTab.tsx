@@ -23,7 +23,7 @@ import {
   Tabs, TabsContent, TabsList, TabsTrigger,
 } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { getNoteNo }   from "@/lib/noteNumberRegistry";
+import { getNoteNo, useDynamicNoteRegistry } from "@/lib/noteNumberRegistry";
 import {
   type Stage7Ratios,
   type RatioInputs,
@@ -52,10 +52,12 @@ interface Props {
 export function RatiosTab({ engagementId, engagement }: Props) {
   const fy: string = engagement?.financial_year ?? "";
 
-  // Note number from registry (22 for "revenue_from_ops")
-  // Note 31 — "ratios" entry appended to NOTE_REGISTRY in Phase 6.
-  // Falls back to 31 if somehow called before the registry is loaded.
-  const noteNo = getNoteNo("ratios") ?? 31;
+  // Issue 2 — Ratios note number is dynamic (last assigned, after all P&L
+  // notes are numbered).  Falls back to the static value when the registry
+  // is still loading.  The static value is itself a fallback (31), but on
+  // any well-populated engagement the dynamic position trumps it.
+  const { getNoteNo: dn } = useDynamicNoteRegistry(engagementId);
+  const noteNo = dn("ratios") ?? getNoteNo("ratios") ?? 31;
 
   // ── State ─────────────────────────────────────────────────────────────────
   const [ratios,      setRatios]      = useState<Stage7Ratios>(DEFAULT_STAGE7_RATIOS);
