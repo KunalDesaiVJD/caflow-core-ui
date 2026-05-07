@@ -26,8 +26,14 @@ interface Props {
 export default function NoteBSAsset({
   engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl, onRemapLedger,
 }: Props) {
-  const cy = (key: string) => Number(notes.bs_asset[key]?.cy ?? 0);
-  const py = (key: string) => Number(notes.bs_asset[key]?.py ?? 0);
+  // Bug 4 — Sign-convention bridge for asset Notes display
+  // Asset notes are normally stored POSITIVE (DR balances), but some legacy
+  // engagements may have stored them negative when a cash overdraft (CR) was
+  // mapped to BS_CA_CCE.  Normalize to positive on read so the displayed
+  // "Total per BS" matches the BS face which uses absolute display.
+  const normalizeSign = (raw: number): number => raw < 0 ? -raw : raw;
+  const cy = (key: string) => normalizeSign(Number(notes.bs_asset[key]?.cy ?? 0));
+  const py = (key: string) => normalizeSign(Number(notes.bs_asset[key]?.py ?? 0));
   const get = (path: string) => path.split(".").reduce<any>((c, k) => c?.[k], notes);
 
   // effectivePY: returns auto-populated PY if non-zero, otherwise falls back
@@ -37,7 +43,7 @@ export default function NoteBSAsset({
     if (autoPy !== 0) return autoPy;
     const bPath = breakupPath ?? `bs_asset.${key}.breakup`;
     const breakup = (get(bPath) ?? []) as ListRow[];
-    return breakup.reduce((s, r) => s + (r?.amount_py ?? 0), 0);
+    return breakup.reduce((s, r) => s + Math.abs(Number(r?.amount_py ?? 0)), 0);
   };
 
   // Smart note: only show a note number when at least one year has data.

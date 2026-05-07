@@ -29,8 +29,23 @@ interface Props {
 export default function NotePL({
   engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl, onRemapLedger,
 }: Props) {
-  const cy = (key: string) => Number(notes.pl[key]?.cy ?? 0);
-  const py = (key: string) => Number(notes.pl[key]?.py ?? 0);
+  // Bug 4 — Sign-convention bridge for P&L Notes display
+  // ─────────────────────────────────────────────────────────────────────────
+  // P&L note headline totals (.cy / .py) may be stored in either sign:
+  //   • Revenue notes (revenue_from_ops, other_income) — stored NEGATIVE in
+  //     Tally CR convention by older auto-populates; stored POSITIVE after
+  //     the sectionSign fix.
+  //   • Expense notes — stored POSITIVE (Tally DR convention). Refunds /
+  //     credit notes that flip a single ledger negative are an edge case.
+  //
+  // Every "Total per P&L" row should display a POSITIVE figure that matches
+  // the face of the P&L Statement (where negI(...) flips revenue to positive
+  // and expenses pass through). Normalize at read time so all values display
+  // as positive — same convention as the breakup sub-rows (which use
+  // Math.abs in buildBreakup).
+  const normalizeSign = (raw: number): number => raw < 0 ? -raw : raw;
+  const cy = (key: string) => normalizeSign(Number(notes.pl[key]?.cy ?? 0));
+  const py = (key: string) => normalizeSign(Number(notes.pl[key]?.py ?? 0));
   const get = (path: string) => path.split(".").reduce<any>((c, k) => c?.[k], notes);
 
   // effectivePY: returns auto-populated PY if non-zero, otherwise falls back
@@ -39,7 +54,7 @@ export default function NotePL({
     const autoPy = py(key);
     if (autoPy !== 0) return autoPy;
     const breakup = (get(`pl.${key}.breakup`) ?? []) as ListRow[];
-    return breakup.reduce((s, r) => s + (r?.amount_py ?? 0), 0);
+    return breakup.reduce((s, r) => s + Math.abs(Number(r?.amount_py ?? 0)), 0);
   };
 
   // Smart note: only show a note number when at least one year has data.

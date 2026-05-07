@@ -75,8 +75,27 @@ interface Props {
 export default function NoteBSLiab({
   engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl, onRemapLedger,
 }: Props) {
-  const cy  = (key: string) => Number(notes.bs_liab[key]?.cy ?? 0);
-  const py  = (key: string) => Number(notes.bs_liab[key]?.py ?? 0);
+  // Bug 4 — Sign-convention bridge for Notes display
+  // ─────────────────────────────────────────────────────────────────────────
+  // bs_liab note headline totals (.cy / .py) may be stored in either sign:
+  //   • POSITIVE — auto-populated AFTER the sectionSign fix in
+  //     notesAutoPopulate.ts (line 1072), or manually entered by an auditor.
+  //   • NEGATIVE — auto-populated BEFORE the sectionSign fix (legacy
+  //     engagements like KWIKTEAM where the stored value is in Tally CR
+  //     convention), or pulled from raw TB without the sign flip.
+  //
+  // The "Total per BS" row on every liability note must display the same
+  // POSITIVE figure that appears on the face of the Balance Sheet. The BS
+  // face already does this via negL(value). The Notes UI now mirrors that:
+  // when the stored value is negative (Tally CR convention), flip it
+  // positive so the auditor sees a consistent number across BS and Notes.
+  //
+  // This handles every client with stale negative-stored bs_liab totals
+  // without requiring a one-time DB migration. Newly auto-populated values
+  // are already positive and pass through unchanged.
+  const normalizeBSLiabSign = (raw: number): number => raw < 0 ? -raw : raw;
+  const cy  = (key: string) => normalizeBSLiabSign(Number(notes.bs_liab[key]?.cy ?? 0));
+  const py  = (key: string) => normalizeBSLiabSign(Number(notes.bs_liab[key]?.py ?? 0));
   const get = (path: string) => path.split(".").reduce<any>((c, k) => c?.[k], notes);
 
   // effectivePY: returns auto-populated PY if non-zero, otherwise falls back
@@ -86,7 +105,7 @@ export default function NoteBSLiab({
     const autoPy = py(key);
     if (autoPy !== 0) return autoPy;
     const breakup = (get(`bs_liab.${key}.breakup`) ?? []) as ListRow[];
-    return breakup.reduce((s, r) => s + (r?.amount_py ?? 0), 0);
+    return breakup.reduce((s, r) => s + Math.abs(Number(r?.amount_py ?? 0)), 0);
   };
 
   // Smart note: only show a note number when at least one year has data.
