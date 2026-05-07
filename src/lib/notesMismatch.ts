@@ -42,6 +42,53 @@ function sumTradePayables(noteRow: Record<string, any>, column: "cy" | "py"): nu
   return (Number.isFinite(m) ? m : 0) + (Number.isFinite(o) ? o : 0);
 }
 
+// Reserves & Surplus has a bespoke schema (NOT a `breakup` array):
+//   1. General Reserve              (gen_reserve_*)
+//   2. Securities Premium           (share_premium_*)
+//   ────  Sub-total [a]
+//   Surplus in the Statement of P&L:
+//     a. Opening balance            (surplus_opening_*)
+//     b. + Profit for the year      (sourced from pl.eps.npat / pl.eps.npat_py)
+//     c. + Adjustments for deferred tax (surplus_deferred_adj_*)
+//     d. + Excess/(Short) provision for income tax (surplus_excess_short_*)
+//   ────  Sub-total [b]
+//   Total = Sub-total [a] + Sub-total [b]
+//
+// Returns the sum of all dedicated component fields. The mismatch detector
+// compares this to the stored .cy headline (= BS face value, since the BS
+// face uses cyOf for reserves_surplus — there is no breakup array to feed
+// the Phase E ncyOf path).
+function sumReservesSurplus(
+  noteRow: Record<string, any>,
+  plData:  any,
+  column:  "cy" | "py",
+): number {
+  const v = (k: string) => {
+    const n = Number(noteRow?.[`${k}_${column}`] ?? 0);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const profitKey = column === "cy" ? "npat" : "npat_py";
+  const profit = Number(plData?.eps?.[profitKey] ?? 0);
+  return (
+    v("gen_reserve") + v("share_premium") +
+    v("surplus_opening") + (Number.isFinite(profit) ? profit : 0) +
+    v("surplus_deferred_adj") + v("surplus_excess_short")
+  );
+}
+
+function isReservesSurplusPopulated(
+  noteRow: Record<string, any>,
+  plData:  any,
+): boolean {
+  const fields = [
+    "gen_reserve_cy", "share_premium_cy",
+    "surplus_opening_cy", "surplus_deferred_adj_cy", "surplus_excess_short_cy",
+  ];
+  if (fields.some(f => isNonEmptyAmount(noteRow?.[f]))) return true;
+  const npat = Number(plData?.eps?.npat ?? 0);
+  return Number.isFinite(npat) && npat !== 0;
+}
+
 // ─── Public types ──────────────────────────────────────────────────────────────
 
 export interface NoteMismatch {
@@ -171,10 +218,29 @@ export function detectMismatches(
     let notesSum: number;
     let hasUserData: boolean;
 
+    const storedCy = Math.abs(Number(noteRow.cy ?? 0));
+    let bsAmount: number;
+
     if (key === "trade_payables") {
       notesSum = sumTradePayables(noteRow, "cy");
       // "Has user data" if either MSME or Others field has any non-empty value.
       hasUserData = isNonEmptyAmount(noteRow.msme_cy) || isNonEmptyAmount(noteRow.others_cy);
+      // Trade Payables BS face IS msme + others (drives the row directly), so
+      // notesSum already represents the BS face value when populated.
+      bsAmount = hasUserData ? notesSum : storedCy;
+    } else if (key === "reserves_surplus") {
+      // Reserves & Surplus uses a bespoke field schema (no breakup array).
+      // The BS face value comes from cyOf (raw TB sum + auto-credit of net
+      // P&L) which is reflected in noteRow.cy.  notesSum is the SUM of the
+      // dedicated component fields the auditor fills in (General Reserve,
+      // Securities Premium, Surplus opening + profit + adjustments).  A
+      // mismatch is real when components don't sum to the BS face value.
+      const plData = (notesData as any)?.pl;
+      notesSum = sumReservesSurplus(noteRow, plData, "cy");
+      hasUserData = isReservesSurplusPopulated(noteRow, plData);
+      // ALWAYS compare against the stored BS face — overrides Phase E parity
+      // because there is no breakup to swap in for the face value.
+      bsAmount = storedCy;
     } else {
       // Generic path: reduce over breakup[].amount_cy with strict empty-check
       // and explicit numeric coercion.
@@ -185,24 +251,9 @@ export function detectMismatches(
         const n = Number(r.amount_cy);
         return s + (Number.isFinite(n) ? n : 0);
       }, 0);
+      // Phase E parity — BS face = breakup sum when populated, else stored .cy
+      bsAmount = hasUserData ? notesSum : storedCy;
     }
-
-    // ── Phase E parity — bsAmount must reflect what the auditor SEES on the
-    // BS / P&L face and on the "Total per BS" row of the note. After the
-    // Phase E migration both surfaces use the BREAKUP SUM when populated,
-    // falling back to the stored .cy headline only when the breakup is empty.
-    // Reading the raw stored .cy here produces false-positive mismatches every
-    // time the auditor manually adds/edits a breakup row (KWIKTEAM Note 11
-    // Other Income: stored .cy=7,948, breakup sum=12,948 — both surfaces
-    // correctly displayed 12,948 but the panel kept flagging a "20,896 diff").
-    //
-    // New rule: bsAmount = breakup sum when populated, else absolute stored
-    // .cy. The mismatch panel then only fires when there is a real schema-
-    // level inconsistency (e.g. a sub-row with non-numeric data that drops
-    // out of notesSum but contributes to .cy elsewhere) — never on routine
-    // manual edits.
-    const storedCy = Math.abs(Number(noteRow.cy ?? 0));
-    const bsAmount = hasUserData ? notesSum : storedCy;
 
     // Skip notes where the effective amount is zero — nothing to check
     if (bsAmount === 0) continue;
