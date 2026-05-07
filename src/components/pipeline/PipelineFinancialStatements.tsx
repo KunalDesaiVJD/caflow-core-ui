@@ -6167,12 +6167,18 @@ export default function PipelineFinancialStatements({
               disabled={!overrideReason.trim()}
               onClick={() => {
                 const code = overrideDialog!.code;
+                const enteredAmount = parseFloat(overrideAmount) || 0;
                 setManualOverrides(prev => ({
                   ...prev,
-                  [code]: { amount: parseFloat(overrideAmount) || 0, reason: overrideReason },
+                  [code]: { amount: enteredAmount, reason: overrideReason },
                 }));
                 setOverrideDialog(null);
                 toast.success("Manual override applied");
+                // Bug 11 — also prompt to sync the note breakup so the
+                // "Apply Override" path matches the inline-edit path.
+                if (Number.isFinite(enteredAmount)) {
+                  maybePromptSyncNote(code, enteredAmount);
+                }
               }}
             >
               Apply Override

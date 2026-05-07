@@ -162,21 +162,20 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
   }, [updatePath]);
 
   // ── Re-sync from COA button ───────────────────────────────────────────
-  // If the user has any manual_edits[] in flight, show a confirm dialog
-  // explaining that those overrides will be preserved. Hitting Cancel
-  // aborts the re-sync entirely.
+  // Bug 12 — always show a confirmation dialog so the auditor can never
+  // accidentally re-sync.  Tooltip on the button itself documents the
+  // preservation guarantee.  When manual_edits[] is non-empty, the dialog
+  // also surfaces the count so the auditor knows their overrides are safe.
   const handleResync = useCallback(async () => {
     const existing = notes ?? await loadStage5Notes(engagementId);
     const overrides = existing.manual_edits?.length ?? 0;
-    if (overrides > 0) {
-      const ok = window.confirm(
-        `Re-sync from COA mapping?\n\n` +
-        `You have ${overrides} manual override(s). Re-sync refreshes ` +
-        `auto-filled cells but PRESERVES your manual edits. ` +
-        `Click OK to continue or Cancel to abort.`,
-      );
-      if (!ok) return;
-    }
+    const message =
+      `This will re-fetch notes data from your Trial Balance.\n\n` +
+      `• Auto-linked rows will refresh to the latest COA-mapped figures.\n` +
+      `• Your manual entries${overrides > 0 ? ` (${overrides} override${overrides === 1 ? "" : "s"})` : ""} will be preserved.\n\n` +
+      `Continue?`;
+    const ok = window.confirm(message);
+    if (!ok) return;
     setSyncing(true);
     try {
       const fresh = await autoPopulateNotes(engagementId, { existing });
@@ -301,6 +300,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
           onClick={handleResync}
           disabled={syncing}
           className="h-7 text-xs gap-1"
+          title="Re-syncs notes from Trial Balance + COA mapping. Manually edited rows (in manual_edits[]) are preserved."
         >
           {syncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
           Re-sync from COA

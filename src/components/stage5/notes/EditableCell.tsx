@@ -86,9 +86,12 @@ interface EditableCellProps {
   onResetToAuto?:  () => void;
   isOverridden?:   boolean;
   isAutoFilled?:   boolean;
-  /** When true and !isOverridden, renders a read-only f(x) display with a pencil-to-override UX. */
+  /** Bug 10 — When true and !isOverridden, renders a fully read-only blue-tinted
+   *  display.  No icon, no override form.  To change a linked amount, the auditor
+   *  must edit the COA mapping in Stage 6. */
   isLocked?:       boolean;
-  /** Called when the user completes the override form. Falls back to onCommit when omitted. */
+  /** @deprecated Bug 10 removed override capability. Prop kept for backwards
+   *  compatibility only — never invoked. */
   onOverride?:     (amount: number, reason: string) => void;
   type?:           "number" | "text";
   placeholder?:    string;
@@ -620,7 +623,7 @@ function ListRowWithSources({
           </div>
           {isLinked && (
             <span
-              title={r.linked_ledger ? `Linked from TB ledger: ${r.linked_ledger} — amounts locked (click f(x) pencil to override)` : "Linked from TB — amounts locked"}
+              title={r.linked_ledger ? `Linked from TB ledger: ${r.linked_ledger} — amount is read-only. Edit COA mapping in Stage 6 to change.` : "Linked from TB — amount is read-only. Edit COA mapping in Stage 6 to change."}
               className="shrink-0 inline-flex items-center px-1 py-[1px] rounded text-[8px] font-semibold uppercase tracking-wide border border-blue-300 bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-200"
             >
               Linked
