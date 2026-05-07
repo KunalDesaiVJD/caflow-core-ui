@@ -2829,17 +2829,40 @@ export default function PipelineFinancialStatements({
     // When the auditor has populated note sub-rows (via auto-populate or manual
     // edit), we use the SUM of those sub-rows as the BS/PL face amount instead of
     // the raw TB sum.  Falls back to cyOf/pyOf (raw TB) when the note is empty.
+    //
+    // Bug 4 — Sign-convention bridge:
+    //   cyOf/pyOf return values in TALLY SIGN CONVENTION:
+    //     • DR ledgers (assets, expenses)  → POSITIVE
+    //     • CR ledgers (liabilities, equity, revenue) → NEGATIVE
+    //   Downstream code (negL, negI, totalELDisplay, computeTotal sums) expects
+    //   that convention.  But notes breakups are user-entered POSITIVE figures.
+    //   Without a sign bridge, ncyOf("bs_liab", ...) returns POSITIVE while the
+    //   downstream consumers double-flip and the BS total goes negative.
+    //   Solution: when the FS code belongs to a credit-side group (liability /
+    //   equity / revenue), negate the notes sum so the value matches Tally
+    //   convention before reaching consumers.
+    const isCreditSideCode = (code: string): boolean =>
+      BS_LIABILITY_CODES.has(code) || PL_REVENUE_CODES.has(code);
+
     const ncyOf = (
       section: "bs_liab" | "bs_asset" | "pl",
       key:     string,
       fsCode:  string,
-    ): number => sumNotesSubRowsCY(stage5NotesData ?? null, section, key) ?? cyOf(fsCode);
+    ): number => {
+      const notesSum = sumNotesSubRowsCY(stage5NotesData ?? null, section, key);
+      if (notesSum == null) return cyOf(fsCode);
+      return isCreditSideCode(fsCode) ? -notesSum : notesSum;
+    };
 
     const npyOf = (
       section: "bs_liab" | "bs_asset" | "pl",
       key:     string,
       fsCode:  string,
-    ): number => sumNotesSubRowsPY(stage5NotesData ?? null, section, key) ?? pyOf(fsCode);
+    ): number => {
+      const notesSum = sumNotesSubRowsPY(stage5NotesData ?? null, section, key);
+      if (notesSum == null) return pyOf(fsCode);
+      return isCreditSideCode(fsCode) ? -notesSum : notesSum;
+    };
 
     // Typed BS/PL/CFS tables — corporate only. Non-corporate returns null
     // for all three; NCE tabs continue to render via their own legacy path.
