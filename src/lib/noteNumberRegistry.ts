@@ -451,6 +451,33 @@ export function useDynamicNoteRegistry(
     staleTime: 5 * 60 * 1000,  // 5 min — entity type and COA mapping rarely change mid-session
   });
 
+  // ── Stage-5 notes fallback fetch ────────────────────────────────────────────
+  // When a caller (NoteBSLiab / NoteBSAsset / NotePL / FAGrid) does NOT pass
+  // computedAmounts / mergedPY, the registry falls back to the COA-mapping
+  // signal which counts ANY mapped ledger as data — including ledgers with
+  // zero balance that produce empty BS rows.  Those zero-balance rows are
+  // suppressed on the BS face (PipelineFinancialStatements passes real
+  // amounts) so the BS gets one numbering and the Notes tab gets a different
+  // one (off-by-one for every suppressed row before a populated key).
+  //
+  // Fix: when the caller does not provide amounts, derive them from the
+  // saved stage5_notes JSONB (which is the source of truth for what's on
+  // the face of the BS / P&L after Phase E).  Both contexts then share a
+  // single set of signals → identical numbering everywhere.
+  const needsFallback = !computedAmounts && !mergedPY;
+  const { data: stage5Notes } = useQuery({
+    queryKey: ["stage5-notes-for-numbering", engagementId],
+    queryFn:  async () => {
+      const { data } = await (supabase.from as any)("audit_engagements")
+        .select("stage5_notes")
+        .eq("id", engagementId)
+        .maybeSingle();
+      return (data as any)?.stage5_notes ?? null;
+    },
+    enabled: !!engagementId && needsFallback,
+    staleTime: 30 * 1000,
+  });
+
   const coaMapping = useMemo<Record<string, { code: string }>>(() => {
     if (engagement?.coa_mapping && typeof engagement.coa_mapping === "object") {
       return engagement.coa_mapping as Record<string, { code: string }>;
@@ -469,14 +496,70 @@ export function useDynamicNoteRegistry(
     );
   }, [engagement]);
 
+  // Derive synthetic FS-code-keyed amounts from stage5_notes for the
+  // fallback path (Notes tab callers).  For each registry key, look at the
+  // saved note row; prefer the breakup-row sum (most accurate post-Phase E)
+  // over the stored .cy/.py headline (which can be stale across re-syncs).
+  const fallbackAmounts = useMemo<{ cy: Record<string, number>; py: Record<string, number> }>(() => {
+    const cy: Record<string, number> = {};
+    const py: Record<string, number> = {};
+    if (!needsFallback || !stage5Notes) return { cy, py };
+    const sectionsForKey = (key: string): ("bs_liab"|"bs_asset"|"pl")[] => {
+      if (CORP_KEY_TO_FS_CODES[key] || NCE_KEY_TO_FS_CODES[key]) {
+        // Crude section detection: BS liab keys live under bs_liab, etc.
+        if (CORPORATE_NOTE_ORDER.indexOf(key) >= 0 && CORPORATE_NOTE_ORDER.indexOf(key) <= 9) return ["bs_liab"];
+        if (NCE_NOTE_ORDER.indexOf(key) >= 0 && NCE_NOTE_ORDER.indexOf(key) <= 7) return ["bs_liab"];
+        // P&L keys
+        if (key.startsWith("nce_") && (key.includes("revenue") || key.includes("income") || key.includes("cost") || key.includes("employee") || key.includes("finance") || key.includes("depreciation") || key.includes("expense"))) return ["pl"];
+        if (["revenue_from_ops","other_income","cost_materials","purchases_stock","changes_inventories","employee_benefits","finance_costs","depreciation","other_expenses","eps","ratios"].includes(key)) return ["pl"];
+        return ["bs_asset"];
+      }
+      return [];
+    };
+    const keys = isNonCorporate ? NCE_NOTE_ORDER : CORPORATE_NOTE_ORDER;
+    for (const key of keys) {
+      const sections = sectionsForKey(key);
+      const fsCodes  = (isNonCorporate ? NCE_KEY_TO_FS_CODES : CORP_KEY_TO_FS_CODES)[key] ?? [];
+      if (fsCodes.length === 0) continue;
+      let cySum = 0, pySum = 0;
+      for (const section of sections) {
+        const noteRow = (stage5Notes[section] as Record<string, any> | undefined)?.[key];
+        if (!noteRow) continue;
+        const breakup: any[] = Array.isArray(noteRow.breakup) ? noteRow.breakup : [];
+        const populatedCy = breakup.filter(r => r != null && r.amount_cy != null && r.amount_cy !== "");
+        const populatedPy = breakup.filter(r => r != null && r.amount_py != null && r.amount_py !== "");
+        const breakupCy = populatedCy.reduce((s, r) => s + (Number.isFinite(Number(r.amount_cy)) ? Number(r.amount_cy) : 0), 0);
+        const breakupPy = populatedPy.reduce((s, r) => s + (Number.isFinite(Number(r.amount_py)) ? Number(r.amount_py) : 0), 0);
+        const headlineCy = Math.abs(Number(noteRow.cy ?? 0));
+        const headlinePy = Math.abs(Number(noteRow.py ?? 0));
+        // Prefer breakup sum when populated; fall back to headline.
+        cySum += breakupCy !== 0 ? breakupCy : headlineCy;
+        pySum += breakupPy !== 0 ? breakupPy : headlinePy;
+      }
+      // Distribute the key's amount across its FS codes (just put on the
+      // first code — hasData() only cares whether any code is non-zero).
+      if (cySum !== 0) cy[fsCodes[0]] = cySum;
+      if (pySum !== 0) py[fsCodes[0]] = pySum;
+    }
+    return { cy, py };
+  }, [needsFallback, stage5Notes, isNonCorporate]);
+
+  const effectiveCy = computedAmounts ?? fallbackAmounts.cy;
+  const effectivePy = mergedPY        ?? fallbackAmounts.py;
+  // When we have effective amounts, suppress the COA-mapping signal so
+  // zero-balance mapped ledgers don't ghost-consume note numbers (matches
+  // the BS-face call site behaviour).
+  const useCoaSignal = !needsFallback ? false : (Object.keys(fallbackAmounts.cy).length === 0 && Object.keys(fallbackAmounts.py).length === 0);
+
   const registry = useMemo<Map<string, number>>(
     () => buildDynamicRegistry(
-      computedAmounts ?? {},
-      mergedPY        ?? {},
+      effectiveCy,
+      effectivePy,
       coaMapping,
       isNonCorporate,
+      useCoaSignal,
     ),
-    [computedAmounts, mergedPY, coaMapping, isNonCorporate],
+    [effectiveCy, effectivePy, coaMapping, isNonCorporate, useCoaSignal],
   );
 
   // ── Accessor helpers ────────────────────────────────────────────────────────

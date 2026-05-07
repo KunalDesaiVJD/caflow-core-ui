@@ -32,18 +32,37 @@ export default function NoteBSAsset({
   // mapped to BS_CA_CCE.  Normalize to positive on read so the displayed
   // "Total per BS" matches the BS face which uses absolute display.
   const normalizeSign = (raw: number): number => raw < 0 ? -raw : raw;
-  const cy = (key: string) => normalizeSign(Number(notes.bs_asset[key]?.cy ?? 0));
-  const py = (key: string) => normalizeSign(Number(notes.bs_asset[key]?.py ?? 0));
   const get = (path: string) => path.split(".").reduce<any>((c, k) => c?.[k], notes);
 
-  // effectivePY: returns auto-populated PY if non-zero, otherwise falls back
-  // to the sum of breakup rows' amount_py so "Total per BS" never shows "—".
+  // Prefer breakup sum over stored headline so the Note "Total per BS"
+  // always matches the BS face (which uses ncyOf → breakup sum).
+  const sumBreakup = (key: string, col: "amount_cy"|"amount_py", breakupPath?: string): { sum: number; hasAny: boolean } => {
+    const arr = (breakupPath ? get(breakupPath) : (notes.bs_asset[key] as any)?.breakup);
+    if (!Array.isArray(arr)) return { sum: 0, hasAny: false };
+    const populated = arr.filter((r: any) => r != null && r[col] != null && r[col] !== "");
+    if (populated.length === 0) return { sum: 0, hasAny: false };
+    const sum = populated.reduce((s: number, r: any) => {
+      const n = Number(r[col]);
+      return s + (Number.isFinite(n) ? n : 0);
+    }, 0);
+    return { sum, hasAny: true };
+  };
+
+  const cy = (key: string) => {
+    const { sum, hasAny } = sumBreakup(key, "amount_cy");
+    if (hasAny) return sum;
+    return normalizeSign(Number(notes.bs_asset[key]?.cy ?? 0));
+  };
+  const py = (key: string) => {
+    const { sum, hasAny } = sumBreakup(key, "amount_py");
+    if (hasAny) return sum;
+    return normalizeSign(Number(notes.bs_asset[key]?.py ?? 0));
+  };
+
   const effectivePY = (key: string, breakupPath?: string): number => {
-    const autoPy = py(key);
-    if (autoPy !== 0) return autoPy;
-    const bPath = breakupPath ?? `bs_asset.${key}.breakup`;
-    const breakup = (get(bPath) ?? []) as ListRow[];
-    return breakup.reduce((s, r) => s + Math.abs(Number(r?.amount_py ?? 0)), 0);
+    const { sum, hasAny } = sumBreakup(key, "amount_py", breakupPath);
+    if (hasAny) return sum;
+    return py(key);
   };
 
   // Smart note: only show a note number when at least one year has data.

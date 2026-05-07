@@ -94,19 +94,41 @@ export default function NoteBSLiab({
   // without requiring a one-time DB migration. Newly auto-populated values
   // are already positive and pass through unchanged.
   const normalizeBSLiabSign = (raw: number): number => raw < 0 ? -raw : raw;
-  const cy  = (key: string) => normalizeBSLiabSign(Number(notes.bs_liab[key]?.cy ?? 0));
-  const py  = (key: string) => normalizeBSLiabSign(Number(notes.bs_liab[key]?.py ?? 0));
+
+  // ── Breakup-aware total resolution ─────────────────────────────────────────
+  // The "Total — <Note> (per BS)" row must match the BS face exactly. The BS
+  // face uses ncyOf() which prefers the breakup sum over the stored headline.
+  // So whenever the breakup is populated, we sum the breakup; only fall back
+  // to the stored .cy/.py when the breakup is empty (greenfield / not yet
+  // auto-populated). This eliminates the drift seen on KWIKTEAM Note 5
+  // where the BS face showed ₹2,30,360 (breakup sum) but the Note "Total
+  // per BS" showed ₹2,23,160 (stale stored cy).
+  const sumBreakup = (key: string, col: "amount_cy"|"amount_py"): { sum: number; hasAny: boolean } => {
+    const arr = (notes.bs_liab[key] as any)?.breakup;
+    if (!Array.isArray(arr)) return { sum: 0, hasAny: false };
+    const populated = arr.filter((r: any) => r != null && r[col] != null && r[col] !== "");
+    if (populated.length === 0) return { sum: 0, hasAny: false };
+    const sum = populated.reduce((s: number, r: any) => {
+      const n = Number(r[col]);
+      return s + (Number.isFinite(n) ? n : 0);
+    }, 0);
+    return { sum, hasAny: true };
+  };
+
+  const cy = (key: string) => {
+    const { sum, hasAny } = sumBreakup(key, "amount_cy");
+    if (hasAny) return sum;
+    return normalizeBSLiabSign(Number(notes.bs_liab[key]?.cy ?? 0));
+  };
+  const py = (key: string) => {
+    const { sum, hasAny } = sumBreakup(key, "amount_py");
+    if (hasAny) return sum;
+    return normalizeBSLiabSign(Number(notes.bs_liab[key]?.py ?? 0));
+  };
   const get = (path: string) => path.split(".").reduce<any>((c, k) => c?.[k], notes);
 
-  // effectivePY: returns auto-populated PY if non-zero, otherwise falls back
-  // to the sum of breakup rows' amount_py (so "Total per BS" never shows "—"
-  // when sub-total rows already have PY values filled in).
-  const effectivePY = (key: string): number => {
-    const autoPy = py(key);
-    if (autoPy !== 0) return autoPy;
-    const breakup = (get(`bs_liab.${key}.breakup`) ?? []) as ListRow[];
-    return breakup.reduce((s, r) => s + Math.abs(Number(r?.amount_py ?? 0)), 0);
-  };
+  // effectivePY: same logic — prefer breakup sum over stored headline.
+  const effectivePY = (key: string): number => py(key);
 
   // Smart note: only show a note number when at least one year has data.
   // dataKey = key into notes.bs_liab; regKey = key into noteNumberRegistry
