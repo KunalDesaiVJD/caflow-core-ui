@@ -478,6 +478,45 @@ export function useDynamicNoteRegistry(
     staleTime: 30 * 1000,
   });
 
+  // ── TB-derived fallback fetch ───────────────────────────────────────────────
+  // Stage-5 notes alone is insufficient for parity with the BS face — many
+  // BS-Asset notes (Cash & Bank, Trade Receivables, Other Current Assets)
+  // have data in the Trial Balance but no corresponding stage5_notes row
+  // until the auditor opens that note.  The BS face counts these (because
+  // PipelineFinancialStatements passes TB-derived computedAmounts to the
+  // hook), so the Notes tab fallback drifts off-by-N for every such missing
+  // BS-Asset note → cascades into wrong P&L note numbers.
+  //
+  // Fix: when the caller doesn't provide computedAmounts, fetch the Trial
+  // Balance + COA mapping ourselves and aggregate by FS code — exactly
+  // mirroring how PipelineFinancialStatements computes computedAmounts.
+  // This guarantees both contexts see identical signals.
+  const { data: tbRows } = useQuery({
+    queryKey: ["tb-for-numbering", engagementId],
+    queryFn:  async () => {
+      const all: any[] = [];
+      const PAGE = 1000;
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await (supabase.from as any)("tally_trial_balance")
+          .select("ledger_name, closing_balance, balance_type, opening_balance, opening_type")
+          .eq("engagement_id", engagementId)
+          .range(from, from + PAGE - 1);
+        if (error || !data || data.length === 0) break;
+        all.push(...data);
+        if (data.length < PAGE) break;
+      }
+      return all as Array<{
+        ledger_name: string;
+        closing_balance: number | null;
+        balance_type: string | null;
+        opening_balance: number | null;
+        opening_type:  string | null;
+      }>;
+    },
+    enabled: !!engagementId && needsFallback,
+    staleTime: 60 * 1000,
+  });
+
   const coaMapping = useMemo<Record<string, { code: string }>>(() => {
     if (engagement?.coa_mapping && typeof engagement.coa_mapping === "object") {
       return engagement.coa_mapping as Record<string, { code: string }>;
@@ -544,12 +583,45 @@ export function useDynamicNoteRegistry(
     return { cy, py };
   }, [needsFallback, stage5Notes, isNonCorporate]);
 
-  const effectiveCy = computedAmounts ?? fallbackAmounts.cy;
-  const effectivePy = mergedPY        ?? fallbackAmounts.py;
+  // Build TB-derived amounts (the same signal the BS face uses).  This is
+  // the PRIMARY source for fallback numbering — it captures every FS code
+  // that has TB data, even when stage5_notes hasn't been populated yet.
+  const tbAmounts = useMemo<{ cy: Record<string, number>; py: Record<string, number> }>(() => {
+    const cy: Record<string, number> = {};
+    const py: Record<string, number> = {};
+    if (!needsFallback || !tbRows || tbRows.length === 0) return { cy, py };
+    for (const r of tbRows) {
+      const code = coaMapping[r.ledger_name]?.code;
+      if (!code) continue;
+      // CY closing_balance signed by balance_type
+      const cb     = Math.abs(Number(r.closing_balance ?? 0));
+      const cIsDr  = String(r.balance_type ?? "").toUpperCase() === "DR";
+      const cyVal  = cIsDr ? cb : -cb;
+      cy[code] = (cy[code] ?? 0) + cyVal;
+      // PY opening_balance signed by opening_type
+      const ob     = Math.abs(Number(r.opening_balance ?? 0));
+      const oIsDr  = String(r.opening_type ?? "").toUpperCase() === "DR";
+      const pyVal  = oIsDr ? ob : -ob;
+      py[code] = (py[code] ?? 0) + pyVal;
+    }
+    return { cy, py };
+  }, [needsFallback, tbRows, coaMapping]);
+
+  // Merge TB-derived amounts (primary) with stage5_notes-derived amounts
+  // (secondary).  TB wins when both are present — it matches the BS face.
+  // stage5_notes covers cases where TB is unavailable (e.g. legacy
+  // engagements migrated from external sources).
+  const mergedFallbackCy: Record<string, number> = { ...fallbackAmounts.cy, ...tbAmounts.cy };
+  const mergedFallbackPy: Record<string, number> = { ...fallbackAmounts.py, ...tbAmounts.py };
+
+  const effectiveCy = computedAmounts ?? mergedFallbackCy;
+  const effectivePy = mergedPY        ?? mergedFallbackPy;
   // When we have effective amounts, suppress the COA-mapping signal so
   // zero-balance mapped ledgers don't ghost-consume note numbers (matches
   // the BS-face call site behaviour).
-  const useCoaSignal = !needsFallback ? false : (Object.keys(fallbackAmounts.cy).length === 0 && Object.keys(fallbackAmounts.py).length === 0);
+  const useCoaSignal = !needsFallback
+    ? false
+    : (Object.keys(mergedFallbackCy).length === 0 && Object.keys(mergedFallbackPy).length === 0);
 
   const registry = useMemo<Map<string, number>>(
     () => buildDynamicRegistry(
