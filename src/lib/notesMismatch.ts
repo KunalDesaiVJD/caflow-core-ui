@@ -18,7 +18,8 @@
  *   others_cy (NOT in a breakup array).  Auto-populate may also create
  *   breakup rows that overlap with the ageing matrix → double-counting →
  *   false mismatch panel entries.  We sum trade_payables explicitly via
- *   the msme_*/others_* fields instead of the generic breakup reducer.
+ *   the dedicated msme_cy / others_cy fields instead of the generic
+ *   breakup reducer.
  */
 
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
