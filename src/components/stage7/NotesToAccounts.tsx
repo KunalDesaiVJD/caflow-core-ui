@@ -694,10 +694,6 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
         ws.getRow(rn).getCell(c).border = b;
       }
     };
-    const sidesOnlyRow = (rn: number) => {
-      ws.getRow(rn).getCell(2).border  = { left: thin };
-      ws.getRow(rn).getCell(10).border = { right: thin };
-    };
 
     // Page setup matching template (NOTW 1_NCE.xlsx)
     ws.pageSetup.paperSize     = 9;
@@ -713,18 +709,18 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
     // ── Row 1: intentionally NO borders ──────────────────────────────────────
     r++;
 
-    // ── Border strategy: build ONE bordered rectangle around rows 2-5 ──────
-    // Two complementary techniques applied together so Excel always draws
-    // a closed rectangle no matter how it interprets the merge:
-    //   (1) preBorderRow on every heading row  → puts top+bottom on EVERY
-    //       cell in B..J, with left on B and right on J. This keeps the
-    //       cells around the perimeter consistent even if some end up as
-    //       merge slaves.
-    //   (2) Re-assert FULL BOX border (top+bottom+left+right) on the master
-    //       cell AFTER each merge. Excel draws this around the entire
-    //       merged range, so the row's left and right edges are guaranteed
-    //       even if ExcelJS strips slave cell borders.
-    const fullBoxThin = { top: thin, bottom: thin, left: thin, right: thin };
+    // ── Border strategy ──────────────────────────────────────────────────────
+    // preBorderRow() sets borders on every cell in columns B..J BEFORE the
+    // merge is created. ExcelJS preserves each cell's border data in the XML
+    // even for slave cells. Excel reads the rightmost slave cell's (J) right
+    // border to draw the right edge of the merged range, and the leftmost
+    // master cell's (B) left border for the left edge.
+    //
+    // IMPORTANT: Do NOT set .border on master cells after merging. In some
+    // ExcelJS versions, accessing a slave cell after merge redirects to the
+    // master, so any post-merge .border call hits the master and puts an
+    // INTERIOR right-border (between B and C, invisible). The pre-merge
+    // borders on slave cells are the correct source for exterior borders.
 
     // ── Row 2: Entity name — B2:J2 merged, h=27.75 ──────────────────────────
     preBorderRow(r);
@@ -732,7 +728,6 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
     ws.getCell(`B${r}`).value     = header.entityNameOverride || displayEntityName;
     ws.getCell(`B${r}`).font      = { name: "Calibri", bold: true, size: 11 };
     ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "middle" };
-    ws.getCell(`B${r}`).border    = fullBoxThin;
     ws.getRow(r).height = 27.75;
     r++;
 
@@ -742,39 +737,32 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
     ws.getCell(`B${r}`).value     = `Notes forming part of the Financial Statements  for the year ended, 31st March, ${auditYear}`;
     ws.getCell(`B${r}`).font      = { name: "Calibri", bold: true, size: 11 };
     ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-    ws.getCell(`B${r}`).border    = fullBoxThin;
     ws.getRow(r).height = 22.5;
     r++;
 
     // ── Row 4: spacer h=5.25 — bordered per template ────────────────────────
     preBorderRow(r);
     ws.mergeCells(`B${r}:J${r}`);
-    ws.getCell(`B${r}`).border = fullBoxThin;
     ws.getRow(r).height = 5.25;
     r++;
 
-    // ── Row 5: "Note :" + "1" + "Summary..." — three cells (no B:C merge) ───
-    // Layout (matches template exactly):
-    //   B5 = "Note :"
-    //   C5 = 1   (note number as its own cell)
+    // ── Row 5: "Note :" + note-number + "Summary..." ─────────────────────────
+    // Layout (matches template):
+    //   B5 = "Note :"  (left+top+bottom from preBorderRow)
+    //   C5 = note number as its own cell  (top+bottom from preBorderRow)
     //   D5:J5 merged = "Summary of Significant accounting policies"
-    // Each cell carries the borders it needs to keep the outer rectangle
-    // closed — B has left, J has right, all have top+bottom.
+    //     J5 slave carries right+top+bottom from preBorderRow (right edge of box)
     preBorderRow(r);
     ws.getCell(`B${r}`).value     = "Note :";
     ws.getCell(`B${r}`).font      = { name: "Calibri", bold: true, size: 11 };
     ws.getCell(`B${r}`).alignment = { horizontal: "left", vertical: "middle", indent: 1 };
-    ws.getCell(`B${r}`).border    = { top: thin, bottom: thin, left: thin };
     ws.getCell(`C${r}`).value     = 1;
     ws.getCell(`C${r}`).font      = { name: "Calibri", bold: true, size: 11 };
     ws.getCell(`C${r}`).alignment = { horizontal: "left", vertical: "middle" };
-    ws.getCell(`C${r}`).border    = { top: thin, bottom: thin };
     ws.mergeCells(`D${r}:J${r}`);
     ws.getCell(`D${r}`).value     = "Summary of Significant accounting policies";
     ws.getCell(`D${r}`).font      = { name: "Calibri", bold: true, size: 11 };
     ws.getCell(`D${r}`).alignment = { horizontal: "left", vertical: "middle" };
-    // Master cell of D:J merge gets right border too (so the merge has its right edge)
-    ws.getCell(`D${r}`).border    = { top: thin, bottom: thin, right: thin };
     r++;
 
     // ── Row 6: NO borders (cleanly close the box at row 5's bottom) ─────────
