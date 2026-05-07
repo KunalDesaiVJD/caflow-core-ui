@@ -37,6 +37,7 @@ import {
   resolveGeneralNote,
   Stage8NtaData,
 } from "@/lib/notesToAccountsDefaults";
+import { useDynamicNoteRegistry } from "@/lib/noteNumberRegistry";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -258,6 +259,10 @@ export function CorporateNTA({ engagement, client, onUpdate }: Props) {
   const [saving, setSaving] = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // ── Dynamic note numbering (corporate: "accounting_policies" is always Note 1) ─
+  const { getNoteNo } = useDynamicNoteRegistry(engagement?.id ?? "");
+  const accountingPoliciesNoteNo = getNoteNo("accounting_policies") ?? 1;
+
   // Re-initialise when the user switches engagement
   useEffect(() => {
     setData(initData(engagement?.stage8_nta_data));
@@ -452,7 +457,7 @@ export function CorporateNTA({ engagement, client, onUpdate }: Props) {
       {/* ── Note title ──────────────────────────────────────────────────── */}
       <div className="border-b pb-3">
         <p className="text-xs text-muted-foreground font-semibold uppercase tracking-wide mb-0.5">
-          Note No: 1
+          Note No: {accountingPoliciesNoteNo}
         </p>
         <h2 className="text-sm font-bold uppercase tracking-wide text-foreground leading-snug">
           DISCLOSURE OF ACCOUNTING POLICIES &amp; NOTES FORMING PART OF THE ANNUAL ACCOUNTS
