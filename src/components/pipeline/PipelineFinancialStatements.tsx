@@ -47,6 +47,8 @@ import {
   type NoteConfig,
 } from "@/config/nceNotesConfig";
 import { computeNceDynamicNoteMap } from "@/lib/nceDynamicNoteNumbers";
+import { sumNotesSubRowsCY, sumNotesSubRowsPY } from "@/lib/notesAutoPopulate";
+import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 
 // ═══════════════════════════════════════
 // Schedule III Line Item Definitions
@@ -2208,6 +2210,23 @@ export default function PipelineFinancialStatements({
     enabled: !!engagementId && isNonCorporate,
   });
 
+  // ── Phase E — Stage 5 notes as source of truth for BS/PL amounts ──────────────
+  // Loaded once at render time so fsDisplayData can substitute notes breakup sums
+  // for raw TB sums. Refreshes whenever stage5_notes is written (auto-populate
+  // or user edit), keeping the BS/PL face in sync with the Notes section.
+  const { data: stage5NotesData } = useQuery<Stage5Notes | null>({
+    queryKey: ["stage5-notes-fsdata", engagementId],
+    queryFn: async () => {
+      const { data } = await (supabase.from as any)("audit_engagements")
+        .select("stage5_notes")
+        .eq("id", engagementId)
+        .maybeSingle();
+      return (data as any)?.stage5_notes as Stage5Notes ?? null;
+    },
+    staleTime: 30_000,
+    enabled: !!engagementId && !isNonCorporate,
+  });
+
   // ─── TB accounts — Tally Sync is the sole authoritative source ───
   // opening_balance (signed; Cr → negative) = PY closing for BS items.
   const tbAccounts: {
@@ -2687,6 +2706,22 @@ export default function PipelineFinancialStatements({
       return mergedPY[code] || v || 0;
     };
 
+    // ── Phase E: Notes-aware amount helpers ────────────────────────────────────
+    // When the auditor has populated note sub-rows (via auto-populate or manual
+    // edit), we use the SUM of those sub-rows as the BS/PL face amount instead of
+    // the raw TB sum.  Falls back to cyOf/pyOf (raw TB) when the note is empty.
+    const ncyOf = (
+      section: "bs_liab" | "bs_asset" | "pl",
+      key:     string,
+      fsCode:  string,
+    ): number => sumNotesSubRowsCY(stage5NotesData ?? null, section, key) ?? cyOf(fsCode);
+
+    const npyOf = (
+      section: "bs_liab" | "bs_asset" | "pl",
+      key:     string,
+      fsCode:  string,
+    ): number => sumNotesSubRowsPY(stage5NotesData ?? null, section, key) ?? pyOf(fsCode);
+
     // Typed BS/PL/CFS tables — corporate only. Non-corporate returns null
     // for all three; NCE tabs continue to render via their own legacy path.
     let bs: BSRowData | null = null;
@@ -2705,51 +2740,56 @@ export default function PipelineFinancialStatements({
       const dn = (key: string): number | null => dynReg.get(key) ?? null;
 
       bs = {
-        shareCap:        { noteNo: dn("share_capital"),       cy: cyOf("BS_EQ_SC"),   py: pyOf("BS_EQ_SC")   },
-        reserves:        { noteNo: dn("reserves_surplus"),    cy: cyOf("BS_EQ_RS"),   py: pyOf("BS_EQ_RS")   },
-        ltBorrowings:    { noteNo: dn("lt_borrowings"),       cy: cyOf("BS_NCL_LTB"), py: pyOf("BS_NCL_LTB") },
-        dtLiab:          { noteNo: dn("deferred_tax_liab"),   cy: cyOf("BS_NCL_DTL"), py: pyOf("BS_NCL_DTL") },
-        otherLtLiab:     { noteNo: dn("other_lt_liab"),       cy: cyOf("BS_NCL_OLT"), py: pyOf("BS_NCL_OLT") },
-        ltProvisions:    { noteNo: dn("lt_provisions"),       cy: cyOf("BS_NCL_LTP"), py: pyOf("BS_NCL_LTP") },
-        stBorrowings:    { noteNo: dn("st_borrowings"),       cy: cyOf("BS_CL_STB"),  py: pyOf("BS_CL_STB")  },
-        tradePayables:   { noteNo: dn("trade_payables")      },
-        tradePayMSME:    { cy: 0, py: 0 },
-        tradePayOthers:  { cy: cyOf("BS_CL_TP"), py: pyOf("BS_CL_TP") },
-        otherCurrLiab:   { noteNo: dn("other_current_liab"),  cy: cyOf("BS_CL_OCL"), py: pyOf("BS_CL_OCL") },
-        stProvisions:    { noteNo: dn("st_provisions"),       cy: cyOf("BS_CL_STP"), py: pyOf("BS_CL_STP") },
-        ppe:             { noteNo: dn("ppe"),                 cy: cyOf("BS_NCA_FA"),  py: pyOf("BS_NCA_FA")  },
-        ncInvestments:   { noteNo: dn("nc_investments"),      cy: cyOf("BS_NCA_INV"), py: pyOf("BS_NCA_INV") },
-        dtAssets:        { noteNo: dn("deferred_tax_assets"), cy: cyOf("BS_NCA_DTA"), py: pyOf("BS_NCA_DTA") },
-        ltLoans:         { noteNo: dn("lt_loans_advances"),   cy: cyOf("BS_NCA_LLA"), py: pyOf("BS_NCA_LLA") },
-        otherNcAssets:   { noteNo: dn("other_nc_assets"),     cy: cyOf("BS_NCA_ONA"), py: pyOf("BS_NCA_ONA") },
-        currInvestments: { noteNo: dn("current_investments"), cy: cyOf("BS_CA_CI"),   py: pyOf("BS_CA_CI")   },
-        inventories:     { noteNo: dn("inventories"),         cy: cyOf("BS_CA_INV"),  py: pyOf("BS_CA_INV")  },
-        tradeRec:        { noteNo: dn("trade_receivables"),   cy: cyOf("BS_CA_TR"),   py: pyOf("BS_CA_TR")   },
-        cashBank:        { noteNo: dn("cash_bank"),           cy: cyOf("BS_CA_CCE"),  py: pyOf("BS_CA_CCE")  },
-        stLoans:         { noteNo: dn("st_loans_advances"),   cy: cyOf("BS_CA_SLA"),  py: pyOf("BS_CA_SLA")  },
-        otherCurrAssets: { noteNo: dn("other_current_assets"), cy: cyOf("BS_CA_OCA"),  py: pyOf("BS_CA_OCA")  },
+        // Phase E: use notes breakup sub-row sums where populated; TB sum otherwise.
+        // PPE (ppe) uses the FA grid (not a standard breakup array) — keep raw TB.
+        shareCap:        { noteNo: dn("share_capital"),        cy: ncyOf("bs_liab","share_capital","BS_EQ_SC"),              py: npyOf("bs_liab","share_capital","BS_EQ_SC")              },
+        reserves:        { noteNo: dn("reserves_surplus"),     cy: ncyOf("bs_liab","reserves_surplus","BS_EQ_RS"),            py: npyOf("bs_liab","reserves_surplus","BS_EQ_RS")            },
+        ltBorrowings:    { noteNo: dn("lt_borrowings"),        cy: ncyOf("bs_liab","lt_borrowings","BS_NCL_LTB"),             py: npyOf("bs_liab","lt_borrowings","BS_NCL_LTB")             },
+        dtLiab:          { noteNo: dn("deferred_tax_liab"),    cy: ncyOf("bs_liab","deferred_tax_liab","BS_NCL_DTL"),         py: npyOf("bs_liab","deferred_tax_liab","BS_NCL_DTL")         },
+        otherLtLiab:     { noteNo: dn("other_lt_liab"),        cy: ncyOf("bs_liab","other_lt_liab","BS_NCL_OLT"),             py: npyOf("bs_liab","other_lt_liab","BS_NCL_OLT")             },
+        ltProvisions:    { noteNo: dn("lt_provisions"),        cy: ncyOf("bs_liab","lt_provisions","BS_NCL_LTP"),             py: npyOf("bs_liab","lt_provisions","BS_NCL_LTP")             },
+        stBorrowings:    { noteNo: dn("st_borrowings"),        cy: ncyOf("bs_liab","st_borrowings","BS_CL_STB"),              py: npyOf("bs_liab","st_borrowings","BS_CL_STB")              },
+        tradePayables:   { noteNo: dn("trade_payables") },
+        tradePayMSME:    { cy: 0, py: 0 },  // ageing MSME split kept at 0; full TP total below
+        tradePayOthers:  { cy: ncyOf("bs_liab","trade_payables","BS_CL_TP"),       py: npyOf("bs_liab","trade_payables","BS_CL_TP")       },
+        otherCurrLiab:   { noteNo: dn("other_current_liab"),   cy: ncyOf("bs_liab","other_current_liab","BS_CL_OCL"),         py: npyOf("bs_liab","other_current_liab","BS_CL_OCL")         },
+        stProvisions:    { noteNo: dn("st_provisions"),        cy: ncyOf("bs_liab","st_provisions","BS_CL_STP"),              py: npyOf("bs_liab","st_provisions","BS_CL_STP")              },
+        ppe:             { noteNo: dn("ppe"),                  cy: cyOf("BS_NCA_FA"),  py: pyOf("BS_NCA_FA")  }, // FA grid — no breakup[]
+        ncInvestments:   { noteNo: dn("nc_investments"),       cy: ncyOf("bs_asset","nc_investments","BS_NCA_INV"),           py: npyOf("bs_asset","nc_investments","BS_NCA_INV")           },
+        dtAssets:        { noteNo: dn("deferred_tax_assets"),  cy: ncyOf("bs_asset","deferred_tax_assets","BS_NCA_DTA"),      py: npyOf("bs_asset","deferred_tax_assets","BS_NCA_DTA")      },
+        ltLoans:         { noteNo: dn("lt_loans_advances"),    cy: ncyOf("bs_asset","lt_loans_advances","BS_NCA_LLA"),        py: npyOf("bs_asset","lt_loans_advances","BS_NCA_LLA")        },
+        otherNcAssets:   { noteNo: dn("other_nc_assets"),      cy: ncyOf("bs_asset","other_nc_assets","BS_NCA_ONA"),          py: npyOf("bs_asset","other_nc_assets","BS_NCA_ONA")          },
+        currInvestments: { noteNo: dn("current_investments"),  cy: ncyOf("bs_asset","current_investments","BS_CA_CI"),        py: npyOf("bs_asset","current_investments","BS_CA_CI")        },
+        inventories:     { noteNo: dn("inventories"),          cy: ncyOf("bs_asset","inventories","BS_CA_INV"),               py: npyOf("bs_asset","inventories","BS_CA_INV")               },
+        tradeRec:        { noteNo: dn("trade_receivables"),    cy: ncyOf("bs_asset","trade_receivables","BS_CA_TR"),          py: npyOf("bs_asset","trade_receivables","BS_CA_TR")          },
+        cashBank:        { noteNo: dn("cash_bank"),            cy: ncyOf("bs_asset","cash_bank","BS_CA_CCE"),                 py: npyOf("bs_asset","cash_bank","BS_CA_CCE")                 },
+        stLoans:         { noteNo: dn("st_loans_advances"),    cy: ncyOf("bs_asset","st_loans_advances","BS_CA_SLA"),         py: npyOf("bs_asset","st_loans_advances","BS_CA_SLA")         },
+        otherCurrAssets: { noteNo: dn("other_current_assets"), cy: ncyOf("bs_asset","other_current_assets","BS_CA_OCA"),      py: npyOf("bs_asset","other_current_assets","BS_CA_OCA")      },
         sigPolicies:     { noteNo: 1 }, // Accounting Policies — always Note 1
       };
-      const expCy = cyOf("PL_EXP_MAT") + cyOf("PL_EXP_SIT") + cyOf("PL_EXP_CII")
-                  + cyOf("PL_EXP_EMP") + cyOf("PL_EXP_FIN") + cyOf("PL_EXP_DEP")
-                  + cyOf("PL_EXP_OTH");
-      const expPy = pyOf("PL_EXP_MAT") + pyOf("PL_EXP_SIT") + pyOf("PL_EXP_CII")
-                  + pyOf("PL_EXP_EMP") + pyOf("PL_EXP_FIN") + pyOf("PL_EXP_DEP")
-                  + pyOf("PL_EXP_OTH");
-      const revCy = cyOf("PL_REV_OPS") + cyOf("PL_REV_OI");
-      const revPy = pyOf("PL_REV_OPS") + pyOf("PL_REV_OI");
+      // P&L — also notes-aware; pbt recomputed from notes-adjusted rev/exp totals
+      const expCy = ncyOf("pl","cost_materials","PL_EXP_MAT")      + ncyOf("pl","purchases_stock","PL_EXP_SIT")
+                  + ncyOf("pl","changes_inventories","PL_EXP_CII")  + ncyOf("pl","employee_benefits","PL_EXP_EMP")
+                  + ncyOf("pl","finance_costs","PL_EXP_FIN")        + ncyOf("pl","depreciation","PL_EXP_DEP")
+                  + ncyOf("pl","other_expenses","PL_EXP_OTH");
+      const expPy = npyOf("pl","cost_materials","PL_EXP_MAT")      + npyOf("pl","purchases_stock","PL_EXP_SIT")
+                  + npyOf("pl","changes_inventories","PL_EXP_CII")  + npyOf("pl","employee_benefits","PL_EXP_EMP")
+                  + npyOf("pl","finance_costs","PL_EXP_FIN")        + npyOf("pl","depreciation","PL_EXP_DEP")
+                  + npyOf("pl","other_expenses","PL_EXP_OTH");
+      const revCy = ncyOf("pl","revenue_from_ops","PL_REV_OPS") + ncyOf("pl","other_income","PL_REV_OI");
+      const revPy = npyOf("pl","revenue_from_ops","PL_REV_OPS") + npyOf("pl","other_income","PL_REV_OI");
       const excCy = cyOf("PL_EI");
       const excPy = pyOf("PL_EI");
       pl = {
-        revFromOps:         { noteNo: dn("revenue_from_ops"),   cy: cyOf("PL_REV_OPS"), py: pyOf("PL_REV_OPS") },
-        otherIncome:        { noteNo: dn("other_income"),        cy: cyOf("PL_REV_OI"),  py: pyOf("PL_REV_OI")  },
-        costMaterials:      { noteNo: dn("cost_materials"),      cy: cyOf("PL_EXP_MAT"), py: pyOf("PL_EXP_MAT") },
-        purchasesStock:     { noteNo: dn("purchases_stock"),     cy: cyOf("PL_EXP_SIT"), py: pyOf("PL_EXP_SIT") },
-        changesInventories: { noteNo: dn("changes_inventories"), cy: cyOf("PL_EXP_CII"), py: pyOf("PL_EXP_CII") },
-        employeeBenefits:   { noteNo: dn("employee_benefits"),   cy: cyOf("PL_EXP_EMP"), py: pyOf("PL_EXP_EMP") },
-        financeCosts:       { noteNo: dn("finance_costs"),       cy: cyOf("PL_EXP_FIN"), py: pyOf("PL_EXP_FIN") },
-        depreciation:       { noteNo: null,                      cy: cyOf("PL_EXP_DEP"), py: pyOf("PL_EXP_DEP") },
-        otherExpenses:      { noteNo: dn("other_expenses"),      cy: cyOf("PL_EXP_OTH"), py: pyOf("PL_EXP_OTH") },
+        revFromOps:         { noteNo: dn("revenue_from_ops"),   cy: ncyOf("pl","revenue_from_ops","PL_REV_OPS"),   py: npyOf("pl","revenue_from_ops","PL_REV_OPS")   },
+        otherIncome:        { noteNo: dn("other_income"),        cy: ncyOf("pl","other_income","PL_REV_OI"),        py: npyOf("pl","other_income","PL_REV_OI")        },
+        costMaterials:      { noteNo: dn("cost_materials"),      cy: ncyOf("pl","cost_materials","PL_EXP_MAT"),     py: npyOf("pl","cost_materials","PL_EXP_MAT")     },
+        purchasesStock:     { noteNo: dn("purchases_stock"),     cy: ncyOf("pl","purchases_stock","PL_EXP_SIT"),    py: npyOf("pl","purchases_stock","PL_EXP_SIT")    },
+        changesInventories: { noteNo: dn("changes_inventories"), cy: ncyOf("pl","changes_inventories","PL_EXP_CII"),py: npyOf("pl","changes_inventories","PL_EXP_CII") },
+        employeeBenefits:   { noteNo: dn("employee_benefits"),   cy: ncyOf("pl","employee_benefits","PL_EXP_EMP"),  py: npyOf("pl","employee_benefits","PL_EXP_EMP")  },
+        financeCosts:       { noteNo: dn("finance_costs"),       cy: ncyOf("pl","finance_costs","PL_EXP_FIN"),      py: npyOf("pl","finance_costs","PL_EXP_FIN")      },
+        depreciation:       { noteNo: null,                      cy: ncyOf("pl","depreciation","PL_EXP_DEP"),       py: npyOf("pl","depreciation","PL_EXP_DEP")       },
+        otherExpenses:      { noteNo: dn("other_expenses"),      cy: ncyOf("pl","other_expenses","PL_EXP_OTH"),     py: npyOf("pl","other_expenses","PL_EXP_OTH")     },
         taxExpense:         { noteNo: null },
         currentTax:         { cy: cyOf("PL_TAX_CUR"), py: pyOf("PL_TAX_CUR") },
         deferredTax:        { cy: cyOf("PL_TAX_DEF"), py: pyOf("PL_TAX_DEF") },
@@ -2818,6 +2858,7 @@ export default function PipelineFinancialStatements({
     tbAccounts, coaMapping, manualOverrides, activeTree,
     pyAmounts, pyManualAmounts, noPriorEngagement, isNonCorporate,
     computedAmounts, mergedPY, noteOverrides, pyInvCII,
+    stage5NotesData,
   ]);
 
   // ─── Corporate BS check + P&L summary ───

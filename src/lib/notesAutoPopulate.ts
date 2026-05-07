@@ -1269,3 +1269,48 @@ export async function resyncStage5Notes(engagementId: string): Promise<Stage5Not
   await saveStage5Notes(engagementId, fresh);
   return fresh;
 }
+
+// ─── Phase E helpers — Notes as source of truth for BS/PL amounts ─────────────
+//
+// These functions read the BREAKUP SUB-ROWS (not the headline .cy/.py) and
+// return their sum.  They return null when:
+//   • notesData is null/undefined (notes never auto-populated), OR
+//   • the note section/key doesn't exist, OR
+//   • no breakup row has a non-null amount (note is still empty).
+//
+// Callers fall back to the raw TB sum (computedAmounts) when null is returned,
+// preserving identical behaviour before the first auto-populate run.
+
+/**
+ * Sum of all non-null `amount_cy` values in the breakup array for the given
+ * note section + key.  Returns null when the note has no populated sub-rows.
+ */
+export function sumNotesSubRowsCY(
+  notesData: Stage5Notes | null | undefined,
+  section:   "bs_liab" | "bs_asset" | "pl",
+  key:       string,
+): number | null {
+  const noteRow = (notesData?.[section] as Record<string, any> | undefined)?.[key];
+  if (!noteRow) return null;
+  const breakup: any[] = Array.isArray(noteRow.breakup) ? noteRow.breakup : [];
+  const populated = breakup.filter(r => r != null && r.amount_cy != null);
+  if (!populated.length) return null;
+  return populated.reduce((s: number, r: any) => s + Number(r.amount_cy ?? 0), 0);
+}
+
+/**
+ * Sum of all non-null `amount_py` values in the breakup array for the given
+ * note section + key.  Returns null when the note has no populated sub-rows.
+ */
+export function sumNotesSubRowsPY(
+  notesData: Stage5Notes | null | undefined,
+  section:   "bs_liab" | "bs_asset" | "pl",
+  key:       string,
+): number | null {
+  const noteRow = (notesData?.[section] as Record<string, any> | undefined)?.[key];
+  if (!noteRow) return null;
+  const breakup: any[] = Array.isArray(noteRow.breakup) ? noteRow.breakup : [];
+  const populated = breakup.filter(r => r != null && r.amount_py != null);
+  if (!populated.length) return null;
+  return populated.reduce((s: number, r: any) => s + Number(r.amount_py ?? 0), 0);
+}
