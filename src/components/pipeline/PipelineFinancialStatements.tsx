@@ -2261,6 +2261,91 @@ export default function PipelineFinancialStatements({
     enabled: !!engagementId,
   });
 
+  // ─── Bug 11 — BS override → optionally sync note breakup ──────────────────────
+  // After a BS cell is manually overridden, if the corresponding note already
+  // has a populated breakup, ask the auditor whether to add an "Adjustment per
+  // BS override" row so the Notes reconcile.  Otherwise the mismatch panel
+  // would warn and the auditor would have to fix it manually.
+  //
+  // Section/key resolution uses FS_CODE_TO_NOTE_KEY (corporate) or
+  // NCE_CODE_TO_NOTE_KEY + NCE_CODE_TO_SECTION (NCE).  The diff is computed
+  // against the existing breakup sum and stored as a positive amount on a new
+  // manual row tagged with a system reason.
+  async function maybePromptSyncNote(code: string, newDisplayValue: number) {
+    // Resolve section + key
+    let section: "bs_liab" | "bs_asset" | "pl" | undefined;
+    let key: string | undefined;
+    if (FS_CODE_TO_NOTE_KEY[code]) {
+      key = FS_CODE_TO_NOTE_KEY[code];
+      section = (FS_CODE_TO_NOTES_SUBTAB[code] as any) === "bs_liab" ? "bs_liab"
+              : (FS_CODE_TO_NOTES_SUBTAB[code] as any) === "bs_asset" ? "bs_asset"
+              : (FS_CODE_TO_NOTES_SUBTAB[code] as any) === "pl" ? "pl" : undefined;
+    } else if (NCE_CODE_TO_NOTE_KEY[code]) {
+      key = NCE_CODE_TO_NOTE_KEY[code];
+      section = NCE_CODE_TO_SECTION[code];
+    }
+    if (!key || !section) return;
+
+    // Fetch the latest stage5_notes (cached query may be stale)
+    const { data: row } = await (supabase.from as any)("audit_engagements")
+      .select("stage5_notes")
+      .eq("id", engagementId)
+      .maybeSingle();
+    const notes = (row?.stage5_notes ?? null) as Stage5Notes | null;
+    if (!notes) return;
+
+    const noteRow = (notes[section] as Record<string, any> | undefined)?.[key];
+    if (!noteRow) return;
+    const breakup: any[] = Array.isArray(noteRow.breakup) ? noteRow.breakup : [];
+    const populated = breakup.filter(r => r != null && r.amount_cy != null && r.amount_cy !== "");
+    if (populated.length === 0) return;
+    const currentSum = populated.reduce((s: number, r: any) => {
+      const n = Number(r.amount_cy);
+      return s + (Number.isFinite(n) ? n : 0);
+    }, 0);
+    const target = Math.abs(newDisplayValue);
+    const diff = target - currentSum;
+    if (Math.abs(diff) < 1) return;
+
+    const proceed = window.confirm(
+      `You changed this BS line to ₹${target.toLocaleString("en-IN")}.\n` +
+      `The Note breakup currently sums to ₹${currentSum.toLocaleString("en-IN")}.\n\n` +
+      `OK   = Sync note (add an "Adjustment per BS override" row of ₹${diff.toLocaleString("en-IN")})\n` +
+      `Cancel = Keep notes unchanged (mismatch panel will flag the difference)`,
+    );
+    if (!proceed) return;
+
+    // Append adjustment row
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const newBreakup = [
+      ...breakup,
+      {
+        id: `bs_override_${Date.now()}`,
+        description:    "Adjustment per BS override",
+        amount_cy:      diff,
+        amount_py:      0,
+        source:         "manual",
+        override_reason: `Auto-added to reconcile BS override on ${dateStr}`,
+      },
+    ];
+    const next = {
+      ...notes,
+      [section]: {
+        ...(notes[section] as any),
+        [key]: { ...noteRow, breakup: newBreakup },
+      },
+    };
+    const { error } = await (supabase.from as any)("audit_engagements")
+      .update({ stage5_notes: next })
+      .eq("id", engagementId);
+    if (error) {
+      toast.error("Failed to sync note: " + error.message);
+      return;
+    }
+    queryClient.invalidateQueries({ queryKey: ["stage5-notes-fsdata", engagementId] });
+    toast.success("Note breakup synced — adjustment row added");
+  }
+
   // ─── TB accounts — Tally Sync is the sole authoritative source ───
   // opening_balance (signed; Cr → negative) = PY closing for BS items.
   const tbAccounts: {
@@ -5639,6 +5724,8 @@ export default function PipelineFinancialStatements({
                       }
                       return next;
                     });
+                    // Bug 11 — prompt to sync the note breakup if it's populated.
+                    if (value !== null) maybePromptSyncNote(code, value);
                   }}
                   onCommitPY={(code, value) => {
                     setPyManualAmounts(prev => {
@@ -5695,6 +5782,8 @@ export default function PipelineFinancialStatements({
                       else next[code] = { amount: value, reason: prev[code]?.reason || "(inline edit)" };
                       return next;
                     });
+                    // Bug 11 — also prompt to sync NCE note breakup
+                    if (value !== null) maybePromptSyncNote(code, value);
                   }}
                   onCommitPY={(code, value) => {
                     setPyManualAmounts(prev => {
@@ -5871,6 +5960,8 @@ export default function PipelineFinancialStatements({
                       else next[code] = { amount: value, reason: prev[code]?.reason || "(inline edit)" };
                       return next;
                     });
+                    // Bug 11 — also prompt to sync NCE note breakup
+                    if (value !== null) maybePromptSyncNote(code, value);
                   }}
                   onCommitPY={(code, value) => {
                     setPyManualAmounts(prev => {
