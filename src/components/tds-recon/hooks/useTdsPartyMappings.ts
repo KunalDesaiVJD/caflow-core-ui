@@ -6,6 +6,7 @@
  */
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { isPartyLedgerGroup } from "../tdsEngine";
 
 export type MappingStatus = "pending" | "confirmed" | "rejected" | "needs_review";
 
@@ -87,7 +88,16 @@ export function useTdsPartyMappings(
       .eq("financial_year", financialYear)
       .order("match_confidence", { ascending: false });
     if (err) setError(err.message);
-    else setMappings((data ?? []) as TbPartyMapping[]);
+    else {
+      // Issue 3 (root-cause fix, part 2): filter out stale non-party rows that
+      // were stored before EXPENSE_TOKENS was tightened. Only rows whose
+      // tb_parent_group satisfies isPartyLedgerGroup() (currently "creditor"
+      // groups) are surfaced to the UI. Auditors can still see rejected rows
+      // because Rejected rows are still party-group rows that were declined.
+      const all = (data ?? []) as TbPartyMapping[];
+      const filtered = all.filter(m => isPartyLedgerGroup(m.tb_parent_group));
+      setMappings(filtered);
+    }
     setLoading(false);
   }, [clientId, financialYear]);
 

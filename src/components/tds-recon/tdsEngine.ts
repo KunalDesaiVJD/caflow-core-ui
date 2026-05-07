@@ -49,6 +49,18 @@ function isExpenseGroup(pg: string | null): boolean {
   return EXPENSE_TOKENS.some(t => lower.includes(t));
 }
 
+/**
+ * Issue 3 (root-cause fix, part 2): the AI mapper writes only party rows now,
+ * but existing rows in tds_tb_party_mappings created BEFORE the filter
+ * tightened (when EXPENSE_TOKENS still included "expense", "indirect", etc.)
+ * remain in the DB. Use this same predicate at READ time to hide stale
+ * non-party rows from the UI without destructively deleting them. Auditors
+ * can manually Reject any they want gone.
+ */
+export function isPartyLedgerGroup(parentGroup: string | null | undefined): boolean {
+  return isExpenseGroup(parentGroup ?? null);
+}
+
 // ─── Section-prescribed TDS rates (Income Tax Act, FY 2025-26) ───────────────
 // Used to validate that the TDS amount in the filing is consistent with the
 // section. Range = [min %, max %] — e.g. 194C is 1% (individual) or 2% (firm).
