@@ -463,6 +463,21 @@ const FS_CODE_TO_NOTE_KEY: Readonly<Record<string, string>> = {
   BS_CA_OCA:  "other_current_assets",
 };
 
+// Bug 5 — NCE FS code → notes section (bs_liab / bs_asset / pl).
+// Used to substitute notes-aware sums into the amounts map for NCE
+// (Phase E parity with corporate entities).
+const NCE_CODE_TO_SECTION: Readonly<Record<string, "bs_liab" | "bs_asset" | "pl">> = {
+  NCE_CAP: "bs_liab", NCE_LTB: "bs_liab", NCE_OLTL: "bs_liab", NCE_LTP: "bs_liab",
+  NCE_STB: "bs_liab", NCE_TP: "bs_liab", NCE_OCL: "bs_liab", NCE_STP: "bs_liab",
+  NCE_PPE: "bs_asset", NCE_CWIP: "bs_asset", NCE_INTG: "bs_asset",
+  NCE_NCINV: "bs_asset", NCE_LTLA: "bs_asset", NCE_ONCA: "bs_asset",
+  NCE_CINV: "bs_asset", NCE_STCK: "bs_asset", NCE_TR: "bs_asset",
+  NCE_CASH: "bs_asset", NCE_STLA: "bs_asset", NCE_OCA: "bs_asset",
+  NCE_REV_OPS: "pl", NCE_REV_OTH: "pl",
+  NCE_COGS: "pl", NCE_EMP_EXP: "pl", NCE_FIN_COST: "pl",
+  NCE_DEPR: "pl", NCE_OTH_EXP: "pl",
+};
+
 // ── NCE FS code → registry note key (BS + P&L) ───────────────────────────────
 // Shared by NCEBalanceSheetView and NCEPLView.
 // CWIP and Intangibles share the "ppe" note (shown in NCEPPESchedule).
@@ -2228,6 +2243,11 @@ export default function PipelineFinancialStatements({
   // Loaded once at render time so fsDisplayData can substitute notes breakup sums
   // for raw TB sums. Refreshes whenever stage5_notes is written (auto-populate
   // or user edit), keeping the BS/PL face in sync with the Notes section.
+  // Bug 5 — Phase E now applies to NCE entities too.  Removing the
+  // !isNonCorporate guard lets NCE Capital Account / Owners' notes drive
+  // the BS the same way Reserves drives BS for corporates.  ncyOf/npyOf
+  // already work for any section/key combination — they just look up
+  // sumNotesSubRowsCY/PY, which is entity-agnostic.
   const { data: stage5NotesData } = useQuery<Stage5Notes | null>({
     queryKey: ["stage5-notes-fsdata", engagementId],
     queryFn: async () => {
@@ -2238,7 +2258,7 @@ export default function PipelineFinancialStatements({
       return (data as any)?.stage5_notes as Stage5Notes ?? null;
     },
     staleTime: 30_000,
-    enabled: !!engagementId && !isNonCorporate,
+    enabled: !!engagementId,
   });
 
   // ─── TB accounts — Tally Sync is the sole authoritative source ───
@@ -2912,12 +2932,45 @@ export default function PipelineFinancialStatements({
     ? Math.round((netProfit - (corpPlData.currentTax.cy || 0) + (corpPlData.deferredTax.cy || 0)) * 100) / 100
     : netProfit;
 
+  // ─── Bug 5 — Phase E for NCE: notes-aware substitution into NCE amounts ─────
+  // For each NCE FS code that has a note key + section mapping, substitute
+  // the breakup sum (when populated) for the raw TB value.  Liability codes
+  // are stored negative in Tally (CR convention) and the NCE BS view applies
+  // negL() at display, so we re-apply the negative sign before storing in
+  // the augmented map — keeps display sign convention identical to before.
+  const nceCyAmounts: Record<string, number> = isNonCorporate
+    ? (() => {
+        const out = { ...computedAmounts };
+        for (const [code, key] of Object.entries(NCE_CODE_TO_NOTE_KEY)) {
+          const section = NCE_CODE_TO_SECTION[code];
+          if (!section) continue;
+          const sum = sumNotesSubRowsCY(stage5NotesData ?? null, section, key);
+          if (sum == null) continue;
+          out[code] = section === "bs_liab" ? -sum : sum;
+        }
+        return out;
+      })()
+    : computedAmounts;
+  const ncePyAmounts: Record<string, number> = isNonCorporate
+    ? (() => {
+        const out = { ...mergedPY };
+        for (const [code, key] of Object.entries(NCE_CODE_TO_NOTE_KEY)) {
+          const section = NCE_CODE_TO_SECTION[code];
+          if (!section) continue;
+          const sum = sumNotesSubRowsPY(stage5NotesData ?? null, section, key);
+          if (sum == null) continue;
+          out[code] = section === "bs_liab" ? -sum : sum;
+        }
+        return out;
+      })()
+    : mergedPY;
+
   // ─── NCE stats bar ───────────────────────────────────────────────────────────
   // Sum individual leaf codes so the stats bar is independent of computeTotal
   // parent nodes. NCE_NET_PROF (row XIII) comes from the profit-chain block.
-  const nceTotalAssets      = NCE_ASSET_IDS.reduce((s, id) => s + (computedAmounts[id] || 0), 0);
+  const nceTotalAssets      = NCE_ASSET_IDS.reduce((s, id) => s + (nceCyAmounts[id] || 0), 0);
   // NCE liabilities are stored negative (Tally credit) → use + to get true diff
-  const nceTotalLiabilities = NCE_LIAB_IDS.reduce((s, id) => s + (computedAmounts[id] || 0), 0);
+  const nceTotalLiabilities = NCE_LIAB_IDS.reduce((s, id) => s + (nceCyAmounts[id] || 0), 0);
   const nceBsDiff           = Math.round((nceTotalAssets + nceTotalLiabilities) * 100) / 100;
   const nceBsBalanced       = Math.abs(nceTotalAssets + nceTotalLiabilities) < 1;
   const nceNetProfit        = computedAmounts["NCE_NET_PROF"] || 0;
@@ -5592,8 +5645,8 @@ export default function PipelineFinancialStatements({
               <>
                 <NCEBalanceSheetView
                   engagementId={engagementId}
-                  cyAmounts={computedAmounts}
-                  pyAmounts={mergedPY}
+                  cyAmounts={nceCyAmounts}
+                  pyAmounts={ncePyAmounts}
                   cyYear={cyYear}
                   pyYear={pyYear}
                   entityName={engagement?.clients?.name || ""}
