@@ -33,7 +33,6 @@ import { useAuditTracker } from "@/hooks/useAuditTracker";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
-import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -1216,58 +1215,23 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
           <AccordionItem key={row.clause_number} value={`clause-${row.clause_number}`} className="border rounded-lg">
             <AccordionTrigger className="px-4 py-3 hover:no-underline">
               <div className="flex items-center gap-3 w-full">
-                <span className="text-sm font-mono font-bold text-primary min-w-[30px]">{row.clause_number}</span>
+                <span className="text-sm font-bold text-primary min-w-[30px]">{row.clause_number}</span>
                 <span className="text-sm font-medium flex-1 text-left">{row.clause_title}</span>
-                {!row.is_applicable && <Badge variant="secondary" className="text-[10px]">N/A</Badge>}
                 {statusBadge(row.status)}
-                {row.is_locked && <Lock className="w-3.5 h-3.5 text-muted-foreground" />}
               </div>
             </AccordionTrigger>
             <AccordionContent className="px-4 pb-4 space-y-3">
-              <div className="flex items-center gap-3">
-                <Switch
-                  checked={row.is_applicable}
-                  onCheckedChange={v => updateRow(idx, "is_applicable", v)}
-                  disabled={row.is_locked}
-                />
-                <Label className="text-xs">Applicable</Label>
-              </div>
-
-              {!row.is_applicable && (
-                <Textarea
-                  value={row.inapplicability_reason}
-                  onChange={e => updateRow(idx, "inapplicability_reason", e.target.value)}
-                  placeholder="Reason for inapplicability..."
-                  className="text-xs h-16"
-                  disabled={row.is_locked}
-                />
+              {row.user_response && (
+                <p className="text-[10px] text-muted-foreground italic">
+                  Default text loaded from Annexure-A — edit below as needed.
+                </p>
               )}
-
-              {row.is_applicable && (
-                <>
-                  {row.user_response && (
-                    <p className="text-[10px] text-muted-foreground italic">
-                      Default text loaded from Annexure-A — edit below as needed.
-                    </p>
-                  )}
-                  <Textarea
-                    value={row.user_response}
-                    onChange={e => updateRow(idx, "user_response", e.target.value)}
-                    placeholder="Enter your CARO response..."
-                    className="text-xs min-h-[140px] font-mono leading-relaxed"
-                    disabled={row.is_locked}
-                  />
-                  {!row.is_locked && (
-                    <Button
-                      variant="outline" size="sm" className="gap-1 text-xs"
-                      onClick={() => approveClause(idx)}
-                      disabled={!row.user_response.trim()}
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5" /> Approve & Lock
-                    </Button>
-                  )}
-                </>
-              )}
+              <Textarea
+                value={row.user_response}
+                onChange={e => updateRow(idx, "user_response", e.target.value)}
+                placeholder="Enter your CARO response..."
+                className="text-sm min-h-[140px] leading-relaxed"
+              />
             </AccordionContent>
           </AccordionItem>
         ))}

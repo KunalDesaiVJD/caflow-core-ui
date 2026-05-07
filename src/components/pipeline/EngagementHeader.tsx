@@ -4,7 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import { Building2, FileBadge, MapPin, CalendarRange, Hash } from "lucide-react";
+import { Building2, CalendarRange } from "lucide-react";
 
 interface EngagementHeaderProps {
   engagement: any;
@@ -93,9 +93,6 @@ export default function EngagementHeader({
     return `${ayStart}-${ayEnd}`;
   }, [fy]);
 
-  const gstinList: string[] = Array.isArray(client?.gstin) ? client.gstin : [];
-  const primaryGstin = gstinList[0];
-
   const entityBadgeClass = (() => {
     const t = String(entityType || "").toLowerCase();
     if (t.includes("company") || t.includes("opc")) return "bg-blue-50 text-blue-700 border-blue-300 dark:bg-blue-950/40 dark:text-blue-300";
@@ -168,32 +165,10 @@ export default function EngagementHeader({
                   </Badge>
                 )}
               </div>
-              <div className="flex items-center gap-3 mt-1 text-[11px] text-muted-foreground flex-wrap">
-                <span className="inline-flex items-center gap-1">
-                  <Hash size={11} /> PAN <span className="font-mono text-foreground">{client?.pan || "—"}</span>
-                </span>
-                {primaryGstin && (
-                  <span className="inline-flex items-center gap-1">
-                    <FileBadge size={11} /> GSTIN <span className="font-mono text-foreground">{primaryGstin}</span>
-                    {gstinList.length > 1 && <Badge variant="outline" className="text-[8px] px-1 ml-0.5">+{gstinList.length - 1}</Badge>}
-                  </span>
-                )}
-                {client?.cin && (
-                  <span className="inline-flex items-center gap-1">
-                    <FileBadge size={11} /> CIN <span className="font-mono text-foreground">{client.cin}</span>
-                  </span>
-                )}
-                {client?.tan_number && (
-                  <span className="inline-flex items-center gap-1">
-                    <FileBadge size={11} /> TAN <span className="font-mono text-foreground">{client.tan_number}</span>
-                  </span>
-                )}
-                {client?.registered_state && (
-                  <span className="inline-flex items-center gap-1">
-                    <MapPin size={11} /> <span>{client.registered_state}</span>
-                  </span>
-                )}
-              </div>
+              {/* Issue 3 — PAN / GSTIN / CIN / TAN / state row removed from
+                  the engagement banner per user request (unnecessary clutter
+                  on every stage).  The full client master remains accessible
+                  from the client management screen. */}
             </div>
           </div>
 

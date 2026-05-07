@@ -525,7 +525,7 @@ export function IFCReportTab({ engagementId, engagement }: Props) {
           <AccordionItem key={s.key} value={s.key} className="border rounded-lg">
             <AccordionTrigger className="px-4 py-3 hover:no-underline">
               <div className="flex items-center gap-3 w-full">
-                <span className="text-sm font-mono font-bold text-primary min-w-[24px]">{idx + 1}</span>
+                <span className="text-sm font-bold text-primary min-w-[24px]">{idx + 1}</span>
                 <span className="text-sm font-medium flex-1 text-left">{s.title}</span>
               </div>
             </AccordionTrigger>
@@ -544,7 +544,7 @@ export function IFCReportTab({ engagementId, engagement }: Props) {
               <Textarea
                 value={sections[s.key]}
                 onChange={e => setSections(prev => ({ ...prev, [s.key]: e.target.value }))}
-                className="text-xs min-h-[160px] font-mono leading-relaxed"
+                className="text-sm min-h-[160px] leading-relaxed"
               />
             </AccordionContent>
           </AccordionItem>

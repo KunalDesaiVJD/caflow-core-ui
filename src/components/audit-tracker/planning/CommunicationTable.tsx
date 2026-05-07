@@ -24,6 +24,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import {
   Check, ChevronsUpDown, Plus, Save, Loader2, Trash2, X, History, Search,
 } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import type { CommEntry, PlanEntry } from "../hooks/useAuditPlanning";
 import type { ClientOption }         from "../hooks/useClients";
@@ -159,6 +160,10 @@ export default function CommunicationTable({ comms, entries, clients, onAdd, onU
   const [historyRowLabel, setHistoryRowLabel] = useState<string | null>(null);
 
   // ── Sync from comms (skip dirty / unsaved rows) ───────────────────────────
+  // Issue 4 — Dedupe by client name on display.  When the same client appears
+  // in multiple rows, only the first occurrence (most recent, since comms is
+  // ordered by created_at desc) is kept.  Blank-name rows (newly-added drafts)
+  // are always preserved.
   useEffect(() => {
     setRows(prev => {
       const newRows   = prev.filter(r => r.isNew);            // keep unsaved drafts
@@ -166,7 +171,15 @@ export default function CommunicationTable({ comms, entries, clients, onAdd, onU
         const dirty = prev.find(r => !r.isNew && r.id === c.id && r.isDirty);
         return dirty ?? commToDraft(c, clients);               // preserve dirty edits
       });
-      return [...syncedRows, ...newRows];
+      const seen = new Set<string>();
+      const deduped = syncedRows.filter(r => {
+        const key = (r.clientName || "").trim().toLowerCase();
+        if (!key) return true;          // blank-name → keep
+        if (seen.has(key)) return false; // duplicate → drop
+        seen.add(key);
+        return true;
+      });
+      return [...deduped, ...newRows];
     });
   }, [comms, clients]);
 
@@ -208,6 +221,23 @@ export default function CommunicationTable({ comms, entries, clients, onAdd, onU
   }
 
   async function handleSave(row: DraftRow) {
+    // Issue 4 — Block duplicate client entries on save.  A client may
+    // appear in the communication log only once.  To update an existing
+    // entry the auditor edits the existing row.
+    if (row.isNew && row.clientName.trim()) {
+      const newKey = row.clientName.trim().toLowerCase();
+      const exists = comms.some(c =>
+        (c.client_name || "").trim().toLowerCase() === newKey,
+      );
+      if (exists) {
+        toast.error(
+          `"${row.clientName}" is already in the communication log. ` +
+          `Edit the existing row instead of creating a duplicate.`,
+        );
+        return;
+      }
+    }
+
     // Final phone validation before save
     const phoneErr = validatePhone(row.contactNo);
     if (phoneErr) {
