@@ -1183,4 +1183,3 @@ export function AgeingTable({
   );
 }
 
-export const PencilIcon = Pencil;
