@@ -49,6 +49,7 @@ import {
 import { computeNceDynamicNoteMap } from "@/lib/nceDynamicNoteNumbers";
 import { sumNotesSubRowsCY, sumNotesSubRowsPY, getSharesOutstanding } from "@/lib/notesAutoPopulate";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
+import { isTallyPLAccount } from "@/lib/tallyDetection";
 
 // ═══════════════════════════════════════
 // Schedule III Line Item Definitions
@@ -221,14 +222,12 @@ const PL_REVENUE_CODES = new Set(["PL_REV_OPS", "PL_REV_OI"]);
 // because revenue/expense ledgers already capture it via PL_REV / PL_EXP codes.
 // Solution: use opening_balance (prior retained earnings only) for BS mapping.
 // Current-year net profit is then auto-credited to BS_EQ_RS after P&L totals are known.
-const isTallyPLAccount = (name: string): boolean => {
-  const n = name.toLowerCase().trim();
-  if (n === "profit & loss a/c" || n === "profit and loss a/c" ||
-      n === "p & l a/c"         || n === "p&l a/c"             ||
-      n === "profit & loss account" || n === "profit and loss account" ||
-      n === "p & l account") return true;
-  return /^profit\s*[&and]+\s*loss(\s*(a\/c|account))?$/i.test(name.trim());
-};
+//
+// Bug 4 / Bug 8 — Detection moved to a shared helper for robustness.
+// The previous inline regex used a buggy character class [&and]+ that
+// matched any of the literal characters & a n d (not the strings "&" or "and"),
+// missing names like "Profit and Loss A/c" → closing balance flowed to
+// BS_EQ_RS, double-counting current-year profit and inverting the BS sign.
 
 // ═══════════════════════════════════════
 // Props
