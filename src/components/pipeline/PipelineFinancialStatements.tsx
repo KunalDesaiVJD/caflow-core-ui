@@ -5455,7 +5455,27 @@ export default function PipelineFinancialStatements({
         </div>
         <div className="flex items-center gap-2">
           <FsUnitsToggle />
-          <Button variant="outline" size="sm" onClick={() => window.location.reload()} className="gap-1" title="Hard refresh — re-renders all FS figures with the active unit scale">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              // Bug 12 — confirm before re-syncing.  Auto-linked rows will
+              // refresh from latest TB; manual entries (manual_edits[]) are
+              // preserved.  Cancel exits without action.
+              const ok = window.confirm(
+                "This will re-fetch notes data from your Trial Balance.\n" +
+                "Auto-linked rows will refresh.\n" +
+                "Your manual entries will be preserved.\n\n" +
+                "Continue?",
+              );
+              if (ok) window.location.reload();
+            }}
+            className="gap-1"
+            title={
+              "Re-syncs notes from Trial Balance + COA mapping.\n" +
+              "Manually edited rows (in manual_edits[]) are preserved."
+            }
+          >
             <RefreshCw size={14} /> Refresh
           </Button>
           <Button variant="outline" size="sm" onClick={exportToExcel} className="gap-1">
