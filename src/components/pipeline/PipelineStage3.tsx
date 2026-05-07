@@ -330,9 +330,10 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     ? [...NCE_AUTO_MAP_RULES, ...AUTO_MAP_RULES]
     : AUTO_MAP_RULES;
 
-  // ─── Ledger Reclassify state ───
+  // ─── Ledger Reclassify / Move state ───
   const [reclassifyDialog, setReclassifyDialog] = useState<{ accountName: string } | null>(null);
-  const [reclassifyCode, setReclassifyCode] = useState<string>("");
+  const [reclassifyCode,   setReclassifyCode]   = useState<string>("");
+  const [reclassifyReason, setReclassifyReason] = useState<string>("");
 
   // ─── Variance drill-down state (Task 4) ───
   const [varianceDrill, setVarianceDrill] = useState<{ code: string; name: string } | null>(null);
@@ -1290,30 +1291,38 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     else toast.info("No similar unmapped accounts found");
   };
 
-  // ═══════ RECLASSIFY LEDGER ═══════
+  // ═══════ RECLASSIFY / MOVE LEDGER ═══════
   const reclassifyAccount = async () => {
     if (!reclassifyDialog || !reclassifyCode) return;
     const { accountName } = reclassifyDialog;
     const lineItem = activeLeafItems.find(i => i.code === reclassifyCode);
     if (!lineItem) return;
 
-    const newEntry = {
-      code: reclassifyCode,
-      noteRef: lineItem.noteRef,
+    const oldLineItem = coaMapping[accountName]
+      ? activeLeafItems.find(i => i.code === coaMapping[accountName].code)
+      : null;
+
+    const newEntry: Record<string, any> = {
+      code:        reclassifyCode,
+      noteRef:     lineItem.noteRef,
       scheduleRef: lineItem.scheduleRef || "",
-      confidence: "manual",
+      confidence:  "manual",
     };
+    if (reclassifyReason.trim()) newEntry.move_reason = reclassifyReason.trim();
+
     const newMapping = { ...coaMapping, [accountName]: newEntry };
     setCoaMapping(newMapping);
     // Auto-save to DB so the override survives page refresh
     try {
       await supabase.from("audit_engagements").update({ coa_mapping: newMapping } as any).eq("id", engagementId);
-      toast.success(`Reclassified "${accountName}" → ${lineItem.name}`);
+      const fromLabel = oldLineItem?.name || coaMapping[accountName]?.code || "unmapped";
+      toast.success(`Moved "${accountName}" from ${fromLabel} → ${lineItem.name}`);
     } catch (e: any) {
       toast.error("Saved locally, failed to persist: " + e.message);
     }
     setReclassifyDialog(null);
     setReclassifyCode("");
+    setReclassifyReason("");
   };
 
   const resetToAuto = async (accountName: string) => {
@@ -1356,6 +1365,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     }
     setReclassifyDialog(null);
     setReclassifyCode("");
+    setReclassifyReason("");
   };
 
   // ═══════ COMPUTED FS AMOUNTS ═══════
@@ -2375,14 +2385,15 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                                       >✕</button>
                                     )}
                                     <button
-                                      title="Reclassify ledger"
+                                      title="Move / Reclassify ledger"
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         setReclassifyDialog({ accountName: acct.account_name });
                                         setReclassifyCode(mapping?.code || "");
+                                        setReclassifyReason("");
                                       }}
                                       className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground ml-1"
-                                    ><Pencil size={10} /></button>
+                                    >⇄</button>
                                   </div>
                                 </div>
                                 {mapping ? (
@@ -2465,15 +2476,16 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                               </button>
                             )}
                             <button
-                              title="Reclassify ledger"
+                              title="Move / Reclassify ledger"
                               onClick={e => {
                                 e.stopPropagation();
                                 setReclassifyDialog({ accountName: acct.account_name });
                                 setReclassifyCode(mapping?.code || "");
+                                setReclassifyReason("");
                               }}
                               className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground ml-1"
                             >
-                              <Pencil size={10} />
+                              ⇄
                             </button>
                           </div>
                         </div>
@@ -2788,14 +2800,15 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                                       className="p-0.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
                                     >✕</button>
                                     <button
-                                      title="Reclassify"
+                                      title="Move / Reclassify"
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         setReclassifyDialog({ accountName: a.account_name });
                                         setReclassifyCode(m?.code || "");
+                                        setReclassifyReason("");
                                       }}
                                       className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-                                    ><Pencil size={9} /></button>
+                                    >⇄</button>
                                   </div>
                                 </div>
                               );
@@ -2841,11 +2854,11 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       {/* Reclassify Ledger Dialog */}
       <Dialog
         open={!!reclassifyDialog}
-        onOpenChange={() => { setReclassifyDialog(null); setReclassifyCode(""); }}
+        onOpenChange={() => { setReclassifyDialog(null); setReclassifyCode(""); setReclassifyReason(""); }}
       >
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle className="text-base">Reclassify Ledger Head</DialogTitle>
+            <DialogTitle className="text-base">⇄ Move / Reclassify Ledger</DialogTitle>
           </DialogHeader>
           {reclassifyDialog && (() => {
             const currentMapping = coaMapping[reclassifyDialog.accountName];
@@ -2915,6 +2928,17 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                     </div>
                   </div>
                 )}
+
+                <div>
+                  <Label className="text-xs text-muted-foreground">Reason <span className="font-normal">(optional)</span></Label>
+                  <Input
+                    className="h-8 text-xs mt-1"
+                    placeholder="e.g. Reclassified per ICAI guidance…"
+                    value={reclassifyReason}
+                    onChange={(e) => setReclassifyReason(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter" && reclassifyCode) reclassifyAccount(); }}
+                  />
+                </div>
               </div>
             );
           })()}
@@ -2932,12 +2956,12 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
             <Button
               variant="outline"
               size="sm"
-              onClick={() => { setReclassifyDialog(null); setReclassifyCode(""); }}
+              onClick={() => { setReclassifyDialog(null); setReclassifyCode(""); setReclassifyReason(""); }}
             >
               Cancel
             </Button>
             <Button size="sm" disabled={!reclassifyCode} onClick={reclassifyAccount} className="gap-1">
-              <Pencil size={12} /> Save Reclassification
+              ⇄ Move
             </Button>
           </DialogFooter>
         </DialogContent>
