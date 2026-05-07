@@ -2821,7 +2821,32 @@ export default function PipelineFinancialStatements({
         otherIncome:        { noteNo: dn("other_income"),        cy: ncyOf("pl","other_income","PL_REV_OI"),        py: npyOf("pl","other_income","PL_REV_OI")        },
         costMaterials:      { noteNo: dn("cost_materials"),      cy: ncyOf("pl","cost_materials","PL_EXP_MAT"),     py: npyOf("pl","cost_materials","PL_EXP_MAT")     },
         purchasesStock:     { noteNo: dn("purchases_stock"),     cy: ncyOf("pl","purchases_stock","PL_EXP_SIT"),    py: npyOf("pl","purchases_stock","PL_EXP_SIT")    },
-        changesInventories: { noteNo: dn("changes_inventories"), cy: ncyOf("pl","changes_inventories","PL_EXP_CII"),py: npyOf("pl","changes_inventories","PL_EXP_CII") },
+        // Bug 7 — When the Inventories note breakup is populated, P&L Changes
+        // in Inventories CY is computed as (opening − closing) where:
+        //   opening = PY inventory  (notes breakup PY sum, or raw TB pyOf)
+        //   closing = CY inventory  (notes breakup CY sum, or raw TB cyOf)
+        // Lets edits to the Inventories note flow into both the BS Inventories
+        // line AND the P&L CII line automatically.  PY column continues to
+        // come from pyInvCII (PY Shell TB) when available, else falls back
+        // to the breakup sum / raw TB.
+        changesInventories: (() => {
+          const invCy = sumNotesSubRowsCY(stage5NotesData ?? null, "bs_asset", "inventories");
+          const invPy = sumNotesSubRowsPY(stage5NotesData ?? null, "bs_asset", "inventories");
+          if (invCy != null || invPy != null) {
+            const closingCy = invCy ?? cyOf("BS_CA_INV");
+            const openingCy = invPy ?? pyOf("BS_CA_INV");
+            return {
+              noteNo: dn("changes_inventories"),
+              cy: openingCy - closingCy,
+              py: pyInvCII ?? npyOf("pl","changes_inventories","PL_EXP_CII"),
+            };
+          }
+          return {
+            noteNo: dn("changes_inventories"),
+            cy: ncyOf("pl","changes_inventories","PL_EXP_CII"),
+            py: npyOf("pl","changes_inventories","PL_EXP_CII"),
+          };
+        })(),
         employeeBenefits:   { noteNo: dn("employee_benefits"),   cy: ncyOf("pl","employee_benefits","PL_EXP_EMP"),  py: npyOf("pl","employee_benefits","PL_EXP_EMP")  },
         financeCosts:       { noteNo: dn("finance_costs"),       cy: ncyOf("pl","finance_costs","PL_EXP_FIN"),      py: npyOf("pl","finance_costs","PL_EXP_FIN")      },
         depreciation:       { noteNo: null,                      cy: ncyOf("pl","depreciation","PL_EXP_DEP"),       py: npyOf("pl","depreciation","PL_EXP_DEP")       },
