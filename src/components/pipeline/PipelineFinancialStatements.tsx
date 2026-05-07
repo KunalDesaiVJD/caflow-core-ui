@@ -47,7 +47,7 @@ import {
   type NoteConfig,
 } from "@/config/nceNotesConfig";
 import { computeNceDynamicNoteMap } from "@/lib/nceDynamicNoteNumbers";
-import { sumNotesSubRowsCY, sumNotesSubRowsPY } from "@/lib/notesAutoPopulate";
+import { sumNotesSubRowsCY, sumNotesSubRowsPY, getSharesOutstanding } from "@/lib/notesAutoPopulate";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 
 // ═══════════════════════════════════════
@@ -720,12 +720,12 @@ function CorporateBalanceSheetView({
 type PLDisplayRow =
   | { kind: "spacer" }
   | { kind: "header";   roman?: string; label: string }              // bold section header e.g. "IV. Expenses"
-  | { kind: "item";     roman?: string; label: string; noteNo?: number | null; cy?: number; py?: number; bold?: boolean; indent?: number; code?: string }
+  | { kind: "item";     roman?: string; label: string; noteNo?: number | null; cy?: number | null; py?: number | null; bold?: boolean; indent?: number; code?: string }
   | { kind: "total";    roman?: string; label: string; cy: number; py: number }
   | { kind: "subnote";  label: string; bold?: boolean }              // helper line e.g. "(III-IV)"
   | { kind: "footer";   label: string };
 
-function buildPLRows(pl: PLRowData): PLDisplayRow[] {
+function buildPLRows(pl: PLRowData, notesData?: Stage5Notes | null): PLDisplayRow[] {
   // Sign convention: Tally exports revenue/income as NEGATIVE (credit balances).
   // Negate for display so income shows as positive on the P&L face.
   const negI = (v: number | null | undefined) => -(v || 0);
@@ -764,9 +764,17 @@ function buildPLRows(pl: PLRowData): PLDisplayRow[] {
   // positive for DTA (adds to profit). + preserves the sign naturally.
   const profitCy = pbtCy - currentTaxCy + deferredTaxCy;           // XV
   const profitPy = pbtPy - currentTaxPy + deferredTaxPy;           // XV (Phase G fix: was -deferredTaxPy)
-  const epsDivisor = pl.shareCap.noteNo || 1;
-  const epsBasicCy = profitCy / epsDivisor;
-  const epsBasicPy = profitPy / epsDivisor;
+
+  // Bug 1 — EPS divisor uses paid-up share count from the Share Capital note
+  // breakup (share_count_cy / share_count_py), NOT the note number.  Falls
+  // back to "—" display when the share count is 0/missing.
+  const sharesCy = getSharesOutstanding(notesData ?? null, "cy");
+  const sharesPy = getSharesOutstanding(notesData ?? null, "py");
+  const epsBasicCy: number | null = sharesCy > 0 ? profitCy / sharesCy : null;
+  const epsBasicPy: number | null = sharesPy > 0 ? profitPy / sharesPy : null;
+  // Default Diluted = Basic when no dilution adjustment is captured.
+  const epsDilCy = epsBasicCy;
+  const epsDilPy = epsBasicPy;
 
   return [
     { kind: "item",   roman: "I.",   label: "Revenue from operations", noteNo: sn(pl.revFromOps.noteNo, pl.revFromOps.cy, pl.revFromOps.py),     cy: negI(pl.revFromOps.cy), py: negI(pl.revFromOps.py), code: "PL_REV_OPS" },
@@ -802,7 +810,7 @@ function buildPLRows(pl: PLRowData): PLDisplayRow[] {
     { kind: "spacer" },
     { kind: "item",   label: "Earnings per equity share ;", noteNo: pl.eps.noteNo, bold: true, code: "PL_EPS_B" },
     { kind: "item",   label: "(1) Basic",   cy: epsBasicCy, py: epsBasicPy, indent: 2 },
-    { kind: "item",   label: "(2) Diluted", indent: 2 },
+    { kind: "item",   label: "(2) Diluted", cy: epsDilCy,   py: epsDilPy,   indent: 2 },
     { kind: "footer", label: "The accompanying notes form an integral part of the financial statements." },
   ];
 }
@@ -819,11 +827,13 @@ interface CorporatePLViewProps {
   onCommitPY?:       (code: string, value: number | null) => void;
   /** Click a note number → jump to that note in the Notes tab. */
   onNavigateToNote?: (noteNo: number, subTab: "bs_liab" | "bs_asset" | "pl" | "fa") => void;
+  /** Bug 1: Stage-5 notes data so EPS divisor can read paid-up share count. */
+  notesData?:        Stage5Notes | null;
 }
 
 function CorporatePLView({
   engagementId: _engagementId, pl, cyYear, pyYear, companyName, pyLocked, lockedCodes,
-  onCommitCY, onCommitPY, onNavigateToNote,
+  onCommitCY, onCommitPY, onNavigateToNote, notesData,
 }: CorporatePLViewProps) {
   // NOTE: Do NOT call useDynamicNoteRegistry here — same reason as CorporateBalanceSheetView.
   // The noteNo embedded in each PLRow is already from the outer buildDynamicRegistry;
@@ -857,7 +867,7 @@ function CorporatePLView({
     );
   };
 
-  const rows = buildPLRows(pl);
+  const rows = buildPLRows(pl, notesData);
   return (
     <div className="rounded-lg border bg-card overflow-hidden">
       <div className="text-center border-b bg-muted/30 py-2 px-3">
@@ -2799,7 +2809,9 @@ export default function PipelineFinancialStatements({
         currentTax:         { cy: cyOf("PL_TAX_CUR"), py: pyOf("PL_TAX_CUR") },
         deferredTax:        { cy: cyOf("PL_TAX_DEF"), py: pyOf("PL_TAX_DEF") },
         eps:                { noteNo: dn("eps")                 },
-        shareCap:           { noteNo: getNoteNo("share_capital") ?? null }, // EPS divisor — keep static
+        // Bug 1 — Excel EPS divisor must be the paid-up share count, not the
+        // note number.  Sourced from Share Capital breakup share_count_cy fields.
+        shareCap:           { noteNo: getSharesOutstanding(stage5NotesData ?? null, "cy") || (getNoteNo("share_capital") ?? null) },
         pbt:                { cy: revCy - expCy - excCy, py: revPy - expPy - excPy },
       };
       cfs = {
@@ -5704,6 +5716,7 @@ export default function PipelineFinancialStatements({
                   companyName={engagement?.clients?.name || "[Company Name]"}
                   pyLocked={pyLocked}
                   lockedCodes={undefined}
+                  notesData={stage5NotesData ?? null}
                   onCommitCY={(code, value) => {
                     setManualOverrides(prev => {
                       const next = { ...prev };

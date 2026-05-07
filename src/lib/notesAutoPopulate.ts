@@ -1322,3 +1322,44 @@ export function sumNotesSubRowsPY(
   if (!populated.length) return null;
   return populated.reduce((s: number, r: any) => s + Number(r.amount_py ?? 0), 0);
 }
+
+// ─── Bug 1 — Shares Outstanding (for EPS divisor) ─────────────────────────────
+//
+// Sum the `share_count_cy` / `share_count_py` fields on Share Capital breakup
+// rows that are flagged as paid-up (is_paid_up === true OR
+// subType === "issued_paid_up").  Returns 0 when no paid-up rows have a count.
+//
+// Used by P&L Earnings-per-share to compute Basic EPS = profit / share count
+// instead of the previous (incorrect) profit / note-number divisor.
+
+export function getSharesOutstanding(
+  notesData: Stage5Notes | null | undefined,
+  column:    "cy" | "py",
+): number {
+  const shareCap = (notesData?.bs_liab as Record<string, any> | undefined)?.share_capital;
+  if (!shareCap) return 0;
+
+  // 1) Primary source — paid-up breakup rows with explicit share_count_* fields.
+  const breakup: any[] = Array.isArray(shareCap.breakup) ? shareCap.breakup : [];
+  const breakupTotal = breakup
+    .filter(r => r != null && (r.is_paid_up === true || r.subType === "issued_paid_up"))
+    .reduce((s: number, r: any) => {
+      const count = column === "cy" ? r.share_count_cy : r.share_count_py;
+      const n = Number(count);
+      return s + (Number.isFinite(n) ? n : 0);
+    }, 0);
+  if (breakupTotal > 0) return breakupTotal;
+
+  // 2) Fallback — reconciliation table (closing = open + move).
+  // The Share Capital note already exposes "Reconciliation of number of
+  // shares outstanding" in the UI; auditors fill open/move counts there
+  // and the closing count is computed.  Use that as the EPS divisor.
+  const parseNum = (v: any): number => {
+    if (v == null || v === "") return 0;
+    const n = Number(String(v).replace(/,/g, "").trim());
+    return Number.isFinite(n) ? n : 0;
+  };
+  const open = parseNum(shareCap[`recon_open_${column}_num`]);
+  const move = parseNum(shareCap[`recon_move_${column}_num`]);
+  return open + move;
+}

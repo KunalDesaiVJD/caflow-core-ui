@@ -347,6 +347,58 @@ function resolveAutoMarkers(
 }
 
 /**
+ * Insert `count` blank rows before 1-indexed display row `beforeRow` in a sheet XML.
+ * Renumbers all rows/cells/mergeCells with row >= beforeRow by adding count,
+ * then inserts blank <row r="N"/> elements for the newly created rows.
+ */
+function insertRowsBefore(xml: string, beforeRow: number, count: number): string {
+  if (count <= 0) return xml;
+
+  // 1. Shift cell addresses  r="XN"  where N >= beforeRow
+  let out = xml.replace(/\br="([A-Z]+)(\d+)"/g, (_m, col: string, rn: string) => {
+    const r = parseInt(rn, 10);
+    return r >= beforeRow ? `r="${col}${r + count}"` : _m;
+  });
+
+  // 2. Shift <row … r="N" …> attributes where N >= beforeRow
+  out = out.replace(/(<row\b[^>]*?\br=")(\d+)(")/g, (_m, pre: string, rn: string, post: string) => {
+    const r = parseInt(rn, 10);
+    return r >= beforeRow ? `${pre}${r + count}${post}` : _m;
+  });
+
+  // 3. Shift mergeCell refs
+  out = out.replace(
+    /(<mergeCell\s+ref=")([A-Z]+)(\d+):([A-Z]+)(\d+)(")/g,
+    (_m, pre: string, c1: string, r1s: string, c2: string, r2s: string, post: string) => {
+      const r1 = parseInt(r1s, 10), r2 = parseInt(r2s, 10);
+      const nr1 = r1 >= beforeRow ? r1 + count : r1;
+      const nr2 = r2 >= beforeRow ? r2 + count : r2;
+      return `${pre}${c1}${nr1}:${c2}${nr2}${post}`;
+    }
+  );
+
+  // 4. Insert blank row elements just before the (now-shifted) first shifted row
+  const sdOpenM = out.match(/<sheetData\b[^>]*>/);
+  if (!sdOpenM || sdOpenM.index === undefined) return out;
+  const sdStart = sdOpenM.index + sdOpenM[0].length;
+  const sdEnd   = out.indexOf("</sheetData>", sdStart);
+  if (sdEnd === -1) return out;
+  const sdInner = out.slice(sdStart, sdEnd);
+
+  // The first shifted row now has number  beforeRow + count
+  const targetRow = beforeRow + count;
+  const insertRowRe = new RegExp(`<row\\b[^>]*?\\br="${targetRow}"[^>]*?(?:\\/|>)`);
+  const mRow = insertRowRe.exec(sdInner);
+  const insertAt = mRow ? mRow.index : sdInner.length;
+
+  let newRows = "";
+  for (let i = 0; i < count; i++) newRows += `<row r="${beforeRow + i}"/>`;
+
+  const newSdInner = sdInner.slice(0, insertAt) + newRows + sdInner.slice(insertAt);
+  return out.slice(0, sdStart) + newSdInner + out.slice(sdEnd);
+}
+
+/**
  * Replace a single cell's content in raw sheet XML with an inline string value,
  * preserving the cell's existing `s` (style) attribute so all formatting stays.
  *
@@ -1144,6 +1196,51 @@ serve(async (req) => {
       } as any;
 
       buildClauseValues(clauseRecord, mockWb, client.name ?? undefined);
+
+      // ── Clause 18 row insertion: preserve ANX_04 format for >3 depreciation blocks ──
+      // Template has exactly 3 empty data rows (display 30-32) for Clause 18.
+      // If we have more blocks, insert extra blank rows before the TOTAL row (display 33)
+      // so the ANX_04 / Clause 20(b) section is pushed down intact.
+      {
+        const cl18rows = Array.isArray((clauseRecord.cl_18 as any)?._rows)
+          ? ((clauseRecord.cl_18 as any)._rows as unknown[]).length
+          : 0;
+        const TEMPLATE_DEPR_EMPTY = 3;   // template empty data rows: display 30, 31, 32
+        const DEPR_TOTAL_ROW      = 33;  // 1-indexed display row of Clause 18 TOTAL
+        const extraRows = Math.max(0, cl18rows - TEMPLATE_DEPR_EMPTY);
+        if (extraRows > 0) {
+          const annexPath = sheetPaths.get(annexMainName);
+          if (annexPath && zip[annexPath]) {
+            // Shift XML rows in the annex sheet
+            let axXml = _dec.decode(zip[annexPath]);
+            axXml = insertRowsBefore(axXml, DEPR_TOTAL_ROW, extraRows);
+            zip[annexPath] = _enc.encode(axXml);
+
+            // Shift addresses already queued in the updates map for the annex sheet.
+            // Rows 33 .. 32+extraRows are the newly inserted blank rows — those are
+            // exactly where the overflow depreciation data will land, so leave them.
+            // Rows >= 33+extraRows are ANX_04 and beyond — shift by extraRows.
+            const shiftThreshold = DEPR_TOTAL_ROW + extraRows;
+            const axUpdates = updates.get(annexMainName);
+            if (axUpdates) {
+              const shifted = new Map<string, string>();
+              for (const [addr, val] of axUpdates) {
+                const m2 = addr.match(/^([A-Z]+)(\d+)$/);
+                if (m2) {
+                  const r = parseInt(m2[2], 10);
+                  shifted.set(r >= shiftThreshold ? `${m2[1]}${r + extraRows}` : addr, val);
+                } else {
+                  shifted.set(addr, val);
+                }
+              }
+              updates.set(annexMainName, shifted);
+            }
+            console.log(
+              `[Clause 18 row insertion] inserted ${extraRows} rows before display row ${DEPR_TOTAL_ROW} in ${annexMainName}`
+            );
+          }
+        }
+      }
     }
 
     // ── Direct cell writes (belt-and-suspenders for cells with no formula/AUTO) ─

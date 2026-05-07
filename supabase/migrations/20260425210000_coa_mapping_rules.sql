@@ -44,7 +44,7 @@ CREATE POLICY "firm members read mapping rules"
   ON public.coa_mapping_rules FOR SELECT TO authenticated
   USING (
     firm_id IN (
-      SELECT firm_id FROM public.firm_members WHERE user_id = auth.uid()
+      SELECT firm_id FROM public.users WHERE id = auth.uid()
     )
   );
 
@@ -53,12 +53,12 @@ CREATE POLICY "firm members write mapping rules"
   ON public.coa_mapping_rules FOR ALL TO authenticated
   USING (
     firm_id IN (
-      SELECT firm_id FROM public.firm_members WHERE user_id = auth.uid()
+      SELECT firm_id FROM public.users WHERE id = auth.uid()
     )
   )
   WITH CHECK (
     firm_id IN (
-      SELECT firm_id FROM public.firm_members WHERE user_id = auth.uid()
+      SELECT firm_id FROM public.users WHERE id = auth.uid()
     )
   );
 
