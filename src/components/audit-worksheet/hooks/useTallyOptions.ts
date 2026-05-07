@@ -28,8 +28,10 @@ interface UseTallyOptionsResult {
 export function useTallyOptions(
   clientId:      string | null | undefined,
   financialYear: string | null | undefined,
+  /** Audit engagement id — preferred lookup key (sync agent writes here). */
+  auditEngagementId?: string | null,
 ): UseTallyOptionsResult {
-  const { tallyEngId } = useTallyEngagementId(clientId, financialYear);
+  const { tallyEngId } = useTallyEngagementId(clientId, financialYear, auditEngagementId);
   const [raw, setRaw] = useState<TallyOption[]>([]);
 
   useEffect(() => {

@@ -36,7 +36,11 @@ interface Props {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function LedgerExplorerTab({ engagementId, clientId, financialYear, onRaiseQuery, onRaiseFinding }: Props) {
-  const { tallyEngId, loading: resolving } = useTallyEngagementId(clientId, financialYear);
+  // Pass engagementId so the hook tries the audit id first — current Tally
+  // sync agent writes tally_* rows under the audit engagement id directly,
+  // so the legacy client_id-based lookup was returning null and showing
+  // "No Tally data synced yet" even when the data was clearly present.
+  const { tallyEngId, loading: resolving } = useTallyEngagementId(clientId, financialYear, engagementId);
 
   const [viewMode, setViewMode] = useState<ViewMode>("bspl");
   const [hasRows,  setHasRows]  = useState<boolean>(true);

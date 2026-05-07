@@ -80,6 +80,9 @@ interface Props {
   parentGroup:   string;
   clientId:      string | null | undefined;
   financialYear: string | null | undefined;
+  /** Audit engagement id — passed through so the Tally lookup can find
+   *  rows written under the audit id directly (current sync agent). */
+  engagementId?: string | null;
   onClose:       () => void;
   onRaiseQuery:  (group: string, ledger: string, entryNote?: string) => void;
   /** Phase 2C: voucher IDs with anomaly flags — shown with amber highlight */
@@ -170,10 +173,10 @@ function buildTableItems(
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function LedgerSidePanel({
-  open, ledgerName, parentGroup, clientId, financialYear, onClose, onRaiseQuery,
+  open, ledgerName, parentGroup, clientId, financialYear, engagementId, onClose, onRaiseQuery,
   flaggedVoucherIds = new Set(),
 }: Props) {
-  const { tallyEngId, loading: resolving } = useTallyEngagementId(clientId, financialYear);
+  const { tallyEngId, loading: resolving } = useTallyEngagementId(clientId, financialYear, engagementId);
 
   const [vouchers,    setVouchers]    = useState<LedgerVoucher[]>([]);
   const [tbRow,       setTbRow]       = useState<TBRow | null>(null);
