@@ -79,6 +79,10 @@ interface EditableCellProps {
   onResetToAuto?:  () => void;
   isOverridden?:   boolean;
   isAutoFilled?:   boolean;
+  /** When true and !isOverridden, renders a read-only f(x) display with a pencil-to-override UX. */
+  isLocked?:       boolean;
+  /** Called when the user completes the override form. Falls back to onCommit when omitted. */
+  onOverride?:     (amount: number, reason: string) => void;
   type?:           "number" | "text";
   placeholder?:    string;
   className?:      string;
@@ -87,12 +91,97 @@ interface EditableCellProps {
 
 export function EditableCell({
   value, autoValue, onCommit, onResetToAuto,
-  isOverridden, isAutoFilled,
+  isOverridden, isAutoFilled, isLocked, onOverride,
   type = "number", placeholder, className, disabled,
 }: EditableCellProps) {
-  const [focused, setFocused] = useState(false);
-  const [draft,   setDraft]   = useState<string>("");
+  const [focused,        setFocused]        = useState(false);
+  const [draft,          setDraft]          = useState<string>("");
+  const [overrideOpen,   setOverrideOpen]   = useState(false);
+  const [overrideAmt,    setOverrideAmt]    = useState("");
+  const [overrideReason, setOverrideReason] = useState("");
   const fsUnits = useFsUnits();
+
+  const handleOverrideSave = () => {
+    const t = overrideAmt.trim();
+    if (!t || !overrideReason.trim()) return;
+    const parsed = Number(t.replace(/,/g, ""));
+    if (!Number.isFinite(parsed)) return;
+    const actual = parsed * fsUnits.meta.divisor;
+    if (onOverride) {
+      onOverride(actual, overrideReason.trim());
+    } else {
+      onCommit(actual);
+    }
+    setOverrideOpen(false);
+    setOverrideAmt("");
+    setOverrideReason("");
+  };
+
+  // ── Locked path (auto-populated from TB, requires override form to edit) ──
+  if (isLocked && !isOverridden && !disabled) {
+    if (overrideOpen) {
+      return (
+        <div className="flex flex-col gap-1 p-1.5 rounded border border-blue-300 bg-blue-50/60">
+          <input
+            autoFocus
+            type="text"
+            inputMode="decimal"
+            placeholder="New amount"
+            value={overrideAmt}
+            onChange={(e) => setOverrideAmt(e.target.value)}
+            className="w-full text-right border rounded px-1 py-0.5 bg-white text-[11px] outline-none focus:ring-1 focus:ring-blue-400"
+          />
+          <input
+            type="text"
+            placeholder="Reason for override (required)"
+            value={overrideReason}
+            onChange={(e) => setOverrideReason(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") handleOverrideSave(); }}
+            className="w-full border rounded px-1 py-0.5 bg-white text-[11px] outline-none focus:ring-1 focus:ring-blue-400"
+          />
+          <div className="flex justify-end gap-1 mt-0.5">
+            <button
+              type="button"
+              onClick={() => { setOverrideOpen(false); setOverrideAmt(""); setOverrideReason(""); }}
+              className="text-[10px] px-2 py-0.5 rounded border hover:bg-muted text-muted-foreground"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleOverrideSave}
+              disabled={!overrideReason.trim() || !overrideAmt.trim()}
+              className="text-[10px] px-2 py-0.5 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className={cn("flex items-center gap-1 rounded px-1 border border-blue-200 bg-blue-50/30", className)}>
+        <span className="flex-1 text-right tabular-nums text-[11px] text-blue-900 dark:text-blue-200 select-none">
+          {fsUnits.format(Number(value ?? 0))}
+          <sup className="ml-0.5 text-[8px] font-bold text-blue-500 align-super">f(x)</sup>
+        </span>
+        <button
+          type="button"
+          onClick={() => {
+            const raw = (value === 0 || value === null || value === undefined)
+              ? ""
+              : String(fsUnits.scaleAmount(Number(value)));
+            setOverrideAmt(raw);
+            setOverrideOpen(true);
+          }}
+          title="Auto-computed from TB. Click to override."
+          className="shrink-0 p-0.5 rounded hover:bg-blue-100 text-blue-400 hover:text-blue-600 transition-colors"
+        >
+          <Pencil size={10} />
+        </button>
+      </div>
+    );
+  }
 
   const display = focused
     ? draft
@@ -592,7 +681,7 @@ function ListRowWithSources({
           </div>
           {isLinked && (
             <span
-              title={r.linked_ledger ? `Linked from COA ledger: ${r.linked_ledger}` : "Linked from COA mapping"}
+              title={r.linked_ledger ? `Linked from TB ledger: ${r.linked_ledger} — amounts locked (click f(x) pencil to override)` : "Linked from TB — amounts locked"}
               className="shrink-0 inline-flex items-center px-1 py-[1px] rounded text-[8px] font-semibold uppercase tracking-wide border border-blue-300 bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-200"
             >
               Linked
@@ -600,10 +689,10 @@ function ListRowWithSources({
           )}
           {isManual && (
             <span
-              title="Manually entered — re-sync from COA will not change this row"
+              title={r.override_reason ? `Overridden — reason: ${r.override_reason}` : "Manually entered — re-sync from COA will not change this row"}
               className="shrink-0 inline-flex items-center px-1 py-[1px] rounded text-[8px] font-semibold uppercase tracking-wide border border-amber-300 bg-amber-50 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200"
             >
-              Manual
+              {r.override_reason ? "Overridden" : "Manual"}
             </span>
           )}
         </div>
@@ -612,6 +701,8 @@ function ListRowWithSources({
             value={r.amount_cy ?? 0}
             isAutoFilled={isLinked}
             isOverridden={isManual && (r.amount_cy ?? 0) !== 0}
+            isLocked={isLinked}
+            onOverride={(amt, reason) => update(origIdx, { amount_cy: amt, override_reason: reason })}
             onCommit={(v) => update(origIdx, { amount_cy: v == null ? 0 : Number(v) })}
           />
         </div>
@@ -620,6 +711,8 @@ function ListRowWithSources({
             value={r.amount_py ?? 0}
             isAutoFilled={isLinked}
             isOverridden={isManual && (r.amount_py ?? 0) !== 0}
+            isLocked={isLinked}
+            onOverride={(amt, reason) => update(origIdx, { amount_py: amt, override_reason: reason })}
             onCommit={(v) => update(origIdx, { amount_py: v == null ? 0 : Number(v) })}
           />
         </div>
@@ -670,6 +763,8 @@ export interface ListRow {
   subgroup_id?: string;
   /** When this row consolidates multiple TB ledgers, lists the underlying ledgers + amounts. */
   sources?: { ledger: string; amount_cy: number; amount_py: number }[];
+  /** Auditor's stated reason when manually overriding a TB-linked amount. */
+  override_reason?: string;
 }
 
 /** Generate a short unique ID for new group headers. */
