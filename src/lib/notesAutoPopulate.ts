@@ -1339,6 +1339,56 @@ export function sumNotesSubRowsPY(
   }, 0);
 }
 
+// ─── Bug 6 — FA Grid Net Block total (for BS PPE Phase E parity) ─────────────
+//
+// FA grid stores rows as { gross_open, additions, disposals, depn_open,
+// depn_add, depn_disp } — the closing net block is computed:
+//
+//   gross_close = gross_open + additions − disposals
+//   depn_close  = depn_open  + depn_add  − depn_disp
+//   net_close   = gross_close − depn_close
+//
+// Returns the sum of net_close across all rows for CY, or the sum of
+// (gross_open − depn_open) for PY.  Returns null when the grid is empty
+// so callers fall back to raw TB cyOf("BS_NCA_FA").
+export function getFAGridNetBlockTotal(
+  notesData: Stage5Notes | null | undefined,
+  column:    "cy" | "py",
+): number | null {
+  const rows: any[] = Array.isArray(notesData?.fa?.rows) ? notesData!.fa!.rows as any[] : [];
+  if (!rows.length) return null;
+  const num = (v: any): number => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+  if (column === "cy") {
+    let total = 0;
+    let anyData = false;
+    for (const r of rows) {
+      if (!r || typeof r !== "object") continue;
+      const grossClose = num(r.gross_open) + num(r.additions) - num(r.disposals);
+      const depnClose  = num(r.depn_open)  + num(r.depn_add)  - num(r.depn_disp);
+      total += grossClose - depnClose;
+      if (num(r.gross_open) || num(r.additions) || num(r.disposals) ||
+          num(r.depn_open)  || num(r.depn_add)  || num(r.depn_disp)) {
+        anyData = true;
+      }
+    }
+    return anyData ? total : null;
+  }
+  // PY = (gross_open − depn_open), per netPY in FAGrid.tsx
+  let total = 0;
+  let anyData = false;
+  for (const r of rows) {
+    if (!r || typeof r !== "object") continue;
+    const g = num(r.gross_open);
+    const d = num(r.depn_open);
+    total += g - d;
+    if (g || d) anyData = true;
+  }
+  return anyData ? total : null;
+}
+
 // ─── Bug 1 — Shares Outstanding (for EPS divisor) ─────────────────────────────
 //
 // Sum the `share_count_cy` / `share_count_py` fields on Share Capital breakup

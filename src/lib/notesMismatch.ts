@@ -22,6 +22,7 @@
  */
 
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
+import { getFAGridNetBlockTotal } from "@/lib/notesAutoPopulate";
 
 // ─── Bug 3 — Strict empty-amount check ────────────────────────────────────────
 // null / undefined / "" / whitespace strings are NOT populated.
@@ -167,6 +168,8 @@ export function detectMismatches(
     // Skip notes where the headline total is zero — nothing to check
     if (bsAmount === 0) continue;
 
+    // (PPE handled separately at end of loop)
+
     // ── Bug 3 — Bespoke per-key sum logic ─────────────────────────────────────
     // Some notes (Trade Payables, etc.) store their detail in dedicated fields
     // rather than a breakup[] array.  The generic reducer would either miss
@@ -207,6 +210,37 @@ export function detectMismatches(
       subTabKey:     meta.subTab,
       sectionAnchor: `note-${noteNo}`,
     });
+  }
+
+  // ── Bug 6 — PPE / FA grid mismatch ─────────────────────────────────────────
+  // The FA grid lives at notesData.fa.rows (not in bs_asset.ppe.breakup[])
+  // so it is excluded from the generic loop above.  Compare the FA grid's
+  // computed Net Block total against the BS face value (cyOf BS_NCA_FA).
+  // The BS face is fed by the same FA total (Bug 6 in PipelineFinancialStatements),
+  // so a mismatch here only appears when fsDisplayData was computed with
+  // raw TB and the FA grid was edited subsequently — i.e. a stale-render
+  // safety check.  The headline total to compare against is
+  // notesData.bs_asset.ppe.cy (manually edited) when present, falling back
+  // to nothing (no mismatch when the grid is empty).
+  const ppeNoteNo = registry.get("ppe");
+  if (ppeNoteNo !== undefined) {
+    const faTotalCy = getFAGridNetBlockTotal(notesData, "cy");
+    const ppeNoteRow = (notesData?.bs_asset as Record<string, any> | undefined)?.ppe;
+    const ppeHeadline = Number(ppeNoteRow?.cy ?? 0);
+    if (faTotalCy != null && ppeHeadline !== 0) {
+      const diff = ppeHeadline - faTotalCy;
+      if (Math.abs(diff) >= 1) {
+        mismatches.push({
+          noteNo:        ppeNoteNo,
+          label:         "PPE & Intangible Assets",
+          bsAmount:      ppeHeadline,
+          notesSum:      faTotalCy,
+          difference:    diff,
+          subTabKey:     "fa",
+          sectionAnchor: `note-${ppeNoteNo}`,
+        });
+      }
+    }
   }
 
   // Sort by note number for consistent display

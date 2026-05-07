@@ -47,7 +47,7 @@ import {
   type NoteConfig,
 } from "@/config/nceNotesConfig";
 import { computeNceDynamicNoteMap } from "@/lib/nceDynamicNoteNumbers";
-import { sumNotesSubRowsCY, sumNotesSubRowsPY, getSharesOutstanding } from "@/lib/notesAutoPopulate";
+import { sumNotesSubRowsCY, sumNotesSubRowsPY, getSharesOutstanding, getFAGridNetBlockTotal } from "@/lib/notesAutoPopulate";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 import { isTallyPLAccount } from "@/lib/tallyDetection";
 
@@ -2788,7 +2788,9 @@ export default function PipelineFinancialStatements({
         tradePayOthers:  { cy: ncyOf("bs_liab","trade_payables","BS_CL_TP"),       py: npyOf("bs_liab","trade_payables","BS_CL_TP")       },
         otherCurrLiab:   { noteNo: dn("other_current_liab"),   cy: ncyOf("bs_liab","other_current_liab","BS_CL_OCL"),         py: npyOf("bs_liab","other_current_liab","BS_CL_OCL")         },
         stProvisions:    { noteNo: dn("st_provisions"),        cy: ncyOf("bs_liab","st_provisions","BS_CL_STP"),              py: npyOf("bs_liab","st_provisions","BS_CL_STP")              },
-        ppe:             { noteNo: dn("ppe"),                  cy: cyOf("BS_NCA_FA"),  py: pyOf("BS_NCA_FA")  }, // FA grid — no breakup[]
+        // Bug 6 — PPE prefers FA grid Net Block total over raw TB.
+        // Falls back to cyOf/pyOf("BS_NCA_FA") when the FA grid has no rows.
+        ppe:             { noteNo: dn("ppe"),                  cy: getFAGridNetBlockTotal(stage5NotesData ?? null, "cy") ?? cyOf("BS_NCA_FA"),  py: getFAGridNetBlockTotal(stage5NotesData ?? null, "py") ?? pyOf("BS_NCA_FA") },
         ncInvestments:   { noteNo: dn("nc_investments"),       cy: ncyOf("bs_asset","nc_investments","BS_NCA_INV"),           py: npyOf("bs_asset","nc_investments","BS_NCA_INV")           },
         dtAssets:        { noteNo: dn("deferred_tax_assets"),  cy: ncyOf("bs_asset","deferred_tax_assets","BS_NCA_DTA"),      py: npyOf("bs_asset","deferred_tax_assets","BS_NCA_DTA")      },
         ltLoans:         { noteNo: dn("lt_loans_advances"),    cy: ncyOf("bs_asset","lt_loans_advances","BS_NCA_LLA"),        py: npyOf("bs_asset","lt_loans_advances","BS_NCA_LLA")        },
@@ -2948,6 +2950,13 @@ export default function PipelineFinancialStatements({
           if (sum == null) continue;
           out[code] = section === "bs_liab" ? -sum : sum;
         }
+        // Bug 6 — NCE PPE / CWIP / Intangibles use the FA grid total when
+        // populated.  CWIP and Intangibles share the PPE note number per
+        // NCE_CODE_TO_NOTE_KEY, but they're not separated in the FA grid;
+        // we apply the total only to NCE_PPE so the remaining two columns
+        // continue to read from raw TB (their own ledgers).
+        const faCy = getFAGridNetBlockTotal(stage5NotesData ?? null, "cy");
+        if (faCy != null) out["NCE_PPE"] = faCy;
         return out;
       })()
     : computedAmounts;
@@ -2961,6 +2970,8 @@ export default function PipelineFinancialStatements({
           if (sum == null) continue;
           out[code] = section === "bs_liab" ? -sum : sum;
         }
+        const faPy = getFAGridNetBlockTotal(stage5NotesData ?? null, "py");
+        if (faPy != null) out["NCE_PPE"] = faPy;
         return out;
       })()
     : mergedPY;
