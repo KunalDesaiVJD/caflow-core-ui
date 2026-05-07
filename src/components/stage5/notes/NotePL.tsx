@@ -61,7 +61,26 @@ export default function NotePL({
   ) => {
     const path = `pl.${key}.breakup`;
     const rows: ListRow[] = (get(path) ?? []) as ListRow[];
-    const effPY = effectivePY(key);
+
+    // Bug 2 — "Total per P&L" row is now READ-ONLY and computed.
+    // It is the strict mathematical sum of breakup rows (numeric coercion;
+    // null / undefined / empty-string treated as 0).  Falls back to the
+    // stored cy/py only when no breakup row is populated.
+    const sumCy = rows.reduce((s, r) => {
+      const v = r?.amount_cy;
+      const n = Number(v);
+      return s + (Number.isFinite(n) ? n : 0);
+    }, 0);
+    const sumPy = rows.reduce((s, r) => {
+      const v = r?.amount_py;
+      const n = Number(v);
+      return s + (Number.isFinite(n) ? n : 0);
+    }, 0);
+    const hasAnyBreakupCy = rows.some(r => r != null && r.amount_cy != null && r.amount_cy !== "");
+    const hasAnyBreakupPy = rows.some(r => r != null && r.amount_py != null && r.amount_py !== "");
+    const totalCy = hasAnyBreakupCy ? sumCy : cy(key);
+    const totalPy = hasAnyBreakupPy ? sumPy : effectivePY(key);
+
     return (
       <NoteCard collapseControl={collapseControl} noteNo={noteNo} title={title}>
         <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
@@ -75,14 +94,9 @@ export default function NotePL({
         />
         <EditableRow
           label={`Total — ${title} (per P&L)`}
-          cy={cy(key)} py={effPY}
-          autoCY={cy(key)} autoPY={effPY}
-          isOverriddenCy={isOverridden(`pl.${key}.cy`)}
-          isOverriddenPy={isOverridden(`pl.${key}.py`)}
-          onCommitCy={(v) => updatePath(`pl.${key}.cy`, v)}
-          onCommitPy={(v) => updatePath(`pl.${key}.py`, v)}
-          onResetCy={() => resetPath(`pl.${key}.cy`)}
-          onResetPy={() => resetPath(`pl.${key}.py`)}
+          cy={totalCy} py={totalPy}
+          /* No commit/reset handlers → row is read-only.  To change the total,
+             edit the underlying breakup rows. */
           bold
         />
       </NoteCard>

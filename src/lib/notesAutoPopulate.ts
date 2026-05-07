@@ -1293,6 +1293,16 @@ export async function resyncStage5Notes(engagementId: string): Promise<Stage5Not
  * Sum of all non-null `amount_cy` values in the breakup array for the given
  * note section + key.  Returns null when the note has no populated sub-rows.
  */
+// Bug 2/3 — strict "non-null" check: null / undefined / "" / whitespace
+// strings are NOT considered populated.  Numeric 0 IS populated (auditor
+// may explicitly enter zero).  Used by both sumNotesSubRows* and the
+// mismatch detector so populated-row checks stay consistent.
+function isNonEmptyAmount(v: any): boolean {
+  if (v === null || v === undefined) return false;
+  if (typeof v === "string" && v.trim() === "") return false;
+  return true;
+}
+
 export function sumNotesSubRowsCY(
   notesData: Stage5Notes | null | undefined,
   section:   "bs_liab" | "bs_asset" | "pl",
@@ -1301,9 +1311,12 @@ export function sumNotesSubRowsCY(
   const noteRow = (notesData?.[section] as Record<string, any> | undefined)?.[key];
   if (!noteRow) return null;
   const breakup: any[] = Array.isArray(noteRow.breakup) ? noteRow.breakup : [];
-  const populated = breakup.filter(r => r != null && r.amount_cy != null);
+  const populated = breakup.filter(r => r != null && isNonEmptyAmount(r.amount_cy));
   if (!populated.length) return null;
-  return populated.reduce((s: number, r: any) => s + Number(r.amount_cy ?? 0), 0);
+  return populated.reduce((s: number, r: any) => {
+    const n = Number(r.amount_cy);
+    return s + (Number.isFinite(n) ? n : 0);
+  }, 0);
 }
 
 /**
@@ -1318,9 +1331,12 @@ export function sumNotesSubRowsPY(
   const noteRow = (notesData?.[section] as Record<string, any> | undefined)?.[key];
   if (!noteRow) return null;
   const breakup: any[] = Array.isArray(noteRow.breakup) ? noteRow.breakup : [];
-  const populated = breakup.filter(r => r != null && r.amount_py != null);
+  const populated = breakup.filter(r => r != null && isNonEmptyAmount(r.amount_py));
   if (!populated.length) return null;
-  return populated.reduce((s: number, r: any) => s + Number(r.amount_py ?? 0), 0);
+  return populated.reduce((s: number, r: any) => {
+    const n = Number(r.amount_py);
+    return s + (Number.isFinite(n) ? n : 0);
+  }, 0);
 }
 
 // ─── Bug 1 — Shares Outstanding (for EPS divisor) ─────────────────────────────
