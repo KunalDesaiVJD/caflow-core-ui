@@ -164,13 +164,6 @@ export function detectMismatches(
     const noteRow = sectionData[key];
     if (!noteRow) continue;
 
-    const bsAmount = Number(noteRow.cy ?? 0);
-
-    // Skip notes where the headline total is zero — nothing to check
-    if (bsAmount === 0) continue;
-
-    // (PPE handled separately at end of loop)
-
     // ── Bug 3 — Bespoke per-key sum logic ─────────────────────────────────────
     // Some notes (Trade Payables, etc.) store their detail in dedicated fields
     // rather than a breakup[] array.  The generic reducer would either miss
@@ -193,6 +186,26 @@ export function detectMismatches(
         return s + (Number.isFinite(n) ? n : 0);
       }, 0);
     }
+
+    // ── Phase E parity — bsAmount must reflect what the auditor SEES on the
+    // BS / P&L face and on the "Total per BS" row of the note. After the
+    // Phase E migration both surfaces use the BREAKUP SUM when populated,
+    // falling back to the stored .cy headline only when the breakup is empty.
+    // Reading the raw stored .cy here produces false-positive mismatches every
+    // time the auditor manually adds/edits a breakup row (KWIKTEAM Note 11
+    // Other Income: stored .cy=7,948, breakup sum=12,948 — both surfaces
+    // correctly displayed 12,948 but the panel kept flagging a "20,896 diff").
+    //
+    // New rule: bsAmount = breakup sum when populated, else absolute stored
+    // .cy. The mismatch panel then only fires when there is a real schema-
+    // level inconsistency (e.g. a sub-row with non-numeric data that drops
+    // out of notesSum but contributes to .cy elsewhere) — never on routine
+    // manual edits.
+    const storedCy = Math.abs(Number(noteRow.cy ?? 0));
+    const bsAmount = hasUserData ? notesSum : storedCy;
+
+    // Skip notes where the effective amount is zero — nothing to check
+    if (bsAmount === 0) continue;
 
     // Only flag when the auditor has actually populated some detail.
     if (!hasUserData) continue;
