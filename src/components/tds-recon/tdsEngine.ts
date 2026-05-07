@@ -9,12 +9,21 @@ import { supabase } from "@/integrations/supabase/client";
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
-const EXPENSE_TOKENS = [
-  "expense","indirect","direct","creditor","manufacturing","trading",
-  "administrative","selling","salary","wages","rent","commission","professional",
-  "maintenance","contractor","service","freight","transport","advertisement",
-  "advertising","outsource","miscellaneous","other","general",
-];
+// Issue 3 (root-cause fix): the TB Ledger column should ONLY show *party*
+// ledgers (Sundry Creditors, party Current Liabilities, etc.) — never income
+// or expense ledgers. Earlier we also matched groups containing "expense",
+// "indirect", "direct" etc. which pulled in nominal-account ledgers like
+// "Depreciation", "Professional Fees Income-18%", "Travelling Expense" and
+// presented them as if they were parties. We now restrict the universe to
+// genuine party-bearing groups.
+//
+// "creditor"      → Sundry Creditors / Creditor for Employees / Trade Creditors
+// "loan"          → Loans from / Loan accounts (party loans only — see SKIP)
+// (Optional later: "current liabilit" — only when individual party rows are
+//  identifiable. Today many clients dump CC/credit cards there, so we keep
+//  it OFF until we have a per-row party detector.)
+const EXPENSE_TOKENS = ["creditor"];
+
 const SKIP_TOKENS = [
   "bank account","cash-in-hand","cash in hand","capital account","reserves",
   "fixed assets","investment","duties & taxes","duties and taxes","sundry debtor",
@@ -38,6 +47,60 @@ function isExpenseGroup(pg: string | null): boolean {
   // Allow services; exclude goods/inventory unless section context is 194Q (checked downstream)
   if (isGoodsGroup(lower)) return false;
   return EXPENSE_TOKENS.some(t => lower.includes(t));
+}
+
+// ─── Section-prescribed TDS rates (Income Tax Act, FY 2025-26) ───────────────
+// Used to validate that the TDS amount in the filing is consistent with the
+// section. Range = [min %, max %] — e.g. 194C is 1% (individual) or 2% (firm).
+// 192/192A are slab-based so we accept any positive deduction.
+const SECTION_TDS_RATE: Record<string, [number, number] | "slab"> = {
+  "192":   "slab",      // Salary slab
+  "192A":  [10, 10],    // PF withdrawal
+  "193":   [10, 10],    // Interest on securities
+  "194":   [10, 10],    // Dividend
+  "194A":  [10, 10],    // Interest other than securities
+  "194B":  [30, 30],    // Lottery / crossword
+  "194BB": [30, 30],    // Horse races
+  "194C":  [1, 2],      // Contractors (1 % indiv / 2 % company)
+  "194D":  [5, 5],      // Insurance commission
+  "194DA": [5, 5],
+  "194E":  [20, 20],
+  "194EE": [10, 10],
+  "194F":  [20, 20],
+  "194G":  [5, 5],
+  "194H":  [5, 5],      // Commission / brokerage
+  "194I":  [10, 10],    // Rent — land/building
+  "194IB": [5, 5],      // Rent by individual/HUF
+  "194IC": [10, 10],
+  "194J":  [2, 10],     // Professional / technical (2 % technical, 10 % professional)
+  "194K":  [10, 10],
+  "194LA": [10, 10],
+  "194M":  [5, 5],      // Contractor by individual/HUF
+  "194N":  [2, 5],      // Cash withdrawal
+  "194Q":  [0.1, 0.1],  // Purchase of goods
+  "194R":  [10, 10],
+  "194S":  [1, 1],
+  "195":   [10, 30],
+};
+
+/**
+ * Issue 1: Validate that the deducted TDS implied rate matches the section's
+ * prescribed rate (within ±20 % tolerance to allow surcharge/cess).
+ * Returns true ONLY when rate is consistent — used for "Confirmed" gating.
+ */
+export function tdsRateMatchesSection(
+  section: string | null,
+  gross: number,
+  tds: number,
+): boolean {
+  if (!section || gross <= 0 || tds <= 0) return false;
+  const range = SECTION_TDS_RATE[section];
+  if (!range) return tds > 0;            // unknown section → only require >0
+  if (range === "slab") return tds > 0;  // slab-based — auditor reviews manually
+  const impliedRate = (tds / gross) * 100;
+  const [lo, hi] = range;
+  // ±20 % tolerance for surcharge / cess and rounding
+  return impliedRate >= lo * 0.8 && impliedRate <= hi * 1.25;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -295,13 +358,18 @@ export async function runAiMapper(params: {
 
     const tbActivity = Math.max(tb.debit_amount ?? 0, tb.credit_amount ?? 0);
 
-    // "Confirmed" requires ALL three:
-    //   1. Strong name match (≥ 90%)
-    //   2. Gross amount match (≥ 75%) — GST-normalised so TB (incl. GST) ÷ 1.18 is also accepted
+    // Issue 1 (root-cause fix): "Confirmed" now requires ALL FOUR criteria —
+    //   1. Strong name match (≥ 90 %)
+    //   2. Gross amount match (≥ 75 %) — GST-normalised so TB (incl. GST) ÷ 1.18 is also accepted
     //   3. TDS was actually deducted in the filing (total_tds > 0)
+    //   4. Implied TDS rate matches the section's prescribed rate
+    //      (e.g. 194C ≈ 1-2 %, 194J ≈ 10 %). Without this check, the system
+    //      auto-confirms party rows even when the TDS amount in the filing
+    //      is for a different invoice/period than the TB ledger balance.
     const grossOk  = best.amtScore >= 75;
     const tdsOk    = best.ded.total_tds > 0;
-    const bothMatch = best.nameScore >= 90 && grossOk && tdsOk;
+    const rateOk   = tdsRateMatchesSection(best.ded.section_code, best.ded.total_amount_paid, best.ded.total_tds);
+    const bothMatch = best.nameScore >= 90 && grossOk && tdsOk && rateOk;
     const mapping_status =
       bothMatch                    ? "confirmed"   :
       best.confidence >= 60        ? "pending"     :
@@ -312,11 +380,15 @@ export async function runAiMapper(params: {
     const grossLabel = best.gstAdjusted
       ? `TB ₹${tbActivity.toFixed(0)} (incl. GST) ≈ TDS ₹${best.ded.total_amount_paid.toFixed(0)} after ÷1.18`
       : `TB ₹${tbActivity.toFixed(0)} vs TDS ₹${best.ded.total_amount_paid.toFixed(0)}`;
+    const impliedRate = best.ded.total_amount_paid > 0
+      ? ((best.ded.total_tds / best.ded.total_amount_paid) * 100).toFixed(2)
+      : "—";
     const reasoning =
       `Name: ${best.nameScore}%, ` +
       `Gross amount: ${best.amtScore}% (${grossLabel}), ` +
-      `TDS deducted: ₹${best.ded.total_tds.toFixed(0)}, ` +
-      `Section: ${best.secScore}% (group: "${tb.parent_group}", section: ${best.ded.section_code ?? "n/a"}). ` +
+      `TDS deducted: ₹${best.ded.total_tds.toFixed(0)} ` +
+      `(implied rate ${impliedRate}% — ${rateOk ? "✓ matches" : "✗ does not match"} section ${best.ded.section_code ?? "?"}), ` +
+      `Section context: ${best.secScore}% (group: "${tb.parent_group}"). ` +
       `Composite: ${best.confidence}%.` +
       (diffNote ? ` Analysis: ${diffNote}` : "");
 

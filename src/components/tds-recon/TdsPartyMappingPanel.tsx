@@ -31,6 +31,7 @@ import { toast } from "sonner";
 import {
   useTdsPartyMappings, MappingStatus, TbPartyMapping,
 } from "./hooks/useTdsPartyMappings";
+import { usePartyExpenseLedgers } from "./hooks/usePartyExpenseLedgers";
 import { runAiMapper } from "./tdsEngine";
 
 // ─── Common TDS sections for the edit dropdown ────────────────────────────────
@@ -203,6 +204,11 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
     mappings, loading, error, counts, firmId,
     refresh, updateStatus, updateMapping,
   } = useTdsPartyMappings(clientId, financialYear);
+
+  // Issue 3 (root-cause fix): walk tally_vouchers to find which expense
+  // ledgers were booked against each party. Shown as sub-lines under the
+  // party name in the TB Ledger column.
+  const { byParty: partyExpenses } = usePartyExpenseLedgers(clientId, financialYear);
 
   const [running,     setRunning]     = useState(false);
   const [filterStatus, setFilterStatus] = useState<FilterStatus>("all");
@@ -387,7 +393,11 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
                   {/* Main row */}
                   <div className="grid grid-cols-[1fr_1fr_80px_100px_110px_130px] gap-2 items-center px-4 py-2.5">
 
-                    {/* TB Ledger */}
+                    {/* TB Ledger — Issue 3 root-cause fix:
+                        only party ledgers reach this row (filter in tdsEngine
+                        restricts to "creditor" groups). The expense ledgers
+                        actually booked against this party are shown below as
+                        sub-lines, pulled from voucher line_items. */}
                     <div>
                       <p className="text-xs font-medium truncate" title={m.tb_ledger_name}>
                         {m.tb_ledger_name}
@@ -401,9 +411,35 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
                           <span className="text-[9px] italic ml-1">(incl. GST)</span>
                         </p>
                       )}
-                      {/* Issue 5: ledger access link */}
+                      {/* Expense ledgers booked against this party (top 3) */}
+                      {(() => {
+                        const expenses = partyExpenses.get((m.tb_ledger_name || "").toLowerCase().trim()) ?? [];
+                        if (expenses.length === 0) return null;
+                        const top = expenses.slice(0, 3);
+                        return (
+                          <div className="mt-1 pl-2 border-l-2 border-blue-200 space-y-0.5">
+                            {top.map(e => (
+                              <p key={e.ledger} className="text-[10px] text-blue-700/90 truncate" title={`${e.ledger} · ${e.count} voucher${e.count === 1 ? "" : "s"}`}>
+                                ↳ {e.ledger}
+                                <span className="text-[9px] text-blue-700/60 ml-1">
+                                  ₹{e.amount.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
+                                </span>
+                              </p>
+                            ))}
+                            {expenses.length > 3 && (
+                              <p className="text-[9px] text-muted-foreground italic">
+                                + {expenses.length - 3} more
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })()}
+                      {/* Issue 2 (root-cause fix): the previous route
+                          /audit/stage/5?ledger=… does not exist in App.tsx
+                          (404). Real route is registered at line 217:
+                          /audit/tally-sync/ledger/:ledgerName → LedgerVouchersView. */}
                       <Link
-                        to={`/audit/stage/5?ledger=${encodeURIComponent(m.tb_ledger_name)}`}
+                        to={`/audit/tally-sync/ledger/${encodeURIComponent(m.tb_ledger_name)}`}
                         className="inline-flex items-center gap-1 text-[10px] text-blue-600 hover:underline mt-0.5"
                       >
                         <ExternalLink size={9} /> View ledger
@@ -416,45 +452,74 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
                         {m.tds_deductee_name}
                       </p>
 
-                      {/* Gross amount row with match indicator */}
+                      {/* Gross amount row with match indicator + GST breakup.
+                          Issue 1: when the TB amount equals tdsGross × 1.18,
+                          show the explicit taxable + GST 18% split so the
+                          auditor sees exactly why the figures reconcile. */}
                       {m.tds_total_amount != null && (() => {
                         const tbGross = m.tb_total_debit ?? 0;
                         const tdsGross = m.tds_total_amount;
                         const ratio = tbGross > 0 ? tdsGross / tbGross : 0;
                         const ratioNet = tbGross > 0 ? tdsGross / (tbGross / 1.18) : 0;
-                        const grossMatch = (ratio >= 0.75 && ratio <= 1.35) || (Math.abs(ratioNet - 1) < 0.10);
-                        const gstCause  = !grossMatch && ratio < 0.75 && Math.abs(ratioNet - 1) < 0.15;
+                        // Treat as "GST-included" when TB÷1.18 ≈ TDS gross
+                        const gstIncluded = Math.abs(ratioNet - 1) < 0.05;
+                        const grossMatch  = (ratio >= 0.75 && ratio <= 1.35) || gstIncluded;
+                        const gstCause    = !grossMatch && ratio < 0.75 && Math.abs(ratioNet - 1) < 0.15;
+                        const gstAmount   = gstIncluded ? Math.round(tbGross - tdsGross) : 0;
                         return (
-                          <div className="flex items-center gap-1">
-                            {grossMatch
-                              ? <BadgeCheck size={9} className="text-green-500 shrink-0" />
-                              : <AlertTriangle size={9} className={cn("shrink-0", gstCause ? "text-amber-500" : "text-red-400")} />}
-                            <span className="text-[10px] text-muted-foreground">
-                              Gross: ₹{tdsGross.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
-                            </span>
-                            {!grossMatch && gstCause && (
-                              <span className="text-[9px] text-amber-600 italic">+GST?</span>
+                          <>
+                            <div className="flex items-center gap-1">
+                              {grossMatch
+                                ? <BadgeCheck size={9} className="text-green-500 shrink-0" />
+                                : <AlertTriangle size={9} className={cn("shrink-0", gstCause ? "text-amber-500" : "text-red-400")} />}
+                              <span className="text-[10px] text-muted-foreground">
+                                Gross: ₹{tdsGross.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
+                              </span>
+                              {!grossMatch && gstCause && (
+                                <span className="text-[9px] text-amber-600 italic">+GST?</span>
+                              )}
+                            </div>
+                            {gstIncluded && gstAmount > 0 && (
+                              <div className="text-[9px] text-muted-foreground/80 italic ml-3.5">
+                                = ₹{tdsGross.toLocaleString("en-IN", { maximumFractionDigits: 0 })} (taxable)
+                                {" + "}
+                                ₹{gstAmount.toLocaleString("en-IN", { maximumFractionDigits: 0 })} (GST 18%)
+                              </div>
                             )}
-                          </div>
+                          </>
                         );
                       })()}
 
-                      {/* TDS deducted row */}
-                      {m.tds_tds_amount != null ? (
-                        <div className="flex items-center gap-1">
-                          {m.tds_tds_amount > 0
-                            ? <BadgeCheck size={9} className="text-green-500 shrink-0" />
-                            : <AlertTriangle size={9} className="text-red-400 shrink-0" />}
-                          <span className="text-[10px] text-muted-foreground">
-                            TDS: ₹{m.tds_tds_amount.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
-                            {m.tds_tds_amount <= 0 && (
-                              <span className="text-red-400 ml-1 italic">no TDS filed</span>
-                            )}
-                          </span>
-                        </div>
-                      ) : (
+                      {/* TDS deducted row + implied rate vs section.
+                          Issue 1: show the implied rate (TDS ÷ taxable gross)
+                          so the auditor can see at a glance whether it is
+                          consistent with the section's prescribed rate. */}
+                      {m.tds_tds_amount != null ? (() => {
+                        const tdsGross = m.tds_total_amount ?? 0;
+                        const tds      = m.tds_tds_amount ?? 0;
+                        const impliedRate = tdsGross > 0 ? (tds / tdsGross) * 100 : 0;
+                        const tdsOk    = tds > 0;
+                        return (
+                          <div className="flex items-center gap-1">
+                            {tdsOk
+                              ? <BadgeCheck size={9} className="text-green-500 shrink-0" />
+                              : <AlertTriangle size={9} className="text-red-400 shrink-0" />}
+                            <span className="text-[10px] text-muted-foreground">
+                              TDS: ₹{tds.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
+                              {tdsOk && tdsGross > 0 && (
+                                <span className="ml-1 text-muted-foreground/70">
+                                  ({impliedRate.toFixed(2)}%)
+                                </span>
+                              )}
+                              {tds <= 0 && (
+                                <span className="text-red-400 ml-1 italic">no TDS filed</span>
+                              )}
+                            </span>
+                          </div>
+                        );
+                      })() : (
                         /* Older row without tds_tds_amount — show neutral placeholder */
-                        <span className="text-[10px] text-muted-foreground/50 italic">TDS: —</span>
+                        <span className="text-[10px] text-muted-foreground/50 italic">TDS: — (re-run mapper to populate)</span>
                       )}
                     </div>
 
