@@ -254,8 +254,46 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
     }
   }, [clientId, financialYear, firmId, refresh]);
 
-  // ── Filter mappings ──────────────────────────────────────────────────────────
-  const visible = mappings.filter(m => {
+  // ── Services-only filter (per Income Tax Act guidance) ────────────────────
+  // TDS party mappings should cover ONLY creditors where the payment is for
+  // SERVICES received from the party.  Creditors arising from purchases of
+  // goods, materials, or inventories are excluded — except those covered
+  // under Section 194Q (TDS on purchase of goods exceeding ₹50 lakh).
+  //
+  // Detection signal: walk the party's voucher line items (already loaded
+  // by usePartyExpenseLedgers) and check whether the booked expense ledgers
+  // look like goods/material purchases.  Section 194Q overrides the filter.
+  const GOODS_LEDGER_RE = /\b(purchase|raw\s*material|material(s)?|inventor(?:y|ies)|stock\s*item|stores|finished\s*goods|trading\s*goods|goods\s*purchase)\b/i;
+  const isGoodsParty = (mapping: TbPartyMapping): boolean => {
+    if (mapping.tds_section_code === "194Q") return false; // 194Q is allowed
+    const expenses = partyExpenses.get((mapping.tb_ledger_name || "").toLowerCase().trim()) ?? [];
+    if (expenses.length === 0) return false; // no voucher data — keep
+    // If MAJORITY of the booked amount goes to goods-flavoured ledgers,
+    // treat the party as a goods supplier.  Use 50 % threshold so a single
+    // small mis-classified ledger doesn't skip a genuine service party.
+    const totalAmt = expenses.reduce((s, e) => s + (e.amount || 0), 0);
+    const goodsAmt = expenses
+      .filter(e => GOODS_LEDGER_RE.test(e.ledger))
+      .reduce((s, e) => s + (e.amount || 0), 0);
+    if (totalAmt <= 0) return false;
+    return (goodsAmt / totalAmt) >= 0.5;
+  };
+
+  // ── Apply services-only filter at the BASE level so KPI chip counts and
+  // the visible list both respect it consistently.
+  const baseList = mappings.filter(m => !isGoodsParty(m));
+
+  // Effective counts after the services-only filter
+  const effectiveCounts = {
+    total:        baseList.length,
+    confirmed:    baseList.filter(m => m.mapping_status === "confirmed").length,
+    pending:      baseList.filter(m => m.mapping_status === "pending").length,
+    needs_review: baseList.filter(m => m.mapping_status === "needs_review").length,
+    rejected:     baseList.filter(m => m.mapping_status === "rejected").length,
+  };
+
+  // ── Filter mappings (status + search) ────────────────────────────────────────
+  const visible = baseList.filter(m => {
     if (filterStatus !== "all" && m.mapping_status !== filterStatus) return false;
     if (search) {
       const q = search.toLowerCase();
@@ -303,11 +341,11 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
       {/* ── Toolbar ── */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <KpiChip label="All"           count={counts.total}        color="slate"  active={filterStatus === "all"}          onClick={() => setFilterStatus("all")} />
-          <KpiChip label="Confirmed"     count={counts.confirmed}    color="green"  active={filterStatus === "confirmed"}    onClick={() => setFilterStatus("confirmed")} />
-          <KpiChip label="Pending"       count={counts.pending}      color="amber"  active={filterStatus === "pending"}      onClick={() => setFilterStatus("pending")} />
-          <KpiChip label="Needs Review"  count={counts.needs_review} color="orange" active={filterStatus === "needs_review"} onClick={() => setFilterStatus("needs_review")} />
-          <KpiChip label="Rejected"      count={counts.rejected}     color="red"    active={filterStatus === "rejected"}     onClick={() => setFilterStatus("rejected")} />
+          <KpiChip label="All"           count={effectiveCounts.total}        color="slate"  active={filterStatus === "all"}          onClick={() => setFilterStatus("all")} />
+          <KpiChip label="Confirmed"     count={effectiveCounts.confirmed}    color="green"  active={filterStatus === "confirmed"}    onClick={() => setFilterStatus("confirmed")} />
+          <KpiChip label="Pending"       count={effectiveCounts.pending}      color="amber"  active={filterStatus === "pending"}      onClick={() => setFilterStatus("pending")} />
+          <KpiChip label="Needs Review"  count={effectiveCounts.needs_review} color="orange" active={filterStatus === "needs_review"} onClick={() => setFilterStatus("needs_review")} />
+          <KpiChip label="Rejected"      count={effectiveCounts.rejected}     color="red"    active={filterStatus === "rejected"}     onClick={() => setFilterStatus("rejected")} />
         </div>
 
         <div className="flex items-center gap-2">

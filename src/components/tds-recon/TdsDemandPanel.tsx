@@ -395,34 +395,53 @@ export function TdsDemandPanel({ clientId, financialYear }: Props) {
         </div>
       )}
 
-      {/* ── KPI Summary ── */}
+      {/* ── KPI Summary ── Issue 2: headline totals show CONFIRMED demand
+           (i.e. only items the auditor has Acknowledged).  A muted
+           "of ₹X.X computed" sub-line shows the full universe so the
+           auditor can see what is still pending review. */}
       {hasItems && (
-        <div className="flex gap-2 flex-wrap">
-          <KpiBox
-            label="TDS Shortfall"
-            value={fmtINR(summary.shortfallTotal)}
-            sub={`${summary.itemCount} item${summary.itemCount !== 1 ? "s" : ""}`}
-            color="text-red-600"
-          />
-          <KpiBox
-            label="201(1A) Interest"
-            value={fmtINR(summary.interest201Total)}
-            sub="on non-deduction / late payment"
-            color="text-amber-600"
-          />
-          <KpiBox
-            label="234E Late Fees"
-            value={fmtINR(summary.fee234eTotal)}
-            sub="₹200/day late filing"
-            color="text-orange-600"
-          />
-          <KpiBox
-            label="Grand Total Demand"
-            value={fmtINR(summary.grandTotal)}
-            sub="Shortfall + Interest + Fees"
-            color="text-slate-800"
-          />
-        </div>
+        <>
+          <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+            <CheckCircle2 size={11} className="text-green-600" />
+            Headline figures reflect <strong>confirmed</strong> short deductions
+            ({summary.acknowledgedCount} of {summary.itemCount} items acknowledged).
+            Use the table below to review and Acknowledge each item.
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            <KpiBox
+              label="TDS Shortfall (Confirmed)"
+              value={fmtINR(summary.shortfallTotal)}
+              sub={summary.shortfallTotalAll !== summary.shortfallTotal
+                ? `of ${fmtINR(summary.shortfallTotalAll)} computed`
+                : `${summary.itemCount} item${summary.itemCount !== 1 ? "s" : ""}`}
+              color="text-red-600"
+            />
+            <KpiBox
+              label="201(1A) Interest (Confirmed)"
+              value={fmtINR(summary.interest201Total)}
+              sub={summary.interest201TotalAll !== summary.interest201Total
+                ? `of ${fmtINR(summary.interest201TotalAll)} computed`
+                : "on non-deduction / late payment"}
+              color="text-amber-600"
+            />
+            <KpiBox
+              label="234E Late Fees (Confirmed)"
+              value={fmtINR(summary.fee234eTotal)}
+              sub={summary.fee234eTotalAll !== summary.fee234eTotal
+                ? `of ${fmtINR(summary.fee234eTotalAll)} computed`
+                : "₹200/day late filing"}
+              color="text-orange-600"
+            />
+            <KpiBox
+              label="Grand Total Demand (Confirmed)"
+              value={fmtINR(summary.grandTotal)}
+              sub={summary.grandTotalAll !== summary.grandTotal
+                ? `of ${fmtINR(summary.grandTotalAll)} computed`
+                : "Shortfall + Interest + Fees"}
+              color="text-slate-800"
+            />
+          </div>
+        </>
       )}
 
       {/* ── Breakdown chips ── */}

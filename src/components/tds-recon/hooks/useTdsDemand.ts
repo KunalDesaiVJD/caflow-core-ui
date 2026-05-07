@@ -43,10 +43,23 @@ export interface TdsDemandItem {
 
 export interface DemandSummary {
   itemCount:         number;
+  // ── Confirmed-only totals (Acknowledged status) ─────────────────────────
+  // Headline KPIs reflect only short deductions the auditor has reviewed
+  // and confirmed via the "Acknowledge" button.  Per Income Tax Act
+  // workflow — the auditor must verify each computed item before it
+  // becomes a real demand exposure.
   shortfallTotal:    number;
   interest201Total:  number;
   fee234eTotal:      number;
   grandTotal:        number;
+  // ── Computed totals (all items the calculator surfaced) ─────────────────
+  // Used as a secondary "of ₹X.X computed" sub-text so the auditor can see
+  // the full universe of potential demand pending review.
+  shortfallTotalAll:    number;
+  interest201TotalAll:  number;
+  fee234eTotalAll:      number;
+  grandTotalAll:        number;
+  acknowledgedCount:    number;
   // by type
   shortDeductionAmt: number;
   missingTdsAmt:     number;
@@ -78,7 +91,10 @@ interface UseTdsDemandResult {
 }
 
 const EMPTY_SUMMARY: DemandSummary = {
-  itemCount: 0, shortfallTotal: 0, interest201Total: 0, fee234eTotal: 0, grandTotal: 0,
+  itemCount: 0,
+  shortfallTotal: 0, interest201Total: 0, fee234eTotal: 0, grandTotal: 0,
+  shortfallTotalAll: 0, interest201TotalAll: 0, fee234eTotalAll: 0, grandTotalAll: 0,
+  acknowledgedCount: 0,
   shortDeductionAmt: 0, missingTdsAmt: 0, acknowledged: 0, disputed: 0, settled: 0,
 };
 
@@ -122,20 +138,33 @@ export function useTdsDemand(
 
   useEffect(() => { load(); }, [load]);
 
-  // Summary
+  // Summary — Issue 2: headline totals (shortfallTotal / interest201Total /
+  // fee234eTotal / grandTotal) reflect ONLY items whose short deduction has
+  // been Acknowledged (confirmed) by the auditor.  Items still in
+  // "computed" / "disputed" / "settled" are excluded from the headline
+  // figures.  The "*All" variants retain the full computed totals for
+  // sub-text display so the auditor can see how much remains to review.
+  const ackItems = items.filter(i => i.item_status === "acknowledged");
   const summary: DemandSummary = {
-    itemCount:         items.length,
-    shortfallTotal:    items.reduce((s, i) => s + i.tds_shortfall,   0),
-    interest201Total:  items.reduce((s, i) => s + i.interest_201_1a, 0),
-    fee234eTotal:      items.reduce((s, i) => s + i.fee_234e,        0),
-    grandTotal:        items.reduce((s, i) => s + i.total_demand,    0),
-    shortDeductionAmt: items.filter(i => i.flag_type === "short_deduction")
-                            .reduce((s, i) => s + i.total_demand, 0),
-    missingTdsAmt:     items.filter(i => i.flag_type === "missing_tds_obligation")
-                            .reduce((s, i) => s + i.total_demand, 0),
-    acknowledged:      items.filter(i => i.item_status === "acknowledged").length,
-    disputed:          items.filter(i => i.item_status === "disputed").length,
-    settled:           items.filter(i => i.item_status === "settled").length,
+    itemCount:           items.length,
+    // Confirmed-only headline totals
+    shortfallTotal:      ackItems.reduce((s, i) => s + i.tds_shortfall,   0),
+    interest201Total:    ackItems.reduce((s, i) => s + i.interest_201_1a, 0),
+    fee234eTotal:        ackItems.reduce((s, i) => s + i.fee_234e,        0),
+    grandTotal:          ackItems.reduce((s, i) => s + i.total_demand,    0),
+    acknowledgedCount:   ackItems.length,
+    // Universe (all computed items, regardless of status) — for context
+    shortfallTotalAll:   items.reduce((s, i) => s + i.tds_shortfall,   0),
+    interest201TotalAll: items.reduce((s, i) => s + i.interest_201_1a, 0),
+    fee234eTotalAll:     items.reduce((s, i) => s + i.fee_234e,        0),
+    grandTotalAll:       items.reduce((s, i) => s + i.total_demand,    0),
+    shortDeductionAmt:   items.filter(i => i.flag_type === "short_deduction")
+                              .reduce((s, i) => s + i.total_demand, 0),
+    missingTdsAmt:       items.filter(i => i.flag_type === "missing_tds_obligation")
+                              .reduce((s, i) => s + i.total_demand, 0),
+    acknowledged:        ackItems.length,
+    disputed:            items.filter(i => i.item_status === "disputed").length,
+    settled:             items.filter(i => i.item_status === "settled").length,
   };
 
   // Run calculator (client-side — no edge function required)
