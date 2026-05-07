@@ -5,6 +5,13 @@
  * Although the file name says "EditableCell", it also exports the lightweight
  * layout primitives (NoteCard, SubSection, EditableRow, ListTable,
  * AgeingTable) so every note file imports from one place.
+ *
+ * Bug 9 — Restore Link is OBSOLETE.  Bug 10 removed the lock + override form
+ * (Phase C reversal) so auto-linked rows are now read-only.  With no
+ * overrides possible, there is nothing to restore.  The menu item was
+ * removed in Bug 10; the onRestoreLink prop survives only for backwards
+ * compatibility with old call sites.  To change an auto-linked amount the
+ * auditor must edit the COA mapping in Stage 6.
  */
 
 import { useState, useEffect } from "react";
@@ -91,94 +98,33 @@ interface EditableCellProps {
 
 export function EditableCell({
   value, autoValue, onCommit, onResetToAuto,
-  isOverridden, isAutoFilled, isLocked, onOverride,
+  isOverridden, isAutoFilled, isLocked, onOverride: _onOverride /* Bug 10: deprecated; kept for backwards compat */,
   type = "number", placeholder, className, disabled,
 }: EditableCellProps) {
-  const [focused,        setFocused]        = useState(false);
-  const [draft,          setDraft]          = useState<string>("");
-  const [overrideOpen,   setOverrideOpen]   = useState(false);
-  const [overrideAmt,    setOverrideAmt]    = useState("");
-  const [overrideReason, setOverrideReason] = useState("");
+  const [focused, setFocused] = useState(false);
+  const [draft,   setDraft]   = useState<string>("");
   const fsUnits = useFsUnits();
+  // Bug 10: override form state and handler removed.  Auto-linked rows
+  // are read-only; auditor must edit COA mapping (Stage 6) to change them.
 
-  const handleOverrideSave = () => {
-    const t = overrideAmt.trim();
-    if (!t || !overrideReason.trim()) return;
-    const parsed = Number(t.replace(/,/g, ""));
-    if (!Number.isFinite(parsed)) return;
-    const actual = parsed * fsUnits.meta.divisor;
-    if (onOverride) {
-      onOverride(actual, overrideReason.trim());
-    } else {
-      onCommit(actual);
-    }
-    setOverrideOpen(false);
-    setOverrideAmt("");
-    setOverrideReason("");
-  };
-
-  // ── Locked path (auto-populated from TB, requires override form to edit) ──
+  // ── Bug 10 — Locked path is now READ-ONLY (no f(x) icon, no override form) ──
+  // Auto-linked rows show their amount in a subtle blue tint with a
+  // tooltip directing the auditor to Stage 6 COA mapping.  To change
+  // an auto-linked amount, edit the COA mapping or the underlying
+  // ledger.  The label cell remains editable elsewhere — only the
+  // amount cell is locked.
   if (isLocked && !isOverridden && !disabled) {
-    if (overrideOpen) {
-      return (
-        <div className="flex flex-col gap-1 p-1.5 rounded border border-blue-300 bg-blue-50/60">
-          <input
-            autoFocus
-            type="text"
-            inputMode="decimal"
-            placeholder="New amount"
-            value={overrideAmt}
-            onChange={(e) => setOverrideAmt(e.target.value)}
-            className="w-full text-right border rounded px-1 py-0.5 bg-white text-[11px] outline-none focus:ring-1 focus:ring-blue-400"
-          />
-          <input
-            type="text"
-            placeholder="Reason for override (required)"
-            value={overrideReason}
-            onChange={(e) => setOverrideReason(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") handleOverrideSave(); }}
-            className="w-full border rounded px-1 py-0.5 bg-white text-[11px] outline-none focus:ring-1 focus:ring-blue-400"
-          />
-          <div className="flex justify-end gap-1 mt-0.5">
-            <button
-              type="button"
-              onClick={() => { setOverrideOpen(false); setOverrideAmt(""); setOverrideReason(""); }}
-              className="text-[10px] px-2 py-0.5 rounded border hover:bg-muted text-muted-foreground"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleOverrideSave}
-              disabled={!overrideReason.trim() || !overrideAmt.trim()}
-              className="text-[10px] px-2 py-0.5 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              Save
-            </button>
-          </div>
-        </div>
-      );
-    }
     return (
-      <div className={cn("flex items-center gap-1 rounded px-1 border border-blue-200 bg-blue-50/30", className)}>
+      <div
+        className={cn(
+          "flex items-center justify-end gap-1 rounded px-1 border border-blue-200 bg-blue-50/30",
+          className,
+        )}
+        title="Auto-linked from Tally TB. Edit COA mapping in Stage 6 to change."
+      >
         <span className="flex-1 text-right tabular-nums text-[11px] text-blue-900 dark:text-blue-200 select-none">
           {fsUnits.format(Number(value ?? 0))}
-          <sup className="ml-0.5 text-[8px] font-bold text-blue-500 align-super">f(x)</sup>
         </span>
-        <button
-          type="button"
-          onClick={() => {
-            const raw = (value === 0 || value === null || value === undefined)
-              ? ""
-              : String(fsUnits.scaleAmount(Number(value)));
-            setOverrideAmt(raw);
-            setOverrideOpen(true);
-          }}
-          title="Auto-computed from TB. Click to override."
-          className="shrink-0 p-0.5 rounded hover:bg-blue-100 text-blue-400 hover:text-blue-600 transition-colors"
-        >
-          <Pencil size={10} />
-        </button>
       </div>
     );
   }
@@ -489,17 +435,10 @@ function ListRowActionsMenu({
         </button>
       </PopoverTrigger>
       <PopoverContent side="bottom" align="end" className="w-48 p-1">
-        {/* Restore Link — for manual rows that were previously linked */}
-        {onRestoreLink && (
-          <button
-            type="button"
-            className="w-full text-left px-2 py-1 rounded text-xs hover:bg-green-50 text-green-700 flex items-center gap-1.5 transition-colors"
-            onClick={() => { onRestoreLink(); setOpen(false); }}
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-            Restore Link
-          </button>
-        )}
+        {/* Bug 10: Restore Link removed — auto-linked rows are now read-only,
+            so there's nothing to restore.  The onRestoreLink prop is kept on
+            the interface for backwards compatibility but the menu item is
+            no longer rendered. */}
         {/* Change Mapping — only for linked rows */}
         {linkedLedger && onChangeMapping && (
           <button
