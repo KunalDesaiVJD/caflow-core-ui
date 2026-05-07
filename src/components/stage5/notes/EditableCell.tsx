@@ -16,7 +16,7 @@
 
 import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
-import { Pencil, X, Plus, Trash2, ChevronDown, ChevronRight, MoreVertical, Info, GripVertical } from "lucide-react";
+import { X, Plus, Trash2, ChevronDown, ChevronRight, MoreVertical, Info, GripVertical } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Popover, PopoverTrigger, PopoverContent,
@@ -338,7 +338,8 @@ function ListRowActionsMenu({
   onDelete,
   onRemoveFromGroup,
   linkedLedger,
-  onChangeMapping,
+  onUnmap,
+  onSplitSources,
   subGroups,
   onMoveToGroup,
   onCreateGroup,
@@ -347,7 +348,12 @@ function ListRowActionsMenu({
   onDelete: () => void;
   onRemoveFromGroup?: () => void;
   linkedLedger?: string;
-  onChangeMapping?: (ledgerName: string, newCode: string) => void;
+  /** Issue 2 — Unmap a TB-linked row.  Clears the linked_ledger so the row
+   *  becomes a free-standing manual entry; auditor re-maps via Stage 6 COA. */
+  onUnmap?: () => void;
+  /** Issue 3 — Split a consolidated row (sources.length > 1) into one
+   *  breakup row per underlying source ledger. */
+  onSplitSources?: () => void;
   subGroups?: { id: string; name: string }[];
   onMoveToGroup?: (groupId: string) => void;
   onCreateGroup?: (groupName: string) => void;
@@ -355,76 +361,11 @@ function ListRowActionsMenu({
   onRestoreLink?: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [mappingOpen, setMappingOpen] = useState(false);
-  const [mappingSearch, setMappingSearch] = useState("");
   const [groupMenuOpen, setGroupMenuOpen] = useState(false);
   const [showNewGroupInput, setShowNewGroupInput] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");
-
-  const filteredCodes = FS_CODE_OPTIONS.filter(
-    (opt) =>
-      opt.label.toLowerCase().includes(mappingSearch.toLowerCase()) ||
-      opt.section.toLowerCase().includes(mappingSearch.toLowerCase()) ||
-      opt.code.toLowerCase().includes(mappingSearch.toLowerCase()),
-  );
-
-  const bySection: Record<string, typeof FS_CODE_OPTIONS> = {};
-  for (const opt of filteredCodes) {
-    if (!bySection[opt.section]) bySection[opt.section] = [];
-    bySection[opt.section].push(opt);
-  }
-
-  if (mappingOpen && linkedLedger && onChangeMapping) {
-    return (
-      <Popover open={mappingOpen} onOpenChange={(o) => { setMappingOpen(o); if (!o) setOpen(false); }}>
-        <PopoverTrigger asChild>
-          <button type="button" className="p-0.5 rounded text-muted-foreground hover:text-foreground">
-            <MoreVertical size={12} />
-          </button>
-        </PopoverTrigger>
-        <PopoverContent side="left" align="start" className="w-64 p-2 space-y-1.5">
-          <div className="text-[10px] font-semibold text-muted-foreground truncate">
-            Change mapping: <span className="text-foreground">{linkedLedger}</span>
-          </div>
-          <input
-            type="text"
-            placeholder="Search FS line item…"
-            value={mappingSearch}
-            onChange={(e) => setMappingSearch(e.target.value)}
-            autoFocus
-            className="w-full text-xs border rounded px-2 py-1 bg-background outline-none focus:ring-1 focus:ring-primary"
-          />
-          <div className="max-h-52 overflow-y-auto space-y-1 pr-0.5">
-            {Object.entries(bySection).map(([section, opts]) => (
-              <div key={section}>
-                <div className="text-[9px] font-semibold text-muted-foreground px-1 py-0.5 uppercase tracking-wide">{section}</div>
-                {opts.map((opt) => (
-                  <button
-                    key={opt.code}
-                    type="button"
-                    className="w-full text-left px-2 py-1 rounded text-xs hover:bg-primary/10 hover:text-primary transition-colors"
-                    onClick={() => { onChangeMapping(linkedLedger, opt.code); setMappingOpen(false); setOpen(false); }}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            ))}
-            {filteredCodes.length === 0 && (
-              <div className="text-[10px] italic text-muted-foreground px-2 py-1">No match</div>
-            )}
-          </div>
-          <button
-            type="button"
-            className="w-full text-left px-2 py-1 rounded text-xs hover:bg-muted text-muted-foreground"
-            onClick={() => { setMappingOpen(false); setOpen(true); }}
-          >
-            ← Back
-          </button>
-        </PopoverContent>
-      </Popover>
-    );
-  }
+  // Issue 2 — Change-Mapping popover removed.  Re-mapping now happens
+  // exclusively at Stage 6 COA Mapping; here we offer Unmap instead.
 
   return (
     <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setGroupMenuOpen(false); setShowNewGroupInput(false); setNewGroupName(""); } }}>
@@ -442,14 +383,31 @@ function ListRowActionsMenu({
             so there's nothing to restore.  The onRestoreLink prop is kept on
             the interface for backwards compatibility but the menu item is
             no longer rendered. */}
-        {/* Change Mapping — only for linked rows */}
-        {linkedLedger && onChangeMapping && (
+        {/* Issue 2 — Unmap (replaces Change Mapping for linked rows).
+            Severs the row's link to the TB ledger so it becomes a manual
+            free-standing row.  Re-mapping happens in Stage 6 COA Mapping. */}
+        {linkedLedger && onUnmap && (
+          <button
+            type="button"
+            className="w-full text-left px-2 py-1 rounded text-xs hover:bg-amber-50 text-amber-700 flex items-center gap-1.5 transition-colors"
+            onClick={() => { onUnmap(); setOpen(false); }}
+            title={`Unlink "${linkedLedger}" — re-map in Stage 6 COA Mapping`}
+          >
+            <X size={11} className="shrink-0" /> Unmap
+          </button>
+        )}
+        {/* Issue 3 — Split into individual rows (sources.length > 1).
+            Breaks a consolidated row that consolidates several TB ledgers
+            into one row per source ledger, so each can be moved to its own
+            sub-group or unmapped independently. */}
+        {onSplitSources && (
           <button
             type="button"
             className="w-full text-left px-2 py-1 rounded text-xs hover:bg-blue-50 text-blue-700 flex items-center gap-1.5 transition-colors"
-            onClick={() => { setOpen(false); setMappingOpen(true); }}
+            onClick={() => { onSplitSources(); setOpen(false); }}
+            title="Split this consolidated row into one row per underlying ledger"
           >
-            <Pencil size={11} className="shrink-0" /> Change Mapping
+            <ChevronDown size={11} className="shrink-0 -rotate-90" /> Split into individual rows
           </button>
         )}
 
@@ -560,7 +518,7 @@ function ListRowActionsMenu({
 /** Single row in a ListTable — shows description, CY, PY, actions, and optionally expands sources. */
 function ListRowWithSources({
   r, origIdx, isLinked, isManual, hasSources, descPlaceholder, update, remove,
-  onChangeMapping, subGroups, onMoveToGroup, onCreateGroup, onRemoveFromGroup,
+  onUnmap, onSplitSources, subGroups, onMoveToGroup, onCreateGroup, onRemoveFromGroup,
   handleDragStart, onRestoreLink,
 }: {
   r: ListRow;
@@ -571,7 +529,10 @@ function ListRowWithSources({
   descPlaceholder: string;
   update: (i: number, patch: Partial<ListRow>) => void;
   remove: (i: number) => void;
-  onChangeMapping?: (ledgerName: string, newCode: string) => void;
+  /** Issue 2 — Unmap a TB-linked row (clears linked_ledger and sources). */
+  onUnmap?: () => void;
+  /** Issue 3 — Split a consolidated row (sources.length > 1) into per-source rows. */
+  onSplitSources?: () => void;
   subGroups?: { id: string; name: string }[];
   onMoveToGroup?: (groupId: string) => void;
   onCreateGroup?: (groupName: string) => void;
@@ -663,7 +624,8 @@ function ListRowWithSources({
             onDelete={() => remove(origIdx)}
             onRemoveFromGroup={onRemoveFromGroup}
             linkedLedger={r.linked_ledger}
-            onChangeMapping={onChangeMapping}
+            onUnmap={onUnmap}
+            onSplitSources={onSplitSources}
             subGroups={subGroups}
             onMoveToGroup={onMoveToGroup}
             onCreateGroup={onCreateGroup}
@@ -805,6 +767,41 @@ export function ListTable({
   const removeFromGroup = (rowIdx: number) => {
     const next = rows.slice();
     next[rowIdx] = { ...next[rowIdx], subgroup_id: undefined };
+    onChange(next);
+  };
+
+  // Issue 2 — Unmap: clear the row's linked_ledger and sources so it
+  // becomes a free-standing manual entry.  Re-mapping happens at Stage 6.
+  const unmapRow = (rowIdx: number) => {
+    const next = rows.slice();
+    const cur = next[rowIdx];
+    if (!cur) return;
+    next[rowIdx] = {
+      ...cur,
+      source: "manual",
+      linked_ledger: undefined,
+      sources: undefined,
+    };
+    onChange(next);
+  };
+
+  // Issue 3 — Split a consolidated row (multiple sources merged into one
+  // breakup row) into one row per source ledger so each can be moved /
+  // unmapped independently.  Preserves the parent row's subgroup_id.
+  const splitSources = (rowIdx: number) => {
+    const cur = rows[rowIdx];
+    if (!cur || !Array.isArray(cur.sources) || cur.sources.length < 2) return;
+    const next = rows.slice();
+    const replacements: ListRow[] = cur.sources.map((s) => ({
+      id:            genGroupId(),
+      description:   s.ledger,
+      amount_cy:     s.amount_cy,
+      amount_py:     s.amount_py,
+      source:        "linked",
+      linked_ledger: s.ledger,
+      subgroup_id:   cur.subgroup_id,
+    }));
+    next.splice(rowIdx, 1, ...replacements);
     onChange(next);
   };
 
@@ -1019,9 +1016,10 @@ export function ListTable({
                         descPlaceholder={descPlaceholder}
                         update={update}
                         remove={remove}
-                        onChangeMapping={
-                          mr.linked_ledger && onRemapLedger
-                            ? (ledger, code) => onRemapLedger(ledger, code)
+                        onUnmap={mr.linked_ledger ? () => unmapRow(mi) : undefined}
+                        onSplitSources={
+                          Array.isArray(mr.sources) && mr.sources.length > 1
+                            ? () => splitSources(mi)
                             : undefined
                         }
                         subGroups={allSubGroups.filter((g) => g.id !== groupId)}
@@ -1061,9 +1059,10 @@ export function ListTable({
               descPlaceholder={descPlaceholder}
               update={update}
               remove={remove}
-              onChangeMapping={
-                r.linked_ledger && onRemapLedger
-                  ? (ledger, code) => onRemapLedger(ledger, code)
+              onUnmap={r.linked_ledger ? () => unmapRow(origIdx) : undefined}
+              onSplitSources={
+                Array.isArray(r.sources) && r.sources.length > 1
+                  ? () => splitSources(origIdx)
                   : undefined
               }
               subGroups={allSubGroups}

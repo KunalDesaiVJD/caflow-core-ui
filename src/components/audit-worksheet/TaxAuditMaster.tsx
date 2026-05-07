@@ -181,6 +181,17 @@ export default function TaxAuditMaster({ data, engagementId, onSaved }: Props) {
     });
   }, [loaded, data.clientName]);
 
+  // Issue 1 — When the client master already has a registered GSTIN on
+  // file, default the "GST Registered?" answer to "yes" so the auditor
+  // doesn't have to set it manually.  Only runs when gst_details is
+  // currently blank / unset; the auditor can still flip it to "no".
+  useEffect(() => {
+    if (!loaded) return;
+    if (m.gst_details) return;        // already answered — never overwrite
+    if (!data.gstin) return;          // no GSTIN on file → leave blank
+    setField("gst_details", "yes");
+  }, [loaded, data.gstin, m.gst_details]);
+
   const fyExpanded = expandFY(data.financialYear);
 
   // ── Checkbox helper ─────────────────────────────────────────────────────
