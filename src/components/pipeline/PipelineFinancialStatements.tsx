@@ -31,6 +31,7 @@ import {
 import NotesTab from "@/components/stage5/NotesTab";
 import NCENotesTab from "@/components/stage7/NCENotesTab";
 import { RatiosTab } from "@/components/stage7/RatiosTab";
+import { NotesMismatchPanel } from "@/components/stage7/NotesMismatchPanel";
 import {
   ArrowRight, AlertTriangle, Download, FileSpreadsheet,
   Pencil, Loader2, BarChart3, Droplets, Lock, Database, CheckCircle2,
@@ -1852,6 +1853,9 @@ export default function PipelineFinancialStatements({
 
   // ─── Active tab (controlled so navigator buttons can switch programmatically) ─
   const [activeTab, setActiveTab] = useState("bs");
+
+  // ─── Notes mismatch count (driven by NotesMismatchPanel callback) ─────────
+  const [mismatchCount, setMismatchCount] = useState(0);
 
   // ─── NCE note navigation state ────────────────────────────────────────────
   const [nceNavNote, setNceNavNote] = useState<number | null>(null);
@@ -5343,7 +5347,7 @@ export default function PipelineFinancialStatements({
       )}
 
       {/* Summary cards */}
-      <div className="grid grid-cols-5 gap-3">
+      <div className="grid grid-cols-6 gap-3">
         <Card className={cn(activeBsBalanced ? "border-primary/30" : "border-destructive/30")}>
           <CardContent className="p-3 text-center">
             <p className={cn("text-2xl font-bold", activeBsBalanced ? "text-primary" : "text-destructive")}>
@@ -5378,6 +5382,48 @@ export default function PipelineFinancialStatements({
             <p className="text-[10px] text-muted-foreground uppercase">Manual Overrides</p>
           </CardContent>
         </Card>
+        {/* Phase B — Notes mismatch counter */}
+        <Card
+          className={cn(
+            "cursor-pointer transition-colors",
+            mismatchCount > 0 ? "border-amber-400/60 bg-amber-50/30 hover:bg-amber-50/60" : "border-primary/20"
+          )}
+          onClick={() => {
+            if (mismatchCount > 0) {
+              setActiveTab("notes");
+              const el = document.getElementById("notes-mismatch-panel");
+              el?.scrollIntoView({ behavior: "smooth", block: "start" });
+            }
+          }}
+        >
+          <CardContent className="p-3 text-center">
+            <p className={cn("text-2xl font-bold", mismatchCount > 0 ? "text-amber-600" : "text-primary")}>
+              {mismatchCount}
+            </p>
+            <p className="text-[10px] text-muted-foreground uppercase">Notes Mismatches</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Phase B — Notes mismatch panel: visible on all tabs when notes reconciliation fails */}
+      <div id="notes-mismatch-panel">
+        <NotesMismatchPanel
+          engagementId={engagementId}
+          entityType={engagement?.entity_type || engagement?.clients?.entity_type}
+          onCountChange={setMismatchCount}
+          onNavigate={(noteNo, subTab) => {
+            setActiveTab("notes");
+            if (isNonCorporate) {
+              setNceNavNote(noteNo);
+            } else {
+              setCorpNavNote({ noteNo, subTab });
+            }
+            // Scroll to the notes tab content after a short delay
+            setTimeout(() => {
+              document.getElementById(`note-${noteNo}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+            }, 300);
+          }}
+        />
       </div>
 
       {isLoading ? (
