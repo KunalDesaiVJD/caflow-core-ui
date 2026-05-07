@@ -12,9 +12,33 @@
  *   • A mismatch is reported when |bsAmount − notesSum| ≥ ₹1 AND the note
  *     has at least one breakup row with a non-null amount_cy.
  *   • PPE (FA grid), eps, ratios are excluded — they have bespoke structures.
+ *
+ * Bug 3 — Trade Payables specialisation:
+ *   trade_payables stores its sub-totals in dedicated fields msme_cy /
+ *   others_cy (NOT in a breakup array).  Auto-populate may also create
+ *   breakup rows that overlap with the ageing matrix → double-counting →
+ *   false mismatch panel entries.  We sum trade_payables explicitly via
+ *   the msme_*/others_* fields instead of the generic breakup reducer.
  */
 
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
+
+// ─── Bug 3 — Strict empty-amount check ────────────────────────────────────────
+// null / undefined / "" / whitespace strings are NOT populated.
+// Numeric 0 IS populated (auditor may explicitly enter zero).
+function isNonEmptyAmount(v: any): boolean {
+  if (v === null || v === undefined) return false;
+  if (typeof v === "string" && v.trim() === "") return false;
+  return true;
+}
+
+// ─── Bug 3 — Specialised summers for notes with bespoke storage shape ─────────
+// Trade Payables splits into MSME + Others on dedicated paths, not breakup[].
+function sumTradePayables(noteRow: Record<string, any>, column: "cy" | "py"): number {
+  const m = Number(noteRow?.[`msme_${column}`]);
+  const o = Number(noteRow?.[`others_${column}`]);
+  return (Number.isFinite(m) ? m : 0) + (Number.isFinite(o) ? o : 0);
+}
 
 // ─── Public types ──────────────────────────────────────────────────────────────
 
@@ -143,15 +167,32 @@ export function detectMismatches(
     // Skip notes where the headline total is zero — nothing to check
     if (bsAmount === 0) continue;
 
-    // Build notesSum from breakup rows
-    const breakup: any[] = Array.isArray(noteRow.breakup) ? noteRow.breakup : [];
+    // ── Bug 3 — Bespoke per-key sum logic ─────────────────────────────────────
+    // Some notes (Trade Payables, etc.) store their detail in dedicated fields
+    // rather than a breakup[] array.  The generic reducer would either miss
+    // the data or double-count from overlapping ageing rows.
+    let notesSum: number;
+    let hasUserData: boolean;
 
-    // Only flag mismatches when there is at least one populated breakup row.
-    // If no rows exist yet, the auditor hasn't filled in the detail — not an error.
-    const populatedRows = breakup.filter(r => r != null && r.amount_cy != null);
-    if (populatedRows.length === 0) continue;
+    if (key === "trade_payables") {
+      notesSum = sumTradePayables(noteRow, "cy");
+      // "Has user data" if either MSME or Others field has any non-empty value.
+      hasUserData = isNonEmptyAmount(noteRow.msme_cy) || isNonEmptyAmount(noteRow.others_cy);
+    } else {
+      // Generic path: reduce over breakup[].amount_cy with strict empty-check
+      // and explicit numeric coercion.
+      const breakup: any[] = Array.isArray(noteRow.breakup) ? noteRow.breakup : [];
+      const populatedRows = breakup.filter(r => r != null && isNonEmptyAmount(r.amount_cy));
+      hasUserData = populatedRows.length > 0;
+      notesSum = populatedRows.reduce((s: number, r: any) => {
+        const n = Number(r.amount_cy);
+        return s + (Number.isFinite(n) ? n : 0);
+      }, 0);
+    }
 
-    const notesSum = populatedRows.reduce((s: number, r: any) => s + Number(r.amount_cy ?? 0), 0);
+    // Only flag when the auditor has actually populated some detail.
+    if (!hasUserData) continue;
+
     const diff = bsAmount - notesSum;
 
     // Tolerance: ignore sub-₹1 rounding differences
