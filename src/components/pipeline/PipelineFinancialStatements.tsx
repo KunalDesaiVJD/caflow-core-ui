@@ -2012,11 +2012,11 @@ export default function PipelineFinancialStatements({
   // When multiple PY shells exist for the same FY (e.g. one auto-created by
   // sync-py.js and one by "Setup PY Data"), prefer the one that has actual
   // tally_trial_balance rows — it is the authoritative PY shell.
-  const { data: pyShellId } = useQuery({
+  const { data: pyShellInfo } = useQuery({
     queryKey: ["py-shell-id", engagement?.client_id, engagement?.financial_year],
-    queryFn: async () => {
+    queryFn: async (): Promise<{ id: string | null; isShell: boolean }> => {
       const fyParts = (engagement.financial_year as string).split("-");
-      if (fyParts.length !== 2) return null;
+      if (fyParts.length !== 2) return { id: null, isShell: false };
       const prevFy = `${parseInt(fyParts[0]) - 1}-${String(parseInt(fyParts[0])).slice(-2)}`;
 
       // Step 1: fetch all is_py_shell=true engagements for FY-1
@@ -2028,19 +2028,16 @@ export default function PipelineFinancialStatements({
 
       if (shells && shells.length > 0) {
         // Prefer the PY shell that has tally_trial_balance rows (TB synced).
-        // Use a regular select(limit:1) instead of head:true count — some RLS
-        // configurations return null/0 for the head count even when select
-        // works, causing the wrong shell to be picked when multiple exist.
         for (const shell of shells as any[]) {
           const { data: probe } = await supabase
             .from("tally_trial_balance")
             .select("ledger_name")
             .eq("engagement_id", shell.id)
             .limit(1);
-          if (probe && probe.length > 0) return shell.id;
+          if (probe && probe.length > 0) return { id: shell.id, isShell: true };
         }
         // No shell has TB data yet — return first shell so navigation works
-        return (shells[0] as any).id;
+        return { id: (shells[0] as any).id, isShell: true };
       }
 
       // Step 2: Fallback — any FY-1 engagement (no PY shell exists)
@@ -2049,9 +2046,14 @@ export default function PipelineFinancialStatements({
         .eq("client_id", engagement.client_id)
         .eq("financial_year", prevFy)
         .limit(1);
-      return (anyEngs as any)?.[0]?.id ?? null;
+      return { id: (anyEngs as any)?.[0]?.id ?? null, isShell: false };
     },
-    enabled: (engagement as any)?.py_source === "py_shell" && !!engagement?.client_id && !!engagement?.financial_year,
+    // Enabled whenever we have a client + FY. We previously gated this on
+    // py_source === "py_shell", which meant clients whose PY shell was created
+    // by sync-py.js (without ever running "Setup PY Data" on the CY engagement)
+    // never got the navigation banner. The query itself only returns an id when
+    // an is_py_shell=true (or any FY-1) engagement exists, so it's safe to run.
+    enabled: !!engagement?.client_id && !!engagement?.financial_year && !(engagement as any)?.is_py_shell,
   });
 
   // ─── PY Shell Trial Balance (for PY Changes in Inventories) ─────────────
@@ -2060,6 +2062,7 @@ export default function PipelineFinancialStatements({
   //   Σ (PY Shell opening_balance − PY Shell closing_balance) for each
   //   ledger name that maps to an INV_* code in the current year.
   // Also used for the mismatch warning: CY opening ≠ PY Shell closing.
+  const pyShellId = pyShellInfo?.isShell ? pyShellInfo.id : null;
   const { data: pyShellTb } = useQuery({
     queryKey: ["py-shell-tb", pyShellId],
     queryFn: async () => {
@@ -5354,7 +5357,7 @@ export default function PipelineFinancialStatements({
           Always visible when py_source === "py_shell". Lets the user go back
           to the PY Shell's Tally Sync at any time — even after leaving it
           the first time — without having to re-trigger the Setup PY Data flow. */}
-      {(engagement as any)?.py_source === "py_shell" && !(engagement as any)?.is_py_shell && (
+      {((engagement as any)?.py_source === "py_shell" || pyShellInfo?.isShell) && !(engagement as any)?.is_py_shell && (
         <Alert className="border-blue-300/50 bg-blue-50/40 dark:bg-blue-950/20">
           <Database className="h-4 w-4 text-blue-600" />
           <AlertTitle className="text-xs flex items-center justify-between">
