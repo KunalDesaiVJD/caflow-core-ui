@@ -2739,6 +2739,17 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                               const m = coaMapping[a.account_name];
                               const confClass = confChipClass(m?.confidence || "low");
                               const opening = a.opening_balance ?? 0;
+                              // PY value to display in the right-hand column.
+                              // BS ledgers: opening_balance on CY TB = PY closing.
+                              // P&L ledgers: opening is always 0 (Tally yearly reset),
+                              //             so fall back to the PY-shell closing balance
+                              //             keyed by ledger name. Without this fallback,
+                              //             every P&L sub-row showed "—" even though the
+                              //             group total (computed from pyShellPLAmounts)
+                              //             was populated.
+                              const pyAmt = Math.abs(opening) >= 0.005
+                                ? opening
+                                : (pyShellLedgerAmounts[a.account_name] ?? 0);
                               const isNew    = Math.abs(opening) < 0.005 && Math.abs(a.balance) >= 0.005;
                               const isClosed = Math.abs(opening) >= 0.005 && Math.abs(a.balance) < 0.005;
                               // P&L A/c (non-BxS) mapped to a BS code: closing balance is NOT added
@@ -2791,9 +2802,9 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                                       <>₹{Math.abs(a.balance).toLocaleString("en-IN")}<span className="ml-0.5 text-[9px]">{a.balance >= 0 ? "Dr" : "Cr"}</span></>
                                     ) : <span className="text-muted-foreground/40">—</span>}
                                   </span>
-                                  <span className={cn("font-mono text-[10px] text-right border-r-2 border-slate-300 dark:border-slate-700 px-2 flex items-center justify-end opacity-80", opening >= 0 ? "text-foreground" : "text-destructive")}>
-                                    {Math.abs(opening) > 0.005 ? (
-                                      <>₹{Math.abs(opening).toLocaleString("en-IN")}<span className="ml-0.5 text-[9px]">{opening >= 0 ? "Dr" : "Cr"}</span></>
+                                  <span className={cn("font-mono text-[10px] text-right border-r-2 border-slate-300 dark:border-slate-700 px-2 flex items-center justify-end opacity-80", pyAmt >= 0 ? "text-foreground" : "text-destructive")}>
+                                    {Math.abs(pyAmt) > 0.005 ? (
+                                      <>₹{Math.abs(pyAmt).toLocaleString("en-IN")}<span className="ml-0.5 text-[9px]">{pyAmt >= 0 ? "Dr" : "Cr"}</span></>
                                     ) : <span className="text-muted-foreground/40">—</span>}
                                   </span>
                                   <div className="flex items-center gap-0.5 justify-end pl-2">
