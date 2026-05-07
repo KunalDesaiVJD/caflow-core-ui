@@ -9,6 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
@@ -27,7 +29,7 @@ import EngagementHeader from "@/components/pipeline/EngagementHeader";
 import {
   ArrowRight, CheckCircle2, AlertTriangle, Search, Download, FileSpreadsheet,
   Link2, RefreshCw, Eye, Pencil, ChevronRight, ChevronDown, Loader2, Trash2,
-  BookOpen, Brain,
+  BookOpen, Brain, Check, ChevronsUpDown,
 } from "lucide-react";
 import { NCE_FS_ITEMS, NCE_AUTO_MAP_RULES } from "@/config/nceLineItems";
 import type { FSLineItem } from "@/config/nceLineItems";
@@ -333,6 +335,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   // ─── Ledger Reclassify / Move state ───
   const [reclassifyDialog, setReclassifyDialog] = useState<{ accountName: string } | null>(null);
   const [reclassifyCode,   setReclassifyCode]   = useState<string>("");
+  const [reclassifyPopoverOpen, setReclassifyPopoverOpen] = useState(false);
   const [reclassifyReason, setReclassifyReason] = useState<string>("");
 
   // ─── Variance drill-down state (Task 4) ───
@@ -2898,20 +2901,64 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
                 <div>
                   <Label className="text-xs">New FS Line Item <span className="text-destructive">*</span></Label>
-                  <Select value={reclassifyCode} onValueChange={setReclassifyCode}>
-                    <SelectTrigger className="h-8 text-xs mt-1">
-                      <SelectValue placeholder="Select FS Line Item…" />
-                    </SelectTrigger>
-                    <SelectContent className="max-h-60">
-                      {activeLeafItems.map(item => (
-                        <SelectItem key={item.code} value={item.code} className="text-xs">
-                          {item.noteRef ? `[N${item.noteRef}] ` : ""}
-                          {item.name}
-                          {item.scheduleRef === "BS+P&L" ? " 📦" : ""}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <Popover open={reclassifyPopoverOpen} onOpenChange={setReclassifyPopoverOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        role="combobox"
+                        aria-expanded={reclassifyPopoverOpen}
+                        className="w-full h-8 text-xs mt-1 justify-between font-normal"
+                      >
+                        <span className="truncate">
+                          {(() => {
+                            const sel = activeLeafItems.find(i => i.code === reclassifyCode);
+                            if (!sel) return <span className="text-muted-foreground">Select FS Line Item…</span>;
+                            return `${sel.noteRef ? `[N${sel.noteRef}] ` : ""}${sel.name}${sel.scheduleRef === "BS+P&L" ? " 📦" : ""}`;
+                          })()}
+                        </span>
+                        <ChevronsUpDown className="ml-2 h-3 w-3 shrink-0 opacity-50" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+                      <Command
+                        filter={(value, search) => {
+                          // value is the code; match against the displayed label
+                          const item = activeLeafItems.find(i => i.code === value);
+                          if (!item) return 0;
+                          const label = `${item.noteRef ? `N${item.noteRef} ` : ""}${item.name}`.toLowerCase();
+                          return label.includes(search.toLowerCase()) ? 1 : 0;
+                        }}
+                      >
+                        <CommandInput placeholder="Search FS line item…" className="h-8 text-xs" />
+                        <CommandList className="max-h-60">
+                          <CommandEmpty>No matching line item.</CommandEmpty>
+                          <CommandGroup>
+                            {activeLeafItems.map(item => (
+                              <CommandItem
+                                key={item.code}
+                                value={item.code}
+                                onSelect={(v) => {
+                                  setReclassifyCode(v);
+                                  setReclassifyPopoverOpen(false);
+                                }}
+                                className="text-xs"
+                              >
+                                <Check
+                                  className={cn(
+                                    "mr-2 h-3 w-3",
+                                    reclassifyCode === item.code ? "opacity-100" : "opacity-0"
+                                  )}
+                                />
+                                {item.noteRef ? `[N${item.noteRef}] ` : ""}
+                                {item.name}
+                                {item.scheduleRef === "BS+P&L" ? " 📦" : ""}
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
                 </div>
 
                 {newLineItem && (
