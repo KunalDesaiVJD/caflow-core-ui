@@ -638,16 +638,17 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     /* Hanging-indent items rendered as borderless two-cell tables.
                        Word's HTML import does NOT reliably honour inline-block /
                        min-width on a span, so the marker + text columns are
-                       guaranteed by table cells.  cellspacing/cellpadding=0 +
-                       border:none keep the visual identical to a paragraph.
+                       guaranteed by table cells.  Border + spacing suppressed
+                       via the HTML4 attributes border="0" cellspacing="0"
+                       cellpadding="0" on the table tag — Word respects those
+                       reliably even when it ignores CSS !important.
                        margin-left:24pt indents lettered points by ~4 chars at
                        Times 10pt — matches the template's start column. */
-                    table.caro-na-item { border-collapse: collapse; width: calc(100% - 24pt); margin: 0 0 8pt 24pt; }
-                    table.caro-na-item td { border: none !important; padding: 0 !important; vertical-align: top; font-family: ${SERIF}; font-size: 10pt; line-height: 1.4; }
+                    table.caro-na-item { border-collapse: collapse; border: none; width: calc(100% - 24pt); margin: 0 0 8pt 24pt; mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+                    table.caro-na-item td { border: none; padding: 0; vertical-align: top; font-family: ${SERIF}; font-size: 10pt; line-height: 1.4; }
                     /* Marker cell shrinks to content width; padding-right of
-                       12pt gives ~2 character widths of gap before text
-                       starts (Times 10pt: 1 char ≈ 6pt). */
-                    table.caro-na-item td.caro-na-marker { width: 1pt; padding-right: 12pt !important; white-space: nowrap; }
+                       6pt gives ~1-2 character widths of gap before text. */
+                    table.caro-na-item td.caro-na-marker { width: 1pt; padding-right: 6pt; white-space: nowrap; }
                     table.caro-na-item td.caro-na-text   { text-align: justify; }
                     /* Roman sub-items sit further right than their parent
                        letter — 24pt parent indent + 36pt nested indent. */
@@ -689,15 +690,20 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                       titleEmitted = true;
                       continue;
                     }
+                    // border="0" cellspacing="0" cellpadding="0" are HTML4
+                    // attributes that Word's import respects reliably — CSS
+                    // border:none alone is sometimes ignored.
+                    const TABLE_ATTRS = `class="caro-na-item" border="0" cellspacing="0" cellpadding="0"`;
+                    const NESTED_ATTRS = `class="caro-na-item caro-na-nested" border="0" cellspacing="0" cellpadding="0"`;
                     // Roman sub-items i. ii. iii. iv. (or with parens) — nested
                     if (ROMAN_RE.test(line)) {
                       const m = line.match(/^(\(?(?:i|ii|iii|iv|v|vi|vii|viii|ix|x)(?:\)|\.))\s+(.*)$/i);
                       const marker = m ? m[1] : "";
                       const rest   = m ? m[2] : line;
                       parts.push(
-                        `<table class="caro-na-item caro-na-nested"><tr>` +
-                        `<td class="caro-na-marker">${escape(marker)}</td>` +
-                        `<td class="caro-na-text">${escape(rest)}</td>` +
+                        `<table ${NESTED_ATTRS}><tr>` +
+                        `<td class="caro-na-marker" style="border:none;padding:0 6pt 0 0;">${escape(marker)}</td>` +
+                        `<td class="caro-na-text" style="border:none;padding:0;">${escape(rest)}</td>` +
                         `</tr></table>`,
                       );
                       continue;
@@ -708,9 +714,9 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                       const marker = m ? m[1] : "";
                       const rest   = m ? m[2] : line;
                       parts.push(
-                        `<table class="caro-na-item"><tr>` +
-                        `<td class="caro-na-marker">${escape(marker)}</td>` +
-                        `<td class="caro-na-text">${escape(rest)}</td>` +
+                        `<table ${TABLE_ATTRS}><tr>` +
+                        `<td class="caro-na-marker" style="border:none;padding:0 6pt 0 0;">${escape(marker)}</td>` +
+                        `<td class="caro-na-text" style="border:none;padding:0;">${escape(rest)}</td>` +
                         `</tr></table>`,
                       );
                       continue;
