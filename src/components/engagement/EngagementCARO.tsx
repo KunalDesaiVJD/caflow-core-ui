@@ -622,17 +622,17 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     div.Section1 { page: Section1; }
                     @page { size: A4; margin: 1.5cm 2cm 2cm 2cm; }
                     html, body { margin: 0 !important; padding: 0 !important; }
-                    body { font-family: ${SERIF}; font-size: 11pt; }
-                    .caro-na-title { font-family: ${SERIF}; font-size: 11pt; font-weight: bold; text-decoration: underline; text-align: left; margin: 0 0 12pt 0; }
-                    .caro-na-para  { font-family: ${SERIF}; font-size: 11pt; line-height: 1.4; text-align: justify; margin: 0 0 10pt 0; }
-                    .caro-na-letter{ font-family: ${SERIF}; font-size: 11pt; line-height: 1.4; text-align: justify; margin: 0 0 8pt 24pt; text-indent: -24pt; }
-                    .caro-na-roman { font-family: ${SERIF}; font-size: 11pt; line-height: 1.4; text-align: justify; margin: 0 0 8pt 60pt; text-indent: -28pt; }
+                    body { font-family: ${SERIF}; font-size: 10pt; }
+                    .caro-na-title { font-family: ${SERIF}; font-size: 10pt; font-weight: bold; text-decoration: underline; text-align: left; margin: 0 0 12pt 0; }
+                    .caro-na-para  { font-family: ${SERIF}; font-size: 10pt; line-height: 1.4; text-align: justify; margin: 0 0 10pt 0; }
+                    .caro-na-letter{ font-family: ${SERIF}; font-size: 10pt; line-height: 1.4; text-align: justify; margin: 0 0 8pt 24pt; text-indent: -24pt; }
+                    .caro-na-roman { font-family: ${SERIF}; font-size: 10pt; line-height: 1.4; text-align: justify; margin: 0 0 8pt 60pt; text-indent: -28pt; }
                     .caro-sig, .caro-sig tr, .caro-sig td {
                       border: none !important;
                       padding: 0 !important;
                       background: transparent !important;
                       font-family: ${SERIF} !important;
-                      font-size: 11pt !important;
+                      font-size: 10pt !important;
                     }
                   `;
 
@@ -757,7 +757,7 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
             export) instead of Arial. */}
         <div
           id="caro-na-print-area"
-          style={{ display: 'none', padding: '32px', fontFamily: "'Times New Roman', Times, serif", fontSize: '11pt' }}
+          style={{ display: 'none', padding: '32px', fontFamily: "'Times New Roman', Times, serif", fontSize: '10pt' }}
         >
           {(() => {
             const yearSub = (s: string) =>
