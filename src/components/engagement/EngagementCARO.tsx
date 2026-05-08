@@ -607,16 +607,26 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   <Download className="h-4 w-4 mr-2" /> Export PDF
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => {
-                  // Same serif typography, reduced margins and signature-block
-                  // layout as the applicable-CARO export.
+                  // ── WITHOUT-CARO Word export — structured to match the
+                  //    "WITHOUT CARO.doc" template provided by the user:
+                  //      • Title: "Report on Other Legal and Regulatory
+                  //        Requirements" (bold + underlined)
+                  //      • Intro paragraph (exemption text)
+                  //      • Section line: "As required by section 143(3)..."
+                  //      • Lettered items (a)–(h) with hanging indent
+                  //      • Sub-list (i)–(iv) indented under (h)
+                  //      • Signature block: firm/partner left, Place/Date/UDIN right
                   const SERIF = "'Times New Roman', Times, serif";
-                  const TD = `style="vertical-align:top;"`;
                   const HEAD_CSS = `
                     @page Section1 { size: A4; margin: 1.5cm 2cm 2cm 2cm; mso-header-margin: 0; mso-footer-margin: 0; }
                     div.Section1 { page: Section1; }
                     @page { size: A4; margin: 1.5cm 2cm 2cm 2cm; }
                     html, body { margin: 0 !important; padding: 0 !important; }
                     body { font-family: ${SERIF}; font-size: 11pt; }
+                    .caro-na-title { font-family: ${SERIF}; font-size: 11pt; font-weight: bold; text-decoration: underline; text-align: left; margin: 0 0 12pt 0; }
+                    .caro-na-para  { font-family: ${SERIF}; font-size: 11pt; line-height: 1.4; text-align: justify; margin: 0 0 10pt 0; }
+                    .caro-na-letter{ font-family: ${SERIF}; font-size: 11pt; line-height: 1.4; text-align: justify; margin: 0 0 8pt 24pt; text-indent: -24pt; }
+                    .caro-na-roman { font-family: ${SERIF}; font-size: 11pt; line-height: 1.4; text-align: justify; margin: 0 0 8pt 60pt; text-indent: -28pt; }
                     .caro-sig, .caro-sig tr, .caro-sig td {
                       border: none !important;
                       padding: 0 !important;
@@ -624,21 +634,54 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                       font-family: ${SERIF} !important;
                       font-size: 11pt !important;
                     }
-                    .caro-sig td.partner { padding-top: 24pt !important; }
                   `;
+
                   // Run the same 20XX → fyEndYear substitution at export time
-                  // — older intros saved before the seed-time substitution
-                  // still carry the literal placeholder.
                   const yearSub = (s: string) =>
                     fyEndYear !== "20XX" ? s.replace(/20XX/g, fyEndYear) : s;
-                  const body = yearSub(introText || CARO_NOT_APPLICABLE_FULL)
-                    .replace(/\n/g, '<br/>');
-                  // Same Place / Date spacing + DD.MM.YYYY date format as
-                  // the applicable-CARO export.
-                  // Body uses LEFT alignment. Signature block uses the
-                  // same single-row 2-cell layout as the applicable export
-                  // so the firm/partner lines stack tightly (no Word
-                  // per-row vertical spacing). All bold per template.
+                  const sourceText = yearSub(introText || CARO_NOT_APPLICABLE_FULL);
+
+                  // Parse body line-by-line into structured HTML matching
+                  // the template's heading / paragraph / list hierarchy.
+                  const escape = (s: string): string =>
+                    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                  const lines = sourceText.split(/\r?\n/);
+                  const parts: string[] = [];
+                  let titleEmitted = false;
+                  for (let raw of lines) {
+                    const line = raw.trim();
+                    if (!line) continue;
+                    // First non-empty line → title
+                    if (!titleEmitted) {
+                      parts.push(`<p class="caro-na-title">${escape(line)}</p>`);
+                      titleEmitted = true;
+                      continue;
+                    }
+                    // Roman sub-items (i), (ii), (iii), (iv) under (h)
+                    if (/^\((i|ii|iii|iv|v|vi|vii|viii|ix|x)\)\s+/i.test(line)) {
+                      const [, marker, rest] =
+                        line.match(/^(\([^)]+\))\s+(.*)$/) ?? ["", line, ""];
+                      parts.push(
+                        `<p class="caro-na-roman"><span style="display:inline-block;min-width:28pt;">${escape(marker)}</span>${escape(rest)}</p>`,
+                      );
+                      continue;
+                    }
+                    // Lettered items (a) through (z)
+                    if (/^\([a-z]\)\s+/i.test(line)) {
+                      const [, marker, rest] =
+                        line.match(/^(\([^)]+\))\s+(.*)$/) ?? ["", line, ""];
+                      parts.push(
+                        `<p class="caro-na-letter"><span style="display:inline-block;min-width:24pt;">${escape(marker)}</span>${escape(rest)}</p>`,
+                      );
+                      continue;
+                    }
+                    // Plain paragraph (intro, "As required by section 143(3)…")
+                    parts.push(`<p class="caro-na-para">${escape(line)}</p>`);
+                  }
+                  const body = parts.join("");
+
+                  // Signature block — firm + partner left, Place / Date /
+                  // UDIN right (UDIN added per template).
                   const SIGTD = `style="vertical-align:top;font-weight:bold;"`;
                   const leftCol =
                     `For, ${firmName}<br/>` +
@@ -651,11 +694,12 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   const rightCol =
                     `<br/><br/>` +
                     `Place :&nbsp;&nbsp;${place || '[Place]'}<br/>` +
-                    `Date&nbsp;&nbsp;:&nbsp;&nbsp;${reportDateDocx}`;
+                    `Date&nbsp;&nbsp;:&nbsp;&nbsp;${reportDateDocx}<br/>` +
+                    `<br/><br/><br/>` +
+                    `UDIN :&nbsp;&nbsp;${udin || ''}`;
                   const html =
                     `<div class="Section1">` +
-                    `<p style="font-family:${SERIF};font-size:11pt;line-height:1.4;` +
-                    `text-align:left;margin:0 0 12pt 0;">${body}</p>` +
+                    body +
                     `<table class="caro-sig" style="width:100%;margin-top:30pt;">` +
                       `<tr>` +
                         `<td ${SIGTD}>${leftCol}</td>` +
@@ -706,14 +750,95 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
           </CardContent>
         </Card>
 
-        {/* Hidden print area for PDF */}
-        <div id="caro-na-print-area" style={{ display: 'none', padding: '32px', fontFamily: 'Arial, sans-serif', fontSize: '11pt' }}>
-          <p style={{ whiteSpace: 'pre-wrap' }}>{introText || CARO_NOT_APPLICABLE_FULL}</p>
-          <div style={{ marginTop: '36px' }}>
-            <p>For, {firmName}<br />Chartered Accountants<br />Firm Regi. No.: {firmFRN}</p>
-            <p>Place: {place || '[Place]'} &nbsp; Date: {reportDateDisplay}</p>
-            <p style={{ marginTop: '24px' }}>{partnerName}<br />Partner &nbsp; Membership No.: {membershipNo}</p>
-          </div>
+        {/* Hidden print area for PDF — structured to match the
+            "WITHOUT CARO.doc" template (title, paragraphs, lettered list
+            with hanging indent, sub-list under (h), and signature block
+            with Place / Date / UDIN).  Uses Times serif (matches Word
+            export) instead of Arial. */}
+        <div
+          id="caro-na-print-area"
+          style={{ display: 'none', padding: '32px', fontFamily: "'Times New Roman', Times, serif", fontSize: '11pt' }}
+        >
+          {(() => {
+            const yearSub = (s: string) =>
+              fyEndYear !== "20XX" ? s.replace(/20XX/g, fyEndYear) : s;
+            const sourceText = yearSub(introText || CARO_NOT_APPLICABLE_FULL);
+            const lines = sourceText.split(/\r?\n/);
+            const blocks: React.ReactNode[] = [];
+            let titleEmitted = false;
+            lines.forEach((raw, idx) => {
+              const line = raw.trim();
+              if (!line) return;
+              if (!titleEmitted) {
+                blocks.push(
+                  <p key={`l-${idx}`} style={{ fontWeight: 'bold', textDecoration: 'underline', margin: '0 0 12pt 0' }}>
+                    {line}
+                  </p>,
+                );
+                titleEmitted = true;
+                return;
+              }
+              const romanMatch = line.match(/^(\((?:i|ii|iii|iv|v|vi|vii|viii|ix|x)\))\s+(.*)$/i);
+              if (romanMatch) {
+                blocks.push(
+                  <p
+                    key={`l-${idx}`}
+                    style={{ margin: '0 0 8pt 60pt', textIndent: '-28pt', textAlign: 'justify', lineHeight: 1.4 }}
+                  >
+                    <span style={{ display: 'inline-block', minWidth: '28pt' }}>{romanMatch[1]}</span>
+                    {romanMatch[2]}
+                  </p>,
+                );
+                return;
+              }
+              const letterMatch = line.match(/^(\([a-z]\))\s+(.*)$/i);
+              if (letterMatch) {
+                blocks.push(
+                  <p
+                    key={`l-${idx}`}
+                    style={{ margin: '0 0 8pt 24pt', textIndent: '-24pt', textAlign: 'justify', lineHeight: 1.4 }}
+                  >
+                    <span style={{ display: 'inline-block', minWidth: '24pt' }}>{letterMatch[1]}</span>
+                    {letterMatch[2]}
+                  </p>,
+                );
+                return;
+              }
+              blocks.push(
+                <p
+                  key={`l-${idx}`}
+                  style={{ margin: '0 0 10pt 0', textAlign: 'justify', lineHeight: 1.4 }}
+                >
+                  {line}
+                </p>,
+              );
+            });
+            return blocks;
+          })()}
+
+          {/* Signature block — firm/partner left, Place/Date/UDIN right */}
+          <table style={{ width: '100%', marginTop: '30pt', borderCollapse: 'collapse' }}>
+            <tbody>
+              <tr>
+                <td style={{ verticalAlign: 'top', fontWeight: 'bold', border: 'none' }}>
+                  For, {firmName}<br />
+                  Chartered Accountants<br />
+                  Firm Regi.No.{firmFRN}<br />
+                  <br /><br /><br />
+                  {partnerName}<br />
+                  Partner<br />
+                  Membership No.{membershipNo}
+                </td>
+                <td style={{ verticalAlign: 'top', fontWeight: 'bold', border: 'none' }}>
+                  <br /><br />
+                  Place :&nbsp;&nbsp;{place || '[Place]'}<br />
+                  Date&nbsp;&nbsp;:&nbsp;&nbsp;{reportDateDisplay}<br />
+                  <br /><br /><br />
+                  UDIN :&nbsp;&nbsp;{udin || ''}
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
     );
