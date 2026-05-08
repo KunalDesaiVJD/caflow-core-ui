@@ -612,158 +612,39 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                 }}>
                   <Download className="h-4 w-4 mr-2" /> Export PDF
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => {
-                  // ── WITHOUT-CARO Word export — structured to match the
-                  //    "WITHOUT CARO.doc" template provided by the user:
-                  //      • Title: "Report on Other Legal and Regulatory
-                  //        Requirements" (bold + underlined)
-                  //      • Intro paragraph (exemption text)
-                  //      • Section line: "As required by section 143(3)..."
-                  //      • Lettered items (a)–(h) with hanging indent
-                  //      • Sub-list (i)–(iv) indented under (h)
-                  //      • Signature block: firm/partner left, Place/Date/UDIN right
-                  const SERIF = "'Times New Roman', Times, serif";
-                  const HEAD_CSS = `
-                    @page Section1 { size: A4; margin: 1.5cm 2cm 2cm 2cm; mso-header-margin: 0; mso-footer-margin: 0; }
-                    div.Section1 { page: Section1; }
-                    @page { size: A4; margin: 1.5cm 2cm 2cm 2cm; }
-                    html, body { margin: 0 !important; padding: 0 !important; }
-                    body { font-family: ${SERIF}; font-size: 10pt; }
-                    .caro-na-title { font-family: ${SERIF}; font-size: 10pt; font-weight: bold; text-decoration: underline; text-align: left; margin: 0 0 12pt 0; }
-                    .caro-na-para  { font-family: ${SERIF}; font-size: 10pt; line-height: 1.4; text-align: justify; margin: 0 0 10pt 0; }
-                    /* "As required by section 143(3) of the Act, we further
-                       report that:" sits as a sub-heading above the lettered
-                       items, indented by ~4 chars (≈ 24pt at Times 10pt). */
-                    .caro-na-subheading { font-family: ${SERIF}; font-size: 10pt; line-height: 1.4; text-align: justify; margin: 0 0 10pt 24pt; }
-                    /* Hanging-indent items rendered as borderless two-cell tables.
-                       Word's HTML import does NOT reliably honour inline-block /
-                       min-width on a span, so the marker + text columns are
-                       guaranteed by table cells.  Border + spacing suppressed
-                       via the HTML4 attributes border="0" cellspacing="0"
-                       cellpadding="0" on the table tag — Word respects those
-                       reliably even when it ignores CSS !important.
-                       margin-left:24pt indents lettered points by ~4 chars at
-                       Times 10pt — matches the template's start column. */
-                    table.caro-na-item { border-collapse: collapse; border: none; width: calc(100% - 24pt); margin: 0 0 8pt 24pt; mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
-                    table.caro-na-item td { border: none; padding: 0; vertical-align: top; font-family: ${SERIF}; font-size: 10pt; line-height: 1.4; }
-                    /* Marker cell shrinks to content width; padding-right of
-                       6pt gives ~1-2 character widths of gap before text. */
-                    table.caro-na-item td.caro-na-marker { width: 1pt; padding-right: 6pt; white-space: nowrap; }
-                    table.caro-na-item td.caro-na-text   { text-align: justify; }
-                    /* Roman sub-items sit further right than their parent
-                       letter — 24pt parent indent + 36pt nested indent. */
-                    table.caro-na-item.caro-na-nested    { margin-left: 60pt; width: calc(100% - 60pt); }
-                    .caro-sig, .caro-sig tr, .caro-sig td {
-                      border: none !important;
-                      padding: 0 !important;
-                      background: transparent !important;
-                      font-family: ${SERIF} !important;
-                      font-size: 10pt !important;
-                    }
-                  `;
-
-                  // Run the same 20XX → fyEndYear substitution at export time
-                  const yearSub = (s: string) =>
-                    fyEndYear !== "20XX" ? s.replace(/20XX/g, fyEndYear) : s;
-                  const sourceText = yearSub(introText || CARO_NOT_APPLICABLE_FULL);
-
-                  // Parse body line-by-line into structured HTML matching
-                  // the template's heading / paragraph / list hierarchy.
-                  // Hanging-indent items render as borderless tables so Word
-                  // aligns wrapped lines under the start-of-text column.
-                  const escape = (s: string): string =>
-                    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-                  const lines = sourceText.split(/\r?\n/);
-                  const parts: string[] = [];
-                  let titleEmitted = false;
-                  // Marker matchers — accept all three syntaxes so user-
-                  // edited text in any style aligns correctly:
-                  //   Letters:  "a)"  or  "(a)"
-                  //   Romans:   "i."  or  "i)"  or  "(i)"   (period is the template style)
-                  const ROMAN_RE  = /^(?:\()?(?:i|ii|iii|iv|v|vi|vii|viii|ix|x)(?:\)|\.)\s+/i;
-                  const LETTER_RE = /^(?:\()?[a-z]\)\s+/i;
-                  for (let raw of lines) {
-                    const line = raw.trim();
-                    if (!line) continue;
-                    if (!titleEmitted) {
-                      parts.push(`<p class="caro-na-title">${escape(line)}</p>`);
-                      titleEmitted = true;
-                      continue;
-                    }
-                    // border="0" cellspacing="0" cellpadding="0" are HTML4
-                    // attributes that Word's import respects reliably — CSS
-                    // border:none alone is sometimes ignored.
-                    const TABLE_ATTRS = `class="caro-na-item" border="0" cellspacing="0" cellpadding="0"`;
-                    const NESTED_ATTRS = `class="caro-na-item caro-na-nested" border="0" cellspacing="0" cellpadding="0"`;
-                    // Roman sub-items i. ii. iii. iv. (or with parens) — nested
-                    if (ROMAN_RE.test(line)) {
-                      const m = line.match(/^(\(?(?:i|ii|iii|iv|v|vi|vii|viii|ix|x)(?:\)|\.))\s+(.*)$/i);
-                      const marker = m ? m[1] : "";
-                      const rest   = m ? m[2] : line;
-                      parts.push(
-                        `<table ${NESTED_ATTRS}><tr>` +
-                        `<td class="caro-na-marker" style="border:none;padding:0 6pt 0 0;">${escape(marker)}</td>` +
-                        `<td class="caro-na-text" style="border:none;padding:0;">${escape(rest)}</td>` +
-                        `</tr></table>`,
-                      );
-                      continue;
-                    }
-                    // Lettered items a) b) c) … (or with parens) — top-level
-                    if (LETTER_RE.test(line)) {
-                      const m = line.match(/^(\(?[a-z]\))\s+(.*)$/i);
-                      const marker = m ? m[1] : "";
-                      const rest   = m ? m[2] : line;
-                      parts.push(
-                        `<table ${TABLE_ATTRS}><tr>` +
-                        `<td class="caro-na-marker" style="border:none;padding:0 6pt 0 0;">${escape(marker)}</td>` +
-                        `<td class="caro-na-text" style="border:none;padding:0;">${escape(rest)}</td>` +
-                        `</tr></table>`,
-                      );
-                      continue;
-                    }
-                    // "As required by section 143(3)…" — sub-heading row
-                    // sitting above the lettered items, indented by 4 chars.
-                    if (/^as required by section 143/i.test(line)) {
-                      parts.push(`<p class="caro-na-subheading">${escape(line)}</p>`);
-                      continue;
-                    }
-                    // Plain paragraph (intro)
-                    parts.push(`<p class="caro-na-para">${escape(line)}</p>`);
+                <DropdownMenuItem onClick={async () => {
+                  // ── WITHOUT-CARO Word export — generates a real .docx
+                  //    with native paragraph properties (page margins,
+                  //    Times New Roman 10pt, justified, hanging-indent
+                  //    list items).  Word renders the .docx using the
+                  //    same metrics the firm's template was authored
+                  //    with, so line wraps land on the same words.
+                  //    Implementation: src/lib/caroNotApplicableDocx.ts
+                  try {
+                    const { buildCaroNotApplicableDocx } =
+                      await import("@/lib/caroNotApplicableDocx");
+                    const blob = await buildCaroNotApplicableDocx({
+                      companyName,
+                      fyEndYear,
+                      firmName,
+                      firmFRN,
+                      partnerName,
+                      membershipNo,
+                      place,
+                      reportDateText: reportDateDocx,
+                      udin,
+                    });
+                    const url = URL.createObjectURL(blob);
+                    const a   = document.createElement("a");
+                    a.href     = url;
+                    a.download = `CARO-NotApplicable_${companyName}_${engagement?.financial_year || ''}.docx`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                  } catch (e: any) {
+                    toast.error("Word export failed: " + (e?.message ?? "unknown"));
                   }
-                  const body = parts.join("");
-
-                  // Signature block — firm + partner left, Place / Date /
-                  // UDIN right (UDIN added per template).
-                  const SIGTD = `style="vertical-align:top;font-weight:bold;"`;
-                  const leftCol =
-                    `For, ${firmName}<br/>` +
-                    `Chartered Accountants<br/>` +
-                    `Firm Regi.No.${firmFRN}<br/>` +
-                    `<br/><br/><br/>` +
-                    `${partnerName}<br/>` +
-                    `Partner<br/>` +
-                    `Membership No.${membershipNo}`;
-                  const rightCol =
-                    `<br/><br/>` +
-                    `Place :&nbsp;&nbsp;${place || '[Place]'}<br/>` +
-                    `Date&nbsp;&nbsp;:&nbsp;&nbsp;${reportDateDocx}<br/>` +
-                    `<br/><br/><br/>` +
-                    `UDIN :&nbsp;&nbsp;${udin || ''}`;
-                  const html =
-                    `<div class="Section1">` +
-                    body +
-                    `<table class="caro-sig" style="width:100%;margin-top:30pt;">` +
-                      `<tr>` +
-                        `<td ${SIGTD}>${leftCol}</td>` +
-                        `<td ${SIGTD}>${rightCol}</td>` +
-                      `</tr>` +
-                    `</table>` +
-                    `</div>`;
-                  exportToWord(
-                    html,
-                    `CARO-NotApplicable_${companyName}_${engagement?.financial_year || ''}.doc`,
-                    HEAD_CSS,
-                  );
                 }}>
                   <FileType className="h-4 w-4 mr-2" /> Export Word
                 </DropdownMenuItem>
