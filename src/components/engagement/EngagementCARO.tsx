@@ -168,24 +168,30 @@ As required by section 143(3) of the Act, we further report that:
 (iv) Based on our examination, the Company has used accounting software for maintaining its books of account, which has a feature of recording audit trail (edit log) facility and as informed by the management the same has operated throughout the year for all relevant transactions recorded in the software.`;
 
 // ─── Full NOT-APPLICABLE text (verbatim from WITHOUT-CARO word file) ─────────
+// Word-for-word match to the firm's template:
+//   - "Auditor's Report"  (apostrophe-s — NOT "Auditors")
+//   - "section143"        (no space — quirk of the source doc)
+//   - "are not enclosed"  (no trailing period in the intro line)
+//   - Letter markers      a) b) c) …  (single trailing paren)
+//   - Roman sub-markers   i. ii. iii. iv.  (period, NOT parentheses)
 const CARO_NOT_APPLICABLE_FULL =
 `Report on Other Legal and Regulatory Requirements
 
-The Company is a private limited and falls within exemptions specified under paragraph 2(iv) of the Companies (Auditors Report) Order, 2020. Hence matters specified in paragraph 3 and 4 of the said order issued by the Central Government of India in terms of sub-section (11) of section 143 of the Act, are not enclosed.
+The Company is a private limited and falls within exemptions specified under paragraph 2(iv) of the Companies (Auditor's Report) Order, 2020. Hence matters specified in paragraph 3 and 4 of the said order issued by the Central Government of India in terms of sub-section (11) of section143 of the Act, are not enclosed
 
 As required by section 143(3) of the Act, we further report that:
-(a) We have sought and obtained all the information and explanations which to the best of our knowledge and belief were necessary for the purpose of our audit;
-(b) In our opinion proper books of account as required by law have been kept by the Company so far as it appears from our examination of those books;
-(c) The company does not have any branch, this para is not applicable.
-(d) The Balance Sheet and Statement of Profit and Loss dealt with by this Report are in agreement with the books of account;
-(e) In our opinion, the aforesaid financial statements comply with the Accounting Standards specified under Section 133 of the Act, read with Rule 7 of the Companies (Accounts) Rules 2014.
-(f) On the basis of written representations received from the directors as on March 31, 20XX, and taken on record by the Board of Directors, none of the directors is disqualified as on March 31, 20XX, from being appointed as a director in terms of Section 164(2) of the Act.
-(g) The report on adequacy of the internal financial control over financial reporting is not applicable as the company falls within the exemptions specified under sub-section 3(1) of section 143 of the Act.
-(h) In our opinion and to the best of our information and according to the explanations given to us, we report with respect to other matters to be included in the Auditor's Report in accordance with Rule 11 of the Companies (Audit and Auditors) Rules, 2014 as under:
-(i) The Company does not have any pending litigations which would impact on its financial position.
-(ii) The Company did not have any long-term contracts including derivative contracts for which there were any material foreseeable losses.
-(iii) There were no amounts which were required to be transferred to the Investor Education and Protection Fund by the Company.
-(iv) Based on our examination, the Company has used accounting software for maintaining its books of account, which has a feature of recording audit trail (edit log) facility and as informed by the management the same has operated throughout the year for all relevant transactions recorded in the software.`;
+a) We have sought and obtained all the information and explanations which to the best of our knowledge and belief were necessary for the purpose of our audit;
+b) In our opinion proper books of account as required by law have been kept by the Company so far as it appears from our examination of those books;
+c) The company does not have any branch, this para is not applicable.
+d) The Balance Sheet and Statement of Profit and Loss dealt with by this Report are in agreement with the books of account;
+e) In our opinion, the aforesaid financial statements comply with the Accounting Standards specified under Section 133 of the Act, read with Rule 7 of the Companies (Accounts) Rules 2014.
+f) On the basis of written representations received from the directors as on March 31, 20XX, and taken on record by the Board of Directors, none of the directors is disqualified as on March 31, 20XX, from being appointed as a director in terms of Section 164(2) of the Act.
+g) The report on adequacy of the internal financial control over financial reporting is not applicable as the company is falls within the exemptions specified under sub-section 3(1) of section 143 of the Act.
+h) In our opinion and to the best of our information and according to the explanations given to us, we report with respect to other matters to be included in the Auditor's Report in accordance with Rule 11 of the Companies (Audit and Auditors) Rules, 2014 as under:
+i. The Company does not have any pending litigations which would impact on its financial position.
+ii. The Company did not have any long-term contracts including derivative contracts for which there were any material foreseeable losses.
+iii. There were no amounts which were required to be transferred to the Investor Education and Protection Fund by the Company.
+iv. Based on our examination, the Company has used accounting software for maintaining its books of account, which has a feature of recording audit trail (edit log) facility and as informed by the management the same has operated throughout the year for all relevant transactions recorded in the software.`;
 
 // ─── Legacy single-paragraph NOT-APPLICABLE text (kept for backward-compat) ──
 const CARO_NOT_APPLICABLE_TEXT =
@@ -669,9 +675,11 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                   const lines = sourceText.split(/\r?\n/);
                   const parts: string[] = [];
                   let titleEmitted = false;
-                  // Marker matchers — accept BOTH "(a)" and "a)" syntax so
-                  // user-edited text in either style still aligns correctly.
-                  const ROMAN_RE  = /^(?:\()?(?:i|ii|iii|iv|v|vi|vii|viii|ix|x)\)\s+/i;
+                  // Marker matchers — accept all three syntaxes so user-
+                  // edited text in any style aligns correctly:
+                  //   Letters:  "a)"  or  "(a)"
+                  //   Romans:   "i."  or  "i)"  or  "(i)"   (period is the template style)
+                  const ROMAN_RE  = /^(?:\()?(?:i|ii|iii|iv|v|vi|vii|viii|ix|x)(?:\)|\.)\s+/i;
                   const LETTER_RE = /^(?:\()?[a-z]\)\s+/i;
                   for (let raw of lines) {
                     const line = raw.trim();
@@ -681,9 +689,9 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                       titleEmitted = true;
                       continue;
                     }
-                    // Roman sub-items (i), (ii), (iii), (iv) under (h) — nested
+                    // Roman sub-items i. ii. iii. iv. (or with parens) — nested
                     if (ROMAN_RE.test(line)) {
-                      const m = line.match(/^(\(?[^)]+\))\s+(.*)$/);
+                      const m = line.match(/^(\(?(?:i|ii|iii|iv|v|vi|vii|viii|ix|x)(?:\)|\.))\s+(.*)$/i);
                       const marker = m ? m[1] : "";
                       const rest   = m ? m[2] : line;
                       parts.push(
@@ -694,7 +702,7 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                       );
                       continue;
                     }
-                    // Lettered items (a) through (h) — top-level
+                    // Lettered items a) b) c) … (or with parens) — top-level
                     if (LETTER_RE.test(line)) {
                       const m = line.match(/^(\(?[a-z]\))\s+(.*)$/i);
                       const marker = m ? m[1] : "";
@@ -804,8 +812,10 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
             const lines = sourceText.split(/\r?\n/);
             const blocks: React.ReactNode[] = [];
             let titleEmitted = false;
-            // Match BOTH "(a)" and "a)" formats — see Word export comment.
-            const ROMAN_RE  = /^(\(?(?:i|ii|iii|iv|v|vi|vii|viii|ix|x)\))\s+(.*)$/i;
+            // Match all three syntaxes per Word-export parser:
+            //   Letters: "a)" or "(a)"
+            //   Romans:  "i." (template style) or "i)" or "(i)"
+            const ROMAN_RE  = /^(\(?(?:i|ii|iii|iv|v|vi|vii|viii|ix|x)(?:\)|\.))\s+(.*)$/i;
             const LETTER_RE = /^(\(?[a-z]\))\s+(.*)$/i;
             const cellTd: React.CSSProperties = {
               border: 'none',
