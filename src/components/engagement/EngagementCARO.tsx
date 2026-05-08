@@ -625,8 +625,16 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     body { font-family: ${SERIF}; font-size: 10pt; }
                     .caro-na-title { font-family: ${SERIF}; font-size: 10pt; font-weight: bold; text-decoration: underline; text-align: left; margin: 0 0 12pt 0; }
                     .caro-na-para  { font-family: ${SERIF}; font-size: 10pt; line-height: 1.4; text-align: justify; margin: 0 0 10pt 0; }
-                    .caro-na-letter{ font-family: ${SERIF}; font-size: 10pt; line-height: 1.4; text-align: justify; margin: 0 0 8pt 24pt; text-indent: -24pt; }
-                    .caro-na-roman { font-family: ${SERIF}; font-size: 10pt; line-height: 1.4; text-align: justify; margin: 0 0 8pt 60pt; text-indent: -28pt; }
+                    /* Hanging-indent items rendered as borderless two-cell tables.
+                       Word's HTML import does NOT reliably honour inline-block /
+                       min-width on a span, so the marker + text columns are
+                       guaranteed by table cells.  cellspacing/cellpadding=0 +
+                       border:none keep the visual identical to a paragraph. */
+                    table.caro-na-item { border-collapse: collapse; width: 100%; margin: 0 0 8pt 0; }
+                    table.caro-na-item td { border: none !important; padding: 0 !important; vertical-align: top; font-family: ${SERIF}; font-size: 10pt; line-height: 1.4; }
+                    table.caro-na-item td.caro-na-marker { width: 28pt; padding-right: 4pt !important; white-space: nowrap; }
+                    table.caro-na-item td.caro-na-text   { text-align: justify; }
+                    table.caro-na-item.caro-na-nested    { margin-left: 36pt; width: calc(100% - 36pt); }
                     .caro-sig, .caro-sig tr, .caro-sig td {
                       border: none !important;
                       padding: 0 !important;
@@ -643,35 +651,48 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
 
                   // Parse body line-by-line into structured HTML matching
                   // the template's heading / paragraph / list hierarchy.
+                  // Hanging-indent items render as borderless tables so Word
+                  // aligns wrapped lines under the start-of-text column.
                   const escape = (s: string): string =>
                     s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
                   const lines = sourceText.split(/\r?\n/);
                   const parts: string[] = [];
                   let titleEmitted = false;
+                  // Marker matchers — accept BOTH "(a)" and "a)" syntax so
+                  // user-edited text in either style still aligns correctly.
+                  const ROMAN_RE  = /^(?:\()?(?:i|ii|iii|iv|v|vi|vii|viii|ix|x)\)\s+/i;
+                  const LETTER_RE = /^(?:\()?[a-z]\)\s+/i;
                   for (let raw of lines) {
                     const line = raw.trim();
                     if (!line) continue;
-                    // First non-empty line → title
                     if (!titleEmitted) {
                       parts.push(`<p class="caro-na-title">${escape(line)}</p>`);
                       titleEmitted = true;
                       continue;
                     }
-                    // Roman sub-items (i), (ii), (iii), (iv) under (h)
-                    if (/^\((i|ii|iii|iv|v|vi|vii|viii|ix|x)\)\s+/i.test(line)) {
-                      const [, marker, rest] =
-                        line.match(/^(\([^)]+\))\s+(.*)$/) ?? ["", line, ""];
+                    // Roman sub-items (i), (ii), (iii), (iv) under (h) — nested
+                    if (ROMAN_RE.test(line)) {
+                      const m = line.match(/^(\(?[^)]+\))\s+(.*)$/);
+                      const marker = m ? m[1] : "";
+                      const rest   = m ? m[2] : line;
                       parts.push(
-                        `<p class="caro-na-roman"><span style="display:inline-block;min-width:28pt;">${escape(marker)}</span>${escape(rest)}</p>`,
+                        `<table class="caro-na-item caro-na-nested"><tr>` +
+                        `<td class="caro-na-marker">${escape(marker)}</td>` +
+                        `<td class="caro-na-text">${escape(rest)}</td>` +
+                        `</tr></table>`,
                       );
                       continue;
                     }
-                    // Lettered items (a) through (z)
-                    if (/^\([a-z]\)\s+/i.test(line)) {
-                      const [, marker, rest] =
-                        line.match(/^(\([^)]+\))\s+(.*)$/) ?? ["", line, ""];
+                    // Lettered items (a) through (h) — top-level
+                    if (LETTER_RE.test(line)) {
+                      const m = line.match(/^(\(?[a-z]\))\s+(.*)$/i);
+                      const marker = m ? m[1] : "";
+                      const rest   = m ? m[2] : line;
                       parts.push(
-                        `<p class="caro-na-letter"><span style="display:inline-block;min-width:24pt;">${escape(marker)}</span>${escape(rest)}</p>`,
+                        `<table class="caro-na-item"><tr>` +
+                        `<td class="caro-na-marker">${escape(marker)}</td>` +
+                        `<td class="caro-na-text">${escape(rest)}</td>` +
+                        `</tr></table>`,
                       );
                       continue;
                     }
@@ -766,6 +787,20 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
             const lines = sourceText.split(/\r?\n/);
             const blocks: React.ReactNode[] = [];
             let titleEmitted = false;
+            // Match BOTH "(a)" and "a)" formats — see Word export comment.
+            const ROMAN_RE  = /^(\(?(?:i|ii|iii|iv|v|vi|vii|viii|ix|x)\))\s+(.*)$/i;
+            const LETTER_RE = /^(\(?[a-z]\))\s+(.*)$/i;
+            const cellTd: React.CSSProperties = {
+              border: 'none',
+              padding: 0,
+              verticalAlign: 'top',
+              fontFamily: "'Times New Roman', Times, serif",
+              fontSize: '10pt',
+              lineHeight: 1.4,
+            };
+            const markerTd: React.CSSProperties = { ...cellTd, width: '28pt', paddingRight: '4pt', whiteSpace: 'nowrap' };
+            const textTd: React.CSSProperties = { ...cellTd, textAlign: 'justify' };
+
             lines.forEach((raw, idx) => {
               const line = raw.trim();
               if (!line) return;
@@ -778,29 +813,37 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                 titleEmitted = true;
                 return;
               }
-              const romanMatch = line.match(/^(\((?:i|ii|iii|iv|v|vi|vii|viii|ix|x)\))\s+(.*)$/i);
+              const romanMatch = line.match(ROMAN_RE);
               if (romanMatch) {
                 blocks.push(
-                  <p
+                  <table
                     key={`l-${idx}`}
-                    style={{ margin: '0 0 8pt 60pt', textIndent: '-28pt', textAlign: 'justify', lineHeight: 1.4 }}
+                    style={{ borderCollapse: 'collapse', width: 'calc(100% - 36pt)', margin: '0 0 8pt 36pt' }}
                   >
-                    <span style={{ display: 'inline-block', minWidth: '28pt' }}>{romanMatch[1]}</span>
-                    {romanMatch[2]}
-                  </p>,
+                    <tbody>
+                      <tr>
+                        <td style={markerTd}>{romanMatch[1]}</td>
+                        <td style={textTd}>{romanMatch[2]}</td>
+                      </tr>
+                    </tbody>
+                  </table>,
                 );
                 return;
               }
-              const letterMatch = line.match(/^(\([a-z]\))\s+(.*)$/i);
+              const letterMatch = line.match(LETTER_RE);
               if (letterMatch) {
                 blocks.push(
-                  <p
+                  <table
                     key={`l-${idx}`}
-                    style={{ margin: '0 0 8pt 24pt', textIndent: '-24pt', textAlign: 'justify', lineHeight: 1.4 }}
+                    style={{ borderCollapse: 'collapse', width: '100%', margin: '0 0 8pt 0' }}
                   >
-                    <span style={{ display: 'inline-block', minWidth: '24pt' }}>{letterMatch[1]}</span>
-                    {letterMatch[2]}
-                  </p>,
+                    <tbody>
+                      <tr>
+                        <td style={markerTd}>{letterMatch[1]}</td>
+                        <td style={textTd}>{letterMatch[2]}</td>
+                      </tr>
+                    </tbody>
+                  </table>,
                 );
                 return;
               }
