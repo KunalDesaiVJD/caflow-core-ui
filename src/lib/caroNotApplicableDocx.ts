@@ -35,10 +35,15 @@ import {
 } from "docx";
 
 const FONT       = "Times New Roman";
-const FONT_HALFP = 22;             // 11 pt = 22 half-points
+const FONT_HALFP = 22;             // 11 pt = 22 half-points (default body)
+const INTRO_HALFP = 20;            // 10 pt — applied only to the intro paragraph
 
 // Indent values (twip — 1 inch = 1440)
-const INDENT_SUBHEAD     = 720;    // ~0.5 inch
+// At Times 11pt, ~120 twip per character.  INDENT_SUBHEAD = 360 twip ≈ 3 chars
+// — this is the previous 720 (≈ 6 chars) reduced by 3 character widths per
+// user request ("remove 3 characters of space from the beginning of the
+// heading: 'As required by section 143(3)…'").
+const INDENT_SUBHEAD     = 360;
 const INDENT_LETTER      = 720;    // (a) starts here
 const INDENT_LETTER_HANG = 360;    // marker hangs back into this gap
 const INDENT_ROMAN       = 1440;   // i. starts here
@@ -52,12 +57,14 @@ const ROMAN_TEXT_TAB  = INDENT_ROMAN;      // text starts at 1440 twip
 /** Default text body — every glyph matches the firm's WITHOUT-CARO.doc. */
 const DEFAULT_TITLE = "Report on Other Legal and Regulatory Requirements";
 
+// Intro paragraph — verbatim per the firm's latest copy.  Rendered at
+// INTRO_HALFP (10pt) regardless of the body's default 11pt.
 const DEFAULT_INTRO =
-  "The Company is a private limited and falls within exemptions specified " +
-  "under paragraph 2(iv) of the Companies (Auditor's Report) Order, 2020. " +
-  "Hence matters specified in paragraph 3 and 4 of the said order issued by " +
-  "the Central Government of India in terms of sub-section (11) of section143 " +
-  "of the Act, are not enclosed";
+  "The Company is a private limited company and falls within the exemptions " +
+  "specified under paragraph 2(iv) of the Companies (Auditor's Report) Order, " +
+  "2020. Hence, the matters specified in paragraphs 3 and 4 of the said Order " +
+  "issued by the Central Government of India in terms of sub-section (11) of " +
+  "section 143 of the Act are not enclosed.";
 
 const DEFAULT_SUBHEAD =
   "As required by section 143(3) of the Act, we further report that:";
@@ -115,11 +122,14 @@ const DEFAULT_ROMANS: Roman[] = [
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-function tr(text: string, opts: { bold?: boolean; underline?: boolean } = {}): TextRun {
+function tr(
+  text: string,
+  opts: { bold?: boolean; underline?: boolean; size?: number } = {},
+): TextRun {
   return new TextRun({
     text,
     font: FONT,
-    size: FONT_HALFP,
+    size: opts.size ?? FONT_HALFP,
     bold: !!opts.bold,
     underline: opts.underline ? {} : undefined,
   });
@@ -187,11 +197,12 @@ export async function buildCaroNotApplicableDocx(
     children: [tr(DEFAULT_TITLE, { bold: true, underline: true })],
   }));
 
-  // Intro paragraph — justified, full-width
+  // Intro paragraph — justified, full-width.  Rendered at 10pt (INTRO_HALFP)
+  // while the rest of the document stays at 11pt (FONT_HALFP).
   children.push(new Paragraph({
     alignment: AlignmentType.JUSTIFIED,
     spacing: { after: 200, line: 280 },
-    children: [tr(DEFAULT_INTRO)],
+    children: [tr(DEFAULT_INTRO, { size: INTRO_HALFP })],
   }));
 
   // Sub-heading — indented
