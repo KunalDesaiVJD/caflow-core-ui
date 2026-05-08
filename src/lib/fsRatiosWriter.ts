@@ -403,8 +403,10 @@ function writeYearSheet(ws: ExcelJS.Worksheet, companyName: string, yearEnd: num
     "NET PROFIT AFTER TAX",       v(inp, "npat"),
     "AVERAGE SHREHOLDERS EQUITY", v(inp, "avg_shareholders_equity"),
     "%");
-  // Template cross-ref: ROE numerator (NPAT) = DSCR detail row E14
-  ws.getCell(20, 5).value = f("+E14");
+  // Template cross-ref: ROE numerator (NPAT) = DSCR detail row E14.
+  // Pass the actual NPAT as the formula's cached result so the cell isn't
+  // blank until Excel triggers a recalc.
+  ws.getCell(20, 5).value = f("+E14", v(inp, "npat"));
 
   writeSimpleYearRow(ws, 22, "5", "INVENTORY TURNOVER RATIO",
     "REVENUE FROM OPERATIONS", v(inp, "revenue_ops"),
@@ -436,9 +438,11 @@ function writeYearSheet(ws: ExcelJS.Worksheet, companyName: string, yearEnd: num
     "NET PROFIT AFTER TAX",    v(inp, "npat"),
     "REVENUE FROM OPERATIONS", v(inp, "revenue_ops"),
     "%");
-  // Template cross-refs: Net Profit num = ROE num (E20 = NPAT); den = Inventory num (E22 = Revenue)
-  ws.getCell(30, 5).value = f("+E20");
-  ws.getCell(30, 7).value = f("+E22");
+  // Template cross-refs: Net Profit num = ROE num (E20 = NPAT); den =
+  // Inventory num (E22 = Revenue).  Cache the actual values alongside the
+  // formulas so Excel shows them on open even before recalculation.
+  ws.getCell(30, 5).value = f("+E20", v(inp, "npat"));
+  ws.getCell(30, 7).value = f("+E22", v(inp, "revenue_ops"));
 
   writeRoceBlock(ws, inp); // rows 32..39
 
@@ -618,8 +622,9 @@ function writeRoceBlock(ws: ExcelJS.Worksheet, inp: RatioInputs | null): void {
   // r0+7: TOTAL = SUM(E33:E38) / SUM(G33:G38)
   setDetail(ws, r0 + 1, "NET PROFIT BEFORE TAX", v(inp, "npbt"),     "NET WORTH",            v(inp, "net_worth"));
   setDetail(ws, r0 + 2, "INTEREST",              v(inp, "interest"), "LONG-TERM BORROWINGS", v(inp, "lt_borrowings"));
-  // Template cross-ref: ROCE Interest (E34) = DSCR Interest row E16
-  ws.getCell(r0 + 2, 5).value = f("E16");
+  // Template cross-ref: ROCE Interest (E34) = DSCR Interest row E16.
+  // Cache the actual interest value so the cell isn't blank pre-recalc.
+  ws.getCell(r0 + 2, 5).value = f("E16", v(inp, "interest"));
   for (let i = 3; i <= 6; i++) setDetail(ws, r0 + i, "", null, "", null);
 
   // Pre-compute ROCE totals so the cached cell value matches the formula
