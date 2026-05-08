@@ -191,11 +191,11 @@ export async function buildCaroNotApplicableDocx(
   // ── Body ──────────────────────────────────────────────────────────────────
   const children: (Paragraph | Table)[] = [];
 
-  // Title — bold + underlined
+  // Title — bold only (underline removed per user request)
   children.push(new Paragraph({
     alignment: AlignmentType.LEFT,
     spacing: { after: 240, line: 280 },
-    children: [tr(DEFAULT_TITLE, { bold: true, underline: true })],
+    children: [tr(DEFAULT_TITLE, { bold: true })],
   }));
 
   // Intro paragraph — justified, full-width.
