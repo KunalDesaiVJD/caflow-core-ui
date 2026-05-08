@@ -3682,6 +3682,104 @@ export default function PipelineFinancialStatements({
     //  gets a file — no regression.
     // ───────────────────────────────────────────────────────────────────────
     if (!isNonCorporate) {
+      // ─── Corporate template-driven export ───────────────────────────────
+      //  Mirrors the NCE template path above.  Uses
+      //  public/templates/corporate-financials.xlsx as a master file and
+      //  fills only the data cells + scalar placeholders.  Falls through
+      //  to the legacy fsExcelExport (pixel-perfect Schedule III builder)
+      //  if the template can't be loaded — and that itself falls through
+      //  to the inline ExcelJS writer if anything goes wrong there too.
+      try {
+        const fyPartsT = String(engagement?.financial_year || "").split("-");
+        const cyEndYearT = fyPartsT.length === 2
+          ? parseInt(fyPartsT[0], 10) + 1
+          : cyYear;
+        const ayT = fyPartsT.length === 2
+          ? `${cyEndYearT}-${(cyEndYearT + 1).toString().slice(-2)}`
+          : "";
+        const reportDateFmtT = (() => {
+          const raw = (engagement as any)?.sign_off_date;
+          if (!raw) return "";
+          try {
+            const d = new Date(raw);
+            const dd = String(d.getDate()).padStart(2, "0");
+            const mm = String(d.getMonth() + 1).padStart(2, "0");
+            return `${dd}/${mm}/${d.getFullYear()}`;
+          } catch { return ""; }
+        })();
+
+        // Build corporate FS code → CY/PY map.  Liability + revenue codes
+        // are sign-flipped from raw TB negative to positive face values.
+        const CORP_LIAB = new Set([
+          "BS_EQ_SC","BS_EQ_RS",
+          "BS_NCL_LTB","BS_NCL_DTL","BS_NCL_OLT","BS_NCL_LTP",
+          "BS_CL_STB","BS_CL_TP","BS_CL_OCL","BS_CL_STP",
+        ]);
+        const CORP_REV = new Set(["PL_REV_OPS","PL_REV_OI"]);
+        const CORP_CODES = [
+          "BS_EQ_SC","BS_EQ_RS",
+          "BS_NCL_LTB","BS_NCL_DTL","BS_NCL_OLT","BS_NCL_LTP",
+          "BS_CL_STB","BS_CL_TP","BS_CL_OCL","BS_CL_STP",
+          "BS_NCA_FA","BS_NCA_INV","BS_NCA_DTA","BS_NCA_LLA","BS_NCA_ONA",
+          "BS_CA_CI","BS_CA_INV","BS_CA_TR","BS_CA_CCE","BS_CA_SLA","BS_CA_OCA",
+          "PL_REV_OPS","PL_REV_OI",
+          "PL_EXP_MAT","PL_EXP_SIT","PL_EXP_EMP","PL_EXP_FIN",
+          "PL_EXP_DEP","PL_EXP_OTH","PL_EXP_CII",
+          "PL_TAX_CUR","PL_TAX_DEF",
+        ];
+        const corpAmounts: Record<string, { cy: number; py: number }> = {};
+        for (const code of CORP_CODES) {
+          let cyVal = (cyOf as any)(code) || 0;
+          let pyVal = (pyOf as any)(code) || 0;
+          if (CORP_LIAB.has(code) || CORP_REV.has(code)) {
+            cyVal = -cyVal;
+            pyVal = -pyVal;
+          }
+          corpAmounts[code] = { cy: cyVal, py: pyVal };
+        }
+
+        const clientT = (engagement?.clients ?? {}) as any;
+        const { buildCorporateFinancialsXLSX } =
+          await import("@/lib/fsExcelTemplateCorporate");
+        const blob = await buildCorporateFinancialsXLSX({
+          entityName:    clientName,
+          entityType:    clientT.entity_type ?? "Private Limited",
+          address:       clientT.registered_office ?? clientT.address ?? "",
+          pan:           clientT.pan ?? "",
+          gstin:         Array.isArray(clientT.gstin) ? (clientT.gstin[0] ?? "") : (clientT.gstin ?? ""),
+          tan:           clientT.tan_number ?? "",
+          cin:           clientT.cin ?? "",
+          business:      clientT.business_activity ?? "",
+          financialYear: fy,
+          assessmentYear: ayT,
+          cyYear:        cyEndYearT,
+          pyYear:        cyEndYearT - 1,
+          firmName:      sigFirmName || "",
+          firmFRN:       sigFirmFRN  || "",
+          partnerName:   sigPartnerName || "",
+          membershipNo:  sigMembershipNo || "",
+          place:         sigPlace || sigFirmCity || "",
+          reportDate:    reportDateFmtT,
+          udin:          (engagement as any)?.udin ?? "",
+          amounts:       corpAmounts,
+        });
+        const safeNmT = (clientName || "Client").replace(/[^A-Za-z0-9]/g, "_");
+        const urlT    = URL.createObjectURL(blob);
+        const aT      = document.createElement("a");
+        aT.href     = urlT;
+        aT.download = `FS_${safeNmT}_${fy || "FY"}.xlsx`;
+        document.body.appendChild(aT);
+        aT.click();
+        document.body.removeChild(aT);
+        URL.revokeObjectURL(urlT);
+        toast.success("Financial Statements exported (Corporate template format)");
+        return;
+      } catch (errT: any) {
+        console.error("[FS Export] Corporate template export failed, falling back:", errT);
+        toast.warning(`Using pixel-perfect format: ${errT?.message || "template export failed"}`);
+        // Fall through to existing pixel-perfect fsExcelExport path below
+      }
+
       try {
         // Convert "2025-26" → ISO "2026-03-31" for fsExcelExport's Engagement.fy_end.
         const fyParts = String(engagement?.financial_year || "").split("-");
