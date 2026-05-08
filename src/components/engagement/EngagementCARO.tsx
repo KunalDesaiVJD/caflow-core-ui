@@ -633,12 +633,16 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                        Word's HTML import does NOT reliably honour inline-block /
                        min-width on a span, so the marker + text columns are
                        guaranteed by table cells.  cellspacing/cellpadding=0 +
-                       border:none keep the visual identical to a paragraph. */
-                    table.caro-na-item { border-collapse: collapse; width: 100%; margin: 0 0 8pt 0; }
+                       border:none keep the visual identical to a paragraph.
+                       margin-left:24pt indents lettered points by ~4 chars at
+                       Times 10pt — matches the template's start column. */
+                    table.caro-na-item { border-collapse: collapse; width: calc(100% - 24pt); margin: 0 0 8pt 24pt; }
                     table.caro-na-item td { border: none !important; padding: 0 !important; vertical-align: top; font-family: ${SERIF}; font-size: 10pt; line-height: 1.4; }
                     table.caro-na-item td.caro-na-marker { width: 28pt; padding-right: 4pt !important; white-space: nowrap; }
                     table.caro-na-item td.caro-na-text   { text-align: justify; }
-                    table.caro-na-item.caro-na-nested    { margin-left: 36pt; width: calc(100% - 36pt); }
+                    /* Roman sub-items sit further right than their parent
+                       letter — 24pt parent indent + 36pt nested indent. */
+                    table.caro-na-item.caro-na-nested    { margin-left: 60pt; width: calc(100% - 60pt); }
                     .caro-sig, .caro-sig tr, .caro-sig td {
                       border: none !important;
                       padding: 0 !important;
@@ -825,10 +829,11 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
               }
               const romanMatch = line.match(ROMAN_RE);
               if (romanMatch) {
+                // Roman sub-items: 24pt parent indent + 36pt nested = 60pt
                 blocks.push(
                   <table
                     key={`l-${idx}`}
-                    style={{ borderCollapse: 'collapse', width: 'calc(100% - 36pt)', margin: '0 0 8pt 36pt' }}
+                    style={{ borderCollapse: 'collapse', width: 'calc(100% - 60pt)', margin: '0 0 8pt 60pt' }}
                   >
                     <tbody>
                       <tr>
@@ -842,10 +847,12 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
               }
               const letterMatch = line.match(LETTER_RE);
               if (letterMatch) {
+                // Lettered points indented 24pt (~4 chars at Times 10pt)
+                // to match the template's start column.
                 blocks.push(
                   <table
                     key={`l-${idx}`}
-                    style={{ borderCollapse: 'collapse', width: '100%', margin: '0 0 8pt 0' }}
+                    style={{ borderCollapse: 'collapse', width: 'calc(100% - 24pt)', margin: '0 0 8pt 24pt' }}
                   >
                     <tbody>
                       <tr>
