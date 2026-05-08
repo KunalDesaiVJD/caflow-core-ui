@@ -227,22 +227,16 @@ export function RatiosTab({ engagementId, engagement }: Props) {
   const handleExportExcel = useCallback(async () => {
     setExporting(true);
     try {
-      // Auto-populate from BS/P&L before export so values are always fresh.
-      // This mirrors the "Re-sync" button but is silent on failure (falls back
-      // to whatever is currently in state).
-      // Export uses a snapshot of current ratios — auto-populate CY from TB
-      // but do NOT update React state or save to DB so the PY tab stays intact.
-      let exportRatios = ratios;
-      try {
-        const { autoPopulateRatios: _autoPop } =
-          await import("@/lib/ratioAutoPopulate");
-        // Merge auto-populated CY into existing ratios, preserving all manual
-        // PY entries (manual_overrides ensures they are not clobbered).
-        exportRatios = await _autoPop(engagementId, { existing: ratios });
-        // Do NOT call setRatios() or _save() — export is read-only.
-      } catch {
-        // TB data unavailable — export with current state values
-      }
+      // WHAT-YOU-SEE-IS-WHAT-YOU-EXPORT.  We export the current `ratios`
+      // state directly — the same numbers visible on the Ratio / Current
+      // Year / Previous Year tabs.  An earlier implementation re-ran
+      // autoPopulateRatios() right before export, which silently zeroed
+      // out any field that wasn't flagged in manual_overrides (e.g.
+      // Debt-Equity numerator/denominator), even when the on-screen
+      // values were correct.  If the auditor wants fresh-from-TB numbers
+      // they click "Re-sync from BS / P&L" — which updates state and
+      // saves to DB — and then export.
+      const exportRatios = ratios;
 
       const ExcelJS   = (await import("exceljs")).default;
       const wb        = new ExcelJS.Workbook();
