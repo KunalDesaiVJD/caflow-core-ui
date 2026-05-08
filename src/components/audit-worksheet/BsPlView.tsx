@@ -646,13 +646,22 @@ export function BsPlView({ engagementId, clientId, financialYear, onRaiseQuery }
         );
       })()}
 
-      {/* Ledger side panel */}
+      {/* Ledger side panel — pass engagementId so useTallyEngagementId can
+          take its STEP 0 path (probe tally_groups / tally_trial_balance
+          for a row under the audit engagement_id directly).  Without it,
+          the hook falls back to client_id-based lookups which can return
+          null for clients whose tally rows are written under the audit
+          engagement_id (current sync agent behaviour) but whose
+          tally_groups don't carry a populated client_id.  Symptom:
+          panel showed "No Tally sync data found" even though the BS/PL
+          face above clearly displayed the same ledger. */}
       <LedgerSidePanel
         open={!!panelLedger}
         ledgerName={panelLedger?.name ?? ""}
         parentGroup={panelLedger?.group ?? ""}
         clientId={clientId}
         financialYear={financialYear}
+        engagementId={engagementId}
         onClose={() => setPanelLedger(null)}
         onRaiseQuery={(group, ledger, note) => {
           setPanelLedger(null);

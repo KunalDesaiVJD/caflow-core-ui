@@ -531,13 +531,17 @@ export function AnomalyFeedView({ tallyEngId, financialYear, clientId, onRaiseQu
         </div>
       )}
 
-      {/* ── Ledger side panel (Phase 2C) ── */}
+      {/* ── Ledger side panel (Phase 2C) ──
+           Pass tallyEngId as the engagementId hint so useTallyEngagementId
+           can resolve via the audit-engagement direct probe (STEP 0).  See
+           cross-client fix in useTallyEngagementId.ts. */}
       <LedgerSidePanel
         open={!!panelLedger}
         ledgerName={panelLedger?.name ?? ""}
         parentGroup={panelLedger?.group ?? ""}
         clientId={clientId}
         financialYear={financialYear}
+        engagementId={tallyEngId ?? undefined}
         flaggedVoucherIds={flaggedVoucherIds}
         onClose={() => setPanelLedger(null)}
         onRaiseQuery={(group, ledger, note) => {

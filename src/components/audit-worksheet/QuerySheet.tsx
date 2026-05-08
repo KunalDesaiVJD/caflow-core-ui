@@ -1149,13 +1149,18 @@ export default function QuerySheet({
         data={data}
       />
 
-      {/* ══════════ LEDGER SIDE PANEL ══════════ */}
+      {/* ══════════ LEDGER SIDE PANEL ══════════
+           Pass the audit engagement.id so useTallyEngagementId can take
+           its STEP 0 direct-probe path.  Without it, the hook falls back
+           to client_id-based queries that may miss tally rows written
+           under the audit engagement_id by the current sync agent. */}
       <LedgerSidePanel
         open={!!viewLedger}
         ledgerName={viewLedger?.name ?? ""}
         parentGroup={viewLedger?.group ?? ""}
         clientId={data.engagement?.client_id}
         financialYear={data.financialYear}
+        engagementId={data.engagement?.id}
         onClose={() => setViewLedger(null)}
         onRaiseQuery={(group, ledger, note) => {
           setViewLedger(null);
