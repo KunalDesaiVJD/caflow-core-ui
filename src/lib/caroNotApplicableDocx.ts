@@ -35,7 +35,7 @@ import {
 } from "docx";
 
 const FONT       = "Times New Roman";
-const FONT_HALFP = 20;             // 10 pt = 20 half-points (whole document)
+const FONT_HALFP = 22;             // 11 pt = 22 half-points (whole document)
 
 // Indent values (twip — 1 inch = 1440)
 // At Times 10pt, ~110-120 twip per character.
