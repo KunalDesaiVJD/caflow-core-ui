@@ -35,7 +35,7 @@ import {
 } from "docx";
 
 const FONT       = "Times New Roman";
-const FONT_HALFP = 20;             // 10 pt = 20 half-points
+const FONT_HALFP = 22;             // 11 pt = 22 half-points
 
 // Indent values (twip — 1 inch = 1440)
 const INDENT_SUBHEAD     = 720;    // ~0.5 inch
