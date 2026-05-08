@@ -3784,6 +3784,111 @@ export default function PipelineFinancialStatements({
       }
     }
 
+    // ───────────────────────────────────────────────────────────────────────
+    //  NCE template-driven export — uses public/templates/nce-financials.xlsx
+    //  as a starting workbook so headings, fonts, borders and column widths
+    //  match the firm's hand-crafted master format.  Only data cells +
+    //  scalar placeholders are replaced.  See src/lib/fsExcelTemplateNCE.ts.
+    //  Falls through to the legacy inline writer if anything goes wrong so
+    //  the auditor always gets a file.
+    // ───────────────────────────────────────────────────────────────────────
+    if (isNonCorporate) {
+      try {
+        // Convert "2025-26" → numeric end year
+        const fyParts = String(engagement?.financial_year || "").split("-");
+        const cyEndYear = fyParts.length === 2
+          ? parseInt(fyParts[0], 10) + 1
+          : cyYear;
+        const pyEndYear = cyEndYear - 1;
+        const ay = fyParts.length === 2
+          ? `${cyEndYear}-${(cyEndYear + 1).toString().slice(-2)}`
+          : "";
+        // Format report date as DD/MM/YYYY for the template
+        const reportDateFmt = (() => {
+          const raw = (engagement as any)?.sign_off_date;
+          if (!raw) return "";
+          try {
+            const d = new Date(raw);
+            const dd = String(d.getDate()).padStart(2, "0");
+            const mm = String(d.getMonth() + 1).padStart(2, "0");
+            return `${dd}/${mm}/${d.getFullYear()}`;
+          } catch { return ""; }
+        })();
+
+        // Build NCE FS code → CY/PY amount map.  Liabilities are stored
+        // negative in TB so we negate them to get positive face values.
+        // exportCy / exportPy include manual overrides + Phase E notes-aware
+        // substitutions for NCE.
+        const NCE_LIAB = new Set([
+          "NCE_CAP","NCE_LTB","NCE_OLTL","NCE_LTP",
+          "NCE_STB","NCE_TP","NCE_OCL","NCE_STP",
+        ]);
+        const NCE_INCOME = new Set([
+          "NCE_REV_OPS","NCE_REV_OTH",
+        ]);
+        const NCE_CODES = [
+          "NCE_CAP","NCE_LTB","NCE_OLTL","NCE_LTP",
+          "NCE_STB","NCE_TP","NCE_OCL","NCE_STP",
+          "NCE_PPE","NCE_CWIP","NCE_INTG",
+          "NCE_NCINV","NCE_LTLA","NCE_ONCA",
+          "NCE_CINV","NCE_STCK","NCE_TR","NCE_CASH","NCE_STLA","NCE_OCA",
+          "NCE_REV_OPS","NCE_REV_OTH",
+          "NCE_COGS","NCE_EMP_EXP","NCE_FIN_COST","NCE_DEPR","NCE_OTH_EXP",
+        ];
+        const amounts: Record<string, { cy: number; py: number }> = {};
+        for (const code of NCE_CODES) {
+          let cyVal = (exportCy as any)[code] || (cyOf as any)(code) || 0;
+          let pyVal = (exportPy as any)[code] || (pyOf as any)(code) || 0;
+          // Liabilities + Income come from TB negative — flip to positive
+          if (NCE_LIAB.has(code) || NCE_INCOME.has(code)) {
+            cyVal = -cyVal;
+            pyVal = -pyVal;
+          }
+          amounts[code] = { cy: cyVal, py: pyVal };
+        }
+
+        const client    = (engagement?.clients ?? {}) as any;
+        const { buildNCEFinancialsXLSX } =
+          await import("@/lib/fsExcelTemplateNCE");
+        const blob = await buildNCEFinancialsXLSX({
+          entityName:    clientName,
+          entityType:    client.entity_type ?? "Non-Corporate Entity",
+          address:       client.registered_office ?? client.address ?? "",
+          pan:           client.pan ?? "",
+          gstin:         Array.isArray(client.gstin) ? (client.gstin[0] ?? "") : (client.gstin ?? ""),
+          tan:           client.tan_number ?? "",
+          business:      client.business_activity ?? "",
+          financialYear: fy,
+          assessmentYear: ay,
+          cyYear:        cyEndYear,
+          pyYear:        pyEndYear,
+          firmName:      sigFirmName || "",
+          firmFRN:       sigFirmFRN  || "",
+          partnerName:   sigPartnerName || "",
+          membershipNo:  sigMembershipNo || "",
+          place:         sigPlace || sigFirmCity || "",
+          reportDate:    reportDateFmt,
+          udin:          (engagement as any)?.udin ?? "",
+          amounts,
+        });
+        const safeNm = (clientName || "Client").replace(/[^A-Za-z0-9]/g, "_");
+        const url    = URL.createObjectURL(blob);
+        const a      = document.createElement("a");
+        a.href     = url;
+        a.download = `FS_${safeNm}_${fy || "FY"}.xlsx`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        toast.success("Financial Statements exported (NCE template format)");
+        return;
+      } catch (err: any) {
+        console.error("[FS Export] NCE template export failed, falling back to legacy:", err);
+        toast.warning(`Using legacy NCE format: ${err?.message || "template export failed"}`);
+        // Fall through to legacy writer below
+      }
+    }
+
     const wb = new ExcelJS.Workbook();
     wb.creator = "CAFlow";
     wb.created = new Date();
