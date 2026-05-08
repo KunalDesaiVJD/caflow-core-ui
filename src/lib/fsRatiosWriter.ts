@@ -500,8 +500,12 @@ function writeSimpleYearRow(
   setCell(6, denLabel,  { align: "left"   });
   setCell(7, denAmt,    { align: "right", numFmt: MONEY_FMT });
 
-  // Ratio = num/den. % ratios are stored as raw decimal (template behaviour).
-  setCell(8, f(`IFERROR(E${r}/G${r}${unit === "%" ? "" : ""},"N.A.")`),
+  // Ratio = num / den. % ratios are stored as raw decimal (template behaviour).
+  // We pass the pre-computed result alongside the formula so the cell shows
+  // the correct value immediately on open — without it, ExcelJS caches 0
+  // and Excel shows 0.00 until the user presses F9 to recalculate.
+  const computedRatio: number | string = denAmt !== 0 ? numAmt / denAmt : "N.A.";
+  setCell(8, f(`IFERROR(E${r}/G${r},"N.A.")`, computedRatio),
     { bold: true, align: "center", numFmt: unit === "%" ? PCT_FMT : RATIO_FMT });
 }
 
@@ -548,10 +552,15 @@ function writeDscrBlock(ws: ExcelJS.Worksheet, inp: RatioInputs | null): void {
   setDetail(ws, r0 + 3, "INTEREST",                 v(inp, "interest"),            "",                         null);
   setDetail(ws, r0 + 4, "OTHER NON CASH ADJUSTMENT", v(inp, "other_non_cash_adj"), "",                         null);
 
-  // TOTAL row
+  // TOTAL row — pre-compute results so Excel shows the right value on open
+  const dscrNumTotal = v(inp, "npat") + v(inp, "non_cash_op_exp")
+                     + v(inp, "interest") + v(inp, "other_non_cash_adj");
+  const dscrDenTotal = v(inp, "interest_lease") + v(inp, "principal_repayments");
+  const dscrRatio: number | string = dscrDenTotal !== 0 ? dscrNumTotal / dscrDenTotal : "N.A.";
+
   setLabel(ws, r0 + 5, 4, "TOTAL", { bold: true });
   const numTot = ws.getCell(r0 + 5, 5);
-  numTot.value = f(`SUM(E${r0 + 1}:E${r0 + 4})`);
+  numTot.value = f(`SUM(E${r0 + 1}:E${r0 + 4})`, dscrNumTotal);
   numTot.numFmt = MONEY_FMT;
   applyFont(numTot, { bold: true, size: 10 });
   numTot.alignment = { horizontal: "right", vertical: "middle" };
@@ -559,14 +568,14 @@ function writeDscrBlock(ws: ExcelJS.Worksheet, inp: RatioInputs | null): void {
 
   setLabel(ws, r0 + 5, 6, "TOTAL", { bold: true });
   const denTot = ws.getCell(r0 + 5, 7);
-  denTot.value = f(`SUM(G${r0 + 1}:G${r0 + 2})`);
+  denTot.value = f(`SUM(G${r0 + 1}:G${r0 + 2})`, dscrDenTotal);
   denTot.numFmt = MONEY_FMT;
   applyFont(denTot, { bold: true, size: 10 });
   denTot.alignment = { horizontal: "right", vertical: "middle" };
   denTot.border = FULL_BDR;
 
   const ratioCell = ws.getCell(r0 + 5, 8);
-  ratioCell.value = f(`IFERROR(E${r0 + 5}/G${r0 + 5},"N.A.")`);
+  ratioCell.value = f(`IFERROR(E${r0 + 5}/G${r0 + 5},"N.A.")`, dscrRatio);
   ratioCell.numFmt = RATIO_FMT;
   applyFont(ratioCell, { bold: true, size: 10 });
   ratioCell.alignment = { horizontal: "center", vertical: "middle" };
@@ -613,9 +622,14 @@ function writeRoceBlock(ws: ExcelJS.Worksheet, inp: RatioInputs | null): void {
   ws.getCell(r0 + 2, 5).value = f("E16");
   for (let i = 3; i <= 6; i++) setDetail(ws, r0 + i, "", null, "", null);
 
+  // Pre-compute ROCE totals so the cached cell value matches the formula
+  const roceNumTotal = v(inp, "npbt") + v(inp, "interest");
+  const roceDenTotal = v(inp, "net_worth") + v(inp, "lt_borrowings");
+  const roceRatio: number | string = roceDenTotal !== 0 ? roceNumTotal / roceDenTotal : "N.A.";
+
   setLabel(ws, r0 + 7, 4, "TOTAL", { bold: true });
   const numTot = ws.getCell(r0 + 7, 5);
-  numTot.value = f(`SUM(E${r0 + 1}:E${r0 + 6})`);
+  numTot.value = f(`SUM(E${r0 + 1}:E${r0 + 6})`, roceNumTotal);
   numTot.numFmt = MONEY_FMT;
   applyFont(numTot, { bold: true, size: 10 });
   numTot.alignment = { horizontal: "right", vertical: "middle" };
@@ -623,14 +637,14 @@ function writeRoceBlock(ws: ExcelJS.Worksheet, inp: RatioInputs | null): void {
 
   setLabel(ws, r0 + 7, 6, "TOTAL", { bold: true });
   const denTot = ws.getCell(r0 + 7, 7);
-  denTot.value = f(`SUM(G${r0 + 1}:G${r0 + 6})`);
+  denTot.value = f(`SUM(G${r0 + 1}:G${r0 + 6})`, roceDenTotal);
   denTot.numFmt = MONEY_FMT;
   applyFont(denTot, { bold: true, size: 10 });
   denTot.alignment = { horizontal: "right", vertical: "middle" };
   denTot.border = FULL_BDR;
 
   const ratioCell = ws.getCell(r0 + 7, 8);
-  ratioCell.value = f(`IFERROR(E${r0 + 7}/G${r0 + 7},"N.A.")`);
+  ratioCell.value = f(`IFERROR(E${r0 + 7}/G${r0 + 7},"N.A.")`, roceRatio);
   ratioCell.numFmt = PCT_FMT;
   applyFont(ratioCell, { bold: true, size: 10 });
   ratioCell.alignment = { horizontal: "center", vertical: "middle" };
