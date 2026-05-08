@@ -136,6 +136,13 @@ function buildEmailHTML(type: string, payload: Record<string, any>): string {
       return wrapper(`
         <p>Dear ${payload.client_name || "Client"},</p>
         <p>${payload.custom_message || "Please find the audit communication details below."}</p>
+        ${payload.portal_url ? `
+        <p style="margin:16px 0;">
+          <a href="${payload.portal_url}"
+             style="background:#c8960c;color:#fff;padding:10px 22px;border-radius:6px;text-decoration:none;font-weight:600;display:inline-block;">
+            View in Client Portal →
+          </a>
+        </p>` : ""}
         <p>Regards,<br><strong>${firmName}</strong><br><em>Chartered Accountants</em></p>
       `);
 

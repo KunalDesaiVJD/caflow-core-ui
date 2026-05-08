@@ -38,6 +38,7 @@ interface AuditQuery {
   ledger_name: string | null;
   group_name: string | null;
   client_reply: string | null;         // legacy single-reply field
+  firm_id: string | null;
 }
 
 interface Message {
@@ -175,6 +176,22 @@ function QueryCard({
       setFile(null);
       toast.success("Reply sent successfully");
       fetchMessages();
+
+      // ── Notify firm: client has replied ───────────────────────────
+      if (query.firm_id) {
+        supabase.functions.invoke("send-notification", {
+          body: {
+            type:         "audit_query_dispatch",
+            firm_id:      query.firm_id,
+            direct_email: "info@vjdesai.com",
+            payload: {
+              client_name:    clientName,
+              custom_message: `${clientName} has responded to an audit query${query.ref_number ? ` (Ref: ${query.ref_number})` : ""}. Please log in to CAFlow to review the response.`,
+              custom_subject: `Client Response Received — ${clientName}`,
+            },
+          },
+        }).catch(() => { /* non-blocking */ });
+      }
     } catch (err: any) {
       toast.error(err.message || "Failed to send reply");
     } finally {
@@ -402,7 +419,7 @@ export default function PortalQueries() {
 
     const { data } = await (supabase as any)
       .from("audit_client_queries")
-      .select("id,ref_number,query_text,status,priority,due_date,financial_year,required_documents,ledger_name,group_name,client_reply")
+      .select("id,ref_number,query_text,status,priority,due_date,financial_year,required_documents,ledger_name,group_name,client_reply,firm_id")
       .eq("client_id", client.id)
       .order("created_at", { ascending: false });
 

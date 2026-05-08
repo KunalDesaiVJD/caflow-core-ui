@@ -411,6 +411,23 @@ function BulkDispatchDialog({
       }
 
       onDispatched(results);
+
+      // ── Email client: notify queries dispatched ────────────────────
+      if (firmId && clientId && results.length > 0) {
+        const qCount = new Set(results.map(r => r.clientQueryId)).size;
+        supabase.functions.invoke("send-notification", {
+          body: {
+            type:      "audit_query_dispatch",
+            firm_id:   firmId,
+            client_id: clientId,
+            payload: {
+              custom_message: `${qCount} audit ${qCount === 1 ? "query has" : "queries have"} been raised for your attention. Please log in to the CAFlow client portal to view and respond.`,
+              portal_url: `${window.location.origin}/portal/queries`,
+            },
+          },
+        }).catch(() => { /* email failure non-blocking */ });
+      }
+
       onClose();
     } catch (err: any) {
       toast.error(err.message || "Dispatch failed");
@@ -658,6 +675,22 @@ export default function QuerySheet({
           setQueryStatus(row.id, "dispatched");
       }
       toast.success("Query dispatched to client portal");
+
+      // ── Email client: notify query dispatched ──────────────────────
+      if (data.engagement?.firm_id && data.engagement?.client_id) {
+        supabase.functions.invoke("send-notification", {
+          body: {
+            type:      "audit_query_dispatch",
+            firm_id:   data.engagement.firm_id,
+            client_id: data.engagement.client_id,
+            payload: {
+              client_name:    data.clientName || "Client",
+              custom_message: `A new audit query has been raised for your attention by ${data.firmName || "your CA firm"}. Please log in to the CAFlow client portal to view and respond.`,
+              portal_url: `${window.location.origin}/portal/queries`,
+            },
+          },
+        }).catch(() => { /* email failure non-blocking */ });
+      }
     } catch (err: any) {
       toast.error(err.message || "Dispatch failed");
     } finally { setDispatchingId(null); }
