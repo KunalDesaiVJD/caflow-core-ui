@@ -1,18 +1,21 @@
 /**
  * useTallyEngagementId
  *
- * Resolves the tally `engagement_id` (used in tally_* tables) from an
- * audit engagement.  The newer Tally desktop agent writes its rows using
- * the AUDIT engagement_id directly, so the audit engagementId itself is
- * usually the right answer.  The legacy lookups below remain as fallbacks
- * for older engagements that still rely on the separate `engagements`
- * table or only carry a `client_id` on `tally_groups`.
+ * Resolves the tally `engagement_id` (used in tally_* tables) from the
+ * audit engagement's client_id + financial_year.
  *
  * Resolution order:
- *   0. Probe tally_groups with engagement_id = audit engagement id.
- *      If any row exists, return audit engagementId directly.
- *   1. Legacy engagements table  (client_id + financial_year)
- *   2. tally_groups table (client_id fallback — picks any row)
+ *   0. tally_groups / tally_trial_balance probed with auditEngagementId directly
+ *      (current sync agent writes tally rows under the audit engagement id)
+ *   1. tally_groups (client_id + financial_year) — exact FY match
+ *   2. tally_groups (client_id only)              — any synced year fallback
+ *
+ * NOTE: The old "engagements" table lookup has been removed. That table
+ * held stale ids and, when it returned any non-null row, it bypassed the
+ * tally_groups resolution — causing "No Tally sync data found" even when
+ * voucher data existed. tally_groups is written during every sync and is
+ * the single source of truth for which engagement_id a client's tally
+ * data lives under.
  */
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -59,18 +62,20 @@ export function useTallyEngagementId(
         }
       }
 
-      // 1. Legacy — separate Tally `engagements` table by client + FY
+      // 1. Exact match: client_id + financial_year (handles multiple years per client)
       if (!id && clientId && financialYear) {
         const { data } = await (supabase as any)
-          .from("engagements")
-          .select("id")
+          .from("tally_groups")
+          .select("engagement_id")
           .eq("client_id", clientId)
           .eq("financial_year", financialYear)
+          .limit(1)
           .maybeSingle();
-        id = data?.id ?? null;
+        id = data?.engagement_id ?? null;
       }
 
-      // 2. Fallback — any tally_groups row for this client
+      // 2. Fallback — any synced year for this client (handles PY shells and
+      //    minor FY string format differences between audit and tally records)
       if (!id && clientId) {
         const { data } = await (supabase as any)
           .from("tally_groups")

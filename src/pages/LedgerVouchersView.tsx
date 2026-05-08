@@ -107,7 +107,7 @@ export default function LedgerVouchersView() {
       // from a PY Shell embedded view so we honour the originating FY.
       if (engOverride) {
         const { data } = await supabase
-          .from("engagements" as any)
+          .from("audit_engagements" as any)
           .select("id, financial_year, is_py_shell")
           .eq("id", engOverride)
           .maybeSingle();
@@ -124,14 +124,18 @@ export default function LedgerVouchersView() {
       const fy       = (selectedEngagement as any).financial_year;
       let id: string | null = null;
 
+      // Use tally_groups as the canonical source (written during every sync).
+      // The old "engagements" table lookup has been removed — it held stale ids
+      // and, when a row was found, it bypassed the tally_groups resolution.
       if (clientId && fy) {
         const { data } = await supabase
-          .from("engagements" as any)
-          .select("id")
+          .from("tally_groups" as any)
+          .select("engagement_id")
           .eq("client_id", clientId)
           .eq("financial_year", fy)
+          .limit(1)
           .maybeSingle();
-        id = (data as any)?.id ?? null;
+        id = (data as any)?.engagement_id ?? null;
       }
       if (!id && clientId) {
         const { data } = await supabase
