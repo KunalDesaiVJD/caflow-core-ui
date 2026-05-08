@@ -35,15 +35,17 @@ import {
 } from "docx";
 
 const FONT       = "Times New Roman";
-const FONT_HALFP = 22;             // 11 pt = 22 half-points (default body)
-const INTRO_HALFP = 20;            // 10 pt — applied only to the intro paragraph
+const FONT_HALFP = 20;             // 10 pt = 20 half-points (whole document)
 
 // Indent values (twip — 1 inch = 1440)
-// At Times 11pt, ~120 twip per character.  INDENT_SUBHEAD = 360 twip ≈ 3 chars
-// — this is the previous 720 (≈ 6 chars) reduced by 3 character widths per
-// user request ("remove 3 characters of space from the beginning of the
-// heading: 'As required by section 143(3)…'").
-const INDENT_SUBHEAD     = 360;
+// At Times 10pt, ~110-120 twip per character.
+// Template wrap structure for lettered items:
+//     "   a) We have sought…"   ← 3-char indent before marker
+//     "      which to the best…"← 6-char indent on wrap
+// Achieved by  left: 720 (≈ 6 chars) + hanging: 360 (≈ 3 chars) so the
+// first line starts at 360 (marker column) and wrap returns to 720
+// (text column).  Same shape for romans at 1440 / 360.
+const INDENT_SUBHEAD     = 360;    // ~3 chars from page margin
 const INDENT_LETTER      = 720;    // (a) starts here
 const INDENT_LETTER_HANG = 360;    // marker hangs back into this gap
 const INDENT_ROMAN       = 1440;   // i. starts here
@@ -57,8 +59,7 @@ const ROMAN_TEXT_TAB  = INDENT_ROMAN;      // text starts at 1440 twip
 /** Default text body — every glyph matches the firm's WITHOUT-CARO.doc. */
 const DEFAULT_TITLE = "Report on Other Legal and Regulatory Requirements";
 
-// Intro paragraph — verbatim per the firm's latest copy.  Rendered at
-// INTRO_HALFP (10pt) regardless of the body's default 11pt.
+// Intro paragraph — verbatim per the firm's latest copy.
 const DEFAULT_INTRO =
   "The Company is a private limited company and falls within the exemptions " +
   "specified under paragraph 2(iv) of the Companies (Auditor's Report) Order, " +
@@ -197,12 +198,11 @@ export async function buildCaroNotApplicableDocx(
     children: [tr(DEFAULT_TITLE, { bold: true, underline: true })],
   }));
 
-  // Intro paragraph — justified, full-width.  Rendered at 10pt (INTRO_HALFP)
-  // while the rest of the document stays at 11pt (FONT_HALFP).
+  // Intro paragraph — justified, full-width.
   children.push(new Paragraph({
     alignment: AlignmentType.JUSTIFIED,
     spacing: { after: 200, line: 280 },
-    children: [tr(DEFAULT_INTRO, { size: INTRO_HALFP })],
+    children: [tr(DEFAULT_INTRO)],
   }));
 
   // Sub-heading — indented
