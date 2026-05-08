@@ -625,6 +625,10 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                     body { font-family: ${SERIF}; font-size: 10pt; }
                     .caro-na-title { font-family: ${SERIF}; font-size: 10pt; font-weight: bold; text-decoration: underline; text-align: left; margin: 0 0 12pt 0; }
                     .caro-na-para  { font-family: ${SERIF}; font-size: 10pt; line-height: 1.4; text-align: justify; margin: 0 0 10pt 0; }
+                    /* "As required by section 143(3) of the Act, we further
+                       report that:" sits as a sub-heading above the lettered
+                       items, indented by ~4 chars (≈ 24pt at Times 10pt). */
+                    .caro-na-subheading { font-family: ${SERIF}; font-size: 10pt; line-height: 1.4; text-align: justify; margin: 0 0 10pt 24pt; }
                     /* Hanging-indent items rendered as borderless two-cell tables.
                        Word's HTML import does NOT reliably honour inline-block /
                        min-width on a span, so the marker + text columns are
@@ -696,7 +700,13 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                       );
                       continue;
                     }
-                    // Plain paragraph (intro, "As required by section 143(3)…")
+                    // "As required by section 143(3)…" — sub-heading row
+                    // sitting above the lettered items, indented by 4 chars.
+                    if (/^as required by section 143/i.test(line)) {
+                      parts.push(`<p class="caro-na-subheading">${escape(line)}</p>`);
+                      continue;
+                    }
+                    // Plain paragraph (intro)
                     parts.push(`<p class="caro-na-para">${escape(line)}</p>`);
                   }
                   const body = parts.join("");
@@ -847,10 +857,16 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                 );
                 return;
               }
+              // "As required by section 143(3)…" — indented sub-heading
+              const isSubheading = /^as required by section 143/i.test(line);
               blocks.push(
                 <p
                   key={`l-${idx}`}
-                  style={{ margin: '0 0 10pt 0', textAlign: 'justify', lineHeight: 1.4 }}
+                  style={{
+                    margin: isSubheading ? '0 0 10pt 24pt' : '0 0 10pt 0',
+                    textAlign: 'justify',
+                    lineHeight: 1.4,
+                  }}
                 >
                   {line}
                 </p>,
