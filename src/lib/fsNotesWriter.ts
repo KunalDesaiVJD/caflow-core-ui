@@ -37,6 +37,32 @@ import { getNoteNo } from "./noteNumberRegistry";
 
 const MONEY_FMT = '#,##0.00;(#,##0.00);"-"';
 
+// Bordered grid for notes sheets — matches the firm's NCE template look.
+const THIN_BLACK = { style: "thin" as const, color: { argb: "FF000000" } };
+const FULL_BORDER = {
+  top:    THIN_BLACK,
+  bottom: THIN_BLACK,
+  left:   THIN_BLACK,
+  right:  THIN_BLACK,
+};
+
+/** Stamp every cell in [rowFrom..rowTo] × [colFrom..colTo] with FULL_BORDER. */
+function applyNotesBorders(
+  sheet:   ExcelJS.Worksheet,
+  rowFrom: number,
+  rowTo:   number,
+  colFrom: string,
+  colTo:   string,
+): void {
+  const a = colFrom.charCodeAt(0);
+  const b = colTo.charCodeAt(0);
+  for (let r = rowFrom; r <= rowTo; r++) {
+    for (let c = a; c <= b; c++) {
+      sheet.getCell(String.fromCharCode(c) + r).border = FULL_BORDER;
+    }
+  }
+}
+
 interface Ctx {
   cyYear:      number;
   pyYear:      number;
@@ -454,6 +480,9 @@ function writeNoteBSLiab(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | nu
 
   setCell(sheet, "A172", "(This space has been intentionally left blank)", { align: "center", size: 9 });
   sheet.mergeCells("A172:H172");
+
+  // Bordered grid across the whole Note BS-Liab area.
+  applyNotesBorders(sheet, 2, 172, "A", "H");
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -708,6 +737,9 @@ function writeNoteBSAsset(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | n
 
   setCell(sheet, "A120", "(This space has been intentionally left blank)", { align: "center", size: 9 });
   sheet.mergeCells("A120:H120");
+
+  // Bordered grid across the whole Note BS-Asset area.
+  applyNotesBorders(sheet, 2, 120, "A", "H");
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -956,6 +988,10 @@ function writeNotePL(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | null):
 
   setCell(sheet, "A127", "(This space has been intentionally left blank)", { align: "center", size: 9 });
   sheet.mergeCells("A127:H127");
+
+  // Bordered grid across the whole Note PL area (cols A–H plus the EPS
+  // amount cells on F/G).
+  applyNotesBorders(sheet, 2, 127, "A", "H");
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -1054,4 +1090,7 @@ function writeFA(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | null): voi
 
   setCell(sheet, "B25", "Notes:", { bold: true });
   setCell(sheet, "B26", "1. The Company has not revalued its Property, Plant & Equipment during the year.", { size: 9 });
+
+  // Bordered grid across the FA matrix (cols A–M, header + asset rows + totals).
+  applyNotesBorders(sheet, 2, 26, "A", "M");
 }

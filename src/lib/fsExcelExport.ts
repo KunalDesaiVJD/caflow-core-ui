@@ -395,6 +395,30 @@ const DASH = "____________";
  *   Phase 2D — Equity & Liabilities section rows 8-31
  * Phase 2E+ (Assets, signature block) will be appended here in later sub-steps.
  */
+/**
+ * Apply FULL_BORDER to every cell in a rectangular region of the sheet.
+ * Used at the end of each writer so the resulting file shows a fully
+ * bordered grid even when the user has Excel's "View Gridlines" turned
+ * off — matching the NCE reference template look.
+ */
+function applyFullBorders(
+  sheet:   ExcelJS.Worksheet,
+  rowFrom: number,
+  rowTo:   number,
+  colFrom: string,
+  colTo:   string,
+): void {
+  const colA = colFrom.charCodeAt(0);
+  const colB = colTo.charCodeAt(0);
+  for (let r = rowFrom; r <= rowTo; r++) {
+    for (let c = colA; c <= colB; c++) {
+      const ref = String.fromCharCode(c) + r;
+      const cell = sheet.getCell(ref);
+      cell.border = FULL_BORDER;
+    }
+  }
+}
+
 function writeBalanceSheet(
   sheet: ExcelJS.Worksheet,
   ctx:   FsExportContext,
@@ -882,6 +906,14 @@ function writeBalanceSheet(
   sheet.getCell("B70").value = `Date: ${signOffDate}`;
   sheet.getCell("D70").value = `Date: ${signOffDate}`;
   sheet.getCell("F70").value = `Date: ${signOffDate}`;
+
+  // ───────────────────────────────────────────────────────────────────────
+  //  Apply FULL_BORDER to every BS data cell (rows 2–61, cols B–F).
+  //  Matches the NCE template's bordered grid look — every Particulars /
+  //  Note No. / CY / PY cell gets a thin black border on all four sides.
+  //  Signature block (rows 65+) is left unbordered.
+  // ───────────────────────────────────────────────────────────────────────
+  applyFullBorders(sheet, 2, 61, "B", "F");
 }
 
 /**
@@ -1326,6 +1358,10 @@ function writeProfitAndLoss(
   // Row 59 — UDIN (auditor side only, under the Date line)
   sheet.getCell("C59").value = `UDIN: ${udinValue}`;
   sheet.getCell("C59").font = { size: 9 };
+
+  // Apply FULL_BORDER to every PL data cell so the bordered grid shows
+  // even with gridlines turned off.  Matches the NCE template look.
+  applyFullBorders(sheet, 2, 50, "B", "H");
 }
 
 /**
@@ -1718,6 +1754,9 @@ function writeCashFlow(
   // Row 61 — UDIN (auditor side only, under the Date line)
   sheet.getCell("C61").value = `UDIN: ${udinValue}`;
   sheet.getCell("C61").font = { size: 9 };
+
+  // Bordered grid across the CFS data area.
+  applyFullBorders(sheet, 2, 51, "B", "I");
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
