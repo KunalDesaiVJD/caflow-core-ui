@@ -638,7 +638,10 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                        Times 10pt — matches the template's start column. */
                     table.caro-na-item { border-collapse: collapse; width: calc(100% - 24pt); margin: 0 0 8pt 24pt; }
                     table.caro-na-item td { border: none !important; padding: 0 !important; vertical-align: top; font-family: ${SERIF}; font-size: 10pt; line-height: 1.4; }
-                    table.caro-na-item td.caro-na-marker { width: 28pt; padding-right: 4pt !important; white-space: nowrap; }
+                    /* Marker cell shrinks to content width; padding-right of
+                       12pt gives ~2 character widths of gap before text
+                       starts (Times 10pt: 1 char ≈ 6pt). */
+                    table.caro-na-item td.caro-na-marker { width: 1pt; padding-right: 12pt !important; white-space: nowrap; }
                     table.caro-na-item td.caro-na-text   { text-align: justify; }
                     /* Roman sub-items sit further right than their parent
                        letter — 24pt parent indent + 36pt nested indent. */
@@ -812,7 +815,10 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
               fontSize: '10pt',
               lineHeight: 1.4,
             };
-            const markerTd: React.CSSProperties = { ...cellTd, width: '28pt', paddingRight: '4pt', whiteSpace: 'nowrap' };
+            // Marker cell shrinks to content (width:1pt forces auto-fit);
+            // padding-right of 12pt gives ~2 character widths of gap before
+            // the text column begins.
+            const markerTd: React.CSSProperties = { ...cellTd, width: '1pt', paddingRight: '12pt', whiteSpace: 'nowrap' };
             const textTd: React.CSSProperties = { ...cellTd, textAlign: 'justify' };
 
             lines.forEach((raw, idx) => {
