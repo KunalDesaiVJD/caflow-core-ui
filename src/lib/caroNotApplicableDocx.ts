@@ -229,6 +229,14 @@ export async function buildCaroNotApplicableDocx(
     ));
   }
 
+  // ── Spacer between the last roman sub-point and the signature block ────────
+  // Empty paragraph with explicit before/after spacing — Word respects this
+  // even though tables themselves do not have a "space-before" attribute.
+  children.push(new Paragraph({
+    spacing: { before: 240, after: 240, line: 280 },
+    children: [tr("")],
+  }));
+
   // ── Signature block ────────────────────────────────────────────────────────
   // 2-cell borderless table: firm/partner left, Place/Date/UDIN right.
   const sigP = (text: string, opts: { bold?: boolean } = {}) =>
