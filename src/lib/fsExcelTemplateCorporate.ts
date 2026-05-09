@@ -166,7 +166,9 @@ function buildPlaceholderMap(i: CorporateFinancialsInputs): Record<string, strin
     // range in the template — substitute with engagement's actual FY span.
     "[01 Apr 2025 to 31 Mar 2026]_ AUTO":   fyDateRange,
     "[2026-27]_ AUTO":             i.assessmentYear || "",
-    "_____ AUTO":                  `31 March, ${i.cyYear}`,
+    // NOTE: "_____ AUTO" handled by a smart regex below (NOT here) so it
+    //       doesn't double-prefix cells that already contain "31 March, "
+    //       and so PY-column cells can be patched separately to PY year.
 
     // ── Bare placeholders without AUTO (keep as fallback for other sheets) ─
     "[ENTER ENTITY NAME]":         i.entityName || "",
@@ -366,25 +368,89 @@ export async function buildCorporateFinancialsXLSX(
     });
   });
 
-  // 6. Replace year/date underscores in headings.
+  // 6. Replace year/date placeholders.  CY year used by default.
+  //
+  //    Smart regex `(31 March,\s*)?_____ AUTO` matches BOTH:
+  //      "_____ AUTO"            → "31 March, <cy>"
+  //      "31 March, _____ AUTO"  → "31 March, <cy>" (NOT "31 March, 31 March, …")
+  //    The optional "31 March, " prefix gets eaten by the capture group
+  //    so we never double-prefix.
+  const cyDateStr = `31 March, ${inputs.cyYear}`;
+  const pyDateStr = `31 March, ${inputs.pyYear}`;
   wb.eachSheet((ws) => {
     ws.eachRow({ includeEmpty: false }, (row) => {
       row.eachCell({ includeEmpty: false }, (cell) => {
         if (typeof cell.value !== "string") return;
         let v = cell.value;
         let dirty = false;
-        if (v.includes("31 March, _____") || v.includes("31 March, ____") || v.includes("31 March, ___") || v.includes("31 March, __")) {
-          v = v.replace(/31 March, _+/g, `31 March, ${inputs.cyYear}`);
+        // "_____ AUTO" / "____ AUTO" with optional "31 March, " prefix
+        const reUnderscores = /(?:31 March,\s*)?_+ AUTO/g;
+        if (reUnderscores.test(v)) {
+          v = v.replace(reUnderscores, cyDateStr);
           dirty = true;
         }
-        if (v.includes("31st March, 20XX") || v.includes("31 March, 20XX")) {
-          v = v.replace(/31(?:st)? March, 20XX/g, `31 March, ${inputs.cyYear}`);
+        // "31 March, ___" without AUTO suffix
+        if (/31 March,\s*_{2,}/.test(v)) {
+          v = v.replace(/31 March,\s*_+/g, cyDateStr);
+          dirty = true;
+        }
+        // 20XX year placeholders
+        if (v.includes("20XX")) {
+          v = v.replace(/31(?:st)? March,?\s*20XX/g, cyDateStr);
+          v = v.replace(/20XX-XX/g, inputs.assessmentYear || "");
+          v = v.replace(/20XX/g, String(inputs.cyYear));
           dirty = true;
         }
         if (dirty) cell.value = v;
       });
     });
   });
+
+  // 6b. Patch PY-column cells.  After step 6, every "_____ AUTO" cell
+  //     contains the CY date — but the PY column should show the
+  //     prior-year date.  Overwrite specific cells that we know hold
+  //     the PY date column header.
+  //
+  //     Mapping (verified from the template's xl/worksheets):
+  //       BS sheet     F6  → PY column header
+  //       PL sheet     H6  → PY column header (header row 6/7)
+  //       Note sheets  the formulas pull PY from BS!H4 / similar so
+  //                    fullCalcOnLoad will refresh those automatically.
+  if (bs) {
+    bs.getCell("E6").value = cyDateStr;
+    bs.getCell("F6").value = pyDateStr;
+  }
+  if (pl) {
+    // PL date headers are on row 7 columns G/H (CY/PY)
+    pl.getCell("G7").value = cyDateStr;
+    pl.getCell("H7").value = pyDateStr;
+  }
+
+  // 6c. Control Sheet — find rows labelled "Balance sheet date" and
+  //     "Comparative year-end" and overwrite the value cell with the
+  //     correct year date string.
+  const ctl = wb.getWorksheet("01_Control");
+  if (ctl) {
+    ctl.eachRow({ includeEmpty: false }, (row) => {
+      let labelText = "";
+      let firstValueCol: number | null = null;
+      row.eachCell({ includeEmpty: false }, (cell, colNum) => {
+        const v = cell.value;
+        if (typeof v === "string") {
+          // First B-column-ish text cell holds the row label
+          if (!labelText && (colNum === 2 || colNum === 3)) labelText = v;
+          // First cell after the label area (col F = 6) is the value cell
+          if (firstValueCol == null && colNum >= 6) firstValueCol = colNum;
+        }
+      });
+      const lbl = labelText.trim().toLowerCase();
+      if (lbl.startsWith("balance sheet date") && firstValueCol != null) {
+        row.getCell(firstValueCol).value = cyDateStr;
+      } else if (lbl.startsWith("comparative year-end") && firstValueCol != null) {
+        row.getCell(firstValueCol).value = pyDateStr;
+      }
+    });
+  }
 
   // 7. Generate the buffer + Blob
   const out = await wb.xlsx.writeBuffer();
