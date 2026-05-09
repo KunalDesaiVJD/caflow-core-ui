@@ -21,10 +21,12 @@ interface Props {
   engagementId:    string;
   collapseControl?: boolean;
   onRemapLedger?:  (ledgerName: string, newCode: string) => void;
+  /** Issue 4 (Aesha) — clears this ledger from coa_mapping (DB) and re-syncs. */
+  onUnmapLedger?:  (ledgerName: string) => void;
 }
 
 export default function NoteBSAsset({
-  engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl, onRemapLedger,
+  engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl, onRemapLedger, onUnmapLedger,
 }: Props) {
   // Bug 4 — Sign-convention bridge for asset Notes display
   // Asset notes are normally stored POSITIVE (DR balances), but some legacy
@@ -102,6 +104,7 @@ export default function NoteBSAsset({
           descPlaceholder={breakupHint}
           addLabel="Add row"
           onRemapLedger={onRemapLedger}
+          onUnmapLedger={onUnmapLedger}
         />
         <EditableRow
           label={`Total — ${title} (per BS)`}
@@ -130,6 +133,7 @@ export default function NoteBSAsset({
           descPlaceholder="Investment particulars"
           addLabel="Add investment"
           onRemapLedger={onRemapLedger}
+          onUnmapLedger={onUnmapLedger}
         />
         <EditableRow
           label="Total — Non-current investments (per BS)"

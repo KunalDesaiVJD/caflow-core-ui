@@ -687,6 +687,7 @@ export function ListTable({
   descPlaceholder = "Particulars",
   showSubtotal = false,
   onRemapLedger,
+  onUnmapLedger,
 }: {
   rows:             ListRow[];
   onChange:         (next: ListRow[]) => void;
@@ -694,6 +695,9 @@ export function ListTable({
   descPlaceholder?: string;
   showSubtotal?:    boolean;
   onRemapLedger?:   (ledgerName: string, newCode: string) => void;
+  /** Issue 4 (Aesha) — also clears the ledger from coa_mapping in DB so it
+   *  appears as Unmapped on the COA Mapping page and is removed from FS. */
+  onUnmapLedger?:   (ledgerName: string) => void;
 }) {
   const [dragRow,          setDragRow]          = useState<number | null>(null);
   const [dragOverRow,      setDragOverRow]       = useState<number | null>(null);
@@ -702,17 +706,31 @@ export function ListTable({
   // ── CRUD helpers ─────────────────────────────────────────────────────────
   const update = (i: number, patch: Partial<ListRow>) => {
     const cur = rows[i] || {};
+    // Issue 3 (Aesha) — Linked → Manual flip rule:
+    // ONLY flip when the patched value actually DIFFERS from the current
+    // stored value.  Previously, simply clicking into the description cell
+    // and blurring (no typing) re-emitted the same string via onCommit,
+    // which triggered an unintended conversion to manual.  Amount cells
+    // are already locked at the EditableCell isLocked path; we still
+    // defensively check amount changes here so any future code path that
+    // edits amount on a linked row also requires a real value change.
+    const hasReal = (key: keyof ListRow): boolean => {
+      if (!Object.prototype.hasOwnProperty.call(patch, key)) return false;
+      const before = (cur as any)[key];
+      const after  = (patch as any)[key];
+      // Treat null / undefined / "" as equivalent so blur-with-empty
+      // doesn't count as a change.
+      const norm = (v: unknown) => (v == null || v === "" ? null : v);
+      return norm(before) !== norm(after);
+    };
     const flipsToManual =
       cur.source === "linked" &&
-      (Object.prototype.hasOwnProperty.call(patch, "description") ||
-        Object.prototype.hasOwnProperty.call(patch, "amount_cy") ||
-        Object.prototype.hasOwnProperty.call(patch, "amount_py"));
+      (hasReal("description") || hasReal("amount_cy") || hasReal("amount_py"));
     const next = rows.slice();
     next[i] = {
       ...cur,
       ...patch,
-      // Issue-3: Keep linked_ledger when flipping to manual so user can restore later.
-      // We intentionally do NOT clear linked_ledger here.
+      // Keep linked_ledger when flipping to manual so user can restore later.
       ...(flipsToManual ? { source: "manual" } : {}),
     };
     onChange(next);
@@ -770,18 +788,37 @@ export function ListTable({
     onChange(next);
   };
 
-  // Issue 2 — Unmap: clear the row's linked_ledger and sources so it
-  // becomes a free-standing manual entry.  Re-mapping happens at Stage 6.
+  // Issue 4 (Aesha) — Unmap: clear the COA mapping for the underlying TB
+  // ledger AND remove the row from the breakup entirely.  This propagates
+  // the unmap to the Stage 6 COA Mapping page (so the ledger appears as
+  // "Unmapped") and to the BS / P&L face (so the ledger no longer feeds
+  // any FS line item).  When the parent component supplies onUnmapLedger,
+  // it is invoked with the linked ledger name; the parent is responsible
+  // for the DB write + a re-sync that will rebuild the breakup without
+  // this row.  As a safety net we also strip the row locally so the user
+  // sees the change immediately even before the re-sync completes.
   const unmapRow = (rowIdx: number) => {
-    const next = rows.slice();
-    const cur = next[rowIdx];
+    const cur = rows[rowIdx];
     if (!cur) return;
-    next[rowIdx] = {
-      ...cur,
-      source: "manual",
-      linked_ledger: undefined,
-      sources: undefined,
-    };
+
+    // Collect every ledger the row represents — single linked_ledger PLUS
+    // any merged sub-sources (smart-merge consolidates several ledgers
+    // into one breakup row; unmapping should clear ALL of them).
+    const linkedNames: string[] = [];
+    if (cur.linked_ledger) linkedNames.push(cur.linked_ledger);
+    if (Array.isArray(cur.sources)) {
+      for (const s of cur.sources) {
+        if (s?.ledger) linkedNames.push(s.ledger);
+      }
+    }
+    if (onUnmapLedger && linkedNames.length > 0) {
+      // Fire & forget — parent re-syncs the notes after each call
+      for (const name of linkedNames) onUnmapLedger(name);
+    }
+
+    // Remove the row locally
+    const next = rows.slice();
+    next.splice(rowIdx, 1);
     onChange(next);
   };
 

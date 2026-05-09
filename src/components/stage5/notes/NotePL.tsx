@@ -24,10 +24,12 @@ interface Props {
   engagementId:    string;
   collapseControl?: boolean;
   onRemapLedger?:  (ledgerName: string, newCode: string) => void;
+  /** Issue 4 (Aesha) — clears this ledger from coa_mapping (DB) and re-syncs. */
+  onUnmapLedger?:  (ledgerName: string) => void;
 }
 
 export default function NotePL({
-  engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl, onRemapLedger,
+  engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl, onRemapLedger, onUnmapLedger,
 }: Props) {
   // Bug 4 — Sign-convention bridge for P&L Notes display
   // ─────────────────────────────────────────────────────────────────────────
@@ -106,6 +108,7 @@ export default function NotePL({
           addLabel="Add row"
           showSubtotal
           onRemapLedger={onRemapLedger}
+          onUnmapLedger={onUnmapLedger}
         />
         <EditableRow
           label={`Total — ${title} (per P&L)`}

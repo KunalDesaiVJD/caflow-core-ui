@@ -132,7 +132,7 @@ function CalCell({ dateISO, employee, entries, isSunday, onClick }: CellProps) {
       <td
         onClick={() => onClick(dateISO, employee, null)}
         className={cn(
-          "border border-border/60 w-[90px] min-w-[90px] h-8 cursor-pointer transition-colors",
+          "border border-border/60 min-w-[60px] h-8 cursor-pointer transition-colors",
           isSunday ? "bg-red-50/70 hover:bg-red-100/60" : "hover:bg-indigo-50/40"
         )}
       />
@@ -143,7 +143,7 @@ function CalCell({ dateISO, employee, entries, isSunday, onClick }: CellProps) {
     <td
       onClick={() => onClick(dateISO, employee, null)}
       className={cn(
-        "border border-border/60 w-[90px] min-w-[90px] max-w-[90px] p-[2px] cursor-pointer align-top transition-colors overflow-hidden",
+        "border border-border/60 min-w-[60px] p-[2px] cursor-pointer align-top transition-colors overflow-hidden",
         isSunday ? "bg-red-50/70 hover:bg-red-100/60" : "hover:bg-muted/10"
       )}
     >
@@ -184,7 +184,7 @@ function WeekCell({ dateISO, employee, entries, isSunday, onClick }: CellProps) 
       <td
         onClick={() => onClick(dateISO, employee, null)}
         className={cn(
-          "border border-border/60 w-[90px] min-w-[90px] h-16 cursor-pointer transition-colors align-top p-1",
+          "border border-border/60 min-w-[60px] h-16 cursor-pointer transition-colors align-top p-1",
           isSunday ? "bg-red-50/70 hover:bg-red-100/60" : "hover:bg-indigo-50/40"
         )}
       />
@@ -195,7 +195,7 @@ function WeekCell({ dateISO, employee, entries, isSunday, onClick }: CellProps) 
     <td
       onClick={() => onClick(dateISO, employee, null)}
       className={cn(
-        "border border-border/60 w-[90px] min-w-[90px] max-w-[90px] min-h-[64px] cursor-pointer p-1 align-top transition-colors overflow-hidden",
+        "border border-border/60 min-w-[60px] min-h-[64px] cursor-pointer p-1 align-top transition-colors overflow-hidden",
         isSunday ? "bg-red-50/70 hover:bg-red-100/60" : "hover:bg-muted/10"
       )}
     >
@@ -601,21 +601,42 @@ export default function PlanningCalendar({
         </div>
       </div>
 
-      {/* ── Calendar grid ── */}
+      {/* ── Calendar grid ── Issues 6 & 7 (Aesha):
+          • Bounded max-height tied to the viewport so the calendar always
+            fits the screen — replaces the previous unbounded "none" which
+            forced page-level scroll and broke the sticky thead.
+          • overflow-auto on this container means the sticky `thead`
+            (top: 0) freezes correctly while the body scrolls underneath,
+            keeping the employee/staff names visible at all times.
+          • table-layout: auto with width: 100% means the table re-flows
+            to the container width whenever a row or column is added /
+            removed; column widths shrink uniformly so the calendar
+            never overflows horizontally. */}
       <div className="border rounded-lg overflow-hidden">
         <div
           className="overflow-auto"
-          style={{ maxHeight: "none" }}
+          style={{ maxHeight: "calc(100vh - 280px)" }}
         >
-          <table className="border-collapse text-xs" style={{ tableLayout: "fixed" }}>
+          <table className="border-collapse text-xs w-full" style={{ tableLayout: "auto" }}>
             {/* Sticky header */}
             <thead className="sticky top-0 z-20">
               <tr className="bg-indigo-700 text-white text-[11px] uppercase tracking-wide">
                 {/* Date column */}
-                <th className="sticky left-0 z-30 bg-indigo-700 border border-indigo-600 px-2 py-2.5 text-left w-[90px] min-w-[90px]">
+                {/* Issue 6 (Aesha) — date column also sticks left so the
+                    date label stays visible on horizontal scroll, just as
+                    the employee header row stays visible on vertical
+                    scroll.  Width kept fixed (90 px) for legibility — it
+                    holds short labels like "Mon 5" so 90 px is sufficient. */}
+                <th className="sticky left-0 top-0 z-30 bg-indigo-700 border border-indigo-600 px-2 py-2.5 text-left w-[90px] min-w-[90px]">
                   Date
                 </th>
-                {/* Employee columns — only planning staff; draggable to reorder */}
+                {/* Employee columns — only planning staff; draggable to reorder.
+                    Issue 7 (Aesha): drop the FIXED w-[90px] / min-w-[90px]
+                    which was forcing the table to overflow whenever a few
+                    employees were added.  Use min-w-[60px] only — the
+                    table's auto layout (width: 100%) divides the remaining
+                    space evenly so columns auto-shrink/grow as rows or
+                    employees are added/removed. */}
                 {planningStaff.map((s, colIdx) => (
                   <th key={s.user_id}
                     draggable
@@ -624,7 +645,7 @@ export default function PlanningCalendar({
                     onDrop={e => handleColDrop(e, colIdx)}
                     onDragEnd={handleColDragEnd}
                     className={cn(
-                      "border border-indigo-600 px-1 py-1 text-center w-[90px] min-w-[90px] cursor-grab active:cursor-grabbing transition-colors",
+                      "border border-indigo-600 px-1 py-1 text-center min-w-[60px] cursor-grab active:cursor-grabbing transition-colors",
                       dragOverIdx === colIdx && dragFromIdx.current !== colIdx && "bg-indigo-500"
                     )}
                     title={`${s.name} — drag to reorder`}>

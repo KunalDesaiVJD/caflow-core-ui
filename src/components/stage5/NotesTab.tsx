@@ -264,6 +264,61 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
     }
   }, [engagementId, handleResync]);
 
+  // ── Unmap a ledger from its FS code (Issue 4 — Aesha) ─────────────────
+  // Mirrors handleRemapLedger but CLEARS the mapping: removes the ledger
+  // from audit_engagements.coa_mapping so it appears as "Unmapped" on the
+  // COA Mapping page, then re-syncs the notes so the row disappears from
+  // every Note breakup (consistent with the BS face which also drops
+  // unmapped ledgers).
+  const handleUnmapLedger = useCallback(async (ledgerName: string) => {
+    try {
+      const { data: eng } = await supabase
+        .from("audit_engagements")
+        .select("coa_mapping, firm_id, client_id")
+        .eq("id", engagementId)
+        .maybeSingle();
+      const current  = ((eng as any)?.coa_mapping ?? {}) as Record<string, any>;
+      const oldCode  = current[ledgerName]?.code ?? null;
+      const firmId   = (eng as any)?.firm_id   ?? null;
+      const clientId = (eng as any)?.client_id ?? null;
+
+      // Drop the ledger key entirely so the COA Mapping page sees it as
+      // unmapped and the next auto-populate excludes it from FS notes.
+      const updated = { ...current };
+      delete updated[ledgerName];
+
+      const { error } = await supabase
+        .from("audit_engagements")
+        .update({ coa_mapping: updated } as any)
+        .eq("id", engagementId);
+      if (error) throw error;
+
+      // Audit trail
+      const { data: { user } } = await supabase.auth.getUser();
+      await supabase
+        .from("audit_human_actions" as any)
+        .insert({
+          engagement_id:   engagementId,
+          firm_id:         firmId,
+          action_type:     "coa_unmap",
+          action_context:  {
+            ledger_name: ledgerName,
+            old_code:    oldCode,
+            new_code:    null,
+            source:      "financial_statements",
+            client_id:   clientId,
+          },
+          user_id:         user?.id ?? null,
+          human_override:  true,
+        });
+
+      toast.success(`Unmapped "${ledgerName}". Re-syncing…`);
+      await handleResync();
+    } catch (e: any) {
+      toast.error(`Unmap failed: ${e?.message || e}`);
+    }
+  }, [engagementId, handleResync]);
+
   // Browser print — print CSS hides toolbar etc. Uses the tab content as-is.
   const handlePrint = useCallback(() => window.print(), []);
 
@@ -364,6 +419,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
             updatePath={updatePath} resetPath={resetPath} isOverridden={isOverridden}
             collapseControl={collapseAll}
             onRemapLedger={handleRemapLedger}
+            onUnmapLedger={handleUnmapLedger}
           />
         </TabsContent>
         <TabsContent value="bs_asset" className="mt-3">
@@ -373,6 +429,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
             updatePath={updatePath} resetPath={resetPath} isOverridden={isOverridden}
             collapseControl={collapseAll}
             onRemapLedger={handleRemapLedger}
+            onUnmapLedger={handleUnmapLedger}
           />
         </TabsContent>
         <TabsContent value="pl" className="mt-3">
@@ -382,6 +439,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
             updatePath={updatePath} resetPath={resetPath} isOverridden={isOverridden}
             collapseControl={collapseAll}
             onRemapLedger={handleRemapLedger}
+            onUnmapLedger={handleUnmapLedger}
           />
         </TabsContent>
         <TabsContent value="fa" className="mt-3">

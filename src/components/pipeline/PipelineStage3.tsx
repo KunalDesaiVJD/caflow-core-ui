@@ -906,14 +906,29 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   }, [coaMapping, engagementId]);
 
   const clearAllMappings = useCallback(async () => {
+    // Issue 5 (Aesha) — "Clear All" must reset every downstream surface so
+    // the auditor can truly start from zero: COA mapping, Stage 5 notes,
+    // Stage 7 ratios, and the FS-face overrides / PY manual amounts.  Any
+    // residue would otherwise re-appear on the BS / P&L / Notes face after
+    // re-sync, defeating the user's intent of starting fresh.
     if (Object.keys(coaMapping).length === 0) { toast.info("Nothing to clear"); return; }
-    if (!window.confirm(`Clear all ${Object.keys(coaMapping).length} mappings? This cannot be undone.`)) return;
     setCoaMapping({});
     try {
-      await supabase.from("audit_engagements").update({ coa_mapping: {} } as any).eq("id", engagementId);
-      toast.success("All mappings cleared");
+      await supabase
+        .from("audit_engagements")
+        .update({
+          coa_mapping:        {},
+          // Reset every downstream FS payload so the BS / P&L / Notes go to zero
+          stage5_notes:       null as any,
+          stage7_ratios:      null as any,
+          fs_overrides:       null as any,
+          py_manual_amounts:  null as any,
+          py_annexures:       null as any,
+        } as any)
+        .eq("id", engagementId);
+      toast.success("All mappings cleared and financials reset to zero");
     } catch (e: any) {
-      toast.error("Clear saved locally, failed to persist: " + e.message);
+      toast.error("Clear failed: " + e.message);
     }
   }, [coaMapping, engagementId]);
 
@@ -2244,7 +2259,38 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
             <div className="ml-auto flex gap-1 items-center">
               <Button variant="ghost" size="sm" onClick={() => unmapByConfidence("low")}    className="text-amber-700 gap-1">Unmap Low</Button>
               <Button variant="ghost" size="sm" onClick={() => unmapByConfidence("medium")} className="text-amber-700 gap-1">Unmap Medium</Button>
-              <Button variant="ghost" size="sm" onClick={clearAllMappings}                  className="text-destructive gap-1">Clear All</Button>
+              {/* Issue 5 (Aesha) — Clear All needs a proper confirm dialog
+                  so it can't be triggered accidentally. The action zeros
+                  out coa_mapping AND stage5_notes / stage7_ratios so the
+                  Financial Statements truly start from scratch. */}
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="ghost" size="sm" className="text-destructive gap-1">Clear All</Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Clear all mappings AND reset financials?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This will <strong>delete every COA mapping</strong> for this engagement
+                      AND <strong>reset all Financial Statements to zero</strong> — Stage 5 Notes,
+                      Stage 7 Ratios, every BS/PL override, and every PY manual amount.
+                      <br /><br />
+                      Use this when you want a complete clean slate (mapping → notes → financials).
+                      You will need to re-map and re-populate the notes from scratch.
+                      This cannot be undone.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={clearAllMappings}
+                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    >
+                      Yes, clear everything
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
               <AlertDialog>
                 <AlertDialogTrigger asChild>
                   <Button

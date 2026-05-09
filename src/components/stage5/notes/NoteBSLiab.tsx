@@ -70,10 +70,13 @@ interface Props {
   engagementId:    string;
   collapseControl?: boolean;
   onRemapLedger?:  (ledgerName: string, newCode: string) => void;
+  /** Issue 4 (Aesha) — clears this ledger from coa_mapping (DB) and re-syncs.
+   *  Wired to ListTable so the unmap menu action propagates to Stage 6. */
+  onUnmapLedger?:  (ledgerName: string) => void;
 }
 
 export default function NoteBSLiab({
-  engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl, onRemapLedger,
+  engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl, onRemapLedger, onUnmapLedger,
 }: Props) {
   // Bug 4 — Sign-convention bridge for Notes display
   // ─────────────────────────────────────────────────────────────────────────
@@ -93,16 +96,18 @@ export default function NoteBSLiab({
   // This handles every client with stale negative-stored bs_liab totals
   // without requiring a one-time DB migration. Newly auto-populated values
   // are already positive and pass through unchanged.
-  const normalizeBSLiabSign = (raw: number): number => raw < 0 ? -raw : raw;
-
-  // ── Breakup-aware total resolution ─────────────────────────────────────────
+  // ── Breakup-aware total resolution with sign awareness ────────────────────
   // The "Total — <Note> (per BS)" row must match the BS face exactly. The BS
-  // face uses ncyOf() which prefers the breakup sum over the stored headline.
-  // So whenever the breakup is populated, we sum the breakup; only fall back
-  // to the stored .cy/.py when the breakup is empty (greenfield / not yet
-  // auto-populated). This eliminates the drift seen on KWIKTEAM Note 5
-  // where the BS face showed ₹2,30,360 (breakup sum) but the Note "Total
-  // per BS" showed ₹2,23,160 (stale stored cy).
+  // face uses ncyOf() which prefers the breakup sum over the stored headline,
+  // and applies negL() so:
+  //   • CR-balance liability  (stored < 0)  → display POSITIVE
+  //   • DR-balance liability  (stored > 0)  → display NEGATIVE
+  // (Issue 1 — Aesha: Deferred tax with a DR balance in Tally must show
+  // negative on the note, just like it does on the BS face.)
+  //
+  // Implementation: prefer breakup sum for the magnitude, then take the
+  // SIGN from the stored .cy/.py (which carries the Tally DR/CR convention).
+  // Stored zero / null defaults to CR-positive (the normal liability case).
   const sumBreakup = (key: string, col: "amount_cy"|"amount_py"): { sum: number; hasAny: boolean } => {
     const arr = (notes.bs_liab[key] as any)?.breakup;
     if (!Array.isArray(arr)) return { sum: 0, hasAny: false };
@@ -115,15 +120,22 @@ export default function NoteBSLiab({
     return { sum, hasAny: true };
   };
 
+  /** Apply negL-equivalent sign logic — magnitude positive when stored is
+   *  CR (Tally negative or zero); negative when stored is DR (positive). */
+  const signedTotal = (storedRaw: number, magnitude: number): number =>
+    storedRaw > 0 ? -magnitude : magnitude;
+
   const cy = (key: string) => {
+    const stored = Number(notes.bs_liab[key]?.cy ?? 0);
     const { sum, hasAny } = sumBreakup(key, "amount_cy");
-    if (hasAny) return sum;
-    return normalizeBSLiabSign(Number(notes.bs_liab[key]?.cy ?? 0));
+    const magnitude = hasAny ? sum : Math.abs(stored);
+    return signedTotal(stored, magnitude);
   };
   const py = (key: string) => {
+    const stored = Number(notes.bs_liab[key]?.py ?? 0);
     const { sum, hasAny } = sumBreakup(key, "amount_py");
-    if (hasAny) return sum;
-    return normalizeBSLiabSign(Number(notes.bs_liab[key]?.py ?? 0));
+    const magnitude = hasAny ? sum : Math.abs(stored);
+    return signedTotal(stored, magnitude);
   };
   const get = (path: string) => path.split(".").reduce<any>((c, k) => c?.[k], notes);
 
@@ -194,8 +206,25 @@ export default function NoteBSLiab({
   const profitCy      = Number(get("pl.eps.npat")    ?? 0);
   const profitPy      = Number(get("pl.eps.npat_py") ?? 0);
 
-  const surpOpenCy    = Number(get("bs_liab.reserves_surplus.surplus_opening_cy")      ?? 0);
-  const surpOpenPy    = Number(get("bs_liab.reserves_surplus.surplus_opening_py")      ?? 0);
+  // Issue 2 (Aesha) — Carry-forward of closing balance for Reserves & Surplus.
+  // CY "Opening balance" of Surplus in P&L should AUTOMATICALLY equal the
+  // prior-year closing balance of Reserves & Surplus (i.e. PY column of the
+  // headline) when the auditor hasn't manually entered a value.  This
+  // matches the standard accounting carry-forward rule:
+  //   Opening balance (CY) = Closing balance (PY)
+  // Implementation: read the raw stored value (preserves explicit "" / null
+  // distinction). If unset, fall back to abs(reserves_surplus.py) which is
+  // the prior-year closing carried in stage5_notes.  The value remains
+  // editable; an explicit auditor entry overrides the auto carry-forward.
+  const surpOpenCyRaw   = get("bs_liab.reserves_surplus.surplus_opening_cy");
+  const surpOpenPyRaw   = get("bs_liab.reserves_surplus.surplus_opening_py");
+  const reservesPyMagn  = Math.abs(Number(get("bs_liab.reserves_surplus.py") ?? 0));
+  const surpOpenCy      = surpOpenCyRaw != null && surpOpenCyRaw !== ""
+    ? Number(surpOpenCyRaw)
+    : reservesPyMagn;
+  const surpOpenPy      = surpOpenPyRaw != null && surpOpenPyRaw !== ""
+    ? Number(surpOpenPyRaw)
+    : 0;
   const surpDeferCy   = Number(get("bs_liab.reserves_surplus.surplus_deferred_adj_cy") ?? 0);
   const surpDeferPy   = Number(get("bs_liab.reserves_surplus.surplus_deferred_adj_py") ?? 0);
   const surpExcessCy  = Number(get("bs_liab.reserves_surplus.surplus_excess_short_cy") ?? 0);
@@ -727,6 +756,7 @@ export default function NoteBSLiab({
           addLabel="Add row"
           showSubtotal
           onRemapLedger={onRemapLedger}
+          onUnmapLedger={onUnmapLedger}
         />
         <EditableRow
           label="Total — Long-term borrowings (per BS)"
@@ -759,6 +789,7 @@ export default function NoteBSLiab({
           descPlaceholder="Other timing differences"
           addLabel="Add row"
           onRemapLedger={onRemapLedger}
+          onUnmapLedger={onUnmapLedger}
         />
         <EditableRow
           label="Total — Deferred tax liabilities (per BS)"
@@ -782,6 +813,7 @@ export default function NoteBSLiab({
           descPlaceholder="(a) Trade payables / (b) Rent deposit / (c) Others"
           addLabel="Add row"
           onRemapLedger={onRemapLedger}
+          onUnmapLedger={onUnmapLedger}
         />
         <EditableRow
           label="Total (per BS)"
@@ -805,6 +837,7 @@ export default function NoteBSLiab({
           descPlaceholder="(a) Provision for employee benefits / (b) Others"
           addLabel="Add row"
           onRemapLedger={onRemapLedger}
+          onUnmapLedger={onUnmapLedger}
         />
         <EditableRow
           label="Total (per BS)"
@@ -829,6 +862,7 @@ export default function NoteBSLiab({
           addLabel="Add row"
           showSubtotal
           onRemapLedger={onRemapLedger}
+          onUnmapLedger={onUnmapLedger}
         />
         <EditableRow
           label="Total — Short-term borrowings (per BS)"
@@ -915,6 +949,7 @@ export default function NoteBSLiab({
           descPlaceholder="Current maturities / Interest accrued / Statutory dues / Advance / Provision for tax"
           addLabel="Add row"
           onRemapLedger={onRemapLedger}
+          onUnmapLedger={onUnmapLedger}
         />
         <EditableRow
           label="Total (per BS)"
@@ -938,6 +973,7 @@ export default function NoteBSLiab({
           descPlaceholder="(a) Employee benefits / (b) Income tax / (c) Expenses"
           addLabel="Add row"
           onRemapLedger={onRemapLedger}
+          onUnmapLedger={onUnmapLedger}
         />
         <EditableRow
           label="Total (per BS)"
