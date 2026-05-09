@@ -3708,35 +3708,80 @@ export default function PipelineFinancialStatements({
           } catch { return ""; }
         })();
 
-        // Build corporate FS code → CY/PY map.  Liability + revenue codes
-        // are sign-flipped from raw TB negative to positive face values.
-        const CORP_LIAB = new Set([
-          "BS_EQ_SC","BS_EQ_RS",
-          "BS_NCL_LTB","BS_NCL_DTL","BS_NCL_OLT","BS_NCL_LTP",
-          "BS_CL_STB","BS_CL_TP","BS_CL_OCL","BS_CL_STP",
-        ]);
-        const CORP_REV = new Set(["PL_REV_OPS","PL_REV_OI"]);
-        const CORP_CODES = [
-          "BS_EQ_SC","BS_EQ_RS",
-          "BS_NCL_LTB","BS_NCL_DTL","BS_NCL_OLT","BS_NCL_LTP",
-          "BS_CL_STB","BS_CL_TP","BS_CL_OCL","BS_CL_STP",
-          "BS_NCA_FA","BS_NCA_INV","BS_NCA_DTA","BS_NCA_LLA","BS_NCA_ONA",
-          "BS_CA_CI","BS_CA_INV","BS_CA_TR","BS_CA_CCE","BS_CA_SLA","BS_CA_OCA",
-          "PL_REV_OPS","PL_REV_OI",
-          "PL_EXP_MAT","PL_EXP_SIT","PL_EXP_EMP","PL_EXP_FIN",
-          "PL_EXP_DEP","PL_EXP_OTH","PL_EXP_CII",
-          "PL_TAX_CUR","PL_TAX_DEF",
-        ];
-        const corpAmounts: Record<string, { cy: number; py: number }> = {};
-        for (const code of CORP_CODES) {
-          let cyVal = (cyOf as any)(code) || 0;
-          let pyVal = (pyOf as any)(code) || 0;
-          if (CORP_LIAB.has(code) || CORP_REV.has(code)) {
-            cyVal = -cyVal;
-            pyVal = -pyVal;
-          }
-          corpAmounts[code] = { cy: cyVal, py: pyVal };
-        }
+        // Build corporate FS code → CY/PY map.
+        //
+        // CRITICAL: pull from fsDisplayData.bs / .pl (the SAME source the
+        // on-screen BS/PL tabs use), NOT from raw cyOf/pyOf.  fsDisplayData
+        // already runs Phase E notes-aware substitution (sumNotesSubRowsCY
+        // ?? cyOf), so the exported amounts will match what the auditor
+        // sees on screen — including:
+        //   - Trade payables that read from the populated breakup sum
+        //   - Reserves PY pulled from prior-engagement / py_manual_amounts
+        //   - Deferred tax positive face value (notes-aware, not raw -ve)
+        //
+        // Each value is Math.abs()'d because the BS face is always positive
+        // for both liabilities (notes sum is +, raw TB is -) and assets
+        // (always +).  This avoids the previous sign-flip bug where notes-
+        // populated liabilities ended up negated TWICE.
+        const pos = (v: number | null | undefined): number => {
+          const n = Number(v);
+          if (!Number.isFinite(n)) return 0;
+          return Math.abs(n);
+        };
+        const corpAmounts: Record<string, { cy: number; py: number }> =
+          (memoBs && memoPl) ? {
+            // ── Equity & Liabilities ─────────────────────────────────────
+            BS_EQ_SC:    { cy: pos(memoBs.shareCap.cy),         py: pos(memoBs.shareCap.py) },
+            BS_EQ_RS:    { cy: pos(memoBs.reserves.cy),         py: pos(memoBs.reserves.py) },
+            BS_NCL_LTB:  { cy: pos(memoBs.ltBorrowings.cy),     py: pos(memoBs.ltBorrowings.py) },
+            BS_NCL_DTL:  { cy: pos(memoBs.dtLiab.cy),           py: pos(memoBs.dtLiab.py) },
+            BS_NCL_OLT:  { cy: pos(memoBs.otherLtLiab.cy),      py: pos(memoBs.otherLtLiab.py) },
+            BS_NCL_LTP:  { cy: pos(memoBs.ltProvisions.cy),     py: pos(memoBs.ltProvisions.py) },
+            BS_CL_STB:   { cy: pos(memoBs.stBorrowings.cy),     py: pos(memoBs.stBorrowings.py) },
+            BS_CL_TP:    { cy: pos(memoBs.tradePayOthers.cy),   py: pos(memoBs.tradePayOthers.py) },
+            BS_CL_OCL:   { cy: pos(memoBs.otherCurrLiab.cy),    py: pos(memoBs.otherCurrLiab.py) },
+            BS_CL_STP:   { cy: pos(memoBs.stProvisions.cy),     py: pos(memoBs.stProvisions.py) },
+            // ── Assets ───────────────────────────────────────────────────
+            BS_NCA_FA:   { cy: pos(memoBs.ppe.cy),              py: pos(memoBs.ppe.py) },
+            BS_NCA_INV:  { cy: pos(memoBs.ncInvestments.cy),    py: pos(memoBs.ncInvestments.py) },
+            BS_NCA_DTA:  { cy: pos(memoBs.dtAssets.cy),         py: pos(memoBs.dtAssets.py) },
+            BS_NCA_LLA:  { cy: pos(memoBs.ltLoans.cy),          py: pos(memoBs.ltLoans.py) },
+            BS_NCA_ONA:  { cy: pos(memoBs.otherNcAssets.cy),    py: pos(memoBs.otherNcAssets.py) },
+            BS_CA_CI:    { cy: pos(memoBs.currInvestments.cy),  py: pos(memoBs.currInvestments.py) },
+            BS_CA_INV:   { cy: pos(memoBs.inventories.cy),      py: pos(memoBs.inventories.py) },
+            BS_CA_TR:    { cy: pos(memoBs.tradeRec.cy),         py: pos(memoBs.tradeRec.py) },
+            BS_CA_CCE:   { cy: pos(memoBs.cashBank.cy),         py: pos(memoBs.cashBank.py) },
+            BS_CA_SLA:   { cy: pos(memoBs.stLoans.cy),          py: pos(memoBs.stLoans.py) },
+            BS_CA_OCA:   { cy: pos(memoBs.otherCurrAssets.cy),  py: pos(memoBs.otherCurrAssets.py) },
+            // ── P&L ──────────────────────────────────────────────────────
+            PL_REV_OPS:  { cy: pos(memoPl.revFromOps.cy),       py: pos(memoPl.revFromOps.py) },
+            PL_REV_OI:   { cy: pos(memoPl.otherIncome.cy),      py: pos(memoPl.otherIncome.py) },
+            PL_EXP_MAT:  { cy: pos(memoPl.costMaterials.cy),    py: pos(memoPl.costMaterials.py) },
+            PL_EXP_SIT:  { cy: pos(memoPl.purchasesStock.cy),   py: pos(memoPl.purchasesStock.py) },
+            PL_EXP_CII:  { cy: memoPl.changesInventories.cy ?? 0, py: memoPl.changesInventories.py ?? 0 }, // signed (can be negative)
+            PL_EXP_EMP:  { cy: pos(memoPl.employeeBenefits.cy), py: pos(memoPl.employeeBenefits.py) },
+            PL_EXP_FIN:  { cy: pos(memoPl.financeCosts.cy),     py: pos(memoPl.financeCosts.py) },
+            PL_EXP_DEP:  { cy: pos(memoPl.depreciation.cy),     py: pos(memoPl.depreciation.py) },
+            PL_EXP_OTH:  { cy: pos(memoPl.otherExpenses.cy),    py: pos(memoPl.otherExpenses.py) },
+            PL_TAX_CUR:  { cy: pos(memoPl.currentTax.cy),       py: pos(memoPl.currentTax.py) },
+            // Deferred tax can be DTA (negative-stored) or DTL (positive) — keep signed
+            PL_TAX_DEF:  { cy: memoPl.deferredTax.cy ?? 0,      py: memoPl.deferredTax.py ?? 0 },
+          } : (() => {
+            // Fallback when fsDisplayData isn't populated (shouldn't happen
+            // for corporate engagement reaching this branch).  Use raw TB
+            // so we still emit something rather than zeros.
+            const out: Record<string, { cy: number; py: number }> = {};
+            const codes = [
+              "BS_EQ_SC","BS_EQ_RS","BS_NCL_LTB","BS_NCL_DTL","BS_NCL_OLT","BS_NCL_LTP",
+              "BS_CL_STB","BS_CL_TP","BS_CL_OCL","BS_CL_STP",
+              "BS_NCA_FA","BS_NCA_INV","BS_NCA_DTA","BS_NCA_LLA","BS_NCA_ONA",
+              "BS_CA_CI","BS_CA_INV","BS_CA_TR","BS_CA_CCE","BS_CA_SLA","BS_CA_OCA",
+              "PL_REV_OPS","PL_REV_OI","PL_EXP_MAT","PL_EXP_SIT","PL_EXP_EMP",
+              "PL_EXP_FIN","PL_EXP_DEP","PL_EXP_OTH","PL_EXP_CII","PL_TAX_CUR","PL_TAX_DEF",
+            ];
+            for (const code of codes) out[code] = { cy: pos(cyOf(code)), py: pos(pyOf(code)) };
+            return out;
+          })();
 
         const clientT = (engagement?.clients ?? {}) as any;
         const { buildCorporateFinancialsXLSX } =
@@ -3913,17 +3958,19 @@ export default function PipelineFinancialStatements({
           } catch { return ""; }
         })();
 
-        // Build NCE FS code → CY/PY amount map.  Liabilities are stored
-        // negative in TB so we negate them to get positive face values.
-        // exportCy / exportPy include manual overrides + Phase E notes-aware
-        // substitutions for NCE.
-        const NCE_LIAB = new Set([
-          "NCE_CAP","NCE_LTB","NCE_OLTL","NCE_LTP",
-          "NCE_STB","NCE_TP","NCE_OCL","NCE_STP",
-        ]);
-        const NCE_INCOME = new Set([
-          "NCE_REV_OPS","NCE_REV_OTH",
-        ]);
+        // Build NCE FS code → CY/PY amount map.
+        //
+        // Pull from nceCyAmounts / ncePyAmounts — these are the Phase-E
+        // notes-aware NCE amount maps built earlier in fsDisplayData
+        // (Bug 5 fix).  They include manual overrides AND notes-breakup
+        // substitutions, matching exactly what the BS/PL tabs render
+        // on screen.  Math.abs() applied because the printed face is
+        // always positive for both liabilities and assets.
+        const posN = (v: number | null | undefined): number => {
+          const n = Number(v);
+          if (!Number.isFinite(n)) return 0;
+          return Math.abs(n);
+        };
         const NCE_CODES = [
           "NCE_CAP","NCE_LTB","NCE_OLTL","NCE_LTP",
           "NCE_STB","NCE_TP","NCE_OCL","NCE_STP",
@@ -3935,14 +3982,15 @@ export default function PipelineFinancialStatements({
         ];
         const amounts: Record<string, { cy: number; py: number }> = {};
         for (const code of NCE_CODES) {
-          let cyVal = (exportCy as any)[code] || (cyOf as any)(code) || 0;
-          let pyVal = (exportPy as any)[code] || (pyOf as any)(code) || 0;
-          // Liabilities + Income come from TB negative — flip to positive
-          if (NCE_LIAB.has(code) || NCE_INCOME.has(code)) {
-            cyVal = -cyVal;
-            pyVal = -pyVal;
-          }
-          amounts[code] = { cy: cyVal, py: pyVal };
+          // nceCyAmounts has signs matching the on-screen layer
+          // (liabilities negative for negL display path), so abs() to flip
+          // to printed positive face value.
+          const cyV = (nceCyAmounts as Record<string, number>)[code];
+          const pyV = (ncePyAmounts as Record<string, number>)[code];
+          amounts[code] = {
+            cy: posN(cyV ?? cyOf(code)),
+            py: posN(pyV ?? pyOf(code)),
+          };
         }
 
         const client    = (engagement?.clients ?? {}) as any;
