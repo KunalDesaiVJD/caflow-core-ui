@@ -30,6 +30,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { CorporateSignatureBlock } from "@/components/shared/CorporateSignatureBlock";
 import { useAuth } from "@/hooks/useAuth";
 import { useAuditTracker } from "@/hooks/useAuditTracker";
+import { useAiSkills } from "@/hooks/useAiSkills";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
@@ -222,6 +223,7 @@ interface Props {
 export function EngagementCARO({ engagement, client, onUpdate }: Props) {
   const { user } = useAuth();
   const { track } = useAuditTracker(engagement?.id);
+  const { examplesFor, recordUsed } = useAiSkills();
   const [rows, setRows] = useState<CaroRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [autoFilling, setAutoFilling] = useState(false);
@@ -441,6 +443,7 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
           current_response: r.user_response || r.auto_draft,
         }));
 
+      const caroSkillExamples = examplesFor("caro_clause_approve");
       const res = await supabase.functions.invoke("claude-gateway", {
         body: {
           request_type: "caro_answers",
@@ -456,8 +459,10 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
             findings_count: findings.length,
             tds_entries_count: tdsEntries.length,
           }),
+          ...(caroSkillExamples.length > 0 ? { skill_examples: caroSkillExamples } : {}),
         },
       });
+      if (caroSkillExamples.length > 0) recordUsed(caroSkillExamples.map(s => s.id));
 
       if (res.data?.reply) {
         try {

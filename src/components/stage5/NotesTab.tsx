@@ -257,6 +257,22 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
           human_override:  true,
         });
 
+      // 5. Fire alias analysis — teaches AI WHY this remap happened.
+      //    Only when the old code and new code differ (i.e. it's a real override).
+      if (oldCode && oldCode !== newCode) {
+        supabase.functions.invoke("analyze-coa-override", {
+          body: {
+            ledger_name:        ledgerName,
+            normalized_name:    normalizedName,
+            entity_type:        "corporate",
+            ai_mapping_code:    oldCode,
+            human_mapping_code: newCode,
+            firm_id:            firmId,
+            engagement_id:      engagementId,
+          },
+        }).catch(() => {}); // fire-and-forget, never block UI
+      }
+
       toast.success(`Remapped "${ledgerName}" → ${newCode}. Re-syncing…`);
       await handleResync();
     } catch (e: any) {

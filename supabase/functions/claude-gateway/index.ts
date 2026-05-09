@@ -113,7 +113,14 @@ serve(async (req) => {
     const firmId = profile?.firm_id ?? null;
 
     const body = await req.json();
-    const { request_type, user_message, stream: wantStream } = body;
+    const {
+      request_type,
+      user_message,
+      stream: wantStream,
+      // skill_examples: approved patterns from audit_ai_skills that Claude should respect.
+      // Format: [{ id, before, after }] — injected as a "LEARNED CORRECTIONS" block.
+      skill_examples,
+    } = body;
 
     if (!request_type || !user_message) {
       return new Response(JSON.stringify({ error: "Missing request_type or user_message" }), {
@@ -122,12 +129,30 @@ serve(async (req) => {
       });
     }
 
-    const systemPrompt = SYSTEM_PROMPTS[request_type];
-    if (!systemPrompt) {
+    const basePrompt = SYSTEM_PROMPTS[request_type];
+    if (!basePrompt) {
       return new Response(JSON.stringify({ error: `Unknown request_type: ${request_type}` }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    // Inject approved skill corrections into the system prompt so Claude
+    // learns from firm-specific human overrides without retraining.
+    let systemPrompt = basePrompt;
+    if (Array.isArray(skill_examples) && skill_examples.length > 0) {
+      const exBlock = skill_examples
+        .filter((s: any) => s?.before && s?.after)
+        .slice(0, 8) // cap at 8 examples to avoid inflating tokens
+        .map((s: any, i: number) =>
+          `  ${i + 1}. Previously AI suggested: "${s.before}" — CA corrected to: "${s.after}"`
+        )
+        .join("\n");
+      if (exBlock) {
+        systemPrompt =
+          basePrompt +
+          `\n\nFIRM-LEARNED CORRECTIONS (highest priority — always apply these patterns):\n${exBlock}\nUse these to improve your suggestions for similar cases.`;
+      }
     }
 
     // --- STEP 2: Rate limit ---
