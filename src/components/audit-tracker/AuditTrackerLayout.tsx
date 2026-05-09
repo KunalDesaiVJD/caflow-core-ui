@@ -94,7 +94,7 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
           {calMaximized ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
         </Button>
       </div>
-      <div className={calMaximized ? "flex-1 overflow-auto p-2" : ""}>
+      <div className={calMaximized ? "flex-1 min-h-0 overflow-hidden p-2" : ""}>
         <PlanningCalendar
           entries={entries}
           loading={loading}
@@ -108,6 +108,7 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
           onAddStaff={addStaff}
           onRemoveStaff={removeStaff}
           onReorderStaff={reorderStaff}
+          fillParent={calMaximized}
         />
       </div>
     </div>

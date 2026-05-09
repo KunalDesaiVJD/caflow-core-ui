@@ -239,6 +239,10 @@ interface Props {
   onAddStaff:       (userId: string, userName: string) => Promise<void>;
   onRemoveStaff:    (staffId: string) => Promise<void>;
   onReorderStaff:   (newOrder: PlanningStaffMember[]) => void;
+  /** When true, the calendar fills the height of its parent container
+   *  instead of capping at calc(100vh - 280px).  Used by the maximized
+   *  (fullscreen) overlay so the grid extends to the bottom of the screen. */
+  fillParent?:      boolean;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -248,6 +252,7 @@ export default function PlanningCalendar({
   isSuperadmin,
   onAddEntry, onUpdateEntry, onDeleteEntry,
   onAddStaff, onRemoveStaff, onReorderStaff,
+  fillParent = false,
 }: Props) {
   const now = new Date();
 
@@ -446,7 +451,7 @@ export default function PlanningCalendar({
   const CellComponent = view === "month" ? CalCell : WeekCell;
 
   return (
-    <div className="space-y-3">
+    <div className={fillParent ? "space-y-3 h-full flex flex-col" : "space-y-3"}>
 
       {/* ── Toolbar ── */}
       <div className="flex items-center justify-between flex-wrap gap-2">
@@ -612,10 +617,13 @@ export default function PlanningCalendar({
             to the container width whenever a row or column is added /
             removed; column widths shrink uniformly so the calendar
             never overflows horizontally. */}
-      <div className="border rounded-lg overflow-hidden">
+      <div className={fillParent
+        ? "border rounded-lg overflow-hidden flex-1 min-h-0 flex flex-col"
+        : "border rounded-lg overflow-hidden"
+      }>
         <div
-          className="overflow-auto"
-          style={{ maxHeight: "calc(100vh - 280px)" }}
+          className={fillParent ? "overflow-auto flex-1 min-h-0" : "overflow-auto"}
+          style={fillParent ? undefined : { maxHeight: "calc(100vh - 280px)" }}
         >
           {/* Issue 1 (today) — table-fixed forces columns to share the
               container width EQUALLY, so all employees fit on one screen
