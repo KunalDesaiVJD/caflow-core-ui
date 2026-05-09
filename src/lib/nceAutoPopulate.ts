@@ -409,12 +409,28 @@ export async function nceAutoPopulate(
 
   // ── 2. Load CY trial balance ────────────────────────────────────────────
   // tally_trial_balance uses closing_balance (magnitude) + balance_type ("Dr"/"Cr")
+  // Issue 2 (today) — also pull opening_balance/opening_type from CY TB so
+  // the cogs note's "Opening Inventories" rows source from the AUTHORITATIVE
+  // value: Tally's own opening_balance for the current engagement (which by
+  // accounting identity equals the prior-period closing).  Previously we only
+  // selected closing_balance, forcing the cogs path to derive CY-Opening from
+  // either the prior year's stage5_notes (which can be stale / wrong) or the
+  // prior engagement's TB.  When the two disagreed we showed the wrong value
+  // (Swastik Buildcon: WIP Opening rendered 9,54,65,534 from a stale prior
+  // note, but the CY TB opening was 6,45,50,000).
   const { data: tbRows } = await supabase
     .from("tally_trial_balance")
-    .select("ledger_name, closing_balance, balance_type, parent_group")
+    .select("ledger_name, closing_balance, balance_type, opening_balance, opening_type, parent_group")
     .eq("engagement_id", engagementId);
 
-  type TBRow = { ledger_name: string; closing_balance: number; balance_type: string; parent_group?: string | null };
+  type TBRow = {
+    ledger_name:      string;
+    closing_balance:  number;
+    balance_type:     string;
+    opening_balance?: number | null;
+    opening_type?:    string | null;
+    parent_group?:    string | null;
+  };
   const tb: TBRow[] = (tbRows ?? []) as TBRow[];
 
   // ── 3. Load CY FS totals (fallback for notes with no TB ledger matches) ─
@@ -619,7 +635,25 @@ export async function nceAutoPopulate(
           staticSources[key].push({ ledger: row.ledger_name, amountCy: amt });
         }
 
-        // CY openings (= PY closings): prefer prior-year cogs note's cy_data
+        // Issue 2 (today) — CY openings sourced FIRST from the current
+        // engagement's TB opening_balance.  This is Tally's own definitive
+        // value for the start-of-year stock — equal by accounting identity
+        // to last year's closing, regardless of what any prior stage5_notes
+        // happened to store.  Walk every inventory ledger and aggregate its
+        // opening_balance into the matching pc_open_*/raw_open/etc. row.
+        // openAmt uses Math.abs because Stock-in-Hand carries a Dr balance.
+        for (const row of tb) {
+          if (!isInventoryParent(row.parent_group)) continue;
+          if (ejectedSet.has(row.ledger_name)) continue;
+          const openAmt = Math.abs(Number(row.opening_balance ?? 0));
+          if (openAmt === 0) continue;
+          const key = openKeyFor(classifyInv(row.ledger_name));
+          newCy[key] = (newCy[key] ?? 0) + openAmt;
+        }
+
+        // CY openings fallback (= PY closings): only fill rows the CY-TB
+        // opening_balance pass above did NOT populate.  Prefer the prior
+        // year's cogs note over a bare TB lookup.
         const pyCogs: Record<string, number> = pyNotes["cogs"] ?? {};
         const openMap: Record<string, string> = {
           pc_open_trade: "pc_close_trade",
@@ -630,6 +664,7 @@ export async function nceAutoPopulate(
           other_open:    "other_close",
         };
         for (const [openKey, closeSrcKey] of Object.entries(openMap)) {
+          if (newCy[openKey]) continue; // already filled from CY-TB opening
           const v = pyCogs[closeSrcKey];
           if (typeof v === "number" && Math.abs(v) > 0) {
             newCy[openKey] = Math.abs(v);

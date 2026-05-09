@@ -354,6 +354,11 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     code: string; noteRef: number | null; scheduleRef: string; confidence: string;
   }>>({});
   const [selectedAccount, setSelectedAccount] = useState<string | null>(null);
+  // Issue 1 (today) — Multi-select bulk-assign.  Holds ledger names the user
+  // has ticked via the row checkbox.  When non-empty, clicking an FS line
+  // item maps EVERY ticked ledger to that code in a single transaction
+  // instead of forcing the user to map each one individually.
+  const [multiSelect, setMultiSelect] = useState<Set<string>>(() => new Set());
   // ─── Right panel tab (Balance Sheet vs P&L) ───
   const [fsPanelTab, setFsPanelTab] = useState<"bs" | "pl">("bs");
   // Filtered items for the right-panel tree — only BS or P&L items depending on active tab.
@@ -1189,6 +1194,53 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       propagated > 0 ? { description: `Auto-applied to ${propagated} other unmapped ledgers in "${group}"` } : undefined,
     );
   }, [activeLeafItems, coaMapping, engagementId, tbAccounts, isNonCorporate, engagement?.firm_id]);
+
+  // Issue 1 (today) — Bulk-assign every ticked ledger to a single FS code in
+  // ONE state update + ONE DB write.  Manual-confidence so the same correction
+  // counts for cross-client AI memory just like a single map would.
+  const bulkMapLedgers = useCallback(async (ledgerNames: string[], code: string) => {
+    if (ledgerNames.length === 0) return;
+    const lineItem = activeLeafItems.find(i => i.code === code);
+    if (!lineItem) return;
+
+    const updated: typeof coaMapping = { ...coaMapping };
+    let mapped = 0;
+    for (const name of ledgerNames) {
+      updated[name] = {
+        code,
+        noteRef:     lineItem.noteRef ?? null,
+        scheduleRef: lineItem.scheduleRef || "",
+        confidence:  "manual",
+      };
+      mapped++;
+    }
+    setCoaMapping(updated);
+    try {
+      await supabase.from("audit_engagements").update({ coa_mapping: updated } as any).eq("id", engagementId);
+    } catch { /* surfaced to user via the toast below if needed */ }
+
+    // Feed each ledger into cross-client AI memory — same path the single-map
+    // flow uses, so bulk-mapping doesn't bypass the learning loop.
+    const entityTypeKey = isNonCorporate ? "nce" : "corporate";
+    const bsPl = lineItem.section?.startsWith("PL") ? "PL" : "BS";
+    for (const name of ledgerNames) {
+      const acct = tbAccounts.find(a => a.account_name === name);
+      const norm = normalizeName(name);
+      supabase.rpc("upsert_coa_intelligence" as any, {
+        p_normalized_name: norm,
+        p_entity_type:     entityTypeKey,
+        p_account_head:    code,
+        p_bs_pl:           bsPl,
+        p_account_group:   acct?.account_group || null,
+        p_firm_id:         engagement?.firm_id || null,
+        p_engagement_id:   engagementId,
+        p_accepted:        true,
+        p_client_id:       engagement?.client_id || null,
+      });
+    }
+
+    toast.success(`Mapped ${mapped} ledger${mapped === 1 ? "" : "s"} → ${lineItem.name}`);
+  }, [activeLeafItems, coaMapping, engagementId, tbAccounts, isNonCorporate, engagement?.firm_id, engagement?.client_id]);
 
   // ═══════ AI MAPPING (Claude via claude-gateway) ═══════
   // Sends unmapped + low-confidence ledgers in batches to fs_line_mapper.
@@ -2437,8 +2489,30 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                 <div className="flex items-center justify-between">
                   <p className="text-xs font-semibold text-muted-foreground">
                     Unmapped Ledgers <Badge variant="outline" className="text-[9px] ml-1">{unmappedAccounts.length}</Badge>
+                    {/* Issue 1 (today) — show how many ledgers are ticked for
+                        a bulk assign so the user knows what their next FS click
+                        will affect. */}
+                    {multiSelect.size > 0 && (
+                      <Badge className="text-[9px] ml-1 bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-900/40 dark:text-blue-300">
+                        {multiSelect.size} ticked
+                      </Badge>
+                    )}
                   </p>
-                  <p className="text-[10px] text-muted-foreground">Select → click FS line item on right</p>
+                  {multiSelect.size > 0 ? (
+                    <div className="flex items-center gap-2">
+                      <p className="text-[10px] text-blue-700 dark:text-blue-300 font-medium">
+                        Click an FS line item to assign all {multiSelect.size}
+                      </p>
+                      <button
+                        className="text-[10px] text-muted-foreground hover:text-destructive underline"
+                        onClick={() => setMultiSelect(new Set())}
+                      >
+                        clear
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="text-[10px] text-muted-foreground">Tick checkboxes to bulk-assign · or click a row to map one</p>
+                  )}
                 </div>
                 <div className="relative">
                   <Search size={14} className="absolute left-2 top-2.5 text-muted-foreground" />
@@ -2580,6 +2654,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                   {unmappedAccounts.map(acct => {
                     const mapping = coaMapping[acct.account_name];
                     const isSelected = selectedAccount === acct.account_name;
+                    const isMulti = multiSelect.has(acct.account_name);
                     const isCFFlat = mapping?.confidence === "carried_forward";
                     const lineItem = mapping ? activeLeafItems.find(i => i.code === mapping.code) : null;
                     return (
@@ -2589,12 +2664,33 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                         className={cn(
                           "px-3 py-2 cursor-pointer text-xs hover:bg-muted/50 transition-colors",
                           isSelected && "bg-primary/10 border-l-2 border-l-primary",
-                          !isSelected && isCFFlat && "bg-amber-50 dark:bg-amber-950/10 border-l-2 border-l-amber-400",
-                          !isSelected && !isCFFlat && mapping?.confidence === "manual" && "bg-violet-50 dark:bg-violet-950/20 border-l-2 border-l-violet-400",
-                          !mapping && "bg-destructive/5"
+                          !isSelected && isMulti && "bg-blue-50 dark:bg-blue-950/20 border-l-2 border-l-blue-500",
+                          !isSelected && !isMulti && isCFFlat && "bg-amber-50 dark:bg-amber-950/10 border-l-2 border-l-amber-400",
+                          !isSelected && !isMulti && !isCFFlat && mapping?.confidence === "manual" && "bg-violet-50 dark:bg-violet-950/20 border-l-2 border-l-violet-400",
+                          !mapping && !isMulti && "bg-destructive/5"
                         )}
                       >
                         <div className="flex items-center justify-between">
+                          {/* Issue 1 (today) — checkbox to add this ledger to the
+                              multi-select bucket.  Click stops propagation so
+                              ticking does not also flip the row's selectedAccount. */}
+                          {!mapping && (
+                            <input
+                              type="checkbox"
+                              className="mr-2 cursor-pointer h-3.5 w-3.5 accent-blue-600 shrink-0"
+                              checked={isMulti}
+                              onClick={e => e.stopPropagation()}
+                              onChange={() => {
+                                setMultiSelect(prev => {
+                                  const next = new Set(prev);
+                                  if (next.has(acct.account_name)) next.delete(acct.account_name);
+                                  else next.add(acct.account_name);
+                                  return next;
+                                });
+                              }}
+                              title="Tick to bulk-assign this ledger with others"
+                            />
+                          )}
                           <div className="flex-1 min-w-0">
                             <p className="font-medium truncate">{acct.account_name}</p>
                             <p className="text-[10px] text-muted-foreground truncate">
@@ -2829,7 +2925,15 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                       <div key={item.code}>
                         <div
                           onClick={() => {
-                            if (selectedAccount && !isHeader) {
+                            // Issue 1 (today) — bulk-assign every ticked ledger
+                            // when multi-select is active.  Falls back to the
+                            // single-selection flow when nothing is ticked.
+                            if (multiSelect.size > 0 && !isHeader) {
+                              const ledgers = Array.from(multiSelect);
+                              bulkMapLedgers(ledgers, item.code);
+                              setMultiSelect(new Set());
+                              setSelectedAccount(null);
+                            } else if (selectedAccount && !isHeader) {
                               mapLedgerWithPropagation(selectedAccount, item.code, "manual");
                               setSelectedAccount(null);
                             } else if (!isHeader && mappedAccounts.length > 0) {
