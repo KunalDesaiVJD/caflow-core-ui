@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuditTracker } from "@/hooks/useAuditTracker";
+import { useAiSkills } from "@/hooks/useAiSkills";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
@@ -72,6 +73,7 @@ export function EngagementRiskAssessment({ engagement, client, onUpdate }: Props
   const [aiSuggestions, setAiSuggestions] = useState<any[] | null>(null);
   const prevRowsRef = useRef<RiskRow[]>([]);
   const { track } = useAuditTracker(engagement?.id);
+  const { examplesFor, recordUsed } = useAiSkills();
 
   useEffect(() => {
     const saved = engagement.risk_assessment as any;
@@ -128,12 +130,15 @@ export function EngagementRiskAssessment({ engagement, client, onUpdate }: Props
     };
 
     try {
+      const riskSkillExamples = examplesFor("risk_override");
       const { data, error } = await supabase.functions.invoke("claude-gateway", {
         body: {
           request_type: "risk_assessment",
           user_message: JSON.stringify(payload),
+          ...(riskSkillExamples.length > 0 ? { skill_examples: riskSkillExamples } : {}),
         },
       });
+      if (!error && riskSkillExamples.length > 0) recordUsed(riskSkillExamples.map(s => s.id));
 
       if (error) throw error;
       const content = data?.content || data?.message || JSON.stringify(data);

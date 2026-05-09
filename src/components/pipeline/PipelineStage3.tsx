@@ -34,6 +34,7 @@ import {
 import { NCE_FS_ITEMS, NCE_AUTO_MAP_RULES } from "@/config/nceLineItems";
 import type { FSLineItem } from "@/config/nceLineItems";
 import { MappingRulesPanel, type MappingRule } from "@/components/pipeline/MappingRulesPanel";
+import { useAiSkills } from "@/hooks/useAiSkills";
 
 // ═══════════════════════════════════════
 // Non-Corporate entity detection
@@ -313,6 +314,7 @@ interface PipelineStage3Props {
 export default function PipelineStage3({ engagementId, engagement, onStageComplete, onSaveDraft }: PipelineStage3Props) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const { examplesFor, recordUsed } = useAiSkills();
   const [search, setSearch] = useState("");
   const [fsSearch, setFsSearch] = useState("");
   const [saving, setSaving] = useState(false);
@@ -1249,16 +1251,28 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           if (intelAnchors.length >= 120) break; // hard cap to avoid oversized payload
         }
 
+        // Pull approved skill examples for COA remapping — these teach Claude
+        // the firm's specific correction patterns (e.g. "AI kept mapping X to Y but we want Z")
+        const coaSkillExamples = examplesFor("coa_remap");
+
         const payload = {
           entity_type:        isNonCorporate ? "nce" : "corporate",
           fs_items:           fsItems,
           ledgers:            batch,
-          ...(cfAnchors.length   > 0 ? { prior_year_anchors:   cfAnchors   } : {}),
-          ...(intelAnchors.length > 0 ? { learned_patterns:    intelAnchors } : {}),
+          ...(cfAnchors.length      > 0 ? { prior_year_anchors: cfAnchors      } : {}),
+          ...(intelAnchors.length   > 0 ? { learned_patterns:   intelAnchors   } : {}),
         };
         const { data, error } = await supabase.functions.invoke("claude-gateway", {
-          body: { request_type: "fs_line_mapper", user_message: JSON.stringify(payload) },
+          body: {
+            request_type:    "fs_line_mapper",
+            user_message:    JSON.stringify(payload),
+            ...(coaSkillExamples.length > 0 ? { skill_examples: coaSkillExamples } : {}),
+          },
         });
+        // Record that these skills were used (updates applied_count + last_used_at)
+        if (!error && coaSkillExamples.length > 0) {
+          recordUsed(coaSkillExamples.map(s => s.id));
+        }
         if (error) { failedBatches++; continue; }
         // claude-gateway returns the parsed JSON directly at the top level.
         // Fall back to .parsed / .content shapes for resilience.
