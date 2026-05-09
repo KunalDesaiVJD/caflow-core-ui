@@ -635,14 +635,15 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
     const raw = (engagement as any).coa_mapping as Record<string, any> | null | undefined;
 
-    // Strip the sentinel key (if any) before counting real ledger entries.
-    // clearAllMappings persists `{ __cleared: true }` so we can reliably tell
-    // "user wiped it" apart from "brand-new engagement, never mapped".  A
-    // bare `{}` is unreliable because some Supabase / Postgres paths can
-    // round-trip an empty JSONB object back as `null`.
-    const realKeys = raw && typeof raw === "object"
-      ? Object.keys(raw).filter(k => k !== "__cleared")
-      : [];
+    // "User explicitly cleared" signal — written by clearAllMappings into
+    // stage_statuses["3"].coa_cleared_at.  We use this in addition to the
+    // value of coa_mapping itself because `null`/`{}` cannot reliably
+    // distinguish "brand-new engagement, never mapped" from "user just
+    // wiped the mapping" (both round-trip through Postgres the same way).
+    const stageStatuses = (engagement as any)?.stage_statuses as Record<string, any> | null;
+    const userCleared   = !!stageStatuses?.["3"]?.coa_cleared_at;
+
+    const realKeys = raw && typeof raw === "object" ? Object.keys(raw) : [];
 
     if (raw && typeof raw === "object" && realKeys.length > 0) {
       // ── Backward-compat migration: BS_CA_INV direct → INV_STOCK ──────────
@@ -675,7 +676,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
             })
           );
       }
-    } else if (raw && typeof raw === "object" && (raw as any).__cleared) {
+    } else if (userCleared) {
       // User explicitly cleared — keep mappings empty, do NOT auto-map.
       setCoaMapping({});
     } else if ((raw == null) && tbAccounts.length > 0) {
@@ -942,34 +943,60 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     if (Object.keys(coaMapping).length === 0) { toast.info("Nothing to clear"); return; }
     setCoaMapping({});
     try {
-      await supabase
+      // Schema notes (verified against integrations/supabase/types.ts):
+      //  - coa_mapping            JSONB nullable
+      //  - stage5_notes           JSONB nullable
+      //  - stage7_ratios          JSONB nullable
+      //  - py_manual_amounts      JSONB NOT NULL  ← must use {} not null
+      //  - py_manual_annexures    JSONB NOT NULL  ← must use {} not null
+      // Earlier code referenced `fs_overrides` and `py_annexures` which DO
+      // NOT EXIST on this table; that made the whole UPDATE fail with an
+      // \"unknown column\" error.  Supabase's update() does NOT throw on
+      // failure — it returns { error } — so the previous version silently
+      // showed a success toast while the row was untouched, and the next
+      // page refresh re-loaded the same full mapping.
+      const { error: updateErr } = await supabase
         .from("audit_engagements")
         .update({
-          coa_mapping:        { __cleared: true } as any,
-          // Reset every downstream FS payload so the BS / P&L / Notes go to zero
-          stage5_notes:       null as any,
-          stage7_ratios:      null as any,
-          fs_overrides:       null as any,
-          py_manual_amounts:  null as any,
-          py_annexures:       null as any,
+          coa_mapping:           null as any,        // NULLABLE — fully wiped
+          stage5_notes:          null as any,
+          stage7_ratios:         null as any,
+          py_manual_amounts:     {} as any,          // NOT NULL — empty JSONB
+          py_manual_annexures:   {} as any,          // NOT NULL — empty JSONB
+          // Mark stage 3 (COA) as in-progress so a refresh re-renders fresh.
+          stage_statuses: {
+            ...(((engagement as any)?.stage_statuses) || {}),
+            "3": { status: "in_progress", coa_cleared_at: new Date().toISOString() },
+          } as any,
         } as any)
         .eq("id", engagementId);
 
-      // 3. Delete the saved FS snapshot so Stage 7 reflects the cleared state.
-      await supabase
+      if (updateErr) {
+        toast.error("Clear failed: " + updateErr.message);
+        return;
+      }
+
+      // Delete the saved FS snapshot so Stage 7 reflects the cleared state.
+      const { error: delErr } = await supabase
         .from("fa_financial_statements")
         .delete()
         .eq("engagement_id", engagementId);
+      if (delErr) {
+        toast.error("FS snapshot delete failed: " + delErr.message);
+        // Continue — the mapping is already cleared, FS rows will be
+        // recomputed on next save.
+      }
 
-      // 4. Invalidate caches so anything looking at the old snapshot refreshes.
+      // Invalidate caches so anything looking at the old snapshot refreshes.
       queryClient.invalidateQueries({ queryKey: ["fs-rows", engagementId] });
       queryClient.invalidateQueries({ queryKey: ["audit-engagement-detail", engagementId] });
+      queryClient.invalidateQueries({ queryKey: ["stage5-notes-fsdata", engagementId] });
 
       toast.success("All mappings cleared and financials reset to zero");
     } catch (e: any) {
       toast.error("Clear failed: " + e.message);
     }
-  }, [coaMapping, engagementId, queryClient]);
+  }, [coaMapping, engagementId, queryClient, engagement]);
 
   // ═══════ RESET & RE-MAP (clear all + auto + AI) ═══════
   const resetAndRemap = useCallback(async () => {
