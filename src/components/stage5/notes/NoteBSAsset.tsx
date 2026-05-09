@@ -28,12 +28,6 @@ interface Props {
 export default function NoteBSAsset({
   engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl, onRemapLedger, onUnmapLedger,
 }: Props) {
-  // Bug 4 — Sign-convention bridge for asset Notes display
-  // Asset notes are normally stored POSITIVE (DR balances), but some legacy
-  // engagements may have stored them negative when a cash overdraft (CR) was
-  // mapped to BS_CA_CCE.  Normalize to positive on read so the displayed
-  // "Total per BS" matches the BS face which uses absolute display.
-  const normalizeSign = (raw: number): number => raw < 0 ? -raw : raw;
   const get = (path: string) => path.split(".").reduce<any>((c, k) => c?.[k], notes);
 
   // Prefer breakup sum over stored headline so the Note "Total per BS"
@@ -50,21 +44,35 @@ export default function NoteBSAsset({
     return { sum, hasAny: true };
   };
 
+  /** Sign convention for bs_asset notes — assets are stored without the
+   *  sectionSign flip, so a normal DR-balance asset lands as POSITIVE in
+   *  storage and an abnormal CR-balance asset (e.g. bank overdraft)
+   *  lands as NEGATIVE.  Display rule (matches BS face):
+   *    • Stored ≥ 0   →  DR balance (normal asset)   →  POSITIVE
+   *    • Stored < 0   →  CR balance (abnormal)       →  NEGATIVE
+   *  When the breakup is populated, magnitude is its always-positive sum
+   *  and the sign is taken from the stored value. */
+  const signedTotal = (storedRaw: number, magnitude: number): number =>
+    storedRaw < 0 ? -magnitude : magnitude;
+
   const cy = (key: string) => {
+    const stored = Number(notes.bs_asset[key]?.cy ?? 0);
     const { sum, hasAny } = sumBreakup(key, "amount_cy");
-    if (hasAny) return sum;
-    return normalizeSign(Number(notes.bs_asset[key]?.cy ?? 0));
+    const magnitude = hasAny ? sum : Math.abs(stored);
+    return signedTotal(stored, magnitude);
   };
   const py = (key: string) => {
+    const stored = Number(notes.bs_asset[key]?.py ?? 0);
     const { sum, hasAny } = sumBreakup(key, "amount_py");
-    if (hasAny) return sum;
-    return normalizeSign(Number(notes.bs_asset[key]?.py ?? 0));
+    const magnitude = hasAny ? sum : Math.abs(stored);
+    return signedTotal(stored, magnitude);
   };
 
   const effectivePY = (key: string, breakupPath?: string): number => {
+    const stored = Number(notes.bs_asset[key]?.py ?? 0);
     const { sum, hasAny } = sumBreakup(key, "amount_py", breakupPath);
-    if (hasAny) return sum;
-    return py(key);
+    const magnitude = hasAny ? sum : Math.abs(stored);
+    return signedTotal(stored, magnitude);
   };
 
   // Smart note: only show a note number when at least one year has data.

@@ -654,8 +654,14 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
             })
           );
       }
-    } else if (tbAccounts.length > 0 && Object.keys(coaMapping).length === 0) {
-      // Auto-map on first load
+    } else if (engagement?.coa_mapping == null && tbAccounts.length > 0) {
+      // Issue 5 (today) — auto-map ONLY when coa_mapping is genuinely
+      // unset (null / undefined — i.e. brand-new engagement that has
+      // never had a mapping).  When the user clicks "Clear All", we
+      // persist coa_mapping = {} (empty OBJECT).  An empty object is
+      // distinct from null in JSON, so this branch no longer fires
+      // after a manual Clear, and the ledgers stay unmapped through
+      // page refresh until the user explicitly clicks Auto Map / AI Map.
       runAutoMapping();
     }
   }, [engagement?.coa_mapping, tbAccounts.length]);

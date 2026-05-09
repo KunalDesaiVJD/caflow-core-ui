@@ -639,8 +639,12 @@ export async function nceAutoPopulate(
         // PY-shell-TB fallback: cold-start case where prior-year cogs note
         // wasn't auto-populated yet, but PY-shell sync DID populate the prior
         // engagement's tally_trial_balance with Stock-in-Hand ledgers.
-        const noOpenings = Object.keys(openMap).every(k => !newCy[k]);
-        if (noOpenings && financialYear && clientId) {
+        // Issue 7 (today): also pull the PRIOR engagement's TB opening_balance
+        // (which equals FY-2 closing) so the PY column of "Opening" rows
+        // is filled — and PY column of "Closing" rows from prior closing.
+        // Symptom this fixes (Swastik Buildcon): CY Opening: WIP = 9,54,65,534
+        // but PY Opening: WIP was blank, making PY Increase/Decrease incorrect.
+        if (financialYear && clientId) {
           const parts = String(financialYear).split("-");
           if (parts.length === 2) {
             const startYr = parseInt(parts[0], 10);
@@ -657,14 +661,32 @@ export async function nceAutoPopulate(
             if (prevIds.length > 0) {
               const { data: prevTb } = await supabase
                 .from("tally_trial_balance")
-                .select("ledger_name, closing_balance, balance_type, parent_group, engagement_id")
+                .select("ledger_name, closing_balance, balance_type, opening_balance, opening_type, parent_group, engagement_id")
                 .in("engagement_id", prevIds);
               for (const row of (prevTb ?? []) as TBRow[]) {
                 if (!isInventoryParent((row as any).parent_group)) continue;
-                const amt = ledgerAmt(row.closing_balance);
-                if (amt === 0) continue;
-                const key = openKeyFor(classifyInv(row.ledger_name));
-                newCy[key] = (newCy[key] ?? 0) + amt;
+
+                const closeAmt = ledgerAmt(row.closing_balance);   // = PY closing
+                const openAmt  = Math.abs(Number((row as any).opening_balance ?? 0)); // = FY-2 closing
+                const cls = classifyInv(row.ledger_name);
+                const openKey  = openKeyFor(cls);   // pc_open_*
+                const closeKey = closeKeyFor(cls);  // pc_close_*
+
+                // CY column: only set when not already filled from prior
+                // year's cogs note (pyCogs branch above).
+                if (closeAmt > 0 && !newCy[openKey]) {
+                  newCy[openKey] = (newCy[openKey] ?? 0) + closeAmt;
+                }
+
+                // PY column — Opening row = FY-2 closing (= prior eng's
+                // opening_balance), PY Closing row = PY closing (= prior eng's
+                // closing_balance).
+                if (openAmt > 0) {
+                  newPy[openKey] = (newPy[openKey] ?? 0) + openAmt;
+                }
+                if (closeAmt > 0) {
+                  newPy[closeKey] = (newPy[closeKey] ?? 0) + closeAmt;
+                }
               }
             }
           }

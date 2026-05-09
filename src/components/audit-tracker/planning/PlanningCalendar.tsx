@@ -617,7 +617,15 @@ export default function PlanningCalendar({
           className="overflow-auto"
           style={{ maxHeight: "calc(100vh - 280px)" }}
         >
-          <table className="border-collapse text-xs w-full" style={{ tableLayout: "auto" }}>
+          {/* Issue 1 (today) — table-fixed forces columns to share the
+              container width EQUALLY, so all employees fit on one screen
+              without horizontal scroll.  table-auto previously let the
+              widest chip (e.g. "CLEAR QUANT TECHNOLOGIES PRIVATE LIMITED")
+              push its column wider, causing overflow.  With fixed layout
+              and explicit 90 px on the Date column, the remaining width
+              auto-distributes among employee columns; adding or removing
+              an employee re-divides the space without an explicit reflow. */}
+          <table className="border-collapse text-xs w-full table-fixed">
             {/* Sticky header */}
             <thead className="sticky top-0 z-20">
               <tr className="bg-indigo-700 text-white text-[11px] uppercase tracking-wide">

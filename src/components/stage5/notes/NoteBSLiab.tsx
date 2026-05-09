@@ -120,10 +120,17 @@ export default function NoteBSLiab({
     return { sum, hasAny: true };
   };
 
-  /** Apply negL-equivalent sign logic — magnitude positive when stored is
-   *  CR (Tally negative or zero); negative when stored is DR (positive). */
+  /** Sign convention for bs_liab notes — auto-populate stores values AFTER
+   *  the sectionSign flip (× -1 in notesAutoPopulate.ts:1072), so a normal
+   *  CR-balance liability lands as POSITIVE in storage and an abnormal
+   *  DR-balance liability lands as NEGATIVE.  Display rule (matches both
+   *  the BS face and the auditor's mental model):
+   *    • Stored ≥ 0   →  CR balance (normal)   →  display POSITIVE
+   *    • Stored < 0   →  DR balance (abnormal) →  display NEGATIVE
+   *  When the breakup is populated we use its (always-positive) sum as the
+   *  magnitude and take the sign from the stored value. */
   const signedTotal = (storedRaw: number, magnitude: number): number =>
-    storedRaw > 0 ? -magnitude : magnitude;
+    storedRaw < 0 ? -magnitude : magnitude;
 
   const cy = (key: string) => {
     const stored = Number(notes.bs_liab[key]?.cy ?? 0);
