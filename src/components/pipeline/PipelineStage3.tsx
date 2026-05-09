@@ -372,6 +372,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     normalized_name: string; account_head: string;
     confidence_score: number; times_confirmed: number; times_overridden: number;
     scope: string; is_party_name: boolean;
+    aliases: string[] | null; override_reason: string | null;
   }[]>([]);
   const [mappingRules, setMappingRules] = useState<MappingRule[]>([]);
   const [rulesOpen, setRulesOpen] = useState(false);
@@ -720,7 +721,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     const clientId = engagement?.client_id;
     let intelQuery = (supabase as any)
       .from("coa_mapping_intelligence")
-      .select("normalized_name, account_head, confidence_score, times_confirmed, times_overridden, scope, is_party_name")
+      .select("id, normalized_name, account_head, confidence_score, times_confirmed, times_overridden, scope, is_party_name, aliases, override_reason")
       .eq("entity_type", entityTypeKey)
       .gte("confidence_score", 60);
     if (clientId) {
@@ -796,13 +797,23 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   };
 
   // ─── Look up intelligence for a ledger ────────────────────────────────────
+  // Priority: 1) exact normalized_name match  2) alias match (slightly lower confidence)
   const applyIntelligence = (
     ledgerName: string,
     intel: typeof intelligence,
   ): { code: string; confidence_score: number } | null => {
     const norm = normalizeName(ledgerName);
-    const hit  = intel.find(i => i.normalized_name === norm);
-    return hit ? { code: hit.account_head, confidence_score: hit.confidence_score } : null;
+    // Exact match
+    const exactHit = intel.find(i => i.normalized_name === norm);
+    if (exactHit) return { code: exactHit.account_head, confidence_score: exactHit.confidence_score };
+    // Alias match — cap at 85 so exact matches always win
+    for (const i of intel) {
+      if (!i.aliases?.length) continue;
+      if (i.aliases.some(a => normalizeName(a) === norm)) {
+        return { code: i.account_head, confidence_score: Math.min(i.confidence_score, 85) };
+      }
+    }
+    return null;
   };
 
   // ═══════ AUTO-MAPPING ═══════
@@ -1042,6 +1053,25 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       const norm = normalizeName(ledgerName);
       const entityTypeKey = isNonCorporate ? "nce" : "corporate";
       const bsPl = lineItem.section?.startsWith("PL") ? "PL" : "BS";
+
+      // Detect if this is an AI override (previous entry was AI-mapped to a DIFFERENT code)
+      const prevEntry = coaMapping[ledgerName];
+      const wasAiMapped = prevEntry && (prevEntry.confidence === "ai" || prevEntry.confidence === "low" || prevEntry.confidence === "medium");
+      const aiSuggestedCode = wasAiMapped && prevEntry.code !== code ? prevEntry.code : null;
+
+      // Fire alias-analysis async — this is what makes the AI learn WHY
+      supabase.functions.invoke("analyze-coa-override", {
+        body: {
+          ledger_name:       ledgerName,
+          normalized_name:   norm,
+          entity_type:       entityTypeKey,
+          ai_mapping_code:   aiSuggestedCode,   // null if no prior AI suggestion
+          human_mapping_code: code,
+          firm_id:           engagement?.firm_id ?? null,
+          engagement_id:     engagementId,
+        },
+      }).catch(() => {}); // never block the UI on this
+
       supabase.rpc("upsert_coa_intelligence" as any, {
         p_normalized_name: norm,
         p_entity_type:     entityTypeKey,
@@ -1067,7 +1097,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           }
           return [
             ...prev,
-            { normalized_name: norm, account_head: code, confidence_score: 70, times_confirmed: 1, times_overridden: 0, scope: 'global', is_party_name: false },
+            { normalized_name: norm, account_head: code, confidence_score: 70, times_confirmed: 1, times_overridden: 0, scope: 'global', is_party_name: false, aliases: null, override_reason: null },
           ];
         });
       });
@@ -1123,10 +1153,20 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         // excluded here — they must never be sent as global learned_patterns to Claude,
         // since they are vendor/customer business names specific to one client and would
         // confuse the AI when mapping other clients' ledgers.
-        const intelAnchors = intelligence
-          .filter(i => i.confidence_score >= 80 && !i.is_party_name && i.scope !== 'engagement')
-          .slice(0, 60)
-          .map(i => ({ ledger_pattern: i.normalized_name, fs_code: i.account_head, confidence: Math.round(i.confidence_score) }));
+        // Build learned_patterns: canonical names + all their AI-derived aliases.
+        // Party names and engagement-scoped entries are intentionally excluded.
+        const intelAnchors: { ledger_pattern: string; fs_code: string; confidence: number }[] = [];
+        for (const i of intelligence) {
+          if (i.confidence_score < 80 || i.is_party_name || i.scope === 'engagement') continue;
+          intelAnchors.push({ ledger_pattern: i.normalized_name, fs_code: i.account_head, confidence: Math.round(i.confidence_score) });
+          // Include aliases so Claude maps spelling variants / abbreviations correctly
+          if (i.aliases?.length) {
+            for (const alias of i.aliases.slice(0, 4)) { // max 4 aliases per entry to keep payload lean
+              intelAnchors.push({ ledger_pattern: alias, fs_code: i.account_head, confidence: 80 });
+            }
+          }
+          if (intelAnchors.length >= 120) break; // hard cap to avoid oversized payload
+        }
 
         const payload = {
           entity_type:        isNonCorporate ? "nce" : "corporate",
