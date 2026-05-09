@@ -369,6 +369,19 @@ type IntelRow = {
   is_party_name: boolean;
   scope: string;           // 'global' | 'engagement'
   client_id: string | null;
+  // AI override analysis (added 2026-05-09)
+  aliases: string[] | null;
+  override_reason: string | null;
+  ai_analysis: string | null;
+};
+
+const REASON_META: Record<string, { label: string; color: string }> = {
+  SPELLING_VARIANT:     { label: "Spelling variant",     color: "bg-blue-100 text-blue-800" },
+  ABBREVIATION:         { label: "Abbreviation",         color: "bg-violet-100 text-violet-800" },
+  ALIAS:                { label: "Alias",                color: "bg-amber-100 text-amber-800" },
+  CONCEPTUAL_CORRECTION:{ label: "Conceptual fix",       color: "bg-orange-100 text-orange-800" },
+  ERROR_CORRECTION:     { label: "AI error corrected",   color: "bg-red-100 text-red-800" },
+  CONFIRMED:            { label: "Confirmed",            color: "bg-green-100 text-green-800" },
 };
 
 type CoaHead = { account_head: string; bs_pl: string | null; group_name: string | null; entity_type: string };
@@ -388,7 +401,7 @@ function CoaIntelligencePanel() {
     setLoading(true);
     const { data } = await supabase
       .from("coa_mapping_intelligence" as any)
-      .select("*")
+      .select("id, normalized_name, entity_type, account_head, bs_pl, account_group, confidence_score, times_confirmed, times_overridden, alternatives, firms_affected, last_used_at, is_party_name, scope, client_id, aliases, override_reason, ai_analysis")
       .order("last_used_at", { ascending: false })
       .limit(1000);
     setRows((data as IntelRow[]) ?? []);
@@ -468,11 +481,17 @@ function CoaIntelligencePanel() {
   return (
     <Card>
       <CardHeader className="space-y-2">
-        <CardTitle className="text-sm flex items-center gap-2">
+        <CardTitle className="text-sm flex items-center gap-2 flex-wrap">
           <Zap size={14} className="text-violet-600" />
           Cross-Client COA Mapping Intelligence
           <Badge variant="outline">{rows.filter(r => (r.scope ?? 'global') === 'global').length} global patterns</Badge>
           <Badge variant="outline" className="border-amber-400 text-amber-700">{rows.filter(r => r.scope === 'engagement').length} client-scoped</Badge>
+          <Badge variant="outline" className="border-violet-400 text-violet-700">
+            {rows.reduce((n, r) => n + (r.aliases?.length ?? 0), 0)} aliases learned
+          </Badge>
+          <Badge variant="outline" className="border-red-400 text-red-700">
+            {rows.filter(r => r.override_reason === 'ERROR_CORRECTION').length} AI errors corrected
+          </Badge>
         </CardTitle>
         <p className="text-xs text-muted-foreground">
           When a user confirms or overrides a COA mapping, it is recorded here.{" "}
@@ -534,7 +553,32 @@ function CoaIntelligencePanel() {
                 return (
                   <TableRow key={r.id}>
                     <TableCell>
-                      <div className="font-mono text-xs">{r.normalized_name}</div>
+                      <div className="font-mono text-xs font-medium">{r.normalized_name}</div>
+                      {/* Override reason badge */}
+                      {r.override_reason && REASON_META[r.override_reason] && (
+                        <span className={`inline-block text-[10px] px-1.5 py-0.5 rounded mt-1 font-medium ${REASON_META[r.override_reason].color}`}>
+                          {REASON_META[r.override_reason].label}
+                        </span>
+                      )}
+                      {/* Aliases learned by AI analysis */}
+                      {r.aliases && r.aliases.length > 0 && (
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {r.aliases.slice(0, 5).map(alias => (
+                            <span key={alias} className="font-mono text-[9px] bg-muted px-1 py-0.5 rounded text-muted-foreground border">
+                              {alias}
+                            </span>
+                          ))}
+                          {r.aliases.length > 5 && (
+                            <span className="text-[9px] text-muted-foreground">+{r.aliases.length - 5} more</span>
+                          )}
+                        </div>
+                      )}
+                      {/* AI explanation tooltip */}
+                      {r.ai_analysis && (
+                        <div className="text-[10px] text-muted-foreground mt-1 italic truncate max-w-[220px]" title={r.ai_analysis}>
+                          {r.ai_analysis}
+                        </div>
+                      )}
                       {/* Issue-6: Show client name for client-scoped entries */}
                       {isParty && r.client_id && clientMap[r.client_id] && (
                         <div className="text-[10px] text-amber-700 mt-0.5 font-medium">
