@@ -3786,6 +3786,44 @@ export default function PipelineFinancialStatements({
         const clientT = (engagement?.clients ?? {}) as any;
         const { buildCorporateFinancialsXLSX } =
           await import("@/lib/fsExcelTemplateCorporate");
+        // Note numbers per FS code — pulled from each memoBs/memoPl row's
+        // noteNo property (already populated by the dynamic registry inside
+        // fsDisplayData useMemo).  Same source the on-screen BS/PL Note
+        // No. column reads from, so the export matches the screen.
+        const corpNoteNos: Record<string, number | null | undefined> =
+          (memoBs && memoPl) ? {
+            BS_EQ_SC:    memoBs.shareCap.noteNo ?? null,
+            BS_EQ_RS:    memoBs.reserves.noteNo ?? null,
+            BS_NCL_LTB:  memoBs.ltBorrowings.noteNo ?? null,
+            BS_NCL_DTL:  memoBs.dtLiab.noteNo ?? null,
+            BS_NCL_OLT:  memoBs.otherLtLiab.noteNo ?? null,
+            BS_NCL_LTP:  memoBs.ltProvisions.noteNo ?? null,
+            BS_CL_STB:   memoBs.stBorrowings.noteNo ?? null,
+            BS_CL_TP:    memoBs.tradePayables.noteNo ?? null,
+            BS_CL_OCL:   memoBs.otherCurrLiab.noteNo ?? null,
+            BS_CL_STP:   memoBs.stProvisions.noteNo ?? null,
+            BS_NCA_FA:   memoBs.ppe.noteNo ?? null,
+            BS_NCA_INV:  memoBs.ncInvestments.noteNo ?? null,
+            BS_NCA_DTA:  memoBs.dtAssets.noteNo ?? null,
+            BS_NCA_LLA:  memoBs.ltLoans.noteNo ?? null,
+            BS_NCA_ONA:  memoBs.otherNcAssets.noteNo ?? null,
+            BS_CA_CI:    memoBs.currInvestments.noteNo ?? null,
+            BS_CA_INV:   memoBs.inventories.noteNo ?? null,
+            BS_CA_TR:    memoBs.tradeRec.noteNo ?? null,
+            BS_CA_CCE:   memoBs.cashBank.noteNo ?? null,
+            BS_CA_SLA:   memoBs.stLoans.noteNo ?? null,
+            BS_CA_OCA:   memoBs.otherCurrAssets.noteNo ?? null,
+            PL_REV_OPS:  memoPl.revFromOps.noteNo ?? null,
+            PL_REV_OI:   memoPl.otherIncome.noteNo ?? null,
+            PL_EXP_MAT:  memoPl.costMaterials.noteNo ?? null,
+            PL_EXP_SIT:  memoPl.purchasesStock.noteNo ?? null,
+            PL_EXP_CII:  memoPl.changesInventories.noteNo ?? null,
+            PL_EXP_EMP:  memoPl.employeeBenefits.noteNo ?? null,
+            PL_EXP_FIN:  memoPl.financeCosts.noteNo ?? null,
+            PL_EXP_DEP:  memoPl.depreciation.noteNo ?? null,
+            PL_EXP_OTH:  memoPl.otherExpenses.noteNo ?? null,
+          } : {};
+
         const blob = await buildCorporateFinancialsXLSX({
           entityName:    clientName,
           entityType:    clientT.entity_type ?? "Private Limited",
@@ -3807,6 +3845,7 @@ export default function PipelineFinancialStatements({
           reportDate:    reportDateFmtT,
           udin:          (engagement as any)?.udin ?? "",
           amounts:       corpAmounts,
+          noteNumbers:   corpNoteNos,
         });
         const safeNmT = (clientName || "Client").replace(/[^A-Za-z0-9]/g, "_");
         const urlT    = URL.createObjectURL(blob);

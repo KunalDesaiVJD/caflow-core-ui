@@ -49,9 +49,27 @@ export interface CorporateFinancialsInputs {
    * number-format (#,##0.00 etc.) preserved.
    */
   amounts:       Record<string, { cy: number; py: number }>;
+
+  /** Map of corporate FS code → dynamic note number from the registry.
+   *  Written into the BS Note-No column (D) and PL Note-No column (F),
+   *  replacing the template's "[01 Apr ...]_ AUTO" placeholder. */
+  noteNumbers?:  Record<string, number | null | undefined>;
 }
 
 // ─── Cell mappings ───────────────────────────────────────────────────────────
+// IMPORTANT: corporate template column letters differ from NCE template:
+//   BS sheet  →  D = Note No,  E = CY amount,  F = PY amount
+//   PL sheet  →  F = Note No,  G = CY amount,  H = PY amount
+// (The G/H pair on the BS sheet — visible to the right of the printed
+//  table — is unbordered overflow space, NOT the data columns.)
+
+// Cross-sheet cell coordinates per sheet:
+const BS_NOTE_COL = "D";
+const BS_CY_COL   = "E";
+const BS_PY_COL   = "F";
+const PL_NOTE_COL = "F";
+const PL_CY_COL   = "G";
+const PL_PY_COL   = "H";
 
 const BS_ROW_MAP: Record<string, number> = {
   // Equity & Liabilities (sheet "BS")
@@ -97,31 +115,24 @@ const PL_ROW_MAP: Record<string, number> = {
 };
 
 function buildPlaceholderMap(i: CorporateFinancialsInputs): Record<string, string> {
+  // Date range for "Previous year" = full FY span.  Template currently
+  // shows literal "[01 Apr 2025 to 31 Mar 2026]" — we substitute with the
+  // engagement's actual FY span derived from cyYear.
+  const fyStartYear  = i.cyYear - 1;
+  const fyDateRange  = `01 Apr ${fyStartYear} to 31 Mar ${i.cyYear}`;
+
   return {
+    // ── Plain placeholders (no AUTO suffix) ────────────────────────────────
     "[NAME OF THE COMPANY]":       i.entityName || "",
-    "[ENTER ENTITY NAME]":         i.entityName || "",
     "[ADDRESS]":                   i.address || "",
-    "[ENTER ADDRESS]":             i.address || "",
-    "[ENTER PAN]":                 i.pan || "",
-    "[ENTER GSTIN]":               i.gstin || "",
-    "[ENTER TAN]":                 i.tan || "",
-    "[ENTER BUSINESS]":            i.business || "",
     "[NAME OF AUDITOR / FIRM]":    i.firmName || "",
     "[NAME OF FIRM]":              i.firmName || "",
-    "[ENTER FIRM NAME]":           i.firmName || "",
     "[FRN]":                       i.firmFRN || "",
-    "[ENTER FRN]":                 i.firmFRN || "",
     "[NAME OF SIGNING PARTNER / PROPRIETOR]": i.partnerName || "",
     "[SIGNING PARTNER / PROPRIETOR]": i.partnerName || "",
-    "[ENTER SIGNATORY NAME]":      i.partnerName || "",
     "[NAME]":                      i.partnerName || "",
-    "[ENTER MEMBERSHIP NO.]":      i.membershipNo || "",
-    "[ENTER UDIN]":                i.udin || "",
     "[PLACE]":                     i.place || "",
-    "[ENTER PLACE]":               i.place || "",
     "[DATE]":                      i.reportDate || "",
-    "[ENTER DATE]":                i.reportDate || "",
-    "[ENTER REPORT DATE]":         i.reportDate || "",
     "[BALANCE SHEET DATE]":        `31 March, ${i.cyYear}`,
     "[STATUTORY AUDITOR NAME]":    i.firmName || "",
     "[DIRECTOR NAME]":             "",
@@ -129,9 +140,50 @@ function buildPlaceholderMap(i: CorporateFinancialsInputs): Record<string, strin
       [i.entityName, i.address, i.pan ? `PAN: ${i.pan}` : ""].filter(Boolean).join(", "),
     "[APPLICABLE ACT]":            "Companies Act, 2013",
     "[DETAILS]":                   "",
-    "[ENTER DETAILS]":             "",
     "[XXXXXXXXXXXX]":              "",
     "[XXXXXX]":                    "",
+
+    // ── "_ AUTO" variants ──────────────────────────────────────────────────
+    // Many template cells store the placeholder + "_ AUTO" suffix as a
+    // single string (e.g. "[ENTER ENTITY NAME]_ AUTO").  We map the FULL
+    // string so the entire cell gets replaced — no dangling "_ AUTO".
+    "[ENTER ENTITY NAME]_ AUTO":   i.entityName || "",
+    "[ENTER ADDRESS]_ AUTO":       i.address || "",
+    "[ENTER PAN]_ AUTO":           i.pan || "",
+    "[ENTER TAN]_ AUTO":           i.tan || "",
+    "[ENTER GSTIN]_ AUTO":         i.gstin || "",
+    "[ENTER BUSINESS]_ AUTO":      i.business || "",
+    "[ENTER FIRM NAME]_ AUTO":     i.firmName || "",
+    "[ENTER FRN]_ AUTO":           i.firmFRN || "",
+    "[ENTER SIGNATORY NAME]_ AUTO": i.partnerName || "",
+    "[ENTER MEMBERSHIP NO.]_ AUTO": i.membershipNo || "",
+    "[ENTER UDIN]_ AUTO":          i.udin || "",
+    "[ENTER PLACE]_ AUTO":         i.place || "",
+    "[ENTER DATE]_ AUTO":          i.reportDate || "",
+    "[ENTER REPORT DATE]_ AUTO":   i.reportDate || "",
+    "[ENTER DETAILS]_ AUTO":       "",
+    // "[01 Apr 2025 to 31 Mar 2026]_ AUTO" is the literal hardcoded year
+    // range in the template — substitute with engagement's actual FY span.
+    "[01 Apr 2025 to 31 Mar 2026]_ AUTO":   fyDateRange,
+    "[2026-27]_ AUTO":             i.assessmentYear || "",
+    "_____ AUTO":                  `31 March, ${i.cyYear}`,
+
+    // ── Bare placeholders without AUTO (keep as fallback for other sheets) ─
+    "[ENTER ENTITY NAME]":         i.entityName || "",
+    "[ENTER ADDRESS]":             i.address || "",
+    "[ENTER PAN]":                 i.pan || "",
+    "[ENTER GSTIN]":               i.gstin || "",
+    "[ENTER TAN]":                 i.tan || "",
+    "[ENTER BUSINESS]":            i.business || "",
+    "[ENTER FIRM NAME]":           i.firmName || "",
+    "[ENTER FRN]":                 i.firmFRN || "",
+    "[ENTER SIGNATORY NAME]":      i.partnerName || "",
+    "[ENTER MEMBERSHIP NO.]":      i.membershipNo || "",
+    "[ENTER UDIN]":                i.udin || "",
+    "[ENTER PLACE]":               i.place || "",
+    "[ENTER DATE]":                i.reportDate || "",
+    "[ENTER REPORT DATE]":         i.reportDate || "",
+    "[ENTER DETAILS]":             "",
   };
 }
 
@@ -186,27 +238,75 @@ export async function buildCorporateFinancialsXLSX(
     });
   });
 
-  // 4. Fill Balance Sheet amounts (sheet name "BS")
+  // 4. Fill Balance Sheet amounts (sheet "BS") — columns E (CY) / F (PY).
+  //    Also writes the dynamic note number to D when supplied.  Each cell
+  //    overwrite replaces the template's cross-sheet pull formula
+  //    ('Note BS-Liab'!Gxx) with a direct value, so the printed BS is
+  //    self-contained (no inter-sheet dependency).
   const bs = wb.getWorksheet("BS");
   if (bs) {
+    const noteMap = inputs.noteNumbers ?? {};
     for (const [code, row] of Object.entries(BS_ROW_MAP)) {
       const amt = inputs.amounts[code];
-      if (!amt) continue;
-      bs.getCell(`G${row}`).value = round2(amt.cy);
-      bs.getCell(`H${row}`).value = round2(amt.py);
+      if (amt) {
+        bs.getCell(`${BS_CY_COL}${row}`).value = round2(amt.cy);
+        bs.getCell(`${BS_PY_COL}${row}`).value = round2(amt.py);
+      }
+      const noteNo = noteMap[code];
+      const noteCell = bs.getCell(`${BS_NOTE_COL}${row}`);
+      if (noteNo != null && Number.isFinite(noteNo)) {
+        noteCell.value = noteNo;
+      } else {
+        // Clear the "[01 Apr ...]_ AUTO" placeholder when no note applies.
+        noteCell.value = "";
+      }
     }
   }
 
-  // 5. Fill P&L amounts (sheet name "PL")
+  // 5. Fill P&L amounts (sheet "PL") — columns G (CY) / H (PY), Note No in F.
   const pl = wb.getWorksheet("PL");
   if (pl) {
+    const noteMap = inputs.noteNumbers ?? {};
     for (const [code, row] of Object.entries(PL_ROW_MAP)) {
       const amt = inputs.amounts[code];
-      if (!amt) continue;
-      pl.getCell(`G${row}`).value = round2(amt.cy);
-      pl.getCell(`H${row}`).value = round2(amt.py);
+      if (amt) {
+        pl.getCell(`${PL_CY_COL}${row}`).value = round2(amt.cy);
+        pl.getCell(`${PL_PY_COL}${row}`).value = round2(amt.py);
+      }
+      const noteNo = noteMap[code];
+      const noteCell = pl.getCell(`${PL_NOTE_COL}${row}`);
+      if (noteNo != null && Number.isFinite(noteNo)) {
+        noteCell.value = noteNo;
+      } else {
+        noteCell.value = "";
+      }
     }
   }
+
+  // 5b. Strip stray "AUTO" / "_ AUTO" residue across every sheet so the
+  //     final file is clean.  Substitution above handles the mapped
+  //     placeholders; this catches any remaining standalone "AUTO" cells
+  //     and trailing "_ AUTO" suffixes that survived because the source
+  //     text didn't match any key.
+  wb.eachSheet((ws) => {
+    ws.eachRow({ includeEmpty: false }, (row) => {
+      row.eachCell({ includeEmpty: false }, (cell) => {
+        if (typeof cell.value !== "string") return;
+        const original = cell.value;
+        let v = original;
+        if (v === "AUTO") {
+          cell.value = "";
+          return;
+        }
+        // Strip "_ AUTO" / " AUTO" suffix
+        v = v.replace(/_? AUTO$/i, "");
+        // Strip surrounding bracket placeholders that didn't match a key
+        // (unmapped "[XYZ]_ AUTO" → empty rather than dangling text).
+        v = v.replace(/^\[[^\]]+\]\s*$/, "");
+        if (v !== original) cell.value = v;
+      });
+    });
+  });
 
   // 6. Replace year/date underscores in headings.
   wb.eachSheet((ws) => {
