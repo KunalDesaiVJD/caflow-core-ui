@@ -625,19 +625,40 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
   // Load existing mapping from engagement
   useEffect(() => {
-    if (engagement?.coa_mapping && typeof engagement.coa_mapping === "object" && Object.keys(engagement.coa_mapping).length > 0) {
-      const raw = engagement.coa_mapping as Record<string, any>;
+    // Issue 5 (re-fix) — wait for engagement to actually load before deciding
+    // whether to auto-map.  Previously the condition `engagement?.coa_mapping
+    // == null` evaluated to TRUE during the loading window (because
+    // `undefined == null` is `true`), so runAutoMapping fired on every page
+    // load before the real coa_mapping arrived from the server — re-mapping
+    // ledgers the user had just cleared.
+    if (!engagement) return;
+
+    const raw = (engagement as any).coa_mapping as Record<string, any> | null | undefined;
+
+    // Strip the sentinel key (if any) before counting real ledger entries.
+    // clearAllMappings persists `{ __cleared: true }` so we can reliably tell
+    // "user wiped it" apart from "brand-new engagement, never mapped".  A
+    // bare `{}` is unreliable because some Supabase / Postgres paths can
+    // round-trip an empty JSONB object back as `null`.
+    const realKeys = raw && typeof raw === "object"
+      ? Object.keys(raw).filter(k => k !== "__cleared")
+      : [];
+
+    if (raw && typeof raw === "object" && realKeys.length > 0) {
       // ── Backward-compat migration: BS_CA_INV direct → INV_STOCK ──────────
       // Pre-Phase-9 coa_mapping entries reference BS_CA_INV directly. After
       // Phase 9, BS_CA_INV is a parent node (with INV_* children), so
       // computeTotal overwrites any direct accumulation to 0. Auto-migrate
       // such entries to INV_STOCK (generic inventory dual-post code).
       let migrated = false;
-      const patched: typeof raw = { ...raw };
-      for (const [ledger, entry] of Object.entries(raw)) {
-        if ((entry as any)?.code === "BS_CA_INV") {
-          patched[ledger] = { ...(entry as any), code: "INV_STOCK", scheduleRef: "BS+P&L" };
+      const patched: Record<string, any> = {};
+      for (const k of realKeys) {
+        const entry = (raw as any)[k];
+        if (entry?.code === "BS_CA_INV") {
+          patched[k] = { ...entry, code: "INV_STOCK", scheduleRef: "BS+P&L" };
           migrated = true;
+        } else {
+          patched[k] = entry;
         }
       }
       setCoaMapping(patched);
@@ -654,17 +675,14 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
             })
           );
       }
-    } else if (engagement?.coa_mapping == null && tbAccounts.length > 0) {
-      // Issue 5 (today) — auto-map ONLY when coa_mapping is genuinely
-      // unset (null / undefined — i.e. brand-new engagement that has
-      // never had a mapping).  When the user clicks "Clear All", we
-      // persist coa_mapping = {} (empty OBJECT).  An empty object is
-      // distinct from null in JSON, so this branch no longer fires
-      // after a manual Clear, and the ledgers stay unmapped through
-      // page refresh until the user explicitly clicks Auto Map / AI Map.
+    } else if (raw && typeof raw === "object" && (raw as any).__cleared) {
+      // User explicitly cleared — keep mappings empty, do NOT auto-map.
+      setCoaMapping({});
+    } else if ((raw == null) && tbAccounts.length > 0) {
+      // Brand-new engagement, no mapping ever stored — auto-map once.
       runAutoMapping();
     }
-  }, [engagement?.coa_mapping, tbAccounts.length]);
+  }, [engagement, tbAccounts.length]);
 
   // ── Auto-patch: silently map "Profit & Loss A/c" type ledgers ─────────────
   // In Tally, when the firm transfers net profit to Capital / Reserves, a
@@ -912,18 +930,22 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   }, [coaMapping, engagementId]);
 
   const clearAllMappings = useCallback(async () => {
-    // Issue 5 (Aesha) — "Clear All" must reset every downstream surface so
-    // the auditor can truly start from zero: COA mapping, Stage 5 notes,
-    // Stage 7 ratios, and the FS-face overrides / PY manual amounts.  Any
-    // residue would otherwise re-appear on the BS / P&L / Notes face after
-    // re-sync, defeating the user's intent of starting fresh.
+    // Issue 5/6 (re-fix) — "Clear All" must reset every downstream surface so
+    // the auditor can truly start from zero AND survive a page refresh
+    // without ledgers re-mapping themselves.  Three things must happen:
+    //   1. coa_mapping → sentinel `{ __cleared: true }` (NOT a bare `{}`,
+    //      which Supabase can round-trip as null and re-trigger auto-map).
+    //   2. Wipe every JSONB blob the FS face/notes/ratios reads from.
+    //   3. Delete the persisted snapshot in fa_financial_statements so
+    //      Stage 7 doesn't keep showing the previous Save's BS/P&L numbers.
+    //   4. Invalidate React-Query caches so any open Stage 6/7 view rebuilds.
     if (Object.keys(coaMapping).length === 0) { toast.info("Nothing to clear"); return; }
     setCoaMapping({});
     try {
       await supabase
         .from("audit_engagements")
         .update({
-          coa_mapping:        {},
+          coa_mapping:        { __cleared: true } as any,
           // Reset every downstream FS payload so the BS / P&L / Notes go to zero
           stage5_notes:       null as any,
           stage7_ratios:      null as any,
@@ -932,11 +954,22 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           py_annexures:       null as any,
         } as any)
         .eq("id", engagementId);
+
+      // 3. Delete the saved FS snapshot so Stage 7 reflects the cleared state.
+      await supabase
+        .from("fa_financial_statements")
+        .delete()
+        .eq("engagement_id", engagementId);
+
+      // 4. Invalidate caches so anything looking at the old snapshot refreshes.
+      queryClient.invalidateQueries({ queryKey: ["fs-rows", engagementId] });
+      queryClient.invalidateQueries({ queryKey: ["audit-engagement-detail", engagementId] });
+
       toast.success("All mappings cleared and financials reset to zero");
     } catch (e: any) {
       toast.error("Clear failed: " + e.message);
     }
-  }, [coaMapping, engagementId]);
+  }, [coaMapping, engagementId, queryClient]);
 
   // ═══════ RESET & RE-MAP (clear all + auto + AI) ═══════
   const resetAndRemap = useCallback(async () => {
