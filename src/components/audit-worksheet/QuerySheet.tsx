@@ -40,6 +40,7 @@ import { generateQueryProgressReport }  from "./QueryProgressReport";
 import { QueryCombobox, COMMON_REQUIRED_DOCS } from "./QueryCombobox";
 import { useRequiredDocsMaster } from "@/hooks/useRequiredDocsMaster";
 import { useQueryStatusSync } from "./hooks/useQueryStatusSync";
+import { useSpellCheck } from "./hooks/useSpellCheck";
 import { toast } from "sonner";
 
 import { supabase } from "@/integrations/supabase/client";
@@ -575,6 +576,9 @@ export default function QuerySheet({
   // Phase 3D: bidirectional sync
   useQueryStatusSync({ engagementId, queries, syncStatusFromClient });
 
+  // Phase 4F: Auto spell check + sentence construction (silent, no approval)
+  const { checkAndFix } = useSpellCheck(updateQuery as (id: string, field: string, value: string) => void);
+
   // Consume externalPrefill
   useEffect(() => {
     if (!externalPrefill) return;
@@ -1060,11 +1064,12 @@ export default function QuerySheet({
                       </div>
                     </td>
 
-                    {/* Query Description — Phase 4D: Smart Draft button */}
+                    {/* Query Description — Phase 4D: Smart Draft button; Phase 4F: auto spell fix */}
                     <td className="border border-border px-2 py-2 align-top">
                       <Textarea rows={2} className="text-xs resize-none w-full min-h-[52px]"
                         placeholder="Describe the query…" value={row.query_description}
-                        onChange={e => updateQuery(row.id, "query_description", e.target.value)} />
+                        onChange={e => updateQuery(row.id, "query_description", e.target.value)}
+                        onBlur={e => checkAndFix(row.id, "query_description", e.target.value)} />
                       {(row.head || row.particulars) && !row.query_description?.trim() && (
                         <button
                           type="button"
@@ -1087,10 +1092,12 @@ export default function QuerySheet({
                         options={requiredDocOptions} placeholder="Documents needed…" />
                     </td>
 
-                    {/* Remark */}
+                    {/* Remark — Phase 4F: auto spell fix */}
                     <td className="border border-border px-2 py-2 align-top">
                       <Input className="h-7 text-xs w-full" placeholder="Remark…"
-                        value={row.remark} onChange={e => updateQuery(row.id, "remark", e.target.value)} />
+                        value={row.remark}
+                        onChange={e => updateQuery(row.id, "remark", e.target.value)}
+                        onBlur={e => checkAndFix(row.id, "remark", e.target.value)} />
                     </td>
 
                     {/* Status + Due Date — Phase 3B/C */}

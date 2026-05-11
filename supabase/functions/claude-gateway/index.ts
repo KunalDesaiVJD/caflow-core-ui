@@ -7,7 +7,7 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-const LIGHT_TYPES = new Set(["tds_section_identifier", "invoice_description"]);
+const LIGHT_TYPES = new Set(["tds_section_identifier", "invoice_description", "spell_grammar_fix"]);
 
 const SYSTEM_PROMPTS: Record<string, string> = {
   tds_section_identifier:
@@ -26,6 +26,8 @@ const SYSTEM_PROMPTS: Record<string, string> = {
     "You are a CA drafting an income tax notice response. Cite IT Act sections and CBDT circulars. Use a professional formal tone.",
   invoice_description:
     "You are a CA writing invoice line items. Return a JSON array of professional service descriptions.",
+  spell_grammar_fix:
+    'You are an expert English proofreader for Indian CA firm audit documents. Fix ALL spelling errors and improve sentence construction in the given text. Preserve technical accounting terms, ledger names, Indian company names, and proper nouns exactly as given. Correct grammar, punctuation, and word order where needed. Keep the same meaning and professional tone — only fix errors. Return ONLY a JSON object with no markdown: {"corrected":"corrected text here"}. If the text is already correct, return it unchanged.',
   workpaper_assistant:
     "You are a CA suggesting audit procedures. Return: specific tests, red flags, and SA standard references.",
   notes_drafter:
