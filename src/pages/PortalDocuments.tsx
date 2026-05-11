@@ -6,7 +6,7 @@
  * - Documents grouped by category
  */
 import { useState, useEffect, useCallback } from "react";
-import { useAuth } from "@/hooks/useAuth";
+import { usePortalClient } from "@/contexts/PortalClientContext";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -42,37 +42,34 @@ function getCategoryGroup(cat: string): string {
 }
 
 export default function PortalDocuments() {
-  const { user } = useAuth();
+  const { activeClient, loading: clientLoading } = usePortalClient();
   const [loading,    setLoading]    = useState(true);
-  const [clientData, setClientData] = useState<any>(null);
   const [documents,  setDocuments]  = useState<any[]>([]);
   const [uploading,  setUploading]  = useState(false);
   const [uploadCat,  setUploadCat]  = useState("Other");
   const [search,     setSearch]     = useState("");
 
   const fetchDocs = useCallback(async () => {
-    if (!user) return;
-    const { data: client } = await supabase.from("clients").select("*").eq("user_id", user.id).maybeSingle();
-    if (!client) { setLoading(false); return; }
-    setClientData(client);
-    const { data } = await supabase.from("documents").select("*").eq("client_id", client.id).order("filename");
+    if (!activeClient) return;
+    setLoading(true);
+    const { data } = await supabase.from("documents").select("*").eq("client_id", activeClient.id).order("filename");
     setDocuments(data || []);
     setLoading(false);
-  }, [user]);
+  }, [activeClient]);
 
   useEffect(() => { fetchDocs(); }, [fetchDocs]);
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    if (!file || !clientData) return;
+    if (!file || !activeClient) return;
     setUploading(true);
     try {
-      const path = `clients/${clientData.id}/client_uploads/${Date.now()}_${file.name}`;
+      const path = `clients/${activeClient.id}/client_uploads/${Date.now()}_${file.name}`;
       const { error: upErr } = await supabase.storage.from("firm-assets").upload(path, file, { upsert: true });
       if (upErr) throw upErr;
       await supabase.from("documents").insert({
-        firm_id: clientData.firm_id,
-        client_id: clientData.id,
+        firm_id: activeClient.firm_id,
+        client_id: activeClient.id,
         filename: file.name,
         category: "client_upload",
         sub_category: uploadCat,
@@ -115,16 +112,26 @@ export default function PortalDocuments() {
   const groupOrder = Object.keys(GROUP_MAP).filter(g => groups[g]?.length > 0);
   if (groups["Other"]?.length) groupOrder.push("Other");
 
-  if (loading) return <div className="space-y-3"><Skeleton className="h-8 w-48"/><Skeleton className="h-40"/></div>;
+  if (clientLoading || loading) {
+    return <div className="space-y-3"><Skeleton className="h-8 w-48"/><Skeleton className="h-40"/></div>;
+  }
+
+  if (!activeClient) {
+    return (
+      <div className="text-center py-20 text-muted-foreground text-sm">
+        No client profile found. Contact your CA firm.
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-xl font-bold flex items-center gap-2">
-          <FolderOpen size={22} className="text-primary" /> My Documents
+        <h1 className="text-xl font-bold flex items-center gap-2 text-[#1A2744]">
+          <FolderOpen size={22} className="text-orange-600" /> My Documents
         </h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          Documents shared by your CA firm and files you've uploaded
+          {activeClient.name} · Documents shared by your CA firm and files you've uploaded
         </p>
       </div>
 
@@ -187,7 +194,7 @@ export default function PortalDocuments() {
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm flex items-center gap-2">
-            <Upload size={15} className="text-primary" /> Upload a Document to Your CA
+            <Upload size={15} className="text-orange-600" /> Upload a Document to Your CA
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -200,7 +207,7 @@ export default function PortalDocuments() {
                 {UPLOAD_CATS.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
               </SelectContent>
             </Select>
-            <Button variant="outline" asChild disabled={uploading} className="flex-1 h-9">
+            <Button variant="outline" asChild disabled={uploading} className="flex-1 h-9 border-orange-300 text-orange-700 hover:bg-orange-50">
               <label className="cursor-pointer flex items-center justify-center gap-2 text-sm">
                 {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload size={15} />}
                 {uploading ? "Uploading…" : "Choose File to Upload"}
