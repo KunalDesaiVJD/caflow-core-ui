@@ -2783,11 +2783,35 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
             <div className="w-1/2 flex flex-col border rounded-lg overflow-hidden">
               <div className="p-2 border-b bg-muted/30 space-y-1.5">
                 {/* Title row */}
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-semibold text-muted-foreground">
-                    {isNonCorporate ? `NCE Line Items (${entityType})` : "Schedule III Line Items"}
-                  </p>
-                  <p className="text-[10px] text-muted-foreground">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <p className="text-xs font-semibold text-muted-foreground">
+                      {isNonCorporate ? `NCE Line Items (${entityType})` : "Schedule III Line Items"}
+                    </p>
+                    {/* ── Expand / Collapse All toggle ── */}
+                    {!fsSearch && (() => {
+                      const anyExpanded = filteredFsItems.some(item => expandedGroups[`fs:${item.code}`] === true);
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next: Record<string, boolean> = { ...expandedGroups };
+                            for (const item of filteredFsItems) {
+                              if (!item.children || item.children.length === 0) {
+                                const mapped = tbAccounts.filter(a => coaMapping[a.account_name]?.code === item.code);
+                                next[`fs:${item.code}`] = anyExpanded ? false : mapped.length > 0;
+                              }
+                            }
+                            setExpandedGroups(next);
+                          }}
+                          className="text-[9px] px-1.5 py-0.5 rounded border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground transition-colors whitespace-nowrap"
+                        >
+                          {anyExpanded ? "⊖ Collapse All" : "⊕ Expand All"}
+                        </button>
+                      );
+                    })()}
+                  </div>
+                  <p className="text-[10px] text-muted-foreground text-right">
                     {selectedAccount
                       ? <>Click a line item to map <span className="font-semibold text-primary">"{selectedAccount}"</span></>
                       : <>Click a mapped ledger's <span className="text-destructive font-semibold">✕</span> to unmap</>}
@@ -3122,6 +3146,93 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                   )} {/* end search ternary */}
                 </div>
               </ScrollArea>
+
+              {/* ── BS Balance Check Totals ──────────────────────────────────────
+                  Visible only on BS tab, not during search.
+                  Shows Total E&L vs Total Assets + balanced/unbalanced indicator.
+              ─────────────────────────────────────────────────────────────────── */}
+              {fsPanelTab === "bs" && !fsSearch && (() => {
+                const totalEL = (computedAmounts["BS_EQ"]  || 0)
+                              + (computedAmounts["BS_NCL"] || 0)
+                              + (computedAmounts["BS_CL"]  || 0);
+                const totalAss = (computedAmounts["BS_NCA"] || 0)
+                               + (computedAmounts["BS_CA"]  || 0);
+                const totalELpy = (computedAmountsPY["BS_EQ"]  || 0)
+                                + (computedAmountsPY["BS_NCL"] || 0)
+                                + (computedAmountsPY["BS_CL"]  || 0);
+                const totalASSpy = (computedAmountsPY["BS_NCA"] || 0)
+                                 + (computedAmountsPY["BS_CA"]  || 0);
+                const diff    = Math.abs(totalEL - totalAss);
+                const balanced = diff < 1;
+                if (Math.abs(totalEL) < 0.005 && Math.abs(totalAss) < 0.005) return null;
+                const fmtAmt = (n: number) =>
+                  n === 0 ? "—"
+                  : `₹${Math.abs(n).toLocaleString("en-IN")}${n >= 0 ? " Dr" : " Cr"}`;
+                return (
+                  <div className="border-t bg-muted/20 px-2 pt-2 pb-2 space-y-1">
+                    {/* Header row */}
+                    <div className="grid grid-cols-[1fr_90px_90px_60px] gap-0 text-[10px] text-muted-foreground uppercase tracking-wide font-semibold border-b pb-1 mb-1">
+                      <span className="pl-2 border-r-2 border-slate-300 dark:border-slate-700 pr-2">BS Total</span>
+                      <span className="text-right border-r-2 border-slate-300 dark:border-slate-700 px-2">Current</span>
+                      <span className="text-right border-r-2 border-slate-300 dark:border-slate-700 px-2">Prior</span>
+                      <span className="text-right pl-2">Match</span>
+                    </div>
+
+                    {/* Total Equity & Liabilities row */}
+                    <div className="grid grid-cols-[1fr_90px_90px_60px] gap-0 items-center text-[10px]">
+                      <span className="font-bold text-foreground pl-2 border-r-2 border-slate-300 dark:border-slate-700 pr-2 py-0.5 truncate">
+                        Total E &amp; L
+                      </span>
+                      <span className={cn(
+                        "font-mono text-right border-r-2 border-slate-300 dark:border-slate-700 px-2 font-semibold",
+                        totalEL >= 0 ? "text-foreground" : "text-destructive",
+                      )}>
+                        {fmtAmt(totalEL)}
+                      </span>
+                      <span className={cn(
+                        "font-mono text-right border-r-2 border-slate-300 dark:border-slate-700 px-2 opacity-70",
+                        totalELpy >= 0 ? "text-foreground" : "text-destructive",
+                      )}>
+                        {fmtAmt(totalELpy)}
+                      </span>
+                      <span className="text-right pl-2" />
+                    </div>
+
+                    {/* Total Assets row */}
+                    <div className="grid grid-cols-[1fr_90px_90px_60px] gap-0 items-center text-[10px]">
+                      <span className="font-bold text-foreground pl-2 border-r-2 border-slate-300 dark:border-slate-700 pr-2 py-0.5 truncate">
+                        Total Assets
+                      </span>
+                      <span className={cn(
+                        "font-mono text-right border-r-2 border-slate-300 dark:border-slate-700 px-2 font-semibold",
+                        totalAss >= 0 ? "text-foreground" : "text-destructive",
+                      )}>
+                        {fmtAmt(totalAss)}
+                      </span>
+                      <span className={cn(
+                        "font-mono text-right border-r-2 border-slate-300 dark:border-slate-700 px-2 opacity-70",
+                        totalASSpy >= 0 ? "text-foreground" : "text-destructive",
+                      )}>
+                        {fmtAmt(totalASSpy)}
+                      </span>
+                      <span className="text-right pl-2" />
+                    </div>
+
+                    {/* Balance indicator */}
+                    <div className={cn(
+                      "flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[10px] font-semibold mt-1",
+                      balanced
+                        ? "bg-green-50 border border-green-200 text-green-700 dark:bg-green-950/30 dark:border-green-800 dark:text-green-400"
+                        : "bg-red-50 border border-red-200 text-red-700 dark:bg-red-950/30 dark:border-red-800 dark:text-red-400",
+                    )}>
+                      {balanced
+                        ? <><span>✓</span> Balance Sheet is <strong>BALANCED</strong></>
+                        : <><span>✗</span> Difference: <strong>₹{diff.toLocaleString("en-IN")}</strong> — BS not balanced yet</>
+                      }
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
 
