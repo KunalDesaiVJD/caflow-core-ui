@@ -2722,8 +2722,33 @@ export default function PipelineFinancialStatements({
       return total;
     };
     for (const item of activeTree) computePL(item);
+
+    // ── Auto-credit PY net profit to BS_EQ_RS (mirrors CY computedAmounts logic) ──
+    // PY P&L amounts are now in `merged` (from pyAmounts / pyManualAmounts).
+    // Compute PY net profit and credit it to Reserves & Surplus so the
+    // comparative Balance Sheet balances — same closing entry the CY side does.
+    if (!isNonCorporate) {
+      const pyRev   = merged["PL_REV"] || 0; // negative (credit balance)
+      const pyExp   = merged["PL_EXP"] || 0; // positive (debit balance)
+      const pyNetPL = Math.round((-pyRev - pyExp) * 100) / 100;
+      if (Math.abs(pyNetPL) > 0.005) {
+        merged["BS_EQ_RS"] = (merged["BS_EQ_RS"] || 0) - pyNetPL;
+        // Re-run BS tree totals so BS_EQ, BS root pick up the change
+        const computeBSTotal = (item: FSLineItem): number => {
+          const sec = String(item.section || "").toLowerCase();
+          const isBS = sec.includes("bs") || sec.includes("asset") || sec.includes("liab") || sec.includes("equity");
+          if (!isBS) return 0;
+          if (!item.children || item.children.length === 0) return merged[item.code] || 0;
+          const total = item.children.reduce((sum, child) => sum + computeBSTotal(child), 0);
+          merged[item.code] = total;
+          return total;
+        };
+        for (const item of activeTree) computeBSTotal(item);
+      }
+    }
+
     return merged;
-  }, [computedAmountsPY, pyAmounts, pyManualAmounts, noPriorEngagement, activeFlatItems, activeTree, pyInvCII]);
+  }, [computedAmountsPY, pyAmounts, pyManualAmounts, noPriorEngagement, activeFlatItems, activeTree, pyInvCII, isNonCorporate]);
 
   // ─── NCE Dynamic Note Number Map ────────────────────────────────────────────
   // Maps originalNoteRef → dynamicSequentialNoteNo for NCE entities.
@@ -3719,14 +3744,14 @@ export default function PipelineFinancialStatements({
         //   - Reserves PY pulled from prior-engagement / py_manual_amounts
         //   - Deferred tax positive face value (notes-aware, not raw -ve)
         //
-        // Each value is Math.abs()'d because the BS face is always positive
-        // for both liabilities (notes sum is +, raw TB is -) and assets
-        // (always +).  This avoids the previous sign-flip bug where notes-
-        // populated liabilities ended up negated TWICE.
+        // Pass signed values: positive = normal balance, negative = abnormal
+        // (e.g. accumulated losses in reserves shows as negative → Excel renders
+        // it as "(amount)" via the MONEY_FMT "#,##0;(#,##0)" pattern).
+        // Math.abs was removed because it masked opposite-nature balances.
         const pos = (v: number | null | undefined): number => {
           const n = Number(v);
           if (!Number.isFinite(n)) return 0;
-          return Math.abs(n);
+          return n;
         };
         const corpAmounts: Record<string, { cy: number; py: number }> =
           (memoBs && memoPl) ? {

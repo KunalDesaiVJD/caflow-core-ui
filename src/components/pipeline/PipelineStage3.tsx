@@ -1676,8 +1676,23 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       return total;
     };
     for (const item of activeTree) computeTotal(item);
+
+    // ── Auto-credit PY net profit to BS_EQ_RS ───────────────────────────────
+    // pyAmounts holds prior-year P&L figures from fa_financial_statements.
+    // Credit the PY net profit to Reserves & Surplus so the PY Balance Sheet
+    // in the COA mapping footer balances (same logic as CY computedAmounts).
+    if (!isNonCorporate) {
+      const pyRev   = pyAmounts["PL_REV"] || 0; // negative (credit)
+      const pyExp   = pyAmounts["PL_EXP"] || 0; // positive (debit)
+      const pyNetPL = Math.round((-pyRev - pyExp) * 100) / 100;
+      if (Math.abs(pyNetPL) > 0.005) {
+        amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) - pyNetPL;
+        for (const item of activeTree) computeTotal(item);
+      }
+    }
+
     return amounts;
-  }, [tbAccounts, coaMapping, isNonCorporate]);
+  }, [tbAccounts, coaMapping, isNonCorporate, pyAmounts, activeTree]);
 
   // ═══════ PY SHELL P&L AMOUNTS ═══════
   // When a PY shell engagement exists, compute P&L closing amounts from its TB.
@@ -2501,17 +2516,36 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
             <div className="w-1/2 flex flex-col border rounded-lg overflow-hidden">
               <div className="p-2 border-b bg-muted/30 space-y-2">
                 <div className="flex items-center justify-between">
-                  <p className="text-xs font-semibold text-muted-foreground">
-                    Unmapped Ledgers <Badge variant="outline" className="text-[9px] ml-1">{unmappedAccounts.length}</Badge>
-                    {/* Issue 1 (today) — show how many ledgers are ticked for
-                        a bulk assign so the user knows what their next FS click
-                        will affect. */}
-                    {multiSelect.size > 0 && (
-                      <Badge className="text-[9px] ml-1 bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-900/40 dark:text-blue-300">
-                        {multiSelect.size} ticked
-                      </Badge>
-                    )}
-                  </p>
+                  <div className="flex items-center gap-1.5">
+                    {/* Global Select-All checkbox */}
+                    {unmappedAccounts.length > 0 && (() => {
+                      const allSel  = unmappedAccounts.every(a => multiSelect.has(a.account_name));
+                      const someSel = unmappedAccounts.some(a => multiSelect.has(a.account_name));
+                      return (
+                        <input
+                          type="checkbox"
+                          className="cursor-pointer h-3.5 w-3.5 accent-blue-600 shrink-0"
+                          checked={allSel}
+                          ref={el => { if (el) el.indeterminate = someSel && !allSel; }}
+                          onChange={() => {
+                            setMultiSelect(prev => {
+                              if (allSel) return new Set();
+                              return new Set(unmappedAccounts.map(a => a.account_name));
+                            });
+                          }}
+                          title={allSel ? "Deselect all" : "Select all unmapped"}
+                        />
+                      );
+                    })()}
+                    <p className="text-xs font-semibold text-muted-foreground">
+                      Unmapped Ledgers <Badge variant="outline" className="text-[9px] ml-1">{unmappedAccounts.length}</Badge>
+                      {multiSelect.size > 0 && (
+                        <Badge className="text-[9px] ml-1 bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-900/40 dark:text-blue-300">
+                          {multiSelect.size} ticked
+                        </Badge>
+                      )}
+                    </p>
+                  </div>
                   {multiSelect.size > 0 ? (
                     <div className="flex items-center gap-2">
                       <p className="text-[10px] text-blue-700 dark:text-blue-300 font-medium">
@@ -2545,6 +2579,10 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                       const isOpen = expandedGroups[g.group] ?? true;
                       const suggestedItem = g.dominantCode
                         ? activeLeafItems.find((i) => i.code === g.dominantCode) : null;
+                      // Unmapped items in this group available for bulk select
+                      const unmappedInGroup = g.items.filter(a => !coaMapping[a.account_name]);
+                      const allGroupSelected = unmappedInGroup.length > 0 && unmappedInGroup.every(a => multiSelect.has(a.account_name));
+                      const someGroupSelected = unmappedInGroup.some(a => multiSelect.has(a.account_name));
                       return (
                         <div key={g.group} className="border-b">
                           <div
@@ -2552,6 +2590,28 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                             className="px-3 py-2 bg-muted/40 hover:bg-muted/60 cursor-pointer flex items-center justify-between sticky top-0 z-10"
                           >
                             <div className="flex items-center gap-2 min-w-0">
+                              {/* Select-all checkbox for unmapped ledgers in this group */}
+                              {unmappedInGroup.length > 0 && (
+                                <input
+                                  type="checkbox"
+                                  className="cursor-pointer h-3.5 w-3.5 accent-blue-600 shrink-0"
+                                  checked={allGroupSelected}
+                                  ref={el => { if (el) el.indeterminate = someGroupSelected && !allGroupSelected; }}
+                                  onClick={e => e.stopPropagation()}
+                                  onChange={() => {
+                                    setMultiSelect(prev => {
+                                      const next = new Set(prev);
+                                      if (allGroupSelected) {
+                                        unmappedInGroup.forEach(a => next.delete(a.account_name));
+                                      } else {
+                                        unmappedInGroup.forEach(a => next.add(a.account_name));
+                                      }
+                                      return next;
+                                    });
+                                  }}
+                                  title={allGroupSelected ? "Deselect all in group" : "Select all unmapped in group"}
+                                />
+                              )}
                               {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                               <span className="text-xs font-semibold truncate">{g.group}</span>
                               <Badge variant="outline" className="text-[9px] px-1">{g.total} unmapped</Badge>
@@ -2584,6 +2644,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                           {isOpen && g.items.map((acct) => {
                             const mapping = coaMapping[acct.account_name];
                             const isSelected = selectedAccount === acct.account_name;
+                            const isMultiG  = multiSelect.has(acct.account_name);
                             const isCF = mapping?.confidence === "carried_forward";
                             const lineItem = mapping ? activeLeafItems.find((i) => i.code === mapping.code) : null;
                             return (
@@ -2593,12 +2654,31 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                                 className={cn(
                                   "pl-6 pr-3 py-2 cursor-pointer text-xs hover:bg-muted/50 transition-colors border-t",
                                   isSelected && "bg-primary/10 border-l-2 border-l-primary",
-                                  !isSelected && isCF && "bg-amber-50 dark:bg-amber-950/10 border-l-2 border-l-amber-400",
-                                  !isSelected && !isCF && mapping?.confidence === "manual" && "bg-violet-50 dark:bg-violet-950/20 border-l-2 border-l-violet-400",
-                                  !mapping && "bg-destructive/5",
+                                  !isSelected && isMultiG && "bg-blue-50 dark:bg-blue-950/20 border-l-2 border-l-blue-500",
+                                  !isSelected && !isMultiG && isCF && "bg-amber-50 dark:bg-amber-950/10 border-l-2 border-l-amber-400",
+                                  !isSelected && !isMultiG && !isCF && mapping?.confidence === "manual" && "bg-violet-50 dark:bg-violet-950/20 border-l-2 border-l-violet-400",
+                                  !mapping && !isMultiG && "bg-destructive/5",
                                 )}
                               >
                                 <div className="flex items-center justify-between">
+                                  {/* Per-row checkbox for bulk assign (group view) */}
+                                  {!mapping && (
+                                    <input
+                                      type="checkbox"
+                                      className="mr-2 cursor-pointer h-3.5 w-3.5 accent-blue-600 shrink-0"
+                                      checked={isMultiG}
+                                      onClick={e => e.stopPropagation()}
+                                      onChange={() => {
+                                        setMultiSelect(prev => {
+                                          const next = new Set(prev);
+                                          if (next.has(acct.account_name)) next.delete(acct.account_name);
+                                          else next.add(acct.account_name);
+                                          return next;
+                                        });
+                                      }}
+                                      title="Tick to bulk-assign this ledger"
+                                    />
+                                  )}
                                   <div className="flex-1 min-w-0">
                                     <p className="font-medium truncate">{acct.account_name}</p>
                                     {typeof acct.opening_balance === "number" && acct.opening_balance !== 0 && (

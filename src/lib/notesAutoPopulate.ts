@@ -189,7 +189,18 @@ export const NOTE_ROW_REGISTRY: {
     cost_materials:     { fsCodes: ["PL_EXP_MAT"], label: "Cost of materials consumed" },
     purchases_stock:    { fsCodes: ["PL_EXP_SIT"], label: "Purchases of stock-in-trade" },
     changes_inventory:  { fsCodes: ["PL_EXP_CII"], label: "Changes in inventories" },
-    employee_benefits:  { fsCodes: ["PL_EXP_EMP"], label: "Employee benefits expense" },
+    employee_benefits:  {
+      fsCodes: ["PL_EXP_EMP"], label: "Employee benefits expense",
+      // Schedule III standard heads for employee cost breakup
+      template: [
+        "Salaries, wages and bonus",
+        "Contribution to provident fund",
+        "Contribution to ESIC",
+        "Gratuity expense",
+        "Leave encashment",
+        "Staff welfare expenses",
+      ],
+    },
     finance_costs:      { fsCodes: ["PL_EXP_FIN"], label: "Finance costs" },
     depreciation:       { fsCodes: ["PL_EXP_DEP"], label: "Depreciation & amortisation" },
     other_expenses:     {
