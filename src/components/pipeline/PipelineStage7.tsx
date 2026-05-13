@@ -299,9 +299,11 @@ export default function PipelineStage7({ engagementId, engagement, onStageComple
 
       const existing = savedNotes?.find((n: any) => n.note_number === note.note_number);
       if (existing) {
-        await supabase.from("audit_notes").update(payload as any).eq("id", existing.id);
+        const { error: updErr } = await supabase.from("audit_notes").update(payload as any).eq("id", existing.id);
+        if (updErr) { setSaving(false); toast.error(updErr.message); return; }
       } else {
-        await supabase.from("audit_notes").insert(payload as any);
+        const { error: insErr } = await supabase.from("audit_notes").insert(payload as any);
+        if (insErr) { setSaving(false); toast.error(insErr.message); return; }
       }
     }
 
@@ -309,7 +311,8 @@ export default function PipelineStage7({ engagementId, engagement, onStageComple
     const newStatuses = { ...((engagement?.stage_statuses || {}) as Record<string, string>), "7": complete ? "complete" : "in_progress" };
     const stagePayload: Record<string, any> = { stage_statuses: newStatuses as unknown as Json };
     if (complete) stagePayload.pipeline_stage = 8;
-    await supabase.from("audit_engagements").update(stagePayload as any).eq("id", engagementId);
+    const { error: stageErr } = await supabase.from("audit_engagements").update(stagePayload as any).eq("id", engagementId);
+    if (stageErr) { setSaving(false); toast.error(stageErr.message); return; }
 
     setSaving(false);
     toast.success(complete ? "Stage 7 completed" : "Notes saved");

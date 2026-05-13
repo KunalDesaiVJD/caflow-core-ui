@@ -332,10 +332,11 @@ export default function PipelineStage4({ engagementId, engagement, onStageComple
 
   const completeStage = useCallback(async () => {
     const statuses = engagement?.stage_statuses || {};
-    await supabase.from("audit_engagements").update({
+    const { error } = await supabase.from("audit_engagements").update({
       stage_statuses: { ...statuses, "4": "complete", "5": "in_progress" },
       pipeline_stage: 5,
     } as any).eq("id", engagementId);
+    if (error) { toast.error(error.message); return; }
     toast.success("Stage 4 complete — proceed to Query Tracker");
     onStageComplete();
   }, [engagement, engagementId]);

@@ -2057,7 +2057,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     }
     try {
       // Delete existing FS rows
-      await supabase.from("fa_financial_statements").delete().eq("engagement_id", engagementId);
+      const { error: delError } = await supabase.from("fa_financial_statements").delete().eq("engagement_id", engagementId);
+      if (delError) throw delError;
 
       // Generate new rows
       const rows: any[] = [];
@@ -2101,7 +2102,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       // Insert in batches
       const BATCH = 50;
       for (let i = 0; i < rows.length; i += BATCH) {
-        await supabase.from("fa_financial_statements").insert(rows.slice(i, i + BATCH) as any);
+        const { error: insError } = await supabase.from("fa_financial_statements").insert(rows.slice(i, i + BATCH) as any);
+        if (insError) throw insError;
       }
 
       // Save mapping too
@@ -2139,10 +2141,11 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     }
     await generateFS();
     const newStatuses = { ...(engagement.stage_statuses || {}), "3": "complete" };
-    await supabase.from("audit_engagements").update({
+    const { error: stageErr } = await supabase.from("audit_engagements").update({
       stage_statuses: newStatuses,
       pipeline_stage: Math.max(engagement.pipeline_stage || 3, 4),
     } as any).eq("id", engagementId);
+    if (stageErr) { toast.error(stageErr.message); return; }
     toast.success("Stage 6 completed");
     onStageComplete();
   };

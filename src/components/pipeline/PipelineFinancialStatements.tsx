@@ -3636,7 +3636,8 @@ export default function PipelineFinancialStatements({
   const saveFS = async () => {
     setSaving(true);
     try {
-      await supabase.from("fa_financial_statements").delete().eq("engagement_id", engagementId);
+      const { error: delError } = await supabase.from("fa_financial_statements").delete().eq("engagement_id", engagementId);
+      if (delError) throw delError;
 
       const rows: any[] = [];
       let sortOrder = 0;
@@ -3663,7 +3664,8 @@ export default function PipelineFinancialStatements({
 
       const BATCH = 50;
       for (let i = 0; i < rows.length; i += BATCH) {
-        await supabase.from("fa_financial_statements").insert(rows.slice(i, i + BATCH) as any);
+        const { error: insError } = await supabase.from("fa_financial_statements").insert(rows.slice(i, i + BATCH) as any);
+        if (insError) throw insError;
       }
 
       toast.success("Financial Statements saved");
