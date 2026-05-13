@@ -404,7 +404,7 @@ export const StepAdvancedInfo = ({
    * the classification-change modal's Responsible Person select. */
   useEffect(() => {
     const load = async () => {
-      let query = supabase.from("users").select("id, name").eq("is_active", true).order("name");
+      let query = supabase.from("users").select("id, name").neq("role", "client").eq("is_active", true).order("name");
       if (user?.firm_id) query = query.eq("firm_id", user.firm_id);
       const { data: usrs } = await query;
       if (usrs) setUsers(usrs);

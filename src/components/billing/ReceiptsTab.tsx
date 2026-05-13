@@ -112,7 +112,7 @@ export default function ReceiptsTab() {
 
     const { data: firmData } = await supabase.from("firms").select("id, name, display_name");
     const { data: groupData } = await supabase.from("client_groups").select("id, name");
-    const { data: usersData } = await supabase.from("users").select("id, name").eq("is_active", true);
+    const { data: usersData } = await supabase.from("users").select("id, name").neq("role", "client").eq("is_active", true);
 
     const cm: Record<string, string> = {};
     (cData || []).forEach((c: any) => { cm[c.id] = c.name || "Unknown"; });

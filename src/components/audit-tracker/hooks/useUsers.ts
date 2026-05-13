@@ -16,6 +16,7 @@ export function useUsers(firmId: string, isSuperadmin?: boolean) {
     let q = supabase
       .from("users")
       .select("id, name")
+      .neq("role", "client")
       .eq("is_active", true)
       .order("name");
     if (!isSuperadmin) q = q.eq("firm_id", firmId);

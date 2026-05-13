@@ -176,7 +176,7 @@ export default function AuditIntelligence() {
 
   useEffect(() => {
     if (!user?.firm_id) return;
-    supabase.from("users").select("id, name, role").eq("firm_id", user.firm_id).eq("is_active", true)
+    supabase.from("users").select("id, name, role").neq("role", "client").eq("firm_id", user.firm_id).eq("is_active", true)
       .then(({ data }) => setUsers(data || []));
   }, [user?.firm_id]);
 

@@ -276,7 +276,7 @@ const ItReturns = () => {
   const { data: staffUsers = [] } = useQuery({
     queryKey: ["staff_users", firmId],
     queryFn: async () => {
-      let q = supabase.from("users").select("id, name, role");
+      let q = supabase.from("users").select("id, name, role").neq("role", "client");
       if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
       const { data } = await q;
       return (data || []) as StaffUser[];
@@ -1403,7 +1403,7 @@ function ComplianceTab({ navigate }: { navigate: (path: string) => void }) {
   const { data: staff = [] } = useQuery({
     queryKey: ["compliance_staff"],
     queryFn: async () => {
-      const { data } = await supabase.from("users").select("id, name").order("name");
+      const { data } = await supabase.from("users").select("id, name").neq("role", "client").order("name");
       return data || [];
     },
   });
