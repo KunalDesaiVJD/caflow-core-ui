@@ -16,19 +16,38 @@ const ResetPassword = () => {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    // Check for recovery token in URL hash
-    const hash = window.location.hash;
-    if (hash.includes("type=recovery")) {
+    // Supabase v2 processes the recovery token from the URL hash synchronously
+    // during client initialisation — BEFORE React renders this component.
+    // By the time we mount, the hash is cleared and the PASSWORD_RECOVERY event
+    // has already fired. We therefore use two strategies in parallel:
+    //
+    // 1. onAuthStateChange — catches the event when token processing happens
+    //    AFTER mount (e.g. PKCE token_hash in search params, slow devices).
+    // 2. getSession() — catches the already-established recovery session for
+    //    the common case where Supabase processed the token before mount.
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "PASSWORD_RECOVERY" || event === "SIGNED_IN") {
+        setReady(true);
+      }
+    });
+
+    // Check URL params too (PKCE flow sends ?token_hash=...&type=recovery)
+    const params = new URLSearchParams(window.location.search);
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    if (
+      params.get("type") === "recovery" ||
+      hashParams.get("type") === "recovery"
+    ) {
       setReady(true);
-    } else {
-      // Also listen for auth state change
-      const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
-        if (event === "PASSWORD_RECOVERY") {
-          setReady(true);
-        }
-      });
-      return () => subscription.unsubscribe();
     }
+
+    // Primary fallback: if Supabase already established a session from the link
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) setReady(true);
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {

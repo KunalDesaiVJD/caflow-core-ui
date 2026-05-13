@@ -146,8 +146,10 @@ interface Props {
    *  the FY of client creation / registration. Used to block effective-from
    *  picks before the client existed. */
   clientCreationFY?: string;
-  /** Optional refetch hook called after a successful classification commit. */
-  onClassificationSaved?: () => void;
+  /** Optional refetch hook called after a successful classification commit.
+   *  Receives the new classification value so the parent can update its
+   *  savedClassification snapshot without relying on a stale closure. */
+  onClassificationSaved?: (newClassification: string) => void;
 }
 
 export const StepAdvancedInfo = ({
@@ -387,7 +389,7 @@ export const StepAdvancedInfo = ({
         title: "Classification updated",
         description: `Changed to ${pendingClassification} from FY ${effectiveFromFY}.`,
       });
-      onClassificationSaved?.();
+      onClassificationSaved?.(pendingClassification);
       setPendingClassification(null);
     } catch (err: any) {
       toast({

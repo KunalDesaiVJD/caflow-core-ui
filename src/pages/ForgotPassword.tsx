@@ -23,7 +23,12 @@ const ForgotPassword = () => {
     setLoading(false);
 
     if (resetErr) {
-      setError(resetErr.message || "Failed to send reset email. Please contact your administrator.");
+      const msg = resetErr.message || "";
+      if (msg.toLowerCase().includes("rate limit") || msg.toLowerCase().includes("too many")) {
+        setError("__rate_limit__");
+      } else {
+        setError(msg || "Failed to send reset email. Please contact your administrator.");
+      }
     } else {
       setSent(true);
     }
@@ -114,12 +119,25 @@ const ForgotPassword = () => {
                 />
               </div>
 
-              {error && (
+              {error === "__rate_limit__" ? (
+                <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 space-y-1.5">
+                  <p className="text-sm font-semibold text-amber-800 flex items-center gap-1.5">
+                    <ShieldAlert size={15} className="shrink-0" />
+                    Too many reset attempts — email delivery paused
+                  </p>
+                  <p className="text-xs text-amber-700">
+                    Supabase has temporarily blocked further emails to this address. Please wait
+                    10–15 minutes before trying again, <strong>or contact your CA firm
+                    administrator</strong> — they can reset your password directly from the
+                    User Management panel without needing email delivery.
+                  </p>
+                </div>
+              ) : error ? (
                 <div className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive flex items-start gap-2">
                   <AlertCircle size={15} className="shrink-0 mt-0.5" />
                   <span>{error}</span>
                 </div>
-              )}
+              ) : null}
 
               <Button
                 type="submit"
