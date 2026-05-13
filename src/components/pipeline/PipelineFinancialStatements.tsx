@@ -5569,11 +5569,21 @@ export default function PipelineFinancialStatements({
 
   // ─── Complete Stage 10 ───
   const handleComplete = async () => {
+    // Block if Balance Sheet does not balance (Option B)
+    const totalA  = totalAssets;
+    const totalEL = totalELDisplay;
+    if (Math.abs(totalA - totalEL) >= 1) {
+      toast.error(
+        `Balance Sheet does not balance — Assets (${totalA.toFixed(0)}) ≠ Equity & Liabilities (${totalEL.toFixed(0)}). Please reconcile before completing.`
+      );
+      return;
+    }
     await saveFS();
     const newStatuses = { ...(engagement.stage_statuses || {}), "10": "complete" };
-    await supabase.from("audit_engagements").update({
+    const { error: stageErr } = await supabase.from("audit_engagements").update({
       stage_statuses: newStatuses,
     } as any).eq("id", engagementId);
+    if (stageErr) { toast.error(stageErr.message); return; }
     toast.success("Financial Statements stage completed");
     onStageComplete();
   };
