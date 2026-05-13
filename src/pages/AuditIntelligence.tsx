@@ -212,17 +212,21 @@ export default function AuditIntelligence() {
 
   const loadMetrics = async (engId: string) => {
     try {
-      const [queriesRes, workpapersRes, caroRes] = await Promise.all([
-        supabase.from("audit_client_queries").select("id, status", { count: "exact" }).eq("engagement_id", engId),
+      const [worksheetRes, workpapersRes, caroRes] = await Promise.all([
+        (supabase as any).from("audit_worksheet_master").select("query_sheet_json").eq("engagement_id", engId).maybeSingle(),
         (supabase as any).from("audit_workpapers").select("id", { count: "exact" }).eq("engagement_id", engId),
         supabase.from("audit_caro_responses").select("id, status", { count: "exact" }).eq("engagement_id", engId),
       ]);
-      const queries = queriesRes.data || [];
       const caroRows = caroRes.data || [];
+      // Read queries from worksheet JSON (same source as QuerySheet tab)
+      const queryJson = worksheetRes.data?.query_sheet_json;
+      const queryRows: any[] = (queryJson && Array.isArray(queryJson.queries)) ? queryJson.queries : [];
+      const raised = queryRows.filter((q: any) => q.query_status && q.query_status !== "draft");
+      const pending = raised.filter((q: any) => q.query_status !== "resolved" && q.query_status !== "escalated");
       setMetrics({
         ledgers: 0,
-        queriesRaised: queries.length,
-        queriesPending: queries.filter((q: any) => q.status === "Open" || q.status === "Pending").length,
+        queriesRaised: raised.length,
+        queriesPending: pending.length,
         workpapers: workpapersRes.count || 0,
         caroCompleted: caroRows.filter((c: any) =>
           c.status === "completed" || c.status === "reviewed" || c.status === "approved"
