@@ -220,14 +220,18 @@ export default function Checklist({ data, engagementId, onSaved }: Props) {
 
   const handlePreview = async (file: ChecklistFile) => {
     if (!file.file_path) return;
-    const { data, error } = await supabase.storage
-      .from("documents")
-      .createSignedUrl(file.file_path, 3600);
-    if (error || !data?.signedUrl) {
+    try {
+      // Use edge function with service role so all employee roles can preview
+      // (direct createSignedUrl fails for roles restricted by storage RLS)
+      const { data, error } = await supabase.functions.invoke("get-document-url", {
+        body: { file_path: file.file_path, bucket: "documents" },
+      });
+      if (error) throw error;
+      if (!data?.signed_url) throw new Error("No URL returned");
+      window.open(data.signed_url, "_blank", "noreferrer");
+    } catch {
       toast.error("Could not generate preview link — please try again");
-      return;
     }
-    window.open(data.signedUrl, "_blank", "noreferrer");
   };
 
   const handleDeleteFile = async (rowId: string, file: ChecklistFile) => {
