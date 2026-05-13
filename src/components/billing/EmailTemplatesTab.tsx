@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import DOMPurify from "dompurify";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
@@ -765,7 +766,7 @@ export default function EmailTemplatesTab({ firmId }: { firmId: string | null })
                   <div
                     className="min-h-[250px] max-h-[380px] overflow-auto rounded border bg-white"
                     dangerouslySetInnerHTML={{
-                      __html: editState.body_html || "<p style='color:#9ca3af;padding:20px;'>No content — apply a theme to generate HTML.</p>",
+                      __html: DOMPurify.sanitize(editState.body_html || "<p style='color:#9ca3af;padding:20px;'>No content — apply a theme to generate HTML.</p>"),
                     }}
                   />
                 ) : (
