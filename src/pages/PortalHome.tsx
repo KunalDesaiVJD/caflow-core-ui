@@ -4,7 +4,7 @@
  * Uses PortalClientContext so shared-email accounts (e.g. family / group
  * companies) see data for whichever entity they have selected.
  *
- * Theme: CAFlow navy (#1A2744) + orange-600.
+ * Theme: CAFlow navy (#0A131E) + amber/gold (#C7A24D).
  */
 
 import { useState, useEffect, useCallback } from "react";
@@ -77,23 +77,23 @@ function AuditProgressCard({ clientId }: { clientId: string }) {
   if (engagements.length === 0 && pendingCount === 0) return null;
 
   return (
-    <Card className="border-l-4 border-l-orange-500">
+    <Card className="border-l-4 border-l-amber-500">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-sm">
-          <ClipboardList size={16} className="text-orange-600" /> Audit Status
+          <ClipboardList size={16} className="text-amber-600" /> Audit Status
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         {pendingCount > 0 && (
-          <div className="flex items-center justify-between rounded-lg bg-orange-50 border border-orange-200 px-3 py-2.5">
+          <div className="flex items-center justify-between rounded-lg bg-amber-50 border border-amber-200 px-3 py-2.5">
             <div className="flex items-center gap-2">
-              <AlertTriangle size={14} className="text-orange-600" />
-              <span className="text-sm font-medium text-orange-800">
+              <AlertTriangle size={14} className="text-amber-600" />
+              <span className="text-sm font-medium text-amber-800">
                 {pendingCount} {pendingCount === 1 ? "query" : "queries"} pending your response
               </span>
             </div>
             <Link to="/portal/queries">
-              <Button size="sm" variant="ghost" className="h-7 text-xs gap-1 text-orange-700 hover:bg-orange-100">
+              <Button size="sm" variant="ghost" className="h-7 text-xs gap-1 text-amber-700 hover:bg-amber-100">
                 View <ArrowRight size={12} />
               </Button>
             </Link>
@@ -120,7 +120,7 @@ function AuditProgressCard({ clientId }: { clientId: string }) {
               </div>
               <div className="h-2 bg-muted rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-orange-500 rounded-full transition-all duration-500"
+                  className="h-full bg-amber-500 rounded-full transition-all duration-500"
                   style={{ width: `${pct}%` }}
                 />
               </div>
@@ -141,8 +141,8 @@ function AllEntitiesStrip() {
   return (
     <div className="rounded-xl border bg-white p-4">
       <div className="flex items-center gap-2 mb-3">
-        <Users size={15} className="text-[#1A2744]" />
-        <span className="text-sm font-semibold text-[#1A2744]">
+        <Users size={15} className="text-[#0A131E]" />
+        <span className="text-sm font-semibold text-[#0A131E]">
           All Your Entities ({clients.length})
         </span>
       </div>
@@ -155,11 +155,11 @@ function AllEntitiesStrip() {
             className={cn(
               "flex items-center gap-2 px-3 py-2 rounded-lg border text-left transition-all text-xs",
               c.id === activeClient?.id
-                ? "bg-[#1A2744] text-white border-[#1A2744] shadow-sm"
-                : "bg-gray-50 text-foreground border-border hover:border-orange-300 hover:bg-orange-50",
+                ? "bg-[#0A131E] text-white border-[#0A131E] shadow-sm"
+                : "bg-gray-50 text-foreground border-border hover:border-amber-300 hover:bg-amber-50",
             )}
           >
-            <Building2 size={12} className={c.id === activeClient?.id ? "text-orange-300" : "text-orange-500"} />
+            <Building2 size={12} className={c.id === activeClient?.id ? "text-amber-300" : "text-amber-500"} />
             <span className="truncate font-medium">{c.name}</span>
           </button>
         ))}
@@ -344,21 +344,21 @@ export default function PortalHome() {
     <div className="space-y-6">
 
       {/* Welcome banner */}
-      <div className="rounded-xl bg-[#1A2744] text-white px-6 py-5 flex items-center gap-4">
-        <div className="h-12 w-12 rounded-full bg-orange-500/20 border-2 border-orange-400 flex items-center justify-center shrink-0">
-          <Building2 size={22} className="text-orange-300" />
+      <div className="rounded-xl bg-[#0A131E] text-white px-6 py-5 flex items-center gap-4">
+        <div className="h-12 w-12 rounded-full bg-amber-500/20 border-2 border-amber-400 flex items-center justify-center shrink-0">
+          <Building2 size={22} className="text-amber-300" />
         </div>
         <div>
           <h1 className="text-lg font-bold">{activeClient.name}</h1>
           <p className="text-sm text-white/70 mt-0.5">
             {firmName && <>Managed by <span className="font-semibold text-white">{firmName}</span></>}
             {partnerName && <> · Partner: <span className="text-white">{partnerName}</span></>}
-            {activeClient.pan && <> · PAN: <span className="font-mono text-orange-300">{activeClient.pan}</span></>}
+            {activeClient.pan && <> · PAN: <span className="font-mono text-amber-300">{activeClient.pan}</span></>}
           </p>
         </div>
         <div className="ml-auto">
           <Link to="/portal/queries">
-            <Button size="sm" className="bg-orange-600 hover:bg-orange-700 gap-1.5 text-xs">
+            <Button size="sm" className="bg-amber-600 hover:bg-amber-700 gap-1.5 text-xs">
               <MessageSquareWarning size={13} /> Queries
             </Button>
           </Link>
@@ -394,7 +394,7 @@ export default function PortalHome() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm flex items-center gap-2">
-              <FileText size={16} className="text-[#1A2744]" /> ITR Status
+              <FileText size={16} className="text-[#0A131E]" /> ITR Status
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -425,7 +425,7 @@ export default function PortalHome() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm flex items-center gap-2">
-              <Receipt size={16} className="text-[#1A2744]" /> TDS Summary
+              <Receipt size={16} className="text-[#0A131E]" /> TDS Summary
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -468,7 +468,7 @@ export default function PortalHome() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-sm">
-              <FolderOpen size={16} className="text-[#1A2744]" /> My Documents
+              <FolderOpen size={16} className="text-[#0A131E]" /> My Documents
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-1">
@@ -487,7 +487,7 @@ export default function PortalHome() {
               </div>
             ))}
             {documents.length > 8 && (
-              <Link to="/portal/documents" className="text-xs text-orange-600 underline underline-offset-2 pt-1 block">
+              <Link to="/portal/documents" className="text-xs text-amber-600 underline underline-offset-2 pt-1 block">
                 View all {documents.length} documents →
               </Link>
             )}
@@ -500,7 +500,7 @@ export default function PortalHome() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-sm">
-              <CreditCard size={16} className="text-[#1A2744]" /> Invoices
+              <CreditCard size={16} className="text-[#0A131E]" /> Invoices
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
@@ -539,7 +539,7 @@ export default function PortalHome() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-sm">
-              <Bell size={16} className="text-[#1A2744]" /> Recent Notifications
+              <Bell size={16} className="text-[#0A131E]" /> Recent Notifications
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
@@ -571,7 +571,7 @@ export default function PortalHome() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-sm">
-            <Upload size={16} className="text-[#1A2744]" /> Upload Document to Your CA
+            <Upload size={16} className="text-[#0A131E]" /> Upload Document to Your CA
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -587,7 +587,7 @@ export default function PortalHome() {
               </SelectContent>
             </Select>
 
-            <Button variant="outline" asChild disabled={uploading} className="flex-1 border-orange-300 text-orange-700 hover:bg-orange-50">
+            <Button variant="outline" asChild disabled={uploading} className="flex-1 border-amber-300 text-amber-700 hover:bg-amber-50">
               <label className="cursor-pointer flex items-center justify-center gap-2">
                 {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload size={16} />}
                 {uploading ? "Uploading…" : "Choose File"}

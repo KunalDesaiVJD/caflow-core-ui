@@ -2,7 +2,7 @@
  * PortalQueries — Client-facing audit query page (Multi-entity)
  *
  * Uses PortalClientContext so shared-email accounts see queries for the
- * currently selected entity. Theme: CAFlow navy + orange-600.
+ * currently selected entity. Theme: CAFlow navy + amber-600.
  *
  * Features:
  *  - All audit_client_queries for the active client entity
@@ -223,7 +223,7 @@ function QueryCard({
       <CardHeader
         className={cn(
           "pb-2 cursor-pointer select-none",
-          isOverdue ? "bg-red-50/40" : expanded ? "bg-orange-50/40" : "",
+          isOverdue ? "bg-red-50/40" : expanded ? "bg-amber-50/40" : "",
         )}
         onClick={() => setExpanded(v => !v)}
       >
@@ -269,7 +269,7 @@ function QueryCard({
               <div className="mt-2 flex flex-wrap gap-1">
                 <span className="text-[10px] text-muted-foreground font-medium mr-1">Required docs:</span>
                 {reqDocs.map((d, i) => (
-                  <Badge key={i} variant="outline" className="text-[10px] gap-1 border-orange-300 text-orange-700">
+                  <Badge key={i} variant="outline" className="text-[10px] gap-1 border-amber-300 text-amber-700">
                     <FileText size={9} /> {d}
                   </Badge>
                 ))}
@@ -285,10 +285,10 @@ function QueryCard({
 
       {/* ── Conversation thread ── */}
       {expanded && (
-        <CardContent className="pt-4 space-y-3 border-t border-orange-100">
+        <CardContent className="pt-4 space-y-3 border-t border-amber-100">
           {loadingMsg ? (
             <div className="flex items-center gap-2 text-xs text-muted-foreground py-3">
-              <Loader2 size={13} className="animate-spin text-orange-500" /> Loading conversation…
+              <Loader2 size={13} className="animate-spin text-amber-500" /> Loading conversation…
             </div>
           ) : (
             <>
@@ -301,8 +301,8 @@ function QueryCard({
                   {/* Legacy single-reply bridge */}
                   {query.client_reply && messages.length === 0 && (
                     <div className="flex justify-end">
-                      <div className="max-w-[80%] bg-orange-50 border border-orange-200 rounded-xl rounded-tr-sm px-3 py-2">
-                        <p className="text-[10px] text-orange-600 mb-0.5 font-medium">You · Earlier reply</p>
+                      <div className="max-w-[80%] bg-amber-50 border border-amber-200 rounded-xl rounded-tr-sm px-3 py-2">
+                        <p className="text-[10px] text-amber-600 mb-0.5 font-medium">You · Earlier reply</p>
                         <p className="text-sm">{query.client_reply}</p>
                       </div>
                     </div>
@@ -315,13 +315,13 @@ function QueryCard({
                         <div className={cn(
                           "max-w-[80%] rounded-xl px-3 py-2 space-y-1",
                           isClient
-                            ? "bg-orange-50 border border-orange-200 rounded-tr-sm"
-                            : "bg-[#1A2744]/5 border border-[#1A2744]/10 rounded-tl-sm",
+                            ? "bg-amber-50 border border-amber-200 rounded-tr-sm"
+                            : "bg-[#0A131E]/5 border border-[#0A131E]/10 rounded-tl-sm",
                         )}>
                           <div className="flex items-baseline gap-2">
                             <span className={cn(
                               "text-[10px] font-semibold",
-                              isClient ? "text-orange-700" : "text-[#1A2744]",
+                              isClient ? "text-amber-700" : "text-[#0A131E]",
                             )}>
                               {isClient ? "You" : (msg.sender_name || "Auditor")}
                             </span>
@@ -332,7 +332,7 @@ function QueryCard({
                             <button
                               type="button"
                               onClick={() => downloadAttachment(msg.attachment_path!, msg.attachment_name!)}
-                              className="flex items-center gap-1.5 text-xs text-orange-600 hover:underline mt-1"
+                              className="flex items-center gap-1.5 text-xs text-amber-600 hover:underline mt-1"
                             >
                               <Paperclip size={11} /> {msg.attachment_name} <Download size={10} />
                             </button>
@@ -347,18 +347,18 @@ function QueryCard({
 
               {/* Reply box */}
               {!isClosed ? (
-                <div className="mt-3 space-y-2 border-t border-orange-100 pt-3">
+                <div className="mt-3 space-y-2 border-t border-amber-100 pt-3">
                   <Textarea
                     value={replyText}
                     onChange={e => setReplyText(e.target.value)}
                     placeholder="Type your reply or explanation…"
                     rows={3}
-                    className="resize-none text-sm border-orange-200 focus:ring-orange-400"
+                    className="resize-none text-sm border-amber-200 focus:ring-amber-400"
                   />
 
                   {file && (
-                    <div className="flex items-center gap-2 px-2 py-1.5 bg-orange-50 rounded-md text-xs border border-orange-200">
-                      <Paperclip size={12} className="text-orange-500" />
+                    <div className="flex items-center gap-2 px-2 py-1.5 bg-amber-50 rounded-md text-xs border border-amber-200">
+                      <Paperclip size={12} className="text-amber-500" />
                       <span className="flex-1 truncate">{file.name}</span>
                       <button type="button" onClick={() => setFile(null)} className="text-muted-foreground hover:text-destructive">
                         <X size={12} />
@@ -370,7 +370,7 @@ function QueryCard({
                     <Button
                       size="sm"
                       variant="outline"
-                      className="gap-1.5 h-8 text-xs border-orange-300 text-orange-700 hover:bg-orange-50"
+                      className="gap-1.5 h-8 text-xs border-amber-300 text-amber-700 hover:bg-amber-50"
                       onClick={() => fileInputRef.current?.click()}
                     >
                       <Paperclip size={13} /> Attach File
@@ -383,7 +383,7 @@ function QueryCard({
                     />
                     <Button
                       size="sm"
-                      className="gap-1.5 h-8 text-xs ml-auto bg-orange-600 hover:bg-orange-700"
+                      className="gap-1.5 h-8 text-xs ml-auto bg-amber-600 hover:bg-amber-700"
                       onClick={sendReply}
                       disabled={sending || (!replyText.trim() && !file)}
                     >
@@ -490,14 +490,14 @@ export default function PortalQueries() {
       {/* Header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-xl font-bold flex items-center gap-2 text-[#1A2744]">
-            <MessageSquareWarning size={22} className="text-orange-600" />
+          <h1 className="text-xl font-bold flex items-center gap-2 text-[#0A131E]">
+            <MessageSquareWarning size={22} className="text-amber-600" />
             Audit Queries
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
             {activeClient.name}
             {clients.length > 1 && (
-              <span className="ml-2 text-[11px] bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full font-medium">
+              <span className="ml-2 text-[11px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-medium">
                 Switch entity from top bar
               </span>
             )}
@@ -525,7 +525,7 @@ export default function PortalQueries() {
               className={cn(
                 "px-3 py-1 rounded-md text-xs font-medium transition-colors",
                 filter === key
-                  ? "bg-orange-600 text-white shadow-sm"
+                  ? "bg-amber-600 text-white shadow-sm"
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
@@ -539,7 +539,7 @@ export default function PortalQueries() {
       {displayed.length === 0 ? (
         <Card>
           <CardContent className="py-14 text-center text-muted-foreground">
-            <MessageSquareWarning className="mx-auto h-10 w-10 mb-3 text-orange-200" />
+            <MessageSquareWarning className="mx-auto h-10 w-10 mb-3 text-amber-200" />
             <p className="text-sm font-medium">
               {filter === "open"
                 ? "No active queries at this time. Your CA firm will send queries here."

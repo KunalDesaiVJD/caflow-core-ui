@@ -60,28 +60,52 @@ export function PortalClientProvider({ children }: { children: ReactNode }) {
   const load = useCallback(async () => {
     if (!user?.id) return;
     setLoading(true);
-    const { data, error } = await supabase
-      .from("clients")
-      .select("id, name, firm_id, mobile, email, gstin, pan, client_type")
-      .eq("user_id", user.id)
-      .eq("is_active", true)
-      .order("name");
 
-    if (error) {
-      console.error("PortalClientContext load error:", error);
+    // Strategy: match clients by BOTH user_id (explicit link) AND email
+    // (shared-email families / group accounts where many entities use one address).
+    // Run two queries then deduplicate by id.
+    const [byIdResult, byEmailResult] = await Promise.all([
+      supabase
+        .from("clients")
+        .select("id, name, firm_id, mobile, email, gstin, pan, client_type")
+        .eq("user_id", user.id)
+        .eq("is_active", true)
+        .order("name"),
+      user.email
+        ? supabase
+            .from("clients")
+            .select("id, name, firm_id, mobile, email, gstin, pan, client_type")
+            .eq("email", user.email)
+            .eq("is_active", true)
+            .order("name")
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+
+    if (byIdResult.error) {
+      console.error("PortalClientContext load error:", byIdResult.error);
       setLoading(false);
       return;
     }
 
-    const list = (data || []) as PortalClient[];
-    setClients(list);
+    // Merge and deduplicate
+    const seen = new Set<string>();
+    const merged: PortalClient[] = [];
+    for (const c of [...(byIdResult.data || []), ...((byEmailResult as any).data || [])]) {
+      if (!seen.has(c.id)) {
+        seen.add(c.id);
+        merged.push(c as PortalClient);
+      }
+    }
+    merged.sort((a, b) => a.name.localeCompare(b.name));
+
+    setClients(merged);
 
     // Restore previous selection from sessionStorage
     const savedId = sessionStorage.getItem(SESSION_KEY);
-    const saved   = savedId ? list.find(c => c.id === savedId) : null;
-    setActiveClient(saved || list[0] || null);
+    const saved   = savedId ? merged.find(c => c.id === savedId) : null;
+    setActiveClient(saved || merged[0] || null);
     setLoading(false);
-  }, [user?.id]);
+  }, [user?.id, user?.email]);
 
   useEffect(() => { load(); }, [load]);
 
