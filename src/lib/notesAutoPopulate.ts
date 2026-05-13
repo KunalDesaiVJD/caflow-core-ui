@@ -1357,31 +1357,30 @@ export async function autoPopulateNotes(
     }
 
     // ── (c) Adjustments for deferred tax / Excess provision (CY & PY) ───────
-    // Issue 4 (take 2, today) — broadened to scan EVERY ledger in the TB
-    // regardless of its current COA mapping.  Restricting to BS_EQ_RS was
-    // too narrow: most firms map "Deferred Tax" under BS_NCL_DTL (Liability)
-    // or BS_NCA_DTA (Asset), and "Provision for Income Tax" under PL_TAX_CUR
-    // or its own BS code — never BS_EQ_RS — so the R&S sub-row stayed blank
-    // for them.  Auditors expect the narrative R&S note to pick up these
-    // adjustments NO MATTER which Schedule-III code holds the ledger, so
-    // we now do a pure name-pattern scan.
+    // Issue 4 (take 3, today) — scoped back to BS_EQ_RS-mapped ledgers only.
     //
-    //   /deferred tax/i           matches Deferred Tax, Deferred tax asset,
-    //                              DEFERRED TAX LIABILITY (net), etc.
-    //   (excess|short) provision  matches Excess/(Short) Provision...
-    //   provision for tax         matches Provision for Income Tax / for Tax
-    //   tax provision             matches Income Tax Provision
+    // An earlier attempt scanned the entire TB by name pattern, which lifted
+    // "Deferred Tax" balances out of BS_NCL_DTL / BS_NCA_DTA and "Provision
+    // for Income Tax" out of PL_TAX_CUR — double-counting them in the R&S
+    // sub-row sum and breaking the Note 3 = BS face reconciliation
+    // (mismatch banner showed ₹72.68L diff).  The user's intent in the
+    // original spec was the narrower one: pull values FROM Tally ledgers
+    // already mapped under Reserves & Surplus.  If the auditor's CoA puts
+    // these items elsewhere, the sub-row stays blank and the auditor can
+    // type the disclosure amount manually — keeping BS-face integrity.
     const DEFERRED_TAX_RX = /\bdeferred\s*tax\b/i;
-    const EXCESS_SHORT_RX = /(excess|short)\s*\(?\s*\(?\s*provision|provision\s+for\s+(income\s+)?tax|(income\s*)?tax\s*provision/i;
+    const EXCESS_SHORT_RX = /(excess|short)\s*\(?\s*\(?\s*provision|provision\s+for\s+income\s+tax|income\s*tax\s+provision/i;
 
     const sumByPattern = (
       ledgers: TBLedger[] | undefined | null,
+      fsCode: string,
       pattern: RegExp,
       useOpening = false,
     ): number => {
       if (!ledgers) return 0;
       let s = 0;
       for (const l of ledgers) {
+        if (mapping[l.account_name]?.code !== fsCode) continue;
         if (!pattern.test(l.account_name)) continue;
         s += Number(useOpening ? (l.opening_balance ?? 0) : (l.balance ?? 0));
       }
@@ -1390,24 +1389,23 @@ export async function autoPopulateNotes(
     };
 
     if (isUnset(existRS.surplus_deferred_adj_cy)) {
-      const v = sumByPattern(tb, DEFERRED_TAX_RX, false);
+      const v = sumByPattern(tb, "BS_EQ_RS", DEFERRED_TAX_RX, false);
       if (Math.abs(v) > 0.005) outRS.surplus_deferred_adj_cy = v;
     }
     if (isUnset(existRS.surplus_deferred_adj_py)) {
-      // Prefer pyTB closing; fall back to CY TB opening_balance for the same ledgers.
       const v = pyTB
-        ? sumByPattern(pyTB, DEFERRED_TAX_RX, false)
-        : sumByPattern(tb,   DEFERRED_TAX_RX, true);
+        ? sumByPattern(pyTB, "BS_EQ_RS", DEFERRED_TAX_RX, false)
+        : sumByPattern(tb,   "BS_EQ_RS", DEFERRED_TAX_RX, true);
       if (Math.abs(v) > 0.005) outRS.surplus_deferred_adj_py = v;
     }
     if (isUnset(existRS.surplus_excess_short_cy)) {
-      const v = sumByPattern(tb, EXCESS_SHORT_RX, false);
+      const v = sumByPattern(tb, "BS_EQ_RS", EXCESS_SHORT_RX, false);
       if (Math.abs(v) > 0.005) outRS.surplus_excess_short_cy = v;
     }
     if (isUnset(existRS.surplus_excess_short_py)) {
       const v = pyTB
-        ? sumByPattern(pyTB, EXCESS_SHORT_RX, false)
-        : sumByPattern(tb,   EXCESS_SHORT_RX, true);
+        ? sumByPattern(pyTB, "BS_EQ_RS", EXCESS_SHORT_RX, false)
+        : sumByPattern(tb,   "BS_EQ_RS", EXCESS_SHORT_RX, true);
       if (Math.abs(v) > 0.005) outRS.surplus_excess_short_py = v;
     }
 
