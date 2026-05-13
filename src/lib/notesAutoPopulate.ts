@@ -956,7 +956,7 @@ export function respectManualEdits(
 ): Stage5Notes {
   const manualEdits = Array.isArray(existing.manual_edits) ? existing.manual_edits : [];
   // Start from the auto payload and overlay each manual-edited path.
-  const merged: Stage5Notes = JSON.parse(JSON.stringify(auto));
+  const merged: Stage5Notes = structuredClone(auto);
   // Carry forward manual_edits + any FA rows the user has touched.
   merged.manual_edits = [...manualEdits];
   for (const path of manualEdits) {
@@ -1031,7 +1031,7 @@ export async function loadStage5Notes(engagementId: string): Promise<Stage5Notes
       manual_edits: rawManualEdits,
     } as Stage5Notes;
   }
-  return JSON.parse(JSON.stringify(DEFAULT_STAGE5_NOTES));
+  return structuredClone(DEFAULT_STAGE5_NOTES);
 }
 
 export async function saveStage5Notes(

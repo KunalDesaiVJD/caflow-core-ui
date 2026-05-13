@@ -139,7 +139,7 @@ const RolesPermissions = () => {
     }
 
     setGrid(g);
-    setSavedGrid(JSON.parse(JSON.stringify(g)));
+    setSavedGrid(structuredClone(g));
     setLastModified(lm);
     setDirty(false);
     setLoading(false);
@@ -202,7 +202,7 @@ const RolesPermissions = () => {
 
       toast({ title: "Permissions saved globally" });
       setDirty(false);
-      setSavedGrid(JSON.parse(JSON.stringify(grid)));
+      setSavedGrid(structuredClone(grid));
       await refreshCtx();
       await loadGrid();
     } catch (e: any) {
