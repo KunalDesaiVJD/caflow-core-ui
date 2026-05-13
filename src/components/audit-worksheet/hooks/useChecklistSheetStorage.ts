@@ -34,6 +34,8 @@ export interface ChecklistRowState {
    * Old data with file_path/file_name is migrated in normalizeRow().
    */
   files: ChecklistFile[];
+  /** Marked as Not Applicable — no document required for this row */
+  is_na?: boolean;
   /** @deprecated — kept for backward-compat migration only */
   file_path?: string;
   /** @deprecated — kept for backward-compat migration only */
@@ -45,6 +47,7 @@ export const BLANK_CHECKLIST_ROW: ChecklistRowState = {
   page_from:   "",
   page_to:     "",
   files:       [],
+  is_na:       false,
 };
 
 /** Migrate old single-file rows into the new files[] array. */
@@ -54,6 +57,7 @@ function normalizeRow(raw: Partial<ChecklistRowState>): ChecklistRowState {
     page_from:   raw.page_from   ?? "",
     page_to:     raw.page_to     ?? "",
     files:       Array.isArray(raw.files) ? raw.files : [],
+    is_na:       raw.is_na ?? false,
   };
   // Migrate legacy file_path / file_name into files[]
   if (base.files.length === 0 && raw.file_path) {
@@ -211,6 +215,22 @@ export function useChecklistSheetStorage(
     [data.rows]
   );
 
+  // ── toggleNA — flip the is_na flag for a row ─────────────────────────────
+  const toggleNA = useCallback(
+    (rowId: string) => {
+      setData(prev => {
+        const prevRow = prev.rows[rowId] ?? { ...BLANK_CHECKLIST_ROW };
+        const next: ChecklistSheetData = {
+          rows:          { ...prev.rows, [rowId]: { ...prevRow, is_na: !prevRow.is_na } },
+          dynamicRowIds: prev.dynamicRowIds,
+        };
+        debounce(next);
+        return next;
+      });
+    },
+    [debounce]
+  );
+
   // ── addRow — append a new dynamic row ────────────────────────────────────
   const addRow = useCallback(() => {
     const newId = `dyn_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
@@ -237,6 +257,7 @@ export function useChecklistSheetStorage(
     addFileToRow,
     removeFileFromRow,
     getRow,
+    toggleNA,
     addRow,
     manualSave,
     saving,
