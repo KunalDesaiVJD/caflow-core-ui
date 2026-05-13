@@ -677,12 +677,13 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           .from("audit_engagements")
           .update({ coa_mapping: patched } as any)
           .eq("id", engagementId)
-          .then(() =>
+          .then(({ error }) => {
+            if (error) { toast.error("Failed to save mapping: " + error.message); return; }
             toast.info("Inventory ledgers upgraded to dual-posting (BS+P&L)", {
               description: "Old BS_CA_INV mappings auto-migrated to INV_STOCK.",
               duration: 5000,
-            })
-          );
+            });
+          });
       }
     } else if (userCleared) {
       // User explicitly cleared — keep mappings empty, do NOT auto-map.
@@ -725,7 +726,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
     setCoaMapping(patch);
     // Persist silently — no toast (it's automatic)
-    supabase.from("audit_engagements").update({ coa_mapping: patch } as any).eq("id", engagementId);
+    supabase.from("audit_engagements").update({ coa_mapping: patch } as any).eq("id", engagementId)
+      .then(({ error }) => { if (error) toast.error("Failed to save mapping: " + error.message); });
   }, [tbAccounts, coaMapping, activeLeafItems, engagementId]);
 
   // Load PY amounts
