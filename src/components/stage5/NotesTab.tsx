@@ -230,7 +230,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
       // 3. Issue-4b / Issue-6: Upsert into coa_mapping_intelligence so it appears
       //    in the AI Skills page and trains future auto-mappings.
       const normalizedName = ledgerName.toLowerCase().trim();
-      await supabase
+      const { error: upsertErr } = await supabase
         .from("coa_mapping_intelligence" as any)
         .upsert(
           {
@@ -247,10 +247,11 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
           { onConflict: "normalized_name,entity_type" },
         )
         .select();
+      if (upsertErr) toast.error("Failed to save mapping intelligence: " + upsertErr.message);
 
       // 4. Issue-5: Log audit trail to audit_human_actions
       const { data: { user } } = await supabase.auth.getUser();
-      await supabase
+      const { error: auditErr } = await supabase
         .from("audit_human_actions" as any)
         .insert({
           engagement_id:   engagementId,
@@ -266,6 +267,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
           user_id:         user?.id ?? null,
           human_override:  true,
         });
+      if (auditErr) toast.error("Audit trail failed to save");
 
       // 5. Fire alias analysis — teaches AI WHY this remap happened.
       //    Only when the old code and new code differ (i.e. it's a real override).

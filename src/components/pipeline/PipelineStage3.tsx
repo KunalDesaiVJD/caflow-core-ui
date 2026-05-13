@@ -1900,10 +1900,12 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   };
   const removeAlias = async (priorName: string) => {
     if (!engagement?.client_id) return;
-    const { error } = await (supabase.from as any)("ledger_aliases")
+    let deleteQuery = (supabase.from as any)("ledger_aliases")
       .delete()
       .eq("client_id", engagement.client_id)
       .eq("prior_ledger_name", priorName);
+    if (engagement.firm_id) deleteQuery = deleteQuery.eq("firm_id", engagement.firm_id);
+    const { error } = await deleteQuery;
     if (error) { toast.error(error.message); return; }
     toast.success("Alias removed");
     refetchAliases();
