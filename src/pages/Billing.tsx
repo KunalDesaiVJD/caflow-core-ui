@@ -333,7 +333,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     const { data: firmData } = await supabase.from("firms").select("id, name, display_name");
     const { data: groupData } = await supabase.from("client_groups").select("id, name");
     // Load firm-scoped active users for Responsible Person filter
-    let usersQuery = supabase.from("users").select("id, name").eq("is_active", true).order("name");
+    let usersQuery = supabase.from("users").select("id, name").neq("role", "client").eq("is_active", true).order("name");
     if (!isSuperadmin && firmId) usersQuery = usersQuery.eq("firm_id", firmId);
     const { data: usersData } = await usersQuery;
 
@@ -1690,7 +1690,7 @@ function TimesheetTab() {
     })();
     (async () => {
       if (isManager || isSuperadmin) {
-        let q = supabase.from("users").select("id, name").eq("is_active", true);
+        let q = supabase.from("users").select("id, name").neq("role", "client").eq("is_active", true);
         if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
         const { data } = await q;
         setUsers(data || []);

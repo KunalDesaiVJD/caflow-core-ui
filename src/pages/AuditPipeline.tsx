@@ -398,7 +398,7 @@ export default function AuditPipeline() {
     queryKey: ["firm-users", user?.firm_id],
     queryFn: async () => {
       // TODO: Supabase RLS policy needs superadmin bypass; guarded by enabled: !!user?.firm_id
-      const { data } = await supabase.from("users").select("id, name, role").eq("firm_id", user?.firm_id ?? "").eq("is_active", true);
+      const { data } = await supabase.from("users").select("id, name, role").neq("role", "client").eq("firm_id", user?.firm_id ?? "").eq("is_active", true);
       return data || [];
     },
     enabled: !!user?.firm_id,

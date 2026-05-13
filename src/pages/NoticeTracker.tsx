@@ -99,7 +99,7 @@ export default function NoticeTracker() {
   const { data: staff = [] } = useQuery({
     queryKey: ["staff_list"],
     queryFn: async () => {
-      const { data } = await supabase.from("users").select("id, name").order("name");
+      const { data } = await supabase.from("users").select("id, name").neq("role", "client").order("name");
       return data || [];
     },
   });

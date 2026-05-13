@@ -89,7 +89,7 @@ export default function EngagementDetail() {
       setManager(data);
     }
     if (user?.firm_id) {
-      const { data } = await supabase.from("users").select("id, name, role").eq("firm_id", user.firm_id);
+      const { data } = await supabase.from("users").select("id, name, role").neq("role", "client").eq("firm_id", user.firm_id);
       setTeamUsers(data || []);
     }
     setLoading(false);
