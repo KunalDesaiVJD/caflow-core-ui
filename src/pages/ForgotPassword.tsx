@@ -17,7 +17,7 @@ const ForgotPassword = () => {
     setError(null);
 
     const { error: resetErr } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-      redirectTo: `${window.location.origin}/reset-password`,
+      redirectTo: `${import.meta.env.VITE_SITE_URL ?? "https://caflow-core-ui.vercel.app"}/reset-password`,
     });
 
     setLoading(false);
