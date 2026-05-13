@@ -1255,10 +1255,10 @@ const NewClientWizard = () => {
               savedClassification={isEditMode ? savedClassification : undefined}
               clientId={isEditMode ? clientId : undefined}
               clientCreationFY={clientCreationFY}
-              onClassificationSaved={() => {
-                // Reflect the change in the local "saved" snapshot so the
-                // warning modal won't fire again for the same value.
-                setSavedClassification(advancedInfo.classification);
+              onClassificationSaved={(newClassification) => {
+                // Use the value passed directly — advancedInfo.classification
+                // is stale here because React hasn't re-rendered yet.
+                setSavedClassification(newClassification);
               }}
             />
           )}
