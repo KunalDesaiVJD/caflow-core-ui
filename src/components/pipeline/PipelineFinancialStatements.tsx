@@ -1964,6 +1964,8 @@ export default function PipelineFinancialStatements({
           .select("id")
           .eq("client_id", engagement.client_id)
           .eq("financial_year", engagement.financial_year)
+          .order("created_at", { ascending: false })
+          .limit(1)
           .maybeSingle();
         const legacyId = (tEng as any)?.id ?? null;
         if (legacyId) {
@@ -2000,11 +2002,13 @@ export default function PipelineFinancialStatements({
       // Exclude PY shells — they have no fa_financial_statements rows.
       // Also use .limit(1) to prevent maybeSingle() error when both a regular
       // engagement and a PY shell exist for the same client + FY.
-      const { data: prevEng } = await (supabase.from as any)("audit_engagements")
+      let prevEngQuery = (supabase.from as any)("audit_engagements")
         .select("id")
         .eq("client_id", engagement.client_id)
         .eq("financial_year", prevFy)
-        .or("is_py_shell.is.null,is_py_shell.eq.false")
+        .or("is_py_shell.is.null,is_py_shell.eq.false");
+      if (engagement.firm_id) prevEngQuery = prevEngQuery.eq("firm_id", engagement.firm_id);
+      const { data: prevEng } = await prevEngQuery
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
