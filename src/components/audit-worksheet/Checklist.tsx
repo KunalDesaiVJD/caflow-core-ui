@@ -218,12 +218,16 @@ export default function Checklist({ data, engagementId, onSaved }: Props) {
     }
   };
 
-  const handlePreview = (file: ChecklistFile) => {
+  const handlePreview = async (file: ChecklistFile) => {
     if (!file.file_path) return;
-    const { data: urlData } = supabase.storage
+    const { data, error } = await supabase.storage
       .from("documents")
-      .getPublicUrl(file.file_path);
-    window.open(urlData.publicUrl, "_blank", "noreferrer");
+      .createSignedUrl(file.file_path, 3600);
+    if (error || !data?.signedUrl) {
+      toast.error("Could not generate preview link — please try again");
+      return;
+    }
+    window.open(data.signedUrl, "_blank", "noreferrer");
   };
 
   const handleDeleteFile = async (rowId: string, file: ChecklistFile) => {
