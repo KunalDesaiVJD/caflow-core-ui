@@ -220,16 +220,23 @@ export default function Checklist({ data, engagementId, onSaved }: Props) {
 
   const handlePreview = async (file: ChecklistFile) => {
     if (!file.file_path) return;
+    // Open blank tab synchronously — must stay within the user-gesture stack
+    // so Chrome's popup blocker doesn't silently swallow the window.open call
+    // that would otherwise come after the async edge-function await.
+    const newTab = window.open("", "_blank", "noreferrer");
     try {
-      // Use edge function with service role so all employee roles can preview
-      // (direct createSignedUrl fails for roles restricted by storage RLS)
       const { data, error } = await supabase.functions.invoke("get-document-url", {
         body: { file_path: file.file_path, bucket: "documents" },
       });
-      if (error) throw error;
-      if (!data?.signed_url) throw new Error("No URL returned");
-      window.open(data.signed_url, "_blank", "noreferrer");
+      if (error || !data?.signed_url) {
+        newTab?.close();
+        throw error ?? new Error("No URL returned");
+      }
+      if (newTab) {
+        newTab.location.href = data.signed_url;
+      }
     } catch {
+      newTab?.close();
       toast.error("Could not generate preview link — please try again");
     }
   };
