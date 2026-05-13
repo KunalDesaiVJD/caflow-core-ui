@@ -1787,6 +1787,9 @@ export default function PipelineFinancialStatements({
 
   // ─── Override dialog state ───
   const [overrideDialog, setOverrideDialog] = useState<{ code: string; name: string } | null>(null);
+  // Issue 12 (today) — list-all dialog for the "Manual Overrides" card so
+  // the user can click the count and inspect every override at once.
+  const [manualOverrideListOpen, setManualOverrideListOpen] = useState(false);
   const [overrideAmount, setOverrideAmount] = useState<string>("");
   const [overrideReason, setOverrideReason] = useState<string>("");
 
@@ -3151,11 +3154,15 @@ export default function PipelineFinancialStatements({
   // NCE liabilities are stored negative (Tally credit) → use + to get true diff
   const nceTotalLiabilities = NCE_LIAB_IDS.reduce((s, id) => s + (nceCyAmounts[id] || 0), 0);
   const nceBsDiff           = Math.round((nceTotalAssets + nceTotalLiabilities) * 100) / 100;
-  const nceBsBalanced       = Math.abs(nceTotalAssets + nceTotalLiabilities) < 1;
+  // Issue 2 (today) — bump tolerance to ₹2 so accumulated 2-decimal rounding
+  // across many sub-rows doesn't trip the imbalance flag when the BS does
+  // in fact balance from the auditor's perspective.
+  const nceBsBalanced       = Math.abs(nceTotalAssets + nceTotalLiabilities) < 2;
   const nceNetProfit        = computedAmounts["NCE_NET_PROF"] || 0;
 
   // ─── Active summary values (swap between NCE and corporate in JSX) ───────
-  const corpBsBalanced    = Math.abs(bsDiff) < 1;
+  // Issue 2 (today) — same ₹2 tolerance for corporate BS check.
+  const corpBsBalanced    = Math.abs(bsDiff) < 2;
   const activeBsDiff      = isNonCorporate ? nceBsDiff      : bsDiff;
   const activeBsBalanced  = isNonCorporate ? nceBsBalanced  : corpBsBalanced;
   const activeTotalAssets      = isNonCorporate ? nceTotalAssets      : totalAssets;
@@ -5975,9 +5982,37 @@ export default function PipelineFinancialStatements({
             <p className="text-[10px] text-muted-foreground uppercase">Net Profit / (Loss)</p>
           </CardContent>
         </Card>
-        <Card>
+        {/* Issue 12 (today) — Manual Overrides card.
+             1) Count was previously `Object.keys(manualOverrides).length`
+                only, which counts amount-overrides written into
+                fa_financial_statements (is_manual=true).  The detailed
+                listing the user saw inside Stage 7 ALSO counts
+                noteOverrides (FS note-number overrides held in
+                localStorage), giving the 2-vs-12 mismatch the user
+                reported.  Sum both stores so both surfaces agree.
+             2) Card is now clickable — toggles a dialog that lists every
+                override with its FS code, current value and reason. */}
+        <Card
+          className={cn(
+            "transition-colors",
+            (Object.keys(manualOverrides).length + Object.values(noteOverrides).filter(v => v != null && Number.isFinite(v as number)).length) > 0
+              ? "cursor-pointer border-amber-400/60 hover:bg-amber-50/40 dark:hover:bg-amber-950/20"
+              : "border-amber-300/30",
+          )}
+          onClick={() => {
+            const total = Object.keys(manualOverrides).length + Object.values(noteOverrides).filter(v => v != null && Number.isFinite(v as number)).length;
+            if (total === 0) {
+              toast.info("No manual overrides applied yet.");
+              return;
+            }
+            setManualOverrideListOpen(true);
+          }}
+        >
           <CardContent className="p-3 text-center">
-            <p className="text-2xl font-bold text-amber-600">{Object.keys(manualOverrides).length}</p>
+            <p className="text-2xl font-bold text-amber-600">
+              {Object.keys(manualOverrides).length
+                + Object.values(noteOverrides).filter(v => v != null && Number.isFinite(v as number)).length}
+            </p>
             <p className="text-[10px] text-muted-foreground uppercase">Manual Overrides</p>
           </CardContent>
         </Card>
@@ -6465,6 +6500,73 @@ export default function PipelineFinancialStatements({
           )}
         </Tabs>
       )}
+
+      {/* Issue 12 (today) — Manual Override LIST dialog.
+           Opens when the user clicks the "Manual Overrides" summary card.
+           Lists every applied override (amount + note-no) with FS code,
+           current value and reason so the auditor can audit-trail them. */}
+      <Dialog open={manualOverrideListOpen} onOpenChange={setManualOverrideListOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-sm">All Manual Overrides</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 max-h-[60vh] overflow-y-auto">
+            {Object.keys(manualOverrides).length > 0 && (
+              <div>
+                <p className="text-[11px] font-semibold text-muted-foreground uppercase mb-1">
+                  Amount overrides ({Object.keys(manualOverrides).length})
+                </p>
+                <table className="w-full text-[11px] border-collapse">
+                  <thead>
+                    <tr className="bg-muted/30">
+                      <th className="text-left p-1 border">FS Code</th>
+                      <th className="text-right p-1 border">Amount (₹)</th>
+                      <th className="text-left p-1 border">Reason</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(manualOverrides).map(([code, ov]) => (
+                      <tr key={code} className="hover:bg-muted/20">
+                        <td className="p-1 border font-mono">{code}</td>
+                        <td className="p-1 border text-right tabular-nums">{Number(ov.amount).toLocaleString("en-IN")}</td>
+                        <td className="p-1 border text-muted-foreground">{ov.reason || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {Object.values(noteOverrides).filter(v => v != null && Number.isFinite(v as number)).length > 0 && (
+              <div>
+                <p className="text-[11px] font-semibold text-muted-foreground uppercase mb-1">
+                  Note-number overrides ({Object.values(noteOverrides).filter(v => v != null && Number.isFinite(v as number)).length})
+                </p>
+                <table className="w-full text-[11px] border-collapse">
+                  <thead>
+                    <tr className="bg-muted/30">
+                      <th className="text-left p-1 border">FS Code</th>
+                      <th className="text-right p-1 border">Overridden Note No.</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(noteOverrides)
+                      .filter(([, v]) => v != null && Number.isFinite(v as number))
+                      .map(([code, v]) => (
+                        <tr key={code} className="hover:bg-muted/20">
+                          <td className="p-1 border font-mono">{code}</td>
+                          <td className="p-1 border text-right tabular-nums">{v}</td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setManualOverrideListOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Manual Override Dialog */}
       <Dialog open={!!overrideDialog} onOpenChange={() => setOverrideDialog(null)}>

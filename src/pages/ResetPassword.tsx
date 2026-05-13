@@ -16,39 +16,69 @@ const ResetPassword = () => {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    // Supabase v2 processes the recovery token from the URL hash synchronously
-    // during client initialisation — BEFORE React renders this component.
-    // By the time we mount, the hash is cleared and the PASSWORD_RECOVERY event
-    // has already fired. We therefore use two strategies in parallel:
+    // Issue 7 (today) — make the recovery-link detection robust across every
+    // path Supabase + email clients can produce:
     //
-    // 1. onAuthStateChange — catches the event when token processing happens
-    //    AFTER mount (e.g. PKCE token_hash in search params, slow devices).
-    // 2. getSession() — catches the already-established recovery session for
-    //    the common case where Supabase processed the token before mount.
+    //   (a) /reset-password#access_token=...&type=recovery   (legacy hash)
+    //   (b) /reset-password?type=recovery&token_hash=...     (PKCE token_hash)
+    //   (c) /reset-password?code=<pkce-code>                  (PKCE code-exchange)
+    //   (d) No URL hint — supabase.auth has already processed the token
+    //       SYNCHRONOUSLY during client init, fires PASSWORD_RECOVERY,
+    //       clears the hash, and leaves us a live session.
+    //
+    // Run all four checks in parallel; whichever succeeds first flips
+    // `ready=true`.  Without this combined strategy, email clients that
+    // mangle the hash into a query (Outlook, some Apple Mail variants)
+    // produced "Invalid or expired link" even with a valid token.
+    let cancelled = false;
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
-      if (event === "PASSWORD_RECOVERY" || event === "SIGNED_IN") {
-        setReady(true);
-      }
-    });
-
-    // Check URL params too (PKCE flow sends ?token_hash=...&type=recovery)
-    const params = new URLSearchParams(window.location.search);
-    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    // (a) + (b) — URL hint
+    const hash       = window.location.hash || "";
+    const search     = window.location.search || "";
+    const hashParams = new URLSearchParams(hash.replace(/^#/, ""));
+    const qsParams   = new URLSearchParams(search);
     if (
-      params.get("type") === "recovery" ||
-      hashParams.get("type") === "recovery"
+      hash.includes("type=recovery") ||
+      hash.includes("access_token=") ||
+      hashParams.get("type") === "recovery" ||
+      qsParams.get("type")   === "recovery"
     ) {
       setReady(true);
     }
 
-    // Primary fallback: if Supabase already established a session from the link
+    // (c) PKCE code-exchange
+    const code = qsParams.get("code");
+    if (code) {
+      supabase.auth.exchangeCodeForSession(code).then(({ error }) => {
+        if (cancelled) return;
+        if (error) {
+          toast({ title: "Recovery link failed", description: error.message, variant: "destructive" });
+        } else {
+          setReady(true);
+        }
+      });
+    }
+
+    // (d) Auth-state listener — catches PASSWORD_RECOVERY when the token
+    // takes >1 frame to land OR a SIGNED_IN that came from the recovery
+    // link (Supabase v2 sometimes only emits SIGNED_IN after token swap).
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (cancelled) return;
+      if (event === "PASSWORD_RECOVERY" || event === "SIGNED_IN") setReady(true);
+    });
+
+    // (d-cont.) Probe an already-restored session for the common case
+    // where Supabase processed the recovery hash BEFORE React mounted.
     supabase.auth.getSession().then(({ data: { session } }) => {
+      if (cancelled) return;
       if (session) setReady(true);
     });
 
-    return () => subscription.unsubscribe();
-  }, []);
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
+  }, [toast]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

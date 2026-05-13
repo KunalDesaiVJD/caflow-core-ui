@@ -722,6 +722,18 @@ export function buildBreakup(
    *  P&L accounts reset to 0 each year so their opening_balance is always 0;
    *  passing the actual FY-1 TB gives correct PY ledger-level amounts. */
   pyLedgers?: TBLedger[],
+  /** Issue 8 (DR/CR netting today) — sign multiplier for amounts the consumer
+   *  WANTS to see (positive when the ledger is on its "normal" side, negative
+   *  when it sits on the wrong side and should REDUCE the head total).
+   *
+   *    bs_liab / pl income  →  -1  (Cr is normal, balance is stored negative)
+   *    bs_asset / pl expense→  +1  (Dr is normal, balance is stored positive)
+   *
+   *  Result: a Sundry Creditor with Dr 2,000 (balance = +2000) stored in a
+   *  bs_liab note becomes amount_cy = -2000, so the sub-row sum equals the
+   *  net liability instead of the gross-positive figure that ignored the
+   *  abnormal-side ledger.  When omitted, defaults to absolute (legacy). */
+  sectionSign: 1 | -1 = 0 as any,
 ): BreakupRow[] {
   // 1) Preserve manual rows from existing breakup verbatim — these are user-
   //    typed entries that don't correspond to any COA-mapped ledger.
@@ -734,11 +746,49 @@ export function buildBreakup(
   const manualRows: BreakupRow[] = (existing || [])
     .filter((r): r is BreakupRow => r != null && r.source !== "linked");
 
+  // Issue 10 (today) — keep a fast lookup of every existing row by its
+  // linked_ledger name so re-built "linked" rows can carry forward any
+  // sub-group membership the user has assigned.  Without this, when the
+  // user creates a sub-group (a manual `is_group: true` row) and drops a
+  // ledger row into it (`subgroup_id` set on the linked row), the next
+  // re-generate-FS pass would re-create the linked row from the template,
+  // losing the subgroup_id — the group header stayed but its children
+  // appeared ungrouped.  Now linked rows that match an existing row by
+  // linked_ledger or description carry over `subgroup_id` (and any other
+  // user-added metadata fields tagged with the `_keep` prefix below).
+  const linkedExistingByName = new Map<string, BreakupRow>();
+  for (const r of (existing || [])) {
+    if (!r || r.source !== "linked") continue;
+    const key = (r.linked_ledger || r.description || "").toLowerCase().trim();
+    if (key) linkedExistingByName.set(key, r);
+  }
+  const carryUserMeta = (newRow: BreakupRow, key: string): BreakupRow => {
+    const prev = linkedExistingByName.get(key.toLowerCase().trim());
+    if (!prev) return newRow;
+    const out: any = { ...newRow };
+    if ((prev as any).subgroup_id) out.subgroup_id = (prev as any).subgroup_id;
+    // Preserve any other user-touched fields we don't yet know about by
+    // forwarding keys not part of the linked-row schema.
+    return out as BreakupRow;
+  };
+
   // 2) Build linked rows
   const result: BreakupRow[] = [];
   const usedLedgers = new Set<string>();
 
   const round2 = (n: number) => Math.round(n * 100) / 100;
+
+  // Sign-aware presentation for a ledger balance.  When sectionSign is given
+  // we return the value multiplied by it so abnormal-side ledgers come out
+  // negative (and reduce the sub-row sum); when not given we fall back to
+  // legacy Math.abs to preserve old behaviour for any caller that hasn't
+  // opted in yet.
+  const present = (val: number): number => {
+    const r = round2(val);
+    return sectionSign === 1 || sectionSign === -1
+      ? round2(r * sectionSign)
+      : Math.abs(r);
+  };
 
   // Build a fast-lookup map from prior-year TB for PY amount resolution.
   // Key = lowercase ledger name → TBLedger from the FY-1 trial balance.
@@ -753,7 +803,7 @@ export function buildBreakup(
    *  to current-year opening_balance (works for BS accounts; 0 for P&L). */
   const resolvePY = (accountName: string, openingBalance: number): number => {
     const py = pyMap.get(accountName.toLowerCase().trim());
-    return py ? Math.abs(round2(py.balance)) : Math.abs(round2(openingBalance));
+    return py ? present(py.balance) : present(openingBalance);
   };
 
   if (template && template.length > 0) {
@@ -771,25 +821,25 @@ export function buildBreakup(
       }
       if (matched) {
         usedLedgers.add(matched.account_name);
-        result.push({
+        result.push(carryUserMeta({
           description:   head,
-          amount_cy:     Math.abs(round2(matched.balance)),
+          amount_cy:     present(matched.balance),
           amount_py:     resolvePY(matched.account_name, matched.opening_balance),
           source:        "linked",
           linked_ledger: matched.account_name,
-        });
+        }, matched.account_name));
       } else {
         // Template head with no matching ledger — check if it exists in PY TB
         const pyMatch = pyMap.get(head.toLowerCase().trim());
-        result.push({
+        result.push(carryUserMeta({
           description:   head,
           amount_cy:     0,
-          amount_py:     pyMatch ? Math.abs(round2(pyMatch.balance)) : 0,
+          amount_py:     pyMatch ? present(pyMatch.balance) : 0,
           source:        "linked",
           // Issue-3: Always set linked_ledger so user can "Restore Link" after
           // editing — even for template heads with no current-year TB match.
           linked_ledger: head,
-        });
+        }, head));
       }
     }
   }
@@ -798,14 +848,14 @@ export function buildBreakup(
   for (const l of ledgers) {
     if (usedLedgers.has(l.account_name)) continue;
     const sources = (l as TBLedgerWithSources)._sources;
-    result.push({
+    result.push(carryUserMeta({
       description:   l.account_name,
-      amount_cy:     Math.abs(round2(l.balance)),
+      amount_cy:     present(l.balance),
       amount_py:     resolvePY(l.account_name, l.opening_balance),
       source:        "linked",
       linked_ledger: l.account_name,
       ...(sources && sources.length > 1 ? { sources } : {}),
-    });
+    }, l.account_name));
   }
 
   // 4) Append manual rows at the end so the user's custom entries are visible
@@ -1136,7 +1186,13 @@ export async function autoPopulateNotes(
       }
       // Pass prior-year TB so PY amounts use FY-1 closing balances, not
       // current-year opening balances (which are 0 for P&L accounts).
-      const breakup = buildBreakup(ledgers, spec.template, existingBreak, pyTBmerged);
+      // Issue 8 (DR/CR netting today) — pass sectionSign so abnormal-side
+      // ledgers inside a note (e.g. a Dr balance under Sundry Creditors)
+      // come out as NEGATIVE in amount_cy/amount_py and the breakup sum
+      // equals the net liability/asset/expense instead of an inflated
+      // gross total.  Without this, the note total diverges from the BS
+      // face heading (which already sums signed via computedAmounts).
+      const breakup = buildBreakup(ledgers, spec.template, existingBreak, pyTBmerged, sectionSign as 1 | -1);
 
       out[section][rowKey] = { cy, py, breakup };
     }
@@ -1226,6 +1282,123 @@ export async function autoPopulateNotes(
         out.pl.eps = { ...(out.pl.eps as any), npat };
       }
     }
+  }
+
+  // ── Issues 3 / 4 / 5 (today) — Reserves & Surplus auto-population ─────────
+  // The user wants four R&S sub-rows to fill themselves so the auditor never
+  // has to re-type values already present in Tally / the prior year:
+  //
+  //   (a) Surplus opening balance, current year  ←  prior-year R&S closing
+  //   (b) Surplus opening balance, previous year ←  prior-year R&S OPENING
+  //                                                 (= FY-2 closing)
+  //   (c) Adjustments for deferred tax (CY & PY) ←  any ledger under BS_EQ_RS
+  //                                                 whose name matches /deferred tax/i
+  //   (d) Excess/(Short) provision for income tax (CY & PY)
+  //                                              ←  any ledger under BS_EQ_RS
+  //                                                 whose name matches /provision.*income tax|income tax.*provision|excess.*provision|short.*provision/i
+  //
+  // Profit for the year is already auto-linked to pl.eps.npat / npat_py
+  // (NoteBSLiab.tsx line 705-715) — no extra plumbing required.
+  //
+  // Cross-client safe: pure pattern match on COA-mapped BS_EQ_RS ledgers,
+  // identical for Corporate (Schedule III Div I) and NCE entities.  Manual
+  // user overrides survive because we only seed the value when the existing
+  // path is null / undefined / empty string.
+  {
+    const existRS  = (options.existing?.bs_liab as any)?.reserves_surplus ?? {};
+    const outRS    = (out.bs_liab.reserves_surplus ?? {}) as any;
+    const priorRS  = (pyNotes?.bs_liab as any)?.reserves_surplus ?? {};
+
+    const isUnset = (v: any) => v == null || v === "" || (typeof v === "number" && !Number.isFinite(v));
+
+    // ── (a) Surplus opening, CY ─────────────────────────────────────────────
+    // = prior year's closing R&S, which sits in pyNotes.bs_liab.reserves_surplus.cy
+    // (sign-corrected positive after the sectionSign fix).  Fall back to the
+    // FS-fallback sum if no prior stage5_notes exists.
+    if (isUnset(existRS.surplus_opening_cy)) {
+      let priorCloseRS: number | null = null;
+      if (typeof priorRS.cy === "number" && Number.isFinite(priorRS.cy)) {
+        priorCloseRS = Math.abs(priorRS.cy);
+      } else if (pyFs["BS_EQ_RS"]) {
+        priorCloseRS = Math.abs(pyFs["BS_EQ_RS"]);
+      }
+      if (priorCloseRS != null && Math.abs(priorCloseRS) > 0.005) {
+        outRS.surplus_opening_cy = Math.round(priorCloseRS * 100) / 100;
+      }
+    }
+
+    // ── (b) Surplus opening, PY ─────────────────────────────────────────────
+    // = prior year's OWN opening balance, derivable from prior stage5_notes
+    // surplus_opening_cy (last year's filling) OR from CY TB's BS_EQ_RS
+    // ledger opening_balance summed (which is FY-1 closing, so we'd need
+    // FY-2 closing for PY opening — that lives only in pyTB).
+    if (isUnset(existRS.surplus_opening_py)) {
+      // Best: take prior year's surplus_opening_cy verbatim — that was the
+      // FY-2 closing when the auditor filled FY-1.
+      if (typeof priorRS.surplus_opening_cy === "number" && Math.abs(priorRS.surplus_opening_cy) > 0.005) {
+        outRS.surplus_opening_py = Math.round(priorRS.surplus_opening_cy * 100) / 100;
+      } else if (pyTB && pyTB.length > 0) {
+        // Fallback: sum opening_balance of every PY-TB ledger mapped to BS_EQ_RS
+        let total = 0;
+        for (const row of pyTB) {
+          if (mapping[row.account_name]?.code !== "BS_EQ_RS") continue;
+          total += Number(row.opening_balance ?? 0);
+        }
+        // bs_liab is Cr-normal → flip sign so positive = liability magnitude
+        const abs = Math.abs(Math.round(total * 100) / 100);
+        if (abs > 0.005) outRS.surplus_opening_py = abs;
+      }
+    }
+
+    // ── (c) Adjustments for deferred tax (CY & PY) ──────────────────────────
+    // Sum balances of ledgers (a) currently mapped to BS_EQ_RS AND
+    // (b) whose name matches a "deferred tax" pattern.  For PY, walk pyTB
+    // and use the same name pattern.  Sign flip applied because bs_liab
+    // ledgers store negative for credit balances.
+    const DEFERRED_TAX_RX = /\bdeferred\s*tax\b/i;
+    const EXCESS_SHORT_RX = /(excess|short)\s*\(?\s*\(?\s*provision|provision\s+for\s+income\s+tax|income\s*tax\s+provision/i;
+
+    const sumByPattern = (
+      ledgers: TBLedger[] | undefined | null,
+      fsCode: string,
+      pattern: RegExp,
+      useOpening = false,
+    ): number => {
+      if (!ledgers) return 0;
+      let s = 0;
+      for (const l of ledgers) {
+        const code = mapping[l.account_name]?.code;
+        if (code !== fsCode) continue;
+        if (!pattern.test(l.account_name)) continue;
+        s += Number(useOpening ? (l.opening_balance ?? 0) : (l.balance ?? 0));
+      }
+      // bs_liab convention — flip sign so increases show positive
+      return Math.round(-s * 100) / 100;
+    };
+
+    if (isUnset(existRS.surplus_deferred_adj_cy)) {
+      const v = sumByPattern(tb, "BS_EQ_RS", DEFERRED_TAX_RX, false);
+      if (Math.abs(v) > 0.005) outRS.surplus_deferred_adj_cy = v;
+    }
+    if (isUnset(existRS.surplus_deferred_adj_py)) {
+      // Prefer pyTB closing; fall back to CY TB opening_balance for the same ledgers.
+      const v = pyTB
+        ? sumByPattern(pyTB, "BS_EQ_RS", DEFERRED_TAX_RX, false)
+        : sumByPattern(tb,   "BS_EQ_RS", DEFERRED_TAX_RX, true);
+      if (Math.abs(v) > 0.005) outRS.surplus_deferred_adj_py = v;
+    }
+    if (isUnset(existRS.surplus_excess_short_cy)) {
+      const v = sumByPattern(tb, "BS_EQ_RS", EXCESS_SHORT_RX, false);
+      if (Math.abs(v) > 0.005) outRS.surplus_excess_short_cy = v;
+    }
+    if (isUnset(existRS.surplus_excess_short_py)) {
+      const v = pyTB
+        ? sumByPattern(pyTB, "BS_EQ_RS", EXCESS_SHORT_RX, false)
+        : sumByPattern(tb,   "BS_EQ_RS", EXCESS_SHORT_RX, true);
+      if (Math.abs(v) > 0.005) outRS.surplus_excess_short_py = v;
+    }
+
+    out.bs_liab.reserves_surplus = outRS;
   }
 
   // FA: seed gross_open from prior closing PPE; leave additions/disposals/

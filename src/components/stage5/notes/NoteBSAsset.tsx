@@ -227,19 +227,15 @@ export default function NoteBSAsset({
           bold
         />
 
-        <div className="font-semibold text-[11px] mt-3">Trade Receivables Ageing — CY ({cyYear})</div>
-        <AgeingTable
-          rowDefs={TR_ROWS} bucketDefs={TR_BUCKETS}
-          matrix={get("bs_asset.trade_receivables.ageing_cy") as AgeingMatrix | undefined}
-          onChange={(m) => updatePath("bs_asset.trade_receivables.ageing_cy", m)}
-        />
-
-        <div className="font-semibold text-[11px] mt-3">Trade Receivables Ageing — PY ({pyYear})</div>
-        <AgeingTable
-          rowDefs={TR_ROWS} bucketDefs={TR_BUCKETS}
-          matrix={get("bs_asset.trade_receivables.ageing_py") as AgeingMatrix | undefined}
-          onChange={(m) => updatePath("bs_asset.trade_receivables.ageing_py", m)}
-        />
+        {/* Issue 11 (today) — the Trade Receivables ageing schedule was
+            displayed below the note by default.  The user has asked for
+            this to be removed; the standard note now ends with the
+            "Total — Trade Receivables (per BS)" row, matching the firm's
+            Schedule III layout.  The ageing matrix is still persisted on
+            the engagement if it has been entered previously, so no data
+            is lost — only the UI rendering is suppressed.  If a firm
+            later needs the ageing breakup back, re-enable the AgeingTable
+            blocks below (using TR_ROWS / TR_BUCKETS already imported). */}
       </NoteCard>
 
       {renderSingleNote(sn("cash_bank"), "Cash and bank equivalents", "cash_bank",

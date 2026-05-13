@@ -692,16 +692,27 @@ export default function NoteBSLiab({
           Surplus in the Statement of Profit and Loss
         </div>
 
+        {/* Issues 3/6 (today) — Surplus Opening:
+             CY auto-fills from prior year R&S closing (already stored via
+             `reservesPyMagn` fallback at line 229).
+             PY auto-fills from prior year stage5_notes.bs_liab.reserves_surplus.surplus_opening_cy
+             OR prior-year TB BS_EQ_RS opening_balance (seeded by autoPopulateNotes).
+             User can override either side; explicit entry wins. */}
         <EditableRow
           label="Opening balance"
           cy={surpOpenCy} py={surpOpenPy}
+          autoCY={reservesPyMagn || undefined}
+          autoPY={surpOpenPy || undefined}
           isOverriddenCy={isOverridden("bs_liab.reserves_surplus.surplus_opening_cy")}
           isOverriddenPy={isOverridden("bs_liab.reserves_surplus.surplus_opening_py")}
           onCommitCy={(v) => updatePath("bs_liab.reserves_surplus.surplus_opening_cy", v)}
           onCommitPy={(v) => updatePath("bs_liab.reserves_surplus.surplus_opening_py", v)}
+          onResetCy={() => resetPath("bs_liab.reserves_surplus.surplus_opening_cy")}
+          onResetPy={() => resetPath("bs_liab.reserves_surplus.surplus_opening_py")}
         />
 
-        {/* Profit for the year — auto-linked from P&L NPAT */}
+        {/* Issue 5 (today) — Profit for the Year auto-linked from
+             P&L line item XV. Profit/(Loss) for the Period (NPAT). */}
         <EditableRow
           label="Add/(Less): Profit for the year"
           cy={profitCy} py={profitPy}
@@ -714,22 +725,36 @@ export default function NoteBSLiab({
           onResetPy={() => resetPath("pl.eps.npat_py")}
         />
 
+        {/* Issue 4 (today) — Adjustments for Deferred Tax auto-populates
+             from any Tally ledger under BS_EQ_RS whose name matches the
+             /deferred tax/i pattern (seeded by autoPopulateNotes). */}
         <EditableRow
           label="Add/(Less): Adjustments for deferred tax"
           cy={surpDeferCy} py={surpDeferPy}
+          autoCY={surpDeferCy || undefined}
+          autoPY={surpDeferPy || undefined}
           isOverriddenCy={isOverridden("bs_liab.reserves_surplus.surplus_deferred_adj_cy")}
           isOverriddenPy={isOverridden("bs_liab.reserves_surplus.surplus_deferred_adj_py")}
           onCommitCy={(v) => updatePath("bs_liab.reserves_surplus.surplus_deferred_adj_cy", v)}
           onCommitPy={(v) => updatePath("bs_liab.reserves_surplus.surplus_deferred_adj_py", v)}
+          onResetCy={() => resetPath("bs_liab.reserves_surplus.surplus_deferred_adj_cy")}
+          onResetPy={() => resetPath("bs_liab.reserves_surplus.surplus_deferred_adj_py")}
         />
 
+        {/* Issue 4 (today) — Excess/(Short) Provision for Income Tax auto-
+             populates from any Tally ledger under BS_EQ_RS whose name
+             matches /provision.*income tax/i etc. (seeded by autoPopulateNotes). */}
         <EditableRow
           label="Add/(Less): Excess/(Short) provision for income tax"
           cy={surpExcessCy} py={surpExcessPy}
+          autoCY={surpExcessCy || undefined}
+          autoPY={surpExcessPy || undefined}
           isOverriddenCy={isOverridden("bs_liab.reserves_surplus.surplus_excess_short_cy")}
           isOverriddenPy={isOverridden("bs_liab.reserves_surplus.surplus_excess_short_py")}
           onCommitCy={(v) => updatePath("bs_liab.reserves_surplus.surplus_excess_short_cy", v)}
           onCommitPy={(v) => updatePath("bs_liab.reserves_surplus.surplus_excess_short_py", v)}
+          onResetCy={() => resetPath("bs_liab.reserves_surplus.surplus_excess_short_cy")}
+          onResetPy={() => resetPath("bs_liab.reserves_surplus.surplus_excess_short_py")}
         />
 
         {/* Sub-total [b] */}
