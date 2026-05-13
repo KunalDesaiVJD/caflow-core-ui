@@ -1482,31 +1482,53 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   };
 
   // ═══════ RECLASSIFY / MOVE LEDGER ═══════
+  // Issue 1 (today, take 2) — when the auditor has ticked multiple ledgers
+  // via the bulk-select checkboxes AND opens the ⇄ Reclassify dialog from
+  // any one of those ticked rows, the user expects the chosen destination
+  // to apply to EVERY ticked ledger, not just the row whose ⇄ button was
+  // clicked.  Treat the dialog as a bulk-move whenever the ticked-row that
+  // triggered it is itself ticked: all ticked ledgers move together.  When
+  // the dialog is invoked on a non-ticked row, behave exactly as before
+  // (single-ledger move) so existing muscle memory is unchanged.
   const reclassifyAccount = async () => {
     if (!reclassifyDialog || !reclassifyCode) return;
     const { accountName } = reclassifyDialog;
     const lineItem = activeLeafItems.find(i => i.code === reclassifyCode);
     if (!lineItem) return;
 
-    const oldLineItem = coaMapping[accountName]
-      ? activeLeafItems.find(i => i.code === coaMapping[accountName].code)
-      : null;
+    // Decide bulk vs single.  If the ⇄ was opened from a ticked row and the
+    // tick-bucket has >1 entries, treat the dialog as a bulk operation.
+    const bulkMode = multiSelect.has(accountName) && multiSelect.size > 1;
+    const targets  = bulkMode ? Array.from(multiSelect) : [accountName];
 
-    const newEntry: Record<string, any> = {
-      code:        reclassifyCode,
-      noteRef:     lineItem.noteRef,
-      scheduleRef: lineItem.scheduleRef || "",
-      confidence:  "manual",
+    const newEntry = (name: string): Record<string, any> => {
+      const entry: Record<string, any> = {
+        code:        reclassifyCode,
+        noteRef:     lineItem.noteRef,
+        scheduleRef: lineItem.scheduleRef || "",
+        confidence:  "manual",
+      };
+      if (reclassifyReason.trim()) entry.move_reason = reclassifyReason.trim();
+      return entry;
     };
-    if (reclassifyReason.trim()) newEntry.move_reason = reclassifyReason.trim();
 
-    const newMapping = { ...coaMapping, [accountName]: newEntry };
+    const newMapping: typeof coaMapping = { ...coaMapping };
+    for (const name of targets) newMapping[name] = newEntry(name) as any;
     setCoaMapping(newMapping);
+    if (bulkMode) setMultiSelect(new Set());
+
     // Auto-save to DB so the override survives page refresh
     try {
       await supabase.from("audit_engagements").update({ coa_mapping: newMapping } as any).eq("id", engagementId);
-      const fromLabel = oldLineItem?.name || coaMapping[accountName]?.code || "unmapped";
-      toast.success(`Moved "${accountName}" from ${fromLabel} → ${lineItem.name}`);
+      if (bulkMode) {
+        toast.success(`Moved ${targets.length} ledgers → ${lineItem.name}`);
+      } else {
+        const oldLineItem = coaMapping[accountName]
+          ? activeLeafItems.find(i => i.code === coaMapping[accountName].code)
+          : null;
+        const fromLabel = oldLineItem?.name || coaMapping[accountName]?.code || "unmapped";
+        toast.success(`Moved "${accountName}" from ${fromLabel} → ${lineItem.name}`);
+      }
     } catch (e: any) {
       toast.error("Saved locally, failed to persist: " + e.message);
     }
@@ -3232,6 +3254,22 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                   Shows Total E&L vs Total Assets + balanced/unbalanced indicator.
               ─────────────────────────────────────────────────────────────────── */}
               {fsPanelTab === "bs" && !fsSearch && (() => {
+                // Issue 2 (today) — sign-fix the BS difference calculation.
+                //
+                // computedAmounts stores liabilities + equity SIGNED CR-negative
+                // (Tally convention) and assets SIGNED DR-positive.  The old
+                // `diff = totalEL - totalAss` therefore doubled the magnitude
+                // when the two sides actually balanced: a perfectly balanced
+                // BS with ₹82,20,083.99 on each side produced
+                //   totalEL  = -82,20,083.99
+                //   totalAss = +82,20,083.99
+                //   diff     = |totalEL - totalAss| = ₹1,64,40,167.98
+                // The user saw "BS not balanced yet — Difference: ₹1.6Cr"
+                // for an engagement whose BS actually balanced to the rupee.
+                //
+                // The correct identity is:  Σ Dr  +  Σ Cr  =  0  (Tally)
+                //                       =>  totalAss + totalEL = 0 when balanced.
+                // So diff = | totalAss + totalEL | .
                 const totalEL = (computedAmounts["BS_EQ"]  || 0)
                               + (computedAmounts["BS_NCL"] || 0)
                               + (computedAmounts["BS_CL"]  || 0);
@@ -3242,8 +3280,10 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                                 + (computedAmountsPY["BS_CL"]  || 0);
                 const totalASSpy = (computedAmountsPY["BS_NCA"] || 0)
                                  + (computedAmountsPY["BS_CA"]  || 0);
-                const diff    = Math.abs(totalEL - totalAss);
-                const balanced = diff < 1;
+                // Sign-corrected difference + ₹2 tolerance (Issue 2 today)
+                // to absorb 2-decimal rounding accumulating over many ledgers.
+                const diff     = Math.abs(totalAss + totalEL);
+                const balanced = diff < 2;
                 if (Math.abs(totalEL) < 0.005 && Math.abs(totalAss) < 0.005) return null;
                 const fmtAmt = (n: number) =>
                   n === 0 ? "—"
@@ -3333,13 +3373,21 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       >
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle className="text-base">⇄ Move / Reclassify Ledger</DialogTitle>
+            <DialogTitle className="text-base">
+              {/* Issue 1 (today, take 2) — surface bulk-mode in the title so
+                  the auditor sees AT A GLANCE that confirming the dialog will
+                  move every ticked ledger, not just the one whose ⇄ they hit. */}
+              {reclassifyDialog && multiSelect.has(reclassifyDialog.accountName) && multiSelect.size > 1
+                ? `⇄ Move ${multiSelect.size} Ticked Ledgers`
+                : "⇄ Move / Reclassify Ledger"}
+            </DialogTitle>
           </DialogHeader>
           {reclassifyDialog && (() => {
             const currentMapping = coaMapping[reclassifyDialog.accountName];
             const currentLineItem = currentMapping ? activeLeafItems.find(i => i.code === currentMapping.code) : null;
             const newLineItem = reclassifyCode ? activeLeafItems.find(i => i.code === reclassifyCode) : null;
             const isCFReclassify = currentMapping?.confidence === "carried_forward";
+            const isBulkMode = multiSelect.has(reclassifyDialog.accountName) && multiSelect.size > 1;
             return (
               <div className="space-y-4 py-1">
                 {isCFReclassify && (
@@ -3351,9 +3399,27 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                     </AlertDescription>
                   </Alert>
                 )}
+                {isBulkMode && (
+                  <Alert className="bg-blue-50 dark:bg-blue-950/20 border-blue-300 dark:border-blue-700">
+                    <AlertTitle className="text-xs text-blue-800 dark:text-blue-300">Bulk move</AlertTitle>
+                    <AlertDescription className="text-[11px] text-blue-700 dark:text-blue-400">
+                      Confirming will move all <strong>{multiSelect.size}</strong> ticked ledgers to the destination chosen below.
+                    </AlertDescription>
+                  </Alert>
+                )}
                 <div>
-                  <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">Account</p>
-                  <p className="text-sm font-semibold">{reclassifyDialog.accountName}</p>
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">
+                    {isBulkMode ? "Tick-selected ledgers" : "Account"}
+                  </p>
+                  {isBulkMode ? (
+                    <p className="text-xs text-foreground space-y-0.5 max-h-24 overflow-y-auto">
+                      {Array.from(multiSelect).map(n => (
+                        <span key={n} className="block truncate">• {n}</span>
+                      ))}
+                    </p>
+                  ) : (
+                    <p className="text-sm font-semibold">{reclassifyDialog.accountName}</p>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">

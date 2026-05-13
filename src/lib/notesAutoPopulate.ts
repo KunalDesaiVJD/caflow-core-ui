@@ -1000,21 +1000,27 @@ export async function loadStage5Notes(engagementId: string): Promise<Stage5Notes
     // If user has explicitly edited fa.rows (including deleting defaults), preserve exactly as-is.
     const faRows = rawManualEdits.includes("fa.rows") ? existingFa : mergeFaDefaults(existingFa);
 
-    // One-time migration: bs_liab notes store POSITIVE magnitudes by convention.
-    // Old data (pre-sectionSign fix) may have stored negative py/amount_py values.
-    // Sanitize them here so the UI always shows correct positive figures.
+    // Issue 8 (today, take 2) — REMOVED the breakup-row Math.abs() sweep
+    // that lived here.  That sweep was originally a one-time fix for a
+    // pre-sectionSign era when bs_liab notes were stored CR-negative, but
+    // it now actively cancels Issue 8's Dr/Cr-netting fix: a Dr ledger
+    // sitting under a bs_liab note (e.g. an advance against Sundry
+    // Creditors) is intentionally stored with amount_cy/amount_py < 0
+    // so the breakup sub-row sum equals the NET liability instead of
+    // gross-positive.  Stripping the sign here re-inflated the total
+    // every time the note was reloaded.
+    //
+    // The .py headline value (node.py) is still kept positive — that
+    // path is the magnitude of the prior-year closing, never signed.
     const bsLiab = raw.bs_liab ?? {};
     for (const key of Object.keys(bsLiab)) {
       const node = bsLiab[key];
       if (!node || typeof node !== "object") continue;
       if (typeof node.py === "number" && node.py < 0) node.py = Math.abs(node.py);
-      if (Array.isArray(node.breakup)) {
-        node.breakup = node.breakup.map((r: any) =>
-          r && typeof r === "object" && typeof r.amount_py === "number" && r.amount_py < 0
-            ? { ...r, amount_py: Math.abs(r.amount_py) }
-            : r,
-        );
-      }
+      // NOTE: breakup amount_cy / amount_py are deliberately signed —
+      // do NOT Math.abs them.  Legacy gross-positive values still render
+      // correctly (positive on the credit side) and will be migrated to
+      // signed on the next "Re-sync from COA" / "Generate FS" pass.
     }
 
     return {
@@ -1350,25 +1356,32 @@ export async function autoPopulateNotes(
       }
     }
 
-    // ── (c) Adjustments for deferred tax (CY & PY) ──────────────────────────
-    // Sum balances of ledgers (a) currently mapped to BS_EQ_RS AND
-    // (b) whose name matches a "deferred tax" pattern.  For PY, walk pyTB
-    // and use the same name pattern.  Sign flip applied because bs_liab
-    // ledgers store negative for credit balances.
+    // ── (c) Adjustments for deferred tax / Excess provision (CY & PY) ───────
+    // Issue 4 (take 2, today) — broadened to scan EVERY ledger in the TB
+    // regardless of its current COA mapping.  Restricting to BS_EQ_RS was
+    // too narrow: most firms map "Deferred Tax" under BS_NCL_DTL (Liability)
+    // or BS_NCA_DTA (Asset), and "Provision for Income Tax" under PL_TAX_CUR
+    // or its own BS code — never BS_EQ_RS — so the R&S sub-row stayed blank
+    // for them.  Auditors expect the narrative R&S note to pick up these
+    // adjustments NO MATTER which Schedule-III code holds the ledger, so
+    // we now do a pure name-pattern scan.
+    //
+    //   /deferred tax/i           matches Deferred Tax, Deferred tax asset,
+    //                              DEFERRED TAX LIABILITY (net), etc.
+    //   (excess|short) provision  matches Excess/(Short) Provision...
+    //   provision for tax         matches Provision for Income Tax / for Tax
+    //   tax provision             matches Income Tax Provision
     const DEFERRED_TAX_RX = /\bdeferred\s*tax\b/i;
-    const EXCESS_SHORT_RX = /(excess|short)\s*\(?\s*\(?\s*provision|provision\s+for\s+income\s+tax|income\s*tax\s+provision/i;
+    const EXCESS_SHORT_RX = /(excess|short)\s*\(?\s*\(?\s*provision|provision\s+for\s+(income\s+)?tax|(income\s*)?tax\s*provision/i;
 
     const sumByPattern = (
       ledgers: TBLedger[] | undefined | null,
-      fsCode: string,
       pattern: RegExp,
       useOpening = false,
     ): number => {
       if (!ledgers) return 0;
       let s = 0;
       for (const l of ledgers) {
-        const code = mapping[l.account_name]?.code;
-        if (code !== fsCode) continue;
         if (!pattern.test(l.account_name)) continue;
         s += Number(useOpening ? (l.opening_balance ?? 0) : (l.balance ?? 0));
       }
@@ -1377,24 +1390,24 @@ export async function autoPopulateNotes(
     };
 
     if (isUnset(existRS.surplus_deferred_adj_cy)) {
-      const v = sumByPattern(tb, "BS_EQ_RS", DEFERRED_TAX_RX, false);
+      const v = sumByPattern(tb, DEFERRED_TAX_RX, false);
       if (Math.abs(v) > 0.005) outRS.surplus_deferred_adj_cy = v;
     }
     if (isUnset(existRS.surplus_deferred_adj_py)) {
       // Prefer pyTB closing; fall back to CY TB opening_balance for the same ledgers.
       const v = pyTB
-        ? sumByPattern(pyTB, "BS_EQ_RS", DEFERRED_TAX_RX, false)
-        : sumByPattern(tb,   "BS_EQ_RS", DEFERRED_TAX_RX, true);
+        ? sumByPattern(pyTB, DEFERRED_TAX_RX, false)
+        : sumByPattern(tb,   DEFERRED_TAX_RX, true);
       if (Math.abs(v) > 0.005) outRS.surplus_deferred_adj_py = v;
     }
     if (isUnset(existRS.surplus_excess_short_cy)) {
-      const v = sumByPattern(tb, "BS_EQ_RS", EXCESS_SHORT_RX, false);
+      const v = sumByPattern(tb, EXCESS_SHORT_RX, false);
       if (Math.abs(v) > 0.005) outRS.surplus_excess_short_cy = v;
     }
     if (isUnset(existRS.surplus_excess_short_py)) {
       const v = pyTB
-        ? sumByPattern(pyTB, "BS_EQ_RS", EXCESS_SHORT_RX, false)
-        : sumByPattern(tb,   "BS_EQ_RS", EXCESS_SHORT_RX, true);
+        ? sumByPattern(pyTB, EXCESS_SHORT_RX, false)
+        : sumByPattern(tb,   EXCESS_SHORT_RX, true);
       if (Math.abs(v) > 0.005) outRS.surplus_excess_short_py = v;
     }
 
