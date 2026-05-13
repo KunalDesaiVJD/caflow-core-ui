@@ -223,7 +223,9 @@ export default function Checklist({ data, engagementId, onSaved }: Props) {
     // Open blank tab synchronously — must stay within the user-gesture stack
     // so Chrome's popup blocker doesn't silently swallow the window.open call
     // that would otherwise come after the async edge-function await.
-    const newTab = window.open("", "_blank", "noreferrer");
+    // NOTE: do NOT pass "noreferrer" — Chrome returns null for the window reference
+    // when that flag is used, making the subsequent location.href assignment a no-op.
+    const newTab = window.open("", "_blank");
     try {
       const { data, error } = await supabase.functions.invoke("get-document-url", {
         body: { file_path: file.file_path, bucket: "documents" },
