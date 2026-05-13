@@ -35,39 +35,52 @@ serve(async (req) => {
       });
     }
 
-    const { document_id } = await req.json();
-    if (!document_id) {
-      return new Response(JSON.stringify({ error: "Missing document_id" }), {
+    const body = await req.json();
+    const { document_id, file_path, bucket } = body;
+
+    if (!document_id && !file_path) {
+      return new Response(JSON.stringify({ error: "Missing document_id or file_path" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // Fetch document - RLS will enforce access
-    const userClient = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_ANON_KEY")!,
-      { global: { headers: { Authorization: `Bearer ${token}` } } }
-    );
+    let r2_key: string;
+    let storageBucket: string;
 
-    const { data: doc, error: docErr } = await userClient
-      .from("documents")
-      .select("r2_key, filename")
-      .eq("id", document_id)
-      .maybeSingle();
+    if (file_path) {
+      // Direct storage path — use service role, no RLS check needed
+      r2_key = file_path;
+      storageBucket = bucket || "documents";
+    } else {
+      // Fetch document record using caller's JWT (RLS enforced)
+      const userClient = createClient(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_ANON_KEY")!,
+        { global: { headers: { Authorization: `Bearer ${token}` } } }
+      );
 
-    if (docErr || !doc || !doc.r2_key) {
-      return new Response(JSON.stringify({ error: "Document not found" }), {
-        status: 404,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      const { data: doc, error: docErr } = await userClient
+        .from("documents")
+        .select("r2_key, filename")
+        .eq("id", document_id)
+        .maybeSingle();
+
+      if (docErr || !doc || !doc.r2_key) {
+        return new Response(JSON.stringify({ error: "Document not found" }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      r2_key = doc.r2_key;
+      storageBucket = "firm-assets";
     }
 
-    // Generate presigned URL valid for 1 hour
+    // Generate presigned URL valid for 1 hour using service role (bypasses storage RLS)
     const { data: urlData, error: urlErr } = await supabase
       .storage
-      .from("firm-assets")
-      .createSignedUrl(doc.r2_key, 3600);
+      .from(storageBucket)
+      .createSignedUrl(r2_key, 3600);
 
     if (urlErr || !urlData?.signedUrl) {
       return new Response(JSON.stringify({ error: "Failed to generate download URL" }), {
