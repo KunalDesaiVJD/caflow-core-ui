@@ -11,7 +11,7 @@
 import { Button } from "@/components/ui/button";
 import { Download, FileText } from "lucide-react";
 import * as XLSX from "xlsx";
-import { awLoad } from "@/lib/awStorage";
+import { awLoad, awLoadFromDB } from "@/lib/awStorage";
 import type { AuditWorksheetData } from "./hooks/useAuditWorksheetData";
 import type { TaxMasterData }       from "./hooks/useTaxMasterStorage";
 import type { StatutoryMasterData } from "./hooks/useStatutoryMasterStorage";
@@ -78,9 +78,15 @@ function booksChecked(m: TaxMasterData | StatutoryMasterData): string {
   return list.join(", ");
 }
 
+// ─── Fetch helper — localStorage first, DB fallback ───────────────────────────
+
+async function fetchSheet<T>(engagementId: string, key: string): Promise<T> {
+  return (awLoad<T>(engagementId, key) ?? await awLoadFromDB<T>(engagementId, key) ?? {}) as T;
+}
+
 // ─── Excel export ──────────────────────────────────────────────────────────────
 
-function exportExcel(engagementId: string, data: AuditWorksheetData) {
+async function exportExcel(engagementId: string, data: AuditWorksheetData) {
   const wb = XLSX.utils.book_new();
   const auditType = data.auditType;
 
@@ -89,8 +95,8 @@ function exportExcel(engagementId: string, data: AuditWorksheetData) {
   const isTax        = auditType === "tax_audit" || isBoth;
   const isStat       = auditType === "statutory"  || isBoth;
 
-  const tax  = awLoad<Partial<TaxMasterData>>(engagementId, "tax_master_json") ?? {};
-  const stat = awLoad<Partial<StatutoryMasterData>>(engagementId, "statutory_master_json") ?? {};
+  const tax  = await fetchSheet<Partial<TaxMasterData>>(engagementId, "tax_master_json");
+  const stat = await fetchSheet<Partial<StatutoryMasterData>>(engagementId, "statutory_master_json");
 
   const masterLabel = isBoth ? "Tax & Statutory Audit Master"
     : isTax ? "Tax Audit Master"
@@ -162,51 +168,55 @@ function exportExcel(engagementId: string, data: AuditWorksheetData) {
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(masterRows), masterLabel.slice(0, 31));
 
   // ── Audit Worksheet ───────────────────────────────────────────────────────
-  const ws = awLoad<WorksheetSheetData>(engagementId, "worksheet_json") ?? { rows: {} };
+  const ws = await fetchSheet<WorksheetSheetData>(engagementId, "worksheet_json");
   const wsHeader = ["Sr", "Area / Particulars", "Extent / As-on Date", "Work Date", "Checked By", "Notes"];
   const wsBody = WORKSHEET_ROWS.map(r => {
-    const row = ws.rows[r.id] ?? {};
+    const row = ((ws as any).rows ?? {})[r.id] ?? {};
     const extent = (row as any).extent_text || (row as any).extent_date || "";
     return [r.sr, r.label, extent, (row as any).date ?? "", (row as any).checked_by_name ?? "", (row as any).notes ?? ""];
   });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([wsHeader, ...wsBody]), "Audit Worksheet");
 
   // ── Special Attention ─────────────────────────────────────────────────────
-  const sa = awLoad<SpecialAttentionFormData>(engagementId, "special_attention_json") ?? { rows: {}, audit_carried_by: [] };
+  const sa = await fetchSheet<SpecialAttentionFormData>(engagementId, "special_attention_json");
   const saHeader = ["Sr", "Particulars", "Query", "Remarks", "Checked By", "Verified By"];
   const saBody: (string | null)[][] = [];
-  // We export all row IDs present in storage
-  for (const [rowId, rowData] of Object.entries(sa.rows ?? {})) {
+  for (const [rowId, rowData] of Object.entries((sa as any).rows ?? {})) {
     const r = rowData as any;
     saBody.push([rowId, "", yesNo(r.query), r.remarks ?? "", r.checked_by_name ?? "", r.verified_by_name ?? ""]);
   }
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([saHeader, ...saBody]), "Special Attention");
 
   // ── Query Sheet ───────────────────────────────────────────────────────────
-  const qs = awLoad<QuerySheetData>(engagementId, "query_sheet_json") ?? { queries: [] };
+  const qs = await fetchSheet<QuerySheetData>(engagementId, "query_sheet_json");
   const qsHeader = ["#", "Head", "Particulars", "Query Description", "Required Documents", "Remark", "Correction Status"];
-  const qsBody = (qs.queries ?? []).map((q: any, i: number) => [
+  const qsBody = ((qs as any).queries ?? []).map((q: any, i: number) => [
     i + 1, q.head, q.particulars, q.query_description, q.required_documents, q.remark, q.correction_status,
   ]);
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([qsHeader, ...qsBody]), "Query Sheet");
 
   // ── Checklist ─────────────────────────────────────────────────────────────
-  const cl = awLoad<ChecklistSheetData>(engagementId, "checklist_sheet_json") ?? { rows: {}, dynamicRowIds: [] };
+  const cl = await fetchSheet<ChecklistSheetData>(engagementId, "checklist_sheet_json");
   const clHeader = ["Sr", "Particulars", "Document Attached", "Page From", "Page To"];
   const fyEndYear = data.fyEndDate ? data.fyEndDate.match(/^(\d{4})/)?.[1] ?? "" : "";
   const allClDefs = [
     ...CHECKLIST_DEFS,
-    ...(cl.dynamicRowIds ?? []).map((id: string, i: number) => ({
+    ...((cl as any).dynamicRowIds ?? []).map((id: string, i: number) => ({
       id, sr: CHECKLIST_DEFS.length + i + 1, particulars: "",
     })),
   ];
   const clBody = allClDefs.map(def => {
-    const row = (cl.rows ?? {})[def.id] ?? {};
+    const row = ((cl as any).rows ?? {})[def.id] ?? {};
     const particulars = (row as any).particulars || def.particulars.replace(/\{fyEndYear\}/g, fyEndYear);
+    const docAttached = (row as any).is_na
+      ? "N/A"
+      : (Array.isArray((row as any).files) && (row as any).files.length > 0)
+        ? (row as any).files.map((f: any) => f.file_name).join(", ")
+        : "";
     return [
       def.sr,
       particulars,
-      (row as any).file_name ?? "",
+      docAttached,
       (row as any).page_from ?? "",
       (row as any).page_to ?? "",
     ];
@@ -240,8 +250,8 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
   const isBoth = auditType === "both";
   const isTax  = auditType === "tax_audit" || isBoth;
   const isStat = auditType === "statutory"  || isBoth;
-  const tax  = awLoad<Partial<TaxMasterData>>(engagementId, "tax_master_json") ?? {};
-  const stat = awLoad<Partial<StatutoryMasterData>>(engagementId, "statutory_master_json") ?? {};
+  const tax  = await fetchSheet<Partial<TaxMasterData>>(engagementId, "tax_master_json");
+  const stat = await fetchSheet<Partial<StatutoryMasterData>>(engagementId, "statutory_master_json");
 
   const masterLabel = isBoth ? "Tax & Statutory Audit Master"
     : isTax ? "Tax Audit Master"
@@ -298,12 +308,12 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
   // ── Page 2: Audit Worksheet ────────────────────────────────────────────────
   doc.addPage();
   pageHeader("Audit Worksheet");
-  const ws = awLoad<WorksheetSheetData>(engagementId, "worksheet_json") ?? { rows: {} };
+  const ws = await fetchSheet<WorksheetSheetData>(engagementId, "worksheet_json");
   autoTable(doc, {
     startY: 20,
     head: [["Sr", "Area / Particulars", "Extent / As-on Date", "Work Date", "Checked By", "Notes"]],
     body: WORKSHEET_ROWS.map(r => {
-      const row = (ws.rows ?? {})[r.id] ?? {} as any;
+      const row = ((ws as any).rows ?? {})[r.id] ?? {} as any;
       const extent = row.extent_text || row.extent_date || "";
       return [r.sr, r.label, extent, row.date ?? "", row.checked_by_name ?? "", row.notes ?? ""];
     }),
@@ -316,8 +326,8 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
   // ── Page 3: Special Attention ──────────────────────────────────────────────
   doc.addPage();
   pageHeader("Special Attention");
-  const sa = awLoad<SpecialAttentionFormData>(engagementId, "special_attention_json") ?? { rows: {} };
-  const saRows = Object.entries(sa.rows ?? {}).map(([rowId, r]: [string, any]) => [
+  const sa = await fetchSheet<SpecialAttentionFormData>(engagementId, "special_attention_json");
+  const saRows = Object.entries((sa as any).rows ?? {}).map(([rowId, r]: [string, any]) => [
     rowId, yesNo(r.query), r.remarks ?? "", r.checked_by_name ?? "", r.verified_by_name ?? "",
   ]);
   autoTable(doc, {
@@ -332,12 +342,12 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
   // ── Page 4: Query Sheet ────────────────────────────────────────────────────
   doc.addPage();
   pageHeader("Query Sheet");
-  const qs = awLoad<QuerySheetData>(engagementId, "query_sheet_json") ?? { queries: [] };
+  const qs = await fetchSheet<QuerySheetData>(engagementId, "query_sheet_json");
   autoTable(doc, {
     startY: 20,
     head: [["#", "Head", "Particulars", "Query Description", "Required Documents", "Remark", "Correction"]],
-    body: (qs.queries ?? []).length > 0
-      ? (qs.queries ?? []).map((q: any, i: number) => [
+    body: ((qs as any).queries ?? []).length > 0
+      ? ((qs as any).queries ?? []).map((q: any, i: number) => [
           i + 1, q.head, q.particulars, q.query_description, q.required_documents, q.remark, q.correction_status,
         ])
       : [["—", "", "", "", "", "", ""]],
@@ -349,11 +359,11 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
   // ── Page 5: Checklist ──────────────────────────────────────────────────────
   doc.addPage();
   pageHeader("Audit Documentation Checklist");
-  const cl = awLoad<ChecklistSheetData>(engagementId, "checklist_sheet_json") ?? { rows: {}, dynamicRowIds: [] };
+  const cl = await fetchSheet<ChecklistSheetData>(engagementId, "checklist_sheet_json");
   const fyEndYear = data.fyEndDate ? data.fyEndDate.match(/^(\d{4})/)?.[1] ?? "" : "";
   const allClDefs = [
     ...CHECKLIST_DEFS,
-    ...(cl.dynamicRowIds ?? []).map((id: string, i: number) => ({
+    ...((cl as any).dynamicRowIds ?? []).map((id: string, i: number) => ({
       id, sr: CHECKLIST_DEFS.length + i + 1, particulars: "",
     })),
   ];
@@ -361,9 +371,14 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
     startY: 20,
     head: [["Sr", "Particulars", "Document Attached", "Page From", "Page To"]],
     body: allClDefs.map(def => {
-      const row = (cl.rows ?? {})[def.id] ?? {} as any;
+      const row = ((cl as any).rows ?? {})[def.id] ?? {} as any;
       const particulars = row.particulars || def.particulars.replace(/\{fyEndYear\}/g, fyEndYear);
-      return [def.sr, particulars, row.file_name ?? "", row.page_from ?? "", row.page_to ?? ""];
+      const docAttached = row.is_na
+        ? "N/A"
+        : (Array.isArray(row.files) && row.files.length > 0)
+          ? row.files.map((f: any) => f.file_name).join(", ")
+          : "";
+      return [def.sr, particulars, docAttached, row.page_from ?? "", row.page_to ?? ""];
     }),
     styles: { fontSize: 8, cellPadding: 2 },
     headStyles: { fillColor: [99, 102, 241] },
@@ -390,7 +405,7 @@ export default function ExportButtons({ data, engagementId }: Props) {
         variant="outline"
         size="sm"
         className="gap-1.5 text-green-700 border-green-300 hover:bg-green-50"
-        onClick={() => exportExcel(engagementId, data)}
+        onClick={() => { exportExcel(engagementId, data); }}
       >
         <Download size={14} /> Excel
       </Button>

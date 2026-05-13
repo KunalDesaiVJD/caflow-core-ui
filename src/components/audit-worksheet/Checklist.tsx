@@ -17,7 +17,7 @@
 import { useRef, useState } from "react";
 import { Button }  from "@/components/ui/button";
 import { Input }   from "@/components/ui/input";
-import { Save, Loader2, ClipboardCheck, Plus, Paperclip, Eye, Trash2 } from "lucide-react";
+import { Save, Loader2, ClipboardCheck, Plus, Paperclip, Eye, Trash2, Ban } from "lucide-react";
 import { toast } from "sonner";
 
 import { supabase } from "@/integrations/supabase/client";
@@ -137,6 +137,7 @@ export default function Checklist({ data, engagementId, onSaved }: Props) {
     setRowField,
     addFileToRow,
     removeFileFromRow,
+    toggleNA,
     addRow,
     manualSave,
     saving,
@@ -153,8 +154,11 @@ export default function Checklist({ data, engagementId, onSaved }: Props) {
   }));
   const allDefs = [...CHECKLIST_DEFS, ...dynamicDefs];
 
-  // Count rows that have at least one document
-  const filledCount = allDefs.filter(def => getRow(def.id).files.length > 0).length;
+  // Count rows that have at least one document OR are marked N/A
+  const filledCount = allDefs.filter(def => {
+    const row = getRow(def.id);
+    return row.files.length > 0 || row.is_na;
+  }).length;
 
   // ── Document upload state ──────────────────────────────────────────────────
   const fileInputRef  = useRef<HTMLInputElement>(null);
@@ -315,10 +319,12 @@ export default function Checklist({ data, engagementId, onSaved }: Props) {
               const displayValue = row.particulars !== "" ? row.particulars : defaultText;
               const isUploading = (uploadingRows[def.id] ?? 0) > 0;
 
+              const isNA = !!row.is_na;
+
               return (
                 <tr
                   key={def.id}
-                  className="align-top hover:bg-muted/10 transition-colors"
+                  className={`align-top transition-colors ${isNA ? "bg-slate-50 opacity-60" : "hover:bg-muted/10"}`}
                 >
                   {/* Sr No */}
                   <td className="border border-border px-2 py-2 text-center">
@@ -330,73 +336,101 @@ export default function Checklist({ data, engagementId, onSaved }: Props) {
                   {/* Particulars */}
                   <td className="border border-border px-3 py-2 w-full">
                     <Input
-                      className="h-7 text-xs w-full border-dashed whitespace-normal"
+                      className={`h-7 text-xs w-full border-dashed whitespace-normal ${isNA ? "line-through text-muted-foreground" : ""}`}
                       placeholder={defaultText || "Enter item description…"}
                       value={displayValue}
+                      disabled={isNA}
                       onChange={e =>
                         setRowField(def.id, "particulars", e.target.value)
                       }
                     />
                   </td>
 
-                  {/* Documents — shows all uploaded files + upload button */}
+                  {/* Documents — shows all uploaded files + upload/NA buttons */}
                   <td className="border border-border px-2 py-2 text-center w-52">
                     <div className="flex flex-col items-center gap-1.5">
 
-                      {/* Existing files list */}
-                      {row.files.map(file => {
-                        const deleteKey = `${def.id}__${file.file_path}`;
-                        const isDeleting = !!deletingFiles[deleteKey];
-                        return (
-                          <div
-                            key={file.file_path}
-                            className="flex items-center gap-1 w-full max-w-[192px] bg-muted/40 rounded px-1.5 py-0.5"
+                      {isNA ? (
+                        /* N/A state */
+                        <div className="flex flex-col items-center gap-1">
+                          <span className="inline-flex items-center gap-1 text-[10px] font-medium text-slate-500 bg-slate-200 rounded px-2 py-0.5">
+                            <Ban size={9} /> Not Applicable
+                          </span>
+                          <button
+                            className="text-[9px] text-violet-600 hover:underline"
+                            onClick={() => toggleNA(def.id)}
                           >
-                            <span
-                              className="text-[10px] text-muted-foreground flex-1 truncate min-w-0"
-                              title={file.file_name}
-                            >
-                              {file.file_name}
-                            </span>
-                            <button
-                              className="shrink-0 text-violet-700 hover:text-violet-900 p-0.5 rounded"
-                              title="Preview"
-                              onClick={() => handlePreview(file)}
-                            >
-                              <Eye size={10} />
-                            </button>
-                            <button
-                              className="shrink-0 text-destructive hover:text-destructive/80 p-0.5 rounded disabled:opacity-40"
-                              title="Delete"
-                              disabled={isDeleting}
-                              onClick={() => handleDeleteFile(def.id, file)}
-                            >
-                              {isDeleting
-                                ? <Loader2 size={10} className="animate-spin" />
-                                : <Trash2  size={10} />
-                              }
-                            </button>
-                          </div>
-                        );
-                      })}
+                            Undo
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          {/* Existing files list */}
+                          {row.files.map(file => {
+                            const deleteKey = `${def.id}__${file.file_path}`;
+                            const isDeleting = !!deletingFiles[deleteKey];
+                            return (
+                              <div
+                                key={file.file_path}
+                                className="flex items-center gap-1 w-full max-w-[192px] bg-muted/40 rounded px-1.5 py-0.5"
+                              >
+                                <span
+                                  className="text-[10px] text-muted-foreground flex-1 truncate min-w-0"
+                                  title={file.file_name}
+                                >
+                                  {file.file_name}
+                                </span>
+                                <button
+                                  className="shrink-0 text-violet-700 hover:text-violet-900 p-0.5 rounded"
+                                  title="Preview"
+                                  onClick={() => handlePreview(file)}
+                                >
+                                  <Eye size={10} />
+                                </button>
+                                <button
+                                  className="shrink-0 text-destructive hover:text-destructive/80 p-0.5 rounded disabled:opacity-40"
+                                  title="Delete"
+                                  disabled={isDeleting}
+                                  onClick={() => handleDeleteFile(def.id, file)}
+                                >
+                                  {isDeleting
+                                    ? <Loader2 size={10} className="animate-spin" />
+                                    : <Trash2  size={10} />
+                                  }
+                                </button>
+                              </div>
+                            );
+                          })}
 
-                      {/* Upload button — always visible to add more */}
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-6 text-[10px] gap-0.5 px-2 border-violet-300 text-violet-700 hover:bg-violet-50"
-                        onClick={() => openFilePicker(def.id)}
-                        disabled={isUploading}
-                      >
-                        {isUploading
-                          ? <Loader2 size={10} className="animate-spin" />
-                          : <Paperclip size={10} />
-                        }
-                        {isUploading
-                          ? "Uploading…"
-                          : row.files.length > 0 ? "+ Add" : "Upload"
-                        }
-                      </Button>
+                          <div className="flex items-center gap-1.5">
+                            {/* Upload button */}
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-6 text-[10px] gap-0.5 px-2 border-violet-300 text-violet-700 hover:bg-violet-50"
+                              onClick={() => openFilePicker(def.id)}
+                              disabled={isUploading}
+                            >
+                              {isUploading
+                                ? <Loader2 size={10} className="animate-spin" />
+                                : <Paperclip size={10} />
+                              }
+                              {isUploading ? "Uploading…" : row.files.length > 0 ? "+ Add" : "Upload"}
+                            </Button>
+
+                            {/* N/A button — only when no files attached */}
+                            {row.files.length === 0 && !isUploading && (
+                              <button
+                                className="h-6 text-[10px] px-1.5 rounded border border-slate-300 text-slate-500 hover:bg-slate-100 flex items-center gap-0.5"
+                                title="Mark as Not Applicable"
+                                onClick={() => toggleNA(def.id)}
+                              >
+                                <Ban size={9} /> N/A
+                              </button>
+                            )}
+                          </div>
+                        </>
+                      )}
 
                     </div>
                   </td>
