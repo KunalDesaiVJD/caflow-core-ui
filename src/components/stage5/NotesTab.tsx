@@ -44,6 +44,8 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
   // undefined = uncontrolled, true = all collapsed, false = all expanded
   const [collapseAll,   setCollapseAll]   = useState<boolean | undefined>(undefined);
   const [pyFaRows, setPyFaRows] = useState<FARow[] | null>(null);
+  // Track whether notes have been loaded from DB (prevents save on initial mount)
+  const [loaded, setLoaded] = useState(false);
 
   // ── Navigate to a specific note from BS / P&L click ──────────────────
   useEffect(() => {
@@ -61,6 +63,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
   useEffect(() => {
     if (!engagementId) return;
     let cancelled = false;
+    setLoaded(false);
     (async () => {
       setLoading(true);
       try {
@@ -69,9 +72,9 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
         if (!existing.auto_synced_at) {
           const fresh = await autoPopulateNotes(engagementId, { existing });
           await saveStage5Notes(engagementId, fresh);
-          if (!cancelled) setNotes(fresh);
+          if (!cancelled) { setNotes(fresh); setLoaded(true); }
         } else {
-          if (!cancelled) setNotes(existing);
+          if (!cancelled) { setNotes(existing); setLoaded(true); }
         }
       } catch (e: any) {
         toast.error(`Failed to load Notes: ${e?.message || e}`);
@@ -109,6 +112,18 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
     })();
   }, [engagementId]);
 
+  // ── Debounced save: fires 800ms after notes change (ISSUE-006) ────────
+  // Keeps setState updaters pure — no async side-effects inside setNotes.
+  useEffect(() => {
+    if (!loaded || !notes) return;
+    const timer = setTimeout(() => {
+      saveStage5Notes(engagementId, notes).catch((e: any) =>
+        toast.error(`Save failed: ${e?.message || e}`)
+      );
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [notes, engagementId, loaded]);
+
   // ── Helpers passed to each sub-tab ────────────────────────────────────
   // Update a path AND mark it as a manual edit (so re-sync respects it).
   // Exception: `.breakup` paths are NOT marked manual at path level — the
@@ -122,10 +137,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
       if (!path.endsWith(".breakup")) {
         next.manual_edits = markManualEdit(next, path);
       }
-      // Fire-and-forget save; toast on error.
-      saveStage5Notes(engagementId, next).catch((e: any) =>
-        toast.error(`Save failed: ${e?.message || e}`),
-      );
+      // Save is handled by the debounced useEffect above (ISSUE-006).
       return next;
     });
   }, [engagementId]);
@@ -140,9 +152,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
         const next: Stage5Notes = JSON.parse(JSON.stringify(prev));
         setAtPath(next, path, autoVal);
         next.manual_edits = clearManualEdit(next, path);
-        saveStage5Notes(engagementId, next).catch((e: any) =>
-          toast.error(`Save failed: ${e?.message || e}`),
-        );
+        // Save is handled by the debounced useEffect above (ISSUE-006).
         return next;
       });
       toast.success("Reset to auto-value");

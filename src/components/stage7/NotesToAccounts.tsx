@@ -521,6 +521,9 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // Notes 1 & 2 are intentionally anchored: Background and Significant Accounting Policies
+  // are always first for all entity types (Schedule III invariant). Dynamic registry is used
+  // for all subsequent notes. NCE_NOTE_ORDER starts from Note 3.
   // ── Note 1 — build new-entity text on first toggle ──
   useEffect(() => {
     if (!note1NewEntity || note1NewEntityText) return;

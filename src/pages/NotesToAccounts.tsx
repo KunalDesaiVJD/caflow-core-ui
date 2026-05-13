@@ -1123,6 +1123,9 @@ function buildNotesWordHtml(
 
   let html = `<h1>Notes to Financial Statements</h1>`;
 
+  // Notes 1 & 2 are intentionally anchored: Background and Significant Accounting Policies
+  // are always first for all entity types (Schedule III invariant). Dynamic registry is used
+  // for all subsequent notes. NCE_NOTE_ORDER starts from Note 3.
   // Note 1 — all sub-sections
   html += `<h2>Note 1 — Background</h2>`;
   html += `<h3>a. Overview of the Reporting Entity</h3>`;
