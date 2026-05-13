@@ -47,11 +47,14 @@ serve(async (req) => {
 
     let r2_key: string;
     let storageBucket: string;
+    let filename: string | undefined;
 
     if (file_path) {
       // Direct storage path — use service role, no RLS check needed
+      // doc lookup skipped; filename derived from path
       r2_key = file_path;
       storageBucket = bucket || "documents";
+      filename = file_path.split("/").pop();
     } else {
       // Fetch document record using caller's JWT (RLS enforced)
       const userClient = createClient(
@@ -74,6 +77,7 @@ serve(async (req) => {
       }
       r2_key = doc.r2_key;
       storageBucket = "firm-assets";
+      filename = doc.filename;
     }
 
     // Generate presigned URL valid for 1 hour using service role (bypasses storage RLS)
@@ -90,7 +94,7 @@ serve(async (req) => {
     }
 
     return new Response(
-      JSON.stringify({ signed_url: urlData.signedUrl, filename: doc.filename }),
+      JSON.stringify({ signed_url: urlData.signedUrl, filename }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (e) {
