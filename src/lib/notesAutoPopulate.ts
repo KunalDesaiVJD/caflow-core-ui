@@ -1269,24 +1269,50 @@ export async function autoPopulateNotes(
     out.bs_liab.share_capital = outSC;
   }
 
-  // ── Note 30 EPS — auto-populate NPAT from P&L computation ─────────────────
-  // The EPS note needs Net Profit After Tax (NPAT). Compute it from the current
-  // TB + COA mapping (same logic as PipelineFinancialStatements computedAmounts).
-  // Only auto-fill if the user hasn't manually entered a value.
+  // ── Note 30 EPS — auto-populate NPAT (CY + PY) from P&L computation ─────
+  // Issue 5 (R&S Profit-for-the-year regression today) — ALWAYS recompute
+  // NPAT from current TB rather than skip-if-present.  Skipping let stale
+  // npat survive a TB resync (mapping changes after the auditor first
+  // saved the note silently kept the original number).  Worse, when the
+  // user re-clicked "Generate FS" the empty existing.pl.eps.npat from a
+  // freshly-cleared engagement won the merge and erased the value the
+  // Profit-for-the-year row in Note 3 R&S relies on.
+  //
+  // Recomputing every run is safe: NPAT is a pure derivative of the
+  // current TB + COA mapping; an auditor wanting to override types into
+  // the EPS row directly and respectManualEdits then locks the path.
+  //
+  // PY NPAT is computed the same way from the prior-year TB (pyTB), which
+  // is what powers the R&S "Add/(Less): Profit for the year" PY column.
   {
-    const existingNpat = (options.existing as any)?.pl?.eps?.npat;
-    if (typeof existingNpat !== "number") {
-      let revSum = 0, expSum = 0;
-      for (const ledger of tb) {
+    let revSum = 0, expSum = 0;
+    for (const ledger of tb) {
+      const code = mapping[ledger.account_name]?.code ?? "";
+      if (code.startsWith("PL_REV")) revSum += ledger.balance;  // negative (CR)
+      if (code.startsWith("PL_EXP")) expSum += ledger.balance;  // positive (DR)
+    }
+    const npat = Math.round((-revSum - expSum) * 100) / 100;
+
+    // PY NPAT from the FY-1 trial balance (closing balances == that year's
+    // P&L since Tally resets to 0 each year).
+    let npatPy = 0;
+    if (pyTB && pyTB.length > 0) {
+      let revSumPy = 0, expSumPy = 0;
+      for (const ledger of pyTB) {
         const code = mapping[ledger.account_name]?.code ?? "";
-        if (code.startsWith("PL_REV")) revSum += ledger.balance;  // negative (CR)
-        if (code.startsWith("PL_EXP")) expSum += ledger.balance;  // positive (DR)
+        if (code.startsWith("PL_REV")) revSumPy += ledger.balance;
+        if (code.startsWith("PL_EXP")) expSumPy += ledger.balance;
       }
-      const npat = Math.round((-revSum - expSum) * 100) / 100;
-      if (Math.abs(npat) > 0.005) {
-        if (!out.pl.eps) out.pl.eps = {};
-        out.pl.eps = { ...(out.pl.eps as any), npat };
-      }
+      npatPy = Math.round((-revSumPy - expSumPy) * 100) / 100;
+    }
+
+    if (Math.abs(npat) > 0.005 || Math.abs(npatPy) > 0.005) {
+      if (!out.pl.eps) out.pl.eps = {};
+      out.pl.eps = {
+        ...(out.pl.eps as any),
+        ...(Math.abs(npat)   > 0.005 ? { npat }     : {}),
+        ...(Math.abs(npatPy) > 0.005 ? { npat_py: npatPy } : {}),
+      };
     }
   }
 
@@ -1334,26 +1360,69 @@ export async function autoPopulateNotes(
     }
 
     // ── (b) Surplus opening, PY ─────────────────────────────────────────────
-    // = prior year's OWN opening balance, derivable from prior stage5_notes
-    // surplus_opening_cy (last year's filling) OR from CY TB's BS_EQ_RS
-    // ledger opening_balance summed (which is FY-1 closing, so we'd need
-    // FY-2 closing for PY opening — that lives only in pyTB).
+    // Issue 3 (today) — the PY column previously stayed blank when no
+    // prior engagement existed in the DB.  Auditors expect it to show
+    // SOMETHING sensible whenever Tally has data, so we now walk four
+    // fallbacks in priority order:
+    //   1. prior stage5_notes.bs_liab.reserves_surplus.surplus_opening_cy
+    //      (what the auditor filled in FY-1)
+    //   2. prior TB opening_balance of BS_EQ_RS ledgers (FY-2 closing)
+    //   3. prior FY's fa_financial_statements snapshot (pyFs[BS_EQ_RS])
+    //      reduced by the prior year's net P&L (back-out of the closing
+    //      identity:  PY_open = PY_close − PY_profit ).  Mathematically
+    //      this is the "Less Profit & Loss A/c" carry-forward auditors
+    //      use as a manual derivation.
+    //   4. current TB opening_balance of BS_EQ_RS ledgers — FY-1 closing —
+    //      which approximates the PY opening for a one-year-old company.
     if (isUnset(existRS.surplus_opening_py)) {
-      // Best: take prior year's surplus_opening_cy verbatim — that was the
-      // FY-2 closing when the auditor filled FY-1.
+      let chosen: number | null = null;
+
+      // (1) prior stage5_notes
       if (typeof priorRS.surplus_opening_cy === "number" && Math.abs(priorRS.surplus_opening_cy) > 0.005) {
-        outRS.surplus_opening_py = Math.round(priorRS.surplus_opening_cy * 100) / 100;
-      } else if (pyTB && pyTB.length > 0) {
-        // Fallback: sum opening_balance of every PY-TB ledger mapped to BS_EQ_RS
+        chosen = Math.round(priorRS.surplus_opening_cy * 100) / 100;
+      }
+
+      // (2) prior TB opening_balance for BS_EQ_RS ledgers
+      if (chosen == null && pyTB && pyTB.length > 0) {
         let total = 0;
         for (const row of pyTB) {
           if (mapping[row.account_name]?.code !== "BS_EQ_RS") continue;
           total += Number(row.opening_balance ?? 0);
         }
-        // bs_liab is Cr-normal → flip sign so positive = liability magnitude
         const abs = Math.abs(Math.round(total * 100) / 100);
-        if (abs > 0.005) outRS.surplus_opening_py = abs;
+        if (abs > 0.005) chosen = abs;
       }
+
+      // (3) back-out from prior fa_financial_statements: PY_open ≈ PY_close − PY_profit
+      if (chosen == null && pyFs["BS_EQ_RS"]) {
+        const pyClose = Math.abs(pyFs["BS_EQ_RS"]);
+        // Approximate prior-year P&L from pyTB if we have it.
+        let pyProfit = 0;
+        if (pyTB && pyTB.length > 0) {
+          let r = 0, e = 0;
+          for (const l of pyTB) {
+            const code = mapping[l.account_name]?.code ?? "";
+            if (code.startsWith("PL_REV")) r += l.balance;
+            if (code.startsWith("PL_EXP")) e += l.balance;
+          }
+          pyProfit = -r - e;
+        }
+        const open = pyClose - Math.abs(pyProfit);
+        if (Math.abs(open) > 0.005) chosen = Math.round(open * 100) / 100;
+      }
+
+      // (4) last resort — current TB opening_balance for BS_EQ_RS ledgers
+      if (chosen == null) {
+        let total = 0;
+        for (const row of tb) {
+          if (mapping[row.account_name]?.code !== "BS_EQ_RS") continue;
+          total += Number(row.opening_balance ?? 0);
+        }
+        const abs = Math.abs(Math.round(total * 100) / 100);
+        if (abs > 0.005) chosen = abs;
+      }
+
+      if (chosen != null) outRS.surplus_opening_py = chosen;
     }
 
     // ── (c) Adjustments for deferred tax / Excess provision (CY & PY) ───────
