@@ -15,6 +15,7 @@ import { Separator } from "@/components/ui/separator";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
@@ -1047,10 +1048,15 @@ const NewInvoice = () => {
           {/* Client */}
           <div>
             <Label className="text-xs font-semibold text-muted-foreground uppercase mb-2 block">Bill To (Client)</Label>
-            <Select value={clientId} onValueChange={setClientId} disabled={isLocked}>
-              <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
-              <SelectContent>{clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name} ({c.pan})</SelectItem>)}</SelectContent>
-            </Select>
+            <SearchableSelect
+              options={clients.map(c => ({ value: c.id, label: `${c.name} (${c.pan})` }))}
+              value={clientId}
+              onValueChange={setClientId}
+              placeholder="Select client"
+              searchPlaceholder="Search client..."
+              disabled={isLocked}
+              className="w-full"
+            />
             {/* Multi-GSTIN Picker — shown only when client has 2+ GSTINs */}
             {clientId && clientGstins.length > 1 && (
               <div className="mt-2">
