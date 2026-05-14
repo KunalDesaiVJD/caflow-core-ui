@@ -1715,16 +1715,28 @@ export async function autoPopulateNotes(
     const gapCy = Math.round((bsCy - subCy) * 100) / 100;
     const gapPy = Math.round((bsPy - subPy) * 100) / 100;
 
-    // Only plug if the auditor hasn't manually entered an excess-short value.
-    const manualEdits: string[] = Array.isArray(options.existing?.manual_edits)
-      ? (options.existing!.manual_edits as string[])
-      : [];
-    const cyManual = manualEdits.includes("bs_liab.reserves_surplus.surplus_excess_short_cy");
-    const pyManual = manualEdits.includes("bs_liab.reserves_surplus.surplus_excess_short_py");
-
-    if (!cyManual && Math.abs(gapCy) > 0.005) rs.surplus_excess_short_cy = excCy0 + gapCy;
-    if (!pyManual && Math.abs(gapPy) > 0.005) rs.surplus_excess_short_py = excPy0 + gapPy;
+    // ALWAYS enforce reconciliation by writing the residual to excess_short.
+    // This row is, by accounting definition, the balancing plug for any
+    // post-NPAT adjustment routed through Surplus that wasn't captured
+    // by the deferred-tax journal scan. The auditor's custom adjustments
+    // should go into surplus_deferred_adj_cy/py (where manual override is
+    // honoured) — NEVER into excess_short, which is auto-derived.
+    //
+    // Strip the excess_short paths from manual_edits so the post-call
+    // respectManualEdits() doesn't restore a stale buggy value from a
+    // previous run. This is one-way: future re-syncs always recompute.
+    rs.surplus_excess_short_cy = Math.round((excCy0 + gapCy) * 100) / 100;
+    rs.surplus_excess_short_py = Math.round((excPy0 + gapPy) * 100) / 100;
     out.bs_liab.reserves_surplus = rs;
+
+    // Strip these paths from the existing manual_edits so respectManualEdits
+    // can't put the stale value back. autoPopulate is the source of truth.
+    if (options.existing && Array.isArray(options.existing.manual_edits)) {
+      options.existing.manual_edits = options.existing.manual_edits.filter(p =>
+        p !== "bs_liab.reserves_surplus.surplus_excess_short_cy" &&
+        p !== "bs_liab.reserves_surplus.surplus_excess_short_py"
+      );
+    }
   } catch { /* non-fatal */ }
 
   // Respect user-touched paths from the existing notes (if provided).
