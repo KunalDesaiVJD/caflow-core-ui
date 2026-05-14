@@ -79,8 +79,26 @@ export function useClients(
         ((engRows as any[]) || []).map(e => e.client_id as string).filter(Boolean)
       );
 
+      // ── Source C: clients with "Audit" classification in client_fy_classifications
+      // When the user changes a client's classification FY (e.g. 2026-27 → 2025-26),
+      // the handler upserts a client_fy_classifications row for the new FY. Without
+      // this source those clients are invisible in FY-scoped dropdowns (Audit Status,
+      // Planning Calendar) until an engagement is manually created for them.
+      let clsQ: any = (supabase as any)
+        .from("client_fy_classifications")
+        .select("client_id, classification, firm_id");
+      if (financialYear) clsQ = clsQ.eq("financial_year", financialYear);
+      if (!isSuperadmin && firmId) clsQ = clsQ.eq("firm_id", firmId);
+      const { data: clsRows } = await clsQ;
+      const clsClientIds = new Set<string>(
+        ((clsRows as any[]) || [])
+          .filter(r => (r.classification || "").toLowerCase().includes("audit"))
+          .map(r => r.client_id as string)
+          .filter(Boolean)
+      );
+
       // ── Union & fetch the actual client rows
-      const clientIds = [...new Set([...setupClientIds, ...engClientIds])];
+      const clientIds = [...new Set([...setupClientIds, ...engClientIds, ...clsClientIds])];
       if (clientIds.length === 0) {
         setClients([]);
         setLoading(false);

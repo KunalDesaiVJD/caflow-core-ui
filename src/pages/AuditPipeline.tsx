@@ -677,6 +677,10 @@ export default function AuditPipeline() {
     mutationFn: async () => {
       const effectiveFirmId = user?.firm_id || "be411601-f0f5-4f74-b93d-b87a8ef1b82b";
 
+      // ── Required-field guard ────────────────────────────────────────────
+      if (!form1A.audit_type) throw new Error("Please select an Audit Type.");
+      if (!form1A.financial_year) throw new Error("Please select a Financial Year.");
+
       // ── FY-aware classification gate ────────────────────────────────────
       // The client's classification IN THE ENGAGEMENT'S FY must be "Audit".
       // Past engagements remain valid because history is consulted by FY —
@@ -1783,7 +1787,7 @@ export default function AuditPipeline() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowNewEng(false)}>Cancel</Button>
-            <Button onClick={() => createEngagement.mutate()} disabled={!form1A.client_id || !form1A.audit_firm_id}>Create</Button>
+            <Button onClick={() => createEngagement.mutate()} disabled={!form1A.client_id || !form1A.audit_firm_id || !form1A.audit_type || !form1A.financial_year}>Create</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
