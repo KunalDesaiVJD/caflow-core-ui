@@ -3181,6 +3181,60 @@ export default function PipelineFinancialStatements({
   const corpBsBalanced    = Math.abs(bsDiff) < 2;
   const activeBsDiff      = isNonCorporate ? nceBsDiff      : bsDiff;
   const activeBsBalanced  = isNonCorporate ? nceBsBalanced  : corpBsBalanced;
+
+  // ─── PY balance sheet check + FA Previous-Year entry gate ────────────────
+  // Export Excel must be blocked until BOTH:
+  //   (1) CY *and* PY Balance Sheet reconcile (Total E&L = Total Assets)
+  //   (2) The FA note has Previous-Year data entered (either pyRows
+  //       auto-filled from a prior engagement OR the auditor has manually
+  //       typed any value into fa.py_manual on the "Total — Previous year"
+  //       row of the FA grid).
+  // Without these gates, the exported Excel ships with mismatched BS totals
+  // or a blank PPE PY column — both of which break the FS file the auditor
+  // sends to the client. This rule applies to every corporate engagement.
+  const bsDiffPy: number = corpBsData
+    ? Math.round((
+        ((corpBsData.ppe.py || 0) + (corpBsData.ncInvestments.py || 0) + (corpBsData.dtAssets.py || 0)
+         + (corpBsData.ltLoans.py || 0) + (corpBsData.otherNcAssets.py || 0)
+         + (corpBsData.currInvestments.py || 0) + (corpBsData.inventories.py || 0) + (corpBsData.tradeRec.py || 0)
+         + (corpBsData.cashBank.py || 0) + (corpBsData.stLoans.py || 0) + (corpBsData.otherCurrAssets.py || 0))
+        - (-(corpBsData.shareCap.py || 0) - (corpBsData.reserves.py || 0)
+           - (corpBsData.ltBorrowings.py || 0) - (corpBsData.dtLiab.py || 0)
+           - (corpBsData.otherLtLiab.py || 0) - (corpBsData.ltProvisions.py || 0)
+           - (corpBsData.stBorrowings.py || 0)
+           - (corpBsData.tradePayMSME.py || 0) - (corpBsData.tradePayOthers.py || 0)
+           - (corpBsData.otherCurrLiab.py || 0) - (corpBsData.stProvisions.py || 0))
+      ) * 100) / 100
+    : 0;
+  const corpBsBalancedPy: boolean = Math.abs(bsDiffPy) < 2;
+
+  // FA PY check — any of (a) auto-filled pyRows from prior engagement,
+  // (b) any manual override on the "Total — Previous year" row in
+  // fa.py_manual, OR (c) any FA row with gross_open / depn_open > 0
+  // (treated as PY closing carried into CY).
+  const faPyEntered: boolean = (() => {
+    const fa = (stage5NotesData as any)?.fa;
+    if (!fa) return false;
+    const pyManual = fa.py_manual && typeof fa.py_manual === "object" ? fa.py_manual : {};
+    if (Object.values(pyManual).some(v => typeof v === "number" && Number.isFinite(v) && Math.abs(v) > 0.005)) return true;
+    const rows: any[] = Array.isArray(fa.rows) ? fa.rows : [];
+    if (rows.some(r => (Number(r?.gross_open) || 0) > 0 || (Number(r?.depn_open) || 0) > 0)) return true;
+    return false;
+  })();
+
+  // Final Export Excel gate: corporate must satisfy ALL three; non-corporate
+  // entities use only the BS-balance subset (NCE has no FA note grid).
+  const exportExcelBlocked: boolean = isNonCorporate
+    ? !nceBsBalanced
+    : (!corpBsBalanced || !corpBsBalancedPy || !faPyEntered);
+  const exportExcelBlockReasons: string[] = [];
+  if (!isNonCorporate) {
+    if (!corpBsBalanced)   exportExcelBlockReasons.push(`CY Balance Sheet out by ₹${Math.abs(bsDiff).toLocaleString("en-IN")}`);
+    if (!corpBsBalancedPy) exportExcelBlockReasons.push(`PY Balance Sheet out by ₹${Math.abs(bsDiffPy).toLocaleString("en-IN")}`);
+    if (!faPyEntered)      exportExcelBlockReasons.push("FA Note — Previous-Year totals not entered");
+  } else if (!nceBsBalanced) {
+    exportExcelBlockReasons.push(`Balance Sheet out by ₹${Math.abs(nceBsDiff).toLocaleString("en-IN")}`);
+  }
   const activeTotalAssets      = isNonCorporate ? nceTotalAssets      : totalAssets;
   // Use fsDisplayData-resolved totalELDisplay (same as bsDiff) so stat card
   // matches the "TOTAL EQUITY AND LIABILITIES" row shown on the BS face.
@@ -5849,7 +5903,18 @@ export default function PipelineFinancialStatements({
           >
             <RefreshCw size={14} /> Refresh
           </Button>
-          <Button variant="outline" size="sm" onClick={exportToExcel} className="gap-1">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={exportToExcel}
+            disabled={exportExcelBlocked}
+            className="gap-1"
+            title={
+              exportExcelBlocked
+                ? "Export Excel is blocked until:\n• " + exportExcelBlockReasons.join("\n• ")
+                : "Export the full Financial Statements workbook to .xlsx"
+            }
+          >
             <Download size={14} /> Export Excel
           </Button>
           <Button variant="outline" size="sm" onClick={saveFS} disabled={saving} className="gap-1">
