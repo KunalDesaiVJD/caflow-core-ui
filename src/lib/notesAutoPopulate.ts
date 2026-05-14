@@ -1081,8 +1081,13 @@ async function sumJournalVoucherImpact(
       if (error || !data || data.length === 0) break;
       for (const v of data as any[]) {
         const items = Array.isArray(v.line_items) ? v.line_items : [];
-        if (items.length < 2) continue;
-        // Must hit the R&S/Surplus ledger
+        // CRITICAL: only TWO-LINE contra journals (Surplus ↔ <adjustment>).
+        // The year-end profit-transfer journal has every P&L sub-ledger as
+        // a line (e.g. 50+ entries including Deferred Tax expense) — it is
+        // NOT an "adjustment" and must be skipped. Any post-NPAT adjustment
+        // routed THROUGH Surplus is, by accounting convention, a 2-line
+        // contra: Surplus Dr/Cr ↔ <Provision / Deferred Tax> Cr/Dr.
+        if (items.length !== 2) continue;
         let surplusLine: any = null;
         let contraLine:  any = null;
         for (const li of items) {
