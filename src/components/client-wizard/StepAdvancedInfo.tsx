@@ -149,7 +149,7 @@ interface Props {
   /** Optional refetch hook called after a successful classification commit.
    *  Receives the new classification value so the parent can update its
    *  savedClassification snapshot without relying on a stale closure. */
-  onClassificationSaved?: (newClassification: string) => void;
+  onClassificationSaved?: (newClassification: string, effectiveFromFY: string) => void;
 }
 
 export const StepAdvancedInfo = ({
@@ -202,7 +202,11 @@ export const StepAdvancedInfo = ({
    *  Used both in new-client mode (no DB write yet — wizard persists on Save)
    *  and after a successful DB commit in edit mode. */
   const stashClassificationLocally = (newValue: string) => {
-    const updates: Partial<AdvancedInfoData> = { classification: newValue };
+    const updates: Partial<AdvancedInfoData> = {
+      classification: newValue,
+      // Sync the Classification Financial Year dropdown to match the effective FY the user just set
+      financial_year: effectiveFromFY || data.financial_year,
+    };
     if (newValue !== "Audit") updates.audit_firm_id = "";
     if (newValue !== "Non-Audit" && newValue !== "Partner in Audited Firm") {
       updates.responsible_person_id = "";
@@ -389,7 +393,7 @@ export const StepAdvancedInfo = ({
         title: "Classification updated",
         description: `Changed to ${pendingClassification} from FY ${effectiveFromFY}.`,
       });
-      onClassificationSaved?.(pendingClassification);
+      onClassificationSaved?.(pendingClassification, effectiveFromFY);
       setPendingClassification(null);
     } catch (err: any) {
       toast({

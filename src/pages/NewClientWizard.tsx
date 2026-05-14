@@ -1255,10 +1255,16 @@ const NewClientWizard = () => {
               savedClassification={isEditMode ? savedClassification : undefined}
               clientId={isEditMode ? clientId : undefined}
               clientCreationFY={clientCreationFY}
-              onClassificationSaved={(newClassification) => {
+              onClassificationSaved={(newClassification, newFY) => {
                 // Use the value passed directly — advancedInfo.classification
                 // is stale here because React hasn't re-rendered yet.
                 setSavedClassification(newClassification);
+                // Update URL ?fy= so a page reload loads the correct FY row
+                if (newFY && newFY !== searchParams.get("fy")) {
+                  const next = new URLSearchParams(searchParams);
+                  next.set("fy", newFY);
+                  setSearchParams(next, { replace: true });
+                }
               }}
             />
           )}
