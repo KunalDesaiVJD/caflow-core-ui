@@ -5906,9 +5906,22 @@ export default function PipelineFinancialStatements({
           <Button
             variant="outline"
             size="sm"
-            onClick={exportToExcel}
-            disabled={exportExcelBlocked}
-            className="gap-1"
+            onClick={() => {
+              if (exportExcelBlocked) {
+                // Surface the validation failure as a blocking toast so the
+                // auditor sees WHY the export can't run without having to
+                // hover the button. The list of reasons is built upstream
+                // and shown one per line via toast.error's description.
+                toast.error("Cannot export Excel yet", {
+                  description: exportExcelBlockReasons.map(r => `• ${r}`).join("\n"),
+                  duration: 8000,
+                  style: { whiteSpace: "pre-line" },
+                });
+                return;
+              }
+              exportToExcel();
+            }}
+            className={cn("gap-1", exportExcelBlocked && "opacity-60 hover:bg-destructive/10 hover:text-destructive")}
             title={
               exportExcelBlocked
                 ? "Export Excel is blocked until:\n• " + exportExcelBlockReasons.join("\n• ")
