@@ -2433,9 +2433,9 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           )}
 
           <div className="flex gap-2 mb-3 flex-wrap items-center">
-            <Button variant="outline" size="sm" onClick={runAutoMapping} className="gap-1">
-              <RefreshCw size={12} /> Auto-Map All
-            </Button>
+            {/* Auto-Map All removed per user request — AI Map Remaining is
+                the canonical mapping action. Naïve keyword auto-map was
+                producing too many false matches that auditors had to undo. */}
             <Button size="sm" onClick={runAiMapping} disabled={aiRunning} className="gap-1 bg-violet-600 hover:bg-violet-700 text-white">
               {aiRunning ? <Loader2 size={12} className="animate-spin" /> : <Link2 size={12} />}
               {aiRunning ? "AI Mapping…" : "AI Map Remaining"}

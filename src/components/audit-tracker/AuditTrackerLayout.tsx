@@ -5,11 +5,13 @@
  *  Tab 2 "Audit Status"             — AY-filtered editable grid
  *                                     (auto-populates from audit_engagements)
  */
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { CalendarDays, TableProperties, Maximize2, Minimize2 } from "lucide-react";
+import { CalendarDays, TableProperties, Maximize2, Minimize2, FileText, FileSpreadsheet } from "lucide-react";
+import { exportToPdf, exportToExcel } from "@/lib/exportUtils";
+import { toast } from "sonner";
 
 import { useAuditPlanning }   from "./hooks/useAuditPlanning";
 import { useClients }          from "./hooks/useClients";
@@ -50,6 +52,95 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
   const [commMaximized, setCommMaximized] = useState(false);
   const [calMaximized,  setCalMaximized]  = useState(false);
 
+  // ── Export refs (PDF captures DOM; Excel pulls structured data) ────────────
+  const calRef    = useRef<HTMLDivElement>(null);
+  const commRef   = useRef<HTMLDivElement>(null);
+  const statusRef = useRef<HTMLDivElement>(null);
+
+  // ── Helpers: export entries / comms to Excel + PDF ─────────────────────────
+  const stamp = () => new Date().toISOString().split("T")[0];
+
+  const exportCalendarPdf = async () => {
+    if (!calRef.current) return;
+    try { await exportToPdf(calRef.current, `Planning_Calendar_${stamp()}.pdf`); toast.success("Calendar exported as PDF"); }
+    catch (e) { toast.error(`PDF export failed: ${(e as Error).message}`); }
+  };
+  const exportCalendarXlsx = () => {
+    try {
+      const userMap = new Map(users.map(u => [u.id, u.full_name || u.email || "—"] as const));
+      const clientMap = new Map(clients.map(c => [c.id, c.name] as const));
+      const rows = entries.map(e => ({
+        Date:        e.assignment_date ?? "",
+        Employee:    userMap.get(e.assignee_user_id) ?? "—",
+        Client:      e.client_id ? (clientMap.get(e.client_id) ?? "—") : (e.label || "—"),
+        Type:        e.type || "",
+        "Financial Year": e.financial_year || "",
+        Status:      (e as any).status || "",
+        Notes:       (e as any).notes || "",
+      }));
+      exportToExcel([{ sheetName: "Planning Calendar", rows }], `Planning_Calendar_${stamp()}.xlsx`);
+      toast.success("Calendar exported as Excel");
+    } catch (e) { toast.error(`Excel export failed: ${(e as Error).message}`); }
+  };
+
+  const exportCommPdf = async () => {
+    if (!commRef.current) return;
+    try { await exportToPdf(commRef.current, `Communication_Log_${stamp()}.pdf`); toast.success("Communication Log exported as PDF"); }
+    catch (e) { toast.error(`PDF export failed: ${(e as Error).message}`); }
+  };
+  const exportCommXlsx = () => {
+    try {
+      const clientMap = new Map(clients.map(c => [c.id, c.name] as const));
+      const rows = (comms || []).map((c: any) => ({
+        Date:    c.comm_date || c.date || "",
+        Client:  c.client_id ? (clientMap.get(c.client_id) ?? "—") : "—",
+        Channel: c.channel || c.type || "",
+        Subject: c.subject || "",
+        Summary: c.summary || c.notes || "",
+        Status:  c.status || "",
+      }));
+      exportToExcel([{ sheetName: "Communication Log", rows }], `Communication_Log_${stamp()}.xlsx`);
+      toast.success("Communication Log exported as Excel");
+    } catch (e) { toast.error(`Excel export failed: ${(e as Error).message}`); }
+  };
+
+  const exportStatusPdf = async () => {
+    if (!statusRef.current) return;
+    try { await exportToPdf(statusRef.current, `Audit_Status_${selectedFY}_${stamp()}.pdf`); toast.success("Audit Status exported as PDF"); }
+    catch (e) { toast.error(`PDF export failed: ${(e as Error).message}`); }
+  };
+  const exportStatusXlsx = () => {
+    // Extract data from the rendered <table> inside the Audit Status grid.
+    if (!statusRef.current) return;
+    try {
+      const tbl = statusRef.current.querySelector("table");
+      if (!tbl) { toast.error("Audit Status grid not yet rendered"); return; }
+      const headers = [...tbl.querySelectorAll("thead th")].map(th => (th.textContent || "").trim());
+      const rows = [...tbl.querySelectorAll("tbody tr")].map(tr => {
+        const cells = [...tr.querySelectorAll("td")].map(td => {
+          const input = td.querySelector<HTMLInputElement | HTMLTextAreaElement>("input,textarea,select");
+          return ((input?.value ?? td.textContent) || "").trim();
+        });
+        const row: Record<string, string> = {};
+        cells.forEach((v, i) => { row[headers[i] || `Col${i + 1}`] = v; });
+        return row;
+      });
+      exportToExcel([{ sheetName: `Audit Status FY${selectedFY}`, rows }], `Audit_Status_${selectedFY}_${stamp()}.xlsx`);
+      toast.success("Audit Status exported as Excel");
+    } catch (e) { toast.error(`Excel export failed: ${(e as Error).message}`); }
+  };
+
+  const ExportButtons = ({ onPdf, onXlsx }: { onPdf: () => void; onXlsx: () => void }) => (
+    <div className="flex items-center gap-1">
+      <Button variant="ghost" size="sm" className="h-6 px-2 gap-1 text-[10px]" onClick={onXlsx} title="Export to Excel">
+        <FileSpreadsheet size={11} /> Excel
+      </Button>
+      <Button variant="ghost" size="sm" className="h-6 px-2 gap-1 text-[10px]" onClick={onPdf} title="Export to PDF">
+        <FileText size={11} /> PDF
+      </Button>
+    </div>
+  );
+
   // ── Audit Status: FY selector ──────────────────────────────────────────────
   const [selectedFY, setSelectedFY] = useState(DEFAULT_FY);
 
@@ -79,20 +170,23 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
 
   // Planning Calendar card — rendered either inline or as a fullscreen overlay
   const planningCalendarCard = (
-    <div className={calMaximized
+    <div ref={calRef} className={calMaximized
       ? "fixed inset-0 z-50 bg-background flex flex-col"
       : "rounded-lg border bg-card shadow-sm overflow-hidden"
     }>
       <div className="flex items-center justify-between px-3 py-2 border-b bg-muted/30 shrink-0">
         <span className="text-xs font-semibold tracking-wide">Planning Calendar</span>
-        <Button
-          variant="ghost" size="sm"
-          className="h-6 w-6 p-0"
-          title={calMaximized ? "Restore" : "Maximize (fit to screen)"}
-          onClick={() => setCalMaximized(v => !v)}
-        >
-          {calMaximized ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
-        </Button>
+        <div className="flex items-center gap-1">
+          <ExportButtons onPdf={exportCalendarPdf} onXlsx={exportCalendarXlsx} />
+          <Button
+            variant="ghost" size="sm"
+            className="h-6 w-6 p-0"
+            title={calMaximized ? "Restore" : "Maximize (fit to screen)"}
+            onClick={() => setCalMaximized(v => !v)}
+          >
+            {calMaximized ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+          </Button>
+        </div>
       </div>
       <div className={calMaximized ? "flex-1 min-h-0 overflow-hidden p-2" : ""}>
         <PlanningCalendar
@@ -134,17 +228,20 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
 
           {/* Communication Log — AFTER Planning Calendar */}
           {!calMaximized && (
-            <div className="rounded-lg border bg-card shadow-sm overflow-hidden">
+            <div ref={commRef} className="rounded-lg border bg-card shadow-sm overflow-hidden">
               <div className="flex items-center justify-between px-3 py-2 border-b bg-muted/30">
                 <span className="text-xs font-semibold tracking-wide">Communication Log</span>
-                <Button
-                  variant="ghost" size="sm"
-                  className="h-6 w-6 p-0"
-                  title={commMaximized ? "Restore" : "Maximize"}
-                  onClick={() => setCommMaximized(v => !v)}
-                >
-                  {commMaximized ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
-                </Button>
+                <div className="flex items-center gap-1">
+                  <ExportButtons onPdf={exportCommPdf} onXlsx={exportCommXlsx} />
+                  <Button
+                    variant="ghost" size="sm"
+                    className="h-6 w-6 p-0"
+                    title={commMaximized ? "Restore" : "Maximize"}
+                    onClick={() => setCommMaximized(v => !v)}
+                  >
+                    {commMaximized ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+                  </Button>
+                </div>
               </div>
               <div className={commMaximized ? "max-h-[calc(100vh-180px)] overflow-y-auto" : ""}>
                 <CommunicationTable
@@ -212,7 +309,13 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
             )}
           </div>
 
-          {/* ── Audit Status grid ── */}
+          {/* ── Export bar for Audit Status ── */}
+          <div className="flex items-center justify-end gap-1 px-1">
+            <ExportButtons onPdf={exportStatusPdf} onXlsx={exportStatusXlsx} />
+          </div>
+
+          {/* ── Audit Status grid (wrapped for export) ── */}
+          <div ref={statusRef}>
           <AuditStatusGrid
             firmId={firmId}
             clients={clients}
@@ -223,6 +326,7 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
             clientIdFilter={selectedClientId}
             selectedFY={selectedFY}
           />
+          </div>
 
         </TabsContent>
       </Tabs>
