@@ -172,7 +172,7 @@ export default function ReceiptsTab() {
 
   const filtered = useMemo(() => receipts.filter(r => {
     if (clientFilter !== "all" && r.client_id !== clientFilter) return false;
-    if (modeFilter !== "all" && r.payment_mode !== modeFilter) return false;
+    if (modeFilter !== "all" && r.payment_mode !== modeFilter.toLowerCase()) return false;
     if (groupFilter !== "all" && !groupClientIds.includes(r.client_id)) return false;
     if (responsibleFilter !== "all" && !responsibleClientIds.includes(r.client_id)) return false;
     return true;
@@ -235,7 +235,7 @@ export default function ReceiptsTab() {
         receipt_type: receiptType,
         receipt_date: dateStr,
         amount_received: amt,
-        payment_mode: paymentMode,
+        payment_mode: paymentMode.toLowerCase(),
         payment_reference: paymentReference || null,
         tds_amount: tds || null,
         gst_tds_amount: gstTds || null,

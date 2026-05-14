@@ -220,6 +220,17 @@ function ClientLedgerView() {
   const [emailMsg,     setEmailMsg]     = useState("");
   const [emailSending, setEmailSending] = useState(false);
 
+  // ── Opening balance state ─────────────────────────────────────────────
+  const [obAmount, setObAmount] = useState<number>(0);
+  const [obDate, setObDate] = useState<string>("");
+  const [obNarration, setObNarration] = useState<string>("");
+  const [obId, setObId] = useState<string | null>(null);
+  const [obDialogOpen, setObDialogOpen] = useState(false);
+  const [obDraftAmount, setObDraftAmount] = useState<string>("");
+  const [obDraftDate, setObDraftDate] = useState<string>("");
+  const [obDraftNarration, setObDraftNarration] = useState<string>("");
+  const [obSaving, setObSaving] = useState(false);
+
   const selectedClientEmails = useMemo(() => {
     const c = clients.find(x => x.id === clientId);
     if (!c) return [];
@@ -260,6 +271,24 @@ function ClientLedgerView() {
       }
 
       setEntries(entries);
+
+      // Fetch opening balance
+      if (clientId) {
+        let obQ = (supabase as any)
+          .from("client_billing_opening_balances")
+          .select("*")
+          .eq("client_id", clientId);
+        if (firmId && firmId !== "all") obQ = obQ.eq("firm_id", firmId);
+        const { data: obData } = await obQ.maybeSingle();
+        if (obData) {
+          setObAmount(Number(obData.amount) || 0);
+          setObDate(obData.balance_date || "");
+          setObNarration(obData.narration || "");
+          setObId(obData.id);
+        } else {
+          setObAmount(0); setObDate(""); setObNarration(""); setObId(null);
+        }
+      }
     } catch (err: any) {
       toast({ title: "Error loading ledger", description: err.message, variant: "destructive" });
     }
@@ -269,7 +298,7 @@ function ClientLedgerView() {
   useEffect(() => { loadEntries(); }, [loadEntries]);
 
   const rows = useMemo(() => {
-    let balance = 0;
+    let balance = obAmount;
     return entries.map(e => {
       const debit = Number(e.debit_amount) || 0;
       const credit = Number(e.credit_amount) || 0;
@@ -290,13 +319,43 @@ function ClientLedgerView() {
       const firmName = firms.find(f => f.id === e.firm_id)?.name || "";
       return { ...e, debit, credit, balance, docNo, narration, firmName };
     });
-  }, [entries, invoiceMap, firms]);
+  }, [entries, invoiceMap, firms, obAmount]);
 
   const totalDebit = rows.reduce((s, r) => s + r.debit, 0);
   const totalCredit = rows.reduce((s, r) => s + r.credit, 0);
-  const closingBalance = totalDebit - totalCredit;
+  const closingBalance = obAmount + totalDebit - totalCredit;
 
   const clientName = clients.find(c => c.id === clientId)?.name || "";
+
+  const handleSaveOpeningBalance = async () => {
+    if (!clientId) return;
+    const resolvedFirmId = firmId && firmId !== "all" ? firmId : user?.firm_id;
+    if (!resolvedFirmId) { toast({ title: "Select a firm first", variant: "destructive" }); return; }
+    if (!obDraftDate) { toast({ title: "Balance date is required", variant: "destructive" }); return; }
+    setObSaving(true);
+    try {
+      const payload = {
+        firm_id: resolvedFirmId,
+        client_id: clientId,
+        balance_date: obDraftDate,
+        amount: Number(obDraftAmount) || 0,
+        narration: obDraftNarration.trim() || null,
+        created_by: user?.id,
+        updated_at: new Date().toISOString(),
+      };
+      if (obId) {
+        await (supabase as any).from("client_billing_opening_balances").update(payload).eq("id", obId);
+      } else {
+        await (supabase as any).from("client_billing_opening_balances").insert(payload);
+      }
+      toast({ title: "Opening balance saved" });
+      setObDialogOpen(false);
+      loadEntries();
+    } catch (err: any) {
+      toast({ title: "Error saving opening balance", description: err.message, variant: "destructive" });
+    }
+    setObSaving(false);
+  };
 
   const handleDownloadXlsx = () => {
     const cName = clients.find(c => c.id === clientId)?.name || "Client";
@@ -614,6 +673,34 @@ function ClientLedgerView() {
         </div>
       </div>
 
+      {/* Opening Balance Info Bar */}
+      {clientId && (
+        <div className="flex items-center gap-3 text-sm bg-muted/40 rounded-md px-3 py-2">
+          <span className="text-muted-foreground font-medium">Opening Balance:</span>
+          {obDate ? (
+            <>
+              <span className={`font-semibold tabular-nums ${obAmount >= 0 ? "text-orange-600" : "text-green-600"}`}>
+                {obAmount >= 0 ? fmtINR(obAmount) + " Dr" : fmtINR(Math.abs(obAmount)) + " Cr"}
+              </span>
+              <span className="text-muted-foreground text-xs">as of {format(new Date(obDate), "dd/MM/yyyy")}</span>
+              {obNarration && <span className="text-muted-foreground text-xs">· {obNarration}</span>}
+            </>
+          ) : (
+            <span className="text-muted-foreground italic text-xs">Not set</span>
+          )}
+          <Button variant="outline" size="sm" className="h-6 text-xs px-2 ml-auto"
+            onClick={() => {
+              setObDraftAmount(String(obAmount || ""));
+              setObDraftDate(obDate || "");
+              setObDraftNarration(obNarration || "");
+              setObDialogOpen(true);
+            }}
+          >
+            {obId ? "Edit" : "Set"} Opening Balance
+          </Button>
+        </div>
+      )}
+
       {!clientId ? (
         <Card><CardContent className="py-12 text-center text-muted-foreground">
           <BookOpen size={36} className="mx-auto mb-2 opacity-40" />
@@ -636,7 +723,27 @@ function ClientLedgerView() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.length === 0 ? (
+                {obDate && clientId && (
+                  <TableRow className="bg-blue-50/50">
+                    <TableCell className="text-xs text-muted-foreground">
+                      {format(new Date(obDate), "dd/MM/yyyy")}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">—</TableCell>
+                    <TableCell className="text-xs text-muted-foreground italic">
+                      Opening Balance{obNarration ? ` — ${obNarration}` : ""}
+                    </TableCell>
+                    <TableCell className="text-right text-xs tabular-nums font-semibold">
+                      {obAmount > 0 ? fmtINR(obAmount) : "—"}
+                    </TableCell>
+                    <TableCell className="text-right text-xs tabular-nums font-semibold">
+                      {obAmount < 0 ? fmtINR(Math.abs(obAmount)) : "—"}
+                    </TableCell>
+                    <TableCell className="text-right text-xs tabular-nums font-semibold text-primary">
+                      {fmtINR(obAmount)}
+                    </TableCell>
+                  </TableRow>
+                )}
+                {rows.length === 0 && !obDate ? (
                   <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-8">No entries found</TableCell></TableRow>
                 ) : rows.map((r, i) => (
                   <TableRow key={r.id || i}>
@@ -799,6 +906,35 @@ function ClientLedgerView() {
                 ? <><span className="animate-spin mr-1">⏳</span> Sending…</>
                 : <><Mail size={14} /> Send Email</>
               }
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Opening Balance Dialog */}
+      <Dialog open={obDialogOpen} onOpenChange={setObDialogOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Opening Balance</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1">
+              <Label className="text-xs">Balance As Of Date *</Label>
+              <Input type="date" value={obDraftDate} onChange={e => setObDraftDate(e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Amount (₹) — positive = Dr (client owes you), negative = Cr (advance paid)</Label>
+              <Input type="number" value={obDraftAmount} onChange={e => setObDraftAmount(e.target.value)} placeholder="e.g. 50000 or -10000" step="0.01" />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Narration (optional)</Label>
+              <Input value={obDraftNarration} onChange={e => setObDraftNarration(e.target.value)} placeholder="e.g. Balance b/f from previous year" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setObDialogOpen(false)} disabled={obSaving}>Cancel</Button>
+            <Button onClick={handleSaveOpeningBalance} disabled={obSaving}>
+              {obSaving ? "Saving..." : "Save"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -815,10 +815,15 @@ const NewInvoice = () => {
         // ─────────────────────────────────────────────────────────────────────
       }
 
-      // Auto-insert ledger entry when finalizing
+      // Auto-insert/update ledger entry when finalizing
       if (effectiveStatus === "finalized" && savedId && clientId && selectedFirmId) {
         const entryType = docType === "credit_note" ? "credit_note" : "invoice";
         const isCredit = docType === "credit_note";
+        // Remove stale ledger row if invoice was edited and re-finalized
+        await supabase.from("client_ledger_entries")
+          .delete()
+          .eq("document_id", savedId)
+          .in("entry_type", ["invoice", "credit_note"]);
         await supabase.from("client_ledger_entries").insert({
           firm_id: selectedFirmId,
           client_id: clientId,
