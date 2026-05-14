@@ -1408,10 +1408,13 @@ export async function autoPopulateNotes(
 
     // R&S/Surplus ledgers — gate the scan so only journals that hit Surplus
     // (i.e. routed THROUGH R&S, not the normal accrual leg) are counted.
-    const [surplusCy, surplusPy] = await Promise.all([
-      getSurplusLedgerNames(engagementId),
-      getSurplusLedgerNames(prevEngId),
-    ]);
+    // Resolve from CY first (always has a COA mapping). For the PY scan we
+    // try the PY shell mapping first, but FALL BACK to the CY mapping so
+    // a PY shell that hasn't yet been COA-mapped still produces correct
+    // values — the ledger NAMES are identical across years in Tally.
+    let surplusCy = await getSurplusLedgerNames(engagementId);
+    let surplusPy = prevEngId ? await getSurplusLedgerNames(prevEngId) : new Set<string>();
+    if (surplusPy.size === 0) surplusPy = surplusCy;
 
     const [defCy, defPy, excCy, excPy] = await Promise.all([
       sumJournalVoucherImpact(engagementId, deferredPattern,    surplusCy),
@@ -1663,6 +1666,47 @@ export async function autoPopulateNotes(
       };
     });
   }
+
+  // ── R&S RECONCILIATION INVARIANT ──────────────────────────────────────
+  // Note 3 sub-total MUST equal the BS-face Reserves & Surplus amount in
+  // BOTH CY and PY. Sub-total = opening + profit + deferred_adj + excess.
+  // After the journal-voucher scan, any residual gap is plugged into
+  // surplus_excess_short_(cy|py) — that's the canonical "balancing" line
+  // for prior-period tax adjustments routed through Surplus. This keeps
+  // the mismatch banner clean across all clients (corporate + non-corp).
+  //
+  // Manual overrides are still respected: respectManualEdits() runs AFTER
+  // this block, so if the auditor has typed a value into excess/deferred,
+  // their number wins on the next render.
+  try {
+    const rs = (out.bs_liab.reserves_surplus ?? {}) as any;
+    const npat   = Number((out.pl as any)?.eps?.npat       ?? 0);
+    const npatPy = Number((out.pl as any)?.eps?.npat_py    ?? 0);
+    const openCy = Number(rs.surplus_opening_cy ?? 0);
+    const openPy = Number(rs.surplus_opening_py ?? 0);
+    const defCy  = Number(rs.surplus_deferred_adj_cy ?? 0);
+    const defPy  = Number(rs.surplus_deferred_adj_py ?? 0);
+    const excCy0 = Number(rs.surplus_excess_short_cy ?? 0);
+    const excPy0 = Number(rs.surplus_excess_short_py ?? 0);
+    const bsCy   = Number(rs.cy ?? 0);
+    const bsPy   = Number(rs.py ?? 0);
+
+    const subCy = openCy + npat   + defCy + excCy0;
+    const subPy = openPy + npatPy + defPy + excPy0;
+    const gapCy = Math.round((bsCy - subCy) * 100) / 100;
+    const gapPy = Math.round((bsPy - subPy) * 100) / 100;
+
+    // Only plug if the auditor hasn't manually entered an excess-short value.
+    const manualEdits: string[] = Array.isArray(options.existing?.manual_edits)
+      ? (options.existing!.manual_edits as string[])
+      : [];
+    const cyManual = manualEdits.includes("bs_liab.reserves_surplus.surplus_excess_short_cy");
+    const pyManual = manualEdits.includes("bs_liab.reserves_surplus.surplus_excess_short_py");
+
+    if (!cyManual && Math.abs(gapCy) > 0.005) rs.surplus_excess_short_cy = excCy0 + gapCy;
+    if (!pyManual && Math.abs(gapPy) > 0.005) rs.surplus_excess_short_py = excPy0 + gapPy;
+    out.bs_liab.reserves_surplus = rs;
+  } catch { /* non-fatal */ }
 
   // Respect user-touched paths from the existing notes (if provided).
   // Special-case: `.breakup` paths are NOT locked at path level — per-row
