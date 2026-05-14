@@ -66,11 +66,12 @@ interface Props {
   firmId: string | null;
   showAllFirms: boolean;
   canEdit: boolean;
+  search?: string;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function ClassificationByFYView({ firmId, showAllFirms, canEdit }: Props) {
+export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }: Props) {
   const navigate = useNavigate();
   const [selectedFY, setSelectedFY]     = useState<string>(getCurrentFY());
   const [activeTab, setActiveTab]       = useState<ClassificationKey>("Audit");
@@ -153,6 +154,14 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit }: Props)
 
   // ─── Render ─────────────────────────────────────────────────────────────────
 
+  const q = search?.trim().toLowerCase() ?? "";
+  const displayRows = q
+    ? rows.filter(r =>
+        (r.name ?? "").toLowerCase().includes(q) ||
+        (r.pan ?? "").toLowerCase().includes(q)
+      )
+    : rows;
+
   return (
     <div className="space-y-4">
 
@@ -216,15 +225,20 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit }: Props)
               <div className="py-10 text-center text-sm text-muted-foreground animate-pulse">
                 Loading {tab.label} clients for FY {selectedFY}…
               </div>
-            ) : rows.length === 0 ? (
+            ) : displayRows.length === 0 ? (
               <div className="py-14 text-center space-y-2">
                 <tab.icon className={`h-10 w-10 mx-auto opacity-30 ${tab.color}`} />
                 <p className="text-sm text-muted-foreground">
-                  No <strong>{tab.label}</strong> clients classified for FY {selectedFY}.
+                  {q
+                    ? <>No <strong>{tab.label}</strong> clients match "<strong>{search}</strong>".</>
+                    : <>No <strong>{tab.label}</strong> clients classified for FY {selectedFY}.</>
+                  }
                 </p>
-                <p className="text-xs text-muted-foreground">
-                  Set a client's classification in the Client Wizard → Advanced Info step.
-                </p>
+                {!q && (
+                  <p className="text-xs text-muted-foreground">
+                    Set a client's classification in the Client Wizard → Advanced Info step.
+                  </p>
+                )}
               </div>
             ) : (
               <div className="rounded-md border border-border overflow-auto">
@@ -239,7 +253,7 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit }: Props)
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {rows.map((row, idx) => (
+                    {displayRows.map((row, idx) => (
                       <TableRow
                         key={row.client_id}
                         className="cursor-pointer hover:bg-muted/50"

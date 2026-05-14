@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { format } from "date-fns";
-import { CalendarIcon, AlertTriangle } from "lucide-react";
+import { CalendarIcon, AlertTriangle, CalendarClock } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Input } from "@/components/ui/input";
@@ -459,6 +459,22 @@ export const StepAdvancedInfo = ({
               </SelectContent>
             </Select>
             {errors.classification && <p className="text-xs text-destructive">{errors.classification}</p>}
+            {/* Edit mode: allow backdating the effective FY without changing classification value */}
+            {clientId && savedClassification && data.classification === savedClassification && (
+              <button
+                type="button"
+                className="flex items-center gap-1 text-xs text-primary hover:underline mt-1"
+                onClick={() => {
+                  setEffectiveFromFY("");
+                  setPendingResponsiblePersonId(data.responsible_person_id || "");
+                  setChangeNotes("");
+                  setPendingClassification(data.classification);
+                }}
+              >
+                <CalendarClock className="h-3 w-3" />
+                Change applicable from FY
+              </button>
+            )}
           </div>
         </div>
 
@@ -614,7 +630,9 @@ export const StepAdvancedInfo = ({
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <AlertTriangle className="h-5 w-5 text-amber-500" />
-              Change Client Classification
+              {pendingClassification === savedClassification
+                ? "Update Classification Effective FY"
+                : "Change Client Classification"}
             </DialogTitle>
             <DialogDescription className="sr-only">
               Confirm the classification change and pick the effective financial year.
@@ -622,14 +640,25 @@ export const StepAdvancedInfo = ({
           </DialogHeader>
 
           {/* Change summary */}
-          <div className="bg-amber-50 border border-amber-200 rounded p-3">
-            <p className="text-sm font-medium">You are changing:</p>
-            <div className="flex items-center gap-3 mt-1 text-sm">
-              <span className="font-bold text-blue-700">{savedClassification}</span>
-              <span className="text-muted-foreground">→</span>
-              <span className="font-bold text-orange-600">{pendingClassification}</span>
+          {pendingClassification !== savedClassification ? (
+            <div className="bg-amber-50 border border-amber-200 rounded p-3">
+              <p className="text-sm font-medium">You are changing:</p>
+              <div className="flex items-center gap-3 mt-1 text-sm">
+                <span className="font-bold text-blue-700">{savedClassification}</span>
+                <span className="text-muted-foreground">→</span>
+                <span className="font-bold text-orange-600">{pendingClassification}</span>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="bg-blue-50 border border-blue-200 rounded p-3">
+              <p className="text-sm font-medium">
+                Classification: <span className="font-bold text-blue-700">{pendingClassification}</span>
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Select the FY from which this classification should apply. All FY records from that year onward will be updated.
+              </p>
+            </div>
+          )}
 
           {/* Effective From FY — mandatory */}
           <div className="space-y-1.5">
@@ -684,16 +713,18 @@ export const StepAdvancedInfo = ({
           {effectiveFromFY && (
             <div className="bg-blue-50 border border-blue-200 rounded p-3 text-sm space-y-0.5">
               <p className="font-semibold mb-1">Impact Summary:</p>
-              <p>
-                • FYs up to <strong>{getPreviousFY(effectiveFromFY)}</strong>:{" "}
-                <strong>{savedClassification}</strong>
-              </p>
+              {pendingClassification !== savedClassification && (
+                <p>
+                  • FYs up to <strong>{getPreviousFY(effectiveFromFY)}</strong>:{" "}
+                  <strong>{savedClassification}</strong>
+                </p>
+              )}
               <p>
                 • From FY <strong>{effectiveFromFY}</strong> onward:{" "}
                 <strong>{pendingClassification}</strong>
               </p>
               <p className="text-muted-foreground mt-1">
-                Previous classification preserved in history.
+                Change recorded in classification history.
               </p>
             </div>
           )}
