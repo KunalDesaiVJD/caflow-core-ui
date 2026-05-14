@@ -1066,6 +1066,7 @@ const Clients = () => {
           firmId={effectiveFirmId}
           showAllFirms={showAllFirms}
           canEdit={canEdit}
+          search={search}
         />
       ) : null}
 
