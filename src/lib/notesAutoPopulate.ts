@@ -1680,16 +1680,35 @@ export async function autoPopulateNotes(
   // their number wins on the next render.
   try {
     const rs = (out.bs_liab.reserves_surplus ?? {}) as any;
+    const existRS2 = ((options.existing?.bs_liab as any)?.reserves_surplus ?? {}) as any;
+    // Resolve opening from out (post-fallback section) OR from existing
+    // saved notes (when the fallback section saw isUnset=false and left
+    // outRS.surplus_opening_* undefined). Mirror this for excess/deferred
+    // so we read the auditor's currently-persisted value, not 0.
+    const pick = (key: string) => {
+      if (Number.isFinite(rs[key])) return Number(rs[key]);
+      if (Number.isFinite(existRS2[key])) return Number(existRS2[key]);
+      return 0;
+    };
     const npat   = Number((out.pl as any)?.eps?.npat       ?? 0);
     const npatPy = Number((out.pl as any)?.eps?.npat_py    ?? 0);
-    const openCy = Number(rs.surplus_opening_cy ?? 0);
-    const openPy = Number(rs.surplus_opening_py ?? 0);
-    const defCy  = Number(rs.surplus_deferred_adj_cy ?? 0);
-    const defPy  = Number(rs.surplus_deferred_adj_py ?? 0);
-    const excCy0 = Number(rs.surplus_excess_short_cy ?? 0);
-    const excPy0 = Number(rs.surplus_excess_short_py ?? 0);
+    const openCy = pick("surplus_opening_cy");
+    const openPy = pick("surplus_opening_py");
+    const defCy  = pick("surplus_deferred_adj_cy");
+    const defPy  = pick("surplus_deferred_adj_py");
+    const excCy0 = pick("surplus_excess_short_cy");
+    const excPy0 = pick("surplus_excess_short_py");
     const bsCy   = Number(rs.cy ?? 0);
     const bsPy   = Number(rs.py ?? 0);
+
+    // Make sure opening values ARE persisted on rs (so subtotal calc on
+    // the next render sees the same numbers we used for reconciliation).
+    if (!Number.isFinite(rs.surplus_opening_cy) && Number.isFinite(existRS2.surplus_opening_cy)) {
+      rs.surplus_opening_cy = Number(existRS2.surplus_opening_cy);
+    }
+    if (!Number.isFinite(rs.surplus_opening_py) && Number.isFinite(existRS2.surplus_opening_py)) {
+      rs.surplus_opening_py = Number(existRS2.surplus_opening_py);
+    }
 
     const subCy = openCy + npat   + defCy + excCy0;
     const subPy = openPy + npatPy + defPy + excPy0;
