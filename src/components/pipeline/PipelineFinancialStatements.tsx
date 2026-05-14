@@ -1792,6 +1792,8 @@ export default function PipelineFinancialStatements({
   const [manualOverrideListOpen, setManualOverrideListOpen] = useState(false);
   const [overrideAmount, setOverrideAmount] = useState<string>("");
   const [overrideReason, setOverrideReason] = useState<string>("");
+  // (manualOverrideListOpen, declared lower in this component, drives the
+  // list dialog opened by clicking the "Manual Overrides" count card.)
 
   // ─── Manual overrides & PY amounts ───
   const [manualOverrides, setManualOverrides] = useState<Record<string, { amount: number; reason: string }>>({});
@@ -2519,10 +2521,12 @@ export default function PipelineFinancialStatements({
   // has no rows until the user explicitly saves the FS.
   // For all other py_source modes ("manual", "none", or prior-year FS), keep
   // using priorEngagement (fa_financial_statements) as the source of truth.
+  // Robust check: PY data is considered synced if EITHER the PY-shell TB has
+  // rows OR a prior-year FA snapshot exists. Handles the case where py_source
+  // is "prior_engagement" but a PY shell with TB rows also exists, which
+  // previously incorrectly showed the "sync pending" banner.
   const pyShellSyncDone: boolean =
-    (engagement as any)?.py_source === "py_shell"
-      ? (pyShellTb?.length ?? 0) > 0
-      : !noPriorEngagement;
+    (pyShellTb?.length ?? 0) > 0 || !noPriorEngagement;
 
   // ─── COA Mapping gate for "Fetch PY from FY-1 Tally" ────────────────────
   // PY comparative figures depend on COA mapping being complete. If unmapped
@@ -6512,10 +6516,11 @@ export default function PipelineFinancialStatements({
         </Tabs>
       )}
 
-      {/* Issue 12 (today) — Manual Override LIST dialog.
-           Opens when the user clicks the "Manual Overrides" summary card.
-           Lists every applied override (amount + note-no) with FS code,
-           current value and reason so the auditor can audit-trail them. */}
+      {/* Manual Override LIST dialog — opens when user clicks the count card.
+           Lists every applied override (amount + note-no + cell edits).
+           Amount overrides are CLICKABLE rows (navigate to the corresponding
+           BS/P&L tab and re-open the per-line edit dialog) and have a
+           "↺ Back to auto" reset button per row. */}
       <Dialog open={manualOverrideListOpen} onOpenChange={setManualOverrideListOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
@@ -6525,55 +6530,84 @@ export default function PipelineFinancialStatements({
             {Object.keys(manualOverrides).length > 0 && (
               <div>
                 <p className="text-[11px] font-semibold text-muted-foreground uppercase mb-1">
-                  Amount overrides ({Object.keys(manualOverrides).length})
+                  Amount overrides ({Object.keys(manualOverrides).length}) — click a row to edit, ↺ to reset
                 </p>
-                <table className="w-full text-[11px] border-collapse">
-                  <thead>
-                    <tr className="bg-muted/30">
-                      <th className="text-left p-1 border">FS Code</th>
-                      <th className="text-right p-1 border">Amount (₹)</th>
-                      <th className="text-left p-1 border">Reason</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Object.entries(manualOverrides).map(([code, ov]) => (
-                      <tr key={code} className="hover:bg-muted/20">
-                        <td className="p-1 border font-mono">{code}</td>
-                        <td className="p-1 border text-right tabular-nums">{Number(ov.amount).toLocaleString("en-IN")}</td>
-                        <td className="p-1 border text-muted-foreground">{ov.reason || "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <div className="space-y-1">
+                  {Object.entries(manualOverrides).map(([code, ov]) => {
+                    const isPL = code.startsWith("PL_");
+                    return (
+                      <div
+                        key={code}
+                        className="flex items-center justify-between gap-3 rounded border border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20 px-3 py-2 hover:bg-amber-100 dark:hover:bg-amber-950/40 cursor-pointer"
+                        onClick={() => {
+                          setManualOverrideListOpen(false);
+                          setActiveTab(isPL ? "pl" : "bs");
+                          openOverride(code, code);
+                        }}
+                      >
+                        <div className="flex-1 min-w-0">
+                          <div className="font-mono text-[11px] font-semibold text-amber-700 dark:text-amber-400">
+                            {code} <span className="text-muted-foreground">({isPL ? "P&L" : "Balance Sheet"})</span>
+                          </div>
+                          <div className="text-[10px] text-muted-foreground truncate">
+                            ₹{Number(ov.amount).toLocaleString("en-IN")} — {ov.reason || "no reason"}
+                          </div>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-[10px] text-amber-700 hover:bg-amber-200/60"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setManualOverrides(prev => {
+                              const next = { ...prev };
+                              delete next[code];
+                              return next;
+                            });
+                            toast.success(`Override on ${code} reset — back to auto`);
+                          }}
+                        >
+                          ↺ Back to auto
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
             {Object.values(noteOverrides).filter(v => v != null && Number.isFinite(v as number)).length > 0 && (
               <div>
                 <p className="text-[11px] font-semibold text-muted-foreground uppercase mb-1">
-                  Note-number overrides ({Object.values(noteOverrides).filter(v => v != null && Number.isFinite(v as number)).length})
+                  Note-number overrides ({Object.values(noteOverrides).filter(v => v != null && Number.isFinite(v as number)).length}) — ↺ to reset
                 </p>
-                <table className="w-full text-[11px] border-collapse">
-                  <thead>
-                    <tr className="bg-muted/30">
-                      <th className="text-left p-1 border">FS Code</th>
-                      <th className="text-right p-1 border">Overridden Note No.</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Object.entries(noteOverrides)
-                      .filter(([, v]) => v != null && Number.isFinite(v as number))
-                      .map(([code, v]) => (
-                        <tr key={code} className="hover:bg-muted/20">
-                          <td className="p-1 border font-mono">{code}</td>
-                          <td className="p-1 border text-right tabular-nums">{v}</td>
-                        </tr>
-                      ))}
-                  </tbody>
-                </table>
+                <div className="space-y-1">
+                  {Object.entries(noteOverrides)
+                    .filter(([, v]) => v != null && Number.isFinite(v as number))
+                    .map(([code, v]) => (
+                      <div key={code} className="flex items-center justify-between gap-3 rounded border border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20 px-3 py-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="font-mono text-[11px] font-semibold text-amber-700 dark:text-amber-400">{code}</div>
+                          <div className="text-[10px] text-muted-foreground">Note No. → {v}</div>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-[10px] text-amber-700 hover:bg-amber-200/60"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (typeof updateNoteOverride === "function") {
+                              try { updateNoteOverride(code, null); } catch { /* ignore */ }
+                            }
+                            toast.success(`Note-no override on ${code} reset`);
+                          }}
+                        >
+                          ↺ Back to auto
+                        </Button>
+                      </div>
+                    ))}
+                </div>
               </div>
             )}
-            {/* Issue 3 (today) — also list the per-note cell edits so the
-                top-card count reconciles 1:1 against the dialog content. */}
             {Array.isArray(stage5NotesData?.manual_edits) && (stage5NotesData!.manual_edits?.length ?? 0) > 0 && (
               <div>
                 <p className="text-[11px] font-semibold text-muted-foreground uppercase mb-1">

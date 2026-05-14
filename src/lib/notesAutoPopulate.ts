@@ -1046,6 +1046,54 @@ export async function saveStage5Notes(
 }
 
 // ═════════════════════════════════════════════════════════════════════════
+// Journal voucher scan — for "Adjustments for deferred tax" and
+// "Excess/(Short) provision for income tax" on Reserves & Surplus.
+//
+// These items are typically routed through Journal vouchers (not TB ledgers
+// with their own balance), so the standard TB scan returns 0. We scan
+// tally_vouchers.line_items for any line whose ledger_name matches the
+// supplied pattern, and net the signed amount. CR contra reduces R&S,
+// DR contra increases R&S (mirror of the surplus convention).
+// ═════════════════════════════════════════════════════════════════════════
+async function sumJournalVoucherImpact(
+  engagementId: string | null | undefined,
+  pattern: RegExp,
+): Promise<number> {
+  if (!engagementId) return 0;
+  try {
+    const PAGE = 500;
+    let total = 0;
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase
+        .from("tally_vouchers")
+        .select("amount, dr_cr, line_items")
+        .eq("engagement_id", engagementId)
+        .eq("voucher_type", "Journal")
+        .range(from, from + PAGE - 1);
+      if (error || !data || data.length === 0) break;
+      for (const v of data as any[]) {
+        const items = Array.isArray(v.line_items) ? v.line_items : [];
+        let matched: any = null;
+        let other:   any = null;
+        for (const li of items) {
+          if (matched == null && pattern.test(String(li?.ledger_name ?? ""))) matched = li;
+          else other = li;
+        }
+        if (!matched) continue;
+        const amt = Number(other?.amount ?? matched?.amount ?? v.amount ?? 0);
+        const cr  = String(matched?.dr_cr ?? "").toUpperCase() === "CR";
+        // CR on the matched (P&L-side) ledger → adjustment ADDS to surplus.
+        total += (cr ? 1 : -1) * (Number.isFinite(amt) ? amt : 0);
+      }
+      if (data.length < PAGE) break;
+    }
+    return Math.round(total * 100) / 100;
+  } catch {
+    return 0;
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════
 // Auto-population orchestrator
 // ═════════════════════════════════════════════════════════════════════════
 
@@ -1282,21 +1330,63 @@ export async function autoPopulateNotes(
     out.bs_liab.share_capital = outSC;
   }
 
+  // ── R&S: "Adjustments for deferred tax" + "Excess/(Short) provision for IT" ──
+  // These line items rarely have their own TB ledger — they're contra entries
+  // routed through Journal vouchers (Surplus Dr/Cr  → Deferred Tax / Provision).
+  // Scan tally_vouchers.line_items for ledgers matching deferred-tax /
+  // excess-short-provision patterns and store the signed net impact on
+  // bs_liab.reserves_surplus.surplus_deferred_adj_cy/py and
+  // bs_liab.reserves_surplus.surplus_excess_short_cy/py.
+  try {
+    // Resolve FY-1 engagement id (prefer PY shell, fall back to regular FY-1)
+    let prevEngId: string | null = null;
+    try {
+      const { data: eng } = await supabase
+        .from("audit_engagements")
+        .select("client_id, financial_year")
+        .eq("id", engagementId)
+        .maybeSingle();
+      const clientId = (eng as any)?.client_id;
+      const fy       = (eng as any)?.financial_year;
+      if (clientId && fy) {
+        const parts = String(fy).split("-");
+        if (parts.length === 2) {
+          const prevFy = `${parseInt(parts[0], 10) - 1}-${String(parseInt(parts[0], 10)).slice(-2)}`;
+          const { data: engList } = await supabase
+            .from("audit_engagements")
+            .select("id, is_py_shell")
+            .eq("client_id", clientId)
+            .eq("financial_year", prevFy);
+          const sorted = ((engList || []) as any[]).sort(
+            (a, b) => (b.is_py_shell ? 1 : 0) - (a.is_py_shell ? 1 : 0)
+          );
+          prevEngId = sorted[0]?.id ?? null;
+        }
+      }
+    } catch { /* prevEngId stays null */ }
+
+    const deferredPattern    = /deferred\s*tax/i;
+    const excessShortPattern = /(excess|short).*provision.*(income|tax)|provision.*(excess|short).*tax/i;
+
+    const [defCy, defPy, excCy, excPy] = await Promise.all([
+      sumJournalVoucherImpact(engagementId, deferredPattern),
+      sumJournalVoucherImpact(prevEngId,    deferredPattern),
+      sumJournalVoucherImpact(engagementId, excessShortPattern),
+      sumJournalVoucherImpact(prevEngId,    excessShortPattern),
+    ]);
+
+    if (!out.bs_liab.reserves_surplus) out.bs_liab.reserves_surplus = {} as any;
+    const rs = out.bs_liab.reserves_surplus as any;
+    if (Math.abs(defCy) > 0.005) rs.surplus_deferred_adj_cy = defCy;
+    if (Math.abs(defPy) > 0.005) rs.surplus_deferred_adj_py = defPy;
+    if (Math.abs(excCy) > 0.005) rs.surplus_excess_short_cy = excCy;
+    if (Math.abs(excPy) > 0.005) rs.surplus_excess_short_py = excPy;
+  } catch { /* swallow — non-fatal */ }
+
   // ── Note 30 EPS — auto-populate NPAT (CY + PY) from P&L computation ─────
-  // Issue 5 (R&S Profit-for-the-year regression today) — ALWAYS recompute
-  // NPAT from current TB rather than skip-if-present.  Skipping let stale
-  // npat survive a TB resync (mapping changes after the auditor first
-  // saved the note silently kept the original number).  Worse, when the
-  // user re-clicked "Generate FS" the empty existing.pl.eps.npat from a
-  // freshly-cleared engagement won the merge and erased the value the
-  // Profit-for-the-year row in Note 3 R&S relies on.
-  //
-  // Recomputing every run is safe: NPAT is a pure derivative of the
-  // current TB + COA mapping; an auditor wanting to override types into
-  // the EPS row directly and respectManualEdits then locks the path.
-  //
-  // PY NPAT is computed the same way from the prior-year TB (pyTB), which
-  // is what powers the R&S "Add/(Less): Profit for the year" PY column.
+  // ALWAYS recompute NPAT from current TB rather than skip-if-present;
+  // skipping let stale npat survive TB resyncs. PY NPAT comes from pyTB
+  // (drives R&S "Add/(Less): Profit for the year" PY column).
   {
     // Issue 2 (today) — NPAT must equal P&L line item
     //   "XV. Profit / (Loss) for the period (XI + XIV)"
