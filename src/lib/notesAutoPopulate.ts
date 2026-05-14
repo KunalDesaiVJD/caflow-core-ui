@@ -1681,34 +1681,35 @@ export async function autoPopulateNotes(
   try {
     const rs = (out.bs_liab.reserves_surplus ?? {}) as any;
     const existRS2 = ((options.existing?.bs_liab as any)?.reserves_surplus ?? {}) as any;
-    // Resolve opening from out (post-fallback section) OR from existing
-    // saved notes (when the fallback section saw isUnset=false and left
-    // outRS.surplus_opening_* undefined). Mirror this for excess/deferred
-    // so we read the auditor's currently-persisted value, not 0.
-    const pick = (key: string) => {
+    const bsCy   = Number(rs.cy ?? 0);
+    const bsPy   = Number(rs.py ?? 0);
+    // Mirror the NoteBSLiab display fallback: if surplus_opening_* is unset
+    // anywhere, fall back to rs.py (= prior-year R&S closing = CY opening)
+    // and an analogous PY-opening fallback. Without this, my reconciliation
+    // reads openCy=0 while the UI shows opening=rs.py — making the gap
+    // calculation overshoot by the entire PY balance.
+    const pick = (key: string, fallback: number) => {
       if (Number.isFinite(rs[key])) return Number(rs[key]);
       if (Number.isFinite(existRS2[key])) return Number(existRS2[key]);
-      return 0;
+      return fallback;
     };
     const npat   = Number((out.pl as any)?.eps?.npat       ?? 0);
     const npatPy = Number((out.pl as any)?.eps?.npat_py    ?? 0);
-    const openCy = pick("surplus_opening_cy");
-    const openPy = pick("surplus_opening_py");
-    const defCy  = pick("surplus_deferred_adj_cy");
-    const defPy  = pick("surplus_deferred_adj_py");
-    const excCy0 = pick("surplus_excess_short_cy");
-    const excPy0 = pick("surplus_excess_short_py");
-    const bsCy   = Number(rs.cy ?? 0);
-    const bsPy   = Number(rs.py ?? 0);
+    // Opening balance CY = prior-year closing (= rs.py magnitude)
+    const openCy = pick("surplus_opening_cy", Math.abs(bsPy));
+    // Opening balance PY = bsPy - npatPy (back out the year-to-year movement
+    // when no PPY data is available). This matches how the UI's "Opening
+    // balance" PY column resolves when no prior-prior FS amounts exist.
+    const openPyFallback = Math.abs(bsPy) - npatPy;
+    const openPy = pick("surplus_opening_py", Math.max(0, openPyFallback));
+    const defCy  = pick("surplus_deferred_adj_cy", 0);
+    const defPy  = pick("surplus_deferred_adj_py", 0);
+    const excCy0 = pick("surplus_excess_short_cy", 0);
+    const excPy0 = pick("surplus_excess_short_py", 0);
 
-    // Make sure opening values ARE persisted on rs (so subtotal calc on
-    // the next render sees the same numbers we used for reconciliation).
-    if (!Number.isFinite(rs.surplus_opening_cy) && Number.isFinite(existRS2.surplus_opening_cy)) {
-      rs.surplus_opening_cy = Number(existRS2.surplus_opening_cy);
-    }
-    if (!Number.isFinite(rs.surplus_opening_py) && Number.isFinite(existRS2.surplus_opening_py)) {
-      rs.surplus_opening_py = Number(existRS2.surplus_opening_py);
-    }
+    // PERSIST openings on rs so the rendered sub-total uses the same numbers.
+    if (!Number.isFinite(rs.surplus_opening_cy)) rs.surplus_opening_cy = openCy;
+    if (!Number.isFinite(rs.surplus_opening_py)) rs.surplus_opening_py = openPy;
 
     const subCy = openCy + npat   + defCy + excCy0;
     const subPy = openPy + npatPy + defPy + excPy0;
