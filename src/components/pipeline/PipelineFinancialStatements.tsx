@@ -779,15 +779,16 @@ function buildPLRows(pl: PLRowData, notesData?: Stage5Notes | null): PLDisplayRo
   const currentTaxPy = pl.currentTax.py || 0;
   const deferredTaxCy = pl.deferredTax.cy || 0;
   const deferredTaxPy = pl.deferredTax.py || 0;
-  // XV = IX − currentTax + deferredTax  (same formula for both CY and PY)
-  // deferredTax is the signed TB value: negative for DTL (reduces profit),
-  // positive for DTA (adds to profit). + preserves the sign naturally.
   // XI — Profit/(Loss) for period from continuing operations  = IX − X
-  // where X (Tax expense) = Current Tax + Deferred Tax.  deferredTax is the
-  // SIGNED TB value (negative for DTL → reduces profit; positive for DTA →
-  // adds to profit), so the "+ deferredTax" preserves sign naturally.
-  const profitContOpsCy = pbtCy - currentTaxCy + deferredTaxCy;    // XI
-  const profitContOpsPy = pbtPy - currentTaxPy + deferredTaxPy;    // XI
+  // X (Tax expense) = Current Tax + Deferred Tax. Both currentTaxCy and
+  // deferredTaxCy are stored as POSITIVE expense magnitudes (matching how
+  // they render on the P&L row: "Current tax 2,310" / "Deferred tax 1,622")
+  // so subtract both to derive PAT. Previously this used "+ deferredTax"
+  // on a stale sign-convention assumption that has long since been
+  // corrected upstream — the result was XI showing PBT − CT + DT instead
+  // of PBT − CT − DT (off by 2× the deferred-tax amount).
+  const profitContOpsCy = pbtCy - currentTaxCy - deferredTaxCy;    // XI
+  const profitContOpsPy = pbtPy - currentTaxPy - deferredTaxPy;    // XI
   // XV — Profit/(Loss) for the period  =  XI + XIV (discontinuing-ops)
   // With no discontinuing operations (XIV = 0), XV equals XI.
   const profitCy = profitContOpsCy;                                // XV
