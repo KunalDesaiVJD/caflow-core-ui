@@ -782,8 +782,16 @@ function buildPLRows(pl: PLRowData, notesData?: Stage5Notes | null): PLDisplayRo
   // XV = IX − currentTax + deferredTax  (same formula for both CY and PY)
   // deferredTax is the signed TB value: negative for DTL (reduces profit),
   // positive for DTA (adds to profit). + preserves the sign naturally.
-  const profitCy = pbtCy - currentTaxCy + deferredTaxCy;           // XV
-  const profitPy = pbtPy - currentTaxPy + deferredTaxPy;           // XV (Phase G fix: was -deferredTaxPy)
+  // XI — Profit/(Loss) for period from continuing operations  = IX − X
+  // where X (Tax expense) = Current Tax + Deferred Tax.  deferredTax is the
+  // SIGNED TB value (negative for DTL → reduces profit; positive for DTA →
+  // adds to profit), so the "+ deferredTax" preserves sign naturally.
+  const profitContOpsCy = pbtCy - currentTaxCy + deferredTaxCy;    // XI
+  const profitContOpsPy = pbtPy - currentTaxPy + deferredTaxPy;    // XI
+  // XV — Profit/(Loss) for the period  =  XI + XIV (discontinuing-ops)
+  // With no discontinuing operations (XIV = 0), XV equals XI.
+  const profitCy = profitContOpsCy;                                // XV
+  const profitPy = profitContOpsPy;                                // XV
 
   // Bug 1 — EPS divisor uses paid-up share count from the Share Capital note
   // breakup (share_count_cy / share_count_py), NOT the note number.  Falls
@@ -820,8 +828,8 @@ function buildPLRows(pl: PLRowData, notesData?: Stage5Notes | null): PLDisplayRo
     { kind: "header", roman: "X.",   label: "Tax expense:" },
     { kind: "item",   label: "(1) Current tax",  cy: currentTaxCy, py: currentTaxPy, indent: 2, code: "PL_TAX_CUR" },
     { kind: "item",   label: "(2) Deferred tax", cy: deferredTaxCy, py: deferredTaxPy, indent: 2, code: "PL_TAX_DEF" },
-    { kind: "item",   roman: "XI.",  label: "Profit (loss) for period from continuing operations", bold: true },
-    { kind: "subnote", label: "(VII-VIII)", bold: true },
+    { kind: "item",   roman: "XI.",  label: "Profit (loss) for period from continuing operations", cy: profitContOpsCy, py: profitContOpsPy, bold: true },
+    { kind: "subnote", label: "(IX-X)", bold: true },
     { kind: "item",   roman: "XII.", label: "Profit (loss) for period from discontinuing operations" },
     { kind: "item",   roman: "XIII.",label: "Tax expense of discontinuing operations" },
     { kind: "item",   roman: "XIV.", label: "Profit (loss) from discontinuing operations (after tax)", bold: true },
@@ -6611,22 +6619,64 @@ export default function PipelineFinancialStatements({
             {Array.isArray(stage5NotesData?.manual_edits) && (stage5NotesData!.manual_edits?.length ?? 0) > 0 && (
               <div>
                 <p className="text-[11px] font-semibold text-muted-foreground uppercase mb-1">
-                  Note cell edits ({stage5NotesData!.manual_edits!.length})
+                  Note cell edits ({stage5NotesData!.manual_edits!.length}) — click a row to jump to the note, ↺ to reset
                 </p>
-                <table className="w-full text-[11px] border-collapse">
-                  <thead>
-                    <tr className="bg-muted/30">
-                      <th className="text-left p-1 border">Dot-path</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {stage5NotesData!.manual_edits!.map((p, i) => (
-                      <tr key={`${p}-${i}`} className="hover:bg-muted/20">
-                        <td className="p-1 border font-mono break-all">{p}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <div className="space-y-1">
+                  {stage5NotesData!.manual_edits!.map((p, i) => {
+                    // Derive sub-tab from the leading segment of the dot-path
+                    const subTab: "bs_liab" | "bs_asset" | "pl" | "fa" =
+                      p.startsWith("bs_liab.") ? "bs_liab"
+                        : p.startsWith("bs_asset.") ? "bs_asset"
+                        : p.startsWith("pl.") ? "pl"
+                        : "fa";
+                    return (
+                      <div
+                        key={`${p}-${i}`}
+                        className="flex items-center justify-between gap-3 rounded border border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20 px-3 py-2 hover:bg-amber-100 dark:hover:bg-amber-950/40 cursor-pointer"
+                        onClick={() => {
+                          setManualOverrideListOpen(false);
+                          setActiveTab("notes");
+                          // Defer so the Notes tab can render before we dispatch
+                          // the sub-tab navigation event the NotesTab listens to.
+                          setTimeout(() => {
+                            try {
+                              window.dispatchEvent(new CustomEvent("caflow:notes-navigate", { detail: { subTab, path: p } }));
+                            } catch { /* ignore */ }
+                          }, 50);
+                        }}
+                      >
+                        <div className="flex-1 min-w-0">
+                          <div className="font-mono text-[11px] font-semibold text-amber-700 dark:text-amber-400 break-all">{p}</div>
+                          <div className="text-[10px] text-muted-foreground">Section: {subTab.toUpperCase()}</div>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-[10px] text-amber-700 hover:bg-amber-200/60 shrink-0"
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            try {
+                              const current = (stage5NotesData ?? { manual_edits: [] }) as any;
+                              const nextEdits: string[] = (Array.isArray(current.manual_edits) ? current.manual_edits : []).filter((x: string) => x !== p);
+                              const nextNotes = { ...current, manual_edits: nextEdits };
+                              const { error } = await (supabase.from as any)("audit_engagements")
+                                .update({ stage5_notes: nextNotes })
+                                .eq("id", engagementId);
+                              if (error) throw error;
+                              queryClient.invalidateQueries({ queryKey: ["stage5-notes-fsdata", engagementId] });
+                              queryClient.invalidateQueries({ queryKey: ["engagement", engagementId] });
+                              toast.success(`Note edit on "${p}" reset — will revert to auto on next Generate FS`);
+                            } catch (err) {
+                              toast.error(`Failed to reset: ${(err as Error).message}`);
+                            }
+                          }}
+                        >
+                          ↺ Back to auto
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </div>

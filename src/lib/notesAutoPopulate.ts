@@ -1049,17 +1049,25 @@ export async function saveStage5Notes(
 // Journal voucher scan — for "Adjustments for deferred tax" and
 // "Excess/(Short) provision for income tax" on Reserves & Surplus.
 //
-// These items are typically routed through Journal vouchers (not TB ledgers
-// with their own balance), so the standard TB scan returns 0. We scan
-// tally_vouchers.line_items for any line whose ledger_name matches the
-// supplied pattern, and net the signed amount. CR contra reduces R&S,
-// DR contra increases R&S (mirror of the surplus convention).
+// CRITICAL: only journals that ACTUALLY HIT the Reserves & Surplus ledger
+// (typically "Profit & Loss A/c" — anything mapped to BS_EQ_RS in COA) are
+// counted. Otherwise every routine deferred-tax / current-tax accrual that
+// debits the P&L Tax-expense head would be double-counted, because that
+// expense ledger's name also matches the pattern. The R&S "Adjustments for
+// deferred tax" row is meant to show ONLY the post-NPAT contra entries that
+// route through Surplus — which is exactly the subset of journals where
+// one line is the R&S ledger.
+//
+// Sign convention: when the R&S line is DEBIT → the adjustment REDUCES
+// surplus (so we record a NEGATIVE addition). When the R&S line is CREDIT
+// → the adjustment ADDS to surplus.
 // ═════════════════════════════════════════════════════════════════════════
 async function sumJournalVoucherImpact(
   engagementId: string | null | undefined,
   pattern: RegExp,
+  surplusLedgers: Set<string>,
 ): Promise<number> {
-  if (!engagementId) return 0;
+  if (!engagementId || surplusLedgers.size === 0) return 0;
   try {
     const PAGE = 500;
     let total = 0;
@@ -1073,17 +1081,20 @@ async function sumJournalVoucherImpact(
       if (error || !data || data.length === 0) break;
       for (const v of data as any[]) {
         const items = Array.isArray(v.line_items) ? v.line_items : [];
-        let matched: any = null;
-        let other:   any = null;
+        if (items.length < 2) continue;
+        // Must hit the R&S/Surplus ledger
+        let surplusLine: any = null;
+        let contraLine:  any = null;
         for (const li of items) {
-          if (matched == null && pattern.test(String(li?.ledger_name ?? ""))) matched = li;
-          else other = li;
+          const name = String(li?.ledger_name ?? "").trim();
+          if (!surplusLine && surplusLedgers.has(name)) { surplusLine = li; continue; }
+          if (!contraLine && pattern.test(name)) { contraLine = li; }
         }
-        if (!matched) continue;
-        const amt = Number(other?.amount ?? matched?.amount ?? v.amount ?? 0);
-        const cr  = String(matched?.dr_cr ?? "").toUpperCase() === "CR";
-        // CR on the matched (P&L-side) ledger → adjustment ADDS to surplus.
-        total += (cr ? 1 : -1) * (Number.isFinite(amt) ? amt : 0);
+        if (!surplusLine || !contraLine) continue;
+        // Sign: DEBIT to surplus reduces R&S (negative), CREDIT adds (positive).
+        const amt = Number(contraLine.amount ?? surplusLine.amount ?? v.amount ?? 0);
+        const surplusDr = String(surplusLine.dr_cr ?? "").toUpperCase() === "DR";
+        total += (surplusDr ? -1 : 1) * (Number.isFinite(amt) ? Math.abs(amt) : 0);
       }
       if (data.length < PAGE) break;
     }
@@ -1091,6 +1102,23 @@ async function sumJournalVoucherImpact(
   } catch {
     return 0;
   }
+}
+
+// Resolve the set of ledger names mapped to BS_EQ_RS (Reserves & Surplus)
+// in the engagement's COA mapping. Used to gate the journal-voucher scan
+// so only vouchers that touch R&S are counted.
+async function getSurplusLedgerNames(
+  engagementId: string | null | undefined,
+): Promise<Set<string>> {
+  const out = new Set<string>();
+  if (!engagementId) return out;
+  try {
+    const mapping = await getCOAMapping(engagementId);
+    for (const [ledgerName, m] of Object.entries(mapping)) {
+      if (m?.code === "BS_EQ_RS") out.add(ledgerName);
+    }
+  } catch { /* ignore */ }
+  return out;
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -1366,21 +1394,37 @@ export async function autoPopulateNotes(
     } catch { /* prevEngId stays null */ }
 
     const deferredPattern    = /deferred\s*tax/i;
-    const excessShortPattern = /(excess|short).*provision.*(income|tax)|provision.*(excess|short).*tax/i;
+    // Any "Provision for Income Tax" / "Provision for Taxation" ledger that
+    // shows up as the contra-side of an R&S journal IS — by definition —
+    // an excess-or-short provision adjustment (the routine year-end provision
+    // is booked against P&L Tax Expense, not against Surplus). Keep the
+    // pattern broad so it matches the conventional ledger names.
+    const excessShortPattern = /provision.*(income|tax)|(excess|short).*provision/i;
+
+    // R&S/Surplus ledgers — gate the scan so only journals that hit Surplus
+    // (i.e. routed THROUGH R&S, not the normal accrual leg) are counted.
+    const [surplusCy, surplusPy] = await Promise.all([
+      getSurplusLedgerNames(engagementId),
+      getSurplusLedgerNames(prevEngId),
+    ]);
 
     const [defCy, defPy, excCy, excPy] = await Promise.all([
-      sumJournalVoucherImpact(engagementId, deferredPattern),
-      sumJournalVoucherImpact(prevEngId,    deferredPattern),
-      sumJournalVoucherImpact(engagementId, excessShortPattern),
-      sumJournalVoucherImpact(prevEngId,    excessShortPattern),
+      sumJournalVoucherImpact(engagementId, deferredPattern,    surplusCy),
+      sumJournalVoucherImpact(prevEngId,    deferredPattern,    surplusPy),
+      sumJournalVoucherImpact(engagementId, excessShortPattern, surplusCy),
+      sumJournalVoucherImpact(prevEngId,    excessShortPattern, surplusPy),
     ]);
 
     if (!out.bs_liab.reserves_surplus) out.bs_liab.reserves_surplus = {} as any;
     const rs = out.bs_liab.reserves_surplus as any;
-    if (Math.abs(defCy) > 0.005) rs.surplus_deferred_adj_cy = defCy;
-    if (Math.abs(defPy) > 0.005) rs.surplus_deferred_adj_py = defPy;
-    if (Math.abs(excCy) > 0.005) rs.surplus_excess_short_cy = excCy;
-    if (Math.abs(excPy) > 0.005) rs.surplus_excess_short_py = excPy;
+    // ALWAYS write — including 0 — so a previously-stale value from the old
+    // "TB-mapped deferred tax" auto-fill is cleared once the journal scan
+    // confirms there is no R&S adjustment. Manual edits are still preserved
+    // because respectManualEdits() locks any path the auditor has touched.
+    rs.surplus_deferred_adj_cy = defCy;
+    rs.surplus_deferred_adj_py = defPy;
+    rs.surplus_excess_short_cy = excCy;
+    rs.surplus_excess_short_py = excPy;
   } catch { /* swallow — non-fatal */ }
 
   // ── Note 30 EPS — auto-populate NPAT (CY + PY) from P&L computation ─────
