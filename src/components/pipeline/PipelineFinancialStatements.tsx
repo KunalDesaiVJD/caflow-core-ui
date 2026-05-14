@@ -3110,12 +3110,15 @@ export default function PipelineFinancialStatements({
   const totalExpenses = (computedAmounts["PL_EXP"] || 0);  // positive (debit)
   // netProfit = PBT (pre-tax); PL_EXP excludes PL_TAX_CUR / PL_TAX_DEF
   const netProfit = Math.round((-totalRevenue - totalExpenses) * 100) / 100;
-  // corpNetPAT: deduct taxes using same sign logic as buildPLRows (line ~760):
-  //   profitCy = pbtCy - currentTax + deferredTax
-  // currentTax is stored DR (positive); deferredTax is stored CR (negative) in Tally.
+  // corpNetPAT: must match the XI formula in buildPLRows.
+  //   profitCy = pbtCy - currentTax - deferredTax     (PBT − Tax expense)
+  // Both currentTax and deferredTax are stored as positive expense
+  // magnitudes (matching how they render on the P&L row). Previous "+ DT"
+  // overstated NPAT by 2× the deferred tax — the top NPAT card disagreed
+  // with the P&L XI / XV totals (5,40,177 vs 5,36,933 for KWIKTEAM).
   const corpPlData = fsDisplayData?.pl;
   const corpNetPAT = corpPlData
-    ? Math.round((netProfit - (corpPlData.currentTax.cy || 0) + (corpPlData.deferredTax.cy || 0)) * 100) / 100
+    ? Math.round((netProfit - (corpPlData.currentTax.cy || 0) - (corpPlData.deferredTax.cy || 0)) * 100) / 100
     : netProfit;
 
   // ─── Bug 5 — Phase E for NCE: notes-aware substitution into NCE amounts ─────
