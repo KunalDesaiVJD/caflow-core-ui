@@ -69,9 +69,21 @@ function sumReservesSurplus(
   };
   const profitKey = column === "cy" ? "npat" : "npat_py";
   const profit = Number(plData?.eps?.[profitKey] ?? 0);
+
+  // Issue 3 (today) — Opening balance fallback mirrors NoteBSLiab.tsx:
+  //   CY opening: surplus_opening_cy ?? abs(reserves_surplus.py)
+  //                 (prior-year R&S closing → carry-forward)
+  //   PY opening: surplus_opening_py ?? 0
+  // The detector previously only read surplus_opening_<col> directly, so
+  // a missing path meant a spurious "Note 3 off by ₹X" banner even when
+  // the on-screen numbers balanced.
+  const surplusOpening =
+    v("surplus_opening") ||
+    (column === "cy" ? Math.abs(Number(noteRow?.py ?? 0)) : 0);
+
   return (
     v("gen_reserve") + v("share_premium") +
-    v("surplus_opening") + (Number.isFinite(profit) ? profit : 0) +
+    surplusOpening + (Number.isFinite(profit) ? profit : 0) +
     v("surplus_deferred_adj") + v("surplus_excess_short")
   );
 }
