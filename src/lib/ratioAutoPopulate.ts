@@ -40,6 +40,7 @@ import {
   sumLedgersByFsCodes,
   getPreviousYearFsAmounts,
 } from "./notesAutoPopulate";
+import { supabase } from "@/integrations/supabase/client";
 
 // ═════════════════════════════════════════════════════════════════════════
 // FS-code groupings
@@ -381,6 +382,57 @@ async function buildCYInputs(
   };
 }
 
+// ─── Fallback: build a pyFs amount-map from the prior-year TB ────────────────
+//
+// When no fa_financial_statements row exists for the prior engagement (most
+// commonly because the auditor opened a PY-shell engagement with Tally data
+// but never saved Stage 7 FS), we synthesize the same shape here by summing
+// the prior TB ledgers per FS code using the CURRENT engagement's COA
+// mapping. The ledger names are stable across years in Tally, so the CY
+// mapping is a safe stand-in. Returns the same { "BS_*"|"PL_*": amount }
+// shape that buildCYInputs / buildPYInputsFromFs expect.
+async function buildPyFsFromPriorTb(
+  engagementId: string,
+): Promise<Record<string, number>> {
+  // Find the prior-year engagement (prefer PY shell)
+  const { data: eng } = await supabase
+    .from("audit_engagements")
+    .select("client_id, financial_year")
+    .eq("id", engagementId)
+    .maybeSingle();
+  const clientId = (eng as any)?.client_id;
+  const fy       = (eng as any)?.financial_year;
+  if (!clientId || !fy) return {};
+  const parts = String(fy).split("-");
+  if (parts.length !== 2) return {};
+  const prevFy = `${parseInt(parts[0], 10) - 1}-${String(parseInt(parts[0], 10)).slice(-2)}`;
+  const { data: engList } = await supabase
+    .from("audit_engagements")
+    .select("id, is_py_shell")
+    .eq("client_id", clientId)
+    .eq("financial_year", prevFy);
+  const sorted = ((engList || []) as any[]).sort(
+    (a, b) => (b.is_py_shell ? 1 : 0) - (a.is_py_shell ? 1 : 0)
+  );
+  const prevEngId = sorted[0]?.id;
+  if (!prevEngId) return {};
+
+  // Fetch prior TB + use CY mapping
+  const [pyTb, mapping] = await Promise.all([
+    getTrialBalance(prevEngId),
+    getCOAMapping(engagementId),
+  ]);
+
+  // Group by FS code, summing TB balances (signed)
+  const out: Record<string, number> = {};
+  for (const ledger of pyTb) {
+    const code = mapping[ledger.account_name]?.code;
+    if (!code) continue;
+    out[code] = (out[code] ?? 0) + Number(ledger.balance ?? 0);
+  }
+  return out;
+}
+
 // ─── PY inputs from prior-year fa_financial_statements ───────────────────────
 //
 // The prior engagement's CY data becomes the current engagement's PY data.
@@ -465,8 +517,17 @@ export async function autoPopulateRatios(
   engagementId: string,
   options: { existing?: Stage7Ratios | null } = {},
 ): Promise<Stage7Ratios> {
-  // Fetch prior-year FS amounts first so buildCYInputs can compute averages
-  const pyFs = await getPreviousYearFsAmounts(engagementId);
+  // Fetch prior-year FS amounts first so buildCYInputs can compute averages.
+  // If the prior engagement has NO fa_financial_statements rows (typical for
+  // a freshly-created PY shell), pyFs is empty and the PY ratio annexure
+  // stays blank. Fall back to deriving a pyFs map from the prior-year TB,
+  // mirroring the same FS-code aggregation used for the CY column.
+  let pyFs = await getPreviousYearFsAmounts(engagementId);
+  if (Object.keys(pyFs).length === 0) {
+    try {
+      pyFs = await buildPyFsFromPriorTb(engagementId);
+    } catch { /* leave as empty */ }
+  }
 
   const [cyInputs, pyInputs] = await Promise.all([
     buildCYInputs(engagementId, pyFs),
