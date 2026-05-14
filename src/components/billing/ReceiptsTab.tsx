@@ -13,6 +13,7 @@ import { Calendar } from "@/components/ui/calendar";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -340,13 +341,14 @@ export default function ReceiptsTab() {
             {responsiblePersons.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
           </SelectContent>
         </Select>
-        <Select value={clientFilter} onValueChange={setClientFilter}>
-          <SelectTrigger className="w-[180px]"><SelectValue placeholder="All Clients" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Clients</SelectItem>
-            {clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-          </SelectContent>
-        </Select>
+        <SearchableSelect
+          options={[{ value: "all", label: "All Clients" }, ...clients.map(c => ({ value: c.id, label: c.name }))]}
+          value={clientFilter}
+          onValueChange={setClientFilter}
+          placeholder="All Clients"
+          searchPlaceholder="Search client..."
+          className="w-[180px]"
+        />
         <Select value={modeFilter} onValueChange={setModeFilter}>
           <SelectTrigger className="w-[130px]"><SelectValue placeholder="All Modes" /></SelectTrigger>
           <SelectContent>
@@ -434,12 +436,14 @@ export default function ReceiptsTab() {
             {/* Client */}
             <div className="space-y-1">
               <Label>Client *</Label>
-              <Select value={formClientId} onValueChange={setFormClientId}>
-                <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
-                <SelectContent>
-                  {clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <SearchableSelect
+                options={clients.map(c => ({ value: c.id, label: c.name }))}
+                value={formClientId}
+                onValueChange={setFormClientId}
+                placeholder="Select client"
+                searchPlaceholder="Search client..."
+                className="w-full"
+              />
             </div>
 
             {/* Against Invoice */}

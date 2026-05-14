@@ -10,6 +10,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow, TableFooter,
 } from "@/components/ui/table";
@@ -583,12 +584,14 @@ function ClientLedgerView() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-3 items-end">
-        <Select value={clientId} onValueChange={setClientId}>
-          <SelectTrigger className="w-[220px]"><SelectValue placeholder="Select Client" /></SelectTrigger>
-          <SelectContent>
-            {clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-          </SelectContent>
-        </Select>
+        <SearchableSelect
+          options={clients.map(c => ({ value: c.id, label: c.name }))}
+          value={clientId}
+          onValueChange={setClientId}
+          placeholder="Select Client"
+          searchPlaceholder="Search client..."
+          className="w-[220px]"
+        />
         <Select value={firmId} onValueChange={setFirmId}>
           <SelectTrigger className="w-[180px]"><SelectValue placeholder="Select Firm" /></SelectTrigger>
           <SelectContent>
