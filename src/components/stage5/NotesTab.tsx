@@ -34,9 +34,18 @@ interface Props {
   pyYear:          number;
   /** When set, switch to the given sub-tab and scroll to note-{noteNo}. */
   navigateToNote?: { noteNo: number; subTab: "bs_liab" | "bs_asset" | "pl" | "fa" } | null;
+  /**
+   * Issue 3 (today) — Optional extra override count contributed by the parent
+   * (fa_financial_statements is_manual rows + FS note-no overrides held in
+   * localStorage).  Added so the Notes tab header and the Stage 7 top
+   * "MANUAL OVERRIDES" summary card display the SAME total.  When omitted
+   * the header falls back to just stage5_notes.manual_edits.length, matching
+   * the old behaviour for stand-alone uses of NotesTab.
+   */
+  extraOverrideCount?: number;
 }
 
-export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote }: Props) {
+export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote, extraOverrideCount = 0 }: Props) {
   const [notes,         setNotes]         = useState<Stage5Notes | null>(null);
   const [loading,       setLoading]       = useState(true);
   const [syncing,       setSyncing]       = useState(false);
@@ -378,9 +387,9 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
         </Button>
         <span className="text-[10px] text-muted-foreground">
           Last synced: <strong>{lastSync}</strong>
-          {notes.manual_edits.length > 0 && (
+          {(notes.manual_edits.length + extraOverrideCount) > 0 && (
             <span className="ml-2 text-amber-600">
-              · {notes.manual_edits.length} manual override(s)
+              · {notes.manual_edits.length + extraOverrideCount} manual override(s)
             </span>
           )}
         </span>

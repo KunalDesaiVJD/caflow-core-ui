@@ -1133,10 +1133,23 @@ export async function autoPopulateNotes(
   for (const section of ["bs_liab", "bs_asset", "pl"] as const) {
     const rows = NOTE_ROW_REGISTRY[section];
     for (const [rowKey, spec] of Object.entries(rows)) {
-      // bs_liab ledgers carry CR-convention balances (negative in the TB).
-      // Negate them so every note stores an absolute positive magnitude.
-      // bs_asset and pl rows are DR-positive — no flip needed.
-      const sectionSign = section === "bs_liab" ? -1 : 1;
+      // Issue 1 (P&L income shown negative today) — section sign now also
+      // accounts for P&L sub-section.  Income line items (PL_REV*, PL_OI*)
+      // carry CR-normal balances and need the same -1 flip as bs_liab, or
+      // their breakup amount_cy/amount_py stays negative and the headline
+      // totals render with parentheses (interpreted as losses).  Expense
+      // line items (PL_EXP*) remain DR-normal with sign +1.  When the
+      // note has mixed PL codes we use the FIRST code as the indicator
+      // (the registry doesn't currently mix REV and EXP within one note).
+      //
+      // bs_liab → -1   (CR-normal liability)
+      // bs_asset → +1  (DR-normal asset)
+      // pl with PL_REV* / PL_OI* → -1 (CR-normal income)
+      // pl with PL_EXP* etc.    → +1 (DR-normal expense)
+      const firstFsCode = (spec.fsCodes && spec.fsCodes[0]) || "";
+      const isPLIncome  = section === "pl" && /^PL_(REV|OI)/.test(firstFsCode);
+      const sectionSign =
+        section === "bs_liab" || isPLIncome ? -1 : 1;
       const cy = sectionSign * sumLedgersByFsCodes(tb, mapping, spec.fsCodes);
       // PY: prior year stage5_notes already stores sign-corrected POSITIVE values,
       // so we must NOT apply sectionSign again (double-negation bug).
@@ -1285,25 +1298,36 @@ export async function autoPopulateNotes(
   // PY NPAT is computed the same way from the prior-year TB (pyTB), which
   // is what powers the R&S "Add/(Less): Profit for the year" PY column.
   {
-    let revSum = 0, expSum = 0;
+    // Issue 2 (today) — NPAT must equal P&L line item
+    //   "XV. Profit / (Loss) for the period (XI + XIV)"
+    // which is Revenue − Expenses − Current Tax − Deferred Tax.
+    // Previous code only summed PL_REV + PL_EXP, ignoring PL_TAX_*, so
+    // the value the R&S "Profit for the year" row carried was actually
+    // PBT (Profit Before Tax), not PAT.  Auditors expect the row to
+    // tie to the BS face Reserves & Surplus auto-credit (which IS net
+    // of tax in Schedule III), so it must use PAT.
+    let revSum = 0, expSum = 0, taxSum = 0;
     for (const ledger of tb) {
       const code = mapping[ledger.account_name]?.code ?? "";
       if (code.startsWith("PL_REV")) revSum += ledger.balance;  // negative (CR)
-      if (code.startsWith("PL_EXP")) expSum += ledger.balance;  // positive (DR)
+      else if (code.startsWith("PL_EXP")) expSum += ledger.balance;  // positive (DR)
+      else if (code.startsWith("PL_TAX")) taxSum += ledger.balance;  // positive (DR)
     }
-    const npat = Math.round((-revSum - expSum) * 100) / 100;
+    // PAT = Revenue (flipped from CR-negative) − Expenses − Taxes
+    const npat = Math.round((-revSum - expSum - taxSum) * 100) / 100;
 
     // PY NPAT from the FY-1 trial balance (closing balances == that year's
-    // P&L since Tally resets to 0 each year).
+    // P&L since Tally resets to 0 each year).  Same after-tax formula.
     let npatPy = 0;
     if (pyTB && pyTB.length > 0) {
-      let revSumPy = 0, expSumPy = 0;
+      let revSumPy = 0, expSumPy = 0, taxSumPy = 0;
       for (const ledger of pyTB) {
         const code = mapping[ledger.account_name]?.code ?? "";
         if (code.startsWith("PL_REV")) revSumPy += ledger.balance;
-        if (code.startsWith("PL_EXP")) expSumPy += ledger.balance;
+        else if (code.startsWith("PL_EXP")) expSumPy += ledger.balance;
+        else if (code.startsWith("PL_TAX")) taxSumPy += ledger.balance;
       }
-      npatPy = Math.round((-revSumPy - expSumPy) * 100) / 100;
+      npatPy = Math.round((-revSumPy - expSumPy - taxSumPy) * 100) / 100;
     }
 
     if (Math.abs(npat) > 0.005 || Math.abs(npatPy) > 0.005) {

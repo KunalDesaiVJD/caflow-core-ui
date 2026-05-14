@@ -5982,40 +5982,45 @@ export default function PipelineFinancialStatements({
             <p className="text-[10px] text-muted-foreground uppercase">Net Profit / (Loss)</p>
           </CardContent>
         </Card>
-        {/* Issue 12 (today) — Manual Overrides card.
-             1) Count was previously `Object.keys(manualOverrides).length`
-                only, which counts amount-overrides written into
-                fa_financial_statements (is_manual=true).  The detailed
-                listing the user saw inside Stage 7 ALSO counts
-                noteOverrides (FS note-number overrides held in
-                localStorage), giving the 2-vs-12 mismatch the user
-                reported.  Sum both stores so both surfaces agree.
-             2) Card is now clickable — toggles a dialog that lists every
-                override with its FS code, current value and reason. */}
-        <Card
-          className={cn(
-            "transition-colors",
-            (Object.keys(manualOverrides).length + Object.values(noteOverrides).filter(v => v != null && Number.isFinite(v as number)).length) > 0
-              ? "cursor-pointer border-amber-400/60 hover:bg-amber-50/40 dark:hover:bg-amber-950/20"
-              : "border-amber-300/30",
-          )}
-          onClick={() => {
-            const total = Object.keys(manualOverrides).length + Object.values(noteOverrides).filter(v => v != null && Number.isFinite(v as number)).length;
-            if (total === 0) {
-              toast.info("No manual overrides applied yet.");
-              return;
-            }
-            setManualOverrideListOpen(true);
-          }}
-        >
-          <CardContent className="p-3 text-center">
-            <p className="text-2xl font-bold text-amber-600">
-              {Object.keys(manualOverrides).length
-                + Object.values(noteOverrides).filter(v => v != null && Number.isFinite(v as number)).length}
-            </p>
-            <p className="text-[10px] text-muted-foreground uppercase">Manual Overrides</p>
-          </CardContent>
-        </Card>
+        {/* Issue 12 + Issue 3 (today) — Manual Overrides card.
+             Counts ALL THREE override stores so every surface in the app
+             agrees on the same number:
+               (a) manualOverrides  — fa_financial_statements is_manual rows
+                                       (auditor-typed amount overrides)
+               (b) noteOverrides    — FS note-number overrides in localStorage
+               (c) stage5_notes.manual_edits — dot-paths the auditor has
+                                       touched inside any Note's editable cell
+             Previously the top card summed only (a)+(b) while the Notes
+             tab header showed only (c), so a 2-vs-7 discrepancy appeared
+             whenever notes were edited.  Now both surfaces display the
+             same SUM. */}
+        {(() => {
+          const overrideTotal = Object.keys(manualOverrides).length
+            + Object.values(noteOverrides).filter(v => v != null && Number.isFinite(v as number)).length
+            + (Array.isArray(stage5NotesData?.manual_edits) ? stage5NotesData!.manual_edits.length : 0);
+          return (
+            <Card
+              className={cn(
+                "transition-colors",
+                overrideTotal > 0
+                  ? "cursor-pointer border-amber-400/60 hover:bg-amber-50/40 dark:hover:bg-amber-950/20"
+                  : "border-amber-300/30",
+              )}
+              onClick={() => {
+                if (overrideTotal === 0) {
+                  toast.info("No manual overrides applied yet.");
+                  return;
+                }
+                setManualOverrideListOpen(true);
+              }}
+            >
+              <CardContent className="p-3 text-center">
+                <p className="text-2xl font-bold text-amber-600">{overrideTotal}</p>
+                <p className="text-[10px] text-muted-foreground uppercase">Manual Overrides</p>
+              </CardContent>
+            </Card>
+          );
+        })()}
         {/* Phase B — Notes mismatch counter */}
         <Card
           className={cn(
@@ -6477,6 +6482,12 @@ export default function PipelineFinancialStatements({
                 cyYear={cyYear}
                 pyYear={pyYear}
                 navigateToNote={corpNavNote}
+                /* Issue 3 (today) — pass amount + note-no override counts so
+                   the Notes header total matches the Stage 7 top card total. */
+                extraOverrideCount={
+                  Object.keys(manualOverrides).length
+                  + Object.values(noteOverrides).filter(v => v != null && Number.isFinite(v as number)).length
+                }
               />
             </TabsContent>
           )}
@@ -6557,6 +6568,29 @@ export default function PipelineFinancialStatements({
                           <td className="p-1 border text-right tabular-nums">{v}</td>
                         </tr>
                       ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {/* Issue 3 (today) — also list the per-note cell edits so the
+                top-card count reconciles 1:1 against the dialog content. */}
+            {Array.isArray(stage5NotesData?.manual_edits) && (stage5NotesData!.manual_edits?.length ?? 0) > 0 && (
+              <div>
+                <p className="text-[11px] font-semibold text-muted-foreground uppercase mb-1">
+                  Note cell edits ({stage5NotesData!.manual_edits!.length})
+                </p>
+                <table className="w-full text-[11px] border-collapse">
+                  <thead>
+                    <tr className="bg-muted/30">
+                      <th className="text-left p-1 border">Dot-path</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stage5NotesData!.manual_edits!.map((p, i) => (
+                      <tr key={`${p}-${i}`} className="hover:bg-muted/20">
+                        <td className="p-1 border font-mono break-all">{p}</td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
