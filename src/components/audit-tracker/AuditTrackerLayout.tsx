@@ -60,44 +60,99 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
   // ── Helpers: export entries / comms to Excel + PDF ─────────────────────────
   const stamp = () => new Date().toISOString().split("T")[0];
 
+  // ── PDF export with full-width capture ─────────────────────────────────
+  // Wide tables (Planning Calendar, Audit Status) overflow A4 portrait and
+  // get truncated by html2canvas. Capture in A3 landscape and walk the
+  // ancestor chain temporarily widening any overflow:auto/scroll containers
+  // so the entire grid is in view during capture.
+  const captureWide = async (el: HTMLElement, filename: string) => {
+    const restored: Array<{ el: HTMLElement; ov: string; w: string }> = [];
+    let n: HTMLElement | null = el;
+    while (n) {
+      const cs = getComputedStyle(n);
+      if (/auto|scroll|hidden/.test(cs.overflowX) || /auto|scroll|hidden/.test(cs.overflow)) {
+        restored.push({ el: n, ov: n.style.overflow, w: n.style.width });
+        n.style.overflow = "visible";
+        n.style.width    = `${n.scrollWidth}px`;
+      }
+      n = n.parentElement;
+    }
+    try {
+      await exportToPdf(el, filename, { orientation: "landscape", format: "a3" });
+    } finally {
+      restored.forEach(({ el, ov, w }) => { el.style.overflow = ov; el.style.width = w; });
+    }
+  };
+
   const exportCalendarPdf = async () => {
     if (!calRef.current) return;
-    try { await exportToPdf(calRef.current, `Planning_Calendar_${stamp()}.pdf`); toast.success("Calendar exported as PDF"); }
+    try { await captureWide(calRef.current, `Planning_Calendar_${stamp()}.pdf`); toast.success("Calendar exported as PDF"); }
     catch (e) { toast.error(`PDF export failed: ${(e as Error).message}`); }
   };
   const exportCalendarXlsx = () => {
     try {
-      const userMap = new Map(users.map(u => [u.id, u.full_name || u.email || "—"] as const));
-      const clientMap = new Map(clients.map(c => [c.id, c.name] as const));
-      const rows = entries.map(e => ({
-        Date:        e.assignment_date ?? "",
-        Employee:    userMap.get(e.assignee_user_id) ?? "—",
-        Client:      e.client_id ? (clientMap.get(e.client_id) ?? "—") : (e.label || "—"),
-        Type:        e.type || "",
-        "Financial Year": e.financial_year || "",
-        Status:      (e as any).status || "",
-        Notes:       (e as any).notes || "",
+      // Sheet 1 — flat list of assignments (one row per planning entry)
+      const flat = (entries || []).map((e: any) => ({
+        "Date From":  e.planned_from ?? "",
+        "Date To":    e.planned_to   ?? "",
+        Employees:    Array.isArray(e.employee_names) ? e.employee_names.join(", ") : "",
+        Client:       e.is_leave ? "LEAVE" : (e.client_name ?? "—"),
+        Days:         e.planned_from && e.planned_to
+          ? Math.max(1, Math.round((new Date(e.planned_to).getTime() - new Date(e.planned_from).getTime()) / 86400000) + 1)
+          : 1,
       }));
-      exportToExcel([{ sheetName: "Planning Calendar", rows }], `Planning_Calendar_${stamp()}.xlsx`);
+
+      // Sheet 2 — calendar grid view (one row per date, one column per employee)
+      // Mirrors what the auditor sees on screen so the export is meaningful.
+      const grid: Record<string, any>[] = [];
+      const empCols = planningStaff.map(s => s.name || s.user_id);
+      if (entries && entries.length > 0) {
+        // Build the date range (earliest planned_from to latest planned_to)
+        const fromMs = Math.min(...entries.map((e: any) => new Date(e.planned_from).getTime()).filter(Number.isFinite));
+        const toMs   = Math.max(...entries.map((e: any) => new Date(e.planned_to).getTime()).filter(Number.isFinite));
+        if (Number.isFinite(fromMs) && Number.isFinite(toMs)) {
+          for (let t = fromMs; t <= toMs; t += 86400000) {
+            const d = new Date(t);
+            const iso = d.toISOString().slice(0, 10);
+            const row: Record<string, string> = { Date: iso };
+            for (const empName of empCols) {
+              const hit = (entries as any[]).find(e =>
+                e.planned_from <= iso && e.planned_to >= iso &&
+                Array.isArray(e.employee_names) && e.employee_names.includes(empName)
+              );
+              row[empName] = hit ? (hit.is_leave ? "Leave" : (hit.client_name ?? "—")) : "";
+            }
+            grid.push(row);
+          }
+        }
+      }
+
+      exportToExcel(
+        [
+          { sheetName: "Assignments", rows: flat },
+          ...(grid.length > 0 ? [{ sheetName: "Calendar Grid", rows: grid }] : []),
+        ],
+        `Planning_Calendar_${stamp()}.xlsx`,
+      );
       toast.success("Calendar exported as Excel");
     } catch (e) { toast.error(`Excel export failed: ${(e as Error).message}`); }
   };
 
   const exportCommPdf = async () => {
     if (!commRef.current) return;
-    try { await exportToPdf(commRef.current, `Communication_Log_${stamp()}.pdf`); toast.success("Communication Log exported as PDF"); }
+    try { await captureWide(commRef.current, `Communication_Log_${stamp()}.pdf`); toast.success("Communication Log exported as PDF"); }
     catch (e) { toast.error(`PDF export failed: ${(e as Error).message}`); }
   };
   const exportCommXlsx = () => {
     try {
-      const clientMap = new Map(clients.map(c => [c.id, c.name] as const));
       const rows = (comms || []).map((c: any) => ({
-        Date:    c.comm_date || c.date || "",
-        Client:  c.client_id ? (clientMap.get(c.client_id) ?? "—") : "—",
-        Channel: c.channel || c.type || "",
-        Subject: c.subject || "",
-        Summary: c.summary || c.notes || "",
-        Status:  c.status || "",
+        Client:          c.client_name        ?? "—",
+        "Audit From":    c.audit_planned_from ?? "",
+        "Audit To":      c.audit_planned_to   ?? "",
+        "Contact Person": c.contact_person     ?? "",
+        "Contact No":    c.contact_no         ?? "",
+        Remarks:         c.remarks            ?? "",
+        "Logged At":     c.created_at         ?? "",
       }));
       exportToExcel([{ sheetName: "Communication Log", rows }], `Communication_Log_${stamp()}.xlsx`);
       toast.success("Communication Log exported as Excel");
@@ -106,20 +161,38 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
 
   const exportStatusPdf = async () => {
     if (!statusRef.current) return;
-    try { await exportToPdf(statusRef.current, `Audit_Status_${selectedFY}_${stamp()}.pdf`); toast.success("Audit Status exported as PDF"); }
+    try { await captureWide(statusRef.current, `Audit_Status_${selectedFY}_${stamp()}.pdf`); toast.success("Audit Status exported as PDF"); }
     catch (e) { toast.error(`PDF export failed: ${(e as Error).message}`); }
   };
   const exportStatusXlsx = () => {
-    // Extract data from the rendered <table> inside the Audit Status grid.
     if (!statusRef.current) return;
     try {
       const tbl = statusRef.current.querySelector("table");
       if (!tbl) { toast.error("Audit Status grid not yet rendered"); return; }
-      const headers = [...tbl.querySelectorAll("thead th")].map(th => (th.textContent || "").trim());
+      const headers = [...tbl.querySelectorAll("thead th")]
+        .map(th => (th.textContent || "").replace(/\s+/g, " ").trim())
+        .filter(Boolean);
       const rows = [...tbl.querySelectorAll("tbody tr")].map(tr => {
         const cells = [...tr.querySelectorAll("td")].map(td => {
-          const input = td.querySelector<HTMLInputElement | HTMLTextAreaElement>("input,textarea,select");
-          return ((input?.value ?? td.textContent) || "").trim();
+          // Prefer the editable control's value (input/textarea/select);
+          // fall back to the cell's text content. This makes the export
+          // reflect what the auditor sees on screen.
+          const ctrl = td.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
+            "input, textarea, select",
+          );
+          let v = "";
+          if (ctrl) {
+            v = ctrl.value || "";
+            // For native <select>, get the visible label of the chosen option
+            if (ctrl.tagName === "SELECT") {
+              const sel = ctrl as HTMLSelectElement;
+              const opt = sel.options[sel.selectedIndex];
+              if (opt) v = opt.text;
+            }
+          } else {
+            v = (td.textContent || "").replace(/\s+/g, " ").trim();
+          }
+          return v;
         });
         const row: Record<string, string> = {};
         cells.forEach((v, i) => { row[headers[i] || `Col${i + 1}`] = v; });
