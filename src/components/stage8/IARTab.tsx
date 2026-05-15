@@ -228,15 +228,39 @@ export function IARTab({ engagement, client, onUpdate }: Props) {
   }, [engagement, client, firm, partner, firmCity, partnerName, partnerMemNo]);
 
   // ── Load firm ────────────────────────────────────────────────────────────
+  // Prefer the AUDIT firm selected in Stage 1 (engagement.audit_firm_id)
+  // over the user's logged-in tenant firm (engagement.firm_id). This is the
+  // firm name + FRN + partner membership that appears on the signed IAR.
+  // Falls back to firm_id for legacy engagements with no Stage 1 selection.
   useEffect(() => {
-    if (!engagement?.firm_id) return;
+    const lookupId = (engagement as any)?.audit_firm_id || engagement?.firm_id;
+    if (!lookupId) return;
     supabase
       .from("firms")
       .select("name, display_name, icai_firm_reg_no, icai_reg_no, address, state, membership_numbers")
-      .eq("id", engagement.firm_id)
+      .eq("id", lookupId)
       .maybeSingle()
-      .then(({ data }) => { if (data) setFirm(data); });
-  }, [engagement?.firm_id]);
+      .then(({ data }) => {
+        if (data) { setFirm(data); return; }
+        // Audit firm only exists in audit_firms (legacy minimal row).
+        supabase
+          .from("audit_firms")
+          .select("name, icai_reg_no, address")
+          .eq("id", lookupId)
+          .maybeSingle()
+          .then(({ data: af }) => {
+            if (af) setFirm({
+              name:             (af as any).name,
+              display_name:     (af as any).name,
+              icai_firm_reg_no: (af as any).icai_reg_no,
+              icai_reg_no:      (af as any).icai_reg_no,
+              address:          (af as any).address,
+              state:            null,
+              membership_numbers: [],
+            } as any);
+          });
+      });
+  }, [(engagement as any)?.audit_firm_id, engagement?.firm_id]);
 
   // ── Load partner ─────────────────────────────────────────────────────────
   useEffect(() => {

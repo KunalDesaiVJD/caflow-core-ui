@@ -141,21 +141,32 @@ export function MRLTab({ engagementId, engagement }: Props) {
   }, [engagement?.client_id]);
 
   // ── Fetch firm details (name + city for "To:" line) ──
+  // Prefer the AUDIT firm chosen in Stage 1 over the tenant firm.
   useEffect(() => {
-    const fid = engagement?.firm_id;
+    const fid = (engagement as any)?.audit_firm_id || engagement?.firm_id;
     if (!fid) return;
     supabase
       .from("firms")
       .select("name, display_name, address, state")
       .eq("id", fid)
-      .single()
+      .maybeSingle()
       .then(({ data }) => {
-        if (!data) return;
-        setFirmName(data.display_name || data.name || "");
-        const addr = data.address as any;
-        setFirmCity(addr?.city || addr?.district || data.state || "");
+        if (data) {
+          setFirmName(data.display_name || data.name || "");
+          const addr = data.address as any;
+          setFirmCity(addr?.city || addr?.district || data.state || "");
+          return;
+        }
+        // Fallback: row only in audit_firms.
+        supabase.from("audit_firms").select("name, address, city").eq("id", fid).maybeSingle()
+          .then(({ data: af }) => {
+            if (af) {
+              setFirmName((af as any).name || "");
+              setFirmCity((af as any).city || "");
+            }
+          });
       });
-  }, [engagement?.firm_id]);
+  }, [(engagement as any)?.audit_firm_id, engagement?.firm_id]);
 
   // ── Load saved MRL data ──
   const loadData = useCallback(async () => {
