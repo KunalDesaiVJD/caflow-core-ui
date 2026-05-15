@@ -2992,9 +2992,9 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                             return (
                               <div
                                 key={idx}
-                                className="px-2 py-2 hover:bg-muted/40 transition-colors"
+                                className="group px-2 py-2 hover:bg-muted/40 transition-colors"
                               >
-                                {/* Ledger name */}
+                                {/* Ledger name + per-row actions */}
                                 <div className="flex items-center gap-1.5 min-w-0 mb-0.5">
                                   <span className="text-xs font-medium truncate">{r.ledger}</span>
                                   <Badge variant="outline" className={cn("text-[8px] px-1 shrink-0", confClass)}>
@@ -3011,6 +3011,35 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                                 <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
                                   <ArrowRight className="w-2.5 h-2.5 shrink-0 text-primary/60" />
                                   <span className="truncate">{r.breadcrumb}</span>
+                                </div>
+                                {/* Action buttons — let the auditor remap or
+                                    unmap the ledger directly from the search
+                                    results without having to unselect search
+                                    first. Previously the only affordance was
+                                    "click the FS row's ✕" — but that row is
+                                    hidden while search is active. */}
+                                <div className="flex items-center gap-1 mt-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => setReclassifyDialog({ accountName: r.ledger })}
+                                    className="text-[10px] px-2 py-0.5 rounded border border-primary/40 text-primary hover:bg-primary/10 transition"
+                                    title="Move this ledger to a different FS head"
+                                  >
+                                    ⇄ Move to…
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const next = { ...coaMapping };
+                                      delete next[r.ledger];
+                                      setCoaMapping(next);
+                                      toast.success(`Unmapped "${r.ledger}"`);
+                                    }}
+                                    className="text-[10px] px-2 py-0.5 rounded border border-destructive/40 text-destructive hover:bg-destructive/10 transition"
+                                    title="Unmap this ledger (move back to Unmapped Ledgers)"
+                                  >
+                                    ✕ Unmap
+                                  </button>
                                 </div>
                               </div>
                             );
