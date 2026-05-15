@@ -139,17 +139,19 @@ function EmpSelect({ label, value, onChange, employees }: {
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 export default function StatutoryAuditMaster({ data, engagementId, onSaved }: Props) {
-  const { data: m, setField, patchFields, manualSave, saving, loaded } =
+  const { data: m, setField, patchFields, programmaticPatch, manualSave, saving, loaded } =
     useStatutoryMasterStorage(engagementId, data.engagement?.firm_id);
 
   const { employees } = useEmployeeDropdown();
 
-  // Auto-fill dates on first load
+  // Auto-fill dates on first load. Uses programmaticPatch so the
+  // userTypedRef gate doesn't block the async DB load from restoring
+  // previously-saved Tally path / sign-off fields after navigation.
   useEffect(() => {
     if (!loaded || !data.clientName) return;
     if (m.audit_date_from) return;
-    patchFields({ audit_date_from: data.fyStartDate, audit_date_to: data.fyEndDate });
-  }, [loaded, data.clientName]);
+    programmaticPatch({ audit_date_from: data.fyStartDate, audit_date_to: data.fyEndDate });
+  }, [loaded, data.clientName]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fyExpanded = expandFY(data.financialYear);
 

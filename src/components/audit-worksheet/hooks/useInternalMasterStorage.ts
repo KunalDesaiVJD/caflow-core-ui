@@ -131,10 +131,10 @@ export function useInternalMasterStorage(
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // See note in useTaxMasterStorage — prevents the async DB load from
-  // clobbering user input when it resolves after the user starts typing.
-  const userEditedRef = useRef(false);
-  const dataRef       = useRef<InternalMasterData>(BLANK_INT_MASTER);
+  // userTypedRef tracks genuine user typing only — programmatic auto-fill
+  // never blocks the async DB load that restores saved fields on return.
+  const userTypedRef = useRef(false);
+  const dataRef      = useRef<InternalMasterData>(BLANK_INT_MASTER);
 
   // ── Load ───────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -147,7 +147,7 @@ export function useInternalMasterStorage(
       dataRef.current = merged;
     }
     awLoadFromDB<Partial<InternalMasterData>>(engagementId, "int_master_json").then(remote => {
-      if (userEditedRef.current) return;
+      if (userTypedRef.current) return;
       if (remote && typeof remote === "object" && Object.keys(remote).length > 0) {
         const merged = { ...BLANK_INT_MASTER, ...remote };
         setData(merged);
@@ -155,6 +155,19 @@ export function useInternalMasterStorage(
       }
     });
   }, [engagementId, loaded]);
+
+  // Flush pending save on unmount so quick navigation doesn't drop edits.
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+        try {
+          awSave(engagementId, "int_master_json", dataRef.current, firmId, user?.id, user?.name || "");
+        } catch { /* swallow on unmount */ }
+      }
+    };
+  }, [engagementId, firmId, user?.id, user?.name]);
 
   // ── Persist ────────────────────────────────────────────────────────────────
   const persist = useCallback(
@@ -175,7 +188,7 @@ export function useInternalMasterStorage(
   // ── setField — single field + debounced auto-save ──────────────────────────
   const setField = useCallback(
     <K extends keyof InternalMasterData>(field: K, value: InternalMasterData[K]) => {
-      userEditedRef.current = true;
+      userTypedRef.current = true;
       setData(prev => {
         const next = { ...prev, [field]: value };
         dataRef.current = next;
@@ -190,7 +203,21 @@ export function useInternalMasterStorage(
   // ── patchFields — multiple fields + debounced auto-save ───────────────────
   const patchFields = useCallback(
     (patch: Partial<InternalMasterData>) => {
-      userEditedRef.current = true;
+      userTypedRef.current = true;
+      setData(prev => {
+        const next = { ...prev, ...patch };
+        dataRef.current = next;
+        if (timerRef.current) clearTimeout(timerRef.current);
+        timerRef.current = setTimeout(() => persist(next, true), 1000);
+        return next;
+      });
+    },
+    [persist]
+  );
+
+  // ── programmaticPatch — auto-fill that does NOT flip userTypedRef ─────────
+  const programmaticPatch = useCallback(
+    (patch: Partial<InternalMasterData>) => {
       setData(prev => {
         const next = { ...prev, ...patch };
         dataRef.current = next;
@@ -210,5 +237,5 @@ export function useInternalMasterStorage(
     return persist(dataRef.current, false);
   }, [persist]);
 
-  return { data, setField, patchFields, manualSave, saving, loaded };
+  return { data, setField, patchFields, programmaticPatch, manualSave, saving, loaded };
 }

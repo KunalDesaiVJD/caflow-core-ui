@@ -162,24 +162,24 @@ function EmpSelect({
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 export default function TaxAuditMaster({ data, engagementId, onSaved }: Props) {
-  const { data: m, setField, patchFields, manualSave, saving, loaded } =
+  const { data: m, setField, patchFields, programmaticPatch, manualSave, saving, loaded } =
     useTaxMasterStorage(engagementId, data.engagement?.firm_id);
 
   const { employees } = useEmployeeDropdown();
   const [showGstPwd, setShowGstPwd] = useState(false);
 
-  // Auto-populate free-text fields from engagement on first load
-  // (Read-only fields are always taken live from `data`)
+  // Auto-populate free-text fields from engagement on first load.
+  // Uses programmaticPatch so the userTypedRef stays false until the
+  // auditor actually types — that way the async DB load can still
+  // restore previously-saved Tally path / sign-off fields after navigation.
   useEffect(() => {
     if (!loaded || !data.clientName) return;
-    // Only auto-fill if all are blank (first open)
     if (m.audit_date_from) return;
-
-    patchFields({
+    programmaticPatch({
       audit_date_from: data.fyStartDate,
       audit_date_to:   data.fyEndDate,
     });
-  }, [loaded, data.clientName]);
+  }, [loaded, data.clientName]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Issue 1 — When the client master already has a registered GSTIN on
   // file, default the "GST Registered?" answer to "yes" so the auditor
@@ -189,8 +189,8 @@ export default function TaxAuditMaster({ data, engagementId, onSaved }: Props) {
     if (!loaded) return;
     if (m.gst_details) return;        // already answered — never overwrite
     if (!data.gstin) return;          // no GSTIN on file → leave blank
-    setField("gst_details", "yes");
-  }, [loaded, data.gstin, m.gst_details]);
+    programmaticPatch({ gst_details: "yes" });
+  }, [loaded, data.gstin, m.gst_details]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fyExpanded = expandFY(data.financialYear);
 

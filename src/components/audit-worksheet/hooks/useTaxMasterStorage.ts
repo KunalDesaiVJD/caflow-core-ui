@@ -147,14 +147,33 @@ export function useTaxMasterStorage(engagementId: string, firmId?: string | null
   const [loaded, setLoaded]   = useState(false);
   const [saving, setSaving]   = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // User-interaction sentinel — once the user edits a field, the async
-  // Supabase load must NOT overwrite their work. Without this guard, a
-  // slow DB roundtrip that resolves after the first keystroke wipes the
-  // accountant name / mobile no / etc. the user just typed.
-  const userEditedRef = useRef(false);
-  const dataRef       = useRef<TaxMasterData>(BLANK_TAX_MASTER);
+  // User-interaction sentinel — once the user TYPES into a field, the
+  // async Supabase load must NOT overwrite their work. We distinguish
+  // genuine user typing (setField/patchFields) from programmatic
+  // auto-fill (programmaticPatch) so the latter never blocks DB sync.
+  const userTypedRef = useRef(false);
+  const dataRef      = useRef<TaxMasterData>(BLANK_TAX_MASTER);
 
   // ── Load ─────────────────────────────────────────────────────────────────
+  // Bug: fields were "disappearing" on navigate-away/return because:
+  //   1. Auto-fill effects in MergedAuditMaster (dates, GST flag) called
+  //      tax.patchFields() within ~1 tick of mount.  setField() flips
+  //      userEditedRef.current to true.
+  //   2. awLoadFromDB() then resolves a few hundred ms later and skips the
+  //      state update (because userEditedRef.current === true).
+  //   3. If the user had typed BEFORE the auto-fill — e.g. into ac_path —
+  //      and then navigated away within the 1s debounce window, the trailing
+  //      auto-save fired with a snapshot that had ac_path = "" because the
+  //      load from DB never ran.  Cache + DB ended up empty.
+  //
+  // Fix:
+  //   • Track userTypedRef separately from userEditedRef. userTypedRef only
+  //     flips when the auditor actually types into a field (setField /
+  //     patchFields originating from a UI event); auto-fill effects use
+  //     a new programmaticPatch() entry point that does NOT flip it.
+  //   • DB load is gated on userTypedRef only — so programmatic auto-fill
+  //     never blocks the DB sync.
+  //   • On unmount, flush any pending debounced save synchronously.
   useEffect(() => {
     if (!engagementId || loaded) return;
     setLoaded(true);
@@ -165,7 +184,8 @@ export function useTaxMasterStorage(engagementId: string, firmId?: string | null
       dataRef.current = merged;
     }
     awLoadFromDB<Partial<TaxMasterData>>(engagementId, "tax_master_json").then(remote => {
-      if (userEditedRef.current) return;                // user already typed — do not clobber
+      // Only skip when the user has ACTUALLY typed (not just auto-fill).
+      if (userTypedRef.current) return;
       if (remote && typeof remote === "object" && Object.keys(remote).length > 0) {
         const merged = { ...BLANK_TAX_MASTER, ...remote };
         setData(merged);
@@ -173,6 +193,21 @@ export function useTaxMasterStorage(engagementId: string, firmId?: string | null
       }
     });
   }, [engagementId, loaded]);
+
+  // ── Flush pending save on unmount ─────────────────────────────────────────
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+        // Synchronous flush so cache + DB persist even when the user
+        // navigates within the 1-second debounce window.
+        try {
+          awSave(engagementId, "tax_master_json", dataRef.current, firmId, user?.id, user?.name || "");
+        } catch { /* swallow on unmount */ }
+      }
+    };
+  }, [engagementId, firmId, user?.id, user?.name]);
 
   // ── Internal save ────────────────────────────────────────────────────────
   const persist = useCallback(
@@ -193,7 +228,7 @@ export function useTaxMasterStorage(engagementId: string, firmId?: string | null
   // ── Set a single field + debounced auto-save ──────────────────────────────
   const setField = useCallback(
     <K extends keyof TaxMasterData>(field: K, value: TaxMasterData[K]) => {
-      userEditedRef.current = true;
+      userTypedRef.current = true;
       setData(prev => {
         const next = { ...prev, [field]: value };
         dataRef.current = next;
@@ -208,7 +243,23 @@ export function useTaxMasterStorage(engagementId: string, firmId?: string | null
   // ── Patch multiple fields at once + debounced auto-save ───────────────────
   const patchFields = useCallback(
     (patch: Partial<TaxMasterData>) => {
-      userEditedRef.current = true;
+      userTypedRef.current = true;
+      setData(prev => {
+        const next = { ...prev, ...patch };
+        dataRef.current = next;
+        if (timerRef.current) clearTimeout(timerRef.current);
+        timerRef.current = setTimeout(() => persist(next, true), 1000);
+        return next;
+      });
+    },
+    [persist]
+  );
+
+  // ── Programmatic patch (auto-fill / default seeding) ─────────────────────
+  // Does NOT flip userTypedRef, so the async DB load that resolves after
+  // mount can still update state from canonical server data.
+  const programmaticPatch = useCallback(
+    (patch: Partial<TaxMasterData>) => {
       setData(prev => {
         const next = { ...prev, ...patch };
         dataRef.current = next;
@@ -229,5 +280,5 @@ export function useTaxMasterStorage(engagementId: string, firmId?: string | null
     return persist(dataRef.current, false);
   }, [persist]);
 
-  return { data, setField, patchFields, manualSave, saving, loaded };
+  return { data, setField, patchFields, programmaticPatch, manualSave, saving, loaded };
 }
