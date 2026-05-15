@@ -1879,7 +1879,16 @@ export function getFAGridNetBlockTotal(
     }
     return anyData ? total : null;
   }
-  // PY = (gross_open − depn_open), per netPY in FAGrid.tsx
+  // PY column. The auditor can override the auto-computed total via the
+  // "Total — Previous year" row in FAGrid (stored in fa.py_manual.netPY).
+  // When that override is set, it WINS — the BS face PY for PPE must reflect
+  // exactly what the auditor typed in the note, not the formula-derived value.
+  // Fall back to (gross_open − depn_open) sum only when no manual override.
+  const pyManual = (notesData?.fa as any)?.py_manual ?? {};
+  const overrideNetPY = pyManual?.netPY;
+  if (Number.isFinite(overrideNetPY) && Math.abs(Number(overrideNetPY)) > 0.005) {
+    return Math.round(Number(overrideNetPY) * 100) / 100;
+  }
   let total = 0;
   let anyData = false;
   for (const r of rows) {
