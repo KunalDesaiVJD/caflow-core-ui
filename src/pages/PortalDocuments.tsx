@@ -43,7 +43,7 @@ function getCategoryGroup(cat: string): string {
 
 export default function PortalDocuments() {
   const { activeClient, loading: clientLoading } = usePortalClient();
-  const [loading,    setLoading]    = useState(true);
+  const [loading,    setLoading]    = useState(false);
   const [documents,  setDocuments]  = useState<any[]>([]);
   const [uploading,  setUploading]  = useState(false);
   const [uploadCat,  setUploadCat]  = useState("Other");

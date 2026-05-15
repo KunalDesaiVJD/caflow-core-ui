@@ -54,11 +54,16 @@ const SESSION_KEY = "caflow_portal_active_client";
 // ─── Provider ─────────────────────────────────────────────────────────────────
 
 export function PortalClientProvider({ children }: { children: ReactNode }) {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [clients,      setClients]      = useState<PortalClient[]>([]);
   const [allClientIds, setAllClientIds] = useState<string[]>([]);
   const [activeClient, setActiveClient] = useState<PortalClient | null>(null);
   const [loading,      setLoading]      = useState(true);
+
+  // When auth finishes but there is no logged-in user, stop showing spinner
+  useEffect(() => {
+    if (!authLoading && !user?.id) setLoading(false);
+  }, [authLoading, user?.id]);
 
   const load = useCallback(async () => {
     if (!user?.id) return;
