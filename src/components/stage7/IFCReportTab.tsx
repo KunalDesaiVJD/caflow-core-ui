@@ -184,26 +184,44 @@ export function IFCReportTab({ engagementId, engagement }: Props) {
   const isApplicable = engagement?.ifc_applicable !== false; // null/undefined → render template
 
   // ── Load firm + partner ──
-  // Pattern matches PipelineFinancialStatements.tsx: partner name comes from
-  // engagement.partner_name, membership number from firms.membership_numbers.
+  // Prefer the AUDIT firm chosen in Stage 1 (engagement.audit_firm_id) over
+  // the user's tenant firm so the IFC Report signature reflects the firm
+  // the engagement is actually being signed by.
   useEffect(() => {
-    if (!engagement?.firm_id) return;
+    const lookupId = (engagement as any)?.audit_firm_id || engagement?.firm_id;
+    if (!lookupId) return;
     supabase
       .from('firms')
       .select('name, display_name, icai_firm_reg_no, icai_reg_no, address, state, membership_numbers')
-      .eq('id', engagement.firm_id)
+      .eq('id', lookupId)
       .maybeSingle()
       .then(({ data }) => {
         if (data) {
           setFirm(data);
-          // If firm has city in address JSON, override default "Ahmedabad"
           const addrCity = (data.address as any)?.city;
           if (addrCity && typeof addrCity === "string" && addrCity.trim()) {
             setPlace(prev => prev === "Ahmedabad" ? addrCity : prev);
           }
+          return;
         }
+        supabase
+          .from('audit_firms')
+          .select('name, icai_reg_no, address, city')
+          .eq('id', lookupId)
+          .maybeSingle()
+          .then(({ data: af }) => {
+            if (af) setFirm({
+              name:             (af as any).name,
+              display_name:     (af as any).name,
+              icai_firm_reg_no: (af as any).icai_reg_no,
+              icai_reg_no:      (af as any).icai_reg_no,
+              address:          (af as any).address,
+              state:            null,
+              membership_numbers: [],
+            } as any);
+          });
       });
-  }, [engagement?.firm_id]);
+  }, [(engagement as any)?.audit_firm_id, engagement?.firm_id]);
 
   useEffect(() => {
     if (!engagement?.partner_id) return;

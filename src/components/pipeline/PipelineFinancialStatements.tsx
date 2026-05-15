@@ -2130,21 +2130,39 @@ export default function PipelineFinancialStatements({
     enabled: !!pyShellId,
   });
 
-  // ─── Firm data (NCE signature block) ─────────────────────────────────────
-  // Pulls `membership_numbers` as well so the partner's M.No. can be
-  // resolved from the engagement's `partner_name` when `partner_id` is
-  // absent (the Stage 1 form writes partner_name, not partner_id).
+  // ─── Firm data — used in the signature block on every BS / P&L / IAR ─────
+  // The DISPLAYED firm must be the audit firm chosen in Stage 1 (engagement.
+  // audit_firm_id), not the user's logged-in tenant firm (engagement.firm_id).
+  // Multi-firm practices select a different audit firm for each engagement
+  // (e.g. "AKTA RAMANI & ASSOCIATES" vs the practice's primary firm).
+  // The audit firm row may live in either `firms` (created via Firm
+  // Management with is_audit_firm=true) or `audit_firms` (legacy). Prefer
+  // audit_firm_id; fall back to firm_id for legacy engagements that never
+  // had a Stage 1 selection.
+  const firmLookupId =
+    (engagement as any)?.audit_firm_id || engagement?.firm_id || null;
   const { data: firmData } = useQuery({
-    queryKey: ["firm-detail-fs", engagement?.firm_id],
+    queryKey: ["firm-detail-fs-v2", firmLookupId],
     queryFn: async () => {
+      if (!firmLookupId) return null;
       const { data } = await supabase
         .from("firms")
-        .select("name, icai_firm_reg_no, address, membership_numbers")
-        .eq("id", engagement.firm_id)
+        .select("name, display_name, icai_firm_reg_no, icai_reg_no, address, membership_numbers")
+        .eq("id", firmLookupId)
         .maybeSingle();
-      return data as any;
+      if (data) {
+        const d = data as any;
+        return { ...d, name: d.display_name || d.name } as any;
+      }
+      // Fallback: row only exists in audit_firms (no firms-table entry yet).
+      const { data: af } = await supabase
+        .from("audit_firms")
+        .select("name, icai_reg_no, address")
+        .eq("id", firmLookupId)
+        .maybeSingle();
+      return af ? { name: (af as any).name, icai_firm_reg_no: (af as any).icai_reg_no, address: (af as any).address, membership_numbers: [] } : null;
     },
-    enabled: !!engagement?.firm_id,
+    enabled: !!firmLookupId,
   });
 
   // ─── Partner user data (NCE signature block) ──────────────────────────────
