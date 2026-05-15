@@ -676,6 +676,27 @@ export default function AuditPipeline() {
   const questValid = blockAValid && blockBValid && blockCValid && blockDValid;
   const canCompleteStage1 = block1AValid && questValid;
 
+  // ── Audit-firm id bridge ─────────────────────────────────────────────────
+  // audit_engagements.audit_firm_id has a FK on audit_firms.id. When the
+  // auditor picks a firm that lives only in the `firms` table (added via
+  // Firm Management with is_audit_firm=true), the insert fails with
+  //   "violates foreign key constraint audit_engagements_audit_firm_id_fkey".
+  // Mirror it into audit_firms with the same id before save — idempotent.
+  const ensureAuditFirmRow = async (firmId: string | null | undefined): Promise<string | null> => {
+    if (!firmId) return null;
+    const { data: existing } = await supabase.from("audit_firms").select("id").eq("id", firmId).maybeSingle();
+    if (existing?.id) return firmId;
+    const { data: src } = await supabase.from("firms").select("id, name").eq("id", firmId).maybeSingle();
+    if (!src?.id) return firmId;
+    await supabase.from("audit_firms").upsert({
+      id:      src.id,
+      name:    src.name,
+      firm_id: user?.firm_id ?? null,
+      active:  true,
+    } as any, { onConflict: "id" });
+    return firmId;
+  };
+
   // ─── Create new engagement ───
   const createEngagement = useMutation({
     mutationFn: async () => {
@@ -712,6 +733,7 @@ export default function AuditPipeline() {
         throw new Error("An engagement already exists for this client, audit type, financial year, and period.");
       }
 
+      const safeAuditFirmId = await ensureAuditFirmRow(form1A.audit_firm_id);
       const { data, error } = await supabase.from("audit_engagements").insert({
         client_id: form1A.client_id,
         firm_id: effectiveFirmId,
@@ -720,7 +742,7 @@ export default function AuditPipeline() {
         entity_type: form1A.entity_type,
         audit_period_type: form1A.audit_period_type,
         period_label: form1A.period_label || null,
-        audit_firm_id: form1A.audit_firm_id || null,
+        audit_firm_id: safeAuditFirmId,
         // partner_id kept for backward compat; partner_name is the primary display field
         partner_id:   form1A.partner_id   || null,
         partner_name: form1A.partner_name || null,
@@ -796,6 +818,7 @@ export default function AuditPipeline() {
     if (!selectedEngId) return;
     setSaving(true);
     const newStatuses = { ...stageStatuses, "1": complete ? "complete" : "in_progress" };
+    const safeAuditFirmId = await ensureAuditFirmRow(form1A.audit_firm_id);
 
     const payload: Record<string, any> = {
       client_id: form1A.client_id,
@@ -804,7 +827,7 @@ export default function AuditPipeline() {
       entity_type: form1A.entity_type,
       audit_period_type: form1A.audit_period_type,
       period_label: form1A.period_label || null,
-      audit_firm_id: form1A.audit_firm_id || null,
+      audit_firm_id: safeAuditFirmId,
       partner_name:  form1A.partner_name  || null,
       questionnaire_answers: questionnaire,
       // Sync PY data-source choice to the dedicated column so Stage 10 can

@@ -345,11 +345,53 @@ export default function AuditIntelligence() {
     });
     setShowEditDialog(true);
   };
+  // ─── Audit-firm id bridge ────────────────────────────────────────────────
+  // The audit_engagements table has a foreign-key constraint on audit_firm_id
+  // → audit_firms.id. When the auditor picks a firm that exists only in the
+  // `firms` table (added via Firm Management with is_audit_firm=true), the
+  // engagement insert/update fails with:
+  //   "insert or update on table 'audit_engagements' violates foreign key
+  //    constraint 'audit_engagements_audit_firm_id_fkey'"
+  // Fix: before persisting the engagement, ensure a corresponding row exists
+  // in audit_firms. We mirror only the immutable identifiers (id, name,
+  // firm_id, active=true). Idempotent: if the audit_firms row already exists
+  // (legacy firms registered there directly), this is a no-op.
+  const ensureAuditFirmRow = async (firmId: string): Promise<string | null> => {
+    if (!firmId) return null;
+    // Already an audit_firms row? Nothing to do.
+    const { data: existing } = await supabase
+      .from("audit_firms")
+      .select("id")
+      .eq("id", firmId)
+      .maybeSingle();
+    if (existing?.id) return firmId;
+    // Look it up in firms (where it must live if not in audit_firms).
+    const { data: src } = await supabase
+      .from("firms")
+      .select("id, name")
+      .eq("id", firmId)
+      .maybeSingle();
+    if (!src?.id) return firmId;          // unknown — let the FK error surface
+    // Mirror into audit_firms with the same id so the FK constraint is met.
+    // tenant attribution: prefer the logged-in user's firm; superadmin path
+    // keeps it nullable.
+    await supabase.from("audit_firms").upsert({
+      id:       src.id,
+      name:     src.name,
+      firm_id:  user?.firm_id ?? null,
+      active:   true,
+    } as any, { onConflict: "id" });
+    return firmId;
+  };
+
   const handleEdit = async () => {
     if (!selectedEngagementId) return;
     setFormSaving(true);
+    const safeAuditFirmId = engForm.audit_firm_id
+      ? await ensureAuditFirmRow(engForm.audit_firm_id)
+      : null;
     const { error } = await supabase.from("audit_engagements").update({
-      audit_firm_id: engForm.audit_firm_id || null,
+      audit_firm_id: safeAuditFirmId,
       client_id: engForm.client_id,
       financial_year: engForm.financial_year,
       audit_type: engForm.audit_type,
