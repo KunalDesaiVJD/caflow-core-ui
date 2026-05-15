@@ -154,18 +154,18 @@ function EntitySwitcher() {
 // ─── Pending badge (queries) ──────────────────────────────────────────────────
 
 function PendingBadge() {
-  const { activeClient } = usePortalClient();
+  const { allClientIds } = usePortalClient();
   const [count, setCount] = useState(0);
 
   useEffect(() => {
-    if (!activeClient?.id) { setCount(0); return; }
+    if (!allClientIds.length) { setCount(0); return; }
     supabase
       .from("audit_client_queries" as any)
       .select("id", { count: "exact", head: true })
-      .eq("client_id", activeClient.id)
+      .in("client_id", allClientIds)
       .in("status", ["Open", "Client Acknowledged"])
       .then(({ count: c }) => setCount(c || 0));
-  }, [activeClient?.id]);
+  }, [allClientIds]);
 
   if (!count) return null;
   return (
