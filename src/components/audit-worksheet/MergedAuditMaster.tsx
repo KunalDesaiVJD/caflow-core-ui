@@ -139,22 +139,27 @@ export default function MergedAuditMaster({ data, engagementId, onSaved }: Props
   const t = tax.data;
   const s = stat.data;
 
-  // Auto-fill dates on first load
+  // Auto-fill dates on first load. Uses programmaticPatch so the async
+  // DB load that resolves shortly after mount is NOT blocked by the
+  // userTypedRef sentinel — otherwise a returning user who navigates
+  // back to this page would see auto-fill dates but their previously
+  // saved Tally path / sign-off fields would disappear.
   useEffect(() => {
     if (!tax.loaded || !data.clientName) return;
     if (t.audit_date_from) return;
-    tax.patchFields({ audit_date_from: data.fyStartDate, audit_date_to: data.fyEndDate });
-    stat.patchFields({ audit_date_from: data.fyStartDate, audit_date_to: data.fyEndDate });
+    tax.programmaticPatch({ audit_date_from: data.fyStartDate, audit_date_to: data.fyEndDate });
+    stat.programmaticPatch({ audit_date_from: data.fyStartDate, audit_date_to: data.fyEndDate });
   }, [tax.loaded, data.clientName]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Issue 1 — Default "GST Registered?" to "yes" when the client master
-  // already has a GSTIN on file.  Only fires when gst_details is unset
-  // (auditor never answered) — never overrides an explicit choice.
+  // Default "GST Registered?" to "yes" when the client master already
+  // has a GSTIN on file. Uses programmaticPatch (NOT setField) for the
+  // same reason as above — auto-fill must never block the DB load that
+  // restores the auditor's saved Tally path / report path / sign-off.
   useEffect(() => {
     if (!tax.loaded) return;
     if (t.gst_details) return;
     if (!data.gstin) return;
-    tax.setField("gst_details", "yes");
+    tax.programmaticPatch({ gst_details: "yes" });
   }, [tax.loaded, data.gstin, t.gst_details]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fyExpanded = expandFY(data.financialYear);
