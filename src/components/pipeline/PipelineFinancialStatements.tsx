@@ -2936,36 +2936,45 @@ export default function PipelineFinancialStatements({
         reserves:        { noteNo: dn("reserves_surplus"),     cy: ncyOf("bs_liab","reserves_surplus","BS_EQ_RS"),            py: npyOf("bs_liab","reserves_surplus","BS_EQ_RS")            },
         ltBorrowings:    { noteNo: dn("lt_borrowings"),        cy: ncyOf("bs_liab","lt_borrowings","BS_NCL_LTB"),             py: npyOf("bs_liab","lt_borrowings","BS_NCL_LTB")             },
         dtLiab:          { noteNo: dn("deferred_tax_liab"),    cy: ncyOf("bs_liab","deferred_tax_liab","BS_NCL_DTL"),         py: npyOf("bs_liab","deferred_tax_liab","BS_NCL_DTL")         },
-        otherLtLiab:     { noteNo: dn("other_lt_liab"),        cy: ncyOf("bs_liab","other_lt_liab","BS_NCL_OLT"),             py: npyOf("bs_liab","other_lt_liab","BS_NCL_OLT")             },
+        // CRITICAL: data keys here MUST match NOTE_ROW_REGISTRY keys in
+        // src/lib/notesAutoPopulate.ts. A typo silently routes the lookup
+        // through pyOf(fsCode) (the raw TB total) and divorces the BS face
+        // from the auditor's note breakup — they will not reconcile.
+        // (Issue: Note 5 "Other current liabilities" was showing 5,17,257
+        //  on the BS face vs 4,85,171 on the note, because the BS lookup
+        //  used "other_current_liab" while the registry stores it under
+        //  "other_curr_liab". Same problem cascaded through six other
+        //  notes. Fixed by aligning every key to the registry below.)
+        otherLtLiab:     { noteNo: dn("other_lt_liab"),        cy: ncyOf("bs_liab","other_lt_liabilities","BS_NCL_OLT"),      py: npyOf("bs_liab","other_lt_liabilities","BS_NCL_OLT")      },
         ltProvisions:    { noteNo: dn("lt_provisions"),        cy: ncyOf("bs_liab","lt_provisions","BS_NCL_LTP"),             py: npyOf("bs_liab","lt_provisions","BS_NCL_LTP")             },
         stBorrowings:    { noteNo: dn("st_borrowings"),        cy: ncyOf("bs_liab","st_borrowings","BS_CL_STB"),              py: npyOf("bs_liab","st_borrowings","BS_CL_STB")              },
         tradePayables:   { noteNo: dn("trade_payables") },
         tradePayMSME:    { cy: 0, py: 0 },  // ageing MSME split kept at 0; full TP total below
         tradePayOthers:  { cy: ncyOf("bs_liab","trade_payables","BS_CL_TP"),       py: npyOf("bs_liab","trade_payables","BS_CL_TP")       },
-        otherCurrLiab:   { noteNo: dn("other_current_liab"),   cy: ncyOf("bs_liab","other_current_liab","BS_CL_OCL"),         py: npyOf("bs_liab","other_current_liab","BS_CL_OCL")         },
+        otherCurrLiab:   { noteNo: dn("other_current_liab"),   cy: ncyOf("bs_liab","other_curr_liab","BS_CL_OCL"),            py: npyOf("bs_liab","other_curr_liab","BS_CL_OCL")            },
         stProvisions:    { noteNo: dn("st_provisions"),        cy: ncyOf("bs_liab","st_provisions","BS_CL_STP"),              py: npyOf("bs_liab","st_provisions","BS_CL_STP")              },
         // Bug 6 — PPE prefers FA grid Net Block total over raw TB.
         // Falls back to cyOf/pyOf("BS_NCA_FA") when the FA grid has no rows.
         ppe:             { noteNo: dn("ppe"),                  cy: getFAGridNetBlockTotal(stage5NotesData ?? null, "cy") ?? cyOf("BS_NCA_FA"),  py: getFAGridNetBlockTotal(stage5NotesData ?? null, "py") ?? pyOf("BS_NCA_FA") },
         ncInvestments:   { noteNo: dn("nc_investments"),       cy: ncyOf("bs_asset","nc_investments","BS_NCA_INV"),           py: npyOf("bs_asset","nc_investments","BS_NCA_INV")           },
-        dtAssets:        { noteNo: dn("deferred_tax_assets"),  cy: ncyOf("bs_asset","deferred_tax_assets","BS_NCA_DTA"),      py: npyOf("bs_asset","deferred_tax_assets","BS_NCA_DTA")      },
-        ltLoans:         { noteNo: dn("lt_loans_advances"),    cy: ncyOf("bs_asset","lt_loans_advances","BS_NCA_LLA"),        py: npyOf("bs_asset","lt_loans_advances","BS_NCA_LLA")        },
+        dtAssets:        { noteNo: dn("deferred_tax_assets"),  cy: ncyOf("bs_asset","deferred_tax_asset","BS_NCA_DTA"),       py: npyOf("bs_asset","deferred_tax_asset","BS_NCA_DTA")       },
+        ltLoans:         { noteNo: dn("lt_loans_advances"),    cy: ncyOf("bs_asset","lt_loans","BS_NCA_LLA"),                 py: npyOf("bs_asset","lt_loans","BS_NCA_LLA")                 },
         otherNcAssets:   { noteNo: dn("other_nc_assets"),      cy: ncyOf("bs_asset","other_nc_assets","BS_NCA_ONA"),          py: npyOf("bs_asset","other_nc_assets","BS_NCA_ONA")          },
-        currInvestments: { noteNo: dn("current_investments"),  cy: ncyOf("bs_asset","current_investments","BS_CA_CI"),        py: npyOf("bs_asset","current_investments","BS_CA_CI")        },
+        currInvestments: { noteNo: dn("current_investments"),  cy: ncyOf("bs_asset","curr_investments","BS_CA_CI"),           py: npyOf("bs_asset","curr_investments","BS_CA_CI")           },
         inventories:     { noteNo: dn("inventories"),          cy: ncyOf("bs_asset","inventories","BS_CA_INV"),               py: npyOf("bs_asset","inventories","BS_CA_INV")               },
         tradeRec:        { noteNo: dn("trade_receivables"),    cy: ncyOf("bs_asset","trade_receivables","BS_CA_TR"),          py: npyOf("bs_asset","trade_receivables","BS_CA_TR")          },
         cashBank:        { noteNo: dn("cash_bank"),            cy: ncyOf("bs_asset","cash_bank","BS_CA_CCE"),                 py: npyOf("bs_asset","cash_bank","BS_CA_CCE")                 },
-        stLoans:         { noteNo: dn("st_loans_advances"),    cy: ncyOf("bs_asset","st_loans_advances","BS_CA_SLA"),         py: npyOf("bs_asset","st_loans_advances","BS_CA_SLA")         },
-        otherCurrAssets: { noteNo: dn("other_current_assets"), cy: ncyOf("bs_asset","other_current_assets","BS_CA_OCA"),      py: npyOf("bs_asset","other_current_assets","BS_CA_OCA")      },
+        stLoans:         { noteNo: dn("st_loans_advances"),    cy: ncyOf("bs_asset","st_loans","BS_CA_SLA"),                  py: npyOf("bs_asset","st_loans","BS_CA_SLA")                  },
+        otherCurrAssets: { noteNo: dn("other_current_assets"), cy: ncyOf("bs_asset","other_curr_assets","BS_CA_OCA"),         py: npyOf("bs_asset","other_curr_assets","BS_CA_OCA")         },
         sigPolicies:     { noteNo: 1 }, // Accounting Policies — always Note 1
       };
       // P&L — also notes-aware; pbt recomputed from notes-adjusted rev/exp totals
       const expCy = ncyOf("pl","cost_materials","PL_EXP_MAT")      + ncyOf("pl","purchases_stock","PL_EXP_SIT")
-                  + ncyOf("pl","changes_inventories","PL_EXP_CII")  + ncyOf("pl","employee_benefits","PL_EXP_EMP")
+                  + ncyOf("pl","changes_inventory","PL_EXP_CII")   + ncyOf("pl","employee_benefits","PL_EXP_EMP")
                   + ncyOf("pl","finance_costs","PL_EXP_FIN")        + ncyOf("pl","depreciation","PL_EXP_DEP")
                   + ncyOf("pl","other_expenses","PL_EXP_OTH");
       const expPy = npyOf("pl","cost_materials","PL_EXP_MAT")      + npyOf("pl","purchases_stock","PL_EXP_SIT")
-                  + npyOf("pl","changes_inventories","PL_EXP_CII")  + npyOf("pl","employee_benefits","PL_EXP_EMP")
+                  + npyOf("pl","changes_inventory","PL_EXP_CII")   + npyOf("pl","employee_benefits","PL_EXP_EMP")
                   + npyOf("pl","finance_costs","PL_EXP_FIN")        + npyOf("pl","depreciation","PL_EXP_DEP")
                   + npyOf("pl","other_expenses","PL_EXP_OTH");
       const revCy = ncyOf("pl","revenue_from_ops","PL_REV_OPS") + ncyOf("pl","other_income","PL_REV_OI");
@@ -2994,13 +3003,13 @@ export default function PipelineFinancialStatements({
             return {
               noteNo: dn("changes_inventories"),
               cy: openingCy - closingCy,
-              py: pyInvCII ?? npyOf("pl","changes_inventories","PL_EXP_CII"),
+              py: pyInvCII ?? npyOf("pl","changes_inventory","PL_EXP_CII"),
             };
           }
           return {
             noteNo: dn("changes_inventories"),
-            cy: ncyOf("pl","changes_inventories","PL_EXP_CII"),
-            py: npyOf("pl","changes_inventories","PL_EXP_CII"),
+            cy: ncyOf("pl","changes_inventory","PL_EXP_CII"),
+            py: npyOf("pl","changes_inventory","PL_EXP_CII"),
           };
         })(),
         employeeBenefits:   { noteNo: dn("employee_benefits"),   cy: ncyOf("pl","employee_benefits","PL_EXP_EMP"),  py: npyOf("pl","employee_benefits","PL_EXP_EMP")  },
