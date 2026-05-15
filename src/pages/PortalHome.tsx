@@ -22,7 +22,7 @@ import { toast } from "sonner";
 import {
   FileText, Download, Upload, AlertTriangle, Receipt, CreditCard,
   Bell, Loader2, FolderOpen, ClipboardList, ArrowRight,
-  Building2, MessageSquareWarning, Users,
+  Building2, MessageSquareWarning,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -132,41 +132,6 @@ function AuditProgressCard({ clientId }: { clientId: string }) {
   );
 }
 
-// ─── All-entities summary strip ───────────────────────────────────────────────
-
-function AllEntitiesStrip() {
-  const { clients, activeClient, setActiveById } = usePortalClient();
-  if (clients.length <= 1) return null;
-
-  return (
-    <div className="rounded-xl border bg-white p-4">
-      <div className="flex items-center gap-2 mb-3">
-        <Users size={15} className="text-[#0A131E]" />
-        <span className="text-sm font-semibold text-[#0A131E]">
-          All Your Entities ({clients.length})
-        </span>
-      </div>
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-        {clients.map(c => (
-          <button
-            key={c.id}
-            type="button"
-            onClick={() => setActiveById(c.id)}
-            className={cn(
-              "flex items-center gap-2 px-3 py-2 rounded-lg border text-left transition-all text-xs",
-              c.id === activeClient?.id
-                ? "bg-[#0A131E] text-white border-[#0A131E] shadow-sm"
-                : "bg-gray-50 text-foreground border-border hover:border-amber-300 hover:bg-amber-50",
-            )}
-          >
-            <Building2 size={12} className={c.id === activeClient?.id ? "text-amber-300" : "text-amber-500"} />
-            <span className="truncate font-medium">{c.name}</span>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
@@ -364,9 +329,6 @@ export default function PortalHome() {
           </Link>
         </div>
       </div>
-
-      {/* All entities grid (only if multi-entity) */}
-      <AllEntitiesStrip />
 
       {/* Audit Progress */}
       <AuditProgressCard clientId={activeClient.id} />
