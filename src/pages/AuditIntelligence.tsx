@@ -180,9 +180,15 @@ export default function AuditIntelligence() {
       .then(({ data }) => setUsers(data || []));
   }, [user?.firm_id]);
 
+  // Engagement Partner dropdown now reflects the SELECTED audit firm's
+  // partner roster (firms.membership_numbers), not just the currently
+  // logged-in user's own firm. This ensures parity with all audit firms —
+  // including newly added ones like "AKTA RAMANI & ASSOCIATES" — so the
+  // auditor sees the right partners regardless of which firm they pick.
   useEffect(() => {
-    if (!user?.firm_id) return;
-    supabase.from("firms").select("membership_numbers").eq("id", user.firm_id).single()
+    const fid = engForm.audit_firm_id || user?.firm_id;
+    if (!fid) { setPartnersForFirm([]); return; }
+    supabase.from("firms").select("membership_numbers").eq("id", fid).maybeSingle()
       .then(({ data }) => {
         if (!data?.membership_numbers) { setPartnersForFirm([]); return; }
         setPartnersForFirm(
@@ -194,15 +200,35 @@ export default function AuditIntelligence() {
             }))
         );
       });
-  }, [user?.firm_id]);
+  }, [engForm.audit_firm_id, user?.firm_id]);
 
+  // Audit Firm dropdown — historically populated from `audit_firms` table
+  // only.  New audit firms added via Firm Management land in the `firms`
+  // table with is_audit_firm=true and therefore never appeared here.
+  // Fix: union both sources, dedupe by name, sort alphabetically. Future
+  // firms added via either path will surface immediately for every tenant.
   useEffect(() => {
     if (!user?.id) return;
-    let q = supabase.from("audit_firms").select("id, name").neq("active", false).order("name");
+    let q1 = supabase.from("audit_firms").select("id, name").neq("active", false).order("name");
     if (user.role !== "superadmin" && user.firm_id) {
-      q = q.eq("firm_id", user.firm_id) as typeof q;
+      q1 = q1.eq("firm_id", user.firm_id) as typeof q1;
     }
-    q.then(({ data }) => setAuditFirms(data || []));
+    const q2 = supabase
+      .from("firms")
+      .select("id, name, is_audit_firm")
+      .eq("is_audit_firm", true)
+      .order("name");
+
+    Promise.all([q1, q2]).then(([r1, r2]) => {
+      const byKey = new Map<string, { id: string; name: string }>();
+      for (const f of (r1.data || [])) byKey.set((f.name || "").toLowerCase().trim(), { id: f.id, name: f.name });
+      for (const f of (r2.data || [])) {
+        const key = (f.name || "").toLowerCase().trim();
+        if (!byKey.has(key)) byKey.set(key, { id: f.id, name: f.name });
+      }
+      const merged = [...byKey.values()].sort((a, b) => a.name.localeCompare(b.name));
+      setAuditFirms(merged);
+    });
   }, [user?.id, user?.firm_id, user?.role]);
 
   useEffect(() => {

@@ -405,38 +405,42 @@ export default function AuditPipeline() {
   });
 
   // ─── Audit firms (for engagement creation) ───
-  // ALL active audit firms are visible to every authenticated user, regardless
-  // of role or practice firm_id. The previous behaviour scoped the list to the
-  // user's own practice firm_id for non-superadmins, which hid co-firms (e.g.
-  // "K Desai and Associates") from team members who legitimately needed to
-  // sign engagements under those firms. Practice partnerships routinely
-  // share staff across multiple registered audit firms — restricting the
-  // dropdown by firm_id breaks that workflow.
+  // Union of (legacy) audit_firms table + firms table where is_audit_firm=true.
+  // The Firm Management screen writes new audit firms into `firms` with
+  // is_audit_firm=true, so without this union those firms (e.g. "AKTA RAMANI
+  // & ASSOCIATES") would never appear in the engagement creation dropdown.
   const { data: auditFirmsForEng } = useQuery({
-    queryKey: ["audit-firms-eng-all"],
+    queryKey: ["audit-firms-eng-all-v2"],
     queryFn: async () => {
-      const { data } = await supabase
-        .from("audit_firms")
-        .select("id, name")
-        .neq("active", false)
-        .order("name");
-      return data || [];
+      const [r1, r2] = await Promise.all([
+        supabase.from("audit_firms").select("id, name").neq("active", false).order("name"),
+        supabase.from("firms").select("id, name, is_audit_firm").eq("is_audit_firm", true).order("name"),
+      ]);
+      const byKey = new Map<string, { id: string; name: string }>();
+      for (const f of (r1.data || [])) byKey.set((f.name || "").toLowerCase().trim(), { id: f.id, name: f.name });
+      for (const f of (r2.data || [])) {
+        const key = (f.name || "").toLowerCase().trim();
+        if (!byKey.has(key)) byKey.set(key, { id: f.id, name: f.name });
+      }
+      return [...byKey.values()].sort((a, b) => a.name.localeCompare(b.name));
     },
     enabled: !!user?.id,
   });
 
   // ─── Partners from FIRM SETTINGS (firms.membership_numbers) ────────────────
-  // Reads the partner membership list configured in Settings → Audit Registration.
-  // These are the actual signing partners of the practice firm.
+  // Resolves to the SELECTED audit firm's partner roster (so picking AKTA
+  // RAMANI shows its partners, not the user's own firm's partners). Falls
+  // back to the user's logged-in firm when no audit firm is chosen yet.
+  const selectedAuditFirmId = form1A.audit_firm_id || user?.firm_id || null;
   const { data: partnersForFirm = [] } = useQuery({
-    queryKey: ["practice-firm-partners", user?.firm_id],
+    queryKey: ["practice-firm-partners-v2", selectedAuditFirmId],
     queryFn: async () => {
-      if (!user?.firm_id) return [];
+      if (!selectedAuditFirmId) return [];
       const { data } = await supabase
         .from("firms")
         .select("membership_numbers")
-        .eq("id", user.firm_id)
-        .single();
+        .eq("id", selectedAuditFirmId)
+        .maybeSingle();
       if (!data?.membership_numbers) return [];
       return ((data.membership_numbers as any[]) || [])
         .filter((m: any) => m?.partner_name)
@@ -445,7 +449,7 @@ export default function AuditPipeline() {
           membership_no: (m.membership_no as string) || null,
         }));
     },
-    enabled: !!user?.firm_id,
+    enabled: !!selectedAuditFirmId,
   });
 
   // ─── Selected engagement detail ───
