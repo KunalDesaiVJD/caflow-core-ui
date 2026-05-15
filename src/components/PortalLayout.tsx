@@ -125,9 +125,9 @@ function EntitySwitcher() {
                   )}>
                     {client.name}
                   </p>
-                  {client.client_type && (
+                  {client.entity_type && (
                     <p className="text-[10px] text-muted-foreground capitalize">
-                      {client.client_type.replace(/_/g, " ")}
+                      {client.entity_type.replace(/_/g, " ")}
                     </p>
                   )}
                 </div>

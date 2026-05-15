@@ -7,6 +7,15 @@
  *
  * Persists the last-chosen entity in sessionStorage so page refreshes don't
  * reset the selection.
+ *
+ * Client lookup strategy (3 sources, merged + deduplicated):
+ *   A. Direct user_id link  — clients.user_id = auth.uid()
+ *   B. Email link via RPC   — get_portal_clients_by_email() SECURITY DEFINER
+ *      function looks up auth.users.email and returns matching clients,
+ *      bypassing RLS entirely. This is necessary because auth.jwt() >> 'email'
+ *      is not always present in RLS policy context.
+ *   C. Direct email query   — clients.email ILIKE user.email (succeeds when
+ *      the portal_clients_by_email RLS policy is effective)
  */
 
 import {
@@ -19,23 +28,23 @@ import { useAuth } from "@/hooks/useAuth";
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface PortalClient {
-  id:             string;
-  name:           string;
-  firm_id:        string | null;
-  mobile:         string | null;
-  email:          string | null;
-  gstin:          string[] | null;
-  pan:            string | null;
-  client_type:    string | null;
+  id:           string;
+  name:         string;
+  firm_id:      string | null;
+  mobile:       string | null;
+  email:        string | null;
+  gstin:        string[] | null;
+  pan:          string | null;
+  entity_type:  string | null;
 }
 
 interface PortalClientContextValue {
-  clients:        PortalClient[];
-  allClientIds:   string[];
-  activeClient:   PortalClient | null;
-  setActiveById:  (id: string) => void;
-  loading:        boolean;
-  reload:         () => void;
+  clients:       PortalClient[];
+  allClientIds:  string[];
+  activeClient:  PortalClient | null;
+  setActiveById: (id: string) => void;
+  loading:       boolean;
+  reload:        () => void;
 }
 
 // ─── Context ──────────────────────────────────────────────────────────────────
@@ -69,48 +78,72 @@ export function PortalClientProvider({ children }: { children: ReactNode }) {
     if (!user?.id) return;
     setLoading(true);
 
-    // Strategy: match clients by BOTH user_id (explicit link) AND email
-    // (shared-email families / group accounts where many entities use one address).
-    // Run two queries then deduplicate by id.
-    // Use neq("is_active", false) instead of eq("is_active", true) so clients
-    // with is_active = null (the DB default) are also included.
-    const [byIdResult, byEmailResult] = await Promise.all([
-      supabase
-        .from("clients")
-        .select("id, name, firm_id, mobile, email, gstin, pan, client_type")
-        .eq("user_id", user.id)
-        .neq("is_active", false)
-        .order("name"),
-      user.email
-        ? supabase
-            .from("clients")
-            .select("id, name, firm_id, mobile, email, gstin, pan, client_type")
-            .ilike("email", user.email)
-            .neq("is_active", false)
-            .order("name")
-        : Promise.resolve({ data: [], error: null }),
+    // ── Source A: user_id-linked clients (subject to RLS) ─────────────────
+    const byIdPromise = supabase
+      .from("clients")
+      .select("id, name, firm_id, mobile, email, gstin, pan, entity_type")
+      .eq("user_id", user.id)
+      .neq("is_active", false)
+      .is("deleted_at", null)
+      .order("name");
+
+    // ── Source B: SECURITY DEFINER RPC — bypasses RLS, uses auth.users email ─
+    // Most reliable for shared-email group accounts. The function looks up the
+    // calling user's email directly from auth.users (not JWT claims) and returns
+    // all clients whose email matches.
+    const byRpcPromise = supabase.rpc("get_portal_clients_by_email" as any);
+
+    // ── Source C: direct email query (works when RLS policy is effective) ──
+    const byEmailPromise = user.email
+      ? supabase
+          .from("clients")
+          .select("id, name, firm_id, mobile, email, gstin, pan, entity_type")
+          .ilike("email", user.email)
+          .neq("is_active", false)
+          .is("deleted_at", null)
+          .order("name")
+      : Promise.resolve({ data: [], error: null });
+
+    const [byIdResult, byRpcResult, byEmailResult] = await Promise.all([
+      byIdPromise,
+      byRpcPromise,
+      byEmailPromise,
     ]);
 
     if (byIdResult.error) {
-      console.error("PortalClientContext load error:", byIdResult.error);
-      setLoading(false);
-      return;
+      console.error("[PortalClientContext] user_id query error:", byIdResult.error);
+    }
+    if (byRpcResult.error) {
+      console.error("[PortalClientContext] RPC query error:", byRpcResult.error);
     }
 
-    // Merge and deduplicate
-    const seen = new Set<string>();
+    // ── Merge and deduplicate across all three sources ─────────────────────
+    const seen   = new Set<string>();
     const merged: PortalClient[] = [];
-    for (const c of [...(byIdResult.data || []), ...((byEmailResult as any).data || [])]) {
-      if (!seen.has(c.id)) {
-        seen.add(c.id);
-        merged.push(c as PortalClient);
-      }
-    }
+
+    const addRow = (c: any) => {
+      if (!c?.id || seen.has(c.id)) return;
+      seen.add(c.id);
+      merged.push({
+        id:          c.id,
+        name:        c.name,
+        firm_id:     c.firm_id ?? null,
+        mobile:      c.mobile ?? null,
+        email:       c.email ?? null,
+        gstin:       c.gstin ?? null,
+        pan:         c.pan ?? null,
+        entity_type: c.entity_type ?? null,
+      });
+    };
+
+    for (const c of byIdResult.data    || []) addRow(c);
+    for (const c of (byRpcResult.data  as any[]) || []) addRow(c);
+    for (const c of (byEmailResult as any).data || []) addRow(c);
+
     merged.sort((a, b) => a.name.localeCompare(b.name));
 
     setClients(merged);
 
-    // Restore previous selection from sessionStorage
     const savedId = sessionStorage.getItem(SESSION_KEY);
     const saved   = savedId ? merged.find(c => c.id === savedId) : null;
     setActiveClient(saved || merged[0] || null);
