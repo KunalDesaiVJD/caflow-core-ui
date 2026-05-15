@@ -265,9 +265,9 @@ function PortalShell() {
 
         <div className="flex-1" />
 
-        {/* User info */}
-        <span className="text-xs text-white/50 hidden lg:inline truncate max-w-36">
-          {user?.name || user?.email}
+        {/* User info — show email so multi-entity users know which login they're using */}
+        <span className="text-xs text-white/50 hidden lg:inline truncate max-w-48">
+          {user?.email || user?.name}
         </span>
 
         {/* Logout */}
