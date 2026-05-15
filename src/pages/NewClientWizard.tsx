@@ -251,10 +251,10 @@ const NewClientWizard = () => {
           .limit(1),
         urlFY
           ? baseClassQuery.eq("financial_year", urlFY).limit(1)
-          : baseClassQuery.order("financial_year", { ascending: false }).limit(1),
+          : baseClassQuery.order("updated_at", { ascending: false }).limit(1),
         urlFY
           ? baseAuditQuery.eq("financial_year", urlFY).limit(1)
-          : baseAuditQuery.order("financial_year", { ascending: false }).limit(1),
+          : baseAuditQuery.order("updated_at", { ascending: false }).limit(1),
       ]);
 
       if (!mounted) return;
