@@ -187,6 +187,8 @@ export const NOTE_SMART_MAP: Record<string, SmartRule[]> = {
         "loan from family", "family loan",
         "loan from member", "huf loan", "loan from huf",
         "unsecured loan from director", "unsecured loan from partner",
+        // HUF entities are always related parties in Indian partnership context
+        " huf", "(huf)", "-huf",
       ] },
     // Unsecured — bank/FI (less common but possible)
     { rowId: "unsec_term_bank", keywords: ["unsecured term loan from bank", "unsecured bank loan", "unsecured tl"] },
@@ -463,17 +465,21 @@ export async function nceAutoPopulate(
     if (parts.length === 2) {
       const startYr = parseInt(parts[0], 10);
       const prevFy  = `${startYr - 1}-${String(startYr).slice(-2)}`;
-      const { data: prevEng } = await supabase
+      // Load all prior-FY engagements (may include PY shell + a regular engagement)
+      const { data: prevEngList } = await supabase
         .from("audit_engagements")
-        .select("id")
+        .select("id, is_py_shell, coa_mapping")
         .eq("client_id", clientId)
-        .eq("financial_year", prevFy)
-        .maybeSingle();
-      if ((prevEng as any)?.id) {
+        .eq("financial_year", prevFy);
+      const prevEngs = (prevEngList ?? []) as any[];
+      // Prefer the non-py_shell engagement for nce_financial_notes (it has user-entered PY).
+      // Fall back to py_shell if that's all there is.
+      const primaryPrev = prevEngs.find(e => !e.is_py_shell) ?? prevEngs[0] ?? null;
+      if (primaryPrev?.id) {
         const { data: prevNoteRows } = await supabase
           .from("nce_financial_notes")
           .select("note_type, cy_data")
-          .eq("engagement_id", (prevEng as any).id);
+          .eq("engagement_id", primaryPrev.id);
         for (const r of (prevNoteRows ?? [])) {
           const raw = (r.cy_data as Record<string, any>) ?? {};
           const nums: Record<string, number> = {};
@@ -484,6 +490,66 @@ export async function nceAutoPopulate(
           pyCustomRows[r.note_type] = Array.isArray(raw._custom_rows)
             ? (raw._custom_rows as NCECustomRow[])
             : [];
+        }
+      }
+
+      // Fallback: if all pyNotes have no numeric data (prior year never auto-populated),
+      // compute PY static-row amounts directly from the prior year TB.
+      // This covers the common case where a PY shell was synced but nceAutoPopulate
+      // was never run for that engagement, leaving nce_financial_notes empty.
+      const allEmpty = Object.values(pyNotes).every(n => Object.keys(n).length === 0);
+      if (allEmpty) {
+        // Find prior-year engagement that actually has TB data (PY shell preferred)
+        const shellEng = prevEngs.find(e => e.is_py_shell) ?? primaryPrev;
+        if (shellEng?.id) {
+          const { data: pyTbRaw } = await supabase
+            .from("tally_trial_balance")
+            .select("ledger_name, closing_balance, balance_type, opening_balance, opening_type, parent_group")
+            .eq("engagement_id", shellEng.id);
+          const pyTb: TBRow[] = (pyTbRaw ?? []) as TBRow[];
+          // Prefer shell's own COA mapping; fall back to current-year mapping
+          const pyCoaMap: Record<string, { code: string }> =
+            shellEng.coa_mapping && Object.keys(shellEng.coa_mapping).length > 0
+              ? shellEng.coa_mapping
+              : coaMapping;
+
+          if (pyTb.length > 0) {
+            for (const [nType, noteFs] of Object.entries(NCE_NOTE_FS_MAP)) {
+              const pyResult: Record<string, number> = {};
+              const pyRules = NOTE_SMART_MAP[nType] ?? [];
+
+              if (noteFs.all) {
+                const codeSet = new Set(noteFs.all);
+                for (const row of pyTb) {
+                  const mapped = pyCoaMap[row.ledger_name];
+                  if (!mapped || !codeSet.has(mapped.code)) continue;
+                  const amt = ledgerAmt(row.closing_balance);
+                  if (amt === 0) continue;
+                  const rid = smartMatch(row.ledger_name, pyRules);
+                  if (rid) pyResult[rid] = (pyResult[rid] ?? 0) + amt;
+                }
+              } else if (noteFs.lt || noteFs.st) {
+                const ltSet = new Set(noteFs.lt ?? []);
+                const stSet = new Set(noteFs.st ?? []);
+                for (const row of pyTb) {
+                  const mapped = pyCoaMap[row.ledger_name];
+                  if (!mapped) continue;
+                  const isLT = ltSet.has(mapped.code);
+                  const isST = stSet.has(mapped.code);
+                  if (!isLT && !isST) continue;
+                  const amt = ledgerAmt(row.closing_balance);
+                  if (amt === 0) continue;
+                  const rid = smartMatch(row.ledger_name, pyRules);
+                  if (rid) {
+                    if (isLT) pyResult[rid + "_lt"] = (pyResult[rid + "_lt"] ?? 0) + amt;
+                    if (isST) pyResult[rid + "_st"] = (pyResult[rid + "_st"] ?? 0) + amt;
+                  }
+                }
+              }
+
+              if (Object.keys(pyResult).length > 0) pyNotes[nType] = pyResult;
+            }
+          }
         }
       }
     }
@@ -733,7 +799,7 @@ export async function nceAutoPopulate(
       const ltSet      = new Set(noteFs.lt ?? []);
       const stSet      = new Set(noteFs.st ?? []);
       const smartRules = NOTE_SMART_MAP[noteType] ?? [];
-      const unmatchedA: { ledger: string; amt: number; isLT: boolean; isST: boolean }[] = [];
+      const unmatchedA: { ledger: string; amt: number; isLT: boolean; isST: boolean; parentGroup?: string }[] = [];
 
       for (const row of tb) {
         const mapped = coaMapping[row.ledger_name];
@@ -757,7 +823,7 @@ export async function nceAutoPopulate(
           if (isST && !(matchedRowId + "_st" in newPy))
             newPy[matchedRowId + "_st"] = Math.abs(pyNotes[noteType]?.[matchedRowId + "_st"] ?? 0);
         } else {
-          unmatchedA.push({ ledger: row.ledger_name, amt, isLT, isST, parentGroup: row.parent_group ?? undefined });
+          unmatchedA.push({ ledger: row.ledger_name, amt, isLT, isST, parentGroup: row.parent_group ?? undefined  });
         }
       }
 
@@ -769,10 +835,6 @@ export async function nceAutoPopulate(
       // matches the auditor's expectation that BS notes show ledger-level
       // detail rather than account-group categories.
       let idx = 0;
-      // For borrowings, all unmatched ledgers are unsecured by nature →
-      // attach them under "Other unsecured loans" static row in the unsecured section.
-      const section    = noteType === "borrowings" ? "unsecured"   : undefined;
-      const attachedTo = noteType === "borrowings" ? "unsec_other" : undefined;
       for (const um of unmatchedA) {
         const label = um.ledger; // ledger name verbatim
         const id    = makeCustomId(label, idx++);
@@ -784,10 +846,27 @@ export async function nceAutoPopulate(
           newCy[id + "_st"] = um.amt;
           newPy[id + "_st"] = pyForCustomRow(noteType, id, label, "_st");
         }
+
+        let rowSection:    string | undefined;
+        let rowAttachedTo: string | undefined;
+        if (noteType === "borrowings") {
+          rowSection = "unsecured";
+          // Check parent_group for related-party indicators, and ledger name for HUF.
+          // When the user has a Tally sub-group like "Loans from Partners" or "Director Loans"
+          // as the parent_group, or when the ledger name contains HUF (always a related party),
+          // route the custom row to "Loans from related parties" instead of "Other unsecured loans".
+          const pgLower   = (um.parentGroup || "").toLowerCase();
+          const nameLower = normLedger(um.ledger);
+          const pgRelated = ["partner", "director", "promoter", "proprietor",
+            "shareholder", "relative", "family", "huf", "related"].some(kw => pgLower.includes(kw));
+          const nameHuf   = nameLower.includes(" huf") || nameLower.includes("(huf)") || nameLower.includes("-huf");
+          rowAttachedTo = (pgRelated || nameHuf) ? "unsec_related" : "unsec_other";
+        }
+
         autoRows.push({
           id, label, source: "auto",
-          ...(section    ? { section }    : {}),
-          ...(attachedTo ? { attachedTo } : {}),
+          ...(rowSection    ? { section: rowSection }       : {}),
+          ...(rowAttachedTo ? { attachedTo: rowAttachedTo } : {}),
         });
       }
 

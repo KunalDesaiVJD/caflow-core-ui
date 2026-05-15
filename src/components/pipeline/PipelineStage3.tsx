@@ -2074,9 +2074,10 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                      String(item.section || "").toLowerCase().includes("equity");
         const pyFromOpening = computedAmountsPY[item.code] || 0;
         const pyFromPrior   = pyAmounts[item.code]         || 0;
+        const pyFromShell   = pyShellPLAmounts[item.code]  || 0;
         const amount_py     = isBS
-          ? (Math.abs(pyFromOpening) > 0.005 ? pyFromOpening : (pyFromPrior || null))
-          : (pyFromPrior || null);
+          ? (Math.abs(pyFromOpening) > 0.005 ? pyFromOpening : (pyFromPrior || pyFromShell || null))
+          : (pyFromPrior || pyFromShell || null);
 
         rows.push({
           engagement_id: engagementId,

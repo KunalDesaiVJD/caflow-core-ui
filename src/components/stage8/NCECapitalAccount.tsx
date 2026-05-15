@@ -34,8 +34,21 @@ interface PyRow {
   profit_share: number;
 }
 
+interface PyPartnerRow {
+  partner_no: number;   // 100, 101, 102 … (PY_PARTNER_BASE range)
+  partner_name: string;
+  opening: number;
+  introduced: number;
+  remuneration: number;
+  interest: number;
+  withdrawals: number;
+  profit_share: number;
+}
+
 // PY aggregate is stored as partner_no = 99 (sentinel value)
 const PY_SENTINEL = 99;
+// PY per-partner rows use partner_no >= 100
+const PY_PARTNER_BASE = 100;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -93,14 +106,16 @@ interface Props {
 
 export function NCECapitalAccount({ engagementId }: Props) {
   // Start with a single partner by default — user adds more via "Add Partner"
-  const [partners, setPartners] = useState<PartnerRow[]>([emptyPartner(1)]);
-  const [pyRow, setPyRow]   = useState<PyRow>(EMPTY_PY);
+  const [partners,    setPartners]    = useState<PartnerRow[]>([emptyPartner(1)]);
+  const [pyRow,       setPyRow]       = useState<PyRow>(EMPTY_PY);
+  const [pyPartners,  setPyPartners]  = useState<PyPartnerRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving,  setSaving]  = useState(false);
   const [eng,     setEng]     = useState<any>(null);
   // Track partner_no values that existed in DB but have been removed in the
   // UI so `save()` can delete the stale rows.
-  const [deletedPartnerNos, setDeletedPartnerNos] = useState<number[]>([]);
+  const [deletedPartnerNos,   setDeletedPartnerNos]   = useState<number[]>([]);
+  const [deletedPyPartnerNos, setDeletedPyPartnerNos] = useState<number[]>([]);
 
   // ── Derived year labels (from self-fetched engagement) ───────────────────
   const fy      = (eng?.financial_year as string) || "";
@@ -138,9 +153,9 @@ export function NCECapitalAccount({ engagementId }: Props) {
       if (error) {
         toast.error("Failed to load capital account data");
       } else if (data && data.length > 0) {
-        // Populate partner rows (all non-sentinel rows, sorted)
+        // CY partner rows: partner_no in [1, PY_SENTINEL-1]
         const savedPartners = data
-          .filter(r => r.partner_no !== PY_SENTINEL)
+          .filter(r => r.partner_no < PY_SENTINEL)
           .sort((a, b) => a.partner_no - b.partner_no)
           .map(row => ({
             partner_no:         row.partner_no,
@@ -155,18 +170,34 @@ export function NCECapitalAccount({ engagementId }: Props) {
           }));
         if (savedPartners.length > 0) setPartners(savedPartners);
 
-        // Populate PY aggregate row (sentinel = 99)
+        // PY aggregate row (sentinel = 99) — used when no per-partner PY rows
         const py = data.find(r => r.partner_no === PY_SENTINEL);
         if (py) {
           setPyRow({
-            opening:     py.opening_balance_cy ?? 0,
-            introduced:  py.introduced_cy      ?? 0,
-            remuneration:py.remuneration_cy    ?? 0,
-            interest:    py.interest_cy        ?? 0,
-            withdrawals: py.withdrawals_cy     ?? 0,
-            profit_share:py.profit_share_cy    ?? 0,
+            opening:      py.opening_balance_cy ?? 0,
+            introduced:   py.introduced_cy      ?? 0,
+            remuneration: py.remuneration_cy    ?? 0,
+            interest:     py.interest_cy        ?? 0,
+            withdrawals:  py.withdrawals_cy     ?? 0,
+            profit_share: py.profit_share_cy    ?? 0,
           });
         }
+
+        // PY per-partner rows: partner_no >= PY_PARTNER_BASE (100+)
+        const savedPyPartners = data
+          .filter(r => r.partner_no >= PY_PARTNER_BASE)
+          .sort((a, b) => a.partner_no - b.partner_no)
+          .map(row => ({
+            partner_no:   row.partner_no,
+            partner_name: row.partner_name        ?? "",
+            opening:      row.opening_balance_cy  ?? 0,
+            introduced:   row.introduced_cy       ?? 0,
+            remuneration: row.remuneration_cy     ?? 0,
+            interest:     row.interest_cy         ?? 0,
+            withdrawals:  row.withdrawals_cy      ?? 0,
+            profit_share: row.profit_share_cy     ?? 0,
+          }));
+        if (savedPyPartners.length > 0) setPyPartners(savedPyPartners);
       }
       if (!cancelled) setLoading(false);
     })();
@@ -201,6 +232,9 @@ export function NCECapitalAccount({ engagementId }: Props) {
   const setPyField = (field: keyof PyRow, value: number) =>
     setPyRow(prev => ({ ...prev, [field]: value }));
 
+  const setPyPartnerField = (idx: number, field: keyof PyPartnerRow, value: string | number) =>
+    setPyPartners(prev => prev.map((p, i) => (i === idx ? { ...p, [field]: value } : p)));
+
   const addPartner = () => {
     setPartners(prev => {
       // Allocate a new partner_no that is not the PY sentinel and not already
@@ -213,6 +247,19 @@ export function NCECapitalAccount({ engagementId }: Props) {
     });
   };
 
+  const addPyPartner = () => {
+    setPyPartners(prev => {
+      const used = new Set(prev.map(p => p.partner_no));
+      let next = PY_PARTNER_BASE;
+      while (used.has(next)) next++;
+      return [...prev, {
+        partner_no: next, partner_name: "",
+        opening: 0, introduced: 0, remuneration: 0,
+        interest: 0, withdrawals: 0, profit_share: 0,
+      }];
+    });
+  };
+
   const removePartner = (idx: number) => {
     setPartners(prev => {
       if (prev.length <= 1) return prev; // keep at least one row
@@ -222,11 +269,19 @@ export function NCECapitalAccount({ engagementId }: Props) {
     });
   };
 
+  const removePyPartner = (idx: number) => {
+    setPyPartners(prev => {
+      const removed = prev[idx];
+      setDeletedPyPartnerNos(d => [...d, removed.partner_no]);
+      return prev.filter((_, i) => i !== idx);
+    });
+  };
+
   // ── Save ─────────────────────────────────────────────────────────────────
   const save = async () => {
     setSaving(true);
     try {
-      // 1. Delete rows for partners the user removed in this session
+      // 1. Delete rows for CY partners removed in this session
       if (deletedPartnerNos.length > 0) {
         const { error: delErr } = await supabase
           .from("nce_capital_account")
@@ -236,6 +291,28 @@ export function NCECapitalAccount({ engagementId }: Props) {
           .in("partner_no", deletedPartnerNos);
         if (delErr) throw delErr;
       }
+      // 2. Delete rows for PY partners removed in this session
+      if (deletedPyPartnerNos.length > 0) {
+        const { error: delErr } = await supabase
+          .from("nce_capital_account")
+          .delete()
+          .eq("engagement_id", engagementId)
+          .eq("financial_year", fy)
+          .in("partner_no", deletedPyPartnerNos);
+        if (delErr) throw delErr;
+      }
+
+      // Compute PY aggregate from per-partner rows when they exist
+      const pyAgg: PyRow = pyPartners.length > 0
+        ? {
+            opening:      pyPartners.reduce((s, p) => s + p.opening, 0),
+            introduced:   pyPartners.reduce((s, p) => s + p.introduced, 0),
+            remuneration: pyPartners.reduce((s, p) => s + p.remuneration, 0),
+            interest:     pyPartners.reduce((s, p) => s + p.interest, 0),
+            withdrawals:  pyPartners.reduce((s, p) => s + p.withdrawals, 0),
+            profit_share: pyPartners.reduce((s, p) => s + p.profit_share, 0),
+          }
+        : pyRow;
 
       const rows = [
         ...partners.map(p => ({
@@ -251,20 +328,34 @@ export function NCECapitalAccount({ engagementId }: Props) {
           withdrawals_cy:     p.withdrawals_cy,
           profit_share_cy:    p.profit_share_cy,
         })),
-        // PY aggregate stored as partner_no = 99
+        // PY aggregate stored as partner_no = 99 (always saved for backward compat)
         {
           engagement_id:      engagementId,
           financial_year:     fy,
           partner_no:         PY_SENTINEL,
           partner_name:       "Previous Year",
           profit_share_pct:   null,
-          opening_balance_cy: pyRow.opening,
-          introduced_cy:      pyRow.introduced,
-          remuneration_cy:    pyRow.remuneration,
-          interest_cy:        pyRow.interest,
-          withdrawals_cy:     pyRow.withdrawals,
-          profit_share_cy:    pyRow.profit_share,
+          opening_balance_cy: pyAgg.opening,
+          introduced_cy:      pyAgg.introduced,
+          remuneration_cy:    pyAgg.remuneration,
+          interest_cy:        pyAgg.interest,
+          withdrawals_cy:     pyAgg.withdrawals,
+          profit_share_cy:    pyAgg.profit_share,
         },
+        // PY per-partner rows (partner_no >= 100)
+        ...pyPartners.map(p => ({
+          engagement_id:      engagementId,
+          financial_year:     fy,
+          partner_no:         p.partner_no,
+          partner_name:       p.partner_name || null,
+          profit_share_pct:   null,
+          opening_balance_cy: p.opening,
+          introduced_cy:      p.introduced,
+          remuneration_cy:    p.remuneration,
+          interest_cy:        p.interest,
+          withdrawals_cy:     p.withdrawals,
+          profit_share_cy:    p.profit_share,
+        })),
       ];
 
       const { error } = await supabase
@@ -523,62 +614,119 @@ export function NCECapitalAccount({ engagementId }: Props) {
               <TableCell />
             </TableRow>
 
-            {/* ── Previous Year (PY) row ── */}
-            <TableRow className="bg-blue-50/40 text-muted-foreground">
-              <TableCell />
-              <TableCell className="text-xs font-medium text-foreground italic">
-                Previous Year ({pyYear})
-              </TableCell>
-              <TableCell />
-
-              <TableCell className="text-right">
-                <NumInput
-                  value={pyRow.opening}
-                  onChange={v => setPyField("opening", v)}
-                />
-              </TableCell>
-              <TableCell className="text-right">
-                <NumInput
-                  value={pyRow.introduced}
-                  onChange={v => setPyField("introduced", v)}
-                />
-              </TableCell>
-              <TableCell className="text-right">
-                <NumInput
-                  value={pyRow.remuneration}
-                  onChange={v => setPyField("remuneration", v)}
-                />
-              </TableCell>
-              <TableCell className="text-right">
-                <NumInput
-                  value={pyRow.interest}
-                  onChange={v => setPyField("interest", v)}
-                />
-              </TableCell>
-              <TableCell className="text-right">
-                <NumInput
-                  value={pyRow.withdrawals}
-                  onChange={v => setPyField("withdrawals", v)}
-                />
-              </TableCell>
-              <TableCell className="text-right">
-                <NumInput
-                  value={pyRow.profit_share}
-                  onChange={v => setPyField("profit_share", v)}
-                />
-              </TableCell>
-
-              {/* PY closing — also auto-calculated */}
-              <TableCell
-                className={cn(
-                  "text-right bg-primary/5 font-semibold",
-                  calcPyClosing(pyRow) < 0 && "text-destructive"
-                )}
-              >
-                {fmt(calcPyClosing(pyRow))}
-              </TableCell>
-              <TableCell />
-            </TableRow>
+            {/* ── Previous Year section ── */}
+            {pyPartners.length > 0 ? (
+              /* Per-partner PY rows */
+              <>
+                {pyPartners.map((p, i) => {
+                  const pyClosing = p.opening + p.introduced + p.remuneration + p.interest - p.withdrawals + p.profit_share;
+                  return (
+                    <TableRow key={p.partner_no} className="bg-blue-50/40 text-muted-foreground">
+                      <TableCell />
+                      <TableCell>
+                        <Input
+                          value={p.partner_name}
+                          onChange={e => setPyPartnerField(i, "partner_name", e.target.value)}
+                          placeholder={`PY Partner ${i + 1}`}
+                          className="h-7 text-xs px-1 w-36 italic"
+                        />
+                      </TableCell>
+                      <TableCell />
+                      <TableCell className="text-right">
+                        <NumInput value={p.opening}      onChange={v => setPyPartnerField(i, "opening", v)} />
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <NumInput value={p.introduced}   onChange={v => setPyPartnerField(i, "introduced", v)} />
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <NumInput value={p.remuneration} onChange={v => setPyPartnerField(i, "remuneration", v)} />
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <NumInput value={p.interest}     onChange={v => setPyPartnerField(i, "interest", v)} />
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <NumInput value={p.withdrawals}  onChange={v => setPyPartnerField(i, "withdrawals", v)} />
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <NumInput value={p.profit_share} onChange={v => setPyPartnerField(i, "profit_share", v)} />
+                      </TableCell>
+                      <TableCell className={cn("text-right bg-primary/5 font-semibold", pyClosing < 0 && "text-destructive")}>
+                        {fmt(pyClosing)}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <Button
+                          type="button" variant="ghost" size="icon"
+                          className="h-6 w-6 text-muted-foreground hover:text-destructive"
+                          onClick={() => removePyPartner(i)}
+                        >
+                          <Trash2 size={12} />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+                {/* PY total row (auto-calculated from per-partner rows) */}
+                {(() => {
+                  const pyTotals = {
+                    opening:      pyPartners.reduce((s, p) => s + p.opening, 0),
+                    introduced:   pyPartners.reduce((s, p) => s + p.introduced, 0),
+                    remuneration: pyPartners.reduce((s, p) => s + p.remuneration, 0),
+                    interest:     pyPartners.reduce((s, p) => s + p.interest, 0),
+                    withdrawals:  pyPartners.reduce((s, p) => s + p.withdrawals, 0),
+                    profit_share: pyPartners.reduce((s, p) => s + p.profit_share, 0),
+                    closing:      pyPartners.reduce((s, p) => s + p.opening + p.introduced + p.remuneration + p.interest - p.withdrawals + p.profit_share, 0),
+                  };
+                  return (
+                    <TableRow className="bg-blue-100/40 border-t font-semibold text-muted-foreground">
+                      <TableCell />
+                      <TableCell className="text-xs uppercase tracking-wide italic">PY Total ({pyYear})</TableCell>
+                      <TableCell />
+                      <TableCell className="text-right text-xs">{fmt(pyTotals.opening)}</TableCell>
+                      <TableCell className="text-right text-xs">{fmt(pyTotals.introduced)}</TableCell>
+                      <TableCell className="text-right text-xs">{fmt(pyTotals.remuneration)}</TableCell>
+                      <TableCell className="text-right text-xs">{fmt(pyTotals.interest)}</TableCell>
+                      <TableCell className="text-right text-xs">{fmt(pyTotals.withdrawals)}</TableCell>
+                      <TableCell className="text-right text-xs">{fmt(pyTotals.profit_share)}</TableCell>
+                      <TableCell className={cn("text-right bg-primary/10 font-bold text-xs", pyTotals.closing < 0 && "text-destructive")}>
+                        {fmt(pyTotals.closing)}
+                      </TableCell>
+                      <TableCell />
+                    </TableRow>
+                  );
+                })()}
+              </>
+            ) : (
+              /* Single aggregate PY row (legacy mode) */
+              <TableRow className="bg-blue-50/40 text-muted-foreground">
+                <TableCell />
+                <TableCell className="text-xs font-medium text-foreground italic">
+                  Previous Year ({pyYear})
+                </TableCell>
+                <TableCell />
+                <TableCell className="text-right">
+                  <NumInput value={pyRow.opening}      onChange={v => setPyField("opening", v)} />
+                </TableCell>
+                <TableCell className="text-right">
+                  <NumInput value={pyRow.introduced}   onChange={v => setPyField("introduced", v)} />
+                </TableCell>
+                <TableCell className="text-right">
+                  <NumInput value={pyRow.remuneration} onChange={v => setPyField("remuneration", v)} />
+                </TableCell>
+                <TableCell className="text-right">
+                  <NumInput value={pyRow.interest}     onChange={v => setPyField("interest", v)} />
+                </TableCell>
+                <TableCell className="text-right">
+                  <NumInput value={pyRow.withdrawals}  onChange={v => setPyField("withdrawals", v)} />
+                </TableCell>
+                <TableCell className="text-right">
+                  <NumInput value={pyRow.profit_share} onChange={v => setPyField("profit_share", v)} />
+                </TableCell>
+                <TableCell className={cn("text-right bg-primary/5 font-semibold", calcPyClosing(pyRow) < 0 && "text-destructive")}>
+                  {fmt(calcPyClosing(pyRow))}
+                </TableCell>
+                <TableCell />
+              </TableRow>
+            )}
           </TableBody>
         </Table>
       </div>
@@ -595,6 +743,16 @@ export function NCECapitalAccount({ engagementId }: Props) {
           >
             <Plus size={13} />
             Add Partner
+          </Button>
+          <Button
+            type="button"
+            onClick={addPyPartner}
+            size="sm"
+            variant="outline"
+            className="gap-1.5 text-blue-700 border-blue-200 hover:bg-blue-50"
+          >
+            <Plus size={13} />
+            Add Partner (PY)
           </Button>
           <p className="text-[10px] text-muted-foreground">
             Closing Balance = Opening + Introduced + Remuneration + Interest − Withdrawals + Profit Share
