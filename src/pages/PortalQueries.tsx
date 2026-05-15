@@ -1,17 +1,19 @@
 /**
- * PortalQueries — Client-facing audit query page (Multi-entity)
+ * PortalQueries — Unified multi-entity audit query inbox
  *
- * Uses PortalClientContext so shared-email accounts see queries for the
- * currently selected entity. Theme: CAFlow navy + amber-600.
+ * When the portal user is linked to multiple clients (shared email / group
+ * company), all queries across all entities are shown in a single inbox by
+ * default, with a colour-coded entity badge on each query card.  The user can
+ * filter down to a single entity using the entity selector tab row.
  *
  * Features:
- *  - All audit_client_queries for the active client entity
- *  - Per-query conversation thread (portal_query_messages)
+ *  - Unified inbox: queries for ALL linked clients in one view
+ *  - Entity filter tabs (All / per-entity)
+ *  - Per-query conversation thread (portal_query_messages) with realtime
  *  - File attachment per reply
  *  - Required documents list per query
- *  - Realtime updates via Supabase channels
  *  - Status badge + priority indicator
- *  - Entity switcher hint (when multi-entity)
+ *  - Big4-style professional layout
  */
 
 import { useState, useEffect, useCallback, useRef } from "react";
@@ -26,7 +28,7 @@ import { toast } from "sonner";
 import {
   MessageSquareWarning, Send, Loader2, Paperclip, Download,
   ChevronDown, ChevronUp, FileText, X, CheckCircle2,
-  Building2,
+  Building2, Inbox,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -45,6 +47,7 @@ interface AuditQuery {
   group_name:          string | null;
   client_reply:        string | null;
   firm_id:             string | null;
+  client_id:           string;
 }
 
 interface Message {
@@ -75,6 +78,18 @@ const PRIORITY_DOT: Record<string, string> = {
   Low:    "bg-green-500",
 };
 
+// Palette for entity colour-coding (cycled if more than 8 clients)
+const ENTITY_COLORS = [
+  "bg-violet-100 text-violet-700 border-violet-200",
+  "bg-cyan-100 text-cyan-700 border-cyan-200",
+  "bg-rose-100 text-rose-700 border-rose-200",
+  "bg-teal-100 text-teal-700 border-teal-200",
+  "bg-orange-100 text-orange-700 border-orange-200",
+  "bg-indigo-100 text-indigo-700 border-indigo-200",
+  "bg-lime-100 text-lime-700 border-lime-200",
+  "bg-pink-100 text-pink-700 border-pink-200",
+];
+
 function fmtDate(iso: string | null): string {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
@@ -91,9 +106,13 @@ function fmtTime(iso: string): string {
 function QueryCard({
   query,
   clientName,
+  entityColorClass,
+  showEntityBadge,
 }: {
-  query:      AuditQuery;
-  clientName: string;
+  query:            AuditQuery;
+  clientName:       string;
+  entityColorClass: string;
+  showEntityBadge:  boolean;
 }) {
   const [messages,   setMessages]   = useState<Message[]>([]);
   const [expanded,   setExpanded]   = useState(false);
@@ -176,7 +195,6 @@ function QueryCard({
       toast.success("Reply sent successfully");
       fetchMessages();
 
-      // Notify firm
       if (query.firm_id) {
         supabase.functions.invoke("send-notification", {
           body: {
@@ -213,8 +231,8 @@ function QueryCard({
     }
   };
 
-  const isClosed = query.status === "Clarified" || query.status === "Closed";
-  const reqDocs  = query.required_documents?.split(",").map(s => s.trim()).filter(Boolean) ?? [];
+  const isClosed  = query.status === "Clarified" || query.status === "Closed";
+  const reqDocs   = query.required_documents?.split(",").map(s => s.trim()).filter(Boolean) ?? [];
   const isOverdue = query.due_date && new Date(query.due_date) < new Date() && !isClosed;
 
   return (
@@ -236,6 +254,12 @@ function QueryCard({
 
           <div className="flex-1 min-w-0">
             <div className="flex flex-wrap items-center gap-2 mb-1">
+              {/* Entity badge — shown when viewing all entities */}
+              {showEntityBadge && (
+                <Badge className={cn("text-[10px] border font-semibold", entityColorClass)}>
+                  <Building2 size={9} className="mr-1" />{clientName}
+                </Badge>
+              )}
               {query.ref_number && (
                 <span className="font-mono text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
                   {query.ref_number}
@@ -298,7 +322,6 @@ function QueryCard({
                 </p>
               ) : (
                 <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
-                  {/* Legacy single-reply bridge */}
                   {query.client_reply && messages.length === 0 && (
                     <div className="flex justify-end">
                       <div className="max-w-[80%] bg-amber-50 border border-amber-200 rounded-xl rounded-tr-sm px-3 py-2">
@@ -345,7 +368,6 @@ function QueryCard({
                 </div>
               )}
 
-              {/* Reply box */}
               {!isClosed ? (
                 <div className="mt-3 space-y-2 border-t border-amber-100 pt-3">
                   <Textarea
@@ -408,48 +430,61 @@ function QueryCard({
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function PortalQueries() {
-  const { activeClient, clients, loading: clientLoading } = usePortalClient();
-  const [loading,    setLoading]    = useState(true);
-  const [queries,    setQueries]    = useState<AuditQuery[]>([]);
-  const [filter,     setFilter]     = useState<"all" | "open" | "closed">("open");
+  const { activeClient, clients, allClientIds, loading: clientLoading } = usePortalClient();
+
+  const [loading,      setLoading]      = useState(true);
+  const [queries,      setQueries]      = useState<AuditQuery[]>([]);
+  const [statusFilter, setStatusFilter] = useState<"all" | "open" | "closed">("open");
+  // "all" = unified inbox across all entities; otherwise the entity id
+  const [entityFilter, setEntityFilter] = useState<"all" | string>("all");
+
+  // Build a stable colour index per client id
+  const clientColorMap = Object.fromEntries(
+    clients.map((c, i) => [c.id, ENTITY_COLORS[i % ENTITY_COLORS.length]])
+  );
 
   const fetchQueries = useCallback(async () => {
-    if (!activeClient) return;
+    if (allClientIds.length === 0) return;
     setLoading(true);
+
+    const ids = entityFilter === "all" ? allClientIds : [entityFilter];
 
     const { data } = await (supabase as any)
       .from("audit_client_queries")
-      .select("id,ref_number,query_text,status,priority,due_date,financial_year,required_documents,ledger_name,group_name,client_reply,firm_id")
-      .eq("client_id", activeClient.id)
+      .select("id,ref_number,query_text,status,priority,due_date,financial_year,required_documents,ledger_name,group_name,client_reply,firm_id,client_id")
+      .in("client_id", ids)
       .order("created_at", { ascending: false });
 
     setQueries((data as AuditQuery[]) || []);
     setLoading(false);
-  }, [activeClient]);
+  }, [allClientIds, entityFilter]);
 
   useEffect(() => { fetchQueries(); }, [fetchQueries]);
 
-  // Realtime
+  // Realtime — subscribe to all linked client IDs
   useEffect(() => {
-    if (!activeClient) return;
-    const ch = supabase
-      .channel(`portal-queries-rt-${activeClient.id}`)
-      .on("postgres_changes", {
-        event: "*", schema: "public", table: "audit_client_queries",
-        filter: `client_id=eq.${activeClient.id}`,
-      }, fetchQueries)
-      .subscribe();
-    return () => { supabase.removeChannel(ch); };
-  }, [activeClient, fetchQueries]);
+    if (allClientIds.length === 0) return;
+    const channels = allClientIds.map(cid =>
+      supabase
+        .channel(`portal-queries-rt-${cid}`)
+        .on("postgres_changes", {
+          event: "*", schema: "public", table: "audit_client_queries",
+          filter: `client_id=eq.${cid}`,
+        }, fetchQueries)
+        .subscribe()
+    );
+    return () => { channels.forEach(ch => supabase.removeChannel(ch)); };
+  }, [allClientIds, fetchQueries]);
 
-  const displayed  = queries.filter(q => {
-    if (filter === "open")   return !["Clarified", "Closed"].includes(q.status);
-    if (filter === "closed") return  ["Clarified", "Closed"].includes(q.status);
+  const displayed = queries.filter(q => {
+    if (statusFilter === "open")   return !["Clarified", "Closed"].includes(q.status);
+    if (statusFilter === "closed") return  ["Clarified", "Closed"].includes(q.status);
     return true;
   });
 
   const openCount   = queries.filter(q => !["Clarified", "Closed"].includes(q.status)).length;
   const closedCount = queries.filter(q =>  ["Clarified", "Closed"].includes(q.status)).length;
+  const isMulti     = clients.length > 1;
 
   // ── Loading states ─────────────────────────────────────────────────────────
 
@@ -487,30 +522,78 @@ export default function PortalQueries() {
   return (
     <div className="space-y-5">
 
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4 flex-wrap">
+      {/* ── Header ── */}
+      <div className="rounded-xl bg-[#0A131E] text-white px-6 py-5 flex items-center gap-4">
+        <div className="h-10 w-10 rounded-full bg-amber-500/20 border-2 border-amber-400 flex items-center justify-center shrink-0">
+          <Inbox size={18} className="text-amber-300" />
+        </div>
         <div>
-          <h1 className="text-xl font-bold flex items-center gap-2 text-[#0A131E]">
-            <MessageSquareWarning size={22} className="text-amber-600" />
-            Audit Queries
-          </h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            {activeClient.name}
-            {clients.length > 1 && (
-              <span className="ml-2 text-[11px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-medium">
-                Switch entity from top bar
-              </span>
-            )}
-          </p>
-          <p className="text-xs text-muted-foreground mt-1">
-            {openCount > 0
-              ? `${openCount} active ${openCount === 1 ? "query" : "queries"} pending your response`
-              : "No pending queries — you're all caught up! ✓"}
+          <h1 className="text-lg font-bold">Audit Query Inbox</h1>
+          <p className="text-sm text-white/70 mt-0.5">
+            {isMulti
+              ? `${clients.length} entities · ${openCount} ${openCount === 1 ? "query" : "queries"} need your response`
+              : `${activeClient.name} · ${openCount > 0 ? `${openCount} pending` : "All caught up ✓"}`}
           </p>
         </div>
+        {openCount > 0 && (
+          <div className="ml-auto flex items-center gap-2">
+            <span className="h-8 w-8 rounded-full bg-red-500 text-white text-sm font-bold flex items-center justify-center">
+              {openCount > 99 ? "99+" : openCount}
+            </span>
+          </div>
+        )}
       </div>
 
-      {/* Filter tabs */}
+      {/* ── Entity tabs (only for multi-entity accounts) ── */}
+      {isMulti && (
+        <div className="flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            onClick={() => setEntityFilter("all")}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all",
+              entityFilter === "all"
+                ? "bg-[#0A131E] text-white border-[#0A131E] shadow-sm"
+                : "bg-white text-muted-foreground border-border hover:border-amber-300 hover:text-foreground",
+            )}
+          >
+            <Inbox size={11} /> All Entities
+            {openCount > 0 && (
+              <span className="ml-1 px-1.5 py-0.5 rounded-full bg-red-500 text-white text-[9px] font-bold leading-none">
+                {openCount}
+              </span>
+            )}
+          </button>
+
+          {clients.map((c, idx) => {
+            const clientQueries = queries.filter(q => q.client_id === c.id);
+            const clientOpen    = clientQueries.filter(q => !["Clarified", "Closed"].includes(q.status)).length;
+            return (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => setEntityFilter(c.id)}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all",
+                  entityFilter === c.id
+                    ? "bg-[#0A131E] text-white border-[#0A131E] shadow-sm"
+                    : "bg-white text-muted-foreground border-border hover:border-amber-300 hover:text-foreground",
+                )}
+              >
+                <Building2 size={11} />
+                <span className="max-w-[120px] truncate">{c.name}</span>
+                {clientOpen > 0 && (
+                  <span className="ml-1 px-1.5 py-0.5 rounded-full bg-red-500 text-white text-[9px] font-bold leading-none">
+                    {clientOpen}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── Status filter tabs ── */}
       {queries.length > 0 && (
         <div className="flex gap-1 p-1 bg-muted rounded-lg w-fit">
           {([
@@ -521,10 +604,10 @@ export default function PortalQueries() {
             <button
               key={key}
               type="button"
-              onClick={() => setFilter(key)}
+              onClick={() => setStatusFilter(key)}
               className={cn(
                 "px-3 py-1 rounded-md text-xs font-medium transition-colors",
-                filter === key
+                statusFilter === key
                   ? "bg-amber-600 text-white shadow-sm"
                   : "text-muted-foreground hover:text-foreground",
               )}
@@ -535,13 +618,13 @@ export default function PortalQueries() {
         </div>
       )}
 
-      {/* Query list */}
+      {/* ── Query list ── */}
       {displayed.length === 0 ? (
         <Card>
           <CardContent className="py-14 text-center text-muted-foreground">
             <MessageSquareWarning className="mx-auto h-10 w-10 mb-3 text-amber-200" />
             <p className="text-sm font-medium">
-              {filter === "open"
+              {statusFilter === "open"
                 ? "No active queries at this time. Your CA firm will send queries here."
                 : "No queries in this category."}
             </p>
@@ -549,9 +632,18 @@ export default function PortalQueries() {
         </Card>
       ) : (
         <div className="space-y-3">
-          {displayed.map(q => (
-            <QueryCard key={q.id} query={q} clientName={activeClient.name} />
-          ))}
+          {displayed.map(q => {
+            const clientName = clients.find(c => c.id === q.client_id)?.name || activeClient.name;
+            return (
+              <QueryCard
+                key={q.id}
+                query={q}
+                clientName={clientName}
+                entityColorClass={clientColorMap[q.client_id] || ENTITY_COLORS[0]}
+                showEntityBadge={entityFilter === "all" && isMulti}
+              />
+            );
+          })}
         </div>
       )}
     </div>

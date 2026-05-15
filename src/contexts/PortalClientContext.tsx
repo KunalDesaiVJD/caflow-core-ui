@@ -30,17 +30,19 @@ export interface PortalClient {
 }
 
 interface PortalClientContextValue {
-  clients:       PortalClient[];
-  activeClient:  PortalClient | null;
-  setActiveById: (id: string) => void;
-  loading:       boolean;
-  reload:        () => void;
+  clients:        PortalClient[];
+  allClientIds:   string[];
+  activeClient:   PortalClient | null;
+  setActiveById:  (id: string) => void;
+  loading:        boolean;
+  reload:         () => void;
 }
 
 // ─── Context ──────────────────────────────────────────────────────────────────
 
 const PortalClientContext = createContext<PortalClientContextValue>({
   clients:       [],
+  allClientIds:  [],
   activeClient:  null,
   setActiveById: () => {},
   loading:       true,
@@ -54,6 +56,7 @@ const SESSION_KEY = "caflow_portal_active_client";
 export function PortalClientProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const [clients,      setClients]      = useState<PortalClient[]>([]);
+  const [allClientIds, setAllClientIds] = useState<string[]>([]);
   const [activeClient, setActiveClient] = useState<PortalClient | null>(null);
   const [loading,      setLoading]      = useState(true);
 
@@ -64,19 +67,21 @@ export function PortalClientProvider({ children }: { children: ReactNode }) {
     // Strategy: match clients by BOTH user_id (explicit link) AND email
     // (shared-email families / group accounts where many entities use one address).
     // Run two queries then deduplicate by id.
+    // Use neq("is_active", false) instead of eq("is_active", true) so clients
+    // with is_active = null (the DB default) are also included.
     const [byIdResult, byEmailResult] = await Promise.all([
       supabase
         .from("clients")
         .select("id, name, firm_id, mobile, email, gstin, pan, client_type")
         .eq("user_id", user.id)
-        .eq("is_active", true)
+        .neq("is_active", false)
         .order("name"),
       user.email
         ? supabase
             .from("clients")
             .select("id, name, firm_id, mobile, email, gstin, pan, client_type")
-            .eq("email", user.email)
-            .eq("is_active", true)
+            .ilike("email", user.email)
+            .neq("is_active", false)
             .order("name")
         : Promise.resolve({ data: [], error: null }),
     ]);
@@ -104,6 +109,7 @@ export function PortalClientProvider({ children }: { children: ReactNode }) {
     const savedId = sessionStorage.getItem(SESSION_KEY);
     const saved   = savedId ? merged.find(c => c.id === savedId) : null;
     setActiveClient(saved || merged[0] || null);
+    setAllClientIds(merged.map(c => c.id));
     setLoading(false);
   }, [user?.id, user?.email]);
 
@@ -119,7 +125,7 @@ export function PortalClientProvider({ children }: { children: ReactNode }) {
 
   return (
     <PortalClientContext.Provider value={{
-      clients, activeClient, setActiveById, loading, reload: load,
+      clients, allClientIds, activeClient, setActiveById, loading, reload: load,
     }}>
       {children}
     </PortalClientContext.Provider>
