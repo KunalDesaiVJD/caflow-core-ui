@@ -1297,6 +1297,39 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
             // contributors).
             const unEjectByNote: Record<string, Set<string>> = {};
             const rebuildCustomRowsByNote: Record<string, Set<string>> = {};
+
+            // ZERO-OUT-CONFLICT detector: if borrowings has any custom row
+            // attached to unsec_related (or sec_related), AND that label looks
+            // related-party, AND the underlying ledger is in ejectedLedgers,
+            // un-eject + drop. Same pattern as the orphan handler, but for
+            // custom rows that point at a STATIC smart-match target rather
+            // than a deleted custom parent. Without this, the zero-out-when-
+            // attached-children logic in nceAutoPopulate wipes the smart-
+            // matched contributors and Total (B) becomes lower than COA.
+            if (built["borrowings"]) {
+              const d = built["borrowings"];
+              const ejectedSet = new Set(d.ejectedLedgers ?? []);
+              const dropIds = new Set<string>();
+              for (const cr of d.customRows ?? []) {
+                if (!cr.label) continue;
+                if (cr.attachedTo !== "unsec_related" && cr.attachedTo !== "sec_related") continue;
+                if (!ejectedSet.has(cr.label)) continue;
+                const lbl = cr.label.toLowerCase();
+                const isRel =
+                  lbl.includes(" huf") || lbl.includes("(huf)") || lbl.includes("-huf") ||
+                  /\b(director|partner|owner|proprietor|promoter|shareholder|relative|family|related)\b/.test(lbl);
+                if (!isRel) continue;
+                if (!unEjectByNote["borrowings"]) unEjectByNote["borrowings"] = new Set();
+                unEjectByNote["borrowings"].add(cr.label);
+                dropIds.add(cr.id);
+              }
+              if (dropIds.size > 0) {
+                rebuildCustomRowsByNote["borrowings"] = dropIds;
+                const filtered = d.customRows.filter(cr => !dropIds.has(cr.id));
+                built["borrowings"] = { ...d, customRows: filtered };
+                healed = true;
+              }
+            }
             for (const [nType, d] of Object.entries(built)) {
               const validIds = new Set((d.customRows || []).map(cr => cr.id));
               const sectionDefaults = STATIC_DEFAULT_ATTACH[nType];
