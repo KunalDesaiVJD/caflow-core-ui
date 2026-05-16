@@ -12,7 +12,7 @@
  *  - Each row has Save (✓) and Delete buttons
  *  - Dirty rows show a blue save button; clean rows show a grey edit indicator
  */
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Button }   from "@/components/ui/button";
 import { Input }    from "@/components/ui/input";
 import { Badge }    from "@/components/ui/badge";
@@ -142,6 +142,10 @@ function ClientCell({ value, clientId, clients, onChange }: ClientCellProps) {
 
 export default function CommunicationTable({ comms, entries, clients, onAdd, onUpdate, onRemove }: Props) {
   const [rows, setRows] = useState<DraftRow[]>([]);
+  // Per-row auto-save timers (debounced ~900 ms after the last edit).
+  const autoSaveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  // Per-row "Saved just now" indicator timer.
+  const [savedFlash, setSavedFlash] = useState<Record<string, number>>({});
   // ── Search / filter ───────────────────────────────────────────────────────
   const [filterText, setFilterText] = useState("");
 
@@ -188,6 +192,34 @@ export default function CommunicationTable({ comms, entries, clients, onAdd, onU
   const patch = useCallback((id: string, delta: Partial<DraftRow>) => {
     setRows(prev => prev.map(r => r.id === id ? { ...r, ...delta, isDirty: true } : r));
   }, []);
+
+  // ── Auto-save (Issue 4) ───────────────────────────────────────────────────
+  // Debounce: when any field on a row changes, schedule a save 900ms later.
+  // Resets on every subsequent edit. No explicit save button — saves happen
+  // silently while the user types and pauses.
+  useEffect(() => {
+    const dirty = rows.filter(r => r.isDirty && !r.saving && !r.phoneError);
+    for (const row of dirty) {
+      // Skip new rows that don't yet have a client name (avoid empty inserts)
+      if (row.isNew && !row.clientName.trim()) continue;
+      if (autoSaveTimers.current[row.id]) clearTimeout(autoSaveTimers.current[row.id]);
+      autoSaveTimers.current[row.id] = setTimeout(() => {
+        handleSave(row).then(() => {
+          setSavedFlash(s => ({ ...s, [row.id]: Date.now() }));
+          // Clear the "Saved" flash 2s later
+          setTimeout(() => {
+            setSavedFlash(s => {
+              const next = { ...s };
+              if (next[row.id] && Date.now() - next[row.id] >= 1900) delete next[row.id];
+              return next;
+            });
+          }, 2000);
+        });
+      }, 900);
+    }
+    // No cleanup needed — timers are reset by the next edit or by save completion
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows]);
 
   function handleClientSelect(id: string, client: ClientOption) {
     // Auto-fetch planned dates for this client
@@ -470,25 +502,31 @@ export default function CommunicationTable({ comms, entries, clients, onAdd, onU
                       </div>
                     ) : (
                       <div className="flex items-center justify-center gap-1">
-                        {/* Save */}
-                        <Button
-                          size="sm"
-                          variant={row.isDirty ? "default" : "ghost"}
+                        {/* Auto-save status (Issue 4) — no explicit save button.
+                            Saves happen silently 900ms after typing stops. */}
+                        <span
                           className={cn(
-                            "h-6 w-6 p-0",
-                            row.isDirty
-                              ? "bg-indigo-600 hover:bg-indigo-700 text-white"
-                              : "text-muted-foreground"
+                            "inline-flex items-center justify-center w-6 h-6 text-[10px]",
+                            row.saving        ? "text-indigo-600" :
+                            savedFlash[row.id] ? "text-green-600" :
+                            row.isDirty       ? "text-amber-500" :
+                                                "text-muted-foreground/40"
                           )}
-                          onClick={() => handleSave(row)}
-                          disabled={row.saving || !!row.phoneError}
-                          title="Save row"
+                          title={
+                            row.saving        ? "Saving…" :
+                            savedFlash[row.id] ? "Saved" :
+                            row.isDirty       ? "Unsaved — auto-saving" :
+                                                "Saved"
+                          }
                         >
                           {row.saving
-                            ? <Loader2 size={10} className="animate-spin" />
-                            : <Check size={10} />
-                          }
-                        </Button>
+                            ? <Loader2 size={11} className="animate-spin" />
+                            : savedFlash[row.id]
+                              ? <Check size={11} />
+                              : row.isDirty
+                                ? <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                                : <Check size={11} className="opacity-30" />}
+                        </span>
                         {/* Delete */}
                         <Button size="sm" variant="ghost"
                           className="h-6 w-6 p-0 text-muted-foreground hover:text-red-600 hover:bg-red-50"

@@ -1274,16 +1274,57 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
             // attachedTo:"unsec_other" so the static row shows the correct
             // aggregate when collapsed. computeDisplayData already excludes
             // attached rows from section extras to prevent double-counting.
+            //
+            // ALSO: orphan custom rows (attachedTo points to a customRow id
+            // that no longer exists — e.g. user created a synthetic wrapper
+            // like "Unsecured Loans" and later deleted it, leaving children
+            // pointing at a ghost parent) cause the children's amounts to
+            // silently disappear from Total (A+B): the formula only adds
+            // static rows + their attached children, and the orphans match
+            // neither. Re-route them to a sane default static row so their
+            // amounts re-enter the total math.
+            const STATIC_DEFAULT_ATTACH: Record<string, Record<string, string>> = {
+              borrowings:     { secured: "sec_other", unsecured: "unsec_other" },
+              provisions:     { default: "other_prov" },
+              investments:    { quoted: "quot_other", unquoted: "unquot_other" },
+              loans_advances: { secured: "kb_secured", unsecured: "kb_unsecured" },
+            };
             let healed = false;
-            if (built["borrowings"]) {
-              const b = built["borrowings"];
-              const patched = b.customRows.map(cr =>
-                cr.section === "unsecured" && !cr.attachedTo
-                  ? { ...cr, attachedTo: "unsec_other" as string }
-                  : cr,
-              );
-              if (patched.some((cr, i) => cr !== b.customRows[i])) {
-                built["borrowings"] = { ...b, customRows: patched };
+            for (const [nType, d] of Object.entries(built)) {
+              const validIds = new Set((d.customRows || []).map(cr => cr.id));
+              const sectionDefaults = STATIC_DEFAULT_ATTACH[nType];
+              if (!sectionDefaults) continue;
+              const patched = d.customRows.map(cr => {
+                // Case 1: legacy rows with section but no attachedTo
+                if (cr.section && !cr.attachedTo) {
+                  const target = sectionDefaults[cr.section] ?? sectionDefaults.default;
+                  if (target) return { ...cr, attachedTo: target };
+                }
+                // Case 2: orphan — attachedTo points to a deleted custom row
+                if (cr.attachedTo
+                    && cr.attachedTo.startsWith("custom_")
+                    && !validIds.has(cr.attachedTo)) {
+                  // For borrowings: if label suggests related-party (HUF,
+                  // director, partner, owner, etc.) route to unsec_related;
+                  // otherwise to the section's default.
+                  let target =
+                    (cr.section && sectionDefaults[cr.section])
+                    ?? sectionDefaults.unsecured
+                    ?? sectionDefaults.default
+                    ?? "unsec_other";
+                  if (nType === "borrowings" && cr.section === "unsecured") {
+                    const lbl = (cr.label || "").toLowerCase();
+                    const isRel =
+                      lbl.includes(" huf") || lbl.includes("(huf)") || lbl.includes("-huf") ||
+                      /\b(director|partner|owner|proprietor|promoter|shareholder|relative|family|related)\b/.test(lbl);
+                    if (isRel) target = "unsec_related";
+                  }
+                  return { ...cr, attachedTo: target };
+                }
+                return cr;
+              });
+              if (patched.some((cr, i) => cr !== d.customRows[i])) {
+                built[nType] = { ...d, customRows: patched };
                 healed = true;
               }
             }
