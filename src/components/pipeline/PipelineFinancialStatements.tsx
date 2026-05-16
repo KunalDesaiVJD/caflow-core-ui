@@ -2142,9 +2142,11 @@ export default function PipelineFinancialStatements({
   const firmLookupId =
     (engagement as any)?.audit_firm_id || engagement?.firm_id || null;
   const { data: firmData } = useQuery({
-    queryKey: ["firm-detail-fs-v2", firmLookupId],
+    queryKey: ["firm-detail-fs-v3", firmLookupId],
     queryFn: async () => {
       if (!firmLookupId) return null;
+      // 1. Try the firms table directly. This is the canonical source for
+      //    membership_numbers (the per-partner roster) and FRN.
       const { data } = await supabase
         .from("firms")
         .select("name, display_name, icai_firm_reg_no, icai_reg_no, address, membership_numbers")
@@ -2154,13 +2156,37 @@ export default function PipelineFinancialStatements({
         const d = data as any;
         return { ...d, name: d.display_name || d.name } as any;
       }
-      // Fallback: row only exists in audit_firms (no firms-table entry yet).
+      // 2. Legacy: firmLookupId points at audit_firms (the parallel table
+      //    Stage 1 used before is_audit_firm rollout). Resolve the audit
+      //    firm's name, then look up the SAME-NAMED row in firms to pull
+      //    its membership_numbers (which is where partner ICAI numbers are
+      //    actually registered via Firm Settings → Audit Registration).
       const { data: af } = await supabase
         .from("audit_firms")
         .select("name, icai_reg_no, address")
         .eq("id", firmLookupId)
         .maybeSingle();
-      return af ? { name: (af as any).name, icai_firm_reg_no: (af as any).icai_reg_no, address: (af as any).address, membership_numbers: [] } : null;
+      if (!af) return null;
+      const afName = ((af as any).name || "").trim();
+      let parentFirm: any = null;
+      if (afName) {
+        const { data: matches } = await supabase
+          .from("firms")
+          .select("name, display_name, icai_firm_reg_no, icai_reg_no, address, membership_numbers")
+          .ilike("name", afName);
+        parentFirm = (matches || []).find((m: any) =>
+          ((m.display_name || m.name) || "").trim().toLowerCase() === afName.toLowerCase(),
+        ) || (matches && matches[0]) || null;
+      }
+      return {
+        name: parentFirm?.display_name || parentFirm?.name || (af as any).name,
+        icai_firm_reg_no: parentFirm?.icai_firm_reg_no || (af as any).icai_reg_no,
+        icai_reg_no: parentFirm?.icai_reg_no || (af as any).icai_reg_no,
+        address: parentFirm?.address || (af as any).address,
+        membership_numbers: Array.isArray(parentFirm?.membership_numbers)
+          ? parentFirm.membership_numbers
+          : [],
+      };
     },
     enabled: !!firmLookupId,
   });
