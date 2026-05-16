@@ -1755,15 +1755,29 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   // Opening_balance on CY TB is always ₹0 for P&L accounts (Tally yearly reset),
   // so this is the only way to show PY P&L figures in the Variance Drill.
   const pyShellPLAmounts: Record<string, number> = useMemo(() => {
-    if (!pyShellTbData?.tbRows?.length || !pyShellTbData?.coaMapping) return {};
+    if (!pyShellTbData?.tbRows?.length) return {};
     const amounts: Record<string, number> = {};
+    // Build a case-insensitive CY mapping index so PY shell ledgers that
+    // differ in case ("SALES" vs "Sales") still resolve to a CY FS code.
+    const cyMappingLowerIndex: Record<string, { code: string }> = {};
+    for (const [k, v] of Object.entries(coaMapping || {})) {
+      if (v?.code) cyMappingLowerIndex[k.toLowerCase().trim()] = v;
+    }
+    const pyShellMapping = (pyShellTbData?.coaMapping as Record<string, any>) || {};
+    const pyShellMappingLowerIndex: Record<string, { code: string }> = {};
+    for (const [k, v] of Object.entries(pyShellMapping)) {
+      if (v?.code) pyShellMappingLowerIndex[k.toLowerCase().trim()] = v;
+    }
     for (const row of pyShellTbData.tbRows) {
       const name = String(row.ledger_name || "").trim();
       if (!name) continue;
-      // Use PY shell's own coa_mapping first, fall back to CY mapping
+      const lower = name.toLowerCase();
+      // Resolution order: PY-shell exact → PY-shell lower → CY exact → CY lower
       const mapping =
-        (pyShellTbData.coaMapping as Record<string, any>)[name] ||
-        (coaMapping as Record<string, any>)[name];
+        pyShellMapping[name] ||
+        pyShellMappingLowerIndex[lower] ||
+        (coaMapping as Record<string, any>)[name] ||
+        cyMappingLowerIndex[lower];
       if (!mapping?.code) continue;
       const item = activeFlatItems.find(i => i.code === mapping.code);
       if (!item) continue;
@@ -1794,6 +1808,16 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   // (the FS-level pyShellPLAmounts aggregates to code level, not ledger level).
   // For BS ledgers, CY opening_balance already gives the PY figure — this only
   // provides data for P&L ledgers where opening = 0.
+  //
+  // ROOT-CAUSE FIX (Issue 1): exact-name lookup fails whenever the PY shell
+  // ledger differs from the CY ledger by case, whitespace, punctuation, or
+  // common suffixes ("Sales" vs "Sales A/c" vs "SALES "). When that happens
+  // the PY column displays "—" even though the same balance is sitting in
+  // tally_trial_balance. We now build BOTH an exact-name map AND a
+  // normalised-name map, and the lookup helper tries: exact → trimmed-lower
+  // → fully-normalised (alphanumerics only, strip "ac/account" noise words).
+  // This makes the PY lookup resilient across every client that has
+  // sync-py.bat data without requiring manual aliases.
   const pyShellLedgerAmounts: Record<string, number> = useMemo(() => {
     if (!pyShellTbData?.tbRows?.length) return {};
     const map: Record<string, number> = {};
@@ -1807,6 +1831,52 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     }
     return map;
   }, [pyShellTbData]);
+
+  // Normalised-name index → signed PY closing balance. Built alongside
+  // pyShellLedgerAmounts so the lookup helper can fall back when the exact
+  // CY ledger name doesn't appear in PY shell TB.
+  const pyShellLedgerNormalized: Record<string, number> = useMemo(() => {
+    if (!pyShellTbData?.tbRows?.length) return {};
+    const map: Record<string, number> = {};
+    for (const row of pyShellTbData.tbRows) {
+      const name = String(row.ledger_name || "").trim();
+      if (!name) continue;
+      const cb = Math.abs(Number(row.closing_balance ?? 0));
+      if (cb < 0.005) continue;
+      const isDr = String(row.balance_type ?? "").toUpperCase() === "DR";
+      const signed = isDr ? cb : -cb;
+      // (a) lowercase + trim   (b) fully normalised (alnum-only)
+      const lower = name.toLowerCase();
+      if (!(lower in map)) map[lower] = signed;
+      const norm = lower
+        .replace(/&/g, " and ")
+        .replace(/[^a-z0-9]+/g, " ")
+        .replace(/\b(a c|ac|account|accounts|a\/c)\b/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (norm && !(norm in map)) map[norm] = signed;
+    }
+    return map;
+  }, [pyShellTbData]);
+
+  /** Robust PY-shell amount lookup for a CY ledger name. Tries exact match,
+   *  then lowercase-trim, then fully normalised name. Returns 0 when none of
+   *  the variants exist in the PY shell TB. */
+  const lookupPyShellAmount = useCallback((cyName: string): number => {
+    if (!cyName) return 0;
+    const exact = pyShellLedgerAmounts[cyName];
+    if (exact !== undefined) return exact;
+    const lower = cyName.toLowerCase().trim();
+    const byLower = pyShellLedgerNormalized[lower];
+    if (byLower !== undefined) return byLower;
+    const norm = lower
+      .replace(/&/g, " and ")
+      .replace(/[^a-z0-9]+/g, " ")
+      .replace(/\b(a c|ac|account|accounts|a\/c)\b/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return pyShellLedgerNormalized[norm] ?? 0;
+  }, [pyShellLedgerAmounts, pyShellLedgerNormalized]);
 
   // ═══════ FS LEDGER SEARCH ═══════
   // When the user types in the right-panel search box, build a flat result list:
@@ -1895,8 +1965,9 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         const cy = a.balance;
         // PY: prefer PY shell closing_balance (for P&L accounts where opening=0);
         // fall back to opening_balance on CY TB (correct for BS accounts).
-        const pyFromShell = pyShellLedgerAmounts[a.account_name];
-        const py = (pyFromShell !== undefined && Math.abs(pyFromShell) > 0.005)
+        // Use the fuzzy helper so case/whitespace/A-c differences don't blank PY.
+        const pyFromShell = lookupPyShellAmount(a.account_name);
+        const py = Math.abs(pyFromShell) > 0.005
           ? pyFromShell
           : (a.opening_balance ?? 0);
         return {
@@ -1912,7 +1983,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       })
       .sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta));
     return rows;
-  }, [varianceDrill, tbAccounts, coaMapping, aliases, pyShellLedgerAmounts]);
+  }, [varianceDrill, tbAccounts, coaMapping, aliases, pyShellLedgerAmounts, lookupPyShellAmount]);
 
   // ═══════ ALIAS HANDLERS (Task 3) ═══════
   const saveAlias = async (priorName: string, currentName: string) => {
@@ -3209,7 +3280,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                               //             was populated.
                               const pyAmt = Math.abs(opening) >= 0.005
                                 ? opening
-                                : (pyShellLedgerAmounts[a.account_name] ?? 0);
+                                : lookupPyShellAmount(a.account_name);
                               const isNew    = Math.abs(opening) < 0.005 && Math.abs(a.balance) >= 0.005;
                               const isClosed = Math.abs(opening) >= 0.005 && Math.abs(a.balance) < 0.005;
                               // P&L A/c (non-BxS) mapped to a BS code: closing balance is NOT added
@@ -3668,6 +3739,30 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                   const prevFy = fyParts.length === 2
                     ? `${parseInt(fyParts[0]) - 1}-${parseInt(fyParts[0]).toString().slice(-2)}`
                     : "prior year";
+                  // ROOT-CAUSE FIX (Issue 1): when PY shell TB HAS rows but the
+                  // ledger lookup still came up empty (post-fuzzy-fallback), the
+                  // generic "not yet synced" message is misleading. Surface a
+                  // more accurate diagnosis instead.
+                  const pyShellLoaded = !!pyShellTbData?.tbRows?.length;
+                  if (pyShellLoaded) {
+                    // PY shell data IS synced — the drill ledger just doesn't
+                    // appear in PY shell TB by any name variant. Likely a
+                    // renamed ledger; suggest the alias UX rather than
+                    // re-running sync-py.bat.
+                    return (
+                      <div className="flex items-start gap-2 rounded-md border border-blue-300 bg-blue-50 dark:bg-blue-950/30 px-3 py-2 text-[11px] text-blue-800 dark:text-blue-300">
+                        <span className="text-base leading-tight shrink-0">ℹ</span>
+                        <div>
+                          <p className="font-semibold">PY shell data is loaded, but no matching prior-year ledger was found for this line item.</p>
+                          <p className="mt-0.5 text-blue-700 dark:text-blue-400">
+                            The ledger may have been renamed between FY {prevFy} and the current year.
+                            Use the <strong>Closed Accounts</strong> tab on the left to map renamed ledgers
+                            (an "ALIAS" link will be created so the PY amount flows through automatically).
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  }
                   return (
                     <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-[11px] text-amber-800 dark:text-amber-300">
                       <span className="text-base leading-tight shrink-0">⚠</span>
