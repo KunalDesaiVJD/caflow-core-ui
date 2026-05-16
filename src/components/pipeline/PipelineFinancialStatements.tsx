@@ -3333,13 +3333,25 @@ export default function PipelineFinancialStatements({
   const sigFirmFRN      = firmData?.icai_firm_reg_no || "";
   const sigFirmCity     = (firmData?.address as any)?.city || "";
   const engPartnerName  = ((engagement as any)?.partner_name || "").trim();
-  const firmMnoEntry    = Array.isArray(firmData?.membership_numbers)
-    ? (firmData!.membership_numbers as any[]).find(
-        (m: any) => (m?.partner_name || "").trim() === engPartnerName
-      )
-    : null;
+  // Resolve the partner name FIRST. If engagement.partner_name is empty
+  // (legacy engagements / partner picked via partner_id only), fall back
+  // to the users-table row resolved by partner_id.
   const sigPartnerName  =
     engPartnerName || partnerData?.name || "";
+  // FIX: previously the roster match ran against `engPartnerName` only —
+  // so a legacy engagement that displayed the partner via partnerData.name
+  // never matched the firm's membership_numbers roster, leaving Membership
+  // No. blank in the BS / P&L / CFS signature blocks. Match against the
+  // RESOLVED sigPartnerName (whichever source the UI is actually showing),
+  // case-insensitively, after trim. Falls back to partnerData.membership_number
+  // and finally to a blank.
+  const firmMnoEntry    = (() => {
+    const target = (sigPartnerName || "").trim().toLowerCase();
+    if (!target || !Array.isArray(firmData?.membership_numbers)) return null;
+    return (firmData!.membership_numbers as any[]).find(
+      (m: any) => (m?.partner_name || "").trim().toLowerCase() === target,
+    ) || null;
+  })();
   const sigMembershipNo =
     firmMnoEntry?.membership_no || partnerData?.membership_number || "";
   const sigClientName   = engagement?.clients?.name      || "";
