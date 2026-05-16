@@ -191,16 +191,19 @@ export default function AuditPipeline() {
     enabled: !!user?.firm_id,
   });
 
-  // ─── Audit firms (for engagement creation) ───
+  // ─── Audit firms for engagement creation ───
+  // Issue 5: lists ALL firms flagged as registered audit firms
+  // (`firms.is_audit_firm = true`). No per-user filter — any staff member
+  // can attach the engagement to any registered audit firm.
   const { data: auditFirmsForEng } = useQuery({
-    queryKey: ["audit-firms-eng", user?.firm_id, user?.role],
+    queryKey: ["audit-firms-eng"],
     queryFn: async () => {
-      let query = supabase.from("audit_firms").select("id, name").neq("active", false).order("name");
-      if (user?.role !== "superadmin" && user?.firm_id) {
-        query = query.eq("firm_id", user.firm_id) as typeof query;
-      }
-      const { data } = await query;
-      return data || [];
+      const { data } = await supabase
+        .from("firms")
+        .select("id, name, display_name")
+        .eq("is_audit_firm", true)
+        .order("name");
+      return (data || []).map((f: any) => ({ id: f.id, name: f.display_name || f.name }));
     },
     enabled: !!user?.id,
   });
@@ -251,9 +254,13 @@ export default function AuditPipeline() {
   }, [currentStage, searchParams]);
 
   // ─── Stage 1 form state ───
+  // Note: `firm_id` here is the engagement's audit firm — written into
+  // `audit_engagements.firm_id` (the single column every downstream
+  // consumer — Stage 7 notes, MRL, IAR, Stage 9 sign-off, Stage 10 FS
+  // export — resolves through). Source list = `firms WHERE is_audit_firm = true`.
   const [form1A, setForm1A] = useState({
     client_id: "", financial_year: "2024-25", audit_period_type: "annual", period_label: "",
-    audit_type: "statutory", entity_type: "company", audit_firm_id: "",
+    audit_type: "statutory", entity_type: "company", firm_id: "",
   });
   const [questionnaire, setQuestionnaire] = useState<Record<string, string>>({});
   const [planning, setPlanning] = useState({
@@ -262,9 +269,14 @@ export default function AuditPipeline() {
     expected_completion: "", review_dates: "",
   });
 
-  // Load form from engagement
+  // Load form from engagement (Fix 3 / Issue 2: also gate on the options
+  // lists so the <Select> values resolve to a matching <SelectItem> by the
+  // time the dialog renders — otherwise the client/firm fields show blank
+  // on edit until the user touches them).
   useEffect(() => {
     if (!engagement) return;
+    if ((eligibleClients?.length ?? 0) === 0) return;
+    if ((auditFirmsForEng?.length ?? 0) === 0) return;
     setForm1A({
       client_id: engagement.client_id || "",
       financial_year: engagement.financial_year || "2024-25",
@@ -272,7 +284,7 @@ export default function AuditPipeline() {
       period_label: engagement.period_label || "",
       audit_type: engagement.audit_type || "statutory",
       entity_type: engagement.entity_type || "company",
-      audit_firm_id: engagement.audit_firm_id || "",
+      firm_id: engagement.firm_id || "",
     });
     if (engagement.questionnaire_answers && typeof engagement.questionnaire_answers === "object") {
       setQuestionnaire(engagement.questionnaire_answers as Record<string, string>);
@@ -292,7 +304,7 @@ export default function AuditPipeline() {
     if (engagement.team_members) {
       setPlanning(p => ({ ...p, team_members: engagement.team_members || [] }));
     }
-  }, [engagement]);
+  }, [engagement, eligibleClients, auditFirmsForEng]);
 
   // Auto-set entity_type when client is selected in creation dialog
   useEffect(() => {
@@ -307,7 +319,8 @@ export default function AuditPipeline() {
   const autoFlags = useMemo(() => {
     const et = (form1A.entity_type || "").toLowerCase().trim();
     const at = form1A.audit_type;
-    const isCompany = ["company", "private ltd", "public ltd"].includes(et);
+    // Companies (Pvt Ltd, Public Ltd, OPC) always use Form 3CA — mandatory under Companies Act
+    const isCompany = ["company", "private ltd", "public ltd", "opc", "pvt_ltd", "public_ltd"].includes(et);
     const isLLP = ["llp"].includes(et);
     const isStatutory = at === "statutory" || at === "both";
     const isTaxAudit = at === "tax_audit" || at === "both";
@@ -315,7 +328,10 @@ export default function AuditPipeline() {
 
     return {
       requires_caro: isCompany && isStatutory,
-      requires_3ca: questionnaire.audited_under_other_act === "yes",
+      // Companies: 3CA always mandatory (audited under Companies Act = "any other law")
+      // Non-companies: 3CA if user selects it via radio (audited under other act = yes)
+      requires_3ca: isCompany ? isTaxAudit : (isTaxAudit && questionnaire.audited_under_other_act === "yes"),
+      // 3CB only for non-companies who are NOT audited under any other law
       requires_3cb: !isCompany && isTaxAudit && questionnaire.audited_under_other_act !== "yes",
       requires_3cd: isTaxAudit,
       requires_cash_flow: isCompany || (isLLP && turnover > 4000000),
@@ -326,7 +342,7 @@ export default function AuditPipeline() {
   const setQ = (key: string, val: string) => setQuestionnaire(q => ({ ...q, [key]: val }));
 
   // ─── Validation ───
-  const block1AValid = form1A.client_id && form1A.financial_year && form1A.entity_type && form1A.audit_type && form1A.audit_firm_id;
+  const block1AValid = form1A.client_id && form1A.financial_year && form1A.entity_type && form1A.audit_type && form1A.firm_id;
 
   const blockAFields = ["constitution_confirmed", "registered_address", "agm_dates", "board_changes", "regulatory_actions"];
   const blockBFields = ["turnover_cy", "turnover_py", "total_assets", "has_inventory", "capital_transactions", "long_term_borrowings", "director_loans"];
@@ -343,7 +359,13 @@ export default function AuditPipeline() {
   // ─── Create new engagement ───
   const createEngagement = useMutation({
     mutationFn: async () => {
-      const effectiveFirmId = user?.firm_id || "be411601-f0f5-4f74-b93d-b87a8ef1b82b";
+      // Issue 1: no hardcoded firm fallback. The Stage-1 dropdown selection
+      // (form1A.firm_id) IS the engagement's audit firm; block1AValid
+      // already enforces non-empty.
+      const effectiveFirmId = form1A.firm_id;
+      if (!effectiveFirmId) {
+        throw new Error("Please select an Audit Firm before creating the engagement.");
+      }
       // Check for duplicate engagement
       const { data: existing } = await supabase
         .from("audit_engagements")
@@ -367,7 +389,8 @@ export default function AuditPipeline() {
         entity_type: form1A.entity_type,
         audit_period_type: form1A.audit_period_type,
         period_label: form1A.period_label || null,
-        audit_firm_id: form1A.audit_firm_id || null,
+        // Legacy `audit_firm_id` column intentionally not written — see
+        // CAFlow_FirmFix_Report.md. `firm_id` is the canonical column.
         status: "planning",
         pipeline_stage: 1,
         stage_statuses: { "1": "in_progress", "2": "not_started", "3": "not_started", "4": "not_started", "5": "not_started", "6": "not_started", "7": "not_started", "8": "not_started", "9": "not_started" },
@@ -402,7 +425,7 @@ export default function AuditPipeline() {
       entity_type: form1A.entity_type,
       audit_period_type: form1A.audit_period_type,
       period_label: form1A.period_label || null,
-      audit_firm_id: form1A.audit_firm_id || null,
+      firm_id: form1A.firm_id || null,
       questionnaire_answers: questionnaire,
       stage_statuses: newStatuses,
       pipeline_stage: complete ? 2 : 1,
@@ -554,10 +577,10 @@ export default function AuditPipeline() {
                   <Label>Audit Firm *</Label>
                   {engagement ? (
                     <div className="flex items-center h-10 px-3 rounded-md border border-input bg-muted/50 text-sm text-foreground">
-                      {(auditFirmsForEng || []).find(f => f.id === form1A.audit_firm_id)?.name || form1A.audit_firm_id || "—"}
+                      {(auditFirmsForEng || []).find(f => f.id === form1A.firm_id)?.name || form1A.firm_id || "—"}
                     </div>
                   ) : (
-                    <Select value={form1A.audit_firm_id} onValueChange={v => setForm1A(f => ({ ...f, audit_firm_id: v }))}>
+                    <Select value={form1A.firm_id} onValueChange={v => setForm1A(f => ({ ...f, firm_id: v }))}>
                       <SelectTrigger><SelectValue placeholder="Select audit firm" /></SelectTrigger>
                       <SelectContent>
                         {(auditFirmsForEng || []).map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
@@ -696,6 +719,83 @@ export default function AuditPipeline() {
               </CardContent>
             </Card>
 
+            {/* 1C — Audit Report Form selection (shown only when tax audit is required) */}
+            {isTaxAuditReq && (() => {
+              const et = (form1A.entity_type || "").toLowerCase().trim();
+              const isCompanyType = ["company", "private ltd", "public ltd", "opc", "pvt_ltd", "public_ltd"].includes(et);
+              return (
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <span className="w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-xs font-bold">C</span>
+                      Audit Report Form
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {isCompanyType ? (
+                      /* Companies: both forms are mandatory — no selection needed */
+                      <div className="space-y-3">
+                        <p className="text-sm text-muted-foreground">
+                          Companies (Private Ltd / Public Ltd / OPC) are audited under the Companies Act — both forms below are mandatory.
+                        </p>
+                        <div className="flex flex-wrap gap-3">
+                          <div className="flex items-center gap-2 px-4 py-2 rounded-md border-2 border-primary bg-primary/5">
+                            <FileText size={16} className="text-primary" />
+                            <div>
+                              <p className="text-sm font-semibold text-primary">Form 3CA</p>
+                              <p className="text-[11px] text-muted-foreground">Mandatory — Audited under Companies Act</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 px-4 py-2 rounded-md border-2 border-primary bg-primary/5">
+                            <FileText size={16} className="text-primary" />
+                            <div>
+                              <p className="text-sm font-semibold text-primary">Form 3CD</p>
+                              <p className="text-[11px] text-muted-foreground">Mandatory — Always auto-attached</p>
+                            </div>
+                          </div>
+                        </div>
+                        <p className="text-xs text-muted-foreground italic">Form 3CB does not apply to companies.</p>
+                      </div>
+                    ) : (
+                      /* Non-companies: radio to select 3CA or 3CB + mandatory 3CD badge */
+                      <div className="space-y-4">
+                        <div className="space-y-2">
+                          <Label className="text-sm font-medium">Select audit report form: <span className="text-destructive">*</span></Label>
+                          <RadioGroup
+                            value={questionnaire.audited_under_other_act || ""}
+                            onValueChange={v => setQ("audited_under_other_act", v)}
+                            className="space-y-2"
+                          >
+                            <div className="flex items-start gap-3 p-3 rounded-md border hover:bg-muted/30 cursor-pointer">
+                              <RadioGroupItem value="yes" id="form-3ca" className="mt-0.5" />
+                              <label htmlFor="form-3ca" className="cursor-pointer space-y-0.5">
+                                <p className="text-sm font-medium">Form 3CA</p>
+                                <p className="text-xs text-muted-foreground">Audit required under any other law (e.g. Companies Act, Co-operative Society Act)</p>
+                              </label>
+                            </div>
+                            <div className="flex items-start gap-3 p-3 rounded-md border hover:bg-muted/30 cursor-pointer">
+                              <RadioGroupItem value="no" id="form-3cb" className="mt-0.5" />
+                              <label htmlFor="form-3cb" className="cursor-pointer space-y-0.5">
+                                <p className="text-sm font-medium">Form 3CB</p>
+                                <p className="text-xs text-muted-foreground">Audit NOT required under any other law — tax audit u/s 44AB only</p>
+                              </label>
+                            </div>
+                          </RadioGroup>
+                        </div>
+                        <div className="flex items-center gap-2 px-4 py-2 rounded-md border border-dashed bg-muted/30">
+                          <FileText size={16} className="text-muted-foreground" />
+                          <div>
+                            <p className="text-sm font-semibold">Form 3CD</p>
+                            <p className="text-[11px] text-muted-foreground">Mandatory — auto-applicable for all tax audits</p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })()}
+
             {/* Bottom actions */}
             <div className="flex justify-end gap-3 pb-8">
               <Button variant="outline" onClick={() => saveStage1(false)} disabled={saving}>Save Draft</Button>
@@ -751,18 +851,176 @@ export default function AuditPipeline() {
           />
         ) : activeStage === 8 ? (
           /* STAGE 8 — 3CA / 3CB / 3CD Reports */
-          <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h1 className="text-xl font-bold text-foreground">Stage 8 — 3CA / 3CB / 3CD Reports</h1>
-                <p className="text-sm text-muted-foreground">Tax audit report forms and annexures</p>
+          (() => {
+            const et = (engagement?.entity_type || "").toLowerCase().trim();
+            // isCompany: computed live from entity_type — overrides any stale DB flag
+            const isCompanyEng = ["company", "private ltd", "public ltd", "opc", "pvt_ltd", "public_ltd"].includes(et);
+            const show3ca = isCompanyEng || (engagement?.requires_3ca ?? false);
+            // 3CB must NEVER show for companies, regardless of what the DB flag says
+            const show3cb = !isCompanyEng && (engagement?.requires_3cb ?? false);
+            const show3cd = engagement?.requires_3cd ?? false;
+            const defaultTab = show3cd ? "3cd" : show3ca ? "3ca" : "3cb";
+            const engClient = engagement?.clients as any;
+
+            return (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h1 className="text-xl font-bold text-foreground">Stage 8 — 3CA / 3CB / 3CD Reports</h1>
+                    <p className="text-sm text-muted-foreground">Tax audit report forms and annexures</p>
+                  </div>
+                  <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs">
+                    <ChevronRight size={14} className="rotate-180" /> Back to Audit Dashboard
+                  </Button>
+                </div>
+
+                <Tabs defaultValue={defaultTab}>
+                  <TabsList>
+                    {show3ca && (
+                      <TabsTrigger value="3ca" className="gap-1.5">
+                        Form 3CA
+                        {!isCompanyEng && (
+                          <Badge variant="secondary" className="text-[9px] px-1 h-4 ml-1">Optional</Badge>
+                        )}
+                      </TabsTrigger>
+                    )}
+                    {show3cb && (
+                      <TabsTrigger value="3cb" className="gap-1.5">
+                        Form 3CB
+                        <Badge variant="secondary" className="text-[9px] px-1 h-4 ml-1">Optional</Badge>
+                      </TabsTrigger>
+                    )}
+                    {show3cd && <TabsTrigger value="3cd">Form 3CD</TabsTrigger>}
+                  </TabsList>
+
+                  {/* ── Form 3CA ── */}
+                  {show3ca && (
+                    <TabsContent value="3ca" className="mt-4">
+                      <Card>
+                        <CardContent className="p-6 space-y-4">
+                          <div className="text-center space-y-1">
+                            <p className="text-xs text-muted-foreground">[See rule 6G(1)(b)]</p>
+                            <p className="text-sm font-semibold leading-snug max-w-2xl mx-auto">
+                              Audit report under section 44AB of the Income-tax Act, 1961, in a case where the accounts of
+                              the business or profession of a person have been audited under any other law
+                            </p>
+                          </div>
+                          <Separator />
+                          <div className="max-w-3xl mx-auto space-y-3 text-sm leading-relaxed">
+                            <p>
+                              <strong>1.</strong> We report that the statutory audit of M/s.{" "}
+                              <span className="font-semibold text-primary">{engClient?.name || "—"}</span>
+                              {engClient?.pan && (
+                                <span> (PAN: <span className="font-mono text-primary">{engClient.pan}</span>)</span>
+                              )}{" "}
+                              was conducted by <strong>{(engagement as any)?.audit_firms?.name || "—"}</strong> in pursuance
+                              of the provisions of the{" "}
+                              <Select
+                                value={(engagement as any)?.questionnaire_answers?.applicable_law || "Companies Act, 2013"}
+                                onValueChange={() => {}}
+                              >
+                                <SelectTrigger className="inline-flex h-7 w-auto min-w-[180px] text-sm px-2 py-0 border-dashed">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="Companies Act, 2013">Companies Act, 2013</SelectItem>
+                                  <SelectItem value="Banking Regulation Act, 1949">Banking Regulation Act, 1949</SelectItem>
+                                  <SelectItem value="Insurance Act, 1938">Insurance Act, 1938</SelectItem>
+                                  <SelectItem value="Electricity Act, 2003">Electricity Act, 2003</SelectItem>
+                                  <SelectItem value="Co-operative Societies Act">Co-operative Societies Act</SelectItem>
+                                  <SelectItem value="Other law">Other law</SelectItem>
+                                </SelectContent>
+                              </Select>
+                              , and we annex hereto a copy of our audit report dated{" "}
+                              <input
+                                type="date"
+                                defaultValue={new Date().toISOString().slice(0, 10)}
+                                className="border-b border-input bg-transparent text-sm px-1 focus:outline-none"
+                              />{" "}
+                              together with a copy of the audited Profit and Loss Account (or Income and Expenditure
+                              Account) for the year ended{" "}
+                              <strong>31st March, {engagement?.financial_year?.slice(-4) || "—"}</strong> and the Balance
+                              Sheet as at that date.
+                            </p>
+                            <p>
+                              <strong>2.</strong> The statement of particulars required to be furnished under section 44AB
+                              is annexed herewith in Form No. 3CD.
+                            </p>
+                            <p>
+                              <strong>3.</strong> In our opinion and to the best of our information and according to the
+                              explanations given to us, the particulars given in Form No. 3CD and the Annexure thereto are
+                              true and correct.
+                            </p>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </TabsContent>
+                  )}
+
+                  {/* ── Form 3CB (non-companies only) ── */}
+                  {show3cb && (
+                    <TabsContent value="3cb" className="mt-4">
+                      <Card>
+                        <CardContent className="p-6 space-y-4">
+                          <div className="text-center space-y-1">
+                            <p className="text-xs text-muted-foreground">[See rule 6G(1)(a)]</p>
+                            <p className="text-sm font-semibold leading-snug max-w-2xl mx-auto">
+                              Audit report under section 44AB of the Income-tax Act, 1961, in a case where the accounts
+                              of the business or profession of a person have not been audited under any other law
+                            </p>
+                          </div>
+                          <Separator />
+                          <div className="max-w-3xl mx-auto space-y-3 text-sm leading-relaxed">
+                            <p>
+                              <strong>1.</strong> I/We have examined the balance sheet as at{" "}
+                              <strong>31st March, {engagement?.financial_year?.slice(-4) || "—"}</strong>, and the
+                              Profit and Loss Account for the year ended on that date, attached herewith, of{" "}
+                              <span className="font-semibold text-primary">{engClient?.name || "—"}</span>
+                              {engClient?.pan && (
+                                <span> (PAN: <span className="font-mono text-primary">{engClient.pan}</span>)</span>
+                              )}.
+                            </p>
+                            <p>
+                              <strong>2.</strong> In my/our opinion and to the best of my/our information and according
+                              to explanations given to me/us, the said accounts give a true and fair view of the state of
+                              the affairs of the assessee as at 31st March,{" "}
+                              {engagement?.financial_year?.slice(-4) || "—"} and of its profit/loss for the year ended on
+                              that date.
+                            </p>
+                            <p>
+                              <strong>3.</strong> The statement of particulars required to be furnished under section 44AB
+                              is annexed herewith in Form No. 3CD.
+                            </p>
+                            <p>
+                              <strong>4.</strong> In my/our opinion and to the best of my/our information and according
+                              to the explanations given to me/us, the particulars given in the said Form No. 3CD and the
+                              Annexure thereto are true and correct.
+                            </p>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </TabsContent>
+                  )}
+
+                  {/* ── Form 3CD ── */}
+                  {show3cd && (
+                    <TabsContent value="3cd" className="mt-0 p-0">
+                      <Form3CD engagementIdProp={selectedEngId} />
+                    </TabsContent>
+                  )}
+
+                  {/* If nothing to show (no tax audit engagement) */}
+                  {!show3ca && !show3cb && !show3cd && (
+                    <div className="mt-6 p-8 text-center text-muted-foreground border rounded-lg">
+                      <FileText size={32} className="mx-auto mb-2 opacity-30" />
+                      <p className="text-sm">No tax audit forms required for this engagement.</p>
+                      <p className="text-xs mt-1">Forms 3CA / 3CB / 3CD apply only to engagements with a tax audit component.</p>
+                    </div>
+                  )}
+                </Tabs>
               </div>
-              <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs">
-                <ChevronRight size={14} className="rotate-180" /> Back to Audit Dashboard
-              </Button>
-            </div>
-            <Form3CD engagementIdProp={selectedEngId} />
-          </div>
+            );
+          })()
         ) : activeStage === 9 ? (
           /* STAGE 9 — Sign-off & UDIN */
           <div className="max-w-5xl space-y-6">
@@ -785,11 +1043,11 @@ export default function AuditPipeline() {
           <div className="grid gap-4">
             <div>
               <Label>Audit Firm <span className="text-destructive">*</span></Label>
-              <Select value={form1A.audit_firm_id} onValueChange={v => setForm1A(f => ({ ...f, audit_firm_id: v }))}>
+              <Select value={form1A.firm_id} onValueChange={v => setForm1A(f => ({ ...f, firm_id: v }))}>
                 <SelectTrigger><SelectValue placeholder="Select audit firm" /></SelectTrigger>
                 <SelectContent>
                   {(auditFirmsForEng || []).length === 0 ? (
-                    <div className="px-3 py-2 text-sm text-muted-foreground">No audit firms found. Add one in Settings → Audit Firms.</div>
+                    <div className="px-3 py-2 text-sm text-muted-foreground">No audit firms found. In Firm Settings → toggle &quot;This firm is a registered audit firm&quot;.</div>
                   ) : (
                     (auditFirmsForEng || []).map(f => (
                       <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>
@@ -842,7 +1100,7 @@ export default function AuditPipeline() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowNewEng(false)}>Cancel</Button>
-            <Button onClick={() => createEngagement.mutate()} disabled={!form1A.client_id || !form1A.audit_firm_id}>Create</Button>
+            <Button onClick={() => createEngagement.mutate()} disabled={!form1A.client_id || !form1A.firm_id}>Create</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

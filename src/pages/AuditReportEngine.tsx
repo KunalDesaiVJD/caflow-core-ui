@@ -94,6 +94,12 @@ export default function AuditReportEngine() {
   const [engagement, setEngagement] = useState<any>(null);
   const [client, setClient] = useState<any>(null);
   const [firm, setFirm] = useState<any>(null);
+  // W3/W4 fix: partner name now comes from engagement.partner_id → users
+  // (the engagement's actual partner), and membership_no is looked up in
+  // firms.membership_numbers keyed by that partner's name. The previous
+  // code always took the FIRST entry in membership_numbers — which was
+  // only correct when the firm had exactly one partner.
+  const [partner, setPartner] = useState<{ name: string; icai_reg_no: string | null } | null>(null);
   const [loading, setLoading] = useState(true);
 
   // IAR
@@ -142,6 +148,18 @@ export default function AuditReportEngine() {
       if (eng?.firm_id) {
         const { data: f } = await supabase.from("firms").select("*").eq("id", eng.firm_id).single();
         setFirm(f);
+      } else {
+        setFirm(null);
+      }
+      if (eng?.partner_id) {
+        const { data: p } = await supabase
+          .from("users")
+          .select("name, icai_reg_no")
+          .eq("id", eng.partner_id)
+          .maybeSingle();
+        setPartner(p ? { name: p.name || "", icai_reg_no: (p as any).icai_reg_no ?? null } : null);
+      } else {
+        setPartner(null);
       }
       // Load 3CD
       const { data: cd } = await supabase.from("audit_3cd_responses").select("*").eq("engagement_id", selectedEngId).order("clause_number");
@@ -240,8 +258,19 @@ export default function AuditReportEngine() {
   }
 
   const firmName = firm?.display_name || firm?.name || "";
-  const partnerName = (firm?.membership_numbers as any)?.[0]?.partner_name || "";
-  const icaiNo = firm?.icai_reg_no || "";
+  // W3: partner is the engagement's actual partner (from partner_id),
+  // not whoever happens to be first in the firm's roster.
+  const partnerName = partner?.name || "";
+  // W4: membership number resolved from firms.membership_numbers by
+  // matching partner_name case-insensitively. Fall back to user's
+  // icai_reg_no, then a blank-line placeholder.
+  const icaiNo = (() => {
+    const roster: Array<{ partner_name: string; membership_no: string }> =
+      Array.isArray((firm as any)?.membership_numbers) ? (firm as any).membership_numbers : [];
+    const norm = (s: string) => (s || "").trim().toLowerCase();
+    const hit = roster.find(m => norm(m.partner_name) === norm(partnerName));
+    return hit?.membership_no || partner?.icai_reg_no || "";
+  })();
 
   if (loading) return <div className="p-6"><Skeleton className="h-[400px] w-full" /></div>;
 
@@ -270,12 +299,21 @@ export default function AuditReportEngine() {
         <Card><CardContent className="py-12 text-center text-muted-foreground">Select an engagement to generate reports.</CardContent></Card>
       ) : (
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList>
-            <TabsTrigger value="iar">Independent Auditor's Report</TabsTrigger>
-            {engagement?.requires_3ca && <TabsTrigger value="3ca">Form 3CA</TabsTrigger>}
-            {engagement?.requires_3cb && <TabsTrigger value="3cb">Form 3CB</TabsTrigger>}
-            {engagement?.requires_3cd && <TabsTrigger value="3cd">Form 3CD</TabsTrigger>}
-          </TabsList>
+          {(() => {
+            // Enforce entity-type rule: companies must never show Form 3CB
+            const et = (engagement?.entity_type || "").toLowerCase().trim();
+            const isCompanyEng = ["company", "private ltd", "public ltd", "opc", "pvt_ltd", "public_ltd"].includes(et);
+            const show3ca = isCompanyEng || (engagement?.requires_3ca ?? false);
+            const show3cb = !isCompanyEng && (engagement?.requires_3cb ?? false);
+            return (
+              <TabsList>
+                <TabsTrigger value="iar">Independent Auditor's Report</TabsTrigger>
+                {show3ca && <TabsTrigger value="3ca">Form 3CA</TabsTrigger>}
+                {show3cb && <TabsTrigger value="3cb">Form 3CB</TabsTrigger>}
+                {engagement?.requires_3cd && <TabsTrigger value="3cd">Form 3CD</TabsTrigger>}
+              </TabsList>
+            );
+          })()}
 
           {/* IAR Tab */}
           <TabsContent value="iar">
@@ -347,8 +385,8 @@ export default function AuditReportEngine() {
             </TabsContent>
           )}
 
-          {/* 3CB Tab */}
-          {engagement?.requires_3cb && (
+          {/* 3CB Tab — only for non-companies */}
+          {engagement?.requires_3cb && !(["company","private ltd","public ltd","opc","pvt_ltd","public_ltd"].includes((engagement?.entity_type||"").toLowerCase().trim())) && (
             <TabsContent value="3cb">
               <Card>
                 <CardHeader><CardTitle className="text-base">Form 3CB — Audit Report u/s 44AB (Non-Companies)</CardTitle></CardHeader>

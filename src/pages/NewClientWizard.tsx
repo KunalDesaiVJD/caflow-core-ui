@@ -51,9 +51,8 @@ const NewClientWizard = () => {
   const { toast } = useToast();
   const { user } = useAuth();
   const isSuperadmin = user?.role === "superadmin";
-  // All clients go under V J Desai & Co.
-  const VJ_DESAI_FIRM_ID = "be411601-f0f5-4f74-b93d-b87a8ef1b82b";
-  const effectiveFirmId = VJ_DESAI_FIRM_ID;
+  // Client is parented to the signed-in user's firm. No hardcoded fallback.
+  const effectiveFirmId = user?.firm_id || null;
 
   const isEditMode = Boolean(clientId);
   const [draftId, setDraftId] = useState<string | null>(clientId || null);
@@ -99,7 +98,7 @@ const NewClientWizard = () => {
     }
   }, [advancedInfo.financial_year]);
 
-  // Firm selector removed — all clients go under V J Desai & Co.
+  // Firm selector removed — client inherits the signed-in user's firm.
 
   // Create draft client on wizard open (create mode only)
   useEffect(() => {
