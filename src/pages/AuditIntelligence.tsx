@@ -909,16 +909,19 @@ export default function AuditIntelligence() {
               </Select>
             </div>
             <div>
-              <Label>Client *</Label>
-              <Select value={engForm.client_id} onValueChange={v => {
-                const client = editDialogClients.find(c => c.id === v);
-                setEngForm(f => ({ ...f, client_id: v, entity_type: client?.entity_type || f.entity_type }));
-              }}>
-                <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
-                <SelectContent>
-                  {editDialogClients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <Label>Client</Label>
+              {/* Client is immutable on an existing engagement. Changing it
+                  would orphan the trial balance, financial statements,
+                  notes, CARO/MRL/3CD responses, workpapers, and every other
+                  child record keyed off (client_id, engagement_id). To
+                  switch clients, archive this engagement and create a new
+                  one for the target client. */}
+              <div className="flex items-center h-10 px-3 rounded-md border border-input bg-muted/50 text-sm text-foreground">
+                {editDialogClients.find(c => c.id === engForm.client_id)?.name
+                  || selectedEngagement?.client_name
+                  || "—"}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">Client cannot be changed on an existing engagement (read-only).</p>
             </div>
             <div>
               <Label>Financial Year</Label>
