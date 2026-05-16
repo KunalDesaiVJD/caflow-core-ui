@@ -186,19 +186,36 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
             .map((c: any) => [c.id, c.name])
         );
 
-        // Resolve audit firm names (always via FK)
-        // Resolve partner names: prefer partner_id → users.name; fall back to partner_name text field
-        const firmIds    = [...new Set((engData as any[]).map((e: any) => e.audit_firm_id).filter(Boolean))];
+        // Resolve audit firm names. Issue 3 (CAFlow_FirmFix_Report): an
+        // engagement's audit firm id can point at EITHER the legacy
+        // `audit_firms` table OR the `firms` table (post-`is_audit_firm`
+        // rollout — the Stage 1 dropdown is a UNION of the two). Querying
+        // only `audit_firms` left engagements assigned to a firms-table
+        // audit firm (e.g. "Akta Ramani & Associates") with `firm = null`,
+        // so the tracker fell back to the stale stored row value (often
+        // "V.J. Desai" from a much earlier creation).
+        const allFirmIds = [
+          ...new Set(
+            (engData as any[]).flatMap((e: any) => [e.audit_firm_id, e.firm_id]).filter(Boolean),
+          ),
+        ];
         const partnerIds = [...new Set((engData as any[]).map((e: any) => e.partner_id).filter(Boolean))];
-        const [{ data: firmRows }, { data: partnerRows }] = await Promise.all([
-          firmIds.length
-            ? (supabase as any).from("audit_firms").select("id, name").in("id", firmIds)
+        const [{ data: afRows }, { data: fRows }, { data: partnerRows }] = await Promise.all([
+          allFirmIds.length
+            ? (supabase as any).from("audit_firms").select("id, name").in("id", allFirmIds)
+            : Promise.resolve({ data: [] }),
+          allFirmIds.length
+            ? (supabase as any).from("firms").select("id, name, display_name").in("id", allFirmIds)
             : Promise.resolve({ data: [] }),
           partnerIds.length
             ? (supabase as any).from("users").select("id, name").in("id", partnerIds)
             : Promise.resolve({ data: [] }),
         ]);
-        const firmNameMap    = new Map((firmRows    || []).map((f: any) => [f.id, f.name]));
+        // Merge both tables into a single id→name map. `firms` wins if both
+        // tables happen to share the same id (extremely unlikely but defensive).
+        const firmNameMap = new Map<string, string>();
+        for (const f of (afRows || []) as any[]) firmNameMap.set(f.id, f.name);
+        for (const f of (fRows  || []) as any[]) firmNameMap.set(f.id, f.display_name || f.name);
         const partnerNameMap = new Map((partnerRows || []).map((p: any) => [p.id, p.name]));
 
         // Build engagementInfoByClient (one entry per client — first eng wins).
@@ -211,8 +228,14 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
             (partnerNameMap.get(eng.partner_id) as string | undefined) ??
             (eng.partner_name as string | null | undefined) ??
             null;
+          // Issue 3: try audit_firm_id first, then firm_id (the canonical
+          // column every downstream consumer reads via firms-table lookup).
+          const resolvedFirm =
+            (firmNameMap.get(eng.audit_firm_id) as string | undefined) ??
+            (firmNameMap.get((eng as any).firm_id) as string | undefined) ??
+            null;
           engagementInfoByClient.set(eng.client_id, {
-            firm:    (firmNameMap.get(eng.audit_firm_id) as string | undefined) ?? null,
+            firm:    resolvedFirm,
             partner: resolvedPartner,
           });
         }
@@ -264,15 +287,22 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
       }
     }
 
-    // Backfill firm/partner on existing real rows that are missing them
+    // Backfill firm/partner on existing real rows.
+    // Issue 3 fix: when an engagement exists for the client+FY, prefer the
+    // engagement-derived firm/partner over the row's stored values. Stored
+    // values can be stale — e.g. the row was created when the client was
+    // assigned to V.J. Desai, the user later switched the engagement to
+    // Akta Ramani, but the audit-status row kept the old name forever.
+    // We still preserve r.firm / r.partner when no engagement exists
+    // (manually-entered standalone status rows are unaffected).
     statusRows = statusRows.map(r => {
-      if (!r.client_id || (r.firm && r.partner)) return r;
+      if (!r.client_id) return r;
       const info = engagementInfoByClient.get(r.client_id);
       if (!info) return r;
       return {
         ...r,
-        firm:    r.firm    || info.firm    || null,
-        partner: r.partner || info.partner || null,
+        firm:    info.firm    ?? r.firm    ?? null,
+        partner: info.partner ?? r.partner ?? null,
       };
     });
 
