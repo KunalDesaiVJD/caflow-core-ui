@@ -43,6 +43,11 @@ export default function EngagementDetail() {
   const [manager, setManager] = useState<any>(null);
   const [teamUsers, setTeamUsers] = useState<any[]>([]);
   const [auditorAssignment, setAuditorAssignment] = useState<any>(null);
+  // FIX 5 / W5: resolve the engagement's firm via engagement.firm_id → firms
+  // (the canonical column every other consumer reads). Replaces the legacy
+  // client_auditor_assignments → audit_firms display path which was driven
+  // by a separate per-client/FY assignment row and could fall out of sync.
+  const [engagementFirm, setEngagementFirm] = useState<{ name: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("risk");
 
@@ -80,6 +85,16 @@ export default function EngagementDetail() {
     if (eng.partner_id) {
       const { data } = await supabase.from("users").select("id, name, icai_reg_no").eq("id", eng.partner_id).single();
       setPartner(data);
+    }
+    if (eng.firm_id) {
+      const { data: f } = await supabase
+        .from("firms")
+        .select("name, display_name")
+        .eq("id", eng.firm_id)
+        .maybeSingle();
+      if (f) setEngagementFirm({ name: (f as any).display_name || f.name });
+    } else {
+      setEngagementFirm(null);
     }
     if (eng.manager_id) {
       const { data } = await supabase.from("users").select("id, name").eq("id", eng.manager_id).single();
@@ -137,7 +152,12 @@ export default function EngagementDetail() {
         <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
           {partner && <span>Partner: <strong className="text-foreground">{partner.name}</strong></span>}
           {manager && <span>Manager: <strong className="text-foreground">{manager.name}</strong></span>}
-          {auditorAssignment ? (
+          {engagementFirm ? (
+            <span className="flex items-center gap-1">
+              Assigned Auditor: <strong className="text-foreground">{engagementFirm.name}</strong>
+              {partner?.name && <> — {partner.name}</>}
+            </span>
+          ) : auditorAssignment ? (
             <span className="flex items-center gap-1">
               Assigned Auditor: <strong className="text-foreground">{auditorAssignment.audit_firms?.name}</strong> — {auditorAssignment.audit_firms?.partner_name}
               <Button variant="ghost" size="icon" className="h-5 w-5 ml-1" onClick={() => navigate(`/clients/${engagement.client_id}?tab=auditors`)}>
@@ -147,7 +167,7 @@ export default function EngagementDetail() {
           ) : (
             <span className="flex items-center gap-1 text-amber-600">
               <AlertTriangle className="h-3.5 w-3.5" />
-              No audit firm assigned for FY {engagement.financial_year}. Assign one from Client &gt; Auditors tab.
+              No audit firm assigned. Set one in Stage 1 (Engagement Setup).
             </span>
           )}
           {engagement.planned_start && <span>Start: {engagement.planned_start}</span>}

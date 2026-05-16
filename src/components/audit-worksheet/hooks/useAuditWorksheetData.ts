@@ -172,18 +172,51 @@ export function useAuditWorksheetData(engagementId: string): AuditWorksheetData 
     staleTime: 300_000,
   });
 
-  // ── Audit Firm (from audit_firms via engagement.audit_firm_id) ──
+  // ── Audit Firm — FIX 5 / W7 ──
+  // The engagement's audit firm is now the same record as `firm` (via
+  // engagement.firm_id → firms). The legacy `audit_firms` table is no
+  // longer consulted. partner_name is derived from engagement.partner_id
+  // → users.name (the engagement's actual partner); icai_reg_no is looked
+  // up in firms.membership_numbers by partner name, with fallback to the
+  // user's icai_reg_no.
   const { data: auditFirm } = useQuery<AuditWorksheetAuditFirm | null>({
-    queryKey: ["aws-audit-firm", engagement?.audit_firm_id],
+    queryKey: ["aws-audit-firm", engagement?.firm_id, engagement?.partner_id],
     queryFn: async () => {
-      const { data } = await supabase
-        .from("audit_firms")
-        .select("name, partner_name, icai_reg_no, address, city, phone")
-        .eq("id", engagement!.audit_firm_id!)
+      if (!engagement?.firm_id) return null;
+      const { data: f } = await supabase
+        .from("firms")
+        .select("name, display_name, icai_firm_reg_no, address, state, phone, membership_numbers")
+        .eq("id", engagement.firm_id)
         .maybeSingle();
-      return data as AuditWorksheetAuditFirm | null;
+      if (!f) return null;
+      let partnerName: string | null = null;
+      let partnerIcai: string | null = null;
+      if (engagement.partner_id) {
+        const { data: p } = await supabase
+          .from("users")
+          .select("name, icai_reg_no")
+          .eq("id", engagement.partner_id)
+          .maybeSingle();
+        partnerName = (p as any)?.name ?? null;
+        partnerIcai = (p as any)?.icai_reg_no ?? null;
+      }
+      const roster: Array<{ partner_name: string; membership_no: string }> =
+        Array.isArray((f as any).membership_numbers) ? (f as any).membership_numbers : [];
+      const norm = (s: string) => (s || "").trim().toLowerCase();
+      const hit = partnerName
+        ? roster.find((m) => norm(m.partner_name) === norm(partnerName!))
+        : undefined;
+      const addr = (f as any).address;
+      return {
+        name: (f as any).display_name || f.name,
+        partner_name: partnerName,
+        icai_reg_no: hit?.membership_no || partnerIcai || null,
+        address: typeof addr === "string" ? addr : addr?.line || null,
+        city: addr?.city || (f as any).state || null,
+        phone: (f as any).phone || null,
+      } as AuditWorksheetAuditFirm;
     },
-    enabled: !!engagement?.audit_firm_id,
+    enabled: !!engagement?.firm_id,
     staleTime: 300_000,
   });
 

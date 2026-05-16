@@ -268,7 +268,7 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
     if (!engagement?.firm_id) return;
     supabase
       .from("firms")
-      .select("name, display_name, icai_firm_reg_no, icai_reg_no, address, state")
+      .select("name, display_name, icai_firm_reg_no, icai_reg_no, address, state, membership_numbers")
       .eq("id", engagement.firm_id)
       .single()
       .then(({ data }) => { if (data) setFirmDetails(data); });
@@ -390,7 +390,18 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
   const firmAddr = firmDetails?.address as any;
   const firmCity = firmAddr?.city || firmAddr?.district || firmDetails?.state || "[City]";
   const partnerName = sig.partnerNameOverride || partnerDetails?.name || "[Partner Name]";
-  const partnerMembership = partnerDetails?.icai_reg_no || "[Membership No.]";
+  // FIX 2 (Issue 4): membership no. is per-partner, stored on the firm
+  // (firms.membership_numbers[]). Match by partner_name case-insensitively.
+  // Fall back to the user's icai_reg_no, then a visible placeholder.
+  const partnerMembership = (() => {
+    const roster: Array<{ partner_name: string; membership_no: string }> =
+      Array.isArray((firmDetails as any)?.membership_numbers)
+        ? (firmDetails as any).membership_numbers
+        : [];
+    const norm = (s: string) => (s || "").trim().toLowerCase();
+    const hit = roster.find((m) => norm(m.partner_name) === norm(partnerName));
+    return hit?.membership_no || partnerDetails?.icai_reg_no || "[Membership No.]";
+  })();
   const assesseePlace = sig.assesseePlace || clientDetails?.registered_state || "[Place]";
 
   const selectedCount = notes.filter((n) => n.selected).length;
