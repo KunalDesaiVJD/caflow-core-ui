@@ -176,17 +176,26 @@ export const NOTE_SMART_MAP: Record<string, SmartRule[]> = {
     { rowId: "sec_demand_bank", keywords: ["cash credit", " cc ", "overdraft", " od "] },
     { rowId: "sec_term_fi",     keywords: ["loan from nbfc", "loan from finance", "finance company loan", "nbfc loan"] },
     { rowId: "sec_related",     keywords: ["secured loan from director", "secured loan from partner", "secured loan from promoter", "secured director", "secured partner"] },
-    // Unsecured — related parties (director/partner/family loans most specific — keep before catch-alls)
+    // Unsecured — related parties (director/partner/owner/family loans most specific — keep before catch-alls)
     { rowId: "unsec_related",   keywords: [
-        "loan from director", "director loan", "director's loan",
-        "loan from partner", "partner loan", "partner's loan",
-        "loan from promoter", "promoter loan",
-        "loan from shareholder", "shareholder loan",
-        "loan from relative", "relative loan",
-        "loan from proprietor", "proprietor loan",
-        "loan from family", "family loan",
+        "loan from director", "director loan", "director's loan", "directors loan",
+        "loan from partner", "partner loan", "partner's loan", "partners loan",
+        "loan from owner", "owner loan", "owner's loan", "owners loan",
+        "loan from proprietor", "proprietor loan", "proprietor's loan", "proprietors loan",
+        "loan from promoter", "promoter loan", "promoter's loan",
+        "loan from shareholder", "shareholder loan", "shareholders loan",
+        "loan from relative", "relative loan", "loan from relatives", "relatives loan",
+        "loan from family", "family loan", "loan from family member",
         "loan from member", "huf loan", "loan from huf",
+        "loan from related party", "related party loan", "loans from related parties", "related parties loan",
+        "loan from associate", "associate loan",
+        "loan from subsidiary", "subsidiary loan",
+        "loan from holding", "holding company loan",
+        "loan from group company", "group company loan", "intercompany loan", "inter-company loan",
+        "loan from kmp", "kmp loan", "key managerial personnel loan",
         "unsecured loan from director", "unsecured loan from partner",
+        "unsecured loan from owner", "unsecured loan from proprietor",
+        "unsecured loan from related",
         // HUF entities are always related parties in Indian partnership context
         " huf", "(huf)", "-huf",
       ] },
@@ -201,12 +210,23 @@ function normLedger(name: string): string {
   return " " + name.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim() + " ";
 }
 
-/** Returns the first matching static rowId, or null if none match. */
-function smartMatch(ledgerName: string, rules: SmartRule[]): string | null {
-  const norm = normLedger(ledgerName);
+/** Returns the first matching static rowId, or null if none match.
+ *  Considers both the ledger name AND its Tally parent_group, so ledgers named
+ *  after a person (e.g. "Mr Ashish K Patel") still classify as related-party
+ *  when the parent_group identifies the relationship ("Loans from Partners",
+ *  "Owner Loan Account", "Loans (Liability) - Director", etc.). */
+function smartMatch(
+  ledgerName: string,
+  rules: SmartRule[],
+  parentGroup?: string | null,
+): string | null {
+  const normName  = normLedger(ledgerName);
+  const normGroup = parentGroup ? normLedger(parentGroup) : "";
   for (const rule of rules) {
     for (const kw of rule.keywords) {
-      if (norm.includes(kw)) return rule.rowId;
+      if (normName.includes(kw) || (normGroup && normGroup.includes(kw))) {
+        return rule.rowId;
+      }
     }
   }
   return null;
@@ -525,7 +545,7 @@ export async function nceAutoPopulate(
                   if (!mapped || !codeSet.has(mapped.code)) continue;
                   const amt = ledgerAmt(row.closing_balance);
                   if (amt === 0) continue;
-                  const rid = smartMatch(row.ledger_name, pyRules);
+                  const rid = smartMatch(row.ledger_name, pyRules, row.parent_group);
                   if (rid) pyResult[rid] = (pyResult[rid] ?? 0) + amt;
                 }
               } else if (noteFs.lt || noteFs.st) {
@@ -539,7 +559,7 @@ export async function nceAutoPopulate(
                   if (!isLT && !isST) continue;
                   const amt = ledgerAmt(row.closing_balance);
                   if (amt === 0) continue;
-                  const rid = smartMatch(row.ledger_name, pyRules);
+                  const rid = smartMatch(row.ledger_name, pyRules, row.parent_group);
                   if (rid) {
                     if (isLT) pyResult[rid + "_lt"] = (pyResult[rid + "_lt"] ?? 0) + amt;
                     if (isST) pyResult[rid + "_st"] = (pyResult[rid + "_st"] ?? 0) + amt;
@@ -598,7 +618,7 @@ export async function nceAutoPopulate(
         // Skip ledgers the user has explicitly ejected to standalone rows
         if (ejectedSet.has(row.ledger_name)) continue;
 
-        const matchedRowId = smartMatch(row.ledger_name, smartRules);
+        const matchedRowId = smartMatch(row.ledger_name, smartRules, row.parent_group);
         if (matchedRowId) {
           // Accumulate directly into the static row — no custom row created
           newCy[matchedRowId] = (newCy[matchedRowId] ?? 0) + amt;
@@ -812,7 +832,7 @@ export async function nceAutoPopulate(
         // Skip ledgers the user has explicitly ejected to standalone rows
         if (ejectedSet.has(row.ledger_name)) continue;
 
-        const matchedRowId = smartMatch(row.ledger_name, smartRules);
+        const matchedRowId = smartMatch(row.ledger_name, smartRules, row.parent_group);
         if (matchedRowId) {
           // Fill static row directly with LT/ST suffix
           if (isLT) newCy[matchedRowId + "_lt"] = (newCy[matchedRowId + "_lt"] ?? 0) + amt;

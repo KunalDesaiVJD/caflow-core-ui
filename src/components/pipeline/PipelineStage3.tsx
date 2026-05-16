@@ -608,28 +608,62 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
   // TB accounts — Tally Sync is the sole authoritative source.
   // closing_balance is unsigned; balance_type (Dr/Cr) gives the sign.
+  //
+  // PY-ONLY MERGE: Ledgers present in the PY trial balance but not in CY TB
+  // (closed accounts, renamed ledgers) must still surface in Stage 6 COA
+  // Mapping so the user can map them — otherwise their PY balance never
+  // reaches Financial Statements (PY column stays blank) and they're invisible
+  // in Notes to Accounts. We append a synthetic CY row (debit/credit/balance
+  // = 0) for every PY-only ledger so the mapping panel shows it under its
+  // parent_group, with the PY closing carried as opening_balance.
   const tbAccounts: {
     account_name: string; account_group: string;
     debit: number; credit: number; balance: number;
     opening_balance?: number; tally_debit?: number; tally_credit?: number;
+    py_only?: boolean;
   }[] = useMemo(() => {
-    if (!tallyTb?.length) return [];
-    return tallyTb.map((l: any) => {
-      const cb   = Math.abs(Number(l.closing_balance ?? 0));
-      const isDr = String(l.balance_type ?? "").toUpperCase() === "DR";
-      return {
-        account_name:  String(l.ledger_name || "").trim(),
-        account_group: l.parent_group || "",
-        debit:  isDr ? cb : 0,
-        credit: isDr ? 0  : cb,
-        balance: isDr ? cb : -cb,
-        opening_balance: Math.abs(Number(l.opening_balance ?? 0)) *
-                         (String(l.opening_type ?? "").toUpperCase() === "CR" ? -1 : 1),
-        tally_debit:  Number(l.debit_amount  ?? 0),
-        tally_credit: Number(l.credit_amount ?? 0),
-      };
-    }).filter((a: any) => a.account_name);
-  }, [tallyTb]);
+    const out: any[] = [];
+    const seen = new Set<string>();
+    if (tallyTb?.length) {
+      for (const l of tallyTb as any[]) {
+        const name = String(l.ledger_name || "").trim();
+        if (!name) continue;
+        const cb   = Math.abs(Number(l.closing_balance ?? 0));
+        const isDr = String(l.balance_type ?? "").toUpperCase() === "DR";
+        seen.add(name.toLowerCase());
+        out.push({
+          account_name:  name,
+          account_group: l.parent_group || "",
+          debit:  isDr ? cb : 0,
+          credit: isDr ? 0  : cb,
+          balance: isDr ? cb : -cb,
+          opening_balance: Math.abs(Number(l.opening_balance ?? 0)) *
+                           (String(l.opening_type ?? "").toUpperCase() === "CR" ? -1 : 1),
+          tally_debit:  Number(l.debit_amount  ?? 0),
+          tally_credit: Number(l.credit_amount ?? 0),
+        });
+      }
+    }
+    const pyRows = pyShellTbData?.tbRows as any[] | undefined;
+    if (pyRows && pyRows.length) {
+      for (const l of pyRows) {
+        const name = String(l.ledger_name || "").trim();
+        if (!name) continue;
+        if (seen.has(name.toLowerCase())) continue;
+        const cb   = Math.abs(Number(l.closing_balance ?? 0));
+        const isDr = String(l.balance_type ?? "").toUpperCase() === "DR";
+        out.push({
+          account_name:  name,
+          account_group: l.parent_group || "",
+          debit: 0, credit: 0, balance: 0,
+          opening_balance: isDr ? cb : -cb,
+          tally_debit: 0, tally_credit: 0,
+          py_only: true,
+        });
+      }
+    }
+    return out;
+  }, [tallyTb, pyShellTbData?.tbRows]);
 
   // Load existing mapping from engagement
   useEffect(() => {
