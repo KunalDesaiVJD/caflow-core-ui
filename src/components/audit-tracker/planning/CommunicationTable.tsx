@@ -247,22 +247,46 @@ export default function CommunicationTable({ comms, entries, clients, onAdd, onU
 
     setRows(prev => prev.map(r => r.id === row.id ? { ...r, saving: true, phoneError: "" } : r));
 
-    const payload: Omit<CommEntry, "id"|"firm_id"|"created_at"> = {
-      planning_id:        null,
-      client_name:        row.clientName     || null,
-      audit_planned_from: row.auditFrom      || null,
-      audit_planned_to:   row.auditTo        || null,
-      contact_person:     row.contactPerson  || null,
-      contact_no:         row.contactNo      || null,
-      remarks:            row.remarks        || null,
-    };
-
+    // ROOT-CAUSE FIX (Issue 1 — Communication Log data wipe on refresh):
+    // The old code put `planning_id: null` into the payload for BOTH inserts
+    // AND updates. When the user edited an auto-created row (which always has
+    // a non-null planning_id pointing at the source audit_planning entry),
+    // the update silently nulled out planning_id. On the next page load:
+    //   1. existingComms.map(c => c.planning_id).filter(Boolean) no longer
+    //      contained that planning_id (now null) →
+    //   2. the auto-backfill in useAuditPlanning.load() re-INSERTED a fresh
+    //      "Auto-created from Planning Calendar" row for the orphaned plan,
+    //      with contact_person = contact_no = NULL →
+    //   3. the dedup-by-client-name in CommunicationTable kept the NEWER
+    //      auto-created row and dropped the user-edited row →
+    //   4. contact details appeared to vanish on refresh.
+    //
+    // Fix: never include planning_id when updating; only set it on insert,
+    // and only when this draft was actually linked to a planning entry.
     if (row.isNew) {
+      const payload: Omit<CommEntry, "id"|"firm_id"|"created_at"> = {
+        planning_id:        null,
+        client_name:        row.clientName     || null,
+        audit_planned_from: row.auditFrom      || null,
+        audit_planned_to:   row.auditTo        || null,
+        contact_person:     row.contactPerson  || null,
+        contact_no:         row.contactNo      || null,
+        remarks:            row.remarks        || null,
+      };
       await onAdd(payload);
       // Remove temp row — comms prop will re-add it with real ID from server
       setRows(prev => prev.filter(r => r.id !== row.id));
     } else {
-      await onUpdate(row.id, payload);
+      // Partial update — preserve existing planning_id (and created_at, firm_id)
+      const patch: Partial<CommEntry> = {
+        client_name:        row.clientName     || null,
+        audit_planned_from: row.auditFrom      || null,
+        audit_planned_to:   row.auditTo        || null,
+        contact_person:     row.contactPerson  || null,
+        contact_no:         row.contactNo      || null,
+        remarks:            row.remarks        || null,
+      };
+      await onUpdate(row.id, patch);
       setRows(prev => prev.map(r =>
         r.id === row.id ? { ...r, saving: false, isDirty: false } : r
       ));

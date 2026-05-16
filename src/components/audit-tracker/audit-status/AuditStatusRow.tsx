@@ -76,6 +76,7 @@ interface RowDraft {
   accounting_data:              string;
   audit_employees:              string;
   audit_report_prepared_by:     string;
+  audit_report_checked_by:      string;
   audit_status:                 string;
   audit_status_other:           string;
   report_print_date:            string;
@@ -560,6 +561,13 @@ export default function AuditStatusRow({
           : <span>{row.audit_report_prepared_by || "—"}</span>}
       </TCell>
 
+      {/* 6b · Audit Report Checked By */}
+      <TCell className="min-w-[120px]">
+        {editing
+          ? <UserCombobox value={draft.audit_report_checked_by} onChange={v => set("audit_report_checked_by", v)} users={users} placeholder="Name…" />
+          : <span>{row.audit_report_checked_by || "—"}</span>}
+      </TCell>
+
       {/* 7 · Audit Status */}
       <TCell className="min-w-[130px]">
         {editing ? (
@@ -716,6 +724,7 @@ function buildDraft(row: StatusEntry, clients: ClientOption[]): RowDraft {
     accounting_data:              row.accounting_data              || "No",
     audit_employees:              row.audit_employees              || "",
     audit_report_prepared_by:     row.audit_report_prepared_by     || "",
+    audit_report_checked_by:      row.audit_report_checked_by      || "",
     audit_status:                 row.audit_status                 || "",
     audit_status_other:           row.audit_status_other           || "",
     report_print_date:            row.report_print_date            || "",
@@ -741,6 +750,7 @@ function draftToPatch(d: RowDraft): StatusPatch {
     accounting_data:              d.accounting_data || "No",
     audit_employees:              d.audit_employees || null,
     audit_report_prepared_by:     d.audit_report_prepared_by || null,
+    audit_report_checked_by:      d.audit_report_checked_by || null,
     audit_status:                 d.audit_status || null,
     audit_status_other:           d.audit_status === "OTHERS" ? (d.audit_status_other || null) : null,
     report_print_date:            d.report_print_date || null,

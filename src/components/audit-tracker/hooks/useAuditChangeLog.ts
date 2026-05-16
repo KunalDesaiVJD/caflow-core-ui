@@ -62,6 +62,7 @@ export const FIELD_LABELS: Record<string, string> = {
   accounting_data:               "Accounting Data",
   audit_employees:               "Audit Employees",
   audit_report_prepared_by:      "Report Prepared By",
+  audit_report_checked_by:       "Report Checked By",
   audit_status:                  "Audit Status",
   audit_status_other:            "Audit Status (Other)",
   report_print_date:             "Report Print Date",

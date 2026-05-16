@@ -93,7 +93,17 @@ export function useAuditPlanning(firmId: string, userId?: string, isSuperadmin?:
     // Back-fill: any planning entry that has no matching audit_communication row
     // (e.g. entries created before the auto-create logic was added, or where the
     // insert silently failed) gets one created now.
+    //
+    // DEFENSE-IN-DEPTH (Issue 1 fix): also match by client_name so that any
+    // legacy comm row whose planning_id was nulled (by an older buggy save
+    // path) still "satisfies" its source planning entry. Without this fallback
+    // we would re-insert a fresh auto-created row and the dedup in
+    // CommunicationTable would drop the user-edited row, silently destroying
+    // contact_person / contact_no on every refresh.
     const linkedPlanIds = new Set(existingComms.map(c => c.planning_id).filter(Boolean));
+    const linkedClientNames = new Set(
+      existingComms.map(c => (c.client_name || "").trim().toLowerCase()).filter(Boolean)
+    );
     // Issue 3: skip leaves with the explicit flag (defensive: keep legacy
     // string match as fallback for any pre-migration row that wasn't backfilled)
     const missing = ((planData as PlanEntry[]) || []).filter(
@@ -101,6 +111,7 @@ export function useAuditPlanning(firmId: string, userId?: string, isSuperadmin?:
         && !p.is_leave
         && p.client_name.toLowerCase() !== "leave"
         && !linkedPlanIds.has(p.id)
+        && !linkedClientNames.has((p.client_name || "").trim().toLowerCase())
     );
     if (missing.length > 0) {
       const inserts = missing.map(p => ({

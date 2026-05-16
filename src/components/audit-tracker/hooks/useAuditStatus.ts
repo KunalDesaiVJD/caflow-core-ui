@@ -23,6 +23,7 @@ export interface StatusEntry {
   accounting_data:              string;
   audit_employees:              string | null;
   audit_report_prepared_by:     string | null;
+  audit_report_checked_by:      string | null;
   audit_status:                 string | null;
   audit_status_other:           string | null;
   report_print_date:            string | null;
@@ -237,6 +238,7 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
             accounting_data:              "No",
             audit_employees:              null,
             audit_report_prepared_by:     null,
+            audit_report_checked_by:      null,
             audit_status:                 null,
             audit_status_other:           null,
             report_print_date:            null,
@@ -374,6 +376,7 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
                                             : (plan.employee_names ?? null)
                                         ),
           audit_report_prepared_by:     null,
+          audit_report_checked_by:      null,
           audit_status:                 "Scheduled",
           audit_status_other:           null,
           report_print_date:            null,
