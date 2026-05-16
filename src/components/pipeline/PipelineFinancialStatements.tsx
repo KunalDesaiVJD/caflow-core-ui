@@ -2142,7 +2142,7 @@ export default function PipelineFinancialStatements({
   const firmLookupId =
     (engagement as any)?.audit_firm_id || engagement?.firm_id || null;
   const { data: firmData } = useQuery({
-    queryKey: ["firm-detail-fs-v3", firmLookupId],
+    queryKey: ["firm-detail-fs-v4", firmLookupId],
     queryFn: async () => {
       if (!firmLookupId) return null;
       // 1. Try the firms table directly. This is the canonical source for
@@ -2156,32 +2156,41 @@ export default function PipelineFinancialStatements({
         const d = data as any;
         return { ...d, name: d.display_name || d.name } as any;
       }
-      // 2. Legacy: firmLookupId points at audit_firms (the parallel table
-      //    Stage 1 used before is_audit_firm rollout). Resolve the audit
-      //    firm's name, then look up the SAME-NAMED row in firms to pull
-      //    its membership_numbers (which is where partner ICAI numbers are
-      //    actually registered via Firm Settings → Audit Registration).
+      // 2. Legacy: firmLookupId points at audit_firms (parallel table used
+      //    before is_audit_firm rollout). Resolve via FRN — the audit_firms
+      //    row carries icai_reg_no (e.g. "113541W") and the parallel firms
+      //    row carries the same value in either icai_firm_reg_no or
+      //    icai_reg_no. FRN match is reliable across legal-name variants
+      //    ("V J Desai & Co. LLP" vs "V. J. Desai & Co.").
       const { data: af } = await supabase
         .from("audit_firms")
         .select("name, icai_reg_no, address")
         .eq("id", firmLookupId)
         .maybeSingle();
       if (!af) return null;
+      const afFrn  = ((af as any).icai_reg_no || "").trim();
       const afName = ((af as any).name || "").trim();
       let parentFirm: any = null;
-      if (afName) {
-        const { data: matches } = await supabase
+      if (afFrn) {
+        // FRN match against either firms column.
+        const { data: byFrn } = await supabase
           .from("firms")
           .select("name, display_name, icai_firm_reg_no, icai_reg_no, address, membership_numbers")
-          .ilike("name", afName);
-        parentFirm = (matches || []).find((m: any) =>
-          ((m.display_name || m.name) || "").trim().toLowerCase() === afName.toLowerCase(),
-        ) || (matches && matches[0]) || null;
+          .or(`icai_firm_reg_no.eq.${afFrn},icai_reg_no.eq.${afFrn}`);
+        parentFirm = (byFrn || [])[0] || null;
+      }
+      if (!parentFirm && afName) {
+        // Last-resort: case-insensitive substring on the firm name.
+        const { data: byName } = await supabase
+          .from("firms")
+          .select("name, display_name, icai_firm_reg_no, icai_reg_no, address, membership_numbers")
+          .ilike("name", `%${afName.replace(/\./g, "").trim()}%`);
+        parentFirm = (byName || [])[0] || null;
       }
       return {
-        name: parentFirm?.display_name || parentFirm?.name || (af as any).name,
-        icai_firm_reg_no: parentFirm?.icai_firm_reg_no || (af as any).icai_reg_no,
-        icai_reg_no: parentFirm?.icai_reg_no || (af as any).icai_reg_no,
+        name: parentFirm?.display_name || parentFirm?.name || afName,
+        icai_firm_reg_no: parentFirm?.icai_firm_reg_no || afFrn,
+        icai_reg_no: parentFirm?.icai_reg_no || afFrn,
         address: parentFirm?.address || (af as any).address,
         membership_numbers: Array.isArray(parentFirm?.membership_numbers)
           ? parentFirm.membership_numbers
