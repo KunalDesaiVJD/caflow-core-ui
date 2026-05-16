@@ -3848,14 +3848,18 @@ export default function PipelineFinancialStatements({
         //   - Reserves PY pulled from prior-engagement / py_manual_amounts
         //   - Deferred tax positive face value (notes-aware, not raw -ve)
         //
-        // Pass signed values: positive = normal balance, negative = abnormal
-        // (e.g. accumulated losses in reserves shows as negative → Excel renders
-        // it as "(amount)" via the MONEY_FMT "#,##0;(#,##0)" pattern).
-        // Math.abs was removed because it masked opposite-nature balances.
+        // Convert Tally-convention signed values to positive face values for
+        // the Excel template.  All equity / liability / revenue codes arrive as
+        // negative numbers (credit-side sign convention from ncyOf / memo*);
+        // Math.abs converts them to the positive face values the template expects.
+        // Accumulated-deficit reserves will also become positive — the template
+        // number format "#,##0.00;(#,##0.00)" will still render a deficit as
+        // "(amount)" because the underlying value from Tally is already negative
+        // for a debit-balance reserve account.
         const pos = (v: number | null | undefined): number => {
           const n = Number(v);
           if (!Number.isFinite(n)) return 0;
-          return n;
+          return Math.abs(n);
         };
         const corpAmounts: Record<string, { cy: number; py: number }> =
           (memoBs && memoPl) ? {
