@@ -143,7 +143,7 @@ function buildPlaceholderMap(i: CorporateFinancialsInputs): Record<string, strin
     "[XXXXXXXXXXXX]":              "",
     "[XXXXXX]":                    "",
 
-    // ── "_ AUTO" variants ──────────────────────────────────────────────────
+    // ── "_ AUTO" variants (with space) ────────────────────────────────────
     // Many template cells store the placeholder + "_ AUTO" suffix as a
     // single string (e.g. "[ENTER ENTITY NAME]_ AUTO").  We map the FULL
     // string so the entire cell gets replaced — no dangling "_ AUTO".
@@ -162,13 +162,28 @@ function buildPlaceholderMap(i: CorporateFinancialsInputs): Record<string, strin
     "[ENTER DATE]_ AUTO":          i.reportDate || "",
     "[ENTER REPORT DATE]_ AUTO":   i.reportDate || "",
     "[ENTER DETAILS]_ AUTO":       "",
-    // "[01 Apr 2025 to 31 Mar 2026]_ AUTO" is the literal hardcoded year
-    // range in the template — substitute with engagement's actual FY span.
     "[01 Apr 2025 to 31 Mar 2026]_ AUTO":   fyDateRange,
     "[2026-27]_ AUTO":             i.assessmentYear || "",
-    // Previous assessment year placeholder (e.g. "[2025-26]_ AUTO")
-    // Derived from cyYear: e.g. 2026 → "2025-26"
     [`[${i.pyYear}-${String(i.cyYear).slice(-2)}]_ AUTO`]: `${i.pyYear}-${String(i.cyYear).slice(-2)}`,
+    // ── "_AUTO" variants (no space) — some cover-page cells omit the space ─
+    "[ENTER ENTITY NAME]_AUTO":   i.entityName || "",
+    "[ENTER ADDRESS]_AUTO":       i.address || "",
+    "[ENTER PAN]_AUTO":           i.pan || "",
+    "[ENTER TAN]_AUTO":           i.tan || "",
+    "[ENTER GSTIN]_AUTO":         i.gstin || "",
+    "[ENTER BUSINESS]_AUTO":      i.business || "",
+    "[ENTER FIRM NAME]_AUTO":     i.firmName || "",
+    "[ENTER FRN]_AUTO":           i.firmFRN || "",
+    "[ENTER SIGNATORY NAME]_AUTO": i.partnerName || "",
+    "[ENTER MEMBERSHIP NO.]_AUTO": i.membershipNo || "",
+    "[ENTER UDIN]_AUTO":          i.udin || "",
+    "[ENTER PLACE]_AUTO":         i.place || "",
+    "[ENTER DATE]_AUTO":          i.reportDate || "",
+    "[ENTER REPORT DATE]_AUTO":   i.reportDate || "",
+    "[ENTER DETAILS]_AUTO":       "",
+    "[01 Apr 2025 to 31 Mar 2026]_AUTO":   fyDateRange,
+    "[2026-27]_AUTO":             i.assessmentYear || "",
+    [`[${i.pyYear}-${String(i.cyYear).slice(-2)}]_AUTO`]: `${i.pyYear}-${String(i.cyYear).slice(-2)}`,
     // NOTE: "_____ AUTO" handled by a smart regex below (NOT here) so it
     //       doesn't double-prefix cells that already contain "31 March, "
     //       and so PY-column cells can be patched separately to PY year.
@@ -364,8 +379,8 @@ export async function buildCorporateFinancialsXLSX(
           const original = cell.value;
           let v = original;
           if (v === "AUTO") { cell.value = ""; return; }
-          // Strip "_ AUTO" / " AUTO" suffix
-          v = v.replace(/_? AUTO$/i, "");
+          // Strip "_AUTO" / "_ AUTO" / " AUTO" suffix (with or without space)
+          v = v.replace(/_?\s*AUTO$/i, "");
           // Strip ONLY bracket placeholders that STILL have "_ AUTO" suffix
           // (e.g. "[ENTER DETAILS]_ AUTO" that step 3 didn't map).
           // Do NOT strip plain "[Insert response]" clauses — those are kept.
@@ -388,8 +403,8 @@ export async function buildCorporateFinancialsXLSX(
           let dirty = false;
           const cleaned = rt.richText.filter((seg: any) => {
             if (typeof seg.text !== "string") return true;
-            const stripped = seg.text.replace(/_? AUTO$/i, "").trim();
-            // Remove entire segments that are ONLY "_ AUTO" / "AUTO"
+            const stripped = seg.text.replace(/_?\s*AUTO$/i, "").trim();
+            // Remove entire segments that are ONLY "_AUTO" / "_ AUTO" / "AUTO"
             if (stripped === "" && /^\s*_?\s*AUTO\s*$/i.test(seg.text)) {
               dirty = true;
               return false; // drop this segment
@@ -590,6 +605,57 @@ export async function buildCorporateFinancialsXLSX(
         } else {
           prevWasCy = hasCy;
           prevColNum = hasCy ? colNum : -1;
+        }
+      });
+    });
+  });
+
+  // 6e. Patch 20XX in formula-cell cached results.
+  //
+  //     Notes / FA / DT sheets contain formula cells whose formulas reference
+  //     BS/PL date headers.  ExcelJS preserves the formula but keeps the
+  //     OLD cached result from the template (e.g. "As at 31st March, 20XX").
+  //     fullCalcOnLoad (set above) will cause Excel to recompute these on open,
+  //     but the stale cache causes Google Sheets / LibreOffice to show 20XX.
+  //     Patch the cache now so every viewer sees the correct date immediately.
+  wb.eachSheet((ws) => {
+    ws.eachRow({ includeEmpty: false }, (row) => {
+      row.eachCell({ includeEmpty: false }, (cell) => {
+        const v: any = cell.value;
+        if (!v || typeof v !== "object" || !("formula" in v)) return;
+        const result = v.result;
+        if (typeof result !== "string" || !result.includes("20XX")) return;
+        const prevAY = `${inputs.pyYear}-${String(inputs.cyYear).slice(-2)}`;
+        let fixed = result
+          .replace(/31(?:st)? March,?\s*20XX/g, cyDateStr)
+          .replace(/(?:As\s+at\s+)?1(?:st)?\s+April[,\s]+20XX/gi, `As at 1 April ${inputs.pyYear}`)
+          .replace(/Previous Year 20XX-XX/gi, `Previous Year ${prevAY}`)
+          .replace(/20XX-XX/g, inputs.assessmentYear || "")
+          .replace(/20XX/g, String(inputs.cyYear));
+        if (fixed !== result) {
+          cell.value = { formula: v.formula, result: fixed } as any;
+        }
+      });
+    });
+  });
+
+  // 6f. Reset red font on cells that now carry numeric data values.
+  //
+  //     Step 5d clears string cells with red font (template annotations).
+  //     But when step 4/5 wrote numeric 0 into a cell that previously held
+  //     a red-font annotation, the cell value changed to 0 (numeric) while
+  //     the font stayed red — step 5d skipped it because it checks for
+  //     strings only.  Reset red font on any numeric cell so the number
+  //     renders in black.
+  wb.eachSheet((ws) => {
+    ws.eachRow({ includeEmpty: false }, (row) => {
+      row.eachCell({ includeEmpty: false }, (cell) => {
+        if (typeof cell.value !== "number") return;
+        const font = (cell.font as any);
+        if (!font?.color) return;
+        const argb = ((font.color.argb ?? font.color.rgb ?? "") as string).toUpperCase();
+        if (argb.endsWith("FF0000")) {
+          cell.font = { ...cell.font, color: { argb: "FF000000" } } as any;
         }
       });
     });
