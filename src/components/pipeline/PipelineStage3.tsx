@@ -1768,16 +1768,55 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     for (const [k, v] of Object.entries(pyShellMapping)) {
       if (v?.code) pyShellMappingLowerIndex[k.toLowerCase().trim()] = v;
     }
+
+    // ROOT-CAUSE FIX (Issue 1 — round 3): build a parent_group → FS code map
+    // from the CY engagement. When a PY-shell ledger is NOT directly mapped
+    // (different ledger name from CY — e.g. PY had "Land Sale", CY has "Sales"),
+    // inherit the FS code from any CY ledger that shares the same Tally
+    // parent_group ("Sales Accounts" → NCE_REV_OPS). This is exactly how a
+    // human auditor would map renamed/replaced revenue & expense ledgers:
+    // they go under the same Schedule III head as their accounting group.
+    const groupToCode: Record<string, string> = {};
+    const groupCodeCount: Record<string, Record<string, number>> = {};
+    for (const acct of tbAccounts) {
+      const code = (coaMapping as Record<string, any>)[acct.account_name]?.code;
+      const grp  = (acct.account_group || "").toLowerCase().trim();
+      if (!code || !grp) continue;
+      if (!groupCodeCount[grp]) groupCodeCount[grp] = {};
+      groupCodeCount[grp][code] = (groupCodeCount[grp][code] || 0) + 1;
+    }
+    // For each group pick the most-frequent code (only when unambiguous, i.e.
+    // no tie with another code that has the same count).
+    for (const [grp, codeCounts] of Object.entries(groupCodeCount)) {
+      let bestCode = "";
+      let bestN = 0;
+      let tie = false;
+      for (const [code, n] of Object.entries(codeCounts)) {
+        if (n > bestN) { bestCode = code; bestN = n; tie = false; }
+        else if (n === bestN && code !== bestCode) { tie = true; }
+      }
+      if (bestCode && !tie) groupToCode[grp] = bestCode;
+    }
+
     for (const row of pyShellTbData.tbRows) {
       const name = String(row.ledger_name || "").trim();
       if (!name) continue;
       const lower = name.toLowerCase();
-      // Resolution order: PY-shell exact → PY-shell lower → CY exact → CY lower
-      const mapping =
+      const grp   = String((row as any).parent_group || "").toLowerCase().trim();
+      // Resolution order:
+      //   1. PY-shell exact
+      //   2. PY-shell lowercase
+      //   3. CY exact
+      //   4. CY lowercase
+      //   5. Group-level inheritance (PY-shell ledger's parent_group → CY group code)
+      let mapping: any =
         pyShellMapping[name] ||
         pyShellMappingLowerIndex[lower] ||
         (coaMapping as Record<string, any>)[name] ||
         cyMappingLowerIndex[lower];
+      if (!mapping?.code && grp && groupToCode[grp]) {
+        mapping = { code: groupToCode[grp] };
+      }
       if (!mapping?.code) continue;
       const item = activeFlatItems.find(i => i.code === mapping.code);
       if (!item) continue;
@@ -1800,7 +1839,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     };
     for (const item of activeTree) computeParent(item);
     return amounts;
-  }, [pyShellTbData, coaMapping, activeFlatItems, activeTree]);
+  }, [pyShellTbData, coaMapping, tbAccounts, activeFlatItems, activeTree]);
 
   // ═══════ PY SHELL LEDGER AMOUNTS (per-ledger) ═══════
   // Maps ledger_name → signed closing_balance from PY shell TB.
@@ -1979,11 +2018,73 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           isNew:    Math.abs(py) < 0.005 && Math.abs(cy) >= 0.005,
           isClosed: Math.abs(py) >= 0.005 && Math.abs(cy) < 0.005,
           isAlias:  !!aliases[a.account_name],
+          isPyOnly: false as boolean,
         };
-      })
-      .sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta));
+      });
+
+    // ROOT-CAUSE FIX (Issue 1 — round 3): also include PY-shell ledgers that
+    // are mapped (in PY shell's own coa_mapping, or via group inheritance)
+    // to the same FS code but DO NOT exist in CY by any name. Without this,
+    // a renamed/replaced revenue ledger (PY: "Land Sale" → NCE_REV_OPS;
+    // CY: "Sales" → NCE_REV_OPS) would never surface its PY ₹4.90 cr in
+    // the Variance Drill, even though pyShellPLAmounts correctly aggregates
+    // it at the FS-code level.
+    const cySeenLower = new Set(tbAccounts.map(a => a.account_name.toLowerCase().trim()));
+    const pyShellMapping = (pyShellTbData?.coaMapping as Record<string, any>) || {};
+    const pyShellMappingLowerIndex: Record<string, { code: string }> = {};
+    for (const [k, v] of Object.entries(pyShellMapping)) {
+      if (v?.code) pyShellMappingLowerIndex[k.toLowerCase().trim()] = v;
+    }
+    // Reuse the same group → code inheritance used by pyShellPLAmounts.
+    const groupToCode: Record<string, string> = {};
+    const groupCodeCount: Record<string, Record<string, number>> = {};
+    for (const acct of tbAccounts) {
+      const code = coaMapping[acct.account_name]?.code;
+      const grp  = (acct.account_group || "").toLowerCase().trim();
+      if (!code || !grp) continue;
+      if (!groupCodeCount[grp]) groupCodeCount[grp] = {};
+      groupCodeCount[grp][code] = (groupCodeCount[grp][code] || 0) + 1;
+    }
+    for (const [grp, codeCounts] of Object.entries(groupCodeCount)) {
+      let bestCode = ""; let bestN = 0; let tie = false;
+      for (const [code, n] of Object.entries(codeCounts)) {
+        if (n > bestN) { bestCode = code; bestN = n; tie = false; }
+        else if (n === bestN && code !== bestCode) { tie = true; }
+      }
+      if (bestCode && !tie) groupToCode[grp] = bestCode;
+    }
+    for (const row of (pyShellTbData?.tbRows ?? []) as any[]) {
+      const name = String(row.ledger_name || "").trim();
+      if (!name) continue;
+      const lower = name.toLowerCase();
+      if (cySeenLower.has(lower)) continue; // already covered by CY iteration
+      const grp = String((row.parent_group || "")).toLowerCase().trim();
+      const m =
+        pyShellMapping[name] ||
+        pyShellMappingLowerIndex[lower] ||
+        coaMapping[name] ||
+        (grp && groupToCode[grp] ? { code: groupToCode[grp] } : null);
+      if (m?.code !== varianceDrill.code) continue;
+      const cb = Math.abs(Number(row.closing_balance ?? 0));
+      if (cb < 0.005) continue;
+      const isDr = String(row.balance_type ?? "").toUpperCase() === "DR";
+      const py = isDr ? cb : -cb;
+      rows.push({
+        ledger: name,
+        group: row.parent_group || "",
+        cy: 0,
+        py,
+        delta: -py,
+        pct: -100,
+        isNew: false,
+        isClosed: true,
+        isAlias: false,
+        isPyOnly: true,
+      });
+    }
+    rows.sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta));
     return rows;
-  }, [varianceDrill, tbAccounts, coaMapping, aliases, pyShellLedgerAmounts, lookupPyShellAmount]);
+  }, [varianceDrill, tbAccounts, coaMapping, aliases, pyShellLedgerAmounts, lookupPyShellAmount, pyShellTbData]);
 
   // ═══════ ALIAS HANDLERS (Task 3) ═══════
   const saveAlias = async (priorName: string, currentName: string) => {
