@@ -534,8 +534,16 @@ export default function AuditPipeline() {
   }, [currentStage, searchParams]);
 
   // Load form from engagement
+  // Issue 2 (CAFlow_FirmFix_Report): also gate on the options lists. When
+  // editing, the engagement row resolves before the clients / audit-firms
+  // queries; setting form1A.client_id to a uuid that isn't yet in the
+  // <Select>'s option set leaves the field blank until the user touches it.
+  // Gating the hydration on both lists ensures the Select value resolves
+  // to a matching SelectItem on first render.
   useEffect(() => {
     if (!engagement) return;
+    if ((eligibleClients?.length ?? 0) === 0) return;
+    if ((auditFirmsForEng?.length ?? 0) === 0) return;
     setForm1A({
       client_id: engagement.client_id || "",
       financial_year: engagement.financial_year || "2024-25",
@@ -565,7 +573,7 @@ export default function AuditPipeline() {
     if (engagement.team_members) {
       setPlanning(p => ({ ...p, team_members: engagement.team_members || [] }));
     }
-  }, [engagement]);
+  }, [engagement, eligibleClients, auditFirmsForEng]);
 
   // Auto-set entity_type when client is selected in creation dialog
   useEffect(() => {
@@ -700,7 +708,14 @@ export default function AuditPipeline() {
   // ─── Create new engagement ───
   const createEngagement = useMutation({
     mutationFn: async () => {
-      const effectiveFirmId = user?.firm_id || "be411601-f0f5-4f74-b93d-b87a8ef1b82b";
+      // Issue 1 (CAFlow_FirmFix_Report): no hardcoded firm fallback. If the
+      // signed-in user has no firm_id we refuse to create the engagement —
+      // silently parenting it to a hardcoded firm caused the "V.J. Desai
+      // ghost" appearing across every export.
+      const effectiveFirmId = user?.firm_id;
+      if (!effectiveFirmId) {
+        throw new Error("Your account has no firm assigned. Ask a Firm Admin to set your firm before creating engagements.");
+      }
 
       // ── Required-field guard ────────────────────────────────────────────
       if (!form1A.audit_type) throw new Error("Please select an Audit Type.");
