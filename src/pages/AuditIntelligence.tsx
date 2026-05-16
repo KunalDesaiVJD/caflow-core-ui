@@ -331,7 +331,13 @@ export default function AuditIntelligence() {
 
   // ─── Edit Engagement ───
   const openEditDialog = (eng?: any) => {
-    const target = eng || selectedEngagement;
+    // Guard: when bound directly to onClick (e.g. `onClick={openEditDialog}`)
+    // React passes the SyntheticEvent as the first arg — which is truthy but
+    // has none of the engagement fields, so the form falls back to all
+    // defaults (FY 2024-25, statutory, blank client, blank firm, etc).
+    // Only treat `eng` as a real engagement when it carries the expected id.
+    const isRealEngagement = eng && typeof eng === "object" && typeof eng.id === "string";
+    const target = isRealEngagement ? eng : selectedEngagement;
     if (!target) return;
     setEngForm({
       audit_firm_id: target.audit_firm_id || "",
@@ -668,7 +674,7 @@ export default function AuditIntelligence() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={openEditDialog}>
+                <DropdownMenuItem onClick={() => openEditDialog()}>
                   <Pencil size={14} className="mr-2" /> Edit Engagement
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => setShowDeleteDialog(true)} className="text-destructive focus:text-destructive">
