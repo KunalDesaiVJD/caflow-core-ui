@@ -2936,14 +2936,68 @@ export default function PipelineFinancialStatements({
     let pl: PLRowData | null = null;
     let cfs: CFSRowData | null = null;
     if (!isNonCorporate) {
-      // Dynamic note registry — same logic as the in-UI NoteCell display so
-      // that Excel export note numbers always match what the user sees on screen.
+      // Dynamic note registry. Note numbering must match what the auditor
+      // SEES on the BS face. The BS face uses ncyOf/npyOf which prefer the
+      // note's breakup-row sum over the raw TB total — so when a note is
+      // populated via manual breakup rows (no TB ledger mapped, e.g.
+      // CROWNGLOBE Share Capital entered straight into stage5_notes), the
+      // BS row shows the value but `computedAmounts[fsCode]` is still 0.
+      // Without enriching, hasData() returns false for that key and the
+      // sequential numbering silently skips it.
+      //
+      // Fix: build an ENRICHED amount map that overlays the note-breakup
+      // sums on top of the raw TB computedAmounts before invoking
+      // buildDynamicRegistry. Now every populated note — TB-mapped or
+      // breakup-mapped — receives a note number in display order.
+      const enrichedCY: Record<string, number> = { ...computedAmounts };
+      const enrichedPY: Record<string, number> = { ...mergedPY };
+      const enrich = (section: "bs_liab" | "bs_asset" | "pl", key: string, fsCode: string) => {
+        const cyN = sumNotesSubRowsCY(stage5NotesData ?? null, section, key);
+        if (cyN != null && Math.abs(cyN) > 0.005 && !((enrichedCY[fsCode] ?? 0))) {
+          enrichedCY[fsCode] = isCreditSideCode(fsCode) ? -cyN : cyN;
+        }
+        const pyN = sumNotesSubRowsPY(stage5NotesData ?? null, section, key);
+        if (pyN != null && Math.abs(pyN) > 0.005 && !((enrichedPY[fsCode] ?? 0))) {
+          enrichedPY[fsCode] = isCreditSideCode(fsCode) ? -pyN : pyN;
+        }
+      };
+      // BS liab notes
+      enrich("bs_liab", "share_capital",        "BS_EQ_SC");
+      enrich("bs_liab", "reserves_surplus",     "BS_EQ_RS");
+      enrich("bs_liab", "lt_borrowings",        "BS_NCL_LTB");
+      enrich("bs_liab", "deferred_tax_liab",    "BS_NCL_DTL");
+      enrich("bs_liab", "other_lt_liabilities", "BS_NCL_OLT");
+      enrich("bs_liab", "lt_provisions",        "BS_NCL_LTP");
+      enrich("bs_liab", "st_borrowings",        "BS_CL_STB");
+      enrich("bs_liab", "trade_payables",       "BS_CL_TP");
+      enrich("bs_liab", "other_curr_liab",      "BS_CL_OCL");
+      enrich("bs_liab", "st_provisions",        "BS_CL_STP");
+      // BS asset notes
+      enrich("bs_asset", "nc_investments",      "BS_NCA_INV");
+      enrich("bs_asset", "deferred_tax_asset",  "BS_NCA_DTA");
+      enrich("bs_asset", "lt_loans",            "BS_NCA_LLA");
+      enrich("bs_asset", "other_nc_assets",     "BS_NCA_ONA");
+      enrich("bs_asset", "curr_investments",    "BS_CA_CI");
+      enrich("bs_asset", "inventories",         "BS_CA_INV");
+      enrich("bs_asset", "trade_receivables",   "BS_CA_TR");
+      enrich("bs_asset", "cash_bank",           "BS_CA_CCE");
+      enrich("bs_asset", "st_loans",            "BS_CA_SLA");
+      enrich("bs_asset", "other_curr_assets",   "BS_CA_OCA");
+      // PPE/FA grid lives outside the breakup convention; the FA grid drives
+      // ppe.cy / ppe.py directly. Treat any populated FA row as note-active.
+      const faRows = (stage5NotesData as any)?.fa?.rows;
+      if (Array.isArray(faRows) && faRows.some((r: any) =>
+        r && (Number(r.gross_open) || Number(r.additions) || Number(r.gross_close) || Number(r.depn_open) || Number(r.depn_add) || Number(r.depn_close))
+      )) {
+        enrichedCY["BS_NCA_FA"] = enrichedCY["BS_NCA_FA"] || 1;
+      }
+
       const dynReg = buildDynamicRegistry(
-        computedAmounts,
-        mergedPY,
+        enrichedCY,
+        enrichedPY,
         coaMapping as Record<string, { code: string }>,
         false,
-        false, // skip COA signal — use real amounts only (prevents gap from zero-balance mapped ledgers)
+        false, // skip COA signal — enriched amounts already include note breakup sums
       );
       const dn = (key: string): number | null => dynReg.get(key) ?? null;
 
