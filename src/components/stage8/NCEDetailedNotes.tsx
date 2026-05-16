@@ -1290,10 +1290,18 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
               loans_advances: { secured: "kb_secured", unsecured: "kb_unsecured" },
             };
             let healed = false;
+            // Track ledgers to un-eject (so they re-enter the auto-aggregation
+            // pipeline on next Re-sync and contribute to the proper static row
+            // directly — avoiding the zero-out side-effect of being attached
+            // as a custom row to a static row that ALSO has smart-matched
+            // contributors).
+            const unEjectByNote: Record<string, Set<string>> = {};
+            const rebuildCustomRowsByNote: Record<string, Set<string>> = {};
             for (const [nType, d] of Object.entries(built)) {
               const validIds = new Set((d.customRows || []).map(cr => cr.id));
               const sectionDefaults = STATIC_DEFAULT_ATTACH[nType];
               if (!sectionDefaults) continue;
+              const dropIds = new Set<string>();
               const patched = d.customRows.map(cr => {
                 // Case 1: legacy rows with section but no attachedTo
                 if (cr.section && !cr.attachedTo) {
@@ -1304,29 +1312,64 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
                 if (cr.attachedTo
                     && cr.attachedTo.startsWith("custom_")
                     && !validIds.has(cr.attachedTo)) {
-                  // For borrowings: if label suggests related-party (HUF,
-                  // director, partner, owner, etc.) route to unsec_related;
-                  // otherwise to the section's default.
-                  let target =
+                  // ROOT-CAUSE FIX: when an orphan's label suggests a smart-
+                  // rule match (HUF/director/partner/etc.), the cleanest fix
+                  // is to UN-EJECT the underlying ledger and drop the custom
+                  // row entirely. The next Re-sync will smart-match the
+                  // ledger directly into unsec_related (Dipak HUF etc.
+                  // already there), restoring Total (B) to match COA without
+                  // triggering the zero-out side-effect of static rows with
+                  // attached children.
+                  const lbl = (cr.label || "").toLowerCase();
+                  const isRel = nType === "borrowings" && cr.section === "unsecured" && (
+                    lbl.includes(" huf") || lbl.includes("(huf)") || lbl.includes("-huf") ||
+                    /\b(director|partner|owner|proprietor|promoter|shareholder|relative|family|related)\b/.test(lbl)
+                  );
+                  if (isRel && cr.label) {
+                    if (!unEjectByNote[nType]) unEjectByNote[nType] = new Set();
+                    unEjectByNote[nType].add(cr.label);
+                    dropIds.add(cr.id);
+                    return cr; // will be filtered out below
+                  }
+                  const target =
                     (cr.section && sectionDefaults[cr.section])
                     ?? sectionDefaults.unsecured
                     ?? sectionDefaults.default
                     ?? "unsec_other";
-                  if (nType === "borrowings" && cr.section === "unsecured") {
-                    const lbl = (cr.label || "").toLowerCase();
-                    const isRel =
-                      lbl.includes(" huf") || lbl.includes("(huf)") || lbl.includes("-huf") ||
-                      /\b(director|partner|owner|proprietor|promoter|shareholder|relative|family|related)\b/.test(lbl);
-                    if (isRel) target = "unsec_related";
-                  }
                   return { ...cr, attachedTo: target };
                 }
                 return cr;
-              });
-              if (patched.some((cr, i) => cr !== d.customRows[i])) {
+              }).filter(cr => !dropIds.has(cr.id));
+              if (patched.length !== d.customRows.length
+                  || patched.some((cr, i) => cr !== d.customRows[i])) {
+                if (dropIds.size > 0) rebuildCustomRowsByNote[nType] = dropIds;
                 built[nType] = { ...d, customRows: patched };
                 healed = true;
               }
+            }
+            // Apply ejectedLedgers cleanup so the dropped custom-row labels
+            // re-enter the smart-match pipeline on next sync. Also strip the
+            // orphan custom_* cy/py keys so they don't linger as stale numbers.
+            for (const [nType, labels] of Object.entries(unEjectByNote)) {
+              const d = built[nType];
+              if (!d) continue;
+              const cleanedEjected = (d.ejectedLedgers ?? []).filter(l => !labels.has(l));
+              const dropIds = rebuildCustomRowsByNote[nType] ?? new Set<string>();
+              const cleanedCy = { ...d.cy };
+              const cleanedPy = { ...d.py };
+              for (const id of dropIds) {
+                for (const suffix of ["", "_lt", "_st"]) {
+                  delete cleanedCy[id + suffix];
+                  delete cleanedPy[id + suffix];
+                }
+              }
+              built[nType] = {
+                ...d,
+                cy: cleanedCy,
+                py: cleanedPy,
+                ejectedLedgers: cleanedEjected,
+              };
+              healed = true;
             }
 
             for (const [, d] of Object.entries(built)) {
@@ -1348,12 +1391,18 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
               persistNotes(built, fy).catch(() => {/* best-effort */});
             }
             if (!cancelled) setNoteData(built);
+            // Whenever the heal touched a note (esp. un-ejected a ledger),
+            // immediately re-run auto-populate so the freshly-unblocked
+            // ledger gets smart-matched into its proper static row. This
+            // restores Total (B) for clients whose stage8 state had orphan
+            // ejected ledgers under deleted parents.
+            const unEjectedAny = Object.keys(unEjectByNote).length > 0;
             // Back-fill cy_sources for engagements saved before the feature was added
             const needsCySources = Object.values(built).some(
               d => Object.keys(d.cy ?? {}).some(k => !k.startsWith("custom_")) &&
                    (!d.cy_sources || Object.keys(d.cy_sources).length === 0)
             );
-            if (needsCySources) {
+            if (unEjectedAny || needsCySources) {
               // Silent background refresh — don't block the UI
               nceAutoPopulate(engagementId, built).then(refreshed => {
                 if (!cancelled) setNoteData(refreshed);
