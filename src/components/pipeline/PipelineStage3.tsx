@@ -587,8 +587,11 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       if (!pyEng && fy1List.length > 0) pyEng = fy1List[0];
       if (!pyEng) return null;
 
-      // Paginated fetch of PY shell TB (closing_balance needed for PY amounts)
-      const TB_COLS = "ledger_name, closing_balance, balance_type";
+      // Paginated fetch of PY shell TB (closing_balance needed for PY amounts).
+      // parent_group is REQUIRED for the group-inheritance fallback that maps
+      // PY-shell ledgers with no direct coa entry to a CY FS code via their
+      // shared Tally parent_group ("Sales Accounts" → NCE_REV_OPS).
+      const TB_COLS = "ledger_name, closing_balance, balance_type, parent_group";
       const PAGE = 1000;
       const all: any[] = [];
       for (let from = 0; ; from += PAGE) {
