@@ -932,27 +932,20 @@ export default function AuditIntelligence() {
             </div>
             <div>
               <Label>Audit Type</Label>
-              {(() => {
-                const selClient = clients.find(c => c.id === engForm.client_id);
-                const opts = getAuditOptionsForClient(selClient);
-                if (engForm.client_id && opts.length === 0) {
-                  return (
-                    <p className="text-xs text-amber-600 mt-1">
-                      No audit services enabled for this client. Configure in Client → Audit Setup.
-                    </p>
-                  );
-                }
-                return (
-                  <Select value={engForm.audit_type} onValueChange={v => setEngForm(f => ({ ...f, audit_type: v }))}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {(opts.length === 0 ? AUDIT_TYPES : opts).map(t => (
-                        <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                );
-              })()}
+              {/* Audit Type is immutable on an existing engagement. Switching
+                  it (e.g. statutory → tax_audit) would invalidate the
+                  requires_caro / requires_3ca / requires_3cb / requires_3cd
+                  / requires_cash_flow flags, the schedule_iii_division
+                  decision, and every downstream artefact (CARO clause set,
+                  3CD clause set, IAR template variant). Archive this
+                  engagement and create a new one for a different audit type. */}
+              <div className="flex items-center h-10 px-3 rounded-md border border-input bg-muted/50 text-sm text-foreground capitalize">
+                {(() => {
+                  const t = AUDIT_TYPES.find(x => x.value === engForm.audit_type);
+                  return t?.label || engForm.audit_type || "—";
+                })()}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">Audit Type cannot be changed on an existing engagement (read-only).</p>
             </div>
             <div>
               <Label>Engagement Partner</Label>
