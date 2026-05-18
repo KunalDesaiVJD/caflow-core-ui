@@ -1484,6 +1484,35 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
               healed = true;
             }
 
+            // PHANTOM-LT HEAL — for Pattern A notes (where customRows can
+            // carry both bare key AND _lt/_st suffix keys), strip the bare
+            // key whenever any suffix variant exists. Without this, the bare
+            // key leaks into the LT total via the fallback path (see
+            // computeDisplayData), producing a phantom amount in the LT
+            // column for ST-only entries.
+            for (const [nType, d] of Object.entries(built)) {
+              if (!d.customRows?.length) continue;
+              const cleanedCy = { ...d.cy };
+              const cleanedPy = { ...d.py };
+              let touched = false;
+              for (const cr of d.customRows) {
+                const hasLtCy = (cr.id + "_lt") in cleanedCy;
+                const hasStCy = (cr.id + "_st") in cleanedCy;
+                if ((hasLtCy || hasStCy) && cr.id in cleanedCy) {
+                  delete cleanedCy[cr.id]; touched = true;
+                }
+                const hasLtPy = (cr.id + "_lt") in cleanedPy;
+                const hasStPy = (cr.id + "_st") in cleanedPy;
+                if ((hasLtPy || hasStPy) && cr.id in cleanedPy) {
+                  delete cleanedPy[cr.id]; touched = true;
+                }
+              }
+              if (touched) {
+                built[nType] = { ...d, cy: cleanedCy, py: cleanedPy };
+                healed = true;
+              }
+            }
+
             // ISSUE 1 HEAL — strip "Auto-filled from COA total" rows when
             // the same note already has manual entries. These rows were
             // inserted by a buggy version of the fallback logic that didn't
