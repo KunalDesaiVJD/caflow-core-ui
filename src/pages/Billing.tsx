@@ -319,22 +319,25 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
       await supabase.rpc("update_overdue_invoices", { p_firm_id: firmId });
     }
 
+    // When a specific firm is selected in the filter, use it as the scope.
+    // Otherwise fall back to the user's own firm (unless superadmin, who sees all).
+    const effectiveFirmId = firmFilter !== "all" ? firmFilter : (isSuperadmin ? null : firmId);
+
     let iQuery = supabase.from("invoices").select("*").in("document_type", docTypeFilter)
       .order("invoice_date", { ascending: false })
       .order("seq_number", { ascending: false });
-    if (!isSuperadmin && firmId) iQuery = iQuery.eq("firm_id", firmId);
-    if (firmFilter !== "all") iQuery = iQuery.eq("firm_id", firmFilter);
+    if (effectiveFirmId) iQuery = iQuery.eq("firm_id", effectiveFirmId);
     const { data: invData } = await iQuery;
 
     let cQuery = supabase.from("clients").select("id, name, entity_type, email, mobile, compliance_flags, responsible_person_id").eq("is_draft", false).is("deleted_at", null);
-    if (!isSuperadmin && firmId) cQuery = cQuery.eq("firm_id", firmId);
+    if (effectiveFirmId) cQuery = cQuery.eq("firm_id", effectiveFirmId);
     const { data: clientData } = await cQuery;
 
     const { data: firmData } = await supabase.from("firms").select("id, name, display_name");
     const { data: groupData } = await supabase.from("client_groups").select("id, name");
     // Load firm-scoped active users for Responsible Person filter
     let usersQuery = supabase.from("users").select("id, name").neq("role", "client").eq("is_active", true).order("name");
-    if (!isSuperadmin && firmId) usersQuery = usersQuery.eq("firm_id", firmId);
+    if (effectiveFirmId) usersQuery = usersQuery.eq("firm_id", effectiveFirmId);
     const { data: usersData } = await usersQuery;
 
     const cMap: ClientMap = {};
