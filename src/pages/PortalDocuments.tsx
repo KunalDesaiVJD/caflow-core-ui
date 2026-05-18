@@ -15,7 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { FolderOpen, FileText, Download, Upload, Loader2, Search, X } from "lucide-react";
+import { FolderOpen, FileText, Download, Upload, Loader2, Search, X, Eye, Trash2, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const UPLOAD_CATS = [
@@ -48,6 +48,7 @@ export default function PortalDocuments() {
   const [uploading,  setUploading]  = useState(false);
   const [uploadCat,  setUploadCat]  = useState("Other");
   const [search,     setSearch]     = useState("");
+  const [deleting,   setDeleting]   = useState<string | null>(null);
 
   const fetchDocs = useCallback(async () => {
     if (!activeClient) return;
@@ -85,17 +86,36 @@ export default function PortalDocuments() {
     }
   }
 
+  async function getSignedUrl(doc: any): Promise<string | null> {
+    const { data, error } = await supabase.storage.from("firm-assets").createSignedUrl(doc.r2_key, 120);
+    if (error) { toast.error("Could not get file URL: " + error.message); return null; }
+    return data.signedUrl;
+  }
+
+  async function handleView(doc: any) {
+    const url = await getSignedUrl(doc);
+    if (url) window.open(url, "_blank");
+  }
+
   async function handleDownload(doc: any) {
+    const url = await getSignedUrl(doc);
+    if (!url) return;
+    const a = document.createElement("a"); a.href = url; a.download = doc.filename; a.click();
+  }
+
+  async function handleDelete(doc: any) {
+    if (!window.confirm(`Delete "${doc.filename}"? This cannot be undone.`)) return;
+    setDeleting(doc.id);
     try {
-      const { data, error } = await supabase.functions.invoke("get-document-url", { body: { document_id: doc.id } });
-      if (error) throw error;
-      if (data?.signed_url) window.open(data.signed_url, "_blank");
-      else {
-        // fallback: direct storage URL
-        const { data: sd } = await supabase.storage.from("firm-assets").createSignedUrl(doc.r2_key, 60);
-        if (sd?.signedUrl) window.open(sd.signedUrl, "_blank");
-      }
-    } catch (e: any) { toast.error(e.message || "Download failed"); }
+      await supabase.storage.from("firm-assets").remove([doc.r2_key]);
+      await supabase.from("documents").delete().eq("id", doc.id);
+      toast.success("Document deleted");
+      fetchDocs();
+    } catch (e: any) {
+      toast.error(e.message || "Delete failed");
+    } finally {
+      setDeleting(null);
+    }
   }
 
   const filtered = search
@@ -165,7 +185,14 @@ export default function PortalDocuments() {
           {groupOrder.map(group => (
             <Card key={group}>
               <CardHeader className="pb-2 pt-4">
-                <CardTitle className="text-sm font-semibold">{group}</CardTitle>
+                <CardTitle className="text-sm font-semibold flex items-center justify-between">
+                  <span>{group}</span>
+                  <label className="cursor-pointer flex items-center gap-1 text-xs font-normal text-orange-600 hover:text-orange-800">
+                    <Plus size={13} /> Upload more
+                    <input type="file" className="hidden" disabled={uploading}
+                      onChange={handleUpload} />
+                  </label>
+                </CardTitle>
               </CardHeader>
               <CardContent className="pt-0">
                 <div className="divide-y">
@@ -177,10 +204,25 @@ export default function PortalDocuments() {
                         {doc.sub_category && (
                           <Badge variant="outline" className="text-[10px] flex-shrink-0">{doc.sub_category}</Badge>
                         )}
+                        {doc.category === "client_upload" && (
+                          <Badge variant="secondary" className="text-[10px] flex-shrink-0">My Upload</Badge>
+                        )}
                       </div>
-                      <Button size="sm" variant="ghost" className="h-7 w-7 p-0 flex-shrink-0" onClick={() => handleDownload(doc)}>
-                        <Download size={14} />
-                      </Button>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1 text-blue-600 hover:bg-blue-50" onClick={() => handleView(doc)}>
+                          <Eye size={13} /> View
+                        </Button>
+                        <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1" onClick={() => handleDownload(doc)}>
+                          <Download size={13} /> Save
+                        </Button>
+                        {doc.category === "client_upload" && (
+                          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1 text-destructive hover:bg-red-50"
+                            disabled={deleting === doc.id}
+                            onClick={() => handleDelete(doc)}>
+                            {deleting === doc.id ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
