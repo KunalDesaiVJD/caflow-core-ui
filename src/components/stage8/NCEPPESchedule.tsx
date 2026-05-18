@@ -110,8 +110,28 @@ function calcRowTotal(r: AssetRow): number {
   return Math.round((r.opening_balance + r.additions_pre + r.additions_post) * 100) / 100;
 }
 
+/** Auto-compute depreciation per Companies Act / Income Tax half-year rule:
+ *  • Opening balance + additions on or before 29/09 → full-year rate
+ *  • Additions after 29/09 → half-year rate (half of the rate %)
+ *
+ *  depn = (opening + additions_pre) * rate% + additions_post * rate%/2
+ *
+ *  Previously this column was a manual input — auditors had to compute and
+ *  type the figure by hand, prone to error. Now the input is read-only and
+ *  the value is derived from rate %, opening balance, and the two
+ *  date-bucketed addition columns. */
+function calcDepreciation(r: AssetRow): number {
+  const rate = Number(r.rate_pct) || 0;
+  if (rate <= 0) return 0;
+  const base = (Number(r.opening_balance) || 0) + (Number(r.additions_pre) || 0);
+  const post = Number(r.additions_post) || 0;
+  const depn = base * (rate / 100) + post * (rate / 200);
+  return Math.round(depn * 100) / 100;
+}
+
 function calcClosing(r: AssetRow): number {
-  return Math.round((calcRowTotal(r) - r.depreciation) * 100) / 100;
+  const depn = calcDepreciation(r);
+  return Math.round((calcRowTotal(r) - depn) * 100) / 100;
 }
 
 function fmtNum(v: number): string {
@@ -267,12 +287,13 @@ export function NCEPPESchedule({ engagementId }: Props) {
       rows.reduce((s, r) => s + (Number(r[f]) || 0), 0);
     const totalTotal   = rows.reduce((s, r) => s + calcRowTotal(r), 0);
     const totalClosing = rows.reduce((s, r) => s + calcClosing(r),  0);
+    const totalDepn    = rows.reduce((s, r) => s + calcDepreciation(r), 0);
     return {
       opening:      sum("opening_balance"),
       addPre:       sum("additions_pre"),
       addPost:      sum("additions_post"),
       total:        Math.round(totalTotal   * 100) / 100,
-      depreciation: sum("depreciation"),
+      depreciation: Math.round(totalDepn    * 100) / 100,
       closing:      Math.round(totalClosing * 100) / 100,
     };
   }, [rows]);
@@ -300,7 +321,7 @@ export function NCEPPESchedule({ engagementId }: Props) {
         additions_pre:   r.additions_pre,
         additions_post:  r.additions_post,
         total:           calcRowTotal(r),
-        depreciation:    r.depreciation,
+        depreciation:    calcDepreciation(r),
         closing_balance: calcClosing(r),
         sort_order:      r.sort_order,
       }));
@@ -443,12 +464,9 @@ export function NCEPPESchedule({ engagementId }: Props) {
           <NumInput value={rowTotal} readOnly />
         </TableCell>
 
-        {/* Col 8: Depreciation */}
+        {/* Col 8: Depreciation (auto-calculated from rate% + opening + additions) */}
         <TableCell className="p-1 border-r" style={{ minWidth: "88px" }}>
-          <NumInput
-            value={row.depreciation}
-            onChange={v => updateRow(row.sort_order, "depreciation", v)}
-          />
+          <NumInput value={calcDepreciation(row)} readOnly />
         </TableCell>
 
         {/* Col 9: Closing Balance (read-only) */}
@@ -503,7 +521,7 @@ export function NCEPPESchedule({ engagementId }: Props) {
           <NumInput value={rowTotal} readOnly />
         </TableCell>
         <TableCell className="p-1 border-r" style={{ minWidth: "88px" }}>
-          <NumInput value={row.depreciation} onChange={v => updateRow(row.sort_order, "depreciation", v)} />
+          <NumInput value={calcDepreciation(row)} readOnly />
         </TableCell>
         <TableCell className="p-1" style={{ minWidth: "88px" }}>
           <NumInput value={closing} readOnly />
@@ -692,7 +710,7 @@ export function NCEPPESchedule({ engagementId }: Props) {
       {/* Legend */}
       <p className="text-[11px] text-muted-foreground pl-1">
         * Shaded columns (Total, Closing Balance) are auto-calculated.&ensp;
-        Rate % is for reference only and does not auto-calculate depreciation.
+        Depreciation auto-calculates as (Opening + Additions before 29/09) × Rate% + (Additions after 29/09) × Rate%/2.
       </p>
 
       {/* Bottom save */}
