@@ -393,6 +393,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   const [groupView, setGroupView]             = useState(true);   // group left panel by Tally parent_group
   const [expandedGroups, setExpandedGroups]   = useState<Record<string, boolean>>({});
   const [maximizedPanel, setMaximizedPanel]   = useState<"left" | "right" | null>(null);
+  const [fullScreen, setFullScreen]           = useState(false);
   const [aiRunning, setAiRunning]             = useState(false);
   const [resetting, setResetting]             = useState(false);
   // PY-first workflow mode for the left panel.
@@ -499,6 +500,13 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     },
     enabled: !!engagement?.client_id,
   });
+
+  useEffect(() => {
+    if (!fullScreen) return;
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") setFullScreen(false); };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [fullScreen]);
 
   useEffect(() => {
     if (!aliasRows) return;
@@ -2669,6 +2677,9 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
             ))}
           </div>
 
+          {/* ── Full-screen mapping workspace ── */}
+          <div className={cn(fullScreen && "fixed inset-0 z-50 bg-background flex flex-col p-3 overflow-hidden")}>
+
           {/* Workflow-mode guidance banner */}
           {workMode === "py" && (
             <Alert className="mb-3 bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800">
@@ -2723,6 +2734,15 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
             </div>
 
             <div className="ml-auto flex gap-1 items-center">
+              <Button
+                variant="outline" size="sm"
+                onClick={() => setFullScreen(f => !f)}
+                className="gap-1 border-primary/40 text-primary hover:bg-primary/10"
+                title={fullScreen ? "Exit full screen (Esc)" : "Full screen — maximize mapping workspace"}
+              >
+                {fullScreen ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+                {fullScreen ? "Exit Full Screen" : "Full Screen"}
+              </Button>
               <Button variant="ghost" size="sm" onClick={() => unmapByConfidence("low")}    className="text-amber-700 gap-1">Unmap Low</Button>
               <Button variant="ghost" size="sm" onClick={() => unmapByConfidence("medium")} className="text-amber-700 gap-1">Unmap Medium</Button>
               {/* Issue 5 (Aesha) — Clear All needs a proper confirm dialog
@@ -2790,7 +2810,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
             </div>
           </div>
 
-          <div className="flex gap-4" style={{ height: "calc(100vh - 22rem)" }}>
+          <div className="flex gap-4" style={{ height: fullScreen ? "calc(100vh - 9rem)" : "calc(100vh - 22rem)" }}>
             {/* Left: UNMAPPED TB Accounts — mapping workspace */}
             <div className={cn("flex flex-col border rounded-lg overflow-hidden transition-all", maximizedPanel === "right" ? "hidden" : maximizedPanel === "left" ? "w-full" : "w-1/2")}>
               <div className="p-2 border-b bg-muted/30 space-y-2">
@@ -2845,11 +2865,9 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                     <button
                       type="button"
                       onClick={() => setMaximizedPanel(p => p === "left" ? null : "left")}
-                      className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                      title={maximizedPanel === "left" ? "Restore split view" : "Maximize this panel"}
-                    >
-                      {maximizedPanel === "left" ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
-                    </button>
+                      className="text-[9px] px-1.5 py-0.5 rounded border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground transition-colors whitespace-nowrap"
+                      title={maximizedPanel === "left" ? "Restore split view" : "Expand left panel"}
+                    >{maximizedPanel === "left" ? "⊠ Restore Split" : "⊡ Expand"}</button>
                   </div>
                   {multiSelect.size > 0 && (
                     <div className="flex items-center gap-2 ml-1">
@@ -3236,11 +3254,9 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                     <button
                       type="button"
                       onClick={() => setMaximizedPanel(p => p === "right" ? null : "right")}
-                      className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0"
-                      title={maximizedPanel === "right" ? "Restore split view" : "Maximize this panel"}
-                    >
-                      {maximizedPanel === "right" ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
-                    </button>
+                      className="text-[9px] px-1.5 py-0.5 rounded border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground transition-colors whitespace-nowrap shrink-0"
+                      title={maximizedPanel === "right" ? "Restore split view" : "Expand right panel"}
+                    >{maximizedPanel === "right" ? "⊠ Restore Split" : "⊡ Expand"}</button>
                   </div>
                 </div>
                 {/* BS / P&L tab switcher */}
@@ -3709,13 +3725,15 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
             </div>
           </div>
 
-          {/* Generate FS Button — always enabled; unmapped ledgers are warned via toast */}
-          <div className="flex justify-end pt-3">
+          {/* Generate FS Button */}
+          <div className="flex justify-end pt-2">
             <Button onClick={generateFS} disabled={saving} className="gap-1">
               {saving ? <Loader2 size={14} className="animate-spin" /> : <FileSpreadsheet size={14} />}
               Generate Financial Statements
             </Button>
           </div>
+
+          </div> {/* end full-screen wrapper */}
         </TabsContent>
       </Tabs>
 
