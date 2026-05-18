@@ -280,9 +280,10 @@ export interface NCENoteData {
   /** User-edited labels for static rows. Keyed by NoteRowDef.id.
    *  Empty string keeps the default config label. Survives re-sync. */
   labelOverrides?: Record<string, string>;
-  /** For Pattern B notes: which TB ledgers were mapped into each static row (CY only).
-   *  Keyed by NoteRowDef.id. Used to render the ℹ️ info popover in NCEDetailedNotes. */
-  cy_sources?: Record<string, { ledger: string; amountCy: number }[]>;
+  /** For Pattern B notes: which TB ledgers were mapped into each static row.
+   *  Keyed by NoteRowDef.id. Used to render the ℹ️ info popover in NCEDetailedNotes.
+   *  amountPy was added later — older saved data may only carry amountCy. */
+  cy_sources?: Record<string, { ledger: string; amountCy: number; amountPy?: number }[]>;
   /** TB ledger names that the user has explicitly ejected to standalone rows.
    *  During Re-sync from COA, ledgers in this list are skipped in the auto-grouping
    *  step — they will NOT be re-merged back into an auto row.
@@ -647,7 +648,19 @@ export async function nceAutoPopulate(
     const newCy:         Record<string, number> = {};
     const newPy:         Record<string, number> = {};
     const autoRows:      NCECustomRow[]         = [];
-    const staticSources: Record<string, { ledger: string; amountCy: number }[]> = {};
+    const staticSources: Record<string, { ledger: string; amountCy: number; amountPy?: number }[]> = {};
+
+    // PY-ledger lookup keyed by lowercase ledger name → signed PY closing.
+    // Used to attach per-ledger amountPy to staticSources so the expandable
+    // breakdown shows BOTH CY and PY amounts per ledger (Issue 2).
+    const pyByLedgerStatic: Record<string, number> = {};
+    if (pyTb.length > 0) {
+      for (const r of pyTb) {
+        const nm = String(r.ledger_name || "").trim();
+        if (!nm) continue;
+        pyByLedgerStatic[nm.toLowerCase()] = ledgerAmt(r.closing_balance);
+      }
+    }
 
     if (noteFs.all) {
       // ── Pattern B ──────────────────────────────────────────────────────
@@ -668,16 +681,53 @@ export async function nceAutoPopulate(
         if (matchedRowId) {
           // Accumulate directly into the static row — no custom row created
           newCy[matchedRowId] = (newCy[matchedRowId] ?? 0) + amt;
-          // Track which ledgers feed this static row (for info popover)
+          // Track which ledgers feed this static row (for info popover).
+          // Carry PY amount too so the expander shows BOTH CY + PY columns.
           if (!staticSources[matchedRowId]) staticSources[matchedRowId] = [];
-          staticSources[matchedRowId].push({ ledger: row.ledger_name, amountCy: amt });
-          // PY: carry from prior-year cy_data for the same static key, if any.
+          const pyAmtLedger = pyByLedgerStatic[row.ledger_name.toLowerCase()] ?? 0;
+          staticSources[matchedRowId].push({
+            ledger: row.ledger_name,
+            amountCy: amt,
+            amountPy: pyAmtLedger,
+          });
+          // PY total: carry from prior-year cy_data for the same static key.
           // Use Math.abs to guard against stale negative values stored in old data.
           if (!(matchedRowId in newPy)) {
             newPy[matchedRowId] = Math.abs(pyNotes[noteType]?.[matchedRowId] ?? 0);
           }
         } else {
           unmatchedB.push({ ledger: row.ledger_name, amt, parentGroup: row.parent_group ?? undefined });
+        }
+      }
+
+      // Also walk PY TB so static rows pick up per-ledger PY contributions
+      // from PY-only ledgers (e.g. Suresh Chavda CLOSED account that doesn't
+      // appear in CY TB but contributed to last year's TDS Payable total).
+      if (pyTb.length > 0) {
+        const cyMappingLower: Record<string, { code: string }> = {};
+        for (const [k, v] of Object.entries(coaMapping || {})) {
+          if (v?.code) cyMappingLower[k.toLowerCase().trim()] = v;
+        }
+        const cySeenLedger = new Set(
+          Object.values(staticSources).flat().map(s => s.ledger.toLowerCase()),
+        );
+        for (const row of pyTb) {
+          const nm = String(row.ledger_name || "").trim();
+          if (!nm) continue;
+          const nmLower = nm.toLowerCase();
+          if (cySeenLedger.has(nmLower)) continue;
+          const lookupMapped = cyMappingLower[nmLower];
+          if (!lookupMapped?.code || !codeSet.has(lookupMapped.code)) continue;
+          const pyAmt = ledgerAmt(row.closing_balance);
+          if (pyAmt === 0) continue;
+          const matchedRowId = smartMatch(nm, smartRules, row.parent_group);
+          if (!matchedRowId) continue;
+          if (!staticSources[matchedRowId]) staticSources[matchedRowId] = [];
+          staticSources[matchedRowId].push({
+            ledger: nm,
+            amountCy: 0,
+            amountPy: pyAmt,
+          });
         }
       }
 
@@ -710,8 +760,14 @@ export async function nceAutoPopulate(
         autoRows.push({ id, label, source: "auto" });
       }
 
-      // Fallback: if nothing was populated at all, use FS-code totals
-      const hasData = autoRows.length > 0 || Object.values(newCy).some(v => v > 0);
+      // Fallback: if nothing was populated at all, use FS-code totals.
+      // Same double-count guard as Pattern A — manual rows count as "data".
+      const manualHasAmountB = manualRows.some(mr =>
+        Math.abs(prev.cy?.[mr.id] ?? 0) > 0.005,
+      );
+      const hasData = autoRows.length > 0
+        || Object.values(newCy).some(v => v > 0)
+        || manualHasAmountB;
       if (!hasData) {
         let fsCY = 0, fsPY = 0;
         for (const code of noteFs.all) {
@@ -991,7 +1047,20 @@ export async function nceAutoPopulate(
       }
 
       // Fallback: use FS-code totals
-      const hasData = autoRows.length > 0 || Object.values(newCy).some(v => v > 0);
+      // ISSUE 1 FIX (provisions double-count): also treat manual rows as
+      // "data present" so the synthetic "Auto-filled from COA total" row
+      // doesn't get appended when the user has already typed manual entries.
+      // Previously the manual rows' amounts (preserved later from prev.cy)
+      // PLUS the auto-total row were both summed into Total, inflating it by
+      // 2× the manual amount.
+      const manualHasAmount = manualRows.some(mr =>
+        Math.abs(prev.cy?.[mr.id] ?? 0) > 0.005 ||
+        Math.abs(prev.cy?.[mr.id + "_lt"] ?? 0) > 0.005 ||
+        Math.abs(prev.cy?.[mr.id + "_st"] ?? 0) > 0.005,
+      );
+      const hasData = autoRows.length > 0
+        || Object.values(newCy).some(v => v > 0)
+        || manualHasAmount;
       if (!hasData) {
         let ltCY = 0, ltPY = 0, stCY = 0, stPY = 0;
         for (const code of (noteFs.lt ?? [])) { ltCY += fsByCode[code]?.cy ?? 0; ltPY += fsByCode[code]?.py ?? 0; }

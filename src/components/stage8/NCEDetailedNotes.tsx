@@ -1484,6 +1484,47 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
               healed = true;
             }
 
+            // ISSUE 1 HEAL — strip "Auto-filled from COA total" rows when
+            // the same note already has manual entries. These rows were
+            // inserted by a buggy version of the fallback logic that didn't
+            // count manual rows as "data present". Their amounts duplicate
+            // the manual totals, doubling Total (B) / Total (A+B). Healing
+            // now is safe — manual amounts remain intact; only the synthetic
+            // duplicate row + its cy/py keys are removed.
+            for (const [nType, d] of Object.entries(built)) {
+              const hasManual = (d.customRows || []).some(cr =>
+                cr.source === "manual" && (
+                  Math.abs(d.cy?.[cr.id] ?? 0) > 0.005 ||
+                  Math.abs(d.cy?.[cr.id + "_lt"] ?? 0) > 0.005 ||
+                  Math.abs(d.cy?.[cr.id + "_st"] ?? 0) > 0.005
+                ),
+              );
+              if (!hasManual) continue;
+              const autoTotalRows = (d.customRows || []).filter(
+                cr => cr.id === "custom_auto_total" ||
+                      cr.label === "Auto-filled from COA total",
+              );
+              if (autoTotalRows.length === 0) continue;
+              const cleanedCy = { ...d.cy };
+              const cleanedPy = { ...d.py };
+              for (const r of autoTotalRows) {
+                for (const suffix of ["", "_lt", "_st"]) {
+                  delete cleanedCy[r.id + suffix];
+                  delete cleanedPy[r.id + suffix];
+                }
+              }
+              built[nType] = {
+                ...d,
+                customRows: (d.customRows || []).filter(
+                  cr => cr.id !== "custom_auto_total" &&
+                        cr.label !== "Auto-filled from COA total",
+                ),
+                cy: cleanedCy,
+                py: cleanedPy,
+              };
+              healed = true;
+            }
+
             for (const [, d] of Object.entries(built)) {
               // Strip stale custom_* keys: cy/py values that belong to a
               // customRow ID that no longer exists in the customRows array
