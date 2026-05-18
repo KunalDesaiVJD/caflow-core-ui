@@ -875,23 +875,38 @@ function PatternATable({
   // under "Unsecured" gets section="unsecured" + attachedTo="unsec_other".
   // Without these, handleAddRow created a sectionless row that only fed Total
   // (A+B) grand-total; Total (B) and the BS face stayed unchanged.
+  //
+  // Heuristic: walk rows in document order, accumulating rows-since-last-total.
+  // When we hit an isTotal row carrying sectionTag, all preceding non-total
+  // rows belong to that section. Within those, pick the row whose id ends with
+  // "_other" / "_specify" as the default attachedTo target (e.g. sec_other,
+  // unsec_other, kb_unsecured, etc.). Falls back to the LAST row in the
+  // section if nothing matches the suffix.
   const sectionAddTargets: { label: string; section: string; attachedTo: string }[] = useMemo(() => {
     const out: { label: string; section: string; attachedTo: string }[] = [];
-    for (const r of config.rows) {
-      if (!r.isTotal || !r.sectionTag) continue;
-      const section = r.sectionTag;
-      const sec = section.toLowerCase();
-      const otherId =
-        config.rows.find(x => x.id === `${sec}_other`)?.id ??
-        config.rows.find(x => x.id === `${sec.slice(0,5)}_other`)?.id ??
-        config.rows.find(x => x.id === `${sec}_specify`)?.id ??
-        config.rows.find(x => !x.isSectionHeader && !x.isTotal
-          && (x.id.endsWith("_other") || x.id.endsWith("_specify"))
-          && (x.id.startsWith(sec) || x.id.startsWith(sec.slice(0,5))))?.id;
-      if (otherId) {
-        const niceName = section.charAt(0).toUpperCase() + section.slice(1);
-        out.push({ label: `+ Add row to ${niceName}`, section, attachedTo: otherId });
+    let sectionStart = 0;
+    for (let i = 0; i < config.rows.length; i++) {
+      const r = config.rows[i];
+      if (!r.isTotal || !r.sectionTag) {
+        if (r.isTotal) sectionStart = i + 1;
+        continue;
       }
+      const sectionRows = config.rows.slice(sectionStart, i)
+        .filter(x => !x.isSectionHeader && !x.isTotal);
+      const otherRow =
+        sectionRows.find(x => x.id.endsWith("_other"))
+        ?? sectionRows.find(x => x.id.endsWith("_specify"))
+        ?? sectionRows.find(x => x.id.endsWith("_others"))
+        ?? sectionRows[sectionRows.length - 1];
+      if (otherRow) {
+        const niceName = r.sectionTag.charAt(0).toUpperCase() + r.sectionTag.slice(1);
+        out.push({
+          label: `+ Add row to ${niceName}`,
+          section: r.sectionTag,
+          attachedTo: otherRow.id,
+        });
+      }
+      sectionStart = i + 1;
     }
     return out;
   }, [config]);
