@@ -360,7 +360,7 @@ function ledgerAmt(closingBalance: number): number {
  *  (a Cr closing balance is the normal side and contributes positively to the
  *  note total); assets and expenses are DR-natural. Used by signedLedgerAmt()
  *  to net opposite-side ledgers within a group total. */
-const NOTE_NATURE: Record<string, "DR" | "CR"> = {
+export const NOTE_NATURE: Record<string, "DR" | "CR"> = {
   // Liabilities + Equity (Cr-natural)
   borrowings:      "CR",
   other_lt_liab:   "CR",
@@ -407,6 +407,123 @@ function signedLedgerAmt(
   const nature: "DR" | "CR" = NOTE_NATURE[noteType] ?? "CR";
   if (nature === "CR") return isDr ? -cb : +cb;
   return isDr ? +cb : -cb;
+}
+
+// ── Note → FS-code reverse map ────────────────────────────────────────────────
+//
+// For each NCE BS / P&L code, the noteType whose grand total feeds that code's
+// face value on the Balance Sheet / Profit & Loss view. Where a noteType
+// spans LT and ST columns (Pattern A), the variant value identifies which
+// column total to read.
+//
+// Used by getNCENoteFaceTotal() so the BS face picks up manual customRows the
+// auditor added in Stage 7 Notes — without this the face only reflects the raw
+// TB sum (auto-mapped ledgers) and ignores any "+ Add row" entries.
+export const NCE_CODE_TO_NOTE: Record<string, { note: string; col?: "lt" | "st" }> = {
+  // Liabilities + Equity
+  NCE_LTB:    { note: "borrowings",     col: "lt" },
+  NCE_STB:    { note: "borrowings",     col: "st" },
+  NCE_OLTL:   { note: "other_lt_liab" },
+  NCE_LTP:    { note: "provisions",     col: "lt" },
+  NCE_STP:    { note: "provisions",     col: "st" },
+  NCE_TP:     { note: "trade_payables" },
+  NCE_OCL:    { note: "other_cl" },
+  // Assets
+  NCE_CWIP:   { note: "cwip" },
+  NCE_NCINV:  { note: "investments",    col: "lt" },
+  NCE_CINV:   { note: "investments",    col: "st" },
+  NCE_LTLA:   { note: "loans_advances", col: "lt" },
+  NCE_STLA:   { note: "loans_advances", col: "st" },
+  NCE_ONCA:   { note: "other_nc_assets" },
+  NCE_STCK:   { note: "inventories" },
+  NCE_TR:     { note: "trade_receivables" },
+  NCE_CASH:   { note: "cash_bank" },
+  NCE_OCA:    { note: "other_ca" },
+  // P&L
+  NCE_REV_OPS: { note: "revenue_ops" },
+  NCE_REV_OTH: { note: "other_income" },
+  NCE_EMP_EXP: { note: "employee_exp" },
+  NCE_FIN_COST:{ note: "finance_costs" },
+  NCE_OTH_EXP: { note: "other_expenses" },
+};
+
+/** Compute the grand-total face value (or LT/ST column total for Pattern A)
+ *  for an NCE note, INCLUDING manual custom rows. Returns null when the note
+ *  has no entries — callers should fall back to the raw TB sum.
+ *
+ *  Why this exists: the BS / P&L face previously read from a separate
+ *  `stage5_notes` JSONB whose `breakup[]` array only ever contained the auto-
+ *  populated ledgers. A custom row added via "+ Add row" lives in
+ *  `nce_financial_notes.cy_data` (with the row id in `_custom_rows`) and never
+ *  made it to the BS face, producing visible mismatches like Trade Payables
+ *  showing ₹19,84,766 on BS face vs ₹19,94,766 in the Notes total. */
+export function getNCENoteFaceTotal(
+  noteRow: { cy_data?: Record<string, any> | null; py_data?: Record<string, any> | null } | undefined | null,
+  column: "cy" | "py",
+  pattern?: "A" | "B",
+  patternCol?: "lt" | "st",
+): number | null {
+  if (!noteRow) return null;
+  const rawCy = (column === "cy" ? noteRow.cy_data : noteRow.py_data) ?? {};
+  if (!rawCy || typeof rawCy !== "object") return null;
+  const customRows: Array<{ id: string; section?: string; attachedTo?: string }> =
+    Array.isArray((rawCy as any)._custom_rows) ? (rawCy as any)._custom_rows : [];
+
+  // Strip meta keys to get the pure numeric map.
+  const numeric: Record<string, number> = {};
+  for (const [k, v] of Object.entries(rawCy)) {
+    if (META_KEYS.has(k)) continue;
+    if (typeof v === "number" && Number.isFinite(v)) numeric[k] = v;
+  }
+
+  // Pattern A: caller asked for a specific column ("lt" or "st"). Sum every
+  // non-customRow leaf suffix key plus customRows (respecting attachedTo /
+  // section semantics from computeDisplayData). For simplicity here we sum
+  // ALL suffixed keys for the chosen column, then add customRows for that
+  // column. This mirrors the Total (A+B)_lt / _st row math in computeDisplayData.
+  if (pattern === "A" && patternCol) {
+    const suffix = "_" + patternCol;
+    let total = 0;
+    let hasAny = false;
+    // Sum top-level suffixed keys, but EXCLUDE customRow ids (they're picked
+    // up via the customRows loop with section/attachedTo awareness).
+    const customIds = new Set(customRows.map(cr => cr.id));
+    for (const [k, v] of Object.entries(numeric)) {
+      if (!k.endsWith(suffix)) continue;
+      const base = k.slice(0, -suffix.length);
+      if (customIds.has(base)) continue;
+      // Skip section/grand totals — they're DERIVED from the leaves below.
+      if (base === "total" || base === "total_ab" || base === "sec_total" || base === "unsec_total") continue;
+      total += v;
+      hasAny = true;
+    }
+    for (const cr of customRows) {
+      const v = numeric[cr.id + suffix];
+      if (v != null) { total += v; hasAny = true; }
+    }
+    return hasAny ? Math.round(total * 100) / 100 : null;
+  }
+
+  // Pattern B: sum leaf keys + sectionless customRows. We deliberately read
+  // only KEYS that look like "leaf" ids (not the synthetic "total" row); for
+  // legacy data we fall back to all non-meta numeric keys minus any key whose
+  // base id collides with a customRow (avoiding double-count).
+  const customIds = new Set(customRows.map(cr => cr.id));
+  let total = 0;
+  let hasAny = false;
+  for (const [k, v] of Object.entries(numeric)) {
+    if (k === "total") continue;       // grand total — derived
+    if (k === "total_ab" || k === "sec_total" || k === "unsec_total") continue;
+    if (customIds.has(k)) continue;    // customRow — added separately below
+    total += v;
+    hasAny = true;
+  }
+  for (const cr of customRows) {
+    if (cr.attachedTo) continue; // attached rows are summed via their parent above
+    const v = numeric[cr.id];
+    if (v != null) { total += v; hasAny = true; }
+  }
+  return hasAny ? Math.round(total * 100) / 100 : null;
 }
 
 // ── Serialise / deserialise ───────────────────────────────────────────────────

@@ -48,6 +48,7 @@ import {
 } from "@/config/nceNotesConfig";
 import { computeNceDynamicNoteMap } from "@/lib/nceDynamicNoteNumbers";
 import { sumNotesSubRowsCY, sumNotesSubRowsPY, getSharesOutstanding, getFAGridNetBlockTotal } from "@/lib/notesAutoPopulate";
+import { getNCENoteFaceTotal, NCE_CODE_TO_NOTE, NOTE_NATURE as NCE_NOTE_NATURE } from "@/lib/nceAutoPopulate";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 import { isTallyPLAccount } from "@/lib/tallyDetection";
 
@@ -2792,6 +2793,22 @@ export default function PipelineFinancialStatements({
     };
     for (const item of activeTree) computePL(item);
 
+    // ── NCE PY profit chain (V → XIII) ────────────────────────────────────
+    // Mirror the CY profit-chain computation (line ~2667). Without this the
+    // PY column for rows V, VII, IX, XI, XIII renders blank even when Total
+    // Income (III) and Total Expenses (IV) are populated, because these
+    // subtotals are derived by subtraction — they have no children in the
+    // FS tree, so computePL() above leaves them at zero.
+    if (isNonCorporate) {
+      const inc = merged["NCE_PL_INC"] || 0;
+      const exp = merged["NCE_PL_EXP"] || 0;
+      merged["NCE_PROF_V"]   = Math.round((-inc - exp) * 100) / 100;
+      merged["NCE_PROF_VII"] = Math.round((merged["NCE_PROF_V"]   - (merged["NCE_EXCEP"]    || 0)) * 100) / 100;
+      merged["NCE_PROF_IX"]  = Math.round((merged["NCE_PROF_VII"] - (merged["NCE_EXTORD"]   || 0)) * 100) / 100;
+      merged["NCE_PROF_XI"]  = Math.round((merged["NCE_PROF_IX"]  - (merged["NCE_PART_REM"] || 0)) * 100) / 100;
+      merged["NCE_NET_PROF"] = Math.round((merged["NCE_PROF_XI"]  - (merged["NCE_TAX"]      || 0)) * 100) / 100;
+    }
+
     // ── Auto-credit PY net profit to BS_EQ_RS (mirrors CY computedAmounts logic) ──
     // PY P&L amounts are now in `merged` (from pyAmounts / pyManualAmounts).
     // Compute PY net profit and credit it to Reserves & Surplus so the
@@ -3243,9 +3260,49 @@ export default function PipelineFinancialStatements({
   // are stored negative in Tally (CR convention) and the NCE BS view applies
   // negL() at display, so we re-apply the negative sign before storing in
   // the augmented map — keeps display sign convention identical to before.
+  // ── Build a lookup from noteType → nce_financial_notes row so getNCENoteFaceTotal
+  // can pull each note's cy_data / py_data without re-querying the DB.
+  const nceNotesByType: Record<string, { cy_data?: any; py_data?: any }> = useMemo(() => {
+    const m: Record<string, { cy_data?: any; py_data?: any }> = {};
+    if (Array.isArray(nceNotesData)) {
+      for (const n of nceNotesData as any[]) {
+        if (n?.note_type) m[n.note_type] = { cy_data: n.cy_data, py_data: n.py_data };
+      }
+    }
+    return m;
+  }, [nceNotesData]);
+
+  /** Apply the NCE note grand total to an FS code, respecting storage sign
+   *  convention: CR-natural codes (liabilities, equity, income) are stored
+   *  negative so the display layer's negL()/negI() can flip them positive. */
+  const applyNCENoteTotal = (
+    out: Record<string, number>,
+    code: string,
+    column: "cy" | "py",
+  ): boolean => {
+    const meta = NCE_CODE_TO_NOTE[code];
+    if (!meta) return false;
+    const row = nceNotesByType[meta.note];
+    if (!row) return false;
+    // Pattern A notes have LT/ST columns; Pattern B is single-column.
+    const isPatternA = meta.col === "lt" || meta.col === "st";
+    const total = getNCENoteFaceTotal(
+      row, column,
+      isPatternA ? "A" : "B",
+      meta.col,
+    );
+    if (total == null) return false;
+    const nature = NCE_NOTE_NATURE[meta.note] ?? "CR";
+    out[code] = nature === "CR" ? -total : total;
+    return true;
+  };
+
   const nceCyAmounts: Record<string, number> = isNonCorporate
     ? (() => {
         const out = { ...computedAmounts };
+        // Phase E (legacy stage5_notes path) — kept for backward compatibility
+        // with engagements that have stage5_notes populated. NCE notes path
+        // below overrides any value found here when present.
         for (const [code, key] of Object.entries(NCE_CODE_TO_NOTE_KEY)) {
           const section = NCE_CODE_TO_SECTION[code];
           if (!section) continue;
@@ -3254,12 +3311,17 @@ export default function PipelineFinancialStatements({
           out[code] = section === "bs_liab" ? -sum : sum;
         }
         // Bug 6 — NCE PPE / CWIP / Intangibles use the FA grid total when
-        // populated.  CWIP and Intangibles share the PPE note number per
-        // NCE_CODE_TO_NOTE_KEY, but they're not separated in the FA grid;
-        // we apply the total only to NCE_PPE so the remaining two columns
-        // continue to read from raw TB (their own ledgers).
+        // populated.
         const faCy = getFAGridNetBlockTotal(stage5NotesData ?? null, "cy");
         if (faCy != null) out["NCE_PPE"] = faCy;
+        // Issue 3 fix — auditor's Notes-to-Accounts (nce_financial_notes)
+        // grand total drives the BS / P&L face. Includes manual customRows
+        // added via "+ Add row" which the legacy stage5_notes breakup array
+        // never carried — fixing the mismatch where Trade Payables note
+        // showed ₹19,94,766 but BS face read ₹19,84,766.
+        for (const code of Object.keys(NCE_CODE_TO_NOTE)) {
+          applyNCENoteTotal(out, code, "cy");
+        }
         return out;
       })()
     : computedAmounts;
@@ -3275,6 +3337,9 @@ export default function PipelineFinancialStatements({
         }
         const faPy = getFAGridNetBlockTotal(stage5NotesData ?? null, "py");
         if (faPy != null) out["NCE_PPE"] = faPy;
+        for (const code of Object.keys(NCE_CODE_TO_NOTE)) {
+          applyNCENoteTotal(out, code, "py");
+        }
         return out;
       })()
     : mergedPY;
