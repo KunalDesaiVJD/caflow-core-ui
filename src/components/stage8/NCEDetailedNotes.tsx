@@ -1515,21 +1515,28 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
                    (!d.cy_sources || Object.keys(d.cy_sources).length === 0)
             );
             // ROOT-CAUSE FIX (Issue 1, PY not populating): trigger a silent
-            // re-sync when ANY note has CY data but no positive PY data — this
-            // catches engagements saved before the per-note PY-TB fallback was
-            // shipped (their PY columns saved as 0 even though PY shell TB
-            // has real numbers). The re-sync calls nceAutoPopulate which now
-            // runs the per-note fallback for each empty PY note.
-            const needsPyRefresh = Object.values(built).some(d => {
+            // re-sync when any note has CY data but no positive PY data OR
+            // when this engagement hasn't yet been migrated by the per-key
+            // PY-fallback in nceAutoPopulate. The migration is tracked via
+            // a per-engagement localStorage flag so the trigger is one-shot:
+            // we don't keep re-running on every page load once the data is
+            // healed.
+            const pyMigrationKey = `nce_py_per_key_fallback_v2_${engagementId}`;
+            const pyMigrationDone = localStorage.getItem(pyMigrationKey) === "1";
+            const needsPyAnyEmpty = Object.values(built).some(d => {
               const hasCY = Object.values(d.cy ?? {}).some(v => Math.abs(Number(v) || 0) > 0.005);
               const hasPY = Object.values(d.py ?? {}).some(v => Math.abs(Number(v) || 0) > 0.005);
               return hasCY && !hasPY;
             });
+            const needsPyRefresh = needsPyAnyEmpty || !pyMigrationDone;
             if (unEjectedAny || needsCySources || needsPyRefresh) {
               // Silent background refresh — don't block the UI
               nceAutoPopulate(engagementId, built).then(refreshed => {
                 if (!cancelled) setNoteData(refreshed);
                 persistNotes(refreshed, fy).catch(() => {});
+                // Mark the per-key PY migration as done so subsequent loads
+                // skip the silent re-sync unless a genuine gap reappears.
+                try { localStorage.setItem(pyMigrationKey, "1"); } catch {/* private mode */}
               }).catch(() => {}); // best-effort
             }
           }

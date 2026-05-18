@@ -538,12 +538,13 @@ export async function nceAutoPopulate(
 
         if (pyTb.length > 0) {
           for (const [nType, noteFs] of Object.entries(NCE_NOTE_FS_MAP)) {
-            // Per-note gate — skip if pyNotes[nType] already has a positive
-            // numeric value (the prior engagement's saved Stage 8 data is
-            // authoritative — never overwrite it).
+            // PER-KEY MERGE — compute pyResult from PY shell TB classification,
+            // then merge into pyNotes[nType] only for keys that don't already
+            // have a positive saved value. This preserves any user-saved PY
+            // amounts while filling in the static rows / catch-all buckets
+            // that the prior auto-populate missed (e.g. SWASTIK's borrowings
+            // had unsec_related_lt saved but unsec_other_lt missing).
             const existing = pyNotes[nType] ?? {};
-            const hasPositive = Object.values(existing).some(v => Math.abs(Number(v) || 0) > 0.005);
-            if (hasPositive) continue;
 
             const pyResult: Record<string, number> = {};
             const pyRules = NOTE_SMART_MAP[nType] ?? [];
@@ -601,7 +602,16 @@ export async function nceAutoPopulate(
               }
             }
 
-            if (Object.keys(pyResult).length > 0) pyNotes[nType] = pyResult;
+            if (Object.keys(pyResult).length > 0) {
+              const merged: Record<string, number> = { ...existing };
+              for (const [k, v] of Object.entries(pyResult)) {
+                // Only fill keys that don't already carry a positive saved
+                // value — authoritative user / prior-year data is preserved.
+                const cur = Math.abs(Number(merged[k]) || 0);
+                if (cur < 0.005 && Math.abs(v) > 0.005) merged[k] = v;
+              }
+              pyNotes[nType] = merged;
+            }
           }
         }
       }
