@@ -29,7 +29,7 @@ import EngagementHeader from "@/components/pipeline/EngagementHeader";
 import {
   ArrowRight, CheckCircle2, AlertTriangle, Search, Download, FileSpreadsheet,
   Link2, RefreshCw, Eye, Pencil, ChevronRight, ChevronDown, Loader2, Trash2,
-  BookOpen, Brain, Check, ChevronsUpDown,
+  BookOpen, Brain, Check, ChevronsUpDown, Maximize2, Minimize2,
 } from "lucide-react";
 import { NCE_FS_ITEMS, NCE_AUTO_MAP_RULES } from "@/config/nceLineItems";
 import type { FSLineItem } from "@/config/nceLineItems";
@@ -392,6 +392,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   const [hideZero, setHideZero]               = useState(true);   // hide opening=0 AND closing=0 ledgers
   const [groupView, setGroupView]             = useState(true);   // group left panel by Tally parent_group
   const [expandedGroups, setExpandedGroups]   = useState<Record<string, boolean>>({});
+  const [maximizedPanel, setMaximizedPanel]   = useState<"left" | "right" | null>(null);
   const [aiRunning, setAiRunning]             = useState(false);
   const [resetting, setResetting]             = useState(false);
   // PY-first workflow mode for the left panel.
@@ -2791,7 +2792,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
           <div className="flex gap-4" style={{ height: "calc(100vh - 22rem)" }}>
             {/* Left: UNMAPPED TB Accounts — mapping workspace */}
-            <div className="w-1/2 flex flex-col border rounded-lg overflow-hidden">
+            <div className={cn("flex flex-col border rounded-lg overflow-hidden transition-all", maximizedPanel === "right" ? "hidden" : maximizedPanel === "left" ? "w-full" : "w-1/2")}>
               <div className="p-2 border-b bg-muted/30 space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-1.5">
@@ -2824,8 +2825,34 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                       )}
                     </p>
                   </div>
-                  {multiSelect.size > 0 ? (
-                    <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5">
+                    {groupView && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setExpandedGroups(prev => { const next = { ...prev }; grouped.forEach(g => { next[g.group] = false; }); return next; })}
+                          className="text-[9px] px-1.5 py-0.5 rounded border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground transition-colors whitespace-nowrap"
+                          title="Collapse all groups"
+                        >⊖ Collapse All</button>
+                        <button
+                          type="button"
+                          onClick={() => setExpandedGroups(prev => { const next = { ...prev }; grouped.forEach(g => { next[g.group] = true; }); return next; })}
+                          className="text-[9px] px-1.5 py-0.5 rounded border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground transition-colors whitespace-nowrap"
+                          title="Expand all groups"
+                        >⊕ Expand All</button>
+                      </>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setMaximizedPanel(p => p === "left" ? null : "left")}
+                      className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                      title={maximizedPanel === "left" ? "Restore split view" : "Maximize this panel"}
+                    >
+                      {maximizedPanel === "left" ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+                    </button>
+                  </div>
+                  {multiSelect.size > 0 && (
+                    <div className="flex items-center gap-2 ml-1">
                       <p className="text-[10px] text-blue-700 dark:text-blue-300 font-medium">
                         Click an FS line item to assign all {multiSelect.size}
                       </p>
@@ -2836,8 +2863,6 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                         clear
                       </button>
                     </div>
-                  ) : (
-                    <p className="text-[10px] text-muted-foreground">Tick checkboxes to bulk-assign · or click a row to map one</p>
                   )}
                 </div>
                 <div className="relative">
@@ -2854,7 +2879,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                 {groupView ? (
                   <div>
                     {grouped.map((g) => {
-                      const isOpen = expandedGroups[g.group] ?? true;
+                      const isOpen = expandedGroups[g.group] ?? false;
                       const suggestedItem = g.dominantCode
                         ? activeLeafItems.find((i) => i.code === g.dominantCode) : null;
                       // Unmapped items in this group available for bulk select
@@ -3171,7 +3196,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
             </div>
 
             {/* Right: FS Line Items Tree — mapping destination + unmap workspace */}
-            <div className="w-1/2 flex flex-col border rounded-lg overflow-hidden">
+            <div className={cn("flex flex-col border rounded-lg overflow-hidden transition-all", maximizedPanel === "left" ? "hidden" : maximizedPanel === "right" ? "w-full" : "w-1/2")}>
               <div className="p-2 border-b bg-muted/30 space-y-1.5">
                 {/* Title row */}
                 <div className="flex items-center justify-between gap-2">
@@ -3202,11 +3227,21 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                       );
                     })()}
                   </div>
-                  <p className="text-[10px] text-muted-foreground text-right">
-                    {selectedAccount
-                      ? <>Click a line item to map <span className="font-semibold text-primary">"{selectedAccount}"</span></>
-                      : <>Click a mapped ledger's <span className="text-destructive font-semibold">✕</span> to unmap</>}
-                  </p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-[10px] text-muted-foreground text-right">
+                      {selectedAccount
+                        ? <>Click a line item to map <span className="font-semibold text-primary">"{selectedAccount}"</span></>
+                        : <>Click a mapped ledger's <span className="text-destructive font-semibold">✕</span> to unmap</>}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setMaximizedPanel(p => p === "right" ? null : "right")}
+                      className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0"
+                      title={maximizedPanel === "right" ? "Restore split view" : "Maximize this panel"}
+                    >
+                      {maximizedPanel === "right" ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+                    </button>
+                  </div>
                 </div>
                 {/* BS / P&L tab switcher */}
                 <div className="flex gap-1">
