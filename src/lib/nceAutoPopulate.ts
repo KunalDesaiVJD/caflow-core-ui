@@ -1105,6 +1105,55 @@ export async function nceAutoPopulate(
       }
     }
 
+    // ISSUE 1 FIX (PY value for manual rows): when a manual row's label
+    // matches a TB ledger (e.g. user manually typed "Unpaid Audit Fees"
+    // and a CY/PY ledger with the same name exists), inherit the PY
+    // closing from PY shell TB into the manual row's PY column. Without
+    // this, manual rows always showed PY = 0 even when the ledger clearly
+    // existed in PY with a known closing balance — the auditor had no way
+    // to see the prior-year amount short of typing it again. This bridges
+    // the COA mapping's per-ledger PY into the manual rows that auditors
+    // type to document explanatory line items under each Schedule III head.
+    // Only fills the PY when the saved PY is zero AND a TB match exists,
+    // so any user-edited PY value is preserved.
+    if (pyTb.length > 0) {
+      const pyByName: Record<string, number> = {};
+      for (const r of pyTb) {
+        const nm = String(r.ledger_name || "").trim();
+        if (!nm) continue;
+        pyByName[nm.toLowerCase()] = ledgerAmt(r.closing_balance);
+      }
+      // Detect whether this note follows Pattern A (LT/ST columns).
+      const isPatternA = !noteFs.all && !!(noteFs.lt || noteFs.st);
+      for (const mr of absorbedManualRows) {
+        if (!mr.label) continue;
+        const pyAmt = pyByName[mr.label.toLowerCase()];
+        if (!pyAmt || pyAmt < 0.005) continue;
+        // Decide which suffix to fill based on note shape and where the CY
+        // amount lives on the manual row.
+        if (isPatternA) {
+          const cyLt = Math.abs(mergedCy[mr.id + "_lt"] ?? 0);
+          const cyStV = Math.abs(mergedCy[mr.id + "_st"] ?? 0);
+          if (cyLt > 0.005 && (mergedPy[mr.id + "_lt"] ?? 0) < 0.005) {
+            mergedPy[mr.id + "_lt"] = pyAmt;
+          } else if (cyStV > 0.005 && (mergedPy[mr.id + "_st"] ?? 0) < 0.005) {
+            mergedPy[mr.id + "_st"] = pyAmt;
+          } else if (cyLt < 0.005 && cyStV < 0.005) {
+            // No CY amount yet — default to ST since the user usually fills
+            // ST first for current-liability provisions.
+            if ((mergedPy[mr.id + "_st"] ?? 0) < 0.005) {
+              mergedPy[mr.id + "_st"] = pyAmt;
+            }
+          }
+        } else {
+          // Pattern B — single column
+          if ((mergedPy[mr.id] ?? 0) < 0.005) {
+            mergedPy[mr.id] = pyAmt;
+          }
+        }
+      }
+    }
+
     // Restore existing static-row user values (non-custom keys) — but ONLY
     // when auto-populate didn't find any fresh data this run. Reasoning: a
     // successful re-sync means COA + TB are the canonical source of truth, so

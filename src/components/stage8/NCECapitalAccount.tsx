@@ -744,16 +744,6 @@ export function NCECapitalAccount({ engagementId }: Props) {
             <Plus size={13} />
             Add Partner
           </Button>
-          <Button
-            type="button"
-            onClick={addPyPartner}
-            size="sm"
-            variant="outline"
-            className="gap-1.5 text-blue-700 border-blue-200 hover:bg-blue-50"
-          >
-            <Plus size={13} />
-            Add Partner (PY)
-          </Button>
           <p className="text-[10px] text-muted-foreground">
             Closing Balance = Opening + Introduced + Remuneration + Interest − Withdrawals + Profit Share
           </p>
