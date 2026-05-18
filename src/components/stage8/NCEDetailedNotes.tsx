@@ -1642,7 +1642,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
             // Issue (debit/credit netting): saved totals pre-fix added Math.abs
             // of opposite-side balances instead of subtracting. Force one-shot
             // re-sync so notes pick up the new signed aggregation.
-            const drCrMigrationKey = `nce_drcr_netting_v1_${engagementId}`;
+            const drCrMigrationKey = `nce_drcr_netting_v2_${engagementId}`;
             const drCrMigrationDone = localStorage.getItem(drCrMigrationKey) === "1";
             const needsPyAnyEmpty = Object.values(built).some(d => {
               const hasCY = Object.values(d.cy ?? {}).some(v => Math.abs(Number(v) || 0) > 0.005);
