@@ -1514,7 +1514,18 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
               d => Object.keys(d.cy ?? {}).some(k => !k.startsWith("custom_")) &&
                    (!d.cy_sources || Object.keys(d.cy_sources).length === 0)
             );
-            if (unEjectedAny || needsCySources) {
+            // ROOT-CAUSE FIX (Issue 1, PY not populating): trigger a silent
+            // re-sync when ANY note has CY data but no positive PY data — this
+            // catches engagements saved before the per-note PY-TB fallback was
+            // shipped (their PY columns saved as 0 even though PY shell TB
+            // has real numbers). The re-sync calls nceAutoPopulate which now
+            // runs the per-note fallback for each empty PY note.
+            const needsPyRefresh = Object.values(built).some(d => {
+              const hasCY = Object.values(d.cy ?? {}).some(v => Math.abs(Number(v) || 0) > 0.005);
+              const hasPY = Object.values(d.py ?? {}).some(v => Math.abs(Number(v) || 0) > 0.005);
+              return hasCY && !hasPY;
+            });
+            if (unEjectedAny || needsCySources || needsPyRefresh) {
               // Silent background refresh — don't block the UI
               nceAutoPopulate(engagementId, built).then(refreshed => {
                 if (!cancelled) setNoteData(refreshed);
