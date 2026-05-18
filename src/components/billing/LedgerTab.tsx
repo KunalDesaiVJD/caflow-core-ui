@@ -201,10 +201,12 @@ async function loadLogoBase64(url: string): Promise<string | null> {
 function ClientLedgerView() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const [clients, setClients] = useState<{ id: string; name: string; email?: string | null; compliance_flags?: Record<string, any> | null }[]>([]);
+  const [clients, setClients] = useState<{ id: string; name: string; email?: string | null; compliance_flags?: Record<string, any> | null; gstin_states?: Record<string, string> | null }[]>([]);
   const [firms, setFirms] = useState<{ id: string; name: string; logo_url?: string; legal_name_changes?: LegalNameChange[] | null }[]>([]);
   const [clientId, setClientId] = useState("");
   const [firmId, setFirmId] = useState("");
+  const [selectedGstin, setSelectedGstin] = useState<string>("all");
+  const [obDraftGstin, setObDraftGstin] = useState<string>("all");
   const [fy, setFy] = useState(getCurrentFY());
   const [fromDate, setFromDate] = useState(() => fyToDateRange(getCurrentFY()).start);
   const [toDate, setToDate] = useState(() => fyToDateRange(getCurrentFY()).end);
@@ -242,10 +244,19 @@ function ClientLedgerView() {
     return arr;
   }, [clients, clientId]);
 
+  const clientGstins = useMemo(() => {
+    const c = clients.find(x => x.id === clientId);
+    const gs = c?.gstin_states;
+    if (!gs || typeof gs !== "object") return [];
+    return Object.entries(gs).map(([gstin, state]) => ({ gstin, state: state as string }));
+  }, [clients, clientId]);
+
+  useEffect(() => { setSelectedGstin("all"); }, [clientId]);
+
   useEffect(() => {
     (async () => {
       const [{ data: c }, { data: f }] = await Promise.all([
-        supabase.from("clients").select("id, name, email, compliance_flags").eq("is_draft", false).is("deleted_at", null).neq("is_active", false).order("name"),
+        supabase.from("clients").select("id, name, email, compliance_flags, gstin_states").eq("is_draft", false).is("deleted_at", null).neq("is_active", false).order("name"),
         supabase.from("firms").select("id, name, logo_url, legal_name_changes").order("name"),
       ]);
       setClients(c || []);
@@ -280,6 +291,8 @@ function ClientLedgerView() {
           .select("*")
           .eq("client_id", clientId);
         if (firmId && firmId !== "all") obQ = obQ.eq("firm_id", firmId);
+        if (selectedGstin && selectedGstin !== "all") obQ = obQ.eq("gstin", selectedGstin);
+        else obQ = obQ.is("gstin", null);
         const { data: obData } = await obQ.maybeSingle();
         if (obData) {
           setObAmount(Number(obData.amount) || 0);
@@ -294,7 +307,7 @@ function ClientLedgerView() {
       toast({ title: "Error loading ledger", description: err.message, variant: "destructive" });
     }
     setLoading(false);
-  }, [clientId, firmId, fromDate, toDate, toast]);
+  }, [clientId, firmId, selectedGstin, fromDate, toDate, toast]);
 
   useEffect(() => { loadEntries(); }, [loadEntries]);
 
@@ -341,6 +354,7 @@ function ClientLedgerView() {
         balance_date: obDraftDate,
         amount: Number(obDraftAmount) || 0,
         narration: obDraftNarration.trim() || null,
+        gstin: obDraftGstin && obDraftGstin !== "all" ? obDraftGstin : null,
         created_by: user?.id,
         updated_at: new Date().toISOString(),
       };
@@ -658,6 +672,17 @@ function ClientLedgerView() {
             {firms.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
           </SelectContent>
         </Select>
+        {clientGstins.length > 1 && (
+          <Select value={selectedGstin} onValueChange={setSelectedGstin}>
+            <SelectTrigger className="w-[200px]"><SelectValue placeholder="All States" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All States</SelectItem>
+              {clientGstins.map(({ gstin, state }) => (
+                <SelectItem key={gstin} value={gstin}>{state} — {gstin}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
         <Select value={fy} onValueChange={v => { setFy(v); const r = fyToDateRange(v); setFromDate(r.start); setToDate(r.end); }}>
           <SelectTrigger className="w-[130px]"><SelectValue /></SelectTrigger>
           <SelectContent>
@@ -696,6 +721,7 @@ function ClientLedgerView() {
               setObDraftAmount(String(obAmount || ""));
               setObDraftDate(obDate || "");
               setObDraftNarration(obNarration || "");
+              setObDraftGstin(selectedGstin);
               setObDialogOpen(true);
             }}
           >
@@ -921,6 +947,20 @@ function ClientLedgerView() {
             <DialogTitle>Opening Balance</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
+            {clientGstins.length > 1 && (
+              <div className="space-y-1">
+                <Label className="text-xs">GSTIN / State</Label>
+                <Select value={obDraftGstin} onValueChange={setObDraftGstin}>
+                  <SelectTrigger className="text-xs h-8"><SelectValue placeholder="Select GSTIN" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All States (combined)</SelectItem>
+                    {clientGstins.map(({ gstin, state }) => (
+                      <SelectItem key={gstin} value={gstin}>{state} — {gstin}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="space-y-1">
               <Label className="text-xs">Balance As Of Date *</Label>
               <Input type="date" value={obDraftDate} onChange={e => setObDraftDate(e.target.value)} />

@@ -100,6 +100,10 @@ export default function ReceiptsTab() {
   // Client invoices for "against invoice"
   const [clientInvoices, setClientInvoices] = useState<any[]>([]);
 
+  // GSTIN state for multi-GSTIN clients
+  const [formClientGstins, setFormClientGstins] = useState<{ gstin: string; state: string }[]>([]);
+  const [formGstin, setFormGstin] = useState<string>("all");
+
   const fetchData = useCallback(async () => {
     setLoading(true);
     let rQuery = supabase.from("billing_receipts").select("*").order("receipt_date", { ascending: false });
@@ -156,6 +160,22 @@ export default function ReceiptsTab() {
     })();
   }, [responsibleFilter]);
 
+  // Load client's GSTINs when formClientId changes
+  useEffect(() => {
+    if (!formClientId) { setFormClientGstins([]); setFormGstin("all"); return; }
+    (async () => {
+      const { data } = await supabase.from("clients").select("gstin_states").eq("id", formClientId).maybeSingle();
+      const gs = data?.gstin_states;
+      if (gs && typeof gs === "object") {
+        const list = Object.entries(gs as Record<string, string>).map(([gstin, state]) => ({ gstin, state }));
+        setFormClientGstins(list);
+      } else {
+        setFormClientGstins([]);
+      }
+      setFormGstin("all");
+    })();
+  }, [formClientId]);
+
   // Fetch invoices when client changes in form
   useEffect(() => {
     if (!formClientId || receiptType !== "against_invoice") { setClientInvoices([]); return; }
@@ -192,6 +212,8 @@ export default function ReceiptsTab() {
     setTdsDate(undefined);
     setRemarks("");
     setClientInvoices([]);
+    setFormClientGstins([]);
+    setFormGstin("all");
   };
 
   const resolveFirmId = async (): Promise<string | null> => {
@@ -242,6 +264,7 @@ export default function ReceiptsTab() {
         gst_tds_amount: gstTds || null,
         tds_date: tds > 0 && tdsDate ? format(tdsDate, "yyyy-MM-dd") : null,
         remarks: remarks || null,
+        gstin: formGstin && formGstin !== "all" ? formGstin : null,
         created_by: user?.id,
       }).select("id").single();
 
@@ -445,6 +468,22 @@ export default function ReceiptsTab() {
                 className="w-full"
               />
             </div>
+
+            {/* GSTIN picker for multi-GSTIN clients */}
+            {formClientGstins.length > 1 && (
+              <div className="space-y-1">
+                <Label>GSTIN / State</Label>
+                <Select value={formGstin} onValueChange={setFormGstin}>
+                  <SelectTrigger><SelectValue placeholder="Select GSTIN" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All States (combined)</SelectItem>
+                    {formClientGstins.map(({ gstin, state }) => (
+                      <SelectItem key={gstin} value={gstin}>{state} — {gstin}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             {/* Against Invoice */}
             {receiptType === "against_invoice" && formClientId && (
