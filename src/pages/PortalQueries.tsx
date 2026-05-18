@@ -288,6 +288,16 @@ function QueryCard({ query, clientName }: { query: AuditQuery; clientName: strin
                     <div className="flex items-center gap-2 px-2 py-1.5 bg-amber-50 rounded-md text-xs border border-amber-200">
                       <Paperclip size={12} className="text-amber-500" />
                       <span className="flex-1 truncate">{file.name}</span>
+                      <button type="button"
+                        onClick={() => window.open(URL.createObjectURL(file), "_blank")}
+                        className="text-amber-600 hover:text-amber-800 font-medium px-1.5 py-0.5 rounded hover:bg-amber-100">
+                        View
+                      </button>
+                      <button type="button"
+                        onClick={() => { const a = document.createElement("a"); a.href = URL.createObjectURL(file); a.download = file.name; a.click(); }}
+                        className="text-amber-600 hover:text-amber-800 font-medium px-1.5 py-0.5 rounded hover:bg-amber-100 flex items-center gap-0.5">
+                        <Download size={11} /> Save
+                      </button>
                       <button type="button" onClick={() => setFile(null)} className="text-muted-foreground hover:text-destructive"><X size={12} /></button>
                     </div>
                   )}
