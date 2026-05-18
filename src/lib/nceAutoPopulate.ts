@@ -480,6 +480,9 @@ export async function nceAutoPopulate(
   // individual rows to show "—" even though PY data exists.
   const pyNotes:      Record<string, Record<string, number>>  = {};
   const pyCustomRows: Record<string, NCECustomRow[]>          = {};
+  // Hoisted PY shell TB rows so the per-ledger Pattern A path can read PY
+  // amounts by ledger name without re-querying Supabase.
+  let pyTb: TBRow[] = [];
   if (financialYear && clientId) {
     const parts = String(financialYear).split("-");
     if (parts.length === 2) {
@@ -530,7 +533,7 @@ export async function nceAutoPopulate(
           .from("tally_trial_balance")
           .select("ledger_name, closing_balance, balance_type, opening_balance, opening_type, parent_group")
           .eq("engagement_id", shellEng.id);
-        const pyTb: TBRow[] = (pyTbRaw ?? []) as TBRow[];
+        pyTb = (pyTbRaw ?? []) as TBRow[];
         const pyCoaMap: Record<string, { code: string }> =
           shellEng.coa_mapping && Object.keys(shellEng.coa_mapping).length > 0
             ? shellEng.coa_mapping
@@ -862,7 +865,18 @@ export async function nceAutoPopulate(
       const ltSet      = new Set(noteFs.lt ?? []);
       const stSet      = new Set(noteFs.st ?? []);
       const smartRules = NOTE_SMART_MAP[noteType] ?? [];
-      const unmatchedA: { ledger: string; amt: number; isLT: boolean; isST: boolean; parentGroup?: string }[] = [];
+      const unmatchedA: { ledger: string; amt: number; pyAmt: number; isLT: boolean; isST: boolean; parentGroup?: string; smartTarget?: string }[] = [];
+
+      // Build a PY-ledger lookup keyed by name so individual customRows get
+      // their actual PY closing instead of falling back to 0.
+      const pyByLedger: Record<string, number> = {};
+      if (pyTb.length > 0) {
+        for (const r of pyTb) {
+          const nm = String(r.ledger_name || "").trim();
+          if (!nm) continue;
+          pyByLedger[nm.toLowerCase()] = ledgerAmt(r.closing_balance);
+        }
+      }
 
       for (const row of tb) {
         const mapped = coaMapping[row.ledger_name];
@@ -876,17 +890,34 @@ export async function nceAutoPopulate(
         if (ejectedSet.has(row.ledger_name)) continue;
 
         const matchedRowId = smartMatch(row.ledger_name, smartRules, row.parent_group);
-        if (matchedRowId) {
-          // Fill static row directly with LT/ST suffix
+        // ISSUE 1 FIX (per-ledger breakup in Notes): for "borrowings",
+        // "investments" and "loans_advances" — notes where the auditor expects
+        // ledger-level detail under each Schedule III sub-head — we ALWAYS
+        // create a customRow per ledger, attached to the smart-matched static
+        // row (or the section fallback). Previously smart-matched ledgers like
+        // "Dipak B Patel (HUF)" were summed into unsec_related directly, so
+        // the Note showed only "Loans from related parties: ₹2.02 cr" without
+        // the per-ledger break-up the COA mapping clearly shows.
+        const wantsPerLedgerBreakup =
+          noteType === "borrowings" ||
+          noteType === "investments" ||
+          noteType === "loans_advances";
+
+        if (matchedRowId && !wantsPerLedgerBreakup) {
+          // Existing aggregate path for other Pattern A notes
           if (isLT) newCy[matchedRowId + "_lt"] = (newCy[matchedRowId + "_lt"] ?? 0) + amt;
           if (isST) newCy[matchedRowId + "_st"] = (newCy[matchedRowId + "_st"] ?? 0) + amt;
-          // PY from prior year if available (Math.abs guards against stale negatives)
           if (isLT && !(matchedRowId + "_lt" in newPy))
             newPy[matchedRowId + "_lt"] = Math.abs(pyNotes[noteType]?.[matchedRowId + "_lt"] ?? 0);
           if (isST && !(matchedRowId + "_st" in newPy))
             newPy[matchedRowId + "_st"] = Math.abs(pyNotes[noteType]?.[matchedRowId + "_st"] ?? 0);
         } else {
-          unmatchedA.push({ ledger: row.ledger_name, amt, isLT, isST, parentGroup: row.parent_group ?? undefined  });
+          const pyAmt = pyByLedger[row.ledger_name.toLowerCase()] ?? 0;
+          unmatchedA.push({
+            ledger: row.ledger_name, amt, pyAmt, isLT, isST,
+            parentGroup: row.parent_group ?? undefined,
+            ...(matchedRowId ? { smartTarget: matchedRowId } : {}),
+          });
         }
       }
 
@@ -903,27 +934,37 @@ export async function nceAutoPopulate(
         const id    = makeCustomId(label, idx++);
         if (um.isLT) {
           newCy[id + "_lt"] = um.amt;
-          newPy[id + "_lt"] = pyForCustomRow(noteType, id, label, "_lt");
+          // Per-ledger PY: prefer PY shell TB closing for this ledger; fall
+          // back to label-matched prior customRow lookup (handles renamed
+          // breakup rows across years).
+          newPy[id + "_lt"] = um.pyAmt > 0 ? um.pyAmt : pyForCustomRow(noteType, id, label, "_lt");
         }
         if (um.isST) {
           newCy[id + "_st"] = um.amt;
-          newPy[id + "_st"] = pyForCustomRow(noteType, id, label, "_st");
+          newPy[id + "_st"] = um.pyAmt > 0 ? um.pyAmt : pyForCustomRow(noteType, id, label, "_st");
         }
 
         let rowSection:    string | undefined;
         let rowAttachedTo: string | undefined;
         if (noteType === "borrowings") {
           rowSection = "unsecured";
-          // Check parent_group for related-party indicators, and ledger name for HUF.
-          // When the user has a Tally sub-group like "Loans from Partners" or "Director Loans"
-          // as the parent_group, or when the ledger name contains HUF (always a related party),
-          // route the custom row to "Loans from related parties" instead of "Other unsecured loans".
-          const pgLower   = (um.parentGroup || "").toLowerCase();
-          const nameLower = normLedger(um.ledger);
-          const pgRelated = ["partner", "director", "promoter", "proprietor",
-            "shareholder", "relative", "family", "huf", "related"].some(kw => pgLower.includes(kw));
-          const nameHuf   = nameLower.includes(" huf") || nameLower.includes("(huf)") || nameLower.includes("-huf");
-          rowAttachedTo = (pgRelated || nameHuf) ? "unsec_related" : "unsec_other";
+          // Use the smart-match target if available (e.g. "unsec_related" for
+          // an HUF ledger that matched the keyword rule). Otherwise fall back
+          // to parent_group / name heuristic.
+          if (um.smartTarget) {
+            rowAttachedTo = um.smartTarget;
+          } else {
+            const pgLower   = (um.parentGroup || "").toLowerCase();
+            const nameLower = normLedger(um.ledger);
+            const pgRelated = ["partner", "director", "promoter", "proprietor",
+              "shareholder", "relative", "family", "huf", "related"].some(kw => pgLower.includes(kw));
+            const nameHuf   = nameLower.includes(" huf") || nameLower.includes("(huf)") || nameLower.includes("-huf");
+            rowAttachedTo = (pgRelated || nameHuf) ? "unsec_related" : "unsec_other";
+          }
+        } else if (um.smartTarget && (noteType === "investments" || noteType === "loans_advances")) {
+          // For investments / loans_advances Pattern A notes, attach to the
+          // smart-matched static row so per-ledger breakup renders beneath it.
+          rowAttachedTo = um.smartTarget;
         }
 
         autoRows.push({
