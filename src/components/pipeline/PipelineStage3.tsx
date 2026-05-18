@@ -591,7 +591,10 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       // parent_group is REQUIRED for the group-inheritance fallback that maps
       // PY-shell ledgers with no direct coa entry to a CY FS code via their
       // shared Tally parent_group ("Sales Accounts" → NCE_REV_OPS).
-      const TB_COLS = "ledger_name, closing_balance, balance_type, parent_group";
+      // opening_balance + opening_type are needed for the PY Changes-in-Inv
+      // dual-post: PY changes = (PY-1 closing) − (PY closing) where PY-1
+      // closing is encoded in the PY shell's opening_balance column.
+      const TB_COLS = "ledger_name, closing_balance, balance_type, opening_balance, opening_type, parent_group";
       const PAGE = 1000;
       const all: any[] = [];
       for (let from = 0; ; from += PAGE) {
@@ -1728,6 +1731,48 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       if (!opening) continue;
       amounts[mapping.code] = (amounts[mapping.code] || 0) + opening;
     }
+
+    // ─── PY CHANGES IN INVENTORIES (dual-post for PY) ─────────────────────
+    // CY computedAmounts dual-posts each inventory ledger into:
+    //   - BS_CA_INV (closing balance)
+    //   - PL_EXP_CII / NCE_CII (opening − closing)
+    // PY needs the same dual-post but shifted one year back:
+    //   - PY BS = CY opening_balance (already aggregated above)
+    //   - PY P&L Changes = PY-1 closing − PY closing
+    //                    = (PY shell's opening_balance) − (CY's opening_balance)
+    // The PY shell's opening_balance column encodes PY-1 closing balance.
+    // Without this dual-post the PY column for "Changes in Inventories"
+    // stayed blank even when both CY TB opening and PY shell TB opening were
+    // available. Universal across every NCE/corporate client.
+    const pyShellRows = pyShellTbData?.tbRows as any[] | undefined;
+    if (pyShellRows && pyShellRows.length) {
+      // Build a PY-shell lookup keyed by lowercase ledger name → signed opening
+      // balance (PY-1 closing). Sign: Dr → +, Cr → −, matching how the BS
+      // sign convention is encoded on CY TB (closing balance for inventory
+      // ledgers is normally Dr = +).
+      const pyShellPrevClose: Record<string, number> = {};
+      for (const row of pyShellRows) {
+        const name = String(row.ledger_name || "").trim().toLowerCase();
+        if (!name) continue;
+        const ob = Math.abs(Number(row.opening_balance ?? 0));
+        if (ob < 0.005) continue;
+        const isDr = String(row.opening_type ?? "").toUpperCase() === "DR";
+        pyShellPrevClose[name] = isDr ? ob : -ob;
+      }
+      // For every CY tbAccount mapped to an inventory code, dual-post the
+      // PY Changes-in-Inv contribution.
+      for (const acct of tbAccounts) {
+        const mapping = coaMapping[acct.account_name];
+        if (!mapping) continue;
+        const plCode = INV_DUAL_MAP[mapping.code];
+        if (!plCode) continue;
+        const pyClose = acct.opening_balance ?? 0;             // PY closing = CY opening
+        const prev    = pyShellPrevClose[acct.account_name.toLowerCase()] ?? 0; // PY-1 closing
+        if (Math.abs(prev) < 0.005 && Math.abs(pyClose) < 0.005) continue;
+        // Changes = opening − closing (matches CY convention at line 1633)
+        amounts[plCode] = (amounts[plCode] || 0) + (prev - pyClose);
+      }
+    }
     const computeTotal = (item: FSLineItem): number => {
       if (!item.children || item.children.length === 0) return amounts[item.code] || 0;
       const total = item.children.reduce((sum, child) => sum + computeTotal(child), 0);
@@ -1751,7 +1796,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     }
 
     return amounts;
-  }, [tbAccounts, coaMapping, isNonCorporate, pyAmounts, activeTree]);
+  }, [tbAccounts, coaMapping, isNonCorporate, pyAmounts, activeTree, pyShellTbData?.tbRows]);
 
   // ═══════ PY SHELL P&L AMOUNTS ═══════
   // When a PY shell engagement exists, compute P&L closing amounts from its TB.
