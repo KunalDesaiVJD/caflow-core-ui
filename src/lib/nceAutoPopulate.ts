@@ -513,62 +513,95 @@ export async function nceAutoPopulate(
         }
       }
 
-      // Fallback: if all pyNotes have no numeric data (prior year never auto-populated),
-      // compute PY static-row amounts directly from the prior year TB.
-      // This covers the common case where a PY shell was synced but nceAutoPopulate
-      // was never run for that engagement, leaving nce_financial_notes empty.
-      const allEmpty = Object.values(pyNotes).every(n => Object.keys(n).length === 0);
-      if (allEmpty) {
-        // Find prior-year engagement that actually has TB data (PY shell preferred)
-        const shellEng = prevEngs.find(e => e.is_py_shell) ?? primaryPrev;
-        if (shellEng?.id) {
-          const { data: pyTbRaw } = await supabase
-            .from("tally_trial_balance")
-            .select("ledger_name, closing_balance, balance_type, opening_balance, opening_type, parent_group")
-            .eq("engagement_id", shellEng.id);
-          const pyTb: TBRow[] = (pyTbRaw ?? []) as TBRow[];
-          // Prefer shell's own COA mapping; fall back to current-year mapping
-          const pyCoaMap: Record<string, { code: string }> =
-            shellEng.coa_mapping && Object.keys(shellEng.coa_mapping).length > 0
-              ? shellEng.coa_mapping
-              : coaMapping;
+      // PY-TB fallback — derive prior-year amounts directly from the PY shell
+      // trial balance. Triggered PER NOTE whenever pyNotes[note] either:
+      //   - doesn't exist (prior eng didn't save this note), OR
+      //   - has only zero values (prior save was stale / pre-fix).
+      //
+      // ROOT-CAUSE FIX (Issue 1, this turn): previous gate was "all pyNotes
+      // empty across every note". For SWASTIK the borrowings note had
+      // pyNotes['borrowings'] with keys (mostly 0) so the gate failed and
+      // every OTHER note (finance_costs, employee_exp, etc.) was denied the
+      // fallback — their PY columns stayed blank even though PY shell TB
+      // held the real numbers and COA mapping clearly classified them.
+      const shellEng = prevEngs.find(e => e.is_py_shell) ?? primaryPrev;
+      if (shellEng?.id) {
+        const { data: pyTbRaw } = await supabase
+          .from("tally_trial_balance")
+          .select("ledger_name, closing_balance, balance_type, opening_balance, opening_type, parent_group")
+          .eq("engagement_id", shellEng.id);
+        const pyTb: TBRow[] = (pyTbRaw ?? []) as TBRow[];
+        const pyCoaMap: Record<string, { code: string }> =
+          shellEng.coa_mapping && Object.keys(shellEng.coa_mapping).length > 0
+            ? shellEng.coa_mapping
+            : coaMapping;
 
-          if (pyTb.length > 0) {
-            for (const [nType, noteFs] of Object.entries(NCE_NOTE_FS_MAP)) {
-              const pyResult: Record<string, number> = {};
-              const pyRules = NOTE_SMART_MAP[nType] ?? [];
+        if (pyTb.length > 0) {
+          for (const [nType, noteFs] of Object.entries(NCE_NOTE_FS_MAP)) {
+            // Per-note gate — skip if pyNotes[nType] already has a positive
+            // numeric value (the prior engagement's saved Stage 8 data is
+            // authoritative — never overwrite it).
+            const existing = pyNotes[nType] ?? {};
+            const hasPositive = Object.values(existing).some(v => Math.abs(Number(v) || 0) > 0.005);
+            if (hasPositive) continue;
 
-              if (noteFs.all) {
-                const codeSet = new Set(noteFs.all);
-                for (const row of pyTb) {
-                  const mapped = pyCoaMap[row.ledger_name];
-                  if (!mapped || !codeSet.has(mapped.code)) continue;
-                  const amt = ledgerAmt(row.closing_balance);
-                  if (amt === 0) continue;
-                  const rid = smartMatch(row.ledger_name, pyRules, row.parent_group);
-                  if (rid) pyResult[rid] = (pyResult[rid] ?? 0) + amt;
-                }
-              } else if (noteFs.lt || noteFs.st) {
-                const ltSet = new Set(noteFs.lt ?? []);
-                const stSet = new Set(noteFs.st ?? []);
-                for (const row of pyTb) {
-                  const mapped = pyCoaMap[row.ledger_name];
-                  if (!mapped) continue;
-                  const isLT = ltSet.has(mapped.code);
-                  const isST = stSet.has(mapped.code);
-                  if (!isLT && !isST) continue;
-                  const amt = ledgerAmt(row.closing_balance);
-                  if (amt === 0) continue;
-                  const rid = smartMatch(row.ledger_name, pyRules, row.parent_group);
-                  if (rid) {
-                    if (isLT) pyResult[rid + "_lt"] = (pyResult[rid + "_lt"] ?? 0) + amt;
-                    if (isST) pyResult[rid + "_st"] = (pyResult[rid + "_st"] ?? 0) + amt;
-                  }
+            const pyResult: Record<string, number> = {};
+            const pyRules = NOTE_SMART_MAP[nType] ?? [];
+
+            // Determine Pattern A's "Other" catch-all rows so unmatched
+            // ledgers in each section still contribute (e.g. a unique
+            // borrowing ledger that doesn't match any smart rule falls into
+            // unsec_other_lt instead of disappearing).
+            const otherByCode: Record<string, string> = {};
+            // Crude heuristic for Pattern A — pick rowIds that look like
+            // catch-alls. Works for borrowings (sec_other / unsec_other),
+            // provisions (other_prov), investments (quot_other / unquot_other),
+            // loans_advances (kb_secured / kb_unsecured fallback). For codes
+            // we don't have specific catch-alls for, unmatched ledgers are
+            // dropped — matching prior behaviour.
+
+            if (noteFs.all) {
+              const codeSet = new Set(noteFs.all);
+              for (const row of pyTb) {
+                const mapped = pyCoaMap[row.ledger_name] ?? coaMapping[row.ledger_name];
+                if (!mapped || !codeSet.has(mapped.code)) continue;
+                const amt = ledgerAmt(row.closing_balance);
+                if (amt === 0) continue;
+                const rid = smartMatch(row.ledger_name, pyRules, row.parent_group);
+                if (rid) {
+                  pyResult[rid] = (pyResult[rid] ?? 0) + amt;
                 }
               }
-
-              if (Object.keys(pyResult).length > 0) pyNotes[nType] = pyResult;
+            } else if (noteFs.lt || noteFs.st) {
+              const ltSet = new Set(noteFs.lt ?? []);
+              const stSet = new Set(noteFs.st ?? []);
+              for (const row of pyTb) {
+                const mapped = pyCoaMap[row.ledger_name] ?? coaMapping[row.ledger_name];
+                if (!mapped) continue;
+                const isLT = ltSet.has(mapped.code);
+                const isST = stSet.has(mapped.code);
+                if (!isLT && !isST) continue;
+                const amt = ledgerAmt(row.closing_balance);
+                if (amt === 0) continue;
+                const rid = smartMatch(row.ledger_name, pyRules, row.parent_group);
+                if (rid) {
+                  if (isLT) pyResult[rid + "_lt"] = (pyResult[rid + "_lt"] ?? 0) + amt;
+                  if (isST) pyResult[rid + "_st"] = (pyResult[rid + "_st"] ?? 0) + amt;
+                } else if (nType === "borrowings") {
+                  // Pattern-A borrowings unmatched fallback: route to the
+                  // section's "Other" bucket so the amount still flows into
+                  // Total (A)/(B) instead of vanishing.
+                  const pg = (row.parent_group || "").toLowerCase();
+                  const nameHuf = /(\s|\(|-)huf/.test(row.ledger_name.toLowerCase());
+                  const isRel = nameHuf || /\b(director|partner|owner|proprietor|promoter|shareholder|relative|family|huf|related)\b/.test(pg);
+                  const target = isRel ? "unsec_related" : "unsec_other";
+                  if (isLT) pyResult[target + "_lt"] = (pyResult[target + "_lt"] ?? 0) + amt;
+                  if (isST) pyResult[target + "_st"] = (pyResult[target + "_st"] ?? 0) + amt;
+                }
+              }
             }
+
+            if (Object.keys(pyResult).length > 0) pyNotes[nType] = pyResult;
           }
         }
       }
