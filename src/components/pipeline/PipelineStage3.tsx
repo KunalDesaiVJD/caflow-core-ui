@@ -2894,22 +2894,17 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                               <span className="text-xs font-semibold truncate">{g.group}</span>
                               <Badge variant="outline" className="text-[9px] px-1">{g.total} unmapped</Badge>
                               {suggestedItem && (
-                                <span className="text-[10px] text-primary truncate">
-                                  siblings → {suggestedItem.name}
-                                </span>
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); assignGroup(g.group, suggestedItem.code); }}
+                                  className="text-[10px] shrink-0 bg-primary text-primary-foreground rounded px-2 py-0.5 hover:bg-primary/90 font-medium"
+                                  title={`Apply "${suggestedItem.name}" to all ${g.total} unmapped ledgers in this group`}
+                                >→ {suggestedItem.name.length > 22 ? suggestedItem.name.slice(0, 22) + "…" : suggestedItem.name}</button>
                               )}
                             </div>
                             <div className="flex items-center gap-2 shrink-0">
                               <span className={cn("font-mono text-[10px]", g.subtotal >= 0 ? "text-foreground" : "text-destructive")}>
                                 ₹{Math.abs(g.subtotal).toLocaleString("en-IN")} {g.subtotal >= 0 ? "Dr" : "Cr"}
                               </span>
-                              {suggestedItem && (
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); assignGroup(g.group, suggestedItem.code); }}
-                                  className="text-[10px] text-primary hover:underline"
-                                  title={`Apply "${suggestedItem.name}" to all ${g.total} unmapped ledgers in this group`}
-                                >Apply to all</button>
-                              )}
                               {selectedAccount && coaMapping[selectedAccount] && (
                                 <button
                                   onClick={(e) => { e.stopPropagation(); assignGroup(g.group, coaMapping[selectedAccount].code); }}

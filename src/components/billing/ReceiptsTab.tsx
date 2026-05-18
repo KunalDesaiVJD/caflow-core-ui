@@ -27,6 +27,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { Plus, CalendarIcon, Receipt, Trash2 } from "lucide-react";
+import { buildClientGstins } from "@/lib/gstinUtils";
 
 const PAYMENT_MODES = ["Cash", "Cheque", "NEFT", "UPI", "RTGS", "Other"];
 
@@ -106,13 +107,16 @@ export default function ReceiptsTab() {
 
   const fetchData = useCallback(async () => {
     setLoading(true);
+    // When a specific firm is selected, scope all queries to it.
+    // Otherwise use the user's own firm (unless superadmin, who sees all).
+    const effectiveFirmId = firmFilter !== "all" ? firmFilter : (isSuperadmin ? null : firmId);
+
     let rQuery = supabase.from("billing_receipts").select("*").order("receipt_date", { ascending: false });
-    if (!isSuperadmin && firmId) rQuery = rQuery.eq("firm_id", firmId);
-    if (firmFilter !== "all") rQuery = rQuery.eq("firm_id", firmFilter);
+    if (effectiveFirmId) rQuery = rQuery.eq("firm_id", effectiveFirmId);
     const { data: rData } = await rQuery;
 
     let cQuery = supabase.from("clients").select("id, name").eq("is_draft", false).is("deleted_at", null).neq("is_active", false);
-    if (!isSuperadmin && firmId) cQuery = cQuery.eq("firm_id", firmId);
+    if (effectiveFirmId) cQuery = cQuery.eq("firm_id", effectiveFirmId);
     const { data: cData } = await cQuery;
 
     const { data: firmData } = await supabase.from("firms").select("id, name, display_name");
@@ -164,14 +168,9 @@ export default function ReceiptsTab() {
   useEffect(() => {
     if (!formClientId) { setFormClientGstins([]); setFormGstin("all"); return; }
     (async () => {
-      const { data } = await supabase.from("clients").select("gstin_states").eq("id", formClientId).maybeSingle();
-      const gs = data?.gstin_states;
-      if (gs && typeof gs === "object") {
-        const list = Object.entries(gs as Record<string, string>).map(([gstin, state]) => ({ gstin, state }));
-        setFormClientGstins(list);
-      } else {
-        setFormClientGstins([]);
-      }
+      const { data } = await supabase.from("clients").select("gstin_states, gstin").eq("id", formClientId).maybeSingle();
+      const list = buildClientGstins(data?.gstin_states as Record<string, string> | null, data?.gstin as string[] | null);
+      setFormClientGstins(list);
       setFormGstin("all");
     })();
   }, [formClientId]);

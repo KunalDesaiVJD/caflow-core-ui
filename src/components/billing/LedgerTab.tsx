@@ -23,6 +23,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { exportToPdf, exportToExcel } from "@/lib/exportUtils";
+import { buildClientGstins } from "@/lib/gstinUtils";
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
 import { ensurePdfUnicodeFont, formatPdfCurrency, setPdfUnicodeFont } from "@/lib/jspdfUnicodeFont";
@@ -201,7 +202,7 @@ async function loadLogoBase64(url: string): Promise<string | null> {
 function ClientLedgerView() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const [clients, setClients] = useState<{ id: string; name: string; email?: string | null; compliance_flags?: Record<string, any> | null; gstin_states?: Record<string, string> | null }[]>([]);
+  const [clients, setClients] = useState<{ id: string; name: string; email?: string | null; compliance_flags?: Record<string, any> | null; gstin_states?: Record<string, string> | null; gstin?: string[] | null }[]>([]);
   const [firms, setFirms] = useState<{ id: string; name: string; logo_url?: string; legal_name_changes?: LegalNameChange[] | null }[]>([]);
   const [clientId, setClientId] = useState("");
   const [firmId, setFirmId] = useState("");
@@ -246,9 +247,7 @@ function ClientLedgerView() {
 
   const clientGstins = useMemo(() => {
     const c = clients.find(x => x.id === clientId);
-    const gs = c?.gstin_states;
-    if (!gs || typeof gs !== "object") return [];
-    return Object.entries(gs).map(([gstin, state]) => ({ gstin, state: state as string }));
+    return buildClientGstins(c?.gstin_states, c?.gstin);
   }, [clients, clientId]);
 
   useEffect(() => { setSelectedGstin("all"); }, [clientId]);
@@ -256,7 +255,7 @@ function ClientLedgerView() {
   useEffect(() => {
     (async () => {
       const [{ data: c }, { data: f }] = await Promise.all([
-        supabase.from("clients").select("id, name, email, compliance_flags, gstin_states").eq("is_draft", false).is("deleted_at", null).neq("is_active", false).order("name"),
+        supabase.from("clients").select("id, name, email, compliance_flags, gstin_states, gstin").eq("is_draft", false).is("deleted_at", null).neq("is_active", false).order("name"),
         supabase.from("firms").select("id, name, logo_url, legal_name_changes").order("name"),
       ]);
       setClients(c || []);
