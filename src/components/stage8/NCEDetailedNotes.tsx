@@ -289,12 +289,14 @@ function SourceBadge({ source }: { source: "auto" | "manual" }) {
 // ─── Row actions menu (⋮) — Move to / Add separate row / Delete ──────────────
 
 function RowActionsMenu({
-  headingOptions, onPromote, onDelete, onAddRow,
+  headingOptions, onPromote, onDelete, onAddRow, onSwapLtSt,
 }: {
   headingOptions: { id: string; label: string }[];
   onPromote:      (id: string) => void;
   onDelete:       () => void;
   onAddRow?:      () => void;
+  /** Pattern A only: swap LT ↔ ST amounts on this custom row. */
+  onSwapLtSt?:    () => void;
 }) {
   const [open,     setOpen]     = useState(false);
   const [showMove, setShowMove] = useState(false);
@@ -377,6 +379,16 @@ function RowActionsMenu({
                 <Plus className="h-3 w-3 shrink-0" /> Add separate row
               </button>
             )}
+            {onSwapLtSt && (
+              <button
+                type="button"
+                className="w-full text-left px-2 py-1 rounded text-xs hover:bg-muted flex items-center gap-1.5 transition-colors"
+                onClick={() => { onSwapLtSt(); closeAll(); }}
+                title="Swap Long-term ↔ Short-term amounts on this row"
+              >
+                <CornerUpRight className="h-3 w-3 shrink-0 rotate-90" /> Swap Long-term ↔ Short-term
+              </button>
+            )}
             <div className="border-t my-0.5" />
             <button
               type="button"
@@ -399,6 +411,7 @@ function CustomRowEditor({
   cyLtVal, cyStVal, pyLtVal, pyStVal,
   onChangeCy, onChangePy, onChangeCyLt, onChangeCySt, onChangePyLt, onChangePySt,
   onChangeLabel, onDelete, headingOptions, onPromote, onEjectCustomSource, onAddRow,
+  onSwapLtSt,
   isOpen: isOpenProp, onToggle: onToggleProp, hasSubRows,
   sourceLabelOverrides, onChangeSourceLabel,
 }: {
@@ -415,6 +428,8 @@ function CustomRowEditor({
   onPromote: (staticId: string) => void;
   onEjectCustomSource?: (ledger: string, amountCy: number, attachToId?: string) => void;
   onAddRow?: () => void;
+  /** Pattern A only: swap LT ↔ ST amounts on this row. */
+  onSwapLtSt?: () => void;
   /** External open state — when provided, overrides internal sourcesOpen */
   isOpen?: boolean;
   /** Called when the +/- button is clicked (required when isOpen is provided) */
@@ -479,6 +494,7 @@ function CustomRowEditor({
             onPromote={onPromote}
             onDelete={onDelete}
             onAddRow={onAddRow}
+            onSwapLtSt={isPatternA ? onSwapLtSt : undefined}
           />
         </TableCell>
       </TableRow>
@@ -824,7 +840,8 @@ function PatternATable({
   customRows, hiddenRows, labelOverrides, cySources,
   sourceLabelOverrides,
   onChangeCy, onChangePy, onAddRow, onDeleteRow, onChangeLabel,
-  onHideStatic, onChangeStaticLabel, onPromote, onEjectSource, onEjectCustomSource,
+  onHideStatic, onChangeStaticLabel, onPromote, onSwapLtSt,
+  onEjectSource, onEjectCustomSource,
   onChangeSourceLabel,
 }: {
   config:       NoteConfig;
@@ -853,6 +870,32 @@ function PatternATable({
     [config, rawCy, rawPy, customRows],
   );
   const grandTotalIdx = config.rows.reduce((last, row, i) => row.isTotal ? i : last, -1);
+
+  // ISSUE 2 FIX — derive section-specific "Add row" buttons so a row added
+  // under "Unsecured" gets section="unsecured" + attachedTo="unsec_other".
+  // Without these, handleAddRow created a sectionless row that only fed Total
+  // (A+B) grand-total; Total (B) and the BS face stayed unchanged.
+  const sectionAddTargets: { label: string; section: string; attachedTo: string }[] = useMemo(() => {
+    const out: { label: string; section: string; attachedTo: string }[] = [];
+    for (const r of config.rows) {
+      if (!r.isTotal || !r.sectionTag) continue;
+      const section = r.sectionTag;
+      const sec = section.toLowerCase();
+      const otherId =
+        config.rows.find(x => x.id === `${sec}_other`)?.id ??
+        config.rows.find(x => x.id === `${sec.slice(0,5)}_other`)?.id ??
+        config.rows.find(x => x.id === `${sec}_specify`)?.id ??
+        config.rows.find(x => !x.isSectionHeader && !x.isTotal
+          && (x.id.endsWith("_other") || x.id.endsWith("_specify"))
+          && (x.id.startsWith(sec) || x.id.startsWith(sec.slice(0,5))))?.id;
+      if (otherId) {
+        const niceName = section.charAt(0).toUpperCase() + section.slice(1);
+        out.push({ label: `+ Add row to ${niceName}`, section, attachedTo: otherId });
+      }
+    }
+    return out;
+  }, [config]);
+
   // Track which static rows have their source-ledger list expanded
   const [openSources, setOpenSources] = useState<Set<string>>(new Set());
   const toggleSources = (id: string) => setOpenSources(prev => {
@@ -972,6 +1015,7 @@ function PatternATable({
                       onDelete={() => onDeleteRow(cr.id)}
                       headingOptions={sectionHeadingOptions.filter(o => o.id !== cr.id)}
                       onPromote={(targetId) => onPromote(cr.id, targetId)}
+                      onSwapLtSt={onSwapLtSt ? () => onSwapLtSt(cr.id) : undefined}
                       onEjectCustomSource={(ledger, amt) => onEjectCustomSource(cr.id, ledger, amt)}
                       onAddRow={onAddRow}
                       hasSubRows={customSubRows.length > 0}
@@ -1000,6 +1044,7 @@ function PatternATable({
                         onDelete={() => onDeleteRow(sub.id)}
                         headingOptions={sectionHeadingOptions.filter(o => o.id !== sub.id)}
                         onPromote={(targetId) => onPromote(sub.id, targetId)}
+                        onSwapLtSt={onSwapLtSt ? () => onSwapLtSt(sub.id) : undefined}
                         onEjectCustomSource={(ledger, amt) => onEjectCustomSource(sub.id, ledger, amt)}
                         onAddRow={onAddRow}
                         sourceLabelOverrides={sourceLabelOverrides}
@@ -1157,6 +1202,7 @@ function PatternATable({
                   onDelete={() => onDeleteRow(cr.id)}
                   headingOptions={allHeadingOptions.filter(o => o.id !== cr.id && o.id !== row.id)}
                   onPromote={(targetId) => onPromote(cr.id, targetId)}
+                  onSwapLtSt={onSwapLtSt ? () => onSwapLtSt(cr.id) : undefined}
                   onEjectCustomSource={(ledger, amt) => onEjectCustomSource(cr.id, ledger, amt)}
                   onAddRow={onAddRow}
                   sourceLabelOverrides={sourceLabelOverrides}
@@ -1166,14 +1212,32 @@ function PatternATable({
             </>
           );
         })}
-        {/* Add row */}
+        {/* Add row — section-specific buttons so the new row's amount flows
+            into the right section total (Issue 2 fix). Plus a fallback
+            sectionless button for notes without sections. */}
         <TableRow>
           <TableCell colSpan={6} className="py-1.5 px-3">
-            <Button type="button" size="sm" variant="ghost"
-              className="h-6 text-xs text-muted-foreground gap-1 hover:text-foreground"
-              onClick={onAddRow}>
-              <Plus className="h-3 w-3" /> Add row
-            </Button>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {sectionAddTargets.length > 0
+                ? sectionAddTargets.map(t => (
+                    <Button
+                      key={t.section}
+                      type="button" size="sm" variant="ghost"
+                      className="h-6 text-xs text-muted-foreground gap-1 hover:text-foreground"
+                      onClick={() => onAddRow({ section: t.section, attachedTo: t.attachedTo })}
+                      title={`Adds a new row under "${t.label.replace('+ Add row to ', '')}" section so its amount flows into the section total`}
+                    >
+                      <Plus className="h-3 w-3" /> {t.label.replace('+ ', '')}
+                    </Button>
+                  ))
+                : (
+                  <Button type="button" size="sm" variant="ghost"
+                    className="h-6 text-xs text-muted-foreground gap-1 hover:text-foreground"
+                    onClick={() => onAddRow()}>
+                    <Plus className="h-3 w-3" /> Add row
+                  </Button>
+                )}
+            </div>
           </TableCell>
         </TableRow>
       </TableBody>
@@ -1484,14 +1548,61 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
   }, [scheduleSave]);
 
   // ── Custom row ops ──────────────────────────────────────────────────────
-  const handleAddRow = useCallback((noteType: string) => {
+  /** Add a manual custom row to a note.
+   *  Optional `section` (e.g. "secured" | "unsecured") tags the row so its
+   *  amount feeds the matching section-total (Total A / Total B) via the
+   *  extras path in computeDisplayData — without this the new row would only
+   *  show up in the grand total. Optional `attachedTo` parents the row under
+   *  a specific static row (e.g. unsec_other) so its amount also rolls up
+   *  into that parent's aggregate display.
+   *  ISSUE 2 FIX: previous version dropped section/attachedTo entirely — any
+   *  row added in a Short-Term section appeared but never flowed into Total
+   *  (B) Short-Term column nor into the BS face. */
+  const handleAddRow = useCallback((
+    noteType: string,
+    opts?: { section?: string; attachedTo?: string },
+  ) => {
     setNoteData(prev => {
       const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
       const id  = newCustomId();
-      const next = { ...prev, [noteType]: { ...cur, customRows: [...cur.customRows, { id, label: "", source: "manual" as const }] } };
+      const newRow: NCECustomRow = {
+        id, label: "", source: "manual",
+        ...(opts?.section    ? { section:    opts.section    } : {}),
+        ...(opts?.attachedTo ? { attachedTo: opts.attachedTo } : {}),
+      };
+      const next = { ...prev, [noteType]: { ...cur, customRows: [...cur.customRows, newRow] } };
       scheduleSave(next);
       return next;
     });
+  }, [scheduleSave]);
+
+  /** Swap LT ↔ ST amounts on a custom row (Pattern A notes). Used by the
+   *  Move LT↔ST action so the user can re-classify a row that landed in the
+   *  wrong column at sync time (e.g. Akash D Patel showing under Long-Term
+   *  when his COA mapping is NCE_STB). */
+  const handleSwapLtSt = useCallback((noteType: string, rowId: string) => {
+    setNoteData(prev => {
+      const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
+      const newCy = { ...cur.cy };
+      const newPy = { ...cur.py };
+      const cyLt = newCy[rowId + "_lt"] ?? 0;
+      const cyBase = newCy[rowId] ?? 0;
+      const cyStOld = newCy[rowId + "_st"] ?? 0;
+      // Swap LT (or bare key from legacy data) with ST
+      newCy[rowId + "_lt"] = cyStOld;
+      newCy[rowId + "_st"] = (cyLt || cyBase);
+      if (cyBase !== 0) delete newCy[rowId];
+      const pyLt = newPy[rowId + "_lt"] ?? 0;
+      const pyBase = newPy[rowId] ?? 0;
+      const pyStOld = newPy[rowId + "_st"] ?? 0;
+      newPy[rowId + "_lt"] = pyStOld;
+      newPy[rowId + "_st"] = (pyLt || pyBase);
+      if (pyBase !== 0) delete newPy[rowId];
+      const next = { ...prev, [noteType]: { ...cur, cy: newCy, py: newPy } };
+      scheduleSave(next);
+      return next;
+    });
+    toast.success("Swapped Long-term ↔ Short-term");
   }, [scheduleSave]);
 
   const handleDeleteRow = useCallback((noteType: string, id: string) => {
@@ -1869,12 +1980,13 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
                     sourceLabelOverrides={d.sourceLabelOverrides ?? {}}
                     onChangeCy={(key, v) => handleChange(nc.noteType, key, true,  v)}
                     onChangePy={(key, v) => handleChange(nc.noteType, key, false, v)}
-                    onAddRow={() => handleAddRow(nc.noteType)}
+                    onAddRow={(opts) => handleAddRow(nc.noteType, opts)}
                     onDeleteRow={id => handleDeleteRow(nc.noteType, id)}
                     onChangeLabel={(id, lbl) => handleChangeLabel(nc.noteType, id, lbl)}
                     onHideStatic={id => handleHideStatic(nc.noteType, id)}
                     onChangeStaticLabel={(id, lbl) => handleChangeStaticLabel(nc.noteType, id, lbl)}
                     onPromote={(cid, sid) => handlePromoteCustomToStatic(nc.noteType, cid, sid)}
+                    onSwapLtSt={(rid) => handleSwapLtSt(nc.noteType, rid)}
                     onEjectSource={(rid, ledger, amt, attachToId?) => handleEjectSource(nc.noteType, rid, ledger, amt, attachToId)}
                     onEjectCustomSource={(cid, ledger, amt, attachToId?) => handleEjectCustomSource(nc.noteType, cid, ledger, amt, attachToId)}
                     onChangeSourceLabel={(rid, ledger, lbl) => handleChangeSourceLabel(nc.noteType, rid, ledger, lbl)}

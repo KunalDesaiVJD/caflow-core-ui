@@ -2893,24 +2893,26 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                                 )}
                               >
                                 <div className="flex items-center justify-between">
-                                  {/* Per-row checkbox for bulk assign (group view) */}
-                                  {!mapping && (
-                                    <input
-                                      type="checkbox"
-                                      className="mr-2 cursor-pointer h-3.5 w-3.5 accent-blue-600 shrink-0"
-                                      checked={isMultiG}
-                                      onClick={e => e.stopPropagation()}
-                                      onChange={() => {
-                                        setMultiSelect(prev => {
-                                          const next = new Set(prev);
-                                          if (next.has(acct.account_name)) next.delete(acct.account_name);
-                                          else next.add(acct.account_name);
-                                          return next;
-                                        });
-                                      }}
-                                      title="Tick to bulk-assign this ledger"
-                                    />
-                                  )}
+                                  {/* ISSUE 3 FIX (group view): show bulk-select
+                                      checkbox for mapped rows too — Closed
+                                      Accounts and All Unmapped tabs need this
+                                      so the auditor can bulk-RE-MAP existing
+                                      ledgers in one click. */}
+                                  <input
+                                    type="checkbox"
+                                    className="mr-2 cursor-pointer h-3.5 w-3.5 accent-blue-600 shrink-0"
+                                    checked={isMultiG}
+                                    onClick={e => e.stopPropagation()}
+                                    onChange={() => {
+                                      setMultiSelect(prev => {
+                                        const next = new Set(prev);
+                                        if (next.has(acct.account_name)) next.delete(acct.account_name);
+                                        else next.add(acct.account_name);
+                                        return next;
+                                      });
+                                    }}
+                                    title={mapping ? "Tick to bulk-RE-MAP this mapped ledger" : "Tick to bulk-assign this ledger"}
+                                  />
                                   <div className="flex-1 min-w-0">
                                     <p className="font-medium truncate">{acct.account_name}</p>
                                     {typeof acct.opening_balance === "number" && acct.opening_balance !== 0 && (
@@ -3000,23 +3002,29 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                           {/* Issue 1 (today) — checkbox to add this ledger to the
                               multi-select bucket.  Click stops propagation so
                               ticking does not also flip the row's selectedAccount. */}
-                          {!mapping && (
-                            <input
-                              type="checkbox"
-                              className="mr-2 cursor-pointer h-3.5 w-3.5 accent-blue-600 shrink-0"
-                              checked={isMulti}
-                              onClick={e => e.stopPropagation()}
-                              onChange={() => {
-                                setMultiSelect(prev => {
-                                  const next = new Set(prev);
-                                  if (next.has(acct.account_name)) next.delete(acct.account_name);
-                                  else next.add(acct.account_name);
-                                  return next;
-                                });
-                              }}
-                              title="Tick to bulk-assign this ledger with others"
-                            />
-                          )}
+                          {/* ISSUE 3 FIX: show the bulk-select checkbox on
+                              EVERY row (mapped + unmapped). Previously the
+                              checkbox was gated `{!mapping &&` so already-mapped
+                              ledgers in the Closed Accounts and All Unmapped
+                              tabs couldn't be bulk-acted on. Clicking a target
+                              FS line item now overwrites the mapping for every
+                              ticked ledger — which is what the auditor expects
+                              when reviewing closed/renamed accounts. */}
+                          <input
+                            type="checkbox"
+                            className="mr-2 cursor-pointer h-3.5 w-3.5 accent-blue-600 shrink-0"
+                            checked={isMulti}
+                            onClick={e => e.stopPropagation()}
+                            onChange={() => {
+                              setMultiSelect(prev => {
+                                const next = new Set(prev);
+                                if (next.has(acct.account_name)) next.delete(acct.account_name);
+                                else next.add(acct.account_name);
+                                return next;
+                              });
+                            }}
+                            title={mapping ? "Tick to bulk-RE-MAP this mapped ledger" : "Tick to bulk-assign this ledger"}
+                          />
                           <div className="flex-1 min-w-0">
                             <p className="font-medium truncate">{acct.account_name}</p>
                             <p className="text-[10px] text-muted-foreground truncate">
