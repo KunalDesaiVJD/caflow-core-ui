@@ -37,7 +37,8 @@ import {
 } from "@/components/ui/hover-card";
 import {
   FileText, Plus, Download, Search, Filter, X, Eye, Info,
-  AlertTriangle, Clock, CheckCircle2, Scale, ChevronRight,
+  AlertTriangle, Clock, CheckCircle2, Scale, ChevronRight, ChevronLeft,
+  ChevronsLeft, ChevronsRight,
   CalendarDays, Sparkles, Copy, Send, Mail,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -746,6 +747,30 @@ function FilingTab({
     return profiles.filter((p: ItrProfile) => getClientSubTab(p.client_classification) === filingSubTab);
   }, [profiles, filingSubTab]);
 
+  // ─── Pagination (50 rows per page) ─────────────────────────────────────────
+  // Single page-state shared across subtabs — resets to 1 when the active
+  // subtab changes or when the underlying filtered list shrinks below the
+  // current page's start row (e.g. user applies a stricter filter).
+  const PAGE_SIZE = 50;
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageCount = Math.max(1, Math.ceil(subTabProfiles.length / PAGE_SIZE));
+
+  // Reset to page 1 when the user switches subtab.
+  useEffect(() => { setCurrentPage(1); }, [filingSubTab]);
+
+  // If filters shrink the list below the current page, snap back into range.
+  useEffect(() => {
+    if (currentPage > pageCount) setCurrentPage(1);
+  }, [pageCount, currentPage]);
+
+  const pagedProfiles = useMemo(
+    () => subTabProfiles.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
+    [subTabProfiles, currentPage],
+  );
+
+  const pageStart = subTabProfiles.length === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1;
+  const pageEnd   = Math.min(currentPage * PAGE_SIZE, subTabProfiles.length);
+
   // Sub-tab counts
   const subTabCounts = useMemo(() => {
     const counts = { audited: 0, non_audited: 0, partner_in_audited_firm: 0 };
@@ -1073,7 +1098,7 @@ function FilingTab({
                           No clients in this category.{filterConstitution || filterWorkGroup || filterStatus || filterPreparedBy || filterCheckedBy || filterUploadBy ? " (filters active)" : ""}
                         </TableCell>
                       </TableRow>
-                    ) : subTabProfiles.map((p: ItrProfile) => (
+                    ) : pagedProfiles.map((p: ItrProfile) => (
                       <InlineEditableRow
                         key={p.id}
                         profile={p}
@@ -1086,6 +1111,62 @@ function FilingTab({
                     ))}
                   </TableBody>
                 </Table>
+              </div>
+            )}
+
+            {/* ── Pagination controls (50 rows/page) ── */}
+            {subTabProfiles.length > 0 && (
+              <div className="flex flex-wrap items-center justify-between gap-3 px-1 py-3 text-xs text-muted-foreground">
+                <div>
+                  Showing <span className="font-medium text-foreground">{pageStart}</span>
+                  &ndash;<span className="font-medium text-foreground">{pageEnd}</span>
+                  {" "}of <span className="font-medium text-foreground">{subTabProfiles.length}</span> clients
+                </div>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 w-7 p-0"
+                    onClick={() => setCurrentPage(1)}
+                    disabled={currentPage === 1}
+                    aria-label="First page"
+                  >
+                    <ChevronsLeft size={14} />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 w-7 p-0"
+                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                    disabled={currentPage === 1}
+                    aria-label="Previous page"
+                  >
+                    <ChevronLeft size={14} />
+                  </Button>
+                  <span className="px-2 text-xs">
+                    Page <span className="font-medium text-foreground">{currentPage}</span> of {pageCount}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 w-7 p-0"
+                    onClick={() => setCurrentPage(p => Math.min(pageCount, p + 1))}
+                    disabled={currentPage >= pageCount}
+                    aria-label="Next page"
+                  >
+                    <ChevronRight size={14} />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 w-7 p-0"
+                    onClick={() => setCurrentPage(pageCount)}
+                    disabled={currentPage >= pageCount}
+                    aria-label="Last page"
+                  >
+                    <ChevronsRight size={14} />
+                  </Button>
+                </div>
               </div>
             )}
           </TabsContent>
