@@ -240,6 +240,8 @@ function smartMatch(
 export interface NCEMergedSource {
   ledger:    string;
   amountCy:  number;
+  /** Per-ledger prior-year amount. Optional — older saved data may only carry amountCy. */
+  amountPy?: number;
   /** "lt" | "st" — only set for Pattern A merged rows. */
   column?:   "lt" | "st";
 }

@@ -533,18 +533,24 @@ function CustomRowEditor({
               <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
                 {s.column === "lt" ? fmtNum(s.amountCy) : "—"}
               </TableCell>
-              <TableCell className="py-0.5 border-r" />
+              <TableCell className="py-0.5 border-r text-xs text-right text-muted-foreground tabular-nums">
+                {s.column === "lt" && s.amountPy !== undefined && s.amountPy !== 0 ? fmtNum(s.amountPy) : "—"}
+              </TableCell>
               <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
                 {s.column === "st" ? fmtNum(s.amountCy) : "—"}
               </TableCell>
-              <TableCell className="py-0.5" />
+              <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
+                {s.column === "st" && s.amountPy !== undefined && s.amountPy !== 0 ? fmtNum(s.amountPy) : "—"}
+              </TableCell>
             </>
           ) : (
             <>
               <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
                 {fmtNum(s.amountCy)}
               </TableCell>
-              <TableCell className="py-0.5" />
+              <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
+                {s.amountPy !== undefined && s.amountPy !== 0 ? fmtNum(s.amountPy) : "—"}
+              </TableCell>
             </>
           )}
           <TableCell className="py-0.5" />
@@ -572,11 +578,11 @@ function PatternBTable({
   customRows:   NCECustomRow[];
   hiddenRows:   string[];
   labelOverrides: Record<string, string>;
-  cySources:    Record<string, { ledger: string; amountCy: number }[]>;
+  cySources:    Record<string, { ledger: string; amountCy: number; amountPy?: number; column?: "lt" | "st" }[]>;
   sourceLabelOverrides: Record<string, string>;
   onChangeCy:   (key: string, v: number) => void;
   onChangePy:   (key: string, v: number) => void;
-  onAddRow:     () => void;
+  onAddRow:     (opts?: { section?: string; attachedTo?: string }) => void;
   onDeleteRow:  (id: string) => void;
   onChangeLabel:(id: string, label: string) => void;
   onHideStatic: (id: string) => void;
@@ -748,11 +754,19 @@ function PatternBTable({
                       : <NumInput value={rawPy[row.id] ?? 0} onChange={v => onChangePy(row.id, v)} disabled={row.naAll || hasAttachedB} />}
                   </TableCell>
                   <TableCell className="p-1 text-center w-8">
-                    <button type="button" onClick={() => onHideStatic(row.id)}
-                      className="text-muted-foreground hover:text-destructive transition-colors"
-                      title="Hide row">
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    <div className="flex items-center justify-end gap-1">
+                      <button type="button"
+                        onClick={() => { onAddRow({ attachedTo: row.id }); toggleSources(row.id); }}
+                        className="text-muted-foreground hover:text-blue-600 transition-colors"
+                        title="Add sub-group under this row">
+                        <Plus className="h-3.5 w-3.5" />
+                      </button>
+                      <button type="button" onClick={() => onHideStatic(row.id)}
+                        className="text-muted-foreground hover:text-destructive transition-colors"
+                        title="Hide row">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
                   </TableCell>
                 </TableRow>
                 );
@@ -784,7 +798,9 @@ function PatternBTable({
                     <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
                       {fmtNum(s.amountCy)}
                     </TableCell>
-                    <TableCell className="py-0.5" />
+                    <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
+                      {s.amountPy !== undefined && s.amountPy !== 0 ? fmtNum(s.amountPy) : "—"}
+                    </TableCell>
                     <TableCell className="py-0.5" />
                   </TableRow>
                   );
@@ -851,11 +867,11 @@ function PatternATable({
   customRows:   NCECustomRow[];
   hiddenRows:   string[];
   labelOverrides: Record<string, string>;
-  cySources:    Record<string, { ledger: string; amountCy: number }[]>;
+  cySources:    Record<string, { ledger: string; amountCy: number; amountPy?: number; column?: "lt" | "st" }[]>;
   sourceLabelOverrides: Record<string, string>;
   onChangeCy:   (key: string, v: number) => void;
   onChangePy:   (key: string, v: number) => void;
-  onAddRow:     () => void;
+  onAddRow:     (opts?: { section?: string; attachedTo?: string }) => void;
   onDeleteRow:  (id: string) => void;
   onChangeLabel:(id: string, label: string) => void;
   onHideStatic: (id: string) => void;
@@ -1146,11 +1162,32 @@ function PatternATable({
                       : <NumInput value={rawPy[row.id + "_st"] ?? 0} onChange={v => onChangePy(row.id + "_st", v)} disabled={row.naST || hasAttachedA} />}
                   </TableCell>
                   <TableCell className="p-1 text-center w-8">
-                    <button type="button" onClick={() => onHideStatic(row.id)}
-                      className="text-muted-foreground hover:text-destructive transition-colors"
-                      title="Hide row">
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    <div className="flex items-center justify-end gap-1">
+                      <button type="button"
+                        onClick={() => {
+                          // Derive section by walking forward to next sectionTag total
+                          const idx = config.rows.findIndex(r2 => r2.id === row.id);
+                          let section: string | undefined;
+                          if (idx >= 0) {
+                            for (let i = idx + 1; i < config.rows.length; i++) {
+                              const r2 = config.rows[i];
+                              if (r2.isTotal && r2.sectionTag) { section = r2.sectionTag; break; }
+                              if (r2.isSectionHeader) break;
+                            }
+                          }
+                          onAddRow({ section, attachedTo: row.id });
+                          toggleSources(row.id);
+                        }}
+                        className="text-muted-foreground hover:text-blue-600 transition-colors"
+                        title="Add sub-group under this row">
+                        <Plus className="h-3.5 w-3.5" />
+                      </button>
+                      <button type="button" onClick={() => onHideStatic(row.id)}
+                        className="text-muted-foreground hover:text-destructive transition-colors"
+                        title="Hide row">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
                   </TableCell>
                 </TableRow>
                 );
@@ -1183,13 +1220,17 @@ function PatternATable({
                       </div>
                     </TableCell>
                     <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
-                      {(s as any).column === "lt" || !(s as any).column ? fmtNum(s.amountCy) : "—"}
+                      {s.column === "lt" || !s.column ? fmtNum(s.amountCy) : "—"}
                     </TableCell>
-                    <TableCell className="py-0.5 border-r" />
+                    <TableCell className="py-0.5 border-r text-xs text-right text-muted-foreground tabular-nums">
+                      {(s.column === "lt" || !s.column) && s.amountPy !== undefined && s.amountPy !== 0 ? fmtNum(s.amountPy) : "—"}
+                    </TableCell>
                     <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
-                      {(s as any).column === "st" ? fmtNum(s.amountCy) : "—"}
+                      {s.column === "st" ? fmtNum(s.amountCy) : "—"}
                     </TableCell>
-                    <TableCell className="py-0.5" />
+                    <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
+                      {s.column === "st" && s.amountPy !== undefined && s.amountPy !== 0 ? fmtNum(s.amountPy) : "—"}
+                    </TableCell>
                     <TableCell className="py-0.5" />
                   </TableRow>
                   );
@@ -1593,13 +1634,19 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
             // healed.
             const pyMigrationKey = `nce_py_per_key_fallback_v2_${engagementId}`;
             const pyMigrationDone = localStorage.getItem(pyMigrationKey) === "1";
+            // Issue 2 fix (per-ledger PY in expanded sub-rows): saved cy_sources
+            // pre-eaa14a2c only carry amountCy, not amountPy. Force one-shot
+            // re-sync per engagement so the UI can render the PY column.
+            const pySourcesMigrationKey = `nce_cy_sources_amountpy_v1_${engagementId}`;
+            const pySourcesMigrationDone = localStorage.getItem(pySourcesMigrationKey) === "1";
             const needsPyAnyEmpty = Object.values(built).some(d => {
               const hasCY = Object.values(d.cy ?? {}).some(v => Math.abs(Number(v) || 0) > 0.005);
               const hasPY = Object.values(d.py ?? {}).some(v => Math.abs(Number(v) || 0) > 0.005);
               return hasCY && !hasPY;
             });
             const needsPyRefresh = needsPyAnyEmpty || !pyMigrationDone;
-            if (unEjectedAny || needsCySources || needsPyRefresh) {
+            const needsCySourcesPyRefresh = !pySourcesMigrationDone;
+            if (unEjectedAny || needsCySources || needsPyRefresh || needsCySourcesPyRefresh) {
               // Silent background refresh — don't block the UI
               nceAutoPopulate(engagementId, built).then(refreshed => {
                 if (!cancelled) setNoteData(refreshed);
@@ -1607,6 +1654,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
                 // Mark the per-key PY migration as done so subsequent loads
                 // skip the silent re-sync unless a genuine gap reappears.
                 try { localStorage.setItem(pyMigrationKey, "1"); } catch {/* private mode */}
+                try { localStorage.setItem(pySourcesMigrationKey, "1"); } catch {/* private mode */}
               }).catch(() => {}); // best-effort
             }
           }
@@ -2106,7 +2154,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
                     sourceLabelOverrides={d.sourceLabelOverrides ?? {}}
                     onChangeCy={(key, v) => handleChange(nc.noteType, key, true,  v)}
                     onChangePy={(key, v) => handleChange(nc.noteType, key, false, v)}
-                    onAddRow={() => handleAddRow(nc.noteType)}
+                    onAddRow={(opts) => handleAddRow(nc.noteType, opts)}
                     onDeleteRow={id => handleDeleteRow(nc.noteType, id)}
                     onChangeLabel={(id, lbl) => handleChangeLabel(nc.noteType, id, lbl)}
                     onHideStatic={id => handleHideStatic(nc.noteType, id)}
