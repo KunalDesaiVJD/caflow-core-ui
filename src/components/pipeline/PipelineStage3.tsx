@@ -400,6 +400,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   //   "cy"     — new ledgers this year: opening = 0, closing ≠ 0
   //   "closed" — closed accounts: opening ≠ 0, closing = 0 (PY-only impact)
   const [workMode, setWorkMode] = useState<"all" | "py" | "cy" | "closed">("py");
+  const [groupPickerOpen, setGroupPickerOpen] = useState<string | null>(null);
 
   // ─── Fetch Tally Trial Balance (sole authoritative TB source) ───
   // `tally_trial_balance` holds the real closing balances (with balance_type
@@ -2915,6 +2916,36 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                                   className="text-[10px] text-primary hover:underline"
                                   title="Map entire group to the currently selected ledger's FS code"
                                 >Map group</button>
+                              )}
+                              {/* Fallback picker for groups with no sibling suggestion */}
+                              {!suggestedItem && unmappedInGroup.length > 0 && !(selectedAccount && coaMapping[selectedAccount]) && (
+                                <Popover open={groupPickerOpen === g.group} onOpenChange={open => setGroupPickerOpen(open ? g.group : null)}>
+                                  <PopoverTrigger asChild>
+                                    <button
+                                      onClick={e => e.stopPropagation()}
+                                      className="text-[10px] text-muted-foreground hover:text-primary border border-dashed border-muted-foreground/30 hover:border-primary/50 rounded px-1.5 py-0.5 transition-colors"
+                                      title="Pick a financial statement line item to map all ledgers in this group"
+                                    >Map all as…</button>
+                                  </PopoverTrigger>
+                                  <PopoverContent className="p-0 w-64" align="end" onClick={e => e.stopPropagation()}>
+                                    <Command>
+                                      <CommandInput placeholder="Search FS item…" className="h-7 text-xs" />
+                                      <CommandList className="max-h-52">
+                                        <CommandEmpty className="text-xs py-2 text-center">No results</CommandEmpty>
+                                        {activeLeafItems.map(item => (
+                                          <CommandItem
+                                            key={item.code}
+                                            value={item.name}
+                                            onSelect={() => { assignGroup(g.group, item.code); setGroupPickerOpen(null); }}
+                                            className="text-xs py-1.5 cursor-pointer"
+                                          >
+                                            {item.name}
+                                          </CommandItem>
+                                        ))}
+                                      </CommandList>
+                                    </Command>
+                                  </PopoverContent>
+                                </Popover>
                               )}
                             </div>
                           </div>
