@@ -1639,6 +1639,11 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
             // re-sync per engagement so the UI can render the PY column.
             const pySourcesMigrationKey = `nce_cy_sources_amountpy_v1_${engagementId}`;
             const pySourcesMigrationDone = localStorage.getItem(pySourcesMigrationKey) === "1";
+            // Issue (debit/credit netting): saved totals pre-fix added Math.abs
+            // of opposite-side balances instead of subtracting. Force one-shot
+            // re-sync so notes pick up the new signed aggregation.
+            const drCrMigrationKey = `nce_drcr_netting_v1_${engagementId}`;
+            const drCrMigrationDone = localStorage.getItem(drCrMigrationKey) === "1";
             const needsPyAnyEmpty = Object.values(built).some(d => {
               const hasCY = Object.values(d.cy ?? {}).some(v => Math.abs(Number(v) || 0) > 0.005);
               const hasPY = Object.values(d.py ?? {}).some(v => Math.abs(Number(v) || 0) > 0.005);
@@ -1646,7 +1651,8 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
             });
             const needsPyRefresh = needsPyAnyEmpty || !pyMigrationDone;
             const needsCySourcesPyRefresh = !pySourcesMigrationDone;
-            if (unEjectedAny || needsCySources || needsPyRefresh || needsCySourcesPyRefresh) {
+            const needsDrCrRefresh = !drCrMigrationDone;
+            if (unEjectedAny || needsCySources || needsPyRefresh || needsCySourcesPyRefresh || needsDrCrRefresh) {
               // Silent background refresh — don't block the UI
               nceAutoPopulate(engagementId, built).then(refreshed => {
                 if (!cancelled) setNoteData(refreshed);
@@ -1655,6 +1661,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
                 // skip the silent re-sync unless a genuine gap reappears.
                 try { localStorage.setItem(pyMigrationKey, "1"); } catch {/* private mode */}
                 try { localStorage.setItem(pySourcesMigrationKey, "1"); } catch {/* private mode */}
+                try { localStorage.setItem(drCrMigrationKey, "1"); } catch {/* private mode */}
               }).catch(() => {}); // best-effort
             }
           }

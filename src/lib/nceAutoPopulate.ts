@@ -356,6 +356,44 @@ function ledgerAmt(closingBalance: number): number {
   return Math.abs(closingBalance ?? 0);
 }
 
+/** Natural side of a Schedule III / NCE financial-statement mapping head.
+ *  Liability, equity and income heads are CR-natural (Credit balance is the
+ *  "right" side). Assets and expenses are DR-natural. Used by
+ *  signedLedgerAmt() to net opposite-side ledgers within a group total. */
+function headNature(mappingCode: string): "DR" | "CR" {
+  if (!mappingCode) return "CR";
+  const c = mappingCode.toUpperCase();
+  if (
+    c.startsWith("BS_CL_") ||  // Current Liabilities
+    c.startsWith("BS_NCL_") || // Non-Current Liabilities
+    c.startsWith("BS_OF_") ||  // Owners' Funds / Equity
+    c.startsWith("BS_EQ_") ||
+    c.startsWith("PL_INC_")    // Income / Revenue
+  ) return "CR";
+  return "DR"; // BS_CA_, BS_NCA_, PL_EXP_, etc.
+}
+
+/** Signed amount of a TB ledger when contributing to a mapped FS head.
+ *  Positive when balance_type matches head's natural side (a regular
+ *  trade-payable Cr balance under "Trade Payables"); negative when opposite
+ *  (a creditor whose closing is Dr because the party paid in advance —
+ *  this should REDUCE the Trade Payables total, mirroring how a sundry-
+ *  debtor's Cr balance reduces the Trade Receivables total).
+ *  Issue: previously Math.abs() was used everywhere so opposite-side
+ *  balances were silently added instead of netted, inflating group totals
+ *  in Balance Sheet, P&L and Notes to Accounts. */
+function signedLedgerAmt(
+  row: { closing_balance: number; balance_type: string },
+  mappingCode: string,
+): number {
+  const cb = Math.abs(Number(row.closing_balance ?? 0));
+  if (cb === 0) return 0;
+  const isDr = String(row.balance_type ?? "").toUpperCase() === "DR";
+  const nature = headNature(mappingCode);
+  if (nature === "CR") return isDr ? -cb : +cb;
+  return isDr ? +cb : -cb;
+}
+
 // ── Serialise / deserialise ───────────────────────────────────────────────────
 
 // Reserved keys used as JSONB metadata inside cy_data — must be filtered out
@@ -391,7 +429,10 @@ export function deserialiseNoteData(
   }
   const py: Record<string, number> = {};
   for (const [k, v] of Object.entries(rawPy)) {
-    if (!META_KEYS.has(k) && typeof v === "number") py[k] = Math.abs(v);
+    // Preserve sign — debit/credit netting may produce signed values, and
+    // unconditional Math.abs would silently strip out negative contributions
+    // for opposite-side ledgers (e.g. a Dr-balance ledger under Trade Payables).
+    if (!META_KEYS.has(k) && typeof v === "number") py[k] = v;
   }
   return { cy, py, customRows, hiddenRows, labelOverrides, cy_sources, ejectedLedgers };
 }
@@ -674,8 +715,11 @@ export async function nceAutoPopulate(
       for (const row of tb) {
         const mapped = coaMapping[row.ledger_name];
         if (!mapped || !codeSet.has(mapped.code)) continue;
-        const amt = ledgerAmt(row.closing_balance);
-        if (amt === 0) continue;
+        // ISSUE FIX (debit/credit netting): use signed amount so opposite-
+        // side balances (e.g. a Dr-balance ledger inside a CR-natural head
+        // like Trade Payables) reduce the group total instead of inflating it.
+        const amt = signedLedgerAmt(row, mapped.code);
+        if (Math.abs(amt) < 0.005) continue;
         // Skip ledgers the user has explicitly ejected to standalone rows
         if (ejectedSet.has(row.ledger_name)) continue;
 
@@ -686,7 +730,10 @@ export async function nceAutoPopulate(
           // Track which ledgers feed this static row (for info popover).
           // Carry PY amount too so the expander shows BOTH CY + PY columns.
           if (!staticSources[matchedRowId]) staticSources[matchedRowId] = [];
-          const pyAmtLedger = pyByLedgerStatic[row.ledger_name.toLowerCase()] ?? 0;
+          // Per-ledger PY: look up against PY TB using the SAME head nature
+          // so signs net correctly in the expanded breakdown.
+          const pyRowLookup = pyTb.find(r => r.ledger_name?.toLowerCase() === row.ledger_name.toLowerCase());
+          const pyAmtLedger = pyRowLookup ? signedLedgerAmt(pyRowLookup, mapped.code) : 0;
           staticSources[matchedRowId].push({
             ledger: row.ledger_name,
             amountCy: amt,
@@ -720,8 +767,8 @@ export async function nceAutoPopulate(
           if (cySeenLedger.has(nmLower)) continue;
           const lookupMapped = cyMappingLower[nmLower];
           if (!lookupMapped?.code || !codeSet.has(lookupMapped.code)) continue;
-          const pyAmt = ledgerAmt(row.closing_balance);
-          if (pyAmt === 0) continue;
+          const pyAmt = signedLedgerAmt(row, lookupMapped.code);
+          if (Math.abs(pyAmt) < 0.005) continue;
           const matchedRowId = smartMatch(nm, smartRules, row.parent_group);
           if (!matchedRowId) continue;
           if (!staticSources[matchedRowId]) staticSources[matchedRowId] = [];
@@ -942,13 +989,17 @@ export async function nceAutoPopulate(
       const unmatchedA: { ledger: string; amt: number; pyAmt: number; isLT: boolean; isST: boolean; parentGroup?: string; smartTarget?: string }[] = [];
 
       // Build a PY-ledger lookup keyed by name so individual customRows get
-      // their actual PY closing instead of falling back to 0.
+      // their actual PY closing instead of falling back to 0. We sign the
+      // PY value using the SAME mapping head's nature (the same ledger is
+      // assumed to live under the same head across years) so Dr balances in
+      // a Cr-natural head subtract from group totals consistently CY + PY.
       const pyByLedger: Record<string, number> = {};
       if (pyTb.length > 0) {
         for (const r of pyTb) {
           const nm = String(r.ledger_name || "").trim();
           if (!nm) continue;
-          pyByLedger[nm.toLowerCase()] = ledgerAmt(r.closing_balance);
+          const m = coaMapping[nm];
+          pyByLedger[nm.toLowerCase()] = m ? signedLedgerAmt(r, m.code) : ledgerAmt(r.closing_balance);
         }
       }
 
@@ -958,8 +1009,10 @@ export async function nceAutoPopulate(
         const isLT = ltSet.has(mapped.code);
         const isST = stSet.has(mapped.code);
         if (!isLT && !isST) continue;
-        const amt = ledgerAmt(row.closing_balance);
-        if (amt === 0) continue;
+        // Signed amount — see signedLedgerAmt() docs. Net opposite-side
+        // balances within the head so group totals match COA Mapping math.
+        const amt = signedLedgerAmt(row, mapped.code);
+        if (Math.abs(amt) < 0.005) continue;
         // Skip ledgers the user has explicitly ejected to standalone rows
         if (ejectedSet.has(row.ledger_name)) continue;
 
