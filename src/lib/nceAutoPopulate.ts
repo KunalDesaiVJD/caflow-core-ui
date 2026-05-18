@@ -685,12 +685,28 @@ export async function nceAutoPopulate(
       // Notes show ledger-level detail; synthetic group wrappers like
       // "Purchase Accounts" or "Unsecured Loans" pulled from Tally
       // parent_group are not appropriate for Schedule III breakups.
+      //
+      // ISSUE 1 FIX (per-ledger PY in Pattern B notes): build a PY-ledger
+      // lookup keyed by name so each custom row gets its actual prior-year
+      // closing balance from PY shell TB, instead of falling back to 0
+      // whenever the prior engagement has no saved customRow with the same
+      // label. Without this, Trade Payables / Other Current Liabilities /
+      // Other Expenses etc. showed CY amounts per ledger but PY column "—".
+      const pyByLedgerB: Record<string, number> = {};
+      if (pyTb.length > 0) {
+        for (const r of pyTb) {
+          const nm = String(r.ledger_name || "").trim();
+          if (!nm) continue;
+          pyByLedgerB[nm.toLowerCase()] = ledgerAmt(r.closing_balance);
+        }
+      }
       let idx = 0;
       for (const um of unmatchedB) {
         const label = um.ledger;
         const id    = makeCustomId(label, idx++);
         newCy[id] = um.amt;
-        newPy[id] = pyForCustomRow(noteType, id, label);
+        const pyFromTb = pyByLedgerB[um.ledger.toLowerCase()] ?? 0;
+        newPy[id] = pyFromTb > 0 ? pyFromTb : pyForCustomRow(noteType, id, label);
         autoRows.push({ id, label, source: "auto" });
       }
 
