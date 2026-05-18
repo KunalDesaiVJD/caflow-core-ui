@@ -115,8 +115,7 @@ export default function ReceiptsTab() {
     if (effectiveFirmId) rQuery = rQuery.eq("firm_id", effectiveFirmId);
     const { data: rData } = await rQuery;
 
-    let cQuery = supabase.from("clients").select("id, name").eq("is_draft", false).is("deleted_at", null).neq("is_active", false);
-    if (effectiveFirmId) cQuery = cQuery.eq("firm_id", effectiveFirmId);
+    let cQuery = supabase.from("clients").select("id, name").eq("is_draft", false).is("deleted_at", null);
     const { data: cData } = await cQuery;
 
     const { data: firmData } = await supabase.from("firms").select("id, name, display_name");

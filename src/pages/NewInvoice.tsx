@@ -416,9 +416,7 @@ const NewInvoice = () => {
   // Fetch clients
   useEffect(() => {
     (async () => {
-      let cq = supabase.from("clients").select("id, name, pan, gstin, gstin_states, gstin_addresses, entity_type, address, registered_office").eq("is_draft", false).is("deleted_at", null).neq("is_active", false).order("name");
-      if (!isSuperadmin && user?.firm_id) cq = cq.eq("firm_id", user.firm_id);
-      const { data: clientData } = await cq;
+      const { data: clientData } = await supabase.from("clients").select("id, name, pan, gstin, gstin_states, gstin_addresses, entity_type, address, registered_office").eq("is_draft", false).is("deleted_at", null).neq("is_active", false).order("name");
       setClients(clientData || []);
     })();
   }, [isSuperadmin, user?.firm_id]);

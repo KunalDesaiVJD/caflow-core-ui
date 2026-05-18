@@ -255,7 +255,7 @@ function ClientLedgerView() {
   useEffect(() => {
     (async () => {
       const [{ data: c }, { data: f }] = await Promise.all([
-        supabase.from("clients").select("id, name, email, compliance_flags, gstin_states, gstin").eq("is_draft", false).is("deleted_at", null).neq("is_active", false).order("name"),
+        supabase.from("clients").select("id, name, email, compliance_flags, gstin_states, gstin").eq("is_draft", false).is("deleted_at", null).order("name"),
         supabase.from("firms").select("id, name, logo_url, legal_name_changes").order("name"),
       ]);
       setClients(c || []);
