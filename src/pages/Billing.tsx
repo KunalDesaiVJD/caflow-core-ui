@@ -330,7 +330,6 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     const { data: invData } = await iQuery;
 
     let cQuery = supabase.from("clients").select("id, name, entity_type, email, mobile, compliance_flags, responsible_person_id").eq("is_draft", false).is("deleted_at", null);
-    if (effectiveFirmId) cQuery = cQuery.eq("firm_id", effectiveFirmId);
     const { data: clientData } = await cQuery;
 
     const { data: firmData } = await supabase.from("firms").select("id, name, display_name");
