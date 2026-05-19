@@ -382,6 +382,18 @@ function ClientLedgerView() {
     aoa.push([`Generated: ${format(new Date(), "dd/MM/yyyy HH:mm")}`]);
     aoa.push([]);
     aoa.push(["Sr.", "Date", "Document No", "Narration", "Debit (₹)", "Credit (₹)", "Balance (₹)"]);
+    // Opening balance row
+    if (obDate) {
+      aoa.push([
+        "",
+        format(new Date(obDate), "dd/MM/yyyy"),
+        "—",
+        `Opening Balance${obNarration ? ` — ${obNarration}` : ""}`,
+        obAmount > 0 ? obAmount : "",
+        obAmount < 0 ? Math.abs(obAmount) : "",
+        obAmount,
+      ]);
+    }
     rows.forEach((r, i) => aoa.push([
       i + 1,
       r.entry_date ? format(new Date(r.entry_date), "dd/MM/yyyy") : "",
@@ -441,7 +453,19 @@ function ClientLedgerView() {
       ? [["Firm", "Date", "Doc No", "Narration", "Debit (₹)", "Credit (₹)", "Balance (₹)"]]
       : [["Date", "Doc No", "Narration", "Debit (₹)", "Credit (₹)", "Balance (₹)"]];
 
-    const tableRows: any[][] = rows.map(r => {
+    const tableRows: any[][] = [];
+    if (obDate) {
+      const obBaseRow = [
+        format(new Date(obDate), "dd/MM/yyyy"),
+        "—",
+        `Opening Balance${obNarration ? ` — ${obNarration}` : ""}`,
+        obAmount > 0 ? formatPdfCurrency(obAmount) : "—",
+        obAmount < 0 ? formatPdfCurrency(Math.abs(obAmount)) : "—",
+        formatPdfCurrency(obAmount),
+      ];
+      tableRows.push(isAllFirms ? ["—", ...obBaseRow] : obBaseRow);
+    }
+    rows.forEach(r => {
       const baseRow = [
         r.entry_date ? format(new Date(r.entry_date), "dd/MM/yyyy") : "",
         r.docNo, r.narration,
@@ -449,7 +473,7 @@ function ClientLedgerView() {
         r.credit > 0 ? formatPdfCurrency(r.credit) : "—",
         formatPdfCurrency(r.balance),
       ];
-      return isAllFirms ? [r.firmName, ...baseRow] : baseRow;
+      tableRows.push(isAllFirms ? [r.firmName, ...baseRow] : baseRow);
     });
 
     const closingColSpan = isAllFirms ? 4 : 3;
@@ -537,7 +561,19 @@ function ClientLedgerView() {
       ? [["Firm", "Date", "Doc No", "Narration", "Debit (₹)", "Credit (₹)", "Balance (₹)"]]
       : [["Date", "Doc No", "Narration", "Debit (₹)", "Credit (₹)", "Balance (₹)"]];
 
-    const tableRows: any[][] = rows.map(r => {
+    const tableRows: any[][] = [];
+    if (obDate) {
+      const obBaseRow = [
+        format(new Date(obDate), "dd/MM/yyyy"),
+        "—",
+        `Opening Balance${obNarration ? ` — ${obNarration}` : ""}`,
+        obAmount > 0 ? formatPdfCurrency(obAmount) : "—",
+        obAmount < 0 ? formatPdfCurrency(Math.abs(obAmount)) : "—",
+        formatPdfCurrency(obAmount),
+      ];
+      tableRows.push(isAllFirms ? ["—", ...obBaseRow] : obBaseRow);
+    }
+    rows.forEach(r => {
       const baseRow = [
         r.entry_date ? format(new Date(r.entry_date), "dd/MM/yyyy") : "",
         r.docNo, r.narration,
@@ -545,7 +581,7 @@ function ClientLedgerView() {
         r.credit > 0 ? formatPdfCurrency(r.credit) : "—",
         formatPdfCurrency(r.balance),
       ];
-      return isAllFirms ? [r.firmName, ...baseRow] : baseRow;
+      tableRows.push(isAllFirms ? [r.firmName, ...baseRow] : baseRow);
     });
 
     const closingColSpan = isAllFirms ? 4 : 3;
@@ -998,7 +1034,8 @@ function GroupLedgerView() {
   const [fy, setFy] = useState(getCurrentFY());
   const [fromDate, setFromDate] = useState(() => fyToDateRange(getCurrentFY()).start);
   const [toDate, setToDate] = useState(() => fyToDateRange(getCurrentFY()).end);
-  const [data, setData] = useState<{ clientName: string; entries: any[] }[]>([]);
+  const [data, setData] = useState<{ clientId: string; clientName: string; entries: any[] }[]>([]);
+  const [groupObMap, setGroupObMap] = useState<Record<string, { amount: number; date: string; narration: string }>>({});
   const [invoiceMap, setInvoiceMap] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
 
@@ -1057,9 +1094,20 @@ function GroupLedgerView() {
       grouped[cid].push(e);
     });
 
+    // Fetch per-client opening balances
+    const { data: obRows } = await (supabase as any)
+      .from("client_billing_opening_balances")
+      .select("client_id, amount, balance_date, narration")
+      .in("client_id", clientIds);
+    const newObMap: Record<string, { amount: number; date: string; narration: string }> = {};
+    (obRows || []).forEach((ob: any) => {
+      newObMap[ob.client_id] = { amount: Number(ob.amount) || 0, date: ob.balance_date || "", narration: ob.narration || "" };
+    });
+    setGroupObMap(newObMap);
+
     const result = clientIds
       .filter(cid => grouped[cid]?.length > 0)
-      .map(cid => ({ clientName: clientMap[cid] || "Unknown", entries: grouped[cid] }));
+      .map(cid => ({ clientId: cid, clientName: clientMap[cid] || "Unknown", entries: grouped[cid] }));
     setData(result);
     setLoading(false);
   }, [groupId, firmIds, fromDate, toDate, toast]);
@@ -1125,8 +1173,22 @@ function GroupLedgerView() {
     };
 
     const tableRows: any[][] = [];
-    data.forEach(({ clientName, entries }) => {
-      let bal = 0;
+    data.forEach(({ clientId, clientName, entries }) => {
+      const ob = groupObMap[clientId];
+      let bal = ob?.amount || 0;
+      // Opening balance row per client
+      if (ob?.date) {
+        const obBaseRow = [
+          clientName,
+          format(new Date(ob.date), "dd/MM/yyyy"),
+          "—",
+          `Opening Balance${ob.narration ? ` — ${ob.narration}` : ""}`,
+          ob.amount > 0 ? formatPdfCurrency(ob.amount) : "—",
+          ob.amount < 0 ? formatPdfCurrency(Math.abs(ob.amount)) : "—",
+          formatPdfCurrency(ob.amount),
+        ];
+        tableRows.push(isAllFirms ? ["—", ...obBaseRow] : obBaseRow);
+      }
       entries.forEach((e: any) => {
         const d = Number(e.debit_amount) || 0;
         const c = Number(e.credit_amount) || 0;
@@ -1283,8 +1345,21 @@ function GroupLedgerView() {
     aoa.push(["Sr.", "Client", "Date", "Document No", "Narration", "Debit (₹)", "Credit (₹)", "Balance (₹)"]);
 
     let srNo = 1;
-    data.forEach(({ clientName, entries }) => {
-      let bal = 0;
+    data.forEach(({ clientId, clientName, entries }) => {
+      const ob = groupObMap[clientId];
+      let bal = ob?.amount || 0;
+      // Opening balance row per client
+      if (ob?.date) {
+        aoa.push([
+          "", clientName,
+          format(new Date(ob.date), "dd/MM/yyyy"),
+          "—",
+          `Opening Balance${ob.narration ? ` — ${ob.narration}` : ""}`,
+          ob.amount > 0 ? ob.amount : "",
+          ob.amount < 0 ? Math.abs(ob.amount) : "",
+          ob.amount,
+        ]);
+      }
       entries.forEach(e => {
         const d = Number(e.debit_amount) || 0;
         const c = Number(e.credit_amount) || 0;
@@ -1562,15 +1637,16 @@ function GroupLedgerView() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {data.map(({ clientName, entries }, gi) => {
-                let bal = 0;
+              {data.map(({ clientId, clientName, entries }, gi) => {
+                const ob = groupObMap[clientId];
+                let bal = ob?.amount || 0;
                 const clientRows = entries.map((e: any, ei: number) => {
                   const d = Number(e.debit_amount) || 0;
                   const c = Number(e.credit_amount) || 0;
                   bal += d - c;
                   return (
                     <TableRow key={`${gi}-${ei}`}>
-                      {ei === 0 && <TableCell rowSpan={entries.length + 1} className="font-medium align-top border-r">{clientName}</TableCell>}
+                      {ei === 0 && <TableCell rowSpan={entries.length + (ob?.date ? 2 : 1)} className="font-medium align-top border-r">{clientName}</TableCell>}
                       <TableCell>{e.entry_date ? format(new Date(e.entry_date), "dd/MM/yyyy") : ""}</TableCell>
                       <TableCell className="font-mono text-xs">{getDocNo(e)}</TableCell>
                       <TableCell>{e.narration || ""}</TableCell>
@@ -1582,7 +1658,18 @@ function GroupLedgerView() {
                 });
                 const subtotalD = entries.reduce((s: number, e: any) => s + (Number(e.debit_amount) || 0), 0);
                 const subtotalC = entries.reduce((s: number, e: any) => s + (Number(e.credit_amount) || 0), 0);
+                const obRow = ob?.date ? (
+                  <TableRow key={`ob-${gi}`} className="bg-blue-50/50 italic text-muted-foreground">
+                    <TableCell>{format(new Date(ob.date), "dd/MM/yyyy")}</TableCell>
+                    <TableCell>—</TableCell>
+                    <TableCell>{`Opening Balance${ob.narration ? ` — ${ob.narration}` : ""}`}</TableCell>
+                    <TableCell className="text-right tabular-nums">{ob.amount > 0 ? fmtINR(ob.amount) : "—"}</TableCell>
+                    <TableCell className="text-right tabular-nums">{ob.amount < 0 ? fmtINR(Math.abs(ob.amount)) : "—"}</TableCell>
+                    <TableCell className="text-right tabular-nums font-semibold">{fmtINR(ob.amount)}</TableCell>
+                  </TableRow>
+                ) : null;
                 return [
+                  ...(obRow ? [obRow] : []),
                   ...clientRows,
                   <TableRow key={`sub-${gi}`} className="bg-muted/30 font-semibold">
                     <TableCell colSpan={4} className="text-right">Subtotal — {clientName}</TableCell>
@@ -1851,13 +1938,16 @@ function FirmRevenueLedgerView() {
     doc.text(`Generated: ${format(new Date(), "dd/MM/yyyy HH:mm")}`, 297 - 14, 17, { align: "right" });
     const totalD = rows.reduce((s, r) => s + r.debit, 0);
     const totalC = rows.reduce((s, r) => s + r.credit, 0);
-    const tableRows: any[][] = rows.map(r => [
-      r.entry_date ? format(new Date(r.entry_date), "dd/MM/yyyy") : "",
-      r.docNo, r.clientName, r.docType,
-      r.debit > 0 ? formatPdfCurrency(r.debit) : "—",
-      r.credit > 0 ? formatPdfCurrency(r.credit) : "—",
-      formatPdfCurrency(r.running),
-    ]);
+    const tableRows: any[][] = [
+      [format(new Date(fromDate), "dd/MM/yyyy"), "—", "—", "Opening Balance (Balance B/F)", "—", "—", formatPdfCurrency(0)],
+      ...rows.map(r => [
+        r.entry_date ? format(new Date(r.entry_date), "dd/MM/yyyy") : "",
+        r.docNo, r.clientName, r.docType,
+        r.debit > 0 ? formatPdfCurrency(r.debit) : "—",
+        r.credit > 0 ? formatPdfCurrency(r.credit) : "—",
+        formatPdfCurrency(r.running),
+      ]),
+    ];
     tableRows.push([
       { content: "GRAND TOTAL", colSpan: 4, styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255] } },
       { content: formatPdfCurrency(totalD), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
@@ -1951,6 +2041,7 @@ function FirmRevenueLedgerView() {
     aoa.push([`Generated: ${format(new Date(), "dd/MM/yyyy HH:mm")}`]);
     aoa.push([]);
     aoa.push(["Sr.", "Date", "Document No", "Client", "Type", "Debit (₹)", "Credit (₹)", "Running Total (₹)"]);
+    aoa.push(["", format(new Date(fromDate), "dd/MM/yyyy"), "—", "—", "Opening Balance (Balance B/F)", "", "", 0]);
     rows.forEach((r, i) => aoa.push([
       i + 1,
       r.entry_date ? format(new Date(r.entry_date), "dd/MM/yyyy") : "",
@@ -2006,13 +2097,16 @@ function FirmRevenueLedgerView() {
     doc.text(`Generated: ${format(new Date(), "dd/MM/yyyy HH:mm")}`, 297 - 14, 17, { align: "right" });
     const totalD = rows.reduce((s, r) => s + r.debit, 0);
     const totalC = rows.reduce((s, r) => s + r.credit, 0);
-    const tableRows: any[][] = rows.map(r => [
-      r.entry_date ? format(new Date(r.entry_date), "dd/MM/yyyy") : "",
-      r.docNo, r.clientName, r.docType,
-      r.debit > 0 ? formatPdfCurrency(r.debit) : "—",
-      r.credit > 0 ? formatPdfCurrency(r.credit) : "—",
-      formatPdfCurrency(r.running),
-    ]);
+    const tableRows: any[][] = [
+      [format(new Date(fromDate), "dd/MM/yyyy"), "—", "—", "Opening Balance (Balance B/F)", "—", "—", formatPdfCurrency(0)],
+      ...rows.map(r => [
+        r.entry_date ? format(new Date(r.entry_date), "dd/MM/yyyy") : "",
+        r.docNo, r.clientName, r.docType,
+        r.debit > 0 ? formatPdfCurrency(r.debit) : "—",
+        r.credit > 0 ? formatPdfCurrency(r.credit) : "—",
+        formatPdfCurrency(r.running),
+      ]),
+    ];
     tableRows.push([
       { content: "GRAND TOTAL", colSpan: 4, styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255] } },
       { content: formatPdfCurrency(totalD), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
