@@ -839,7 +839,7 @@ export async function nceAutoPopulate(
       for (const r of pyTb) {
         const nm = String(r.ledger_name || "").trim();
         if (!nm) continue;
-        pyByLedgerStatic[nm.toLowerCase()] = ledgerAmt(r.closing_balance);
+        pyByLedgerStatic[nm.toLowerCase()] = signedLedgerAmt(r, noteType);
       }
     }
 
@@ -1004,12 +1004,26 @@ export async function nceAutoPopulate(
       // whenever the prior engagement has no saved customRow with the same
       // label. Without this, Trade Payables / Other Current Liabilities /
       // Other Expenses etc. showed CY amounts per ledger but PY column "—".
+      // ROOT-CAUSE FIX (Issue: BS face PY ≠ variance drill PY by 2×Dr_total):
+      // pyByLedgerB previously used ledgerAmt() (Math.abs) so a Cr-balance PY
+      // ledger always produced a POSITIVE value here, regardless of head
+      // nature. For CR-natural notes (trade_payables, other_cl, ...) where
+      // Cr balance should contribute +cb and Dr should contribute -cb, this
+      // worked for Cr ledgers but FLIPPED the sign of Dr-balance creditors
+      // (party paid in advance) — they got +cb in the customRow but the
+      // variance drill computed -cb. The two diverged by exactly 2×|Dr_sum|
+      // on every report (DBS REALTY: ₹71.24 lakh = 2 × ₹35.62 lakh).
+      //
+      // Fix: sign-aware lookup using the same NOTE_NATURE convention as the
+      // PY-only walk and the CY aggregation. Every PY value across the
+      // entire note now respects the head's natural side, so the note
+      // total = variance drill total = BS face total for every NCE client.
       const pyByLedgerB: Record<string, number> = {};
       if (pyTb.length > 0) {
         for (const r of pyTb) {
           const nm = String(r.ledger_name || "").trim();
           if (!nm) continue;
-          pyByLedgerB[nm.toLowerCase()] = ledgerAmt(r.closing_balance);
+          pyByLedgerB[nm.toLowerCase()] = signedLedgerAmt(r, noteType);
         }
       }
       // Default attachedTo for COGS auto-mapped ledgers: every plain expense
@@ -1033,9 +1047,11 @@ export async function nceAutoPopulate(
         // and disappear from the note even though COA Mapping shows them.
         const pyFromWalk = um.pyAmt ?? 0;
         const pyFromTb   = pyByLedgerB[um.ledger.toLowerCase()] ?? 0;
+        // Math.abs check (not > 0) — pyFromTb is now signed so a Dr-balance
+        // creditor's negative PY value must NOT fall through to the fallback.
         const pyResolved = Math.abs(pyFromWalk) > 0.005
           ? pyFromWalk
-          : (pyFromTb > 0 ? pyFromTb : pyForCustomRow(noteType, id, label));
+          : (Math.abs(pyFromTb) > 0.005 ? pyFromTb : pyForCustomRow(noteType, id, label));
         newPy[id] = pyResolved;
         const row: NCECustomRow = {
           id, label, source: "auto",
