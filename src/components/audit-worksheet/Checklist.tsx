@@ -329,19 +329,27 @@ export default function Checklist({ data, engagementId, onSaved }: Props) {
               return (
                 <tr
                   key={def.id}
-                  className={`align-top transition-colors ${isNA ? "bg-slate-50 opacity-60" : "hover:bg-muted/10"}`}
+                  className={`align-top transition-colors ${isNA ? "bg-amber-50/40 dark:bg-amber-950/10" : "hover:bg-muted/10"}`}
                 >
                   {/* Sr No */}
                   <td className="border border-border px-2 py-2 text-center">
-                    <span className="text-xs font-mono text-muted-foreground">
+                    <span className={`text-xs font-mono ${isNA ? "text-foreground/70" : "text-muted-foreground"}`}>
                       {def.sr}
                     </span>
                   </td>
 
-                  {/* Particulars */}
+                  {/* Particulars
+                      N/A styling: previously combined `opacity-60` on the row
+                      with `line-through text-muted-foreground` on the input —
+                      stacked together they made the text effectively
+                      unreadable. New treatment keeps the text at FULL contrast
+                      so the auditor can still see what was marked N/A; only
+                      the row background gets a subtle amber tint plus a
+                      strike-through on the input so the N/A state stays
+                      visually distinct without losing legibility. */}
                   <td className="border border-border px-3 py-2 w-full">
                     <Input
-                      className={`h-7 text-xs w-full border-dashed whitespace-normal ${isNA ? "line-through text-muted-foreground" : ""}`}
+                      className={`h-7 text-xs w-full border-dashed whitespace-normal ${isNA ? "line-through text-foreground italic disabled:opacity-100 disabled:cursor-not-allowed disabled:bg-amber-50/60 dark:disabled:bg-amber-950/20" : ""}`}
                       placeholder={defaultText || "Enter item description…"}
                       value={displayValue}
                       disabled={isNA}
