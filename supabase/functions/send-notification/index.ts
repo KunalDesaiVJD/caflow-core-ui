@@ -265,57 +265,84 @@ function buildEmailHTML(type: string, payload: Record<string, any>): string {
 // ── Portal activity digest HTML builder ─────────────────────────────
 
 function buildPortalDigestHtml(activities: any[], firmName: string): string {
-  const rows = activities.map((a: any) => {
+  const cards = activities.map((a: any) => {
     const time = new Date(a.created_at).toLocaleString("en-IN", {
       day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
     });
-    const icon    = a.activity === "document_upload" ? "📎" : "💬";
-    const actLabel = a.activity === "document_upload" ? "Uploaded document" : "Replied to query";
-    return `<tr>
-      <td style="padding:8px 12px;border-bottom:1px solid #f3f4f6;font-size:13px;">${icon} ${a.client_name || "Client"}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #f3f4f6;font-size:13px;">${actLabel}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #f3f4f6;font-size:13px;color:#6b7280;">${a.details || "—"}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #f3f4f6;font-size:13px;color:#6b7280;white-space:nowrap;">${time}</td>
-    </tr>`;
+    const icon     = a.activity === "document_upload" ? "📎" : "💬";
+    const actLabel = a.activity === "document_upload" ? "Uploaded a document" : "Replied to a query";
+    const meta     = (typeof a.metadata === "object" && a.metadata) ? a.metadata : {};
+
+    let detailBlock = "";
+
+    if (a.activity === "query_reply") {
+      detailBlock = `
+        ${meta.query_ref ? `<p style="margin:0 0 8px;font-size:12px;color:#6b7280"><strong>Query Ref:</strong> ${meta.query_ref}</p>` : ""}
+        ${meta.query_text ? `
+        <div style="background:#f9fafb;border-left:3px solid #d97706;padding:10px 14px;margin:0 0 10px;border-radius:0 4px 4px 0">
+          <p style="margin:0 0 4px;font-size:10px;color:#9ca3af;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Original Query</p>
+          <p style="margin:0;font-size:13px;color:#374151;line-height:1.5">${meta.query_text}</p>
+        </div>` : ""}
+        ${meta.reply_text ? `
+        <div style="background:#fffbf0;border-left:3px solid #f59e0b;padding:10px 14px;margin:0 0 10px;border-radius:0 4px 4px 0">
+          <p style="margin:0 0 4px;font-size:10px;color:#9ca3af;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Client's Reply</p>
+          <p style="margin:0;font-size:13px;color:#374151;line-height:1.5;white-space:pre-line">${meta.reply_text}</p>
+        </div>` : (a.details ? `<p style="margin:0 0 8px;font-size:13px;color:#374151">${a.details}</p>` : "")}
+        ${meta.attachment_name ? `
+        <p style="margin:0;font-size:12px;color:#374151">
+          📎 <strong>Attached File:</strong>
+          <span style="color:#1a3a5c;font-style:italic">${meta.attachment_name}</span>
+        </p>` : ""}
+      `;
+    } else if (a.activity === "document_upload") {
+      detailBlock = `
+        <div style="background:#eff6ff;border-left:3px solid #3b82f6;padding:10px 14px;border-radius:0 4px 4px 0">
+          <p style="margin:0 0 4px;font-size:10px;color:#9ca3af;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Document Uploaded</p>
+          <p style="margin:0;font-size:13px;color:#374151;font-weight:600">
+            📄 ${meta.filename || a.details || "—"}
+          </p>
+          ${meta.sub_category ? `<p style="margin:4px 0 0;font-size:11px;color:#6b7280">Category: <strong>${meta.sub_category}</strong></p>` : ""}
+        </div>
+      `;
+    } else {
+      detailBlock = a.details
+        ? `<p style="margin:0;font-size:13px;color:#374151">${a.details}</p>`
+        : "";
+    }
+
+    return `
+    <div style="border:1px solid #e5e7eb;border-radius:8px;margin:0 0 16px;overflow:hidden">
+      <div style="background:#f9fafb;padding:10px 14px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center">
+        <div style="font-size:13px;font-weight:600;color:#1a3a5c">
+          ${icon} ${a.client_name || "Client"}
+          <span style="color:#9ca3af;font-weight:400;margin-left:6px">— ${actLabel}</span>
+        </div>
+        <div style="font-size:11px;color:#9ca3af;white-space:nowrap;margin-left:12px">${time}</div>
+      </div>
+      <div style="padding:12px 14px">${detailBlock}</div>
+    </div>`;
   }).join("");
 
   return `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><style>
-body{font-family:Arial,sans-serif;max-width:700px;margin:0 auto;padding:0;color:#333}
-.hdr{background:#1a3a5c;color:#fff;padding:18px 24px}
-.hdr h2{margin:0;font-size:18px;font-weight:600}
-.hdr p{margin:4px 0 0;font-size:12px;opacity:.8}
-.bdy{border:1px solid #e5e7eb;border-top:none;padding:24px}
-.ftr{margin-top:20px;font-size:11px;color:#9ca3af;border-top:1px solid #f3f4f6;padding-top:12px}
-</style></head>
-<body>
-<div class="hdr">
-  <h2>${firmName}</h2>
-  <p>Client Portal — Activity Digest</p>
+<html><head><meta charset="utf-8"></head>
+<body style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto;padding:0;color:#333">
+<div style="background:#1a3a5c;color:#fff;padding:18px 24px">
+  <h2 style="margin:0;font-size:18px;font-weight:600">${firmName}</h2>
+  <p style="margin:4px 0 0;font-size:12px;opacity:.8">Client Portal — Activity Digest</p>
 </div>
-<div class="bdy">
-  <p style="margin:0 0 16px;font-size:14px;color:#374151">
+<div style="border:1px solid #e5e7eb;border-top:none;padding:24px">
+  <p style="margin:0 0 20px;font-size:14px;color:#374151">
     The following client portal activities require your attention:
   </p>
-  <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden">
-    <thead>
-      <tr style="background:#f9fafb">
-        <th style="padding:10px 12px;text-align:left;font-size:12px;color:#6b7280;font-weight:600;border-bottom:1px solid #e5e7eb">Client</th>
-        <th style="padding:10px 12px;text-align:left;font-size:12px;color:#6b7280;font-weight:600;border-bottom:1px solid #e5e7eb">Activity</th>
-        <th style="padding:10px 12px;text-align:left;font-size:12px;color:#6b7280;font-weight:600;border-bottom:1px solid #e5e7eb">Details</th>
-        <th style="padding:10px 12px;text-align:left;font-size:12px;color:#6b7280;font-weight:600;border-bottom:1px solid #e5e7eb">Time</th>
-      </tr>
-    </thead>
-    <tbody>${rows}</tbody>
-  </table>
-  <p style="margin:20px 0 0;font-size:13px;color:#6b7280">
+  ${cards}
+  <p style="margin:8px 0 0;font-size:13px;color:#6b7280">
     Please log in to <strong>CAFlow</strong> to review and respond to your clients.
   </p>
 </div>
-<div style="padding:0 24px">
-  <div class="ftr">
+<div style="padding:12px 24px">
+  <div style="font-size:11px;color:#9ca3af;border-top:1px solid #f3f4f6;padding-top:12px">
     Automated digest from CAFlow Client Portal · sent at most once every 4 hours per firm.<br>
-    © ${new Date().getFullYear()} V J Desai &amp; Co. LLP, Chartered Accountants
+    &copy; ${new Date().getFullYear()} V J Desai &amp; Co. LLP, Chartered Accountants
   </div>
 </div>
 </body></html>`;
@@ -632,10 +659,18 @@ Deno.serve(async (req) => {
       try {
         await adminClient.from("portal_activity_log").insert({
           firm_id,
-          client_id: client_id || null,
-          client_name: payload.client_name || "Unknown Client",
-          activity:    payload.activity_type  || "activity",
-          details:     payload.details        || null,
+          client_id:   client_id || null,
+          client_name: payload.client_name   || "Unknown Client",
+          activity:    payload.activity_type || "activity",
+          details:     payload.details       || null,
+          metadata: {
+            query_ref:       payload.query_ref       || null,
+            query_text:      payload.query_text      || null,
+            reply_text:      payload.reply_text      || null,
+            attachment_name: payload.attachment_name || null,
+            filename:        payload.filename        || null,
+            sub_category:    payload.sub_category    || null,
+          },
         });
       } catch (_) { /* non-fatal */ }
 

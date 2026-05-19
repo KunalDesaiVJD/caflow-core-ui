@@ -88,6 +88,9 @@ export default function PortalDocuments() {
             client_name:   activeClient.name,
             activity_type: "document_upload",
             details:       `${file.name} (${uploadCat})`,
+            // Rich metadata shown in digest email
+            filename:     file.name,
+            sub_category: uploadCat,
           },
         },
       }).catch(() => {});
