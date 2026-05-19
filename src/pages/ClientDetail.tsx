@@ -20,7 +20,7 @@ import { ClientGroupsSection } from "@/components/client-detail/ClientGroupsSect
 import ClassificationHistoryTimeline from "@/components/clients/ClassificationHistoryTimeline";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
-import { ArrowLeft, Pencil, Shield, Loader2, Save, AlertTriangle, Upload, Download, FileText, Eye, Trash2, Plus, FolderOpen } from "lucide-react";
+import { ArrowLeft, Pencil, Shield, Loader2, Save, AlertTriangle, Upload, Download, FileText, Eye, Trash2, Plus, FolderOpen, UserCheck, Mail } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 
 interface Client {
@@ -40,6 +40,9 @@ interface Client {
   stock_audit_applicable: boolean | null;
   audit_config: any;
   tan_number?: string | null;
+  email?: string | null;
+  mobile?: string | null;
+  user_id?: string | null;
 }
 
 interface ServiceCategory {
@@ -141,6 +144,9 @@ const ClientDetail = () => {
   const [clientServices, setClientServices] = useState<ClientService[]>([]);
   const [clientPackages, setClientPackages] = useState<ClientPackage[]>([]);
   const [svcSaving, setSvcSaving] = useState<string | null>(null);
+
+  // Portal access activation
+  const [portalActivating, setPortalActivating] = useState(false);
 
   // TAN editing
   const [tanValue, setTanValue] = useState("");
@@ -422,6 +428,38 @@ const ClientDetail = () => {
       toast({ title: "Error saving TAN", description: e.message, variant: "destructive" });
     } finally {
       setTanSaving(false);
+    }
+  }
+
+  async function activatePortal() {
+    if (!client?.email) {
+      toast({ title: "No email on record", description: "Add the client's email before activating portal access.", variant: "destructive" });
+      return;
+    }
+    setPortalActivating(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(`${(supabase as any).supabaseUrl}/functions/v1/user-management?action=activate-portal`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session?.access_token}`,
+        },
+        body: JSON.stringify({
+          email: client.email,
+          name: client.name || client.email,
+          firm_id: client.firm_id,
+          client_id: client.id,
+        }),
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || "Failed to activate portal");
+      setClient(prev => prev ? { ...prev, user_id: result.user_id } : prev);
+      toast({ title: "Portal access activated", description: `Login: ${client.email} · Password: Client@2025!` });
+    } catch (e: any) {
+      toast({ title: "Activation failed", description: e.message, variant: "destructive" });
+    } finally {
+      setPortalActivating(false);
     }
   }
 
@@ -853,6 +891,40 @@ const ClientDetail = () => {
                     )}
                     <div className="col-span-2"><span className="text-muted-foreground">GSTIN:</span> <span className="font-mono">{(client.gstin || []).join(", ") || "—"}</span></div>
                     <div className="col-span-2"><span className="text-muted-foreground">Responsible Person:</span> <span className="font-medium">{responsiblePersonName || "—"}</span></div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Portal Access */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <UserCheck size={14} className="text-orange-600" /> Client Portal Access
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="text-sm space-y-0.5">
+                      <div className="flex items-center gap-1.5 text-muted-foreground">
+                        <Mail size={12} />
+                        <span>{client.email || <span className="italic">No email on record</span>}</span>
+                      </div>
+                      {client.user_id ? (
+                        <p className="text-xs text-green-600 font-medium">Portal active · Default password: Client@2025!</p>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">Portal not activated</p>
+                      )}
+                    </div>
+                    <Button
+                      size="sm"
+                      variant={client.user_id ? "outline" : "default"}
+                      className="gap-1.5 shrink-0"
+                      disabled={portalActivating || !client.email}
+                      onClick={activatePortal}
+                    >
+                      {portalActivating ? <Loader2 size={13} className="animate-spin" /> : <UserCheck size={13} />}
+                      {client.user_id ? "Reset Portal Password" : "Activate Portal"}
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
