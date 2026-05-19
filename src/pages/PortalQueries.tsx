@@ -157,9 +157,14 @@ function QueryCard({ query, clientName }: { query: AuditQuery; clientName: strin
             firm_id: query.firm_id,
             client_id: query.client_id,
             payload: {
-              client_name:   clientName,
-              activity_type: "query_reply",
-              details:       `Query ${query.ref_number || ""}: ${replyText.trim().slice(0, 100)}${replyText.trim().length > 100 ? "…" : ""}`,
+              client_name:     clientName,
+              activity_type:   "query_reply",
+              details:         `Query ${query.ref_number || ""}: ${replyText.trim().slice(0, 80)}${replyText.trim().length > 80 ? "…" : ""}`,
+              // Rich metadata shown in digest email
+              query_ref:       query.ref_number || null,
+              query_text:      query.query_text || null,
+              reply_text:      replyText.trim() || null,
+              attachment_name: attachName || null,
             },
           },
         }).catch(() => {});
