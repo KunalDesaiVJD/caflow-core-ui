@@ -114,13 +114,13 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
       )}
     >
       {/* Logo */}
-      <div className="flex items-center h-16 px-4 border-b border-sidebar-border">
-        <Link to="/" className="flex items-center gap-2 overflow-hidden">
+      <div className={cn("flex items-center border-b border-sidebar-border", collapsed ? "h-16 px-2 justify-center" : "h-20 px-4")}>
+        <Link to="/" className={cn("flex items-center gap-2", !collapsed && "overflow-hidden")}>
           {firmLogo ? (
             <img
               src={firmLogo}
               alt="Firm Logo"
-              className={cn("object-contain shrink-0 rounded", collapsed ? "h-12 w-12" : "h-[54px] max-w-[210px]")}
+              className={cn("object-contain rounded", collapsed ? "h-11 w-11" : "h-[54px] max-w-[200px]")}
             />
           ) : (
             <>
