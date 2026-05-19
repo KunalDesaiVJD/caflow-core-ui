@@ -734,6 +734,7 @@ ${sheetsXml}
                 isSuperadmin={isSuperadmin}
                 clientIdFilter={selectedClientId}
                 selectedFY={selectedFY}
+                maximized={statusMaximized}
               />
             </div>
           </div>

@@ -88,11 +88,16 @@ interface Props {
   clientIdFilter?: string | null;
   /** Financial year filter e.g. "2024-25" — auto-populates from audit_engagements */
   selectedFY?:     string;
+  /** Issue 2: when the grid is rendered inside the fullscreen overlay, use
+   *  the entire remaining viewport height for the scroll container so the
+   *  table actually fits the screen instead of staying capped at
+   *  100vh - 320px (which left huge empty space below). */
+  maximized?:      boolean;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function AuditStatusGrid({ firmId, clients, users, auditFirms, planEntries, isSuperadmin, clientIdFilter, selectedFY }: Props) {
+export default function AuditStatusGrid({ firmId, clients, users, auditFirms, planEntries, isSuperadmin, clientIdFilter, selectedFY, maximized }: Props) {
   const { rows, loading, useLs, reload, addRow, updateRow, removeRow } = useAuditStatus(firmId, isSuperadmin, selectedFY);
 
   // ── Search (debounced 300 ms) ──────────────────────────────────────────────
@@ -281,8 +286,14 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
       />
 
       {/* Table */}
-      <div className="border rounded-lg overflow-hidden w-full">
-        <div className="overflow-auto w-full" style={{ maxHeight: "calc(100vh - 320px)" }}>
+      <div className={cn("border rounded-lg overflow-hidden w-full", maximized && "border-0 rounded-none")}>
+        <div
+          className="overflow-auto w-full"
+          // Maximized mode uses nearly the whole viewport (minus the card
+          // header + filter bar above ≈ 140 px). Non-maximized keeps the
+          // original 320 px reservation for the surrounding page chrome.
+          style={{ maxHeight: maximized ? "calc(100vh - 140px)" : "calc(100vh - 320px)" }}
+        >
           <table className="border-collapse text-xs" style={{ minWidth: 1850, tableLayout: "fixed" }}>
 
             {/* ── Sticky header row ── */}
