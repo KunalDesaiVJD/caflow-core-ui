@@ -303,6 +303,62 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify(data), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
+    // ACTIVATE PORTAL — create or reset portal account for a client by email
+    if (req.method === "POST" && action === "activate-portal") {
+      const body = await req.json();
+      const { email, name, firm_id, client_id } = body;
+
+      if (!email) {
+        return new Response(JSON.stringify({ error: "email is required" }), { status: 400, headers: corsHeaders });
+      }
+
+      const password = DEFAULT_PASSWORDS["client"];
+
+      // Look up existing auth user by email
+      const { data: listData } = await adminClient.auth.admin.listUsers();
+      const existing = listData?.users?.find((u: any) => u.email?.toLowerCase() === email.toLowerCase());
+
+      let authUserId: string;
+
+      if (existing) {
+        // Reset password + mark must_change_password
+        const { error: pwErr } = await adminClient.auth.admin.updateUserById(existing.id, { password });
+        if (pwErr) throw pwErr;
+        await adminClient.from("users").update({ must_change_password: true }).eq("id", existing.id);
+        authUserId = existing.id;
+      } else {
+        // Create new auth user
+        const { data: authUser, error: authError } = await adminClient.auth.admin.createUser({
+          email,
+          password,
+          email_confirm: true,
+          user_metadata: { role: "client", firm_id, name },
+        });
+        if (authError) throw authError;
+        authUserId = authUser.user.id;
+      }
+
+      // Upsert users table row
+      await adminClient.from("users").upsert({
+        id: authUserId,
+        name: name || email,
+        email,
+        role: "client",
+        firm_id: firm_id || requestingUser.firm_id,
+        is_active: true,
+        must_change_password: true,
+      }, { onConflict: "id" });
+
+      // Link client record to auth user
+      if (client_id) {
+        await adminClient.from("clients").update({ user_id: authUserId }).eq("id", client_id);
+      }
+
+      return new Response(JSON.stringify({ success: true, user_id: authUserId, default_password: password }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     // DELETE USER
     if (req.method === "POST" && action === "delete") {
       const body = await req.json();
