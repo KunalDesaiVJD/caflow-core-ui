@@ -103,6 +103,17 @@ async function exportExcel(engagementId: string, data: AuditWorksheetData) {
     : isStat ? "Statutory Audit Master"
     : "Audit Master";
 
+  // Same first-non-empty logic the PDF export uses — see exportPdf().
+  const pick = <T,>(...vals: (T | undefined | null)[]): T | "" => {
+    for (const v of vals) {
+      if (v === null || v === undefined) continue;
+      if (typeof v === "string" && v.trim() === "") continue;
+      if (Array.isArray(v) && v.length === 0) continue;
+      return v as T;
+    }
+    return "" as T | "";
+  };
+
   const masterRows: (string | number | null)[][] = [
     [masterLabel],
     [],
@@ -113,8 +124,8 @@ async function exportExcel(engagementId: string, data: AuditWorksheetData) {
     ["Entity Type",     data.entityType],
     ["Financial Year",  data.financialYear],
     [],
-    ["Accountant Name", tax.accountant_name ?? stat.accountant_name ?? ""],
-    ["Mobile No.",      tax.mobile_no ?? stat.mobile_no ?? ""],
+    ["Accountant Name", pick(tax.accountant_name, stat.accountant_name)],
+    ["Mobile No.",      pick(tax.mobile_no, stat.mobile_no)],
     [],
     ["MOA/AOA/Deed obtained",           yesNo(tax.prev_moa_aoa_deed ?? stat.prev_moa_aoa_deed)],
     ["Prev IT Return obtained",         yesNo(tax.prev_it_return ?? stat.prev_it_return)],
@@ -130,8 +141,8 @@ async function exportExcel(engagementId: string, data: AuditWorksheetData) {
       (isTax ? tax : stat) as TaxMasterData & StatutoryMasterData
     )],
     [],
-    ["Audit Date From", tax.audit_date_from ?? stat.audit_date_from ?? ""],
-    ["Audit Date To",   tax.audit_date_to   ?? stat.audit_date_to   ?? ""],
+    ["Audit Date From", pick(tax.audit_date_from, stat.audit_date_from)],
+    ["Audit Date To",   pick(tax.audit_date_to,   stat.audit_date_to)],
   );
 
   if (isTax) {
@@ -152,17 +163,19 @@ async function exportExcel(engagementId: string, data: AuditWorksheetData) {
     );
   }
 
-  const auditCarriedBy = (tax.audit_carried_by ?? stat.audit_carried_by ?? [])
-    .map((a: any) => a.name).filter(Boolean).join(", ");
+  const carriedListXls = pick(stat.audit_carried_by, tax.audit_carried_by) as any[];
+  const auditCarriedBy = Array.isArray(carriedListXls)
+    ? carriedListXls.map((a: any) => a?.name).filter(Boolean).join(", ")
+    : "";
   masterRows.push(
     [],
     ["Audit Carried Out By", auditCarriedBy],
     [],
-    ["A/c (Tally) File Path",    tax.ac_path ?? stat.ac_path ?? ""],
-    ["Report / Working Path",    tax.report_path ?? stat.report_path ?? ""],
-    ["Footer: Prepared By",      tax.footer_prepared_by_name ?? stat.footer_prepared_by_name ?? ""],
-    ["Footer: Verified By",      tax.footer_verified_by_name ?? stat.footer_verified_by_name ?? ""],
-    ["Footer: Reviewed By",      tax.footer_reviewed_by_name ?? stat.footer_reviewed_by_name ?? ""],
+    ["A/c (Tally) File Path",       pick(tax.ac_path, stat.ac_path)],
+    ["Report / Working File Path",  pick(tax.report_path, stat.report_path)],
+    ["Footer: Prepared By",         pick(tax.footer_prepared_by_name, stat.footer_prepared_by_name)],
+    ["Footer: Verified By",         pick(tax.footer_verified_by_name, stat.footer_verified_by_name)],
+    ["Footer: Reviewed By",         pick(tax.footer_reviewed_by_name, stat.footer_reviewed_by_name)],
   );
 
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(masterRows), masterLabel.slice(0, 31));
@@ -261,17 +274,43 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
   // ── Page 1: Master ────────────────────────────────────────────────────────
   pageHeader(masterLabel);
 
-  const auditCarriedBy = (tax.audit_carried_by ?? stat.audit_carried_by ?? [])
-    .map((a: any) => a.name).filter(Boolean).join(", ");
+  // pickFirst: use the FIRST non-empty value across tax/stat blobs.
+  // `??` falls through only on null/undefined — but stale blobs (e.g. an
+  // engagement that briefly used "both" auditType and then switched to
+  // statutory-only) leave the OTHER blob with empty strings. `||` treats
+  // empty string as falsy so we always surface the value the auditor
+  // actually typed regardless of which blob it lives in.
+  const pick = <T,>(...vals: (T | undefined | null)[]): T | "" => {
+    for (const v of vals) {
+      if (v === null || v === undefined) continue;
+      if (typeof v === "string" && v.trim() === "") continue;
+      if (Array.isArray(v) && v.length === 0) continue;
+      return v as T;
+    }
+    return "" as T | "";
+  };
+  // audit_carried_by: pick whichever blob has a non-empty list (MergedAuditMaster
+  // writes to BOTH so either works; statutory-only writes to stat).
+  const carriedList = pick(stat.audit_carried_by, tax.audit_carried_by) as any[];
+  const auditCarriedBy = Array.isArray(carriedList)
+    ? carriedList.map((a: any) => a?.name).filter(Boolean).join(", ")
+    : "";
+  const acPath        = pick(tax.ac_path,        stat.ac_path);
+  const reportPath    = pick(tax.report_path,    stat.report_path);
+  const preparedBy    = pick(tax.footer_prepared_by_name, stat.footer_prepared_by_name);
+  const verifiedBy    = pick(tax.footer_verified_by_name, stat.footer_verified_by_name);
+  const reviewedBy    = pick(tax.footer_reviewed_by_name, stat.footer_reviewed_by_name);
+  const accountant    = pick(tax.accountant_name,  stat.accountant_name);
+  const mobile        = pick(tax.mobile_no,        stat.mobile_no);
+  const auditFrom     = pick(tax.audit_date_from,  stat.audit_date_from);
+  const auditTo       = pick(tax.audit_date_to,    stat.audit_date_to);
 
   const masterBody: (string | null)[][] = [
     ["Client Name",     data.clientName,           "PAN",            data.pan],
     ["Address",         data.clientAddress,         "Entity Type",    data.entityType],
     ["Financial Year",  data.financialYear,         "Firm Name",      data.firmName],
-    ["Accountant",      tax.accountant_name ?? stat.accountant_name ?? "",
-     "Mobile",          tax.mobile_no ?? stat.mobile_no ?? ""],
-    ["Audit Date From", tax.audit_date_from ?? stat.audit_date_from ?? "",
-     "Audit Date To",   tax.audit_date_to   ?? stat.audit_date_to   ?? ""],
+    ["Accountant",      accountant,                "Mobile",          mobile],
+    ["Audit Date From", auditFrom,                 "Audit Date To",   auditTo],
     ["Books Verified",  booksChecked((isTax ? tax : stat) as TaxMasterData & StatutoryMasterData), "", ""],
     ["Audit Carried By", auditCarriedBy, "", ""],
   ];
@@ -289,10 +328,10 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
     masterBody.push(["CARO 2020 Applicable", yesNo(stat.caro_applicable), "", ""]);
   }
   masterBody.push(
-    ["Prepared By",  tax.footer_prepared_by_name  ?? stat.footer_prepared_by_name  ?? "",
-     "Verified By",  tax.footer_verified_by_name  ?? stat.footer_verified_by_name  ?? ""],
-    ["Reviewed By",  tax.footer_reviewed_by_name  ?? stat.footer_reviewed_by_name  ?? "",
-     "A/c Path",     tax.ac_path ?? stat.ac_path ?? ""],
+    ["Prepared By",  preparedBy, "Verified By",   verifiedBy],
+    ["Reviewed By",  reviewedBy, "",              ""],
+    ["A/c (Tally) File Path",    acPath,     "", ""],
+    ["Report / Working File Path", reportPath, "", ""],
   );
 
   autoTable(doc, {

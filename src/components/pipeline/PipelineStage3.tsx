@@ -401,7 +401,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   //   "py"     — ledgers with opening_balance ≠ 0 (map these first; propagates to CY)
   //   "cy"     — new ledgers this year: opening = 0, closing ≠ 0
   //   "closed" — closed accounts: opening ≠ 0, closing = 0 (PY-only impact)
-  const [workMode, setWorkMode] = useState<"all" | "py" | "cy" | "closed">("py");
+  const [workMode, setWorkMode] = useState<"all" | "closed">("all");
   const [groupPickerOpen, setGroupPickerOpen] = useState<string | null>(null);
 
   // ─── Fetch Tally Trial Balance (sole authoritative TB source) ───
@@ -2203,15 +2203,24 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       const hasClose = Math.abs(closing) >= 0.005;
       const hasTurnover = Math.abs(a.tally_debit ?? 0) >= 0.005 || Math.abs(a.tally_credit ?? 0) >= 0.005;
       // hideZero: hide only accounts with no balance AND no turnover.
-      // Exception: in "All Unmapped" mode, always show unmapped ledgers even with ₹0
-      // so the auditor can find and map them (prevents the "1 unmapped but panel empty" bug).
+      // Exceptions:
+      //   • "All Unmapped" mode — always show unmapped ledgers even with ₹0
+      //     so the auditor can find and map them.
+      //   • "Closed Accounts" mode — dormant ledgers are EXACTLY what this tab
+      //     is meant to surface, so never hide them.
       const isUnmapped = !coaMapping[a.account_name];
-      if (hideZero && !hasOpen && !hasClose && !hasTurnover && !(workMode === "all" && isUnmapped)) return false;
+      if (
+        hideZero && !hasOpen && !hasClose && !hasTurnover &&
+        !(workMode === "all" && isUnmapped) &&
+        workMode !== "closed"
+      ) return false;
 
       // Workflow-mode narrowing
-      if (workMode === "py"     && !hasOpen) return false;                        // PY-mapping: only opening ≠ 0
-      if (workMode === "cy"     && (hasOpen || !hasClose)) return false;          // CY-mapping: new ledgers (open=0, close≠0)
-      if (workMode === "closed" && (!hasOpen || hasClose)) return false;          // Closed accounts only (open≠0, close=0)
+      // "closed" now means truly dormant: opening = 0 AND closing = 0 AND no
+      // turnover. This covers both BS ledgers brought forward at ₹0 still at
+      // ₹0 and P&L ledgers with no debit / credit transactions during the
+      // year — the auditor's standard "ledgers I can safely ignore" bucket.
+      if (workMode === "closed" && (hasOpen || hasClose || hasTurnover)) return false;
       // "all" mode: include everything not excluded above (incl. turnover-only and ₹0 unmapped)
 
       if (!s) return true;
@@ -2233,22 +2242,19 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     [filteredAccounts, coaMapping, workMode],
   );
 
-  // Counts per mode (shown on the segmented control)
+  // Counts per mode (shown on the segmented control). "closed" is now
+  // truly-dormant: no opening, no closing, no debit/credit turnover — covers
+  // both BS ledgers brought forward at ₹0 and P&L ledgers with no activity.
   const modeCounts = useMemo(() => {
-    let py = 0, cy = 0, closed = 0, all = 0;
+    let closed = 0, all = 0;
     for (const a of tbAccounts) {
       const hasOpen     = Math.abs(a.opening_balance ?? 0) >= 0.005;
       const hasClose    = Math.abs(a.balance) >= 0.005;
       const hasTurnover = Math.abs(a.tally_debit ?? 0) >= 0.005 || Math.abs(a.tally_credit ?? 0) >= 0.005;
-      // "all" counts every unmapped ledger — including ₹0 dormant ones — so it
-      // matches unmappedCount in the stats bar and the auditor can find them.
       if (!coaMapping[a.account_name]) all++;
-      if (!hasOpen && !hasClose && !hasTurnover) continue;  // skip dormant for sub-mode counts
-      if (hasOpen  && !coaMapping[a.account_name]) py++;
-      if (!hasOpen && hasClose && !coaMapping[a.account_name]) cy++;
-      if (hasOpen  && !hasClose) closed++;                  // review regardless of mapped state
+      if (!hasOpen && !hasClose && !hasTurnover) closed++;
     }
-    return { py, cy, closed, all };
+    return { closed, all };
   }, [tbAccounts, coaMapping]);
 
   // Grouped view — keyed by parent_group, aggregated subtotal + mapped/total counts.
@@ -2651,12 +2657,15 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
             </Alert>
           )}
 
-          {/* PY-first workflow segmented control */}
+          {/* Workflow segmented control — only Closed + All Unmapped.
+              The earlier "Prior Year" / "Current Year (new)" tabs were
+              redundant once the Mapping Instructions / hideZero filters were
+              available; auditors only need a way to (a) review dormant
+              ledgers in bulk (Closed) and (b) see everything still pending
+              (All Unmapped). */}
           <div className="flex items-stretch gap-0 mb-3 border rounded-md overflow-hidden">
             {([
-              { key: "py",     label: "Prior Year",         hint: "opening ≠ 0",           count: modeCounts.py,     color: "bg-amber-100 text-amber-800 border-amber-300" },
-              { key: "cy",     label: "Current Year (new)", hint: "opening = 0, closing ≠ 0", count: modeCounts.cy, color: "bg-primary/10 text-primary" },
-              { key: "closed", label: "Closed Accounts",    hint: "opening ≠ 0, closing = 0", count: modeCounts.closed, color: "bg-slate-100 text-slate-700 dark:bg-slate-900/60 dark:text-slate-300" },
+              { key: "closed", label: "Closed Accounts",    hint: "opening = 0, closing = 0 (P&L: no debit/credit)", count: modeCounts.closed, color: "bg-slate-100 text-slate-700 dark:bg-slate-900/60 dark:text-slate-300" },
               { key: "all",    label: "All Unmapped",       hint: "every unmapped ledger", count: modeCounts.all,   color: "bg-violet-100 text-violet-800 dark:bg-violet-950/30 dark:text-violet-200" },
             ] as const).map((m, i) => (
               <button
@@ -2681,21 +2690,12 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           <div className={cn(fullScreen && "fixed inset-0 z-50 bg-background flex flex-col p-3 overflow-hidden")}>
 
           {/* Workflow-mode guidance banner */}
-          {workMode === "py" && (
-            <Alert className="mb-3 bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800">
-              <AlertTriangle className="h-4 w-4 text-amber-600" />
-              <AlertTitle className="text-xs">Prior-Year Mapping Mode</AlertTitle>
-              <AlertDescription className="text-[11px]">
-                You're mapping ledgers with non-zero opening balances. Each mapping serves both PY and CY — once these are done, only new CY ledgers remain.
-              </AlertDescription>
-            </Alert>
-          )}
           {workMode === "closed" && (
             <Alert className="mb-3 bg-slate-50 dark:bg-slate-900/40 border-slate-200 dark:border-slate-700">
               <AlertTriangle className="h-4 w-4 text-slate-600" />
               <AlertTitle className="text-xs">Closed Accounts Review</AlertTitle>
               <AlertDescription className="text-[11px]">
-                These ledgers had balances last year but are now zero. They only affect the PY comparative column. Verify mapping — they may be ledgers that were renamed or reclassified mid-year.
+                These ledgers are fully dormant — opening = 0, closing = 0, and no debit/credit transactions during the year. They include BS ledgers brought forward at ₹0 and P&L ledgers with no activity. Safe to leave unmapped if confirmed.
               </AlertDescription>
             </Alert>
           )}
