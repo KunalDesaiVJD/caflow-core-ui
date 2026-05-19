@@ -9,7 +9,10 @@ import { useRef, useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { CalendarDays, TableProperties, Maximize2, Minimize2, FileText, FileSpreadsheet } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { CalendarDays, TableProperties, Maximize2, Minimize2, FileText, FileSpreadsheet, Check, ChevronsUpDown } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { exportToPdf, exportToExcel } from "@/lib/exportUtils";
 import { toast } from "sonner";
 
@@ -51,6 +54,10 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
   // ── Planning & Communication: maximize state ───────────────────────────────
   const [commMaximized, setCommMaximized] = useState(false);
   const [calMaximized,  setCalMaximized]  = useState(false);
+  // ── Audit Status: maximize state (Issue 4 — fullscreen view) ───────────────
+  const [statusMaximized, setStatusMaximized] = useState(false);
+  // ── Audit Status: searchable client filter (Issue 1) ───────────────────────
+  const [clientPickerOpen, setClientPickerOpen] = useState(false);
 
   // ── Export refs (PDF captures DOM; Excel pulls structured data) ────────────
   const calRef    = useRef<HTMLDivElement>(null);
@@ -634,25 +641,54 @@ ${sheetsXml}
 
             <div className="h-5 w-px bg-border" />
 
-            {/* Client filter */}
-            <Select
-              value={selectedClientId ?? "__all__"}
-              onValueChange={handleClientDropdown}
-            >
-              <SelectTrigger className="h-8 text-xs w-[220px]">
-                <SelectValue placeholder="Filter by client…" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__all__" className="text-xs text-muted-foreground">
-                  — All clients —
-                </SelectItem>
-                {clients.map(c => (
-                  <SelectItem key={c.id} value={c.id} className="text-xs">
-                    {c.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {/* Client filter — searchable combobox (Issue 1).
+                Previously a basic <Select> with one item per client; for firms
+                with 40+ clients this required scrolling through a long list.
+                Now a cmdk-based search input filters as the auditor types. */}
+            <Popover open={clientPickerOpen} onOpenChange={setClientPickerOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  role="combobox"
+                  aria-expanded={clientPickerOpen}
+                  className="h-8 text-xs w-[260px] justify-between font-normal"
+                >
+                  <span className="truncate">
+                    {selectedClientName ?? "— All clients —"}
+                  </span>
+                  <ChevronsUpDown size={12} className="opacity-50 shrink-0 ml-2" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[260px] p-0" align="start">
+                <Command>
+                  <CommandInput placeholder="Search client…" className="h-8 text-xs" />
+                  <CommandList>
+                    <CommandEmpty>No client matches.</CommandEmpty>
+                    <CommandGroup>
+                      <CommandItem
+                        value="__all_clients__"
+                        onSelect={() => { handleClientDropdown("__all__"); setClientPickerOpen(false); }}
+                        className="text-xs"
+                      >
+                        <Check className={cn("mr-2 h-3.5 w-3.5", !selectedClientId ? "opacity-100" : "opacity-0")} />
+                        — All clients —
+                      </CommandItem>
+                      {clients.map(c => (
+                        <CommandItem
+                          key={c.id}
+                          value={c.name}
+                          onSelect={() => { handleClientDropdown(c.id); setClientPickerOpen(false); }}
+                          className="text-xs"
+                        >
+                          <Check className={cn("mr-2 h-3.5 w-3.5", selectedClientId === c.id ? "opacity-100" : "opacity-0")} />
+                          {c.name}
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
 
             {selectedClientName && (
               <span className="text-xs text-muted-foreground">
@@ -662,23 +698,44 @@ ${sheetsXml}
             )}
           </div>
 
-          {/* ── Export bar for Audit Status ── */}
-          <div className="flex items-center justify-end gap-1 px-1">
-            <ExportButtons onPdf={exportStatusPdf} onXlsx={exportStatusXlsx} />
-          </div>
-
-          {/* ── Audit Status grid (wrapped for export) ── */}
-          <div ref={statusRef}>
-          <AuditStatusGrid
-            firmId={firmId}
-            clients={clients}
-            users={users}
-            auditFirms={auditFirms}
-            planEntries={entries}
-            isSuperadmin={isSuperadmin}
-            clientIdFilter={selectedClientId}
-            selectedFY={selectedFY}
-          />
+          {/* ── Audit Status card with maximize toggle (Issue 4) ──
+              The Audit Status grid is wide — for firms with many columns the
+              card view forces lots of horizontal scrolling. The maximize
+              button promotes the grid to a fullscreen overlay using the
+              entire viewport. Mirrors the Planning Calendar maximize UX. */}
+          <div
+            ref={statusRef}
+            className={statusMaximized
+              ? "fixed inset-0 z-50 bg-background flex flex-col"
+              : "rounded-lg border bg-card shadow-sm overflow-hidden"
+            }
+          >
+            <div className="flex items-center justify-between px-3 py-2 border-b bg-muted/30 shrink-0">
+              <span className="text-xs font-semibold tracking-wide">Audit Status — FY {selectedFY}</span>
+              <div className="flex items-center gap-1">
+                <ExportButtons onPdf={exportStatusPdf} onXlsx={exportStatusXlsx} />
+                <Button
+                  variant="ghost" size="sm"
+                  className="h-6 w-6 p-0"
+                  title={statusMaximized ? "Restore" : "Maximize (fullscreen)"}
+                  onClick={() => setStatusMaximized(v => !v)}
+                >
+                  {statusMaximized ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+                </Button>
+              </div>
+            </div>
+            <div className={statusMaximized ? "flex-1 min-h-0 overflow-auto p-2" : ""}>
+              <AuditStatusGrid
+                firmId={firmId}
+                clients={clients}
+                users={users}
+                auditFirms={auditFirms}
+                planEntries={entries}
+                isSuperadmin={isSuperadmin}
+                clientIdFilter={selectedClientId}
+                selectedFY={selectedFY}
+              />
+            </div>
           </div>
 
         </TabsContent>

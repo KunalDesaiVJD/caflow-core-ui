@@ -146,9 +146,11 @@ function ClientCombobox({ value, onChange, clients, placeholder }: {
   clients: ClientOption[];
   placeholder?: string;
 }) {
-  const [open, setOpen]     = useState(false);
+  const [open, setOpen]       = useState(false);
+  const [highlight, setHighlight] = useState(0);
   const [dropPos, setDropPos] = useState({ top: 0, left: 0, width: 180 });
   const inputRef = useRef<HTMLInputElement>(null);
+  const dropRef  = useRef<HTMLDivElement>(null);
 
   const filtered = useMemo(() =>
     (value
@@ -158,12 +160,33 @@ function ClientCombobox({ value, onChange, clients, placeholder }: {
     [value, clients]
   );
 
+  useEffect(() => { setHighlight(0); }, [value, clients]);
+  useEffect(() => {
+    if (!open || !dropRef.current) return;
+    const el = dropRef.current.querySelector<HTMLElement>(`[data-idx="${highlight}"]`);
+    el?.scrollIntoView({ block: "nearest" });
+  }, [highlight, open]);
+
   function handleFocus() {
     if (inputRef.current) {
       const r = inputRef.current.getBoundingClientRect();
       setDropPos({ top: r.bottom, left: r.left, width: Math.max(r.width, 180) });
     }
     setOpen(true);
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (!open) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") { setOpen(true); e.preventDefault(); }
+      return;
+    }
+    if (e.key === "ArrowDown") { e.preventDefault(); setHighlight(h => Math.min(h + 1, Math.max(filtered.length - 1, 0))); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setHighlight(h => Math.max(h - 1, 0)); }
+    else if (e.key === "Enter" && filtered.length > 0) {
+      e.preventDefault();
+      const pick = filtered[Math.min(highlight, filtered.length - 1)];
+      if (pick) { onChange(pick.name, pick); setOpen(false); }
+    } else if (e.key === "Escape") setOpen(false);
   }
 
   return (
@@ -174,19 +197,26 @@ function ClientCombobox({ value, onChange, clients, placeholder }: {
         onChange={e => onChange(e.target.value, null)}
         onFocus={handleFocus}
         onBlur={() => setTimeout(() => setOpen(false), 160)}
+        onKeyDown={handleKeyDown}
         placeholder={placeholder || "Search party…"}
         className="h-6 text-[11px] px-1.5 w-full"
       />
       {open && filtered.length > 0 && (
         <div
+          ref={dropRef}
           style={{ position: "fixed", top: dropPos.top, left: dropPos.left, width: dropPos.width, zIndex: 9999 }}
           className="bg-popover border rounded-md shadow-lg max-h-48 overflow-auto"
         >
-          {filtered.map(c => (
+          {filtered.map((c, i) => (
             <div
               key={c.id}
+              data-idx={i}
               onMouseDown={e => { e.preventDefault(); onChange(c.name, c); setOpen(false); }}
-              className="px-2 py-1.5 text-[11px] cursor-pointer hover:bg-accent"
+              onMouseEnter={() => setHighlight(i)}
+              className={cn(
+                "px-2 py-1.5 text-[11px] cursor-pointer",
+                i === highlight ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",
+              )}
             >
               {c.name}
             </div>
@@ -198,14 +228,27 @@ function ClientCombobox({ value, onChange, clients, placeholder }: {
 }
 
 // ─── Searchable combobox for users ───────────────────────────────────────────
+//
+// Issue 2 fix — keyboard navigation:
+// Previously this combobox rendered a filtered list on focus but had no way
+// to navigate it from the keyboard. Pressing ArrowDown moved focus out of
+// the input instead of highlighting the next option, so the only way to
+// pick a name was to mouse-click it.
+//
+// Now: ArrowDown/ArrowUp move a highlight through the filtered list,
+// Enter selects the highlighted option (or the first item if none is
+// highlighted), Escape closes the dropdown. Highlight resets whenever the
+// filter text changes. Selected option auto-scrolls into view.
 
 function UserCombobox({ value, onChange, users, placeholder }: {
   value: string; onChange: (v: string) => void;
   users: UserOption[]; placeholder?: string;
 }) {
-  const [open, setOpen]     = useState(false);
+  const [open, setOpen]       = useState(false);
+  const [highlight, setHighlight] = useState(0);
   const [dropPos, setDropPos] = useState({ top: 0, left: 0, width: 120 });
   const inputRef = useRef<HTMLInputElement>(null);
+  const dropRef  = useRef<HTMLDivElement>(null);
 
   const filtered = useMemo(() =>
     (value
@@ -215,12 +258,45 @@ function UserCombobox({ value, onChange, users, placeholder }: {
     [value, users]
   );
 
+  // Reset highlight to top whenever the filtered set changes (typing).
+  useEffect(() => { setHighlight(0); }, [value, users]);
+
+  // Auto-scroll highlighted item into view as the user arrows through.
+  useEffect(() => {
+    if (!open || !dropRef.current) return;
+    const el = dropRef.current.querySelector<HTMLElement>(`[data-idx="${highlight}"]`);
+    el?.scrollIntoView({ block: "nearest" });
+  }, [highlight, open]);
+
   function handleFocus() {
     if (inputRef.current) {
       const r = inputRef.current.getBoundingClientRect();
       setDropPos({ top: r.bottom, left: r.left, width: Math.max(r.width, 120) });
     }
     setOpen(true);
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (!open) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        setOpen(true);
+        e.preventDefault();
+      }
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHighlight(h => Math.min(h + 1, Math.max(filtered.length - 1, 0)));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHighlight(h => Math.max(h - 1, 0));
+    } else if (e.key === "Enter" && filtered.length > 0) {
+      e.preventDefault();
+      const pick = filtered[Math.min(highlight, filtered.length - 1)];
+      if (pick) { onChange(pick.name); setOpen(false); }
+    } else if (e.key === "Escape") {
+      setOpen(false);
+    }
   }
 
   return (
@@ -231,19 +307,26 @@ function UserCombobox({ value, onChange, users, placeholder }: {
         onChange={e => onChange(e.target.value)}
         onFocus={handleFocus}
         onBlur={() => setTimeout(() => setOpen(false), 160)}
+        onKeyDown={handleKeyDown}
         placeholder={placeholder || "Search…"}
         className="h-6 text-[11px] px-1.5 w-full"
       />
       {open && filtered.length > 0 && (
         <div
+          ref={dropRef}
           style={{ position: "fixed", top: dropPos.top, left: dropPos.left, width: dropPos.width, zIndex: 9999 }}
           className="bg-popover border rounded-md shadow-lg max-h-40 overflow-auto"
         >
-          {filtered.map(u => (
+          {filtered.map((u, i) => (
             <div
               key={u.id}
+              data-idx={i}
               onMouseDown={e => { e.preventDefault(); onChange(u.name); setOpen(false); }}
-              className="px-2 py-1.5 text-[11px] cursor-pointer hover:bg-accent"
+              onMouseEnter={() => setHighlight(i)}
+              className={cn(
+                "px-2 py-1.5 text-[11px] cursor-pointer",
+                i === highlight ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",
+              )}
             >
               {u.name}
             </div>

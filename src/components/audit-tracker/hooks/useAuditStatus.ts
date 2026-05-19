@@ -481,9 +481,37 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
     delete payload.planned_from;
     delete payload.planned_to;
     delete payload.created_at;     // let DB default to now()
-    const { data, error } = await supabase.from("audit_status").insert(payload).select().single();
-    if (error) { toast.error(error.message); return null; }
-    toast.success("Row added");
+
+    // Defensive insert — see comment in updateRow. Same problem applies when
+    // saving a virtual row for the first time: an unknown column in the
+    // payload makes PostgREST drop EVERYTHING. We retry without unknown
+    // columns and surface a clear toast naming the skipped fields.
+    let attemptPayload: any = { ...payload };
+    let skipped: string[] = [];
+    let lastError: any = null;
+    let data: any = null;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const res = await supabase.from("audit_status").insert(attemptPayload).select().single();
+      if (!res.error) { data = res.data; lastError = null; break; }
+      lastError = res.error;
+      const msg = String(res.error.message || "");
+      const m = msg.match(/column ["']?([a-zA-Z0-9_]+)["']?/i)
+            ?? msg.match(/find the ["']?([a-zA-Z0-9_]+)["']? column/i);
+      const bad = m?.[1];
+      if (!bad || !(bad in attemptPayload)) break;
+      skipped.push(bad);
+      delete attemptPayload[bad];
+      if (Object.keys(attemptPayload).length === 0) break;
+    }
+    if (lastError) { toast.error(lastError.message); return null; }
+    if (skipped.length > 0) {
+      toast.warning(
+        `Row added — but ${skipped.length} field${skipped.length > 1 ? "s" : ""} could not be persisted (column missing): ${skipped.join(", ")}. Ask your admin to apply the latest DB migration.`,
+        { duration: 8000 },
+      );
+    } else {
+      toast.success("Row added");
+    }
     await load();
     return data as StatusEntry;
   }
@@ -536,8 +564,46 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
     delete cleanPatch.isVirtual;
     delete cleanPatch.engagement_type;
 
-    const { error } = await supabase.from("audit_status").update(cleanPatch).eq("id", id);
-    if (error) { toast.error(error.message); return; }
+    // Defensive save (Issue 3 root-cause partial fix):
+    // The audit_status table may not yet have every column the UI writes
+    // (e.g. audit_report_checked_by — migration 20260516120000 not yet
+    // applied to the remote DB, or the PostgREST schema cache is stale).
+    // PostgREST returns a "column ... does not exist" / "Could not find
+    // the X column in the schema cache" error and REJECTS THE WHOLE patch
+    // — every other field the auditor typed gets lost too, which appears
+    // to the user as "save worked but data was deleted on refresh".
+    //
+    // Strategy: try the full patch first; if PostgREST reports an unknown
+    // column, surgically drop that one field and retry. Loop a few times
+    // so multiple unknown columns can be stripped in one go. The auditor
+    // gets a toast with the column names that were skipped so they (or
+    // the firm admin) can apply the missing migration to restore those
+    // fields' persistence.
+    let attemptPatch: any = { ...cleanPatch };
+    let skipped: string[] = [];
+    let lastError: any = null;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const { error: err } = await supabase.from("audit_status").update(attemptPatch).eq("id", id);
+      if (!err) { lastError = null; break; }
+      lastError = err;
+      // PostgREST formats: "column \"foo\" of relation ..." or
+      // "Could not find the 'foo' column of 'audit_status' in the schema cache".
+      const msg = String(err.message || "");
+      const m = msg.match(/column ["']?([a-zA-Z0-9_]+)["']?/i)
+            ?? msg.match(/find the ["']?([a-zA-Z0-9_]+)["']? column/i);
+      const bad = m?.[1];
+      if (!bad || !(bad in attemptPatch)) break;
+      skipped.push(bad);
+      delete attemptPatch[bad];
+      if (Object.keys(attemptPatch).length === 0) break;
+    }
+    if (lastError) { toast.error(lastError.message); return; }
+    if (skipped.length > 0) {
+      toast.warning(
+        `Saved — but ${skipped.length} field${skipped.length > 1 ? "s" : ""} could not be persisted (column missing): ${skipped.join(", ")}. Ask your admin to apply the latest DB migration.`,
+        { duration: 8000 },
+      );
+    }
 
     if (oldRow) {
       (supabase as any).from("audit_status_history").insert({
