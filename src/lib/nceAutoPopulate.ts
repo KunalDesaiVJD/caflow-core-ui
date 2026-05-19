@@ -659,6 +659,12 @@ export async function nceAutoPopulate(
   // Hoisted PY shell TB rows so the per-ledger Pattern A path can read PY
   // amounts by ledger name without re-querying Supabase.
   let pyTb: TBRow[] = [];
+  // Hoisted PY shell coa_mapping — used by both the per-note PY fallback
+  // (below) AND the Pattern A/B PY-only ledger walks so CLOSED ledgers
+  // that only exist in PY can still be classified to a CY FS code via
+  // the PY shell's own mapping (the CY mapping won't carry them since
+  // the ledger doesn't appear in CY TB).
+  let pyCoaMap: Record<string, { code: string }> = {};
   if (financialYear && clientId) {
     const parts = String(financialYear).split("-");
     if (parts.length === 2) {
@@ -710,7 +716,7 @@ export async function nceAutoPopulate(
           .select("ledger_name, closing_balance, balance_type, opening_balance, opening_type, parent_group")
           .eq("engagement_id", shellEng.id);
         pyTb = (pyTbRaw ?? []) as TBRow[];
-        const pyCoaMap: Record<string, { code: string }> =
+        pyCoaMap =
           shellEng.coa_mapping && Object.keys(shellEng.coa_mapping).length > 0
             ? shellEng.coa_mapping
             : coaMapping;
@@ -882,12 +888,47 @@ export async function nceAutoPopulate(
       }
 
       // Also walk PY TB so static rows pick up per-ledger PY contributions
-      // from PY-only ledgers (e.g. Suresh Chavda CLOSED account that doesn't
-      // appear in CY TB but contributed to last year's TDS Payable total).
+      // from PY-only ledgers (e.g. Suresh Chavda or TDS Payable-194A-24-25
+      // CLOSED accounts that don't appear in CY TB but contributed to last
+      // year's TDS Payable total).
+      //
+      // ROOT-CAUSE FIX (this turn): previously the lookup only consulted
+      // `coaMapping` (CY engagement's mapping). A CLOSED PY-only ledger
+      // doesn't exist in CY TB, so its CY mapping entry is missing — the
+      // ledger silently dropped out and the PY column showed no breakup
+      // even though the variance drill listed the ledger with a clear PY
+      // amount. We now also consult the PY shell engagement's own mapping
+      // (pyCoaMap) and, as a last resort, inherit the FS code from any
+      // CY ledger sharing the same Tally parent_group. This way ledgers
+      // renamed between years (Tally export quirk) still classify.
       if (pyTb.length > 0) {
         const cyMappingLower: Record<string, { code: string }> = {};
         for (const [k, v] of Object.entries(coaMapping || {})) {
           if (v?.code) cyMappingLower[k.toLowerCase().trim()] = v;
+        }
+        const pyMappingLower: Record<string, { code: string }> = {};
+        for (const [k, v] of Object.entries(pyCoaMap || {})) {
+          if (v?.code) pyMappingLower[k.toLowerCase().trim()] = v;
+        }
+        // parent_group → FS code map derived from CY mapping, for group
+        // inheritance when an exact ledger lookup fails on both sides.
+        const groupToCode: Record<string, string> = {};
+        const groupCount: Record<string, Record<string, number>> = {};
+        for (const [ledger, m] of Object.entries(coaMapping || {})) {
+          const c = m?.code; if (!c) continue;
+          const tbRow = tb.find(r => r.ledger_name === ledger);
+          const grp = (tbRow?.parent_group || "").toLowerCase().trim();
+          if (!grp) continue;
+          if (!groupCount[grp]) groupCount[grp] = {};
+          groupCount[grp][c] = (groupCount[grp][c] || 0) + 1;
+        }
+        for (const [grp, codes] of Object.entries(groupCount)) {
+          let best = "", bestN = 0, tie = false;
+          for (const [c, n] of Object.entries(codes)) {
+            if (n > bestN) { best = c; bestN = n; tie = false; }
+            else if (n === bestN) tie = true;
+          }
+          if (best && !tie) groupToCode[grp] = best;
         }
         const cySeenLedger = new Set(
           Object.values(staticSources).flat().map(s => s.ledger.toLowerCase()),
@@ -897,8 +938,20 @@ export async function nceAutoPopulate(
           if (!nm) continue;
           const nmLower = nm.toLowerCase();
           if (cySeenLedger.has(nmLower)) continue;
-          const lookupMapped = cyMappingLower[nmLower];
-          if (!lookupMapped?.code || !codeSet.has(lookupMapped.code)) continue;
+          // Resolution order: PY-shell exact → PY-shell lower → CY exact →
+          // CY lower → parent_group inheritance. Mirrors how the variance
+          // drill resolves PY ledgers, so what the auditor sees in the
+          // drill always reaches the expanded note breakdown.
+          let mapped: { code: string } | undefined =
+            (pyCoaMap as any)[nm] ||
+            pyMappingLower[nmLower] ||
+            (coaMapping as any)[nm] ||
+            cyMappingLower[nmLower];
+          if (!mapped?.code) {
+            const grp = String((row as any).parent_group || "").toLowerCase().trim();
+            if (grp && groupToCode[grp]) mapped = { code: groupToCode[grp] };
+          }
+          if (!mapped?.code || !codeSet.has(mapped.code)) continue;
           const pyAmt = signedLedgerAmt(row, noteType);
           if (Math.abs(pyAmt) < 0.005) continue;
           const matchedRowId = smartMatch(nm, smartRules, row.parent_group);
