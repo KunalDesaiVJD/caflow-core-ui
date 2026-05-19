@@ -69,6 +69,10 @@ interface InvoiceRecord {
   firm_settings?: {
     logo_url?: string | null;
   } | null;
+  invoice_type?: string | null;
+  export_currency?: string | null;
+  exchange_rate?: number | null;
+  lut_number?: string | null;
   [key: string]: any;
 }
 
@@ -343,7 +347,25 @@ export function downloadPdfBlob(blob: Blob, filename: string) {
 
 export function buildInvoiceHtml(inv: InvoiceRecord): string {
   const docType = inv.document_type || "invoice";
-  const heading = DOC_HEADINGS[docType] || "TAX INVOICE";
+
+  // \u2500\u2500 Export invoice detection \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  const isExportWithIGST   = inv.invoice_type === "export_with_igst";
+  const isExportWithoutIGST = inv.invoice_type === "export_without_igst";
+  const isExport = isExportWithIGST || isExportWithoutIGST;
+  const currency  = (isExport && inv.export_currency) ? inv.export_currency : null;
+  const exRate    = (isExport && inv.exchange_rate) ? Number(inv.exchange_rate) : 1;
+  const lutNumber = inv.lut_number || "";
+
+  // Heading: export without IGST uses "EXPORT INVOICE"; others follow doc type
+  let heading = isExportWithoutIGST ? "EXPORT INVOICE" : (DOC_HEADINGS[docType] || "TAX INVOICE");
+
+  // Amount formatters: FC for export, INR otherwise
+  const fmtAmt = (n: number) =>
+    isExport
+      ? n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      : fmtINR(n);
+  const currSym = isExport ? (currency + " ") : "\u20B9";
+
   const firmName = inv.from_firm_name || "Firm";
   const firmGstin = inv.from_gstin || "";
   const firmPan = inv.from_pan || "";
@@ -366,9 +388,24 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
   const items: any[] = Array.isArray(inv.line_items) ? inv.line_items : [];
   const hasGst = !!firmGstin;
 
-  const totalTaxable = inv.subtotal || inv.amount || items.reduce((s: number, li: any) => s + (li.taxable_value || li.rate || 0), 0);
-  const totalGst = inv.gst_amount || 0;
-  const grandTotal = inv.total_amount || totalTaxable + totalGst;
+  // FC totals (from line items \u2014 stored as FC for export invoices, INR for domestic)
+  const fcTotalTaxable = items.reduce((s: number, li: any) => s + (li.taxable_value || 0), 0);
+  const fcTotalGst     = items.reduce((s: number, li: any) => s + (li.gst_amount || 0), 0);
+  const fcGrandTotal   = fcTotalTaxable + fcTotalGst;
+
+  // Display totals: FC for export, INR otherwise
+  const totalTaxable = isExport
+    ? fcTotalTaxable
+    : (inv.subtotal || inv.amount || fcTotalTaxable);
+  const totalGst = isExport
+    ? (isExportWithoutIGST ? 0 : fcTotalGst)
+    : (inv.gst_amount || 0);
+  const grandTotal = totalTaxable + totalGst;
+
+  // INR grand total for export (for "Amount in words" row in INR)
+  const inrGrandTotal = isExport
+    ? (inv.total_amount || Math.round(grandTotal * exRate))
+    : (inv.total_amount || grandTotal);
 
   const thGst = hasGst ? `<th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">GST %</th>` : "";
 
@@ -391,36 +428,60 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
       </td>
       <td style="border:1px solid #bbb;padding:6px 8px;text-align:center;vertical-align:middle;font-size:11px">${item.hsn_sac_code || ""}</td>
       <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">${Number(item.quantity || 1).toFixed(2)}</td>
-      <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">${fmtINR(item.rate || 0)}</td>
-      <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">${fmtINR(item.taxable_value || 0)}</td>
+      <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">${currSym}${fmtAmt(item.rate || 0)}</td>
+      <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">${currSym}${fmtAmt(item.taxable_value || 0)}</td>
       ${gstCol}
-      <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px;font-weight:600">${fmtINR(itemTotal)}</td>
+      <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px;font-weight:600">${currSym}${fmtAmt(itemTotal)}</td>
     </tr>`;
   }).join("");
 
   const colSpan = hasGst ? 5 : 4;
   const totalRow = `<tr style="background:#f0f0f0;font-weight:700">
     <td style="border:1px solid #bbb;padding:8px;vertical-align:middle" colspan="${colSpan}">Total</td>
-    <td style="border:1px solid #bbb;padding:8px;text-align:right;vertical-align:middle;font-size:11px">${fmtINR(totalTaxable)}</td>
+    <td style="border:1px solid #bbb;padding:8px;text-align:right;vertical-align:middle;font-size:11px">${currSym}${fmtAmt(totalTaxable)}</td>
     ${hasGst ? `<td style="border:1px solid #bbb;padding:8px;vertical-align:middle"></td>` : ""}
-    <td style="border:1px solid #bbb;padding:8px;text-align:right;vertical-align:middle;font-size:12px">${fmtINR(grandTotal)}</td>
+    <td style="border:1px solid #bbb;padding:8px;text-align:right;vertical-align:middle;font-size:12px">${currSym}${fmtAmt(grandTotal)}</td>
   </tr>`;
 
   const halfGst = totalGst / 2;
-  let totalsSummary = `<tr><td style="padding:3px 8px;vertical-align:middle">Taxable Amount</td><td style="padding:3px 8px;text-align:right;font-weight:600;vertical-align:middle">\u20B9${fmtINR(totalTaxable)}</td></tr>`;
-  if (hasGst) {
-    if (isIntraState) {
+  let totalsSummary = `<tr><td style="padding:3px 8px;vertical-align:middle">Taxable Amount</td><td style="padding:3px 8px;text-align:right;font-weight:600;vertical-align:middle">${currSym}${fmtAmt(totalTaxable)}</td></tr>`;
+  if (hasGst && !isExportWithoutIGST) {
+    if (!isExport && isIntraState) {
       totalsSummary += `
         <tr><td style="padding:3px 8px;vertical-align:middle">CGST</td><td style="padding:3px 8px;text-align:right;vertical-align:middle">\u20B9${fmtINR(halfGst)}</td></tr>
         <tr><td style="padding:3px 8px;vertical-align:middle">SGST</td><td style="padding:3px 8px;text-align:right;vertical-align:middle">\u20B9${fmtINR(halfGst)}</td></tr>`;
     } else {
-      totalsSummary += `<tr><td style="padding:3px 8px;vertical-align:middle">IGST</td><td style="padding:3px 8px;text-align:right;vertical-align:middle">\u20B9${fmtINR(totalGst)}</td></tr>`;
+      // inter-state or export with IGST
+      totalsSummary += `<tr><td style="padding:3px 8px;vertical-align:middle">IGST</td><td style="padding:3px 8px;text-align:right;vertical-align:middle">${currSym}${fmtAmt(totalGst)}</td></tr>`;
     }
-    totalsSummary += `<tr><td style="padding:3px 8px;vertical-align:middle">Round Off</td><td style="padding:3px 8px;text-align:right;vertical-align:middle">${(Math.round(grandTotal) - grandTotal) >= 0 ? "+" : ""}\u20B9${(Math.round(grandTotal) - grandTotal).toFixed(2)}</td></tr>`;
+    totalsSummary += `<tr><td style="padding:3px 8px;vertical-align:middle">Round Off</td><td style="padding:3px 8px;text-align:right;vertical-align:middle">${(Math.round(grandTotal) - grandTotal) >= 0 ? "+" : ""}${currSym}${Math.abs(Math.round(grandTotal) - grandTotal).toFixed(2)}</td></tr>`;
   }
-  totalsSummary += `<tr style="font-weight:700;font-size:13px;border-top:2px solid #333"><td style="padding:6px 8px;vertical-align:middle">Grand Total</td><td style="padding:6px 8px;text-align:right;vertical-align:middle">\u20B9${Math.round(grandTotal).toLocaleString("en-IN")}</td></tr>`;
+  totalsSummary += `<tr style="font-weight:700;font-size:13px;border-top:2px solid #333"><td style="padding:6px 8px;vertical-align:middle">Grand Total</td><td style="padding:6px 8px;text-align:right;vertical-align:middle">${currSym}${fmtAmt(Math.round(grandTotal))}</td></tr>`;
 
-  const docLabel = heading === "TAX INVOICE" ? "Invoice" : heading.charAt(0) + heading.slice(1).toLowerCase();
+  // For export: add exchange rate and INR equivalent rows
+  if (isExport) {
+    totalsSummary += `
+      <tr style="border-top:1px solid #ccc"><td style="padding:4px 8px;font-size:10px;color:#555">Exchange Rate</td><td style="padding:4px 8px;text-align:right;font-size:10px;color:#555">1 ${currency} = \u20B9${exRate.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}</td></tr>
+      <tr style="font-weight:700;font-size:12px;background:#f0f4ff"><td style="padding:5px 8px;vertical-align:middle">INR Equivalent</td><td style="padding:5px 8px;text-align:right;vertical-align:middle">\u20B9${Math.round(inrGrandTotal).toLocaleString("en-IN")}</td></tr>`;
+  }
+
+  const docLabel = (heading === "TAX INVOICE" || heading === "EXPORT INVOICE") ? "Invoice" : heading.charAt(0) + heading.slice(1).toLowerCase();
+
+  // Export declaration text (mandatory per GST Rules)
+  const exportDeclaration = isExportWithIGST
+    ? `<div style="text-align:center;margin-bottom:10px;font-size:10.5px;font-style:italic;color:#444;border:1px solid #e0b060;background:#fffbf0;padding:5px 10px;border-radius:3px">
+        Supply meant for Export under Bond or Letter of Undertaking with payment of IGST
+      </div>`
+    : isExportWithoutIGST
+    ? `<div style="text-align:center;margin-bottom:10px;font-size:10.5px;font-style:italic;color:#444;border:1px solid #e0b060;background:#fffbf0;padding:5px 10px;border-radius:3px">
+        Supply meant for Export under Bond or Letter of Undertaking without payment of IGST
+      </div>`
+    : "";
+
+  // Amount-in-words section
+  const amountInWords = isExport
+    ? `<strong>Amount in Foreign Currency (${currency}):</strong> ${numberToWords(Math.round(grandTotal))} <span style="font-size:10px;color:#555">&nbsp;|&nbsp; <strong>INR Equivalent:</strong> ${numberToWords(Math.round(inrGrandTotal))}</span>`
+    : `<strong>Amount in words:</strong> ${numberToWords(Math.round(grandTotal))}`;
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${heading} ${invoiceNo}</title>
     <style>
@@ -433,9 +494,11 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
     </style></head><body>
       <div style="border:1px solid #bbb;padding:12px 14px">
 
-    <div style="text-align:center;margin-bottom:16px;padding:6px 0;line-height:1.2">
+    <div style="text-align:center;margin-bottom:${isExport ? "8px" : "16px"};padding:6px 0;line-height:1.2">
       <h1 style="font-size:20px;font-weight:700;color:#8B4513;letter-spacing:1.5px;margin:0;padding:0;display:inline">${heading}</h1>
     </div>
+
+    ${exportDeclaration}
 
     <div style="display:flex;justify-content:space-between;margin-bottom:14px">
       <div style="flex:1;max-width:55%">
@@ -453,7 +516,9 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
           <div style="text-align:right">
             <p style="margin:2px 0"><strong>${docLabel} Date:</strong> ${invoiceDate ? format(new Date(invoiceDate), "dd/MM/yyyy") : "\u2014"}</p>
             <p style="margin:2px 0"><strong>${docLabel} No:</strong> ${invoiceNo}</p>
+            ${lutNumber ? `<p style="margin:2px 0"><strong>LUT No:</strong> ${lutNumber}</p>` : ""}
             ${referenceNo ? `<p style="margin:2px 0"><strong>Ref No:</strong> ${referenceNo}</p>` : ""}
+            ${isExport ? `<p style="margin:2px 0"><strong>Currency:</strong> ${currency}</p>` : ""}
           </div>
         </div>
       </div>
@@ -464,6 +529,7 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
       <p style="font-weight:600;margin:0;font-size:13px">${toName}</p>
       ${toAddress ? `<p style="margin:2px 0;font-size:11px">${toAddress}</p>` : ""}
       ${toGstin ? `<p style="margin:4px 0;font-size:11px"><strong>GSTIN:</strong> ${toGstin}</p>` : ""}
+      ${placeOfSupply && !isExport ? `<p style="margin:4px 0;font-size:11px"><strong>Place of Supply:</strong> ${placeOfSupply}</p>` : ""}
     </div>
 
     <table>
@@ -473,10 +539,10 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
           <th style="border:1px solid #bbb;padding:7px;font-size:10px;text-align:left;vertical-align:middle">Item</th>
           <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">HSN/SAC</th>
           <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">Quantity</th>
-          <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">Rate / Item (\u20B9)</th>
-          <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">Taxable Value (\u20B9)</th>
+          <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">Rate / Item (${isExport ? currency : "\u20B9"})</th>
+          <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">Taxable Value (${isExport ? currency : "\u20B9"})</th>
           ${thGst}
-          <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">Total (\u20B9)</th>
+          <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">Total (${isExport ? currency : "\u20B9"})</th>
         </tr>
       </thead>
       <tbody>
@@ -486,11 +552,11 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
     </table>
 
     <div style="display:flex;justify-content:flex-end;margin-top:10px">
-      <table style="width:320px;font-size:12px">${totalsSummary}</table>
+      <table style="width:360px;font-size:12px">${totalsSummary}</table>
     </div>
 
     <div style="margin:8px 0;padding:6px 8px;background:#f9f9f9;border:1px solid #ddd;font-size:11px">
-      <strong>Amount in words:</strong> ${numberToWords(Math.round(grandTotal))}
+      ${amountInWords}
     </div>
 
     ${remarksConditions ? `<div style="margin:8px 0;padding:6px 8px;font-size:11px;border:1px solid #ddd;page-break-inside:avoid;overflow:hidden">
