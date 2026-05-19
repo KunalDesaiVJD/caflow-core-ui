@@ -638,8 +638,16 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
       // PostgREST formats: "column \"foo\" of relation ..." or
       // "Could not find the 'foo' column of 'audit_status' in the schema cache".
       const msg = String(err.message || "");
-      const m = msg.match(/column ["']?([a-zA-Z0-9_]+)["']?/i)
-            ?? msg.match(/find the ["']?([a-zA-Z0-9_]+)["']? column/i);
+      // ORDER MATTERS: the "Could not find the 'X' column of 'audit_status'"
+      // message from PostgREST's schema-cache miss contains BOTH "column of"
+      // AND "column" tokens — the bare "column X" regex incorrectly matched
+      // the table name "audit_status" instead of the missing column. Match
+      // the more specific "find the X column" / "X column of Y" patterns
+      // FIRST. Also covers "column \"foo\" of relation \"audit_status\"".
+      const m = msg.match(/find the ["']?([a-zA-Z0-9_]+)["']? column/i)
+            ?? msg.match(/column ["']?([a-zA-Z0-9_]+)["']? of (?:relation |the )?["']?(?:audit_status|[a-zA-Z_]+)["']?/i)
+            ?? msg.match(/['"]([a-zA-Z0-9_]+)['"] column/i)
+            ?? msg.match(/column ["']?([a-zA-Z0-9_]+)["']?/i);
       const bad = m?.[1];
       if (!bad || !(bad in attemptPatch)) break;
       skippedFields[bad] = attemptPatch[bad];
@@ -659,6 +667,9 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
       );
     } else {
       toast.success("Saved");
+      // If the row had earlier shadow data (from a previous failed save) but
+      // the DB now accepts the patch, the shadow entry is stale. Clear it.
+      shadowDeleteRow(firmId, id);
     }
 
     if (oldRow) {
