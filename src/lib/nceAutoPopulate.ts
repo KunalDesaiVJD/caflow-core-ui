@@ -848,7 +848,9 @@ export async function nceAutoPopulate(
       const codeSet    = new Set(noteFs.all);
       const smartRules = NOTE_SMART_MAP[noteType] ?? [];
       // Stage 1: split each ledger into "matched-static" or "unmatched"
-      const unmatchedB: { ledger: string; amt: number; parentGroup?: string }[] = [];
+      // pyAmt is optional so PY-only ledgers (no CY balance) can still flow
+      // through Stage 2 as their own customRow with amt = 0 and pyAmt set.
+      const unmatchedB: { ledger: string; amt: number; parentGroup?: string; pyAmt?: number }[] = [];
 
       for (const row of tb) {
         const mapped = coaMapping[row.ledger_name];
@@ -955,13 +957,30 @@ export async function nceAutoPopulate(
           const pyAmt = signedLedgerAmt(row, noteType);
           if (Math.abs(pyAmt) < 0.005) continue;
           const matchedRowId = smartMatch(nm, smartRules, row.parent_group);
-          if (!matchedRowId) continue;
-          if (!staticSources[matchedRowId]) staticSources[matchedRowId] = [];
-          staticSources[matchedRowId].push({
-            ledger: nm,
-            amountCy: 0,
-            amountPy: pyAmt,
-          });
+          if (matchedRowId) {
+            // Smart-match → attach as a sub-row under the static row (e.g.
+            // TDS Payable-194A-24-25 → TDS Payable).
+            if (!staticSources[matchedRowId]) staticSources[matchedRowId] = [];
+            staticSources[matchedRowId].push({
+              ledger: nm,
+              amountCy: 0,
+              amountPy: pyAmt,
+            });
+          } else {
+            // No smart-match (e.g. trade_payables, where every creditor is its
+            // own line). Push to unmatchedB so Stage 2 creates a customRow
+            // with amountCy = 0 and amountPy = the PY closing. Without this,
+            // CLOSED ledgers (Ambition Electric, Kapadiya Hiren, etc.) that
+            // had balances last year but none this year silently disappear
+            // from the auto-populated note even though COA Mapping still
+            // shows them under Trade Payables.
+            unmatchedB.push({
+              ledger: nm,
+              amt: 0,
+              parentGroup: (row as any).parent_group ?? undefined,
+              pyAmt,
+            });
+          }
         }
       }
 
@@ -989,8 +1008,19 @@ export async function nceAutoPopulate(
         const label = um.ledger;
         const id    = makeCustomId(label, idx++);
         newCy[id] = um.amt;
-        const pyFromTb = pyByLedgerB[um.ledger.toLowerCase()] ?? 0;
-        newPy[id] = pyFromTb > 0 ? pyFromTb : pyForCustomRow(noteType, id, label);
+        // PY resolution order:
+        //   1. pre-computed pyAmt from the PY-only walk (signed)
+        //   2. PY-shell TB closing for the same ledger name (positive magnitude)
+        //   3. prior engagement's saved customRow with the same label
+        // Without step 1, CLOSED ledgers (e.g. Ambition Electric, Kapadiya
+        // Hiren) get amt = 0 and pyFromTb = 0 (already filtered in PY walk)
+        // and disappear from the note even though COA Mapping shows them.
+        const pyFromWalk = um.pyAmt ?? 0;
+        const pyFromTb   = pyByLedgerB[um.ledger.toLowerCase()] ?? 0;
+        const pyResolved = Math.abs(pyFromWalk) > 0.005
+          ? pyFromWalk
+          : (pyFromTb > 0 ? pyFromTb : pyForCustomRow(noteType, id, label));
+        newPy[id] = pyResolved;
         autoRows.push({ id, label, source: "auto" });
       }
 
