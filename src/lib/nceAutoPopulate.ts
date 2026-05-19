@@ -932,9 +932,18 @@ export async function nceAutoPopulate(
           }
           if (best && !tie) groupToCode[grp] = best;
         }
-        const cySeenLedger = new Set(
-          Object.values(staticSources).flat().map(s => s.ledger.toLowerCase()),
-        );
+        // Track every ledger already produced by the CY walk so the PY-only
+        // walk below doesn't re-create them as duplicate customRows. BUG FIX:
+        // previously this only watched staticSources (smart-matched ledgers).
+        // For Pattern B notes without smart-match (trade_payables, etc.)
+        // every CY ledger goes to unmatchedB instead, so the PY walk had no
+        // way to know they were already handled and ended up emitting a
+        // second "PY-only" row for the same ledger (Akash Ghanshyambhai
+        // Gediya appeared twice on DBS REALTY).
+        const cySeenLedger = new Set([
+          ...Object.values(staticSources).flat().map(s => s.ledger.toLowerCase()),
+          ...unmatchedB.map(u => u.ledger.toLowerCase()),
+        ]);
         for (const row of pyTb) {
           const nm = String(row.ledger_name || "").trim();
           if (!nm) continue;
@@ -1003,6 +1012,13 @@ export async function nceAutoPopulate(
           pyByLedgerB[nm.toLowerCase()] = ledgerAmt(r.closing_balance);
         }
       }
+      // Default attachedTo for COGS auto-mapped ledgers: every plain expense
+      // ledger (Hardware Purchase, Cement Purchase, etc.) lands under
+      // "Add: Purchases of raw materials" (raw_purch) by default. The
+      // auditor can still move it elsewhere via the row-actions menu
+      // (Stock-in-Trade / Packing material / etc.). Inventory ledgers are
+      // routed via the cogs special block further down — they hit the fixed
+      // pc_open_*/pc_close_* slots, not the unmatchedB customRow path.
       let idx = 0;
       for (const um of unmatchedB) {
         const label = um.ledger;
@@ -1021,7 +1037,11 @@ export async function nceAutoPopulate(
           ? pyFromWalk
           : (pyFromTb > 0 ? pyFromTb : pyForCustomRow(noteType, id, label));
         newPy[id] = pyResolved;
-        autoRows.push({ id, label, source: "auto" });
+        const row: NCECustomRow = {
+          id, label, source: "auto",
+          ...(noteType === "cogs" ? { attachedTo: "raw_purch" } : {}),
+        };
+        autoRows.push(row);
       }
 
       // Fallback: if nothing was populated at all, use FS-code totals.
