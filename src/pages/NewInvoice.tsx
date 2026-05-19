@@ -41,6 +41,24 @@ import {
 import { buildInvoiceHtml, downloadPdfFromHtml } from "@/lib/invoicePdfGenerator";
 import { resolveFirmNameForDate } from "@/lib/firmName";
 
+// ─── Export Invoice Currencies ───
+const EXPORT_CURRENCIES = [
+  { code: "USD", name: "US Dollar" },
+  { code: "EUR", name: "Euro" },
+  { code: "GBP", name: "Pound Sterling" },
+  { code: "AED", name: "UAE Dirham" },
+  { code: "SGD", name: "Singapore Dollar" },
+  { code: "AUD", name: "Australian Dollar" },
+  { code: "CAD", name: "Canadian Dollar" },
+  { code: "JPY", name: "Japanese Yen" },
+  { code: "CHF", name: "Swiss Franc" },
+  { code: "HKD", name: "Hong Kong Dollar" },
+  { code: "SAR", name: "Saudi Riyal" },
+  { code: "NZD", name: "New Zealand Dollar" },
+];
+
+type InvoiceType = "domestic" | "export_with_igst" | "export_without_igst";
+
 // ─── GSTIN State Code Map ───
 const STATE_CODES: Record<string, string> = {
   "01": "Jammu & Kashmir", "02": "Himachal Pradesh", "03": "Punjab", "04": "Chandigarh",
@@ -334,6 +352,12 @@ const NewInvoice = () => {
   const [tdsSectionCode, setTdsSectionCode] = useState("");
   const [tdsRate, setTdsRate] = useState(0);
 
+  // Export invoice state
+  const [invoiceType, setInvoiceType] = useState<InvoiceType>("domestic");
+  const [exportCurrency, setExportCurrency] = useState("USD");
+  const [exchangeRate, setExchangeRate] = useState<number>(84);
+  const [lutNumber, setLutNumber] = useState("");
+
   // Derived values
   const firmGstin = firm?.gstin || "";
   const placeOfSupply = getPlaceOfSupply(firmGstin);
@@ -341,6 +365,11 @@ const NewInvoice = () => {
   const billingEmail = (firm?.settings as any)?.billing_email || firm?.email || "";
   const billingContact = (firm?.settings as any)?.billing_contact_no || firm?.phone || "";
   const firmHasGst = !!firmGstin;
+  const isExport = invoiceType !== "domestic";
+  const isExportWithIGST = invoiceType === "export_with_igst";
+  const isExportWithoutIGST = invoiceType === "export_without_igst";
+  // Export transactions are always inter-state (IGST); domestic follows GSTIN match
+  const effectiveIsIntraState = isExport ? false : isIntraState;
   const currentFY = getFYFromDate(invoiceDate);
 
   useEffect(() => {
@@ -481,6 +510,10 @@ const NewInvoice = () => {
         setSourceDocumentId((inv as any).source_document_id || "");
         setTdsSectionCode((inv as any).tds_section_code || "");
         setTdsRate(Number((inv as any).tds_rate) || 0);
+        setInvoiceType(((inv as any).invoice_type as InvoiceType) || "domestic");
+        setExportCurrency((inv as any).export_currency || "USD");
+        setExchangeRate(Number((inv as any).exchange_rate) || 84);
+        setLutNumber((inv as any).lut_number || "");
         if (inv.firm_id) setSelectedFirmId(inv.firm_id);
         if (Array.isArray(inv.line_items) && inv.line_items.length > 0) {
           setLineItems(inv.line_items.map((li: any, i: number) => ({
@@ -602,10 +635,11 @@ const NewInvoice = () => {
     const qty = Number(item.quantity) || 0;
     const rate = Number(item.rate) || 0;
     const taxable = Math.round(qty * rate * 100) / 100;
-    const gstPct = firmHasGst ? (Number(item.gst_percent) || 0) : 0;
+    // Export without IGST = zero-rated; no GST on the invoice
+    const gstPct = (firmHasGst && !isExportWithoutIGST) ? (Number(item.gst_percent) || 0) : 0;
     const gstAmt = Math.round(taxable * gstPct / 100 * 100) / 100;
     return { ...item, taxable_value: taxable, gst_amount: gstAmt, total: taxable + gstAmt };
-  }, [firmHasGst]);
+  }, [firmHasGst, isExportWithoutIGST]);
 
   const updateLine = (idx: number, field: keyof LineItem, value: any) => {
     setLineItems(prev => {
@@ -680,12 +714,17 @@ const NewInvoice = () => {
     toast({ title: "Line items loaded from client package" });
   };
 
-  // Totals
+  // Totals (amounts in foreign currency for export, INR for domestic)
   const items = useMemo(() => lineItems.filter(li => li.description.trim()), [lineItems]);
   const totalTaxable = useMemo(() => items.reduce((s, li) => s + li.taxable_value, 0), [items]);
-  const totalGst = useMemo(() => firmHasGst ? items.reduce((s, li) => s + li.gst_amount, 0) : 0, [items, firmHasGst]);
+  const totalGst = useMemo(() => (firmHasGst && !isExportWithoutIGST) ? items.reduce((s, li) => s + li.gst_amount, 0) : 0, [items, firmHasGst, isExportWithoutIGST]);
   const grandTotal = totalTaxable + totalGst;
-  const tdsAmount = useMemo(() => tdsSectionCode ? Math.round(totalTaxable * tdsRate / 100 * 100) / 100 : 0, [tdsSectionCode, tdsRate, totalTaxable]);
+  // INR equivalents for saving to DB and ledger entries
+  const inrMultiplier = isExport ? (Number(exchangeRate) || 1) : 1;
+  const inrSubtotal   = Math.round(totalTaxable * inrMultiplier * 100) / 100;
+  const inrGst        = Math.round(totalGst * inrMultiplier * 100) / 100;
+  const inrGrandTotal = Math.round(grandTotal * inrMultiplier * 100) / 100;
+  const tdsAmount = useMemo(() => tdsSectionCode ? Math.round(inrSubtotal * tdsRate / 100 * 100) / 100 : 0, [tdsSectionCode, tdsRate, inrSubtotal]);
   const firmLogoUrl = useMemo(() => {
     const settingsLogo = typeof firm?.settings === "object" && firm?.settings
       ? (firm.settings as Record<string, any>).logo_url
@@ -723,7 +762,7 @@ const NewInvoice = () => {
     setSaving(true);
     try {
       const effectiveStatus = newStatus || status;
-      const halfGst = isIntraState ? totalGst / 2 : 0;
+      const halfGst = effectiveIsIntraState ? inrGst / 2 : 0;
       const series = getDocSeries(docType);
       const fy = getFYFromDate(invoiceDate);
 
@@ -735,14 +774,18 @@ const NewInvoice = () => {
         reference_no: referenceNo || null,
         place_of_supply: placeOfSupply || null,
         invoice_format: "gst_tax_invoice",
-        amount: totalTaxable,
-        subtotal: totalTaxable,
-        gst_amount: totalGst,
-        total_cgst: firmHasGst && isIntraState ? halfGst : 0,
-        total_sgst: firmHasGst && isIntraState ? halfGst : 0,
-        total_igst: firmHasGst && !isIntraState ? totalGst : 0,
-        total_amount: grandTotal,
-        is_intra_state: isIntraState,
+        amount: inrSubtotal,
+        subtotal: inrSubtotal,
+        gst_amount: inrGst,
+        total_cgst: firmHasGst && effectiveIsIntraState ? halfGst : 0,
+        total_sgst: firmHasGst && effectiveIsIntraState ? halfGst : 0,
+        total_igst: firmHasGst && !effectiveIsIntraState && !isExportWithoutIGST ? inrGst : 0,
+        total_amount: inrGrandTotal,
+        is_intra_state: effectiveIsIntraState,
+        invoice_type: invoiceType,
+        export_currency: isExport ? exportCurrency : null,
+        exchange_rate: isExport ? (Number(exchangeRate) || null) : null,
+        lut_number: isExportWithoutIGST ? (lutNumber || null) : null,
         show_logo: showLogo,
         status: effectiveStatus,
         document_type: docType,
@@ -829,8 +872,8 @@ const NewInvoice = () => {
           entry_date: invoiceDate,
           entry_type: entryType,
           document_id: savedId,
-          debit_amount: isCredit ? 0 : grandTotal,
-          credit_amount: isCredit ? grandTotal : 0,
+          debit_amount: isCredit ? 0 : inrGrandTotal,
+          credit_amount: isCredit ? inrGrandTotal : 0,
           narration: `${isCredit ? "Credit Note" : "Invoice"} ${invoiceNo}`,
           financial_year: fy,
         });
@@ -844,7 +887,14 @@ const NewInvoice = () => {
     setSaving(false);
   };
 
-  const handleFinalize = () => { setFinalizeOpen(false); handleSave("finalized"); };
+  const handleFinalize = () => {
+    if (isExportWithoutIGST && !lutNumber.trim()) {
+      toast({ title: "LUT Number required", description: "Enter the LUT/Bond number for export without IGST before finalizing.", variant: "destructive" });
+      return;
+    }
+    setFinalizeOpen(false);
+    handleSave("finalized");
+  };
 
   // Convert to Invoice
   const handleConvertToInvoice = async () => {
@@ -928,12 +978,12 @@ const NewInvoice = () => {
       to_gstin: toGstin,
       to_address: toAddress,
       place_of_supply: placeOfSupply,
-      is_intra_state: isIntraState,
+      is_intra_state: effectiveIsIntraState,
       line_items: validItems,
       amount: totalTaxable,
       subtotal: totalTaxable,
       gst_amount: totalGst,
-      total_amount: grandTotal,
+      total_amount: inrGrandTotal,
       reference_no: referenceNo || null,
       remarks_conditions: remarksConditions || null,
       bank_details_snapshot: bankDetails,
@@ -941,11 +991,16 @@ const NewInvoice = () => {
       logo_url: firmLogoUrl,
       show_logo: showLogo,
       firm_settings: typeof firm?.settings === "object" ? firm.settings : null,
+      invoice_type: invoiceType,
+      export_currency: isExport ? exportCurrency : null,
+      exchange_rate: isExport ? (Number(exchangeRate) || 1) : null,
+      lut_number: isExportWithoutIGST ? lutNumber : null,
     });
-  }, [lineItems, invoiceNo, invoiceDate, referenceNo, placeOfSupply, isIntraState,
+  }, [lineItems, invoiceNo, invoiceDate, referenceNo, placeOfSupply, effectiveIsIntraState,
     firm, firmName, firmFullAddress, firmGstin, bankDetails, showLogo, firmLogoUrl,
-    toName, toGstin, toAddress, totalTaxable, totalGst, grandTotal,
-    billingEmail, billingContact, docType, remarksConditions]);
+    toName, toGstin, toAddress, totalTaxable, totalGst, inrGrandTotal,
+    billingEmail, billingContact, docType, remarksConditions,
+    invoiceType, exportCurrency, exchangeRate, lutNumber, isExport, isExportWithoutIGST]);
 
   if (loading) return <div className="p-6"><Skeleton className="h-[400px] w-full" /></div>;
 
@@ -1008,12 +1063,97 @@ const NewInvoice = () => {
                     variant={docType === dt ? "default" : "outline"}
                     size="sm"
                     className="text-xs"
-                    onClick={() => setDocType(dt)}
+                    onClick={() => { setDocType(dt); if (dt !== "invoice") setInvoiceType("domestic"); }}
                   >
                     {DOC_TYPE_LABELS[dt]}
                   </Button>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* Export Invoice Type — only for Tax Invoice */}
+          {docType === "invoice" && (
+            <div>
+              <Label className="text-xs font-semibold text-muted-foreground uppercase mb-2 block">Invoice Type</Label>
+              <div className="flex flex-wrap gap-1">
+                {([
+                  { value: "domestic",             label: "Tax Invoice (Domestic)" },
+                  { value: "export_with_igst",     label: "Export — With IGST" },
+                  { value: "export_without_igst",  label: "Export — Without IGST (LUT/Bond)" },
+                ] as { value: InvoiceType; label: string }[]).map(opt => (
+                  <Button
+                    key={opt.value}
+                    variant={invoiceType === opt.value ? "default" : "outline"}
+                    size="sm"
+                    className="text-xs"
+                    disabled={isLocked}
+                    onClick={() => setInvoiceType(opt.value)}
+                  >
+                    {opt.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Export Invoice Settings Panel */}
+          {isExport && docType === "invoice" && (
+            <div className="rounded-lg border border-orange-200 bg-orange-50/50 dark:bg-orange-950/20 p-3 space-y-3">
+              <div className="flex items-center gap-2">
+                <Badge className="text-[10px] bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200">Export Invoice</Badge>
+                <span className="text-xs text-orange-700 dark:text-orange-300 italic">
+                  {isExportWithIGST
+                    ? "Supply meant for Export under Bond or LUT with payment of IGST"
+                    : "Supply meant for Export under Bond or LUT without payment of IGST"}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <Label className="text-xs">Currency</Label>
+                  <Select value={exportCurrency} onValueChange={setExportCurrency} disabled={isLocked}>
+                    <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {EXPORT_CURRENCIES.map(c => (
+                        <SelectItem key={c.code} value={c.code} className="text-xs">
+                          {c.code} — {c.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs">Exchange Rate (1 {exportCurrency} = ₹)</Label>
+                  <Input
+                    type="number"
+                    value={exchangeRate}
+                    onChange={e => setExchangeRate(Number(e.target.value))}
+                    disabled={isLocked}
+                    className="h-8 text-xs"
+                    min={0}
+                    step={0.01}
+                  />
+                </div>
+              </div>
+              {isExportWithoutIGST && (
+                <div>
+                  <Label className="text-xs">LUT / Bond Number <span className="text-destructive">*</span></Label>
+                  <Input
+                    value={lutNumber}
+                    onChange={e => setLutNumber(e.target.value)}
+                    placeholder="e.g., AD240124012345G"
+                    disabled={isLocked}
+                    className="h-8 text-xs"
+                  />
+                  <p className="text-[10px] text-muted-foreground mt-1">Mandatory for zero-rated supply without IGST</p>
+                </div>
+              )}
+              {grandTotal > 0 && Number(exchangeRate) > 0 && (
+                <div className="text-xs text-orange-700 dark:text-orange-300 border-t border-orange-200 pt-2">
+                  {exportCurrency} {grandTotal.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                  {" "}× ₹{Number(exchangeRate).toLocaleString("en-IN")} = <strong>₹{inrGrandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong>
+                </div>
+              )}
             </div>
           )}
 
@@ -1372,18 +1512,23 @@ const NewInvoice = () => {
                       <Input type="number" value={item.quantity || ""} onChange={e => updateLine(idx, "quantity", Number(e.target.value))} className="text-xs h-8" disabled={isLocked} />
                     </div>
                     <div>
-                      <Label className="text-[10px]">Rate</Label>
+                      <Label className="text-[10px]">Rate {isExport ? `(${exportCurrency})` : ""}</Label>
                       <Input type="number" value={item.rate || ""} onChange={e => updateLine(idx, "rate", Number(e.target.value))} className="text-xs h-8" disabled={isLocked} />
                     </div>
-                    {firmHasGst && (
+                    {firmHasGst && !isExportWithoutIGST && (
                       <div>
                         <Label className="text-[10px]">GST %</Label>
                         <Input type="number" value={item.gst_percent || ""} onChange={e => updateLine(idx, "gst_percent", Number(e.target.value))} className="text-xs h-8" disabled={isLocked} />
                       </div>
                     )}
                     <div>
-                      <Label className="text-[10px]">Total</Label>
-                      <div className="text-xs font-semibold pt-2 text-right">{fmtINR(firmHasGst ? item.total : item.taxable_value)}</div>
+                      <Label className="text-[10px]">Total {isExport ? `(${exportCurrency})` : ""}</Label>
+                      <div className="text-xs font-semibold pt-2 text-right">
+                        {isExport
+                          ? `${exportCurrency} ${(firmHasGst && !isExportWithoutIGST ? item.total : item.taxable_value).toLocaleString("en-US", { minimumFractionDigits: 2 })}`
+                          : fmtINR(firmHasGst ? item.total : item.taxable_value)
+                        }
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1440,18 +1585,35 @@ const NewInvoice = () => {
 
             {/* Amount summary */}
             <div className="text-sm space-y-1 text-right">
-              <p>Taxable Amount: <strong>{fmtINR(totalTaxable)}</strong></p>
-              {firmHasGst && (
-                isIntraState ? (
-                  <>
-                    <p>CGST: <strong>{fmtINR(totalGst / 2)}</strong></p>
-                    <p>SGST: <strong>{fmtINR(totalGst / 2)}</strong></p>
-                  </>
-                ) : (
-                  <p>IGST: <strong>{fmtINR(totalGst)}</strong></p>
-                )
+              {isExport ? (
+                <>
+                  <p>Taxable Amount ({exportCurrency}): <strong>{exportCurrency} {totalTaxable.toLocaleString("en-US", { minimumFractionDigits: 2 })}</strong></p>
+                  {isExportWithIGST && firmHasGst && totalGst > 0 && (
+                    <p>IGST ({exportCurrency}): <strong>{exportCurrency} {totalGst.toLocaleString("en-US", { minimumFractionDigits: 2 })}</strong></p>
+                  )}
+                  {isExportWithoutIGST && (
+                    <p className="text-xs text-orange-600">Zero-rated — No IGST (LUT/Bond)</p>
+                  )}
+                  <p className="text-base font-bold">Grand Total ({exportCurrency}): {exportCurrency} {grandTotal.toLocaleString("en-US", { minimumFractionDigits: 2 })}</p>
+                  <p className="text-xs text-muted-foreground">@ ₹{Number(exchangeRate).toLocaleString("en-IN")} per {exportCurrency}</p>
+                  <p className="text-lg font-bold text-foreground border-t pt-1">INR Equivalent: {fmtINR(inrGrandTotal)}</p>
+                </>
+              ) : (
+                <>
+                  <p>Taxable Amount: <strong>{fmtINR(totalTaxable)}</strong></p>
+                  {firmHasGst && (
+                    effectiveIsIntraState ? (
+                      <>
+                        <p>CGST: <strong>{fmtINR(totalGst / 2)}</strong></p>
+                        <p>SGST: <strong>{fmtINR(totalGst / 2)}</strong></p>
+                      </>
+                    ) : (
+                      <p>IGST: <strong>{fmtINR(totalGst)}</strong></p>
+                    )
+                  )}
+                  <p className="text-lg font-bold text-foreground">Grand Total: {fmtINR(grandTotal)}</p>
+                </>
               )}
-              <p className="text-lg font-bold text-foreground">Grand Total: {fmtINR(grandTotal)}</p>
               {tdsAmount > 0 && (
                 <p className="text-sm text-orange-600 font-medium">
                   TDS Deductible u/s {tdsSectionCode} @ {tdsRate}%: <strong>— {fmtINR(tdsAmount)}</strong>
@@ -1459,10 +1621,10 @@ const NewInvoice = () => {
               )}
               {tdsAmount > 0 && (
                 <p className="text-sm font-semibold text-foreground">
-                  Net Receivable after TDS: {fmtINR(grandTotal - tdsAmount)}
+                  Net Receivable after TDS: {fmtINR(inrGrandTotal - tdsAmount)}
                 </p>
               )}
-              <p className="text-xs text-muted-foreground italic">{numberToWords(Math.round(grandTotal))}</p>
+              <p className="text-xs text-muted-foreground italic">{numberToWords(Math.round(isExport ? inrGrandTotal : grandTotal))}</p>
             </div>
           </div>
         </div>
