@@ -5,7 +5,7 @@
  *  POST ?action=send-otp   → generate 6-digit OTP, email it, store in otp_requests
  *  POST ?action=verify-otp → verify OTP, reset password (or confirm email change)
  *
- * Email sent via Microsoft Graph API from accounts@vjdesai.com
+ * Email sent via Microsoft Graph API from audit@vjdesai.com
  * Required secrets: GRAPH_TENANT_ID, GRAPH_CLIENT_ID, GRAPH_CLIENT_SECRET, SMTP_SENDER
  */
 
@@ -45,7 +45,7 @@ async function getGraphToken(): Promise<string> {
 }
 
 async function sendOtpEmail(toEmail: string, userName: string, otp: string, purpose: string): Promise<void> {
-  const fromEmail = Deno.env.get("SMTP_SENDER") || "accounts@vjdesai.com";
+  const fromEmail = Deno.env.get("SMTP_SENDER") || "audit@vjdesai.com";
   const token = await getGraphToken();
 
   const purposeLabel = purpose === "email_change" ? "Email Change Verification" : "Password Reset";
@@ -139,7 +139,7 @@ function buildOtpEmailHtml(userName: string, otp: string, purposeLabel: string):
 
               <p style="margin:0 0 8px;color:#374151;font-size:14px;line-height:1.6;">
                 If you did not request this, please ignore this email or contact us immediately at
-                <a href="mailto:accounts@vjdesai.com" style="color:#2d5a8e;">accounts@vjdesai.com</a>.
+                <a href="mailto:audit@vjdesai.com" style="color:#2d5a8e;">audit@vjdesai.com</a>.
               </p>
             </td>
           </tr>

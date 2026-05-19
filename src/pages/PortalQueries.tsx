@@ -153,12 +153,13 @@ function QueryCard({ query, clientName }: { query: AuditQuery; clientName: strin
       if (query.firm_id) {
         supabase.functions.invoke("send-notification", {
           body: {
-            type: "audit_query_dispatch", firm_id: query.firm_id,
-            direct_email: "info@vjdesai.com",
+            type: "portal_client_activity",
+            firm_id: query.firm_id,
+            client_id: query.client_id,
             payload: {
-              client_name: clientName,
-              custom_message: `${clientName} responded to an audit query${query.ref_number ? ` (${query.ref_number})` : ""}. Log in to CAFlow to review.`,
-              custom_subject: `Client Response — ${clientName}`,
+              client_name:   clientName,
+              activity_type: "query_reply",
+              details:       `Query ${query.ref_number || ""}: ${replyText.trim().slice(0, 100)}${replyText.trim().length > 100 ? "…" : ""}`,
             },
           },
         }).catch(() => {});

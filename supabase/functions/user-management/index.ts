@@ -24,6 +24,112 @@ const DEFAULT_PASSWORDS: Record<string, string> = {
   client: "Client@2025!",
 };
 
+// ── Graph API helpers (for portal credentials email) ─────────────────
+
+async function getGraphToken(): Promise<string> {
+  const tenantId     = Deno.env.get("GRAPH_TENANT_ID");
+  const clientId     = Deno.env.get("GRAPH_CLIENT_ID");
+  const clientSecret = Deno.env.get("GRAPH_CLIENT_SECRET");
+  if (!tenantId || !clientId || !clientSecret) throw new Error("Graph credentials not configured");
+  const res = await fetch(
+    `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type:    "client_credentials",
+        client_id:     clientId,
+        client_secret: clientSecret,
+        scope:         "https://graph.microsoft.com/.default",
+      }),
+    }
+  );
+  const data = await res.json();
+  if (!data.access_token) throw new Error("Graph token error: " + JSON.stringify(data));
+  return data.access_token;
+}
+
+function buildCredentialsEmailHtml(name: string, email: string, password: string): string {
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+body{font-family:Arial,sans-serif;max-width:600px;margin:32px auto;padding:0;color:#333;background:#f4f4f5}
+.wrap{background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.08)}
+.hdr{background:linear-gradient(135deg,#1a3a5c,#2d5a8e);padding:28px 32px;text-align:center}
+.hdr h1{margin:0;color:#c9a84c;font-size:26px;font-weight:700;letter-spacing:1px}
+.hdr h1 span{color:#fff}
+.hdr p{margin:6px 0 0;color:rgba(255,255,255,.7);font-size:13px}
+.bdy{padding:32px}
+.creds{background:#f0f4ff;border:1px solid #d1d5db;border-radius:8px;padding:20px;margin:20px 0}
+.creds p{margin:6px 0;font-size:14px}
+.creds code{background:#fff;border:1px solid #d1d5db;padding:2px 8px;border-radius:4px;font-family:monospace;font-size:13px}
+.warn{background:#fef3c7;border-left:4px solid #f59e0b;padding:12px 16px;border-radius:0 6px 6px 0;margin:16px 0}
+.warn p{margin:0;color:#92400e;font-size:13px}
+.ftr{background:#f9fafb;padding:20px 32px;border-top:1px solid #e5e7eb;text-align:center;font-size:12px;color:#9ca3af}
+</style></head>
+<body>
+<div class="wrap">
+<div class="hdr">
+  <h1>CA<span>Flow</span></h1>
+  <p>Practice Management for CA Firms</p>
+</div>
+<div class="bdy">
+  <h2 style="margin:0 0 8px;color:#1a3a5c;font-size:20px">Your Client Portal Access</h2>
+  <p style="color:#6b7280;font-size:14px;margin:0 0 20px">Dear ${name},</p>
+  <p style="color:#374151;font-size:14px;line-height:1.6;margin:0 0 20px">
+    Your client portal account has been created by <strong>V J Desai &amp; Co. LLP</strong>.
+    You can now securely access your audit queries, documents, and communications online.
+  </p>
+  <div class="creds">
+    <p><strong>Login Email:</strong> <code>${email}</code></p>
+    <p><strong>Temporary Password:</strong> <code>${password}</code></p>
+  </div>
+  <div class="warn">
+    <p>⚠️ Please change your password immediately after your first login for security.</p>
+  </div>
+  <p style="color:#6b7280;font-size:13px;margin:16px 0 0">
+    For any assistance, contact us at
+    <a href="mailto:audit@vjdesai.com" style="color:#2d5a8e">audit@vjdesai.com</a>.
+  </p>
+</div>
+<div class="ftr">
+  V J Desai &amp; Co. LLP, Chartered Accountants<br>
+  This is an automated message from CAFlow. Please do not reply to this email.<br>
+  © ${new Date().getFullYear()} CAFlow Practice Management
+</div>
+</div>
+</body></html>`;
+}
+
+async function sendCredentialsEmail(toEmail: string, name: string, password: string): Promise<void> {
+  const fromEmail = Deno.env.get("SMTP_SENDER") || "audit@vjdesai.com";
+  try {
+    const token = await getGraphToken();
+    const html  = buildCredentialsEmailHtml(name, toEmail, password);
+    const res   = await fetch(`https://graph.microsoft.com/v1.0/users/${fromEmail}/sendMail`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: {
+          subject:      "Your Client Portal Access — V J Desai & Co. LLP",
+          body:         { contentType: "HTML", content: html },
+          toRecipients: [{ emailAddress: { address: toEmail } }],
+          from:         { emailAddress: { name: "V J Desai & Co. LLP", address: fromEmail } },
+        },
+        saveToSentItems: true,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      console.error("[user-management] credentials email failed:", err.slice(0, 300));
+    } else {
+      console.log("[user-management] credentials email sent to", toEmail);
+    }
+  } catch (err: any) {
+    // Non-fatal — portal activation should succeed even if email fails
+    console.error("[user-management] sendCredentialsEmail error:", err.message);
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -353,6 +459,9 @@ Deno.serve(async (req) => {
       if (client_id) {
         await adminClient.from("clients").update({ user_id: authUserId }).eq("id", client_id);
       }
+
+      // Send credentials email to the client from audit@vjdesai.com
+      await sendCredentialsEmail(email, name || email, password);
 
       return new Response(JSON.stringify({ success: true, user_id: authUserId, default_password: password }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
