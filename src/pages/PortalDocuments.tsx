@@ -78,6 +78,19 @@ export default function PortalDocuments() {
       });
       toast.success("Document uploaded");
       fetchDocs();
+      // Notify firm via smart-batched digest (at most once per 4 hours)
+      supabase.functions.invoke("send-notification", {
+        body: {
+          type:      "portal_client_activity",
+          firm_id:   activeClient.firm_id,
+          client_id: activeClient.id,
+          payload: {
+            client_name:   activeClient.name,
+            activity_type: "document_upload",
+            details:       `${file.name} (${uploadCat})`,
+          },
+        },
+      }).catch(() => {});
     } catch (err: any) {
       toast.error(err.message || "Upload failed");
     } finally {

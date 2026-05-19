@@ -39,6 +39,8 @@ const subjects: Record<string, string> = {
   audit_query_reminder:      "Reminder: Pending Audit Queries",
   audit_draft_report:        "Draft Audit Report for Review",
   audit_final_report:        "Audit Report Finalized",
+  // Client portal activity digest (smart-batched to info@vjdesai.com)
+  portal_client_activity:    "Client Portal Activity Digest",
 };
 
 const templateMap: Record<string, string> = {
@@ -72,6 +74,8 @@ const channelRules: Record<string, ("whatsapp" | "email")[]> = {
   audit_query_reminder:      ["email"],     // Phase 4B: also handles whatsapp via direct_whatsapp param
   audit_draft_report:        ["email"],
   audit_final_report:        ["email"],
+  // Client portal activity digest — handled specially in main handler
+  portal_client_activity:    ["email"],
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -113,7 +117,7 @@ function buildEmailHTML(type: string, payload: Record<string, any>): string {
   <div style="padding:0 24px">
     <div class="ftr">
       This is an automated message from CAFlow Practice Management. Please do not reply to this email.<br>
-      For queries, contact us at <a href="mailto:accounts@vjdesai.com">accounts@vjdesai.com</a>
+      For queries, contact us at <a href="mailto:audit@vjdesai.com">audit@vjdesai.com</a>
     </div>
   </div>
 </body></html>`;
@@ -256,6 +260,65 @@ function buildEmailHTML(type: string, payload: Record<string, any>): string {
         <p>${payload.custom_message || "Please find the details below."}</p>
         ${payload.invoice_no ? `<p>Reference: ${payload.invoice_no}</p>` : ""}`);
   }
+}
+
+// ── Portal activity digest HTML builder ─────────────────────────────
+
+function buildPortalDigestHtml(activities: any[], firmName: string): string {
+  const rows = activities.map((a: any) => {
+    const time = new Date(a.created_at).toLocaleString("en-IN", {
+      day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
+    });
+    const icon    = a.activity === "document_upload" ? "📎" : "💬";
+    const actLabel = a.activity === "document_upload" ? "Uploaded document" : "Replied to query";
+    return `<tr>
+      <td style="padding:8px 12px;border-bottom:1px solid #f3f4f6;font-size:13px;">${icon} ${a.client_name || "Client"}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #f3f4f6;font-size:13px;">${actLabel}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #f3f4f6;font-size:13px;color:#6b7280;">${a.details || "—"}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #f3f4f6;font-size:13px;color:#6b7280;white-space:nowrap;">${time}</td>
+    </tr>`;
+  }).join("");
+
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+body{font-family:Arial,sans-serif;max-width:700px;margin:0 auto;padding:0;color:#333}
+.hdr{background:#1a3a5c;color:#fff;padding:18px 24px}
+.hdr h2{margin:0;font-size:18px;font-weight:600}
+.hdr p{margin:4px 0 0;font-size:12px;opacity:.8}
+.bdy{border:1px solid #e5e7eb;border-top:none;padding:24px}
+.ftr{margin-top:20px;font-size:11px;color:#9ca3af;border-top:1px solid #f3f4f6;padding-top:12px}
+</style></head>
+<body>
+<div class="hdr">
+  <h2>${firmName}</h2>
+  <p>Client Portal — Activity Digest</p>
+</div>
+<div class="bdy">
+  <p style="margin:0 0 16px;font-size:14px;color:#374151">
+    The following client portal activities require your attention:
+  </p>
+  <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden">
+    <thead>
+      <tr style="background:#f9fafb">
+        <th style="padding:10px 12px;text-align:left;font-size:12px;color:#6b7280;font-weight:600;border-bottom:1px solid #e5e7eb">Client</th>
+        <th style="padding:10px 12px;text-align:left;font-size:12px;color:#6b7280;font-weight:600;border-bottom:1px solid #e5e7eb">Activity</th>
+        <th style="padding:10px 12px;text-align:left;font-size:12px;color:#6b7280;font-weight:600;border-bottom:1px solid #e5e7eb">Details</th>
+        <th style="padding:10px 12px;text-align:left;font-size:12px;color:#6b7280;font-weight:600;border-bottom:1px solid #e5e7eb">Time</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>
+  <p style="margin:20px 0 0;font-size:13px;color:#6b7280">
+    Please log in to <strong>CAFlow</strong> to review and respond to your clients.
+  </p>
+</div>
+<div style="padding:0 24px">
+  <div class="ftr">
+    Automated digest from CAFlow Client Portal · sent at most once every 4 hours per firm.<br>
+    © ${new Date().getFullYear()} V J Desai &amp; Co. LLP, Chartered Accountants
+  </div>
+</div>
+</body></html>`;
 }
 
 // ── Microsoft Graph API — get access token ───────────────────────────
@@ -562,6 +625,67 @@ Deno.serve(async (req) => {
       ...payload,
       firm_name: firmData?.name || "V J Desai & Co. LLP",
     };
+
+    // ── Smart-batched portal activity digest ─────────────────────────────
+    if (type === "portal_client_activity") {
+      // Log this activity (ignore failures so the portal interaction still succeeds)
+      try {
+        await adminClient.from("portal_activity_log").insert({
+          firm_id,
+          client_id: client_id || null,
+          client_name: payload.client_name || "Unknown Client",
+          activity:    payload.activity_type  || "activity",
+          details:     payload.details        || null,
+        });
+      } catch (_) { /* non-fatal */ }
+
+      // Find when the last digest was sent for this firm
+      const { data: lastRow } = await adminClient
+        .from("portal_activity_log")
+        .select("created_at")
+        .eq("firm_id", firm_id)
+        .eq("notified", true)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      const lastSentAt   = lastRow?.created_at ? new Date(lastRow.created_at) : null;
+      const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000);
+
+      if (lastSentAt && lastSentAt > fourHoursAgo) {
+        // A digest was already sent within 4 hours — just accumulate, skip email
+        return jsonResponse({ success: true, batched: true, message: "Activity logged; digest pending" });
+      }
+
+      // Fetch all unnotified activities for this firm
+      const { data: pending } = await adminClient
+        .from("portal_activity_log")
+        .select("*")
+        .eq("firm_id", firm_id)
+        .eq("notified", false)
+        .order("created_at", { ascending: true });
+
+      if (!pending || pending.length === 0) {
+        return jsonResponse({ success: true, batched: true });
+      }
+
+      const digestHtml = buildPortalDigestHtml(pending, enrichedPayload.firm_name || "V J Desai & Co. LLP");
+      const subject    = `Client Portal Activity — ${pending.length} update${pending.length !== 1 ? "s" : ""} (${enrichedPayload.firm_name || "CAFlow"})`;
+
+      const emailResult = await sendEmail(
+        "portal_client_activity",
+        "info@vjdesai.com",
+        { ...enrichedPayload, custom_html: digestHtml },
+        subject,
+      );
+
+      if (emailResult.success) {
+        const ids = (pending as any[]).map((r) => r.id);
+        await adminClient.from("portal_activity_log").update({ notified: true }).in("id", ids);
+      }
+
+      return jsonResponse({ success: true, digest_sent: emailResult.success, count: pending.length });
+    }
 
     const allResults: Record<string, any> = {};
 
