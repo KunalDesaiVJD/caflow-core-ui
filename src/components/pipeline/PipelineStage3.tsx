@@ -1888,6 +1888,36 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       const isDr = String(row.balance_type ?? "").toUpperCase() === "DR";
       amounts[mapping.code] = (amounts[mapping.code] || 0) + (isDr ? cb : -cb);
     }
+    // ROOT-CAUSE FIX (Stage 6 — PY parent total bug): also inject the
+    // PY Changes-in-Inventories dual-post here. Without this, the CII PL
+    // leaf in pyShellPLAmounts stays at 0 (no PY-shell ledger maps to
+    // PL_EXP_CII directly — inventory ledgers map to BS_CA_INV). Then the
+    // render at line ~3421 short-circuits on computedAmountsPY (which only
+    // contains the CII contribution at PL parent codes) and ignores
+    // pyShellPLAmounts entirely. Mirroring the same dual-post into
+    // pyShellPLAmounts gives the FULL P&L PY total: regular P&L sums +
+    // CII dual-post, identical to what computedAmountsPY produces for the
+    // CII child alone, but with ALL the other P&L children also populated.
+    const pyShellPrevClose: Record<string, number> = {};
+    for (const row of pyShellTbData?.tbRows || []) {
+      const name = String((row as any).ledger_name || "").trim().toLowerCase();
+      if (!name) continue;
+      const ob = Math.abs(Number((row as any).opening_balance ?? 0));
+      if (ob < 0.005) continue;
+      const isDr = String((row as any).opening_type ?? "").toUpperCase() === "DR";
+      pyShellPrevClose[name] = isDr ? ob : -ob;
+    }
+    for (const acct of tbAccounts) {
+      const mapping = coaMapping[acct.account_name];
+      if (!mapping) continue;
+      const plCode = INV_DUAL_MAP[mapping.code];
+      if (!plCode) continue;
+      const pyClose = acct.opening_balance ?? 0;
+      const prev    = pyShellPrevClose[acct.account_name.toLowerCase()] ?? 0;
+      if (Math.abs(prev) < 0.005 && Math.abs(pyClose) < 0.005) continue;
+      amounts[plCode] = (amounts[plCode] || 0) + (prev - pyClose);
+    }
+
     // Roll up parent P&L nodes
     const computeParent = (item: FSLineItem): number => {
       if (!item.children || item.children.length === 0) return amounts[item.code] || 0;
@@ -3417,12 +3447,23 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                     const isHeader = item.children && item.children.length > 0;
                     const mappedAccounts = tbAccounts.filter(a => coaMapping[a.account_name]?.code === item.code);
                     const amountCY = computedAmounts[item.code]   || 0;
-                    // PY: BS items → opening_balance from CY TB; P&L items → PY shell closing_balance
-                    const amountPY =
-                      computedAmountsPY[item.code] ||   // BS: opening_balance-derived
-                      pyShellPLAmounts[item.code]  ||   // P&L: PY shell closing_balance
-                      pyAmounts[item.code]         ||   // P&L fallback: prior fa_financial_statements
-                      0;
+                    // PY: BS items → opening_balance from CY TB; P&L items → PY shell TB.
+                    // ROOT-CAUSE FIX (Stage 6 — PY parent total bug):
+                    // For P&L items we MUST consult pyShellPLAmounts first.
+                    // computedAmountsPY for any P&L parent only ever contains the
+                    // CII dual-post amount (since every other P&L leaf has
+                    // opening_balance = 0), so a naïve `||` chain short-circuits
+                    // on that partial total and ignores the real PY values.
+                    // Classify by section so corporate (PL_*) and NCE (NCE_*)
+                    // codes both flow through the correct branch.
+                    const itemSecLower = String((item as any).section || "").toLowerCase();
+                    const isItemPL =
+                      itemSecLower.includes("pl") || itemSecLower.includes("p_l") ||
+                      itemSecLower.includes("revenue") || itemSecLower.includes("expense") ||
+                      itemSecLower.includes("income");
+                    const amountPY = isItemPL
+                      ? (pyShellPLAmounts[item.code] || pyAmounts[item.code] || 0)
+                      : (computedAmountsPY[item.code] || 0);
                     const delta    = amountCY - amountPY;
                     const pct      = Math.abs(amountPY) > 0.005
                       ? Math.round((delta / Math.abs(amountPY)) * 100)
