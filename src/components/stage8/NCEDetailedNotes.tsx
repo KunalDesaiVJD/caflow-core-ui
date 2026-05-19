@@ -15,6 +15,7 @@
  */
 
 import { useState, useEffect, useMemo, useCallback, useRef, Fragment } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { supabase }    from "@/integrations/supabase/client";
 import { Button }      from "@/components/ui/button";
 import { Input }       from "@/components/ui/input";
@@ -1304,6 +1305,7 @@ function PatternATable({
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
+  const queryClient = useQueryClient();
   const [noteData,    setNoteData]    = useState<Record<string, NCENoteData>>({});
   const [loading,     setLoading]     = useState(true);
   const [saving,      setSaving]      = useState(false);
@@ -1656,7 +1658,18 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
               // Silent background refresh — don't block the UI
               nceAutoPopulate(engagementId, built).then(refreshed => {
                 if (!cancelled) setNoteData(refreshed);
-                persistNotes(refreshed, fy).catch(() => {});
+                persistNotes(refreshed, fy)
+                  .then(() => {
+                    // BS face on the same Stage 7 page reads from a separate
+                    // useQuery({ queryKey: ["nce-financial-notes", ...] }) in
+                    // PipelineFinancialStatements. Without an invalidation
+                    // here, that query keeps stale data after the re-sync
+                    // writes to the DB — so the BS face shows the old
+                    // (incorrect) Trade Payables PY total while the Note
+                    // shows the new correct value.
+                    queryClient.invalidateQueries({ queryKey: ["nce-financial-notes", engagementId] });
+                  })
+                  .catch(() => {});
                 // Mark the per-key PY migration as done so subsequent loads
                 // skip the silent re-sync unless a genuine gap reappears.
                 try { localStorage.setItem(pyMigrationKey, "1"); } catch {/* private mode */}
