@@ -3,6 +3,7 @@ import ReceiptsTabComponent from "@/components/billing/ReceiptsTab";
 import LedgerTabComponent from "@/components/billing/LedgerTab";
 import BillingDashboardTab from "@/components/billing/BillingDashboardTab";
 import EmailSettingsTab from "@/components/billing/EmailSettingsTab";
+import ReceivablesReportTab from "@/components/billing/ReceivablesReportTab";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -227,6 +228,7 @@ const Billing = () => {
           <TabsTrigger value="receipts" className="gap-2"><Receipt size={14} /> Receipts</TabsTrigger>
           <TabsTrigger value="ledger" className="gap-2"><BookOpen size={14} /> Ledger</TabsTrigger>
           <TabsTrigger value="item-master" className="gap-2"><Settings2 size={14} /> Item Master</TabsTrigger>
+          <TabsTrigger value="report" className="gap-2"><BarChart3 size={14} /> Report</TabsTrigger>
           <TabsTrigger value="email-settings" className="gap-2"><Mail size={14} /> Email Settings</TabsTrigger>
         </TabsList>
 
@@ -235,6 +237,7 @@ const Billing = () => {
         <TabsContent value="receipts"><ReceiptsTab /></TabsContent>
         <TabsContent value="ledger"><LedgerTabComponent /></TabsContent>
         <TabsContent value="item-master"><ItemMasterTab /></TabsContent>
+        <TabsContent value="report"><ReceivablesReportTab /></TabsContent>
         <TabsContent value="email-settings"><EmailSettingsTab firmId={firmId} userId={userId} /></TabsContent>
       </Tabs>
     </div>
