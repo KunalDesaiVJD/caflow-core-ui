@@ -1,14 +1,13 @@
 /**
- * ReceivablesReportTab — Sundry Debtors (Flat list, Tally-inspired)
+ * ReceivablesReportTab — Sundry Debtors (Flat list, Tally-inspired) v3
  *
- * Features:
- *  - Flat client list: Opening | Debit | Credit | Closing (Dr/Cr)
- *  - Click any row → right-side Sheet with running ledger
- *  - Export: Big4-style PDF
- *  - Email individual client ledger from the Sheet
- *  - Send full report to Telegram (all linked users of the firm)
+ * Fixed:
+ *  1. Firm dropdown — superadmin sees all firms, others see only their firm
+ *  2. Opening balance from client_billing_opening_balances included in totals
+ *     (clients with only OB now appear in the report)
+ *  3. Ledger sheet shows OB as first row, matching the Ledger tab
  */
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -18,12 +17,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { format, parseISO } from "date-fns";
 import {
   Download, RefreshCw, Search, X, TrendingUp, Users,
   Send, FileText, Mail, MessageCircle, Loader2,
-  ArrowUpDown, ChevronUp, ChevronDown,
+  ArrowUpDown, ChevronUp, ChevronDown, Building2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -32,15 +32,17 @@ import {
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
+interface Firm { id: string; name: string; logo_url?: string | null; }
+
 interface ClientRow {
   id: string;
   name: string;
   email: string | null;
-  entity_type: string;
-  openingDr: number;
-  openingCr: number;
-  debit: number;
-  credit: number;
+  ob: number;          // manual opening balance from client_billing_opening_balances
+  openingDr: number;   // invoices before period
+  openingCr: number;   // receipts before period
+  debit: number;       // invoices in period
+  credit: number;      // receipts in period
 }
 
 interface LedgerEntry {
@@ -70,9 +72,7 @@ function currentFYStart(): string {
   return `${y}-04-01`;
 }
 
-function todayStr(): string {
-  return format(new Date(), "yyyy-MM-dd");
-}
+function todayStr(): string { return format(new Date(), "yyyy-MM-dd"); }
 
 async function loadLogoBase64(url: string): Promise<string | null> {
   try {
@@ -90,59 +90,111 @@ async function loadLogoBase64(url: string): Promise<string | null> {
 
 export default function ReceivablesReportTab() {
   const { user } = useAuth();
-  const firmId = user?.firm_id ?? null;
+  const isSuperAdmin = user?.role === "superadmin";
 
-  // ── State ─────────────────────────────────────────────────────────────────
-
-  const [fromDate, setFromDate] = useState(currentFYStart());
-  const [toDate,   setToDate]   = useState(todayStr());
-  const [loading,  setLoading]  = useState(false);
-  const [rows,     setRows]     = useState<ClientRow[]>([]);
-  const [firmName, setFirmName] = useState<string>("");
+  const [firms,       setFirms]       = useState<Firm[]>([]);
+  const [selectedFirmId, setSelectedFirmId] = useState<string>(user?.firm_id ?? "");
+  const [fromDate,    setFromDate]    = useState(currentFYStart());
+  const [toDate,      setToDate]      = useState(todayStr());
+  const [loading,     setLoading]     = useState(false);
+  const [rows,        setRows]        = useState<ClientRow[]>([]);
   const [firmLogoUrl, setFirmLogoUrl] = useState<string | null>(null);
-  const [search,   setSearch]   = useState("");
-  const [hideZero, setHideZero] = useState(true);
-  const [sortKey,  setSortKey]  = useState<SortKey>("name");
-  const [sortDir,  setSortDir]  = useState<SortDir>("asc");
+  const [search,      setSearch]      = useState("");
+  const [hideZero,    setHideZero]    = useState(true);
+  const [sortKey,     setSortKey]     = useState<SortKey>("name");
+  const [sortDir,     setSortDir]     = useState<SortDir>("asc");
 
   // Sheet (ledger)
-  const [sheetClient, setSheetClient] = useState<ClientRow | null>(null);
+  const [sheetClient,  setSheetClient]  = useState<ClientRow | null>(null);
   const [sheetEntries, setSheetEntries] = useState<LedgerEntry[]>([]);
   const [sheetLoading, setSheetLoading] = useState(false);
 
   // Email dialog
-  const [emailClient, setEmailClient] = useState<ClientRow | null>(null);
+  const [emailClient,  setEmailClient]  = useState<ClientRow | null>(null);
   const [emailSending, setEmailSending] = useState(false);
 
-  // Telegram
-  const [tgSending, setTgSending] = useState(false);
+  // Telegram / PDF
+  const [tgSending,    setTgSending]    = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
+
+  // ── Load firms ────────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    async function loadFirms() {
+      if (isSuperAdmin) {
+        const { data } = await supabase
+          .from("firms")
+          .select("id, name, settings")
+          .order("name");
+        const list: Firm[] = (data || []).map(f => ({
+          id: f.id,
+          name: f.name || "—",
+          logo_url: (f.settings as any)?.logo_url ?? null,
+        }));
+        setFirms(list);
+        if (!selectedFirmId && list.length > 0) setSelectedFirmId(list[0].id);
+      } else {
+        // non-superadmin: only their own firm
+        const fid = user?.firm_id ?? "";
+        const { data } = await supabase
+          .from("firms")
+          .select("id, name, settings")
+          .eq("id", fid)
+          .maybeSingle();
+        if (data) {
+          setFirms([{ id: data.id, name: data.name || "—", logo_url: (data.settings as any)?.logo_url ?? null }]);
+          setSelectedFirmId(data.id);
+        }
+      }
+    }
+    loadFirms();
+  }, [isSuperAdmin, user?.firm_id]);
+
+  // Keep logo URL in sync with selected firm
+  useEffect(() => {
+    const f = firms.find(f => f.id === selectedFirmId);
+    setFirmLogoUrl(f?.logo_url ?? null);
+  }, [selectedFirmId, firms]);
 
   // ── Fetch report data ─────────────────────────────────────────────────────
 
   const fetchReport = useCallback(async () => {
-    if (!firmId) return;
+    if (!selectedFirmId) return;
     setLoading(true);
     try {
       const [
-        { data: firmData },
-        { data: clients, error: cErr },
+        { data: clients,  error: cErr },
         { data: invoices, error: iErr },
         { data: receipts, error: rErr },
+        { data: obRows,   error: oErr },
       ] = await Promise.all([
-        supabase.from("firms").select("name, settings").eq("id", firmId).single(),
-        supabase.from("clients").select("id, name, email, entity_type").eq("firm_id", firmId).order("name"),
-        supabase.from("invoices").select("client_id, invoice_date, total_amount").eq("firm_id", firmId).neq("status", "voided"),
-        supabase.from("billing_receipts").select("client_id, receipt_date, amount_received, tds_amount").eq("firm_id", firmId),
+        supabase.from("clients")
+          .select("id, name, email")
+          .eq("firm_id", selectedFirmId)
+          .order("name"),
+        supabase.from("invoices")
+          .select("client_id, invoice_date, total_amount")
+          .eq("firm_id", selectedFirmId)
+          .neq("status", "voided"),
+        supabase.from("billing_receipts")
+          .select("client_id, receipt_date, amount_received, tds_amount")
+          .eq("firm_id", selectedFirmId),
+        // Opening balances manually entered in Ledger tab
+        (supabase as any).from("client_billing_opening_balances")
+          .select("client_id, amount")
+          .eq("firm_id", selectedFirmId),
       ]);
 
       if (cErr) throw cErr;
       if (iErr) throw iErr;
       if (rErr) throw rErr;
+      // oErr is non-fatal — table might not exist yet
 
-      setFirmName(firmData?.name ?? "");
-      const logo = (firmData?.settings as any)?.logo_url ?? null;
-      setFirmLogoUrl(logo);
+      // Build OB map: client_id → amount
+      const obMap: Record<string, number> = {};
+      for (const ob of obRows || []) {
+        obMap[ob.client_id] = (obMap[ob.client_id] ?? 0) + Number(ob.amount || 0);
+      }
 
       const built: ClientRow[] = (clients || []).map(c => {
         let openingDr = 0, openingCr = 0, debit = 0, credit = 0;
@@ -151,25 +203,28 @@ export default function ReceivablesReportTab() {
           if (inv.client_id !== c.id) continue;
           const amt = Number(inv.total_amount || 0);
           if (!amt) continue;
-          if (inv.invoice_date && inv.invoice_date < fromDate) {
-            openingDr += amt;
-          } else if (inv.invoice_date && inv.invoice_date >= fromDate && inv.invoice_date <= toDate) {
-            debit += amt;
-          }
+          if (inv.invoice_date && inv.invoice_date < fromDate) openingDr += amt;
+          else if (inv.invoice_date && inv.invoice_date >= fromDate && inv.invoice_date <= toDate) debit += amt;
         }
 
         for (const rec of receipts || []) {
           if (rec.client_id !== c.id) continue;
           const amt = Number(rec.amount_received || 0) + Number(rec.tds_amount || 0);
           if (!amt) continue;
-          if (rec.receipt_date && rec.receipt_date < fromDate) {
-            openingCr += amt;
-          } else if (rec.receipt_date && rec.receipt_date >= fromDate && rec.receipt_date <= toDate) {
-            credit += amt;
-          }
+          if (rec.receipt_date && rec.receipt_date < fromDate) openingCr += amt;
+          else if (rec.receipt_date && rec.receipt_date >= fromDate && rec.receipt_date <= toDate) credit += amt;
         }
 
-        return { id: c.id, name: c.name || "—", email: c.email ?? null, entity_type: c.entity_type ?? "", openingDr, openingCr, debit, credit };
+        return {
+          id: c.id,
+          name: c.name || "—",
+          email: c.email ?? null,
+          ob: obMap[c.id] ?? 0,   // manual opening balance
+          openingDr,
+          openingCr,
+          debit,
+          credit,
+        };
       });
 
       setRows(built);
@@ -178,9 +233,18 @@ export default function ReceivablesReportTab() {
     } finally {
       setLoading(false);
     }
-  }, [firmId, fromDate, toDate]);
+  }, [selectedFirmId, fromDate, toDate]);
 
   useEffect(() => { fetchReport(); }, [fetchReport]);
+
+  // ── Net opening = manual OB + pre-period invoices − pre-period receipts ──
+
+  function netOpening(r: ClientRow) {
+    return r.ob + r.openingDr - r.openingCr;
+  }
+  function netClosing(r: ClientRow) {
+    return netOpening(r) + r.debit - r.credit;
+  }
 
   // ── Fetch ledger for sheet ────────────────────────────────────────────────
 
@@ -192,11 +256,12 @@ export default function ReceivablesReportTab() {
       const [
         { data: invData },
         { data: recData },
+        obResult,
       ] = await Promise.all([
         supabase.from("invoices")
-          .select("id, invoice_no, invoice_date, total_amount, document_type, status")
+          .select("id, invoice_no, invoice_date, total_amount, document_type")
           .eq("client_id", client.id)
-          .eq("firm_id", firmId!)
+          .eq("firm_id", selectedFirmId)
           .neq("status", "voided")
           .gte("invoice_date", fromDate)
           .lte("invoice_date", toDate)
@@ -204,51 +269,61 @@ export default function ReceivablesReportTab() {
         supabase.from("billing_receipts")
           .select("id, receipt_date, amount_received, tds_amount, payment_mode, remarks")
           .eq("client_id", client.id)
-          .eq("firm_id", firmId!)
+          .eq("firm_id", selectedFirmId)
           .gte("receipt_date", fromDate)
           .lte("receipt_date", toDate)
           .order("receipt_date"),
+        (supabase as any).from("client_billing_opening_balances")
+          .select("amount, balance_date, narration")
+          .eq("client_id", client.id)
+          .eq("firm_id", selectedFirmId)
+          .is("gstin", null)
+          .maybeSingle(),
       ]);
 
-      const entries: LedgerEntry[] = [];
-      const opening = client.openingDr - client.openingCr;
+      const obAmount: number = obResult?.data?.amount ? Number(obResult.data.amount) : 0;
+      const obDate: string   = obResult?.data?.balance_date || fromDate;
+      const obNarration      = obResult?.data?.narration || "Opening Balance";
 
-      // Add opening balance row
+      // opening = manual OB + pre-period invoices − pre-period receipts
+      const opening = netOpening(client);
+
+      const entries: LedgerEntry[] = [];
+
       if (opening !== 0) {
         entries.push({
-          entry_date: fromDate,
+          entry_date: obDate || fromDate,
           doc_no: "—",
-          narration: "Opening Balance",
-          debit: opening > 0 ? opening : 0,
-          credit: opening < 0 ? -opening : 0,
+          narration: obNarration,
+          debit:   opening > 0 ? opening : 0,
+          credit:  opening < 0 ? -opening : 0,
           balance: opening,
         });
       }
 
-      // Merge and sort by date
-      type TmpEntry = { date: string; doc_no: string; narration: string; debit: number; credit: number };
-      const tmp: TmpEntry[] = [];
+      type Tmp = { date: string; doc_no: string; narration: string; debit: number; credit: number };
+      const tmp: Tmp[] = [];
 
       for (const inv of invData || []) {
         const isCredit = inv.document_type === "credit_note";
         const amt = Number(inv.total_amount || 0);
         tmp.push({
-          date: inv.invoice_date || fromDate,
-          doc_no: inv.invoice_no || inv.id.slice(0, 8).toUpperCase(),
-          narration: isCredit ? `Credit Note` : `Invoice`,
-          debit: isCredit ? 0 : amt,
-          credit: isCredit ? amt : 0,
+          date:      inv.invoice_date || fromDate,
+          doc_no:    inv.invoice_no || inv.id.slice(0, 8).toUpperCase(),
+          narration: isCredit ? `Credit Note — ${inv.invoice_no || ""}` : `Invoice — ${inv.invoice_no || ""}`,
+          debit:     isCredit ? 0 : amt,
+          credit:    isCredit ? amt : 0,
         });
       }
 
       for (const rec of recData || []) {
         const amt = Number(rec.amount_received || 0) + Number(rec.tds_amount || 0);
         tmp.push({
-          date: rec.receipt_date,
-          doc_no: rec.id.slice(0, 8).toUpperCase(),
-          narration: `Receipt — ${rec.payment_mode || ""}${rec.remarks ? ` (${rec.remarks})` : ""}`.trim().replace(/—\s*$/, "").trim(),
-          debit: 0,
-          credit: amt,
+          date:      rec.receipt_date,
+          doc_no:    rec.id.slice(0, 8).toUpperCase(),
+          narration: `Receipt — ${rec.payment_mode || ""}${rec.remarks ? ` (${rec.remarks})` : ""}`.replace(/—\s*$/, "").trim(),
+          debit:     0,
+          credit:    amt,
         });
       }
 
@@ -257,14 +332,7 @@ export default function ReceivablesReportTab() {
       let balance = opening;
       for (const t of tmp) {
         balance += t.debit - t.credit;
-        entries.push({
-          entry_date: t.date,
-          doc_no: t.doc_no,
-          narration: t.narration,
-          debit: t.debit,
-          credit: t.credit,
-          balance,
-        });
+        entries.push({ entry_date: t.date, doc_no: t.doc_no, narration: t.narration, debit: t.debit, credit: t.credit, balance });
       }
 
       setSheetEntries(entries);
@@ -281,20 +349,16 @@ export default function ReceivablesReportTab() {
     let r = rows;
     if (search) r = r.filter(c => c.name.toLowerCase().includes(search.toLowerCase()));
     if (hideZero) r = r.filter(c => {
-      const opening = c.openingDr - c.openingCr;
-      const closing = opening + c.debit - c.credit;
-      return Math.abs(closing) > 0.005 || c.debit > 0 || c.credit > 0 || Math.abs(opening) > 0.005;
+      const open  = netOpening(c);
+      const close = netClosing(c);
+      return Math.abs(close) > 0.005 || c.debit > 0 || c.credit > 0 || Math.abs(open) > 0.005;
     });
-    // Sort
     return [...r].sort((a, b) => {
       let va: number | string = 0, vb: number | string = 0;
-      if (sortKey === "name") { va = a.name; vb = b.name; }
-      else if (sortKey === "debit") { va = a.debit; vb = b.debit; }
+      if (sortKey === "name")    { va = a.name; vb = b.name; }
+      else if (sortKey === "debit")  { va = a.debit; vb = b.debit; }
       else if (sortKey === "credit") { va = a.credit; vb = b.credit; }
-      else {
-        va = (a.openingDr - a.openingCr) + a.debit - a.credit;
-        vb = (b.openingDr - b.openingCr) + b.debit - b.credit;
-      }
+      else { va = netClosing(a); vb = netClosing(b); }
       const cmp = typeof va === "string" ? va.localeCompare(vb as string) : (va as number) - (vb as number);
       return sortDir === "asc" ? cmp : -cmp;
     });
@@ -306,90 +370,74 @@ export default function ReceivablesReportTab() {
   }
 
   const grandTotal = useMemo(() => {
-    let openingDr = 0, openingCr = 0, debit = 0, credit = 0;
-    for (const r of filtered) {
-      openingDr += r.openingDr; openingCr += r.openingCr;
-      debit += r.debit; credit += r.credit;
-    }
-    return { openingDr, openingCr, debit, credit };
+    let openNet = 0, debit = 0, credit = 0;
+    for (const r of filtered) { openNet += netOpening(r); debit += r.debit; credit += r.credit; }
+    return { openNet, debit, credit, closeNet: openNet + debit - credit };
   }, [filtered]);
 
-  // ── Big4 PDF Export ───────────────────────────────────────────────────────
+  const selectedFirmName = firms.find(f => f.id === selectedFirmId)?.name ?? "";
+
+  // ── Big4 PDF ──────────────────────────────────────────────────────────────
 
   async function generateReportPdf(): Promise<{ base64: string; blob: Blob }> {
-    const jsPDF = (await import("jspdf")).default;
+    const jsPDF   = (await import("jspdf")).default;
     const autoTable = (await import("jspdf-autotable")).default;
     const DARK_BLUE: [number, number, number] = [26, 58, 92];
-    const ACCENT: [number, number, number]    = [215, 120, 30];
 
     const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
     await ensurePdfUnicodeFont(doc);
+    const logo = firmLogoUrl ? await loadLogoBase64(firmLogoUrl) : null;
 
-    const logoBase64 = firmLogoUrl ? await loadLogoBase64(firmLogoUrl) : null;
-
-    // Header band
     doc.setFillColor(...DARK_BLUE);
     doc.rect(0, 0, 297, 24, "F");
 
     let textX = 14;
-    if (logoBase64) {
-      try {
-        doc.addImage(logoBase64, logoBase64.includes("image/png") ? "PNG" : "JPEG", 12, 2, 32, 20);
-        textX = 50;
-      } catch { /* ignore */ }
+    if (logo) {
+      try { doc.addImage(logo, logo.includes("image/png") ? "PNG" : "JPEG", 12, 2, 32, 20); textX = 50; }
+      catch { /* ignore */ }
     }
 
     doc.setTextColor(255, 255, 255);
-    setPdfUnicodeFont(doc, "bold");
-    doc.setFontSize(14);
+    setPdfUnicodeFont(doc, "bold"); doc.setFontSize(14);
     doc.text("SUNDRY DEBTORS — STATEMENT OF ACCOUNTS", textX, 10);
-    setPdfUnicodeFont(doc, "normal");
-    doc.setFontSize(8);
-    doc.text(firmName, textX, 16);
-    doc.text(
-      `Period: ${format(parseISO(fromDate), "d MMM yyyy")} to ${format(parseISO(toDate), "d MMM yyyy")}   |   Generated: ${format(new Date(), "d MMM yyyy, HH:mm")}`,
-      textX, 21,
-    );
+    setPdfUnicodeFont(doc, "normal"); doc.setFontSize(8);
+    doc.text(selectedFirmName, textX, 16);
+    doc.text(`Period: ${format(parseISO(fromDate), "d MMM yyyy")} to ${format(parseISO(toDate), "d MMM yyyy")}   |   Generated: ${format(new Date(), "d MMM yyyy, HH:mm")}`, textX, 21);
 
-    // Right-side summary box
-    const gtOpenNet = grandTotal.openingDr - grandTotal.openingCr;
-    const gtClose   = gtOpenNet + grandTotal.debit - grandTotal.credit;
+    const { abs: gtCA, label: gtCL } = drCr(grandTotal.closeNet);
     doc.setFontSize(7);
-    doc.text(`Clients: ${filtered.length}   |   Net Receivable: ₹${fmtINR(Math.abs(gtClose))} ${gtClose >= 0 ? "Dr" : "Cr"}`, 200, 21, { align: "right" });
+    doc.text(`Clients: ${filtered.length}   |   Net Receivable: ₹${fmtINR(gtCA)} ${gtCL}`, 283, 21, { align: "right" });
 
-    // Table data
-    const tableRows = filtered.map(r => {
-      const openNet = r.openingDr - r.openingCr;
-      const close   = openNet + r.debit - r.credit;
-      const { abs: openAbs, label: openLbl } = drCr(openNet);
-      const { abs: closeAbs, label: closeLbl } = drCr(close);
+    const tableRows: any[][] = filtered.map(r => {
+      const open  = netOpening(r);
+      const close = netClosing(r);
+      const { abs: oa, label: ol } = drCr(open);
+      const { abs: ca, label: cl } = drCr(close);
       return [
         r.name,
-        openNet === 0 ? "—" : `${fmtINR(openAbs)} ${openLbl}`,
-        r.debit > 0 ? fmtINR(r.debit) : "—",
+        open === 0 ? "—" : `${fmtINR(oa)} ${ol}`,
+        r.debit  > 0 ? fmtINR(r.debit)  : "—",
         r.credit > 0 ? fmtINR(r.credit) : "—",
-        close === 0 ? "—" : `${fmtINR(closeAbs)} ${closeLbl}`,
+        close === 0 ? "—" : `${fmtINR(ca)} ${cl}`,
       ];
     });
 
-    // Grand total row
-    const { abs: gtOpenAbs, label: gtOpenLbl } = drCr(gtOpenNet);
-    const { abs: gtCloseAbs, label: gtCloseLbl } = drCr(gtClose);
+    const { abs: gtOA, label: gtOL } = drCr(grandTotal.openNet);
     tableRows.push([
-      { content: "GRAND TOTAL", styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255, 255, 255] as [number, number, number] } },
-      { content: `${fmtINR(gtOpenAbs)} ${gtOpenLbl}`, styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255, 255, 255] as [number, number, number], halign: "right" as const } },
-      { content: fmtINR(grandTotal.debit), styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255, 255, 255] as [number, number, number], halign: "right" as const } },
-      { content: fmtINR(grandTotal.credit), styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255, 255, 255] as [number, number, number], halign: "right" as const } },
-      { content: `${fmtINR(gtCloseAbs)} ${gtCloseLbl}`, styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255, 255, 255] as [number, number, number], halign: "right" as const } },
+      { content: "GRAND TOTAL", styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255,255,255] as [number,number,number] } },
+      { content: `${fmtINR(gtOA)} ${gtOL}`, styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255,255,255] as [number,number,number], halign: "right" as const } },
+      { content: fmtINR(grandTotal.debit),  styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255,255,255] as [number,number,number], halign: "right" as const } },
+      { content: fmtINR(grandTotal.credit), styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255,255,255] as [number,number,number], halign: "right" as const } },
+      { content: `${fmtINR(gtCA)} ${gtCL}`, styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255,255,255] as [number,number,number], halign: "right" as const } },
     ]);
 
     autoTable(doc, {
       startY: 28,
       head: [["Particulars", "Opening Balance", "Debit (₹)", "Credit (₹)", "Closing Balance"]],
       body: tableRows,
-      styles: { font: "NotoSans", fontSize: 8.5, cellPadding: 3, lineColor: [200, 210, 225], lineWidth: 0.3 },
-      headStyles: { font: "NotoSans", fillColor: [40, 80, 130], textColor: [255, 255, 255], fontStyle: "bold", halign: "center" },
-      alternateRowStyles: { fillColor: [248, 251, 255] },
+      styles: { font: "NotoSans", fontSize: 8.5, cellPadding: 3, lineColor: [200,210,225], lineWidth: 0.3 },
+      headStyles: { font: "NotoSans", fillColor: [40,80,130], textColor: [255,255,255], fontStyle: "bold", halign: "center" },
+      alternateRowStyles: { fillColor: [248,251,255] },
       columnStyles: {
         0: { cellWidth: 80 },
         1: { cellWidth: 42, halign: "right" as const },
@@ -399,17 +447,10 @@ export default function ReceivablesReportTab() {
       },
       margin: { left: 14, right: 14 },
       didDrawPage: (hookData: any) => {
-        const pageCount = (doc as any).internal.getNumberOfPages();
-        doc.setFontSize(7);
-        setPdfUnicodeFont(doc, "normal");
-        doc.setTextColor(120, 130, 145);
-        doc.text(
-          `Page ${hookData.pageNumber} of ${pageCount}   |   ${firmName}   |   Confidential — For Internal Use Only`,
-          148, 208, { align: "center" },
-        );
-        doc.setDrawColor(...DARK_BLUE);
-        doc.setLineWidth(0.4);
-        doc.line(14, 204, 283, 204);
+        const pc = (doc as any).internal.getNumberOfPages();
+        doc.setFontSize(7); setPdfUnicodeFont(doc, "normal"); doc.setTextColor(120,130,145);
+        doc.text(`Page ${hookData.pageNumber} of ${pc}   |   ${selectedFirmName}   |   Confidential`, 148, 208, { align: "center" });
+        doc.setDrawColor(...DARK_BLUE); doc.setLineWidth(0.4); doc.line(14, 204, 283, 204);
       },
     });
 
@@ -423,74 +464,58 @@ export default function ReceivablesReportTab() {
     try {
       const { blob } = await generateReportPdf();
       const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = `Sundry_Debtors_${fromDate}_to_${toDate}.pdf`; a.click();
+      const a = document.createElement("a"); a.href = url; a.download = `Sundry_Debtors_${fromDate}_to_${toDate}.pdf`; a.click();
       URL.revokeObjectURL(url);
-    } catch (e: any) {
-      toast.error("PDF export failed: " + e.message);
-    } finally {
-      setExportingPdf(false);
-    }
+    } catch (e: any) { toast.error("PDF failed: " + e.message); }
+    finally { setExportingPdf(false); }
   }
 
-  // ── Client ledger PDF (for email / download from sheet) ───────────────────
+  // ── Client ledger PDF ─────────────────────────────────────────────────────
 
   async function generateClientLedgerPdf(client: ClientRow, entries: LedgerEntry[]): Promise<{ base64: string; blob: Blob }> {
-    const jsPDF = (await import("jspdf")).default;
+    const jsPDF   = (await import("jspdf")).default;
     const autoTable = (await import("jspdf-autotable")).default;
     const DARK_BLUE: [number, number, number] = [26, 58, 92];
 
     const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
     await ensurePdfUnicodeFont(doc);
+    const logo = firmLogoUrl ? await loadLogoBase64(firmLogoUrl) : null;
 
-    const logoBase64 = firmLogoUrl ? await loadLogoBase64(firmLogoUrl) : null;
-    doc.setFillColor(...DARK_BLUE);
-    doc.rect(0, 0, 210, 24, "F");
-
+    doc.setFillColor(...DARK_BLUE); doc.rect(0, 0, 210, 24, "F");
     let textX = 14;
-    if (logoBase64) {
-      try {
-        doc.addImage(logoBase64, logoBase64.includes("image/png") ? "PNG" : "JPEG", 12, 2, 30, 20);
-        textX = 48;
-      } catch { /* ignore */ }
-    }
+    if (logo) { try { doc.addImage(logo, logo.includes("image/png") ? "PNG" : "JPEG", 12, 2, 30, 20); textX = 48; } catch { /**/ } }
 
     doc.setTextColor(255, 255, 255);
-    setPdfUnicodeFont(doc, "bold");
-    doc.setFontSize(13);
+    setPdfUnicodeFont(doc, "bold"); doc.setFontSize(13);
     doc.text("CLIENT LEDGER STATEMENT", textX, 10);
-    setPdfUnicodeFont(doc, "normal");
-    doc.setFontSize(8);
-    doc.text(`${firmName}   |   Client: ${client.name}`, textX, 16);
+    setPdfUnicodeFont(doc, "normal"); doc.setFontSize(8);
+    doc.text(`${selectedFirmName}   |   Client: ${client.name}`, textX, 16);
     doc.text(`Period: ${format(parseISO(fromDate), "d MMM yyyy")} to ${format(parseISO(toDate), "d MMM yyyy")}   |   Generated: ${format(new Date(), "d MMM yyyy HH:mm")}`, textX, 21);
 
-    const openNet = client.openingDr - client.openingCr;
-    const closingNet = openNet + client.debit - client.credit;
-
+    const close = netClosing(client);
     const tableRows = entries.map(e => [
       e.entry_date ? format(parseISO(e.entry_date), "dd/MM/yyyy") : "",
-      e.doc_no,
-      e.narration,
-      e.debit > 0 ? formatPdfCurrency(e.debit) : "—",
+      e.doc_no, e.narration,
+      e.debit  > 0 ? formatPdfCurrency(e.debit)  : "—",
       e.credit > 0 ? formatPdfCurrency(e.credit) : "—",
       formatPdfCurrency(e.balance),
     ]);
 
-    const { abs: closeAbs, label: closeLbl } = drCr(closingNet);
+    const { abs: ca, label: cl } = drCr(close);
     tableRows.push([
-      { content: "CLOSING BALANCE", colSpan: 3, styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255, 255, 255] as [number, number, number] } },
-      { content: formatPdfCurrency(client.debit), styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255, 255, 255] as [number, number, number], halign: "right" as const } },
-      { content: formatPdfCurrency(client.credit), styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255, 255, 255] as [number, number, number], halign: "right" as const } },
-      { content: `${formatPdfCurrency(closeAbs)} ${closeLbl}`, styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255, 255, 255] as [number, number, number], halign: "right" as const } },
+      { content: "CLOSING BALANCE", colSpan: 3, styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255,255,255] as [number,number,number] } },
+      { content: formatPdfCurrency(client.debit),  styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255,255,255] as [number,number,number], halign: "right" as const } },
+      { content: formatPdfCurrency(client.credit), styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255,255,255] as [number,number,number], halign: "right" as const } },
+      { content: `${formatPdfCurrency(ca)} ${cl}`, styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255,255,255] as [number,number,number], halign: "right" as const } },
     ]);
 
     autoTable(doc, {
       startY: 28,
       head: [["Date", "Doc No", "Narration", "Debit (₹)", "Credit (₹)", "Balance (₹)"]],
       body: tableRows,
-      styles: { font: "NotoSans", fontSize: 8, cellPadding: 2.5, lineColor: [200, 210, 225], lineWidth: 0.3 },
-      headStyles: { font: "NotoSans", fillColor: DARK_BLUE, textColor: [255, 255, 255], fontStyle: "bold" },
-      alternateRowStyles: { fillColor: [248, 251, 255] },
+      styles: { font: "NotoSans", fontSize: 8, cellPadding: 2.5, lineColor: [200,210,225], lineWidth: 0.3 },
+      headStyles: { font: "NotoSans", fillColor: DARK_BLUE, textColor: [255,255,255], fontStyle: "bold" },
+      alternateRowStyles: { fillColor: [248,251,255] },
       columnStyles: {
         0: { cellWidth: 22, halign: "center" as const },
         1: { cellWidth: 22, halign: "center" as const },
@@ -501,11 +526,9 @@ export default function ReceivablesReportTab() {
       },
       margin: { left: 10, right: 10 },
       didDrawPage: (hookData: any) => {
-        const pageCount = (doc as any).internal.getNumberOfPages();
-        doc.setFontSize(7);
-        setPdfUnicodeFont(doc, "normal");
-        doc.setTextColor(120, 130, 145);
-        doc.text(`Page ${hookData.pageNumber} of ${pageCount}   |   CAFlow — Confidential`, 105, 290, { align: "center" });
+        const pc = (doc as any).internal.getNumberOfPages();
+        doc.setFontSize(7); setPdfUnicodeFont(doc, "normal"); doc.setTextColor(120,130,145);
+        doc.text(`Page ${hookData.pageNumber} of ${pc}   |   CAFlow — Confidential`, 105, 290, { align: "center" });
         doc.setDrawColor(...DARK_BLUE); doc.setLineWidth(0.4); doc.line(10, 287, 200, 287);
       },
     });
@@ -520,48 +543,44 @@ export default function ReceivablesReportTab() {
     try {
       const { blob } = await generateClientLedgerPdf(sheetClient, sheetEntries);
       const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = `Ledger_${sheetClient.name.replace(/\s+/g, "_")}_${toDate}.pdf`; a.click();
+      const a = document.createElement("a"); a.href = url; a.download = `Ledger_${sheetClient.name.replace(/\s+/g, "_")}_${toDate}.pdf`; a.click();
       URL.revokeObjectURL(url);
     } catch (e: any) { toast.error("PDF failed: " + e.message); }
   }
 
-  // ── Email Ledger ──────────────────────────────────────────────────────────
+  // ── Email ─────────────────────────────────────────────────────────────────
 
   async function handleSendEmail() {
     if (!emailClient) return;
     setEmailSending(true);
     try {
-      await openLedger(emailClient); // ensure entries loaded
-      // Wait for sheet entries if they're not ready yet — brief poll
-      await new Promise(r => setTimeout(r, 600));
-      const entries = sheetClient?.id === emailClient.id ? sheetEntries : [];
+      // ensure ledger is loaded for the email client
+      if (!sheetClient || sheetClient.id !== emailClient.id) await openLedger(emailClient);
+      await new Promise(r => setTimeout(r, 400));
+      const entries = sheetEntries;
       const { base64 } = await generateClientLedgerPdf(emailClient, entries);
       const { error } = await supabase.functions.invoke("send-notification", {
         body: {
-          type: "ledger_statement",
-          firm_id: firmId,
+          type:         "ledger_statement",
+          firm_id:      selectedFirmId,
           direct_email: emailClient.email,
           payload: {
-            client_name: emailClient.name,
+            client_name:    emailClient.name,
             custom_subject: `Statement of Account — ${format(parseISO(fromDate), "d MMM yyyy")} to ${format(parseISO(toDate), "d MMM yyyy")}`,
             custom_message: `Please find attached your statement of account for the period ${format(parseISO(fromDate), "d MMM yyyy")} to ${format(parseISO(toDate), "d MMM yyyy")}. Kindly review and revert if any discrepancies are noticed.`,
-            pdf_base64: base64,
-            pdf_filename: `Ledger_${emailClient.name.replace(/\s+/g, "_")}_${toDate}.pdf`,
+            pdf_base64:     base64,
+            pdf_filename:   `Ledger_${emailClient.name.replace(/\s+/g, "_")}_${toDate}.pdf`,
           },
         },
       });
       if (error) throw new Error(error.message);
       toast.success(`Ledger sent to ${emailClient.email}`);
       setEmailClient(null);
-    } catch (e: any) {
-      toast.error("Email failed: " + e.message);
-    } finally {
-      setEmailSending(false);
-    }
+    } catch (e: any) { toast.error("Email failed: " + e.message); }
+    finally { setEmailSending(false); }
   }
 
-  // ── Telegram send ─────────────────────────────────────────────────────────
+  // ── Telegram ──────────────────────────────────────────────────────────────
 
   async function handleSendTelegram() {
     setTgSending(true);
@@ -569,43 +588,48 @@ export default function ReceivablesReportTab() {
       const { base64 } = await generateReportPdf();
       const { error } = await supabase.functions.invoke("send-telegram-report", {
         body: {
-          firm_id: firmId,
+          firm_id:    selectedFirmId,
           pdf_base64: base64,
-          filename: `Sundry_Debtors_${fromDate}_to_${toDate}.pdf`,
-          caption: `📊 *Sundry Debtors Report*\n_${firmName}_\nPeriod: ${format(parseISO(fromDate), "d MMM yyyy")} → ${format(parseISO(toDate), "d MMM yyyy")}\nClients: ${filtered.length}`,
+          filename:   `Sundry_Debtors_${fromDate}_to_${toDate}.pdf`,
+          caption:    `📊 *Sundry Debtors Report*\n_${selectedFirmName}_\nPeriod: ${format(parseISO(fromDate), "d MMM yyyy")} → ${format(parseISO(toDate), "d MMM yyyy")}\nClients: ${filtered.length}`,
         },
       });
       if (error) throw new Error(error.message);
       toast.success("Report sent to all linked Telegram users");
-    } catch (e: any) {
-      toast.error("Telegram send failed: " + e.message);
-    } finally {
-      setTgSending(false);
-    }
+    } catch (e: any) { toast.error("Telegram failed: " + e.message); }
+    finally { setTgSending(false); }
   }
 
-  // ── Sort icon helper ──────────────────────────────────────────────────────
+  // ── Sort icon ─────────────────────────────────────────────────────────────
 
   function SortIcon({ col }: { col: SortKey }) {
     if (sortKey !== col) return <ArrowUpDown size={11} className="ml-1 opacity-40" />;
-    return sortDir === "asc"
-      ? <ChevronUp size={11} className="ml-1 text-orange-500" />
-      : <ChevronDown size={11} className="ml-1 text-orange-500" />;
+    return sortDir === "asc" ? <ChevronUp size={11} className="ml-1 text-orange-500" /> : <ChevronDown size={11} className="ml-1 text-orange-500" />;
   }
-
-  // ── Derived totals for Grand Total row ───────────────────────────────────
-
-  const gtOpenNet  = grandTotal.openingDr - grandTotal.openingCr;
-  const gtClose    = gtOpenNet + grandTotal.debit - grandTotal.credit;
-  const { abs: gtOpenAbs,  label: gtOpenLbl  } = drCr(gtOpenNet);
-  const { abs: gtCloseAbs, label: gtCloseLbl } = drCr(gtClose);
 
   // ── Render ────────────────────────────────────────────────────────────────
 
+  const { abs: gtOA, label: gtOL } = drCr(grandTotal.openNet);
+  const { abs: gtCA, label: gtCL } = drCr(grandTotal.closeNet);
+
   return (
     <div className="space-y-4">
-      {/* ── Controls ── */}
+      {/* ── Controls row ── */}
       <div className="flex flex-wrap items-end gap-3">
+
+        {/* Firm dropdown */}
+        <div className="space-y-1">
+          <Label className="text-xs text-muted-foreground flex items-center gap-1"><Building2 size={11}/> Firm</Label>
+          <Select value={selectedFirmId} onValueChange={setSelectedFirmId} disabled={!isSuperAdmin && firms.length <= 1}>
+            <SelectTrigger className="h-8 text-xs w-56">
+              <SelectValue placeholder="Select firm…" />
+            </SelectTrigger>
+            <SelectContent>
+              {firms.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+
         <div className="space-y-1">
           <Label className="text-xs text-muted-foreground">From</Label>
           <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="h-8 text-xs w-36" />
@@ -623,9 +647,7 @@ export default function ReceivablesReportTab() {
         <div className="relative w-48">
           <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
           <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search client…" className="h-8 pl-8 pr-7 text-xs" />
-          {search && (
-            <button onClick={() => setSearch("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground"><X size={11} /></button>
-          )}
+          {search && <button onClick={() => setSearch("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground"><X size={11} /></button>}
         </div>
 
         <div className="flex items-center gap-1.5">
@@ -636,7 +658,6 @@ export default function ReceivablesReportTab() {
         <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={handleExportPdf} disabled={exportingPdf || loading}>
           {exportingPdf ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} Export PDF
         </Button>
-
         <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs text-blue-600 border-blue-200 hover:bg-blue-50" onClick={handleSendTelegram} disabled={tgSending || loading}>
           {tgSending ? <Loader2 size={13} className="animate-spin" /> : <MessageCircle size={13} />} Telegram
         </Button>
@@ -644,41 +665,29 @@ export default function ReceivablesReportTab() {
 
       {/* ── Report frame ── */}
       <div className="rounded-lg border border-[#1A2744]/20 overflow-hidden shadow-sm">
-        {/* Title bar */}
         <div className="bg-[#1A2744] text-white px-5 py-2.5">
           <div className="font-semibold text-sm">Sundry Debtors</div>
-          <div className="text-xs text-white/60">{firmName} · {format(parseISO(fromDate), "d-MMM-yy")} to {format(parseISO(toDate), "d-MMM-yy")}</div>
+          <div className="text-xs text-white/60">{selectedFirmName} · {format(parseISO(fromDate), "d-MMM-yy")} to {format(parseISO(toDate), "d-MMM-yy")}</div>
         </div>
 
         {/* Column headers */}
-        <div className="grid grid-cols-[1fr_150px_120px_120px_150px_80px] bg-muted/60 border-b px-4 py-2 text-[11px] font-semibold text-muted-foreground">
-          <button className="text-left flex items-center" onClick={() => toggleSort("name")}>
-            Particulars <SortIcon col="name" />
-          </button>
+        <div className="grid grid-cols-[1fr_150px_120px_120px_150px_44px] bg-muted/60 border-b px-4 py-2 text-[11px] font-semibold text-muted-foreground select-none">
+          <button className="text-left flex items-center" onClick={() => toggleSort("name")}>Particulars <SortIcon col="name" /></button>
           <div className="text-right">Opening Balance</div>
-          <button className="flex items-center justify-end w-full" onClick={() => toggleSort("debit")}>
-            Debit <SortIcon col="debit" />
-          </button>
-          <button className="flex items-center justify-end w-full" onClick={() => toggleSort("credit")}>
-            Credit <SortIcon col="credit" />
-          </button>
-          <button className="flex items-center justify-end w-full" onClick={() => toggleSort("closing")}>
-            Closing Balance <SortIcon col="closing" />
-          </button>
-          <div className="text-center">Actions</div>
+          <button className="flex items-center justify-end w-full" onClick={() => toggleSort("debit")}>Debit <SortIcon col="debit" /></button>
+          <button className="flex items-center justify-end w-full" onClick={() => toggleSort("credit")}>Credit <SortIcon col="credit" /></button>
+          <button className="flex items-center justify-end w-full" onClick={() => toggleSort("closing")}>Closing Balance <SortIcon col="closing" /></button>
+          <div />
         </div>
 
         {/* Body */}
         <div className="divide-y">
           {loading ? (
             Array.from({ length: 8 }).map((_, i) => (
-              <div key={i} className="grid grid-cols-[1fr_150px_120px_120px_150px_80px] px-4 py-2.5 gap-2">
-                <Skeleton className="h-4 w-3/4" />
-                <Skeleton className="h-4 w-full ml-auto" />
-                <Skeleton className="h-4 w-full" />
-                <Skeleton className="h-4 w-full" />
-                <Skeleton className="h-4 w-full" />
-                <Skeleton className="h-4 w-12 mx-auto" />
+              <div key={i} className="grid grid-cols-[1fr_150px_120px_120px_150px_44px] px-4 py-2.5 gap-2">
+                <Skeleton className="h-4 w-3/4" /><Skeleton className="h-4 w-full ml-auto" />
+                <Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-full" />
+                <Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-8 mx-auto" />
               </div>
             ))
           ) : filtered.length === 0 ? (
@@ -688,16 +697,16 @@ export default function ReceivablesReportTab() {
             </div>
           ) : (
             filtered.map((r, idx) => {
-              const openNet  = r.openingDr - r.openingCr;
-              const close    = openNet + r.debit - r.credit;
-              const { abs: openAbs, label: openLbl } = drCr(openNet);
-              const { abs: closeAbs, label: closeLbl } = drCr(close);
+              const open  = netOpening(r);
+              const close = netClosing(r);
+              const { abs: oa, label: ol } = drCr(open);
+              const { abs: ca, label: cl } = drCr(close);
 
               return (
                 <div
                   key={r.id}
                   className={cn(
-                    "grid grid-cols-[1fr_150px_120px_120px_150px_80px] px-4 py-2.5 text-[12px] hover:bg-blue-50/50 cursor-pointer transition-colors",
+                    "grid grid-cols-[1fr_150px_120px_120px_150px_44px] px-4 py-2.5 text-[12px] hover:bg-blue-50/50 cursor-pointer transition-colors",
                     idx % 2 === 0 ? "bg-white" : "bg-slate-50/50",
                   )}
                   onClick={() => openLedger(r)}
@@ -707,31 +716,21 @@ export default function ReceivablesReportTab() {
                     <span className="font-medium truncate text-[#1A2744] hover:underline">{r.name}</span>
                   </div>
                   <div className="text-right tabular-nums">
-                    {openNet === 0 ? <span className="text-muted-foreground">—</span> : (
-                      <>
-                        {fmtINR(openAbs)}&nbsp;
-                        <span className={cn("text-[10px]", openLbl === "Cr" ? "text-green-600" : "text-orange-600")}>{openLbl}</span>
-                      </>
+                    {open === 0 ? <span className="text-muted-foreground">—</span> : (
+                      <>{fmtINR(oa)}&nbsp;<span className={cn("text-[10px]", ol === "Cr" ? "text-green-600" : "text-orange-600")}>{ol}</span></>
                     )}
                   </div>
                   <div className="text-right tabular-nums">{r.debit > 0 ? fmtINR(r.debit) : <span className="text-muted-foreground">—</span>}</div>
                   <div className="text-right tabular-nums">{r.credit > 0 ? fmtINR(r.credit) : <span className="text-muted-foreground">—</span>}</div>
                   <div className="text-right tabular-nums font-semibold">
                     {close === 0 ? <span className="text-muted-foreground">—</span> : (
-                      <>
-                        {fmtINR(closeAbs)}&nbsp;
-                        <span className={cn("text-[10px]", closeLbl === "Cr" ? "text-green-600" : "text-orange-600")}>{closeLbl}</span>
-                      </>
+                      <>{fmtINR(ca)}&nbsp;<span className={cn("text-[10px]", cl === "Cr" ? "text-green-600" : "text-orange-600")}>{cl}</span></>
                     )}
                   </div>
-                  <div className="flex items-center justify-center gap-1" onClick={e => e.stopPropagation()}>
+                  <div className="flex items-center justify-center" onClick={e => e.stopPropagation()}>
                     {r.email && (
-                      <button
-                        title={`Email ledger to ${r.email}`}
-                        className="p-1 rounded text-muted-foreground hover:text-blue-600 hover:bg-blue-50"
-                        onClick={() => setEmailClient(r)}
-                      >
-                        <Mail size={13} />
+                      <button title={`Email to ${r.email}`} className="p-1 rounded text-muted-foreground hover:text-blue-600 hover:bg-blue-50" onClick={() => setEmailClient(r)}>
+                        <Mail size={12} />
                       </button>
                     )}
                   </div>
@@ -743,18 +742,18 @@ export default function ReceivablesReportTab() {
 
         {/* Grand Total */}
         {!loading && filtered.length > 0 && (
-          <div className="grid grid-cols-[1fr_150px_120px_120px_150px_80px] px-4 py-3 bg-[#1A2744] text-white text-[12px] font-bold">
+          <div className="grid grid-cols-[1fr_150px_120px_120px_150px_44px] px-4 py-3 bg-[#1A2744] text-white text-[12px] font-bold">
             <div className="flex items-center gap-1.5">
               <TrendingUp size={13} className="text-orange-400" /> Grand Total
-              <span className="text-[10px] font-normal text-white/60 ml-1">({filtered.length} clients)</span>
+              <span className="text-[10px] font-normal text-white/60 ml-1">({filtered.length})</span>
             </div>
             <div className="text-right tabular-nums">
-              {fmtINR(gtOpenAbs)}&nbsp;<span className={cn("text-[10px] font-normal", gtOpenLbl === "Cr" ? "text-green-300" : "text-orange-300")}>{gtOpenLbl}</span>
+              {fmtINR(gtOA)}&nbsp;<span className={cn("text-[10px] font-normal", gtOL === "Cr" ? "text-green-300" : "text-orange-300")}>{gtOL}</span>
             </div>
             <div className="text-right tabular-nums">{fmtINR(grandTotal.debit)}</div>
             <div className="text-right tabular-nums">{fmtINR(grandTotal.credit)}</div>
             <div className="text-right tabular-nums">
-              {fmtINR(gtCloseAbs)}&nbsp;<span className={cn("text-[10px] font-normal", gtCloseLbl === "Cr" ? "text-green-300" : "text-orange-300")}>{gtCloseLbl}</span>
+              {fmtINR(gtCA)}&nbsp;<span className={cn("text-[10px] font-normal", gtCL === "Cr" ? "text-green-300" : "text-orange-300")}>{gtCL}</span>
             </div>
             <div />
           </div>
@@ -762,10 +761,10 @@ export default function ReceivablesReportTab() {
       </div>
 
       <div className="flex gap-4 text-[11px] text-muted-foreground">
-        <span><span className="text-orange-600 font-semibold">Dr</span> = amount owed to firm</span>
-        <span><span className="text-green-600 font-semibold">Cr</span> = advance / overpaid</span>
-        <span>Click any row to view ledger</span>
-        <span><Mail size={10} className="inline" /> = send ledger to client email</span>
+        <span><span className="text-orange-600 font-semibold">Dr</span> = owed to firm</span>
+        <span><span className="text-green-600 font-semibold">Cr</span> = advance/overpaid</span>
+        <span>Click row → ledger detail</span>
+        <span><Mail size={10} className="inline" /> = email ledger to client</span>
       </div>
 
       {/* ── Client Ledger Sheet ── */}
@@ -784,7 +783,7 @@ export default function ReceivablesReportTab() {
                   <Download size={12} /> PDF
                 </Button>
                 {sheetClient?.email && (
-                  <Button size="sm" variant="outline" className="h-8 text-[#1A2744] text-xs gap-1 bg-white/90 hover:bg-white" onClick={() => { setEmailClient(sheetClient); }}>
+                  <Button size="sm" variant="outline" className="h-8 text-[#1A2744] text-xs gap-1 bg-white/90 hover:bg-white" onClick={() => setEmailClient(sheetClient)}>
                     <Mail size={12} /> Email
                   </Button>
                 )}
@@ -792,30 +791,32 @@ export default function ReceivablesReportTab() {
             </SheetTitle>
           </SheetHeader>
 
-          {/* Summary cards */}
           {sheetClient && (
             <div className="grid grid-cols-4 border-b bg-slate-50 flex-shrink-0">
-              {[
-                { label: "Opening", net: sheetClient.openingDr - sheetClient.openingCr },
-                { label: "Debit", net: sheetClient.debit },
-                { label: "Credit", net: -sheetClient.credit },
-                { label: "Closing", net: (sheetClient.openingDr - sheetClient.openingCr) + sheetClient.debit - sheetClient.credit },
-              ].map(card => {
-                const { abs, label } = drCr(card.net);
-                return (
-                  <div key={card.label} className="px-4 py-3 border-r last:border-r-0 text-center">
-                    <div className="text-[10px] text-muted-foreground uppercase tracking-wide">{card.label}</div>
-                    <div className={cn("font-semibold text-sm tabular-nums", label === "Cr" ? "text-green-700" : card.net === 0 ? "text-muted-foreground" : "text-orange-700")}>
-                      {card.net === 0 ? "Nil" : `₹${fmtINR(abs)}`}
+              {(() => {
+                const open  = netOpening(sheetClient);
+                const close = netClosing(sheetClient);
+                return [
+                  { label: "Opening", net: open },
+                  { label: "Debit",   net: sheetClient.debit },
+                  { label: "Credit",  net: -sheetClient.credit },
+                  { label: "Closing", net: close },
+                ].map(card => {
+                  const { abs, label } = drCr(card.net);
+                  return (
+                    <div key={card.label} className="px-4 py-3 border-r last:border-r-0 text-center">
+                      <div className="text-[10px] text-muted-foreground uppercase tracking-wide">{card.label}</div>
+                      <div className={cn("font-semibold text-sm tabular-nums", label === "Cr" ? "text-green-700" : card.net === 0 ? "text-muted-foreground" : "text-orange-700")}>
+                        {card.net === 0 ? "Nil" : `₹${fmtINR(abs)}`}
+                      </div>
+                      {card.net !== 0 && <div className={cn("text-[9px]", label === "Cr" ? "text-green-600" : "text-orange-600")}>{label}</div>}
                     </div>
-                    {card.net !== 0 && <div className={cn("text-[9px]", label === "Cr" ? "text-green-600" : "text-orange-600")}>{label}</div>}
-                  </div>
-                );
-              })}
+                  );
+                });
+              })()}
             </div>
           )}
 
-          {/* Ledger table */}
           <div className="flex-1 overflow-auto">
             {sheetLoading ? (
               <div className="flex items-center justify-center py-20 text-muted-foreground text-sm gap-2">
@@ -838,16 +839,16 @@ export default function ReceivablesReportTab() {
                     <tr><td colSpan={6} className="py-12 text-center text-muted-foreground">No transactions in this period</td></tr>
                   ) : (
                     sheetEntries.map((e, i) => {
-                      const { abs: balAbs, label: balLbl } = drCr(e.balance);
+                      const { abs: ba, label: bl } = drCr(e.balance);
                       return (
                         <tr key={i} className={cn(i % 2 === 0 ? "bg-white" : "bg-slate-50/50", "hover:bg-blue-50/30")}>
                           <td className="px-4 py-2 tabular-nums text-muted-foreground">{e.entry_date ? format(parseISO(e.entry_date), "dd/MM/yy") : ""}</td>
                           <td className="px-2 py-2 font-mono text-muted-foreground">{e.doc_no}</td>
                           <td className="px-2 py-2 text-foreground">{e.narration}</td>
-                          <td className="px-4 py-2 text-right tabular-nums">{e.debit > 0 ? fmtINR(e.debit) : <span className="text-muted-foreground">—</span>}</td>
+                          <td className="px-4 py-2 text-right tabular-nums">{e.debit  > 0 ? fmtINR(e.debit)  : <span className="text-muted-foreground">—</span>}</td>
                           <td className="px-4 py-2 text-right tabular-nums">{e.credit > 0 ? fmtINR(e.credit) : <span className="text-muted-foreground">—</span>}</td>
-                          <td className={cn("px-4 py-2 text-right tabular-nums font-semibold", balLbl === "Cr" ? "text-green-700" : e.balance === 0 ? "text-muted-foreground" : "text-orange-700")}>
-                            {e.balance === 0 ? "Nil" : `${fmtINR(balAbs)} ${balLbl}`}
+                          <td className={cn("px-4 py-2 text-right tabular-nums font-semibold", bl === "Cr" ? "text-green-700" : e.balance === 0 ? "text-muted-foreground" : "text-orange-700")}>
+                            {e.balance === 0 ? "Nil" : `${fmtINR(ba)} ${bl}`}
                           </td>
                         </tr>
                       );
@@ -860,13 +861,11 @@ export default function ReceivablesReportTab() {
         </SheetContent>
       </Sheet>
 
-      {/* ── Email Confirmation Dialog ── */}
+      {/* ── Email dialog ── */}
       <Dialog open={!!emailClient} onOpenChange={open => { if (!open && !emailSending) setEmailClient(null); }}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-base">
-              <Mail size={16} className="text-blue-600" /> Send Ledger Statement
-            </DialogTitle>
+            <DialogTitle className="flex items-center gap-2 text-base"><Mail size={16} className="text-blue-600" /> Send Ledger Statement</DialogTitle>
           </DialogHeader>
           <div className="text-sm text-muted-foreground space-y-2 py-1">
             <p>Send ledger PDF to <span className="font-semibold text-foreground">{emailClient?.name}</span>?</p>
