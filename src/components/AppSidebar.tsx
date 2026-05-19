@@ -120,7 +120,7 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
             <img
               src={firmLogo}
               alt="Firm Logo"
-              className={cn("object-contain shrink-0 rounded", collapsed ? "h-8 w-8" : "h-9 max-w-[140px]")}
+              className={cn("object-contain shrink-0 rounded", collapsed ? "h-12 w-12" : "h-[54px] max-w-[210px]")}
             />
           ) : (
             <>
