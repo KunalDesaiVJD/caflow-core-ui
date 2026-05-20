@@ -1344,12 +1344,20 @@ export async function nceAutoPopulate(
           // Also skip ledgers already pushed to unmatchedA from the CY loop.
           const inUnmatched = new Set(unmatchedA.map(u => u.ledger.toLowerCase().trim()));
           let pyOnlyAdded = 0;
+          // Temporary diagnostic: trace the loans_advances PY-only walk so we
+          // can see exactly why CLOSED ledgers (Advance Tax - 2024-25, TDS
+          // Receivable, …) are or aren't being turned into breakup rows.
+          const DBG = noteType === "loans_advances";
+          if (DBG) {
+            console.info(`[nce-dbg] loans_advances: pyTb=${pyTb.length} cySeen=${cySeen.size} ltSet=${[...ltSet].join(",")} stSet=${[...stSet].join(",")}`);
+          }
           for (const row of pyTb) {
             const nm = String(row.ledger_name || "").trim();
             if (!nm) continue;
             const nmLower = nm.toLowerCase();
-            if (cySeen.has(nmLower) || inUnmatched.has(nmLower)) continue;
-            if (ejectedSet.has(nm)) continue;
+            const dbgHit = DBG && (nmLower.includes("advance tax") || nmLower.includes("tds") || nmLower.includes("tcs") || nmLower.includes("income tax refund"));
+            if (cySeen.has(nmLower) || inUnmatched.has(nmLower)) { if (dbgHit) console.info(`[nce-dbg] skip(seen) "${nm}"`); continue; }
+            if (ejectedSet.has(nm)) { if (dbgHit) console.info(`[nce-dbg] skip(ejected) "${nm}"`); continue; }
             let mapped: { code: string } | undefined =
               (pyCoaMap as any)[nm] || pyMappingLowerA[nmLower] ||
               (coaMapping as any)[nm] || cyMappingLowerA[nmLower];
@@ -1357,13 +1365,14 @@ export async function nceAutoPopulate(
               const grp = String((row as any).parent_group || "").toLowerCase().trim();
               if (grp && groupToCodeA[grp]) mapped = { code: groupToCodeA[grp] };
             }
-            if (!mapped?.code) continue;
+            if (!mapped?.code) { if (dbgHit) console.info(`[nce-dbg] skip(no-map) "${nm}" pg="${(row as any).parent_group}"`); continue; }
             const isLT = ltSet.has(mapped.code);
             const isST = stSet.has(mapped.code);
-            if (!isLT && !isST) continue;
+            if (!isLT && !isST) { if (dbgHit) console.info(`[nce-dbg] skip(code-not-in-note) "${nm}" code=${mapped.code}`); continue; }
             const pyAmt = signedLedgerAmt(row, noteType);
-            if (Math.abs(pyAmt) < 0.005) continue;
+            if (Math.abs(pyAmt) < 0.005) { if (dbgHit) console.info(`[nce-dbg] skip(zero-amt) "${nm}" code=${mapped.code} closing=${row.closing_balance}`); continue; }
             const matchedRowId = smartMatch(nm, smartRules, row.parent_group);
+            if (dbgHit) console.info(`[nce-dbg] ADD "${nm}" code=${mapped.code} pyAmt=${pyAmt} target=${matchedRowId}`);
             unmatchedA.push({
               ledger: nm, amt: 0, pyAmt, isLT, isST,
               parentGroup: (row as any).parent_group ?? undefined,
