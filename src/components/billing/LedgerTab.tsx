@@ -230,6 +230,7 @@ function ClientLedgerView() {
   const [obNarration, setObNarration] = useState<string>("");
   const [obId, setObId] = useState<string | null>(null);
   const [obDialogOpen, setObDialogOpen] = useState(false);
+  const [obDraftFirmId, setObDraftFirmId] = useState<string>("");
   const [obDraftAmount, setObDraftAmount] = useState<string>("");
   const [obDraftDate, setObDraftDate] = useState<string>("");
   const [obDraftNarration, setObDraftNarration] = useState<string>("");
@@ -342,7 +343,7 @@ function ClientLedgerView() {
 
   const handleSaveOpeningBalance = async () => {
     if (!clientId) return;
-    const resolvedFirmId = firmId && firmId !== "all" ? firmId : user?.firm_id;
+    const resolvedFirmId = obDraftFirmId || (firmId && firmId !== "all" ? firmId : user?.firm_id);
     if (!resolvedFirmId) { toast({ title: "Select a firm first", variant: "destructive" }); return; }
     if (!obDraftDate) { toast({ title: "Balance date is required", variant: "destructive" }); return; }
     setObSaving(true);
@@ -757,6 +758,7 @@ function ClientLedgerView() {
               setObDraftDate(obDate || "");
               setObDraftNarration(obNarration || "");
               setObDraftGstin(selectedGstin);
+              setObDraftFirmId(firmId && firmId !== "all" ? firmId : (user?.firm_id ?? ""));
               setObDialogOpen(true);
             }}
           >
@@ -982,6 +984,18 @@ function ClientLedgerView() {
             <DialogTitle>Opening Balance</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
+            {/* Firm selector — prevents accidental save to wrong firm */}
+            <div className="space-y-1">
+              <Label className="text-xs">Firm *</Label>
+              <Select value={obDraftFirmId} onValueChange={setObDraftFirmId}>
+                <SelectTrigger className="text-xs h-8"><SelectValue placeholder="Select firm" /></SelectTrigger>
+                <SelectContent>
+                  {firms.map(f => (
+                    <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             {clientGstins.length > 1 && (
               <div className="space-y-1">
                 <Label className="text-xs">GSTIN / State</Label>
@@ -1055,7 +1069,8 @@ function GroupLedgerView() {
       ]);
       setGroups(g || []);
       setFirms(f || []);
-      if (user?.firm_id) setFirmIds([user.firm_id]);
+      // Default to all firms selected so group login sees everything
+      setFirmIds(["all"]);
     })();
   }, [user]);
 
@@ -1105,9 +1120,10 @@ function GroupLedgerView() {
     });
     setGroupObMap(newObMap);
 
+    // Include all clients — even those with only an opening balance and no period entries
     const result = clientIds
-      .filter(cid => grouped[cid]?.length > 0)
-      .map(cid => ({ clientId: cid, clientName: clientMap[cid] || "Unknown", entries: grouped[cid] }));
+      .map(cid => ({ clientId: cid, clientName: clientMap[cid] || "Unknown", entries: grouped[cid] || [] }))
+      .filter(r => r.entries.length > 0 || newObMap[r.clientId] !== undefined);
     setData(result);
     setLoading(false);
   }, [groupId, firmIds, fromDate, toDate, toast]);

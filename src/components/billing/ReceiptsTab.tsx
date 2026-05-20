@@ -332,6 +332,8 @@ export default function ReceiptsTab() {
   };
 
   const handleDelete = async (id: string) => {
+    // Delete ledger entry first (FK may not cascade), then the receipt itself
+    await supabase.from("client_ledger_entries").delete().eq("document_id", id);
     const { error } = await supabase.from("billing_receipts").delete().eq("id", id);
     if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
     else { toast({ title: "Receipt deleted" }); fetchData(); }
