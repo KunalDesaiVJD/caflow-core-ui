@@ -229,8 +229,11 @@ async function exportExcel(engagementId: string, data: AuditWorksheetData) {
     ["Prev IT Return obtained",         yesNo(pickByType(tax.prev_it_return, stat.prev_it_return) as any)],
   ];
 
+  if (isTax) {
+    masterRows.push(["Prev Year Tax Audit Report (File) obtained", yesNo((tax as any).prev_tax_audit_report)]);
+  }
   if (isStat) {
-    masterRows.push(["Prev Statutory Audit Report obtained", yesNo(stat.prev_audit_report)]);
+    masterRows.push(["Prev Year Statutory Audit Report (File) obtained", yesNo(stat.prev_audit_report)]);
   }
 
   masterRows.push(
@@ -250,7 +253,8 @@ async function exportExcel(engagementId: string, data: AuditWorksheetData) {
       ["Stock Qty Details",   tax.stock_qty_records === "yes" ? (tax.stock_qty_details ?? "") : ""],
       [],
       ["GST Registered",      yesNo(tax.gst_details)],
-      ["GST ID",              tax.gst_details === "yes" ? (tax.gst_id ?? "") : ""],
+      ["GST ID",               tax.gst_details === "yes" ? (tax.gst_id ?? "")       : ""],
+      ["GST Password",         tax.gst_details === "yes" ? (tax.gst_password ?? "") : ""],
     );
   }
 
@@ -545,8 +549,15 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
     yesNA(pickByType(tax.prev_moa_aoa_deed, stat.prev_moa_aoa_deed) as any) || "—"]);
   masterBody.push(["Previous Year IT Return & Balance Sheet",
     yesNA(pickByType(tax.prev_it_return, stat.prev_it_return) as any) || "—"]);
+  // Tax engagements get the tax-audit-report file row; statutory engagements
+  // get the statutory-audit-report file row; "both" engagements get both.
+  // Suffix "(File)" mirrors the on-screen checkbox label.
+  if (isTax) {
+    masterBody.push(["Previous Year Tax Audit Report (File)",
+      yesNA((tax as any).prev_tax_audit_report) || "—"]);
+  }
   if (isStat) {
-    masterBody.push(["Previous Year Statutory Audit Report",
+    masterBody.push(["Previous Year Statutory Audit Report (File)",
       yesNA(stat.prev_audit_report) || "—"]);
   }
 
@@ -579,6 +590,7 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
     masterBody.push(["GST Registered?", yesNA(tax.gst_details) || "—"]);
     if (tax.gst_details === "yes") {
       masterBody.push(["GST ID", fmt(tax.gst_id)]);
+      masterBody.push(["GST Password", fmt(tax.gst_password)]);
     }
   }
   if (isStat) {

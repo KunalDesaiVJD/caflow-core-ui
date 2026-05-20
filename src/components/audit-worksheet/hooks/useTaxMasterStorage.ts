@@ -38,6 +38,7 @@ export interface TaxMasterData {
   // Field 7 — Previous year documents checkboxes
   prev_moa_aoa_deed: boolean;
   prev_it_return: boolean;
+  prev_tax_audit_report: boolean;
 
   // Field 8 — Books of Accounts checkboxes
   books_cash_book: boolean;
@@ -101,6 +102,7 @@ export const BLANK_TAX_MASTER: TaxMasterData = {
   bank_branch: "",
   prev_moa_aoa_deed: false,
   prev_it_return: false,
+  prev_tax_audit_report: false,
   books_cash_book: false,
   books_bank_book: false,
   books_journal_register: false,

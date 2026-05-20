@@ -260,7 +260,7 @@ export default function StatutoryAuditMaster({ data, engagementId, onSaved }: Pr
           </label>
           <label className="flex items-center gap-2 cursor-pointer text-sm">
             {chk("prev_audit_report")}
-            <span>Previous Year Statutory Audit Report</span>
+            <span>Previous Year Statutory Audit Report (File)</span>
           </label>
         </div>
 

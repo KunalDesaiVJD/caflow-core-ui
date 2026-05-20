@@ -328,7 +328,11 @@ export default function TaxAuditMaster({ data, engagementId, onSaved }: Props) {
           </label>
           <label className="flex items-center gap-2 cursor-pointer text-sm">
             {chk("prev_it_return")}
-            <span>Previous Year IT Return, Audit Report &amp; Balance Sheet</span>
+            <span>Previous Year IT Return &amp; Balance Sheet</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer text-sm">
+            {chk("prev_tax_audit_report")}
+            <span>Previous Year Tax Audit Report (File)</span>
           </label>
         </div>
 
