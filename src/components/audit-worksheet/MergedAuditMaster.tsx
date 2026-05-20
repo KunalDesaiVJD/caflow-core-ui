@@ -292,11 +292,11 @@ export default function MergedAuditMaster({ data, engagementId, onSaved }: Props
         </div>
 
         {/* ── 7. Previous Years Details ── */}
-        <SectionHeader no={7} label="Previous Years Details (Documents Obtained)" />
+        <SectionHeader no={7} label="Previous Years Details (Documents Obtained, if first year or any change)" />
         <div className="flex flex-col gap-2 pl-2">
           <label className="flex items-center gap-2 cursor-pointer text-sm">
             {chk("prev_moa_aoa_deed")}
-            <span>MOA / AOA / Partnership Deed (if first year or any change)</span>
+            <span>MOA / AOA / Partnership Deed</span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer text-sm">
             {chk("prev_it_return")}

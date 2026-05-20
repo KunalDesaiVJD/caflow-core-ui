@@ -488,9 +488,31 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
   };
 
   // Section helper: emits a band-styled row that spans both columns.
+  // Slightly larger font + cell padding than the value rows so the auditor
+  // can visually distinguish a section heading at a glance.
   const section = (title: string): (string | { content: string; colSpan?: number; styles?: any })[] => [
-    { content: title, colSpan: 2, styles: { fillColor: [241, 245, 249], fontStyle: "bold", textColor: [30, 41, 59] } },
+    {
+      content: title,
+      colSpan: 2,
+      styles: {
+        fillColor:  [226, 232, 240],
+        fontStyle:  "bold",
+        textColor:  [15, 23, 42],
+        fontSize:   10,
+        cellPadding: 2.4,
+      },
+    },
   ];
+
+  // PDF-specific yes/no renderer: shows "Not Applicable" instead of plain "No"
+  // so audit working papers read naturally as compliance notes ("Yes" / "Not
+  // Applicable" rather than "Yes" / "No"). On-screen forms keep the YES/NO
+  // toggles unchanged.
+  const yesNA = (v: "yes" | "no" | "" | boolean | undefined): string => {
+    if (v === true  || v === "yes") return "Yes";
+    if (v === false || v === "no")  return "Not Applicable";
+    return "";
+  };
 
   type Row = (string | { content: string; colSpan?: number; styles?: any })[];
   const masterBody: Row[] = [];
@@ -518,14 +540,14 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
   masterBody.push(["Accountant Name",      fmt(pickByType(tax.accountant_name, stat.accountant_name))]);
   masterBody.push(["Mobile No.",           fmt(pickByType(tax.mobile_no, stat.mobile_no))]);
 
-  masterBody.push(section("Previous Years Details (Documents Obtained)"));
-  masterBody.push(["MOA / AOA / Partnership Deed (if first year or any change)",
-    yesNo(pickByType(tax.prev_moa_aoa_deed, stat.prev_moa_aoa_deed) as any) || "—"]);
+  masterBody.push(section("Previous Years Details (Documents Obtained, if first year or any change)"));
+  masterBody.push(["MOA / AOA / Partnership Deed",
+    yesNA(pickByType(tax.prev_moa_aoa_deed, stat.prev_moa_aoa_deed) as any) || "—"]);
   masterBody.push(["Previous Year IT Return & Balance Sheet",
-    yesNo(pickByType(tax.prev_it_return, stat.prev_it_return) as any) || "—"]);
+    yesNA(pickByType(tax.prev_it_return, stat.prev_it_return) as any) || "—"]);
   if (isStat) {
     masterBody.push(["Previous Year Statutory Audit Report",
-      yesNo(stat.prev_audit_report) || "—"]);
+      yesNA(stat.prev_audit_report) || "—"]);
   }
 
   masterBody.push(section("Books of Accounts Verified"));
@@ -537,24 +559,29 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
   // row produces a duplicated "CARO 2020 Applicable? / CARO 2020 Applicable"
   // pair in the PDF, which the auditor flagged as redundant.
   if (isTax) {
-    masterBody.push(["Stock Quantity Records Maintained", yesNo(tax.stock_qty_records) || "—"]);
+    masterBody.push(["Stock Quantity Records Maintained", yesNA(tax.stock_qty_records) || "—"]);
     if (tax.stock_qty_records === "yes") {
       masterBody.push(["Stock Quantity Details", fmt(tax.stock_qty_details)]);
     }
   }
 
   masterBody.push(section("Dates Audit Conducted"));
-  masterBody.push(["Audit Date From", fmtDate(pickByType(tax.audit_date_from, stat.audit_date_from) as string) || "—"]);
-  masterBody.push(["Audit Date To",   fmtDate(pickByType(tax.audit_date_to,   stat.audit_date_to)   as string) || "—"]);
+  // Right-aligned date values under the "Dates Audit Conducted" band.
+  // Labels are intentionally just "From" / "To" — the band already names
+  // the section, so prefixing with "Audit Date" reads as duplication.
+  const dateFromVal = fmtDate(pickByType(tax.audit_date_from, stat.audit_date_from) as string) || "—";
+  const dateToVal   = fmtDate(pickByType(tax.audit_date_to,   stat.audit_date_to)   as string) || "—";
+  masterBody.push(["From", { content: dateFromVal, styles: { halign: "right" } } as any]);
+  masterBody.push(["To",   { content: dateToVal,   styles: { halign: "right" } } as any]);
 
   if (isTax) {
-    masterBody.push(["GST Registered?", yesNo(tax.gst_details) || "—"]);
+    masterBody.push(["GST Registered?", yesNA(tax.gst_details) || "—"]);
     if (tax.gst_details === "yes") {
       masterBody.push(["GST ID", fmt(tax.gst_id)]);
     }
   }
   if (isStat) {
-    masterBody.push(["CARO 2020 Applicable?", yesNo(stat.caro_applicable) || "—"]);
+    masterBody.push(["CARO 2020 Applicable?", yesNA(stat.caro_applicable) || "—"]);
   }
 
   masterBody.push(["Audit Carried Out By", auditCarriedBy || "—"]);
@@ -572,13 +599,15 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
     ...baseTable(masterLabel),
     head: [["Field", "Value"]],
     body: masterBody as any,
-    // Slightly tighter padding + fontSize so the entire Master fits on one
-    // portrait A4 page (~25-28 rows including section bands).
-    styles: { ...baseTable(masterLabel).styles, fontSize: 8, cellPadding: 1.6 },
-    headStyles: { ...baseTable(masterLabel).headStyles, fillColor: [79, 70, 229], fontSize: 8.5 },
+    // Master is ~25-28 rows on a portrait A4 page (height ≈ 260 mm of usable
+    // content area). 9.5pt font + 2.4mm padding fills the page properly so
+    // the printed PDF doesn't have wasted whitespace at the bottom — section
+    // bands themselves bump up to 10pt via the inline section() styles.
+    styles: { ...baseTable(masterLabel).styles, fontSize: 9.5, cellPadding: 2.4 },
+    headStyles: { ...baseTable(masterLabel).headStyles, fillColor: [79, 70, 229], fontSize: 10 },
     columnStyles: {
-      0: { fontStyle: "bold", cellWidth: 60, fillColor: [249, 250, 251] },
-      1: { cellWidth: CONTENT_W - 60 },
+      0: { fontStyle: "bold", cellWidth: 65, fillColor: [249, 250, 251] },
+      1: { cellWidth: CONTENT_W - 65 },
     },
   });
 
