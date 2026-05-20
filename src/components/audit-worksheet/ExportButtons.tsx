@@ -57,6 +57,61 @@ const CHECKLIST_DEFS = [
   { id: "stock_qty",       sr: 20, particulars: "Quantitative Details of Stock (if apply)" },
 ];
 
+// Special Attention — "Advanced Checklist For Tax & Statutory Auditing".
+// Mirrors the CHECKLIST array in SpecialAttention.tsx (Sheet 3). Section rows
+// (`isSection: true`) render as merged dark-band headers in the PDF; indented
+// rows are sub-points under their parent. {fyEnd} is replaced at render time.
+const SA_CHECKLIST: Array<{
+  id: string; sr: string; particulars: string; documents?: string;
+  isSection: boolean; indent: boolean;
+}> = [
+  { id: "1",    sr: "1",    particulars: "Changes in Profit & Loss ratio of Partner or Shareholding",
+    documents: "Copy of Partnership Deed / Shareholder Register", isSection: false, indent: false },
+  { id: "2",    sr: "2",    particulars: "TDS Payable Checking", isSection: true,  indent: false },
+  { id: "2_1",  sr: "2.1",  particulars: "TDS payable at end of quarter verified with Q4 return & challan paid after 31.03.{fyEnd}",
+    documents: "TDS return copy, TDS challan paid after March end", isSection: false, indent: true },
+  { id: "2_2",  sr: "2.2",  particulars: "Bifurcation of TDS by section-wise",
+    documents: "Verification of 26Q / 24Q", isSection: false, indent: true },
+  { id: "2_3",  sr: "2.3",  particulars: "Interest on late TDS payment and return filing dates",
+    documents: "TDS acknowledgement copy, Interest amount", isSection: false, indent: true },
+  { id: "2_4",  sr: "2.4",  particulars: "Scrutiny of each TDS ledger", isSection: false, indent: true },
+  { id: "3",    sr: "3",    particulars: "TDS Receivable Checking — 26AS reconciliation with P&L income and Balance Sheet TDS receivable",
+    documents: "Copy of 26AS, Ledger of TDS receivable", isSection: false, indent: false },
+  { id: "4",    sr: "4",    particulars: "Deduction under Chapter-VIA — List of deductions section-wise",
+    documents: "Receipts / proof of all deductions claimed", isSection: false, indent: false },
+  { id: "5",    sr: "5",    particulars: "Related Party Transactions — List with Name, Relationship, PAN, Nature of Payment",
+    documents: "Format as specified in audit report (AS-18 / Ind AS 24)", isSection: false, indent: false },
+  { id: "6",    sr: "6",    particulars: "Details of Unsecured Loan — List with PAN & Address; verify mode of payment",
+    documents: "Format as specified in audit report", isSection: false, indent: false },
+  { id: "7",    sr: "7",    particulars: "Details of Secured Loan", isSection: true,  indent: false },
+  { id: "7_1",  sr: "7.1",  particulars: "Whether interest on secured loan charged to expenses", isSection: false, indent: true },
+  { id: "7_2",  sr: "7.2",  particulars: "Whether TDS deducted on interest (applicable for NBFC loans)",
+    documents: "Verification of Loan Statement", isSection: false, indent: true },
+  { id: "8",    sr: "8",    particulars: "GST", isSection: true,  indent: false },
+  { id: "8_1",  sr: "8.1",  particulars: "GST offset entries verified", isSection: false, indent: true },
+  { id: "8_2",  sr: "8.2",  particulars: "CGST / SGST / IGST credit & payable verification",
+    documents: "GST challan paid after {fyEnd}-03-31", isSection: false, indent: true },
+  { id: "8_3",  sr: "8.3",  particulars: "ITC match with electronic credit ledger",
+    documents: "Verify with GSTR-3B", isSection: false, indent: true },
+  { id: "9",    sr: "9",    particulars: "Manufacturing Unit Details (Only for Manufacturing Companies) — Opening Qty (RM / FG), Qty Purchased / Produced, Qty Sold / Consumed, Closing Qty",
+    isSection: false, indent: false },
+  { id: "10",   sr: "10",   particulars: "Private Limited / Limited Company — Specific Audit Points", isSection: true,  indent: false },
+  { id: "10_1", sr: "10.1", particulars: "Unsecured loan taken and repaid during the year", isSection: false, indent: true },
+  { id: "10_2", sr: "10.2", particulars: "Loans given to shareholders during the year", isSection: false, indent: true },
+  { id: "10_3", sr: "10.3", particulars: "Remuneration paid to Directors",
+    documents: "Board / Shareholders Resolutions", isSection: false, indent: true },
+  { id: "10_4", sr: "10.4", particulars: "Change of Registered Office",
+    documents: "Board / Shareholders Resolutions", isSection: false, indent: true },
+  { id: "10_5", sr: "10.5", particulars: "Change in authorized / paid-up share capital",
+    documents: "Board Resolutions + Updated shareholder list", isSection: false, indent: true },
+  { id: "10_6", sr: "10.6", particulars: "Related party transactions (AS-18 / Ind AS 24 compliance)", isSection: false, indent: true },
+  { id: "10_7", sr: "10.7", particulars: "Pending disputes / litigations with government authorities", isSection: false, indent: true },
+  { id: "10_8", sr: "10.8", particulars: "CARO clauses — specifically clauses 11, 13 & 15",
+    documents: "Written answers to each CARO reporting point from management", isSection: false, indent: true },
+  { id: "11",   sr: "11",   particulars: "MSME — Verification of outstanding dues to Micro and Small Enterprises under MSMED Act, 2006",
+    documents: "MSME Declaration / Udyam Registration Certificate of all Suppliers / Creditors", isSection: false, indent: false },
+];
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function yesNo(v: "yes" | "no" | "" | boolean | undefined): string {
@@ -463,45 +518,132 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
     },
   });
 
-  // ── Page 2: Audit Worksheet ────────────────────────────────────────────────
+  // ── Page 2: Vouching ──────────────────────────────────────────────────────
+  // Columns mirror Worksheet.tsx on-screen header exactly:
+  //   Sr. | Name of Books | Extent of Check | Date | Assigned To | Status | Notes
+  // Multi-period rows (periods.length > 0) emit one sub-row per period under
+  // the book name; single-period (legacy) rows emit a single row.
   doc.addPage();
   const ws = await fetchSheet<WorksheetSheetData>(engagementId, "worksheet_json");
-  autoTable(doc, {
-    ...baseTable("Audit Worksheet"),
-    head: [["Sr", "Area / Particulars", "Extent / As-on Date", "Work Date", "Checked By", "Notes"]],
-    body: WORKSHEET_ROWS.map(r => {
-      const row = ((ws as any).rows ?? {})[r.id] ?? {} as any;
+
+  const STATUS_LABEL: Record<string, string> = { done: "Done", na: "N/A", pending: "Pending" };
+  type VouchRow = (string | { content: string; colSpan?: number; styles?: any })[];
+  const vouchBody: VouchRow[] = [];
+  for (const r of WORKSHEET_ROWS) {
+    const row = ((ws as any).rows ?? {})[r.id] ?? {} as any;
+    const periods: any[] = Array.isArray(row.periods) ? row.periods : [];
+    if (periods.length > 0) {
+      periods.forEach((p, idx) => {
+        const extent = p.extent_text || p.extent_date || "";
+        const assigned = Array.isArray(p.assigned_names)
+          ? p.assigned_names.filter(Boolean).join(", ")
+          : "";
+        vouchBody.push([
+          idx === 0 ? r.sr : "",
+          idx === 0 ? r.label : "",
+          p.period_label ? `${p.period_label}${extent ? ` — ${extent}` : ""}` : extent,
+          p.date ?? "",
+          assigned,
+          STATUS_LABEL[p.status] ?? "",
+          idx === 0 ? (row.notes ?? "") : "",
+        ]);
+      });
+    } else {
       const extent = row.extent_text || row.extent_date || "";
-      return [r.sr, r.label, extent, row.date ?? "", row.checked_by_name ?? "", row.notes ?? ""];
-    }),
-    headStyles: { ...baseTable("Audit Worksheet").headStyles, fillColor: [16, 185, 129] },
+      const assigned = Array.isArray(row.checked_by_names) && row.checked_by_names.length > 0
+        ? row.checked_by_names.filter(Boolean).join(", ")
+        : (row.checked_by_name ?? "");
+      vouchBody.push([
+        r.sr, r.label, extent, row.date ?? "", assigned, "", row.notes ?? "",
+      ]);
+    }
+  }
+  autoTable(doc, {
+    ...baseTable("Vouching"),
+    head: [["Sr.", "Name of Books", "Extent of Check", "Date", "Assigned To", "Status", "Notes"]],
+    body: vouchBody as any,
+    headStyles: { ...baseTable("Vouching").headStyles, fillColor: [13, 148, 136] },
     columnStyles: {
       0: { cellWidth: 10, halign: "center" },
-      1: { cellWidth: 55, fontStyle: "bold" },
-      2: { cellWidth: 50 },
-      3: { cellWidth: 28 },
-      4: { cellWidth: 40 },
-      5: { cellWidth: CONTENT_W - 10 - 55 - 50 - 28 - 40 },
+      1: { cellWidth: 50, fontStyle: "bold" },
+      2: { cellWidth: 60 },
+      3: { cellWidth: 25, halign: "center" },
+      4: { cellWidth: 45 },
+      5: { cellWidth: 22, halign: "center" },
+      6: { cellWidth: CONTENT_W - 10 - 50 - 60 - 25 - 45 - 22 },
     },
   });
 
-  // ── Page 3: Special Attention ──────────────────────────────────────────────
+  // ── Page 3: Audit Worksheet (Advanced Checklist) ──────────────────────────
+  // Renders the full SA_CHECKLIST in order — including section bands and
+  // user-added extra_rows appended after the static checklist. Columns mirror
+  // SpecialAttention.tsx on-screen header:
+  //   Sr. | Particulars | Documents to Verify | Checked By | Verified By | Query? | Query / Remarks
   doc.addPage();
   const sa = await fetchSheet<SpecialAttentionFormData>(engagementId, "special_attention_json");
-  const saRows = Object.entries((sa as any).rows ?? {}).map(([rowId, r]: [string, any]) => [
-    rowId, yesNo(r.query), r.remarks ?? "", r.checked_by_name ?? "", r.verified_by_name ?? "",
-  ]);
+  const fyEndForSA = data.fyEndDate ? data.fyEndDate.match(/^(\d{4})/)?.[1] ?? "" : "";
+  const inject = (s: string) => s.replaceAll("{fyEnd}", fyEndForSA);
+  const saRowsData: Record<string, any> = (sa as any).rows ?? {};
+  const extraRows: Array<{ id: string; particulars: string; documents?: string }> =
+    Array.isArray((sa as any).extra_rows) ? (sa as any).extra_rows : [];
+
+  type SARow = (string | { content: string; colSpan?: number; styles?: any })[];
+  const saBody: SARow[] = [];
+
+  const sectionStyle = { fillColor: [251, 191, 36], fontStyle: "bold" as const, textColor: [69, 26, 3] };
+  for (const def of SA_CHECKLIST) {
+    if (def.isSection) {
+      saBody.push([{ content: `${def.sr}  ${inject(def.particulars)}`, colSpan: 7, styles: sectionStyle }]);
+      continue;
+    }
+    const r = saRowsData[def.id] ?? {};
+    const checkedBy = Array.isArray(r.checked_by_names) && r.checked_by_names.length > 0
+      ? r.checked_by_names.filter(Boolean).join(", ")
+      : (r.checked_by_name ?? "");
+    saBody.push([
+      def.sr,
+      (def.indent ? "   " : "") + inject(def.particulars),
+      def.documents ? inject(def.documents) : "",
+      checkedBy,
+      r.verified_by_name ?? "",
+      yesNo(r.query),
+      r.remarks ?? "",
+    ]);
+  }
+  // Custom extra rows added by the user (appended after the static checklist).
+  if (extraRows.length > 0) {
+    saBody.push([{ content: "Additional Points", colSpan: 7, styles: sectionStyle }]);
+    extraRows.forEach((er, idx) => {
+      const r = saRowsData[er.id] ?? {};
+      const checkedBy = Array.isArray(r.checked_by_names) && r.checked_by_names.length > 0
+        ? r.checked_by_names.filter(Boolean).join(", ")
+        : (r.checked_by_name ?? "");
+      saBody.push([
+        `A${idx + 1}`,
+        er.particulars || "",
+        er.documents || "",
+        checkedBy,
+        r.verified_by_name ?? "",
+        yesNo(r.query),
+        r.remarks ?? "",
+      ]);
+    });
+  }
+
   autoTable(doc, {
-    ...baseTable("Special Attention"),
-    head: [["Sr / ID", "Query", "Remarks", "Checked By", "Verified By"]],
-    body: saRows.length > 0 ? saRows : [["—", "", "", "", ""]],
-    headStyles: { ...baseTable("Special Attention").headStyles, fillColor: [245, 158, 11] },
+    ...baseTable("Audit Worksheet — Advanced Checklist For Tax & Statutory Auditing"),
+    head: [["Sr.", "Particulars", "Documents to Verify", "Checked By", "Verified By (Sr. Head)", "Query?", "Query / Remarks"]],
+    body: saBody.length > 0 ? (saBody as any) : [["—", "", "", "", "", "", ""]],
+    styles: { ...baseTable("").styles, fontSize: 8, cellPadding: 1.8 },
+    headStyles: { ...baseTable("").headStyles, fillColor: [217, 119, 6], fontSize: 8.5 },
     columnStyles: {
-      0: { cellWidth: 40 },
-      1: { cellWidth: 18, halign: "center" },
-      2: { cellWidth: CONTENT_W - 40 - 18 - 45 - 45 },
-      3: { cellWidth: 45 },
-      4: { cellWidth: 45 },
+      0: { cellWidth: 12, halign: "center" },
+      1: { cellWidth: 75, fontStyle: "bold" },
+      2: { cellWidth: 55 },
+      3: { cellWidth: 35 },
+      4: { cellWidth: 30 },
+      5: { cellWidth: 14, halign: "center" },
+      6: { cellWidth: CONTENT_W - 12 - 75 - 55 - 35 - 30 - 14 },
     },
   });
 
