@@ -1067,9 +1067,23 @@ export async function nceAutoPopulate(
           ? pyFromWalk
           : (Math.abs(pyFromTb) > 0.005 ? pyFromTb : pyForCustomRow(noteType, id, label));
         newPy[id] = pyResolved;
+        // ISSUE (collapse/expand internal heads): Pattern B breakup ledgers
+        // used to be created with NO attachedTo (except cogs), so they rendered
+        // as a FLAT, always-visible list before the grand total with no
+        // collapsible head — e.g. every Trade Payables creditor / Other
+        // Current Liabilities payable was permanently expanded. Attach each
+        // unmatched ledger to its note's catch-all static head so it nests
+        // under that head with the standard +/- toggle (collapsed by default).
+        const DEFAULT_ATTACH_B: Record<string, string> = {
+          cogs:           "raw_purch",
+          trade_payables: "others",      // (b) Others
+          other_cl:       "other_cl",    // Other payables — Others
+          other_lt_liab:  "others",      // (b) Others (please specify)
+        };
+        const attachTarget = DEFAULT_ATTACH_B[noteType];
         const row: NCECustomRow = {
           id, label, source: "auto",
-          ...(noteType === "cogs" ? { attachedTo: "raw_purch" } : {}),
+          ...(attachTarget ? { attachedTo: attachTarget } : {}),
         };
         autoRows.push(row);
       }
