@@ -14,14 +14,14 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import {
-  Loader2, DatabaseZap, BarChart3, Zap,
+  Loader2, DatabaseZap, BarChart3, TrendingUp, Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTallyEngagementId } from "./hooks/useTallyEngagementId";
 import { BsPlView } from "./BsPlView";
 import { AnomalyFeedView } from "./AnomalyFeedView";
 
-type ViewMode = "bspl" | "anomaly";
+type ViewMode = "bs" | "pl" | "anomaly";
 
 interface Props {
   engagementId:    string;
@@ -42,7 +42,7 @@ export function LedgerExplorerTab({ engagementId, clientId, financialYear, onRai
   // "No Tally data synced yet" even when the data was clearly present.
   const { tallyEngId, loading: resolving } = useTallyEngagementId(clientId, financialYear, engagementId);
 
-  const [viewMode, setViewMode] = useState<ViewMode>("bspl");
+  const [viewMode, setViewMode] = useState<ViewMode>("bs");
   const [hasRows,  setHasRows]  = useState<boolean>(true);
   const [loading,  setLoading]  = useState(false);
 
@@ -103,15 +103,27 @@ export function LedgerExplorerTab({ engagementId, clientId, financialYear, onRai
         <div className="inline-flex rounded-md border overflow-hidden">
           <button
             type="button"
-            onClick={() => setViewMode("bspl")}
+            onClick={() => setViewMode("bs")}
             className={cn(
               "flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium transition-colors border-r",
-              viewMode === "bspl"
+              viewMode === "bs"
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:bg-muted/60",
             )}
           >
-            <BarChart3 size={11} /> BS / P&amp;L
+            <BarChart3 size={11} /> Balance Sheet
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode("pl")}
+            className={cn(
+              "flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium transition-colors border-r",
+              viewMode === "pl"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:bg-muted/60",
+            )}
+          >
+            <TrendingUp size={11} /> Profit &amp; Loss
           </button>
           <button
             type="button"
@@ -128,13 +140,25 @@ export function LedgerExplorerTab({ engagementId, clientId, financialYear, onRai
         </div>
       </div>
 
-      {/* ── BS / P&L view ── */}
-      {viewMode === "bspl" && (
+      {/* ── Balance Sheet view ── */}
+      {viewMode === "bs" && (
         <BsPlView
           engagementId={engagementId}
           clientId={clientId}
           financialYear={financialYear}
           onRaiseQuery={onRaiseQuery}
+          section="bs"
+        />
+      )}
+
+      {/* ── Profit & Loss view ── */}
+      {viewMode === "pl" && (
+        <BsPlView
+          engagementId={engagementId}
+          clientId={clientId}
+          financialYear={financialYear}
+          onRaiseQuery={onRaiseQuery}
+          section="pl"
         />
       )}
 
