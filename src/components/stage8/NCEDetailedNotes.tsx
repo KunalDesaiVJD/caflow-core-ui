@@ -1639,7 +1639,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
             // Issue 2 fix (per-ledger PY in expanded sub-rows): saved cy_sources
             // pre-eaa14a2c only carry amountCy, not amountPy. Force one-shot
             // re-sync per engagement so the UI can render the PY column.
-            const pySourcesMigrationKey = `nce_cy_sources_amountpy_v8_${engagementId}`;
+            const pySourcesMigrationKey = `nce_cy_sources_amountpy_v9_${engagementId}`;
             const pySourcesMigrationDone = localStorage.getItem(pySourcesMigrationKey) === "1";
             // Issue (debit/credit netting): saved totals pre-fix added Math.abs
             // of opposite-side balances instead of subtracting. Force one-shot

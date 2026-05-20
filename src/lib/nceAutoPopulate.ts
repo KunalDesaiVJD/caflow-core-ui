@@ -1343,6 +1343,7 @@ export async function nceAutoPopulate(
           const cySeen = new Set(tb.map(r => r.ledger_name.toLowerCase().trim()));
           // Also skip ledgers already pushed to unmatchedA from the CY loop.
           const inUnmatched = new Set(unmatchedA.map(u => u.ledger.toLowerCase().trim()));
+          let pyOnlyAdded = 0;
           for (const row of pyTb) {
             const nm = String(row.ledger_name || "").trim();
             if (!nm) continue;
@@ -1368,6 +1369,10 @@ export async function nceAutoPopulate(
               parentGroup: (row as any).parent_group ?? undefined,
               ...(matchedRowId ? { smartTarget: matchedRowId } : {}),
             });
+            pyOnlyAdded++;
+          }
+          if (pyOnlyAdded > 0) {
+            console.info(`[nceAutoPopulate] ${noteType}: PY-only walk added ${pyOnlyAdded} closed-ledger breakup row(s)`);
           }
         } catch (e) {
           console.warn("[nceAutoPopulate] Pattern A PY-only walk failed (non-fatal):", (e as Error)?.message);
