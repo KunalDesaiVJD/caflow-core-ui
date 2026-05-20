@@ -372,11 +372,29 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
   type Row = (string | { content: string; colSpan?: number; styles?: any })[];
   const masterBody: Row[] = [];
 
-  masterBody.push(section("Engagement"));
+  // Fields below mirror, 1:1, what each on-screen Audit Master form actually
+  // renders (TaxAuditMaster.tsx / StatutoryAuditMaster.tsx — numbered sections
+  // 1-12 / 1-11 respectively). Do NOT add rows for data-shape fields that the
+  // UI never collects (payments_to_relatives, secured_unsecured_loan,
+  // deduction_details, *_prepared_by_name, signed_copy_received,
+  // management_repr_letter, appointment_letter, audit_form_type) — they
+  // appeared as empty rows in earlier PDFs and the auditor flagged it.
+  const incIso = (data as any).client?.date_of_incorporation as string | null | undefined;
+  const dateOfIncorporation = incIso
+    ? (() => {
+        try {
+          return new Date(incIso).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+        } catch { return incIso; }
+      })()
+    : "—";
+
+  masterBody.push(section("Client"));
   masterBody.push(["Firm Name",            fmt(data.firmName)]);
   masterBody.push(["Client / Assessee",    fmt(data.clientName)]);
   masterBody.push(["Registered Address",   fmt(data.clientAddress)]);
   masterBody.push(["PAN",                  fmt(data.pan)]);
+  masterBody.push([isStat ? "Date of Incorporation / Registration" : "Birth Date / Registration Date",
+                   dateOfIncorporation]);
   masterBody.push(["Entity Type",          fmt(data.entityType)]);
   masterBody.push(["Financial Year",       fmt(data.financialYear)]);
 
@@ -384,59 +402,46 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
   masterBody.push(["Accountant Name",      fmt(pick(tax.accountant_name, stat.accountant_name))]);
   masterBody.push(["Mobile No.",           fmt(pick(tax.mobile_no, stat.mobile_no))]);
 
-  masterBody.push(section("Previous Year Documents"));
-  masterBody.push(["MOA / AOA / Deed obtained", yesNo(tax.prev_moa_aoa_deed ?? stat.prev_moa_aoa_deed) || "—"]);
-  masterBody.push(["Previous IT Return obtained", yesNo(tax.prev_it_return ?? stat.prev_it_return) || "—"]);
+  masterBody.push(section("Previous Years Details (Documents Obtained)"));
+  masterBody.push(["MOA / AOA / Partnership Deed (if first year or any change)",
+    yesNo(pick(tax.prev_moa_aoa_deed, stat.prev_moa_aoa_deed) as any) || "—"]);
+  masterBody.push(["Previous Year IT Return & Balance Sheet",
+    yesNo(pick(tax.prev_it_return, stat.prev_it_return) as any) || "—"]);
   if (isStat) {
-    masterBody.push(["Previous Statutory Audit Report obtained", yesNo(stat.prev_audit_report) || "—"]);
+    masterBody.push(["Previous Year Statutory Audit Report",
+      yesNo(stat.prev_audit_report) || "—"]);
   }
 
-  masterBody.push(section("Books of Accounts"));
-  masterBody.push(["Books Verified", booksChecked((isTax ? tax : stat) as TaxMasterData & StatutoryMasterData) || "—"]);
-
-  masterBody.push(section("Audit Dates"));
-  masterBody.push(["Audit Date From", fmt(pick(tax.audit_date_from, stat.audit_date_from))]);
-  masterBody.push(["Audit Date To",   fmt(pick(tax.audit_date_to,   stat.audit_date_to))]);
+  masterBody.push(section("Books of Accounts Verified"));
+  masterBody.push(["Books Verified",
+    booksChecked((isTax ? tax : stat) as TaxMasterData & StatutoryMasterData) || "—"]);
 
   if (isTax) {
-    masterBody.push(section("Tax Audit Specifics"));
+    masterBody.push(section("Stock Quantity Records Maintained"));
     masterBody.push(["Stock Quantity Records", yesNo(tax.stock_qty_records) || "—"]);
     if (tax.stock_qty_records === "yes") {
       masterBody.push(["Stock Quantity Details", fmt(tax.stock_qty_details)]);
     }
+  }
+
+  masterBody.push(section("Dates Audit Conducted"));
+  masterBody.push(["Audit Date From", fmt(pick(tax.audit_date_from, stat.audit_date_from))]);
+  masterBody.push(["Audit Date To",   fmt(pick(tax.audit_date_to,   stat.audit_date_to))]);
+
+  if (isTax) {
+    masterBody.push(section("GST Registered?"));
     masterBody.push(["GST Registered", yesNo(tax.gst_details) || "—"]);
     if (tax.gst_details === "yes") {
       masterBody.push(["GST ID", fmt(tax.gst_id)]);
     }
-    masterBody.push(["Payments to Relatives",        yesNo(tax.payments_to_relatives) || "—"]);
-    masterBody.push(["Secured / Unsecured Loan",     yesNo(tax.secured_unsecured_loan) || "—"]);
-    masterBody.push(["Deduction Details",            yesNo(tax.deduction_details) || "—"]);
   }
   if (isStat) {
-    masterBody.push(section("Statutory Audit Specifics"));
+    masterBody.push(section("CARO 2020 Applicable?"));
     masterBody.push(["CARO 2020 Applicable", yesNo(stat.caro_applicable) || "—"]);
-    if ((stat as any).audit_form_type) {
-      masterBody.push(["Audit Report Form", fmt((stat as any).audit_form_type)]);
-    }
-    masterBody.push(["Payments to Relatives",    yesNo(stat.payments_to_relatives) || "—"]);
-    masterBody.push(["Secured / Unsecured Loan", yesNo(stat.secured_unsecured_loan) || "—"]);
   }
-  masterBody.push(section("Preparation & Review"));
-  masterBody.push(["Audit Report Prepared By",
-    fmt(pick(tax.audit_report_prepared_by_name, stat.audit_report_prepared_by_name))]);
-  masterBody.push(["Return Prepared By",
-    fmt(pick(tax.return_prepared_by_name, stat.return_prepared_by_name))]);
-  masterBody.push(["3CD Prepared By",
-    fmt(pick(tax.cd_prepared_by_name, stat.cd_prepared_by_name))]);
-  masterBody.push(["Signed Copy Received",
-    fmt(pick(tax.signed_copy_received, stat.signed_copy_received))]);
-  masterBody.push(["Management Representation Letter",
-    fmt(pick(tax.management_repr_letter, stat.management_repr_letter))]);
-  masterBody.push(["Appointment Letter",
-    fmt(pick(tax.appointment_letter, stat.appointment_letter))]);
 
-  masterBody.push(section("Audit Team"));
-  masterBody.push(["Audit Carried Out By", auditCarriedBy || "—"]);
+  masterBody.push(section("Audit Carried Out By"));
+  masterBody.push(["Auditors", auditCarriedBy || "—"]);
 
   masterBody.push(section("Paths"));
   masterBody.push(["A/c (Tally) File Path",     fmt(pick(tax.ac_path,     stat.ac_path))]);
