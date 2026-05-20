@@ -333,6 +333,35 @@ export async function getCOAMapping(engagementId: string): Promise<COAMapping> {
   return {};
 }
 
+// Exact entity_type strings that classify an engagement as Non-Corporate (NCE).
+// MUST stay in sync with NON_CORPORATE_TYPES in PipelineFinancialStatements.tsx.
+const NON_CORPORATE_ENTITY_TYPES = new Set(
+  [
+    "Individual", "Proprietorship", "Sole Proprietorship", "Partnership",
+    "LLP", "Limited Liability Partnership", "HUF", "Hindu Undivided Family",
+    "Trust", "AOP", "Association of Persons", "BOI", "Body of Individuals",
+  ].map(s => s.toLowerCase()),
+);
+
+/**
+ * Resolve whether an engagement is a Non-Corporate Entity (NCE). Reads the
+ * engagement's entity_type, falling back to the client's entity_type. This is
+ * the SAME source of truth Stage 6 / Stage 7 use to pick the NCE vs corporate
+ * FS tree, so downstream views (e.g. the Ledger Explorer) classify ledger
+ * codes against the right schema instead of always assuming corporate.
+ */
+export async function getEngagementIsNonCorporate(engagementId: string): Promise<boolean> {
+  const { data } = await supabase
+    .from("audit_engagements")
+    .select("entity_type, clients(entity_type)")
+    .eq("id", engagementId)
+    .maybeSingle();
+  const et = String(
+    (data as any)?.entity_type || (data as any)?.clients?.entity_type || "",
+  ).trim().toLowerCase();
+  return NON_CORPORATE_ENTITY_TYPES.has(et);
+}
+
 /**
  * Fetch the prior-year (FY-1) trial balance for a given engagement.
  * Used by buildBreakup to populate the PY amount column from actual
@@ -440,6 +469,67 @@ export async function getPreviousYearFsAmounts(
       out[r.line_item_code] = (out[r.line_item_code] || 0) + Number(r.amount_cy || 0);
     }
   }
+  return out;
+}
+
+/**
+ * Preferred PY source for the Ledger Explorer: derive prior-year FS-code totals
+ * directly from the PY-shell trial balance + COA mapping — the SAME method the
+ * CY column uses. Many engagements never populate fa_financial_statements, so
+ * getPreviousYearFsAmounts() returned {} and the PY column showed "—" even
+ * though a PY-shell Tally sync (is_py_shell) was complete. This reads the FY-1
+ * shell engagement's TB and sums each ledger's signed closing balance under its
+ * mapped FS code (Dr +, Cr −), matching sumLedgersByFsCodes()'s convention so
+ * the caller can apply the per-row sign exactly as it does for CY.
+ */
+export async function getPreviousYearFsAmountsFromTB(
+  engagementId: string,
+): Promise<Record<string, number>> {
+  const { data: eng } = await supabase
+    .from("audit_engagements")
+    .select("client_id, financial_year")
+    .eq("id", engagementId)
+    .maybeSingle();
+  const clientId = (eng as any)?.client_id;
+  const fy       = (eng as any)?.financial_year;
+  if (!clientId || !fy) return {};
+  const parts = String(fy).split("-");
+  if (parts.length !== 2) return {};
+  const prevFy = `${parseInt(parts[0], 10) - 1}-${String(parseInt(parts[0], 10)).slice(-2)}`;
+
+  // Prefer the PY shell (is_py_shell — carries the FY-1 Tally sync) over any
+  // regular FY-1 engagement.
+  const { data: engList } = await supabase
+    .from("audit_engagements")
+    .select("id, is_py_shell, coa_mapping")
+    .eq("client_id", clientId)
+    .eq("financial_year", prevFy);
+  const sorted = ((engList || []) as any[]).sort(
+    (a, b) => (b.is_py_shell ? 1 : 0) - (a.is_py_shell ? 1 : 0),
+  );
+  const prev = sorted[0];
+  if (!prev?.id) return {};
+
+  const prevTb = await getTrialBalance(prev.id);
+  if (!prevTb.length) return {};
+
+  // Mapping: prefer the prior engagement's own coa_mapping; fall back to the
+  // current engagement's (ledger names are stable across years for a client).
+  let mapping: COAMapping | null =
+    prev.coa_mapping && typeof prev.coa_mapping === "object"
+      ? (prev.coa_mapping as COAMapping)
+      : null;
+  if (!mapping || Object.keys(mapping).length === 0) {
+    mapping = await getCOAMapping(engagementId);
+  }
+
+  const out: Record<string, number> = {};
+  for (const acct of prevTb) {
+    const code = mapping[acct.account_name]?.code;
+    if (!code) continue;
+    out[code] = (out[code] || 0) + acct.balance;
+  }
+  for (const k of Object.keys(out)) out[k] = Math.round(out[k] * 100) / 100;
   return out;
 }
 

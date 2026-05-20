@@ -647,6 +647,37 @@ export async function nceAutoPopulate(
     };
   }
 
+  // ── Precompute lookup maps used by the per-note PY-only walks ───────────
+  // These depend ONLY on coaMapping + tb (constant across all notes), so we
+  // build them ONCE here instead of rebuilding inside every note iteration.
+  // The previous in-loop `tb.find(...)` was O(ledgers²) per note × 19 notes,
+  // which made re-sync crawl on large engagements (600+ ledgers).
+  const tbParentByLedgerLower: Record<string, string> = {};
+  for (const r of tb) {
+    const nm = String(r.ledger_name || "").trim().toLowerCase();
+    if (nm) tbParentByLedgerLower[nm] = String(r.parent_group || "").toLowerCase().trim();
+  }
+  const groupToCodeGlobal: Record<string, string> = (() => {
+    const counts: Record<string, Record<string, number>> = {};
+    for (const [ledger, m] of Object.entries(coaMapping || {})) {
+      const c = (m as any)?.code; if (!c) continue;
+      const grp = tbParentByLedgerLower[ledger.toLowerCase().trim()];
+      if (!grp) continue;
+      if (!counts[grp]) counts[grp] = {};
+      counts[grp][c] = (counts[grp][c] || 0) + 1;
+    }
+    const out: Record<string, string> = {};
+    for (const [grp, codeCounts] of Object.entries(counts)) {
+      let best = "", bestN = 0, tie = false;
+      for (const [c, n] of Object.entries(codeCounts)) {
+        if (n > bestN) { best = c; bestN = n; tie = false; }
+        else if (n === bestN) tie = true;
+      }
+      if (best && !tie) out[grp] = best;
+    }
+    return out;
+  })();
+
   // ── 4. Load PY amounts from prior year's nce_financial_notes ───────────
   //
   // We also load the prior year's _custom_rows so we can match custom rows
@@ -912,26 +943,9 @@ export async function nceAutoPopulate(
         for (const [k, v] of Object.entries(pyCoaMap || {})) {
           if (v?.code) pyMappingLower[k.toLowerCase().trim()] = v;
         }
-        // parent_group → FS code map derived from CY mapping, for group
-        // inheritance when an exact ledger lookup fails on both sides.
-        const groupToCode: Record<string, string> = {};
-        const groupCount: Record<string, Record<string, number>> = {};
-        for (const [ledger, m] of Object.entries(coaMapping || {})) {
-          const c = m?.code; if (!c) continue;
-          const tbRow = tb.find(r => r.ledger_name === ledger);
-          const grp = (tbRow?.parent_group || "").toLowerCase().trim();
-          if (!grp) continue;
-          if (!groupCount[grp]) groupCount[grp] = {};
-          groupCount[grp][c] = (groupCount[grp][c] || 0) + 1;
-        }
-        for (const [grp, codes] of Object.entries(groupCount)) {
-          let best = "", bestN = 0, tie = false;
-          for (const [c, n] of Object.entries(codes)) {
-            if (n > bestN) { best = c; bestN = n; tie = false; }
-            else if (n === bestN) tie = true;
-          }
-          if (best && !tie) groupToCode[grp] = best;
-        }
+        // parent_group → FS code map (precomputed once at fn scope — avoids
+        // the previous O(ledgers²) tb.find per note that hung large engagements).
+        const groupToCode = groupToCodeGlobal;
         // Track every ledger already produced by the CY walk so the PY-only
         // walk below doesn't re-create them as duplicate customRows. BUG FIX:
         // previously this only watched staticSources (smart-matched ledgers).
@@ -1263,11 +1277,6 @@ export async function nceAutoPopulate(
         // Signed amount — see signedLedgerAmt() docs. Net opposite-side
         // balances within the head so group totals match COA Mapping math.
         const amt = signedLedgerAmt(row, noteType);
-        if (Math.abs(amt) < 0.005) continue;
-        // Skip ledgers the user has explicitly ejected to standalone rows
-        if (ejectedSet.has(row.ledger_name)) continue;
-
-        const matchedRowId = smartMatch(row.ledger_name, smartRules, row.parent_group);
         // ISSUE 1 FIX (per-ledger breakup in Notes): for "borrowings",
         // "investments" and "loans_advances" — notes where the auditor expects
         // ledger-level detail under each Schedule III sub-head — we ALWAYS
@@ -1280,6 +1289,26 @@ export async function nceAutoPopulate(
           noteType === "borrowings" ||
           noteType === "investments" ||
           noteType === "loans_advances";
+        // PY balance this same ledger carried (PY shell TB closing). Needed for
+        // the CLOSED-ledger case below.
+        const pyAmtForLedger = pyByLedger[row.ledger_name.toLowerCase()] ?? 0;
+        // ROOT-CAUSE FIX (Issue 1, CLOSED ledgers vanish): a ledger that closed
+        // during CY still appears in the CY trial balance, but with closing 0,
+        // so signedLedgerAmt() returns ~0. The old `if (<0.005) continue` then
+        // dropped it from the CY loop — AND the PY-only walk also skipped it
+        // (it IS present in CY TB, so it's in cySeen). The ledger therefore
+        // disappeared from BOTH paths: e.g. "Advance Tax - 2024-25",
+        // "TDS Reimbursement - Toyota Finance Service", "TDS/TCS Recevable-2425"
+        // on OM REALTY (closing 0 in CY, real balance in PY) never rendered as
+        // a breakup row even though COA Mapping clearly classifies them.
+        // For per-ledger-breakup notes, KEEP the ledger when it has a non-zero
+        // PY balance so it surfaces as a CY 0 / PY <amt> breakup line.
+        const keepForPy = wantsPerLedgerBreakup && Math.abs(pyAmtForLedger) > 0.005;
+        if (Math.abs(amt) < 0.005 && !keepForPy) continue;
+        // Skip ledgers the user has explicitly ejected to standalone rows
+        if (ejectedSet.has(row.ledger_name)) continue;
+
+        const matchedRowId = smartMatch(row.ledger_name, smartRules, row.parent_group);
 
         if (matchedRowId && !wantsPerLedgerBreakup) {
           // Existing aggregate path for other Pattern A notes
@@ -1290,12 +1319,72 @@ export async function nceAutoPopulate(
           if (isST && !(matchedRowId + "_st" in newPy))
             newPy[matchedRowId + "_st"] = Math.abs(pyNotes[noteType]?.[matchedRowId + "_st"] ?? 0);
         } else {
-          const pyAmt = pyByLedger[row.ledger_name.toLowerCase()] ?? 0;
           unmatchedA.push({
-            ledger: row.ledger_name, amt, pyAmt, isLT, isST,
+            ledger: row.ledger_name, amt, pyAmt: pyAmtForLedger, isLT, isST,
             parentGroup: row.parent_group ?? undefined,
             ...(matchedRowId ? { smartTarget: matchedRowId } : {}),
           });
+        }
+      }
+
+      // ── PY-only ledger walk (Pattern A) ─────────────────────────────────
+      // ROOT-CAUSE FIX (Issue: CLOSED ledgers missing from Pattern A notes &
+      // FS): the loop above only iterates CY trial-balance rows. A ledger
+      // that existed only in the PRIOR year (CLOSED — closing 0 in CY, so it
+      // isn't in CY TB at all) was therefore never turned into a breakup row.
+      // Result: "Advance Tax - 2024-25", "TDS Reimbursement", "TDS/TCS
+      // Receivable-2425" etc. showed in the Variance Drill / COA mapping but
+      // vanished from the loans_advances note AND from the BS face PY column.
+      // Mirror the Pattern B PY-only walk: resolve each PY-shell ledger via
+      // PY-shell mapping → CY mapping → parent_group inheritance, and push a
+      // breakup row with CY 0 + signed PY amount under the matched static row.
+      //
+      // Wrapped in try/catch so any unexpected error in this supplementary
+      // walk can NEVER blank the whole note — the CY-derived rows above are
+      // the authoritative content and must always survive.
+      if (pyTb.length > 0) {
+        try {
+          const cyMappingLowerA: Record<string, { code: string }> = {};
+          for (const [k, v] of Object.entries(coaMapping || {})) {
+            if (v?.code) cyMappingLowerA[k.toLowerCase().trim()] = v;
+          }
+          const pyMappingLowerA: Record<string, { code: string }> = {};
+          for (const [k, v] of Object.entries(pyCoaMap || {})) {
+            if (v?.code) pyMappingLowerA[k.toLowerCase().trim()] = v;
+          }
+          // parent_group → FS code inheritance (precomputed once at fn scope)
+          const groupToCodeA = groupToCodeGlobal;
+          const cySeen = new Set(tb.map(r => r.ledger_name.toLowerCase().trim()));
+          // Also skip ledgers already pushed to unmatchedA from the CY loop.
+          const inUnmatched = new Set(unmatchedA.map(u => u.ledger.toLowerCase().trim()));
+          for (const row of pyTb) {
+            const nm = String(row.ledger_name || "").trim();
+            if (!nm) continue;
+            const nmLower = nm.toLowerCase();
+            if (cySeen.has(nmLower) || inUnmatched.has(nmLower)) continue;
+            if (ejectedSet.has(nm)) continue;
+            let mapped: { code: string } | undefined =
+              (pyCoaMap as any)[nm] || pyMappingLowerA[nmLower] ||
+              (coaMapping as any)[nm] || cyMappingLowerA[nmLower];
+            if (!mapped?.code) {
+              const grp = String((row as any).parent_group || "").toLowerCase().trim();
+              if (grp && groupToCodeA[grp]) mapped = { code: groupToCodeA[grp] };
+            }
+            if (!mapped?.code) continue;
+            const isLT = ltSet.has(mapped.code);
+            const isST = stSet.has(mapped.code);
+            if (!isLT && !isST) continue;
+            const pyAmt = signedLedgerAmt(row, noteType);
+            if (Math.abs(pyAmt) < 0.005) continue;
+            const matchedRowId = smartMatch(nm, smartRules, row.parent_group);
+            unmatchedA.push({
+              ledger: nm, amt: 0, pyAmt, isLT, isST,
+              parentGroup: (row as any).parent_group ?? undefined,
+              ...(matchedRowId ? { smartTarget: matchedRowId } : {}),
+            });
+          }
+        } catch (e) {
+          console.warn("[nceAutoPopulate] Pattern A PY-only walk failed (non-fatal):", (e as Error)?.message);
         }
       }
 
@@ -1314,31 +1403,75 @@ export async function nceAutoPopulate(
           newCy[id + "_lt"] = um.amt;
           // Per-ledger PY: prefer PY shell TB closing for this ledger; fall
           // back to label-matched prior customRow lookup (handles renamed
-          // breakup rows across years).
-          newPy[id + "_lt"] = um.pyAmt > 0 ? um.pyAmt : pyForCustomRow(noteType, id, label, "_lt");
+          // breakup rows across years). Math.abs guard so signed-negative PY
+          // values (Dr balance in a Cr-natural head, etc.) aren't discarded.
+          newPy[id + "_lt"] = Math.abs(um.pyAmt) > 0.005 ? um.pyAmt : pyForCustomRow(noteType, id, label, "_lt");
         }
         if (um.isST) {
           newCy[id + "_st"] = um.amt;
-          newPy[id + "_st"] = um.pyAmt > 0 ? um.pyAmt : pyForCustomRow(noteType, id, label, "_st");
+          newPy[id + "_st"] = Math.abs(um.pyAmt) > 0.005 ? um.pyAmt : pyForCustomRow(noteType, id, label, "_st");
         }
 
         let rowSection:    string | undefined;
         let rowAttachedTo: string | undefined;
         if (noteType === "borrowings") {
-          rowSection = "unsecured";
+          // ROOT-CAUSE FIX (Issue: "Term Loans — Banks (Unsecured)" lands on
+          // Secured): when a ledger's own name or Tally parent_group EXPLICITLY
+          // says "unsecured", it must NEVER be routed to a secured row — even
+          // though its name also matches a secured keyword (e.g. "Term Loan
+          // from Bank (Unsecured)" matches the sec_term_bank rule). Detect the
+          // explicit qualifier and, if present, force the unsecured counterpart.
+          const classifyTxt =
+            " " + normLedger(um.ledger).trim() + " " +
+            (um.parentGroup || "").toLowerCase().trim() + " ";
+          const isExplicitUnsecured = /unsecured|un-secured|un secured/.test(classifyTxt);
+          // Secured-row → unsecured-row counterpart map (ids from nceNotesConfig).
+          const SEC_TO_UNSEC: Record<string, string> = {
+            sec_term_bank:   "unsec_term_bank",
+            sec_term_fi:     "unsec_term_fi",
+            sec_term_others: "unsec_term_others",
+            sec_demand_bank: "unsec_demand_bank",
+            sec_demand_other:"unsec_demand_other",
+            sec_deferred:    "unsec_deferred",
+            sec_related:     "unsec_related",
+            sec_other:       "unsec_other",
+          };
+
           // Use the smart-match target if available (e.g. "unsec_related" for
-          // an HUF ledger that matched the keyword rule). Otherwise fall back
-          // to parent_group / name heuristic.
+          // an HUF ledger, or "sec_demand_bank" for a CC/OD bank ledger).
+          // Otherwise fall back to parent_group / name heuristic.
           if (um.smartTarget) {
             rowAttachedTo = um.smartTarget;
+            if (isExplicitUnsecured && rowAttachedTo.startsWith("sec_")) {
+              rowAttachedTo = SEC_TO_UNSEC[rowAttachedTo] ?? "unsec_other";
+            }
           } else {
             const pgLower   = (um.parentGroup || "").toLowerCase();
             const nameLower = normLedger(um.ledger);
+            // Secured bank facilities (CC/OD/term loan) routed to the secured
+            // demand/term rows even when smartMatch missed the exact keyword —
+            // a parent_group that mentions a bank/secured facility is a strong
+            // signal. This keeps "Loans on demand — Banks" populated with its
+            // actual ledger breakup instead of leaving a stale aggregate.
+            // Suppressed when the ledger is explicitly unsecured.
+            const pgSecuredBank = !isExplicitUnsecured &&
+              ["cash credit", " cc ", "overdraft", " od ", "bank od",
+               "secured loan", "working capital"].some(kw => (" " + pgLower + " ").includes(kw));
             const pgRelated = ["partner", "director", "promoter", "proprietor",
               "shareholder", "relative", "family", "huf", "related"].some(kw => pgLower.includes(kw));
             const nameHuf   = nameLower.includes(" huf") || nameLower.includes("(huf)") || nameLower.includes("-huf");
-            rowAttachedTo = (pgRelated || nameHuf) ? "unsec_related" : "unsec_other";
+            rowAttachedTo = pgSecuredBank
+              ? "sec_demand_bank"
+              : (pgRelated || nameHuf) ? "unsec_related" : "unsec_other";
           }
+          // ROOT-CAUSE FIX: section MUST follow the attached row. Previously
+          // every borrowings breakup row was hardcoded section="unsecured",
+          // so a ledger correctly attached to a SECURED row (sec_demand_bank,
+          // sec_term_bank, …) carried a contradictory section tag — the
+          // renderer groups children by section, so the row could fail to
+          // render beneath its secured parent (e.g. "Loans on demand — Banks"
+          // showed a stale aggregate with no expandable per-ledger breakup).
+          rowSection = rowAttachedTo.startsWith("sec_") ? "secured" : "unsecured";
         } else if (um.smartTarget && (noteType === "investments" || noteType === "loans_advances")) {
           // For investments / loans_advances Pattern A notes, attach to the
           // smart-matched static row so per-ledger breakup renders beneath it.

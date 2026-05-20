@@ -61,6 +61,12 @@ function emptyPartner(num: number): PartnerRow {
   };
 }
 
+/** Convert a ledger name to Proper Case for the partner-name field, e.g.
+ *  "rajesh kumar shah" → "Rajesh Kumar Shah", "ABC ENTERPRISES" → "Abc Enterprises". */
+function properCase(s: string): string {
+  return String(s || "").trim().toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+}
+
 const EMPTY_PY: PyRow = {
   opening: 0, introduced: 0, remuneration: 0,
   interest: 0, withdrawals: 0, profit_share: 0,
@@ -131,14 +137,27 @@ export function NCECapitalAccount({ engagementId }: Props) {
     (async () => {
       setLoading(true);
 
-      // 1. Fetch engagement — get FY, client name, firm, partner
+      // 1. Fetch engagement — get FY, client name, firm, partner, coa_mapping
       const { data: engRow } = await supabase
         .from("audit_engagements")
-        .select("financial_year, clients(name), firms(*), partner:users!partner_id(name)")
+        .select("financial_year, coa_mapping, clients(name), firms(*), partner:users!partner_id(name)")
         .eq("id", engagementId)
         .single();
       if (cancelled) return;
       if (engRow) setEng(engRow);
+
+      // Partner names auto-sourced from COA Mapping: every ledger mapped to the
+      // Owners' Capital Account code (NCE_CAP) becomes a partner row, Proper-
+      // Cased and editable. Used to seed the table when nothing is saved yet.
+      const coaMapping = (engRow?.coa_mapping ?? {}) as Record<string, { code?: string }>;
+      const capitalLedgerNames = Object.entries(coaMapping)
+        .filter(([, v]) => (v as any)?.code === "NCE_CAP")
+        .map(([name]) => name)
+        .filter(Boolean);
+      const autoPartners: PartnerRow[] = capitalLedgerNames.map((name, i) => ({
+        ...emptyPartner(i + 1),
+        partner_name: properCase(name),
+      }));
 
       const activeFY = (engRow?.financial_year as string) || "";
       if (!activeFY) { setLoading(false); return; }
@@ -152,6 +171,8 @@ export function NCECapitalAccount({ engagementId }: Props) {
 
       if (error) {
         toast.error("Failed to load capital account data");
+        // Even on error, seed names from COA mapping so the auditor isn't blank.
+        if (autoPartners.length > 0) setPartners(autoPartners);
       } else if (data && data.length > 0) {
         // CY partner rows: partner_no in [1, PY_SENTINEL-1]
         const savedPartners = data
@@ -169,6 +190,7 @@ export function NCECapitalAccount({ engagementId }: Props) {
             profit_share_cy:    row.profit_share_cy     ?? 0,
           }));
         if (savedPartners.length > 0) setPartners(savedPartners);
+        else if (autoPartners.length > 0) setPartners(autoPartners);
 
         // PY aggregate row (sentinel = 99) — used when no per-partner PY rows
         const py = data.find(r => r.partner_no === PY_SENTINEL);
@@ -198,6 +220,10 @@ export function NCECapitalAccount({ engagementId }: Props) {
             profit_share: row.profit_share_cy     ?? 0,
           }));
         if (savedPyPartners.length > 0) setPyPartners(savedPyPartners);
+      } else if (autoPartners.length > 0) {
+        // No saved capital-account rows yet → seed partner names from the
+        // ledgers mapped to "(a) Owners' Capital Account" in COA Mapping.
+        setPartners(autoPartners);
       }
       if (!cancelled) setLoading(false);
     })();
@@ -378,9 +404,10 @@ export function NCECapitalAccount({ engagementId }: Props) {
   // Whole-rupee Indian formatting — Schedule III auditor-friendly (no paise).
   const fmt = (n: number) => {
     if (!Number.isFinite(n) || Math.abs(n) < 0.5) return "—";
-    return Math.round(n).toLocaleString("en-IN", {
+    const abs = Math.round(Math.abs(n)).toLocaleString("en-IN", {
       minimumFractionDigits: 0, maximumFractionDigits: 0,
     });
+    return n < 0 ? `(${abs})` : abs;
   };
 
   // ── Loading guard ─────────────────────────────────────────────────────────

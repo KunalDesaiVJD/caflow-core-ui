@@ -292,15 +292,20 @@ export default function MergedAuditMaster({ data, engagementId, onSaved }: Props
         </div>
 
         {/* ── 7. Previous Years Details ── */}
-        <SectionHeader no={7} label="Previous Years Details (Documents Obtained)" />
+        <SectionHeader no={7} label="Previous Years Details (Documents Obtained, if first year or any change)" />
         <div className="flex flex-col gap-2 pl-2">
           <label className="flex items-center gap-2 cursor-pointer text-sm">
             {chk("prev_moa_aoa_deed")}
-            <span>MOA / AOA / Partnership Deed (if first year or any change)</span>
+            <span>MOA / AOA / Partnership Deed</span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer text-sm">
             {chk("prev_it_return")}
-            <span>Previous Year IT Return, Audit Report &amp; Balance Sheet</span>
+            <span>Previous Year IT Return &amp; Balance Sheet</span>
+          </label>
+          {/* Tax-unique */}
+          <label className="flex items-center gap-2 cursor-pointer text-sm">
+            {chk("prev_tax_audit_report")}
+            <span>Previous Year Tax Audit Report (File)</span>
           </label>
           {/* Statutory-unique */}
           <label className="flex items-center gap-2 cursor-pointer text-sm">
@@ -309,7 +314,7 @@ export default function MergedAuditMaster({ data, engagementId, onSaved }: Props
               checked={!!s.prev_audit_report}
               onCheckedChange={v => stat.setField("prev_audit_report", !!v as any)}
             />
-            <span>Previous Year Statutory Audit Report</span>
+            <span>Previous Year Statutory Audit Report (File)</span>
           </label>
         </div>
 

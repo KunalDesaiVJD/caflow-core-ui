@@ -12,7 +12,7 @@
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
-import { awLoad, awSave, awLoadFromDB } from "@/lib/awStorage";
+import { awLoad, awSave, awLoadFromDB, awCacheOnly } from "@/lib/awStorage";
 import { useAuth } from "@/hooks/useAuth";
 
 // ─── Data shape ─────────────────────────────────────────────────────────────
@@ -155,10 +155,23 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
     });
   }, [engagementId, loaded]);
 
-  // Flush pending debounced save on unmount so quick navigation doesn't
-  // drop the user's last keystrokes from cache + DB.
+  // Flush pending debounced save on unmount OR on the global "aw:flush"
+  // event. ExportButtons dispatches "aw:flush" right before reading from
+  // storage, so PDF/Excel exports always capture what the user just typed
+  // — even when they click Export inside the 1-second debounce window.
   useEffect(() => {
+    const flushNow = () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      try {
+        awSave(engagementId, "statutory_master_json", dataRef.current, firmId, user?.id, user?.name || "");
+      } catch { /* swallow */ }
+    };
+    window.addEventListener("aw:flush", flushNow);
     return () => {
+      window.removeEventListener("aw:flush", flushNow);
       if (timerRef.current) {
         clearTimeout(timerRef.current);
         timerRef.current = null;
@@ -186,18 +199,22 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
   );
 
   // ── Set a single field + debounced auto-save ──────────────────────────────
+  // localStorage is written SYNCHRONOUSLY on every keystroke (awCacheOnly) so
+  // PDF/Excel exports always read the value the user currently sees — the
+  // 1-second debounce only batches the Supabase round-trip, not the cache.
   const setField = useCallback(
     <K extends keyof StatutoryMasterData>(field: K, value: StatutoryMasterData[K]) => {
       userTypedRef.current = true;
       setData(prev => {
         const next = { ...prev, [field]: value };
         dataRef.current = next;
+        awCacheOnly(engagementId, "statutory_master_json", next);
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => persist(next, true), 1000);
         return next;
       });
     },
-    [persist]
+    [persist, engagementId]
   );
 
   const patchFields = useCallback(
@@ -206,12 +223,13 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
       setData(prev => {
         const next = { ...prev, ...patch };
         dataRef.current = next;
+        awCacheOnly(engagementId, "statutory_master_json", next);
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => persist(next, true), 1000);
         return next;
       });
     },
-    [persist]
+    [persist, engagementId]
   );
 
   // Programmatic patch — does NOT flip userTypedRef so async DB load can

@@ -72,11 +72,13 @@ function parseFY(fy: string): { cy: number; py: number } {
 function fmtNum(v: number): string {
   // Whole-rupee Indian formatting — Schedule III FS / Notes / Annexures must
   // never show paise (auditor-friendly). Round-half-away-from-zero so totals
-  // tie to BS/PL even after individual rows are rounded.
+  // tie to BS/PL even after individual rows are rounded. Negatives are shown
+  // in parentheses, e.g. (25,000), per financial-reporting convention.
   if (!Number.isFinite(v) || Math.abs(v) < 0.5) return "—";
-  return Math.round(v).toLocaleString("en-IN", {
+  const abs = Math.round(Math.abs(v)).toLocaleString("en-IN", {
     minimumFractionDigits: 0, maximumFractionDigits: 0,
   });
+  return v < 0 ? `(${abs})` : abs;
 }
 
 function newCustomId(): string {
@@ -191,7 +193,11 @@ function NoteCard({
   /** Stable DOM id for scroll-to-note. Falls back to noteNumber when omitted. */
   anchorId?: string;
 }) {
-  const [open, setOpen] = useState(true);
+  // Default COLLAPSED: every Note in "Notes to Accounts" starts collapsed with
+  // a "+" beside the heading; clicking expands to reveal the ledger breakup
+  // (Word-file requirement). The global Expand All / Collapse All control still
+  // overrides via collapseControl.
+  const [open, setOpen] = useState(false);
   useEffect(() => {
     if (collapseControl !== undefined) setOpen(!collapseControl);
   }, [collapseControl]);
@@ -605,12 +611,27 @@ function PatternBTable({
     if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
-  const staticHeadingOptions = useMemo(
-    () => config.rows
-      .filter(r => !r.isSectionHeader && !r.isTotal && !hiddenRows.includes(r.id))
-      .map(r => ({ id: r.id, label: labelOverrides[r.id] ?? r.label })),
-    [config, hiddenRows, labelOverrides],
-  );
+  // Build move-target options, qualifying each row's label with its section
+  // header (Secured / Unsecured / Quoted / Unquoted). Without this, notes like
+  // Borrowings list "Term loans — Banks" identically under BOTH Secured and
+  // Unsecured, so moving a ledger to "Term Loans — Banks (Unsecured)" looked
+  // like it landed in Secured (the user couldn't tell the two options apart).
+  // The move itself keys off the distinct row id, so disambiguating the label
+  // makes the correct sub-classification selectable. (Word-file Issue D.)
+  const staticHeadingOptions = useMemo(() => {
+    const out: { id: string; label: string }[] = [];
+    let currentSection = "";
+    for (const r of config.rows) {
+      if (r.isSectionHeader) { currentSection = r.label || ""; continue; }
+      if (r.isTotal || hiddenRows.includes(r.id)) continue;
+      const base = labelOverrides[r.id] ?? r.label;
+      out.push({
+        id: r.id,
+        label: currentSection ? `${base} (${currentSection})` : base,
+      });
+    }
+    return out;
+  }, [config, hiddenRows, labelOverrides]);
   // Include OTHER custom rows so "Site Expense - 18%" can move under "Site Expense"
   // Exclude custom rows that are already attached to something (they're not standalone headings)
   const allHeadingOptions = useMemo(
@@ -949,12 +970,27 @@ function PatternATable({
     return groups;
   }, [customRows]);
 
-  const staticHeadingOptions = useMemo(
-    () => config.rows
-      .filter(r => !r.isSectionHeader && !r.isTotal && !hiddenRows.includes(r.id))
-      .map(r => ({ id: r.id, label: labelOverrides[r.id] ?? r.label })),
-    [config, hiddenRows, labelOverrides],
-  );
+  // Build move-target options, qualifying each row's label with its section
+  // header (Secured / Unsecured / Quoted / Unquoted). Without this, notes like
+  // Borrowings list "Term loans — Banks" identically under BOTH Secured and
+  // Unsecured, so moving a ledger to "Term Loans — Banks (Unsecured)" looked
+  // like it landed in Secured (the user couldn't tell the two options apart).
+  // The move itself keys off the distinct row id, so disambiguating the label
+  // makes the correct sub-classification selectable. (Word-file Issue D.)
+  const staticHeadingOptions = useMemo(() => {
+    const out: { id: string; label: string }[] = [];
+    let currentSection = "";
+    for (const r of config.rows) {
+      if (r.isSectionHeader) { currentSection = r.label || ""; continue; }
+      if (r.isTotal || hiddenRows.includes(r.id)) continue;
+      const base = labelOverrides[r.id] ?? r.label;
+      out.push({
+        id: r.id,
+        label: currentSection ? `${base} (${currentSection})` : base,
+      });
+    }
+    return out;
+  }, [config, hiddenRows, labelOverrides]);
   // Include custom rows in dropdown so items can move under other custom rows
   // Exclude custom rows that are already attached to something (they're not standalone headings)
   const allHeadingOptions = useMemo(
@@ -1639,7 +1675,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
             // Issue 2 fix (per-ledger PY in expanded sub-rows): saved cy_sources
             // pre-eaa14a2c only carry amountCy, not amountPy. Force one-shot
             // re-sync per engagement so the UI can render the PY column.
-            const pySourcesMigrationKey = `nce_cy_sources_amountpy_v5_${engagementId}`;
+            const pySourcesMigrationKey = `nce_cy_sources_amountpy_v11_${engagementId}`;
             const pySourcesMigrationDone = localStorage.getItem(pySourcesMigrationKey) === "1";
             // Issue (debit/credit netting): saved totals pre-fix added Math.abs
             // of opposite-side balances instead of subtracting. Force one-shot

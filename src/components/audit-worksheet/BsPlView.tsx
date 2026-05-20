@@ -26,6 +26,8 @@ import {
   getTrialBalance,
   getCOAMapping,
   getPreviousYearFsAmounts,
+  getPreviousYearFsAmountsFromTB,
+  getEngagementIsNonCorporate,
   sumLedgersByFsCodes,
   type COAMapping,
 } from "@/lib/notesAutoPopulate";
@@ -119,6 +121,94 @@ const BS_PL_LAYOUT: LayoutRow[] = [
   L("pbt", "PROFIT / (LOSS) BEFORE TAX", "result", { sumKeys: ["tot_rev"], subKeys: ["tot_exp"] }),
 ];
 
+// ─── NCE (Non-Corporate Entity) FS Layout ──────────────────────────────────────
+// Non-corporate engagements store NCE_* codes in coa_mapping (NCE_CAP, NCE_LTB,
+// NCE_REV_OPS, …) — NOT the corporate BS_/PL_ codes. Using the corporate layout
+// for an NCE client therefore sums nothing (every line → 0 → "—") even though
+// 100% of ledgers are mapped. This layout mirrors src/config/nceLineItems.ts so
+// the Ledger Explorer reflects the same figures as Stage 7.
+const NCE_BS_PL_LAYOUT: LayoutRow[] = [
+  // ═══ EQUITY & LIABILITIES ════════════════════════════════════════════════
+  L("sec_eq_liab", "EQUITY & LIABILITIES", "section"),
+
+  L("grp_own",   "Owners' Funds",                 "group"),
+  L("own_cap",   "Owners' Capital Account",       "line", { fsCodes: ["NCE_CAP"], sign: -1 }),
+  L("tot_own",   "Total Owners' Funds",           "subtotal", { sumKeys: ["own_cap"] }),
+
+  L("grp_ncl",   "Non-Current Liabilities",       "group"),
+  L("lt_borr",   "Long-term Borrowings",          "line", { fsCodes: ["NCE_LTB"],  sign: -1 }),
+  L("oth_lt_liab","Other Long-term Liabilities",  "line", { fsCodes: ["NCE_OLTL"], sign: -1 }),
+  L("lt_prov",   "Long-term Provisions",          "line", { fsCodes: ["NCE_LTP"],  sign: -1 }),
+  L("tot_ncl",   "Total Non-Current Liabilities", "subtotal", { sumKeys: ["lt_borr", "oth_lt_liab", "lt_prov"] }),
+
+  L("grp_cl",    "Current Liabilities",           "group"),
+  L("st_borr",   "Short-term Borrowings",         "line", { fsCodes: ["NCE_STB"], sign: -1 }),
+  L("trade_pay", "Trade Payables",                "line", { fsCodes: ["NCE_TP"],  sign: -1 }),
+  L("oth_cl",    "Other Current Liabilities",     "line", { fsCodes: ["NCE_OCL"], sign: -1 }),
+  L("st_prov",   "Short-term Provisions",         "line", { fsCodes: ["NCE_STP"], sign: -1 }),
+  L("tot_cl",    "Total Current Liabilities",     "subtotal", { sumKeys: ["st_borr", "trade_pay", "oth_cl", "st_prov"] }),
+
+  L("tot_eq_liab", "TOTAL EQUITY & LIABILITIES",  "total", { sumKeys: ["tot_own", "tot_ncl", "tot_cl"] }),
+
+  // ═══ ASSETS ══════════════════════════════════════════════════════════════
+  L("sec_assets", "ASSETS", "section"),
+
+  L("grp_nca",   "Non-Current Assets",            "group"),
+  L("ppe",       "Property, Plant & Equipment",   "line", { fsCodes: ["NCE_PPE"],   sign: 1 }),
+  L("cwip",      "Capital Work-in-Progress",      "line", { fsCodes: ["NCE_CWIP"],  sign: 1 }),
+  L("intg",      "Intangible Assets",             "line", { fsCodes: ["NCE_INTG"],  sign: 1 }),
+  L("nc_inv",    "Non-current Investments",       "line", { fsCodes: ["NCE_NCINV"], sign: 1 }),
+  L("lt_loans",  "Long-term Loans & Advances",    "line", { fsCodes: ["NCE_LTLA"],  sign: 1 }),
+  L("oth_nca",   "Other Non-current Assets",      "line", { fsCodes: ["NCE_ONCA"],  sign: 1 }),
+  L("tot_nca",   "Total Non-Current Assets",      "subtotal", { sumKeys: ["ppe", "cwip", "intg", "nc_inv", "lt_loans", "oth_nca"] }),
+
+  L("grp_ca",    "Current Assets",                "group"),
+  L("curr_inv",  "Current Investments",           "line", { fsCodes: ["NCE_CINV"], sign: 1 }),
+  L("inventories","Inventories",                  "line", { fsCodes: ["NCE_STCK"], sign: 1 }),
+  L("trade_rec", "Trade Receivables",             "line", { fsCodes: ["NCE_TR"],   sign: 1 }),
+  L("cash_bank", "Cash & Bank Balances",          "line", { fsCodes: ["NCE_CASH"], sign: 1 }),
+  L("st_loans",  "Short-term Loans & Advances",   "line", { fsCodes: ["NCE_STLA"], sign: 1 }),
+  L("oth_ca",    "Other Current Assets",          "line", { fsCodes: ["NCE_OCA"],  sign: 1 }),
+  L("tot_ca",    "Total Current Assets",          "subtotal", { sumKeys: ["curr_inv", "inventories", "trade_rec", "cash_bank", "st_loans", "oth_ca"] }),
+
+  L("tot_assets", "TOTAL ASSETS", "total", { sumKeys: ["tot_nca", "tot_ca"] }),
+
+  // ═══ PROFIT & LOSS ════════════════════════════════════════════════════════
+  L("sec_pl", "PROFIT & LOSS STATEMENT", "section"),
+
+  L("grp_rev",   "Income",                        "group"),
+  L("rev_ops",   "I.  Revenue from Operations",   "line", { fsCodes: ["NCE_REV_OPS"], sign: -1 }),
+  L("oth_inc",   "II. Other Income",              "line", { fsCodes: ["NCE_REV_OTH"], sign: -1 }),
+  L("tot_rev",   "III. Total Income",             "subtotal", { sumKeys: ["rev_ops", "oth_inc"] }),
+
+  L("grp_exp",   "Expenses",                      "group"),
+  L("cogs",      "(a) Cost of Goods Sold",        "line", { fsCodes: ["NCE_COGS"],     sign: 1 }),
+  L("emp_exp",   "(b) Employee Benefits Expense", "line", { fsCodes: ["NCE_EMP_EXP"],  sign: 1 }),
+  L("fin_cost",  "(c) Finance Costs",             "line", { fsCodes: ["NCE_FIN_COST"], sign: 1 }),
+  L("dep",       "(d) Depreciation & Amortisation","line", { fsCodes: ["NCE_DEPR"],    sign: 1 }),
+  L("oth_exp",   "(e) Other Expenses",            "line", { fsCodes: ["NCE_OTH_EXP"],  sign: 1 }),
+  L("tot_exp",   "IV. Total Expenses",            "subtotal", { sumKeys: ["cogs", "emp_exp", "fin_cost", "dep", "oth_exp"] }),
+
+  // Profit chain (mirrors nceLineItems.ts V→XIII)
+  L("prof_v",    "V. Profit/(Loss) before exceptional items, partners' remuneration & tax", "result", { sumKeys: ["tot_rev"], subKeys: ["tot_exp"] }),
+  L("excep",     "VI. Exceptional Items",         "line", { fsCodes: ["NCE_EXCEP"], sign: 1 }),
+  L("prof_vii",  "VII. Profit before extraordinary items & tax", "result", { sumKeys: ["prof_v"], subKeys: ["excep"] }),
+  L("extord",    "VIII. Extraordinary Items",     "line", { fsCodes: ["NCE_EXTORD"], sign: 1 }),
+  L("prof_ix",   "IX. Profit before partners' remuneration & tax", "result", { sumKeys: ["prof_vii"], subKeys: ["extord"] }),
+  L("part_rem",  "X. Partners' Remuneration",     "line", { fsCodes: ["NCE_PART_REM"], sign: 1 }),
+  L("prof_xi",   "XI. Profit before tax",         "result", { sumKeys: ["prof_ix"], subKeys: ["part_rem"] }),
+  L("tax",       "XII. Tax Expense",              "line", { fsCodes: ["NCE_CUR_TAX", "NCE_PRIOR_TAX"], sign: 1 }),
+  L("net_prof",  "XIII. PROFIT / (LOSS) FOR THE YEAR", "result", { sumKeys: ["prof_xi"], subKeys: ["tax"] }),
+];
+
+/** Split a layout into its Balance-Sheet portion and its P&L portion at the
+ *  "sec_pl" divider, so each can render under its own tab. */
+function splitLayout(layout: LayoutRow[]): { bs: LayoutRow[]; pl: LayoutRow[] } {
+  const i = layout.findIndex(r => r.key === "sec_pl");
+  if (i < 0) return { bs: layout, pl: [] };
+  return { bs: layout.slice(0, i), pl: layout.slice(i) };
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface TBLedger {
@@ -143,21 +233,29 @@ function fmtAmt(n: number): string {
   });
 }
 
+/** Format a closing amount for financial display: negatives shown in
+ *  parentheses, e.g. -25,000 → "(25,000.00)". */
+function fmtClosing(n: number): string {
+  const abs = fmtAmt(n);
+  return n < 0 ? `(${abs})` : abs;
+}
+
 function varPct(cy: number, py: number): number | null {
   if (!py) return null;
   return Math.round(((cy - py) / Math.abs(py)) * 10000) / 100;
 }
 
-/** Compute all line-item amounts from TB + mapping + pyFs */
+/** Compute all line-item amounts from TB + mapping + pyFs for a given layout */
 function computeAmounts(
   tb:       TBLedger[],
   mapping:  COAMapping,
   pyFs:     Record<string, number>,
+  layout:   LayoutRow[],
 ): AmountMap {
   const map: AmountMap = new Map();
 
   // Pass 1: line rows
-  for (const row of BS_PL_LAYOUT) {
+  for (const row of layout) {
     if (row.type === "line" && row.fsCodes && row.sign != null) {
       const rawCy = sumLedgersByFsCodes(tb as any, mapping, row.fsCodes);
       const rawPy = row.fsCodes.reduce((s, c) => s + (pyFs[c] ?? 0), 0);
@@ -166,7 +264,7 @@ function computeAmounts(
   }
 
   // Pass 2: subtotal / total / result rows
-  for (const row of BS_PL_LAYOUT) {
+  for (const row of layout) {
     if (!["subtotal", "total", "result"].includes(row.type)) continue;
     const addSum  = (row.sumKeys  ?? []).reduce((s, k) => s + (map.get(k)?.cy  ?? 0), 0);
     const subSum  = (row.subKeys  ?? []).reduce((s, k) => s + (map.get(k)?.cy  ?? 0), 0);
@@ -194,6 +292,7 @@ function useBsPlData(engagementId: string) {
   const [tb,      setTb]      = useState<TBLedger[]>([]);
   const [mapping, setMapping] = useState<COAMapping>({});
   const [pyFs,    setPyFs]    = useState<Record<string, number>>({});
+  const [isNce,   setIsNce]   = useState(false);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState<string | null>(null);
 
@@ -204,18 +303,23 @@ function useBsPlData(engagementId: string) {
     Promise.all([
       getTrialBalance(engagementId),
       getCOAMapping(engagementId),
+      // Primary PY source: PY-shell trial balance (same method as CY). Falls
+      // back to fa_financial_statements when no PY-shell sync exists.
+      getPreviousYearFsAmountsFromTB(engagementId),
       getPreviousYearFsAmounts(engagementId),
+      getEngagementIsNonCorporate(engagementId),
     ])
-      .then(([tbData, mapData, pyData]) => {
+      .then(([tbData, mapData, pyFromTb, pyFromFs, nce]) => {
         setTb(tbData as TBLedger[]);
         setMapping(mapData);
-        setPyFs(pyData);
+        setPyFs(Object.keys(pyFromTb).length > 0 ? pyFromTb : pyFromFs);
+        setIsNce(!!nce);
       })
       .catch(e => setError(e?.message || "Failed to load BS/PL data"))
       .finally(() => setLoading(false));
   }, [engagementId]);
 
-  return { tb, mapping, pyFs, loading, error };
+  return { tb, mapping, pyFs, isNce, loading, error };
 }
 
 // ─── Ledger sub-row (inside accordion) ───────────────────────────────────────
@@ -351,12 +455,12 @@ function FsRow({
           isResult && cy >= 0 ? "text-green-700" : isResult ? "text-red-600" : "text-foreground",
         )}>
           {hasCy || isTotal || isSubtotal || isResult
-            ? `₹${fmtAmt(cy)}`
+            ? `₹${fmtClosing(cy)}`
             : "—"}
         </span>
         {/* PY */}
         <span className="text-xs font-mono tabular-nums w-32 text-right text-muted-foreground">
-          {py ? `₹${fmtAmt(py)}` : "—"}
+          {py ? `₹${fmtClosing(py)}` : "—"}
         </span>
         {/* Variance */}
         <span className={cn(
@@ -416,12 +520,12 @@ function FsRow({
 
         {/* CY */}
         <span className="text-xs font-mono tabular-nums w-32 text-right font-medium text-foreground">
-          {hasCy ? `₹${fmtAmt(cy)}` : "—"}
+          {hasCy ? `₹${fmtClosing(cy)}` : "—"}
         </span>
 
         {/* PY */}
         <span className="text-xs font-mono tabular-nums w-32 text-right text-muted-foreground">
-          {py ? `₹${fmtAmt(py)}` : "—"}
+          {py ? `₹${fmtClosing(py)}` : "—"}
         </span>
 
         {/* Variance ₹ */}
@@ -450,7 +554,7 @@ function FsRow({
           title="Raise query for this line item"
           onClick={() => onRaiseQuery(
             row.label, "",
-            `[BS/PL] ${row.label} — CY ₹${fmtAmt(cy)}${py ? ` vs PY ₹${fmtAmt(py)}` : ""}`,
+            `[BS/PL] ${row.label} — CY ₹${fmtClosing(cy)}${py ? ` vs PY ₹${fmtClosing(py)}` : ""}`,
           )}
           className="h-6 w-6 flex items-center justify-center rounded
                      text-amber-500 hover:bg-amber-50 hover:text-amber-700 transition-colors
@@ -497,16 +601,27 @@ interface Props {
   clientId?:     string | null;
   financialYear?: string | null;
   onRaiseQuery:  (group: string, ledger: string, note?: string) => void;
+  /** Which sheet to render. "bs" = Balance Sheet only, "pl" = P&L only.
+   *  Defaults to "bs" so each Ledger Explorer tab shows one statement. */
+  section?:      "bs" | "pl";
 }
 
-export function BsPlView({ engagementId, clientId, financialYear, onRaiseQuery }: Props) {
-  const { tb, mapping, pyFs, loading, error } = useBsPlData(engagementId);
+export function BsPlView({ engagementId, clientId, financialYear, onRaiseQuery, section = "bs" }: Props) {
+  const { tb, mapping, pyFs, isNce, loading, error } = useBsPlData(engagementId);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [panelLedger, setPanelLedger] = useState<{ name: string; group: string } | null>(null);
 
+  // Pick the layout that matches the engagement's entity type, then show only
+  // the requested statement (BS or P&L). Amounts are always computed over the
+  // FULL layout so subtotal/result rows that reference cross-section keys stay
+  // correct, then we render just the active section's rows.
+  const fullLayout = isNce ? NCE_BS_PL_LAYOUT : BS_PL_LAYOUT;
+  const { bs: bsRows, pl: plRows } = useMemo(() => splitLayout(fullLayout), [fullLayout]);
+  const visibleRows = section === "pl" ? plRows : bsRows;
+
   const amounts = useMemo(
-    () => computeAmounts(tb, mapping, pyFs),
-    [tb, mapping, pyFs],
+    () => computeAmounts(tb, mapping, pyFs, fullLayout),
+    [tb, mapping, pyFs, fullLayout],
   );
 
   const toggleKey = (key: string) =>
@@ -604,7 +719,7 @@ export function BsPlView({ engagementId, clientId, financialYear, onRaiseQuery }
 
         {/* All rows */}
         <div className="divide-y divide-border/30 bg-background">
-          {BS_PL_LAYOUT.map(row => (
+          {visibleRows.map(row => (
             <FsRow
               key={row.key}
               row={row}
@@ -622,8 +737,8 @@ export function BsPlView({ engagementId, clientId, financialYear, onRaiseQuery }
         </div>
       </div>
 
-      {/* Tally-to-BS check */}
-      {(() => {
+      {/* Tally-to-BS check — only on the Balance Sheet tab */}
+      {section === "bs" && (() => {
         const totAssets   = amounts.get("tot_assets")?.cy   ?? 0;
         const totEqLiab   = amounts.get("tot_eq_liab")?.cy  ?? 0;
         const diff        = Math.abs(totAssets - totEqLiab);

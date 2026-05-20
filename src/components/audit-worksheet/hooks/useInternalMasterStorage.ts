@@ -13,7 +13,7 @@
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
-import { awLoad, awSave, awLoadFromDB } from "@/lib/awStorage";
+import { awLoad, awSave, awLoadFromDB, awCacheOnly } from "@/lib/awStorage";
 import { useAuth } from "@/hooks/useAuth";
 
 // ─── Data shape ──────────────────────────────────────────────────────────────
@@ -156,9 +156,23 @@ export function useInternalMasterStorage(
     });
   }, [engagementId, loaded]);
 
-  // Flush pending save on unmount so quick navigation doesn't drop edits.
+  // Flush pending save on unmount OR on the global "aw:flush" event.
+  // ExportButtons dispatches "aw:flush" right before reading from storage,
+  // so PDF/Excel exports always capture what the user just typed — even
+  // when they click Export inside the 1-second debounce window.
   useEffect(() => {
+    const flushNow = () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      try {
+        awSave(engagementId, "int_master_json", dataRef.current, firmId, user?.id, user?.name || "");
+      } catch { /* swallow */ }
+    };
+    window.addEventListener("aw:flush", flushNow);
     return () => {
+      window.removeEventListener("aw:flush", flushNow);
       if (timerRef.current) {
         clearTimeout(timerRef.current);
         timerRef.current = null;
@@ -186,18 +200,22 @@ export function useInternalMasterStorage(
   );
 
   // ── setField — single field + debounced auto-save ──────────────────────────
+  // localStorage is written SYNCHRONOUSLY on every keystroke (awCacheOnly) so
+  // PDF/Excel exports always read the value the user currently sees — the
+  // 1-second debounce only batches the Supabase round-trip, not the cache.
   const setField = useCallback(
     <K extends keyof InternalMasterData>(field: K, value: InternalMasterData[K]) => {
       userTypedRef.current = true;
       setData(prev => {
         const next = { ...prev, [field]: value };
         dataRef.current = next;
+        awCacheOnly(engagementId, "int_master_json", next);
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => persist(next, true), 1000);
         return next;
       });
     },
-    [persist]
+    [persist, engagementId]
   );
 
   // ── patchFields — multiple fields + debounced auto-save ───────────────────
@@ -207,12 +225,13 @@ export function useInternalMasterStorage(
       setData(prev => {
         const next = { ...prev, ...patch };
         dataRef.current = next;
+        awCacheOnly(engagementId, "int_master_json", next);
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => persist(next, true), 1000);
         return next;
       });
     },
-    [persist]
+    [persist, engagementId]
   );
 
   // ── programmaticPatch — auto-fill that does NOT flip userTypedRef ─────────

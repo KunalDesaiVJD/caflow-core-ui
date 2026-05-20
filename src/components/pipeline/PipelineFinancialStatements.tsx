@@ -3322,6 +3322,16 @@ export default function PipelineFinancialStatements({
         for (const code of Object.keys(NCE_CODE_TO_NOTE)) {
           applyNCENoteTotal(out, code, "cy");
         }
+        // ROOT-CAUSE FIX (Issue 2 — TOTAL rows didn't match the line items):
+        // applyNCENoteTotal overrides LEAF codes (NCE_STLA, NCE_TP, …) with
+        // the note totals, but the BS face reads the PARENT totals NCE_AST /
+        // NCE_EL which were computed earlier from the raw TB sums. After any
+        // leaf override the parents go stale, so "TOTAL ASSETS" / "TOTAL
+        // EQUITY AND LIABILITIES" no longer equalled the sum of the rows
+        // shown above them. Recompute the parents from the (now-authoritative)
+        // leaf codes so the totals always reconcile with the displayed lines.
+        out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (out[id] || 0), 0);
+        out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
         return out;
       })()
     : computedAmounts;
@@ -3340,6 +3350,11 @@ export default function PipelineFinancialStatements({
         for (const code of Object.keys(NCE_CODE_TO_NOTE)) {
           applyNCENoteTotal(out, code, "py");
         }
+        // See nceCyAmounts — recompute PY parents from leaf codes so the
+        // PY "TOTAL ASSETS" / "TOTAL EQUITY AND LIABILITIES" rows reconcile
+        // with the PY line items shown above them.
+        out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (out[id] || 0), 0);
+        out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
         return out;
       })()
     : mergedPY;

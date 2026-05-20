@@ -65,6 +65,37 @@ function lsSave(firmId: string, data: StatusEntry[]) {
   localStorage.setItem(LS(firmId), JSON.stringify(data));
 }
 
+// ── Shadow store for fields whose DB columns don't exist yet ────────────────
+// When the DB schema is missing a column the UI writes (e.g.
+// audit_report_checked_by before its migration is applied), PostgREST
+// rejects the entire update — the auditor sees "Saved" but the field
+// silently vanishes on refresh.
+//
+// To prevent that silent data loss, the defensive save in updateRow/addRow
+// now also mirrors any DROPPED fields into a per-firm shadow store keyed by
+// row id. On load() we merge the shadow data back into each row, so the
+// field appears populated in the UI even though the DB column is missing.
+// This is a stopgap until the migration is applied — once the column
+// exists, real saves succeed and the shadow store stays in sync.
+const SHADOW = (firmId: string) => `at_status_shadow_${firmId}`;
+type ShadowMap = Record<string, Record<string, any>>; // rowId → { col: value }
+function shadowLoad(firmId: string): ShadowMap {
+  try { const r = localStorage.getItem(SHADOW(firmId)); return r ? JSON.parse(r) : {}; }
+  catch { return {}; }
+}
+function shadowSaveRow(firmId: string, rowId: string, fields: Record<string, any>) {
+  const all = shadowLoad(firmId);
+  all[rowId] = { ...(all[rowId] || {}), ...fields };
+  try { localStorage.setItem(SHADOW(firmId), JSON.stringify(all)); } catch { /* private mode */ }
+}
+function shadowDeleteRow(firmId: string, rowId: string) {
+  const all = shadowLoad(firmId);
+  if (rowId in all) {
+    delete all[rowId];
+    try { localStorage.setItem(SHADOW(firmId), JSON.stringify(all)); } catch { /* private mode */ }
+  }
+}
+
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedFY?: string) {
@@ -450,6 +481,19 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
       return (a.party_name || "").localeCompare(b.party_name || "");
     });
 
+    // Merge shadow-store fields (data the UI saved when its DB column was
+    // missing). For each real row id, fields stored in localStorage override
+    // the DB row's null/empty values so the auditor's input doesn't appear
+    // to vanish on refresh. Untouched rows pass through unchanged.
+    const shadow = shadowLoad(firmId);
+    if (Object.keys(shadow).length > 0) {
+      statusRows = statusRows.map(r => {
+        const sh = shadow[r.id];
+        if (!sh) return r;
+        return { ...r, ...sh };
+      });
+    }
+
     setRows(statusRows);
     setLoading(false);
   }, [firmId, selectedFY]);
@@ -481,9 +525,42 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
     delete payload.planned_from;
     delete payload.planned_to;
     delete payload.created_at;     // let DB default to now()
-    const { data, error } = await supabase.from("audit_status").insert(payload).select().single();
-    if (error) { toast.error(error.message); return null; }
-    toast.success("Row added");
+
+    // Defensive insert — see comment in updateRow. Same problem applies when
+    // saving a virtual row for the first time: an unknown column in the
+    // payload makes PostgREST drop EVERYTHING. We retry without unknown
+    // columns and surface a clear toast naming the skipped fields.
+    let attemptPayload: any = { ...payload };
+    const skippedFields: Record<string, any> = {};
+    let lastError: any = null;
+    let data: any = null;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const res = await supabase.from("audit_status").insert(attemptPayload).select().single();
+      if (!res.error) { data = res.data; lastError = null; break; }
+      lastError = res.error;
+      const msg = String(res.error.message || "");
+      const m = msg.match(/column ["']?([a-zA-Z0-9_]+)["']?/i)
+            ?? msg.match(/find the ["']?([a-zA-Z0-9_]+)["']? column/i);
+      const bad = m?.[1];
+      if (!bad || !(bad in attemptPayload)) break;
+      skippedFields[bad] = attemptPayload[bad];
+      delete attemptPayload[bad];
+      if (Object.keys(attemptPayload).length === 0) break;
+    }
+    if (lastError) { toast.error(lastError.message); return null; }
+    const skipped = Object.keys(skippedFields);
+    if (skipped.length > 0 && data?.id) {
+      // Mirror dropped fields to the shadow store keyed by the new row's
+      // real id, so the data survives a page refresh even without the DB
+      // column. See updateRow + load() merge logic for the read side.
+      shadowSaveRow(firmId, data.id, skippedFields);
+      toast.warning(
+        `Row added — ${skipped.length} field${skipped.length > 1 ? "s" : ""} kept locally only (column missing in DB): ${skipped.join(", ")}. Ask your admin to apply the latest DB migration for full persistence.`,
+        { duration: 6000 },
+      );
+    } else {
+      toast.success("Row added");
+    }
     await load();
     return data as StatusEntry;
   }
@@ -536,8 +613,64 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
     delete cleanPatch.isVirtual;
     delete cleanPatch.engagement_type;
 
-    const { error } = await supabase.from("audit_status").update(cleanPatch).eq("id", id);
-    if (error) { toast.error(error.message); return; }
+    // Defensive save (Issue 3 root-cause partial fix):
+    // The audit_status table may not yet have every column the UI writes
+    // (e.g. audit_report_checked_by — migration 20260516120000 not yet
+    // applied to the remote DB, or the PostgREST schema cache is stale).
+    // PostgREST returns a "column ... does not exist" / "Could not find
+    // the X column in the schema cache" error and REJECTS THE WHOLE patch
+    // — every other field the auditor typed gets lost too, which appears
+    // to the user as "save worked but data was deleted on refresh".
+    //
+    // Strategy: try the full patch first; if PostgREST reports an unknown
+    // column, surgically drop that one field and retry. Loop a few times
+    // so multiple unknown columns can be stripped in one go. The auditor
+    // gets a toast with the column names that were skipped so they (or
+    // the firm admin) can apply the missing migration to restore those
+    // fields' persistence.
+    let attemptPatch: any = { ...cleanPatch };
+    const skippedFields: Record<string, any> = {};
+    let lastError: any = null;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const { error: err } = await supabase.from("audit_status").update(attemptPatch).eq("id", id);
+      if (!err) { lastError = null; break; }
+      lastError = err;
+      // PostgREST formats: "column \"foo\" of relation ..." or
+      // "Could not find the 'foo' column of 'audit_status' in the schema cache".
+      const msg = String(err.message || "");
+      // ORDER MATTERS: the "Could not find the 'X' column of 'audit_status'"
+      // message from PostgREST's schema-cache miss contains BOTH "column of"
+      // AND "column" tokens — the bare "column X" regex incorrectly matched
+      // the table name "audit_status" instead of the missing column. Match
+      // the more specific "find the X column" / "X column of Y" patterns
+      // FIRST. Also covers "column \"foo\" of relation \"audit_status\"".
+      const m = msg.match(/find the ["']?([a-zA-Z0-9_]+)["']? column/i)
+            ?? msg.match(/column ["']?([a-zA-Z0-9_]+)["']? of (?:relation |the )?["']?(?:audit_status|[a-zA-Z_]+)["']?/i)
+            ?? msg.match(/['"]([a-zA-Z0-9_]+)['"] column/i)
+            ?? msg.match(/column ["']?([a-zA-Z0-9_]+)["']?/i);
+      const bad = m?.[1];
+      if (!bad || !(bad in attemptPatch)) break;
+      skippedFields[bad] = attemptPatch[bad];
+      delete attemptPatch[bad];
+      if (Object.keys(attemptPatch).length === 0) break;
+    }
+    if (lastError) { toast.error(lastError.message); return; }
+    const skipped = Object.keys(skippedFields);
+    if (skipped.length > 0) {
+      // Persist dropped fields to the shadow store so they re-appear on
+      // refresh (until the DB migration ships). Toast remains so the auditor
+      // / admin know to apply the migration for real persistence.
+      shadowSaveRow(firmId, id, skippedFields);
+      toast.warning(
+        `Saved — ${skipped.length} field${skipped.length > 1 ? "s" : ""} kept locally only (column missing in DB): ${skipped.join(", ")}. Ask your admin to apply the latest DB migration for full persistence.`,
+        { duration: 6000 },
+      );
+    } else {
+      toast.success("Saved");
+      // If the row had earlier shadow data (from a previous failed save) but
+      // the DB now accepts the patch, the shadow entry is stale. Clear it.
+      shadowDeleteRow(firmId, id);
+    }
 
     if (oldRow) {
       (supabase as any).from("audit_status_history").insert({
@@ -549,7 +682,8 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
       }).then(() => {});
       logChanges("audit_status", id, oldRow as any, patch as any, user?.id, user?.name ?? user?.email ?? null);
     }
-    toast.success("Saved");
+    // "Saved" toast now shown inside the defensive-save block above so it
+    // can be replaced with the "kept locally only" warning when applicable.
     await load();
   }
 
@@ -566,6 +700,8 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
     }
     const { error } = await supabase.from("audit_status").delete().eq("id", id);
     if (error) { toast.error(error.message); return; }
+    // Also clear any shadow-store data tied to this row.
+    shadowDeleteRow(firmId, id);
     await load();
   }
 

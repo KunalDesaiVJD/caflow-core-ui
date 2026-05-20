@@ -18,6 +18,16 @@ export function awKey(engagementId: string, sheet: string): string {
 }
 
 /**
+ * Write to localStorage ONLY — no Supabase round-trip. Use inside setField
+ * to keep the on-disk cache in lock-step with every keystroke, so PDF/Excel
+ * exports never read a stale value due to the 1-second auto-save debounce.
+ */
+export function awCacheOnly(engagementId: string, sheet: string, data: unknown): void {
+  if (!engagementId) return;
+  try { localStorage.setItem(awKey(engagementId, sheet), JSON.stringify(data)); } catch {}
+}
+
+/**
  * Read from localStorage (synchronous, instant).
  * Returns null if nothing saved or parse fails.
  */
