@@ -121,34 +121,26 @@ export default function ReceivablesReportTab() {
 
   useEffect(() => {
     async function loadFirms() {
-      if (isSuperAdmin) {
-        const { data } = await supabase
-          .from("firms")
-          .select("id, name, settings")
-          .order("name");
-        const list: Firm[] = (data || []).map(f => ({
-          id: f.id,
-          name: f.name || "—",
-          logo_url: (f.settings as any)?.logo_url ?? null,
-        }));
-        setFirms(list);
-        if (!selectedFirmId && list.length > 0) setSelectedFirmId(list[0].id);
-      } else {
-        // non-superadmin: only their own firm
-        const fid = user?.firm_id ?? "";
-        const { data } = await supabase
-          .from("firms")
-          .select("id, name, settings")
-          .eq("id", fid)
-          .maybeSingle();
-        if (data) {
-          setFirms([{ id: data.id, name: data.name || "—", logo_url: (data.settings as any)?.logo_url ?? null }]);
-          setSelectedFirmId(data.id);
-        }
+      // All users see all firms — dropdown is always enabled
+      const { data } = await supabase
+        .from("firms")
+        .select("id, name, settings")
+        .order("name");
+      const list: Firm[] = (data || []).map(f => ({
+        id: f.id,
+        name: f.name || "—",
+        logo_url: (f.settings as any)?.logo_url ?? null,
+      }));
+      setFirms(list);
+      // Default to user's own firm if not yet set
+      if (!selectedFirmId) {
+        const own = list.find(f => f.id === user?.firm_id);
+        if (own) setSelectedFirmId(own.id);
+        else if (list.length > 0) setSelectedFirmId(list[0].id);
       }
     }
     loadFirms();
-  }, [isSuperAdmin, user?.firm_id]);
+  }, [user?.firm_id]);
 
   // Keep logo URL in sync with selected firm
   useEffect(() => {
@@ -620,7 +612,7 @@ export default function ReceivablesReportTab() {
         {/* Firm dropdown */}
         <div className="space-y-1">
           <Label className="text-xs text-muted-foreground flex items-center gap-1"><Building2 size={11}/> Firm</Label>
-          <Select value={selectedFirmId} onValueChange={setSelectedFirmId} disabled={!isSuperAdmin && firms.length <= 1}>
+          <Select value={selectedFirmId} onValueChange={setSelectedFirmId}>
             <SelectTrigger className="h-8 text-xs w-56">
               <SelectValue placeholder="Select firm…" />
             </SelectTrigger>
