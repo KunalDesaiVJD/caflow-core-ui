@@ -498,8 +498,8 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
         fillColor:  [226, 232, 240],
         fontStyle:  "bold",
         textColor:  [15, 23, 42],
-        fontSize:   10,
-        cellPadding: 2.4,
+        fontSize:   9.5,
+        cellPadding: 1.8,
       },
     },
   ];
@@ -566,13 +566,14 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
   }
 
   masterBody.push(section("Dates Audit Conducted"));
-  // Right-aligned date values under the "Dates Audit Conducted" band.
-  // Labels are intentionally just "From" / "To" — the band already names
-  // the section, so prefixing with "Audit Date" reads as duplication.
+  // The "From" / "To" labels are right-aligned (sitting tight against the
+  // value column edge) while the date values use the default left-align —
+  // this is the convention the auditor asked for. Labels are intentionally
+  // just "From" / "To" since the band already names the section.
   const dateFromVal = fmtDate(pickByType(tax.audit_date_from, stat.audit_date_from) as string) || "—";
   const dateToVal   = fmtDate(pickByType(tax.audit_date_to,   stat.audit_date_to)   as string) || "—";
-  masterBody.push(["From", { content: dateFromVal, styles: { halign: "right" } } as any]);
-  masterBody.push(["To",   { content: dateToVal,   styles: { halign: "right" } } as any]);
+  masterBody.push([{ content: "From", styles: { halign: "right" } } as any, dateFromVal]);
+  masterBody.push([{ content: "To",   styles: { halign: "right" } } as any, dateToVal]);
 
   if (isTax) {
     masterBody.push(["GST Registered?", yesNA(tax.gst_details) || "—"]);
@@ -599,15 +600,17 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
     ...baseTable(masterLabel),
     head: [["Field", "Value"]],
     body: masterBody as any,
-    // Master is ~25-28 rows on a portrait A4 page (height ≈ 260 mm of usable
-    // content area). 9.5pt font + 2.4mm padding fills the page properly so
-    // the printed PDF doesn't have wasted whitespace at the bottom — section
-    // bands themselves bump up to 10pt via the inline section() styles.
-    styles: { ...baseTable(masterLabel).styles, fontSize: 9.5, cellPadding: 2.4 },
-    headStyles: { ...baseTable(masterLabel).headStyles, fillColor: [79, 70, 229], fontSize: 10 },
+    // Master must fit on a SINGLE portrait A4 page (usable height ≈ 260 mm).
+    // ~28 rows including section bands + wrapped rows (Registered Address,
+    // Books Verified, Auditors list, paths) settles around 9 pt with 1.8 mm
+    // padding. Section bands bump up to 9.5 pt via inline styles in
+    // section() so headings stand out from value rows without forcing an
+    // extra page.
+    styles: { ...baseTable(masterLabel).styles, fontSize: 9, cellPadding: 1.8 },
+    headStyles: { ...baseTable(masterLabel).headStyles, fillColor: [79, 70, 229], fontSize: 9.5 },
     columnStyles: {
-      0: { fontStyle: "bold", cellWidth: 65, fillColor: [249, 250, 251] },
-      1: { cellWidth: CONTENT_W - 65 },
+      0: { fontStyle: "bold", cellWidth: 62, fillColor: [249, 250, 251] },
+      1: { cellWidth: CONTENT_W - 62 },
     },
   });
 
