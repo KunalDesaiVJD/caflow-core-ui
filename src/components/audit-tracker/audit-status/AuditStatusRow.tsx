@@ -121,6 +121,48 @@ function EInput({ value, onChange, placeholder, type = "text", className, readOn
   );
 }
 
+// ─── UDIN input with quick "NA" toggle ─────────────────────────────────────────
+//
+// UDIN numbers are entered manually, but some engagements simply have no
+// UDIN to report (e.g. the report isn't applicable). Auditors asked for a
+// one-click "NA" instead of typing it every time. The pill toggles the
+// value to/from the literal string "NA"; while NA is set the text field is
+// disabled (NA and a real UDIN are mutually exclusive). Manual typing is
+// otherwise unchanged.
+function UdinInput({ value, onChange, placeholder }: {
+  value: string; onChange: (v: string) => void; placeholder?: string;
+}) {
+  const isNA = value.trim().toUpperCase() === "NA";
+  return (
+    <div className="flex items-center gap-1">
+      <Input
+        type="text"
+        value={isNA ? "NA" : value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder}
+        disabled={isNA}
+        className={cn(
+          "h-6 text-[11px] w-full px-1.5 font-mono",
+          isNA && "disabled:opacity-100 text-muted-foreground italic",
+        )}
+      />
+      <button
+        type="button"
+        onClick={() => onChange(isNA ? "" : "NA")}
+        title={isNA ? "Clear NA" : "Mark Not Applicable"}
+        className={cn(
+          "h-6 px-1.5 text-[10px] font-semibold rounded border shrink-0 transition-colors",
+          isNA
+            ? "bg-slate-600 text-white border-slate-600"
+            : "bg-background text-muted-foreground border-input hover:bg-muted",
+        )}
+      >
+        NA
+      </button>
+    </div>
+  );
+}
+
 // ─── Select helper ────────────────────────────────────────────────────────────
 
 function ESelect({ value, onChange, options, placeholder }: {
@@ -437,8 +479,10 @@ export default function AuditStatusRow({
   function handleUdinField(field: "udin_tax_audit" | "udin_statutory_audit", val: string) {
     setDraft(p => {
       const updates: Partial<RowDraft> = { [field]: val };
-      // Auto-fill UDIN date when first entering a value
-      if (val && !p.udin_date) {
+      // Auto-fill UDIN date when first entering a REAL UDIN value. "NA" means
+      // no UDIN is applicable, so it must NOT trigger the date auto-fill.
+      const isRealUdin = !!val && val.trim().toUpperCase() !== "NA";
+      if (isRealUdin && !p.udin_date) {
         updates.udin_date = todayISO();
       }
       return { ...p, ...updates };
@@ -690,17 +734,17 @@ export default function AuditStatusRow({
           : <span className="text-[11px]">{row.physical_report_received_date || "—"}</span>}
       </TCell>
 
-      {/* 11 · UDIN Tax Audit */}
-      <TCell className="min-w-[120px]">
+      {/* 11 · UDIN Tax Audit (manual entry + one-click NA) */}
+      <TCell className="min-w-[150px]">
         {editing
-          ? <EInput value={draft.udin_tax_audit} onChange={v => handleUdinField("udin_tax_audit", v)} placeholder="UDIN…" className="font-mono" />
+          ? <UdinInput value={draft.udin_tax_audit} onChange={v => handleUdinField("udin_tax_audit", v)} placeholder="UDIN…" />
           : <span className="font-mono text-[11px] truncate block" title={row.udin_tax_audit || ""}>{row.udin_tax_audit || "—"}</span>}
       </TCell>
 
-      {/* 12 · UDIN Statutory Audit (conditional) */}
-      <TCell className="min-w-[120px]">
+      {/* 12 · UDIN Statutory Audit (conditional, manual entry + one-click NA) */}
+      <TCell className="min-w-[150px]">
         {editing && showUdinStatutoryEdit
-          ? <EInput value={draft.udin_statutory_audit} onChange={v => handleUdinField("udin_statutory_audit", v)} placeholder="UDIN…" className="font-mono" />
+          ? <UdinInput value={draft.udin_statutory_audit} onChange={v => handleUdinField("udin_statutory_audit", v)} placeholder="UDIN…" />
           : !editing && showUdinStatutoryView
             ? <span className="font-mono text-[11px] truncate block" title={row.udin_statutory_audit || ""}>{row.udin_statutory_audit || "—"}</span>
             : <span className="text-muted-foreground/40 text-[11px]">—</span>}
