@@ -340,14 +340,18 @@ async function exportExcel(engagementId: string, data: AuditWorksheetData) {
 // ─── PDF export ────────────────────────────────────────────────────────────────
 //
 // Layout principles (do not regress):
-//  • Landscape A4, 12 mm side margins, 22 mm top margin (room for header),
-//    15 mm bottom margin (room for footer/page-number).
+//  • Portrait A4 (210 × 297 mm), 12 mm side margins, 22 mm top margin (room
+//    for header), 15 mm bottom margin (room for footer/page-number).
+//  • Master sheet uses a 2-column (Field | Value) layout sized to fit on a
+//    SINGLE portrait page. Tighten cellPadding + fontSize before widening.
+//  • Multi-column sheets (Vouching, Special Attention, Query Sheet,
+//    Checklist) use explicit column widths that sum to CONTENT_W (186 mm)
+//    so nothing clips off the right edge.
 //  • Every section table uses didDrawPage to repaint header + footer on each
 //    auto-paginated page, so long sections never lose their title.
-//  • Master sheet uses a 2-column (Field | Value) layout — long values like the
-//    full registered address, books-verified list, file paths, etc. get the
-//    entire content-width to wrap into. The previous 4-column grid clipped
-//    long values; do not switch back.
+//  • Yes/no single-question sections (CARO, Stock Qty, GST Registered) emit
+//    a SINGLE labeled row — never a section band PLUS a row, which produced
+//    a duplicated "CARO 2020 Applicable? / CARO 2020 Applicable" pair.
 //  • All cells use overflow: "linebreak" so jspdf-autotable wraps instead of
 //    truncating.
 //
@@ -357,14 +361,18 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
   const { default: jsPDF } = await import("jspdf");
   const { default: autoTable } = await import("jspdf-autotable");
 
-  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  // A4 portrait — auditor prefers portrait so the document prints cleanly on
+  // standard letterhead and binds with the rest of the audit working papers.
+  // Content width = 186 mm; we tune column widths and section layout to fit
+  // the full Master in a single page without horizontal clipping.
+  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
 
-  const PAGE_W = doc.internal.pageSize.getWidth();   // 297mm
-  const PAGE_H = doc.internal.pageSize.getHeight();  // 210mm
+  const PAGE_W = doc.internal.pageSize.getWidth();   // 210 mm
+  const PAGE_H = doc.internal.pageSize.getHeight();  // 297 mm
   const MARGIN_X = 12;
   const MARGIN_TOP = 22;
   const MARGIN_BOTTOM = 15;
-  const CONTENT_W = PAGE_W - MARGIN_X * 2;            // 273 mm
+  const CONTENT_W = PAGE_W - MARGIN_X * 2;            // 186 mm
 
   const clientLine = `${data.firmName || "CA Firm"}  |  ${data.clientName || "Client"}  |  FY ${data.financialYear || ""}`;
   const generatedOn = new Date().toLocaleString("en-IN", {
@@ -386,10 +394,10 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
     doc.setTextColor(75, 85, 99);
     doc.text(clientLine, MARGIN_X, 7);
 
-    doc.setFontSize(12);
+    doc.setFontSize(10.5);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(17, 24, 39);
-    doc.text(sheetTitle, MARGIN_X, 14);
+    doc.text(sheetTitle, MARGIN_X, 14, { maxWidth: PAGE_W - MARGIN_X * 2 });
 
     // Footer
     const pageNo = (doc as any).internal.getNumberOfPages
@@ -524,9 +532,12 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
   masterBody.push(["Books Verified",
     booksChecked((isTax ? tax : stat) as TaxMasterData & StatutoryMasterData) || "—"]);
 
+  // Single yes/no questions: emit ONE row (label = question, value = answer).
+  // We deliberately skip the section band here — adding a band AND a labelled
+  // row produces a duplicated "CARO 2020 Applicable? / CARO 2020 Applicable"
+  // pair in the PDF, which the auditor flagged as redundant.
   if (isTax) {
-    masterBody.push(section("Stock Quantity Records Maintained"));
-    masterBody.push(["Stock Quantity Records", yesNo(tax.stock_qty_records) || "—"]);
+    masterBody.push(["Stock Quantity Records Maintained", yesNo(tax.stock_qty_records) || "—"]);
     if (tax.stock_qty_records === "yes") {
       masterBody.push(["Stock Quantity Details", fmt(tax.stock_qty_details)]);
     }
@@ -537,19 +548,16 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
   masterBody.push(["Audit Date To",   fmtDate(pickByType(tax.audit_date_to,   stat.audit_date_to)   as string) || "—"]);
 
   if (isTax) {
-    masterBody.push(section("GST Registered?"));
-    masterBody.push(["GST Registered", yesNo(tax.gst_details) || "—"]);
+    masterBody.push(["GST Registered?", yesNo(tax.gst_details) || "—"]);
     if (tax.gst_details === "yes") {
       masterBody.push(["GST ID", fmt(tax.gst_id)]);
     }
   }
   if (isStat) {
-    masterBody.push(section("CARO 2020 Applicable?"));
-    masterBody.push(["CARO 2020 Applicable", yesNo(stat.caro_applicable) || "—"]);
+    masterBody.push(["CARO 2020 Applicable?", yesNo(stat.caro_applicable) || "—"]);
   }
 
-  masterBody.push(section("Audit Carried Out By"));
-  masterBody.push(["Auditors", auditCarriedBy || "—"]);
+  masterBody.push(["Audit Carried Out By", auditCarriedBy || "—"]);
 
   masterBody.push(section("Paths"));
   masterBody.push(["A/c (Tally) File Path",     fmt(pickByType(tax.ac_path,     stat.ac_path))]);
@@ -564,10 +572,13 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
     ...baseTable(masterLabel),
     head: [["Field", "Value"]],
     body: masterBody as any,
-    headStyles: { ...baseTable(masterLabel).headStyles, fillColor: [79, 70, 229] },
+    // Slightly tighter padding + fontSize so the entire Master fits on one
+    // portrait A4 page (~25-28 rows including section bands).
+    styles: { ...baseTable(masterLabel).styles, fontSize: 8, cellPadding: 1.6 },
+    headStyles: { ...baseTable(masterLabel).headStyles, fillColor: [79, 70, 229], fontSize: 8.5 },
     columnStyles: {
-      0: { fontStyle: "bold", cellWidth: 70, fillColor: [249, 250, 251] },
-      1: { cellWidth: CONTENT_W - 70 },
+      0: { fontStyle: "bold", cellWidth: 60, fillColor: [249, 250, 251] },
+      1: { cellWidth: CONTENT_W - 60 },
     },
   });
 
@@ -620,15 +631,16 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
     ...baseTable("Vouching"),
     head: [["Sr.", "Name of Books", "Extent of Check", "Date", "Assigned To", "Status", "Notes"]],
     body: vouchBody as any,
-    headStyles: { ...baseTable("Vouching").headStyles, fillColor: [13, 148, 136] },
+    styles: { ...baseTable("Vouching").styles, fontSize: 7.5, cellPadding: 1.6 },
+    headStyles: { ...baseTable("Vouching").headStyles, fillColor: [13, 148, 136], fontSize: 8 },
     columnStyles: {
-      0: { cellWidth: 10, halign: "center" },
-      1: { cellWidth: 50, fontStyle: "bold" },
-      2: { cellWidth: 60 },
-      3: { cellWidth: 25, halign: "center" },
-      4: { cellWidth: 45 },
-      5: { cellWidth: 22, halign: "center" },
-      6: { cellWidth: CONTENT_W - 10 - 50 - 60 - 25 - 45 - 22 },
+      0: { cellWidth: 8,  halign: "center" },
+      1: { cellWidth: 36, fontStyle: "bold" },
+      2: { cellWidth: 32 },
+      3: { cellWidth: 18, halign: "center" },
+      4: { cellWidth: 32 },
+      5: { cellWidth: 16, halign: "center" },
+      6: { cellWidth: CONTENT_W - 8 - 36 - 32 - 18 - 32 - 16 },
     },
   });
 
@@ -692,16 +704,16 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
     ...baseTable("Audit Worksheet — Advanced Checklist For Tax & Statutory Auditing"),
     head: [["Sr.", "Particulars", "Documents to Verify", "Checked By", "Verified By (Sr. Head)", "Query?", "Query / Remarks"]],
     body: saBody.length > 0 ? (saBody as any) : [["—", "", "", "", "", "", ""]],
-    styles: { ...baseTable("").styles, fontSize: 8, cellPadding: 1.8 },
-    headStyles: { ...baseTable("").headStyles, fillColor: [217, 119, 6], fontSize: 8.5 },
+    styles: { ...baseTable("").styles, fontSize: 7, cellPadding: 1.4 },
+    headStyles: { ...baseTable("").headStyles, fillColor: [217, 119, 6], fontSize: 7.5 },
     columnStyles: {
-      0: { cellWidth: 12, halign: "center" },
-      1: { cellWidth: 75, fontStyle: "bold" },
-      2: { cellWidth: 55 },
-      3: { cellWidth: 35 },
-      4: { cellWidth: 30 },
-      5: { cellWidth: 14, halign: "center" },
-      6: { cellWidth: CONTENT_W - 12 - 75 - 55 - 35 - 30 - 14 },
+      0: { cellWidth: 10, halign: "center" },
+      1: { cellWidth: 52, fontStyle: "bold" },
+      2: { cellWidth: 40 },
+      3: { cellWidth: 24 },
+      4: { cellWidth: 22 },
+      5: { cellWidth: 10, halign: "center" },
+      6: { cellWidth: CONTENT_W - 10 - 52 - 40 - 24 - 22 - 10 },
     },
   });
 
@@ -716,16 +728,16 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
           i + 1, q.head, q.particulars, q.query_description, q.required_documents, q.remark, q.correction_status,
         ])
       : [["—", "", "", "", "", "", ""]],
-    styles: { ...baseTable("Query Sheet").styles, fontSize: 8, cellPadding: 1.8 },
-    headStyles: { ...baseTable("Query Sheet").headStyles, fillColor: [239, 68, 68], fontSize: 8.5 },
+    styles: { ...baseTable("Query Sheet").styles, fontSize: 7, cellPadding: 1.4 },
+    headStyles: { ...baseTable("Query Sheet").headStyles, fillColor: [239, 68, 68], fontSize: 7.5 },
     columnStyles: {
-      0: { cellWidth: 8,  halign: "center" },
-      1: { cellWidth: 32 },
-      2: { cellWidth: 36 },
-      3: { cellWidth: 60 },
-      4: { cellWidth: 50 },
-      5: { cellWidth: 50 },
-      6: { cellWidth: CONTENT_W - 8 - 32 - 36 - 60 - 50 - 50 },
+      0: { cellWidth: 6,  halign: "center" },
+      1: { cellWidth: 22 },
+      2: { cellWidth: 24 },
+      3: { cellWidth: 42 },
+      4: { cellWidth: 32 },
+      5: { cellWidth: 30 },
+      6: { cellWidth: CONTENT_W - 6 - 22 - 24 - 42 - 32 - 30 },
     },
   });
 
@@ -752,13 +764,14 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
           : "";
       return [def.sr, particulars, docAttached, row.page_from ?? "", row.page_to ?? ""];
     }),
-    headStyles: { ...baseTable("Audit Documentation Checklist").headStyles, fillColor: [99, 102, 241] },
+    styles: { ...baseTable("Audit Documentation Checklist").styles, fontSize: 8, cellPadding: 1.6 },
+    headStyles: { ...baseTable("Audit Documentation Checklist").headStyles, fillColor: [99, 102, 241], fontSize: 8.5 },
     columnStyles: {
-      0: { cellWidth: 12, halign: "center" },
-      1: { cellWidth: 95, fontStyle: "bold" },
-      2: { cellWidth: CONTENT_W - 12 - 95 - 25 - 25 },
-      3: { cellWidth: 25, halign: "center" },
-      4: { cellWidth: 25, halign: "center" },
+      0: { cellWidth: 8,  halign: "center" },
+      1: { cellWidth: 70, fontStyle: "bold" },
+      2: { cellWidth: CONTENT_W - 8 - 70 - 19 - 19 },
+      3: { cellWidth: 19, halign: "center" },
+      4: { cellWidth: 19, halign: "center" },
     },
   });
 
