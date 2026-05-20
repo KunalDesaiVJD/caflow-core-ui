@@ -1957,8 +1957,25 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       return total;
     };
     for (const item of activeTree) computeParent(item);
+
+    // ── NCE P&L profit chain (V → XIII) for the PRIOR-YEAR column ───────────
+    // The COA Mapping PY column reads P&L figures from pyShellPLAmounts (P&L
+    // opening balances are always 0, so PY P&L can only come from the PY-shell
+    // TB). computeParent only sums additive parents (NCE_PL_INC/EXP/TAX); the
+    // subtraction subtotals V/VII/IX/XI/XIII are leaf codes and stayed blank in
+    // the PY column even though CY computed fine. Compute them here from the
+    // PY-shell income/expense so the prior-year profit chain auto-populates.
+    if (isNonCorporate) {
+      const inc = amounts["NCE_PL_INC"] || 0; // negative (credit)
+      const exp = amounts["NCE_PL_EXP"] || 0; // positive (debit)
+      amounts["NCE_PROF_V"]   = Math.round((-inc - exp) * 100) / 100;
+      amounts["NCE_PROF_VII"] = Math.round((amounts["NCE_PROF_V"]   - (amounts["NCE_EXCEP"]    || 0)) * 100) / 100;
+      amounts["NCE_PROF_IX"]  = Math.round((amounts["NCE_PROF_VII"] - (amounts["NCE_EXTORD"]   || 0)) * 100) / 100;
+      amounts["NCE_PROF_XI"]  = Math.round((amounts["NCE_PROF_IX"]  - (amounts["NCE_PART_REM"] || 0)) * 100) / 100;
+      amounts["NCE_NET_PROF"] = Math.round((amounts["NCE_PROF_XI"]  - (amounts["NCE_TAX"]      || 0)) * 100) / 100;
+    }
     return amounts;
-  }, [pyShellTbData, coaMapping, tbAccounts, activeFlatItems, activeTree]);
+  }, [pyShellTbData, coaMapping, tbAccounts, activeFlatItems, activeTree, isNonCorporate]);
 
   // ═══════ PY SHELL LEDGER AMOUNTS (per-ledger) ═══════
   // Maps ledger_name → signed closing_balance from PY shell TB.

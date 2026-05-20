@@ -246,11 +246,23 @@ function NumInput({
   // never show paise. Rounding happens both on initial display AND on blur,
   // so even if the underlying TB closing has decimals (Tally returns paise
   // on some ledgers), the displayed/saved figure is always a whole rupee.
+  // Parse a displayed value back to a number, accepting both "-1,234" and the
+  // accounting "(1,234)" bracket form for negatives.
+  const parseLocal = (s: string): number => {
+    let t = String(s).trim().replace(/,/g, "");
+    let neg = false;
+    if (/^\(.*\)$/.test(t)) { neg = true; t = t.slice(1, -1); }
+    const n = parseFloat(t) || 0;
+    return neg ? -Math.abs(n) : n;
+  };
+  // Display: negatives in parentheses, e.g. (25,000), per financial-reporting
+  // convention (Word-file requirement — applies to every editable Note cell).
   const formatDisplay = (v: number): string => {
     if (!Number.isFinite(v) || v === 0) return "";
-    return Math.round(v).toLocaleString("en-IN", {
+    const abs = Math.round(Math.abs(v)).toLocaleString("en-IN", {
       minimumFractionDigits: 0, maximumFractionDigits: 0,
     });
+    return v < 0 ? `(${abs})` : abs;
   };
   const [local, setLocal] = useState(formatDisplay(value));
   const [focused, setFocused] = useState(false);
@@ -268,15 +280,16 @@ function NumInput({
       value={local}
       placeholder={placeholder ?? "—"}
       onFocus={() => {
-        // While editing show the plain rounded integer (no commas) so typing/
-        // backspace works naturally; on blur we re-apply Indian formatting.
+        // While editing show the plain signed integer (no commas/brackets) so
+        // typing/backspace works naturally; on blur we re-apply Indian
+        // formatting with parentheses for negatives.
         setFocused(true);
-        const v = parseFloat(local.replace(/,/g, "")) || 0;
+        const v = parseLocal(local);
         setLocal(v === 0 ? "" : String(Math.round(v)));
       }}
       onChange={e => setLocal(e.target.value)}
       onBlur={() => {
-        const parsed = Math.round(parseFloat(local.replace(/,/g, "")) || 0);
+        const parsed = Math.round(parseLocal(local));
         setLocal(formatDisplay(parsed));
         setFocused(false);
         onChange(parsed);
