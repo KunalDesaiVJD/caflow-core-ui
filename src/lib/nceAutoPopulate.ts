@@ -647,6 +647,37 @@ export async function nceAutoPopulate(
     };
   }
 
+  // ── Precompute lookup maps used by the per-note PY-only walks ───────────
+  // These depend ONLY on coaMapping + tb (constant across all notes), so we
+  // build them ONCE here instead of rebuilding inside every note iteration.
+  // The previous in-loop `tb.find(...)` was O(ledgers²) per note × 19 notes,
+  // which made re-sync crawl on large engagements (600+ ledgers).
+  const tbParentByLedgerLower: Record<string, string> = {};
+  for (const r of tb) {
+    const nm = String(r.ledger_name || "").trim().toLowerCase();
+    if (nm) tbParentByLedgerLower[nm] = String(r.parent_group || "").toLowerCase().trim();
+  }
+  const groupToCodeGlobal: Record<string, string> = (() => {
+    const counts: Record<string, Record<string, number>> = {};
+    for (const [ledger, m] of Object.entries(coaMapping || {})) {
+      const c = (m as any)?.code; if (!c) continue;
+      const grp = tbParentByLedgerLower[ledger.toLowerCase().trim()];
+      if (!grp) continue;
+      if (!counts[grp]) counts[grp] = {};
+      counts[grp][c] = (counts[grp][c] || 0) + 1;
+    }
+    const out: Record<string, string> = {};
+    for (const [grp, codeCounts] of Object.entries(counts)) {
+      let best = "", bestN = 0, tie = false;
+      for (const [c, n] of Object.entries(codeCounts)) {
+        if (n > bestN) { best = c; bestN = n; tie = false; }
+        else if (n === bestN) tie = true;
+      }
+      if (best && !tie) out[grp] = best;
+    }
+    return out;
+  })();
+
   // ── 4. Load PY amounts from prior year's nce_financial_notes ───────────
   //
   // We also load the prior year's _custom_rows so we can match custom rows
@@ -912,26 +943,9 @@ export async function nceAutoPopulate(
         for (const [k, v] of Object.entries(pyCoaMap || {})) {
           if (v?.code) pyMappingLower[k.toLowerCase().trim()] = v;
         }
-        // parent_group → FS code map derived from CY mapping, for group
-        // inheritance when an exact ledger lookup fails on both sides.
-        const groupToCode: Record<string, string> = {};
-        const groupCount: Record<string, Record<string, number>> = {};
-        for (const [ledger, m] of Object.entries(coaMapping || {})) {
-          const c = m?.code; if (!c) continue;
-          const tbRow = tb.find(r => r.ledger_name === ledger);
-          const grp = (tbRow?.parent_group || "").toLowerCase().trim();
-          if (!grp) continue;
-          if (!groupCount[grp]) groupCount[grp] = {};
-          groupCount[grp][c] = (groupCount[grp][c] || 0) + 1;
-        }
-        for (const [grp, codes] of Object.entries(groupCount)) {
-          let best = "", bestN = 0, tie = false;
-          for (const [c, n] of Object.entries(codes)) {
-            if (n > bestN) { best = c; bestN = n; tie = false; }
-            else if (n === bestN) tie = true;
-          }
-          if (best && !tie) groupToCode[grp] = best;
-        }
+        // parent_group → FS code map (precomputed once at fn scope — avoids
+        // the previous O(ledgers²) tb.find per note that hung large engagements).
+        const groupToCode = groupToCodeGlobal;
         // Track every ledger already produced by the CY walk so the PY-only
         // walk below doesn't re-create them as duplicate customRows. BUG FIX:
         // previously this only watched staticSources (smart-matched ledgers).
@@ -1324,25 +1338,8 @@ export async function nceAutoPopulate(
           for (const [k, v] of Object.entries(pyCoaMap || {})) {
             if (v?.code) pyMappingLowerA[k.toLowerCase().trim()] = v;
           }
-          // parent_group → FS code inheritance from CY mapping
-          const groupToCodeA: Record<string, string> = {};
-          const groupCountA: Record<string, Record<string, number>> = {};
-          for (const [ledger, m] of Object.entries(coaMapping || {})) {
-            const c = m?.code; if (!c) continue;
-            const tbRow = tb.find(r => r.ledger_name === ledger);
-            const grp = (tbRow?.parent_group || "").toLowerCase().trim();
-            if (!grp) continue;
-            if (!groupCountA[grp]) groupCountA[grp] = {};
-            groupCountA[grp][c] = (groupCountA[grp][c] || 0) + 1;
-          }
-          for (const [grp, codes] of Object.entries(groupCountA)) {
-            let best = "", bestN = 0, tie = false;
-            for (const [c, n] of Object.entries(codes)) {
-              if (n > bestN) { best = c; bestN = n; tie = false; }
-              else if (n === bestN) tie = true;
-            }
-            if (best && !tie) groupToCodeA[grp] = best;
-          }
+          // parent_group → FS code inheritance (precomputed once at fn scope)
+          const groupToCodeA = groupToCodeGlobal;
           const cySeen = new Set(tb.map(r => r.ledger_name.toLowerCase().trim()));
           // Also skip ledgers already pushed to unmatchedA from the CY loop.
           const inUnmatched = new Set(unmatchedA.map(u => u.ledger.toLowerCase().trim()));
