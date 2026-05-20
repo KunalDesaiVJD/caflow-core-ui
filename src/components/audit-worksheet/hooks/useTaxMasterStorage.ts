@@ -12,7 +12,7 @@
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
-import { awLoad, awSave, awLoadFromDB } from "@/lib/awStorage";
+import { awLoad, awSave, awLoadFromDB, awCacheOnly } from "@/lib/awStorage";
 import { useAuth } from "@/hooks/useAuth";
 
 // ─── Data shape ─────────────────────────────────────────────────────────────
@@ -239,18 +239,22 @@ export function useTaxMasterStorage(engagementId: string, firmId?: string | null
   );
 
   // ── Set a single field + debounced auto-save ──────────────────────────────
+  // localStorage is written SYNCHRONOUSLY on every keystroke (awCacheOnly) so
+  // PDF/Excel exports always read the value the user currently sees — the
+  // 1-second debounce only batches the Supabase round-trip, not the cache.
   const setField = useCallback(
     <K extends keyof TaxMasterData>(field: K, value: TaxMasterData[K]) => {
       userTypedRef.current = true;
       setData(prev => {
         const next = { ...prev, [field]: value };
         dataRef.current = next;
+        awCacheOnly(engagementId, "tax_master_json", next);
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => persist(next, true), 1000);
         return next;
       });
     },
-    [persist]
+    [persist, engagementId]
   );
 
   // ── Patch multiple fields at once + debounced auto-save ───────────────────
@@ -260,12 +264,13 @@ export function useTaxMasterStorage(engagementId: string, firmId?: string | null
       setData(prev => {
         const next = { ...prev, ...patch };
         dataRef.current = next;
+        awCacheOnly(engagementId, "tax_master_json", next);
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => persist(next, true), 1000);
         return next;
       });
     },
-    [persist]
+    [persist, engagementId]
   );
 
   // ── Programmatic patch (auto-fill / default seeding) ─────────────────────
