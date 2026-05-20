@@ -193,7 +193,11 @@ function NoteCard({
   /** Stable DOM id for scroll-to-note. Falls back to noteNumber when omitted. */
   anchorId?: string;
 }) {
-  const [open, setOpen] = useState(true);
+  // Default COLLAPSED: every Note in "Notes to Accounts" starts collapsed with
+  // a "+" beside the heading; clicking expands to reveal the ledger breakup
+  // (Word-file requirement). The global Expand All / Collapse All control still
+  // overrides via collapseControl.
+  const [open, setOpen] = useState(false);
   useEffect(() => {
     if (collapseControl !== undefined) setOpen(!collapseControl);
   }, [collapseControl]);
@@ -607,12 +611,27 @@ function PatternBTable({
     if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
-  const staticHeadingOptions = useMemo(
-    () => config.rows
-      .filter(r => !r.isSectionHeader && !r.isTotal && !hiddenRows.includes(r.id))
-      .map(r => ({ id: r.id, label: labelOverrides[r.id] ?? r.label })),
-    [config, hiddenRows, labelOverrides],
-  );
+  // Build move-target options, qualifying each row's label with its section
+  // header (Secured / Unsecured / Quoted / Unquoted). Without this, notes like
+  // Borrowings list "Term loans — Banks" identically under BOTH Secured and
+  // Unsecured, so moving a ledger to "Term Loans — Banks (Unsecured)" looked
+  // like it landed in Secured (the user couldn't tell the two options apart).
+  // The move itself keys off the distinct row id, so disambiguating the label
+  // makes the correct sub-classification selectable. (Word-file Issue D.)
+  const staticHeadingOptions = useMemo(() => {
+    const out: { id: string; label: string }[] = [];
+    let currentSection = "";
+    for (const r of config.rows) {
+      if (r.isSectionHeader) { currentSection = r.label || ""; continue; }
+      if (r.isTotal || hiddenRows.includes(r.id)) continue;
+      const base = labelOverrides[r.id] ?? r.label;
+      out.push({
+        id: r.id,
+        label: currentSection ? `${base} (${currentSection})` : base,
+      });
+    }
+    return out;
+  }, [config, hiddenRows, labelOverrides]);
   // Include OTHER custom rows so "Site Expense - 18%" can move under "Site Expense"
   // Exclude custom rows that are already attached to something (they're not standalone headings)
   const allHeadingOptions = useMemo(
@@ -951,12 +970,27 @@ function PatternATable({
     return groups;
   }, [customRows]);
 
-  const staticHeadingOptions = useMemo(
-    () => config.rows
-      .filter(r => !r.isSectionHeader && !r.isTotal && !hiddenRows.includes(r.id))
-      .map(r => ({ id: r.id, label: labelOverrides[r.id] ?? r.label })),
-    [config, hiddenRows, labelOverrides],
-  );
+  // Build move-target options, qualifying each row's label with its section
+  // header (Secured / Unsecured / Quoted / Unquoted). Without this, notes like
+  // Borrowings list "Term loans — Banks" identically under BOTH Secured and
+  // Unsecured, so moving a ledger to "Term Loans — Banks (Unsecured)" looked
+  // like it landed in Secured (the user couldn't tell the two options apart).
+  // The move itself keys off the distinct row id, so disambiguating the label
+  // makes the correct sub-classification selectable. (Word-file Issue D.)
+  const staticHeadingOptions = useMemo(() => {
+    const out: { id: string; label: string }[] = [];
+    let currentSection = "";
+    for (const r of config.rows) {
+      if (r.isSectionHeader) { currentSection = r.label || ""; continue; }
+      if (r.isTotal || hiddenRows.includes(r.id)) continue;
+      const base = labelOverrides[r.id] ?? r.label;
+      out.push({
+        id: r.id,
+        label: currentSection ? `${base} (${currentSection})` : base,
+      });
+    }
+    return out;
+  }, [config, hiddenRows, labelOverrides]);
   // Include custom rows in dropdown so items can move under other custom rows
   // Exclude custom rows that are already attached to something (they're not standalone headings)
   const allHeadingOptions = useMemo(
