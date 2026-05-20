@@ -322,6 +322,8 @@ function ClientLedgerView() {
         docNo = e.document_id ? (invoiceMap[e.document_id] || e.document_id.slice(0, 8)) : "";
       } else if (e.entry_type === "receipt") {
         docNo = e.document_id ? `RCT-${e.document_id.slice(0, 6)}` : "";
+      } else if (e.entry_type === "kasar") {
+        docNo = e.document_id ? `KSR-${e.document_id.slice(0, 6)}` : "";
       }
       let narration = e.narration || "";
       if (!narration) {
@@ -329,6 +331,7 @@ function ClientLedgerView() {
         else if (e.entry_type === "credit_note") narration = "Credit note issued";
         else if (e.entry_type === "receipt") narration = "Payment received";
         else if (e.entry_type === "adjustment") narration = "Adjustment";
+        else if (e.entry_type === "kasar") narration = "Kasar settlement";
       }
       const firmName = firms.find(f => f.id === e.firm_id)?.name || "";
       return { ...e, debit, credit, balance, docNo, narration, firmName };
@@ -346,6 +349,12 @@ function ClientLedgerView() {
     const resolvedFirmId = obDraftFirmId || (firmId && firmId !== "all" ? firmId : user?.firm_id);
     if (!resolvedFirmId) { toast({ title: "Select a firm first", variant: "destructive" }); return; }
     if (!obDraftDate) { toast({ title: "Balance date is required", variant: "destructive" }); return; }
+    // Validate client belongs to the selected firm to prevent cross-firm OB entries
+    const { data: clientCheck } = await supabase.from("clients").select("firm_id").eq("id", clientId).maybeSingle();
+    if (clientCheck && clientCheck.firm_id !== resolvedFirmId) {
+      toast({ title: "Client does not belong to the selected firm", variant: "destructive" });
+      return;
+    }
     setObSaving(true);
     try {
       const payload = {
@@ -1133,6 +1142,7 @@ function GroupLedgerView() {
   const getDocNo = (e: any) => {
     if (e.entry_type === "invoice" || e.entry_type === "credit_note") return e.document_id ? (invoiceMap[e.document_id] || e.document_id.slice(0, 8)) : "";
     if (e.entry_type === "receipt") return e.document_id ? `RCT-${e.document_id.slice(0, 6)}` : "";
+    if (e.entry_type === "kasar") return e.document_id ? `KSR-${e.document_id.slice(0, 6)}` : "";
     return "";
   };
 
@@ -1185,6 +1195,7 @@ function GroupLedgerView() {
     const getDocNoLocal = (e: any) => {
       if (e.entry_type === "invoice" || e.entry_type === "credit_note") return e.document_id ? (invoiceMap[e.document_id] || e.document_id.slice(0, 8)) : "";
       if (e.entry_type === "receipt") return e.document_id ? `RCT-${e.document_id.slice(0, 6)}` : "";
+      if (e.entry_type === "kasar") return e.document_id ? `KSR-${e.document_id.slice(0, 6)}` : "";
       return "";
     };
 
@@ -1921,7 +1932,8 @@ function FirmRevenueLedgerView() {
       const c = Number(e.credit_amount) || 0;
       running += d - c;
       const inv = e.document_id ? invoiceMap[e.document_id] : null;
-      return { ...e, debit: d, credit: c, running, docNo: inv?.no || (e.entry_type === "receipt" && e.document_id ? `RCT-${e.document_id.slice(0, 6)}` : ""), docType: inv?.type || e.entry_type, clientName: clientMap[e.client_id] || "" };
+      const docNo = inv?.no || (e.entry_type === "receipt" && e.document_id ? `RCT-${e.document_id.slice(0, 6)}` : e.entry_type === "kasar" && e.document_id ? `KSR-${e.document_id.slice(0, 6)}` : "");
+      return { ...e, debit: d, credit: c, running, docNo, docType: inv?.type || e.entry_type, clientName: clientMap[e.client_id] || "" };
     });
   }, [entries, invoiceMap, clientMap]);
 

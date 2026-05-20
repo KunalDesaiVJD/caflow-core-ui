@@ -159,6 +159,7 @@ export default function ReceivablesReportTab() {
         { data: invoices, error: iErr },
         { data: receipts, error: rErr },
         { data: obRows,   error: oErr },
+        { data: kasars },
       ] = await Promise.all([
         supabase.from("clients")
           .select("id, name, email")
@@ -174,6 +175,10 @@ export default function ReceivablesReportTab() {
         // Opening balances manually entered in Ledger tab
         (supabase as any).from("client_billing_opening_balances")
           .select("client_id, amount")
+          .eq("firm_id", selectedFirmId),
+        // Kasar / write-off entries
+        (supabase as any).from("billing_kasars")
+          .select("client_id, kasar_date, amount")
           .eq("firm_id", selectedFirmId),
       ]);
 
@@ -205,6 +210,15 @@ export default function ReceivablesReportTab() {
           if (!amt) continue;
           if (rec.receipt_date && rec.receipt_date < fromDate) openingCr += amt;
           else if (rec.receipt_date && rec.receipt_date >= fromDate && rec.receipt_date <= toDate) credit += amt;
+        }
+
+        // Kasar (write-off / discount) — treated as credit reducing outstanding balance
+        for (const k of kasars || []) {
+          if (k.client_id !== c.id) continue;
+          const amt = Number(k.amount || 0);
+          if (!amt) continue;
+          if (k.kasar_date && k.kasar_date < fromDate) openingCr += amt;
+          else if (k.kasar_date && k.kasar_date >= fromDate && k.kasar_date <= toDate) credit += amt;
         }
 
         return {
@@ -249,6 +263,7 @@ export default function ReceivablesReportTab() {
         { data: invData },
         { data: recData },
         obResult,
+        { data: kasarData },
       ] = await Promise.all([
         supabase.from("invoices")
           .select("id, invoice_no, invoice_date, total_amount, document_type")
@@ -271,6 +286,13 @@ export default function ReceivablesReportTab() {
           .eq("firm_id", selectedFirmId)
           .is("gstin", null)
           .maybeSingle(),
+        (supabase as any).from("billing_kasars")
+          .select("id, kasar_date, amount, narration")
+          .eq("client_id", client.id)
+          .eq("firm_id", selectedFirmId)
+          .gte("kasar_date", fromDate)
+          .lte("kasar_date", toDate)
+          .order("kasar_date"),
       ]);
 
       const obAmount: number = obResult?.data?.amount ? Number(obResult.data.amount) : 0;
@@ -316,6 +338,16 @@ export default function ReceivablesReportTab() {
           narration: `Receipt — ${rec.payment_mode || ""}${rec.remarks ? ` (${rec.remarks})` : ""}`.replace(/—\s*$/, "").trim(),
           debit:     0,
           credit:    amt,
+        });
+      }
+
+      for (const k of kasarData || []) {
+        tmp.push({
+          date:      k.kasar_date,
+          doc_no:    `KSR-${k.id.slice(0, 6).toUpperCase()}`,
+          narration: k.narration ? `Kasar — ${k.narration}` : "Kasar settlement",
+          debit:     0,
+          credit:    Number(k.amount || 0),
         });
       }
 
