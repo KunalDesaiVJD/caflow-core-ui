@@ -146,19 +146,19 @@ function UdinInput({ value, onChange, placeholder }: {
           isNA && "disabled:opacity-100 text-muted-foreground italic",
         )}
       />
-      <button
-        type="button"
-        onClick={() => onChange(isNA ? "" : "NA")}
-        title={isNA ? "Clear NA" : "Mark Not Applicable"}
-        className={cn(
-          "h-6 px-1.5 text-[10px] font-semibold rounded border shrink-0 transition-colors",
-          isNA
-            ? "bg-slate-600 text-white border-slate-600"
-            : "bg-background text-muted-foreground border-input hover:bg-muted",
-        )}
+      {/* Issue 1: "NA" is now a dropdown option (not a pill button).
+          Manual UDIN typing stays in the text box; the dropdown lets the
+          auditor flag the cell as Not Applicable. Selecting "NA" disables
+          the text box; "Manual entry" clears it back to typeable. */}
+      <select
+        value={isNA ? "NA" : ""}
+        onChange={e => onChange(e.target.value === "NA" ? "NA" : "")}
+        title="Set Not Applicable"
+        className="h-6 w-[42px] shrink-0 text-[10px] rounded border border-input bg-background px-0.5 cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring"
       >
-        NA
-      </button>
+        <option value="">—</option>
+        <option value="NA">NA</option>
+      </select>
     </div>
   );
 }
@@ -271,39 +271,42 @@ function ClientCombobox({ value, onChange, clients, placeholder }: {
 
 // ─── Searchable combobox for users ───────────────────────────────────────────
 //
-// Issue 2 fix — keyboard navigation:
-// Previously this combobox rendered a filtered list on focus but had no way
-// to navigate it from the keyboard. Pressing ArrowDown moved focus out of
-// the input instead of highlighting the next option, so the only way to
-// pick a name was to mouse-click it.
+// Issue 2 fix — STRICT selection-only:
+// The committed value (the draft field) can ONLY ever be a real user name
+// from the list, or empty. The text box is a search filter, not a free-text
+// field — typing narrows the list but does not by itself become the value.
+// A name is committed only when the auditor picks it (mouse / Enter). On
+// blur, if the typed text doesn't exactly match a user, the box reverts to
+// the last committed value, so stray typing can never be saved.
 //
-// Now: ArrowDown/ArrowUp move a highlight through the filtered list,
-// Enter selects the highlighted option (or the first item if none is
-// highlighted), Escape closes the dropdown. Highlight resets whenever the
-// filter text changes. Selected option auto-scrolls into view.
+// Keyboard nav (kept from the earlier fix): ArrowDown/ArrowUp move the
+// highlight, Enter selects, Escape closes; highlight auto-scrolls into view.
 
 function UserCombobox({ value, onChange, users, placeholder }: {
   value: string; onChange: (v: string) => void;
   users: UserOption[]; placeholder?: string;
 }) {
   const [open, setOpen]       = useState(false);
+  const [query, setQuery]     = useState(value);   // local search text
   const [highlight, setHighlight] = useState(0);
   const [dropPos, setDropPos] = useState({ top: 0, left: 0, width: 120 });
   const inputRef = useRef<HTMLInputElement>(null);
   const dropRef  = useRef<HTMLDivElement>(null);
 
+  // Keep the local query in sync when the committed value changes externally
+  // (e.g. row reset / load). Only sync when the box isn't being edited.
+  useEffect(() => { if (!open) setQuery(value); }, [value, open]);
+
   const filtered = useMemo(() =>
-    (value
-      ? users.filter(u => u.name.toLowerCase().includes(value.toLowerCase()))
+    (query
+      ? users.filter(u => u.name.toLowerCase().includes(query.toLowerCase()))
       : users
     ).slice(0, 15),
-    [value, users]
+    [query, users]
   );
 
-  // Reset highlight to top whenever the filtered set changes (typing).
-  useEffect(() => { setHighlight(0); }, [value, users]);
+  useEffect(() => { setHighlight(0); }, [query, users]);
 
-  // Auto-scroll highlighted item into view as the user arrows through.
   useEffect(() => {
     if (!open || !dropRef.current) return;
     const el = dropRef.current.querySelector<HTMLElement>(`[data-idx="${highlight}"]`);
@@ -318,12 +321,26 @@ function UserCombobox({ value, onChange, users, placeholder }: {
     setOpen(true);
   }
 
+  // Commit a valid pick; otherwise revert the box to the committed value.
+  function selectUser(name: string) {
+    onChange(name);
+    setQuery(name);
+    setOpen(false);
+  }
+  function handleBlur() {
+    setTimeout(() => {
+      setOpen(false);
+      // STRICT: only an exact (case-insensitive) match may persist.
+      const exact = users.find(u => u.name.toLowerCase() === query.trim().toLowerCase());
+      if (exact) { if (exact.name !== value) onChange(exact.name); setQuery(exact.name); }
+      else if (query.trim() === "") { if (value !== "") onChange(""); setQuery(""); }
+      else { setQuery(value); } // typed something not in the list → discard
+    }, 160);
+  }
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (!open) {
-      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        setOpen(true);
-        e.preventDefault();
-      }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") { setOpen(true); e.preventDefault(); }
       return;
     }
     if (e.key === "ArrowDown") {
@@ -335,8 +352,9 @@ function UserCombobox({ value, onChange, users, placeholder }: {
     } else if (e.key === "Enter" && filtered.length > 0) {
       e.preventDefault();
       const pick = filtered[Math.min(highlight, filtered.length - 1)];
-      if (pick) { onChange(pick.name); setOpen(false); }
+      if (pick) selectUser(pick.name);
     } else if (e.key === "Escape") {
+      setQuery(value); // discard in-progress typing
       setOpen(false);
     }
   }
@@ -345,12 +363,12 @@ function UserCombobox({ value, onChange, users, placeholder }: {
     <div className="min-w-[100px]">
       <Input
         ref={inputRef}
-        value={value}
-        onChange={e => onChange(e.target.value)}
+        value={query}
+        onChange={e => { setQuery(e.target.value); if (!open) setOpen(true); }}
         onFocus={handleFocus}
-        onBlur={() => setTimeout(() => setOpen(false), 160)}
+        onBlur={handleBlur}
         onKeyDown={handleKeyDown}
-        placeholder={placeholder || "Search…"}
+        placeholder={placeholder || "Select…"}
         className="h-6 text-[11px] px-1.5 w-full"
       />
       {open && filtered.length > 0 && (
@@ -363,7 +381,7 @@ function UserCombobox({ value, onChange, users, placeholder }: {
             <div
               key={u.id}
               data-idx={i}
-              onMouseDown={e => { e.preventDefault(); onChange(u.name); setOpen(false); }}
+              onMouseDown={e => { e.preventDefault(); selectUser(u.name); }}
               onMouseEnter={() => setHighlight(i)}
               className={cn(
                 "px-2 py-1.5 text-[11px] cursor-pointer",
@@ -373,6 +391,15 @@ function UserCombobox({ value, onChange, users, placeholder }: {
               {u.name}
             </div>
           ))}
+        </div>
+      )}
+      {/* When the user has typed something that matches nothing, show a hint */}
+      {open && query.trim() !== "" && filtered.length === 0 && (
+        <div
+          style={{ position: "fixed", top: dropPos.top, left: dropPos.left, width: dropPos.width, zIndex: 9999 }}
+          className="bg-popover border rounded-md shadow-lg px-2 py-1.5 text-[10px] text-muted-foreground italic"
+        >
+          No match — pick a name from the list
         </div>
       )}
     </div>
