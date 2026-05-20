@@ -81,6 +81,7 @@ export default function ReceiptsTab() {
   const [clientFilter, setClientFilter] = useState("all");
   const [modeFilter, setModeFilter] = useState("all");
   const [firmFilter, setFirmFilter] = useState("all");
+  const [fyFilter, setFyFilter] = useState("all");
   const [groupFilter, setGroupFilter] = useState("all");
   const [responsibleFilter, setResponsibleFilter] = useState("all");
 
@@ -226,13 +227,20 @@ export default function ReceiptsTab() {
     })();
   }, [kasarClientId, firmId]);
 
+  // Derive available FY options from loaded receipts
+  const fyOptions = useMemo(() => {
+    const fys = new Set(receipts.map(r => r.receipt_date ? getFYFromDate(r.receipt_date) : "").filter(Boolean));
+    return [...fys].sort().reverse();
+  }, [receipts]);
+
   const filtered = useMemo(() => receipts.filter(r => {
     if (clientFilter !== "all" && r.client_id !== clientFilter) return false;
     if (modeFilter !== "all" && r.payment_mode !== modeFilter.toLowerCase()) return false;
+    if (fyFilter !== "all" && r.receipt_date && getFYFromDate(r.receipt_date) !== fyFilter) return false;
     if (groupFilter !== "all" && !groupClientIds.includes(r.client_id)) return false;
     if (responsibleFilter !== "all" && !responsibleClientIds.includes(r.client_id)) return false;
     return true;
-  }), [receipts, clientFilter, modeFilter, groupFilter, groupClientIds, responsibleFilter, responsibleClientIds]);
+  }), [receipts, clientFilter, modeFilter, fyFilter, groupFilter, groupClientIds, responsibleFilter, responsibleClientIds]);
 
   const filteredKasars = useMemo(() => kasars.filter(k => {
     if (clientFilter !== "all" && k.client_id !== clientFilter) return false;
@@ -336,6 +344,14 @@ export default function ReceiptsTab() {
           gstin: formGstin && formGstin !== "all" ? formGstin : null,
         }).eq("id", editingId);
         if (uErr) throw uErr;
+
+        // Update invoice status if amount covers the invoice total
+        if (receiptType === "against_invoice" && invoiceId) {
+          const { data: inv } = await supabase.from("invoices").select("total_amount").eq("id", invoiceId).maybeSingle();
+          if (inv && amt >= Number(inv.total_amount || 0)) {
+            await supabase.from("invoices").update({ status: "paid", paid_at: dateStr }).eq("id", invoiceId);
+          }
+        }
 
         // Delete old ledger entries and re-create them fresh
         await supabase.from("client_ledger_entries").delete().eq("document_id", editingId);
@@ -464,6 +480,7 @@ export default function ReceiptsTab() {
   };
 
   const handleDelete = async (id: string) => {
+    if (!window.confirm("Delete this receipt? All ledger entries will also be removed and this cannot be undone.")) return;
     await supabase.from("client_ledger_entries").delete().eq("document_id", id);
     const { error } = await supabase.from("billing_receipts").delete().eq("id", id);
     if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
@@ -581,6 +598,13 @@ export default function ReceiptsTab() {
           <SelectContent>
             <SelectItem value="all">All Firms</SelectItem>
             {firms.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Select value={fyFilter} onValueChange={setFyFilter}>
+          <SelectTrigger className="w-[120px]"><SelectValue placeholder="All FY" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All FY</SelectItem>
+            {fyOptions.map(fy => <SelectItem key={fy} value={fy}>FY {fy}</SelectItem>)}
           </SelectContent>
         </Select>
         <Select value={groupFilter} onValueChange={v => { setGroupFilter(v); setFirmFilter("all"); setResponsibleFilter("all"); }}>
