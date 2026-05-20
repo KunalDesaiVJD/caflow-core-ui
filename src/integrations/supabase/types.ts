@@ -1083,6 +1083,7 @@ export type Database = {
         Row: {
           accounting_data: string | null
           audit_employees: string | null
+          audit_report_checked_by: string | null
           audit_report_prepared_by: string | null
           audit_status: string | null
           audit_status_other: string | null
@@ -1110,6 +1111,7 @@ export type Database = {
         Insert: {
           accounting_data?: string | null
           audit_employees?: string | null
+          audit_report_checked_by?: string | null
           audit_report_prepared_by?: string | null
           audit_status?: string | null
           audit_status_other?: string | null
@@ -1137,6 +1139,7 @@ export type Database = {
         Update: {
           accounting_data?: string | null
           audit_employees?: string | null
+          audit_report_checked_by?: string | null
           audit_report_prepared_by?: string | null
           audit_status?: string | null
           audit_status_other?: string | null

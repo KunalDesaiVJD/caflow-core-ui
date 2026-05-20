@@ -11,7 +11,7 @@
 import { Button } from "@/components/ui/button";
 import { Download, FileText } from "lucide-react";
 import * as XLSX from "xlsx";
-import { awLoad } from "@/lib/awStorage";
+import { awLoad, awLoadFromDB } from "@/lib/awStorage";
 import type { AuditWorksheetData } from "./hooks/useAuditWorksheetData";
 import type { TaxMasterData }       from "./hooks/useTaxMasterStorage";
 import type { StatutoryMasterData } from "./hooks/useStatutoryMasterStorage";
@@ -78,9 +78,15 @@ function booksChecked(m: TaxMasterData | StatutoryMasterData): string {
   return list.join(", ");
 }
 
+// ─── Fetch helper — localStorage first, DB fallback ───────────────────────────
+
+async function fetchSheet<T>(engagementId: string, key: string): Promise<T> {
+  return (awLoad<T>(engagementId, key) ?? await awLoadFromDB<T>(engagementId, key) ?? {}) as T;
+}
+
 // ─── Excel export ──────────────────────────────────────────────────────────────
 
-function exportExcel(engagementId: string, data: AuditWorksheetData) {
+async function exportExcel(engagementId: string, data: AuditWorksheetData) {
   const wb = XLSX.utils.book_new();
   const auditType = data.auditType;
 
@@ -89,13 +95,24 @@ function exportExcel(engagementId: string, data: AuditWorksheetData) {
   const isTax        = auditType === "tax_audit" || isBoth;
   const isStat       = auditType === "statutory"  || isBoth;
 
-  const tax  = awLoad<Partial<TaxMasterData>>(engagementId, "tax_master_json") ?? {};
-  const stat = awLoad<Partial<StatutoryMasterData>>(engagementId, "statutory_master_json") ?? {};
+  const tax  = await fetchSheet<Partial<TaxMasterData>>(engagementId, "tax_master_json");
+  const stat = await fetchSheet<Partial<StatutoryMasterData>>(engagementId, "statutory_master_json");
 
   const masterLabel = isBoth ? "Tax & Statutory Audit Master"
     : isTax ? "Tax Audit Master"
     : isStat ? "Statutory Audit Master"
     : "Audit Master";
+
+  // Same first-non-empty logic the PDF export uses — see exportPdf().
+  const pick = <T,>(...vals: (T | undefined | null)[]): T | "" => {
+    for (const v of vals) {
+      if (v === null || v === undefined) continue;
+      if (typeof v === "string" && v.trim() === "") continue;
+      if (Array.isArray(v) && v.length === 0) continue;
+      return v as T;
+    }
+    return "" as T | "";
+  };
 
   const masterRows: (string | number | null)[][] = [
     [masterLabel],
@@ -107,8 +124,8 @@ function exportExcel(engagementId: string, data: AuditWorksheetData) {
     ["Entity Type",     data.entityType],
     ["Financial Year",  data.financialYear],
     [],
-    ["Accountant Name", tax.accountant_name ?? stat.accountant_name ?? ""],
-    ["Mobile No.",      tax.mobile_no ?? stat.mobile_no ?? ""],
+    ["Accountant Name", pick(tax.accountant_name, stat.accountant_name)],
+    ["Mobile No.",      pick(tax.mobile_no, stat.mobile_no)],
     [],
     ["MOA/AOA/Deed obtained",           yesNo(tax.prev_moa_aoa_deed ?? stat.prev_moa_aoa_deed)],
     ["Prev IT Return obtained",         yesNo(tax.prev_it_return ?? stat.prev_it_return)],
@@ -124,8 +141,8 @@ function exportExcel(engagementId: string, data: AuditWorksheetData) {
       (isTax ? tax : stat) as TaxMasterData & StatutoryMasterData
     )],
     [],
-    ["Audit Date From", tax.audit_date_from ?? stat.audit_date_from ?? ""],
-    ["Audit Date To",   tax.audit_date_to   ?? stat.audit_date_to   ?? ""],
+    ["Audit Date From", pick(tax.audit_date_from, stat.audit_date_from)],
+    ["Audit Date To",   pick(tax.audit_date_to,   stat.audit_date_to)],
   );
 
   if (isTax) {
@@ -146,67 +163,73 @@ function exportExcel(engagementId: string, data: AuditWorksheetData) {
     );
   }
 
-  const auditCarriedBy = (tax.audit_carried_by ?? stat.audit_carried_by ?? [])
-    .map((a: any) => a.name).filter(Boolean).join(", ");
+  const carriedListXls = pick(stat.audit_carried_by, tax.audit_carried_by) as any[];
+  const auditCarriedBy = Array.isArray(carriedListXls)
+    ? carriedListXls.map((a: any) => a?.name).filter(Boolean).join(", ")
+    : "";
   masterRows.push(
     [],
     ["Audit Carried Out By", auditCarriedBy],
     [],
-    ["A/c (Tally) File Path",    tax.ac_path ?? stat.ac_path ?? ""],
-    ["Report / Working Path",    tax.report_path ?? stat.report_path ?? ""],
-    ["Footer: Prepared By",      tax.footer_prepared_by_name ?? stat.footer_prepared_by_name ?? ""],
-    ["Footer: Verified By",      tax.footer_verified_by_name ?? stat.footer_verified_by_name ?? ""],
-    ["Footer: Reviewed By",      tax.footer_reviewed_by_name ?? stat.footer_reviewed_by_name ?? ""],
+    ["A/c (Tally) File Path",       pick(tax.ac_path, stat.ac_path)],
+    ["Report / Working File Path",  pick(tax.report_path, stat.report_path)],
+    ["Footer: Prepared By",         pick(tax.footer_prepared_by_name, stat.footer_prepared_by_name)],
+    ["Footer: Verified By",         pick(tax.footer_verified_by_name, stat.footer_verified_by_name)],
+    ["Footer: Reviewed By",         pick(tax.footer_reviewed_by_name, stat.footer_reviewed_by_name)],
   );
 
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(masterRows), masterLabel.slice(0, 31));
 
   // ── Audit Worksheet ───────────────────────────────────────────────────────
-  const ws = awLoad<WorksheetSheetData>(engagementId, "worksheet_json") ?? { rows: {} };
+  const ws = await fetchSheet<WorksheetSheetData>(engagementId, "worksheet_json");
   const wsHeader = ["Sr", "Area / Particulars", "Extent / As-on Date", "Work Date", "Checked By", "Notes"];
   const wsBody = WORKSHEET_ROWS.map(r => {
-    const row = ws.rows[r.id] ?? {};
+    const row = ((ws as any).rows ?? {})[r.id] ?? {};
     const extent = (row as any).extent_text || (row as any).extent_date || "";
     return [r.sr, r.label, extent, (row as any).date ?? "", (row as any).checked_by_name ?? "", (row as any).notes ?? ""];
   });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([wsHeader, ...wsBody]), "Audit Worksheet");
 
   // ── Special Attention ─────────────────────────────────────────────────────
-  const sa = awLoad<SpecialAttentionFormData>(engagementId, "special_attention_json") ?? { rows: {}, audit_carried_by: [] };
+  const sa = await fetchSheet<SpecialAttentionFormData>(engagementId, "special_attention_json");
   const saHeader = ["Sr", "Particulars", "Query", "Remarks", "Checked By", "Verified By"];
   const saBody: (string | null)[][] = [];
-  // We export all row IDs present in storage
-  for (const [rowId, rowData] of Object.entries(sa.rows ?? {})) {
+  for (const [rowId, rowData] of Object.entries((sa as any).rows ?? {})) {
     const r = rowData as any;
     saBody.push([rowId, "", yesNo(r.query), r.remarks ?? "", r.checked_by_name ?? "", r.verified_by_name ?? ""]);
   }
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([saHeader, ...saBody]), "Special Attention");
 
   // ── Query Sheet ───────────────────────────────────────────────────────────
-  const qs = awLoad<QuerySheetData>(engagementId, "query_sheet_json") ?? { queries: [] };
+  const qs = await fetchSheet<QuerySheetData>(engagementId, "query_sheet_json");
   const qsHeader = ["#", "Head", "Particulars", "Query Description", "Required Documents", "Remark", "Correction Status"];
-  const qsBody = (qs.queries ?? []).map((q: any, i: number) => [
+  const qsBody = ((qs as any).queries ?? []).map((q: any, i: number) => [
     i + 1, q.head, q.particulars, q.query_description, q.required_documents, q.remark, q.correction_status,
   ]);
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([qsHeader, ...qsBody]), "Query Sheet");
 
   // ── Checklist ─────────────────────────────────────────────────────────────
-  const cl = awLoad<ChecklistSheetData>(engagementId, "checklist_sheet_json") ?? { rows: {}, dynamicRowIds: [] };
+  const cl = await fetchSheet<ChecklistSheetData>(engagementId, "checklist_sheet_json");
   const clHeader = ["Sr", "Particulars", "Document Attached", "Page From", "Page To"];
   const fyEndYear = data.fyEndDate ? data.fyEndDate.match(/^(\d{4})/)?.[1] ?? "" : "";
   const allClDefs = [
     ...CHECKLIST_DEFS,
-    ...(cl.dynamicRowIds ?? []).map((id: string, i: number) => ({
+    ...((cl as any).dynamicRowIds ?? []).map((id: string, i: number) => ({
       id, sr: CHECKLIST_DEFS.length + i + 1, particulars: "",
     })),
   ];
   const clBody = allClDefs.map(def => {
-    const row = (cl.rows ?? {})[def.id] ?? {};
+    const row = ((cl as any).rows ?? {})[def.id] ?? {};
     const particulars = (row as any).particulars || def.particulars.replace(/\{fyEndYear\}/g, fyEndYear);
+    const docAttached = (row as any).is_na
+      ? "N/A"
+      : (Array.isArray((row as any).files) && (row as any).files.length > 0)
+        ? (row as any).files.map((f: any) => f.file_name).join(", ")
+        : "";
     return [
       def.sr,
       particulars,
-      (row as any).file_name ?? "",
+      docAttached,
       (row as any).page_from ?? "",
       (row as any).page_to ?? "",
     ];
@@ -306,8 +329,8 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
   const isBoth = auditType === "both";
   const isTax  = auditType === "tax_audit" || isBoth;
   const isStat = auditType === "statutory"  || isBoth;
-  const tax  = awLoad<Partial<TaxMasterData>>(engagementId, "tax_master_json") ?? {};
-  const stat = awLoad<Partial<StatutoryMasterData>>(engagementId, "statutory_master_json") ?? {};
+  const tax  = await fetchSheet<Partial<TaxMasterData>>(engagementId, "tax_master_json");
+  const stat = await fetchSheet<Partial<StatutoryMasterData>>(engagementId, "statutory_master_json");
 
   const masterLabel = isBoth ? "Tax & Statutory Audit Master"
     : isTax ? "Tax Audit Master"
@@ -315,10 +338,31 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
     : "Audit Master";
 
   // ── Page 1: Master — 2-column Field/Value layout ──────────────────────────
-  const auditCarriedBy = (tax.audit_carried_by ?? stat.audit_carried_by ?? [])
-    .map((a: any) => a.name).filter(Boolean).join(", ");
+  // pick: return the FIRST non-empty value across tax/stat blobs. `??` only
+  // falls through on null/undefined, but stale blobs (e.g. an engagement that
+  // briefly used "both" auditType then switched to statutory-only) leave the
+  // OTHER blob populated with empty strings — `??` would surface those empties
+  // and hide the real value. This treats "" and [] as misses.
+  const pick = <T,>(...vals: (T | undefined | null)[]): T | "" => {
+    for (const v of vals) {
+      if (v === null || v === undefined) continue;
+      if (typeof v === "string" && v.trim() === "") continue;
+      if (Array.isArray(v) && v.length === 0) continue;
+      return v as T;
+    }
+    return "" as T | "";
+  };
 
-  const fmt = (v: unknown) => (v === null || v === undefined || v === "") ? "—" : String(v);
+  const carriedList = pick(stat.audit_carried_by, tax.audit_carried_by) as any[];
+  const auditCarriedBy = Array.isArray(carriedList)
+    ? carriedList.map((a: any) => a?.name).filter(Boolean).join(", ")
+    : "";
+
+  const fmt = (v: unknown) => {
+    if (v === null || v === undefined) return "—";
+    if (typeof v === "string" && v.trim() === "") return "—";
+    return String(v);
+  };
 
   // Section helper: emits a band-styled row that spans both columns.
   const section = (title: string): (string | { content: string; colSpan?: number; styles?: any })[] => [
@@ -337,8 +381,8 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
   masterBody.push(["Financial Year",       fmt(data.financialYear)]);
 
   masterBody.push(section("Contact"));
-  masterBody.push(["Accountant Name",      fmt(tax.accountant_name ?? stat.accountant_name)]);
-  masterBody.push(["Mobile No.",           fmt(tax.mobile_no ?? stat.mobile_no)]);
+  masterBody.push(["Accountant Name",      fmt(pick(tax.accountant_name, stat.accountant_name))]);
+  masterBody.push(["Mobile No.",           fmt(pick(tax.mobile_no, stat.mobile_no))]);
 
   masterBody.push(section("Previous Year Documents"));
   masterBody.push(["MOA / AOA / Deed obtained", yesNo(tax.prev_moa_aoa_deed ?? stat.prev_moa_aoa_deed) || "—"]);
@@ -351,8 +395,8 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
   masterBody.push(["Books Verified", booksChecked((isTax ? tax : stat) as TaxMasterData & StatutoryMasterData) || "—"]);
 
   masterBody.push(section("Audit Dates"));
-  masterBody.push(["Audit Date From", fmt(tax.audit_date_from ?? stat.audit_date_from)]);
-  masterBody.push(["Audit Date To",   fmt(tax.audit_date_to   ?? stat.audit_date_to)]);
+  masterBody.push(["Audit Date From", fmt(pick(tax.audit_date_from, stat.audit_date_from))]);
+  masterBody.push(["Audit Date To",   fmt(pick(tax.audit_date_to,   stat.audit_date_to))]);
 
   if (isTax) {
     masterBody.push(section("Tax Audit Specifics"));
@@ -377,32 +421,31 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
     masterBody.push(["Payments to Relatives",    yesNo(stat.payments_to_relatives) || "—"]);
     masterBody.push(["Secured / Unsecured Loan", yesNo(stat.secured_unsecured_loan) || "—"]);
   }
-
   masterBody.push(section("Preparation & Review"));
   masterBody.push(["Audit Report Prepared By",
-    fmt(tax.audit_report_prepared_by_name ?? stat.audit_report_prepared_by_name)]);
+    fmt(pick(tax.audit_report_prepared_by_name, stat.audit_report_prepared_by_name))]);
   masterBody.push(["Return Prepared By",
-    fmt(tax.return_prepared_by_name ?? stat.return_prepared_by_name)]);
+    fmt(pick(tax.return_prepared_by_name, stat.return_prepared_by_name))]);
   masterBody.push(["3CD Prepared By",
-    fmt(tax.cd_prepared_by_name ?? stat.cd_prepared_by_name)]);
+    fmt(pick(tax.cd_prepared_by_name, stat.cd_prepared_by_name))]);
   masterBody.push(["Signed Copy Received",
-    fmt(tax.signed_copy_received ?? stat.signed_copy_received)]);
+    fmt(pick(tax.signed_copy_received, stat.signed_copy_received))]);
   masterBody.push(["Management Representation Letter",
-    fmt(tax.management_repr_letter ?? stat.management_repr_letter)]);
+    fmt(pick(tax.management_repr_letter, stat.management_repr_letter))]);
   masterBody.push(["Appointment Letter",
-    fmt(tax.appointment_letter ?? stat.appointment_letter)]);
+    fmt(pick(tax.appointment_letter, stat.appointment_letter))]);
 
   masterBody.push(section("Audit Team"));
   masterBody.push(["Audit Carried Out By", auditCarriedBy || "—"]);
 
   masterBody.push(section("Paths"));
-  masterBody.push(["A/c (Tally) File Path", fmt(tax.ac_path ?? stat.ac_path)]);
-  masterBody.push(["Report / Working Path", fmt(tax.report_path ?? stat.report_path)]);
+  masterBody.push(["A/c (Tally) File Path",     fmt(pick(tax.ac_path,     stat.ac_path))]);
+  masterBody.push(["Report / Working File Path", fmt(pick(tax.report_path, stat.report_path))]);
 
   masterBody.push(section("Sign-off"));
-  masterBody.push(["Prepared By", fmt(tax.footer_prepared_by_name ?? stat.footer_prepared_by_name)]);
-  masterBody.push(["Verified By", fmt(tax.footer_verified_by_name ?? stat.footer_verified_by_name)]);
-  masterBody.push(["Reviewed By", fmt(tax.footer_reviewed_by_name ?? stat.footer_reviewed_by_name)]);
+  masterBody.push(["Prepared By", fmt(pick(tax.footer_prepared_by_name, stat.footer_prepared_by_name))]);
+  masterBody.push(["Verified By", fmt(pick(tax.footer_verified_by_name, stat.footer_verified_by_name))]);
+  masterBody.push(["Reviewed By", fmt(pick(tax.footer_reviewed_by_name, stat.footer_reviewed_by_name))]);
 
   autoTable(doc, {
     ...baseTable(masterLabel),
@@ -417,12 +460,12 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
 
   // ── Page 2: Audit Worksheet ────────────────────────────────────────────────
   doc.addPage();
-  const ws = awLoad<WorksheetSheetData>(engagementId, "worksheet_json") ?? { rows: {} };
+  const ws = await fetchSheet<WorksheetSheetData>(engagementId, "worksheet_json");
   autoTable(doc, {
     ...baseTable("Audit Worksheet"),
     head: [["Sr", "Area / Particulars", "Extent / As-on Date", "Work Date", "Checked By", "Notes"]],
     body: WORKSHEET_ROWS.map(r => {
-      const row = (ws.rows ?? {})[r.id] ?? {} as any;
+      const row = ((ws as any).rows ?? {})[r.id] ?? {} as any;
       const extent = row.extent_text || row.extent_date || "";
       return [r.sr, r.label, extent, row.date ?? "", row.checked_by_name ?? "", row.notes ?? ""];
     }),
@@ -439,8 +482,8 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
 
   // ── Page 3: Special Attention ──────────────────────────────────────────────
   doc.addPage();
-  const sa = awLoad<SpecialAttentionFormData>(engagementId, "special_attention_json") ?? { rows: {} };
-  const saRows = Object.entries(sa.rows ?? {}).map(([rowId, r]: [string, any]) => [
+  const sa = await fetchSheet<SpecialAttentionFormData>(engagementId, "special_attention_json");
+  const saRows = Object.entries((sa as any).rows ?? {}).map(([rowId, r]: [string, any]) => [
     rowId, yesNo(r.query), r.remarks ?? "", r.checked_by_name ?? "", r.verified_by_name ?? "",
   ]);
   autoTable(doc, {
@@ -459,12 +502,12 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
 
   // ── Page 4: Query Sheet ────────────────────────────────────────────────────
   doc.addPage();
-  const qs = awLoad<QuerySheetData>(engagementId, "query_sheet_json") ?? { queries: [] };
+  const qs = await fetchSheet<QuerySheetData>(engagementId, "query_sheet_json");
   autoTable(doc, {
     ...baseTable("Query Sheet"),
     head: [["#", "Head", "Particulars", "Query Description", "Required Documents", "Remark", "Correction"]],
-    body: (qs.queries ?? []).length > 0
-      ? (qs.queries ?? []).map((q: any, i: number) => [
+    body: ((qs as any).queries ?? []).length > 0
+      ? ((qs as any).queries ?? []).map((q: any, i: number) => [
           i + 1, q.head, q.particulars, q.query_description, q.required_documents, q.remark, q.correction_status,
         ])
       : [["—", "", "", "", "", "", ""]],
@@ -483,11 +526,11 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
 
   // ── Page 5: Checklist ──────────────────────────────────────────────────────
   doc.addPage();
-  const cl = awLoad<ChecklistSheetData>(engagementId, "checklist_sheet_json") ?? { rows: {}, dynamicRowIds: [] };
+  const cl = await fetchSheet<ChecklistSheetData>(engagementId, "checklist_sheet_json");
   const fyEndYear = data.fyEndDate ? data.fyEndDate.match(/^(\d{4})/)?.[1] ?? "" : "";
   const allClDefs = [
     ...CHECKLIST_DEFS,
-    ...(cl.dynamicRowIds ?? []).map((id: string, i: number) => ({
+    ...((cl as any).dynamicRowIds ?? []).map((id: string, i: number) => ({
       id, sr: CHECKLIST_DEFS.length + i + 1, particulars: "",
     })),
   ];
@@ -495,9 +538,14 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
     ...baseTable("Audit Documentation Checklist"),
     head: [["Sr", "Particulars", "Document Attached", "Page From", "Page To"]],
     body: allClDefs.map(def => {
-      const row = (cl.rows ?? {})[def.id] ?? {} as any;
+      const row = ((cl as any).rows ?? {})[def.id] ?? {} as any;
       const particulars = row.particulars || def.particulars.replace(/\{fyEndYear\}/g, fyEndYear);
-      return [def.sr, particulars, row.file_name ?? "", row.page_from ?? "", row.page_to ?? ""];
+      const docAttached = row.is_na
+        ? "N/A"
+        : (Array.isArray(row.files) && row.files.length > 0)
+          ? row.files.map((f: any) => f.file_name).join(", ")
+          : "";
+      return [def.sr, particulars, docAttached, row.page_from ?? "", row.page_to ?? ""];
     }),
     headStyles: { ...baseTable("Audit Documentation Checklist").headStyles, fillColor: [99, 102, 241] },
     columnStyles: {
@@ -528,7 +576,7 @@ export default function ExportButtons({ data, engagementId }: Props) {
         variant="outline"
         size="sm"
         className="gap-1.5 text-green-700 border-green-300 hover:bg-green-50"
-        onClick={() => exportExcel(engagementId, data)}
+        onClick={() => { exportExcel(engagementId, data); }}
       >
         <Download size={14} /> Excel
       </Button>

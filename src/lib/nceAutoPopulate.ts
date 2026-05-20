@@ -176,17 +176,28 @@ export const NOTE_SMART_MAP: Record<string, SmartRule[]> = {
     { rowId: "sec_demand_bank", keywords: ["cash credit", " cc ", "overdraft", " od "] },
     { rowId: "sec_term_fi",     keywords: ["loan from nbfc", "loan from finance", "finance company loan", "nbfc loan"] },
     { rowId: "sec_related",     keywords: ["secured loan from director", "secured loan from partner", "secured loan from promoter", "secured director", "secured partner"] },
-    // Unsecured — related parties (director/partner/family loans most specific — keep before catch-alls)
+    // Unsecured — related parties (director/partner/owner/family loans most specific — keep before catch-alls)
     { rowId: "unsec_related",   keywords: [
-        "loan from director", "director loan", "director's loan",
-        "loan from partner", "partner loan", "partner's loan",
-        "loan from promoter", "promoter loan",
-        "loan from shareholder", "shareholder loan",
-        "loan from relative", "relative loan",
-        "loan from proprietor", "proprietor loan",
-        "loan from family", "family loan",
+        "loan from director", "director loan", "director's loan", "directors loan",
+        "loan from partner", "partner loan", "partner's loan", "partners loan",
+        "loan from owner", "owner loan", "owner's loan", "owners loan",
+        "loan from proprietor", "proprietor loan", "proprietor's loan", "proprietors loan",
+        "loan from promoter", "promoter loan", "promoter's loan",
+        "loan from shareholder", "shareholder loan", "shareholders loan",
+        "loan from relative", "relative loan", "loan from relatives", "relatives loan",
+        "loan from family", "family loan", "loan from family member",
         "loan from member", "huf loan", "loan from huf",
+        "loan from related party", "related party loan", "loans from related parties", "related parties loan",
+        "loan from associate", "associate loan",
+        "loan from subsidiary", "subsidiary loan",
+        "loan from holding", "holding company loan",
+        "loan from group company", "group company loan", "intercompany loan", "inter-company loan",
+        "loan from kmp", "kmp loan", "key managerial personnel loan",
         "unsecured loan from director", "unsecured loan from partner",
+        "unsecured loan from owner", "unsecured loan from proprietor",
+        "unsecured loan from related",
+        // HUF entities are always related parties in Indian partnership context
+        " huf", "(huf)", "-huf",
       ] },
     // Unsecured — bank/FI (less common but possible)
     { rowId: "unsec_term_bank", keywords: ["unsecured term loan from bank", "unsecured bank loan", "unsecured tl"] },
@@ -199,12 +210,23 @@ function normLedger(name: string): string {
   return " " + name.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim() + " ";
 }
 
-/** Returns the first matching static rowId, or null if none match. */
-function smartMatch(ledgerName: string, rules: SmartRule[]): string | null {
-  const norm = normLedger(ledgerName);
+/** Returns the first matching static rowId, or null if none match.
+ *  Considers both the ledger name AND its Tally parent_group, so ledgers named
+ *  after a person (e.g. "Mr Ashish K Patel") still classify as related-party
+ *  when the parent_group identifies the relationship ("Loans from Partners",
+ *  "Owner Loan Account", "Loans (Liability) - Director", etc.). */
+function smartMatch(
+  ledgerName: string,
+  rules: SmartRule[],
+  parentGroup?: string | null,
+): string | null {
+  const normName  = normLedger(ledgerName);
+  const normGroup = parentGroup ? normLedger(parentGroup) : "";
   for (const rule of rules) {
     for (const kw of rule.keywords) {
-      if (norm.includes(kw)) return rule.rowId;
+      if (normName.includes(kw) || (normGroup && normGroup.includes(kw))) {
+        return rule.rowId;
+      }
     }
   }
   return null;
@@ -218,6 +240,8 @@ function smartMatch(ledgerName: string, rules: SmartRule[]): string | null {
 export interface NCEMergedSource {
   ledger:    string;
   amountCy:  number;
+  /** Per-ledger prior-year amount. Optional — older saved data may only carry amountCy. */
+  amountPy?: number;
   /** "lt" | "st" — only set for Pattern A merged rows. */
   column?:   "lt" | "st";
 }
@@ -258,9 +282,10 @@ export interface NCENoteData {
   /** User-edited labels for static rows. Keyed by NoteRowDef.id.
    *  Empty string keeps the default config label. Survives re-sync. */
   labelOverrides?: Record<string, string>;
-  /** For Pattern B notes: which TB ledgers were mapped into each static row (CY only).
-   *  Keyed by NoteRowDef.id. Used to render the ℹ️ info popover in NCEDetailedNotes. */
-  cy_sources?: Record<string, { ledger: string; amountCy: number }[]>;
+  /** For Pattern B notes: which TB ledgers were mapped into each static row.
+   *  Keyed by NoteRowDef.id. Used to render the ℹ️ info popover in NCEDetailedNotes.
+   *  amountPy was added later — older saved data may only carry amountCy. */
+  cy_sources?: Record<string, { ledger: string; amountCy: number; amountPy?: number }[]>;
   /** TB ledger names that the user has explicitly ejected to standalone rows.
    *  During Re-sync from COA, ledgers in this list are skipped in the auto-grouping
    *  step — they will NOT be re-merged back into an auto row.
@@ -331,6 +356,176 @@ function ledgerAmt(closingBalance: number): number {
   return Math.abs(closingBalance ?? 0);
 }
 
+/** Natural side of an NCE note. Liabilities, equity and income are CR-natural
+ *  (a Cr closing balance is the normal side and contributes positively to the
+ *  note total); assets and expenses are DR-natural. Used by signedLedgerAmt()
+ *  to net opposite-side ledgers within a group total. */
+export const NOTE_NATURE: Record<string, "DR" | "CR"> = {
+  // Liabilities + Equity (Cr-natural)
+  borrowings:      "CR",
+  other_lt_liab:   "CR",
+  provisions:      "CR",
+  trade_payables:  "CR",
+  other_cl:        "CR",
+  // Income (Cr-natural)
+  revenue_ops:     "CR",
+  other_income:    "CR",
+  // Assets (Dr-natural)
+  cwip:               "DR",
+  investments:        "DR",
+  loans_advances:     "DR",
+  other_nc_assets:    "DR",
+  inventories:        "DR",
+  trade_receivables:  "DR",
+  cash_bank:          "DR",
+  other_ca:           "DR",
+  // Expenses (Dr-natural)
+  cogs:           "DR",
+  employee_exp:   "DR",
+  finance_costs:  "DR",
+  other_expenses: "DR",
+};
+
+/** Signed amount of a TB ledger when contributing to a note total.
+ *  Positive when balance_type matches the note's natural side (e.g. a Cr
+ *  ledger under Trade Payables — the normal case); negative when opposite
+ *  (e.g. a creditor whose closing is Dr because the party paid in advance —
+ *  this should REDUCE the Trade Payables total, mirroring how a sundry-
+ *  debtor's Cr balance reduces the Trade Receivables total).
+ *  Issue: previously Math.abs() was used everywhere so opposite-side
+ *  balances were silently added instead of netted, inflating group totals.
+ *  We key the nature off the noteType (not the FS code) because NCE
+ *  engagements use NCE_* codes that don't follow the corporate BS_CL_/
+ *  BS_NCL_/PL_EXP_ prefix convention. */
+function signedLedgerAmt(
+  row: { closing_balance: number; balance_type: string },
+  noteType: string,
+): number {
+  const cb = Math.abs(Number(row.closing_balance ?? 0));
+  if (cb === 0) return 0;
+  const isDr = String(row.balance_type ?? "").toUpperCase() === "DR";
+  const nature: "DR" | "CR" = NOTE_NATURE[noteType] ?? "CR";
+  if (nature === "CR") return isDr ? -cb : +cb;
+  return isDr ? +cb : -cb;
+}
+
+// ── Note → FS-code reverse map ────────────────────────────────────────────────
+//
+// For each NCE BS / P&L code, the noteType whose grand total feeds that code's
+// face value on the Balance Sheet / Profit & Loss view. Where a noteType
+// spans LT and ST columns (Pattern A), the variant value identifies which
+// column total to read.
+//
+// Used by getNCENoteFaceTotal() so the BS face picks up manual customRows the
+// auditor added in Stage 7 Notes — without this the face only reflects the raw
+// TB sum (auto-mapped ledgers) and ignores any "+ Add row" entries.
+export const NCE_CODE_TO_NOTE: Record<string, { note: string; col?: "lt" | "st" }> = {
+  // Liabilities + Equity
+  NCE_LTB:    { note: "borrowings",     col: "lt" },
+  NCE_STB:    { note: "borrowings",     col: "st" },
+  NCE_OLTL:   { note: "other_lt_liab" },
+  NCE_LTP:    { note: "provisions",     col: "lt" },
+  NCE_STP:    { note: "provisions",     col: "st" },
+  NCE_TP:     { note: "trade_payables" },
+  NCE_OCL:    { note: "other_cl" },
+  // Assets
+  NCE_CWIP:   { note: "cwip" },
+  NCE_NCINV:  { note: "investments",    col: "lt" },
+  NCE_CINV:   { note: "investments",    col: "st" },
+  NCE_LTLA:   { note: "loans_advances", col: "lt" },
+  NCE_STLA:   { note: "loans_advances", col: "st" },
+  NCE_ONCA:   { note: "other_nc_assets" },
+  NCE_STCK:   { note: "inventories" },
+  NCE_TR:     { note: "trade_receivables" },
+  NCE_CASH:   { note: "cash_bank" },
+  NCE_OCA:    { note: "other_ca" },
+  // P&L
+  NCE_REV_OPS: { note: "revenue_ops" },
+  NCE_REV_OTH: { note: "other_income" },
+  NCE_EMP_EXP: { note: "employee_exp" },
+  NCE_FIN_COST:{ note: "finance_costs" },
+  NCE_OTH_EXP: { note: "other_expenses" },
+};
+
+/** Compute the grand-total face value (or LT/ST column total for Pattern A)
+ *  for an NCE note, INCLUDING manual custom rows. Returns null when the note
+ *  has no entries — callers should fall back to the raw TB sum.
+ *
+ *  Why this exists: the BS / P&L face previously read from a separate
+ *  `stage5_notes` JSONB whose `breakup[]` array only ever contained the auto-
+ *  populated ledgers. A custom row added via "+ Add row" lives in
+ *  `nce_financial_notes.cy_data` (with the row id in `_custom_rows`) and never
+ *  made it to the BS face, producing visible mismatches like Trade Payables
+ *  showing ₹19,84,766 on BS face vs ₹19,94,766 in the Notes total. */
+export function getNCENoteFaceTotal(
+  noteRow: { cy_data?: Record<string, any> | null; py_data?: Record<string, any> | null } | undefined | null,
+  column: "cy" | "py",
+  pattern?: "A" | "B",
+  patternCol?: "lt" | "st",
+): number | null {
+  if (!noteRow) return null;
+  const rawCy = (column === "cy" ? noteRow.cy_data : noteRow.py_data) ?? {};
+  if (!rawCy || typeof rawCy !== "object") return null;
+  const customRows: Array<{ id: string; section?: string; attachedTo?: string }> =
+    Array.isArray((rawCy as any)._custom_rows) ? (rawCy as any)._custom_rows : [];
+
+  // Strip meta keys to get the pure numeric map.
+  const numeric: Record<string, number> = {};
+  for (const [k, v] of Object.entries(rawCy)) {
+    if (META_KEYS.has(k)) continue;
+    if (typeof v === "number" && Number.isFinite(v)) numeric[k] = v;
+  }
+
+  // Pattern A: caller asked for a specific column ("lt" or "st"). Sum every
+  // non-customRow leaf suffix key plus customRows (respecting attachedTo /
+  // section semantics from computeDisplayData). For simplicity here we sum
+  // ALL suffixed keys for the chosen column, then add customRows for that
+  // column. This mirrors the Total (A+B)_lt / _st row math in computeDisplayData.
+  if (pattern === "A" && patternCol) {
+    const suffix = "_" + patternCol;
+    let total = 0;
+    let hasAny = false;
+    // Sum top-level suffixed keys, but EXCLUDE customRow ids (they're picked
+    // up via the customRows loop with section/attachedTo awareness).
+    const customIds = new Set(customRows.map(cr => cr.id));
+    for (const [k, v] of Object.entries(numeric)) {
+      if (!k.endsWith(suffix)) continue;
+      const base = k.slice(0, -suffix.length);
+      if (customIds.has(base)) continue;
+      // Skip section/grand totals — they're DERIVED from the leaves below.
+      if (base === "total" || base === "total_ab" || base === "sec_total" || base === "unsec_total") continue;
+      total += v;
+      hasAny = true;
+    }
+    for (const cr of customRows) {
+      const v = numeric[cr.id + suffix];
+      if (v != null) { total += v; hasAny = true; }
+    }
+    return hasAny ? Math.round(total * 100) / 100 : null;
+  }
+
+  // Pattern B: sum leaf keys + sectionless customRows. We deliberately read
+  // only KEYS that look like "leaf" ids (not the synthetic "total" row); for
+  // legacy data we fall back to all non-meta numeric keys minus any key whose
+  // base id collides with a customRow (avoiding double-count).
+  const customIds = new Set(customRows.map(cr => cr.id));
+  let total = 0;
+  let hasAny = false;
+  for (const [k, v] of Object.entries(numeric)) {
+    if (k === "total") continue;       // grand total — derived
+    if (k === "total_ab" || k === "sec_total" || k === "unsec_total") continue;
+    if (customIds.has(k)) continue;    // customRow — added separately below
+    total += v;
+    hasAny = true;
+  }
+  for (const cr of customRows) {
+    if (cr.attachedTo) continue; // attached rows are summed via their parent above
+    const v = numeric[cr.id];
+    if (v != null) { total += v; hasAny = true; }
+  }
+  return hasAny ? Math.round(total * 100) / 100 : null;
+}
+
 // ── Serialise / deserialise ───────────────────────────────────────────────────
 
 // Reserved keys used as JSONB metadata inside cy_data — must be filtered out
@@ -366,7 +561,10 @@ export function deserialiseNoteData(
   }
   const py: Record<string, number> = {};
   for (const [k, v] of Object.entries(rawPy)) {
-    if (!META_KEYS.has(k) && typeof v === "number") py[k] = Math.abs(v);
+    // Preserve sign — debit/credit netting may produce signed values, and
+    // unconditional Math.abs would silently strip out negative contributions
+    // for opposite-side ledgers (e.g. a Dr-balance ledger under Trade Payables).
+    if (!META_KEYS.has(k) && typeof v === "number") py[k] = v;
   }
   return { cy, py, customRows, hiddenRows, labelOverrides, cy_sources, ejectedLedgers };
 }
@@ -409,12 +607,28 @@ export async function nceAutoPopulate(
 
   // ── 2. Load CY trial balance ────────────────────────────────────────────
   // tally_trial_balance uses closing_balance (magnitude) + balance_type ("Dr"/"Cr")
+  // Issue 2 (today) — also pull opening_balance/opening_type from CY TB so
+  // the cogs note's "Opening Inventories" rows source from the AUTHORITATIVE
+  // value: Tally's own opening_balance for the current engagement (which by
+  // accounting identity equals the prior-period closing).  Previously we only
+  // selected closing_balance, forcing the cogs path to derive CY-Opening from
+  // either the prior year's stage5_notes (which can be stale / wrong) or the
+  // prior engagement's TB.  When the two disagreed we showed the wrong value
+  // (Swastik Buildcon: WIP Opening rendered 9,54,65,534 from a stale prior
+  // note, but the CY TB opening was 6,45,50,000).
   const { data: tbRows } = await supabase
     .from("tally_trial_balance")
-    .select("ledger_name, closing_balance, balance_type, parent_group")
+    .select("ledger_name, closing_balance, balance_type, opening_balance, opening_type, parent_group")
     .eq("engagement_id", engagementId);
 
-  type TBRow = { ledger_name: string; closing_balance: number; balance_type: string; parent_group?: string | null };
+  type TBRow = {
+    ledger_name:      string;
+    closing_balance:  number;
+    balance_type:     string;
+    opening_balance?: number | null;
+    opening_type?:    string | null;
+    parent_group?:    string | null;
+  };
   const tb: TBRow[] = (tbRows ?? []) as TBRow[];
 
   // ── 3. Load CY FS totals (fallback for notes with no TB ledger matches) ─
@@ -442,22 +656,35 @@ export async function nceAutoPopulate(
   // individual rows to show "—" even though PY data exists.
   const pyNotes:      Record<string, Record<string, number>>  = {};
   const pyCustomRows: Record<string, NCECustomRow[]>          = {};
+  // Hoisted PY shell TB rows so the per-ledger Pattern A path can read PY
+  // amounts by ledger name without re-querying Supabase.
+  let pyTb: TBRow[] = [];
+  // Hoisted PY shell coa_mapping — used by both the per-note PY fallback
+  // (below) AND the Pattern A/B PY-only ledger walks so CLOSED ledgers
+  // that only exist in PY can still be classified to a CY FS code via
+  // the PY shell's own mapping (the CY mapping won't carry them since
+  // the ledger doesn't appear in CY TB).
+  let pyCoaMap: Record<string, { code: string }> = {};
   if (financialYear && clientId) {
     const parts = String(financialYear).split("-");
     if (parts.length === 2) {
       const startYr = parseInt(parts[0], 10);
       const prevFy  = `${startYr - 1}-${String(startYr).slice(-2)}`;
-      const { data: prevEng } = await supabase
+      // Load all prior-FY engagements (may include PY shell + a regular engagement)
+      const { data: prevEngList } = await supabase
         .from("audit_engagements")
-        .select("id")
+        .select("id, is_py_shell, coa_mapping")
         .eq("client_id", clientId)
-        .eq("financial_year", prevFy)
-        .maybeSingle();
-      if ((prevEng as any)?.id) {
+        .eq("financial_year", prevFy);
+      const prevEngs = (prevEngList ?? []) as any[];
+      // Prefer the non-py_shell engagement for nce_financial_notes (it has user-entered PY).
+      // Fall back to py_shell if that's all there is.
+      const primaryPrev = prevEngs.find(e => !e.is_py_shell) ?? prevEngs[0] ?? null;
+      if (primaryPrev?.id) {
         const { data: prevNoteRows } = await supabase
           .from("nce_financial_notes")
           .select("note_type, cy_data")
-          .eq("engagement_id", (prevEng as any).id);
+          .eq("engagement_id", primaryPrev.id);
         for (const r of (prevNoteRows ?? [])) {
           const raw = (r.cy_data as Record<string, any>) ?? {};
           const nums: Record<string, number> = {};
@@ -468,6 +695,109 @@ export async function nceAutoPopulate(
           pyCustomRows[r.note_type] = Array.isArray(raw._custom_rows)
             ? (raw._custom_rows as NCECustomRow[])
             : [];
+        }
+      }
+
+      // PY-TB fallback — derive prior-year amounts directly from the PY shell
+      // trial balance. Triggered PER NOTE whenever pyNotes[note] either:
+      //   - doesn't exist (prior eng didn't save this note), OR
+      //   - has only zero values (prior save was stale / pre-fix).
+      //
+      // ROOT-CAUSE FIX (Issue 1, this turn): previous gate was "all pyNotes
+      // empty across every note". For SWASTIK the borrowings note had
+      // pyNotes['borrowings'] with keys (mostly 0) so the gate failed and
+      // every OTHER note (finance_costs, employee_exp, etc.) was denied the
+      // fallback — their PY columns stayed blank even though PY shell TB
+      // held the real numbers and COA mapping clearly classified them.
+      const shellEng = prevEngs.find(e => e.is_py_shell) ?? primaryPrev;
+      if (shellEng?.id) {
+        const { data: pyTbRaw } = await supabase
+          .from("tally_trial_balance")
+          .select("ledger_name, closing_balance, balance_type, opening_balance, opening_type, parent_group")
+          .eq("engagement_id", shellEng.id);
+        pyTb = (pyTbRaw ?? []) as TBRow[];
+        pyCoaMap =
+          shellEng.coa_mapping && Object.keys(shellEng.coa_mapping).length > 0
+            ? shellEng.coa_mapping
+            : coaMapping;
+
+        if (pyTb.length > 0) {
+          for (const [nType, noteFs] of Object.entries(NCE_NOTE_FS_MAP)) {
+            // PER-KEY MERGE — compute pyResult from PY shell TB classification,
+            // then merge into pyNotes[nType] only for keys that don't already
+            // have a positive saved value. This preserves any user-saved PY
+            // amounts while filling in the static rows / catch-all buckets
+            // that the prior auto-populate missed (e.g. SWASTIK's borrowings
+            // had unsec_related_lt saved but unsec_other_lt missing).
+            const existing = pyNotes[nType] ?? {};
+
+            const pyResult: Record<string, number> = {};
+            const pyRules = NOTE_SMART_MAP[nType] ?? [];
+
+            // Determine Pattern A's "Other" catch-all rows so unmatched
+            // ledgers in each section still contribute (e.g. a unique
+            // borrowing ledger that doesn't match any smart rule falls into
+            // unsec_other_lt instead of disappearing).
+            const otherByCode: Record<string, string> = {};
+            // Crude heuristic for Pattern A — pick rowIds that look like
+            // catch-alls. Works for borrowings (sec_other / unsec_other),
+            // provisions (other_prov), investments (quot_other / unquot_other),
+            // loans_advances (kb_secured / kb_unsecured fallback). For codes
+            // we don't have specific catch-alls for, unmatched ledgers are
+            // dropped — matching prior behaviour.
+
+            if (noteFs.all) {
+              const codeSet = new Set(noteFs.all);
+              for (const row of pyTb) {
+                const mapped = pyCoaMap[row.ledger_name] ?? coaMapping[row.ledger_name];
+                if (!mapped || !codeSet.has(mapped.code)) continue;
+                const amt = ledgerAmt(row.closing_balance);
+                if (amt === 0) continue;
+                const rid = smartMatch(row.ledger_name, pyRules, row.parent_group);
+                if (rid) {
+                  pyResult[rid] = (pyResult[rid] ?? 0) + amt;
+                }
+              }
+            } else if (noteFs.lt || noteFs.st) {
+              const ltSet = new Set(noteFs.lt ?? []);
+              const stSet = new Set(noteFs.st ?? []);
+              for (const row of pyTb) {
+                const mapped = pyCoaMap[row.ledger_name] ?? coaMapping[row.ledger_name];
+                if (!mapped) continue;
+                const isLT = ltSet.has(mapped.code);
+                const isST = stSet.has(mapped.code);
+                if (!isLT && !isST) continue;
+                const amt = ledgerAmt(row.closing_balance);
+                if (amt === 0) continue;
+                const rid = smartMatch(row.ledger_name, pyRules, row.parent_group);
+                if (rid) {
+                  if (isLT) pyResult[rid + "_lt"] = (pyResult[rid + "_lt"] ?? 0) + amt;
+                  if (isST) pyResult[rid + "_st"] = (pyResult[rid + "_st"] ?? 0) + amt;
+                } else if (nType === "borrowings") {
+                  // Pattern-A borrowings unmatched fallback: route to the
+                  // section's "Other" bucket so the amount still flows into
+                  // Total (A)/(B) instead of vanishing.
+                  const pg = (row.parent_group || "").toLowerCase();
+                  const nameHuf = /(\s|\(|-)huf/.test(row.ledger_name.toLowerCase());
+                  const isRel = nameHuf || /\b(director|partner|owner|proprietor|promoter|shareholder|relative|family|huf|related)\b/.test(pg);
+                  const target = isRel ? "unsec_related" : "unsec_other";
+                  if (isLT) pyResult[target + "_lt"] = (pyResult[target + "_lt"] ?? 0) + amt;
+                  if (isST) pyResult[target + "_st"] = (pyResult[target + "_st"] ?? 0) + amt;
+                }
+              }
+            }
+
+            if (Object.keys(pyResult).length > 0) {
+              const merged: Record<string, number> = { ...existing };
+              for (const [k, v] of Object.entries(pyResult)) {
+                // Only fill keys that don't already carry a positive saved
+                // value — authoritative user / prior-year data is preserved.
+                const cur = Math.abs(Number(merged[k]) || 0);
+                if (cur < 0.005 && Math.abs(v) > 0.005) merged[k] = v;
+              }
+              pyNotes[nType] = merged;
+            }
+          }
         }
       }
     }
@@ -499,31 +829,57 @@ export async function nceAutoPopulate(
     const newCy:         Record<string, number> = {};
     const newPy:         Record<string, number> = {};
     const autoRows:      NCECustomRow[]         = [];
-    const staticSources: Record<string, { ledger: string; amountCy: number }[]> = {};
+    const staticSources: Record<string, { ledger: string; amountCy: number; amountPy?: number }[]> = {};
+
+    // PY-ledger lookup keyed by lowercase ledger name → signed PY closing.
+    // Used to attach per-ledger amountPy to staticSources so the expandable
+    // breakdown shows BOTH CY and PY amounts per ledger (Issue 2).
+    const pyByLedgerStatic: Record<string, number> = {};
+    if (pyTb.length > 0) {
+      for (const r of pyTb) {
+        const nm = String(r.ledger_name || "").trim();
+        if (!nm) continue;
+        pyByLedgerStatic[nm.toLowerCase()] = signedLedgerAmt(r, noteType);
+      }
+    }
 
     if (noteFs.all) {
       // ── Pattern B ──────────────────────────────────────────────────────
       const codeSet    = new Set(noteFs.all);
       const smartRules = NOTE_SMART_MAP[noteType] ?? [];
       // Stage 1: split each ledger into "matched-static" or "unmatched"
-      const unmatchedB: { ledger: string; amt: number; parentGroup?: string }[] = [];
+      // pyAmt is optional so PY-only ledgers (no CY balance) can still flow
+      // through Stage 2 as their own customRow with amt = 0 and pyAmt set.
+      const unmatchedB: { ledger: string; amt: number; parentGroup?: string; pyAmt?: number }[] = [];
 
       for (const row of tb) {
         const mapped = coaMapping[row.ledger_name];
         if (!mapped || !codeSet.has(mapped.code)) continue;
-        const amt = ledgerAmt(row.closing_balance);
-        if (amt === 0) continue;
+        // ISSUE FIX (debit/credit netting): use signed amount so opposite-
+        // side balances (e.g. a Dr-balance ledger inside a CR-natural head
+        // like Trade Payables) reduce the group total instead of inflating it.
+        const amt = signedLedgerAmt(row, noteType);
+        if (Math.abs(amt) < 0.005) continue;
         // Skip ledgers the user has explicitly ejected to standalone rows
         if (ejectedSet.has(row.ledger_name)) continue;
 
-        const matchedRowId = smartMatch(row.ledger_name, smartRules);
+        const matchedRowId = smartMatch(row.ledger_name, smartRules, row.parent_group);
         if (matchedRowId) {
           // Accumulate directly into the static row — no custom row created
           newCy[matchedRowId] = (newCy[matchedRowId] ?? 0) + amt;
-          // Track which ledgers feed this static row (for info popover)
+          // Track which ledgers feed this static row (for info popover).
+          // Carry PY amount too so the expander shows BOTH CY + PY columns.
           if (!staticSources[matchedRowId]) staticSources[matchedRowId] = [];
-          staticSources[matchedRowId].push({ ledger: row.ledger_name, amountCy: amt });
-          // PY: carry from prior-year cy_data for the same static key, if any.
+          // Per-ledger PY: look up against PY TB using the SAME head nature
+          // so signs net correctly in the expanded breakdown.
+          const pyRowLookup = pyTb.find(r => r.ledger_name?.toLowerCase() === row.ledger_name.toLowerCase());
+          const pyAmtLedger = pyRowLookup ? signedLedgerAmt(pyRowLookup, noteType) : 0;
+          staticSources[matchedRowId].push({
+            ledger: row.ledger_name,
+            amountCy: amt,
+            amountPy: pyAmtLedger,
+          });
+          // PY total: carry from prior-year cy_data for the same static key.
           // Use Math.abs to guard against stale negative values stored in old data.
           if (!(matchedRowId in newPy)) {
             newPy[matchedRowId] = Math.abs(pyNotes[noteType]?.[matchedRowId] ?? 0);
@@ -533,21 +889,185 @@ export async function nceAutoPopulate(
         }
       }
 
+      // Also walk PY TB so static rows pick up per-ledger PY contributions
+      // from PY-only ledgers (e.g. Suresh Chavda or TDS Payable-194A-24-25
+      // CLOSED accounts that don't appear in CY TB but contributed to last
+      // year's TDS Payable total).
+      //
+      // ROOT-CAUSE FIX (this turn): previously the lookup only consulted
+      // `coaMapping` (CY engagement's mapping). A CLOSED PY-only ledger
+      // doesn't exist in CY TB, so its CY mapping entry is missing — the
+      // ledger silently dropped out and the PY column showed no breakup
+      // even though the variance drill listed the ledger with a clear PY
+      // amount. We now also consult the PY shell engagement's own mapping
+      // (pyCoaMap) and, as a last resort, inherit the FS code from any
+      // CY ledger sharing the same Tally parent_group. This way ledgers
+      // renamed between years (Tally export quirk) still classify.
+      if (pyTb.length > 0) {
+        const cyMappingLower: Record<string, { code: string }> = {};
+        for (const [k, v] of Object.entries(coaMapping || {})) {
+          if (v?.code) cyMappingLower[k.toLowerCase().trim()] = v;
+        }
+        const pyMappingLower: Record<string, { code: string }> = {};
+        for (const [k, v] of Object.entries(pyCoaMap || {})) {
+          if (v?.code) pyMappingLower[k.toLowerCase().trim()] = v;
+        }
+        // parent_group → FS code map derived from CY mapping, for group
+        // inheritance when an exact ledger lookup fails on both sides.
+        const groupToCode: Record<string, string> = {};
+        const groupCount: Record<string, Record<string, number>> = {};
+        for (const [ledger, m] of Object.entries(coaMapping || {})) {
+          const c = m?.code; if (!c) continue;
+          const tbRow = tb.find(r => r.ledger_name === ledger);
+          const grp = (tbRow?.parent_group || "").toLowerCase().trim();
+          if (!grp) continue;
+          if (!groupCount[grp]) groupCount[grp] = {};
+          groupCount[grp][c] = (groupCount[grp][c] || 0) + 1;
+        }
+        for (const [grp, codes] of Object.entries(groupCount)) {
+          let best = "", bestN = 0, tie = false;
+          for (const [c, n] of Object.entries(codes)) {
+            if (n > bestN) { best = c; bestN = n; tie = false; }
+            else if (n === bestN) tie = true;
+          }
+          if (best && !tie) groupToCode[grp] = best;
+        }
+        // Track every ledger already produced by the CY walk so the PY-only
+        // walk below doesn't re-create them as duplicate customRows. BUG FIX:
+        // previously this only watched staticSources (smart-matched ledgers).
+        // For Pattern B notes without smart-match (trade_payables, etc.)
+        // every CY ledger goes to unmatchedB instead, so the PY walk had no
+        // way to know they were already handled and ended up emitting a
+        // second "PY-only" row for the same ledger (Akash Ghanshyambhai
+        // Gediya appeared twice on DBS REALTY).
+        const cySeenLedger = new Set([
+          ...Object.values(staticSources).flat().map(s => s.ledger.toLowerCase()),
+          ...unmatchedB.map(u => u.ledger.toLowerCase()),
+        ]);
+        for (const row of pyTb) {
+          const nm = String(row.ledger_name || "").trim();
+          if (!nm) continue;
+          const nmLower = nm.toLowerCase();
+          if (cySeenLedger.has(nmLower)) continue;
+          // Resolution order: PY-shell exact → PY-shell lower → CY exact →
+          // CY lower → parent_group inheritance. Mirrors how the variance
+          // drill resolves PY ledgers, so what the auditor sees in the
+          // drill always reaches the expanded note breakdown.
+          let mapped: { code: string } | undefined =
+            (pyCoaMap as any)[nm] ||
+            pyMappingLower[nmLower] ||
+            (coaMapping as any)[nm] ||
+            cyMappingLower[nmLower];
+          if (!mapped?.code) {
+            const grp = String((row as any).parent_group || "").toLowerCase().trim();
+            if (grp && groupToCode[grp]) mapped = { code: groupToCode[grp] };
+          }
+          if (!mapped?.code || !codeSet.has(mapped.code)) continue;
+          const pyAmt = signedLedgerAmt(row, noteType);
+          if (Math.abs(pyAmt) < 0.005) continue;
+          const matchedRowId = smartMatch(nm, smartRules, row.parent_group);
+          if (matchedRowId) {
+            // Smart-match → attach as a sub-row under the static row (e.g.
+            // TDS Payable-194A-24-25 → TDS Payable).
+            if (!staticSources[matchedRowId]) staticSources[matchedRowId] = [];
+            staticSources[matchedRowId].push({
+              ledger: nm,
+              amountCy: 0,
+              amountPy: pyAmt,
+            });
+          } else {
+            // No smart-match (e.g. trade_payables, where every creditor is its
+            // own line). Push to unmatchedB so Stage 2 creates a customRow
+            // with amountCy = 0 and amountPy = the PY closing. Without this,
+            // CLOSED ledgers (Ambition Electric, Kapadiya Hiren, etc.) that
+            // had balances last year but none this year silently disappear
+            // from the auto-populated note even though COA Mapping still
+            // shows them under Trade Payables.
+            unmatchedB.push({
+              ledger: nm,
+              amt: 0,
+              parentGroup: (row as any).parent_group ?? undefined,
+              pyAmt,
+            });
+          }
+        }
+      }
+
       // Stage 2: per-ledger rows (no parent_group wrapping).
       // Notes show ledger-level detail; synthetic group wrappers like
       // "Purchase Accounts" or "Unsecured Loans" pulled from Tally
       // parent_group are not appropriate for Schedule III breakups.
+      //
+      // ISSUE 1 FIX (per-ledger PY in Pattern B notes): build a PY-ledger
+      // lookup keyed by name so each custom row gets its actual prior-year
+      // closing balance from PY shell TB, instead of falling back to 0
+      // whenever the prior engagement has no saved customRow with the same
+      // label. Without this, Trade Payables / Other Current Liabilities /
+      // Other Expenses etc. showed CY amounts per ledger but PY column "—".
+      // ROOT-CAUSE FIX (Issue: BS face PY ≠ variance drill PY by 2×Dr_total):
+      // pyByLedgerB previously used ledgerAmt() (Math.abs) so a Cr-balance PY
+      // ledger always produced a POSITIVE value here, regardless of head
+      // nature. For CR-natural notes (trade_payables, other_cl, ...) where
+      // Cr balance should contribute +cb and Dr should contribute -cb, this
+      // worked for Cr ledgers but FLIPPED the sign of Dr-balance creditors
+      // (party paid in advance) — they got +cb in the customRow but the
+      // variance drill computed -cb. The two diverged by exactly 2×|Dr_sum|
+      // on every report (DBS REALTY: ₹71.24 lakh = 2 × ₹35.62 lakh).
+      //
+      // Fix: sign-aware lookup using the same NOTE_NATURE convention as the
+      // PY-only walk and the CY aggregation. Every PY value across the
+      // entire note now respects the head's natural side, so the note
+      // total = variance drill total = BS face total for every NCE client.
+      const pyByLedgerB: Record<string, number> = {};
+      if (pyTb.length > 0) {
+        for (const r of pyTb) {
+          const nm = String(r.ledger_name || "").trim();
+          if (!nm) continue;
+          pyByLedgerB[nm.toLowerCase()] = signedLedgerAmt(r, noteType);
+        }
+      }
+      // Default attachedTo for COGS auto-mapped ledgers: every plain expense
+      // ledger (Hardware Purchase, Cement Purchase, etc.) lands under
+      // "Add: Purchases of raw materials" (raw_purch) by default. The
+      // auditor can still move it elsewhere via the row-actions menu
+      // (Stock-in-Trade / Packing material / etc.). Inventory ledgers are
+      // routed via the cogs special block further down — they hit the fixed
+      // pc_open_*/pc_close_* slots, not the unmatchedB customRow path.
       let idx = 0;
       for (const um of unmatchedB) {
         const label = um.ledger;
         const id    = makeCustomId(label, idx++);
         newCy[id] = um.amt;
-        newPy[id] = pyForCustomRow(noteType, id, label);
-        autoRows.push({ id, label, source: "auto" });
+        // PY resolution order:
+        //   1. pre-computed pyAmt from the PY-only walk (signed)
+        //   2. PY-shell TB closing for the same ledger name (positive magnitude)
+        //   3. prior engagement's saved customRow with the same label
+        // Without step 1, CLOSED ledgers (e.g. Ambition Electric, Kapadiya
+        // Hiren) get amt = 0 and pyFromTb = 0 (already filtered in PY walk)
+        // and disappear from the note even though COA Mapping shows them.
+        const pyFromWalk = um.pyAmt ?? 0;
+        const pyFromTb   = pyByLedgerB[um.ledger.toLowerCase()] ?? 0;
+        // Math.abs check (not > 0) — pyFromTb is now signed so a Dr-balance
+        // creditor's negative PY value must NOT fall through to the fallback.
+        const pyResolved = Math.abs(pyFromWalk) > 0.005
+          ? pyFromWalk
+          : (Math.abs(pyFromTb) > 0.005 ? pyFromTb : pyForCustomRow(noteType, id, label));
+        newPy[id] = pyResolved;
+        const row: NCECustomRow = {
+          id, label, source: "auto",
+          ...(noteType === "cogs" ? { attachedTo: "raw_purch" } : {}),
+        };
+        autoRows.push(row);
       }
 
-      // Fallback: if nothing was populated at all, use FS-code totals
-      const hasData = autoRows.length > 0 || Object.values(newCy).some(v => v > 0);
+      // Fallback: if nothing was populated at all, use FS-code totals.
+      // Same double-count guard as Pattern A — manual rows count as "data".
+      const manualHasAmountB = manualRows.some(mr =>
+        Math.abs(prev.cy?.[mr.id] ?? 0) > 0.005,
+      );
+      const hasData = autoRows.length > 0
+        || Object.values(newCy).some(v => v > 0)
+        || manualHasAmountB;
       if (!hasData) {
         let fsCY = 0, fsPY = 0;
         for (const code of noteFs.all) {
@@ -619,7 +1139,25 @@ export async function nceAutoPopulate(
           staticSources[key].push({ ledger: row.ledger_name, amountCy: amt });
         }
 
-        // CY openings (= PY closings): prefer prior-year cogs note's cy_data
+        // Issue 2 (today) — CY openings sourced FIRST from the current
+        // engagement's TB opening_balance.  This is Tally's own definitive
+        // value for the start-of-year stock — equal by accounting identity
+        // to last year's closing, regardless of what any prior stage5_notes
+        // happened to store.  Walk every inventory ledger and aggregate its
+        // opening_balance into the matching pc_open_*/raw_open/etc. row.
+        // openAmt uses Math.abs because Stock-in-Hand carries a Dr balance.
+        for (const row of tb) {
+          if (!isInventoryParent(row.parent_group)) continue;
+          if (ejectedSet.has(row.ledger_name)) continue;
+          const openAmt = Math.abs(Number(row.opening_balance ?? 0));
+          if (openAmt === 0) continue;
+          const key = openKeyFor(classifyInv(row.ledger_name));
+          newCy[key] = (newCy[key] ?? 0) + openAmt;
+        }
+
+        // CY openings fallback (= PY closings): only fill rows the CY-TB
+        // opening_balance pass above did NOT populate.  Prefer the prior
+        // year's cogs note over a bare TB lookup.
         const pyCogs: Record<string, number> = pyNotes["cogs"] ?? {};
         const openMap: Record<string, string> = {
           pc_open_trade: "pc_close_trade",
@@ -630,6 +1168,7 @@ export async function nceAutoPopulate(
           other_open:    "other_close",
         };
         for (const [openKey, closeSrcKey] of Object.entries(openMap)) {
+          if (newCy[openKey]) continue; // already filled from CY-TB opening
           const v = pyCogs[closeSrcKey];
           if (typeof v === "number" && Math.abs(v) > 0) {
             newCy[openKey] = Math.abs(v);
@@ -639,8 +1178,12 @@ export async function nceAutoPopulate(
         // PY-shell-TB fallback: cold-start case where prior-year cogs note
         // wasn't auto-populated yet, but PY-shell sync DID populate the prior
         // engagement's tally_trial_balance with Stock-in-Hand ledgers.
-        const noOpenings = Object.keys(openMap).every(k => !newCy[k]);
-        if (noOpenings && financialYear && clientId) {
+        // Issue 7 (today): also pull the PRIOR engagement's TB opening_balance
+        // (which equals FY-2 closing) so the PY column of "Opening" rows
+        // is filled — and PY column of "Closing" rows from prior closing.
+        // Symptom this fixes (Swastik Buildcon): CY Opening: WIP = 9,54,65,534
+        // but PY Opening: WIP was blank, making PY Increase/Decrease incorrect.
+        if (financialYear && clientId) {
           const parts = String(financialYear).split("-");
           if (parts.length === 2) {
             const startYr = parseInt(parts[0], 10);
@@ -657,14 +1200,32 @@ export async function nceAutoPopulate(
             if (prevIds.length > 0) {
               const { data: prevTb } = await supabase
                 .from("tally_trial_balance")
-                .select("ledger_name, closing_balance, balance_type, parent_group, engagement_id")
+                .select("ledger_name, closing_balance, balance_type, opening_balance, opening_type, parent_group, engagement_id")
                 .in("engagement_id", prevIds);
               for (const row of (prevTb ?? []) as TBRow[]) {
                 if (!isInventoryParent((row as any).parent_group)) continue;
-                const amt = ledgerAmt(row.closing_balance);
-                if (amt === 0) continue;
-                const key = openKeyFor(classifyInv(row.ledger_name));
-                newCy[key] = (newCy[key] ?? 0) + amt;
+
+                const closeAmt = ledgerAmt(row.closing_balance);   // = PY closing
+                const openAmt  = Math.abs(Number((row as any).opening_balance ?? 0)); // = FY-2 closing
+                const cls = classifyInv(row.ledger_name);
+                const openKey  = openKeyFor(cls);   // pc_open_*
+                const closeKey = closeKeyFor(cls);  // pc_close_*
+
+                // CY column: only set when not already filled from prior
+                // year's cogs note (pyCogs branch above).
+                if (closeAmt > 0 && !newCy[openKey]) {
+                  newCy[openKey] = (newCy[openKey] ?? 0) + closeAmt;
+                }
+
+                // PY column — Opening row = FY-2 closing (= prior eng's
+                // opening_balance), PY Closing row = PY closing (= prior eng's
+                // closing_balance).
+                if (openAmt > 0) {
+                  newPy[openKey] = (newPy[openKey] ?? 0) + openAmt;
+                }
+                if (closeAmt > 0) {
+                  newPy[closeKey] = (newPy[closeKey] ?? 0) + closeAmt;
+                }
               }
             }
           }
@@ -676,7 +1237,22 @@ export async function nceAutoPopulate(
       const ltSet      = new Set(noteFs.lt ?? []);
       const stSet      = new Set(noteFs.st ?? []);
       const smartRules = NOTE_SMART_MAP[noteType] ?? [];
-      const unmatchedA: { ledger: string; amt: number; isLT: boolean; isST: boolean }[] = [];
+      const unmatchedA: { ledger: string; amt: number; pyAmt: number; isLT: boolean; isST: boolean; parentGroup?: string; smartTarget?: string }[] = [];
+
+      // Build a PY-ledger lookup keyed by name so individual customRows get
+      // their actual PY closing instead of falling back to 0. We sign the
+      // PY value using the SAME mapping head's nature (the same ledger is
+      // assumed to live under the same head across years) so Dr balances in
+      // a Cr-natural head subtract from group totals consistently CY + PY.
+      const pyByLedger: Record<string, number> = {};
+      if (pyTb.length > 0) {
+        for (const r of pyTb) {
+          const nm = String(r.ledger_name || "").trim();
+          if (!nm) continue;
+          const m = coaMapping[nm];
+          pyByLedger[nm.toLowerCase()] = m ? signedLedgerAmt(r, noteType) : ledgerAmt(r.closing_balance);
+        }
+      }
 
       for (const row of tb) {
         const mapped = coaMapping[row.ledger_name];
@@ -684,23 +1260,42 @@ export async function nceAutoPopulate(
         const isLT = ltSet.has(mapped.code);
         const isST = stSet.has(mapped.code);
         if (!isLT && !isST) continue;
-        const amt = ledgerAmt(row.closing_balance);
-        if (amt === 0) continue;
+        // Signed amount — see signedLedgerAmt() docs. Net opposite-side
+        // balances within the head so group totals match COA Mapping math.
+        const amt = signedLedgerAmt(row, noteType);
+        if (Math.abs(amt) < 0.005) continue;
         // Skip ledgers the user has explicitly ejected to standalone rows
         if (ejectedSet.has(row.ledger_name)) continue;
 
-        const matchedRowId = smartMatch(row.ledger_name, smartRules);
-        if (matchedRowId) {
-          // Fill static row directly with LT/ST suffix
+        const matchedRowId = smartMatch(row.ledger_name, smartRules, row.parent_group);
+        // ISSUE 1 FIX (per-ledger breakup in Notes): for "borrowings",
+        // "investments" and "loans_advances" — notes where the auditor expects
+        // ledger-level detail under each Schedule III sub-head — we ALWAYS
+        // create a customRow per ledger, attached to the smart-matched static
+        // row (or the section fallback). Previously smart-matched ledgers like
+        // "Dipak B Patel (HUF)" were summed into unsec_related directly, so
+        // the Note showed only "Loans from related parties: ₹2.02 cr" without
+        // the per-ledger break-up the COA mapping clearly shows.
+        const wantsPerLedgerBreakup =
+          noteType === "borrowings" ||
+          noteType === "investments" ||
+          noteType === "loans_advances";
+
+        if (matchedRowId && !wantsPerLedgerBreakup) {
+          // Existing aggregate path for other Pattern A notes
           if (isLT) newCy[matchedRowId + "_lt"] = (newCy[matchedRowId + "_lt"] ?? 0) + amt;
           if (isST) newCy[matchedRowId + "_st"] = (newCy[matchedRowId + "_st"] ?? 0) + amt;
-          // PY from prior year if available (Math.abs guards against stale negatives)
           if (isLT && !(matchedRowId + "_lt" in newPy))
             newPy[matchedRowId + "_lt"] = Math.abs(pyNotes[noteType]?.[matchedRowId + "_lt"] ?? 0);
           if (isST && !(matchedRowId + "_st" in newPy))
             newPy[matchedRowId + "_st"] = Math.abs(pyNotes[noteType]?.[matchedRowId + "_st"] ?? 0);
         } else {
-          unmatchedA.push({ ledger: row.ledger_name, amt, isLT, isST, parentGroup: row.parent_group ?? undefined });
+          const pyAmt = pyByLedger[row.ledger_name.toLowerCase()] ?? 0;
+          unmatchedA.push({
+            ledger: row.ledger_name, amt, pyAmt, isLT, isST,
+            parentGroup: row.parent_group ?? undefined,
+            ...(matchedRowId ? { smartTarget: matchedRowId } : {}),
+          });
         }
       }
 
@@ -712,30 +1307,66 @@ export async function nceAutoPopulate(
       // matches the auditor's expectation that BS notes show ledger-level
       // detail rather than account-group categories.
       let idx = 0;
-      // For borrowings, all unmatched ledgers are unsecured by nature →
-      // attach them under "Other unsecured loans" static row in the unsecured section.
-      const section    = noteType === "borrowings" ? "unsecured"   : undefined;
-      const attachedTo = noteType === "borrowings" ? "unsec_other" : undefined;
       for (const um of unmatchedA) {
         const label = um.ledger; // ledger name verbatim
         const id    = makeCustomId(label, idx++);
         if (um.isLT) {
           newCy[id + "_lt"] = um.amt;
-          newPy[id + "_lt"] = pyForCustomRow(noteType, id, label, "_lt");
+          // Per-ledger PY: prefer PY shell TB closing for this ledger; fall
+          // back to label-matched prior customRow lookup (handles renamed
+          // breakup rows across years).
+          newPy[id + "_lt"] = um.pyAmt > 0 ? um.pyAmt : pyForCustomRow(noteType, id, label, "_lt");
         }
         if (um.isST) {
           newCy[id + "_st"] = um.amt;
-          newPy[id + "_st"] = pyForCustomRow(noteType, id, label, "_st");
+          newPy[id + "_st"] = um.pyAmt > 0 ? um.pyAmt : pyForCustomRow(noteType, id, label, "_st");
         }
+
+        let rowSection:    string | undefined;
+        let rowAttachedTo: string | undefined;
+        if (noteType === "borrowings") {
+          rowSection = "unsecured";
+          // Use the smart-match target if available (e.g. "unsec_related" for
+          // an HUF ledger that matched the keyword rule). Otherwise fall back
+          // to parent_group / name heuristic.
+          if (um.smartTarget) {
+            rowAttachedTo = um.smartTarget;
+          } else {
+            const pgLower   = (um.parentGroup || "").toLowerCase();
+            const nameLower = normLedger(um.ledger);
+            const pgRelated = ["partner", "director", "promoter", "proprietor",
+              "shareholder", "relative", "family", "huf", "related"].some(kw => pgLower.includes(kw));
+            const nameHuf   = nameLower.includes(" huf") || nameLower.includes("(huf)") || nameLower.includes("-huf");
+            rowAttachedTo = (pgRelated || nameHuf) ? "unsec_related" : "unsec_other";
+          }
+        } else if (um.smartTarget && (noteType === "investments" || noteType === "loans_advances")) {
+          // For investments / loans_advances Pattern A notes, attach to the
+          // smart-matched static row so per-ledger breakup renders beneath it.
+          rowAttachedTo = um.smartTarget;
+        }
+
         autoRows.push({
           id, label, source: "auto",
-          ...(section    ? { section }    : {}),
-          ...(attachedTo ? { attachedTo } : {}),
+          ...(rowSection    ? { section: rowSection }       : {}),
+          ...(rowAttachedTo ? { attachedTo: rowAttachedTo } : {}),
         });
       }
 
       // Fallback: use FS-code totals
-      const hasData = autoRows.length > 0 || Object.values(newCy).some(v => v > 0);
+      // ISSUE 1 FIX (provisions double-count): also treat manual rows as
+      // "data present" so the synthetic "Auto-filled from COA total" row
+      // doesn't get appended when the user has already typed manual entries.
+      // Previously the manual rows' amounts (preserved later from prev.cy)
+      // PLUS the auto-total row were both summed into Total, inflating it by
+      // 2× the manual amount.
+      const manualHasAmount = manualRows.some(mr =>
+        Math.abs(prev.cy?.[mr.id] ?? 0) > 0.005 ||
+        Math.abs(prev.cy?.[mr.id + "_lt"] ?? 0) > 0.005 ||
+        Math.abs(prev.cy?.[mr.id + "_st"] ?? 0) > 0.005,
+      );
+      const hasData = autoRows.length > 0
+        || Object.values(newCy).some(v => v > 0)
+        || manualHasAmount;
       if (!hasData) {
         let ltCY = 0, ltPY = 0, stCY = 0, stPY = 0;
         for (const code of (noteFs.lt ?? [])) { ltCY += fsByCode[code]?.cy ?? 0; ltPY += fsByCode[code]?.py ?? 0; }
@@ -777,6 +1408,55 @@ export async function nceAutoPopulate(
         const k = mr.id + suffix;
         if (prev.cy[k] !== undefined) mergedCy[k] = prev.cy[k];
         if (prev.py[k] !== undefined) mergedPy[k] = prev.py[k];
+      }
+    }
+
+    // ISSUE 1 FIX (PY value for manual rows): when a manual row's label
+    // matches a TB ledger (e.g. user manually typed "Unpaid Audit Fees"
+    // and a CY/PY ledger with the same name exists), inherit the PY
+    // closing from PY shell TB into the manual row's PY column. Without
+    // this, manual rows always showed PY = 0 even when the ledger clearly
+    // existed in PY with a known closing balance — the auditor had no way
+    // to see the prior-year amount short of typing it again. This bridges
+    // the COA mapping's per-ledger PY into the manual rows that auditors
+    // type to document explanatory line items under each Schedule III head.
+    // Only fills the PY when the saved PY is zero AND a TB match exists,
+    // so any user-edited PY value is preserved.
+    if (pyTb.length > 0) {
+      const pyByName: Record<string, number> = {};
+      for (const r of pyTb) {
+        const nm = String(r.ledger_name || "").trim();
+        if (!nm) continue;
+        pyByName[nm.toLowerCase()] = ledgerAmt(r.closing_balance);
+      }
+      // Detect whether this note follows Pattern A (LT/ST columns).
+      const isPatternA = !noteFs.all && !!(noteFs.lt || noteFs.st);
+      for (const mr of absorbedManualRows) {
+        if (!mr.label) continue;
+        const pyAmt = pyByName[mr.label.toLowerCase()];
+        if (!pyAmt || pyAmt < 0.005) continue;
+        // Decide which suffix to fill based on note shape and where the CY
+        // amount lives on the manual row.
+        if (isPatternA) {
+          const cyLt = Math.abs(mergedCy[mr.id + "_lt"] ?? 0);
+          const cyStV = Math.abs(mergedCy[mr.id + "_st"] ?? 0);
+          if (cyLt > 0.005 && (mergedPy[mr.id + "_lt"] ?? 0) < 0.005) {
+            mergedPy[mr.id + "_lt"] = pyAmt;
+          } else if (cyStV > 0.005 && (mergedPy[mr.id + "_st"] ?? 0) < 0.005) {
+            mergedPy[mr.id + "_st"] = pyAmt;
+          } else if (cyLt < 0.005 && cyStV < 0.005) {
+            // No CY amount yet — default to ST since the user usually fills
+            // ST first for current-liability provisions.
+            if ((mergedPy[mr.id + "_st"] ?? 0) < 0.005) {
+              mergedPy[mr.id + "_st"] = pyAmt;
+            }
+          }
+        } else {
+          // Pattern B — single column
+          if ((mergedPy[mr.id] ?? 0) < 0.005) {
+            mergedPy[mr.id] = pyAmt;
+          }
+        }
       }
     }
 

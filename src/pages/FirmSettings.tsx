@@ -179,8 +179,11 @@ const FirmSettings = () => {
       return;
     }
     try {
-      await supabase.storage.from("firm-assets").upload(path, file, { upsert: true });
-      const { data } = supabase.storage.from("firm-assets").getPublicUrl(path);
+      // Use a versioned path so browsers don't cache the old image
+      const ext = file.name.split(".").pop() || "png";
+      const versionedPath = `${path}_${Date.now()}.${ext}`;
+      await supabase.storage.from("firm-assets").upload(versionedPath, file, { upsert: false });
+      const { data } = supabase.storage.from("firm-assets").getPublicUrl(versionedPath);
       const publicUrl = data.publicUrl;
       setter(publicUrl);
       // Auto-save to database immediately so it persists
@@ -461,84 +464,34 @@ const FirmSettings = () => {
           <Card>
             <CardHeader>
               <CardTitle>Branding & Theme</CardTitle>
-              <CardDescription>Logo, signature, letterhead, and brand colours.</CardDescription>
+              <CardDescription>Logo and brand colours.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-               {/* Logo */}
-                <div className="space-y-2">
-                  <Label>Firm Logo</Label>
-                  {logoUrl && <img src={logoUrl} alt="Logo" className="h-16 object-contain rounded border border-border p-1" />}
-                  <input ref={logoRef} type="file" accept="image/*" className="hidden" onChange={e => {
-                    const f = e.target.files?.[0];
-                    if (f && firmId) handleUpload(f, `${firmId}/logo`, setLogoUrl, "logo_url");
-                  }} />
-                  <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={() => logoRef.current?.click()} disabled={!isAdmin}>
-                      <Upload className="h-3 w-3 mr-1" /> Upload Logo
+              {/* Logo */}
+              <div className="space-y-2">
+                <Label>Firm Logo</Label>
+                {logoUrl && <img src={logoUrl} alt="Logo" className="h-16 object-contain rounded border border-border p-1" />}
+                <input ref={logoRef} type="file" accept="image/*" className="hidden" onChange={e => {
+                  const f = e.target.files?.[0];
+                  if (f && firmId) handleUpload(f, `${firmId}/logo`, setLogoUrl, "logo_url");
+                }} />
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" onClick={() => logoRef.current?.click()} disabled={!isAdmin}>
+                    <Upload className="h-3 w-3 mr-1" /> Upload Logo
+                  </Button>
+                  {logoUrl && (
+                    <Button variant="destructive" size="sm" disabled={!isAdmin} onClick={async () => {
+                      if (!firmId) return;
+                      const { data: current } = await supabase.from("firms").select("settings").eq("id", firmId).single();
+                      const existingSettings = (current?.settings || {}) as any;
+                      delete existingSettings.logo_url;
+                      await supabase.from("firms").update({ logo_url: null, settings: existingSettings } as any).eq("id", firmId);
+                      setLogoUrl("");
+                      toast({ title: "Logo removed" });
+                    }}>
+                      <Trash2 className="h-3 w-3 mr-1" /> Remove
                     </Button>
-                    {logoUrl && (
-                      <Button variant="destructive" size="sm" disabled={!isAdmin} onClick={async () => {
-                        if (!firmId) return;
-                        const { data: current } = await supabase.from("firms").select("settings").eq("id", firmId).single();
-                        const existingSettings = (current?.settings || {}) as any;
-                        delete existingSettings.logo_url;
-                        await supabase.from("firms").update({ logo_url: null, settings: existingSettings } as any).eq("id", firmId);
-                        setLogoUrl("");
-                        toast({ title: "Logo removed" });
-                      }}>
-                        <Trash2 className="h-3 w-3 mr-1" /> Remove
-                      </Button>
-                    )}
-                  </div>
-                </div>
-                {/* Signature */}
-                <div className="space-y-2">
-                  <Label>Signature</Label>
-                  {signatureUrl && <img src={signatureUrl} alt="Signature" className="h-16 object-contain rounded border border-border p-1" />}
-                  <input ref={sigRef} type="file" accept="image/*" className="hidden" onChange={e => {
-                    const f = e.target.files?.[0];
-                    if (f && firmId) handleUpload(f, `${firmId}/signature`, setSignatureUrl, "signature_url");
-                  }} />
-                  <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={() => sigRef.current?.click()} disabled={!isAdmin}>
-                      <Upload className="h-3 w-3 mr-1" /> Upload Signature
-                    </Button>
-                    {signatureUrl && (
-                      <Button variant="destructive" size="sm" disabled={!isAdmin} onClick={async () => {
-                        if (!firmId) return;
-                        await supabase.from("firms").update({ signature_url: null } as any).eq("id", firmId);
-                        setSignatureUrl("");
-                        toast({ title: "Signature removed" });
-                      }}>
-                        <Trash2 className="h-3 w-3 mr-1" /> Remove
-                      </Button>
-                    )}
-                  </div>
-                </div>
-                {/* Letterhead */}
-                <div className="space-y-2">
-                  <Label>Letterhead</Label>
-                  {letterheadUrl && <img src={letterheadUrl} alt="Letterhead" className="h-16 object-contain rounded border border-border p-1" />}
-                  <input ref={lhRef} type="file" accept="image/*" className="hidden" onChange={e => {
-                    const f = e.target.files?.[0];
-                    if (f && firmId) handleUpload(f, `${firmId}/letterhead`, setLetterheadUrl, "letterhead_url");
-                  }} />
-                  <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={() => lhRef.current?.click()} disabled={!isAdmin}>
-                      <Upload className="h-3 w-3 mr-1" /> Upload Letterhead
-                    </Button>
-                    {letterheadUrl && (
-                      <Button variant="destructive" size="sm" disabled={!isAdmin} onClick={async () => {
-                        if (!firmId) return;
-                        await supabase.from("firms").update({ letterhead_url: null } as any).eq("id", firmId);
-                        setLetterheadUrl("");
-                        toast({ title: "Letterhead removed" });
-                      }}>
-                        <Trash2 className="h-3 w-3 mr-1" /> Remove
-                      </Button>
-                    )}
-                  </div>
+                  )}
                 </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4">

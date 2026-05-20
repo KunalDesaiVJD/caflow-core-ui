@@ -369,6 +369,19 @@ type IntelRow = {
   is_party_name: boolean;
   scope: string;           // 'global' | 'engagement'
   client_id: string | null;
+  // AI override analysis (added 2026-05-09)
+  aliases: string[] | null;
+  override_reason: string | null;
+  ai_analysis: string | null;
+};
+
+const REASON_META: Record<string, { label: string; color: string }> = {
+  SPELLING_VARIANT:     { label: "Spelling variant",     color: "bg-blue-100 text-blue-800" },
+  ABBREVIATION:         { label: "Abbreviation",         color: "bg-violet-100 text-violet-800" },
+  ALIAS:                { label: "Alias",                color: "bg-amber-100 text-amber-800" },
+  CONCEPTUAL_CORRECTION:{ label: "Conceptual fix",       color: "bg-orange-100 text-orange-800" },
+  ERROR_CORRECTION:     { label: "AI error corrected",   color: "bg-red-100 text-red-800" },
+  CONFIRMED:            { label: "Confirmed",            color: "bg-green-100 text-green-800" },
 };
 
 type CoaHead = { account_head: string; bs_pl: string | null; group_name: string | null; entity_type: string };
@@ -376,19 +389,16 @@ type CoaHead = { account_head: string; bs_pl: string | null; group_name: string 
 function CoaIntelligencePanel() {
   const [rows, setRows] = useState<IntelRow[]>([]);
   const [heads, setHeads] = useState<CoaHead[]>([]);
-  const [clientMap, setClientMap] = useState<Record<string, string>>({}); // client_id → client name
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState("");
   const [entity, setEntity] = useState<"all" | "corporate" | "llp" | "nce">("all");
-  const [scopeFilter, setScopeFilter] = useState<"all" | "global" | "engagement">("all");
-  /** Issue-7: Default true — hide person/party names; only show income/expense accounts */
-  const [excludePartyNames, setExcludePartyNames] = useState(true);
+  const [scopeFilter, setScopeFilter] = useState<"all" | "global">("all");
 
   const load = useCallback(async () => {
     setLoading(true);
     const { data } = await supabase
       .from("coa_mapping_intelligence" as any)
-      .select("*")
+      .select("id, normalized_name, entity_type, account_head, bs_pl, account_group, confidence_score, times_confirmed, times_overridden, alternatives, firms_affected, last_used_at, is_party_name, scope, client_id, aliases, override_reason, ai_analysis")
       .order("last_used_at", { ascending: false })
       .limit(1000);
     setRows((data as IntelRow[]) ?? []);
@@ -397,16 +407,6 @@ function CoaIntelligencePanel() {
       .select("account_head, bs_pl, group_name, entity_type")
       .limit(5000);
     setHeads((hd as CoaHead[]) ?? []);
-    // Issue-6: Load client names for client-scoped entries
-    const { data: clients } = await supabase
-      .from("clients" as any)
-      .select("id, name")
-      .limit(2000);
-    if (clients) {
-      const map: Record<string, string> = {};
-      for (const c of clients as { id: string; name: string }[]) map[c.id] = c.name;
-      setClientMap(map);
-    }
     setLoading(false);
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -414,30 +414,14 @@ function CoaIntelligencePanel() {
   const filtered = rows.filter((r) => {
     if (entity !== "all" && r.entity_type !== entity) return false;
     if (scopeFilter !== "all" && (r.scope ?? "global") !== scopeFilter) return false;
-    // Issue-7: Exclude party/person names by default
-    if (excludePartyNames && r.is_party_name) return false;
     if (!q.trim()) return true;
     const qq = q.toLowerCase();
     return (
       r.normalized_name.toLowerCase().includes(qq) ||
       r.account_head.toLowerCase().includes(qq) ||
-      (r.account_group ?? "").toLowerCase().includes(qq) ||
-      // Issue-6: Also search by client name
-      (r.client_id && (clientMap[r.client_id] ?? "").toLowerCase().includes(qq))
+      (r.account_group ?? "").toLowerCase().includes(qq)
     );
   });
-
-  // Promote an engagement-scoped pattern to global scope (admin override)
-  const promoteToGlobal = async (r: IntelRow) => {
-    if (!confirm(`Promote "${r.normalized_name}" to global scope?\nThis will make it apply to ALL clients across all firms.`)) return;
-    const { error } = await supabase
-      .from("coa_mapping_intelligence" as any)
-      .update({ scope: "global", is_party_name: false, client_id: null })
-      .eq("id", r.id);
-    if (error) { toast.error(error.message); return; }
-    toast.success(`Promoted to global: ${r.normalized_name}`);
-    load();
-  };
 
   const remap = async (r: IntelRow, h: CoaHead) => {
     const { error } = await supabase
@@ -468,16 +452,21 @@ function CoaIntelligencePanel() {
   return (
     <Card>
       <CardHeader className="space-y-2">
-        <CardTitle className="text-sm flex items-center gap-2">
+        <CardTitle className="text-sm flex items-center gap-2 flex-wrap">
           <Zap size={14} className="text-violet-600" />
           Cross-Client COA Mapping Intelligence
-          <Badge variant="outline">{rows.filter(r => (r.scope ?? 'global') === 'global').length} global patterns</Badge>
-          <Badge variant="outline" className="border-amber-400 text-amber-700">{rows.filter(r => r.scope === 'engagement').length} client-scoped</Badge>
+          <Badge variant="outline">{rows.length} global patterns</Badge>
+          <Badge variant="outline" className="border-violet-400 text-violet-700">
+            {rows.reduce((n, r) => n + (r.aliases?.length ?? 0), 0)} aliases learned
+          </Badge>
+          <Badge variant="outline" className="border-red-400 text-red-700">
+            {rows.filter(r => r.override_reason === 'ERROR_CORRECTION').length} AI errors corrected
+          </Badge>
         </CardTitle>
         <p className="text-xs text-muted-foreground">
           When a user confirms or overrides a COA mapping, it is recorded here.{" "}
-          <span className="text-green-700 font-medium">Global patterns</span> (generic ledger/account names) apply across all firms and clients and are used to train Claude.{" "}
-          <span className="text-amber-700 font-medium">Client-scoped patterns</span> (vendor/customer/party business names) are restricted to the same client in future years and are never sent to Claude as global training data.
+          Only <span className="text-green-700 font-medium">generic accounting ledger names</span> (bank charges, depreciation, rent, etc.) are stored as global patterns and used to improve future AI suggestions.
+          Party names, vendor names, and business names are automatically excluded.
         </p>
         <div className="flex gap-2 pt-2 flex-wrap">
           <div className="relative flex-1 max-w-md">
@@ -490,21 +479,6 @@ function CoaIntelligencePanel() {
             <option value="llp">LLP</option>
             <option value="nce">NCE</option>
           </select>
-          <select value={scopeFilter} onChange={(e) => setScopeFilter(e.target.value as any)} className="border rounded-md px-3 text-sm bg-background">
-            <option value="all">All scopes</option>
-            <option value="global">🌐 Global only</option>
-            <option value="engagement">🔒 Client-scoped only</option>
-          </select>
-          {/* Issue-7: Toggle to exclude person/party names */}
-          <label className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={excludePartyNames}
-              onChange={(e) => setExcludePartyNames(e.target.checked)}
-              className="accent-primary"
-            />
-            <span className="text-muted-foreground text-xs">Hide party names</span>
-          </label>
         </div>
       </CardHeader>
       <CardContent className="p-0">
@@ -534,16 +508,30 @@ function CoaIntelligencePanel() {
                 return (
                   <TableRow key={r.id}>
                     <TableCell>
-                      <div className="font-mono text-xs">{r.normalized_name}</div>
-                      {/* Issue-6: Show client name for client-scoped entries */}
-                      {isParty && r.client_id && clientMap[r.client_id] && (
-                        <div className="text-[10px] text-amber-700 mt-0.5 font-medium">
-                          👤 {clientMap[r.client_id]}
+                      <div className="font-mono text-xs font-medium">{r.normalized_name}</div>
+                      {/* Override reason badge */}
+                      {r.override_reason && REASON_META[r.override_reason] && (
+                        <span className={`inline-block text-[10px] px-1.5 py-0.5 rounded mt-1 font-medium ${REASON_META[r.override_reason].color}`}>
+                          {REASON_META[r.override_reason].label}
+                        </span>
+                      )}
+                      {/* Aliases learned by AI analysis */}
+                      {r.aliases && r.aliases.length > 0 && (
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {r.aliases.slice(0, 5).map(alias => (
+                            <span key={alias} className="font-mono text-[9px] bg-muted px-1 py-0.5 rounded text-muted-foreground border">
+                              {alias}
+                            </span>
+                          ))}
+                          {r.aliases.length > 5 && (
+                            <span className="text-[9px] text-muted-foreground">+{r.aliases.length - 5} more</span>
+                          )}
                         </div>
                       )}
-                      {isParty && (!r.client_id || !clientMap[r.client_id]) && (
-                        <div className="text-[10px] text-amber-600 mt-0.5">
-                          👤 Party/business name — client-scoped only
+                      {/* AI explanation tooltip */}
+                      {r.ai_analysis && (
+                        <div className="text-[10px] text-muted-foreground mt-1 italic truncate max-w-[220px]" title={r.ai_analysis}>
+                          {r.ai_analysis}
                         </div>
                       )}
                     </TableCell>
@@ -577,18 +565,7 @@ function CoaIntelligencePanel() {
                     <TableCell className="text-right">{r.firms_affected}</TableCell>
                     <TableCell>
                       <div className="flex gap-1 justify-end flex-wrap">
-                        {isEngagement && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="text-xs text-green-700 border-green-400 px-2"
-                            title="Promote to global — applies to all clients"
-                            onClick={() => promoteToGlobal(r)}
-                          >
-                            🌐
-                          </Button>
-                        )}
-                        <IntelRemapPopover r={r} heads={heads.filter((h) => h.entity_type === r.entity_type)} onPick={remap} />
+                          <IntelRemapPopover r={r} heads={heads.filter((h) => h.entity_type === r.entity_type)} onPick={remap} />
                         <Button size="sm" variant="ghost" onClick={() => remove(r)} className="text-destructive"><Trash2 size={14} /></Button>
                       </div>
                     </TableCell>

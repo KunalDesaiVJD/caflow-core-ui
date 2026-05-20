@@ -21,17 +21,13 @@ interface Props {
   engagementId:    string;
   collapseControl?: boolean;
   onRemapLedger?:  (ledgerName: string, newCode: string) => void;
+  /** Issue 4 (Aesha) — clears this ledger from coa_mapping (DB) and re-syncs. */
+  onUnmapLedger?:  (ledgerName: string) => void;
 }
 
 export default function NoteBSAsset({
-  engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl, onRemapLedger,
+  engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl, onRemapLedger, onUnmapLedger,
 }: Props) {
-  // Bug 4 — Sign-convention bridge for asset Notes display
-  // Asset notes are normally stored POSITIVE (DR balances), but some legacy
-  // engagements may have stored them negative when a cash overdraft (CR) was
-  // mapped to BS_CA_CCE.  Normalize to positive on read so the displayed
-  // "Total per BS" matches the BS face which uses absolute display.
-  const normalizeSign = (raw: number): number => raw < 0 ? -raw : raw;
   const get = (path: string) => path.split(".").reduce<any>((c, k) => c?.[k], notes);
 
   // Prefer breakup sum over stored headline so the Note "Total per BS"
@@ -48,21 +44,35 @@ export default function NoteBSAsset({
     return { sum, hasAny: true };
   };
 
+  /** Sign convention for bs_asset notes — assets are stored without the
+   *  sectionSign flip, so a normal DR-balance asset lands as POSITIVE in
+   *  storage and an abnormal CR-balance asset (e.g. bank overdraft)
+   *  lands as NEGATIVE.  Display rule (matches BS face):
+   *    • Stored ≥ 0   →  DR balance (normal asset)   →  POSITIVE
+   *    • Stored < 0   →  CR balance (abnormal)       →  NEGATIVE
+   *  When the breakup is populated, magnitude is its always-positive sum
+   *  and the sign is taken from the stored value. */
+  const signedTotal = (storedRaw: number, magnitude: number): number =>
+    storedRaw < 0 ? -magnitude : magnitude;
+
   const cy = (key: string) => {
+    const stored = Number(notes.bs_asset[key]?.cy ?? 0);
     const { sum, hasAny } = sumBreakup(key, "amount_cy");
-    if (hasAny) return sum;
-    return normalizeSign(Number(notes.bs_asset[key]?.cy ?? 0));
+    const magnitude = hasAny ? sum : Math.abs(stored);
+    return signedTotal(stored, magnitude);
   };
   const py = (key: string) => {
+    const stored = Number(notes.bs_asset[key]?.py ?? 0);
     const { sum, hasAny } = sumBreakup(key, "amount_py");
-    if (hasAny) return sum;
-    return normalizeSign(Number(notes.bs_asset[key]?.py ?? 0));
+    const magnitude = hasAny ? sum : Math.abs(stored);
+    return signedTotal(stored, magnitude);
   };
 
   const effectivePY = (key: string, breakupPath?: string): number => {
+    const stored = Number(notes.bs_asset[key]?.py ?? 0);
     const { sum, hasAny } = sumBreakup(key, "amount_py", breakupPath);
-    if (hasAny) return sum;
-    return py(key);
+    const magnitude = hasAny ? sum : Math.abs(stored);
+    return signedTotal(stored, magnitude);
   };
 
   // Smart note: only show a note number when at least one year has data.
@@ -102,6 +112,7 @@ export default function NoteBSAsset({
           descPlaceholder={breakupHint}
           addLabel="Add row"
           onRemapLedger={onRemapLedger}
+          onUnmapLedger={onUnmapLedger}
         />
         <EditableRow
           label={`Total — ${title} (per BS)`}
@@ -130,6 +141,7 @@ export default function NoteBSAsset({
           descPlaceholder="Investment particulars"
           addLabel="Add investment"
           onRemapLedger={onRemapLedger}
+          onUnmapLedger={onUnmapLedger}
         />
         <EditableRow
           label="Total — Non-current investments (per BS)"
@@ -215,19 +227,15 @@ export default function NoteBSAsset({
           bold
         />
 
-        <div className="font-semibold text-[11px] mt-3">Trade Receivables Ageing — CY ({cyYear})</div>
-        <AgeingTable
-          rowDefs={TR_ROWS} bucketDefs={TR_BUCKETS}
-          matrix={get("bs_asset.trade_receivables.ageing_cy") as AgeingMatrix | undefined}
-          onChange={(m) => updatePath("bs_asset.trade_receivables.ageing_cy", m)}
-        />
-
-        <div className="font-semibold text-[11px] mt-3">Trade Receivables Ageing — PY ({pyYear})</div>
-        <AgeingTable
-          rowDefs={TR_ROWS} bucketDefs={TR_BUCKETS}
-          matrix={get("bs_asset.trade_receivables.ageing_py") as AgeingMatrix | undefined}
-          onChange={(m) => updatePath("bs_asset.trade_receivables.ageing_py", m)}
-        />
+        {/* Issue 11 (today) — the Trade Receivables ageing schedule was
+            displayed below the note by default.  The user has asked for
+            this to be removed; the standard note now ends with the
+            "Total — Trade Receivables (per BS)" row, matching the firm's
+            Schedule III layout.  The ageing matrix is still persisted on
+            the engagement if it has been entered previously, so no data
+            is lost — only the UI rendering is suppressed.  If a firm
+            later needs the ageing breakup back, re-enable the AgeingTable
+            blocks below (using TR_ROWS / TR_BUCKETS already imported). */}
       </NoteCard>
 
       {renderSingleNote(sn("cash_bank"), "Cash and bank equivalents", "cash_bank",

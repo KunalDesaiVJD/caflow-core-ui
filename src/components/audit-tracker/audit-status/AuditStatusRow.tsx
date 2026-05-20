@@ -76,6 +76,7 @@ interface RowDraft {
   accounting_data:              string;
   audit_employees:              string;
   audit_report_prepared_by:     string;
+  audit_report_checked_by:      string;
   audit_status:                 string;
   audit_status_other:           string;
   report_print_date:            string;
@@ -120,6 +121,50 @@ function EInput({ value, onChange, placeholder, type = "text", className, readOn
   );
 }
 
+// ─── UDIN input with quick "NA" toggle ─────────────────────────────────────────
+//
+// UDIN numbers are entered manually, but some engagements simply have no
+// UDIN to report (e.g. the report isn't applicable). Auditors asked for a
+// one-click "NA" instead of typing it every time. The pill toggles the
+// value to/from the literal string "NA"; while NA is set the text field is
+// disabled (NA and a real UDIN are mutually exclusive). Manual typing is
+// otherwise unchanged.
+function UdinInput({ value, onChange, placeholder }: {
+  value: string; onChange: (v: string) => void; placeholder?: string;
+}) {
+  const isNA = value.trim().toUpperCase() === "NA";
+  return (
+    <div className="flex items-center gap-1">
+      {/* When NA is selected the dropdown already shows "NA" — so the text
+          box must NOT also display "NA" (that produced a redundant double
+          "NA"). It instead shows a muted "Not applicable" placeholder while
+          disabled. Manual UDIN typing is unchanged. */}
+      <Input
+        type="text"
+        value={isNA ? "" : value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={isNA ? "Not applicable" : placeholder}
+        disabled={isNA}
+        className={cn(
+          "h-6 text-[11px] w-full px-1.5 font-mono",
+          isNA && "disabled:opacity-100 italic placeholder:text-muted-foreground",
+        )}
+      />
+      {/* "NA" is a dropdown option. Selecting "NA" flags the cell Not
+          Applicable; "—" clears it back to a typeable UDIN field. */}
+      <select
+        value={isNA ? "NA" : ""}
+        onChange={e => onChange(e.target.value === "NA" ? "NA" : "")}
+        title="Set Not Applicable"
+        className="h-6 w-[42px] shrink-0 text-[10px] rounded border border-input bg-background px-0.5 cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring"
+      >
+        <option value="">—</option>
+        <option value="NA">NA</option>
+      </select>
+    </div>
+  );
+}
+
 // ─── Select helper ────────────────────────────────────────────────────────────
 
 function ESelect({ value, onChange, options, placeholder }: {
@@ -145,9 +190,11 @@ function ClientCombobox({ value, onChange, clients, placeholder }: {
   clients: ClientOption[];
   placeholder?: string;
 }) {
-  const [open, setOpen]     = useState(false);
+  const [open, setOpen]       = useState(false);
+  const [highlight, setHighlight] = useState(0);
   const [dropPos, setDropPos] = useState({ top: 0, left: 0, width: 180 });
   const inputRef = useRef<HTMLInputElement>(null);
+  const dropRef  = useRef<HTMLDivElement>(null);
 
   const filtered = useMemo(() =>
     (value
@@ -157,12 +204,33 @@ function ClientCombobox({ value, onChange, clients, placeholder }: {
     [value, clients]
   );
 
+  useEffect(() => { setHighlight(0); }, [value, clients]);
+  useEffect(() => {
+    if (!open || !dropRef.current) return;
+    const el = dropRef.current.querySelector<HTMLElement>(`[data-idx="${highlight}"]`);
+    el?.scrollIntoView({ block: "nearest" });
+  }, [highlight, open]);
+
   function handleFocus() {
     if (inputRef.current) {
       const r = inputRef.current.getBoundingClientRect();
       setDropPos({ top: r.bottom, left: r.left, width: Math.max(r.width, 180) });
     }
     setOpen(true);
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (!open) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") { setOpen(true); e.preventDefault(); }
+      return;
+    }
+    if (e.key === "ArrowDown") { e.preventDefault(); setHighlight(h => Math.min(h + 1, Math.max(filtered.length - 1, 0))); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setHighlight(h => Math.max(h - 1, 0)); }
+    else if (e.key === "Enter" && filtered.length > 0) {
+      e.preventDefault();
+      const pick = filtered[Math.min(highlight, filtered.length - 1)];
+      if (pick) { onChange(pick.name, pick); setOpen(false); }
+    } else if (e.key === "Escape") setOpen(false);
   }
 
   return (
@@ -173,19 +241,26 @@ function ClientCombobox({ value, onChange, clients, placeholder }: {
         onChange={e => onChange(e.target.value, null)}
         onFocus={handleFocus}
         onBlur={() => setTimeout(() => setOpen(false), 160)}
+        onKeyDown={handleKeyDown}
         placeholder={placeholder || "Search party…"}
         className="h-6 text-[11px] px-1.5 w-full"
       />
       {open && filtered.length > 0 && (
         <div
+          ref={dropRef}
           style={{ position: "fixed", top: dropPos.top, left: dropPos.left, width: dropPos.width, zIndex: 9999 }}
           className="bg-popover border rounded-md shadow-lg max-h-48 overflow-auto"
         >
-          {filtered.map(c => (
+          {filtered.map((c, i) => (
             <div
               key={c.id}
+              data-idx={i}
               onMouseDown={e => { e.preventDefault(); onChange(c.name, c); setOpen(false); }}
-              className="px-2 py-1.5 text-[11px] cursor-pointer hover:bg-accent"
+              onMouseEnter={() => setHighlight(i)}
+              className={cn(
+                "px-2 py-1.5 text-[11px] cursor-pointer",
+                i === highlight ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",
+              )}
             >
               {c.name}
             </div>
@@ -197,22 +272,48 @@ function ClientCombobox({ value, onChange, clients, placeholder }: {
 }
 
 // ─── Searchable combobox for users ───────────────────────────────────────────
+//
+// Issue 2 fix — STRICT selection-only:
+// The committed value (the draft field) can ONLY ever be a real user name
+// from the list, or empty. The text box is a search filter, not a free-text
+// field — typing narrows the list but does not by itself become the value.
+// A name is committed only when the auditor picks it (mouse / Enter). On
+// blur, if the typed text doesn't exactly match a user, the box reverts to
+// the last committed value, so stray typing can never be saved.
+//
+// Keyboard nav (kept from the earlier fix): ArrowDown/ArrowUp move the
+// highlight, Enter selects, Escape closes; highlight auto-scrolls into view.
 
 function UserCombobox({ value, onChange, users, placeholder }: {
   value: string; onChange: (v: string) => void;
   users: UserOption[]; placeholder?: string;
 }) {
-  const [open, setOpen]     = useState(false);
+  const [open, setOpen]       = useState(false);
+  const [query, setQuery]     = useState(value);   // local search text
+  const [highlight, setHighlight] = useState(0);
   const [dropPos, setDropPos] = useState({ top: 0, left: 0, width: 120 });
   const inputRef = useRef<HTMLInputElement>(null);
+  const dropRef  = useRef<HTMLDivElement>(null);
+
+  // Keep the local query in sync when the committed value changes externally
+  // (e.g. row reset / load). Only sync when the box isn't being edited.
+  useEffect(() => { if (!open) setQuery(value); }, [value, open]);
 
   const filtered = useMemo(() =>
-    (value
-      ? users.filter(u => u.name.toLowerCase().includes(value.toLowerCase()))
+    (query
+      ? users.filter(u => u.name.toLowerCase().includes(query.toLowerCase()))
       : users
     ).slice(0, 15),
-    [value, users]
+    [query, users]
   );
+
+  useEffect(() => { setHighlight(0); }, [query, users]);
+
+  useEffect(() => {
+    if (!open || !dropRef.current) return;
+    const el = dropRef.current.querySelector<HTMLElement>(`[data-idx="${highlight}"]`);
+    el?.scrollIntoView({ block: "nearest" });
+  }, [highlight, open]);
 
   function handleFocus() {
     if (inputRef.current) {
@@ -222,31 +323,85 @@ function UserCombobox({ value, onChange, users, placeholder }: {
     setOpen(true);
   }
 
+  // Commit a valid pick; otherwise revert the box to the committed value.
+  function selectUser(name: string) {
+    onChange(name);
+    setQuery(name);
+    setOpen(false);
+  }
+  function handleBlur() {
+    setTimeout(() => {
+      setOpen(false);
+      // STRICT: only an exact (case-insensitive) match may persist.
+      const exact = users.find(u => u.name.toLowerCase() === query.trim().toLowerCase());
+      if (exact) { if (exact.name !== value) onChange(exact.name); setQuery(exact.name); }
+      else if (query.trim() === "") { if (value !== "") onChange(""); setQuery(""); }
+      else { setQuery(value); } // typed something not in the list → discard
+    }, 160);
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (!open) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") { setOpen(true); e.preventDefault(); }
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHighlight(h => Math.min(h + 1, Math.max(filtered.length - 1, 0)));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHighlight(h => Math.max(h - 1, 0));
+    } else if (e.key === "Enter" && filtered.length > 0) {
+      e.preventDefault();
+      const pick = filtered[Math.min(highlight, filtered.length - 1)];
+      if (pick) selectUser(pick.name);
+    } else if (e.key === "Escape") {
+      setQuery(value); // discard in-progress typing
+      setOpen(false);
+    }
+  }
+
   return (
     <div className="min-w-[100px]">
       <Input
         ref={inputRef}
-        value={value}
-        onChange={e => onChange(e.target.value)}
+        value={query}
+        onChange={e => { setQuery(e.target.value); if (!open) setOpen(true); }}
         onFocus={handleFocus}
-        onBlur={() => setTimeout(() => setOpen(false), 160)}
-        placeholder={placeholder || "Search…"}
+        onBlur={handleBlur}
+        onKeyDown={handleKeyDown}
+        placeholder={placeholder || "Select…"}
         className="h-6 text-[11px] px-1.5 w-full"
       />
       {open && filtered.length > 0 && (
         <div
+          ref={dropRef}
           style={{ position: "fixed", top: dropPos.top, left: dropPos.left, width: dropPos.width, zIndex: 9999 }}
           className="bg-popover border rounded-md shadow-lg max-h-40 overflow-auto"
         >
-          {filtered.map(u => (
+          {filtered.map((u, i) => (
             <div
               key={u.id}
-              onMouseDown={e => { e.preventDefault(); onChange(u.name); setOpen(false); }}
-              className="px-2 py-1.5 text-[11px] cursor-pointer hover:bg-accent"
+              data-idx={i}
+              onMouseDown={e => { e.preventDefault(); selectUser(u.name); }}
+              onMouseEnter={() => setHighlight(i)}
+              className={cn(
+                "px-2 py-1.5 text-[11px] cursor-pointer",
+                i === highlight ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",
+              )}
             >
               {u.name}
             </div>
           ))}
+        </div>
+      )}
+      {/* When the user has typed something that matches nothing, show a hint */}
+      {open && query.trim() !== "" && filtered.length === 0 && (
+        <div
+          style={{ position: "fixed", top: dropPos.top, left: dropPos.left, width: dropPos.width, zIndex: 9999 }}
+          className="bg-popover border rounded-md shadow-lg px-2 py-1.5 text-[10px] text-muted-foreground italic"
+        >
+          No match — pick a name from the list
         </div>
       )}
     </div>
@@ -353,8 +508,10 @@ export default function AuditStatusRow({
   function handleUdinField(field: "udin_tax_audit" | "udin_statutory_audit", val: string) {
     setDraft(p => {
       const updates: Partial<RowDraft> = { [field]: val };
-      // Auto-fill UDIN date when first entering a value
-      if (val && !p.udin_date) {
+      // Auto-fill UDIN date when first entering a REAL UDIN value. "NA" means
+      // no UDIN is applicable, so it must NOT trigger the date auto-fill.
+      const isRealUdin = !!val && val.trim().toUpperCase() !== "NA";
+      if (isRealUdin && !p.udin_date) {
         updates.udin_date = todayISO();
       }
       return { ...p, ...updates };
@@ -560,6 +717,13 @@ export default function AuditStatusRow({
           : <span>{row.audit_report_prepared_by || "—"}</span>}
       </TCell>
 
+      {/* 6b · Audit Report Checked By */}
+      <TCell className="min-w-[120px]">
+        {editing
+          ? <UserCombobox value={draft.audit_report_checked_by} onChange={v => set("audit_report_checked_by", v)} users={users} placeholder="Name…" />
+          : <span>{row.audit_report_checked_by || "—"}</span>}
+      </TCell>
+
       {/* 7 · Audit Status */}
       <TCell className="min-w-[130px]">
         {editing ? (
@@ -599,17 +763,17 @@ export default function AuditStatusRow({
           : <span className="text-[11px]">{row.physical_report_received_date || "—"}</span>}
       </TCell>
 
-      {/* 11 · UDIN Tax Audit */}
-      <TCell className="min-w-[120px]">
+      {/* 11 · UDIN Tax Audit (manual entry + one-click NA) */}
+      <TCell className="min-w-[150px]">
         {editing
-          ? <EInput value={draft.udin_tax_audit} onChange={v => handleUdinField("udin_tax_audit", v)} placeholder="UDIN…" className="font-mono" />
+          ? <UdinInput value={draft.udin_tax_audit} onChange={v => handleUdinField("udin_tax_audit", v)} placeholder="UDIN…" />
           : <span className="font-mono text-[11px] truncate block" title={row.udin_tax_audit || ""}>{row.udin_tax_audit || "—"}</span>}
       </TCell>
 
-      {/* 12 · UDIN Statutory Audit (conditional) */}
-      <TCell className="min-w-[120px]">
+      {/* 12 · UDIN Statutory Audit (conditional, manual entry + one-click NA) */}
+      <TCell className="min-w-[150px]">
         {editing && showUdinStatutoryEdit
-          ? <EInput value={draft.udin_statutory_audit} onChange={v => handleUdinField("udin_statutory_audit", v)} placeholder="UDIN…" className="font-mono" />
+          ? <UdinInput value={draft.udin_statutory_audit} onChange={v => handleUdinField("udin_statutory_audit", v)} placeholder="UDIN…" />
           : !editing && showUdinStatutoryView
             ? <span className="font-mono text-[11px] truncate block" title={row.udin_statutory_audit || ""}>{row.udin_statutory_audit || "—"}</span>
             : <span className="text-muted-foreground/40 text-[11px]">—</span>}
@@ -716,6 +880,7 @@ function buildDraft(row: StatusEntry, clients: ClientOption[]): RowDraft {
     accounting_data:              row.accounting_data              || "No",
     audit_employees:              row.audit_employees              || "",
     audit_report_prepared_by:     row.audit_report_prepared_by     || "",
+    audit_report_checked_by:      row.audit_report_checked_by      || "",
     audit_status:                 row.audit_status                 || "",
     audit_status_other:           row.audit_status_other           || "",
     report_print_date:            row.report_print_date            || "",
@@ -741,6 +906,7 @@ function draftToPatch(d: RowDraft): StatusPatch {
     accounting_data:              d.accounting_data || "No",
     audit_employees:              d.audit_employees || null,
     audit_report_prepared_by:     d.audit_report_prepared_by || null,
+    audit_report_checked_by:      d.audit_report_checked_by || null,
     audit_status:                 d.audit_status || null,
     audit_status_other:           d.audit_status === "OTHERS" ? (d.audit_status_other || null) : null,
     report_print_date:            d.report_print_date || null,

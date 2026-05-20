@@ -27,6 +27,7 @@ export function useEmployeeDropdown(): {
       let q = supabase
         .from("users")
         .select("id, name, role, icai_reg_no")
+        .neq("role", "client")
         .order("name");
       if (!isSuperadmin) q = q.eq("firm_id", user?.firm_id ?? "");
       const { data, error } = await q;

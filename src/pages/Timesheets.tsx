@@ -109,7 +109,7 @@ const Timesheets = () => {
 
   const fetchUsers = useCallback(async () => {
     if (isSuperadmin || user?.role === "firm_admin") {
-      let q = supabase.from("users").select("id, name");
+      let q = supabase.from("users").select("id, name").neq("role", "client");
       if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
       const { data } = await q;
       setUsers(data || []);

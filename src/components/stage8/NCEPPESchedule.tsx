@@ -11,8 +11,26 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toast } from "sonner";
-import { Loader2, Save } from "lucide-react";
+import { Loader2, Plus, Save, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+// ─── Sub-ledger sort_order encoding ──────────────────────────────────────────
+// Parent rows use sort_order 1–11 (see ASSET_ROW_DEFS). User-added sub-ledgers
+// under parent N are stored with sort_order = N * 100 + slot, where slot ∈ [1..99].
+// This keeps every row in the same flat nce_ppe_schedule table without a
+// schema migration: a row is a sub-ledger iff sort_order >= 100.
+const SUB_BASE = 100;
+const isSubLedger = (so: number) => so >= SUB_BASE;
+const parentOfSub = (so: number) => Math.floor(so / SUB_BASE);
+const nextSubSlot = (rows: { sort_order: number }[], parentSo: number): number => {
+  const used = new Set(
+    rows
+      .filter(r => isSubLedger(r.sort_order) && parentOfSub(r.sort_order) === parentSo)
+      .map(r => r.sort_order % SUB_BASE),
+  );
+  for (let slot = 1; slot < SUB_BASE; slot++) if (!used.has(slot)) return slot;
+  return SUB_BASE - 1;
+};
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -92,8 +110,28 @@ function calcRowTotal(r: AssetRow): number {
   return Math.round((r.opening_balance + r.additions_pre + r.additions_post) * 100) / 100;
 }
 
+/** Auto-compute depreciation per Companies Act / Income Tax half-year rule:
+ *  • Opening balance + additions on or before 29/09 → full-year rate
+ *  • Additions after 29/09 → half-year rate (half of the rate %)
+ *
+ *  depn = (opening + additions_pre) * rate% + additions_post * rate%/2
+ *
+ *  Previously this column was a manual input — auditors had to compute and
+ *  type the figure by hand, prone to error. Now the input is read-only and
+ *  the value is derived from rate %, opening balance, and the two
+ *  date-bucketed addition columns. */
+function calcDepreciation(r: AssetRow): number {
+  const rate = Number(r.rate_pct) || 0;
+  if (rate <= 0) return 0;
+  const base = (Number(r.opening_balance) || 0) + (Number(r.additions_pre) || 0);
+  const post = Number(r.additions_post) || 0;
+  const depn = base * (rate / 100) + post * (rate / 200);
+  return Math.round(depn * 100) / 100;
+}
+
 function calcClosing(r: AssetRow): number {
-  return Math.round((calcRowTotal(r) - r.depreciation) * 100) / 100;
+  const depn = calcDepreciation(r);
+  return Math.round((calcRowTotal(r) - depn) * 100) / 100;
 }
 
 function fmtNum(v: number): string {
@@ -183,22 +221,29 @@ export function NCEPPESchedule({ engagementId }: Props) {
       if (!cancelled) {
         if (!error && data && data.length > 0) {
           const built = initRows();
+          // Preserve sub-ledger rows from DB (sort_order >= SUB_BASE) and merge
+          // them after the parent rows so the table renders nested correctly.
+          const subRows: AssetRow[] = [];
           for (const db of data) {
-            const idx = built.findIndex(r => r.sort_order === db.sort_order);
-            if (idx >= 0) {
-              built[idx] = {
-                sort_order:      db.sort_order,
-                asset_category:  db.asset_category as "tangible" | "intangible",
-                asset_name:      db.asset_name,
-                rate_pct:        Number(db.rate_pct)        || 0,
-                opening_balance: Number(db.opening_balance) || 0,
-                additions_pre:   Number(db.additions_pre)   || 0,
-                additions_post:  Number(db.additions_post)  || 0,
-                depreciation:    Number(db.depreciation)    || 0,
-              };
+            const so = Number(db.sort_order);
+            const row: AssetRow = {
+              sort_order:      so,
+              asset_category:  db.asset_category as "tangible" | "intangible",
+              asset_name:      db.asset_name,
+              rate_pct:        Number(db.rate_pct)        || 0,
+              opening_balance: Number(db.opening_balance) || 0,
+              additions_pre:   Number(db.additions_pre)   || 0,
+              additions_post:  Number(db.additions_post)  || 0,
+              depreciation:    Number(db.depreciation)    || 0,
+            };
+            if (isSubLedger(so)) {
+              subRows.push(row);
+              continue;
             }
+            const idx = built.findIndex(r => r.sort_order === so);
+            if (idx >= 0) built[idx] = row;
           }
-          setRows(built);
+          setRows([...built, ...subRows].sort((a, b) => a.sort_order - b.sort_order));
         }
         setLoading(false);
       }
@@ -213,18 +258,42 @@ export function NCEPPESchedule({ engagementId }: Props) {
     );
   };
 
+  // ── Sub-ledger handlers ─────────────────────────────────────────────────
+  const addSubLedger = (parentSo: number) => {
+    setRows(prev => {
+      const parent = prev.find(r => r.sort_order === parentSo);
+      if (!parent) return prev;
+      const slot = nextSubSlot(prev, parentSo);
+      const newRow: AssetRow = {
+        sort_order:      parentSo * SUB_BASE + slot,
+        asset_category:  parent.asset_category,
+        asset_name:      "",                                  // user-entered
+        rate_pct:        0,
+        opening_balance: 0,
+        additions_pre:   0,
+        additions_post:  0,
+        depreciation:    0,
+      };
+      return [...prev, newRow].sort((a, b) => a.sort_order - b.sort_order);
+    });
+  };
+  const deleteSubLedger = (sort_order: number) => {
+    setRows(prev => prev.filter(r => r.sort_order !== sort_order));
+  };
+
   // ── Totals ──────────────────────────────────────────────────────────────
   const totals = useMemo(() => {
     const sum = (f: keyof AssetRow) =>
       rows.reduce((s, r) => s + (Number(r[f]) || 0), 0);
     const totalTotal   = rows.reduce((s, r) => s + calcRowTotal(r), 0);
     const totalClosing = rows.reduce((s, r) => s + calcClosing(r),  0);
+    const totalDepn    = rows.reduce((s, r) => s + calcDepreciation(r), 0);
     return {
       opening:      sum("opening_balance"),
       addPre:       sum("additions_pre"),
       addPost:      sum("additions_post"),
       total:        Math.round(totalTotal   * 100) / 100,
-      depreciation: sum("depreciation"),
+      depreciation: Math.round(totalDepn    * 100) / 100,
       closing:      Math.round(totalClosing * 100) / 100,
     };
   }, [rows]);
@@ -252,7 +321,7 @@ export function NCEPPESchedule({ engagementId }: Props) {
         additions_pre:   r.additions_pre,
         additions_post:  r.additions_post,
         total:           calcRowTotal(r),
-        depreciation:    r.depreciation,
+        depreciation:    calcDepreciation(r),
         closing_balance: calcClosing(r),
         sort_order:      r.sort_order,
       }));
@@ -276,8 +345,18 @@ export function NCEPPESchedule({ engagementId }: Props) {
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────
-  const tangibleRows   = rows.filter(r => r.asset_category === "tangible");
-  const intangibleRows = rows.filter(r => r.asset_category === "intangible");
+  // Parent rows only — the renderer pulls each parent's sub-ledgers from the
+  // full `rows` list and renders them inline beneath. This keeps the section
+  // rowspan math (TANGIBLE_COUNT / INTANGIBLE_COUNT) stable even as sub-rows
+  // are added/removed.
+  const tangibleParents   = rows.filter(r => r.asset_category === "tangible"   && !isSubLedger(r.sort_order));
+  const intangibleParents = rows.filter(r => r.asset_category === "intangible" && !isSubLedger(r.sort_order));
+  const subRowsOf = (parentSo: number) =>
+    rows.filter(r => isSubLedger(r.sort_order) && parentOfSub(r.sort_order) === parentSo);
+  const sectionSpan = (cat: "tangible" | "intangible") =>
+    cat === "tangible"
+      ? tangibleParents.length + rows.filter(r => r.asset_category === "tangible" && isSubLedger(r.sort_order)).length
+      : intangibleParents.length + rows.filter(r => r.asset_category === "intangible" && isSubLedger(r.sort_order)).length;
 
   const SaveBtn = () => (
     <Button size="sm" onClick={handleSave} disabled={saving}>
@@ -288,7 +367,8 @@ export function NCEPPESchedule({ engagementId }: Props) {
     </Button>
   );
 
-  /** Render one asset row. isFirst drives whether the rowspan Category cell appears. */
+  /** Render one PARENT asset row (sort_order < SUB_BASE). isFirst drives
+   *  whether the rowspan Category cell appears. */
   const renderAssetRow = (
     row:          AssetRow,
     def:          AssetRowDef,
@@ -317,8 +397,8 @@ export function NCEPPESchedule({ engagementId }: Props) {
           </TableCell>
         )}
 
-        {/* Col 2: Asset Name */}
-        <TableCell className="py-1 px-2 text-xs border-r" style={{ minWidth: "160px" }}>
+        {/* Col 2: Asset Name + inline "+ Add sub-ledger" button */}
+        <TableCell className="py-1 px-2 text-xs border-r" style={{ minWidth: "180px" }}>
           <div className="flex items-center gap-1.5">
             <span className="text-muted-foreground shrink-0 font-mono text-[11px]">
               {def.rowLabel}
@@ -334,8 +414,16 @@ export function NCEPPESchedule({ engagementId }: Props) {
                 }
               />
             ) : (
-              <span>{def.defaultName}</span>
+              <span className="flex-1">{def.defaultName}</span>
             )}
+            <button
+              type="button"
+              className="h-5 px-1.5 inline-flex items-center gap-0.5 rounded text-[10px] text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/20 shrink-0"
+              onClick={() => addSubLedger(row.sort_order)}
+              title={`Add a sub-ledger under "${def.defaultName}"`}
+            >
+              <Plus className="h-3 w-3" /> Sub
+            </button>
           </div>
         </TableCell>
 
@@ -376,15 +464,65 @@ export function NCEPPESchedule({ engagementId }: Props) {
           <NumInput value={rowTotal} readOnly />
         </TableCell>
 
-        {/* Col 8: Depreciation */}
+        {/* Col 8: Depreciation (auto-calculated from rate% + opening + additions) */}
         <TableCell className="p-1 border-r" style={{ minWidth: "88px" }}>
-          <NumInput
-            value={row.depreciation}
-            onChange={v => updateRow(row.sort_order, "depreciation", v)}
-          />
+          <NumInput value={calcDepreciation(row)} readOnly />
         </TableCell>
 
         {/* Col 9: Closing Balance (read-only) */}
+        <TableCell className="p-1" style={{ minWidth: "88px" }}>
+          <NumInput value={closing} readOnly />
+        </TableCell>
+      </TableRow>
+    );
+  };
+
+  /** Render a sub-ledger row (sort_order >= SUB_BASE). The Category column is
+   *  not emitted — its rowspan already covers this row. Asset name is fully
+   *  editable; a trash icon allows removal. */
+  const renderSubLedgerRow = (row: AssetRow) => {
+    const rowTotal = calcRowTotal(row);
+    const closing  = calcClosing(row);
+    return (
+      <TableRow key={row.sort_order} className="bg-blue-50/30 hover:bg-blue-50/50">
+        <TableCell className="py-1 px-2 text-xs border-r" style={{ minWidth: "180px" }}>
+          <div className="flex items-center gap-1.5 pl-5">
+            <span className="text-muted-foreground/60 shrink-0 text-[11px]">└</span>
+            <Input
+              type="text"
+              className="h-7 text-xs px-2 py-0 flex-1 border-blue-200"
+              value={row.asset_name}
+              placeholder="Sub-ledger name…"
+              onChange={e => updateRow(row.sort_order, "asset_name", e.target.value)}
+            />
+            <button
+              type="button"
+              className="h-5 w-5 inline-flex items-center justify-center rounded text-muted-foreground hover:text-destructive hover:bg-red-50 shrink-0"
+              onClick={() => deleteSubLedger(row.sort_order)}
+              title="Remove this sub-ledger"
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+          </div>
+        </TableCell>
+        <TableCell className="p-1 border-r" style={{ minWidth: "64px" }}>
+          <NumInput value={row.rate_pct} onChange={v => updateRow(row.sort_order, "rate_pct", v)} />
+        </TableCell>
+        <TableCell className="p-1 border-r" style={{ minWidth: "88px" }}>
+          <NumInput value={row.opening_balance} onChange={v => updateRow(row.sort_order, "opening_balance", v)} />
+        </TableCell>
+        <TableCell className="p-1" style={{ minWidth: "88px" }}>
+          <NumInput value={row.additions_pre} onChange={v => updateRow(row.sort_order, "additions_pre", v)} />
+        </TableCell>
+        <TableCell className="p-1 border-r" style={{ minWidth: "88px" }}>
+          <NumInput value={row.additions_post} onChange={v => updateRow(row.sort_order, "additions_post", v)} />
+        </TableCell>
+        <TableCell className="p-1 border-r" style={{ minWidth: "88px" }}>
+          <NumInput value={rowTotal} readOnly />
+        </TableCell>
+        <TableCell className="p-1 border-r" style={{ minWidth: "88px" }}>
+          <NumInput value={calcDepreciation(row)} readOnly />
+        </TableCell>
         <TableCell className="p-1" style={{ minWidth: "88px" }}>
           <NumInput value={closing} readOnly />
         </TableCell>
@@ -505,28 +643,28 @@ export function NCEPPESchedule({ engagementId }: Props) {
 
           <TableBody>
             {/* ── Tangible Assets ── */}
-            {tangibleRows.map((row, idx) => {
-              const def = ASSET_ROW_DEFS.find(d => d.sort_order === row.sort_order)!;
-              return renderAssetRow(
-                row,
-                def,
-                idx === 0,
-                TANGIBLE_COUNT,
-                "(a) Tangible Assets",
-              );
-            })}
+            {(() => {
+              const span = sectionSpan("tangible");
+              const out: JSX.Element[] = [];
+              tangibleParents.forEach((row, idx) => {
+                const def = ASSET_ROW_DEFS.find(d => d.sort_order === row.sort_order)!;
+                out.push(renderAssetRow(row, def, idx === 0, span, "(a) Tangible Assets"));
+                for (const sub of subRowsOf(row.sort_order)) out.push(renderSubLedgerRow(sub));
+              });
+              return out;
+            })()}
 
             {/* ── Intangible Assets ── */}
-            {intangibleRows.map((row, idx) => {
-              const def = ASSET_ROW_DEFS.find(d => d.sort_order === row.sort_order)!;
-              return renderAssetRow(
-                row,
-                def,
-                idx === 0,
-                INTANGIBLE_COUNT,
-                "(b) Intangible Assets",
-              );
-            })}
+            {(() => {
+              const span = sectionSpan("intangible");
+              const out: JSX.Element[] = [];
+              intangibleParents.forEach((row, idx) => {
+                const def = ASSET_ROW_DEFS.find(d => d.sort_order === row.sort_order)!;
+                out.push(renderAssetRow(row, def, idx === 0, span, "(b) Intangible Assets"));
+                for (const sub of subRowsOf(row.sort_order)) out.push(renderSubLedgerRow(sub));
+              });
+              return out;
+            })()}
 
             {/* ── Total Row ── */}
             <TableRow className="bg-muted/20 border-t-2 font-semibold">
@@ -572,7 +710,7 @@ export function NCEPPESchedule({ engagementId }: Props) {
       {/* Legend */}
       <p className="text-[11px] text-muted-foreground pl-1">
         * Shaded columns (Total, Closing Balance) are auto-calculated.&ensp;
-        Rate % is for reference only and does not auto-calculate depreciation.
+        Depreciation auto-calculates as (Opening + Additions before 29/09) × Rate% + (Additions after 29/09) × Rate%/2.
       </p>
 
       {/* Bottom save */}

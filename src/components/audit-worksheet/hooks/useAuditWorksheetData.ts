@@ -173,15 +173,52 @@ export function useAuditWorksheetData(engagementId: string): AuditWorksheetData 
   });
 
   // ── Audit Firm (from audit_firms via engagement.audit_firm_id) ──
+  // The engagement's audit_firm_id may point to either:
+  //   1. A row in audit_firms (legacy / minimal — just name+partner)
+  //   2. A row in `firms` (created via Firm Management — has full details:
+  //      ICAI registration, address, membership_numbers, etc.)
+  // We hydrate from both: take audit_firms as the primary, then fall back
+  // to firms (same id) for any fields the audit_firms row leaves blank.
+  // This guarantees the audit firm chosen in Stage 1 shows correctly in
+  // every downstream stage (Workpapers, FS, IAR, MRL).
   const { data: auditFirm } = useQuery<AuditWorksheetAuditFirm | null>({
-    queryKey: ["aws-audit-firm", engagement?.audit_firm_id],
+    queryKey: ["aws-audit-firm-v2", engagement?.audit_firm_id],
     queryFn: async () => {
-      const { data } = await supabase
-        .from("audit_firms")
-        .select("name, partner_name, icai_reg_no, address, city, phone")
-        .eq("id", engagement!.audit_firm_id!)
-        .maybeSingle();
-      return data as AuditWorksheetAuditFirm | null;
+      if (!engagement?.audit_firm_id) return null;
+      const [afRes, fRes] = await Promise.all([
+        supabase
+          .from("audit_firms")
+          .select("name, partner_name, icai_reg_no, address, city, phone")
+          .eq("id", engagement.audit_firm_id)
+          .maybeSingle(),
+        supabase
+          .from("firms")
+          .select("name, display_name, icai_reg_no, icai_firm_reg_no, address, phone, email, membership_numbers")
+          .eq("id", engagement.audit_firm_id)
+          .maybeSingle(),
+      ]);
+      const af = (afRes.data || {}) as any;
+      const f  = (fRes.data  || {}) as any;
+      // Partner name preference: audit_firms.partner_name → first entry in
+      // firms.membership_numbers (which is what the Stage 1 Engagement
+      // Partner dropdown reads from).
+      const partnerName = af.partner_name
+        || (Array.isArray(f.membership_numbers)
+              ? (f.membership_numbers.find((m: any) => m?.partner_name)?.partner_name as string | undefined)
+              : undefined)
+        || null;
+      const addressVal = af.address || f.address || null;
+      const merged: AuditWorksheetAuditFirm = {
+        name:         af.name        || f.display_name || f.name || "",
+        partner_name: partnerName ?? null,
+        icai_reg_no:  af.icai_reg_no || f.icai_firm_reg_no || f.icai_reg_no || null,
+        address:      typeof addressVal === "object"
+          ? `${addressVal?.line ?? ""}${addressVal?.city ? ", " + addressVal.city : ""}`.trim() || null
+          : (addressVal || null),
+        city:         af.city  || (typeof f.address === "object" ? (f.address?.city ?? null) : null),
+        phone:        af.phone || f.phone || null,
+      };
+      return merged;
     },
     enabled: !!engagement?.audit_firm_id,
     staleTime: 300_000,
@@ -216,9 +253,17 @@ export function useAuditWorksheetData(engagementId: string): AuditWorksheetData 
     clientEntity === "Private Limited" ||
     clientEntity === "Public Limited";
 
+  // Display the AUDIT firm chosen in Engagement Setup (Stage 1), not the
+  // tenant/practice firm the user is logged into. Auditors in multi-firm
+  // practices routinely sign engagements under different audit firm names
+  // (e.g. "AKTA RAMANI & ASSOCIATES" vs the practice's primary
+  // "V J Desai & Co. LLP"). The downstream stages — Workpapers,
+  // Financial Statements, IAR, MRL — must show the audit firm that
+  // actually appears on the signed report.
   const firmName =
+    auditFirm?.name    ||
     firm?.display_name || firm?.name ||
-    auditFirm?.name    || "";
+    "";
 
   return {
     engagement:     engagement     ?? null,

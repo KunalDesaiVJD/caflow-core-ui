@@ -167,9 +167,12 @@ export default function UserManagement() {
   useEffect(() => {
     if (!user || !["superadmin", "firm_admin"].includes(user.role || "")) return;
     loadUsers();
-    if (user.role === "superadmin") {
-      supabase.from("firms").select("id, name").order("name").then(({ data }) => setFirmsList(data || []));
-    }
+    // FIX 6 (CAFlow_FirmFix_Report): load every firm so the Firm column in
+    // the user table resolves user.firm_id → name for users belonging to
+    // any firm, not only the current admin's own firm.
+    supabase.from("firms").select("id, name, display_name").order("name").then(({ data }) => {
+      setFirmsList((data || []).map((f: any) => ({ id: f.id, name: f.display_name || f.name })));
+    });
   }, [user]);
 
   async function loadUsers() {
@@ -410,6 +413,7 @@ export default function UserManagement() {
               <TableHead>Member</TableHead>
               <TableHead>Email</TableHead>
               <TableHead>Phone</TableHead>
+              <TableHead>Firm</TableHead>
               <TableHead>Role</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Last Login</TableHead>
@@ -418,9 +422,9 @@ export default function UserManagement() {
           </TableHeader>
           <TableBody>
             {loading ? (
-              <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-10">Loading…</TableCell></TableRow>
+              <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-10">Loading…</TableCell></TableRow>
             ) : users.length === 0 ? (
-              <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-10">No team members found</TableCell></TableRow>
+              <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-10">No team members found</TableCell></TableRow>
             ) : users.map(u => (
               <TableRow key={u.id} className="group">
                 <TableCell>
@@ -436,6 +440,11 @@ export default function UserManagement() {
                 </TableCell>
                 <TableCell className="text-muted-foreground text-sm">{u.email || "—"}</TableCell>
                 <TableCell className="text-muted-foreground text-sm">{u.phone || "—"}</TableCell>
+                <TableCell className="text-muted-foreground text-sm">
+                  {/* FIX 6: resolve each user's firm via user.firm_id → firms.
+                      Never filtered to only the current admin's firm. */}
+                  {firmsList.find(f => f.id === u.firm_id)?.name || "—"}
+                </TableCell>
                 <TableCell>
                   <Badge variant="outline" className={ROLE_COLORS[u.role || "staff_article"]}>
                     {ROLE_LABELS[u.role || "staff_article"] || u.role}

@@ -252,18 +252,47 @@ export default function AuditWorksheetModule({ engagementId, engagement, client:
   const { from: prevFrom, to: prevTo } = prevFY(fy);
 
   // ── Load master + team users ────────────────────────────────────────────
+  // FIX 5 / W6: auditFirmData now comes from firms (engagement.firm_id) +
+  // partner from users (engagement.partner_id). Legacy audit_firms is no
+  // longer consulted; the worksheet's audit-firm defaults follow the same
+  // single source of truth as every other downstream consumer.
   const { data: auditFirmData } = useQuery({
-    queryKey: ["audit-firm", engagement?.audit_firm_id],
+    queryKey: ["audit-firm", engagement?.firm_id, engagement?.partner_id],
     queryFn: async () => {
-      if (!engagement?.audit_firm_id) return null;
-      const { data } = await supabase
-        .from("audit_firms")
-        .select("name, partner_name, icai_reg_no, address, city")
-        .eq("id", engagement.audit_firm_id)
+      if (!engagement?.firm_id) return null;
+      const { data: f } = await supabase
+        .from("firms")
+        .select("name, display_name, icai_firm_reg_no, address, state, membership_numbers")
+        .eq("id", engagement.firm_id)
         .maybeSingle();
-      return data;
+      if (!f) return null;
+      let partnerName: string | null = null;
+      let partnerIcai: string | null = null;
+      if (engagement.partner_id) {
+        const { data: p } = await supabase
+          .from("users")
+          .select("name, icai_reg_no")
+          .eq("id", engagement.partner_id)
+          .maybeSingle();
+        partnerName = (p as any)?.name ?? null;
+        partnerIcai = (p as any)?.icai_reg_no ?? null;
+      }
+      const roster: Array<{ partner_name: string; membership_no: string }> =
+        Array.isArray((f as any).membership_numbers) ? (f as any).membership_numbers : [];
+      const norm = (s: string) => (s || "").trim().toLowerCase();
+      const hit = partnerName
+        ? roster.find((m) => norm(m.partner_name) === norm(partnerName!))
+        : undefined;
+      const addr = (f as any).address;
+      return {
+        name: (f as any).display_name || f.name,
+        partner_name: partnerName,
+        icai_reg_no: hit?.membership_no || partnerIcai || null,
+        address: typeof addr === "string" ? addr : addr?.line || null,
+        city: addr?.city || (f as any).state || null,
+      };
     },
-    enabled: !!engagement?.audit_firm_id,
+    enabled: !!engagement?.firm_id,
   });
 
   const { data: firmUsers = [] } = useQuery<TeamUser[]>({

@@ -398,45 +398,49 @@ export default function AuditPipeline() {
     queryKey: ["firm-users", user?.firm_id],
     queryFn: async () => {
       // TODO: Supabase RLS policy needs superadmin bypass; guarded by enabled: !!user?.firm_id
-      const { data } = await supabase.from("users").select("id, name, role").eq("firm_id", user?.firm_id ?? "").eq("is_active", true);
+      const { data } = await supabase.from("users").select("id, name, role").neq("role", "client").eq("firm_id", user?.firm_id ?? "").eq("is_active", true);
       return data || [];
     },
     enabled: !!user?.firm_id,
   });
 
   // ─── Audit firms (for engagement creation) ───
-  // ALL active audit firms are visible to every authenticated user, regardless
-  // of role or practice firm_id. The previous behaviour scoped the list to the
-  // user's own practice firm_id for non-superadmins, which hid co-firms (e.g.
-  // "K Desai and Associates") from team members who legitimately needed to
-  // sign engagements under those firms. Practice partnerships routinely
-  // share staff across multiple registered audit firms — restricting the
-  // dropdown by firm_id breaks that workflow.
+  // Union of (legacy) audit_firms table + firms table where is_audit_firm=true.
+  // The Firm Management screen writes new audit firms into `firms` with
+  // is_audit_firm=true, so without this union those firms (e.g. "AKTA RAMANI
+  // & ASSOCIATES") would never appear in the engagement creation dropdown.
   const { data: auditFirmsForEng } = useQuery({
-    queryKey: ["audit-firms-eng-all"],
+    queryKey: ["audit-firms-eng-all-v2"],
     queryFn: async () => {
-      const { data } = await supabase
-        .from("audit_firms")
-        .select("id, name")
-        .neq("active", false)
-        .order("name");
-      return data || [];
+      const [r1, r2] = await Promise.all([
+        supabase.from("audit_firms").select("id, name").neq("active", false).order("name"),
+        supabase.from("firms").select("id, name, is_audit_firm").eq("is_audit_firm", true).order("name"),
+      ]);
+      const byKey = new Map<string, { id: string; name: string }>();
+      for (const f of (r1.data || [])) byKey.set((f.name || "").toLowerCase().trim(), { id: f.id, name: f.name });
+      for (const f of (r2.data || [])) {
+        const key = (f.name || "").toLowerCase().trim();
+        if (!byKey.has(key)) byKey.set(key, { id: f.id, name: f.name });
+      }
+      return [...byKey.values()].sort((a, b) => a.name.localeCompare(b.name));
     },
     enabled: !!user?.id,
   });
 
   // ─── Partners from FIRM SETTINGS (firms.membership_numbers) ────────────────
-  // Reads the partner membership list configured in Settings → Audit Registration.
-  // These are the actual signing partners of the practice firm.
+  // Resolves to the SELECTED audit firm's partner roster (so picking AKTA
+  // RAMANI shows its partners, not the user's own firm's partners). Falls
+  // back to the user's logged-in firm when no audit firm is chosen yet.
+  const selectedAuditFirmId = form1A.audit_firm_id || user?.firm_id || null;
   const { data: partnersForFirm = [] } = useQuery({
-    queryKey: ["practice-firm-partners", user?.firm_id],
+    queryKey: ["practice-firm-partners-v2", selectedAuditFirmId],
     queryFn: async () => {
-      if (!user?.firm_id) return [];
+      if (!selectedAuditFirmId) return [];
       const { data } = await supabase
         .from("firms")
         .select("membership_numbers")
-        .eq("id", user.firm_id)
-        .single();
+        .eq("id", selectedAuditFirmId)
+        .maybeSingle();
       if (!data?.membership_numbers) return [];
       return ((data.membership_numbers as any[]) || [])
         .filter((m: any) => m?.partner_name)
@@ -445,7 +449,7 @@ export default function AuditPipeline() {
           membership_no: (m.membership_no as string) || null,
         }));
     },
-    enabled: !!user?.firm_id,
+    enabled: !!selectedAuditFirmId,
   });
 
   // ─── Selected engagement detail ───
@@ -530,8 +534,16 @@ export default function AuditPipeline() {
   }, [currentStage, searchParams]);
 
   // Load form from engagement
+  // Issue 2 (CAFlow_FirmFix_Report): also gate on the options lists. When
+  // editing, the engagement row resolves before the clients / audit-firms
+  // queries; setting form1A.client_id to a uuid that isn't yet in the
+  // <Select>'s option set leaves the field blank until the user touches it.
+  // Gating the hydration on both lists ensures the Select value resolves
+  // to a matching SelectItem on first render.
   useEffect(() => {
     if (!engagement) return;
+    if ((eligibleClients?.length ?? 0) === 0) return;
+    if ((auditFirmsForEng?.length ?? 0) === 0) return;
     setForm1A({
       client_id: engagement.client_id || "",
       financial_year: engagement.financial_year || "2024-25",
@@ -561,7 +573,7 @@ export default function AuditPipeline() {
     if (engagement.team_members) {
       setPlanning(p => ({ ...p, team_members: engagement.team_members || [] }));
     }
-  }, [engagement]);
+  }, [engagement, eligibleClients, auditFirmsForEng]);
 
   // Auto-set entity_type when client is selected in creation dialog
   useEffect(() => {
@@ -672,10 +684,42 @@ export default function AuditPipeline() {
   const questValid = blockAValid && blockBValid && blockCValid && blockDValid;
   const canCompleteStage1 = block1AValid && questValid;
 
+  // ── Audit-firm id bridge ─────────────────────────────────────────────────
+  // audit_engagements.audit_firm_id has a FK on audit_firms.id. When the
+  // auditor picks a firm that lives only in the `firms` table (added via
+  // Firm Management with is_audit_firm=true), the insert fails with
+  //   "violates foreign key constraint audit_engagements_audit_firm_id_fkey".
+  // Mirror it into audit_firms with the same id before save — idempotent.
+  const ensureAuditFirmRow = async (firmId: string | null | undefined): Promise<string | null> => {
+    if (!firmId) return null;
+    const { data: existing } = await supabase.from("audit_firms").select("id").eq("id", firmId).maybeSingle();
+    if (existing?.id) return firmId;
+    const { data: src } = await supabase.from("firms").select("id, name").eq("id", firmId).maybeSingle();
+    if (!src?.id) return firmId;
+    await supabase.from("audit_firms").upsert({
+      id:      src.id,
+      name:    src.name,
+      firm_id: user?.firm_id ?? null,
+      active:  true,
+    } as any, { onConflict: "id" });
+    return firmId;
+  };
+
   // ─── Create new engagement ───
   const createEngagement = useMutation({
     mutationFn: async () => {
-      const effectiveFirmId = user?.firm_id || "be411601-f0f5-4f74-b93d-b87a8ef1b82b";
+      // Issue 1 (CAFlow_FirmFix_Report): no hardcoded firm fallback. If the
+      // signed-in user has no firm_id we refuse to create the engagement —
+      // silently parenting it to a hardcoded firm caused the "V.J. Desai
+      // ghost" appearing across every export.
+      const effectiveFirmId = user?.firm_id;
+      if (!effectiveFirmId) {
+        throw new Error("Your account has no firm assigned. Ask a Firm Admin to set your firm before creating engagements.");
+      }
+
+      // ── Required-field guard ────────────────────────────────────────────
+      if (!form1A.audit_type) throw new Error("Please select an Audit Type.");
+      if (!form1A.financial_year) throw new Error("Please select a Financial Year.");
 
       // ── FY-aware classification gate ────────────────────────────────────
       // The client's classification IN THE ENGAGEMENT'S FY must be "Audit".
@@ -704,6 +748,7 @@ export default function AuditPipeline() {
         throw new Error("An engagement already exists for this client, audit type, financial year, and period.");
       }
 
+      const safeAuditFirmId = await ensureAuditFirmRow(form1A.audit_firm_id);
       const { data, error } = await supabase.from("audit_engagements").insert({
         client_id: form1A.client_id,
         firm_id: effectiveFirmId,
@@ -712,7 +757,7 @@ export default function AuditPipeline() {
         entity_type: form1A.entity_type,
         audit_period_type: form1A.audit_period_type,
         period_label: form1A.period_label || null,
-        audit_firm_id: form1A.audit_firm_id || null,
+        audit_firm_id: safeAuditFirmId,
         // partner_id kept for backward compat; partner_name is the primary display field
         partner_id:   form1A.partner_id   || null,
         partner_name: form1A.partner_name || null,
@@ -788,6 +833,7 @@ export default function AuditPipeline() {
     if (!selectedEngId) return;
     setSaving(true);
     const newStatuses = { ...stageStatuses, "1": complete ? "complete" : "in_progress" };
+    const safeAuditFirmId = await ensureAuditFirmRow(form1A.audit_firm_id);
 
     const payload: Record<string, any> = {
       client_id: form1A.client_id,
@@ -796,7 +842,7 @@ export default function AuditPipeline() {
       entity_type: form1A.entity_type,
       audit_period_type: form1A.audit_period_type,
       period_label: form1A.period_label || null,
-      audit_firm_id: form1A.audit_firm_id || null,
+      audit_firm_id: safeAuditFirmId,
       partner_name:  form1A.partner_name  || null,
       questionnaire_answers: questionnaire,
       // Sync PY data-source choice to the dedicated column so Stage 10 can
@@ -1783,7 +1829,7 @@ export default function AuditPipeline() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowNewEng(false)}>Cancel</Button>
-            <Button onClick={() => createEngagement.mutate()} disabled={!form1A.client_id || !form1A.audit_firm_id}>Create</Button>
+            <Button onClick={() => createEngagement.mutate()} disabled={!form1A.client_id || !form1A.audit_firm_id || !form1A.audit_type || !form1A.financial_year}>Create</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

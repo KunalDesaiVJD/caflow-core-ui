@@ -15,6 +15,7 @@
  */
 
 import { useState, useEffect, useMemo, useCallback, useRef, Fragment } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { supabase }    from "@/integrations/supabase/client";
 import { Button }      from "@/components/ui/button";
 import { Input }       from "@/components/ui/input";
@@ -289,12 +290,14 @@ function SourceBadge({ source }: { source: "auto" | "manual" }) {
 // ─── Row actions menu (⋮) — Move to / Add separate row / Delete ──────────────
 
 function RowActionsMenu({
-  headingOptions, onPromote, onDelete, onAddRow,
+  headingOptions, onPromote, onDelete, onAddRow, onSwapLtSt,
 }: {
   headingOptions: { id: string; label: string }[];
   onPromote:      (id: string) => void;
   onDelete:       () => void;
   onAddRow?:      () => void;
+  /** Pattern A only: swap LT ↔ ST amounts on this custom row. */
+  onSwapLtSt?:    () => void;
 }) {
   const [open,     setOpen]     = useState(false);
   const [showMove, setShowMove] = useState(false);
@@ -377,6 +380,16 @@ function RowActionsMenu({
                 <Plus className="h-3 w-3 shrink-0" /> Add separate row
               </button>
             )}
+            {onSwapLtSt && (
+              <button
+                type="button"
+                className="w-full text-left px-2 py-1 rounded text-xs hover:bg-muted flex items-center gap-1.5 transition-colors"
+                onClick={() => { onSwapLtSt(); closeAll(); }}
+                title="Swap Long-term ↔ Short-term amounts on this row"
+              >
+                <CornerUpRight className="h-3 w-3 shrink-0 rotate-90" /> Swap Long-term ↔ Short-term
+              </button>
+            )}
             <div className="border-t my-0.5" />
             <button
               type="button"
@@ -399,6 +412,7 @@ function CustomRowEditor({
   cyLtVal, cyStVal, pyLtVal, pyStVal,
   onChangeCy, onChangePy, onChangeCyLt, onChangeCySt, onChangePyLt, onChangePySt,
   onChangeLabel, onDelete, headingOptions, onPromote, onEjectCustomSource, onAddRow,
+  onSwapLtSt,
   isOpen: isOpenProp, onToggle: onToggleProp, hasSubRows,
   sourceLabelOverrides, onChangeSourceLabel,
 }: {
@@ -415,6 +429,8 @@ function CustomRowEditor({
   onPromote: (staticId: string) => void;
   onEjectCustomSource?: (ledger: string, amountCy: number, attachToId?: string) => void;
   onAddRow?: () => void;
+  /** Pattern A only: swap LT ↔ ST amounts on this row. */
+  onSwapLtSt?: () => void;
   /** External open state — when provided, overrides internal sourcesOpen */
   isOpen?: boolean;
   /** Called when the +/- button is clicked (required when isOpen is provided) */
@@ -479,6 +495,7 @@ function CustomRowEditor({
             onPromote={onPromote}
             onDelete={onDelete}
             onAddRow={onAddRow}
+            onSwapLtSt={isPatternA ? onSwapLtSt : undefined}
           />
         </TableCell>
       </TableRow>
@@ -517,18 +534,24 @@ function CustomRowEditor({
               <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
                 {s.column === "lt" ? fmtNum(s.amountCy) : "—"}
               </TableCell>
-              <TableCell className="py-0.5 border-r" />
+              <TableCell className="py-0.5 border-r text-xs text-right text-muted-foreground tabular-nums">
+                {s.column === "lt" && s.amountPy !== undefined && s.amountPy !== 0 ? fmtNum(s.amountPy) : "—"}
+              </TableCell>
               <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
                 {s.column === "st" ? fmtNum(s.amountCy) : "—"}
               </TableCell>
-              <TableCell className="py-0.5" />
+              <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
+                {s.column === "st" && s.amountPy !== undefined && s.amountPy !== 0 ? fmtNum(s.amountPy) : "—"}
+              </TableCell>
             </>
           ) : (
             <>
               <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
                 {fmtNum(s.amountCy)}
               </TableCell>
-              <TableCell className="py-0.5" />
+              <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
+                {s.amountPy !== undefined && s.amountPy !== 0 ? fmtNum(s.amountPy) : "—"}
+              </TableCell>
             </>
           )}
           <TableCell className="py-0.5" />
@@ -556,11 +579,11 @@ function PatternBTable({
   customRows:   NCECustomRow[];
   hiddenRows:   string[];
   labelOverrides: Record<string, string>;
-  cySources:    Record<string, { ledger: string; amountCy: number }[]>;
+  cySources:    Record<string, { ledger: string; amountCy: number; amountPy?: number; column?: "lt" | "st" }[]>;
   sourceLabelOverrides: Record<string, string>;
   onChangeCy:   (key: string, v: number) => void;
   onChangePy:   (key: string, v: number) => void;
-  onAddRow:     () => void;
+  onAddRow:     (opts?: { section?: string; attachedTo?: string }) => void;
   onDeleteRow:  (id: string) => void;
   onChangeLabel:(id: string, label: string) => void;
   onHideStatic: (id: string) => void;
@@ -732,11 +755,19 @@ function PatternBTable({
                       : <NumInput value={rawPy[row.id] ?? 0} onChange={v => onChangePy(row.id, v)} disabled={row.naAll || hasAttachedB} />}
                   </TableCell>
                   <TableCell className="p-1 text-center w-8">
-                    <button type="button" onClick={() => onHideStatic(row.id)}
-                      className="text-muted-foreground hover:text-destructive transition-colors"
-                      title="Hide row">
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    <div className="flex items-center justify-end gap-1">
+                      <button type="button"
+                        onClick={() => { onAddRow({ attachedTo: row.id }); toggleSources(row.id); }}
+                        className="text-muted-foreground hover:text-blue-600 transition-colors"
+                        title="Add sub-group under this row">
+                        <Plus className="h-3.5 w-3.5" />
+                      </button>
+                      <button type="button" onClick={() => onHideStatic(row.id)}
+                        className="text-muted-foreground hover:text-destructive transition-colors"
+                        title="Hide row">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
                   </TableCell>
                 </TableRow>
                 );
@@ -768,7 +799,9 @@ function PatternBTable({
                     <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
                       {fmtNum(s.amountCy)}
                     </TableCell>
-                    <TableCell className="py-0.5" />
+                    <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
+                      {s.amountPy !== undefined && s.amountPy !== 0 ? fmtNum(s.amountPy) : "—"}
+                    </TableCell>
                     <TableCell className="py-0.5" />
                   </TableRow>
                   );
@@ -824,7 +857,8 @@ function PatternATable({
   customRows, hiddenRows, labelOverrides, cySources,
   sourceLabelOverrides,
   onChangeCy, onChangePy, onAddRow, onDeleteRow, onChangeLabel,
-  onHideStatic, onChangeStaticLabel, onPromote, onEjectSource, onEjectCustomSource,
+  onHideStatic, onChangeStaticLabel, onPromote, onSwapLtSt,
+  onEjectSource, onEjectCustomSource,
   onChangeSourceLabel,
 }: {
   config:       NoteConfig;
@@ -834,11 +868,11 @@ function PatternATable({
   customRows:   NCECustomRow[];
   hiddenRows:   string[];
   labelOverrides: Record<string, string>;
-  cySources:    Record<string, { ledger: string; amountCy: number }[]>;
+  cySources:    Record<string, { ledger: string; amountCy: number; amountPy?: number; column?: "lt" | "st" }[]>;
   sourceLabelOverrides: Record<string, string>;
   onChangeCy:   (key: string, v: number) => void;
   onChangePy:   (key: string, v: number) => void;
-  onAddRow:     () => void;
+  onAddRow:     (opts?: { section?: string; attachedTo?: string }) => void;
   onDeleteRow:  (id: string) => void;
   onChangeLabel:(id: string, label: string) => void;
   onHideStatic: (id: string) => void;
@@ -853,6 +887,47 @@ function PatternATable({
     [config, rawCy, rawPy, customRows],
   );
   const grandTotalIdx = config.rows.reduce((last, row, i) => row.isTotal ? i : last, -1);
+
+  // ISSUE 2 FIX — derive section-specific "Add row" buttons so a row added
+  // under "Unsecured" gets section="unsecured" + attachedTo="unsec_other".
+  // Without these, handleAddRow created a sectionless row that only fed Total
+  // (A+B) grand-total; Total (B) and the BS face stayed unchanged.
+  //
+  // Heuristic: walk rows in document order, accumulating rows-since-last-total.
+  // When we hit an isTotal row carrying sectionTag, all preceding non-total
+  // rows belong to that section. Within those, pick the row whose id ends with
+  // "_other" / "_specify" as the default attachedTo target (e.g. sec_other,
+  // unsec_other, kb_unsecured, etc.). Falls back to the LAST row in the
+  // section if nothing matches the suffix.
+  const sectionAddTargets: { label: string; section: string; attachedTo: string }[] = useMemo(() => {
+    const out: { label: string; section: string; attachedTo: string }[] = [];
+    let sectionStart = 0;
+    for (let i = 0; i < config.rows.length; i++) {
+      const r = config.rows[i];
+      if (!r.isTotal || !r.sectionTag) {
+        if (r.isTotal) sectionStart = i + 1;
+        continue;
+      }
+      const sectionRows = config.rows.slice(sectionStart, i)
+        .filter(x => !x.isSectionHeader && !x.isTotal);
+      const otherRow =
+        sectionRows.find(x => x.id.endsWith("_other"))
+        ?? sectionRows.find(x => x.id.endsWith("_specify"))
+        ?? sectionRows.find(x => x.id.endsWith("_others"))
+        ?? sectionRows[sectionRows.length - 1];
+      if (otherRow) {
+        const niceName = r.sectionTag.charAt(0).toUpperCase() + r.sectionTag.slice(1);
+        out.push({
+          label: `+ Add row to ${niceName}`,
+          section: r.sectionTag,
+          attachedTo: otherRow.id,
+        });
+      }
+      sectionStart = i + 1;
+    }
+    return out;
+  }, [config]);
+
   // Track which static rows have their source-ledger list expanded
   const [openSources, setOpenSources] = useState<Set<string>>(new Set());
   const toggleSources = (id: string) => setOpenSources(prev => {
@@ -972,6 +1047,7 @@ function PatternATable({
                       onDelete={() => onDeleteRow(cr.id)}
                       headingOptions={sectionHeadingOptions.filter(o => o.id !== cr.id)}
                       onPromote={(targetId) => onPromote(cr.id, targetId)}
+                      onSwapLtSt={onSwapLtSt ? () => onSwapLtSt(cr.id) : undefined}
                       onEjectCustomSource={(ledger, amt) => onEjectCustomSource(cr.id, ledger, amt)}
                       onAddRow={onAddRow}
                       hasSubRows={customSubRows.length > 0}
@@ -1000,6 +1076,7 @@ function PatternATable({
                         onDelete={() => onDeleteRow(sub.id)}
                         headingOptions={sectionHeadingOptions.filter(o => o.id !== sub.id)}
                         onPromote={(targetId) => onPromote(sub.id, targetId)}
+                        onSwapLtSt={onSwapLtSt ? () => onSwapLtSt(sub.id) : undefined}
                         onEjectCustomSource={(ledger, amt) => onEjectCustomSource(sub.id, ledger, amt)}
                         onAddRow={onAddRow}
                         sourceLabelOverrides={sourceLabelOverrides}
@@ -1086,11 +1163,32 @@ function PatternATable({
                       : <NumInput value={rawPy[row.id + "_st"] ?? 0} onChange={v => onChangePy(row.id + "_st", v)} disabled={row.naST || hasAttachedA} />}
                   </TableCell>
                   <TableCell className="p-1 text-center w-8">
-                    <button type="button" onClick={() => onHideStatic(row.id)}
-                      className="text-muted-foreground hover:text-destructive transition-colors"
-                      title="Hide row">
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    <div className="flex items-center justify-end gap-1">
+                      <button type="button"
+                        onClick={() => {
+                          // Derive section by walking forward to next sectionTag total
+                          const idx = config.rows.findIndex(r2 => r2.id === row.id);
+                          let section: string | undefined;
+                          if (idx >= 0) {
+                            for (let i = idx + 1; i < config.rows.length; i++) {
+                              const r2 = config.rows[i];
+                              if (r2.isTotal && r2.sectionTag) { section = r2.sectionTag; break; }
+                              if (r2.isSectionHeader) break;
+                            }
+                          }
+                          onAddRow({ section, attachedTo: row.id });
+                          toggleSources(row.id);
+                        }}
+                        className="text-muted-foreground hover:text-blue-600 transition-colors"
+                        title="Add sub-group under this row">
+                        <Plus className="h-3.5 w-3.5" />
+                      </button>
+                      <button type="button" onClick={() => onHideStatic(row.id)}
+                        className="text-muted-foreground hover:text-destructive transition-colors"
+                        title="Hide row">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
                   </TableCell>
                 </TableRow>
                 );
@@ -1123,13 +1221,17 @@ function PatternATable({
                       </div>
                     </TableCell>
                     <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
-                      {(s as any).column === "lt" || !(s as any).column ? fmtNum(s.amountCy) : "—"}
+                      {s.column === "lt" || !s.column ? fmtNum(s.amountCy) : "—"}
                     </TableCell>
-                    <TableCell className="py-0.5 border-r" />
+                    <TableCell className="py-0.5 border-r text-xs text-right text-muted-foreground tabular-nums">
+                      {(s.column === "lt" || !s.column) && s.amountPy !== undefined && s.amountPy !== 0 ? fmtNum(s.amountPy) : "—"}
+                    </TableCell>
                     <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
-                      {(s as any).column === "st" ? fmtNum(s.amountCy) : "—"}
+                      {s.column === "st" ? fmtNum(s.amountCy) : "—"}
                     </TableCell>
-                    <TableCell className="py-0.5" />
+                    <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
+                      {s.column === "st" && s.amountPy !== undefined && s.amountPy !== 0 ? fmtNum(s.amountPy) : "—"}
+                    </TableCell>
                     <TableCell className="py-0.5" />
                   </TableRow>
                   );
@@ -1157,6 +1259,7 @@ function PatternATable({
                   onDelete={() => onDeleteRow(cr.id)}
                   headingOptions={allHeadingOptions.filter(o => o.id !== cr.id && o.id !== row.id)}
                   onPromote={(targetId) => onPromote(cr.id, targetId)}
+                  onSwapLtSt={onSwapLtSt ? () => onSwapLtSt(cr.id) : undefined}
                   onEjectCustomSource={(ledger, amt) => onEjectCustomSource(cr.id, ledger, amt)}
                   onAddRow={onAddRow}
                   sourceLabelOverrides={sourceLabelOverrides}
@@ -1166,14 +1269,32 @@ function PatternATable({
             </>
           );
         })}
-        {/* Add row */}
+        {/* Add row — section-specific buttons so the new row's amount flows
+            into the right section total (Issue 2 fix). Plus a fallback
+            sectionless button for notes without sections. */}
         <TableRow>
           <TableCell colSpan={6} className="py-1.5 px-3">
-            <Button type="button" size="sm" variant="ghost"
-              className="h-6 text-xs text-muted-foreground gap-1 hover:text-foreground"
-              onClick={onAddRow}>
-              <Plus className="h-3 w-3" /> Add row
-            </Button>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {sectionAddTargets.length > 0
+                ? sectionAddTargets.map(t => (
+                    <Button
+                      key={t.section}
+                      type="button" size="sm" variant="ghost"
+                      className="h-6 text-xs text-muted-foreground gap-1 hover:text-foreground"
+                      onClick={() => onAddRow({ section: t.section, attachedTo: t.attachedTo })}
+                      title={`Adds a new row under "${t.label.replace('+ Add row to ', '')}" section so its amount flows into the section total`}
+                    >
+                      <Plus className="h-3 w-3" /> {t.label.replace('+ ', '')}
+                    </Button>
+                  ))
+                : (
+                  <Button type="button" size="sm" variant="ghost"
+                    className="h-6 text-xs text-muted-foreground gap-1 hover:text-foreground"
+                    onClick={() => onAddRow()}>
+                    <Plus className="h-3 w-3" /> Add row
+                  </Button>
+                )}
+            </div>
           </TableCell>
         </TableRow>
       </TableBody>
@@ -1184,6 +1305,7 @@ function PatternATable({
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
+  const queryClient = useQueryClient();
   const [noteData,    setNoteData]    = useState<Record<string, NCENoteData>>({});
   const [loading,     setLoading]     = useState(true);
   const [saving,      setSaving]      = useState(false);
@@ -1274,18 +1396,205 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
             // attachedTo:"unsec_other" so the static row shows the correct
             // aggregate when collapsed. computeDisplayData already excludes
             // attached rows from section extras to prevent double-counting.
+            //
+            // ALSO: orphan custom rows (attachedTo points to a customRow id
+            // that no longer exists — e.g. user created a synthetic wrapper
+            // like "Unsecured Loans" and later deleted it, leaving children
+            // pointing at a ghost parent) cause the children's amounts to
+            // silently disappear from Total (A+B): the formula only adds
+            // static rows + their attached children, and the orphans match
+            // neither. Re-route them to a sane default static row so their
+            // amounts re-enter the total math.
+            const STATIC_DEFAULT_ATTACH: Record<string, Record<string, string>> = {
+              borrowings:     { secured: "sec_other", unsecured: "unsec_other" },
+              provisions:     { default: "other_prov" },
+              investments:    { quoted: "quot_other", unquoted: "unquot_other" },
+              loans_advances: { secured: "kb_secured", unsecured: "kb_unsecured" },
+            };
             let healed = false;
+            // Track ledgers to un-eject (so they re-enter the auto-aggregation
+            // pipeline on next Re-sync and contribute to the proper static row
+            // directly — avoiding the zero-out side-effect of being attached
+            // as a custom row to a static row that ALSO has smart-matched
+            // contributors).
+            const unEjectByNote: Record<string, Set<string>> = {};
+            const rebuildCustomRowsByNote: Record<string, Set<string>> = {};
+
+            // ZERO-OUT-CONFLICT detector: if borrowings has any custom row
+            // attached to unsec_related (or sec_related), AND that label looks
+            // related-party, AND the underlying ledger is in ejectedLedgers,
+            // un-eject + drop. Same pattern as the orphan handler, but for
+            // custom rows that point at a STATIC smart-match target rather
+            // than a deleted custom parent. Without this, the zero-out-when-
+            // attached-children logic in nceAutoPopulate wipes the smart-
+            // matched contributors and Total (B) becomes lower than COA.
             if (built["borrowings"]) {
-              const b = built["borrowings"];
-              const patched = b.customRows.map(cr =>
-                cr.section === "unsecured" && !cr.attachedTo
-                  ? { ...cr, attachedTo: "unsec_other" as string }
-                  : cr,
-              );
-              if (patched.some((cr, i) => cr !== b.customRows[i])) {
-                built["borrowings"] = { ...b, customRows: patched };
+              const d = built["borrowings"];
+              const ejectedSet = new Set(d.ejectedLedgers ?? []);
+              const dropIds = new Set<string>();
+              for (const cr of d.customRows ?? []) {
+                if (!cr.label) continue;
+                if (cr.attachedTo !== "unsec_related" && cr.attachedTo !== "sec_related") continue;
+                if (!ejectedSet.has(cr.label)) continue;
+                const lbl = cr.label.toLowerCase();
+                const isRel =
+                  lbl.includes(" huf") || lbl.includes("(huf)") || lbl.includes("-huf") ||
+                  /\b(director|partner|owner|proprietor|promoter|shareholder|relative|family|related)\b/.test(lbl);
+                if (!isRel) continue;
+                if (!unEjectByNote["borrowings"]) unEjectByNote["borrowings"] = new Set();
+                unEjectByNote["borrowings"].add(cr.label);
+                dropIds.add(cr.id);
+              }
+              if (dropIds.size > 0) {
+                rebuildCustomRowsByNote["borrowings"] = dropIds;
+                const filtered = d.customRows.filter(cr => !dropIds.has(cr.id));
+                built["borrowings"] = { ...d, customRows: filtered };
                 healed = true;
               }
+            }
+            for (const [nType, d] of Object.entries(built)) {
+              const validIds = new Set((d.customRows || []).map(cr => cr.id));
+              const sectionDefaults = STATIC_DEFAULT_ATTACH[nType];
+              if (!sectionDefaults) continue;
+              const dropIds = new Set<string>();
+              const patched = d.customRows.map(cr => {
+                // Case 1: legacy rows with section but no attachedTo
+                if (cr.section && !cr.attachedTo) {
+                  const target = sectionDefaults[cr.section] ?? sectionDefaults.default;
+                  if (target) return { ...cr, attachedTo: target };
+                }
+                // Case 2: orphan — attachedTo points to a deleted custom row
+                if (cr.attachedTo
+                    && cr.attachedTo.startsWith("custom_")
+                    && !validIds.has(cr.attachedTo)) {
+                  // ROOT-CAUSE FIX: when an orphan's label suggests a smart-
+                  // rule match (HUF/director/partner/etc.), the cleanest fix
+                  // is to UN-EJECT the underlying ledger and drop the custom
+                  // row entirely. The next Re-sync will smart-match the
+                  // ledger directly into unsec_related (Dipak HUF etc.
+                  // already there), restoring Total (B) to match COA without
+                  // triggering the zero-out side-effect of static rows with
+                  // attached children.
+                  const lbl = (cr.label || "").toLowerCase();
+                  const isRel = nType === "borrowings" && cr.section === "unsecured" && (
+                    lbl.includes(" huf") || lbl.includes("(huf)") || lbl.includes("-huf") ||
+                    /\b(director|partner|owner|proprietor|promoter|shareholder|relative|family|related)\b/.test(lbl)
+                  );
+                  if (isRel && cr.label) {
+                    if (!unEjectByNote[nType]) unEjectByNote[nType] = new Set();
+                    unEjectByNote[nType].add(cr.label);
+                    dropIds.add(cr.id);
+                    return cr; // will be filtered out below
+                  }
+                  const target =
+                    (cr.section && sectionDefaults[cr.section])
+                    ?? sectionDefaults.unsecured
+                    ?? sectionDefaults.default
+                    ?? "unsec_other";
+                  return { ...cr, attachedTo: target };
+                }
+                return cr;
+              }).filter(cr => !dropIds.has(cr.id));
+              if (patched.length !== d.customRows.length
+                  || patched.some((cr, i) => cr !== d.customRows[i])) {
+                if (dropIds.size > 0) rebuildCustomRowsByNote[nType] = dropIds;
+                built[nType] = { ...d, customRows: patched };
+                healed = true;
+              }
+            }
+            // Apply ejectedLedgers cleanup so the dropped custom-row labels
+            // re-enter the smart-match pipeline on next sync. Also strip the
+            // orphan custom_* cy/py keys so they don't linger as stale numbers.
+            for (const [nType, labels] of Object.entries(unEjectByNote)) {
+              const d = built[nType];
+              if (!d) continue;
+              const cleanedEjected = (d.ejectedLedgers ?? []).filter(l => !labels.has(l));
+              const dropIds = rebuildCustomRowsByNote[nType] ?? new Set<string>();
+              const cleanedCy = { ...d.cy };
+              const cleanedPy = { ...d.py };
+              for (const id of dropIds) {
+                for (const suffix of ["", "_lt", "_st"]) {
+                  delete cleanedCy[id + suffix];
+                  delete cleanedPy[id + suffix];
+                }
+              }
+              built[nType] = {
+                ...d,
+                cy: cleanedCy,
+                py: cleanedPy,
+                ejectedLedgers: cleanedEjected,
+              };
+              healed = true;
+            }
+
+            // PHANTOM-LT HEAL — for Pattern A notes (where customRows can
+            // carry both bare key AND _lt/_st suffix keys), strip the bare
+            // key whenever any suffix variant exists. Without this, the bare
+            // key leaks into the LT total via the fallback path (see
+            // computeDisplayData), producing a phantom amount in the LT
+            // column for ST-only entries.
+            for (const [nType, d] of Object.entries(built)) {
+              if (!d.customRows?.length) continue;
+              const cleanedCy = { ...d.cy };
+              const cleanedPy = { ...d.py };
+              let touched = false;
+              for (const cr of d.customRows) {
+                const hasLtCy = (cr.id + "_lt") in cleanedCy;
+                const hasStCy = (cr.id + "_st") in cleanedCy;
+                if ((hasLtCy || hasStCy) && cr.id in cleanedCy) {
+                  delete cleanedCy[cr.id]; touched = true;
+                }
+                const hasLtPy = (cr.id + "_lt") in cleanedPy;
+                const hasStPy = (cr.id + "_st") in cleanedPy;
+                if ((hasLtPy || hasStPy) && cr.id in cleanedPy) {
+                  delete cleanedPy[cr.id]; touched = true;
+                }
+              }
+              if (touched) {
+                built[nType] = { ...d, cy: cleanedCy, py: cleanedPy };
+                healed = true;
+              }
+            }
+
+            // ISSUE 1 HEAL — strip "Auto-filled from COA total" rows when
+            // the same note already has manual entries. These rows were
+            // inserted by a buggy version of the fallback logic that didn't
+            // count manual rows as "data present". Their amounts duplicate
+            // the manual totals, doubling Total (B) / Total (A+B). Healing
+            // now is safe — manual amounts remain intact; only the synthetic
+            // duplicate row + its cy/py keys are removed.
+            for (const [nType, d] of Object.entries(built)) {
+              const hasManual = (d.customRows || []).some(cr =>
+                cr.source === "manual" && (
+                  Math.abs(d.cy?.[cr.id] ?? 0) > 0.005 ||
+                  Math.abs(d.cy?.[cr.id + "_lt"] ?? 0) > 0.005 ||
+                  Math.abs(d.cy?.[cr.id + "_st"] ?? 0) > 0.005
+                ),
+              );
+              if (!hasManual) continue;
+              const autoTotalRows = (d.customRows || []).filter(
+                cr => cr.id === "custom_auto_total" ||
+                      cr.label === "Auto-filled from COA total",
+              );
+              if (autoTotalRows.length === 0) continue;
+              const cleanedCy = { ...d.cy };
+              const cleanedPy = { ...d.py };
+              for (const r of autoTotalRows) {
+                for (const suffix of ["", "_lt", "_st"]) {
+                  delete cleanedCy[r.id + suffix];
+                  delete cleanedPy[r.id + suffix];
+                }
+              }
+              built[nType] = {
+                ...d,
+                customRows: (d.customRows || []).filter(
+                  cr => cr.id !== "custom_auto_total" &&
+                        cr.label !== "Auto-filled from COA total",
+                ),
+                cy: cleanedCy,
+                py: cleanedPy,
+              };
+              healed = true;
             }
 
             for (const [, d] of Object.entries(built)) {
@@ -1307,16 +1616,65 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
               persistNotes(built, fy).catch(() => {/* best-effort */});
             }
             if (!cancelled) setNoteData(built);
+            // Whenever the heal touched a note (esp. un-ejected a ledger),
+            // immediately re-run auto-populate so the freshly-unblocked
+            // ledger gets smart-matched into its proper static row. This
+            // restores Total (B) for clients whose stage8 state had orphan
+            // ejected ledgers under deleted parents.
+            const unEjectedAny = Object.keys(unEjectByNote).length > 0;
             // Back-fill cy_sources for engagements saved before the feature was added
             const needsCySources = Object.values(built).some(
               d => Object.keys(d.cy ?? {}).some(k => !k.startsWith("custom_")) &&
                    (!d.cy_sources || Object.keys(d.cy_sources).length === 0)
             );
-            if (needsCySources) {
+            // ROOT-CAUSE FIX (Issue 1, PY not populating): trigger a silent
+            // re-sync when any note has CY data but no positive PY data OR
+            // when this engagement hasn't yet been migrated by the per-key
+            // PY-fallback in nceAutoPopulate. The migration is tracked via
+            // a per-engagement localStorage flag so the trigger is one-shot:
+            // we don't keep re-running on every page load once the data is
+            // healed.
+            const pyMigrationKey = `nce_py_per_key_fallback_v2_${engagementId}`;
+            const pyMigrationDone = localStorage.getItem(pyMigrationKey) === "1";
+            // Issue 2 fix (per-ledger PY in expanded sub-rows): saved cy_sources
+            // pre-eaa14a2c only carry amountCy, not amountPy. Force one-shot
+            // re-sync per engagement so the UI can render the PY column.
+            const pySourcesMigrationKey = `nce_cy_sources_amountpy_v5_${engagementId}`;
+            const pySourcesMigrationDone = localStorage.getItem(pySourcesMigrationKey) === "1";
+            // Issue (debit/credit netting): saved totals pre-fix added Math.abs
+            // of opposite-side balances instead of subtracting. Force one-shot
+            // re-sync so notes pick up the new signed aggregation.
+            const drCrMigrationKey = `nce_drcr_netting_v2_${engagementId}`;
+            const drCrMigrationDone = localStorage.getItem(drCrMigrationKey) === "1";
+            const needsPyAnyEmpty = Object.values(built).some(d => {
+              const hasCY = Object.values(d.cy ?? {}).some(v => Math.abs(Number(v) || 0) > 0.005);
+              const hasPY = Object.values(d.py ?? {}).some(v => Math.abs(Number(v) || 0) > 0.005);
+              return hasCY && !hasPY;
+            });
+            const needsPyRefresh = needsPyAnyEmpty || !pyMigrationDone;
+            const needsCySourcesPyRefresh = !pySourcesMigrationDone;
+            const needsDrCrRefresh = !drCrMigrationDone;
+            if (unEjectedAny || needsCySources || needsPyRefresh || needsCySourcesPyRefresh || needsDrCrRefresh) {
               // Silent background refresh — don't block the UI
               nceAutoPopulate(engagementId, built).then(refreshed => {
                 if (!cancelled) setNoteData(refreshed);
-                persistNotes(refreshed, fy).catch(() => {});
+                persistNotes(refreshed, fy)
+                  .then(() => {
+                    // BS face on the same Stage 7 page reads from a separate
+                    // useQuery({ queryKey: ["nce-financial-notes", ...] }) in
+                    // PipelineFinancialStatements. Without an invalidation
+                    // here, that query keeps stale data after the re-sync
+                    // writes to the DB — so the BS face shows the old
+                    // (incorrect) Trade Payables PY total while the Note
+                    // shows the new correct value.
+                    queryClient.invalidateQueries({ queryKey: ["nce-financial-notes", engagementId] });
+                  })
+                  .catch(() => {});
+                // Mark the per-key PY migration as done so subsequent loads
+                // skip the silent re-sync unless a genuine gap reappears.
+                try { localStorage.setItem(pyMigrationKey, "1"); } catch {/* private mode */}
+                try { localStorage.setItem(pySourcesMigrationKey, "1"); } catch {/* private mode */}
+                try { localStorage.setItem(drCrMigrationKey, "1"); } catch {/* private mode */}
               }).catch(() => {}); // best-effort
             }
           }
@@ -1361,14 +1719,61 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
   }, [scheduleSave]);
 
   // ── Custom row ops ──────────────────────────────────────────────────────
-  const handleAddRow = useCallback((noteType: string) => {
+  /** Add a manual custom row to a note.
+   *  Optional `section` (e.g. "secured" | "unsecured") tags the row so its
+   *  amount feeds the matching section-total (Total A / Total B) via the
+   *  extras path in computeDisplayData — without this the new row would only
+   *  show up in the grand total. Optional `attachedTo` parents the row under
+   *  a specific static row (e.g. unsec_other) so its amount also rolls up
+   *  into that parent's aggregate display.
+   *  ISSUE 2 FIX: previous version dropped section/attachedTo entirely — any
+   *  row added in a Short-Term section appeared but never flowed into Total
+   *  (B) Short-Term column nor into the BS face. */
+  const handleAddRow = useCallback((
+    noteType: string,
+    opts?: { section?: string; attachedTo?: string },
+  ) => {
     setNoteData(prev => {
       const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
       const id  = newCustomId();
-      const next = { ...prev, [noteType]: { ...cur, customRows: [...cur.customRows, { id, label: "", source: "manual" as const }] } };
+      const newRow: NCECustomRow = {
+        id, label: "", source: "manual",
+        ...(opts?.section    ? { section:    opts.section    } : {}),
+        ...(opts?.attachedTo ? { attachedTo: opts.attachedTo } : {}),
+      };
+      const next = { ...prev, [noteType]: { ...cur, customRows: [...cur.customRows, newRow] } };
       scheduleSave(next);
       return next;
     });
+  }, [scheduleSave]);
+
+  /** Swap LT ↔ ST amounts on a custom row (Pattern A notes). Used by the
+   *  Move LT↔ST action so the user can re-classify a row that landed in the
+   *  wrong column at sync time (e.g. Akash D Patel showing under Long-Term
+   *  when his COA mapping is NCE_STB). */
+  const handleSwapLtSt = useCallback((noteType: string, rowId: string) => {
+    setNoteData(prev => {
+      const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
+      const newCy = { ...cur.cy };
+      const newPy = { ...cur.py };
+      const cyLt = newCy[rowId + "_lt"] ?? 0;
+      const cyBase = newCy[rowId] ?? 0;
+      const cyStOld = newCy[rowId + "_st"] ?? 0;
+      // Swap LT (or bare key from legacy data) with ST
+      newCy[rowId + "_lt"] = cyStOld;
+      newCy[rowId + "_st"] = (cyLt || cyBase);
+      if (cyBase !== 0) delete newCy[rowId];
+      const pyLt = newPy[rowId + "_lt"] ?? 0;
+      const pyBase = newPy[rowId] ?? 0;
+      const pyStOld = newPy[rowId + "_st"] ?? 0;
+      newPy[rowId + "_lt"] = pyStOld;
+      newPy[rowId + "_st"] = (pyLt || pyBase);
+      if (pyBase !== 0) delete newPy[rowId];
+      const next = { ...prev, [noteType]: { ...cur, cy: newCy, py: newPy } };
+      scheduleSave(next);
+      return next;
+    });
+    toast.success("Swapped Long-term ↔ Short-term");
   }, [scheduleSave]);
 
   const handleDeleteRow = useCallback((noteType: string, id: string) => {
@@ -1746,12 +2151,13 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
                     sourceLabelOverrides={d.sourceLabelOverrides ?? {}}
                     onChangeCy={(key, v) => handleChange(nc.noteType, key, true,  v)}
                     onChangePy={(key, v) => handleChange(nc.noteType, key, false, v)}
-                    onAddRow={() => handleAddRow(nc.noteType)}
+                    onAddRow={(opts) => handleAddRow(nc.noteType, opts)}
                     onDeleteRow={id => handleDeleteRow(nc.noteType, id)}
                     onChangeLabel={(id, lbl) => handleChangeLabel(nc.noteType, id, lbl)}
                     onHideStatic={id => handleHideStatic(nc.noteType, id)}
                     onChangeStaticLabel={(id, lbl) => handleChangeStaticLabel(nc.noteType, id, lbl)}
                     onPromote={(cid, sid) => handlePromoteCustomToStatic(nc.noteType, cid, sid)}
+                    onSwapLtSt={(rid) => handleSwapLtSt(nc.noteType, rid)}
                     onEjectSource={(rid, ledger, amt, attachToId?) => handleEjectSource(nc.noteType, rid, ledger, amt, attachToId)}
                     onEjectCustomSource={(cid, ledger, amt, attachToId?) => handleEjectCustomSource(nc.noteType, cid, ledger, amt, attachToId)}
                     onChangeSourceLabel={(rid, ledger, lbl) => handleChangeSourceLabel(nc.noteType, rid, ledger, lbl)}
@@ -1768,7 +2174,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
                     sourceLabelOverrides={d.sourceLabelOverrides ?? {}}
                     onChangeCy={(key, v) => handleChange(nc.noteType, key, true,  v)}
                     onChangePy={(key, v) => handleChange(nc.noteType, key, false, v)}
-                    onAddRow={() => handleAddRow(nc.noteType)}
+                    onAddRow={(opts) => handleAddRow(nc.noteType, opts)}
                     onDeleteRow={id => handleDeleteRow(nc.noteType, id)}
                     onChangeLabel={(id, lbl) => handleChangeLabel(nc.noteType, id, lbl)}
                     onHideStatic={id => handleHideStatic(nc.noteType, id)}

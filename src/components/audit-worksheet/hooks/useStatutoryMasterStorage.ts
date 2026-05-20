@@ -130,10 +130,10 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // See note in useTaxMasterStorage — prevents the async DB load from
-  // clobbering user input when it resolves after the user starts typing.
-  const userEditedRef = useRef(false);
-  const dataRef       = useRef<StatutoryMasterData>(BLANK_STATUTORY_MASTER);
+  // See note in useTaxMasterStorage — userTypedRef tracks genuine user
+  // typing only, so programmatic auto-fill never blocks the async DB load.
+  const userTypedRef = useRef(false);
+  const dataRef      = useRef<StatutoryMasterData>(BLANK_STATUTORY_MASTER);
 
   // ── Load ─────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -146,7 +146,7 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
       dataRef.current = merged;
     }
     awLoadFromDB<Partial<StatutoryMasterData>>(engagementId, "statutory_master_json").then(remote => {
-      if (userEditedRef.current) return;
+      if (userTypedRef.current) return;
       if (remote && typeof remote === "object" && Object.keys(remote).length > 0) {
         const merged = { ...BLANK_STATUTORY_MASTER, ...remote };
         setData(merged);
@@ -154,6 +154,20 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
       }
     });
   }, [engagementId, loaded]);
+
+  // Flush pending debounced save on unmount so quick navigation doesn't
+  // drop the user's last keystrokes from cache + DB.
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+        try {
+          awSave(engagementId, "statutory_master_json", dataRef.current, firmId, user?.id, user?.name || "");
+        } catch { /* swallow on unmount */ }
+      }
+    };
+  }, [engagementId, firmId, user?.id, user?.name]);
 
   // ── Internal save ────────────────────────────────────────────────────────
   const persist = useCallback(
@@ -174,7 +188,7 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
   // ── Set a single field + debounced auto-save ──────────────────────────────
   const setField = useCallback(
     <K extends keyof StatutoryMasterData>(field: K, value: StatutoryMasterData[K]) => {
-      userEditedRef.current = true;
+      userTypedRef.current = true;
       setData(prev => {
         const next = { ...prev, [field]: value };
         dataRef.current = next;
@@ -188,7 +202,22 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
 
   const patchFields = useCallback(
     (patch: Partial<StatutoryMasterData>) => {
-      userEditedRef.current = true;
+      userTypedRef.current = true;
+      setData(prev => {
+        const next = { ...prev, ...patch };
+        dataRef.current = next;
+        if (timerRef.current) clearTimeout(timerRef.current);
+        timerRef.current = setTimeout(() => persist(next, true), 1000);
+        return next;
+      });
+    },
+    [persist]
+  );
+
+  // Programmatic patch — does NOT flip userTypedRef so async DB load can
+  // still apply server data after auto-fill effects mutate state.
+  const programmaticPatch = useCallback(
+    (patch: Partial<StatutoryMasterData>) => {
       setData(prev => {
         const next = { ...prev, ...patch };
         dataRef.current = next;
@@ -207,5 +236,5 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
     return persist(dataRef.current, false);
   }, [persist]);
 
-  return { data, setField, patchFields, manualSave, saving, loaded };
+  return { data, setField, patchFields, programmaticPatch, manualSave, saving, loaded };
 }

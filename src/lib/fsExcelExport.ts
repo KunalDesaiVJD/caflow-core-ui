@@ -1225,8 +1225,8 @@ function writeProfitAndLoss(
   sheet.getCell("C32").value = "Profit (loss) for period from continuing operations ";
   sheet.getCell("C32").font = { bold: true, size: 9 };
 
-  // Row 33 — "(VII-VIII)" on its own row
-  sheet.getCell("C33").value = "(VII-VIII)";
+  // Row 33 — "(IX-X)" on its own row  (XI = Profit before tax − Tax expense)
+  sheet.getCell("C33").value = "(IX-X)";
   sheet.getCell("C33").font = { bold: true, size: 9 };
 
   // Row 34 — XII. Discontinuing operations

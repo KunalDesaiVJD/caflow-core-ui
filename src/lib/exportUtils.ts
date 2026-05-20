@@ -2,15 +2,28 @@ import html2pdf from "html2pdf.js";
 import * as XLSX from "xlsx";
 
 /**
- * Export a DOM element as PDF using html2pdf.js
+ * Export a DOM element as PDF using html2pdf.js. Wide tables (Planning
+ * Calendar, Audit Status) need `orientation: "landscape"` AND a larger
+ * page format ("a3") so the columns aren't truncated. Caller can also
+ * temporarily expand the element width before invoking this so html2canvas
+ * captures the full table — see audit-tracker exporters for that pattern.
  */
-export async function exportToPdf(element: HTMLElement, filename: string) {
+export async function exportToPdf(
+  element: HTMLElement,
+  filename: string,
+  options: {
+    orientation?: "portrait" | "landscape";
+    format?: "a4" | "a3" | "a2" | "legal";
+  } = {},
+) {
+  const orientation = options.orientation ?? "portrait";
+  const format      = options.format      ?? "a4";
   const opt = {
-    margin: [15, 15, 15, 15],
+    margin: [8, 8, 8, 8],
     filename,
-    image: { type: "jpeg", quality: 0.98 },
-    html2canvas: { scale: 2, useCORS: true, logging: false },
-    jsPDF: { unit: "mm", format: "a4", orientation: "portrait" as const },
+    image: { type: "jpeg", quality: 0.95 },
+    html2canvas: { scale: 2, useCORS: true, logging: false, scrollY: 0, windowWidth: Math.max(element.scrollWidth + 40, 1600) },
+    jsPDF: { unit: "mm", format, orientation },
     pagebreak: { mode: ["avoid-all", "css", "legacy"] },
   };
   await html2pdf().set(opt).from(element).save();

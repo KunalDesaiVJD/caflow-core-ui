@@ -128,21 +128,23 @@ function EmpSelect({
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 export default function InternalAuditMaster({ data, engagementId, onSaved }: Props) {
-  const { data: m, setField, patchFields, manualSave, saving, loaded } =
+  const { data: m, setField, patchFields, programmaticPatch, manualSave, saving, loaded } =
     useInternalMasterStorage(engagementId, data.engagement?.firm_id);
 
   const { employees } = useEmployeeDropdown();
   const [showGstPwd, setShowGstPwd] = useState(false);
 
-  // Auto-fill audit dates from FY on first open
+  // Auto-fill audit dates from FY on first open. Uses programmaticPatch
+  // so the userTypedRef gate doesn't block the async DB load from
+  // restoring previously-saved fields after navigation.
   useEffect(() => {
     if (!loaded || !data.fyStartDate) return;
-    if (m.audit_date_from) return;         // already set
-    patchFields({
+    if (m.audit_date_from) return;
+    programmaticPatch({
       audit_date_from: data.fyStartDate,
       audit_date_to:   data.fyEndDate,
     });
-  }, [loaded, data.fyStartDate]);
+  }, [loaded, data.fyStartDate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fyExpanded = expandFY(data.financialYear);
 

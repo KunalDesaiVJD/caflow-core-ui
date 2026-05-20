@@ -45,7 +45,8 @@ const COLS: { label: string; id: string; sortable?: boolean; filterType?: "text"
   { label: "Party Name",            id: "party_name",       sortable: true, filterType: "text" },
   { label: "Physical Audit",        id: "physical_audit_conducted",       filterType: "yesno"  },
   { label: "Accounting Data",       id: "accounting_data",                filterType: "yesno"  },
-  { label: "Audit Report Prep. By", id: "audit_report_prepared_by",       filterType: "text"   },
+  { label: "Audit Report Prep. By",    id: "audit_report_prepared_by",    filterType: "text"   },
+  { label: "Audit Report Checked By",  id: "audit_report_checked_by",     filterType: "text"   },
   { label: "Audit Status",          id: "audit_status",     sortable: true, filterType: "status" },
   { label: "Report Print Date",     id: "report_print_date", sortable: true, filterType: "date" },
   { label: "Phys. Report Recd",     id: "physical_report_received_date",  filterType: "date"   },
@@ -65,7 +66,7 @@ const COLS: { label: string; id: string; sortable?: boolean; filterType?: "text"
 const makeBlankRow = (fy?: string): StatusEntry => ({
   id: "__new__", firm_id: "", client_id: null, party_name: null,
   physical_audit_conducted: "No", accounting_data: "No",
-  audit_employees: null, audit_report_prepared_by: null,
+  audit_employees: null, audit_report_prepared_by: null, audit_report_checked_by: null,
   audit_status: null, audit_status_other: null,
   report_print_date: null, firm: null, partner: null,
   udin_tax_audit: null, udin_statutory_audit: null, udin_date: null,
@@ -87,11 +88,16 @@ interface Props {
   clientIdFilter?: string | null;
   /** Financial year filter e.g. "2024-25" — auto-populates from audit_engagements */
   selectedFY?:     string;
+  /** Issue 2: when the grid is rendered inside the fullscreen overlay, use
+   *  the entire remaining viewport height for the scroll container so the
+   *  table actually fits the screen instead of staying capped at
+   *  100vh - 320px (which left huge empty space below). */
+  maximized?:      boolean;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function AuditStatusGrid({ firmId, clients, users, auditFirms, planEntries, isSuperadmin, clientIdFilter, selectedFY }: Props) {
+export default function AuditStatusGrid({ firmId, clients, users, auditFirms, planEntries, isSuperadmin, clientIdFilter, selectedFY, maximized }: Props) {
   const { rows, loading, useLs, reload, addRow, updateRow, removeRow } = useAuditStatus(firmId, isSuperadmin, selectedFY);
 
   // ── Search (debounced 300 ms) ──────────────────────────────────────────────
@@ -227,6 +233,7 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
       accounting_data:               patch.accounting_data               ?? "No",
       audit_employees:               patch.audit_employees               ?? null,
       audit_report_prepared_by:      patch.audit_report_prepared_by      ?? null,
+      audit_report_checked_by:       patch.audit_report_checked_by       ?? null,
       audit_status:                  patch.audit_status                  ?? null,
       audit_status_other:            patch.audit_status_other            ?? null,
       report_print_date:             patch.report_print_date             ?? null,
@@ -279,8 +286,14 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
       />
 
       {/* Table */}
-      <div className="border rounded-lg overflow-hidden w-full">
-        <div className="overflow-auto w-full" style={{ maxHeight: "calc(100vh - 320px)" }}>
+      <div className={cn("border rounded-lg overflow-hidden w-full", maximized && "border-0 rounded-none")}>
+        <div
+          className="overflow-auto w-full"
+          // Maximized mode uses nearly the whole viewport (minus the card
+          // header + filter bar above ≈ 140 px). Non-maximized keeps the
+          // original 320 px reservation for the surrounding page chrome.
+          style={{ maxHeight: maximized ? "calc(100vh - 140px)" : "calc(100vh - 320px)" }}
+        >
           <table className="border-collapse text-xs" style={{ minWidth: 1850, tableLayout: "fixed" }}>
 
             {/* ── Sticky header row ── */}

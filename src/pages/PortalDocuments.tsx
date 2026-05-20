@@ -6,7 +6,7 @@
  * - Documents grouped by category
  */
 import { useState, useEffect, useCallback } from "react";
-import { useAuth } from "@/hooks/useAuth";
+import { usePortalClient } from "@/contexts/PortalClientContext";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -15,7 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { FolderOpen, FileText, Download, Upload, Loader2, Search, X } from "lucide-react";
+import { FolderOpen, FileText, Download, Upload, Loader2, Search, X, Eye, Trash2, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const UPLOAD_CATS = [
@@ -42,37 +42,35 @@ function getCategoryGroup(cat: string): string {
 }
 
 export default function PortalDocuments() {
-  const { user } = useAuth();
-  const [loading,    setLoading]    = useState(true);
-  const [clientData, setClientData] = useState<any>(null);
+  const { activeClient, loading: clientLoading } = usePortalClient();
+  const [loading,    setLoading]    = useState(false);
   const [documents,  setDocuments]  = useState<any[]>([]);
   const [uploading,  setUploading]  = useState(false);
   const [uploadCat,  setUploadCat]  = useState("Other");
   const [search,     setSearch]     = useState("");
+  const [deleting,   setDeleting]   = useState<string | null>(null);
 
   const fetchDocs = useCallback(async () => {
-    if (!user) return;
-    const { data: client } = await supabase.from("clients").select("*").eq("user_id", user.id).maybeSingle();
-    if (!client) { setLoading(false); return; }
-    setClientData(client);
-    const { data } = await supabase.from("documents").select("*").eq("client_id", client.id).order("filename");
+    if (!activeClient) return;
+    setLoading(true);
+    const { data } = await supabase.from("documents").select("*").eq("client_id", activeClient.id).order("filename");
     setDocuments(data || []);
     setLoading(false);
-  }, [user]);
+  }, [activeClient]);
 
   useEffect(() => { fetchDocs(); }, [fetchDocs]);
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    if (!file || !clientData) return;
+    if (!file || !activeClient) return;
     setUploading(true);
     try {
-      const path = `clients/${clientData.id}/client_uploads/${Date.now()}_${file.name}`;
+      const path = `clients/${activeClient.id}/client_uploads/${Date.now()}_${file.name}`;
       const { error: upErr } = await supabase.storage.from("firm-assets").upload(path, file, { upsert: true });
       if (upErr) throw upErr;
       await supabase.from("documents").insert({
-        firm_id: clientData.firm_id,
-        client_id: clientData.id,
+        firm_id: activeClient.firm_id,
+        client_id: activeClient.id,
         filename: file.name,
         category: "client_upload",
         sub_category: uploadCat,
@@ -80,6 +78,22 @@ export default function PortalDocuments() {
       });
       toast.success("Document uploaded");
       fetchDocs();
+      // Notify firm via smart-batched digest (at most once per 4 hours)
+      supabase.functions.invoke("send-notification", {
+        body: {
+          type:      "portal_client_activity",
+          firm_id:   activeClient.firm_id,
+          client_id: activeClient.id,
+          payload: {
+            client_name:   activeClient.name,
+            activity_type: "document_upload",
+            details:       `${file.name} (${uploadCat})`,
+            // Rich metadata shown in digest email
+            filename:     file.name,
+            sub_category: uploadCat,
+          },
+        },
+      }).catch(() => {});
     } catch (err: any) {
       toast.error(err.message || "Upload failed");
     } finally {
@@ -88,17 +102,36 @@ export default function PortalDocuments() {
     }
   }
 
+  async function getSignedUrl(doc: any): Promise<string | null> {
+    const { data, error } = await supabase.storage.from("firm-assets").createSignedUrl(doc.r2_key, 120);
+    if (error) { toast.error("Could not get file URL: " + error.message); return null; }
+    return data.signedUrl;
+  }
+
+  async function handleView(doc: any) {
+    const url = await getSignedUrl(doc);
+    if (url) window.open(url, "_blank");
+  }
+
   async function handleDownload(doc: any) {
+    const url = await getSignedUrl(doc);
+    if (!url) return;
+    const a = document.createElement("a"); a.href = url; a.download = doc.filename; a.click();
+  }
+
+  async function handleDelete(doc: any) {
+    if (!window.confirm(`Delete "${doc.filename}"? This cannot be undone.`)) return;
+    setDeleting(doc.id);
     try {
-      const { data, error } = await supabase.functions.invoke("get-document-url", { body: { document_id: doc.id } });
-      if (error) throw error;
-      if (data?.signed_url) window.open(data.signed_url, "_blank");
-      else {
-        // fallback: direct storage URL
-        const { data: sd } = await supabase.storage.from("firm-assets").createSignedUrl(doc.r2_key, 60);
-        if (sd?.signedUrl) window.open(sd.signedUrl, "_blank");
-      }
-    } catch (e: any) { toast.error(e.message || "Download failed"); }
+      await supabase.storage.from("firm-assets").remove([doc.r2_key]);
+      await supabase.from("documents").delete().eq("id", doc.id);
+      toast.success("Document deleted");
+      fetchDocs();
+    } catch (e: any) {
+      toast.error(e.message || "Delete failed");
+    } finally {
+      setDeleting(null);
+    }
   }
 
   const filtered = search
@@ -115,16 +148,26 @@ export default function PortalDocuments() {
   const groupOrder = Object.keys(GROUP_MAP).filter(g => groups[g]?.length > 0);
   if (groups["Other"]?.length) groupOrder.push("Other");
 
-  if (loading) return <div className="space-y-3"><Skeleton className="h-8 w-48"/><Skeleton className="h-40"/></div>;
+  if (clientLoading || loading) {
+    return <div className="space-y-3"><Skeleton className="h-8 w-48"/><Skeleton className="h-40"/></div>;
+  }
+
+  if (!activeClient) {
+    return (
+      <div className="text-center py-20 text-muted-foreground text-sm">
+        No client profile found. Contact your CA firm.
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-xl font-bold flex items-center gap-2">
-          <FolderOpen size={22} className="text-primary" /> My Documents
+        <h1 className="text-xl font-bold flex items-center gap-2 text-[#1A2744]">
+          <FolderOpen size={22} className="text-orange-600" /> My Documents
         </h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          Documents shared by your CA firm and files you've uploaded
+          {activeClient.name} · Documents shared by your CA firm and files you've uploaded
         </p>
       </div>
 
@@ -158,7 +201,14 @@ export default function PortalDocuments() {
           {groupOrder.map(group => (
             <Card key={group}>
               <CardHeader className="pb-2 pt-4">
-                <CardTitle className="text-sm font-semibold">{group}</CardTitle>
+                <CardTitle className="text-sm font-semibold flex items-center justify-between">
+                  <span>{group}</span>
+                  <label className="cursor-pointer flex items-center gap-1 text-xs font-normal text-orange-600 hover:text-orange-800">
+                    <Plus size={13} /> Upload more
+                    <input type="file" className="hidden" disabled={uploading}
+                      onChange={handleUpload} />
+                  </label>
+                </CardTitle>
               </CardHeader>
               <CardContent className="pt-0">
                 <div className="divide-y">
@@ -170,10 +220,25 @@ export default function PortalDocuments() {
                         {doc.sub_category && (
                           <Badge variant="outline" className="text-[10px] flex-shrink-0">{doc.sub_category}</Badge>
                         )}
+                        {doc.category === "client_upload" && (
+                          <Badge variant="secondary" className="text-[10px] flex-shrink-0">My Upload</Badge>
+                        )}
                       </div>
-                      <Button size="sm" variant="ghost" className="h-7 w-7 p-0 flex-shrink-0" onClick={() => handleDownload(doc)}>
-                        <Download size={14} />
-                      </Button>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1 text-blue-600 hover:bg-blue-50" onClick={() => handleView(doc)}>
+                          <Eye size={13} /> View
+                        </Button>
+                        <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1" onClick={() => handleDownload(doc)}>
+                          <Download size={13} /> Save
+                        </Button>
+                        {doc.category === "client_upload" && (
+                          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1 text-destructive hover:bg-red-50"
+                            disabled={deleting === doc.id}
+                            onClick={() => handleDelete(doc)}>
+                            {deleting === doc.id ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -187,7 +252,7 @@ export default function PortalDocuments() {
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm flex items-center gap-2">
-            <Upload size={15} className="text-primary" /> Upload a Document to Your CA
+            <Upload size={15} className="text-orange-600" /> Upload a Document to Your CA
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -200,7 +265,7 @@ export default function PortalDocuments() {
                 {UPLOAD_CATS.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
               </SelectContent>
             </Select>
-            <Button variant="outline" asChild disabled={uploading} className="flex-1 h-9">
+            <Button variant="outline" asChild disabled={uploading} className="flex-1 h-9 border-orange-300 text-orange-700 hover:bg-orange-50">
               <label className="cursor-pointer flex items-center justify-center gap-2 text-sm">
                 {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload size={15} />}
                 {uploading ? "Uploading…" : "Choose File to Upload"}

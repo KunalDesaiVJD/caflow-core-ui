@@ -176,13 +176,19 @@ export default function AuditIntelligence() {
 
   useEffect(() => {
     if (!user?.firm_id) return;
-    supabase.from("users").select("id, name, role").eq("firm_id", user.firm_id).eq("is_active", true)
+    supabase.from("users").select("id, name, role").neq("role", "client").eq("firm_id", user.firm_id).eq("is_active", true)
       .then(({ data }) => setUsers(data || []));
   }, [user?.firm_id]);
 
+  // Engagement Partner dropdown now reflects the SELECTED audit firm's
+  // partner roster (firms.membership_numbers), not just the currently
+  // logged-in user's own firm. This ensures parity with all audit firms —
+  // including newly added ones like "AKTA RAMANI & ASSOCIATES" — so the
+  // auditor sees the right partners regardless of which firm they pick.
   useEffect(() => {
-    if (!user?.firm_id) return;
-    supabase.from("firms").select("membership_numbers").eq("id", user.firm_id).single()
+    const fid = engForm.audit_firm_id || user?.firm_id;
+    if (!fid) { setPartnersForFirm([]); return; }
+    supabase.from("firms").select("membership_numbers").eq("id", fid).maybeSingle()
       .then(({ data }) => {
         if (!data?.membership_numbers) { setPartnersForFirm([]); return; }
         setPartnersForFirm(
@@ -194,15 +200,35 @@ export default function AuditIntelligence() {
             }))
         );
       });
-  }, [user?.firm_id]);
+  }, [engForm.audit_firm_id, user?.firm_id]);
 
+  // Audit Firm dropdown — historically populated from `audit_firms` table
+  // only.  New audit firms added via Firm Management land in the `firms`
+  // table with is_audit_firm=true and therefore never appeared here.
+  // Fix: union both sources, dedupe by name, sort alphabetically. Future
+  // firms added via either path will surface immediately for every tenant.
   useEffect(() => {
     if (!user?.id) return;
-    let q = supabase.from("audit_firms").select("id, name").neq("active", false).order("name");
+    let q1 = supabase.from("audit_firms").select("id, name").neq("active", false).order("name");
     if (user.role !== "superadmin" && user.firm_id) {
-      q = q.eq("firm_id", user.firm_id) as typeof q;
+      q1 = q1.eq("firm_id", user.firm_id) as typeof q1;
     }
-    q.then(({ data }) => setAuditFirms(data || []));
+    const q2 = supabase
+      .from("firms")
+      .select("id, name, is_audit_firm")
+      .eq("is_audit_firm", true)
+      .order("name");
+
+    Promise.all([q1, q2]).then(([r1, r2]) => {
+      const byKey = new Map<string, { id: string; name: string }>();
+      for (const f of (r1.data || [])) byKey.set((f.name || "").toLowerCase().trim(), { id: f.id, name: f.name });
+      for (const f of (r2.data || [])) {
+        const key = (f.name || "").toLowerCase().trim();
+        if (!byKey.has(key)) byKey.set(key, { id: f.id, name: f.name });
+      }
+      const merged = [...byKey.values()].sort((a, b) => a.name.localeCompare(b.name));
+      setAuditFirms(merged);
+    });
   }, [user?.id, user?.firm_id, user?.role]);
 
   useEffect(() => {
@@ -212,17 +238,21 @@ export default function AuditIntelligence() {
 
   const loadMetrics = async (engId: string) => {
     try {
-      const [queriesRes, workpapersRes, caroRes] = await Promise.all([
-        supabase.from("audit_client_queries").select("id, status", { count: "exact" }).eq("engagement_id", engId),
+      const [worksheetRes, workpapersRes, caroRes] = await Promise.all([
+        (supabase as any).from("audit_worksheet_master").select("query_sheet_json").eq("engagement_id", engId).maybeSingle(),
         (supabase as any).from("audit_workpapers").select("id", { count: "exact" }).eq("engagement_id", engId),
         supabase.from("audit_caro_responses").select("id, status", { count: "exact" }).eq("engagement_id", engId),
       ]);
-      const queries = queriesRes.data || [];
       const caroRows = caroRes.data || [];
+      // Read queries from worksheet JSON (same source as QuerySheet tab)
+      const queryJson = worksheetRes.data?.query_sheet_json;
+      const queryRows: any[] = (queryJson && Array.isArray(queryJson.queries)) ? queryJson.queries : [];
+      const raised = queryRows.filter((q: any) => q.query_status && q.query_status !== "draft");
+      const pending = raised.filter((q: any) => q.query_status !== "resolved" && q.query_status !== "escalated");
       setMetrics({
         ledgers: 0,
-        queriesRaised: queries.length,
-        queriesPending: queries.filter((q: any) => q.status === "Open" || q.status === "Pending").length,
+        queriesRaised: raised.length,
+        queriesPending: pending.length,
         workpapers: workpapersRes.count || 0,
         caroCompleted: caroRows.filter((c: any) =>
           c.status === "completed" || c.status === "reviewed" || c.status === "approved"
@@ -301,7 +331,13 @@ export default function AuditIntelligence() {
 
   // ─── Edit Engagement ───
   const openEditDialog = (eng?: any) => {
-    const target = eng || selectedEngagement;
+    // Guard: when bound directly to onClick (e.g. `onClick={openEditDialog}`)
+    // React passes the SyntheticEvent as the first arg — which is truthy but
+    // has none of the engagement fields, so the form falls back to all
+    // defaults (FY 2024-25, statutory, blank client, blank firm, etc).
+    // Only treat `eng` as a real engagement when it carries the expected id.
+    const isRealEngagement = eng && typeof eng === "object" && typeof eng.id === "string";
+    const target = isRealEngagement ? eng : selectedEngagement;
     if (!target) return;
     setEngForm({
       audit_firm_id: target.audit_firm_id || "",
@@ -315,11 +351,53 @@ export default function AuditIntelligence() {
     });
     setShowEditDialog(true);
   };
+  // ─── Audit-firm id bridge ────────────────────────────────────────────────
+  // The audit_engagements table has a foreign-key constraint on audit_firm_id
+  // → audit_firms.id. When the auditor picks a firm that exists only in the
+  // `firms` table (added via Firm Management with is_audit_firm=true), the
+  // engagement insert/update fails with:
+  //   "insert or update on table 'audit_engagements' violates foreign key
+  //    constraint 'audit_engagements_audit_firm_id_fkey'"
+  // Fix: before persisting the engagement, ensure a corresponding row exists
+  // in audit_firms. We mirror only the immutable identifiers (id, name,
+  // firm_id, active=true). Idempotent: if the audit_firms row already exists
+  // (legacy firms registered there directly), this is a no-op.
+  const ensureAuditFirmRow = async (firmId: string): Promise<string | null> => {
+    if (!firmId) return null;
+    // Already an audit_firms row? Nothing to do.
+    const { data: existing } = await supabase
+      .from("audit_firms")
+      .select("id")
+      .eq("id", firmId)
+      .maybeSingle();
+    if (existing?.id) return firmId;
+    // Look it up in firms (where it must live if not in audit_firms).
+    const { data: src } = await supabase
+      .from("firms")
+      .select("id, name")
+      .eq("id", firmId)
+      .maybeSingle();
+    if (!src?.id) return firmId;          // unknown — let the FK error surface
+    // Mirror into audit_firms with the same id so the FK constraint is met.
+    // tenant attribution: prefer the logged-in user's firm; superadmin path
+    // keeps it nullable.
+    await supabase.from("audit_firms").upsert({
+      id:       src.id,
+      name:     src.name,
+      firm_id:  user?.firm_id ?? null,
+      active:   true,
+    } as any, { onConflict: "id" });
+    return firmId;
+  };
+
   const handleEdit = async () => {
     if (!selectedEngagementId) return;
     setFormSaving(true);
+    const safeAuditFirmId = engForm.audit_firm_id
+      ? await ensureAuditFirmRow(engForm.audit_firm_id)
+      : null;
     const { error } = await supabase.from("audit_engagements").update({
-      audit_firm_id: engForm.audit_firm_id || null,
+      audit_firm_id: safeAuditFirmId,
       client_id: engForm.client_id,
       financial_year: engForm.financial_year,
       audit_type: engForm.audit_type,
@@ -596,7 +674,7 @@ export default function AuditIntelligence() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={openEditDialog}>
+                <DropdownMenuItem onClick={() => openEditDialog()}>
                   <Pencil size={14} className="mr-2" /> Edit Engagement
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => setShowDeleteDialog(true)} className="text-destructive focus:text-destructive">
@@ -831,16 +909,19 @@ export default function AuditIntelligence() {
               </Select>
             </div>
             <div>
-              <Label>Client *</Label>
-              <Select value={engForm.client_id} onValueChange={v => {
-                const client = editDialogClients.find(c => c.id === v);
-                setEngForm(f => ({ ...f, client_id: v, entity_type: client?.entity_type || f.entity_type }));
-              }}>
-                <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
-                <SelectContent>
-                  {editDialogClients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <Label>Client</Label>
+              {/* Client is immutable on an existing engagement. Changing it
+                  would orphan the trial balance, financial statements,
+                  notes, CARO/MRL/3CD responses, workpapers, and every other
+                  child record keyed off (client_id, engagement_id). To
+                  switch clients, archive this engagement and create a new
+                  one for the target client. */}
+              <div className="flex items-center h-10 px-3 rounded-md border border-input bg-muted/50 text-sm text-foreground">
+                {editDialogClients.find(c => c.id === engForm.client_id)?.name
+                  || selectedEngagement?.client_name
+                  || "—"}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">Client cannot be changed on an existing engagement (read-only).</p>
             </div>
             <div>
               <Label>Financial Year</Label>
@@ -851,27 +932,20 @@ export default function AuditIntelligence() {
             </div>
             <div>
               <Label>Audit Type</Label>
-              {(() => {
-                const selClient = clients.find(c => c.id === engForm.client_id);
-                const opts = getAuditOptionsForClient(selClient);
-                if (engForm.client_id && opts.length === 0) {
-                  return (
-                    <p className="text-xs text-amber-600 mt-1">
-                      No audit services enabled for this client. Configure in Client → Audit Setup.
-                    </p>
-                  );
-                }
-                return (
-                  <Select value={engForm.audit_type} onValueChange={v => setEngForm(f => ({ ...f, audit_type: v }))}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {(opts.length === 0 ? AUDIT_TYPES : opts).map(t => (
-                        <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                );
-              })()}
+              {/* Audit Type is immutable on an existing engagement. Switching
+                  it (e.g. statutory → tax_audit) would invalidate the
+                  requires_caro / requires_3ca / requires_3cb / requires_3cd
+                  / requires_cash_flow flags, the schedule_iii_division
+                  decision, and every downstream artefact (CARO clause set,
+                  3CD clause set, IAR template variant). Archive this
+                  engagement and create a new one for a different audit type. */}
+              <div className="flex items-center h-10 px-3 rounded-md border border-input bg-muted/50 text-sm text-foreground capitalize">
+                {(() => {
+                  const t = AUDIT_TYPES.find(x => x.value === engForm.audit_type);
+                  return t?.label || engForm.audit_type || "—";
+                })()}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">Audit Type cannot be changed on an existing engagement (read-only).</p>
             </div>
             <div>
               <Label>Engagement Partner</Label>

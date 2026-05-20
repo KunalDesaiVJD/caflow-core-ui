@@ -628,6 +628,30 @@ export function computeDisplayData(
       outPy[row.id] = Math.round(pVal * 100) / 100;
     } else {
       let ltC = 0, ltP = 0, stC = 0, stP = 0;
+      // ROOT-CAUSE FIX (provisions LT phantom amount): the bare-key fallback
+      // (`outCy[cr.id]`) on the LT branch causes amounts saved without a
+      // suffix to leak into BOTH columns. e.g. a manual "Unpaid Audit Fees"
+      // row saved with cy[id] = 20000 AND cy[id + "_st"] = 20000 produced
+      // ltC += 20000 (bare fallback) and stC += 20000 — doubling the total.
+      // Use bare-key fallback ONLY when NEITHER _lt NOR _st key exists; if
+      // either suffix is present the row is suffix-aware and the bare key
+      // is legacy noise. Applies symmetrically to extras (sectionless rows).
+      const lookupSuffixed = (
+        baseCy: Record<string, number>,
+        basePy: Record<string, number>,
+        id: string,
+      ) => {
+        const ltKey = id + "_lt", stKey = id + "_st";
+        const hasLt = ltKey in baseCy;
+        const hasSt = stKey in baseCy;
+        const useBare = !hasLt && !hasSt;
+        return {
+          ltCy: baseCy[ltKey] ?? (useBare ? baseCy[id] ?? 0 : 0),
+          ltPy: basePy[ltKey] ?? (useBare ? basePy[id] ?? 0 : 0),
+          stCy: baseCy[stKey] ?? 0,
+          stPy: basePy[stKey] ?? 0,
+        };
+      };
       for (const id of adds) {
         ltC += outCy[id + "_lt"] ?? 0; ltP += outPy[id + "_lt"] ?? 0;
         stC += outCy[id + "_st"] ?? 0; stP += outPy[id + "_st"] ?? 0;
@@ -636,8 +660,9 @@ export function computeDisplayData(
         if (customRows) {
           for (const cr of customRows) {
             if (cr.attachedTo !== id) continue;
-            ltC += outCy[cr.id + "_lt"] ?? outCy[cr.id] ?? 0; ltP += outPy[cr.id + "_lt"] ?? outPy[cr.id] ?? 0;
-            stC += outCy[cr.id + "_st"] ?? 0; stP += outPy[cr.id + "_st"] ?? 0;
+            const v = lookupSuffixed(outCy, outPy, cr.id);
+            ltC += v.ltCy; ltP += v.ltPy;
+            stC += v.stCy; stP += v.stPy;
           }
         }
       }
@@ -646,8 +671,9 @@ export function computeDisplayData(
         stC -= outCy[id + "_st"] ?? 0; stP -= outPy[id + "_st"] ?? 0;
       }
       for (const id of extras) {
-        ltC += outCy[id + "_lt"] ?? outCy[id] ?? 0; ltP += outPy[id + "_lt"] ?? outPy[id] ?? 0;
-        stC += outCy[id + "_st"] ?? 0; stP += outPy[id + "_st"] ?? 0;
+        const v = lookupSuffixed(outCy, outPy, id);
+        ltC += v.ltCy; ltP += v.ltPy;
+        stC += v.stCy; stP += v.stPy;
       }
       outCy[row.id + "_lt"] = Math.round(ltC * 100) / 100;
       outPy[row.id + "_lt"] = Math.round(ltP * 100) / 100;

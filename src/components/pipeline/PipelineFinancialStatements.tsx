@@ -48,6 +48,7 @@ import {
 } from "@/config/nceNotesConfig";
 import { computeNceDynamicNoteMap } from "@/lib/nceDynamicNoteNumbers";
 import { sumNotesSubRowsCY, sumNotesSubRowsPY, getSharesOutstanding, getFAGridNetBlockTotal } from "@/lib/notesAutoPopulate";
+import { getNCENoteFaceTotal, NCE_CODE_TO_NOTE, NOTE_NATURE as NCE_NOTE_NATURE } from "@/lib/nceAutoPopulate";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 import { isTallyPLAccount } from "@/lib/tallyDetection";
 
@@ -779,11 +780,20 @@ function buildPLRows(pl: PLRowData, notesData?: Stage5Notes | null): PLDisplayRo
   const currentTaxPy = pl.currentTax.py || 0;
   const deferredTaxCy = pl.deferredTax.cy || 0;
   const deferredTaxPy = pl.deferredTax.py || 0;
-  // XV = IX − currentTax + deferredTax  (same formula for both CY and PY)
-  // deferredTax is the signed TB value: negative for DTL (reduces profit),
-  // positive for DTA (adds to profit). + preserves the sign naturally.
-  const profitCy = pbtCy - currentTaxCy + deferredTaxCy;           // XV
-  const profitPy = pbtPy - currentTaxPy + deferredTaxPy;           // XV (Phase G fix: was -deferredTaxPy)
+  // XI — Profit/(Loss) for period from continuing operations  = IX − X
+  // X (Tax expense) = Current Tax + Deferred Tax. Both currentTaxCy and
+  // deferredTaxCy are stored as POSITIVE expense magnitudes (matching how
+  // they render on the P&L row: "Current tax 2,310" / "Deferred tax 1,622")
+  // so subtract both to derive PAT. Previously this used "+ deferredTax"
+  // on a stale sign-convention assumption that has long since been
+  // corrected upstream — the result was XI showing PBT − CT + DT instead
+  // of PBT − CT − DT (off by 2× the deferred-tax amount).
+  const profitContOpsCy = pbtCy - currentTaxCy - deferredTaxCy;    // XI
+  const profitContOpsPy = pbtPy - currentTaxPy - deferredTaxPy;    // XI
+  // XV — Profit/(Loss) for the period  =  XI + XIV (discontinuing-ops)
+  // With no discontinuing operations (XIV = 0), XV equals XI.
+  const profitCy = profitContOpsCy;                                // XV
+  const profitPy = profitContOpsPy;                                // XV
 
   // Bug 1 — EPS divisor uses paid-up share count from the Share Capital note
   // breakup (share_count_cy / share_count_py), NOT the note number.  Falls
@@ -820,8 +830,8 @@ function buildPLRows(pl: PLRowData, notesData?: Stage5Notes | null): PLDisplayRo
     { kind: "header", roman: "X.",   label: "Tax expense:" },
     { kind: "item",   label: "(1) Current tax",  cy: currentTaxCy, py: currentTaxPy, indent: 2, code: "PL_TAX_CUR" },
     { kind: "item",   label: "(2) Deferred tax", cy: deferredTaxCy, py: deferredTaxPy, indent: 2, code: "PL_TAX_DEF" },
-    { kind: "item",   roman: "XI.",  label: "Profit (loss) for period from continuing operations", bold: true },
-    { kind: "subnote", label: "(VII-VIII)", bold: true },
+    { kind: "item",   roman: "XI.",  label: "Profit (loss) for period from continuing operations", cy: profitContOpsCy, py: profitContOpsPy, bold: true },
+    { kind: "subnote", label: "(IX-X)", bold: true },
     { kind: "item",   roman: "XII.", label: "Profit (loss) for period from discontinuing operations" },
     { kind: "item",   roman: "XIII.",label: "Tax expense of discontinuing operations" },
     { kind: "item",   roman: "XIV.", label: "Profit (loss) from discontinuing operations (after tax)", bold: true },
@@ -1787,8 +1797,13 @@ export default function PipelineFinancialStatements({
 
   // ─── Override dialog state ───
   const [overrideDialog, setOverrideDialog] = useState<{ code: string; name: string } | null>(null);
+  // Issue 12 (today) — list-all dialog for the "Manual Overrides" card so
+  // the user can click the count and inspect every override at once.
+  const [manualOverrideListOpen, setManualOverrideListOpen] = useState(false);
   const [overrideAmount, setOverrideAmount] = useState<string>("");
   const [overrideReason, setOverrideReason] = useState<string>("");
+  // (manualOverrideListOpen, declared lower in this component, drives the
+  // list dialog opened by clicking the "Manual Overrides" count card.)
 
   // ─── Manual overrides & PY amounts ───
   const [manualOverrides, setManualOverrides] = useState<Record<string, { amount: number; reason: string }>>({});
@@ -2116,21 +2131,74 @@ export default function PipelineFinancialStatements({
     enabled: !!pyShellId,
   });
 
-  // ─── Firm data (NCE signature block) ─────────────────────────────────────
-  // Pulls `membership_numbers` as well so the partner's M.No. can be
-  // resolved from the engagement's `partner_name` when `partner_id` is
-  // absent (the Stage 1 form writes partner_name, not partner_id).
+  // ─── Firm data — used in the signature block on every BS / P&L / IAR ─────
+  // The DISPLAYED firm must be the audit firm chosen in Stage 1 (engagement.
+  // audit_firm_id), not the user's logged-in tenant firm (engagement.firm_id).
+  // Multi-firm practices select a different audit firm for each engagement
+  // (e.g. "AKTA RAMANI & ASSOCIATES" vs the practice's primary firm).
+  // The audit firm row may live in either `firms` (created via Firm
+  // Management with is_audit_firm=true) or `audit_firms` (legacy). Prefer
+  // audit_firm_id; fall back to firm_id for legacy engagements that never
+  // had a Stage 1 selection.
+  const firmLookupId =
+    (engagement as any)?.audit_firm_id || engagement?.firm_id || null;
   const { data: firmData } = useQuery({
-    queryKey: ["firm-detail-fs", engagement?.firm_id],
+    queryKey: ["firm-detail-fs-v4", firmLookupId],
     queryFn: async () => {
+      if (!firmLookupId) return null;
+      // 1. Try the firms table directly. This is the canonical source for
+      //    membership_numbers (the per-partner roster) and FRN.
       const { data } = await supabase
         .from("firms")
-        .select("name, icai_firm_reg_no, address, membership_numbers")
-        .eq("id", engagement.firm_id)
+        .select("name, display_name, icai_firm_reg_no, icai_reg_no, address, membership_numbers")
+        .eq("id", firmLookupId)
         .maybeSingle();
-      return data as any;
+      if (data) {
+        const d = data as any;
+        return { ...d, name: d.display_name || d.name } as any;
+      }
+      // 2. Legacy: firmLookupId points at audit_firms (parallel table used
+      //    before is_audit_firm rollout). Resolve via FRN — the audit_firms
+      //    row carries icai_reg_no (e.g. "113541W") and the parallel firms
+      //    row carries the same value in either icai_firm_reg_no or
+      //    icai_reg_no. FRN match is reliable across legal-name variants
+      //    ("V J Desai & Co. LLP" vs "V. J. Desai & Co.").
+      const { data: af } = await supabase
+        .from("audit_firms")
+        .select("name, icai_reg_no, address")
+        .eq("id", firmLookupId)
+        .maybeSingle();
+      if (!af) return null;
+      const afFrn  = ((af as any).icai_reg_no || "").trim();
+      const afName = ((af as any).name || "").trim();
+      let parentFirm: any = null;
+      if (afFrn) {
+        // FRN match against either firms column.
+        const { data: byFrn } = await supabase
+          .from("firms")
+          .select("name, display_name, icai_firm_reg_no, icai_reg_no, address, membership_numbers")
+          .or(`icai_firm_reg_no.eq.${afFrn},icai_reg_no.eq.${afFrn}`);
+        parentFirm = (byFrn || [])[0] || null;
+      }
+      if (!parentFirm && afName) {
+        // Last-resort: case-insensitive substring on the firm name.
+        const { data: byName } = await supabase
+          .from("firms")
+          .select("name, display_name, icai_firm_reg_no, icai_reg_no, address, membership_numbers")
+          .ilike("name", `%${afName.replace(/\./g, "").trim()}%`);
+        parentFirm = (byName || [])[0] || null;
+      }
+      return {
+        name: parentFirm?.display_name || parentFirm?.name || afName,
+        icai_firm_reg_no: parentFirm?.icai_firm_reg_no || afFrn,
+        icai_reg_no: parentFirm?.icai_reg_no || afFrn,
+        address: parentFirm?.address || (af as any).address,
+        membership_numbers: Array.isArray(parentFirm?.membership_numbers)
+          ? parentFirm.membership_numbers
+          : [],
+      };
     },
-    enabled: !!engagement?.firm_id,
+    enabled: !!firmLookupId,
   });
 
   // ─── Partner user data (NCE signature block) ──────────────────────────────
@@ -2516,10 +2584,12 @@ export default function PipelineFinancialStatements({
   // has no rows until the user explicitly saves the FS.
   // For all other py_source modes ("manual", "none", or prior-year FS), keep
   // using priorEngagement (fa_financial_statements) as the source of truth.
+  // Robust check: PY data is considered synced if EITHER the PY-shell TB has
+  // rows OR a prior-year FA snapshot exists. Handles the case where py_source
+  // is "prior_engagement" but a PY shell with TB rows also exists, which
+  // previously incorrectly showed the "sync pending" banner.
   const pyShellSyncDone: boolean =
-    (engagement as any)?.py_source === "py_shell"
-      ? (pyShellTb?.length ?? 0) > 0
-      : !noPriorEngagement;
+    (pyShellTb?.length ?? 0) > 0 || !noPriorEngagement;
 
   // ─── COA Mapping gate for "Fetch PY from FY-1 Tally" ────────────────────
   // PY comparative figures depend on COA mapping being complete. If unmapped
@@ -2722,8 +2792,49 @@ export default function PipelineFinancialStatements({
       return total;
     };
     for (const item of activeTree) computePL(item);
+
+    // ── NCE PY profit chain (V → XIII) ────────────────────────────────────
+    // Mirror the CY profit-chain computation (line ~2667). Without this the
+    // PY column for rows V, VII, IX, XI, XIII renders blank even when Total
+    // Income (III) and Total Expenses (IV) are populated, because these
+    // subtotals are derived by subtraction — they have no children in the
+    // FS tree, so computePL() above leaves them at zero.
+    if (isNonCorporate) {
+      const inc = merged["NCE_PL_INC"] || 0;
+      const exp = merged["NCE_PL_EXP"] || 0;
+      merged["NCE_PROF_V"]   = Math.round((-inc - exp) * 100) / 100;
+      merged["NCE_PROF_VII"] = Math.round((merged["NCE_PROF_V"]   - (merged["NCE_EXCEP"]    || 0)) * 100) / 100;
+      merged["NCE_PROF_IX"]  = Math.round((merged["NCE_PROF_VII"] - (merged["NCE_EXTORD"]   || 0)) * 100) / 100;
+      merged["NCE_PROF_XI"]  = Math.round((merged["NCE_PROF_IX"]  - (merged["NCE_PART_REM"] || 0)) * 100) / 100;
+      merged["NCE_NET_PROF"] = Math.round((merged["NCE_PROF_XI"]  - (merged["NCE_TAX"]      || 0)) * 100) / 100;
+    }
+
+    // ── Auto-credit PY net profit to BS_EQ_RS (mirrors CY computedAmounts logic) ──
+    // PY P&L amounts are now in `merged` (from pyAmounts / pyManualAmounts).
+    // Compute PY net profit and credit it to Reserves & Surplus so the
+    // comparative Balance Sheet balances — same closing entry the CY side does.
+    if (!isNonCorporate) {
+      const pyRev   = merged["PL_REV"] || 0; // negative (credit balance)
+      const pyExp   = merged["PL_EXP"] || 0; // positive (debit balance)
+      const pyNetPL = Math.round((-pyRev - pyExp) * 100) / 100;
+      if (Math.abs(pyNetPL) > 0.005) {
+        merged["BS_EQ_RS"] = (merged["BS_EQ_RS"] || 0) - pyNetPL;
+        // Re-run BS tree totals so BS_EQ, BS root pick up the change
+        const computeBSTotal = (item: FSLineItem): number => {
+          const sec = String(item.section || "").toLowerCase();
+          const isBS = sec.includes("bs") || sec.includes("asset") || sec.includes("liab") || sec.includes("equity");
+          if (!isBS) return 0;
+          if (!item.children || item.children.length === 0) return merged[item.code] || 0;
+          const total = item.children.reduce((sum, child) => sum + computeBSTotal(child), 0);
+          merged[item.code] = total;
+          return total;
+        };
+        for (const item of activeTree) computeBSTotal(item);
+      }
+    }
+
     return merged;
-  }, [computedAmountsPY, pyAmounts, pyManualAmounts, noPriorEngagement, activeFlatItems, activeTree, pyInvCII]);
+  }, [computedAmountsPY, pyAmounts, pyManualAmounts, noPriorEngagement, activeFlatItems, activeTree, pyInvCII, isNonCorporate]);
 
   // ─── NCE Dynamic Note Number Map ────────────────────────────────────────────
   // Maps originalNoteRef → dynamicSequentialNoteNo for NCE entities.
@@ -2877,14 +2988,68 @@ export default function PipelineFinancialStatements({
     let pl: PLRowData | null = null;
     let cfs: CFSRowData | null = null;
     if (!isNonCorporate) {
-      // Dynamic note registry — same logic as the in-UI NoteCell display so
-      // that Excel export note numbers always match what the user sees on screen.
+      // Dynamic note registry. Note numbering must match what the auditor
+      // SEES on the BS face. The BS face uses ncyOf/npyOf which prefer the
+      // note's breakup-row sum over the raw TB total — so when a note is
+      // populated via manual breakup rows (no TB ledger mapped, e.g.
+      // CROWNGLOBE Share Capital entered straight into stage5_notes), the
+      // BS row shows the value but `computedAmounts[fsCode]` is still 0.
+      // Without enriching, hasData() returns false for that key and the
+      // sequential numbering silently skips it.
+      //
+      // Fix: build an ENRICHED amount map that overlays the note-breakup
+      // sums on top of the raw TB computedAmounts before invoking
+      // buildDynamicRegistry. Now every populated note — TB-mapped or
+      // breakup-mapped — receives a note number in display order.
+      const enrichedCY: Record<string, number> = { ...computedAmounts };
+      const enrichedPY: Record<string, number> = { ...mergedPY };
+      const enrich = (section: "bs_liab" | "bs_asset" | "pl", key: string, fsCode: string) => {
+        const cyN = sumNotesSubRowsCY(stage5NotesData ?? null, section, key);
+        if (cyN != null && Math.abs(cyN) > 0.005 && !((enrichedCY[fsCode] ?? 0))) {
+          enrichedCY[fsCode] = isCreditSideCode(fsCode) ? -cyN : cyN;
+        }
+        const pyN = sumNotesSubRowsPY(stage5NotesData ?? null, section, key);
+        if (pyN != null && Math.abs(pyN) > 0.005 && !((enrichedPY[fsCode] ?? 0))) {
+          enrichedPY[fsCode] = isCreditSideCode(fsCode) ? -pyN : pyN;
+        }
+      };
+      // BS liab notes
+      enrich("bs_liab", "share_capital",        "BS_EQ_SC");
+      enrich("bs_liab", "reserves_surplus",     "BS_EQ_RS");
+      enrich("bs_liab", "lt_borrowings",        "BS_NCL_LTB");
+      enrich("bs_liab", "deferred_tax_liab",    "BS_NCL_DTL");
+      enrich("bs_liab", "other_lt_liabilities", "BS_NCL_OLT");
+      enrich("bs_liab", "lt_provisions",        "BS_NCL_LTP");
+      enrich("bs_liab", "st_borrowings",        "BS_CL_STB");
+      enrich("bs_liab", "trade_payables",       "BS_CL_TP");
+      enrich("bs_liab", "other_curr_liab",      "BS_CL_OCL");
+      enrich("bs_liab", "st_provisions",        "BS_CL_STP");
+      // BS asset notes
+      enrich("bs_asset", "nc_investments",      "BS_NCA_INV");
+      enrich("bs_asset", "deferred_tax_asset",  "BS_NCA_DTA");
+      enrich("bs_asset", "lt_loans",            "BS_NCA_LLA");
+      enrich("bs_asset", "other_nc_assets",     "BS_NCA_ONA");
+      enrich("bs_asset", "curr_investments",    "BS_CA_CI");
+      enrich("bs_asset", "inventories",         "BS_CA_INV");
+      enrich("bs_asset", "trade_receivables",   "BS_CA_TR");
+      enrich("bs_asset", "cash_bank",           "BS_CA_CCE");
+      enrich("bs_asset", "st_loans",            "BS_CA_SLA");
+      enrich("bs_asset", "other_curr_assets",   "BS_CA_OCA");
+      // PPE/FA grid lives outside the breakup convention; the FA grid drives
+      // ppe.cy / ppe.py directly. Treat any populated FA row as note-active.
+      const faRows = (stage5NotesData as any)?.fa?.rows;
+      if (Array.isArray(faRows) && faRows.some((r: any) =>
+        r && (Number(r.gross_open) || Number(r.additions) || Number(r.gross_close) || Number(r.depn_open) || Number(r.depn_add) || Number(r.depn_close))
+      )) {
+        enrichedCY["BS_NCA_FA"] = enrichedCY["BS_NCA_FA"] || 1;
+      }
+
       const dynReg = buildDynamicRegistry(
-        computedAmounts,
-        mergedPY,
+        enrichedCY,
+        enrichedPY,
         coaMapping as Record<string, { code: string }>,
         false,
-        false, // skip COA signal — use real amounts only (prevents gap from zero-balance mapped ledgers)
+        false, // skip COA signal — enriched amounts already include note breakup sums
       );
       const dn = (key: string): number | null => dynReg.get(key) ?? null;
 
@@ -2895,36 +3060,45 @@ export default function PipelineFinancialStatements({
         reserves:        { noteNo: dn("reserves_surplus"),     cy: ncyOf("bs_liab","reserves_surplus","BS_EQ_RS"),            py: npyOf("bs_liab","reserves_surplus","BS_EQ_RS")            },
         ltBorrowings:    { noteNo: dn("lt_borrowings"),        cy: ncyOf("bs_liab","lt_borrowings","BS_NCL_LTB"),             py: npyOf("bs_liab","lt_borrowings","BS_NCL_LTB")             },
         dtLiab:          { noteNo: dn("deferred_tax_liab"),    cy: ncyOf("bs_liab","deferred_tax_liab","BS_NCL_DTL"),         py: npyOf("bs_liab","deferred_tax_liab","BS_NCL_DTL")         },
-        otherLtLiab:     { noteNo: dn("other_lt_liab"),        cy: ncyOf("bs_liab","other_lt_liab","BS_NCL_OLT"),             py: npyOf("bs_liab","other_lt_liab","BS_NCL_OLT")             },
+        // CRITICAL: data keys here MUST match NOTE_ROW_REGISTRY keys in
+        // src/lib/notesAutoPopulate.ts. A typo silently routes the lookup
+        // through pyOf(fsCode) (the raw TB total) and divorces the BS face
+        // from the auditor's note breakup — they will not reconcile.
+        // (Issue: Note 5 "Other current liabilities" was showing 5,17,257
+        //  on the BS face vs 4,85,171 on the note, because the BS lookup
+        //  used "other_current_liab" while the registry stores it under
+        //  "other_curr_liab". Same problem cascaded through six other
+        //  notes. Fixed by aligning every key to the registry below.)
+        otherLtLiab:     { noteNo: dn("other_lt_liab"),        cy: ncyOf("bs_liab","other_lt_liabilities","BS_NCL_OLT"),      py: npyOf("bs_liab","other_lt_liabilities","BS_NCL_OLT")      },
         ltProvisions:    { noteNo: dn("lt_provisions"),        cy: ncyOf("bs_liab","lt_provisions","BS_NCL_LTP"),             py: npyOf("bs_liab","lt_provisions","BS_NCL_LTP")             },
         stBorrowings:    { noteNo: dn("st_borrowings"),        cy: ncyOf("bs_liab","st_borrowings","BS_CL_STB"),              py: npyOf("bs_liab","st_borrowings","BS_CL_STB")              },
         tradePayables:   { noteNo: dn("trade_payables") },
         tradePayMSME:    { cy: 0, py: 0 },  // ageing MSME split kept at 0; full TP total below
         tradePayOthers:  { cy: ncyOf("bs_liab","trade_payables","BS_CL_TP"),       py: npyOf("bs_liab","trade_payables","BS_CL_TP")       },
-        otherCurrLiab:   { noteNo: dn("other_current_liab"),   cy: ncyOf("bs_liab","other_current_liab","BS_CL_OCL"),         py: npyOf("bs_liab","other_current_liab","BS_CL_OCL")         },
+        otherCurrLiab:   { noteNo: dn("other_current_liab"),   cy: ncyOf("bs_liab","other_curr_liab","BS_CL_OCL"),            py: npyOf("bs_liab","other_curr_liab","BS_CL_OCL")            },
         stProvisions:    { noteNo: dn("st_provisions"),        cy: ncyOf("bs_liab","st_provisions","BS_CL_STP"),              py: npyOf("bs_liab","st_provisions","BS_CL_STP")              },
         // Bug 6 — PPE prefers FA grid Net Block total over raw TB.
         // Falls back to cyOf/pyOf("BS_NCA_FA") when the FA grid has no rows.
         ppe:             { noteNo: dn("ppe"),                  cy: getFAGridNetBlockTotal(stage5NotesData ?? null, "cy") ?? cyOf("BS_NCA_FA"),  py: getFAGridNetBlockTotal(stage5NotesData ?? null, "py") ?? pyOf("BS_NCA_FA") },
         ncInvestments:   { noteNo: dn("nc_investments"),       cy: ncyOf("bs_asset","nc_investments","BS_NCA_INV"),           py: npyOf("bs_asset","nc_investments","BS_NCA_INV")           },
-        dtAssets:        { noteNo: dn("deferred_tax_assets"),  cy: ncyOf("bs_asset","deferred_tax_assets","BS_NCA_DTA"),      py: npyOf("bs_asset","deferred_tax_assets","BS_NCA_DTA")      },
-        ltLoans:         { noteNo: dn("lt_loans_advances"),    cy: ncyOf("bs_asset","lt_loans_advances","BS_NCA_LLA"),        py: npyOf("bs_asset","lt_loans_advances","BS_NCA_LLA")        },
+        dtAssets:        { noteNo: dn("deferred_tax_assets"),  cy: ncyOf("bs_asset","deferred_tax_asset","BS_NCA_DTA"),       py: npyOf("bs_asset","deferred_tax_asset","BS_NCA_DTA")       },
+        ltLoans:         { noteNo: dn("lt_loans_advances"),    cy: ncyOf("bs_asset","lt_loans","BS_NCA_LLA"),                 py: npyOf("bs_asset","lt_loans","BS_NCA_LLA")                 },
         otherNcAssets:   { noteNo: dn("other_nc_assets"),      cy: ncyOf("bs_asset","other_nc_assets","BS_NCA_ONA"),          py: npyOf("bs_asset","other_nc_assets","BS_NCA_ONA")          },
-        currInvestments: { noteNo: dn("current_investments"),  cy: ncyOf("bs_asset","current_investments","BS_CA_CI"),        py: npyOf("bs_asset","current_investments","BS_CA_CI")        },
+        currInvestments: { noteNo: dn("current_investments"),  cy: ncyOf("bs_asset","curr_investments","BS_CA_CI"),           py: npyOf("bs_asset","curr_investments","BS_CA_CI")           },
         inventories:     { noteNo: dn("inventories"),          cy: ncyOf("bs_asset","inventories","BS_CA_INV"),               py: npyOf("bs_asset","inventories","BS_CA_INV")               },
         tradeRec:        { noteNo: dn("trade_receivables"),    cy: ncyOf("bs_asset","trade_receivables","BS_CA_TR"),          py: npyOf("bs_asset","trade_receivables","BS_CA_TR")          },
         cashBank:        { noteNo: dn("cash_bank"),            cy: ncyOf("bs_asset","cash_bank","BS_CA_CCE"),                 py: npyOf("bs_asset","cash_bank","BS_CA_CCE")                 },
-        stLoans:         { noteNo: dn("st_loans_advances"),    cy: ncyOf("bs_asset","st_loans_advances","BS_CA_SLA"),         py: npyOf("bs_asset","st_loans_advances","BS_CA_SLA")         },
-        otherCurrAssets: { noteNo: dn("other_current_assets"), cy: ncyOf("bs_asset","other_current_assets","BS_CA_OCA"),      py: npyOf("bs_asset","other_current_assets","BS_CA_OCA")      },
+        stLoans:         { noteNo: dn("st_loans_advances"),    cy: ncyOf("bs_asset","st_loans","BS_CA_SLA"),                  py: npyOf("bs_asset","st_loans","BS_CA_SLA")                  },
+        otherCurrAssets: { noteNo: dn("other_current_assets"), cy: ncyOf("bs_asset","other_curr_assets","BS_CA_OCA"),         py: npyOf("bs_asset","other_curr_assets","BS_CA_OCA")         },
         sigPolicies:     { noteNo: 1 }, // Accounting Policies — always Note 1
       };
       // P&L — also notes-aware; pbt recomputed from notes-adjusted rev/exp totals
       const expCy = ncyOf("pl","cost_materials","PL_EXP_MAT")      + ncyOf("pl","purchases_stock","PL_EXP_SIT")
-                  + ncyOf("pl","changes_inventories","PL_EXP_CII")  + ncyOf("pl","employee_benefits","PL_EXP_EMP")
+                  + ncyOf("pl","changes_inventory","PL_EXP_CII")   + ncyOf("pl","employee_benefits","PL_EXP_EMP")
                   + ncyOf("pl","finance_costs","PL_EXP_FIN")        + ncyOf("pl","depreciation","PL_EXP_DEP")
                   + ncyOf("pl","other_expenses","PL_EXP_OTH");
       const expPy = npyOf("pl","cost_materials","PL_EXP_MAT")      + npyOf("pl","purchases_stock","PL_EXP_SIT")
-                  + npyOf("pl","changes_inventories","PL_EXP_CII")  + npyOf("pl","employee_benefits","PL_EXP_EMP")
+                  + npyOf("pl","changes_inventory","PL_EXP_CII")   + npyOf("pl","employee_benefits","PL_EXP_EMP")
                   + npyOf("pl","finance_costs","PL_EXP_FIN")        + npyOf("pl","depreciation","PL_EXP_DEP")
                   + npyOf("pl","other_expenses","PL_EXP_OTH");
       const revCy = ncyOf("pl","revenue_from_ops","PL_REV_OPS") + ncyOf("pl","other_income","PL_REV_OI");
@@ -2953,13 +3127,13 @@ export default function PipelineFinancialStatements({
             return {
               noteNo: dn("changes_inventories"),
               cy: openingCy - closingCy,
-              py: pyInvCII ?? npyOf("pl","changes_inventories","PL_EXP_CII"),
+              py: pyInvCII ?? npyOf("pl","changes_inventory","PL_EXP_CII"),
             };
           }
           return {
             noteNo: dn("changes_inventories"),
-            cy: ncyOf("pl","changes_inventories","PL_EXP_CII"),
-            py: npyOf("pl","changes_inventories","PL_EXP_CII"),
+            cy: ncyOf("pl","changes_inventory","PL_EXP_CII"),
+            py: npyOf("pl","changes_inventory","PL_EXP_CII"),
           };
         })(),
         employeeBenefits:   { noteNo: dn("employee_benefits"),   cy: ncyOf("pl","employee_benefits","PL_EXP_EMP"),  py: npyOf("pl","employee_benefits","PL_EXP_EMP")  },
@@ -3069,12 +3243,15 @@ export default function PipelineFinancialStatements({
   const totalExpenses = (computedAmounts["PL_EXP"] || 0);  // positive (debit)
   // netProfit = PBT (pre-tax); PL_EXP excludes PL_TAX_CUR / PL_TAX_DEF
   const netProfit = Math.round((-totalRevenue - totalExpenses) * 100) / 100;
-  // corpNetPAT: deduct taxes using same sign logic as buildPLRows (line ~760):
-  //   profitCy = pbtCy - currentTax + deferredTax
-  // currentTax is stored DR (positive); deferredTax is stored CR (negative) in Tally.
+  // corpNetPAT: must match the XI formula in buildPLRows.
+  //   profitCy = pbtCy - currentTax - deferredTax     (PBT − Tax expense)
+  // Both currentTax and deferredTax are stored as positive expense
+  // magnitudes (matching how they render on the P&L row). Previous "+ DT"
+  // overstated NPAT by 2× the deferred tax — the top NPAT card disagreed
+  // with the P&L XI / XV totals (5,40,177 vs 5,36,933 for KWIKTEAM).
   const corpPlData = fsDisplayData?.pl;
   const corpNetPAT = corpPlData
-    ? Math.round((netProfit - (corpPlData.currentTax.cy || 0) + (corpPlData.deferredTax.cy || 0)) * 100) / 100
+    ? Math.round((netProfit - (corpPlData.currentTax.cy || 0) - (corpPlData.deferredTax.cy || 0)) * 100) / 100
     : netProfit;
 
   // ─── Bug 5 — Phase E for NCE: notes-aware substitution into NCE amounts ─────
@@ -3083,9 +3260,49 @@ export default function PipelineFinancialStatements({
   // are stored negative in Tally (CR convention) and the NCE BS view applies
   // negL() at display, so we re-apply the negative sign before storing in
   // the augmented map — keeps display sign convention identical to before.
+  // ── Build a lookup from noteType → nce_financial_notes row so getNCENoteFaceTotal
+  // can pull each note's cy_data / py_data without re-querying the DB.
+  const nceNotesByType: Record<string, { cy_data?: any; py_data?: any }> = useMemo(() => {
+    const m: Record<string, { cy_data?: any; py_data?: any }> = {};
+    if (Array.isArray(nceNotesData)) {
+      for (const n of nceNotesData as any[]) {
+        if (n?.note_type) m[n.note_type] = { cy_data: n.cy_data, py_data: n.py_data };
+      }
+    }
+    return m;
+  }, [nceNotesData]);
+
+  /** Apply the NCE note grand total to an FS code, respecting storage sign
+   *  convention: CR-natural codes (liabilities, equity, income) are stored
+   *  negative so the display layer's negL()/negI() can flip them positive. */
+  const applyNCENoteTotal = (
+    out: Record<string, number>,
+    code: string,
+    column: "cy" | "py",
+  ): boolean => {
+    const meta = NCE_CODE_TO_NOTE[code];
+    if (!meta) return false;
+    const row = nceNotesByType[meta.note];
+    if (!row) return false;
+    // Pattern A notes have LT/ST columns; Pattern B is single-column.
+    const isPatternA = meta.col === "lt" || meta.col === "st";
+    const total = getNCENoteFaceTotal(
+      row, column,
+      isPatternA ? "A" : "B",
+      meta.col,
+    );
+    if (total == null) return false;
+    const nature = NCE_NOTE_NATURE[meta.note] ?? "CR";
+    out[code] = nature === "CR" ? -total : total;
+    return true;
+  };
+
   const nceCyAmounts: Record<string, number> = isNonCorporate
     ? (() => {
         const out = { ...computedAmounts };
+        // Phase E (legacy stage5_notes path) — kept for backward compatibility
+        // with engagements that have stage5_notes populated. NCE notes path
+        // below overrides any value found here when present.
         for (const [code, key] of Object.entries(NCE_CODE_TO_NOTE_KEY)) {
           const section = NCE_CODE_TO_SECTION[code];
           if (!section) continue;
@@ -3094,12 +3311,17 @@ export default function PipelineFinancialStatements({
           out[code] = section === "bs_liab" ? -sum : sum;
         }
         // Bug 6 — NCE PPE / CWIP / Intangibles use the FA grid total when
-        // populated.  CWIP and Intangibles share the PPE note number per
-        // NCE_CODE_TO_NOTE_KEY, but they're not separated in the FA grid;
-        // we apply the total only to NCE_PPE so the remaining two columns
-        // continue to read from raw TB (their own ledgers).
+        // populated.
         const faCy = getFAGridNetBlockTotal(stage5NotesData ?? null, "cy");
         if (faCy != null) out["NCE_PPE"] = faCy;
+        // Issue 3 fix — auditor's Notes-to-Accounts (nce_financial_notes)
+        // grand total drives the BS / P&L face. Includes manual customRows
+        // added via "+ Add row" which the legacy stage5_notes breakup array
+        // never carried — fixing the mismatch where Trade Payables note
+        // showed ₹19,94,766 but BS face read ₹19,84,766.
+        for (const code of Object.keys(NCE_CODE_TO_NOTE)) {
+          applyNCENoteTotal(out, code, "cy");
+        }
         return out;
       })()
     : computedAmounts;
@@ -3115,6 +3337,9 @@ export default function PipelineFinancialStatements({
         }
         const faPy = getFAGridNetBlockTotal(stage5NotesData ?? null, "py");
         if (faPy != null) out["NCE_PPE"] = faPy;
+        for (const code of Object.keys(NCE_CODE_TO_NOTE)) {
+          applyNCENoteTotal(out, code, "py");
+        }
         return out;
       })()
     : mergedPY;
@@ -3126,13 +3351,71 @@ export default function PipelineFinancialStatements({
   // NCE liabilities are stored negative (Tally credit) → use + to get true diff
   const nceTotalLiabilities = NCE_LIAB_IDS.reduce((s, id) => s + (nceCyAmounts[id] || 0), 0);
   const nceBsDiff           = Math.round((nceTotalAssets + nceTotalLiabilities) * 100) / 100;
-  const nceBsBalanced       = Math.abs(nceTotalAssets + nceTotalLiabilities) < 1;
+  // Issue 2 (today) — bump tolerance to ₹2 so accumulated 2-decimal rounding
+  // across many sub-rows doesn't trip the imbalance flag when the BS does
+  // in fact balance from the auditor's perspective.
+  const nceBsBalanced       = Math.abs(nceTotalAssets + nceTotalLiabilities) < 2;
   const nceNetProfit        = computedAmounts["NCE_NET_PROF"] || 0;
 
   // ─── Active summary values (swap between NCE and corporate in JSX) ───────
-  const corpBsBalanced    = Math.abs(bsDiff) < 1;
+  // Issue 2 (today) — same ₹2 tolerance for corporate BS check.
+  const corpBsBalanced    = Math.abs(bsDiff) < 2;
   const activeBsDiff      = isNonCorporate ? nceBsDiff      : bsDiff;
   const activeBsBalanced  = isNonCorporate ? nceBsBalanced  : corpBsBalanced;
+
+  // ─── PY balance sheet check + FA Previous-Year entry gate ────────────────
+  // Export Excel must be blocked until BOTH:
+  //   (1) CY *and* PY Balance Sheet reconcile (Total E&L = Total Assets)
+  //   (2) The FA note has Previous-Year data entered (either pyRows
+  //       auto-filled from a prior engagement OR the auditor has manually
+  //       typed any value into fa.py_manual on the "Total — Previous year"
+  //       row of the FA grid).
+  // Without these gates, the exported Excel ships with mismatched BS totals
+  // or a blank PPE PY column — both of which break the FS file the auditor
+  // sends to the client. This rule applies to every corporate engagement.
+  const bsDiffPy: number = corpBsData
+    ? Math.round((
+        ((corpBsData.ppe.py || 0) + (corpBsData.ncInvestments.py || 0) + (corpBsData.dtAssets.py || 0)
+         + (corpBsData.ltLoans.py || 0) + (corpBsData.otherNcAssets.py || 0)
+         + (corpBsData.currInvestments.py || 0) + (corpBsData.inventories.py || 0) + (corpBsData.tradeRec.py || 0)
+         + (corpBsData.cashBank.py || 0) + (corpBsData.stLoans.py || 0) + (corpBsData.otherCurrAssets.py || 0))
+        - (-(corpBsData.shareCap.py || 0) - (corpBsData.reserves.py || 0)
+           - (corpBsData.ltBorrowings.py || 0) - (corpBsData.dtLiab.py || 0)
+           - (corpBsData.otherLtLiab.py || 0) - (corpBsData.ltProvisions.py || 0)
+           - (corpBsData.stBorrowings.py || 0)
+           - (corpBsData.tradePayMSME.py || 0) - (corpBsData.tradePayOthers.py || 0)
+           - (corpBsData.otherCurrLiab.py || 0) - (corpBsData.stProvisions.py || 0))
+      ) * 100) / 100
+    : 0;
+  const corpBsBalancedPy: boolean = Math.abs(bsDiffPy) < 2;
+
+  // FA PY check — any of (a) auto-filled pyRows from prior engagement,
+  // (b) any manual override on the "Total — Previous year" row in
+  // fa.py_manual, OR (c) any FA row with gross_open / depn_open > 0
+  // (treated as PY closing carried into CY).
+  const faPyEntered: boolean = (() => {
+    const fa = (stage5NotesData as any)?.fa;
+    if (!fa) return false;
+    const pyManual = fa.py_manual && typeof fa.py_manual === "object" ? fa.py_manual : {};
+    if (Object.values(pyManual).some(v => typeof v === "number" && Number.isFinite(v) && Math.abs(v) > 0.005)) return true;
+    const rows: any[] = Array.isArray(fa.rows) ? fa.rows : [];
+    if (rows.some(r => (Number(r?.gross_open) || 0) > 0 || (Number(r?.depn_open) || 0) > 0)) return true;
+    return false;
+  })();
+
+  // Final Export Excel gate: corporate must satisfy ALL three; non-corporate
+  // entities use only the BS-balance subset (NCE has no FA note grid).
+  const exportExcelBlocked: boolean = isNonCorporate
+    ? !nceBsBalanced
+    : (!corpBsBalanced || !corpBsBalancedPy || !faPyEntered);
+  const exportExcelBlockReasons: string[] = [];
+  if (!isNonCorporate) {
+    if (!corpBsBalanced)   exportExcelBlockReasons.push(`CY Balance Sheet out by ₹${Math.abs(bsDiff).toLocaleString("en-IN")}`);
+    if (!corpBsBalancedPy) exportExcelBlockReasons.push(`PY Balance Sheet out by ₹${Math.abs(bsDiffPy).toLocaleString("en-IN")}`);
+    if (!faPyEntered)      exportExcelBlockReasons.push("FA Note — Previous-Year totals not entered");
+  } else if (!nceBsBalanced) {
+    exportExcelBlockReasons.push(`Balance Sheet out by ₹${Math.abs(nceBsDiff).toLocaleString("en-IN")}`);
+  }
   const activeTotalAssets      = isNonCorporate ? nceTotalAssets      : totalAssets;
   // Use fsDisplayData-resolved totalELDisplay (same as bsDiff) so stat card
   // matches the "TOTAL EQUITY AND LIABILITIES" row shown on the BS face.
@@ -3150,13 +3433,25 @@ export default function PipelineFinancialStatements({
   const sigFirmFRN      = firmData?.icai_firm_reg_no || "";
   const sigFirmCity     = (firmData?.address as any)?.city || "";
   const engPartnerName  = ((engagement as any)?.partner_name || "").trim();
-  const firmMnoEntry    = Array.isArray(firmData?.membership_numbers)
-    ? (firmData!.membership_numbers as any[]).find(
-        (m: any) => (m?.partner_name || "").trim() === engPartnerName
-      )
-    : null;
+  // Resolve the partner name FIRST. If engagement.partner_name is empty
+  // (legacy engagements / partner picked via partner_id only), fall back
+  // to the users-table row resolved by partner_id.
   const sigPartnerName  =
     engPartnerName || partnerData?.name || "";
+  // FIX: previously the roster match ran against `engPartnerName` only —
+  // so a legacy engagement that displayed the partner via partnerData.name
+  // never matched the firm's membership_numbers roster, leaving Membership
+  // No. blank in the BS / P&L / CFS signature blocks. Match against the
+  // RESOLVED sigPartnerName (whichever source the UI is actually showing),
+  // case-insensitively, after trim. Falls back to partnerData.membership_number
+  // and finally to a blank.
+  const firmMnoEntry    = (() => {
+    const target = (sigPartnerName || "").trim().toLowerCase();
+    if (!target || !Array.isArray(firmData?.membership_numbers)) return null;
+    return (firmData!.membership_numbers as any[]).find(
+      (m: any) => (m?.partner_name || "").trim().toLowerCase() === target,
+    ) || null;
+  })();
   const sigMembershipNo =
     firmMnoEntry?.membership_no || partnerData?.membership_number || "";
   const sigClientName   = engagement?.clients?.name      || "";
@@ -3719,10 +4014,14 @@ export default function PipelineFinancialStatements({
         //   - Reserves PY pulled from prior-engagement / py_manual_amounts
         //   - Deferred tax positive face value (notes-aware, not raw -ve)
         //
-        // Each value is Math.abs()'d because the BS face is always positive
-        // for both liabilities (notes sum is +, raw TB is -) and assets
-        // (always +).  This avoids the previous sign-flip bug where notes-
-        // populated liabilities ended up negated TWICE.
+        // Convert Tally-convention signed values to positive face values for
+        // the Excel template.  All equity / liability / revenue codes arrive as
+        // negative numbers (credit-side sign convention from ncyOf / memo*);
+        // Math.abs converts them to the positive face values the template expects.
+        // Accumulated-deficit reserves will also become positive — the template
+        // number format "#,##0.00;(#,##0.00)" will still render a deficit as
+        // "(amount)" because the underlying value from Tally is already negative
+        // for a debit-balance reserve account.
         const pos = (v: number | null | undefined): number => {
           const n = Number(v);
           if (!Number.isFinite(n)) return 0;
@@ -5801,7 +6100,31 @@ export default function PipelineFinancialStatements({
           >
             <RefreshCw size={14} /> Refresh
           </Button>
-          <Button variant="outline" size="sm" onClick={exportToExcel} className="gap-1">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              if (exportExcelBlocked) {
+                // Surface the validation failure as a blocking toast so the
+                // auditor sees WHY the export can't run without having to
+                // hover the button. The list of reasons is built upstream
+                // and shown one per line via toast.error's description.
+                toast.error("Cannot export Excel yet", {
+                  description: exportExcelBlockReasons.map(r => `• ${r}`).join("\n"),
+                  duration: 8000,
+                  style: { whiteSpace: "pre-line" },
+                });
+                return;
+              }
+              exportToExcel();
+            }}
+            className={cn("gap-1", exportExcelBlocked && "opacity-60 hover:bg-destructive/10 hover:text-destructive")}
+            title={
+              exportExcelBlocked
+                ? "Export Excel is blocked until:\n• " + exportExcelBlockReasons.join("\n• ")
+                : "Export the full Financial Statements workbook to .xlsx"
+            }
+          >
             <Download size={14} /> Export Excel
           </Button>
           <Button variant="outline" size="sm" onClick={saveFS} disabled={saving} className="gap-1">
@@ -5950,12 +6273,45 @@ export default function PipelineFinancialStatements({
             <p className="text-[10px] text-muted-foreground uppercase">Net Profit / (Loss)</p>
           </CardContent>
         </Card>
-        <Card>
-          <CardContent className="p-3 text-center">
-            <p className="text-2xl font-bold text-amber-600">{Object.keys(manualOverrides).length}</p>
-            <p className="text-[10px] text-muted-foreground uppercase">Manual Overrides</p>
-          </CardContent>
-        </Card>
+        {/* Issue 12 + Issue 3 (today) — Manual Overrides card.
+             Counts ALL THREE override stores so every surface in the app
+             agrees on the same number:
+               (a) manualOverrides  — fa_financial_statements is_manual rows
+                                       (auditor-typed amount overrides)
+               (b) noteOverrides    — FS note-number overrides in localStorage
+               (c) stage5_notes.manual_edits — dot-paths the auditor has
+                                       touched inside any Note's editable cell
+             Previously the top card summed only (a)+(b) while the Notes
+             tab header showed only (c), so a 2-vs-7 discrepancy appeared
+             whenever notes were edited.  Now both surfaces display the
+             same SUM. */}
+        {(() => {
+          const overrideTotal = Object.keys(manualOverrides).length
+            + Object.values(noteOverrides).filter(v => v != null && Number.isFinite(v as number)).length
+            + (Array.isArray(stage5NotesData?.manual_edits) ? stage5NotesData!.manual_edits.length : 0);
+          return (
+            <Card
+              className={cn(
+                "transition-colors",
+                overrideTotal > 0
+                  ? "cursor-pointer border-amber-400/60 hover:bg-amber-50/40 dark:hover:bg-amber-950/20"
+                  : "border-amber-300/30",
+              )}
+              onClick={() => {
+                if (overrideTotal === 0) {
+                  toast.info("No manual overrides applied yet.");
+                  return;
+                }
+                setManualOverrideListOpen(true);
+              }}
+            >
+              <CardContent className="p-3 text-center">
+                <p className="text-2xl font-bold text-amber-600">{overrideTotal}</p>
+                <p className="text-[10px] text-muted-foreground uppercase">Manual Overrides</p>
+              </CardContent>
+            </Card>
+          );
+        })()}
         {/* Phase B — Notes mismatch counter */}
         <Card
           className={cn(
@@ -6417,6 +6773,12 @@ export default function PipelineFinancialStatements({
                 cyYear={cyYear}
                 pyYear={pyYear}
                 navigateToNote={corpNavNote}
+                /* Issue 3 (today) — pass amount + note-no override counts so
+                   the Notes header total matches the Stage 7 top card total. */
+                extraOverrideCount={
+                  Object.keys(manualOverrides).length
+                  + Object.values(noteOverrides).filter(v => v != null && Number.isFinite(v as number)).length
+                }
               />
             </TabsContent>
           )}
@@ -6440,6 +6802,168 @@ export default function PipelineFinancialStatements({
           )}
         </Tabs>
       )}
+
+      {/* Manual Override LIST dialog — opens when user clicks the count card.
+           Lists every applied override (amount + note-no + cell edits).
+           Amount overrides are CLICKABLE rows (navigate to the corresponding
+           BS/P&L tab and re-open the per-line edit dialog) and have a
+           "↺ Back to auto" reset button per row. */}
+      <Dialog open={manualOverrideListOpen} onOpenChange={setManualOverrideListOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-sm">All Manual Overrides</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 max-h-[60vh] overflow-y-auto">
+            {Object.keys(manualOverrides).length > 0 && (
+              <div>
+                <p className="text-[11px] font-semibold text-muted-foreground uppercase mb-1">
+                  Amount overrides ({Object.keys(manualOverrides).length}) — click a row to edit, ↺ to reset
+                </p>
+                <div className="space-y-1">
+                  {Object.entries(manualOverrides).map(([code, ov]) => {
+                    const isPL = code.startsWith("PL_");
+                    return (
+                      <div
+                        key={code}
+                        className="flex items-center justify-between gap-3 rounded border border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20 px-3 py-2 hover:bg-amber-100 dark:hover:bg-amber-950/40 cursor-pointer"
+                        onClick={() => {
+                          setManualOverrideListOpen(false);
+                          setActiveTab(isPL ? "pl" : "bs");
+                          openOverride(code, code);
+                        }}
+                      >
+                        <div className="flex-1 min-w-0">
+                          <div className="font-mono text-[11px] font-semibold text-amber-700 dark:text-amber-400">
+                            {code} <span className="text-muted-foreground">({isPL ? "P&L" : "Balance Sheet"})</span>
+                          </div>
+                          <div className="text-[10px] text-muted-foreground truncate">
+                            ₹{Number(ov.amount).toLocaleString("en-IN")} — {ov.reason || "no reason"}
+                          </div>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-[10px] text-amber-700 hover:bg-amber-200/60"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setManualOverrides(prev => {
+                              const next = { ...prev };
+                              delete next[code];
+                              return next;
+                            });
+                            toast.success(`Override on ${code} reset — back to auto`);
+                          }}
+                        >
+                          ↺ Back to auto
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {Object.values(noteOverrides).filter(v => v != null && Number.isFinite(v as number)).length > 0 && (
+              <div>
+                <p className="text-[11px] font-semibold text-muted-foreground uppercase mb-1">
+                  Note-number overrides ({Object.values(noteOverrides).filter(v => v != null && Number.isFinite(v as number)).length}) — ↺ to reset
+                </p>
+                <div className="space-y-1">
+                  {Object.entries(noteOverrides)
+                    .filter(([, v]) => v != null && Number.isFinite(v as number))
+                    .map(([code, v]) => (
+                      <div key={code} className="flex items-center justify-between gap-3 rounded border border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20 px-3 py-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="font-mono text-[11px] font-semibold text-amber-700 dark:text-amber-400">{code}</div>
+                          <div className="text-[10px] text-muted-foreground">Note No. → {v}</div>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-[10px] text-amber-700 hover:bg-amber-200/60"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (typeof updateNoteOverride === "function") {
+                              try { updateNoteOverride(code, null); } catch { /* ignore */ }
+                            }
+                            toast.success(`Note-no override on ${code} reset`);
+                          }}
+                        >
+                          ↺ Back to auto
+                        </Button>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+            {Array.isArray(stage5NotesData?.manual_edits) && (stage5NotesData!.manual_edits?.length ?? 0) > 0 && (
+              <div>
+                <p className="text-[11px] font-semibold text-muted-foreground uppercase mb-1">
+                  Note cell edits ({stage5NotesData!.manual_edits!.length}) — click a row to jump to the note, ↺ to reset
+                </p>
+                <div className="space-y-1">
+                  {stage5NotesData!.manual_edits!.map((p, i) => {
+                    // Derive sub-tab from the leading segment of the dot-path
+                    const subTab: "bs_liab" | "bs_asset" | "pl" | "fa" =
+                      p.startsWith("bs_liab.") ? "bs_liab"
+                        : p.startsWith("bs_asset.") ? "bs_asset"
+                        : p.startsWith("pl.") ? "pl"
+                        : "fa";
+                    return (
+                      <div
+                        key={`${p}-${i}`}
+                        className="flex items-center justify-between gap-3 rounded border border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20 px-3 py-2 hover:bg-amber-100 dark:hover:bg-amber-950/40 cursor-pointer"
+                        onClick={() => {
+                          setManualOverrideListOpen(false);
+                          setActiveTab("notes");
+                          // Defer so the Notes tab can render before we dispatch
+                          // the sub-tab navigation event the NotesTab listens to.
+                          setTimeout(() => {
+                            try {
+                              window.dispatchEvent(new CustomEvent("caflow:notes-navigate", { detail: { subTab, path: p } }));
+                            } catch { /* ignore */ }
+                          }, 50);
+                        }}
+                      >
+                        <div className="flex-1 min-w-0">
+                          <div className="font-mono text-[11px] font-semibold text-amber-700 dark:text-amber-400 break-all">{p}</div>
+                          <div className="text-[10px] text-muted-foreground">Section: {subTab.toUpperCase()}</div>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-[10px] text-amber-700 hover:bg-amber-200/60 shrink-0"
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            try {
+                              const current = (stage5NotesData ?? { manual_edits: [] }) as any;
+                              const nextEdits: string[] = (Array.isArray(current.manual_edits) ? current.manual_edits : []).filter((x: string) => x !== p);
+                              const nextNotes = { ...current, manual_edits: nextEdits };
+                              const { error } = await (supabase.from as any)("audit_engagements")
+                                .update({ stage5_notes: nextNotes })
+                                .eq("id", engagementId);
+                              if (error) throw error;
+                              queryClient.invalidateQueries({ queryKey: ["stage5-notes-fsdata", engagementId] });
+                              queryClient.invalidateQueries({ queryKey: ["engagement", engagementId] });
+                              toast.success(`Note edit on "${p}" reset — will revert to auto on next Generate FS`);
+                            } catch (err) {
+                              toast.error(`Failed to reset: ${(err as Error).message}`);
+                            }
+                          }}
+                        >
+                          ↺ Back to auto
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setManualOverrideListOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Manual Override Dialog */}
       <Dialog open={!!overrideDialog} onOpenChange={() => setOverrideDialog(null)}>

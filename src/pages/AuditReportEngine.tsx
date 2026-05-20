@@ -94,6 +94,12 @@ export default function AuditReportEngine() {
   const [engagement, setEngagement] = useState<any>(null);
   const [client, setClient] = useState<any>(null);
   const [firm, setFirm] = useState<any>(null);
+  // W3/W4 fix (CAFlow_FirmFix_Report): partner now comes from
+  // engagement.partner_id → users (the engagement's actual partner) and
+  // membership_no is looked up in firms.membership_numbers by partner name.
+  // Previous code took the FIRST entry in membership_numbers regardless of
+  // which partner signed the engagement — only correct for single-partner firms.
+  const [partner, setPartner] = useState<{ name: string; icai_reg_no: string | null } | null>(null);
   const [loading, setLoading] = useState(true);
 
   // IAR
@@ -142,6 +148,18 @@ export default function AuditReportEngine() {
       if (eng?.firm_id) {
         const { data: f } = await supabase.from("firms").select("*").eq("id", eng.firm_id).single();
         setFirm(f);
+      } else {
+        setFirm(null);
+      }
+      if (eng?.partner_id) {
+        const { data: p } = await supabase
+          .from("users")
+          .select("name, icai_reg_no")
+          .eq("id", eng.partner_id)
+          .maybeSingle();
+        setPartner(p ? { name: (p as any).name || "", icai_reg_no: (p as any).icai_reg_no ?? null } : null);
+      } else {
+        setPartner(null);
       }
       // Load 3CD
       const { data: cd } = await supabase.from("audit_3cd_responses").select("*").eq("engagement_id", selectedEngId).order("clause_number");
@@ -240,8 +258,18 @@ export default function AuditReportEngine() {
   }
 
   const firmName = firm?.display_name || firm?.name || "";
-  const partnerName = (firm?.membership_numbers as any)?.[0]?.partner_name || "";
-  const icaiNo = firm?.icai_reg_no || "";
+  // W3: engagement's actual partner (not roster[0]).
+  const partnerName = partner?.name || "";
+  // W4: membership_no resolved from firms.membership_numbers by matching
+  // partner_name case-insensitively, fallback to users.icai_reg_no, then
+  // firms.icai_reg_no.
+  const icaiNo = (() => {
+    const roster: Array<{ partner_name: string; membership_no: string }> =
+      Array.isArray((firm as any)?.membership_numbers) ? (firm as any).membership_numbers : [];
+    const norm = (s: string) => (s || "").trim().toLowerCase();
+    const hit = roster.find(m => norm(m.partner_name) === norm(partnerName));
+    return hit?.membership_no || partner?.icai_reg_no || firm?.icai_reg_no || "";
+  })();
 
   if (loading) return <div className="p-6"><Skeleton className="h-[400px] w-full" /></div>;
 

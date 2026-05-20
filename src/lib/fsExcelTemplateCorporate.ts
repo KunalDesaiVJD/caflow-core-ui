@@ -143,7 +143,7 @@ function buildPlaceholderMap(i: CorporateFinancialsInputs): Record<string, strin
     "[XXXXXXXXXXXX]":              "",
     "[XXXXXX]":                    "",
 
-    // ── "_ AUTO" variants ──────────────────────────────────────────────────
+    // ── "_ AUTO" variants (with space) ────────────────────────────────────
     // Many template cells store the placeholder + "_ AUTO" suffix as a
     // single string (e.g. "[ENTER ENTITY NAME]_ AUTO").  We map the FULL
     // string so the entire cell gets replaced — no dangling "_ AUTO".
@@ -162,10 +162,28 @@ function buildPlaceholderMap(i: CorporateFinancialsInputs): Record<string, strin
     "[ENTER DATE]_ AUTO":          i.reportDate || "",
     "[ENTER REPORT DATE]_ AUTO":   i.reportDate || "",
     "[ENTER DETAILS]_ AUTO":       "",
-    // "[01 Apr 2025 to 31 Mar 2026]_ AUTO" is the literal hardcoded year
-    // range in the template — substitute with engagement's actual FY span.
     "[01 Apr 2025 to 31 Mar 2026]_ AUTO":   fyDateRange,
     "[2026-27]_ AUTO":             i.assessmentYear || "",
+    [`[${i.pyYear}-${String(i.cyYear).slice(-2)}]_ AUTO`]: `${i.pyYear}-${String(i.cyYear).slice(-2)}`,
+    // ── "_AUTO" variants (no space) — some cover-page cells omit the space ─
+    "[ENTER ENTITY NAME]_AUTO":   i.entityName || "",
+    "[ENTER ADDRESS]_AUTO":       i.address || "",
+    "[ENTER PAN]_AUTO":           i.pan || "",
+    "[ENTER TAN]_AUTO":           i.tan || "",
+    "[ENTER GSTIN]_AUTO":         i.gstin || "",
+    "[ENTER BUSINESS]_AUTO":      i.business || "",
+    "[ENTER FIRM NAME]_AUTO":     i.firmName || "",
+    "[ENTER FRN]_AUTO":           i.firmFRN || "",
+    "[ENTER SIGNATORY NAME]_AUTO": i.partnerName || "",
+    "[ENTER MEMBERSHIP NO.]_AUTO": i.membershipNo || "",
+    "[ENTER UDIN]_AUTO":          i.udin || "",
+    "[ENTER PLACE]_AUTO":         i.place || "",
+    "[ENTER DATE]_AUTO":          i.reportDate || "",
+    "[ENTER REPORT DATE]_AUTO":   i.reportDate || "",
+    "[ENTER DETAILS]_AUTO":       "",
+    "[01 Apr 2025 to 31 Mar 2026]_AUTO":   fyDateRange,
+    "[2026-27]_AUTO":             i.assessmentYear || "",
+    [`[${i.pyYear}-${String(i.cyYear).slice(-2)}]_AUTO`]: `${i.pyYear}-${String(i.cyYear).slice(-2)}`,
     // NOTE: "_____ AUTO" handled by a smart regex below (NOT here) so it
     //       doesn't double-prefix cells that already contain "31 March, "
     //       and so PY-column cells can be patched separately to PY year.
@@ -344,59 +362,151 @@ export async function buildCorporateFinancialsXLSX(
   // cross-sheet formula whose cached result we didn't explicitly patch.
   (wb as any).calcProperties = { fullCalcOnLoad: true };
 
-  // 5c. Strip stray "AUTO" / "_ AUTO" residue from STRING cells across
-  //     every sheet so the final file is clean.  Substitution above
-  //     handles the mapped placeholders; this catches any standalone
-  //     "AUTO" cells and trailing "_ AUTO" suffixes that survived.
+  // 5c. Strip stray "AUTO" / "_ AUTO" residue from STRING and RICH-TEXT cells.
+  //     Step 3 handles fully-mapped placeholders; this catches:
+  //       • Standalone "AUTO" cells → cleared
+  //       • Trailing "_ AUTO" / " AUTO" suffixes on plain strings
+  //       • Trailing "_ AUTO" segments in rich-text cells (e.g. cover page)
+  //       • Bracket-only UNFILLED placeholders with "_ AUTO" suffix → cleared
+  //         (e.g. "[ENTER DETAILS]_ AUTO" left over after step 3 misses a key)
+  //     NOTE: plain "[Insert response]" instructions WITHOUT "_ AUTO" are
+  //     intentional user-editable placeholders — they must NOT be stripped.
+  wb.eachSheet((ws) => {
+    ws.eachRow({ includeEmpty: false }, (row) => {
+      row.eachCell({ includeEmpty: false }, (cell) => {
+        // ── Plain string handling ────────────────────────────────────────
+        if (typeof cell.value === "string") {
+          const original = cell.value;
+          let v = original;
+          if (v === "AUTO") { cell.value = ""; return; }
+          // Strip "_AUTO" / "_ AUTO" / " AUTO" suffix (with or without space)
+          v = v.replace(/_?\s*AUTO$/i, "");
+          // Strip ONLY bracket placeholders that STILL have "_ AUTO" suffix
+          // (e.g. "[ENTER DETAILS]_ AUTO" that step 3 didn't map).
+          // Do NOT strip plain "[Insert response]" clauses — those are kept.
+          v = v.replace(/^\[[^\]]+\]_\s*AUTO\s*$/i, "");
+          if (v !== original) cell.value = v;
+          return;
+        }
+        // ── Rich-text handling ───────────────────────────────────────────
+        // Cover page and some other sheets store cell text as rich-text
+        // objects with per-segment formatting.  If the placeholder key
+        // "[ENTER ENTITY NAME]_ AUTO" is split across two rich-text segments
+        // (e.g. "[ENTER ENTITY NAME]" + "_ AUTO"), step 3 substitutes the
+        // first segment but leaves the "_ AUTO" segment intact.  Strip it.
+        if (
+          cell.value &&
+          typeof cell.value === "object" &&
+          "richText" in (cell.value as any)
+        ) {
+          const rt = cell.value as any;
+          let dirty = false;
+          const cleaned = rt.richText.filter((seg: any) => {
+            if (typeof seg.text !== "string") return true;
+            const stripped = seg.text.replace(/_?\s*AUTO$/i, "").trim();
+            // Remove entire segments that are ONLY "_AUTO" / "_ AUTO" / "AUTO"
+            if (stripped === "" && /^\s*_?\s*AUTO\s*$/i.test(seg.text)) {
+              dirty = true;
+              return false; // drop this segment
+            }
+            if (stripped !== seg.text) {
+              seg.text = stripped;
+              dirty = true;
+            }
+            return true;
+          });
+          if (dirty) {
+            rt.richText = cleaned;
+            cell.value = rt;
+          }
+        }
+      });
+    });
+  });
+
+  // 5d. Strip design-annotation cells that carry a red font (these are
+  //     author notes baked into the template, e.g. "We can remove this
+  //     head", "Notes required?").  Red = any ARGB that ends in FF0000.
+  wb.eachSheet((ws) => {
+    ws.eachRow({ includeEmpty: false }, (row) => {
+      row.eachCell({ includeEmpty: false }, (cell) => {
+        if (typeof cell.value !== "string" || !cell.value.trim()) return;
+        const font = (cell.font as any);
+        if (!font?.color) return;
+        const argb = ((font.color.argb ?? font.color.rgb ?? "") as string)
+          .toUpperCase();
+        // Match fully-opaque red: "FFFF0000" or bare "FF0000"
+        if (argb.endsWith("FF0000")) {
+          cell.value = "";
+        }
+      });
+    });
+  });
+
+  // 5e. Strip known internal workflow / template annotation strings that are
+  //     NOT red-font but must not appear in final client exports.
+  const ANNOTATION_STRINGS = [
+    "Workflow Notes for Lovable / Automation",
+    "Mode of valuation shall be stated",
+    "in notes to a/c given in details",
+    "Secured / Unsecured - specify and specify nature of security for secured position",
+    "Old Format",
+    "As ON",
+    "1% of Rev. from Op.",
+    "As per P&L",
+  ];
   wb.eachSheet((ws) => {
     ws.eachRow({ includeEmpty: false }, (row) => {
       row.eachCell({ includeEmpty: false }, (cell) => {
         if (typeof cell.value !== "string") return;
-        const original = cell.value;
-        let v = original;
-        if (v === "AUTO") {
-          cell.value = "";
-          return;
+        for (const ann of ANNOTATION_STRINGS) {
+          if (cell.value.includes(ann)) { cell.value = ""; break; }
         }
-        // Strip "_ AUTO" / " AUTO" suffix
-        v = v.replace(/_? AUTO$/i, "");
-        // Strip surrounding bracket placeholders that didn't match a key
-        // (unmapped "[XYZ]_ AUTO" → empty rather than dangling text).
-        v = v.replace(/^\[[^\]]+\]\s*$/, "");
-        if (v !== original) cell.value = v;
       });
     });
   });
 
   // 6. Replace year/date placeholders.  CY year used by default.
   //
-  //    Smart regex `(31 March,\s*)?_____ AUTO` matches BOTH:
-  //      "_____ AUTO"            → "31 March, <cy>"
-  //      "31 March, _____ AUTO"  → "31 March, <cy>" (NOT "31 March, 31 March, …")
-  //    The optional "31 March, " prefix gets eaten by the capture group
-  //    so we never double-prefix.
-  const cyDateStr = `31 March, ${inputs.cyYear}`;
-  const pyDateStr = `31 March, ${inputs.pyYear}`;
+  //    Smart regex `(31(?:st)? March,\s*)?_____ AUTO` matches BOTH:
+  //      "_____ AUTO"              → "31st March, <cy>"
+  //      "31 March, _____ AUTO"    → "31st March, <cy>" (no double-prefix)
+  //      "31st March, _____ AUTO"  → "31st March, <cy>" (no double-prefix)
+  //    The optional prefix gets eaten so we never get "31st March, 31st March, …"
+  const cyDateStr = `31st March, ${inputs.cyYear}`;
+  const pyDateStr = `31st March, ${inputs.pyYear}`;
   wb.eachSheet((ws) => {
     ws.eachRow({ includeEmpty: false }, (row) => {
       row.eachCell({ includeEmpty: false }, (cell) => {
         if (typeof cell.value !== "string") return;
         let v = cell.value;
         let dirty = false;
-        // "_____ AUTO" / "____ AUTO" with optional "31 March, " prefix
-        const reUnderscores = /(?:31 March,\s*)?_+ AUTO/g;
+        // "_____ AUTO" / "____ AUTO" with optional date prefix (handles both
+        // "31 March," and "31st March," so we never double-prefix)
+        const reUnderscores = /(?:31(?:st)? March,?\s*)?_+ AUTO/g;
         if (reUnderscores.test(v)) {
           v = v.replace(reUnderscores, cyDateStr);
           dirty = true;
         }
-        // "31 March, ___" without AUTO suffix
-        if (/31 March,\s*_{2,}/.test(v)) {
-          v = v.replace(/31 March,\s*_+/g, cyDateStr);
+        // "31 March, ___" or "31st March, ___" without AUTO suffix
+        if (/31(?:st)? March,?\s*_{2,}/.test(v)) {
+          v = v.replace(/31(?:st)? March,?\s*_+/g, cyDateStr);
           dirty = true;
         }
         // 20XX year placeholders
         if (v.includes("20XX")) {
+          // "31st/31 March, 20XX" → CY date (balance-sheet closing date)
           v = v.replace(/31(?:st)? March,?\s*20XX/g, cyDateStr);
+          // "1 April 20XX" → OPENING balance date = PY year
+          // (Fixed Asset schedule D7/H7 and similar opening-balance headers)
+          v = v.replace(
+            /(?:As\s+at\s+)?1(?:st)?\s+April[,\s]+20XX/gi,
+            `As at 1 April ${inputs.pyYear}`,
+          );
+          // "Previous Year 20XX-XX" → prior-year assessment period
+          const prevAY = `${inputs.pyYear}-${String(inputs.cyYear).slice(-2)}`;
+          v = v.replace(/Previous Year 20XX-XX/gi, `Previous Year ${prevAY}`);
+          // Generic assessment year and bare year
           v = v.replace(/20XX-XX/g, inputs.assessmentYear || "");
           v = v.replace(/20XX/g, String(inputs.cyYear));
           dirty = true;
@@ -406,24 +516,33 @@ export async function buildCorporateFinancialsXLSX(
     });
   });
 
-  // 6b. Patch PY-column cells.  After step 6, every "_____ AUTO" cell
-  //     contains the CY date — but the PY column should show the
-  //     prior-year date.  Overwrite specific cells that we know hold
-  //     the PY date column header.
+  // 6b. Patch PY-column cells.
   //
-  //     Mapping (verified from the template's xl/worksheets):
-  //       BS sheet     F6  → PY column header
-  //       PL sheet     H6  → PY column header (header row 6/7)
-  //       Note sheets  the formulas pull PY from BS!H4 / similar so
-  //                    fullCalcOnLoad will refresh those automatically.
+  //     After step 6, ALL "20XX" / "_____ AUTO" placeholders have been
+  //     replaced with the CY date — but PY columns must show the prior-year.
+  //
+  //     BS sheet layout (verified from template):
+  //       Row 6  col E → "As at"  (plain text, do NOT overwrite)
+  //       Row 6  col F → "As at"  (plain text, do NOT overwrite)
+  //       Row 7  col E → CY date  (step 6 already set this correctly)
+  //       Row 7  col F → PY date  (step 6 wrongly set to CY — patch here)
+  //
+  //     PL sheet layout (verified from template):
+  //       G6:G7 merged → "For the year ended 31st March, <cy>"
+  //                      (step 6 already rewrites G6 via the 20XX regex)
+  //       H6:H7 merged → must be patched to PY year
+  //
+  //     Note sheets pull dates via cross-sheet formulas; fullCalcOnLoad
+  //     (set above) refreshes those automatically.
   if (bs) {
-    bs.getCell("E6").value = cyDateStr;
-    bs.getCell("F6").value = pyDateStr;
+    // Only patch F7 (PY column date). E6/F6 are "As at" labels — leave them.
+    bs.getCell("F7").value = pyDateStr;
   }
   if (pl) {
-    // PL date headers are on row 7 columns G/H (CY/PY)
-    pl.getCell("G7").value = cyDateStr;
-    pl.getCell("H7").value = pyDateStr;
+    // G6:G7 and H6:H7 are merged cells; ExcelJS addresses the top-left.
+    // Step 6 already wrote CY into G6; patch H6 to PY with the full prefix.
+    pl.getCell("G6").value = `For the year ended 31st March, ${inputs.cyYear}`;
+    pl.getCell("H6").value = `For the year ended 31st March, ${inputs.pyYear}`;
   }
 
   // 6c. Control Sheet — find rows labelled "Balance sheet date" and
@@ -451,6 +570,96 @@ export async function buildCorporateFinancialsXLSX(
       }
     });
   }
+
+  // 6d. Universal PY-column date-header fix.
+  //
+  //     After step 6, EVERY "20XX" placeholder in every sheet becomes the CY
+  //     date — including PY column headers in Notes, FA, CFS, DT, etc. sheets.
+  //     Steps 6b/6c only patch the known BS/PL/Control cells; this pass
+  //     catches every other sheet by detecting ADJACENT same-date cell pairs:
+  //
+  //       If cell (row, col) contains cyDateStr AND the IMMEDIATELY PRECEDING
+  //       cell (row, col-1) ALSO contains cyDateStr, then cell (row, col) is
+  //       the PY column header → replace cyDateStr with pyDateStr in its value.
+  //
+  //     This heuristic is safe because the CY date only appears in paired
+  //     column headers; the replacement is limited to the date substring so
+  //     surrounding text (e.g. "As at", "For the year ended") is preserved.
+  wb.eachSheet((ws) => {
+    ws.eachRow({ includeEmpty: false }, (row) => {
+      let prevWasCy = false;
+      let prevColNum = -1;
+      row.eachCell({ includeEmpty: false }, (cell, colNum) => {
+        if (typeof cell.value !== "string") {
+          prevWasCy = false; prevColNum = -1;
+          return;
+        }
+        const hasCy = cell.value.includes(cyDateStr);
+        if (hasCy && prevWasCy && colNum === prevColNum + 1) {
+          // Two consecutive cells with CY date — this one is the PY column
+          cell.value = (cell.value as string).replace(
+            new RegExp(cyDateStr.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"),
+            pyDateStr,
+          );
+          prevWasCy = false; // reset so we don't chain further
+        } else {
+          prevWasCy = hasCy;
+          prevColNum = hasCy ? colNum : -1;
+        }
+      });
+    });
+  });
+
+  // 6e. Patch 20XX in formula-cell cached results.
+  //
+  //     Notes / FA / DT sheets contain formula cells whose formulas reference
+  //     BS/PL date headers.  ExcelJS preserves the formula but keeps the
+  //     OLD cached result from the template (e.g. "As at 31st March, 20XX").
+  //     fullCalcOnLoad (set above) will cause Excel to recompute these on open,
+  //     but the stale cache causes Google Sheets / LibreOffice to show 20XX.
+  //     Patch the cache now so every viewer sees the correct date immediately.
+  wb.eachSheet((ws) => {
+    ws.eachRow({ includeEmpty: false }, (row) => {
+      row.eachCell({ includeEmpty: false }, (cell) => {
+        const v: any = cell.value;
+        if (!v || typeof v !== "object" || !("formula" in v)) return;
+        const result = v.result;
+        if (typeof result !== "string" || !result.includes("20XX")) return;
+        const prevAY = `${inputs.pyYear}-${String(inputs.cyYear).slice(-2)}`;
+        let fixed = result
+          .replace(/31(?:st)? March,?\s*20XX/g, cyDateStr)
+          .replace(/(?:As\s+at\s+)?1(?:st)?\s+April[,\s]+20XX/gi, `As at 1 April ${inputs.pyYear}`)
+          .replace(/Previous Year 20XX-XX/gi, `Previous Year ${prevAY}`)
+          .replace(/20XX-XX/g, inputs.assessmentYear || "")
+          .replace(/20XX/g, String(inputs.cyYear));
+        if (fixed !== result) {
+          cell.value = { formula: v.formula, result: fixed } as any;
+        }
+      });
+    });
+  });
+
+  // 6f. Reset red font on cells that now carry numeric data values.
+  //
+  //     Step 5d clears string cells with red font (template annotations).
+  //     But when step 4/5 wrote numeric 0 into a cell that previously held
+  //     a red-font annotation, the cell value changed to 0 (numeric) while
+  //     the font stayed red — step 5d skipped it because it checks for
+  //     strings only.  Reset red font on any numeric cell so the number
+  //     renders in black.
+  wb.eachSheet((ws) => {
+    ws.eachRow({ includeEmpty: false }, (row) => {
+      row.eachCell({ includeEmpty: false }, (cell) => {
+        if (typeof cell.value !== "number") return;
+        const font = (cell.font as any);
+        if (!font?.color) return;
+        const argb = ((font.color.argb ?? font.color.rgb ?? "") as string).toUpperCase();
+        if (argb.endsWith("FF0000")) {
+          cell.font = { ...cell.font, color: { argb: "FF000000" } } as any;
+        }
+      });
+    });
+  });
 
   // 7. Generate the buffer + Blob
   const out = await wb.xlsx.writeBuffer();

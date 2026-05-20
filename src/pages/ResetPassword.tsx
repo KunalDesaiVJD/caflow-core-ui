@@ -16,20 +16,69 @@ const ResetPassword = () => {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    // Check for recovery token in URL hash
-    const hash = window.location.hash;
-    if (hash.includes("type=recovery")) {
+    // Issue 7 (today) — make the recovery-link detection robust across every
+    // path Supabase + email clients can produce:
+    //
+    //   (a) /reset-password#access_token=...&type=recovery   (legacy hash)
+    //   (b) /reset-password?type=recovery&token_hash=...     (PKCE token_hash)
+    //   (c) /reset-password?code=<pkce-code>                  (PKCE code-exchange)
+    //   (d) No URL hint — supabase.auth has already processed the token
+    //       SYNCHRONOUSLY during client init, fires PASSWORD_RECOVERY,
+    //       clears the hash, and leaves us a live session.
+    //
+    // Run all four checks in parallel; whichever succeeds first flips
+    // `ready=true`.  Without this combined strategy, email clients that
+    // mangle the hash into a query (Outlook, some Apple Mail variants)
+    // produced "Invalid or expired link" even with a valid token.
+    let cancelled = false;
+
+    // (a) + (b) — URL hint
+    const hash       = window.location.hash || "";
+    const search     = window.location.search || "";
+    const hashParams = new URLSearchParams(hash.replace(/^#/, ""));
+    const qsParams   = new URLSearchParams(search);
+    if (
+      hash.includes("type=recovery") ||
+      hash.includes("access_token=") ||
+      hashParams.get("type") === "recovery" ||
+      qsParams.get("type")   === "recovery"
+    ) {
       setReady(true);
-    } else {
-      // Also listen for auth state change
-      const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
-        if (event === "PASSWORD_RECOVERY") {
+    }
+
+    // (c) PKCE code-exchange
+    const code = qsParams.get("code");
+    if (code) {
+      supabase.auth.exchangeCodeForSession(code).then(({ error }) => {
+        if (cancelled) return;
+        if (error) {
+          toast({ title: "Recovery link failed", description: error.message, variant: "destructive" });
+        } else {
           setReady(true);
         }
       });
-      return () => subscription.unsubscribe();
     }
-  }, []);
+
+    // (d) Auth-state listener — catches PASSWORD_RECOVERY when the token
+    // takes >1 frame to land OR a SIGNED_IN that came from the recovery
+    // link (Supabase v2 sometimes only emits SIGNED_IN after token swap).
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (cancelled) return;
+      if (event === "PASSWORD_RECOVERY" || event === "SIGNED_IN") setReady(true);
+    });
+
+    // (d-cont.) Probe an already-restored session for the common case
+    // where Supabase processed the recovery hash BEFORE React mounted.
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (cancelled) return;
+      if (session) setReady(true);
+    });
+
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
+  }, [toast]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

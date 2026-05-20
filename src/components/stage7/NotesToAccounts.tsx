@@ -448,14 +448,35 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
   }, [engagement?.client_id]);
 
   useEffect(() => {
-    if (!engagement?.firm_id) return;
+    // Prefer the AUDIT firm chosen in Stage 1 over the tenant firm so the
+    // Notes to Accounts signature block matches the engagement's signer.
+    const lookupId = (engagement as any)?.audit_firm_id || engagement?.firm_id;
+    if (!lookupId) return;
     supabase
       .from("firms")
       .select("name, display_name, icai_firm_reg_no, icai_reg_no, address, state, membership_numbers")
-      .eq("id", engagement.firm_id)
-      .single()
-      .then(({ data }) => { if (data) setFirmDetails(data); });
-  }, [engagement?.firm_id]);
+      .eq("id", lookupId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data) { setFirmDetails(data); return; }
+        supabase
+          .from("audit_firms")
+          .select("name, icai_reg_no, address")
+          .eq("id", lookupId)
+          .maybeSingle()
+          .then(({ data: af }) => {
+            if (af) setFirmDetails({
+              name:             (af as any).name,
+              display_name:     (af as any).name,
+              icai_firm_reg_no: (af as any).icai_reg_no,
+              icai_reg_no:      (af as any).icai_reg_no,
+              address:          (af as any).address,
+              state:            null,
+              membership_numbers: [],
+            } as any);
+          });
+      });
+  }, [(engagement as any)?.audit_firm_id, engagement?.firm_id]);
 
   useEffect(() => {
     if (!engagement?.partner_id) return;

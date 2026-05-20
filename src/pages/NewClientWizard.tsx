@@ -251,10 +251,10 @@ const NewClientWizard = () => {
           .limit(1),
         urlFY
           ? baseClassQuery.eq("financial_year", urlFY).limit(1)
-          : baseClassQuery.order("financial_year", { ascending: false }).limit(1),
+          : baseClassQuery.order("updated_at", { ascending: false }).limit(1),
         urlFY
           ? baseAuditQuery.eq("financial_year", urlFY).limit(1)
-          : baseAuditQuery.order("financial_year", { ascending: false }).limit(1),
+          : baseAuditQuery.order("updated_at", { ascending: false }).limit(1),
       ]);
 
       if (!mounted) return;
@@ -1255,10 +1255,16 @@ const NewClientWizard = () => {
               savedClassification={isEditMode ? savedClassification : undefined}
               clientId={isEditMode ? clientId : undefined}
               clientCreationFY={clientCreationFY}
-              onClassificationSaved={() => {
-                // Reflect the change in the local "saved" snapshot so the
-                // warning modal won't fire again for the same value.
-                setSavedClassification(advancedInfo.classification);
+              onClassificationSaved={(newClassification, newFY) => {
+                // Use the value passed directly — advancedInfo.classification
+                // is stale here because React hasn't re-rendered yet.
+                setSavedClassification(newClassification);
+                // Update URL ?fy= so a page reload loads the correct FY row
+                if (newFY && newFY !== searchParams.get("fy")) {
+                  const next = new URLSearchParams(searchParams);
+                  next.set("fy", newFY);
+                  setSearchParams(next, { replace: true });
+                }
               }}
             />
           )}

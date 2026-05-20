@@ -29,11 +29,12 @@ import EngagementHeader from "@/components/pipeline/EngagementHeader";
 import {
   ArrowRight, CheckCircle2, AlertTriangle, Search, Download, FileSpreadsheet,
   Link2, RefreshCw, Eye, Pencil, ChevronRight, ChevronDown, Loader2, Trash2,
-  BookOpen, Brain, Check, ChevronsUpDown,
+  BookOpen, Brain, Check, ChevronsUpDown, Maximize2, Minimize2,
 } from "lucide-react";
 import { NCE_FS_ITEMS, NCE_AUTO_MAP_RULES } from "@/config/nceLineItems";
 import type { FSLineItem } from "@/config/nceLineItems";
 import { MappingRulesPanel, type MappingRule } from "@/components/pipeline/MappingRulesPanel";
+import { useAiSkills } from "@/hooks/useAiSkills";
 
 // ═══════════════════════════════════════
 // Non-Corporate entity detection
@@ -313,6 +314,7 @@ interface PipelineStage3Props {
 export default function PipelineStage3({ engagementId, engagement, onStageComplete, onSaveDraft }: PipelineStage3Props) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const { examplesFor, recordUsed } = useAiSkills();
   const [search, setSearch] = useState("");
   const [fsSearch, setFsSearch] = useState("");
   const [saving, setSaving] = useState(false);
@@ -354,6 +356,11 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     code: string; noteRef: number | null; scheduleRef: string; confidence: string;
   }>>({});
   const [selectedAccount, setSelectedAccount] = useState<string | null>(null);
+  // Issue 1 (today) — Multi-select bulk-assign.  Holds ledger names the user
+  // has ticked via the row checkbox.  When non-empty, clicking an FS line
+  // item maps EVERY ticked ledger to that code in a single transaction
+  // instead of forcing the user to map each one individually.
+  const [multiSelect, setMultiSelect] = useState<Set<string>>(() => new Set());
   // ─── Right panel tab (Balance Sheet vs P&L) ───
   const [fsPanelTab, setFsPanelTab] = useState<"bs" | "pl">("bs");
   // Filtered items for the right-panel tree — only BS or P&L items depending on active tab.
@@ -372,6 +379,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     normalized_name: string; account_head: string;
     confidence_score: number; times_confirmed: number; times_overridden: number;
     scope: string; is_party_name: boolean;
+    aliases: string[] | null; override_reason: string | null;
   }[]>([]);
   const [mappingRules, setMappingRules] = useState<MappingRule[]>([]);
   const [rulesOpen, setRulesOpen] = useState(false);
@@ -384,6 +392,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   const [hideZero, setHideZero]               = useState(true);   // hide opening=0 AND closing=0 ledgers
   const [groupView, setGroupView]             = useState(true);   // group left panel by Tally parent_group
   const [expandedGroups, setExpandedGroups]   = useState<Record<string, boolean>>({});
+  const [maximizedPanel, setMaximizedPanel]   = useState<"left" | "right" | null>(null);
+  const [fullScreen, setFullScreen]           = useState(false);
   const [aiRunning, setAiRunning]             = useState(false);
   const [resetting, setResetting]             = useState(false);
   // PY-first workflow mode for the left panel.
@@ -391,7 +401,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   //   "py"     — ledgers with opening_balance ≠ 0 (map these first; propagates to CY)
   //   "cy"     — new ledgers this year: opening = 0, closing ≠ 0
   //   "closed" — closed accounts: opening ≠ 0, closing = 0 (PY-only impact)
-  const [workMode, setWorkMode] = useState<"all" | "py" | "cy" | "closed">("py");
+  const [workMode, setWorkMode] = useState<"all" | "closed">("all");
+  const [groupPickerOpen, setGroupPickerOpen] = useState<string | null>(null);
 
   // ─── Fetch Tally Trial Balance (sole authoritative TB source) ───
   // `tally_trial_balance` holds the real closing balances (with balance_type
@@ -491,6 +502,13 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   });
 
   useEffect(() => {
+    if (!fullScreen) return;
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") setFullScreen(false); };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [fullScreen]);
+
+  useEffect(() => {
     if (!aliasRows) return;
     const map: Record<string, string> = {};
     for (const r of aliasRows as any[]) map[r.prior_ledger_name] = r.current_ledger_name;
@@ -579,8 +597,14 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       if (!pyEng && fy1List.length > 0) pyEng = fy1List[0];
       if (!pyEng) return null;
 
-      // Paginated fetch of PY shell TB (closing_balance needed for PY amounts)
-      const TB_COLS = "ledger_name, closing_balance, balance_type";
+      // Paginated fetch of PY shell TB (closing_balance needed for PY amounts).
+      // parent_group is REQUIRED for the group-inheritance fallback that maps
+      // PY-shell ledgers with no direct coa entry to a CY FS code via their
+      // shared Tally parent_group ("Sales Accounts" → NCE_REV_OPS).
+      // opening_balance + opening_type are needed for the PY Changes-in-Inv
+      // dual-post: PY changes = (PY-1 closing) − (PY closing) where PY-1
+      // closing is encoded in the PY shell's opening_balance column.
+      const TB_COLS = "ledger_name, closing_balance, balance_type, opening_balance, opening_type, parent_group";
       const PAGE = 1000;
       const all: any[] = [];
       for (let from = 0; ; from += PAGE) {
@@ -600,44 +624,100 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
   // TB accounts — Tally Sync is the sole authoritative source.
   // closing_balance is unsigned; balance_type (Dr/Cr) gives the sign.
+  //
+  // PY-ONLY MERGE: Ledgers present in the PY trial balance but not in CY TB
+  // (closed accounts, renamed ledgers) must still surface in Stage 6 COA
+  // Mapping so the user can map them — otherwise their PY balance never
+  // reaches Financial Statements (PY column stays blank) and they're invisible
+  // in Notes to Accounts. We append a synthetic CY row (debit/credit/balance
+  // = 0) for every PY-only ledger so the mapping panel shows it under its
+  // parent_group, with the PY closing carried as opening_balance.
   const tbAccounts: {
     account_name: string; account_group: string;
     debit: number; credit: number; balance: number;
     opening_balance?: number; tally_debit?: number; tally_credit?: number;
+    py_only?: boolean;
   }[] = useMemo(() => {
-    if (!tallyTb?.length) return [];
-    return tallyTb.map((l: any) => {
-      const cb   = Math.abs(Number(l.closing_balance ?? 0));
-      const isDr = String(l.balance_type ?? "").toUpperCase() === "DR";
-      return {
-        account_name:  String(l.ledger_name || "").trim(),
-        account_group: l.parent_group || "",
-        debit:  isDr ? cb : 0,
-        credit: isDr ? 0  : cb,
-        balance: isDr ? cb : -cb,
-        opening_balance: Math.abs(Number(l.opening_balance ?? 0)) *
-                         (String(l.opening_type ?? "").toUpperCase() === "CR" ? -1 : 1),
-        tally_debit:  Number(l.debit_amount  ?? 0),
-        tally_credit: Number(l.credit_amount ?? 0),
-      };
-    }).filter((a: any) => a.account_name);
-  }, [tallyTb]);
+    const out: any[] = [];
+    const seen = new Set<string>();
+    if (tallyTb?.length) {
+      for (const l of tallyTb as any[]) {
+        const name = String(l.ledger_name || "").trim();
+        if (!name) continue;
+        const cb   = Math.abs(Number(l.closing_balance ?? 0));
+        const isDr = String(l.balance_type ?? "").toUpperCase() === "DR";
+        seen.add(name.toLowerCase());
+        out.push({
+          account_name:  name,
+          account_group: l.parent_group || "",
+          debit:  isDr ? cb : 0,
+          credit: isDr ? 0  : cb,
+          balance: isDr ? cb : -cb,
+          opening_balance: Math.abs(Number(l.opening_balance ?? 0)) *
+                           (String(l.opening_type ?? "").toUpperCase() === "CR" ? -1 : 1),
+          tally_debit:  Number(l.debit_amount  ?? 0),
+          tally_credit: Number(l.credit_amount ?? 0),
+        });
+      }
+    }
+    const pyRows = pyShellTbData?.tbRows as any[] | undefined;
+    if (pyRows && pyRows.length) {
+      for (const l of pyRows) {
+        const name = String(l.ledger_name || "").trim();
+        if (!name) continue;
+        if (seen.has(name.toLowerCase())) continue;
+        const cb   = Math.abs(Number(l.closing_balance ?? 0));
+        const isDr = String(l.balance_type ?? "").toUpperCase() === "DR";
+        out.push({
+          account_name:  name,
+          account_group: l.parent_group || "",
+          debit: 0, credit: 0, balance: 0,
+          opening_balance: isDr ? cb : -cb,
+          tally_debit: 0, tally_credit: 0,
+          py_only: true,
+        });
+      }
+    }
+    return out;
+  }, [tallyTb, pyShellTbData?.tbRows]);
 
   // Load existing mapping from engagement
   useEffect(() => {
-    if (engagement?.coa_mapping && typeof engagement.coa_mapping === "object" && Object.keys(engagement.coa_mapping).length > 0) {
-      const raw = engagement.coa_mapping as Record<string, any>;
+    // Issue 5 (re-fix) — wait for engagement to actually load before deciding
+    // whether to auto-map.  Previously the condition `engagement?.coa_mapping
+    // == null` evaluated to TRUE during the loading window (because
+    // `undefined == null` is `true`), so runAutoMapping fired on every page
+    // load before the real coa_mapping arrived from the server — re-mapping
+    // ledgers the user had just cleared.
+    if (!engagement) return;
+
+    const raw = (engagement as any).coa_mapping as Record<string, any> | null | undefined;
+
+    // "User explicitly cleared" signal — written by clearAllMappings into
+    // stage_statuses["3"].coa_cleared_at.  We use this in addition to the
+    // value of coa_mapping itself because `null`/`{}` cannot reliably
+    // distinguish "brand-new engagement, never mapped" from "user just
+    // wiped the mapping" (both round-trip through Postgres the same way).
+    const stageStatuses = (engagement as any)?.stage_statuses as Record<string, any> | null;
+    const userCleared   = !!stageStatuses?.["3"]?.coa_cleared_at;
+
+    const realKeys = raw && typeof raw === "object" ? Object.keys(raw) : [];
+
+    if (raw && typeof raw === "object" && realKeys.length > 0) {
       // ── Backward-compat migration: BS_CA_INV direct → INV_STOCK ──────────
       // Pre-Phase-9 coa_mapping entries reference BS_CA_INV directly. After
       // Phase 9, BS_CA_INV is a parent node (with INV_* children), so
       // computeTotal overwrites any direct accumulation to 0. Auto-migrate
       // such entries to INV_STOCK (generic inventory dual-post code).
       let migrated = false;
-      const patched: typeof raw = { ...raw };
-      for (const [ledger, entry] of Object.entries(raw)) {
-        if ((entry as any)?.code === "BS_CA_INV") {
-          patched[ledger] = { ...(entry as any), code: "INV_STOCK", scheduleRef: "BS+P&L" };
+      const patched: Record<string, any> = {};
+      for (const k of realKeys) {
+        const entry = (raw as any)[k];
+        if (entry?.code === "BS_CA_INV") {
+          patched[k] = { ...entry, code: "INV_STOCK", scheduleRef: "BS+P&L" };
           migrated = true;
+        } else {
+          patched[k] = entry;
         }
       }
       setCoaMapping(patched);
@@ -654,11 +734,14 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
             })
           );
       }
-    } else if (tbAccounts.length > 0 && Object.keys(coaMapping).length === 0) {
-      // Auto-map on first load
+    } else if (userCleared) {
+      // User explicitly cleared — keep mappings empty, do NOT auto-map.
+      setCoaMapping({});
+    } else if ((raw == null) && tbAccounts.length > 0) {
+      // Brand-new engagement, no mapping ever stored — auto-map once.
       runAutoMapping();
     }
-  }, [engagement?.coa_mapping, tbAccounts.length]);
+  }, [engagement, tbAccounts.length]);
 
   // ── Auto-patch: silently map "Profit & Loss A/c" type ledgers ─────────────
   // In Tally, when the firm transfers net profit to Capital / Reserves, a
@@ -720,7 +803,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     const clientId = engagement?.client_id;
     let intelQuery = (supabase as any)
       .from("coa_mapping_intelligence")
-      .select("normalized_name, account_head, confidence_score, times_confirmed, times_overridden, scope, is_party_name")
+      .select("id, normalized_name, account_head, confidence_score, times_confirmed, times_overridden, scope, is_party_name, aliases, override_reason")
       .eq("entity_type", entityTypeKey)
       .gte("confidence_score", 60);
     if (clientId) {
@@ -796,13 +879,23 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   };
 
   // ─── Look up intelligence for a ledger ────────────────────────────────────
+  // Priority: 1) exact normalized_name match  2) alias match (slightly lower confidence)
   const applyIntelligence = (
     ledgerName: string,
     intel: typeof intelligence,
   ): { code: string; confidence_score: number } | null => {
     const norm = normalizeName(ledgerName);
-    const hit  = intel.find(i => i.normalized_name === norm);
-    return hit ? { code: hit.account_head, confidence_score: hit.confidence_score } : null;
+    // Exact match
+    const exactHit = intel.find(i => i.normalized_name === norm);
+    if (exactHit) return { code: exactHit.account_head, confidence_score: exactHit.confidence_score };
+    // Alias match — cap at 85 so exact matches always win
+    for (const i of intel) {
+      if (!i.aliases?.length) continue;
+      if (i.aliases.some(a => normalizeName(a) === norm)) {
+        return { code: i.account_head, confidence_score: Math.min(i.confidence_score, 85) };
+      }
+    }
+    return null;
   };
 
   // ═══════ AUTO-MAPPING ═══════
@@ -906,16 +999,72 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   }, [coaMapping, engagementId]);
 
   const clearAllMappings = useCallback(async () => {
+    // Issue 5/6 (re-fix) — "Clear All" must reset every downstream surface so
+    // the auditor can truly start from zero AND survive a page refresh
+    // without ledgers re-mapping themselves.  Three things must happen:
+    //   1. coa_mapping → sentinel `{ __cleared: true }` (NOT a bare `{}`,
+    //      which Supabase can round-trip as null and re-trigger auto-map).
+    //   2. Wipe every JSONB blob the FS face/notes/ratios reads from.
+    //   3. Delete the persisted snapshot in fa_financial_statements so
+    //      Stage 7 doesn't keep showing the previous Save's BS/P&L numbers.
+    //   4. Invalidate React-Query caches so any open Stage 6/7 view rebuilds.
     if (Object.keys(coaMapping).length === 0) { toast.info("Nothing to clear"); return; }
-    if (!window.confirm(`Clear all ${Object.keys(coaMapping).length} mappings? This cannot be undone.`)) return;
     setCoaMapping({});
     try {
-      await supabase.from("audit_engagements").update({ coa_mapping: {} } as any).eq("id", engagementId);
-      toast.success("All mappings cleared");
+      // Schema notes (verified against integrations/supabase/types.ts):
+      //  - coa_mapping            JSONB nullable
+      //  - stage5_notes           JSONB nullable
+      //  - stage7_ratios          JSONB nullable
+      //  - py_manual_amounts      JSONB NOT NULL  ← must use {} not null
+      //  - py_manual_annexures    JSONB NOT NULL  ← must use {} not null
+      // Earlier code referenced `fs_overrides` and `py_annexures` which DO
+      // NOT EXIST on this table; that made the whole UPDATE fail with an
+      // \"unknown column\" error.  Supabase's update() does NOT throw on
+      // failure — it returns { error } — so the previous version silently
+      // showed a success toast while the row was untouched, and the next
+      // page refresh re-loaded the same full mapping.
+      const { error: updateErr } = await supabase
+        .from("audit_engagements")
+        .update({
+          coa_mapping:           null as any,        // NULLABLE — fully wiped
+          stage5_notes:          null as any,
+          stage7_ratios:         null as any,
+          py_manual_amounts:     {} as any,          // NOT NULL — empty JSONB
+          py_manual_annexures:   {} as any,          // NOT NULL — empty JSONB
+          // Mark stage 3 (COA) as in-progress so a refresh re-renders fresh.
+          stage_statuses: {
+            ...(((engagement as any)?.stage_statuses) || {}),
+            "3": { status: "in_progress", coa_cleared_at: new Date().toISOString() },
+          } as any,
+        } as any)
+        .eq("id", engagementId);
+
+      if (updateErr) {
+        toast.error("Clear failed: " + updateErr.message);
+        return;
+      }
+
+      // Delete the saved FS snapshot so Stage 7 reflects the cleared state.
+      const { error: delErr } = await supabase
+        .from("fa_financial_statements")
+        .delete()
+        .eq("engagement_id", engagementId);
+      if (delErr) {
+        toast.error("FS snapshot delete failed: " + delErr.message);
+        // Continue — the mapping is already cleared, FS rows will be
+        // recomputed on next save.
+      }
+
+      // Invalidate caches so anything looking at the old snapshot refreshes.
+      queryClient.invalidateQueries({ queryKey: ["fs-rows", engagementId] });
+      queryClient.invalidateQueries({ queryKey: ["audit-engagement-detail", engagementId] });
+      queryClient.invalidateQueries({ queryKey: ["stage5-notes-fsdata", engagementId] });
+
+      toast.success("All mappings cleared and financials reset to zero");
     } catch (e: any) {
-      toast.error("Clear saved locally, failed to persist: " + e.message);
+      toast.error("Clear failed: " + e.message);
     }
-  }, [coaMapping, engagementId]);
+  }, [coaMapping, engagementId, queryClient, engagement]);
 
   // ═══════ RESET & RE-MAP (clear all + auto + AI) ═══════
   const resetAndRemap = useCallback(async () => {
@@ -1042,6 +1191,25 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       const norm = normalizeName(ledgerName);
       const entityTypeKey = isNonCorporate ? "nce" : "corporate";
       const bsPl = lineItem.section?.startsWith("PL") ? "PL" : "BS";
+
+      // Detect if this is an AI override (previous entry was AI-mapped to a DIFFERENT code)
+      const prevEntry = coaMapping[ledgerName];
+      const wasAiMapped = prevEntry && (prevEntry.confidence === "ai" || prevEntry.confidence === "low" || prevEntry.confidence === "medium");
+      const aiSuggestedCode = wasAiMapped && prevEntry.code !== code ? prevEntry.code : null;
+
+      // Fire alias-analysis async — this is what makes the AI learn WHY
+      supabase.functions.invoke("analyze-coa-override", {
+        body: {
+          ledger_name:       ledgerName,
+          normalized_name:   norm,
+          entity_type:       entityTypeKey,
+          ai_mapping_code:   aiSuggestedCode,   // null if no prior AI suggestion
+          human_mapping_code: code,
+          firm_id:           engagement?.firm_id ?? null,
+          engagement_id:     engagementId,
+        },
+      }).catch(() => {}); // never block the UI on this
+
       supabase.rpc("upsert_coa_intelligence" as any, {
         p_normalized_name: norm,
         p_entity_type:     entityTypeKey,
@@ -1067,7 +1235,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           }
           return [
             ...prev,
-            { normalized_name: norm, account_head: code, confidence_score: 70, times_confirmed: 1, times_overridden: 0, scope: 'global', is_party_name: false },
+            { normalized_name: norm, account_head: code, confidence_score: 70, times_confirmed: 1, times_overridden: 0, scope: 'global', is_party_name: false, aliases: null, override_reason: null },
           ];
         });
       });
@@ -1078,6 +1246,53 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       propagated > 0 ? { description: `Auto-applied to ${propagated} other unmapped ledgers in "${group}"` } : undefined,
     );
   }, [activeLeafItems, coaMapping, engagementId, tbAccounts, isNonCorporate, engagement?.firm_id]);
+
+  // Issue 1 (today) — Bulk-assign every ticked ledger to a single FS code in
+  // ONE state update + ONE DB write.  Manual-confidence so the same correction
+  // counts for cross-client AI memory just like a single map would.
+  const bulkMapLedgers = useCallback(async (ledgerNames: string[], code: string) => {
+    if (ledgerNames.length === 0) return;
+    const lineItem = activeLeafItems.find(i => i.code === code);
+    if (!lineItem) return;
+
+    const updated: typeof coaMapping = { ...coaMapping };
+    let mapped = 0;
+    for (const name of ledgerNames) {
+      updated[name] = {
+        code,
+        noteRef:     lineItem.noteRef ?? null,
+        scheduleRef: lineItem.scheduleRef || "",
+        confidence:  "manual",
+      };
+      mapped++;
+    }
+    setCoaMapping(updated);
+    try {
+      await supabase.from("audit_engagements").update({ coa_mapping: updated } as any).eq("id", engagementId);
+    } catch { /* surfaced to user via the toast below if needed */ }
+
+    // Feed each ledger into cross-client AI memory — same path the single-map
+    // flow uses, so bulk-mapping doesn't bypass the learning loop.
+    const entityTypeKey = isNonCorporate ? "nce" : "corporate";
+    const bsPl = lineItem.section?.startsWith("PL") ? "PL" : "BS";
+    for (const name of ledgerNames) {
+      const acct = tbAccounts.find(a => a.account_name === name);
+      const norm = normalizeName(name);
+      supabase.rpc("upsert_coa_intelligence" as any, {
+        p_normalized_name: norm,
+        p_entity_type:     entityTypeKey,
+        p_account_head:    code,
+        p_bs_pl:           bsPl,
+        p_account_group:   acct?.account_group || null,
+        p_firm_id:         engagement?.firm_id || null,
+        p_engagement_id:   engagementId,
+        p_accepted:        true,
+        p_client_id:       engagement?.client_id || null,
+      });
+    }
+
+    toast.success(`Mapped ${mapped} ledger${mapped === 1 ? "" : "s"} → ${lineItem.name}`);
+  }, [activeLeafItems, coaMapping, engagementId, tbAccounts, isNonCorporate, engagement?.firm_id, engagement?.client_id]);
 
   // ═══════ AI MAPPING (Claude via claude-gateway) ═══════
   // Sends unmapped + low-confidence ledgers in batches to fs_line_mapper.
@@ -1123,21 +1338,43 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         // excluded here — they must never be sent as global learned_patterns to Claude,
         // since they are vendor/customer business names specific to one client and would
         // confuse the AI when mapping other clients' ledgers.
-        const intelAnchors = intelligence
-          .filter(i => i.confidence_score >= 80 && !i.is_party_name && i.scope !== 'engagement')
-          .slice(0, 60)
-          .map(i => ({ ledger_pattern: i.normalized_name, fs_code: i.account_head, confidence: Math.round(i.confidence_score) }));
+        // Build learned_patterns: canonical names + all their AI-derived aliases.
+        // Party names and engagement-scoped entries are intentionally excluded.
+        const intelAnchors: { ledger_pattern: string; fs_code: string; confidence: number }[] = [];
+        for (const i of intelligence) {
+          if (i.confidence_score < 80 || i.is_party_name || i.scope === 'engagement') continue;
+          intelAnchors.push({ ledger_pattern: i.normalized_name, fs_code: i.account_head, confidence: Math.round(i.confidence_score) });
+          // Include aliases so Claude maps spelling variants / abbreviations correctly
+          if (i.aliases?.length) {
+            for (const alias of i.aliases.slice(0, 4)) { // max 4 aliases per entry to keep payload lean
+              intelAnchors.push({ ledger_pattern: alias, fs_code: i.account_head, confidence: 80 });
+            }
+          }
+          if (intelAnchors.length >= 120) break; // hard cap to avoid oversized payload
+        }
+
+        // Pull approved skill examples for COA remapping — these teach Claude
+        // the firm's specific correction patterns (e.g. "AI kept mapping X to Y but we want Z")
+        const coaSkillExamples = examplesFor("coa_remap");
 
         const payload = {
           entity_type:        isNonCorporate ? "nce" : "corporate",
           fs_items:           fsItems,
           ledgers:            batch,
-          ...(cfAnchors.length   > 0 ? { prior_year_anchors:   cfAnchors   } : {}),
-          ...(intelAnchors.length > 0 ? { learned_patterns:    intelAnchors } : {}),
+          ...(cfAnchors.length      > 0 ? { prior_year_anchors: cfAnchors      } : {}),
+          ...(intelAnchors.length   > 0 ? { learned_patterns:   intelAnchors   } : {}),
         };
         const { data, error } = await supabase.functions.invoke("claude-gateway", {
-          body: { request_type: "fs_line_mapper", user_message: JSON.stringify(payload) },
+          body: {
+            request_type:    "fs_line_mapper",
+            user_message:    JSON.stringify(payload),
+            ...(coaSkillExamples.length > 0 ? { skill_examples: coaSkillExamples } : {}),
+          },
         });
+        // Record that these skills were used (updates applied_count + last_used_at)
+        if (!error && coaSkillExamples.length > 0) {
+          recordUsed(coaSkillExamples.map(s => s.id));
+        }
         if (error) { failedBatches++; continue; }
         // claude-gateway returns the parsed JSON directly at the top level.
         // Fall back to .parsed / .content shapes for resilience.
@@ -1295,31 +1532,53 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   };
 
   // ═══════ RECLASSIFY / MOVE LEDGER ═══════
+  // Issue 1 (today, take 2) — when the auditor has ticked multiple ledgers
+  // via the bulk-select checkboxes AND opens the ⇄ Reclassify dialog from
+  // any one of those ticked rows, the user expects the chosen destination
+  // to apply to EVERY ticked ledger, not just the row whose ⇄ button was
+  // clicked.  Treat the dialog as a bulk-move whenever the ticked-row that
+  // triggered it is itself ticked: all ticked ledgers move together.  When
+  // the dialog is invoked on a non-ticked row, behave exactly as before
+  // (single-ledger move) so existing muscle memory is unchanged.
   const reclassifyAccount = async () => {
     if (!reclassifyDialog || !reclassifyCode) return;
     const { accountName } = reclassifyDialog;
     const lineItem = activeLeafItems.find(i => i.code === reclassifyCode);
     if (!lineItem) return;
 
-    const oldLineItem = coaMapping[accountName]
-      ? activeLeafItems.find(i => i.code === coaMapping[accountName].code)
-      : null;
+    // Decide bulk vs single.  If the ⇄ was opened from a ticked row and the
+    // tick-bucket has >1 entries, treat the dialog as a bulk operation.
+    const bulkMode = multiSelect.has(accountName) && multiSelect.size > 1;
+    const targets  = bulkMode ? Array.from(multiSelect) : [accountName];
 
-    const newEntry: Record<string, any> = {
-      code:        reclassifyCode,
-      noteRef:     lineItem.noteRef,
-      scheduleRef: lineItem.scheduleRef || "",
-      confidence:  "manual",
+    const newEntry = (name: string): Record<string, any> => {
+      const entry: Record<string, any> = {
+        code:        reclassifyCode,
+        noteRef:     lineItem.noteRef,
+        scheduleRef: lineItem.scheduleRef || "",
+        confidence:  "manual",
+      };
+      if (reclassifyReason.trim()) entry.move_reason = reclassifyReason.trim();
+      return entry;
     };
-    if (reclassifyReason.trim()) newEntry.move_reason = reclassifyReason.trim();
 
-    const newMapping = { ...coaMapping, [accountName]: newEntry };
+    const newMapping: typeof coaMapping = { ...coaMapping };
+    for (const name of targets) newMapping[name] = newEntry(name) as any;
     setCoaMapping(newMapping);
+    if (bulkMode) setMultiSelect(new Set());
+
     // Auto-save to DB so the override survives page refresh
     try {
       await supabase.from("audit_engagements").update({ coa_mapping: newMapping } as any).eq("id", engagementId);
-      const fromLabel = oldLineItem?.name || coaMapping[accountName]?.code || "unmapped";
-      toast.success(`Moved "${accountName}" from ${fromLabel} → ${lineItem.name}`);
+      if (bulkMode) {
+        toast.success(`Moved ${targets.length} ledgers → ${lineItem.name}`);
+      } else {
+        const oldLineItem = coaMapping[accountName]
+          ? activeLeafItems.find(i => i.code === coaMapping[accountName].code)
+          : null;
+        const fromLabel = oldLineItem?.name || coaMapping[accountName]?.code || "unmapped";
+        toast.success(`Moved "${accountName}" from ${fromLabel} → ${lineItem.name}`);
+      }
     } catch (e: any) {
       toast.error("Saved locally, failed to persist: " + e.message);
     }
@@ -1482,6 +1741,48 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       if (!opening) continue;
       amounts[mapping.code] = (amounts[mapping.code] || 0) + opening;
     }
+
+    // ─── PY CHANGES IN INVENTORIES (dual-post for PY) ─────────────────────
+    // CY computedAmounts dual-posts each inventory ledger into:
+    //   - BS_CA_INV (closing balance)
+    //   - PL_EXP_CII / NCE_CII (opening − closing)
+    // PY needs the same dual-post but shifted one year back:
+    //   - PY BS = CY opening_balance (already aggregated above)
+    //   - PY P&L Changes = PY-1 closing − PY closing
+    //                    = (PY shell's opening_balance) − (CY's opening_balance)
+    // The PY shell's opening_balance column encodes PY-1 closing balance.
+    // Without this dual-post the PY column for "Changes in Inventories"
+    // stayed blank even when both CY TB opening and PY shell TB opening were
+    // available. Universal across every NCE/corporate client.
+    const pyShellRows = pyShellTbData?.tbRows as any[] | undefined;
+    if (pyShellRows && pyShellRows.length) {
+      // Build a PY-shell lookup keyed by lowercase ledger name → signed opening
+      // balance (PY-1 closing). Sign: Dr → +, Cr → −, matching how the BS
+      // sign convention is encoded on CY TB (closing balance for inventory
+      // ledgers is normally Dr = +).
+      const pyShellPrevClose: Record<string, number> = {};
+      for (const row of pyShellRows) {
+        const name = String(row.ledger_name || "").trim().toLowerCase();
+        if (!name) continue;
+        const ob = Math.abs(Number(row.opening_balance ?? 0));
+        if (ob < 0.005) continue;
+        const isDr = String(row.opening_type ?? "").toUpperCase() === "DR";
+        pyShellPrevClose[name] = isDr ? ob : -ob;
+      }
+      // For every CY tbAccount mapped to an inventory code, dual-post the
+      // PY Changes-in-Inv contribution.
+      for (const acct of tbAccounts) {
+        const mapping = coaMapping[acct.account_name];
+        if (!mapping) continue;
+        const plCode = INV_DUAL_MAP[mapping.code];
+        if (!plCode) continue;
+        const pyClose = acct.opening_balance ?? 0;             // PY closing = CY opening
+        const prev    = pyShellPrevClose[acct.account_name.toLowerCase()] ?? 0; // PY-1 closing
+        if (Math.abs(prev) < 0.005 && Math.abs(pyClose) < 0.005) continue;
+        // Changes = opening − closing (matches CY convention at line 1633)
+        amounts[plCode] = (amounts[plCode] || 0) + (prev - pyClose);
+      }
+    }
     const computeTotal = (item: FSLineItem): number => {
       if (!item.children || item.children.length === 0) return amounts[item.code] || 0;
       const total = item.children.reduce((sum, child) => sum + computeTotal(child), 0);
@@ -1489,23 +1790,91 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       return total;
     };
     for (const item of activeTree) computeTotal(item);
+
+    // ── Auto-credit PY net profit to BS_EQ_RS ───────────────────────────────
+    // pyAmounts holds prior-year P&L figures from fa_financial_statements.
+    // Credit the PY net profit to Reserves & Surplus so the PY Balance Sheet
+    // in the COA mapping footer balances (same logic as CY computedAmounts).
+    if (!isNonCorporate) {
+      const pyRev   = pyAmounts["PL_REV"] || 0; // negative (credit)
+      const pyExp   = pyAmounts["PL_EXP"] || 0; // positive (debit)
+      const pyNetPL = Math.round((-pyRev - pyExp) * 100) / 100;
+      if (Math.abs(pyNetPL) > 0.005) {
+        amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) - pyNetPL;
+        for (const item of activeTree) computeTotal(item);
+      }
+    }
+
     return amounts;
-  }, [tbAccounts, coaMapping, isNonCorporate]);
+  }, [tbAccounts, coaMapping, isNonCorporate, pyAmounts, activeTree, pyShellTbData?.tbRows]);
 
   // ═══════ PY SHELL P&L AMOUNTS ═══════
   // When a PY shell engagement exists, compute P&L closing amounts from its TB.
   // Opening_balance on CY TB is always ₹0 for P&L accounts (Tally yearly reset),
   // so this is the only way to show PY P&L figures in the Variance Drill.
   const pyShellPLAmounts: Record<string, number> = useMemo(() => {
-    if (!pyShellTbData?.tbRows?.length || !pyShellTbData?.coaMapping) return {};
+    if (!pyShellTbData?.tbRows?.length) return {};
     const amounts: Record<string, number> = {};
+    // Build a case-insensitive CY mapping index so PY shell ledgers that
+    // differ in case ("SALES" vs "Sales") still resolve to a CY FS code.
+    const cyMappingLowerIndex: Record<string, { code: string }> = {};
+    for (const [k, v] of Object.entries(coaMapping || {})) {
+      if (v?.code) cyMappingLowerIndex[k.toLowerCase().trim()] = v;
+    }
+    const pyShellMapping = (pyShellTbData?.coaMapping as Record<string, any>) || {};
+    const pyShellMappingLowerIndex: Record<string, { code: string }> = {};
+    for (const [k, v] of Object.entries(pyShellMapping)) {
+      if (v?.code) pyShellMappingLowerIndex[k.toLowerCase().trim()] = v;
+    }
+
+    // ROOT-CAUSE FIX (Issue 1 — round 3): build a parent_group → FS code map
+    // from the CY engagement. When a PY-shell ledger is NOT directly mapped
+    // (different ledger name from CY — e.g. PY had "Land Sale", CY has "Sales"),
+    // inherit the FS code from any CY ledger that shares the same Tally
+    // parent_group ("Sales Accounts" → NCE_REV_OPS). This is exactly how a
+    // human auditor would map renamed/replaced revenue & expense ledgers:
+    // they go under the same Schedule III head as their accounting group.
+    const groupToCode: Record<string, string> = {};
+    const groupCodeCount: Record<string, Record<string, number>> = {};
+    for (const acct of tbAccounts) {
+      const code = (coaMapping as Record<string, any>)[acct.account_name]?.code;
+      const grp  = (acct.account_group || "").toLowerCase().trim();
+      if (!code || !grp) continue;
+      if (!groupCodeCount[grp]) groupCodeCount[grp] = {};
+      groupCodeCount[grp][code] = (groupCodeCount[grp][code] || 0) + 1;
+    }
+    // For each group pick the most-frequent code (only when unambiguous, i.e.
+    // no tie with another code that has the same count).
+    for (const [grp, codeCounts] of Object.entries(groupCodeCount)) {
+      let bestCode = "";
+      let bestN = 0;
+      let tie = false;
+      for (const [code, n] of Object.entries(codeCounts)) {
+        if (n > bestN) { bestCode = code; bestN = n; tie = false; }
+        else if (n === bestN && code !== bestCode) { tie = true; }
+      }
+      if (bestCode && !tie) groupToCode[grp] = bestCode;
+    }
+
     for (const row of pyShellTbData.tbRows) {
       const name = String(row.ledger_name || "").trim();
       if (!name) continue;
-      // Use PY shell's own coa_mapping first, fall back to CY mapping
-      const mapping =
-        (pyShellTbData.coaMapping as Record<string, any>)[name] ||
-        (coaMapping as Record<string, any>)[name];
+      const lower = name.toLowerCase();
+      const grp   = String((row as any).parent_group || "").toLowerCase().trim();
+      // Resolution order:
+      //   1. PY-shell exact
+      //   2. PY-shell lowercase
+      //   3. CY exact
+      //   4. CY lowercase
+      //   5. Group-level inheritance (PY-shell ledger's parent_group → CY group code)
+      let mapping: any =
+        pyShellMapping[name] ||
+        pyShellMappingLowerIndex[lower] ||
+        (coaMapping as Record<string, any>)[name] ||
+        cyMappingLowerIndex[lower];
+      if (!mapping?.code && grp && groupToCode[grp]) {
+        mapping = { code: groupToCode[grp] };
+      }
       if (!mapping?.code) continue;
       const item = activeFlatItems.find(i => i.code === mapping.code);
       if (!item) continue;
@@ -1519,6 +1888,36 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       const isDr = String(row.balance_type ?? "").toUpperCase() === "DR";
       amounts[mapping.code] = (amounts[mapping.code] || 0) + (isDr ? cb : -cb);
     }
+    // ROOT-CAUSE FIX (Stage 6 — PY parent total bug): also inject the
+    // PY Changes-in-Inventories dual-post here. Without this, the CII PL
+    // leaf in pyShellPLAmounts stays at 0 (no PY-shell ledger maps to
+    // PL_EXP_CII directly — inventory ledgers map to BS_CA_INV). Then the
+    // render at line ~3421 short-circuits on computedAmountsPY (which only
+    // contains the CII contribution at PL parent codes) and ignores
+    // pyShellPLAmounts entirely. Mirroring the same dual-post into
+    // pyShellPLAmounts gives the FULL P&L PY total: regular P&L sums +
+    // CII dual-post, identical to what computedAmountsPY produces for the
+    // CII child alone, but with ALL the other P&L children also populated.
+    const pyShellPrevClose: Record<string, number> = {};
+    for (const row of pyShellTbData?.tbRows || []) {
+      const name = String((row as any).ledger_name || "").trim().toLowerCase();
+      if (!name) continue;
+      const ob = Math.abs(Number((row as any).opening_balance ?? 0));
+      if (ob < 0.005) continue;
+      const isDr = String((row as any).opening_type ?? "").toUpperCase() === "DR";
+      pyShellPrevClose[name] = isDr ? ob : -ob;
+    }
+    for (const acct of tbAccounts) {
+      const mapping = coaMapping[acct.account_name];
+      if (!mapping) continue;
+      const plCode = INV_DUAL_MAP[mapping.code];
+      if (!plCode) continue;
+      const pyClose = acct.opening_balance ?? 0;
+      const prev    = pyShellPrevClose[acct.account_name.toLowerCase()] ?? 0;
+      if (Math.abs(prev) < 0.005 && Math.abs(pyClose) < 0.005) continue;
+      amounts[plCode] = (amounts[plCode] || 0) + (prev - pyClose);
+    }
+
     // Roll up parent P&L nodes
     const computeParent = (item: FSLineItem): number => {
       if (!item.children || item.children.length === 0) return amounts[item.code] || 0;
@@ -1528,7 +1927,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     };
     for (const item of activeTree) computeParent(item);
     return amounts;
-  }, [pyShellTbData, coaMapping, activeFlatItems, activeTree]);
+  }, [pyShellTbData, coaMapping, tbAccounts, activeFlatItems, activeTree]);
 
   // ═══════ PY SHELL LEDGER AMOUNTS (per-ledger) ═══════
   // Maps ledger_name → signed closing_balance from PY shell TB.
@@ -1536,6 +1935,16 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   // (the FS-level pyShellPLAmounts aggregates to code level, not ledger level).
   // For BS ledgers, CY opening_balance already gives the PY figure — this only
   // provides data for P&L ledgers where opening = 0.
+  //
+  // ROOT-CAUSE FIX (Issue 1): exact-name lookup fails whenever the PY shell
+  // ledger differs from the CY ledger by case, whitespace, punctuation, or
+  // common suffixes ("Sales" vs "Sales A/c" vs "SALES "). When that happens
+  // the PY column displays "—" even though the same balance is sitting in
+  // tally_trial_balance. We now build BOTH an exact-name map AND a
+  // normalised-name map, and the lookup helper tries: exact → trimmed-lower
+  // → fully-normalised (alphanumerics only, strip "ac/account" noise words).
+  // This makes the PY lookup resilient across every client that has
+  // sync-py.bat data without requiring manual aliases.
   const pyShellLedgerAmounts: Record<string, number> = useMemo(() => {
     if (!pyShellTbData?.tbRows?.length) return {};
     const map: Record<string, number> = {};
@@ -1549,6 +1958,52 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     }
     return map;
   }, [pyShellTbData]);
+
+  // Normalised-name index → signed PY closing balance. Built alongside
+  // pyShellLedgerAmounts so the lookup helper can fall back when the exact
+  // CY ledger name doesn't appear in PY shell TB.
+  const pyShellLedgerNormalized: Record<string, number> = useMemo(() => {
+    if (!pyShellTbData?.tbRows?.length) return {};
+    const map: Record<string, number> = {};
+    for (const row of pyShellTbData.tbRows) {
+      const name = String(row.ledger_name || "").trim();
+      if (!name) continue;
+      const cb = Math.abs(Number(row.closing_balance ?? 0));
+      if (cb < 0.005) continue;
+      const isDr = String(row.balance_type ?? "").toUpperCase() === "DR";
+      const signed = isDr ? cb : -cb;
+      // (a) lowercase + trim   (b) fully normalised (alnum-only)
+      const lower = name.toLowerCase();
+      if (!(lower in map)) map[lower] = signed;
+      const norm = lower
+        .replace(/&/g, " and ")
+        .replace(/[^a-z0-9]+/g, " ")
+        .replace(/\b(a c|ac|account|accounts|a\/c)\b/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (norm && !(norm in map)) map[norm] = signed;
+    }
+    return map;
+  }, [pyShellTbData]);
+
+  /** Robust PY-shell amount lookup for a CY ledger name. Tries exact match,
+   *  then lowercase-trim, then fully normalised name. Returns 0 when none of
+   *  the variants exist in the PY shell TB. */
+  const lookupPyShellAmount = useCallback((cyName: string): number => {
+    if (!cyName) return 0;
+    const exact = pyShellLedgerAmounts[cyName];
+    if (exact !== undefined) return exact;
+    const lower = cyName.toLowerCase().trim();
+    const byLower = pyShellLedgerNormalized[lower];
+    if (byLower !== undefined) return byLower;
+    const norm = lower
+      .replace(/&/g, " and ")
+      .replace(/[^a-z0-9]+/g, " ")
+      .replace(/\b(a c|ac|account|accounts|a\/c)\b/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return pyShellLedgerNormalized[norm] ?? 0;
+  }, [pyShellLedgerAmounts, pyShellLedgerNormalized]);
 
   // ═══════ FS LEDGER SEARCH ═══════
   // When the user types in the right-panel search box, build a flat result list:
@@ -1637,8 +2092,9 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         const cy = a.balance;
         // PY: prefer PY shell closing_balance (for P&L accounts where opening=0);
         // fall back to opening_balance on CY TB (correct for BS accounts).
-        const pyFromShell = pyShellLedgerAmounts[a.account_name];
-        const py = (pyFromShell !== undefined && Math.abs(pyFromShell) > 0.005)
+        // Use the fuzzy helper so case/whitespace/A-c differences don't blank PY.
+        const pyFromShell = lookupPyShellAmount(a.account_name);
+        const py = Math.abs(pyFromShell) > 0.005
           ? pyFromShell
           : (a.opening_balance ?? 0);
         return {
@@ -1650,11 +2106,73 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           isNew:    Math.abs(py) < 0.005 && Math.abs(cy) >= 0.005,
           isClosed: Math.abs(py) >= 0.005 && Math.abs(cy) < 0.005,
           isAlias:  !!aliases[a.account_name],
+          isPyOnly: false as boolean,
         };
-      })
-      .sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta));
+      });
+
+    // ROOT-CAUSE FIX (Issue 1 — round 3): also include PY-shell ledgers that
+    // are mapped (in PY shell's own coa_mapping, or via group inheritance)
+    // to the same FS code but DO NOT exist in CY by any name. Without this,
+    // a renamed/replaced revenue ledger (PY: "Land Sale" → NCE_REV_OPS;
+    // CY: "Sales" → NCE_REV_OPS) would never surface its PY ₹4.90 cr in
+    // the Variance Drill, even though pyShellPLAmounts correctly aggregates
+    // it at the FS-code level.
+    const cySeenLower = new Set(tbAccounts.map(a => a.account_name.toLowerCase().trim()));
+    const pyShellMapping = (pyShellTbData?.coaMapping as Record<string, any>) || {};
+    const pyShellMappingLowerIndex: Record<string, { code: string }> = {};
+    for (const [k, v] of Object.entries(pyShellMapping)) {
+      if (v?.code) pyShellMappingLowerIndex[k.toLowerCase().trim()] = v;
+    }
+    // Reuse the same group → code inheritance used by pyShellPLAmounts.
+    const groupToCode: Record<string, string> = {};
+    const groupCodeCount: Record<string, Record<string, number>> = {};
+    for (const acct of tbAccounts) {
+      const code = coaMapping[acct.account_name]?.code;
+      const grp  = (acct.account_group || "").toLowerCase().trim();
+      if (!code || !grp) continue;
+      if (!groupCodeCount[grp]) groupCodeCount[grp] = {};
+      groupCodeCount[grp][code] = (groupCodeCount[grp][code] || 0) + 1;
+    }
+    for (const [grp, codeCounts] of Object.entries(groupCodeCount)) {
+      let bestCode = ""; let bestN = 0; let tie = false;
+      for (const [code, n] of Object.entries(codeCounts)) {
+        if (n > bestN) { bestCode = code; bestN = n; tie = false; }
+        else if (n === bestN && code !== bestCode) { tie = true; }
+      }
+      if (bestCode && !tie) groupToCode[grp] = bestCode;
+    }
+    for (const row of (pyShellTbData?.tbRows ?? []) as any[]) {
+      const name = String(row.ledger_name || "").trim();
+      if (!name) continue;
+      const lower = name.toLowerCase();
+      if (cySeenLower.has(lower)) continue; // already covered by CY iteration
+      const grp = String((row.parent_group || "")).toLowerCase().trim();
+      const m =
+        pyShellMapping[name] ||
+        pyShellMappingLowerIndex[lower] ||
+        coaMapping[name] ||
+        (grp && groupToCode[grp] ? { code: groupToCode[grp] } : null);
+      if (m?.code !== varianceDrill.code) continue;
+      const cb = Math.abs(Number(row.closing_balance ?? 0));
+      if (cb < 0.005) continue;
+      const isDr = String(row.balance_type ?? "").toUpperCase() === "DR";
+      const py = isDr ? cb : -cb;
+      rows.push({
+        ledger: name,
+        group: row.parent_group || "",
+        cy: 0,
+        py,
+        delta: -py,
+        pct: -100,
+        isNew: false,
+        isClosed: true,
+        isAlias: false,
+        isPyOnly: true,
+      });
+    }
+    rows.sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta));
     return rows;
-  }, [varianceDrill, tbAccounts, coaMapping, aliases, pyShellLedgerAmounts]);
+  }, [varianceDrill, tbAccounts, coaMapping, aliases, pyShellLedgerAmounts, lookupPyShellAmount, pyShellTbData]);
 
   // ═══════ ALIAS HANDLERS (Task 3) ═══════
   const saveAlias = async (priorName: string, currentName: string) => {
@@ -1715,15 +2233,24 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       const hasClose = Math.abs(closing) >= 0.005;
       const hasTurnover = Math.abs(a.tally_debit ?? 0) >= 0.005 || Math.abs(a.tally_credit ?? 0) >= 0.005;
       // hideZero: hide only accounts with no balance AND no turnover.
-      // Exception: in "All Unmapped" mode, always show unmapped ledgers even with ₹0
-      // so the auditor can find and map them (prevents the "1 unmapped but panel empty" bug).
+      // Exceptions:
+      //   • "All Unmapped" mode — always show unmapped ledgers even with ₹0
+      //     so the auditor can find and map them.
+      //   • "Closed Accounts" mode — dormant ledgers are EXACTLY what this tab
+      //     is meant to surface, so never hide them.
       const isUnmapped = !coaMapping[a.account_name];
-      if (hideZero && !hasOpen && !hasClose && !hasTurnover && !(workMode === "all" && isUnmapped)) return false;
+      if (
+        hideZero && !hasOpen && !hasClose && !hasTurnover &&
+        !(workMode === "all" && isUnmapped) &&
+        workMode !== "closed"
+      ) return false;
 
       // Workflow-mode narrowing
-      if (workMode === "py"     && !hasOpen) return false;                        // PY-mapping: only opening ≠ 0
-      if (workMode === "cy"     && (hasOpen || !hasClose)) return false;          // CY-mapping: new ledgers (open=0, close≠0)
-      if (workMode === "closed" && (!hasOpen || hasClose)) return false;          // Closed accounts only (open≠0, close=0)
+      // "closed" now means truly dormant: opening = 0 AND closing = 0 AND no
+      // turnover. This covers both BS ledgers brought forward at ₹0 still at
+      // ₹0 and P&L ledgers with no debit / credit transactions during the
+      // year — the auditor's standard "ledgers I can safely ignore" bucket.
+      if (workMode === "closed" && (hasOpen || hasClose || hasTurnover)) return false;
       // "all" mode: include everything not excluded above (incl. turnover-only and ₹0 unmapped)
 
       if (!s) return true;
@@ -1745,22 +2272,19 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     [filteredAccounts, coaMapping, workMode],
   );
 
-  // Counts per mode (shown on the segmented control)
+  // Counts per mode (shown on the segmented control). "closed" is now
+  // truly-dormant: no opening, no closing, no debit/credit turnover — covers
+  // both BS ledgers brought forward at ₹0 and P&L ledgers with no activity.
   const modeCounts = useMemo(() => {
-    let py = 0, cy = 0, closed = 0, all = 0;
+    let closed = 0, all = 0;
     for (const a of tbAccounts) {
       const hasOpen     = Math.abs(a.opening_balance ?? 0) >= 0.005;
       const hasClose    = Math.abs(a.balance) >= 0.005;
       const hasTurnover = Math.abs(a.tally_debit ?? 0) >= 0.005 || Math.abs(a.tally_credit ?? 0) >= 0.005;
-      // "all" counts every unmapped ledger — including ₹0 dormant ones — so it
-      // matches unmappedCount in the stats bar and the auditor can find them.
       if (!coaMapping[a.account_name]) all++;
-      if (!hasOpen && !hasClose && !hasTurnover) continue;  // skip dormant for sub-mode counts
-      if (hasOpen  && !coaMapping[a.account_name]) py++;
-      if (!hasOpen && hasClose && !coaMapping[a.account_name]) cy++;
-      if (hasOpen  && !hasClose) closed++;                  // review regardless of mapped state
+      if (!hasOpen && !hasClose && !hasTurnover) closed++;
     }
-    return { py, cy, closed, all };
+    return { closed, all };
   }, [tbAccounts, coaMapping]);
 
   // Grouped view — keyed by parent_group, aggregated subtotal + mapped/total counts.
@@ -1850,9 +2374,10 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                      String(item.section || "").toLowerCase().includes("equity");
         const pyFromOpening = computedAmountsPY[item.code] || 0;
         const pyFromPrior   = pyAmounts[item.code]         || 0;
+        const pyFromShell   = pyShellPLAmounts[item.code]  || 0;
         const amount_py     = isBS
-          ? (Math.abs(pyFromOpening) > 0.005 ? pyFromOpening : (pyFromPrior || null))
-          : (pyFromPrior || null);
+          ? (Math.abs(pyFromOpening) > 0.005 ? pyFromOpening : (pyFromPrior || pyFromShell || null))
+          : (pyFromPrior || pyFromShell || null);
 
         rows.push({
           engagement_id: engagementId,
@@ -2162,12 +2687,15 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
             </Alert>
           )}
 
-          {/* PY-first workflow segmented control */}
+          {/* Workflow segmented control — only Closed + All Unmapped.
+              The earlier "Prior Year" / "Current Year (new)" tabs were
+              redundant once the Mapping Instructions / hideZero filters were
+              available; auditors only need a way to (a) review dormant
+              ledgers in bulk (Closed) and (b) see everything still pending
+              (All Unmapped). */}
           <div className="flex items-stretch gap-0 mb-3 border rounded-md overflow-hidden">
             {([
-              { key: "py",     label: "Prior Year",         hint: "opening ≠ 0",           count: modeCounts.py,     color: "bg-amber-100 text-amber-800 border-amber-300" },
-              { key: "cy",     label: "Current Year (new)", hint: "opening = 0, closing ≠ 0", count: modeCounts.cy, color: "bg-primary/10 text-primary" },
-              { key: "closed", label: "Closed Accounts",    hint: "opening ≠ 0, closing = 0", count: modeCounts.closed, color: "bg-slate-100 text-slate-700 dark:bg-slate-900/60 dark:text-slate-300" },
+              { key: "closed", label: "Closed Accounts",    hint: "opening = 0, closing = 0 (P&L: no debit/credit)", count: modeCounts.closed, color: "bg-slate-100 text-slate-700 dark:bg-slate-900/60 dark:text-slate-300" },
               { key: "all",    label: "All Unmapped",       hint: "every unmapped ledger", count: modeCounts.all,   color: "bg-violet-100 text-violet-800 dark:bg-violet-950/30 dark:text-violet-200" },
             ] as const).map((m, i) => (
               <button
@@ -2188,30 +2716,24 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
             ))}
           </div>
 
+          {/* ── Full-screen mapping workspace ── */}
+          <div className={cn(fullScreen && "fixed inset-0 z-50 bg-background flex flex-col p-3 overflow-hidden")}>
+
           {/* Workflow-mode guidance banner */}
-          {workMode === "py" && (
-            <Alert className="mb-3 bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800">
-              <AlertTriangle className="h-4 w-4 text-amber-600" />
-              <AlertTitle className="text-xs">Prior-Year Mapping Mode</AlertTitle>
-              <AlertDescription className="text-[11px]">
-                You're mapping ledgers with non-zero opening balances. Each mapping serves both PY and CY — once these are done, only new CY ledgers remain.
-              </AlertDescription>
-            </Alert>
-          )}
           {workMode === "closed" && (
             <Alert className="mb-3 bg-slate-50 dark:bg-slate-900/40 border-slate-200 dark:border-slate-700">
               <AlertTriangle className="h-4 w-4 text-slate-600" />
               <AlertTitle className="text-xs">Closed Accounts Review</AlertTitle>
               <AlertDescription className="text-[11px]">
-                These ledgers had balances last year but are now zero. They only affect the PY comparative column. Verify mapping — they may be ledgers that were renamed or reclassified mid-year.
+                These ledgers are fully dormant — opening = 0, closing = 0, and no debit/credit transactions during the year. They include BS ledgers brought forward at ₹0 and P&L ledgers with no activity. Safe to leave unmapped if confirmed.
               </AlertDescription>
             </Alert>
           )}
 
           <div className="flex gap-2 mb-3 flex-wrap items-center">
-            <Button variant="outline" size="sm" onClick={runAutoMapping} className="gap-1">
-              <RefreshCw size={12} /> Auto-Map All
-            </Button>
+            {/* Auto-Map All removed per user request — AI Map Remaining is
+                the canonical mapping action. Naïve keyword auto-map was
+                producing too many false matches that auditors had to undo. */}
             <Button size="sm" onClick={runAiMapping} disabled={aiRunning} className="gap-1 bg-violet-600 hover:bg-violet-700 text-white">
               {aiRunning ? <Loader2 size={12} className="animate-spin" /> : <Link2 size={12} />}
               {aiRunning ? "AI Mapping…" : "AI Map Remaining"}
@@ -2242,9 +2764,49 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
             </div>
 
             <div className="ml-auto flex gap-1 items-center">
+              <Button
+                variant="outline" size="sm"
+                onClick={() => setFullScreen(f => !f)}
+                className="gap-1 border-primary/40 text-primary hover:bg-primary/10"
+                title={fullScreen ? "Exit full screen (Esc)" : "Full screen — maximize mapping workspace"}
+              >
+                {fullScreen ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+                {fullScreen ? "Exit Full Screen" : "Full Screen"}
+              </Button>
               <Button variant="ghost" size="sm" onClick={() => unmapByConfidence("low")}    className="text-amber-700 gap-1">Unmap Low</Button>
               <Button variant="ghost" size="sm" onClick={() => unmapByConfidence("medium")} className="text-amber-700 gap-1">Unmap Medium</Button>
-              <Button variant="ghost" size="sm" onClick={clearAllMappings}                  className="text-destructive gap-1">Clear All</Button>
+              {/* Issue 5 (Aesha) — Clear All needs a proper confirm dialog
+                  so it can't be triggered accidentally. The action zeros
+                  out coa_mapping AND stage5_notes / stage7_ratios so the
+                  Financial Statements truly start from scratch. */}
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="ghost" size="sm" className="text-destructive gap-1">Clear All</Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Clear all mappings AND reset financials?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This will <strong>delete every COA mapping</strong> for this engagement
+                      AND <strong>reset all Financial Statements to zero</strong> — Stage 5 Notes,
+                      Stage 7 Ratios, every BS/PL override, and every PY manual amount.
+                      <br /><br />
+                      Use this when you want a complete clean slate (mapping → notes → financials).
+                      You will need to re-map and re-populate the notes from scratch.
+                      This cannot be undone.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={clearAllMappings}
+                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    >
+                      Yes, clear everything
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
               <AlertDialog>
                 <AlertDialogTrigger asChild>
                   <Button
@@ -2278,15 +2840,78 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
             </div>
           </div>
 
-          <div className="flex gap-4" style={{ height: "calc(100vh - 22rem)" }}>
+          <div className="flex gap-4" style={{ height: fullScreen ? "calc(100vh - 9rem)" : "calc(100vh - 22rem)" }}>
             {/* Left: UNMAPPED TB Accounts — mapping workspace */}
-            <div className="w-1/2 flex flex-col border rounded-lg overflow-hidden">
+            <div className={cn("flex flex-col border rounded-lg overflow-hidden transition-all", maximizedPanel === "right" ? "hidden" : maximizedPanel === "left" ? "w-full" : "w-1/2")}>
               <div className="p-2 border-b bg-muted/30 space-y-2">
                 <div className="flex items-center justify-between">
-                  <p className="text-xs font-semibold text-muted-foreground">
-                    Unmapped Ledgers <Badge variant="outline" className="text-[9px] ml-1">{unmappedAccounts.length}</Badge>
-                  </p>
-                  <p className="text-[10px] text-muted-foreground">Select → click FS line item on right</p>
+                  <div className="flex items-center gap-1.5">
+                    {/* Global Select-All checkbox */}
+                    {unmappedAccounts.length > 0 && (() => {
+                      const allSel  = unmappedAccounts.every(a => multiSelect.has(a.account_name));
+                      const someSel = unmappedAccounts.some(a => multiSelect.has(a.account_name));
+                      return (
+                        <input
+                          type="checkbox"
+                          className="cursor-pointer h-3.5 w-3.5 accent-blue-600 shrink-0"
+                          checked={allSel}
+                          ref={el => { if (el) el.indeterminate = someSel && !allSel; }}
+                          onChange={() => {
+                            setMultiSelect(prev => {
+                              if (allSel) return new Set();
+                              return new Set(unmappedAccounts.map(a => a.account_name));
+                            });
+                          }}
+                          title={allSel ? "Deselect all" : "Select all unmapped"}
+                        />
+                      );
+                    })()}
+                    <p className="text-xs font-semibold text-muted-foreground">
+                      Unmapped Ledgers <Badge variant="outline" className="text-[9px] ml-1">{unmappedAccounts.length}</Badge>
+                      {multiSelect.size > 0 && (
+                        <Badge className="text-[9px] ml-1 bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-900/40 dark:text-blue-300">
+                          {multiSelect.size} ticked
+                        </Badge>
+                      )}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {groupView && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setExpandedGroups(prev => { const next = { ...prev }; grouped.forEach(g => { next[g.group] = false; }); return next; })}
+                          className="text-[9px] px-1.5 py-0.5 rounded border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground transition-colors whitespace-nowrap"
+                          title="Collapse all groups"
+                        >⊖ Collapse All</button>
+                        <button
+                          type="button"
+                          onClick={() => setExpandedGroups(prev => { const next = { ...prev }; grouped.forEach(g => { next[g.group] = true; }); return next; })}
+                          className="text-[9px] px-1.5 py-0.5 rounded border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground transition-colors whitespace-nowrap"
+                          title="Expand all groups"
+                        >⊕ Expand All</button>
+                      </>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setMaximizedPanel(p => p === "left" ? null : "left")}
+                      className="text-[9px] px-1.5 py-0.5 rounded border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground transition-colors whitespace-nowrap"
+                      title={maximizedPanel === "left" ? "Restore split view" : "Expand left panel"}
+                    >{maximizedPanel === "left" ? "⊠ Restore Split" : "⊡ Expand"}</button>
+                  </div>
+                  {multiSelect.size > 0 && (
+                    <div className="flex items-center gap-2 ml-1">
+                      <p className="text-[10px] text-blue-700 dark:text-blue-300 font-medium">
+                        Click an FS line item to assign all {multiSelect.size}
+                      </p>
+                      <button
+                        className="text-[10px] text-muted-foreground hover:text-destructive underline"
+                        onClick={() => setMultiSelect(new Set())}
+                      >
+                        clear
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <div className="relative">
                   <Search size={14} className="absolute left-2 top-2.5 text-muted-foreground" />
@@ -2302,9 +2927,13 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                 {groupView ? (
                   <div>
                     {grouped.map((g) => {
-                      const isOpen = expandedGroups[g.group] ?? true;
+                      const isOpen = expandedGroups[g.group] ?? false;
                       const suggestedItem = g.dominantCode
                         ? activeLeafItems.find((i) => i.code === g.dominantCode) : null;
+                      // Unmapped items in this group available for bulk select
+                      const unmappedInGroup = g.items.filter(a => !coaMapping[a.account_name]);
+                      const allGroupSelected = unmappedInGroup.length > 0 && unmappedInGroup.every(a => multiSelect.has(a.account_name));
+                      const someGroupSelected = unmappedInGroup.some(a => multiSelect.has(a.account_name));
                       return (
                         <div key={g.group} className="border-b">
                           <div
@@ -2312,26 +2941,43 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                             className="px-3 py-2 bg-muted/40 hover:bg-muted/60 cursor-pointer flex items-center justify-between sticky top-0 z-10"
                           >
                             <div className="flex items-center gap-2 min-w-0">
+                              {/* Select-all checkbox for unmapped ledgers in this group */}
+                              {unmappedInGroup.length > 0 && (
+                                <input
+                                  type="checkbox"
+                                  className="cursor-pointer h-3.5 w-3.5 accent-blue-600 shrink-0"
+                                  checked={allGroupSelected}
+                                  ref={el => { if (el) el.indeterminate = someGroupSelected && !allGroupSelected; }}
+                                  onClick={e => e.stopPropagation()}
+                                  onChange={() => {
+                                    setMultiSelect(prev => {
+                                      const next = new Set(prev);
+                                      if (allGroupSelected) {
+                                        unmappedInGroup.forEach(a => next.delete(a.account_name));
+                                      } else {
+                                        unmappedInGroup.forEach(a => next.add(a.account_name));
+                                      }
+                                      return next;
+                                    });
+                                  }}
+                                  title={allGroupSelected ? "Deselect all in group" : "Select all unmapped in group"}
+                                />
+                              )}
                               {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                               <span className="text-xs font-semibold truncate">{g.group}</span>
                               <Badge variant="outline" className="text-[9px] px-1">{g.total} unmapped</Badge>
                               {suggestedItem && (
-                                <span className="text-[10px] text-primary truncate">
-                                  siblings → {suggestedItem.name}
-                                </span>
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); assignGroup(g.group, suggestedItem.code); }}
+                                  className="text-[10px] shrink-0 bg-primary text-primary-foreground rounded px-2 py-0.5 hover:bg-primary/90 font-medium"
+                                  title={`Apply "${suggestedItem.name}" to all ${g.total} unmapped ledgers in this group`}
+                                >→ {suggestedItem.name.length > 22 ? suggestedItem.name.slice(0, 22) + "…" : suggestedItem.name}</button>
                               )}
                             </div>
                             <div className="flex items-center gap-2 shrink-0">
                               <span className={cn("font-mono text-[10px]", g.subtotal >= 0 ? "text-foreground" : "text-destructive")}>
                                 ₹{Math.abs(g.subtotal).toLocaleString("en-IN")} {g.subtotal >= 0 ? "Dr" : "Cr"}
                               </span>
-                              {suggestedItem && (
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); assignGroup(g.group, suggestedItem.code); }}
-                                  className="text-[10px] text-primary hover:underline"
-                                  title={`Apply "${suggestedItem.name}" to all ${g.total} unmapped ledgers in this group`}
-                                >Apply to all</button>
-                              )}
                               {selectedAccount && coaMapping[selectedAccount] && (
                                 <button
                                   onClick={(e) => { e.stopPropagation(); assignGroup(g.group, coaMapping[selectedAccount].code); }}
@@ -2339,11 +2985,42 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                                   title="Map entire group to the currently selected ledger's FS code"
                                 >Map group</button>
                               )}
+                              {/* Fallback picker for groups with no sibling suggestion */}
+                              {!suggestedItem && unmappedInGroup.length > 0 && !(selectedAccount && coaMapping[selectedAccount]) && (
+                                <Popover open={groupPickerOpen === g.group} onOpenChange={open => setGroupPickerOpen(open ? g.group : null)}>
+                                  <PopoverTrigger asChild>
+                                    <button
+                                      onClick={e => e.stopPropagation()}
+                                      className="text-[10px] text-muted-foreground hover:text-primary border border-dashed border-muted-foreground/30 hover:border-primary/50 rounded px-1.5 py-0.5 transition-colors"
+                                      title="Pick a financial statement line item to map all ledgers in this group"
+                                    >Map all as…</button>
+                                  </PopoverTrigger>
+                                  <PopoverContent className="p-0 w-64" align="end" onClick={e => e.stopPropagation()}>
+                                    <Command>
+                                      <CommandInput placeholder="Search FS item…" className="h-7 text-xs" />
+                                      <CommandList className="max-h-52">
+                                        <CommandEmpty className="text-xs py-2 text-center">No results</CommandEmpty>
+                                        {activeLeafItems.map(item => (
+                                          <CommandItem
+                                            key={item.code}
+                                            value={item.name}
+                                            onSelect={() => { assignGroup(g.group, item.code); setGroupPickerOpen(null); }}
+                                            className="text-xs py-1.5 cursor-pointer"
+                                          >
+                                            {item.name}
+                                          </CommandItem>
+                                        ))}
+                                      </CommandList>
+                                    </Command>
+                                  </PopoverContent>
+                                </Popover>
+                              )}
                             </div>
                           </div>
                           {isOpen && g.items.map((acct) => {
                             const mapping = coaMapping[acct.account_name];
                             const isSelected = selectedAccount === acct.account_name;
+                            const isMultiG  = multiSelect.has(acct.account_name);
                             const isCF = mapping?.confidence === "carried_forward";
                             const lineItem = mapping ? activeLeafItems.find((i) => i.code === mapping.code) : null;
                             return (
@@ -2353,12 +3030,33 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                                 className={cn(
                                   "pl-6 pr-3 py-2 cursor-pointer text-xs hover:bg-muted/50 transition-colors border-t",
                                   isSelected && "bg-primary/10 border-l-2 border-l-primary",
-                                  !isSelected && isCF && "bg-amber-50 dark:bg-amber-950/10 border-l-2 border-l-amber-400",
-                                  !isSelected && !isCF && mapping?.confidence === "manual" && "bg-violet-50 dark:bg-violet-950/20 border-l-2 border-l-violet-400",
-                                  !mapping && "bg-destructive/5",
+                                  !isSelected && isMultiG && "bg-blue-50 dark:bg-blue-950/20 border-l-2 border-l-blue-500",
+                                  !isSelected && !isMultiG && isCF && "bg-amber-50 dark:bg-amber-950/10 border-l-2 border-l-amber-400",
+                                  !isSelected && !isMultiG && !isCF && mapping?.confidence === "manual" && "bg-violet-50 dark:bg-violet-950/20 border-l-2 border-l-violet-400",
+                                  !mapping && !isMultiG && "bg-destructive/5",
                                 )}
                               >
                                 <div className="flex items-center justify-between">
+                                  {/* ISSUE 3 FIX (group view): show bulk-select
+                                      checkbox for mapped rows too — Closed
+                                      Accounts and All Unmapped tabs need this
+                                      so the auditor can bulk-RE-MAP existing
+                                      ledgers in one click. */}
+                                  <input
+                                    type="checkbox"
+                                    className="mr-2 cursor-pointer h-3.5 w-3.5 accent-blue-600 shrink-0"
+                                    checked={isMultiG}
+                                    onClick={e => e.stopPropagation()}
+                                    onChange={() => {
+                                      setMultiSelect(prev => {
+                                        const next = new Set(prev);
+                                        if (next.has(acct.account_name)) next.delete(acct.account_name);
+                                        else next.add(acct.account_name);
+                                        return next;
+                                      });
+                                    }}
+                                    title={mapping ? "Tick to bulk-RE-MAP this mapped ledger" : "Tick to bulk-assign this ledger"}
+                                  />
                                   <div className="flex-1 min-w-0">
                                     <p className="font-medium truncate">{acct.account_name}</p>
                                     {typeof acct.opening_balance === "number" && acct.opening_balance !== 0 && (
@@ -2428,6 +3126,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                   {unmappedAccounts.map(acct => {
                     const mapping = coaMapping[acct.account_name];
                     const isSelected = selectedAccount === acct.account_name;
+                    const isMulti = multiSelect.has(acct.account_name);
                     const isCFFlat = mapping?.confidence === "carried_forward";
                     const lineItem = mapping ? activeLeafItems.find(i => i.code === mapping.code) : null;
                     return (
@@ -2437,12 +3136,39 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                         className={cn(
                           "px-3 py-2 cursor-pointer text-xs hover:bg-muted/50 transition-colors",
                           isSelected && "bg-primary/10 border-l-2 border-l-primary",
-                          !isSelected && isCFFlat && "bg-amber-50 dark:bg-amber-950/10 border-l-2 border-l-amber-400",
-                          !isSelected && !isCFFlat && mapping?.confidence === "manual" && "bg-violet-50 dark:bg-violet-950/20 border-l-2 border-l-violet-400",
-                          !mapping && "bg-destructive/5"
+                          !isSelected && isMulti && "bg-blue-50 dark:bg-blue-950/20 border-l-2 border-l-blue-500",
+                          !isSelected && !isMulti && isCFFlat && "bg-amber-50 dark:bg-amber-950/10 border-l-2 border-l-amber-400",
+                          !isSelected && !isMulti && !isCFFlat && mapping?.confidence === "manual" && "bg-violet-50 dark:bg-violet-950/20 border-l-2 border-l-violet-400",
+                          !mapping && !isMulti && "bg-destructive/5"
                         )}
                       >
                         <div className="flex items-center justify-between">
+                          {/* Issue 1 (today) — checkbox to add this ledger to the
+                              multi-select bucket.  Click stops propagation so
+                              ticking does not also flip the row's selectedAccount. */}
+                          {/* ISSUE 3 FIX: show the bulk-select checkbox on
+                              EVERY row (mapped + unmapped). Previously the
+                              checkbox was gated `{!mapping &&` so already-mapped
+                              ledgers in the Closed Accounts and All Unmapped
+                              tabs couldn't be bulk-acted on. Clicking a target
+                              FS line item now overwrites the mapping for every
+                              ticked ledger — which is what the auditor expects
+                              when reviewing closed/renamed accounts. */}
+                          <input
+                            type="checkbox"
+                            className="mr-2 cursor-pointer h-3.5 w-3.5 accent-blue-600 shrink-0"
+                            checked={isMulti}
+                            onClick={e => e.stopPropagation()}
+                            onChange={() => {
+                              setMultiSelect(prev => {
+                                const next = new Set(prev);
+                                if (next.has(acct.account_name)) next.delete(acct.account_name);
+                                else next.add(acct.account_name);
+                                return next;
+                              });
+                            }}
+                            title={mapping ? "Tick to bulk-RE-MAP this mapped ledger" : "Tick to bulk-assign this ledger"}
+                          />
                           <div className="flex-1 min-w-0">
                             <p className="font-medium truncate">{acct.account_name}</p>
                             <p className="text-[10px] text-muted-foreground truncate">
@@ -2518,18 +3244,50 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
             </div>
 
             {/* Right: FS Line Items Tree — mapping destination + unmap workspace */}
-            <div className="w-1/2 flex flex-col border rounded-lg overflow-hidden">
+            <div className={cn("flex flex-col border rounded-lg overflow-hidden transition-all", maximizedPanel === "left" ? "hidden" : maximizedPanel === "right" ? "w-full" : "w-1/2")}>
               <div className="p-2 border-b bg-muted/30 space-y-1.5">
                 {/* Title row */}
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-semibold text-muted-foreground">
-                    {isNonCorporate ? `NCE Line Items (${entityType})` : "Schedule III Line Items"}
-                  </p>
-                  <p className="text-[10px] text-muted-foreground">
-                    {selectedAccount
-                      ? <>Click a line item to map <span className="font-semibold text-primary">"{selectedAccount}"</span></>
-                      : <>Click a mapped ledger's <span className="text-destructive font-semibold">✕</span> to unmap</>}
-                  </p>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <p className="text-xs font-semibold text-muted-foreground">
+                      {isNonCorporate ? `NCE Line Items (${entityType})` : "Schedule III Line Items"}
+                    </p>
+                    {/* ── Expand / Collapse All toggle ── */}
+                    {!fsSearch && (() => {
+                      const anyExpanded = filteredFsItems.some(item => expandedGroups[`fs:${item.code}`] === true);
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next: Record<string, boolean> = { ...expandedGroups };
+                            for (const item of filteredFsItems) {
+                              if (!item.children || item.children.length === 0) {
+                                const mapped = tbAccounts.filter(a => coaMapping[a.account_name]?.code === item.code);
+                                next[`fs:${item.code}`] = anyExpanded ? false : mapped.length > 0;
+                              }
+                            }
+                            setExpandedGroups(next);
+                          }}
+                          className="text-[9px] px-1.5 py-0.5 rounded border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground transition-colors whitespace-nowrap"
+                        >
+                          {anyExpanded ? "⊖ Collapse All" : "⊕ Expand All"}
+                        </button>
+                      );
+                    })()}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <p className="text-[10px] text-muted-foreground text-right">
+                      {selectedAccount
+                        ? <>Click a line item to map <span className="font-semibold text-primary">"{selectedAccount}"</span></>
+                        : <>Click a mapped ledger's <span className="text-destructive font-semibold">✕</span> to unmap</>}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setMaximizedPanel(p => p === "right" ? null : "right")}
+                      className="text-[9px] px-1.5 py-0.5 rounded border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground transition-colors whitespace-nowrap shrink-0"
+                      title={maximizedPanel === "right" ? "Restore split view" : "Expand right panel"}
+                    >{maximizedPanel === "right" ? "⊠ Restore Split" : "⊡ Expand"}</button>
+                  </div>
                 </div>
                 {/* BS / P&L tab switcher */}
                 <div className="flex gap-1">
@@ -2604,9 +3362,9 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                             return (
                               <div
                                 key={idx}
-                                className="px-2 py-2 hover:bg-muted/40 transition-colors"
+                                className="group px-2 py-2 hover:bg-muted/40 transition-colors"
                               >
-                                {/* Ledger name */}
+                                {/* Ledger name + per-row actions */}
                                 <div className="flex items-center gap-1.5 min-w-0 mb-0.5">
                                   <span className="text-xs font-medium truncate">{r.ledger}</span>
                                   <Badge variant="outline" className={cn("text-[8px] px-1 shrink-0", confClass)}>
@@ -2623,6 +3381,35 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                                 <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
                                   <ArrowRight className="w-2.5 h-2.5 shrink-0 text-primary/60" />
                                   <span className="truncate">{r.breadcrumb}</span>
+                                </div>
+                                {/* Action buttons — let the auditor remap or
+                                    unmap the ledger directly from the search
+                                    results without having to unselect search
+                                    first. Previously the only affordance was
+                                    "click the FS row's ✕" — but that row is
+                                    hidden while search is active. */}
+                                <div className="flex items-center gap-1 mt-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => setReclassifyDialog({ accountName: r.ledger })}
+                                    className="text-[10px] px-2 py-0.5 rounded border border-primary/40 text-primary hover:bg-primary/10 transition"
+                                    title="Move this ledger to a different FS head"
+                                  >
+                                    ⇄ Move to…
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const next = { ...coaMapping };
+                                      delete next[r.ledger];
+                                      setCoaMapping(next);
+                                      toast.success(`Unmapped "${r.ledger}"`);
+                                    }}
+                                    className="text-[10px] px-2 py-0.5 rounded border border-destructive/40 text-destructive hover:bg-destructive/10 transition"
+                                    title="Unmap this ledger (move back to Unmapped Ledgers)"
+                                  >
+                                    ✕ Unmap
+                                  </button>
                                 </div>
                               </div>
                             );
@@ -2660,12 +3447,23 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                     const isHeader = item.children && item.children.length > 0;
                     const mappedAccounts = tbAccounts.filter(a => coaMapping[a.account_name]?.code === item.code);
                     const amountCY = computedAmounts[item.code]   || 0;
-                    // PY: BS items → opening_balance from CY TB; P&L items → PY shell closing_balance
-                    const amountPY =
-                      computedAmountsPY[item.code] ||   // BS: opening_balance-derived
-                      pyShellPLAmounts[item.code]  ||   // P&L: PY shell closing_balance
-                      pyAmounts[item.code]         ||   // P&L fallback: prior fa_financial_statements
-                      0;
+                    // PY: BS items → opening_balance from CY TB; P&L items → PY shell TB.
+                    // ROOT-CAUSE FIX (Stage 6 — PY parent total bug):
+                    // For P&L items we MUST consult pyShellPLAmounts first.
+                    // computedAmountsPY for any P&L parent only ever contains the
+                    // CII dual-post amount (since every other P&L leaf has
+                    // opening_balance = 0), so a naïve `||` chain short-circuits
+                    // on that partial total and ignores the real PY values.
+                    // Classify by section so corporate (PL_*) and NCE (NCE_*)
+                    // codes both flow through the correct branch.
+                    const itemSecLower = String((item as any).section || "").toLowerCase();
+                    const isItemPL =
+                      itemSecLower.includes("pl") || itemSecLower.includes("p_l") ||
+                      itemSecLower.includes("revenue") || itemSecLower.includes("expense") ||
+                      itemSecLower.includes("income");
+                    const amountPY = isItemPL
+                      ? (pyShellPLAmounts[item.code] || pyAmounts[item.code] || 0)
+                      : (computedAmountsPY[item.code] || 0);
                     const delta    = amountCY - amountPY;
                     const pct      = Math.abs(amountPY) > 0.005
                       ? Math.round((delta / Math.abs(amountPY)) * 100)
@@ -2677,7 +3475,15 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                       <div key={item.code}>
                         <div
                           onClick={() => {
-                            if (selectedAccount && !isHeader) {
+                            // Issue 1 (today) — bulk-assign every ticked ledger
+                            // when multi-select is active.  Falls back to the
+                            // single-selection flow when nothing is ticked.
+                            if (multiSelect.size > 0 && !isHeader) {
+                              const ledgers = Array.from(multiSelect);
+                              bulkMapLedgers(ledgers, item.code);
+                              setMultiSelect(new Set());
+                              setSelectedAccount(null);
+                            } else if (selectedAccount && !isHeader) {
                               mapLedgerWithPropagation(selectedAccount, item.code, "manual");
                               setSelectedAccount(null);
                             } else if (!isHeader && mappedAccounts.length > 0) {
@@ -2749,7 +3555,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                               //             was populated.
                               const pyAmt = Math.abs(opening) >= 0.005
                                 ? opening
-                                : (pyShellLedgerAmounts[a.account_name] ?? 0);
+                                : lookupPyShellAmount(a.account_name);
                               const isNew    = Math.abs(opening) < 0.005 && Math.abs(a.balance) >= 0.005;
                               const isClosed = Math.abs(opening) >= 0.005 && Math.abs(a.balance) < 0.005;
                               // P&L A/c (non-BxS) mapped to a BS code: closing balance is NOT added
@@ -2852,16 +3658,123 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                   )} {/* end search ternary */}
                 </div>
               </ScrollArea>
+
+              {/* ── BS Balance Check Totals ──────────────────────────────────────
+                  Visible only on BS tab, not during search.
+                  Shows Total E&L vs Total Assets + balanced/unbalanced indicator.
+              ─────────────────────────────────────────────────────────────────── */}
+              {fsPanelTab === "bs" && !fsSearch && (() => {
+                // Issue 2 (today) — sign-fix the BS difference calculation.
+                //
+                // computedAmounts stores liabilities + equity SIGNED CR-negative
+                // (Tally convention) and assets SIGNED DR-positive.  The old
+                // `diff = totalEL - totalAss` therefore doubled the magnitude
+                // when the two sides actually balanced: a perfectly balanced
+                // BS with ₹82,20,083.99 on each side produced
+                //   totalEL  = -82,20,083.99
+                //   totalAss = +82,20,083.99
+                //   diff     = |totalEL - totalAss| = ₹1,64,40,167.98
+                // The user saw "BS not balanced yet — Difference: ₹1.6Cr"
+                // for an engagement whose BS actually balanced to the rupee.
+                //
+                // The correct identity is:  Σ Dr  +  Σ Cr  =  0  (Tally)
+                //                       =>  totalAss + totalEL = 0 when balanced.
+                // So diff = | totalAss + totalEL | .
+                const totalEL = (computedAmounts["BS_EQ"]  || 0)
+                              + (computedAmounts["BS_NCL"] || 0)
+                              + (computedAmounts["BS_CL"]  || 0);
+                const totalAss = (computedAmounts["BS_NCA"] || 0)
+                               + (computedAmounts["BS_CA"]  || 0);
+                const totalELpy = (computedAmountsPY["BS_EQ"]  || 0)
+                                + (computedAmountsPY["BS_NCL"] || 0)
+                                + (computedAmountsPY["BS_CL"]  || 0);
+                const totalASSpy = (computedAmountsPY["BS_NCA"] || 0)
+                                 + (computedAmountsPY["BS_CA"]  || 0);
+                // Sign-corrected difference + ₹2 tolerance (Issue 2 today)
+                // to absorb 2-decimal rounding accumulating over many ledgers.
+                const diff     = Math.abs(totalAss + totalEL);
+                const balanced = diff < 2;
+                if (Math.abs(totalEL) < 0.005 && Math.abs(totalAss) < 0.005) return null;
+                const fmtAmt = (n: number) =>
+                  n === 0 ? "—"
+                  : `₹${Math.abs(n).toLocaleString("en-IN")}${n >= 0 ? " Dr" : " Cr"}`;
+                return (
+                  <div className="border-t bg-muted/20 px-2 pt-2 pb-2 space-y-1">
+                    {/* Header row */}
+                    <div className="grid grid-cols-[1fr_90px_90px_60px] gap-0 text-[10px] text-muted-foreground uppercase tracking-wide font-semibold border-b pb-1 mb-1">
+                      <span className="pl-2 border-r-2 border-slate-300 dark:border-slate-700 pr-2">BS Total</span>
+                      <span className="text-right border-r-2 border-slate-300 dark:border-slate-700 px-2">Current</span>
+                      <span className="text-right border-r-2 border-slate-300 dark:border-slate-700 px-2">Prior</span>
+                      <span className="text-right pl-2">Match</span>
+                    </div>
+
+                    {/* Total Equity & Liabilities row */}
+                    <div className="grid grid-cols-[1fr_90px_90px_60px] gap-0 items-center text-[10px]">
+                      <span className="font-bold text-foreground pl-2 border-r-2 border-slate-300 dark:border-slate-700 pr-2 py-0.5 truncate">
+                        Total E &amp; L
+                      </span>
+                      <span className={cn(
+                        "font-mono text-right border-r-2 border-slate-300 dark:border-slate-700 px-2 font-semibold",
+                        totalEL >= 0 ? "text-foreground" : "text-destructive",
+                      )}>
+                        {fmtAmt(totalEL)}
+                      </span>
+                      <span className={cn(
+                        "font-mono text-right border-r-2 border-slate-300 dark:border-slate-700 px-2 opacity-70",
+                        totalELpy >= 0 ? "text-foreground" : "text-destructive",
+                      )}>
+                        {fmtAmt(totalELpy)}
+                      </span>
+                      <span className="text-right pl-2" />
+                    </div>
+
+                    {/* Total Assets row */}
+                    <div className="grid grid-cols-[1fr_90px_90px_60px] gap-0 items-center text-[10px]">
+                      <span className="font-bold text-foreground pl-2 border-r-2 border-slate-300 dark:border-slate-700 pr-2 py-0.5 truncate">
+                        Total Assets
+                      </span>
+                      <span className={cn(
+                        "font-mono text-right border-r-2 border-slate-300 dark:border-slate-700 px-2 font-semibold",
+                        totalAss >= 0 ? "text-foreground" : "text-destructive",
+                      )}>
+                        {fmtAmt(totalAss)}
+                      </span>
+                      <span className={cn(
+                        "font-mono text-right border-r-2 border-slate-300 dark:border-slate-700 px-2 opacity-70",
+                        totalASSpy >= 0 ? "text-foreground" : "text-destructive",
+                      )}>
+                        {fmtAmt(totalASSpy)}
+                      </span>
+                      <span className="text-right pl-2" />
+                    </div>
+
+                    {/* Balance indicator */}
+                    <div className={cn(
+                      "flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[10px] font-semibold mt-1",
+                      balanced
+                        ? "bg-green-50 border border-green-200 text-green-700 dark:bg-green-950/30 dark:border-green-800 dark:text-green-400"
+                        : "bg-red-50 border border-red-200 text-red-700 dark:bg-red-950/30 dark:border-red-800 dark:text-red-400",
+                    )}>
+                      {balanced
+                        ? <><span>✓</span> Balance Sheet is <strong>BALANCED</strong></>
+                        : <><span>✗</span> Difference: <strong>₹{diff.toLocaleString("en-IN")}</strong> — BS not balanced yet</>
+                      }
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
 
-          {/* Generate FS Button — always enabled; unmapped ledgers are warned via toast */}
-          <div className="flex justify-end pt-3">
+          {/* Generate FS Button */}
+          <div className="flex justify-end pt-2">
             <Button onClick={generateFS} disabled={saving} className="gap-1">
               {saving ? <Loader2 size={14} className="animate-spin" /> : <FileSpreadsheet size={14} />}
               Generate Financial Statements
             </Button>
           </div>
+
+          </div> {/* end full-screen wrapper */}
         </TabsContent>
       </Tabs>
 
@@ -2872,13 +3785,21 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       >
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle className="text-base">⇄ Move / Reclassify Ledger</DialogTitle>
+            <DialogTitle className="text-base">
+              {/* Issue 1 (today, take 2) — surface bulk-mode in the title so
+                  the auditor sees AT A GLANCE that confirming the dialog will
+                  move every ticked ledger, not just the one whose ⇄ they hit. */}
+              {reclassifyDialog && multiSelect.has(reclassifyDialog.accountName) && multiSelect.size > 1
+                ? `⇄ Move ${multiSelect.size} Ticked Ledgers`
+                : "⇄ Move / Reclassify Ledger"}
+            </DialogTitle>
           </DialogHeader>
           {reclassifyDialog && (() => {
             const currentMapping = coaMapping[reclassifyDialog.accountName];
             const currentLineItem = currentMapping ? activeLeafItems.find(i => i.code === currentMapping.code) : null;
             const newLineItem = reclassifyCode ? activeLeafItems.find(i => i.code === reclassifyCode) : null;
             const isCFReclassify = currentMapping?.confidence === "carried_forward";
+            const isBulkMode = multiSelect.has(reclassifyDialog.accountName) && multiSelect.size > 1;
             return (
               <div className="space-y-4 py-1">
                 {isCFReclassify && (
@@ -2890,9 +3811,27 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                     </AlertDescription>
                   </Alert>
                 )}
+                {isBulkMode && (
+                  <Alert className="bg-blue-50 dark:bg-blue-950/20 border-blue-300 dark:border-blue-700">
+                    <AlertTitle className="text-xs text-blue-800 dark:text-blue-300">Bulk move</AlertTitle>
+                    <AlertDescription className="text-[11px] text-blue-700 dark:text-blue-400">
+                      Confirming will move all <strong>{multiSelect.size}</strong> ticked ledgers to the destination chosen below.
+                    </AlertDescription>
+                  </Alert>
+                )}
                 <div>
-                  <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">Account</p>
-                  <p className="text-sm font-semibold">{reclassifyDialog.accountName}</p>
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">
+                    {isBulkMode ? "Tick-selected ledgers" : "Account"}
+                  </p>
+                  {isBulkMode ? (
+                    <p className="text-xs text-foreground space-y-0.5 max-h-24 overflow-y-auto">
+                      {Array.from(multiSelect).map(n => (
+                        <span key={n} className="block truncate">• {n}</span>
+                      ))}
+                    </p>
+                  ) : (
+                    <p className="text-sm font-semibold">{reclassifyDialog.accountName}</p>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
@@ -3077,6 +4016,30 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                   const prevFy = fyParts.length === 2
                     ? `${parseInt(fyParts[0]) - 1}-${parseInt(fyParts[0]).toString().slice(-2)}`
                     : "prior year";
+                  // ROOT-CAUSE FIX (Issue 1): when PY shell TB HAS rows but the
+                  // ledger lookup still came up empty (post-fuzzy-fallback), the
+                  // generic "not yet synced" message is misleading. Surface a
+                  // more accurate diagnosis instead.
+                  const pyShellLoaded = !!pyShellTbData?.tbRows?.length;
+                  if (pyShellLoaded) {
+                    // PY shell data IS synced — the drill ledger just doesn't
+                    // appear in PY shell TB by any name variant. Likely a
+                    // renamed ledger; suggest the alias UX rather than
+                    // re-running sync-py.bat.
+                    return (
+                      <div className="flex items-start gap-2 rounded-md border border-blue-300 bg-blue-50 dark:bg-blue-950/30 px-3 py-2 text-[11px] text-blue-800 dark:text-blue-300">
+                        <span className="text-base leading-tight shrink-0">ℹ</span>
+                        <div>
+                          <p className="font-semibold">PY shell data is loaded, but no matching prior-year ledger was found for this line item.</p>
+                          <p className="mt-0.5 text-blue-700 dark:text-blue-400">
+                            The ledger may have been renamed between FY {prevFy} and the current year.
+                            Use the <strong>Closed Accounts</strong> tab on the left to map renamed ledgers
+                            (an "ALIAS" link will be created so the PY amount flows through automatically).
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  }
                   return (
                     <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-[11px] text-amber-800 dark:text-amber-300">
                       <span className="text-base leading-tight shrink-0">⚠</span>

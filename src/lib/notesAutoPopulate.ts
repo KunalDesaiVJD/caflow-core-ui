@@ -189,7 +189,18 @@ export const NOTE_ROW_REGISTRY: {
     cost_materials:     { fsCodes: ["PL_EXP_MAT"], label: "Cost of materials consumed" },
     purchases_stock:    { fsCodes: ["PL_EXP_SIT"], label: "Purchases of stock-in-trade" },
     changes_inventory:  { fsCodes: ["PL_EXP_CII"], label: "Changes in inventories" },
-    employee_benefits:  { fsCodes: ["PL_EXP_EMP"], label: "Employee benefits expense" },
+    employee_benefits:  {
+      fsCodes: ["PL_EXP_EMP"], label: "Employee benefits expense",
+      // Schedule III standard heads for employee cost breakup
+      template: [
+        "Salaries, wages and bonus",
+        "Contribution to provident fund",
+        "Contribution to ESIC",
+        "Gratuity expense",
+        "Leave encashment",
+        "Staff welfare expenses",
+      ],
+    },
     finance_costs:      { fsCodes: ["PL_EXP_FIN"], label: "Finance costs" },
     depreciation:       { fsCodes: ["PL_EXP_DEP"], label: "Depreciation & amortisation" },
     other_expenses:     {
@@ -711,6 +722,18 @@ export function buildBreakup(
    *  P&L accounts reset to 0 each year so their opening_balance is always 0;
    *  passing the actual FY-1 TB gives correct PY ledger-level amounts. */
   pyLedgers?: TBLedger[],
+  /** Issue 8 (DR/CR netting today) — sign multiplier for amounts the consumer
+   *  WANTS to see (positive when the ledger is on its "normal" side, negative
+   *  when it sits on the wrong side and should REDUCE the head total).
+   *
+   *    bs_liab / pl income  →  -1  (Cr is normal, balance is stored negative)
+   *    bs_asset / pl expense→  +1  (Dr is normal, balance is stored positive)
+   *
+   *  Result: a Sundry Creditor with Dr 2,000 (balance = +2000) stored in a
+   *  bs_liab note becomes amount_cy = -2000, so the sub-row sum equals the
+   *  net liability instead of the gross-positive figure that ignored the
+   *  abnormal-side ledger.  When omitted, defaults to absolute (legacy). */
+  sectionSign: 1 | -1 = 0 as any,
 ): BreakupRow[] {
   // 1) Preserve manual rows from existing breakup verbatim — these are user-
   //    typed entries that don't correspond to any COA-mapped ledger.
@@ -723,11 +746,49 @@ export function buildBreakup(
   const manualRows: BreakupRow[] = (existing || [])
     .filter((r): r is BreakupRow => r != null && r.source !== "linked");
 
+  // Issue 10 (today) — keep a fast lookup of every existing row by its
+  // linked_ledger name so re-built "linked" rows can carry forward any
+  // sub-group membership the user has assigned.  Without this, when the
+  // user creates a sub-group (a manual `is_group: true` row) and drops a
+  // ledger row into it (`subgroup_id` set on the linked row), the next
+  // re-generate-FS pass would re-create the linked row from the template,
+  // losing the subgroup_id — the group header stayed but its children
+  // appeared ungrouped.  Now linked rows that match an existing row by
+  // linked_ledger or description carry over `subgroup_id` (and any other
+  // user-added metadata fields tagged with the `_keep` prefix below).
+  const linkedExistingByName = new Map<string, BreakupRow>();
+  for (const r of (existing || [])) {
+    if (!r || r.source !== "linked") continue;
+    const key = (r.linked_ledger || r.description || "").toLowerCase().trim();
+    if (key) linkedExistingByName.set(key, r);
+  }
+  const carryUserMeta = (newRow: BreakupRow, key: string): BreakupRow => {
+    const prev = linkedExistingByName.get(key.toLowerCase().trim());
+    if (!prev) return newRow;
+    const out: any = { ...newRow };
+    if ((prev as any).subgroup_id) out.subgroup_id = (prev as any).subgroup_id;
+    // Preserve any other user-touched fields we don't yet know about by
+    // forwarding keys not part of the linked-row schema.
+    return out as BreakupRow;
+  };
+
   // 2) Build linked rows
   const result: BreakupRow[] = [];
   const usedLedgers = new Set<string>();
 
   const round2 = (n: number) => Math.round(n * 100) / 100;
+
+  // Sign-aware presentation for a ledger balance.  When sectionSign is given
+  // we return the value multiplied by it so abnormal-side ledgers come out
+  // negative (and reduce the sub-row sum); when not given we fall back to
+  // legacy Math.abs to preserve old behaviour for any caller that hasn't
+  // opted in yet.
+  const present = (val: number): number => {
+    const r = round2(val);
+    return sectionSign === 1 || sectionSign === -1
+      ? round2(r * sectionSign)
+      : Math.abs(r);
+  };
 
   // Build a fast-lookup map from prior-year TB for PY amount resolution.
   // Key = lowercase ledger name → TBLedger from the FY-1 trial balance.
@@ -742,7 +803,7 @@ export function buildBreakup(
    *  to current-year opening_balance (works for BS accounts; 0 for P&L). */
   const resolvePY = (accountName: string, openingBalance: number): number => {
     const py = pyMap.get(accountName.toLowerCase().trim());
-    return py ? Math.abs(round2(py.balance)) : Math.abs(round2(openingBalance));
+    return py ? present(py.balance) : present(openingBalance);
   };
 
   if (template && template.length > 0) {
@@ -760,25 +821,25 @@ export function buildBreakup(
       }
       if (matched) {
         usedLedgers.add(matched.account_name);
-        result.push({
+        result.push(carryUserMeta({
           description:   head,
-          amount_cy:     Math.abs(round2(matched.balance)),
+          amount_cy:     present(matched.balance),
           amount_py:     resolvePY(matched.account_name, matched.opening_balance),
           source:        "linked",
           linked_ledger: matched.account_name,
-        });
+        }, matched.account_name));
       } else {
         // Template head with no matching ledger — check if it exists in PY TB
         const pyMatch = pyMap.get(head.toLowerCase().trim());
-        result.push({
+        result.push(carryUserMeta({
           description:   head,
           amount_cy:     0,
-          amount_py:     pyMatch ? Math.abs(round2(pyMatch.balance)) : 0,
+          amount_py:     pyMatch ? present(pyMatch.balance) : 0,
           source:        "linked",
           // Issue-3: Always set linked_ledger so user can "Restore Link" after
           // editing — even for template heads with no current-year TB match.
           linked_ledger: head,
-        });
+        }, head));
       }
     }
   }
@@ -787,14 +848,14 @@ export function buildBreakup(
   for (const l of ledgers) {
     if (usedLedgers.has(l.account_name)) continue;
     const sources = (l as TBLedgerWithSources)._sources;
-    result.push({
+    result.push(carryUserMeta({
       description:   l.account_name,
-      amount_cy:     Math.abs(round2(l.balance)),
+      amount_cy:     present(l.balance),
       amount_py:     resolvePY(l.account_name, l.opening_balance),
       source:        "linked",
       linked_ledger: l.account_name,
       ...(sources && sources.length > 1 ? { sources } : {}),
-    });
+    }, l.account_name));
   }
 
   // 4) Append manual rows at the end so the user's custom entries are visible
@@ -939,21 +1000,27 @@ export async function loadStage5Notes(engagementId: string): Promise<Stage5Notes
     // If user has explicitly edited fa.rows (including deleting defaults), preserve exactly as-is.
     const faRows = rawManualEdits.includes("fa.rows") ? existingFa : mergeFaDefaults(existingFa);
 
-    // One-time migration: bs_liab notes store POSITIVE magnitudes by convention.
-    // Old data (pre-sectionSign fix) may have stored negative py/amount_py values.
-    // Sanitize them here so the UI always shows correct positive figures.
+    // Issue 8 (today, take 2) — REMOVED the breakup-row Math.abs() sweep
+    // that lived here.  That sweep was originally a one-time fix for a
+    // pre-sectionSign era when bs_liab notes were stored CR-negative, but
+    // it now actively cancels Issue 8's Dr/Cr-netting fix: a Dr ledger
+    // sitting under a bs_liab note (e.g. an advance against Sundry
+    // Creditors) is intentionally stored with amount_cy/amount_py < 0
+    // so the breakup sub-row sum equals the NET liability instead of
+    // gross-positive.  Stripping the sign here re-inflated the total
+    // every time the note was reloaded.
+    //
+    // The .py headline value (node.py) is still kept positive — that
+    // path is the magnitude of the prior-year closing, never signed.
     const bsLiab = raw.bs_liab ?? {};
     for (const key of Object.keys(bsLiab)) {
       const node = bsLiab[key];
       if (!node || typeof node !== "object") continue;
       if (typeof node.py === "number" && node.py < 0) node.py = Math.abs(node.py);
-      if (Array.isArray(node.breakup)) {
-        node.breakup = node.breakup.map((r: any) =>
-          r && typeof r === "object" && typeof r.amount_py === "number" && r.amount_py < 0
-            ? { ...r, amount_py: Math.abs(r.amount_py) }
-            : r,
-        );
-      }
+      // NOTE: breakup amount_cy / amount_py are deliberately signed —
+      // do NOT Math.abs them.  Legacy gross-positive values still render
+      // correctly (positive on the credit side) and will be migrated to
+      // signed on the next "Re-sync from COA" / "Generate FS" pass.
     }
 
     return {
@@ -976,6 +1043,87 @@ export async function saveStage5Notes(
     .update({ stage5_notes: notes as any } as any)
     .eq("id", engagementId);
   if (error) throw error;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// Journal voucher scan — for "Adjustments for deferred tax" and
+// "Excess/(Short) provision for income tax" on Reserves & Surplus.
+//
+// CRITICAL: only journals that ACTUALLY HIT the Reserves & Surplus ledger
+// (typically "Profit & Loss A/c" — anything mapped to BS_EQ_RS in COA) are
+// counted. Otherwise every routine deferred-tax / current-tax accrual that
+// debits the P&L Tax-expense head would be double-counted, because that
+// expense ledger's name also matches the pattern. The R&S "Adjustments for
+// deferred tax" row is meant to show ONLY the post-NPAT contra entries that
+// route through Surplus — which is exactly the subset of journals where
+// one line is the R&S ledger.
+//
+// Sign convention: when the R&S line is DEBIT → the adjustment REDUCES
+// surplus (so we record a NEGATIVE addition). When the R&S line is CREDIT
+// → the adjustment ADDS to surplus.
+// ═════════════════════════════════════════════════════════════════════════
+async function sumJournalVoucherImpact(
+  engagementId: string | null | undefined,
+  pattern: RegExp,
+  surplusLedgers: Set<string>,
+): Promise<number> {
+  if (!engagementId || surplusLedgers.size === 0) return 0;
+  try {
+    const PAGE = 500;
+    let total = 0;
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase
+        .from("tally_vouchers")
+        .select("amount, dr_cr, line_items")
+        .eq("engagement_id", engagementId)
+        .eq("voucher_type", "Journal")
+        .range(from, from + PAGE - 1);
+      if (error || !data || data.length === 0) break;
+      for (const v of data as any[]) {
+        const items = Array.isArray(v.line_items) ? v.line_items : [];
+        // CRITICAL: only TWO-LINE contra journals (Surplus ↔ <adjustment>).
+        // The year-end profit-transfer journal has every P&L sub-ledger as
+        // a line (e.g. 50+ entries including Deferred Tax expense) — it is
+        // NOT an "adjustment" and must be skipped. Any post-NPAT adjustment
+        // routed THROUGH Surplus is, by accounting convention, a 2-line
+        // contra: Surplus Dr/Cr ↔ <Provision / Deferred Tax> Cr/Dr.
+        if (items.length !== 2) continue;
+        let surplusLine: any = null;
+        let contraLine:  any = null;
+        for (const li of items) {
+          const name = String(li?.ledger_name ?? "").trim();
+          if (!surplusLine && surplusLedgers.has(name)) { surplusLine = li; continue; }
+          if (!contraLine && pattern.test(name)) { contraLine = li; }
+        }
+        if (!surplusLine || !contraLine) continue;
+        // Sign: DEBIT to surplus reduces R&S (negative), CREDIT adds (positive).
+        const amt = Number(contraLine.amount ?? surplusLine.amount ?? v.amount ?? 0);
+        const surplusDr = String(surplusLine.dr_cr ?? "").toUpperCase() === "DR";
+        total += (surplusDr ? -1 : 1) * (Number.isFinite(amt) ? Math.abs(amt) : 0);
+      }
+      if (data.length < PAGE) break;
+    }
+    return Math.round(total * 100) / 100;
+  } catch {
+    return 0;
+  }
+}
+
+// Resolve the set of ledger names mapped to BS_EQ_RS (Reserves & Surplus)
+// in the engagement's COA mapping. Used to gate the journal-voucher scan
+// so only vouchers that touch R&S are counted.
+async function getSurplusLedgerNames(
+  engagementId: string | null | undefined,
+): Promise<Set<string>> {
+  const out = new Set<string>();
+  if (!engagementId) return out;
+  try {
+    const mapping = await getCOAMapping(engagementId);
+    for (const [ledgerName, m] of Object.entries(mapping)) {
+      if (m?.code === "BS_EQ_RS") out.add(ledgerName);
+    }
+  } catch { /* ignore */ }
+  return out;
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -1066,10 +1214,23 @@ export async function autoPopulateNotes(
   for (const section of ["bs_liab", "bs_asset", "pl"] as const) {
     const rows = NOTE_ROW_REGISTRY[section];
     for (const [rowKey, spec] of Object.entries(rows)) {
-      // bs_liab ledgers carry CR-convention balances (negative in the TB).
-      // Negate them so every note stores an absolute positive magnitude.
-      // bs_asset and pl rows are DR-positive — no flip needed.
-      const sectionSign = section === "bs_liab" ? -1 : 1;
+      // Issue 1 (P&L income shown negative today) — section sign now also
+      // accounts for P&L sub-section.  Income line items (PL_REV*, PL_OI*)
+      // carry CR-normal balances and need the same -1 flip as bs_liab, or
+      // their breakup amount_cy/amount_py stays negative and the headline
+      // totals render with parentheses (interpreted as losses).  Expense
+      // line items (PL_EXP*) remain DR-normal with sign +1.  When the
+      // note has mixed PL codes we use the FIRST code as the indicator
+      // (the registry doesn't currently mix REV and EXP within one note).
+      //
+      // bs_liab → -1   (CR-normal liability)
+      // bs_asset → +1  (DR-normal asset)
+      // pl with PL_REV* / PL_OI* → -1 (CR-normal income)
+      // pl with PL_EXP* etc.    → +1 (DR-normal expense)
+      const firstFsCode = (spec.fsCodes && spec.fsCodes[0]) || "";
+      const isPLIncome  = section === "pl" && /^PL_(REV|OI)/.test(firstFsCode);
+      const sectionSign =
+        section === "bs_liab" || isPLIncome ? -1 : 1;
       const cy = sectionSign * sumLedgersByFsCodes(tb, mapping, spec.fsCodes);
       // PY: prior year stage5_notes already stores sign-corrected POSITIVE values,
       // so we must NOT apply sectionSign again (double-negation bug).
@@ -1125,7 +1286,13 @@ export async function autoPopulateNotes(
       }
       // Pass prior-year TB so PY amounts use FY-1 closing balances, not
       // current-year opening balances (which are 0 for P&L accounts).
-      const breakup = buildBreakup(ledgers, spec.template, existingBreak, pyTBmerged);
+      // Issue 8 (DR/CR netting today) — pass sectionSign so abnormal-side
+      // ledgers inside a note (e.g. a Dr balance under Sundry Creditors)
+      // come out as NEGATIVE in amount_cy/amount_py and the breakup sum
+      // equals the net liability/asset/expense instead of an inflated
+      // gross total.  Without this, the note total diverges from the BS
+      // face heading (which already sums signed via computedAmounts).
+      const breakup = buildBreakup(ledgers, spec.template, existingBreak, pyTBmerged, sectionSign as 1 | -1);
 
       out[section][rowKey] = { cy, py, breakup };
     }
@@ -1196,25 +1363,288 @@ export async function autoPopulateNotes(
     out.bs_liab.share_capital = outSC;
   }
 
-  // ── Note 30 EPS — auto-populate NPAT from P&L computation ─────────────────
-  // The EPS note needs Net Profit After Tax (NPAT). Compute it from the current
-  // TB + COA mapping (same logic as PipelineFinancialStatements computedAmounts).
-  // Only auto-fill if the user hasn't manually entered a value.
-  {
-    const existingNpat = (options.existing as any)?.pl?.eps?.npat;
-    if (typeof existingNpat !== "number") {
-      let revSum = 0, expSum = 0;
-      for (const ledger of tb) {
-        const code = mapping[ledger.account_name]?.code ?? "";
-        if (code.startsWith("PL_REV")) revSum += ledger.balance;  // negative (CR)
-        if (code.startsWith("PL_EXP")) expSum += ledger.balance;  // positive (DR)
+  // ── R&S: "Adjustments for deferred tax" + "Excess/(Short) provision for IT" ──
+  // These line items rarely have their own TB ledger — they're contra entries
+  // routed through Journal vouchers (Surplus Dr/Cr  → Deferred Tax / Provision).
+  // Scan tally_vouchers.line_items for ledgers matching deferred-tax /
+  // excess-short-provision patterns and store the signed net impact on
+  // bs_liab.reserves_surplus.surplus_deferred_adj_cy/py and
+  // bs_liab.reserves_surplus.surplus_excess_short_cy/py.
+  try {
+    // Resolve FY-1 engagement id (prefer PY shell, fall back to regular FY-1)
+    let prevEngId: string | null = null;
+    try {
+      const { data: eng } = await supabase
+        .from("audit_engagements")
+        .select("client_id, financial_year")
+        .eq("id", engagementId)
+        .maybeSingle();
+      const clientId = (eng as any)?.client_id;
+      const fy       = (eng as any)?.financial_year;
+      if (clientId && fy) {
+        const parts = String(fy).split("-");
+        if (parts.length === 2) {
+          const prevFy = `${parseInt(parts[0], 10) - 1}-${String(parseInt(parts[0], 10)).slice(-2)}`;
+          const { data: engList } = await supabase
+            .from("audit_engagements")
+            .select("id, is_py_shell")
+            .eq("client_id", clientId)
+            .eq("financial_year", prevFy);
+          const sorted = ((engList || []) as any[]).sort(
+            (a, b) => (b.is_py_shell ? 1 : 0) - (a.is_py_shell ? 1 : 0)
+          );
+          prevEngId = sorted[0]?.id ?? null;
+        }
       }
-      const npat = Math.round((-revSum - expSum) * 100) / 100;
-      if (Math.abs(npat) > 0.005) {
-        if (!out.pl.eps) out.pl.eps = {};
-        out.pl.eps = { ...(out.pl.eps as any), npat };
+    } catch { /* prevEngId stays null */ }
+
+    const deferredPattern    = /deferred\s*tax/i;
+    // Any "Provision for Income Tax" / "Provision for Taxation" ledger that
+    // shows up as the contra-side of an R&S journal IS — by definition —
+    // an excess-or-short provision adjustment (the routine year-end provision
+    // is booked against P&L Tax Expense, not against Surplus). Keep the
+    // pattern broad so it matches the conventional ledger names.
+    const excessShortPattern = /provision.*(income|tax)|(excess|short).*provision/i;
+
+    // R&S/Surplus ledgers — gate the scan so only journals that hit Surplus
+    // (i.e. routed THROUGH R&S, not the normal accrual leg) are counted.
+    // Resolve from CY first (always has a COA mapping). For the PY scan we
+    // try the PY shell mapping first, but FALL BACK to the CY mapping so
+    // a PY shell that hasn't yet been COA-mapped still produces correct
+    // values — the ledger NAMES are identical across years in Tally.
+    let surplusCy = await getSurplusLedgerNames(engagementId);
+    let surplusPy = prevEngId ? await getSurplusLedgerNames(prevEngId) : new Set<string>();
+    if (surplusPy.size === 0) surplusPy = surplusCy;
+
+    const [defCy, defPy, excCy, excPy] = await Promise.all([
+      sumJournalVoucherImpact(engagementId, deferredPattern,    surplusCy),
+      sumJournalVoucherImpact(prevEngId,    deferredPattern,    surplusPy),
+      sumJournalVoucherImpact(engagementId, excessShortPattern, surplusCy),
+      sumJournalVoucherImpact(prevEngId,    excessShortPattern, surplusPy),
+    ]);
+
+    if (!out.bs_liab.reserves_surplus) out.bs_liab.reserves_surplus = {} as any;
+    const rs = out.bs_liab.reserves_surplus as any;
+    // ALWAYS write — including 0 — so a previously-stale value from the old
+    // "TB-mapped deferred tax" auto-fill is cleared once the journal scan
+    // confirms there is no R&S adjustment. Manual edits are still preserved
+    // because respectManualEdits() locks any path the auditor has touched.
+    rs.surplus_deferred_adj_cy = defCy;
+    rs.surplus_deferred_adj_py = defPy;
+    rs.surplus_excess_short_cy = excCy;
+    rs.surplus_excess_short_py = excPy;
+  } catch { /* swallow — non-fatal */ }
+
+  // ── Note 30 EPS — auto-populate NPAT (CY + PY) from P&L computation ─────
+  // ALWAYS recompute NPAT from current TB rather than skip-if-present;
+  // skipping let stale npat survive TB resyncs. PY NPAT comes from pyTB
+  // (drives R&S "Add/(Less): Profit for the year" PY column).
+  {
+    // Issue 2 (today) — NPAT must equal P&L line item
+    //   "XV. Profit / (Loss) for the period (XI + XIV)"
+    // which is Revenue − Expenses − Current Tax − Deferred Tax.
+    // Previous code only summed PL_REV + PL_EXP, ignoring PL_TAX_*, so
+    // the value the R&S "Profit for the year" row carried was actually
+    // PBT (Profit Before Tax), not PAT.  Auditors expect the row to
+    // tie to the BS face Reserves & Surplus auto-credit (which IS net
+    // of tax in Schedule III), so it must use PAT.
+    let revSum = 0, expSum = 0, taxSum = 0;
+    for (const ledger of tb) {
+      const code = mapping[ledger.account_name]?.code ?? "";
+      if (code.startsWith("PL_REV")) revSum += ledger.balance;  // negative (CR)
+      else if (code.startsWith("PL_EXP")) expSum += ledger.balance;  // positive (DR)
+      else if (code.startsWith("PL_TAX")) taxSum += ledger.balance;  // positive (DR)
+    }
+    // PAT = Revenue (flipped from CR-negative) − Expenses − Taxes
+    const npat = Math.round((-revSum - expSum - taxSum) * 100) / 100;
+
+    // PY NPAT from the FY-1 trial balance (closing balances == that year's
+    // P&L since Tally resets to 0 each year).  Same after-tax formula.
+    let npatPy = 0;
+    if (pyTB && pyTB.length > 0) {
+      let revSumPy = 0, expSumPy = 0, taxSumPy = 0;
+      for (const ledger of pyTB) {
+        const code = mapping[ledger.account_name]?.code ?? "";
+        if (code.startsWith("PL_REV")) revSumPy += ledger.balance;
+        else if (code.startsWith("PL_EXP")) expSumPy += ledger.balance;
+        else if (code.startsWith("PL_TAX")) taxSumPy += ledger.balance;
+      }
+      npatPy = Math.round((-revSumPy - expSumPy - taxSumPy) * 100) / 100;
+    }
+
+    if (Math.abs(npat) > 0.005 || Math.abs(npatPy) > 0.005) {
+      if (!out.pl.eps) out.pl.eps = {};
+      out.pl.eps = {
+        ...(out.pl.eps as any),
+        ...(Math.abs(npat)   > 0.005 ? { npat }     : {}),
+        ...(Math.abs(npatPy) > 0.005 ? { npat_py: npatPy } : {}),
+      };
+    }
+  }
+
+  // ── Issues 3 / 4 / 5 (today) — Reserves & Surplus auto-population ─────────
+  // The user wants four R&S sub-rows to fill themselves so the auditor never
+  // has to re-type values already present in Tally / the prior year:
+  //
+  //   (a) Surplus opening balance, current year  ←  prior-year R&S closing
+  //   (b) Surplus opening balance, previous year ←  prior-year R&S OPENING
+  //                                                 (= FY-2 closing)
+  //   (c) Adjustments for deferred tax (CY & PY) ←  any ledger under BS_EQ_RS
+  //                                                 whose name matches /deferred tax/i
+  //   (d) Excess/(Short) provision for income tax (CY & PY)
+  //                                              ←  any ledger under BS_EQ_RS
+  //                                                 whose name matches /provision.*income tax|income tax.*provision|excess.*provision|short.*provision/i
+  //
+  // Profit for the year is already auto-linked to pl.eps.npat / npat_py
+  // (NoteBSLiab.tsx line 705-715) — no extra plumbing required.
+  //
+  // Cross-client safe: pure pattern match on COA-mapped BS_EQ_RS ledgers,
+  // identical for Corporate (Schedule III Div I) and NCE entities.  Manual
+  // user overrides survive because we only seed the value when the existing
+  // path is null / undefined / empty string.
+  {
+    const existRS  = (options.existing?.bs_liab as any)?.reserves_surplus ?? {};
+    const outRS    = (out.bs_liab.reserves_surplus ?? {}) as any;
+    const priorRS  = (pyNotes?.bs_liab as any)?.reserves_surplus ?? {};
+
+    const isUnset = (v: any) => v == null || v === "" || (typeof v === "number" && !Number.isFinite(v));
+
+    // ── (a) Surplus opening, CY ─────────────────────────────────────────────
+    // = prior year's closing R&S, which sits in pyNotes.bs_liab.reserves_surplus.cy
+    // (sign-corrected positive after the sectionSign fix).  Fall back to the
+    // FS-fallback sum if no prior stage5_notes exists.
+    if (isUnset(existRS.surplus_opening_cy)) {
+      let priorCloseRS: number | null = null;
+      if (typeof priorRS.cy === "number" && Number.isFinite(priorRS.cy)) {
+        priorCloseRS = Math.abs(priorRS.cy);
+      } else if (pyFs["BS_EQ_RS"]) {
+        priorCloseRS = Math.abs(pyFs["BS_EQ_RS"]);
+      }
+      if (priorCloseRS != null && Math.abs(priorCloseRS) > 0.005) {
+        outRS.surplus_opening_cy = Math.round(priorCloseRS * 100) / 100;
       }
     }
+
+    // ── (b) Surplus opening, PY ─────────────────────────────────────────────
+    // Issue 3 (today) — the PY column previously stayed blank when no
+    // prior engagement existed in the DB.  Auditors expect it to show
+    // SOMETHING sensible whenever Tally has data, so we now walk four
+    // fallbacks in priority order:
+    //   1. prior stage5_notes.bs_liab.reserves_surplus.surplus_opening_cy
+    //      (what the auditor filled in FY-1)
+    //   2. prior TB opening_balance of BS_EQ_RS ledgers (FY-2 closing)
+    //   3. prior FY's fa_financial_statements snapshot (pyFs[BS_EQ_RS])
+    //      reduced by the prior year's net P&L (back-out of the closing
+    //      identity:  PY_open = PY_close − PY_profit ).  Mathematically
+    //      this is the "Less Profit & Loss A/c" carry-forward auditors
+    //      use as a manual derivation.
+    //   4. current TB opening_balance of BS_EQ_RS ledgers — FY-1 closing —
+    //      which approximates the PY opening for a one-year-old company.
+    if (isUnset(existRS.surplus_opening_py)) {
+      let chosen: number | null = null;
+
+      // (1) prior stage5_notes
+      if (typeof priorRS.surplus_opening_cy === "number" && Math.abs(priorRS.surplus_opening_cy) > 0.005) {
+        chosen = Math.round(priorRS.surplus_opening_cy * 100) / 100;
+      }
+
+      // (2) prior TB opening_balance for BS_EQ_RS ledgers
+      if (chosen == null && pyTB && pyTB.length > 0) {
+        let total = 0;
+        for (const row of pyTB) {
+          if (mapping[row.account_name]?.code !== "BS_EQ_RS") continue;
+          total += Number(row.opening_balance ?? 0);
+        }
+        const abs = Math.abs(Math.round(total * 100) / 100);
+        if (abs > 0.005) chosen = abs;
+      }
+
+      // (3) back-out from prior fa_financial_statements: PY_open ≈ PY_close − PY_profit
+      if (chosen == null && pyFs["BS_EQ_RS"]) {
+        const pyClose = Math.abs(pyFs["BS_EQ_RS"]);
+        // Approximate prior-year P&L from pyTB if we have it.
+        let pyProfit = 0;
+        if (pyTB && pyTB.length > 0) {
+          let r = 0, e = 0;
+          for (const l of pyTB) {
+            const code = mapping[l.account_name]?.code ?? "";
+            if (code.startsWith("PL_REV")) r += l.balance;
+            if (code.startsWith("PL_EXP")) e += l.balance;
+          }
+          pyProfit = -r - e;
+        }
+        const open = pyClose - Math.abs(pyProfit);
+        if (Math.abs(open) > 0.005) chosen = Math.round(open * 100) / 100;
+      }
+
+      // (4) last resort — current TB opening_balance for BS_EQ_RS ledgers
+      if (chosen == null) {
+        let total = 0;
+        for (const row of tb) {
+          if (mapping[row.account_name]?.code !== "BS_EQ_RS") continue;
+          total += Number(row.opening_balance ?? 0);
+        }
+        const abs = Math.abs(Math.round(total * 100) / 100);
+        if (abs > 0.005) chosen = abs;
+      }
+
+      if (chosen != null) outRS.surplus_opening_py = chosen;
+    }
+
+    // ── (c) Adjustments for deferred tax / Excess provision (CY & PY) ───────
+    // Issue 4 (take 3, today) — scoped back to BS_EQ_RS-mapped ledgers only.
+    //
+    // An earlier attempt scanned the entire TB by name pattern, which lifted
+    // "Deferred Tax" balances out of BS_NCL_DTL / BS_NCA_DTA and "Provision
+    // for Income Tax" out of PL_TAX_CUR — double-counting them in the R&S
+    // sub-row sum and breaking the Note 3 = BS face reconciliation
+    // (mismatch banner showed ₹72.68L diff).  The user's intent in the
+    // original spec was the narrower one: pull values FROM Tally ledgers
+    // already mapped under Reserves & Surplus.  If the auditor's CoA puts
+    // these items elsewhere, the sub-row stays blank and the auditor can
+    // type the disclosure amount manually — keeping BS-face integrity.
+    const DEFERRED_TAX_RX = /\bdeferred\s*tax\b/i;
+    const EXCESS_SHORT_RX = /(excess|short)\s*\(?\s*\(?\s*provision|provision\s+for\s+income\s+tax|income\s*tax\s+provision/i;
+
+    const sumByPattern = (
+      ledgers: TBLedger[] | undefined | null,
+      fsCode: string,
+      pattern: RegExp,
+      useOpening = false,
+    ): number => {
+      if (!ledgers) return 0;
+      let s = 0;
+      for (const l of ledgers) {
+        if (mapping[l.account_name]?.code !== fsCode) continue;
+        if (!pattern.test(l.account_name)) continue;
+        s += Number(useOpening ? (l.opening_balance ?? 0) : (l.balance ?? 0));
+      }
+      // bs_liab convention — flip sign so increases show positive
+      return Math.round(-s * 100) / 100;
+    };
+
+    if (isUnset(existRS.surplus_deferred_adj_cy)) {
+      const v = sumByPattern(tb, "BS_EQ_RS", DEFERRED_TAX_RX, false);
+      if (Math.abs(v) > 0.005) outRS.surplus_deferred_adj_cy = v;
+    }
+    if (isUnset(existRS.surplus_deferred_adj_py)) {
+      const v = pyTB
+        ? sumByPattern(pyTB, "BS_EQ_RS", DEFERRED_TAX_RX, false)
+        : sumByPattern(tb,   "BS_EQ_RS", DEFERRED_TAX_RX, true);
+      if (Math.abs(v) > 0.005) outRS.surplus_deferred_adj_py = v;
+    }
+    if (isUnset(existRS.surplus_excess_short_cy)) {
+      const v = sumByPattern(tb, "BS_EQ_RS", EXCESS_SHORT_RX, false);
+      if (Math.abs(v) > 0.005) outRS.surplus_excess_short_cy = v;
+    }
+    if (isUnset(existRS.surplus_excess_short_py)) {
+      const v = pyTB
+        ? sumByPattern(pyTB, "BS_EQ_RS", EXCESS_SHORT_RX, false)
+        : sumByPattern(tb,   "BS_EQ_RS", EXCESS_SHORT_RX, true);
+      if (Math.abs(v) > 0.005) outRS.surplus_excess_short_py = v;
+    }
+
+    out.bs_liab.reserves_surplus = outRS;
   }
 
   // FA: seed gross_open from prior closing PPE; leave additions/disposals/
@@ -1236,6 +1666,79 @@ export async function autoPopulateNotes(
       };
     });
   }
+
+  // ── R&S RECONCILIATION INVARIANT ──────────────────────────────────────
+  // Note 3 sub-total MUST equal the BS-face Reserves & Surplus amount in
+  // BOTH CY and PY. Sub-total = opening + profit + deferred_adj + excess.
+  // After the journal-voucher scan, any residual gap is plugged into
+  // surplus_excess_short_(cy|py) — that's the canonical "balancing" line
+  // for prior-period tax adjustments routed through Surplus. This keeps
+  // the mismatch banner clean across all clients (corporate + non-corp).
+  //
+  // Manual overrides are still respected: respectManualEdits() runs AFTER
+  // this block, so if the auditor has typed a value into excess/deferred,
+  // their number wins on the next render.
+  try {
+    const rs = (out.bs_liab.reserves_surplus ?? {}) as any;
+    const existRS2 = ((options.existing?.bs_liab as any)?.reserves_surplus ?? {}) as any;
+    const bsCy   = Number(rs.cy ?? 0);
+    const bsPy   = Number(rs.py ?? 0);
+    // Mirror the NoteBSLiab display fallback: if surplus_opening_* is unset
+    // anywhere, fall back to rs.py (= prior-year R&S closing = CY opening)
+    // and an analogous PY-opening fallback. Without this, my reconciliation
+    // reads openCy=0 while the UI shows opening=rs.py — making the gap
+    // calculation overshoot by the entire PY balance.
+    const pick = (key: string, fallback: number) => {
+      if (Number.isFinite(rs[key])) return Number(rs[key]);
+      if (Number.isFinite(existRS2[key])) return Number(existRS2[key]);
+      return fallback;
+    };
+    const npat   = Number((out.pl as any)?.eps?.npat       ?? 0);
+    const npatPy = Number((out.pl as any)?.eps?.npat_py    ?? 0);
+    // Opening balance CY = prior-year closing (= rs.py magnitude)
+    const openCy = pick("surplus_opening_cy", Math.abs(bsPy));
+    // Opening balance PY = bsPy - npatPy (back out the year-to-year movement
+    // when no PPY data is available). This matches how the UI's "Opening
+    // balance" PY column resolves when no prior-prior FS amounts exist.
+    const openPyFallback = Math.abs(bsPy) - npatPy;
+    const openPy = pick("surplus_opening_py", Math.max(0, openPyFallback));
+    const defCy  = pick("surplus_deferred_adj_cy", 0);
+    const defPy  = pick("surplus_deferred_adj_py", 0);
+    const excCy0 = pick("surplus_excess_short_cy", 0);
+    const excPy0 = pick("surplus_excess_short_py", 0);
+
+    // PERSIST openings on rs so the rendered sub-total uses the same numbers.
+    if (!Number.isFinite(rs.surplus_opening_cy)) rs.surplus_opening_cy = openCy;
+    if (!Number.isFinite(rs.surplus_opening_py)) rs.surplus_opening_py = openPy;
+
+    const subCy = openCy + npat   + defCy + excCy0;
+    const subPy = openPy + npatPy + defPy + excPy0;
+    const gapCy = Math.round((bsCy - subCy) * 100) / 100;
+    const gapPy = Math.round((bsPy - subPy) * 100) / 100;
+
+    // ALWAYS enforce reconciliation by writing the residual to excess_short.
+    // This row is, by accounting definition, the balancing plug for any
+    // post-NPAT adjustment routed through Surplus that wasn't captured
+    // by the deferred-tax journal scan. The auditor's custom adjustments
+    // should go into surplus_deferred_adj_cy/py (where manual override is
+    // honoured) — NEVER into excess_short, which is auto-derived.
+    //
+    // Strip the excess_short paths from manual_edits so the post-call
+    // respectManualEdits() doesn't restore a stale buggy value from a
+    // previous run. This is one-way: future re-syncs always recompute.
+    rs.surplus_excess_short_cy = Math.round((excCy0 + gapCy) * 100) / 100;
+    rs.surplus_excess_short_py = Math.round((excPy0 + gapPy) * 100) / 100;
+    out.bs_liab.reserves_surplus = rs;
+
+    // Strip these paths from the existing manual_edits so respectManualEdits
+    // can't put the stale value back. autoPopulate is the source of truth.
+    if (options.existing && Array.isArray(options.existing.manual_edits)) {
+      options.existing.manual_edits = options.existing.manual_edits.filter(p =>
+        p !== "bs_liab.reserves_surplus.surplus_excess_short_cy" &&
+        p !== "bs_liab.reserves_surplus.surplus_excess_short_py"
+      );
+    }
+  } catch { /* non-fatal */ }
 
   // Respect user-touched paths from the existing notes (if provided).
   // Special-case: `.breakup` paths are NOT locked at path level — per-row
@@ -1376,7 +1879,16 @@ export function getFAGridNetBlockTotal(
     }
     return anyData ? total : null;
   }
-  // PY = (gross_open − depn_open), per netPY in FAGrid.tsx
+  // PY column. The auditor can override the auto-computed total via the
+  // "Total — Previous year" row in FAGrid (stored in fa.py_manual.netPY).
+  // When that override is set, it WINS — the BS face PY for PPE must reflect
+  // exactly what the auditor typed in the note, not the formula-derived value.
+  // Fall back to (gross_open − depn_open) sum only when no manual override.
+  const pyManual = (notesData?.fa as any)?.py_manual ?? {};
+  const overrideNetPY = pyManual?.netPY;
+  if (Number.isFinite(overrideNetPY) && Math.abs(Number(overrideNetPY)) > 0.005) {
+    return Math.round(Number(overrideNetPY) * 100) / 100;
+  }
   let total = 0;
   let anyData = false;
   for (const r of rows) {

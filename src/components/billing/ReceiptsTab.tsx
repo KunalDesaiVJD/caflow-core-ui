@@ -13,6 +13,7 @@ import { Calendar } from "@/components/ui/calendar";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -26,6 +27,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { Plus, CalendarIcon, Receipt, Trash2 } from "lucide-react";
+import { buildClientGstins } from "@/lib/gstinUtils";
 
 const PAYMENT_MODES = ["Cash", "Cheque", "NEFT", "UPI", "RTGS", "Other"];
 
@@ -99,20 +101,26 @@ export default function ReceiptsTab() {
   // Client invoices for "against invoice"
   const [clientInvoices, setClientInvoices] = useState<any[]>([]);
 
+  // GSTIN state for multi-GSTIN clients
+  const [formClientGstins, setFormClientGstins] = useState<{ gstin: string; state: string }[]>([]);
+  const [formGstin, setFormGstin] = useState<string>("all");
+
   const fetchData = useCallback(async () => {
     setLoading(true);
+    // When a specific firm is selected, scope all queries to it.
+    // Otherwise use the user's own firm (unless superadmin, who sees all).
+    const effectiveFirmId = firmFilter !== "all" ? firmFilter : (isSuperadmin ? null : firmId);
+
     let rQuery = supabase.from("billing_receipts").select("*").order("receipt_date", { ascending: false });
-    if (!isSuperadmin && firmId) rQuery = rQuery.eq("firm_id", firmId);
-    if (firmFilter !== "all") rQuery = rQuery.eq("firm_id", firmFilter);
+    if (effectiveFirmId) rQuery = rQuery.eq("firm_id", effectiveFirmId);
     const { data: rData } = await rQuery;
 
-    let cQuery = supabase.from("clients").select("id, name").eq("is_draft", false).is("deleted_at", null).neq("is_active", false);
-    if (!isSuperadmin && firmId) cQuery = cQuery.eq("firm_id", firmId);
+    let cQuery = supabase.from("clients").select("id, name").eq("is_draft", false).is("deleted_at", null);
     const { data: cData } = await cQuery;
 
     const { data: firmData } = await supabase.from("firms").select("id, name, display_name");
     const { data: groupData } = await supabase.from("client_groups").select("id, name");
-    const { data: usersData } = await supabase.from("users").select("id, name").eq("is_active", true);
+    const { data: usersData } = await supabase.from("users").select("id, name").neq("role", "client").eq("is_active", true);
 
     const cm: Record<string, string> = {};
     (cData || []).forEach((c: any) => { cm[c.id] = c.name || "Unknown"; });
@@ -155,6 +163,17 @@ export default function ReceiptsTab() {
     })();
   }, [responsibleFilter]);
 
+  // Load client's GSTINs when formClientId changes
+  useEffect(() => {
+    if (!formClientId) { setFormClientGstins([]); setFormGstin("all"); return; }
+    (async () => {
+      const { data } = await supabase.from("clients").select("gstin_states, gstin").eq("id", formClientId).maybeSingle();
+      const list = buildClientGstins(data?.gstin_states as Record<string, string> | null, data?.gstin as string[] | null);
+      setFormClientGstins(list);
+      setFormGstin("all");
+    })();
+  }, [formClientId]);
+
   // Fetch invoices when client changes in form
   useEffect(() => {
     if (!formClientId || receiptType !== "against_invoice") { setClientInvoices([]); return; }
@@ -172,7 +191,7 @@ export default function ReceiptsTab() {
 
   const filtered = useMemo(() => receipts.filter(r => {
     if (clientFilter !== "all" && r.client_id !== clientFilter) return false;
-    if (modeFilter !== "all" && r.payment_mode !== modeFilter) return false;
+    if (modeFilter !== "all" && r.payment_mode !== modeFilter.toLowerCase()) return false;
     if (groupFilter !== "all" && !groupClientIds.includes(r.client_id)) return false;
     if (responsibleFilter !== "all" && !responsibleClientIds.includes(r.client_id)) return false;
     return true;
@@ -191,6 +210,8 @@ export default function ReceiptsTab() {
     setTdsDate(undefined);
     setRemarks("");
     setClientInvoices([]);
+    setFormClientGstins([]);
+    setFormGstin("all");
   };
 
   const resolveFirmId = async (): Promise<string | null> => {
@@ -235,12 +256,13 @@ export default function ReceiptsTab() {
         receipt_type: receiptType,
         receipt_date: dateStr,
         amount_received: amt,
-        payment_mode: paymentMode,
+        payment_mode: paymentMode.toLowerCase(),
         payment_reference: paymentReference || null,
         tds_amount: tds || null,
         gst_tds_amount: gstTds || null,
         tds_date: tds > 0 && tdsDate ? format(tdsDate, "yyyy-MM-dd") : null,
         remarks: remarks || null,
+        gstin: formGstin && formGstin !== "all" ? formGstin : null,
         created_by: user?.id,
       }).select("id").single();
 
@@ -340,13 +362,14 @@ export default function ReceiptsTab() {
             {responsiblePersons.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
           </SelectContent>
         </Select>
-        <Select value={clientFilter} onValueChange={setClientFilter}>
-          <SelectTrigger className="w-[180px]"><SelectValue placeholder="All Clients" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Clients</SelectItem>
-            {clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-          </SelectContent>
-        </Select>
+        <SearchableSelect
+          options={[{ value: "all", label: "All Clients" }, ...clients.map(c => ({ value: c.id, label: c.name }))]}
+          value={clientFilter}
+          onValueChange={setClientFilter}
+          placeholder="All Clients"
+          searchPlaceholder="Search client..."
+          className="w-[180px]"
+        />
         <Select value={modeFilter} onValueChange={setModeFilter}>
           <SelectTrigger className="w-[130px]"><SelectValue placeholder="All Modes" /></SelectTrigger>
           <SelectContent>
@@ -434,13 +457,31 @@ export default function ReceiptsTab() {
             {/* Client */}
             <div className="space-y-1">
               <Label>Client *</Label>
-              <Select value={formClientId} onValueChange={setFormClientId}>
-                <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
-                <SelectContent>
-                  {clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <SearchableSelect
+                options={clients.map(c => ({ value: c.id, label: c.name }))}
+                value={formClientId}
+                onValueChange={setFormClientId}
+                placeholder="Select client"
+                searchPlaceholder="Search client..."
+                className="w-full"
+              />
             </div>
+
+            {/* GSTIN picker for multi-GSTIN clients */}
+            {formClientGstins.length > 1 && (
+              <div className="space-y-1">
+                <Label>GSTIN / State</Label>
+                <Select value={formGstin} onValueChange={setFormGstin}>
+                  <SelectTrigger><SelectValue placeholder="Select GSTIN" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All States (combined)</SelectItem>
+                    {formClientGstins.map(({ gstin, state }) => (
+                      <SelectItem key={gstin} value={gstin}>{state} — {gstin}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             {/* Against Invoice */}
             {receiptType === "against_invoice" && formClientId && (

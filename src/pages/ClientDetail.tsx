@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -20,7 +20,7 @@ import { ClientGroupsSection } from "@/components/client-detail/ClientGroupsSect
 import ClassificationHistoryTimeline from "@/components/clients/ClassificationHistoryTimeline";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
-import { ArrowLeft, Pencil, Shield, Loader2, Save, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Pencil, Shield, Loader2, Save, AlertTriangle, Upload, Download, FileText, Eye, Trash2, Plus, FolderOpen, UserCheck, Mail } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 
 interface Client {
@@ -40,6 +40,9 @@ interface Client {
   stock_audit_applicable: boolean | null;
   audit_config: any;
   tan_number?: string | null;
+  email?: string | null;
+  mobile?: string | null;
+  user_id?: string | null;
 }
 
 interface ServiceCategory {
@@ -141,6 +144,9 @@ const ClientDetail = () => {
   const [clientServices, setClientServices] = useState<ClientService[]>([]);
   const [clientPackages, setClientPackages] = useState<ClientPackage[]>([]);
   const [svcSaving, setSvcSaving] = useState<string | null>(null);
+
+  // Portal access activation
+  const [portalActivating, setPortalActivating] = useState(false);
 
   // TAN editing
   const [tanValue, setTanValue] = useState("");
@@ -422,6 +428,38 @@ const ClientDetail = () => {
       toast({ title: "Error saving TAN", description: e.message, variant: "destructive" });
     } finally {
       setTanSaving(false);
+    }
+  }
+
+  async function activatePortal() {
+    if (!client?.email) {
+      toast({ title: "No email on record", description: "Add the client's email before activating portal access.", variant: "destructive" });
+      return;
+    }
+    setPortalActivating(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(`${(supabase as any).supabaseUrl}/functions/v1/user-management?action=activate-portal`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session?.access_token}`,
+        },
+        body: JSON.stringify({
+          email: client.email,
+          name: client.name || client.email,
+          firm_id: client.firm_id,
+          client_id: client.id,
+        }),
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || "Failed to activate portal");
+      setClient(prev => prev ? { ...prev, user_id: result.user_id } : prev);
+      toast({ title: "Portal access activated", description: `Login: ${client.email} · Password: Client@2025!` });
+    } catch (e: any) {
+      toast({ title: "Activation failed", description: e.message, variant: "destructive" });
+    } finally {
+      setPortalActivating(false);
     }
   }
 
@@ -833,6 +871,7 @@ const ClientDetail = () => {
           <TabsTrigger value="basic">Basic Info</TabsTrigger>
           <TabsTrigger value="services">Service Activation</TabsTrigger>
           {isAuditClient && <TabsTrigger value="audit">Audit Setup</TabsTrigger>}
+          <TabsTrigger value="documents" className="gap-1.5"><FolderOpen size={13} /> Documents</TabsTrigger>
         </TabsList>
 
         {/* Tab 1: Basic Info */}
@@ -852,6 +891,40 @@ const ClientDetail = () => {
                     )}
                     <div className="col-span-2"><span className="text-muted-foreground">GSTIN:</span> <span className="font-mono">{(client.gstin || []).join(", ") || "—"}</span></div>
                     <div className="col-span-2"><span className="text-muted-foreground">Responsible Person:</span> <span className="font-medium">{responsiblePersonName || "—"}</span></div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Portal Access */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <UserCheck size={14} className="text-orange-600" /> Client Portal Access
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="text-sm space-y-0.5">
+                      <div className="flex items-center gap-1.5 text-muted-foreground">
+                        <Mail size={12} />
+                        <span>{client.email || <span className="italic">No email on record</span>}</span>
+                      </div>
+                      {client.user_id ? (
+                        <p className="text-xs text-green-600 font-medium">Portal active · Default password: Client@2025!</p>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">Portal not activated</p>
+                      )}
+                    </div>
+                    <Button
+                      size="sm"
+                      variant={client.user_id ? "outline" : "default"}
+                      className="gap-1.5 shrink-0"
+                      disabled={portalActivating || !client.email}
+                      onClick={activatePortal}
+                    >
+                      {portalActivating ? <Loader2 size={13} className="animate-spin" /> : <UserCheck size={13} />}
+                      {client.user_id ? "Reset Portal Password" : "Activate Portal"}
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
@@ -1142,6 +1215,10 @@ const ClientDetail = () => {
         </TabsContent>
 
         {/* Tab 3: Audit Setup — READ-ONLY */}
+        <TabsContent value="documents">
+          <ClientDocumentsPanel clientId={client.id} firmId={client.firm_id} />
+        </TabsContent>
+
         {isAuditClient && <TabsContent value="audit">
           <Card>
             <CardHeader className="pb-3">
@@ -1345,5 +1422,183 @@ const ClientDetail = () => {
     </div>
   );
 };
+
+// ─── Client Documents Panel ───────────────────────────────────────────────────
+
+const DOC_CATS = [
+  "Bank Statement", "GST Return", "TDS Certificate", "Audit Report",
+  "Board Resolution", "Loan Agreement", "Vendor Invoice", "Other",
+];
+
+function ClientDocumentsPanel({ clientId, firmId }: { clientId: string; firmId: string | null }) {
+  const [docs,      setDocs]      = useState<any[]>([]);
+  const [loading,   setLoading]   = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [deleting,  setDeleting]  = useState<string | null>(null);
+  const [cat,       setCat]       = useState("Other");
+  const { toast }                 = useToast();
+
+  const fetchDocs = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase.from("documents").select("*").eq("client_id", clientId).order("created_at", { ascending: false });
+    setDocs(data || []);
+    setLoading(false);
+  }, [clientId]);
+
+  useEffect(() => { fetchDocs(); }, [fetchDocs]);
+
+  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const path = `clients/${clientId}/firm_shared/${Date.now()}_${file.name}`;
+      const { error: upErr } = await supabase.storage.from("firm-assets").upload(path, file, { upsert: true });
+      if (upErr) throw upErr;
+      await supabase.from("documents").insert({
+        firm_id: firmId, client_id: clientId,
+        filename: file.name, category: "firm_shared", sub_category: cat, r2_key: path,
+      });
+      toast({ title: "Document uploaded", description: `${file.name} is now visible to the client in the portal.` });
+      fetchDocs();
+    } catch (err: any) {
+      toast({ title: "Upload failed", description: err.message, variant: "destructive" });
+    } finally {
+      setUploading(false);
+      e.target.value = "";
+    }
+  }
+
+  async function handleView(doc: any) {
+    const { data, error } = await supabase.storage.from("firm-assets").createSignedUrl(doc.r2_key, 120);
+    if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
+    window.open(data.signedUrl, "_blank");
+  }
+
+  async function handleDownload(doc: any) {
+    const { data, error } = await supabase.storage.from("firm-assets").createSignedUrl(doc.r2_key, 120);
+    if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
+    const a = document.createElement("a"); a.href = data.signedUrl; a.download = doc.filename; a.click();
+  }
+
+  async function handleDelete(doc: any) {
+    if (!window.confirm(`Delete "${doc.filename}"? This cannot be undone.`)) return;
+    setDeleting(doc.id);
+    try {
+      await supabase.storage.from("firm-assets").remove([doc.r2_key]);
+      await supabase.from("documents").delete().eq("id", doc.id);
+      toast({ title: "Deleted", description: doc.filename });
+      fetchDocs();
+    } catch (err: any) {
+      toast({ title: "Delete failed", description: err.message, variant: "destructive" });
+    } finally {
+      setDeleting(null);
+    }
+  }
+
+  const firmDocs   = docs.filter(d => d.category === "firm_shared");
+  const clientDocs = docs.filter(d => d.category === "client_upload");
+
+  return (
+    <div className="space-y-4">
+      {/* Upload section */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Upload size={14} className="text-primary" /> Share Document with Client
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-col sm:flex-row gap-3">
+            <Select value={cat} onValueChange={setCat}>
+              <SelectTrigger className="w-full sm:w-48 h-9 text-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {DOC_CATS.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Button variant="outline" asChild disabled={uploading} className="flex-1 h-9 border-primary/30 text-primary hover:bg-primary/5">
+              <label className="cursor-pointer flex items-center justify-center gap-2 text-sm">
+                {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload size={14} />}
+                {uploading ? "Uploading…" : "Choose File to Upload"}
+                <input type="file" className="hidden" onChange={handleUpload} />
+              </label>
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground mt-2">Files uploaded here will appear in the client's portal under "My Documents".</p>
+        </CardContent>
+      </Card>
+
+      {/* Documents shared by firm */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <FolderOpen size={14} className="text-primary" /> Shared with Client ({firmDocs.length})
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="pt-0">
+          {loading ? (
+            <div className="py-4 text-center text-xs text-muted-foreground"><Loader2 size={14} className="animate-spin inline mr-1" /> Loading…</div>
+          ) : firmDocs.length === 0 ? (
+            <p className="text-xs text-muted-foreground py-4 text-center">No documents shared yet.</p>
+          ) : (
+            <div className="divide-y">
+              {firmDocs.map(doc => (
+                <div key={doc.id} className="flex items-center justify-between py-2.5 gap-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <FileText size={13} className="text-muted-foreground flex-shrink-0" />
+                    <span className="text-sm truncate">{doc.filename}</span>
+                    {doc.sub_category && <Badge variant="outline" className="text-[10px] flex-shrink-0">{doc.sub_category}</Badge>}
+                  </div>
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1 text-blue-600 hover:bg-blue-50" onClick={() => handleView(doc)}><Eye size={12} /> View</Button>
+                    <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1" onClick={() => handleDownload(doc)}><Download size={12} /> Save</Button>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive hover:bg-red-50" disabled={deleting === doc.id} onClick={() => handleDelete(doc)}>
+                      {deleting === doc.id ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Documents uploaded by client */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <FileText size={14} className="text-orange-600" /> Uploaded by Client ({clientDocs.length})
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="pt-0">
+          {loading ? (
+            <div className="py-4 text-center text-xs text-muted-foreground"><Loader2 size={14} className="animate-spin inline mr-1" /> Loading…</div>
+          ) : clientDocs.length === 0 ? (
+            <p className="text-xs text-muted-foreground py-4 text-center">Client hasn't uploaded any documents via the portal yet.</p>
+          ) : (
+            <div className="divide-y">
+              {clientDocs.map(doc => (
+                <div key={doc.id} className="flex items-center justify-between py-2.5 gap-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <FileText size={13} className="text-orange-500 flex-shrink-0" />
+                    <span className="text-sm truncate">{doc.filename}</span>
+                    {doc.sub_category && <Badge variant="outline" className="text-[10px] flex-shrink-0">{doc.sub_category}</Badge>}
+                    <Badge className="text-[10px] bg-orange-100 text-orange-700 flex-shrink-0">Client Upload</Badge>
+                  </div>
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1 text-blue-600 hover:bg-blue-50" onClick={() => handleView(doc)}><Eye size={12} /> View</Button>
+                    <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1" onClick={() => handleDownload(doc)}><Download size={12} /> Save</Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
 
 export default ClientDetail;

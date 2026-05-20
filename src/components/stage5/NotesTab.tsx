@@ -34,9 +34,18 @@ interface Props {
   pyYear:          number;
   /** When set, switch to the given sub-tab and scroll to note-{noteNo}. */
   navigateToNote?: { noteNo: number; subTab: "bs_liab" | "bs_asset" | "pl" | "fa" } | null;
+  /**
+   * Issue 3 (today) — Optional extra override count contributed by the parent
+   * (fa_financial_statements is_manual rows + FS note-no overrides held in
+   * localStorage).  Added so the Notes tab header and the Stage 7 top
+   * "MANUAL OVERRIDES" summary card display the SAME total.  When omitted
+   * the header falls back to just stage5_notes.manual_edits.length, matching
+   * the old behaviour for stand-alone uses of NotesTab.
+   */
+  extraOverrideCount?: number;
 }
 
-export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote }: Props) {
+export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote, extraOverrideCount = 0 }: Props) {
   const [notes,         setNotes]         = useState<Stage5Notes | null>(null);
   const [loading,       setLoading]       = useState(true);
   const [syncing,       setSyncing]       = useState(false);
@@ -257,10 +266,81 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
           human_override:  true,
         });
 
+      // 5. Fire alias analysis — teaches AI WHY this remap happened.
+      //    Only when the old code and new code differ (i.e. it's a real override).
+      if (oldCode && oldCode !== newCode) {
+        supabase.functions.invoke("analyze-coa-override", {
+          body: {
+            ledger_name:        ledgerName,
+            normalized_name:    normalizedName,
+            entity_type:        "corporate",
+            ai_mapping_code:    oldCode,
+            human_mapping_code: newCode,
+            firm_id:            firmId,
+            engagement_id:      engagementId,
+          },
+        }).catch(() => {}); // fire-and-forget, never block UI
+      }
+
       toast.success(`Remapped "${ledgerName}" → ${newCode}. Re-syncing…`);
       await handleResync();
     } catch (e: any) {
       toast.error(`Remap failed: ${e?.message || e}`);
+    }
+  }, [engagementId, handleResync]);
+
+  // ── Unmap a ledger from its FS code (Issue 4 — Aesha) ─────────────────
+  // Mirrors handleRemapLedger but CLEARS the mapping: removes the ledger
+  // from audit_engagements.coa_mapping so it appears as "Unmapped" on the
+  // COA Mapping page, then re-syncs the notes so the row disappears from
+  // every Note breakup (consistent with the BS face which also drops
+  // unmapped ledgers).
+  const handleUnmapLedger = useCallback(async (ledgerName: string) => {
+    try {
+      const { data: eng } = await supabase
+        .from("audit_engagements")
+        .select("coa_mapping, firm_id, client_id")
+        .eq("id", engagementId)
+        .maybeSingle();
+      const current  = ((eng as any)?.coa_mapping ?? {}) as Record<string, any>;
+      const oldCode  = current[ledgerName]?.code ?? null;
+      const firmId   = (eng as any)?.firm_id   ?? null;
+      const clientId = (eng as any)?.client_id ?? null;
+
+      // Drop the ledger key entirely so the COA Mapping page sees it as
+      // unmapped and the next auto-populate excludes it from FS notes.
+      const updated = { ...current };
+      delete updated[ledgerName];
+
+      const { error } = await supabase
+        .from("audit_engagements")
+        .update({ coa_mapping: updated } as any)
+        .eq("id", engagementId);
+      if (error) throw error;
+
+      // Audit trail
+      const { data: { user } } = await supabase.auth.getUser();
+      await supabase
+        .from("audit_human_actions" as any)
+        .insert({
+          engagement_id:   engagementId,
+          firm_id:         firmId,
+          action_type:     "coa_unmap",
+          action_context:  {
+            ledger_name: ledgerName,
+            old_code:    oldCode,
+            new_code:    null,
+            source:      "financial_statements",
+            client_id:   clientId,
+          },
+          user_id:         user?.id ?? null,
+          human_override:  true,
+        });
+
+      toast.success(`Unmapped "${ledgerName}". Re-syncing…`);
+      await handleResync();
+    } catch (e: any) {
+      toast.error(`Unmap failed: ${e?.message || e}`);
     }
   }, [engagementId, handleResync]);
 
@@ -307,9 +387,9 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
         </Button>
         <span className="text-[10px] text-muted-foreground">
           Last synced: <strong>{lastSync}</strong>
-          {notes.manual_edits.length > 0 && (
+          {(notes.manual_edits.length + extraOverrideCount) > 0 && (
             <span className="ml-2 text-amber-600">
-              · {notes.manual_edits.length} manual override(s)
+              · {notes.manual_edits.length + extraOverrideCount} manual override(s)
             </span>
           )}
         </span>
@@ -364,6 +444,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
             updatePath={updatePath} resetPath={resetPath} isOverridden={isOverridden}
             collapseControl={collapseAll}
             onRemapLedger={handleRemapLedger}
+            onUnmapLedger={handleUnmapLedger}
           />
         </TabsContent>
         <TabsContent value="bs_asset" className="mt-3">
@@ -373,6 +454,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
             updatePath={updatePath} resetPath={resetPath} isOverridden={isOverridden}
             collapseControl={collapseAll}
             onRemapLedger={handleRemapLedger}
+            onUnmapLedger={handleUnmapLedger}
           />
         </TabsContent>
         <TabsContent value="pl" className="mt-3">
@@ -382,6 +464,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote 
             updatePath={updatePath} resetPath={resetPath} isOverridden={isOverridden}
             collapseControl={collapseAll}
             onRemapLedger={handleRemapLedger}
+            onUnmapLedger={handleUnmapLedger}
           />
         </TabsContent>
         <TabsContent value="fa" className="mt-3">

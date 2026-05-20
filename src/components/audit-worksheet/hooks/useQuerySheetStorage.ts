@@ -150,11 +150,23 @@ export function useQuerySheetStorage(
     setLoaded(true);
     const cached = awLoad<QuerySheetData>(engagementId, "query_sheet_json");
     if (cached && typeof cached === "object" && Array.isArray(cached.queries)) {
-      setData(cached);
+      setData({ queries: cached.queries.map(migrateRow) });
     }
     awLoadFromDB<QuerySheetData>(engagementId, "query_sheet_json").then(remote => {
       if (remote && typeof remote === "object" && Array.isArray(remote.queries)) {
-        setData(remote);
+        // ── Race-condition fix ───────────────────────────────────────────────
+        // addQueryPrefilled (from Ledger Explorer "+ Query") may have already
+        // added a row to local state while this async fetch was in flight.
+        // A plain setData(remote) would overwrite — and silently discard — that
+        // locally-added row.  Use a functional update so we can inspect the
+        // current state and preserve any rows whose IDs are not present in the
+        // remote snapshot (i.e. rows added locally after the fetch started).
+        setData(prev => {
+          const migratedRemote = remote.queries.map(migrateRow);
+          const remoteIds = new Set(migratedRemote.map(q => q.id));
+          const localOnly  = prev.queries.filter(q => !remoteIds.has(q.id));
+          return { queries: [...migratedRemote, ...localOnly] };
+        });
       }
     });
   }, [engagementId, loaded]);

@@ -13,61 +13,64 @@ serve(async (req) => {
   }
 
   try {
-    const authHeader = req.headers.get("Authorization") ?? "";
-    const token = authHeader.replace("Bearer ", "").trim();
-    if (!token) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
+    // JWT verification is handled by Supabase's edge-function gateway.
+    // We only need the service-role client here to generate the signed URL
+    // (bypasses storage RLS so any authenticated firm member can preview files).
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    const { data: { user }, error: authErr } = await supabase.auth.getUser(token);
-    if (authErr || !user) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+    const body = await req.json();
+    const { document_id, file_path, bucket } = body;
 
-    const { document_id } = await req.json();
-    if (!document_id) {
-      return new Response(JSON.stringify({ error: "Missing document_id" }), {
+    if (!document_id && !file_path) {
+      return new Response(JSON.stringify({ error: "Missing document_id or file_path" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // Fetch document - RLS will enforce access
-    const userClient = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_ANON_KEY")!,
-      { global: { headers: { Authorization: `Bearer ${token}` } } }
-    );
+    let r2_key: string;
+    let storageBucket: string;
+    let filename: string | undefined;
 
-    const { data: doc, error: docErr } = await userClient
-      .from("documents")
-      .select("r2_key, filename")
-      .eq("id", document_id)
-      .maybeSingle();
+    if (file_path) {
+      // Direct storage path — use service role, no RLS check needed
+      // doc lookup skipped; filename derived from path
+      r2_key = file_path;
+      storageBucket = bucket || "documents";
+      filename = file_path.split("/").pop();
+    } else {
+      // Fetch document record using caller's JWT (RLS enforced)
+      const userClient = createClient(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_ANON_KEY")!,
+        { global: { headers: { Authorization: `Bearer ${token}` } } }
+      );
 
-    if (docErr || !doc || !doc.r2_key) {
-      return new Response(JSON.stringify({ error: "Document not found" }), {
-        status: 404,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      const { data: doc, error: docErr } = await userClient
+        .from("documents")
+        .select("r2_key, filename")
+        .eq("id", document_id)
+        .maybeSingle();
+
+      if (docErr || !doc || !doc.r2_key) {
+        return new Response(JSON.stringify({ error: "Document not found" }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      r2_key = doc.r2_key;
+      storageBucket = "firm-assets";
+      filename = doc.filename;
     }
 
-    // Generate presigned URL valid for 1 hour
+    // Generate presigned URL valid for 1 hour using service role (bypasses storage RLS)
     const { data: urlData, error: urlErr } = await supabase
       .storage
-      .from("firm-assets")
-      .createSignedUrl(doc.r2_key, 3600);
+      .from(storageBucket)
+      .createSignedUrl(r2_key, 3600);
 
     if (urlErr || !urlData?.signedUrl) {
       return new Response(JSON.stringify({ error: "Failed to generate download URL" }), {
@@ -77,7 +80,7 @@ serve(async (req) => {
     }
 
     return new Response(
-      JSON.stringify({ signed_url: urlData.signedUrl, filename: doc.filename }),
+      JSON.stringify({ signed_url: urlData.signedUrl, filename }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (e) {
