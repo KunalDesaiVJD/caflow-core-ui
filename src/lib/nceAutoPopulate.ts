@@ -1277,11 +1277,6 @@ export async function nceAutoPopulate(
         // Signed amount — see signedLedgerAmt() docs. Net opposite-side
         // balances within the head so group totals match COA Mapping math.
         const amt = signedLedgerAmt(row, noteType);
-        if (Math.abs(amt) < 0.005) continue;
-        // Skip ledgers the user has explicitly ejected to standalone rows
-        if (ejectedSet.has(row.ledger_name)) continue;
-
-        const matchedRowId = smartMatch(row.ledger_name, smartRules, row.parent_group);
         // ISSUE 1 FIX (per-ledger breakup in Notes): for "borrowings",
         // "investments" and "loans_advances" — notes where the auditor expects
         // ledger-level detail under each Schedule III sub-head — we ALWAYS
@@ -1294,6 +1289,26 @@ export async function nceAutoPopulate(
           noteType === "borrowings" ||
           noteType === "investments" ||
           noteType === "loans_advances";
+        // PY balance this same ledger carried (PY shell TB closing). Needed for
+        // the CLOSED-ledger case below.
+        const pyAmtForLedger = pyByLedger[row.ledger_name.toLowerCase()] ?? 0;
+        // ROOT-CAUSE FIX (Issue 1, CLOSED ledgers vanish): a ledger that closed
+        // during CY still appears in the CY trial balance, but with closing 0,
+        // so signedLedgerAmt() returns ~0. The old `if (<0.005) continue` then
+        // dropped it from the CY loop — AND the PY-only walk also skipped it
+        // (it IS present in CY TB, so it's in cySeen). The ledger therefore
+        // disappeared from BOTH paths: e.g. "Advance Tax - 2024-25",
+        // "TDS Reimbursement - Toyota Finance Service", "TDS/TCS Recevable-2425"
+        // on OM REALTY (closing 0 in CY, real balance in PY) never rendered as
+        // a breakup row even though COA Mapping clearly classifies them.
+        // For per-ledger-breakup notes, KEEP the ledger when it has a non-zero
+        // PY balance so it surfaces as a CY 0 / PY <amt> breakup line.
+        const keepForPy = wantsPerLedgerBreakup && Math.abs(pyAmtForLedger) > 0.005;
+        if (Math.abs(amt) < 0.005 && !keepForPy) continue;
+        // Skip ledgers the user has explicitly ejected to standalone rows
+        if (ejectedSet.has(row.ledger_name)) continue;
+
+        const matchedRowId = smartMatch(row.ledger_name, smartRules, row.parent_group);
 
         if (matchedRowId && !wantsPerLedgerBreakup) {
           // Existing aggregate path for other Pattern A notes
@@ -1304,9 +1319,8 @@ export async function nceAutoPopulate(
           if (isST && !(matchedRowId + "_st" in newPy))
             newPy[matchedRowId + "_st"] = Math.abs(pyNotes[noteType]?.[matchedRowId + "_st"] ?? 0);
         } else {
-          const pyAmt = pyByLedger[row.ledger_name.toLowerCase()] ?? 0;
           unmatchedA.push({
-            ledger: row.ledger_name, amt, pyAmt, isLT, isST,
+            ledger: row.ledger_name, amt, pyAmt: pyAmtForLedger, isLT, isST,
             parentGroup: row.parent_group ?? undefined,
             ...(matchedRowId ? { smartTarget: matchedRowId } : {}),
           });
@@ -1343,21 +1357,12 @@ export async function nceAutoPopulate(
           const cySeen = new Set(tb.map(r => r.ledger_name.toLowerCase().trim()));
           // Also skip ledgers already pushed to unmatchedA from the CY loop.
           const inUnmatched = new Set(unmatchedA.map(u => u.ledger.toLowerCase().trim()));
-          let pyOnlyAdded = 0;
-          // Temporary diagnostic: trace the loans_advances PY-only walk so we
-          // can see exactly why CLOSED ledgers (Advance Tax - 2024-25, TDS
-          // Receivable, …) are or aren't being turned into breakup rows.
-          const DBG = noteType === "loans_advances";
-          if (DBG) {
-            console.info(`[nce-dbg] loans_advances: pyTb=${pyTb.length} cySeen=${cySeen.size} ltSet=${[...ltSet].join(",")} stSet=${[...stSet].join(",")}`);
-          }
           for (const row of pyTb) {
             const nm = String(row.ledger_name || "").trim();
             if (!nm) continue;
             const nmLower = nm.toLowerCase();
-            const dbgHit = DBG && (nmLower.includes("advance tax") || nmLower.includes("tds") || nmLower.includes("tcs") || nmLower.includes("income tax refund"));
-            if (cySeen.has(nmLower) || inUnmatched.has(nmLower)) { if (dbgHit) console.info(`[nce-dbg] skip(seen) "${nm}"`); continue; }
-            if (ejectedSet.has(nm)) { if (dbgHit) console.info(`[nce-dbg] skip(ejected) "${nm}"`); continue; }
+            if (cySeen.has(nmLower) || inUnmatched.has(nmLower)) continue;
+            if (ejectedSet.has(nm)) continue;
             let mapped: { code: string } | undefined =
               (pyCoaMap as any)[nm] || pyMappingLowerA[nmLower] ||
               (coaMapping as any)[nm] || cyMappingLowerA[nmLower];
@@ -1365,23 +1370,18 @@ export async function nceAutoPopulate(
               const grp = String((row as any).parent_group || "").toLowerCase().trim();
               if (grp && groupToCodeA[grp]) mapped = { code: groupToCodeA[grp] };
             }
-            if (!mapped?.code) { if (dbgHit) console.info(`[nce-dbg] skip(no-map) "${nm}" pg="${(row as any).parent_group}"`); continue; }
+            if (!mapped?.code) continue;
             const isLT = ltSet.has(mapped.code);
             const isST = stSet.has(mapped.code);
-            if (!isLT && !isST) { if (dbgHit) console.info(`[nce-dbg] skip(code-not-in-note) "${nm}" code=${mapped.code}`); continue; }
+            if (!isLT && !isST) continue;
             const pyAmt = signedLedgerAmt(row, noteType);
-            if (Math.abs(pyAmt) < 0.005) { if (dbgHit) console.info(`[nce-dbg] skip(zero-amt) "${nm}" code=${mapped.code} closing=${row.closing_balance}`); continue; }
+            if (Math.abs(pyAmt) < 0.005) continue;
             const matchedRowId = smartMatch(nm, smartRules, row.parent_group);
-            if (dbgHit) console.info(`[nce-dbg] ADD "${nm}" code=${mapped.code} pyAmt=${pyAmt} target=${matchedRowId}`);
             unmatchedA.push({
               ledger: nm, amt: 0, pyAmt, isLT, isST,
               parentGroup: (row as any).parent_group ?? undefined,
               ...(matchedRowId ? { smartTarget: matchedRowId } : {}),
             });
-            pyOnlyAdded++;
-          }
-          if (pyOnlyAdded > 0) {
-            console.info(`[nceAutoPopulate] ${noteType}: PY-only walk added ${pyOnlyAdded} closed-ledger breakup row(s)`);
           }
         } catch (e) {
           console.warn("[nceAutoPopulate] Pattern A PY-only walk failed (non-fatal):", (e as Error)?.message);
