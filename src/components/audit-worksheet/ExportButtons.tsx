@@ -217,24 +217,90 @@ function exportExcel(engagementId: string, data: AuditWorksheetData) {
 }
 
 // ─── PDF export ────────────────────────────────────────────────────────────────
+//
+// Layout principles (do not regress):
+//  • Landscape A4, 12 mm side margins, 22 mm top margin (room for header),
+//    15 mm bottom margin (room for footer/page-number).
+//  • Every section table uses didDrawPage to repaint header + footer on each
+//    auto-paginated page, so long sections never lose their title.
+//  • Master sheet uses a 2-column (Field | Value) layout — long values like the
+//    full registered address, books-verified list, file paths, etc. get the
+//    entire content-width to wrap into. The previous 4-column grid clipped
+//    long values; do not switch back.
+//  • All cells use overflow: "linebreak" so jspdf-autotable wraps instead of
+//    truncating.
+//
 
 async function exportPdf(engagementId: string, data: AuditWorksheetData) {
   const { default: jsPDF } = await import("jspdf");
   const { default: autoTable } = await import("jspdf-autotable");
 
   const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
-  const clientLine = `${data.firmName || "CA Firm"}  |  ${data.clientName || "Client"}  |  FY ${data.financialYear || ""}`;
 
-  function pageHeader(sheetTitle: string) {
+  const PAGE_W = doc.internal.pageSize.getWidth();   // 297mm
+  const PAGE_H = doc.internal.pageSize.getHeight();  // 210mm
+  const MARGIN_X = 12;
+  const MARGIN_TOP = 22;
+  const MARGIN_BOTTOM = 15;
+  const CONTENT_W = PAGE_W - MARGIN_X * 2;            // 273 mm
+
+  const clientLine = `${data.firmName || "CA Firm"}  |  ${data.clientName || "Client"}  |  FY ${data.financialYear || ""}`;
+  const generatedOn = new Date().toLocaleString("en-IN", {
+    day: "2-digit", month: "short", year: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
+
+  // Per-page header + footer painter. Called by autoTable's didDrawPage.
+  function paintChrome(sheetTitle: string) {
+    // Header strip
+    doc.setFillColor(243, 244, 246);
+    doc.rect(0, 0, PAGE_W, 17, "F");
+    doc.setDrawColor(209, 213, 219);
+    doc.setLineWidth(0.2);
+    doc.line(0, 17, PAGE_W, 17);
+
     doc.setFontSize(8);
     doc.setFont("helvetica", "normal");
-    doc.setTextColor(100);
-    doc.text(clientLine, 14, 9);
-    doc.setFontSize(11);
+    doc.setTextColor(75, 85, 99);
+    doc.text(clientLine, MARGIN_X, 7);
+
+    doc.setFontSize(12);
     doc.setFont("helvetica", "bold");
-    doc.setTextColor(0);
-    doc.text(sheetTitle, 14, 16);
+    doc.setTextColor(17, 24, 39);
+    doc.text(sheetTitle, MARGIN_X, 14);
+
+    // Footer
+    const pageNo = (doc as any).internal.getNumberOfPages
+      ? doc.getCurrentPageInfo().pageNumber
+      : 1;
+    doc.setFontSize(7.5);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(107, 114, 128);
+    doc.text(`Generated ${generatedOn}`, MARGIN_X, PAGE_H - 6);
+    doc.text(`Page ${pageNo}`, PAGE_W - MARGIN_X, PAGE_H - 6, { align: "right" });
   }
+
+  // Common autoTable defaults — extend per section.
+  const baseTable = (sheetTitle: string) => ({
+    startY: MARGIN_TOP,
+    margin: { left: MARGIN_X, right: MARGIN_X, top: MARGIN_TOP, bottom: MARGIN_BOTTOM },
+    styles: {
+      fontSize: 8.5,
+      cellPadding: 2.2,
+      overflow: "linebreak" as const,
+      valign: "top" as const,
+      lineColor: [209, 213, 219] as [number, number, number],
+      lineWidth: 0.15,
+    },
+    headStyles: {
+      fontSize: 9,
+      fontStyle: "bold" as const,
+      textColor: 255 as const,
+      halign: "left" as const,
+    },
+    theme: "grid" as const,
+    didDrawPage: () => paintChrome(sheetTitle),
+  });
 
   const auditType = data.auditType;
   const isBoth = auditType === "both";
@@ -248,107 +314,175 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
     : isStat ? "Statutory Audit Master"
     : "Audit Master";
 
-  // ── Page 1: Master ────────────────────────────────────────────────────────
-  pageHeader(masterLabel);
-
+  // ── Page 1: Master — 2-column Field/Value layout ──────────────────────────
   const auditCarriedBy = (tax.audit_carried_by ?? stat.audit_carried_by ?? [])
     .map((a: any) => a.name).filter(Boolean).join(", ");
 
-  const masterBody: (string | null)[][] = [
-    ["Client Name",     data.clientName,           "PAN",            data.pan],
-    ["Address",         data.clientAddress,         "Entity Type",    data.entityType],
-    ["Financial Year",  data.financialYear,         "Firm Name",      data.firmName],
-    ["Accountant",      tax.accountant_name ?? stat.accountant_name ?? "",
-     "Mobile",          tax.mobile_no ?? stat.mobile_no ?? ""],
-    ["Audit Date From", tax.audit_date_from ?? stat.audit_date_from ?? "",
-     "Audit Date To",   tax.audit_date_to   ?? stat.audit_date_to   ?? ""],
-    ["Books Verified",  booksChecked((isTax ? tax : stat) as TaxMasterData & StatutoryMasterData), "", ""],
-    ["Audit Carried By", auditCarriedBy, "", ""],
+  const fmt = (v: unknown) => (v === null || v === undefined || v === "") ? "—" : String(v);
+
+  // Section helper: emits a band-styled row that spans both columns.
+  const section = (title: string): (string | { content: string; colSpan?: number; styles?: any })[] => [
+    { content: title, colSpan: 2, styles: { fillColor: [241, 245, 249], fontStyle: "bold", textColor: [30, 41, 59] } },
   ];
 
+  type Row = (string | { content: string; colSpan?: number; styles?: any })[];
+  const masterBody: Row[] = [];
+
+  masterBody.push(section("Engagement"));
+  masterBody.push(["Firm Name",            fmt(data.firmName)]);
+  masterBody.push(["Client / Assessee",    fmt(data.clientName)]);
+  masterBody.push(["Registered Address",   fmt(data.clientAddress)]);
+  masterBody.push(["PAN",                  fmt(data.pan)]);
+  masterBody.push(["Entity Type",          fmt(data.entityType)]);
+  masterBody.push(["Financial Year",       fmt(data.financialYear)]);
+
+  masterBody.push(section("Contact"));
+  masterBody.push(["Accountant Name",      fmt(tax.accountant_name ?? stat.accountant_name)]);
+  masterBody.push(["Mobile No.",           fmt(tax.mobile_no ?? stat.mobile_no)]);
+
+  masterBody.push(section("Previous Year Documents"));
+  masterBody.push(["MOA / AOA / Deed obtained", yesNo(tax.prev_moa_aoa_deed ?? stat.prev_moa_aoa_deed) || "—"]);
+  masterBody.push(["Previous IT Return obtained", yesNo(tax.prev_it_return ?? stat.prev_it_return) || "—"]);
+  if (isStat) {
+    masterBody.push(["Previous Statutory Audit Report obtained", yesNo(stat.prev_audit_report) || "—"]);
+  }
+
+  masterBody.push(section("Books of Accounts"));
+  masterBody.push(["Books Verified", booksChecked((isTax ? tax : stat) as TaxMasterData & StatutoryMasterData) || "—"]);
+
+  masterBody.push(section("Audit Dates"));
+  masterBody.push(["Audit Date From", fmt(tax.audit_date_from ?? stat.audit_date_from)]);
+  masterBody.push(["Audit Date To",   fmt(tax.audit_date_to   ?? stat.audit_date_to)]);
+
   if (isTax) {
-    masterBody.push(
-      ["Stock Qty Records", yesNo(tax.stock_qty_records),
-       "GST Registered",    yesNo(tax.gst_details)],
-    );
-    if (tax.gst_details === "yes") {
-      masterBody.push(["GST ID", tax.gst_id ?? "", "", ""]);
+    masterBody.push(section("Tax Audit Specifics"));
+    masterBody.push(["Stock Quantity Records", yesNo(tax.stock_qty_records) || "—"]);
+    if (tax.stock_qty_records === "yes") {
+      masterBody.push(["Stock Quantity Details", fmt(tax.stock_qty_details)]);
     }
+    masterBody.push(["GST Registered", yesNo(tax.gst_details) || "—"]);
+    if (tax.gst_details === "yes") {
+      masterBody.push(["GST ID", fmt(tax.gst_id)]);
+    }
+    masterBody.push(["Payments to Relatives",        yesNo(tax.payments_to_relatives) || "—"]);
+    masterBody.push(["Secured / Unsecured Loan",     yesNo(tax.secured_unsecured_loan) || "—"]);
+    masterBody.push(["Deduction Details",            yesNo(tax.deduction_details) || "—"]);
   }
   if (isStat) {
-    masterBody.push(["CARO 2020 Applicable", yesNo(stat.caro_applicable), "", ""]);
+    masterBody.push(section("Statutory Audit Specifics"));
+    masterBody.push(["CARO 2020 Applicable", yesNo(stat.caro_applicable) || "—"]);
+    if ((stat as any).audit_form_type) {
+      masterBody.push(["Audit Report Form", fmt((stat as any).audit_form_type)]);
+    }
+    masterBody.push(["Payments to Relatives",    yesNo(stat.payments_to_relatives) || "—"]);
+    masterBody.push(["Secured / Unsecured Loan", yesNo(stat.secured_unsecured_loan) || "—"]);
   }
-  masterBody.push(
-    ["Prepared By",  tax.footer_prepared_by_name  ?? stat.footer_prepared_by_name  ?? "",
-     "Verified By",  tax.footer_verified_by_name  ?? stat.footer_verified_by_name  ?? ""],
-    ["Reviewed By",  tax.footer_reviewed_by_name  ?? stat.footer_reviewed_by_name  ?? "",
-     "A/c Path",     tax.ac_path ?? stat.ac_path ?? ""],
-  );
+
+  masterBody.push(section("Preparation & Review"));
+  masterBody.push(["Audit Report Prepared By",
+    fmt(tax.audit_report_prepared_by_name ?? stat.audit_report_prepared_by_name)]);
+  masterBody.push(["Return Prepared By",
+    fmt(tax.return_prepared_by_name ?? stat.return_prepared_by_name)]);
+  masterBody.push(["3CD Prepared By",
+    fmt(tax.cd_prepared_by_name ?? stat.cd_prepared_by_name)]);
+  masterBody.push(["Signed Copy Received",
+    fmt(tax.signed_copy_received ?? stat.signed_copy_received)]);
+  masterBody.push(["Management Representation Letter",
+    fmt(tax.management_repr_letter ?? stat.management_repr_letter)]);
+  masterBody.push(["Appointment Letter",
+    fmt(tax.appointment_letter ?? stat.appointment_letter)]);
+
+  masterBody.push(section("Audit Team"));
+  masterBody.push(["Audit Carried Out By", auditCarriedBy || "—"]);
+
+  masterBody.push(section("Paths"));
+  masterBody.push(["A/c (Tally) File Path", fmt(tax.ac_path ?? stat.ac_path)]);
+  masterBody.push(["Report / Working Path", fmt(tax.report_path ?? stat.report_path)]);
+
+  masterBody.push(section("Sign-off"));
+  masterBody.push(["Prepared By", fmt(tax.footer_prepared_by_name ?? stat.footer_prepared_by_name)]);
+  masterBody.push(["Verified By", fmt(tax.footer_verified_by_name ?? stat.footer_verified_by_name)]);
+  masterBody.push(["Reviewed By", fmt(tax.footer_reviewed_by_name ?? stat.footer_reviewed_by_name)]);
 
   autoTable(doc, {
-    startY: 20,
-    head: [["Field", "Value", "Field", "Value"]],
-    body: masterBody,
-    styles: { fontSize: 8, cellPadding: 2 },
-    headStyles: { fillColor: [79, 70, 229] },
-    columnStyles: { 0: { fontStyle: "bold", cellWidth: 42 }, 2: { fontStyle: "bold", cellWidth: 42 } },
-    theme: "grid",
+    ...baseTable(masterLabel),
+    head: [["Field", "Value"]],
+    body: masterBody as any,
+    headStyles: { ...baseTable(masterLabel).headStyles, fillColor: [79, 70, 229] },
+    columnStyles: {
+      0: { fontStyle: "bold", cellWidth: 70, fillColor: [249, 250, 251] },
+      1: { cellWidth: CONTENT_W - 70 },
+    },
   });
 
   // ── Page 2: Audit Worksheet ────────────────────────────────────────────────
   doc.addPage();
-  pageHeader("Audit Worksheet");
   const ws = awLoad<WorksheetSheetData>(engagementId, "worksheet_json") ?? { rows: {} };
   autoTable(doc, {
-    startY: 20,
+    ...baseTable("Audit Worksheet"),
     head: [["Sr", "Area / Particulars", "Extent / As-on Date", "Work Date", "Checked By", "Notes"]],
     body: WORKSHEET_ROWS.map(r => {
       const row = (ws.rows ?? {})[r.id] ?? {} as any;
       const extent = row.extent_text || row.extent_date || "";
       return [r.sr, r.label, extent, row.date ?? "", row.checked_by_name ?? "", row.notes ?? ""];
     }),
-    styles: { fontSize: 8, cellPadding: 2 },
-    headStyles: { fillColor: [16, 185, 129] },
-    columnStyles: { 0: { cellWidth: 10 }, 1: { cellWidth: 52 } },
-    theme: "grid",
+    headStyles: { ...baseTable("Audit Worksheet").headStyles, fillColor: [16, 185, 129] },
+    columnStyles: {
+      0: { cellWidth: 10, halign: "center" },
+      1: { cellWidth: 55, fontStyle: "bold" },
+      2: { cellWidth: 50 },
+      3: { cellWidth: 28 },
+      4: { cellWidth: 40 },
+      5: { cellWidth: CONTENT_W - 10 - 55 - 50 - 28 - 40 },
+    },
   });
 
   // ── Page 3: Special Attention ──────────────────────────────────────────────
   doc.addPage();
-  pageHeader("Special Attention");
   const sa = awLoad<SpecialAttentionFormData>(engagementId, "special_attention_json") ?? { rows: {} };
   const saRows = Object.entries(sa.rows ?? {}).map(([rowId, r]: [string, any]) => [
     rowId, yesNo(r.query), r.remarks ?? "", r.checked_by_name ?? "", r.verified_by_name ?? "",
   ]);
   autoTable(doc, {
-    startY: 20,
+    ...baseTable("Special Attention"),
     head: [["Sr / ID", "Query", "Remarks", "Checked By", "Verified By"]],
     body: saRows.length > 0 ? saRows : [["—", "", "", "", ""]],
-    styles: { fontSize: 8, cellPadding: 2 },
-    headStyles: { fillColor: [245, 158, 11] },
-    theme: "grid",
+    headStyles: { ...baseTable("Special Attention").headStyles, fillColor: [245, 158, 11] },
+    columnStyles: {
+      0: { cellWidth: 40 },
+      1: { cellWidth: 18, halign: "center" },
+      2: { cellWidth: CONTENT_W - 40 - 18 - 45 - 45 },
+      3: { cellWidth: 45 },
+      4: { cellWidth: 45 },
+    },
   });
 
   // ── Page 4: Query Sheet ────────────────────────────────────────────────────
   doc.addPage();
-  pageHeader("Query Sheet");
   const qs = awLoad<QuerySheetData>(engagementId, "query_sheet_json") ?? { queries: [] };
   autoTable(doc, {
-    startY: 20,
+    ...baseTable("Query Sheet"),
     head: [["#", "Head", "Particulars", "Query Description", "Required Documents", "Remark", "Correction"]],
     body: (qs.queries ?? []).length > 0
       ? (qs.queries ?? []).map((q: any, i: number) => [
           i + 1, q.head, q.particulars, q.query_description, q.required_documents, q.remark, q.correction_status,
         ])
       : [["—", "", "", "", "", "", ""]],
-    styles: { fontSize: 7.5, cellPadding: 1.5 },
-    headStyles: { fillColor: [239, 68, 68] },
-    theme: "grid",
+    styles: { ...baseTable("Query Sheet").styles, fontSize: 8, cellPadding: 1.8 },
+    headStyles: { ...baseTable("Query Sheet").headStyles, fillColor: [239, 68, 68], fontSize: 8.5 },
+    columnStyles: {
+      0: { cellWidth: 8,  halign: "center" },
+      1: { cellWidth: 32 },
+      2: { cellWidth: 36 },
+      3: { cellWidth: 60 },
+      4: { cellWidth: 50 },
+      5: { cellWidth: 50 },
+      6: { cellWidth: CONTENT_W - 8 - 32 - 36 - 60 - 50 - 50 },
+    },
   });
 
   // ── Page 5: Checklist ──────────────────────────────────────────────────────
   doc.addPage();
-  pageHeader("Audit Documentation Checklist");
   const cl = awLoad<ChecklistSheetData>(engagementId, "checklist_sheet_json") ?? { rows: {}, dynamicRowIds: [] };
   const fyEndYear = data.fyEndDate ? data.fyEndDate.match(/^(\d{4})/)?.[1] ?? "" : "";
   const allClDefs = [
@@ -358,17 +492,21 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
     })),
   ];
   autoTable(doc, {
-    startY: 20,
+    ...baseTable("Audit Documentation Checklist"),
     head: [["Sr", "Particulars", "Document Attached", "Page From", "Page To"]],
     body: allClDefs.map(def => {
       const row = (cl.rows ?? {})[def.id] ?? {} as any;
       const particulars = row.particulars || def.particulars.replace(/\{fyEndYear\}/g, fyEndYear);
       return [def.sr, particulars, row.file_name ?? "", row.page_from ?? "", row.page_to ?? ""];
     }),
-    styles: { fontSize: 8, cellPadding: 2 },
-    headStyles: { fillColor: [99, 102, 241] },
-    columnStyles: { 0: { cellWidth: 10 }, 3: { cellWidth: 20 }, 4: { cellWidth: 20 } },
-    theme: "grid",
+    headStyles: { ...baseTable("Audit Documentation Checklist").headStyles, fillColor: [99, 102, 241] },
+    columnStyles: {
+      0: { cellWidth: 12, halign: "center" },
+      1: { cellWidth: 95, fontStyle: "bold" },
+      2: { cellWidth: CONTENT_W - 12 - 95 - 25 - 25 },
+      3: { cellWidth: 25, halign: "center" },
+      4: { cellWidth: 25, halign: "center" },
+    },
   });
 
   doc.save(`AuditWorksheet_${data.clientName || "Export"}_${data.financialYear || "FY"}.pdf`);
