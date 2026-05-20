@@ -1676,6 +1676,24 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       computeTotal(item);
     }
 
+    // ── NCE P&L profit chain (V → XIII) ─────────────────────────────────────
+    // computeTotal only sums additive parents (NCE_PL_INC, NCE_PL_EXP, NCE_TAX).
+    // The subtraction-based subtotals V/VII/IX/XI/XIII are leaf codes with no
+    // children, so without this block they stay 0 on the COA Mapping screen —
+    // the auditor saw blanks from "V. Profit/(Loss) before exceptional items…"
+    // downward. Mirror the Stage 7 chain (PipelineFinancialStatements.tsx) so
+    // the same figures appear here. Mapped values (VI exceptional, VIII
+    // extraordinary, X partners' remuneration, XII tax) flow in via `amounts`.
+    if (isNonCorporate) {
+      const nceInc = amounts["NCE_PL_INC"] || 0; // negative (credit)
+      const nceExp = amounts["NCE_PL_EXP"] || 0; // positive (debit)
+      amounts["NCE_PROF_V"]   = Math.round((-nceInc - nceExp) * 100) / 100;
+      amounts["NCE_PROF_VII"] = Math.round((amounts["NCE_PROF_V"]   - (amounts["NCE_EXCEP"]    || 0)) * 100) / 100;
+      amounts["NCE_PROF_IX"]  = Math.round((amounts["NCE_PROF_VII"] - (amounts["NCE_EXTORD"]   || 0)) * 100) / 100;
+      amounts["NCE_PROF_XI"]  = Math.round((amounts["NCE_PROF_IX"]  - (amounts["NCE_PART_REM"] || 0)) * 100) / 100;
+      amounts["NCE_NET_PROF"] = Math.round((amounts["NCE_PROF_XI"]  - (amounts["NCE_TAX"]      || 0)) * 100) / 100;
+    }
+
     // ── Auto-flow net P&L to BS_EQ_RS for corporate entities ─────────────────
     // Revenue (PL_REV, credit = negative) and Expenses (PL_EXP, debit = positive)
     // live in P&L codes.  The current-year net profit must be credited to Reserves &
@@ -1790,6 +1808,19 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       return total;
     };
     for (const item of activeTree) computeTotal(item);
+
+    // ── NCE P&L profit chain (V → XIII) for the PY column ───────────────────
+    // Same subtraction chain as CY so the COA Mapping PY column shows the
+    // derived NCE profit subtotals instead of blanks.
+    if (isNonCorporate) {
+      const nceInc = amounts["NCE_PL_INC"] || 0;
+      const nceExp = amounts["NCE_PL_EXP"] || 0;
+      amounts["NCE_PROF_V"]   = Math.round((-nceInc - nceExp) * 100) / 100;
+      amounts["NCE_PROF_VII"] = Math.round((amounts["NCE_PROF_V"]   - (amounts["NCE_EXCEP"]    || 0)) * 100) / 100;
+      amounts["NCE_PROF_IX"]  = Math.round((amounts["NCE_PROF_VII"] - (amounts["NCE_EXTORD"]   || 0)) * 100) / 100;
+      amounts["NCE_PROF_XI"]  = Math.round((amounts["NCE_PROF_IX"]  - (amounts["NCE_PART_REM"] || 0)) * 100) / 100;
+      amounts["NCE_NET_PROF"] = Math.round((amounts["NCE_PROF_XI"]  - (amounts["NCE_TAX"]      || 0)) * 100) / 100;
+    }
 
     // ── Auto-credit PY net profit to BS_EQ_RS ───────────────────────────────
     // pyAmounts holds prior-year P&L figures from fa_financial_statements.
@@ -3680,16 +3711,30 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                 // The correct identity is:  Σ Dr  +  Σ Cr  =  0  (Tally)
                 //                       =>  totalAss + totalEL = 0 when balanced.
                 // So diff = | totalAss + totalEL | .
-                const totalEL = (computedAmounts["BS_EQ"]  || 0)
-                              + (computedAmounts["BS_NCL"] || 0)
-                              + (computedAmounts["BS_CL"]  || 0);
-                const totalAss = (computedAmounts["BS_NCA"] || 0)
-                               + (computedAmounts["BS_CA"]  || 0);
-                const totalELpy = (computedAmountsPY["BS_EQ"]  || 0)
-                                + (computedAmountsPY["BS_NCL"] || 0)
-                                + (computedAmountsPY["BS_CL"]  || 0);
-                const totalASSpy = (computedAmountsPY["BS_NCA"] || 0)
-                                 + (computedAmountsPY["BS_CA"]  || 0);
+                // Entity-aware totals. Corporate sums BS_EQ/BS_NCL/BS_CL and
+                // BS_NCA/BS_CA. NCE has no such codes — its grand totals are the
+                // pre-computed parents NCE_EL (equity+liabilities, Cr-negative)
+                // and NCE_AST (assets, Dr-positive). Without this branch the NCE
+                // COA Mapping screen showed NO balance-check panel at all (both
+                // corporate totals were 0 → the guard below returned null).
+                const totalEL = isNonCorporate
+                  ? (computedAmounts["NCE_EL"] || 0)
+                  : (computedAmounts["BS_EQ"]  || 0)
+                  + (computedAmounts["BS_NCL"] || 0)
+                  + (computedAmounts["BS_CL"]  || 0);
+                const totalAss = isNonCorporate
+                  ? (computedAmounts["NCE_AST"] || 0)
+                  : (computedAmounts["BS_NCA"] || 0)
+                  + (computedAmounts["BS_CA"]  || 0);
+                const totalELpy = isNonCorporate
+                  ? (computedAmountsPY["NCE_EL"] || 0)
+                  : (computedAmountsPY["BS_EQ"]  || 0)
+                  + (computedAmountsPY["BS_NCL"] || 0)
+                  + (computedAmountsPY["BS_CL"]  || 0);
+                const totalASSpy = isNonCorporate
+                  ? (computedAmountsPY["NCE_AST"] || 0)
+                  : (computedAmountsPY["BS_NCA"] || 0)
+                  + (computedAmountsPY["BS_CA"]  || 0);
                 // Sign-corrected difference + ₹2 tolerance (Issue 2 today)
                 // to absorb 2-decimal rounding accumulating over many ledgers.
                 const diff     = Math.abs(totalAss + totalEL);
