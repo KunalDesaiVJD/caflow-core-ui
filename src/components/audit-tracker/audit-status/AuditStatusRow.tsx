@@ -135,21 +135,23 @@ function UdinInput({ value, onChange, placeholder }: {
   const isNA = value.trim().toUpperCase() === "NA";
   return (
     <div className="flex items-center gap-1">
+      {/* When NA is selected the dropdown already shows "NA" — so the text
+          box must NOT also display "NA" (that produced a redundant double
+          "NA"). It instead shows a muted "Not applicable" placeholder while
+          disabled. Manual UDIN typing is unchanged. */}
       <Input
         type="text"
-        value={isNA ? "NA" : value}
+        value={isNA ? "" : value}
         onChange={e => onChange(e.target.value)}
-        placeholder={placeholder}
+        placeholder={isNA ? "Not applicable" : placeholder}
         disabled={isNA}
         className={cn(
           "h-6 text-[11px] w-full px-1.5 font-mono",
-          isNA && "disabled:opacity-100 text-muted-foreground italic",
+          isNA && "disabled:opacity-100 italic placeholder:text-muted-foreground",
         )}
       />
-      {/* Issue 1: "NA" is now a dropdown option (not a pill button).
-          Manual UDIN typing stays in the text box; the dropdown lets the
-          auditor flag the cell as Not Applicable. Selecting "NA" disables
-          the text box; "Manual entry" clears it back to typeable. */}
+      {/* "NA" is a dropdown option. Selecting "NA" flags the cell Not
+          Applicable; "—" clears it back to a typeable UDIN field. */}
       <select
         value={isNA ? "NA" : ""}
         onChange={e => onChange(e.target.value === "NA" ? "NA" : "")}
