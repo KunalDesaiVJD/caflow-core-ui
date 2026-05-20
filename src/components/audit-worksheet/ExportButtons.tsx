@@ -200,6 +200,18 @@ async function exportExcel(engagementId: string, data: AuditWorksheetData) {
     return "" as T | "";
   };
 
+  // Active-form blob wins — a stale tax_master_json on a statutory-only
+  // engagement (or vice versa) must never override the value the auditor is
+  // currently editing on the visible form.
+  const pickByType = <T,>(
+    taxVal: T | undefined | null,
+    statVal: T | undefined | null,
+  ): T | "" => {
+    if (isStat && !isTax)  return pick(statVal, taxVal);
+    if (isTax  && !isStat) return pick(taxVal,  statVal);
+    return pick(taxVal, statVal);
+  };
+
   const masterRows: (string | number | null)[][] = [
     [masterLabel],
     [],
@@ -210,11 +222,11 @@ async function exportExcel(engagementId: string, data: AuditWorksheetData) {
     ["Entity Type",     data.entityType],
     ["Financial Year",  data.financialYear],
     [],
-    ["Accountant Name", pick(tax.accountant_name, stat.accountant_name)],
-    ["Mobile No.",      pick(tax.mobile_no, stat.mobile_no)],
+    ["Accountant Name", pickByType(tax.accountant_name, stat.accountant_name)],
+    ["Mobile No.",      pickByType(tax.mobile_no, stat.mobile_no)],
     [],
-    ["MOA/AOA/Deed obtained",           yesNo(tax.prev_moa_aoa_deed ?? stat.prev_moa_aoa_deed)],
-    ["Prev IT Return obtained",         yesNo(tax.prev_it_return ?? stat.prev_it_return)],
+    ["MOA/AOA/Deed obtained",           yesNo(pickByType(tax.prev_moa_aoa_deed, stat.prev_moa_aoa_deed) as any)],
+    ["Prev IT Return obtained",         yesNo(pickByType(tax.prev_it_return, stat.prev_it_return) as any)],
   ];
 
   if (isStat) {
@@ -227,8 +239,8 @@ async function exportExcel(engagementId: string, data: AuditWorksheetData) {
       (isTax ? tax : stat) as TaxMasterData & StatutoryMasterData
     )],
     [],
-    ["Audit Date From", fmtDate(pick(tax.audit_date_from, stat.audit_date_from) as string)],
-    ["Audit Date To",   fmtDate(pick(tax.audit_date_to,   stat.audit_date_to)   as string)],
+    ["Audit Date From", fmtDate(pickByType(tax.audit_date_from, stat.audit_date_from) as string)],
+    ["Audit Date To",   fmtDate(pickByType(tax.audit_date_to,   stat.audit_date_to)   as string)],
   );
 
   if (isTax) {
@@ -249,7 +261,7 @@ async function exportExcel(engagementId: string, data: AuditWorksheetData) {
     );
   }
 
-  const carriedListXls = pick(stat.audit_carried_by, tax.audit_carried_by) as any[];
+  const carriedListXls = pickByType(tax.audit_carried_by, stat.audit_carried_by) as any[];
   const auditCarriedBy = Array.isArray(carriedListXls)
     ? carriedListXls.map((a: any) => a?.name).filter(Boolean).join(", ")
     : "";
@@ -257,11 +269,11 @@ async function exportExcel(engagementId: string, data: AuditWorksheetData) {
     [],
     ["Audit Carried Out By", auditCarriedBy],
     [],
-    ["A/c (Tally) File Path",       pick(tax.ac_path, stat.ac_path)],
-    ["Report / Working File Path",  pick(tax.report_path, stat.report_path)],
-    ["Footer: Prepared By",         pick(tax.footer_prepared_by_name, stat.footer_prepared_by_name)],
-    ["Footer: Verified By",         pick(tax.footer_verified_by_name, stat.footer_verified_by_name)],
-    ["Footer: Reviewed By",         pick(tax.footer_reviewed_by_name, stat.footer_reviewed_by_name)],
+    ["A/c (Tally) File Path",       pickByType(tax.ac_path, stat.ac_path)],
+    ["Report / Working File Path",  pickByType(tax.report_path, stat.report_path)],
+    ["Footer: Prepared By",         pickByType(tax.footer_prepared_by_name, stat.footer_prepared_by_name)],
+    ["Footer: Verified By",         pickByType(tax.footer_verified_by_name, stat.footer_verified_by_name)],
+    ["Footer: Reviewed By",         pickByType(tax.footer_reviewed_by_name, stat.footer_reviewed_by_name)],
   );
 
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(masterRows), masterLabel.slice(0, 31));
@@ -440,7 +452,23 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
     return "" as T | "";
   };
 
-  const carriedList = pick(stat.audit_carried_by, tax.audit_carried_by) as any[];
+  // For shared fields (accountant, audit dates, paths, sign-off, etc.) the
+  // ON-SCREEN form for THIS engagement's audit_type is the source of truth.
+  // A statutory-only engagement might still have a stale tax_master_json blob
+  // from an earlier audit_type switch — surfacing tax's stale value would
+  // hide the value the auditor is currently editing on the statutory form.
+  // pickByType resolves the active form's blob FIRST and only falls back to
+  // the other blob for "both"/legacy cases.
+  const pickByType = <T,>(
+    taxVal: T | undefined | null,
+    statVal: T | undefined | null,
+  ): T | "" => {
+    if (isStat && !isTax)      return pick(statVal, taxVal);
+    if (isTax  && !isStat)     return pick(taxVal,  statVal);
+    return pick(taxVal, statVal);   // both: either is in sync
+  };
+
+  const carriedList = pickByType(tax.audit_carried_by, stat.audit_carried_by) as any[];
   const auditCarriedBy = Array.isArray(carriedList)
     ? carriedList.map((a: any) => a?.name).filter(Boolean).join(", ")
     : "";
@@ -479,14 +507,14 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
   masterBody.push(["Financial Year",       fmt(data.financialYear)]);
 
   masterBody.push(section("Contact"));
-  masterBody.push(["Accountant Name",      fmt(pick(tax.accountant_name, stat.accountant_name))]);
-  masterBody.push(["Mobile No.",           fmt(pick(tax.mobile_no, stat.mobile_no))]);
+  masterBody.push(["Accountant Name",      fmt(pickByType(tax.accountant_name, stat.accountant_name))]);
+  masterBody.push(["Mobile No.",           fmt(pickByType(tax.mobile_no, stat.mobile_no))]);
 
   masterBody.push(section("Previous Years Details (Documents Obtained)"));
   masterBody.push(["MOA / AOA / Partnership Deed (if first year or any change)",
-    yesNo(pick(tax.prev_moa_aoa_deed, stat.prev_moa_aoa_deed) as any) || "—"]);
+    yesNo(pickByType(tax.prev_moa_aoa_deed, stat.prev_moa_aoa_deed) as any) || "—"]);
   masterBody.push(["Previous Year IT Return & Balance Sheet",
-    yesNo(pick(tax.prev_it_return, stat.prev_it_return) as any) || "—"]);
+    yesNo(pickByType(tax.prev_it_return, stat.prev_it_return) as any) || "—"]);
   if (isStat) {
     masterBody.push(["Previous Year Statutory Audit Report",
       yesNo(stat.prev_audit_report) || "—"]);
@@ -505,8 +533,8 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
   }
 
   masterBody.push(section("Dates Audit Conducted"));
-  masterBody.push(["Audit Date From", fmtDate(pick(tax.audit_date_from, stat.audit_date_from) as string) || "—"]);
-  masterBody.push(["Audit Date To",   fmtDate(pick(tax.audit_date_to,   stat.audit_date_to)   as string) || "—"]);
+  masterBody.push(["Audit Date From", fmtDate(pickByType(tax.audit_date_from, stat.audit_date_from) as string) || "—"]);
+  masterBody.push(["Audit Date To",   fmtDate(pickByType(tax.audit_date_to,   stat.audit_date_to)   as string) || "—"]);
 
   if (isTax) {
     masterBody.push(section("GST Registered?"));
@@ -524,13 +552,13 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
   masterBody.push(["Auditors", auditCarriedBy || "—"]);
 
   masterBody.push(section("Paths"));
-  masterBody.push(["A/c (Tally) File Path",     fmt(pick(tax.ac_path,     stat.ac_path))]);
-  masterBody.push(["Report / Working File Path", fmt(pick(tax.report_path, stat.report_path))]);
+  masterBody.push(["A/c (Tally) File Path",     fmt(pickByType(tax.ac_path,     stat.ac_path))]);
+  masterBody.push(["Report / Working File Path", fmt(pickByType(tax.report_path, stat.report_path))]);
 
   masterBody.push(section("Sign-off"));
-  masterBody.push(["Prepared By", fmt(pick(tax.footer_prepared_by_name, stat.footer_prepared_by_name))]);
-  masterBody.push(["Verified By", fmt(pick(tax.footer_verified_by_name, stat.footer_verified_by_name))]);
-  masterBody.push(["Reviewed By", fmt(pick(tax.footer_reviewed_by_name, stat.footer_reviewed_by_name))]);
+  masterBody.push(["Prepared By", fmt(pickByType(tax.footer_prepared_by_name, stat.footer_prepared_by_name))]);
+  masterBody.push(["Verified By", fmt(pickByType(tax.footer_verified_by_name, stat.footer_verified_by_name))]);
+  masterBody.push(["Reviewed By", fmt(pickByType(tax.footer_reviewed_by_name, stat.footer_reviewed_by_name))]);
 
   autoTable(doc, {
     ...baseTable(masterLabel),
