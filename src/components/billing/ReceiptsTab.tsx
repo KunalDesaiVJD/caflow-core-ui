@@ -2,12 +2,11 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Calendar } from "@/components/ui/calendar";
 import {
@@ -26,7 +25,7 @@ import {
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
-import { Plus, CalendarIcon, Receipt, Trash2 } from "lucide-react";
+import { Plus, CalendarIcon, Receipt, Trash2, Pencil, Scissors } from "lucide-react";
 import { buildClientGstins } from "@/lib/gstinUtils";
 
 const PAYMENT_MODES = ["Cash", "Cheque", "NEFT", "UPI", "RTGS", "Other"];
@@ -51,6 +50,18 @@ interface ReceiptRow {
   gst_tds_amount: number | null;
   tds_date: string | null;
   remarks: string | null;
+  created_at: string | null;
+}
+
+interface KasarRow {
+  id: string;
+  client_id: string;
+  firm_id: string;
+  invoice_id: string | null;
+  kasar_date: string;
+  amount: number;
+  narration: string | null;
+  financial_year: string | null;
   created_at: string | null;
 }
 
@@ -81,11 +92,12 @@ export default function ReceiptsTab() {
   const [groupClientIds, setGroupClientIds] = useState<string[]>([]);
   const [responsibleClientIds, setResponsibleClientIds] = useState<string[]>([]);
 
-  // Dialog
+  // Receipt Dialog
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
-  // Form state
+  // Receipt Form state
   const [receiptType, setReceiptType] = useState<"against_invoice" | "on_account">("against_invoice");
   const [formClientId, setFormClientId] = useState("");
   const [formInvoiceId, setFormInvoiceId] = useState("");
@@ -97,27 +109,32 @@ export default function ReceiptsTab() {
   const [gstTdsAmount, setGstTdsAmount] = useState("");
   const [tdsDate, setTdsDate] = useState<Date | undefined>(undefined);
   const [remarks, setRemarks] = useState("");
-
-  // Client invoices for "against invoice"
   const [clientInvoices, setClientInvoices] = useState<any[]>([]);
-
-  // GSTIN state for multi-GSTIN clients
   const [formClientGstins, setFormClientGstins] = useState<{ gstin: string; state: string }[]>([]);
   const [formGstin, setFormGstin] = useState<string>("all");
 
+  // Kasar state
+  const [kasars, setKasars] = useState<KasarRow[]>([]);
+  const [kasarLoading, setKasarLoading] = useState(false);
+  const [kasarDialogOpen, setKasarDialogOpen] = useState(false);
+  const [savingKasar, setSavingKasar] = useState(false);
+  const [editingKasarId, setEditingKasarId] = useState<string | null>(null);
+  const [kasarClientId, setKasarClientId] = useState("");
+  const [kasarDate, setKasarDate] = useState<Date | undefined>(new Date());
+  const [kasarAmount, setKasarAmount] = useState("");
+  const [kasarNarration, setKasarNarration] = useState("");
+  const [kasarInvoiceId, setKasarInvoiceId] = useState("");
+  const [kasarInvoices, setKasarInvoices] = useState<any[]>([]);
+
   const fetchData = useCallback(async () => {
     setLoading(true);
-    // When a specific firm is selected, scope all queries to it.
-    // Otherwise use the user's own firm (unless superadmin, who sees all).
     const effectiveFirmId = firmFilter !== "all" ? firmFilter : (isSuperadmin ? null : firmId);
 
     let rQuery = supabase.from("billing_receipts").select("*").order("receipt_date", { ascending: false });
     if (effectiveFirmId) rQuery = rQuery.eq("firm_id", effectiveFirmId);
     const { data: rData } = await rQuery;
 
-    let cQuery = supabase.from("clients").select("id, name").eq("is_draft", false).is("deleted_at", null);
-    const { data: cData } = await cQuery;
-
+    const { data: cData } = await supabase.from("clients").select("id, name").eq("is_draft", false).is("deleted_at", null);
     const { data: firmData } = await supabase.from("firms").select("id, name, display_name");
     const { data: groupData } = await supabase.from("client_groups").select("id, name");
     const { data: usersData } = await supabase.from("users").select("id, name").neq("role", "client").eq("is_active", true);
@@ -125,7 +142,6 @@ export default function ReceiptsTab() {
     const cm: Record<string, string> = {};
     (cData || []).forEach((c: any) => { cm[c.id] = c.name || "Unknown"; });
 
-    // Fetch invoice numbers for receipts
     const invoiceIds = [...new Set((rData || []).map((r: any) => r.invoice_id).filter(Boolean))];
     const im: Record<string, string> = {};
     if (invoiceIds.length > 0) {
@@ -143,9 +159,19 @@ export default function ReceiptsTab() {
     setLoading(false);
   }, [firmId, isSuperadmin, firmFilter]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  const fetchKasars = useCallback(async () => {
+    setKasarLoading(true);
+    const effectiveFirmId = firmFilter !== "all" ? firmFilter : (isSuperadmin ? null : firmId);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let q = (supabase as any).from("billing_kasars").select("*").order("kasar_date", { ascending: false });
+    if (effectiveFirmId) q = q.eq("firm_id", effectiveFirmId);
+    const { data } = await q;
+    setKasars(data || []);
+    setKasarLoading(false);
+  }, [firmId, isSuperadmin, firmFilter]);
 
-  // Group filter
+  useEffect(() => { fetchData(); fetchKasars(); }, [fetchData, fetchKasars]);
+
   useEffect(() => {
     if (groupFilter === "all") { setGroupClientIds([]); return; }
     (async () => {
@@ -154,7 +180,6 @@ export default function ReceiptsTab() {
     })();
   }, [groupFilter]);
 
-  // Responsible person filter
   useEffect(() => {
     if (responsibleFilter === "all") { setResponsibleClientIds([]); return; }
     (async () => {
@@ -163,7 +188,6 @@ export default function ReceiptsTab() {
     })();
   }, [responsibleFilter]);
 
-  // Load client's GSTINs when formClientId changes
   useEffect(() => {
     if (!formClientId) { setFormClientGstins([]); setFormGstin("all"); return; }
     (async () => {
@@ -174,7 +198,6 @@ export default function ReceiptsTab() {
     })();
   }, [formClientId]);
 
-  // Fetch invoices when client changes in form
   useEffect(() => {
     if (!formClientId || receiptType !== "against_invoice") { setClientInvoices([]); return; }
     (async () => {
@@ -189,6 +212,20 @@ export default function ReceiptsTab() {
     })();
   }, [formClientId, receiptType, firmId]);
 
+  useEffect(() => {
+    if (!kasarClientId) { setKasarInvoices([]); return; }
+    (async () => {
+      let q = supabase.from("invoices").select("id, invoice_no, total_amount, due_date")
+        .eq("client_id", kasarClientId)
+        .eq("document_type", "invoice")
+        .in("status", ["finalized", "sent", "overdue", "paid"])
+        .order("invoice_date", { ascending: false });
+      if (firmId) q = q.eq("firm_id", firmId);
+      const { data } = await q;
+      setKasarInvoices(data || []);
+    })();
+  }, [kasarClientId, firmId]);
+
   const filtered = useMemo(() => receipts.filter(r => {
     if (clientFilter !== "all" && r.client_id !== clientFilter) return false;
     if (modeFilter !== "all" && r.payment_mode !== modeFilter.toLowerCase()) return false;
@@ -197,7 +234,15 @@ export default function ReceiptsTab() {
     return true;
   }), [receipts, clientFilter, modeFilter, groupFilter, groupClientIds, responsibleFilter, responsibleClientIds]);
 
+  const filteredKasars = useMemo(() => kasars.filter(k => {
+    if (clientFilter !== "all" && k.client_id !== clientFilter) return false;
+    if (groupFilter !== "all" && !groupClientIds.includes(k.client_id)) return false;
+    if (responsibleFilter !== "all" && !responsibleClientIds.includes(k.client_id)) return false;
+    return true;
+  }), [kasars, clientFilter, groupFilter, groupClientIds, responsibleFilter, responsibleClientIds]);
+
   const resetForm = () => {
+    setEditingId(null);
     setReceiptType("against_invoice");
     setFormClientId("");
     setFormInvoiceId("");
@@ -214,6 +259,16 @@ export default function ReceiptsTab() {
     setFormGstin("all");
   };
 
+  const resetKasarForm = () => {
+    setEditingKasarId(null);
+    setKasarClientId("");
+    setKasarDate(new Date());
+    setKasarAmount("");
+    setKasarNarration("");
+    setKasarInvoiceId("");
+    setKasarInvoices([]);
+  };
+
   const resolveFirmId = async (): Promise<string | null> => {
     if (firmId) return firmId;
     try {
@@ -226,6 +281,22 @@ export default function ReceiptsTab() {
       }
     } catch {}
     return null;
+  };
+
+  const handleEdit = (r: ReceiptRow) => {
+    setEditingId(r.id);
+    setReceiptType(r.receipt_type as "against_invoice" | "on_account");
+    setFormClientId(r.client_id);
+    setFormInvoiceId(r.invoice_id || "");
+    setReceiptDate(r.receipt_date ? new Date(r.receipt_date + "T00:00:00") : new Date());
+    setAmountReceived(String(r.amount_received));
+    setPaymentMode(r.payment_mode || "");
+    setPaymentReference(r.payment_reference || "");
+    setTdsAmount(r.tds_amount ? String(r.tds_amount) : "");
+    setGstTdsAmount(r.gst_tds_amount ? String(r.gst_tds_amount) : "");
+    setTdsDate(r.tds_date ? new Date(r.tds_date + "T00:00:00") : undefined);
+    setRemarks(r.remarks || "");
+    setDialogOpen(true);
   };
 
   const handleSave = async () => {
@@ -248,79 +319,140 @@ export default function ReceiptsTab() {
     const fy = getFYFromDate(dateStr);
 
     try {
-      // Step 1: Insert receipt
-      const { data: newReceipt, error: rErr } = await supabase.from("billing_receipts").insert({
-        firm_id: resolvedFirmId,
-        client_id: formClientId,
-        invoice_id: invoiceId,
-        receipt_type: receiptType,
-        receipt_date: dateStr,
-        amount_received: amt,
-        payment_mode: paymentMode.toLowerCase(),
-        payment_reference: paymentReference || null,
-        tds_amount: tds || null,
-        gst_tds_amount: gstTds || null,
-        tds_date: tds > 0 && tdsDate ? format(tdsDate, "yyyy-MM-dd") : null,
-        remarks: remarks || null,
-        gstin: formGstin && formGstin !== "all" ? formGstin : null,
-        created_by: user?.id,
-      }).select("id").single();
+      if (editingId) {
+        // UPDATE existing receipt
+        const { error: uErr } = await supabase.from("billing_receipts").update({
+          client_id: formClientId,
+          invoice_id: invoiceId,
+          receipt_type: receiptType,
+          receipt_date: dateStr,
+          amount_received: amt,
+          payment_mode: paymentMode.toLowerCase(),
+          payment_reference: paymentReference || null,
+          tds_amount: tds || null,
+          gst_tds_amount: gstTds || null,
+          tds_date: tds > 0 && tdsDate ? format(tdsDate, "yyyy-MM-dd") : null,
+          remarks: remarks || null,
+          gstin: formGstin && formGstin !== "all" ? formGstin : null,
+        }).eq("id", editingId);
+        if (uErr) throw uErr;
 
-      if (rErr) throw rErr;
-      const receiptId = newReceipt.id;
+        // Delete old ledger entries and re-create them fresh
+        await supabase.from("client_ledger_entries").delete().eq("document_id", editingId);
 
-      // Step 2: Update invoice status if against_invoice
-      if (receiptType === "against_invoice" && invoiceId) {
-        const inv = clientInvoices.find(i => i.id === invoiceId);
-        if (inv && amt >= (inv.total_amount || 0)) {
-          await supabase.from("invoices").update({ status: "paid", paid_at: dateStr }).eq("id", invoiceId);
+        await supabase.from("client_ledger_entries").insert({
+          firm_id: resolvedFirmId,
+          client_id: formClientId,
+          entry_date: dateStr,
+          entry_type: "receipt",
+          document_id: editingId,
+          debit_amount: 0,
+          credit_amount: amt,
+          narration: `Payment received — ${paymentMode}`,
+          financial_year: fy,
+        });
+
+        if (tds > 0) {
+          await supabase.from("client_ledger_entries").insert({
+            firm_id: resolvedFirmId,
+            client_id: formClientId,
+            entry_date: dateStr,
+            entry_type: "adjustment",
+            document_id: editingId,
+            debit_amount: 0,
+            credit_amount: tds,
+            narration: `TDS deducted — Date: ${tdsDate ? format(tdsDate, "dd/MM/yyyy") : dateStr}`,
+            financial_year: fy,
+          });
         }
-      }
 
-      // Step 3: Ledger entry for payment
-      await supabase.from("client_ledger_entries").insert({
-        firm_id: resolvedFirmId,
-        client_id: formClientId,
-        entry_date: dateStr,
-        entry_type: "receipt",
-        document_id: receiptId,
-        debit_amount: 0,
-        credit_amount: amt,
-        narration: `Payment received — ${paymentMode}`,
-        financial_year: fy,
-      });
+        if (gstTds > 0) {
+          await supabase.from("client_ledger_entries").insert({
+            firm_id: resolvedFirmId,
+            client_id: formClientId,
+            entry_date: dateStr,
+            entry_type: "adjustment",
+            document_id: editingId,
+            debit_amount: 0,
+            credit_amount: gstTds,
+            narration: "GST TDS deducted",
+            financial_year: fy,
+          });
+        }
 
-      // Step 4: TDS ledger entry
-      if (tds > 0) {
+        toast({ title: "Receipt updated. Ledger entries refreshed." });
+      } else {
+        // INSERT new receipt
+        const { data: newReceipt, error: rErr } = await supabase.from("billing_receipts").insert({
+          firm_id: resolvedFirmId,
+          client_id: formClientId,
+          invoice_id: invoiceId,
+          receipt_type: receiptType,
+          receipt_date: dateStr,
+          amount_received: amt,
+          payment_mode: paymentMode.toLowerCase(),
+          payment_reference: paymentReference || null,
+          tds_amount: tds || null,
+          gst_tds_amount: gstTds || null,
+          tds_date: tds > 0 && tdsDate ? format(tdsDate, "yyyy-MM-dd") : null,
+          remarks: remarks || null,
+          gstin: formGstin && formGstin !== "all" ? formGstin : null,
+          created_by: user?.id,
+        }).select("id").single();
+
+        if (rErr) throw rErr;
+        const receiptId = newReceipt.id;
+
+        if (receiptType === "against_invoice" && invoiceId) {
+          const inv = clientInvoices.find(i => i.id === invoiceId);
+          if (inv && amt >= (inv.total_amount || 0)) {
+            await supabase.from("invoices").update({ status: "paid", paid_at: dateStr }).eq("id", invoiceId);
+          }
+        }
+
         await supabase.from("client_ledger_entries").insert({
           firm_id: resolvedFirmId,
           client_id: formClientId,
           entry_date: dateStr,
-          entry_type: "adjustment",
+          entry_type: "receipt",
           document_id: receiptId,
           debit_amount: 0,
-          credit_amount: tds,
-          narration: `TDS deducted — Date: ${tdsDate ? format(tdsDate, "dd/MM/yyyy") : dateStr}`,
+          credit_amount: amt,
+          narration: `Payment received — ${paymentMode}`,
           financial_year: fy,
         });
+
+        if (tds > 0) {
+          await supabase.from("client_ledger_entries").insert({
+            firm_id: resolvedFirmId,
+            client_id: formClientId,
+            entry_date: dateStr,
+            entry_type: "adjustment",
+            document_id: receiptId,
+            debit_amount: 0,
+            credit_amount: tds,
+            narration: `TDS deducted — Date: ${tdsDate ? format(tdsDate, "dd/MM/yyyy") : dateStr}`,
+            financial_year: fy,
+          });
+        }
+
+        if (gstTds > 0) {
+          await supabase.from("client_ledger_entries").insert({
+            firm_id: resolvedFirmId,
+            client_id: formClientId,
+            entry_date: dateStr,
+            entry_type: "adjustment",
+            document_id: receiptId,
+            debit_amount: 0,
+            credit_amount: gstTds,
+            narration: "GST TDS deducted",
+            financial_year: fy,
+          });
+        }
+
+        toast({ title: "Receipt recorded successfully. Client ledger updated." });
       }
 
-      // Step 5: GST TDS ledger entry
-      if (gstTds > 0) {
-        await supabase.from("client_ledger_entries").insert({
-          firm_id: resolvedFirmId,
-          client_id: formClientId,
-          entry_date: dateStr,
-          entry_type: "adjustment",
-          document_id: receiptId,
-          debit_amount: 0,
-          credit_amount: gstTds,
-          narration: "GST TDS deducted",
-          financial_year: fy,
-        });
-      }
-
-      toast({ title: "Receipt recorded successfully. Client ledger updated." });
       setDialogOpen(false);
       resetForm();
       fetchData();
@@ -332,11 +464,112 @@ export default function ReceiptsTab() {
   };
 
   const handleDelete = async (id: string) => {
-    // Delete ledger entry first (FK may not cascade), then the receipt itself
     await supabase.from("client_ledger_entries").delete().eq("document_id", id);
     const { error } = await supabase.from("billing_receipts").delete().eq("id", id);
     if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
     else { toast({ title: "Receipt deleted" }); fetchData(); }
+  };
+
+  const handleEditKasar = (k: KasarRow) => {
+    setEditingKasarId(k.id);
+    setKasarClientId(k.client_id);
+    setKasarDate(k.kasar_date ? new Date(k.kasar_date + "T00:00:00") : new Date());
+    setKasarAmount(String(k.amount));
+    setKasarNarration(k.narration || "");
+    setKasarInvoiceId(k.invoice_id || "");
+    setKasarDialogOpen(true);
+  };
+
+  const handleSaveKasar = async () => {
+    if (!kasarClientId || !kasarDate || !kasarAmount || Number(kasarAmount) <= 0) {
+      toast({ title: "Please fill all mandatory fields", variant: "destructive" });
+      return;
+    }
+    const resolvedFirmId = await resolveFirmId();
+    if (!resolvedFirmId) {
+      toast({ title: "Unable to resolve firm. Please refresh and try again.", variant: "destructive" });
+      return;
+    }
+
+    setSavingKasar(true);
+    const dateStr = format(kasarDate, "yyyy-MM-dd");
+    const amt = Number(kasarAmount);
+    const fy = getFYFromDate(dateStr);
+    const invId = kasarInvoiceId || null;
+    const narration = kasarNarration ? `Kasar — ${kasarNarration}` : "Kasar settlement";
+
+    try {
+      if (editingKasarId) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { error: uErr } = await (supabase as any).from("billing_kasars").update({
+          client_id: kasarClientId,
+          kasar_date: dateStr,
+          amount: amt,
+          narration: kasarNarration || null,
+          invoice_id: invId,
+          financial_year: fy,
+        }).eq("id", editingKasarId);
+        if (uErr) throw uErr;
+
+        await supabase.from("client_ledger_entries").delete().eq("document_id", editingKasarId);
+        await supabase.from("client_ledger_entries").insert({
+          firm_id: resolvedFirmId,
+          client_id: kasarClientId,
+          entry_date: dateStr,
+          entry_type: "kasar",
+          document_id: editingKasarId,
+          debit_amount: 0,
+          credit_amount: amt,
+          narration,
+          financial_year: fy,
+        });
+
+        toast({ title: "Kasar updated. Ledger refreshed." });
+      } else {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: newKasar, error: kErr } = await (supabase as any).from("billing_kasars").insert({
+          firm_id: resolvedFirmId,
+          client_id: kasarClientId,
+          kasar_date: dateStr,
+          amount: amt,
+          narration: kasarNarration || null,
+          invoice_id: invId,
+          financial_year: fy,
+          created_by: user?.id,
+        }).select("id").single();
+        if (kErr) throw kErr;
+
+        await supabase.from("client_ledger_entries").insert({
+          firm_id: resolvedFirmId,
+          client_id: kasarClientId,
+          entry_date: dateStr,
+          entry_type: "kasar",
+          document_id: newKasar.id,
+          debit_amount: 0,
+          credit_amount: amt,
+          narration,
+          financial_year: fy,
+        });
+
+        toast({ title: "Kasar added. Client ledger updated." });
+      }
+
+      setKasarDialogOpen(false);
+      resetKasarForm();
+      fetchKasars();
+    } catch (err: any) {
+      toast({ title: "Error saving kasar", description: err.message, variant: "destructive" });
+    } finally {
+      setSavingKasar(false);
+    }
+  };
+
+  const handleDeleteKasar = async (id: string) => {
+    await supabase.from("client_ledger_entries").delete().eq("document_id", id);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase as any).from("billing_kasars").delete().eq("id", id);
+    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
+    else { toast({ title: "Kasar deleted" }); fetchKasars(); }
   };
 
   return (
@@ -385,7 +618,7 @@ export default function ReceiptsTab() {
         </Button>
       </div>
 
-      {/* Table */}
+      {/* Receipts Table */}
       <Card><CardContent className="p-0">
         {loading ? (
           <div className="p-6 space-y-3">{[1, 2, 3].map(i => <Skeleton key={i} className="h-12 w-full" />)}</div>
@@ -422,9 +655,14 @@ export default function ReceiptsTab() {
                     {(r.tds_amount || 0) > 0 ? `₹${Number(r.tds_amount).toLocaleString("en-IN")}` : "—"}
                   </TableCell>
                   <TableCell>
-                    <Button variant="ghost" size="icon" className="h-7 w-7" title="Delete" onClick={() => handleDelete(r.id)}>
-                      <Trash2 size={14} className="text-destructive" />
-                    </Button>
+                    <div className="flex items-center gap-1">
+                      <Button variant="ghost" size="icon" className="h-7 w-7" title="Edit" onClick={() => handleEdit(r)}>
+                        <Pencil size={13} className="text-blue-600" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-7 w-7" title="Delete" onClick={() => handleDelete(r.id)}>
+                        <Trash2 size={14} className="text-destructive" />
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
@@ -433,15 +671,69 @@ export default function ReceiptsTab() {
         )}
       </CardContent></Card>
 
-      {/* Create Receipt Dialog */}
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+      {/* Kasar Section */}
+      <Card>
+        <CardHeader className="pb-2 pt-4">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <Scissors size={15} className="text-orange-600" /> Kasar (Write-off / Discount Settlement)
+            </CardTitle>
+            <Button size="sm" variant="outline" className="gap-1 h-8 text-xs" onClick={() => { resetKasarForm(); setKasarDialogOpen(true); }}>
+              <Plus size={13} /> Add Kasar
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          {kasarLoading ? (
+            <div className="p-4 space-y-2">{[1, 2].map(i => <Skeleton key={i} className="h-10 w-full" />)}</div>
+          ) : filteredKasars.length === 0 ? (
+            <p className="text-xs text-muted-foreground px-4 pb-4">No kasar entries yet.</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Client</TableHead>
+                  <TableHead className="text-right">Amount</TableHead>
+                  <TableHead>Narration</TableHead>
+                  <TableHead>Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filteredKasars.map(k => (
+                  <TableRow key={k.id}>
+                    <TableCell className="text-sm">{k.kasar_date ? format(new Date(k.kasar_date), "dd/MM/yyyy") : "—"}</TableCell>
+                    <TableCell className="font-medium">{clientMap[k.client_id] || "—"}</TableCell>
+                    <TableCell className="text-right font-semibold tabular-nums text-orange-700">₹{Number(k.amount).toLocaleString("en-IN")}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{k.narration || "—"}</TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1">
+                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Edit" onClick={() => handleEditKasar(k)}>
+                          <Pencil size={13} className="text-blue-600" />
+                        </Button>
+                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Delete" onClick={() => handleDeleteKasar(k.id)}>
+                          <Trash2 size={14} className="text-destructive" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Receipt Dialog (Create / Edit) */}
+      <Dialog open={dialogOpen} onOpenChange={open => { if (!open) resetForm(); setDialogOpen(open); }}>
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><Receipt size={18} /> New Receipt</DialogTitle>
+            <DialogTitle className="flex items-center gap-2">
+              <Receipt size={18} /> {editingId ? "Edit Receipt" : "New Receipt"}
+            </DialogTitle>
           </DialogHeader>
 
           <div className="space-y-4 py-2">
-            {/* Receipt Type */}
             <div className="space-y-2">
               <Label className="font-medium">Receipt Type *</Label>
               <RadioGroup value={receiptType} onValueChange={(v: any) => { setReceiptType(v); setFormInvoiceId(""); }} className="flex gap-6">
@@ -456,7 +748,6 @@ export default function ReceiptsTab() {
               </RadioGroup>
             </div>
 
-            {/* Client */}
             <div className="space-y-1">
               <Label>Client *</Label>
               <SearchableSelect
@@ -469,7 +760,6 @@ export default function ReceiptsTab() {
               />
             </div>
 
-            {/* GSTIN picker for multi-GSTIN clients */}
             {formClientGstins.length > 1 && (
               <div className="space-y-1">
                 <Label>GSTIN / State</Label>
@@ -485,7 +775,6 @@ export default function ReceiptsTab() {
               </div>
             )}
 
-            {/* Against Invoice */}
             {receiptType === "against_invoice" && formClientId && (
               <div className="space-y-1">
                 <Label>Against Invoice</Label>
@@ -504,7 +793,6 @@ export default function ReceiptsTab() {
               </div>
             )}
 
-            {/* Receipt Date */}
             <div className="space-y-1">
               <Label>Receipt Date *</Label>
               <Popover>
@@ -520,13 +808,11 @@ export default function ReceiptsTab() {
               </Popover>
             </div>
 
-            {/* Amount */}
             <div className="space-y-1">
               <Label>Amount Received (₹) *</Label>
               <Input type="number" value={amountReceived} onChange={e => setAmountReceived(e.target.value)} placeholder="0.00" min="0.01" step="0.01" />
             </div>
 
-            {/* Payment Mode */}
             <div className="space-y-1">
               <Label>Payment Mode *</Label>
               <Select value={paymentMode} onValueChange={setPaymentMode}>
@@ -537,13 +823,11 @@ export default function ReceiptsTab() {
               </Select>
             </div>
 
-            {/* Payment Reference */}
             <div className="space-y-1">
               <Label>Payment Reference</Label>
               <Input value={paymentReference} onChange={e => setPaymentReference(e.target.value)} placeholder="Cheque No / UTR / Transaction ID" />
             </div>
 
-            {/* TDS */}
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
                 <Label>TDS Amount (₹)</Label>
@@ -555,7 +839,6 @@ export default function ReceiptsTab() {
               </div>
             </div>
 
-            {/* TDS Date */}
             {Number(tdsAmount) > 0 && (
               <div className="space-y-1">
                 <Label>TDS Deduction Date</Label>
@@ -573,7 +856,6 @@ export default function ReceiptsTab() {
               </div>
             )}
 
-            {/* Remarks */}
             <div className="space-y-1">
               <Label>Remarks</Label>
               <Input value={remarks} onChange={e => setRemarks(e.target.value)} placeholder="Optional notes" />
@@ -581,8 +863,84 @@ export default function ReceiptsTab() {
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={saving}>Cancel</Button>
-            <Button onClick={handleSave} disabled={saving}>{saving ? "Saving..." : "Save Receipt"}</Button>
+            <Button variant="outline" onClick={() => { setDialogOpen(false); resetForm(); }} disabled={saving}>Cancel</Button>
+            <Button onClick={handleSave} disabled={saving}>
+              {saving ? "Saving..." : editingId ? "Update Receipt" : "Save Receipt"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Kasar Dialog */}
+      <Dialog open={kasarDialogOpen} onOpenChange={open => { if (!open) resetKasarForm(); setKasarDialogOpen(open); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Scissors size={18} /> {editingKasarId ? "Edit Kasar" : "Add Kasar"}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="space-y-1">
+              <Label>Client *</Label>
+              <SearchableSelect
+                options={clients.map(c => ({ value: c.id, label: c.name }))}
+                value={kasarClientId}
+                onValueChange={setKasarClientId}
+                placeholder="Select client"
+                searchPlaceholder="Search client..."
+                className="w-full"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <Label>Kasar Date *</Label>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" className={cn("w-full justify-start text-left font-normal", !kasarDate && "text-muted-foreground")}>
+                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    {kasarDate ? format(kasarDate, "dd/MM/yyyy") : "Pick a date"}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar mode="single" selected={kasarDate} onSelect={setKasarDate} initialFocus className="p-3 pointer-events-auto" />
+                </PopoverContent>
+              </Popover>
+            </div>
+
+            <div className="space-y-1">
+              <Label>Amount (₹) *</Label>
+              <Input type="number" value={kasarAmount} onChange={e => setKasarAmount(e.target.value)} placeholder="0.00" min="0.01" step="0.01" />
+            </div>
+
+            {kasarClientId && (
+              <div className="space-y-1">
+                <Label>Settle Against Invoice (optional)</Label>
+                <Select value={kasarInvoiceId} onValueChange={setKasarInvoiceId}>
+                  <SelectTrigger><SelectValue placeholder="Select invoice (optional)" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">None</SelectItem>
+                    {kasarInvoices.map((inv: any) => (
+                      <SelectItem key={inv.id} value={inv.id}>
+                        {inv.invoice_no} — ₹{Number(inv.total_amount || 0).toLocaleString("en-IN")}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            <div className="space-y-1">
+              <Label>Narration</Label>
+              <Input value={kasarNarration} onChange={e => setKasarNarration(e.target.value)} placeholder="Reason for kasar / write-off" />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setKasarDialogOpen(false); resetKasarForm(); }} disabled={savingKasar}>Cancel</Button>
+            <Button onClick={handleSaveKasar} disabled={savingKasar}>
+              {savingKasar ? "Saving..." : editingKasarId ? "Update Kasar" : "Add Kasar"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
