@@ -1415,11 +1415,36 @@ export async function nceAutoPopulate(
         let rowSection:    string | undefined;
         let rowAttachedTo: string | undefined;
         if (noteType === "borrowings") {
+          // ROOT-CAUSE FIX (Issue: "Term Loans — Banks (Unsecured)" lands on
+          // Secured): when a ledger's own name or Tally parent_group EXPLICITLY
+          // says "unsecured", it must NEVER be routed to a secured row — even
+          // though its name also matches a secured keyword (e.g. "Term Loan
+          // from Bank (Unsecured)" matches the sec_term_bank rule). Detect the
+          // explicit qualifier and, if present, force the unsecured counterpart.
+          const classifyTxt =
+            " " + normLedger(um.ledger).trim() + " " +
+            (um.parentGroup || "").toLowerCase().trim() + " ";
+          const isExplicitUnsecured = /unsecured|un-secured|un secured/.test(classifyTxt);
+          // Secured-row → unsecured-row counterpart map (ids from nceNotesConfig).
+          const SEC_TO_UNSEC: Record<string, string> = {
+            sec_term_bank:   "unsec_term_bank",
+            sec_term_fi:     "unsec_term_fi",
+            sec_term_others: "unsec_term_others",
+            sec_demand_bank: "unsec_demand_bank",
+            sec_demand_other:"unsec_demand_other",
+            sec_deferred:    "unsec_deferred",
+            sec_related:     "unsec_related",
+            sec_other:       "unsec_other",
+          };
+
           // Use the smart-match target if available (e.g. "unsec_related" for
           // an HUF ledger, or "sec_demand_bank" for a CC/OD bank ledger).
           // Otherwise fall back to parent_group / name heuristic.
           if (um.smartTarget) {
             rowAttachedTo = um.smartTarget;
+            if (isExplicitUnsecured && rowAttachedTo.startsWith("sec_")) {
+              rowAttachedTo = SEC_TO_UNSEC[rowAttachedTo] ?? "unsec_other";
+            }
           } else {
             const pgLower   = (um.parentGroup || "").toLowerCase();
             const nameLower = normLedger(um.ledger);
@@ -1428,7 +1453,8 @@ export async function nceAutoPopulate(
             // a parent_group that mentions a bank/secured facility is a strong
             // signal. This keeps "Loans on demand — Banks" populated with its
             // actual ledger breakup instead of leaving a stale aggregate.
-            const pgSecuredBank =
+            // Suppressed when the ledger is explicitly unsecured.
+            const pgSecuredBank = !isExplicitUnsecured &&
               ["cash credit", " cc ", "overdraft", " od ", "bank od",
                "secured loan", "working capital"].some(kw => (" " + pgLower + " ").includes(kw));
             const pgRelated = ["partner", "director", "promoter", "proprietor",

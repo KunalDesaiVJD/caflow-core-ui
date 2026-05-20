@@ -88,7 +88,9 @@ const fmtIndian = (v: number) => {
   const lastThree = intPart.slice(-3);
   const otherNums = intPart.slice(0, -3);
   const formatted = otherNums.replace(/\B(?=(\d{2})+(?!\d))/g, ",") + (otherNums ? "," : "") + lastThree;
-  return (v < 0 ? "-" : "") + "₹ " + formatted + "." + dec;
+  const body = "₹ " + formatted + "." + dec;
+  // Negative amounts in parentheses per financial-reporting convention.
+  return v < 0 ? `(${body})` : body;
 };
 
 function NoteInput({ value, onChange, placeholder = "—", className = "" }: { value: string; onChange: (v: string) => void; placeholder?: string; className?: string }) {
