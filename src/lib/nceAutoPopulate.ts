@@ -1299,6 +1299,74 @@ export async function nceAutoPopulate(
         }
       }
 
+      // ── PY-only ledger walk (Pattern A) ─────────────────────────────────
+      // ROOT-CAUSE FIX (Issue: CLOSED ledgers missing from Pattern A notes &
+      // FS): the loop above only iterates CY trial-balance rows. A ledger
+      // that existed only in the PRIOR year (CLOSED — closing 0 in CY, so it
+      // isn't in CY TB at all) was therefore never turned into a breakup row.
+      // Result: "Advance Tax - 2024-25", "TDS Reimbursement", "TDS/TCS
+      // Receivable-2425" etc. showed in the Variance Drill / COA mapping but
+      // vanished from the loans_advances note AND from the BS face PY column.
+      // Mirror the Pattern B PY-only walk: resolve each PY-shell ledger via
+      // PY-shell mapping → CY mapping → parent_group inheritance, and push a
+      // breakup row with CY 0 + signed PY amount under the matched static row.
+      if (pyTb.length > 0) {
+        const cyMappingLowerA: Record<string, { code: string }> = {};
+        for (const [k, v] of Object.entries(coaMapping || {})) {
+          if (v?.code) cyMappingLowerA[k.toLowerCase().trim()] = v;
+        }
+        const pyMappingLowerA: Record<string, { code: string }> = {};
+        for (const [k, v] of Object.entries(pyCoaMap || {})) {
+          if (v?.code) pyMappingLowerA[k.toLowerCase().trim()] = v;
+        }
+        // parent_group → FS code inheritance from CY mapping
+        const groupToCodeA: Record<string, string> = {};
+        const groupCountA: Record<string, Record<string, number>> = {};
+        for (const [ledger, m] of Object.entries(coaMapping || {})) {
+          const c = m?.code; if (!c) continue;
+          const tbRow = tb.find(r => r.ledger_name === ledger);
+          const grp = (tbRow?.parent_group || "").toLowerCase().trim();
+          if (!grp) continue;
+          if (!groupCountA[grp]) groupCountA[grp] = {};
+          groupCountA[grp][c] = (groupCountA[grp][c] || 0) + 1;
+        }
+        for (const [grp, codes] of Object.entries(groupCountA)) {
+          let best = "", bestN = 0, tie = false;
+          for (const [c, n] of Object.entries(codes)) {
+            if (n > bestN) { best = c; bestN = n; tie = false; }
+            else if (n === bestN) tie = true;
+          }
+          if (best && !tie) groupToCodeA[grp] = best;
+        }
+        const cySeen = new Set(tb.map(r => r.ledger_name.toLowerCase().trim()));
+        for (const row of pyTb) {
+          const nm = String(row.ledger_name || "").trim();
+          if (!nm) continue;
+          const nmLower = nm.toLowerCase();
+          if (cySeen.has(nmLower)) continue;        // already handled by CY loop
+          if (ejectedSet.has(nm)) continue;
+          let mapped: { code: string } | undefined =
+            (pyCoaMap as any)[nm] || pyMappingLowerA[nmLower] ||
+            (coaMapping as any)[nm] || cyMappingLowerA[nmLower];
+          if (!mapped?.code) {
+            const grp = String((row as any).parent_group || "").toLowerCase().trim();
+            if (grp && groupToCodeA[grp]) mapped = { code: groupToCodeA[grp] };
+          }
+          if (!mapped?.code) continue;
+          const isLT = ltSet.has(mapped.code);
+          const isST = stSet.has(mapped.code);
+          if (!isLT && !isST) continue;
+          const pyAmt = signedLedgerAmt(row, noteType);
+          if (Math.abs(pyAmt) < 0.005) continue;
+          const matchedRowId = smartMatch(nm, smartRules, row.parent_group);
+          unmatchedA.push({
+            ledger: nm, amt: 0, pyAmt, isLT, isST,
+            parentGroup: (row as any).parent_group ?? undefined,
+            ...(matchedRowId ? { smartTarget: matchedRowId } : {}),
+          });
+        }
+      }
+
       // Per-ledger rows (no parent_group wrapping).
       // Per user feedback: in Notes to Accounts, only ledgers should appear —
       // not synthetic group wrappers like "Unsecured Loans" derived from Tally
@@ -1314,12 +1382,13 @@ export async function nceAutoPopulate(
           newCy[id + "_lt"] = um.amt;
           // Per-ledger PY: prefer PY shell TB closing for this ledger; fall
           // back to label-matched prior customRow lookup (handles renamed
-          // breakup rows across years).
-          newPy[id + "_lt"] = um.pyAmt > 0 ? um.pyAmt : pyForCustomRow(noteType, id, label, "_lt");
+          // breakup rows across years). Math.abs guard so signed-negative PY
+          // values (Dr balance in a Cr-natural head, etc.) aren't discarded.
+          newPy[id + "_lt"] = Math.abs(um.pyAmt) > 0.005 ? um.pyAmt : pyForCustomRow(noteType, id, label, "_lt");
         }
         if (um.isST) {
           newCy[id + "_st"] = um.amt;
-          newPy[id + "_st"] = um.pyAmt > 0 ? um.pyAmt : pyForCustomRow(noteType, id, label, "_st");
+          newPy[id + "_st"] = Math.abs(um.pyAmt) > 0.005 ? um.pyAmt : pyForCustomRow(noteType, id, label, "_st");
         }
 
         let rowSection:    string | undefined;
