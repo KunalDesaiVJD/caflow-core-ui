@@ -26,6 +26,7 @@ import {
   getTrialBalance,
   getCOAMapping,
   getPreviousYearFsAmounts,
+  getPreviousYearFsAmountsFromTB,
   getEngagementIsNonCorporate,
   sumLedgersByFsCodes,
   type COAMapping,
@@ -302,13 +303,16 @@ function useBsPlData(engagementId: string) {
     Promise.all([
       getTrialBalance(engagementId),
       getCOAMapping(engagementId),
+      // Primary PY source: PY-shell trial balance (same method as CY). Falls
+      // back to fa_financial_statements when no PY-shell sync exists.
+      getPreviousYearFsAmountsFromTB(engagementId),
       getPreviousYearFsAmounts(engagementId),
       getEngagementIsNonCorporate(engagementId),
     ])
-      .then(([tbData, mapData, pyData, nce]) => {
+      .then(([tbData, mapData, pyFromTb, pyFromFs, nce]) => {
         setTb(tbData as TBLedger[]);
         setMapping(mapData);
-        setPyFs(pyData);
+        setPyFs(Object.keys(pyFromTb).length > 0 ? pyFromTb : pyFromFs);
         setIsNce(!!nce);
       })
       .catch(e => setError(e?.message || "Failed to load BS/PL data"))

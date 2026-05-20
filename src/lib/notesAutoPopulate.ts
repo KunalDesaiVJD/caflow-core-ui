@@ -472,6 +472,67 @@ export async function getPreviousYearFsAmounts(
   return out;
 }
 
+/**
+ * Preferred PY source for the Ledger Explorer: derive prior-year FS-code totals
+ * directly from the PY-shell trial balance + COA mapping — the SAME method the
+ * CY column uses. Many engagements never populate fa_financial_statements, so
+ * getPreviousYearFsAmounts() returned {} and the PY column showed "—" even
+ * though a PY-shell Tally sync (is_py_shell) was complete. This reads the FY-1
+ * shell engagement's TB and sums each ledger's signed closing balance under its
+ * mapped FS code (Dr +, Cr −), matching sumLedgersByFsCodes()'s convention so
+ * the caller can apply the per-row sign exactly as it does for CY.
+ */
+export async function getPreviousYearFsAmountsFromTB(
+  engagementId: string,
+): Promise<Record<string, number>> {
+  const { data: eng } = await supabase
+    .from("audit_engagements")
+    .select("client_id, financial_year")
+    .eq("id", engagementId)
+    .maybeSingle();
+  const clientId = (eng as any)?.client_id;
+  const fy       = (eng as any)?.financial_year;
+  if (!clientId || !fy) return {};
+  const parts = String(fy).split("-");
+  if (parts.length !== 2) return {};
+  const prevFy = `${parseInt(parts[0], 10) - 1}-${String(parseInt(parts[0], 10)).slice(-2)}`;
+
+  // Prefer the PY shell (is_py_shell — carries the FY-1 Tally sync) over any
+  // regular FY-1 engagement.
+  const { data: engList } = await supabase
+    .from("audit_engagements")
+    .select("id, is_py_shell, coa_mapping")
+    .eq("client_id", clientId)
+    .eq("financial_year", prevFy);
+  const sorted = ((engList || []) as any[]).sort(
+    (a, b) => (b.is_py_shell ? 1 : 0) - (a.is_py_shell ? 1 : 0),
+  );
+  const prev = sorted[0];
+  if (!prev?.id) return {};
+
+  const prevTb = await getTrialBalance(prev.id);
+  if (!prevTb.length) return {};
+
+  // Mapping: prefer the prior engagement's own coa_mapping; fall back to the
+  // current engagement's (ledger names are stable across years for a client).
+  let mapping: COAMapping | null =
+    prev.coa_mapping && typeof prev.coa_mapping === "object"
+      ? (prev.coa_mapping as COAMapping)
+      : null;
+  if (!mapping || Object.keys(mapping).length === 0) {
+    mapping = await getCOAMapping(engagementId);
+  }
+
+  const out: Record<string, number> = {};
+  for (const acct of prevTb) {
+    const code = mapping[acct.account_name]?.code;
+    if (!code) continue;
+    out[code] = (out[code] || 0) + acct.balance;
+  }
+  for (const k of Object.keys(out)) out[k] = Math.round(out[k] * 100) / 100;
+  return out;
+}
+
 // ═════════════════════════════════════════════════════════════════════════
 // Sum + path helpers
 // ═════════════════════════════════════════════════════════════════════════
