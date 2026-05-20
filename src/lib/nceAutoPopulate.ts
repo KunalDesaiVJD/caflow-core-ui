@@ -1310,60 +1310,70 @@ export async function nceAutoPopulate(
       // Mirror the Pattern B PY-only walk: resolve each PY-shell ledger via
       // PY-shell mapping → CY mapping → parent_group inheritance, and push a
       // breakup row with CY 0 + signed PY amount under the matched static row.
+      //
+      // Wrapped in try/catch so any unexpected error in this supplementary
+      // walk can NEVER blank the whole note — the CY-derived rows above are
+      // the authoritative content and must always survive.
       if (pyTb.length > 0) {
-        const cyMappingLowerA: Record<string, { code: string }> = {};
-        for (const [k, v] of Object.entries(coaMapping || {})) {
-          if (v?.code) cyMappingLowerA[k.toLowerCase().trim()] = v;
-        }
-        const pyMappingLowerA: Record<string, { code: string }> = {};
-        for (const [k, v] of Object.entries(pyCoaMap || {})) {
-          if (v?.code) pyMappingLowerA[k.toLowerCase().trim()] = v;
-        }
-        // parent_group → FS code inheritance from CY mapping
-        const groupToCodeA: Record<string, string> = {};
-        const groupCountA: Record<string, Record<string, number>> = {};
-        for (const [ledger, m] of Object.entries(coaMapping || {})) {
-          const c = m?.code; if (!c) continue;
-          const tbRow = tb.find(r => r.ledger_name === ledger);
-          const grp = (tbRow?.parent_group || "").toLowerCase().trim();
-          if (!grp) continue;
-          if (!groupCountA[grp]) groupCountA[grp] = {};
-          groupCountA[grp][c] = (groupCountA[grp][c] || 0) + 1;
-        }
-        for (const [grp, codes] of Object.entries(groupCountA)) {
-          let best = "", bestN = 0, tie = false;
-          for (const [c, n] of Object.entries(codes)) {
-            if (n > bestN) { best = c; bestN = n; tie = false; }
-            else if (n === bestN) tie = true;
+        try {
+          const cyMappingLowerA: Record<string, { code: string }> = {};
+          for (const [k, v] of Object.entries(coaMapping || {})) {
+            if (v?.code) cyMappingLowerA[k.toLowerCase().trim()] = v;
           }
-          if (best && !tie) groupToCodeA[grp] = best;
-        }
-        const cySeen = new Set(tb.map(r => r.ledger_name.toLowerCase().trim()));
-        for (const row of pyTb) {
-          const nm = String(row.ledger_name || "").trim();
-          if (!nm) continue;
-          const nmLower = nm.toLowerCase();
-          if (cySeen.has(nmLower)) continue;        // already handled by CY loop
-          if (ejectedSet.has(nm)) continue;
-          let mapped: { code: string } | undefined =
-            (pyCoaMap as any)[nm] || pyMappingLowerA[nmLower] ||
-            (coaMapping as any)[nm] || cyMappingLowerA[nmLower];
-          if (!mapped?.code) {
-            const grp = String((row as any).parent_group || "").toLowerCase().trim();
-            if (grp && groupToCodeA[grp]) mapped = { code: groupToCodeA[grp] };
+          const pyMappingLowerA: Record<string, { code: string }> = {};
+          for (const [k, v] of Object.entries(pyCoaMap || {})) {
+            if (v?.code) pyMappingLowerA[k.toLowerCase().trim()] = v;
           }
-          if (!mapped?.code) continue;
-          const isLT = ltSet.has(mapped.code);
-          const isST = stSet.has(mapped.code);
-          if (!isLT && !isST) continue;
-          const pyAmt = signedLedgerAmt(row, noteType);
-          if (Math.abs(pyAmt) < 0.005) continue;
-          const matchedRowId = smartMatch(nm, smartRules, row.parent_group);
-          unmatchedA.push({
-            ledger: nm, amt: 0, pyAmt, isLT, isST,
-            parentGroup: (row as any).parent_group ?? undefined,
-            ...(matchedRowId ? { smartTarget: matchedRowId } : {}),
-          });
+          // parent_group → FS code inheritance from CY mapping
+          const groupToCodeA: Record<string, string> = {};
+          const groupCountA: Record<string, Record<string, number>> = {};
+          for (const [ledger, m] of Object.entries(coaMapping || {})) {
+            const c = m?.code; if (!c) continue;
+            const tbRow = tb.find(r => r.ledger_name === ledger);
+            const grp = (tbRow?.parent_group || "").toLowerCase().trim();
+            if (!grp) continue;
+            if (!groupCountA[grp]) groupCountA[grp] = {};
+            groupCountA[grp][c] = (groupCountA[grp][c] || 0) + 1;
+          }
+          for (const [grp, codes] of Object.entries(groupCountA)) {
+            let best = "", bestN = 0, tie = false;
+            for (const [c, n] of Object.entries(codes)) {
+              if (n > bestN) { best = c; bestN = n; tie = false; }
+              else if (n === bestN) tie = true;
+            }
+            if (best && !tie) groupToCodeA[grp] = best;
+          }
+          const cySeen = new Set(tb.map(r => r.ledger_name.toLowerCase().trim()));
+          // Also skip ledgers already pushed to unmatchedA from the CY loop.
+          const inUnmatched = new Set(unmatchedA.map(u => u.ledger.toLowerCase().trim()));
+          for (const row of pyTb) {
+            const nm = String(row.ledger_name || "").trim();
+            if (!nm) continue;
+            const nmLower = nm.toLowerCase();
+            if (cySeen.has(nmLower) || inUnmatched.has(nmLower)) continue;
+            if (ejectedSet.has(nm)) continue;
+            let mapped: { code: string } | undefined =
+              (pyCoaMap as any)[nm] || pyMappingLowerA[nmLower] ||
+              (coaMapping as any)[nm] || cyMappingLowerA[nmLower];
+            if (!mapped?.code) {
+              const grp = String((row as any).parent_group || "").toLowerCase().trim();
+              if (grp && groupToCodeA[grp]) mapped = { code: groupToCodeA[grp] };
+            }
+            if (!mapped?.code) continue;
+            const isLT = ltSet.has(mapped.code);
+            const isST = stSet.has(mapped.code);
+            if (!isLT && !isST) continue;
+            const pyAmt = signedLedgerAmt(row, noteType);
+            if (Math.abs(pyAmt) < 0.005) continue;
+            const matchedRowId = smartMatch(nm, smartRules, row.parent_group);
+            unmatchedA.push({
+              ledger: nm, amt: 0, pyAmt, isLT, isST,
+              parentGroup: (row as any).parent_group ?? undefined,
+              ...(matchedRowId ? { smartTarget: matchedRowId } : {}),
+            });
+          }
+        } catch (e) {
+          console.warn("[nceAutoPopulate] Pattern A PY-only walk failed (non-fatal):", (e as Error)?.message);
         }
       }
 
