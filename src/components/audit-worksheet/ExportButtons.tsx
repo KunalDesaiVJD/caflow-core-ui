@@ -133,6 +133,23 @@ function booksChecked(m: TaxMasterData | StatutoryMasterData): string {
   return list.join(", ");
 }
 
+// Format a date stored as ISO (YYYY-MM-DD) for display as DD-MMM-YYYY.
+// IMPORTANT: we parse the Y/M/D parts manually instead of `new Date(iso)`,
+// because `new Date("2026-04-21")` is parsed as UTC midnight and, when
+// rendered in IST (or any positive-offset timezone), can shift to the
+// previous day. The on-screen form stores plain calendar dates with no
+// timezone, so we treat them as calendar dates here too.
+function fmtDate(v: string | null | undefined): string {
+  if (!v) return "";
+  const iso = v.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) {
+    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const mi = parseInt(iso[2], 10) - 1;
+    return `${iso[3]}-${months[mi] ?? iso[2]}-${iso[1]}`;
+  }
+  return v;  // already formatted or unrecognized — pass through unchanged
+}
+
 // ─── Fetch helper — localStorage first, DB fallback ───────────────────────────
 
 async function fetchSheet<T>(engagementId: string, key: string): Promise<T> {
@@ -196,8 +213,8 @@ async function exportExcel(engagementId: string, data: AuditWorksheetData) {
       (isTax ? tax : stat) as TaxMasterData & StatutoryMasterData
     )],
     [],
-    ["Audit Date From", pick(tax.audit_date_from, stat.audit_date_from)],
-    ["Audit Date To",   pick(tax.audit_date_to,   stat.audit_date_to)],
+    ["Audit Date From", fmtDate(pick(tax.audit_date_from, stat.audit_date_from) as string)],
+    ["Audit Date To",   fmtDate(pick(tax.audit_date_to,   stat.audit_date_to)   as string)],
   );
 
   if (isTax) {
@@ -241,7 +258,7 @@ async function exportExcel(engagementId: string, data: AuditWorksheetData) {
   const wsBody = WORKSHEET_ROWS.map(r => {
     const row = ((ws as any).rows ?? {})[r.id] ?? {};
     const extent = (row as any).extent_text || (row as any).extent_date || "";
-    return [r.sr, r.label, extent, (row as any).date ?? "", (row as any).checked_by_name ?? "", (row as any).notes ?? ""];
+    return [r.sr, r.label, extent, fmtDate((row as any).date), (row as any).checked_by_name ?? "", (row as any).notes ?? ""];
   });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([wsHeader, ...wsBody]), "Audit Worksheet");
 
@@ -434,14 +451,7 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
   // deduction_details, *_prepared_by_name, signed_copy_received,
   // management_repr_letter, appointment_letter, audit_form_type) — they
   // appeared as empty rows in earlier PDFs and the auditor flagged it.
-  const incIso = (data as any).client?.date_of_incorporation as string | null | undefined;
-  const dateOfIncorporation = incIso
-    ? (() => {
-        try {
-          return new Date(incIso).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
-        } catch { return incIso; }
-      })()
-    : "—";
+  const dateOfIncorporation = fmtDate((data as any).client?.date_of_incorporation) || "—";
 
   masterBody.push(section("Client"));
   masterBody.push(["Firm Name",            fmt(data.firmName)]);
@@ -480,8 +490,8 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
   }
 
   masterBody.push(section("Dates Audit Conducted"));
-  masterBody.push(["Audit Date From", fmt(pick(tax.audit_date_from, stat.audit_date_from))]);
-  masterBody.push(["Audit Date To",   fmt(pick(tax.audit_date_to,   stat.audit_date_to))]);
+  masterBody.push(["Audit Date From", fmtDate(pick(tax.audit_date_from, stat.audit_date_from) as string) || "—"]);
+  masterBody.push(["Audit Date To",   fmtDate(pick(tax.audit_date_to,   stat.audit_date_to)   as string) || "—"]);
 
   if (isTax) {
     masterBody.push(section("GST Registered?"));
@@ -538,23 +548,28 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
         const assigned = Array.isArray(p.assigned_names)
           ? p.assigned_names.filter(Boolean).join(", ")
           : "";
+        const extentDisplay = p.extent_date
+          ? fmtDate(p.extent_date)
+          : (p.extent_text || "");
         vouchBody.push([
           idx === 0 ? r.sr : "",
           idx === 0 ? r.label : "",
-          p.period_label ? `${p.period_label}${extent ? ` — ${extent}` : ""}` : extent,
-          p.date ?? "",
+          p.period_label ? `${p.period_label}${extentDisplay ? ` — ${extentDisplay}` : ""}` : extentDisplay,
+          fmtDate(p.date),
           assigned,
           STATUS_LABEL[p.status] ?? "",
           idx === 0 ? (row.notes ?? "") : "",
         ]);
       });
     } else {
-      const extent = row.extent_text || row.extent_date || "";
+      const extent = row.extent_text
+        ? row.extent_text
+        : (row.extent_date ? fmtDate(row.extent_date) : "");
       const assigned = Array.isArray(row.checked_by_names) && row.checked_by_names.length > 0
         ? row.checked_by_names.filter(Boolean).join(", ")
         : (row.checked_by_name ?? "");
       vouchBody.push([
-        r.sr, r.label, extent, row.date ?? "", assigned, "", row.notes ?? "",
+        r.sr, r.label, extent, fmtDate(row.date), assigned, "", row.notes ?? "",
       ]);
     }
   }
