@@ -155,10 +155,23 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
     });
   }, [engagementId, loaded]);
 
-  // Flush pending debounced save on unmount so quick navigation doesn't
-  // drop the user's last keystrokes from cache + DB.
+  // Flush pending debounced save on unmount OR on the global "aw:flush"
+  // event. ExportButtons dispatches "aw:flush" right before reading from
+  // storage, so PDF/Excel exports always capture what the user just typed
+  // — even when they click Export inside the 1-second debounce window.
   useEffect(() => {
+    const flushNow = () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      try {
+        awSave(engagementId, "statutory_master_json", dataRef.current, firmId, user?.id, user?.name || "");
+      } catch { /* swallow */ }
+    };
+    window.addEventListener("aw:flush", flushNow);
     return () => {
+      window.removeEventListener("aw:flush", flushNow);
       if (timerRef.current) {
         clearTimeout(timerRef.current);
         timerRef.current = null;

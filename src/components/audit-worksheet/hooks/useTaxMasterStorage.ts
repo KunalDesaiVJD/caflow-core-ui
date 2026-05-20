@@ -194,14 +194,27 @@ export function useTaxMasterStorage(engagementId: string, firmId?: string | null
     });
   }, [engagementId, loaded]);
 
-  // ── Flush pending save on unmount ─────────────────────────────────────────
+  // ── Flush pending save on unmount or on global "aw:flush" event ──────────
+  // The window event is dispatched by ExportButtons immediately before it
+  // reads from localStorage / DB, so a PDF/Excel export captures what the
+  // user currently sees on screen — even if they typed within the 1-second
+  // debounce window and clicked Export before auto-save fired.
   useEffect(() => {
-    return () => {
+    const flushNow = () => {
       if (timerRef.current) {
         clearTimeout(timerRef.current);
         timerRef.current = null;
-        // Synchronous flush so cache + DB persist even when the user
-        // navigates within the 1-second debounce window.
+      }
+      try {
+        awSave(engagementId, "tax_master_json", dataRef.current, firmId, user?.id, user?.name || "");
+      } catch { /* swallow */ }
+    };
+    window.addEventListener("aw:flush", flushNow);
+    return () => {
+      window.removeEventListener("aw:flush", flushNow);
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
         try {
           awSave(engagementId, "tax_master_json", dataRef.current, firmId, user?.id, user?.name || "");
         } catch { /* swallow on unmount */ }

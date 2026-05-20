@@ -156,9 +156,23 @@ async function fetchSheet<T>(engagementId: string, key: string): Promise<T> {
   return (awLoad<T>(engagementId, key) ?? await awLoadFromDB<T>(engagementId, key) ?? {}) as T;
 }
 
+// Force every audit-worksheet storage hook to synchronously persist its
+// current React state to localStorage NOW (cancels and runs the pending
+// 1-second debounce). Without this, a user who types a value and clicks
+// Export inside that 1-second window would see the PRIOR persisted value
+// in the PDF (e.g. an auto-filled FY date range instead of the date they
+// just typed). Storage hooks listen for the "aw:flush" event and call
+// awSave(dataRef.current) immediately. The 25 ms tick gives synchronous
+// listeners a chance to run; awSave's localStorage write is itself sync.
+async function flushPendingSaves(): Promise<void> {
+  try { window.dispatchEvent(new Event("aw:flush")); } catch { /* SSR-safe */ }
+  await new Promise(resolve => setTimeout(resolve, 25));
+}
+
 // ─── Excel export ──────────────────────────────────────────────────────────────
 
 async function exportExcel(engagementId: string, data: AuditWorksheetData) {
+  await flushPendingSaves();
   const wb = XLSX.utils.book_new();
   const auditType = data.auditType;
 
@@ -327,6 +341,7 @@ async function exportExcel(engagementId: string, data: AuditWorksheetData) {
 //
 
 async function exportPdf(engagementId: string, data: AuditWorksheetData) {
+  await flushPendingSaves();
   const { default: jsPDF } = await import("jspdf");
   const { default: autoTable } = await import("jspdf-autotable");
 
