@@ -1401,20 +1401,37 @@ export async function nceAutoPopulate(
         let rowSection:    string | undefined;
         let rowAttachedTo: string | undefined;
         if (noteType === "borrowings") {
-          rowSection = "unsecured";
           // Use the smart-match target if available (e.g. "unsec_related" for
-          // an HUF ledger that matched the keyword rule). Otherwise fall back
-          // to parent_group / name heuristic.
+          // an HUF ledger, or "sec_demand_bank" for a CC/OD bank ledger).
+          // Otherwise fall back to parent_group / name heuristic.
           if (um.smartTarget) {
             rowAttachedTo = um.smartTarget;
           } else {
             const pgLower   = (um.parentGroup || "").toLowerCase();
             const nameLower = normLedger(um.ledger);
+            // Secured bank facilities (CC/OD/term loan) routed to the secured
+            // demand/term rows even when smartMatch missed the exact keyword —
+            // a parent_group that mentions a bank/secured facility is a strong
+            // signal. This keeps "Loans on demand — Banks" populated with its
+            // actual ledger breakup instead of leaving a stale aggregate.
+            const pgSecuredBank =
+              ["cash credit", " cc ", "overdraft", " od ", "bank od",
+               "secured loan", "working capital"].some(kw => (" " + pgLower + " ").includes(kw));
             const pgRelated = ["partner", "director", "promoter", "proprietor",
               "shareholder", "relative", "family", "huf", "related"].some(kw => pgLower.includes(kw));
             const nameHuf   = nameLower.includes(" huf") || nameLower.includes("(huf)") || nameLower.includes("-huf");
-            rowAttachedTo = (pgRelated || nameHuf) ? "unsec_related" : "unsec_other";
+            rowAttachedTo = pgSecuredBank
+              ? "sec_demand_bank"
+              : (pgRelated || nameHuf) ? "unsec_related" : "unsec_other";
           }
+          // ROOT-CAUSE FIX: section MUST follow the attached row. Previously
+          // every borrowings breakup row was hardcoded section="unsecured",
+          // so a ledger correctly attached to a SECURED row (sec_demand_bank,
+          // sec_term_bank, …) carried a contradictory section tag — the
+          // renderer groups children by section, so the row could fail to
+          // render beneath its secured parent (e.g. "Loans on demand — Banks"
+          // showed a stale aggregate with no expandable per-ledger breakup).
+          rowSection = rowAttachedTo.startsWith("sec_") ? "secured" : "unsecured";
         } else if (um.smartTarget && (noteType === "investments" || noteType === "loans_advances")) {
           // For investments / loans_advances Pattern A notes, attach to the
           // smart-matched static row so per-ledger breakup renders beneath it.
