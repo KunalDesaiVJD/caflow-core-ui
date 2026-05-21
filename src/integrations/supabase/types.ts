@@ -4359,6 +4359,7 @@ export type Database = {
           from_email: string | null
           from_firm_name: string | null
           from_gstin: string | null
+          from_msme: string | null
           from_pan: string | null
           from_phone: string | null
           gst_amount: number | null
@@ -4413,6 +4414,7 @@ export type Database = {
           from_email?: string | null
           from_firm_name?: string | null
           from_gstin?: string | null
+          from_msme?: string | null
           from_pan?: string | null
           from_phone?: string | null
           gst_amount?: number | null
@@ -4467,6 +4469,7 @@ export type Database = {
           from_email?: string | null
           from_firm_name?: string | null
           from_gstin?: string | null
+          from_msme?: string | null
           from_pan?: string | null
           from_phone?: string | null
           gst_amount?: number | null

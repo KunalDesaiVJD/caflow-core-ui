@@ -44,6 +44,7 @@ interface InvoiceRecord {
   from_firm_name?: string | null;
   from_gstin?: string | null;
   from_pan?: string | null;
+  from_msme?: string | null;
   from_address?: string | null;
   from_email?: string | null;
   from_phone?: string | null;
@@ -369,6 +370,7 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
   const firmName = inv.from_firm_name || "Firm";
   const firmGstin = inv.from_gstin || "";
   const firmPan = inv.from_pan || "";
+  const firmMsme = inv.from_msme || "";
   const firmAddr = inv.from_address || "";
   const firmEmail = inv.from_email || "";
   const firmPhone = inv.from_phone || "";
@@ -516,6 +518,7 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
           <div style="text-align:right">
             <p style="margin:2px 0"><strong>${docLabel} Date:</strong> ${invoiceDate ? format(new Date(invoiceDate), "dd/MM/yyyy") : "\u2014"}</p>
             <p style="margin:2px 0"><strong>${docLabel} No:</strong> ${invoiceNo}</p>
+            ${firmMsme ? `<p style="margin:2px 0"><strong>MSME No:</strong> ${firmMsme}</p>` : ""}
             ${lutNumber ? `<p style="margin:2px 0"><strong>LUT No:</strong> ${lutNumber}</p>` : ""}
             ${referenceNo ? `<p style="margin:2px 0"><strong>Ref No:</strong> ${referenceNo}</p>` : ""}
             ${isExport ? `<p style="margin:2px 0"><strong>Currency:</strong> ${currency}</p>` : ""}
