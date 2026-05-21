@@ -1597,9 +1597,7 @@ function GroupLedgerView() {
     <div className="space-y-4">
       <div className="flex flex-wrap gap-3 items-end">
         <SearchableSelect
-          options={groups
-            .filter(g => firmIds[0] === "all" || firmIds.length === 0 || g.firm_id === firmIds[0])
-            .map(g => ({ value: g.id, label: g.name }))}
+          options={groups.map(g => ({ value: g.id, label: g.name }))}
           value={groupId}
           onValueChange={setGroupId}
           placeholder="Select Group"
@@ -1611,7 +1609,6 @@ function GroupLedgerView() {
           onValueChange={v => {
             if (v === "all") setFirmIds(["all"]);
             else setFirmIds([v]);
-            setGroupId("");
           }}
         >
           <SelectTrigger className="w-[200px]"><SelectValue placeholder="Select Firm" /></SelectTrigger>
