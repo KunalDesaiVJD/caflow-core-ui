@@ -518,7 +518,6 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
           <div style="text-align:right">
             <p style="margin:2px 0"><strong>${docLabel} Date:</strong> ${invoiceDate ? format(new Date(invoiceDate), "dd/MM/yyyy") : "\u2014"}</p>
             <p style="margin:2px 0"><strong>${docLabel} No:</strong> ${invoiceNo}</p>
-            ${firmMsme ? `<p style="margin:2px 0"><strong>MSME No:</strong> ${firmMsme}</p>` : ""}
             ${lutNumber ? `<p style="margin:2px 0"><strong>LUT No:</strong> ${lutNumber}</p>` : ""}
             ${referenceNo ? `<p style="margin:2px 0"><strong>Ref No:</strong> ${referenceNo}</p>` : ""}
             ${isExport ? `<p style="margin:2px 0"><strong>Currency:</strong> ${currency}</p>` : ""}
@@ -585,6 +584,7 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
     <div style="margin-top:16px;padding-top:8px;padding-bottom:10px;border-top:1px solid #ddd;font-size:10px;color:#555">
       <p style="font-weight:700;margin:0 0 4px">Terms & Conditions:</p>
       <p style="margin:0;font-weight:700;letter-spacing:0.5px">PAYMENT TERMS: PAYMENT IS DUE WITHIN 45 DAYS FROM THE INVOICE DATE</p>
+      ${firmMsme ? `<p style="margin:6px 0 0;font-weight:700;letter-spacing:0.5px">MSME No: ${firmMsme}</p>` : ""}
     </div>
 
     </div>
