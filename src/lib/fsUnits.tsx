@@ -17,7 +17,7 @@ import {
   createContext, useContext, useEffect, useMemo, useState, type ReactNode,
 } from "react";
 
-export type FsScale = "actual" | "thousands";
+export type FsScale = "actual" | "thousands" | "lakhs";
 
 export interface FsScaleMeta {
   key:        FsScale;
@@ -26,11 +26,10 @@ export interface FsScaleMeta {
   divisor:    number;
 }
 
-// Per Sch III for Pvt / Public Ltd, only "actual" or "in '000" are mandated
-// for the on-screen FS view in our current scope — user removed Lakhs/Crores.
 export const FS_SCALES: FsScaleMeta[] = [
-  { key: "actual",    label: "Actual",      suffix: "(₹)",         divisor: 1     },
-  { key: "thousands", label: "Rs. in '000", suffix: "(₹ in '000)", divisor: 1_000 },
+  { key: "actual",    label: "Actual",       suffix: "(₹)",           divisor: 1         },
+  { key: "thousands", label: "Rs. in '000",  suffix: "(₹ in '000)",   divisor: 1_000     },
+  { key: "lakhs",     label: "Rs. in Lakhs", suffix: "(₹ in Lakhs)",  divisor: 100_000   },
 ];
 
 interface FsUnitsContextValue {
@@ -86,7 +85,7 @@ export function FsUnitsProvider({ engagementId, children }: ProviderProps) {
     if (typeof window === "undefined") return "actual";
     try {
       const stored = localStorage.getItem(STORAGE_KEY(engagementId));
-      if (stored === "actual" || stored === "thousands") return stored;
+      if (stored === "actual" || stored === "thousands" || stored === "lakhs") return stored as FsScale;
     } catch { /* ignore */ }
     return "actual";
   });
@@ -95,7 +94,7 @@ export function FsUnitsProvider({ engagementId, children }: ProviderProps) {
   useEffect(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY(engagementId));
-      if (stored === "actual" || stored === "thousands") setScaleState(stored);
+      if (stored === "actual" || stored === "thousands" || stored === "lakhs") setScaleState(stored as FsScale);
       else setScaleState("actual");
     } catch { /* ignore */ }
   }, [engagementId]);
