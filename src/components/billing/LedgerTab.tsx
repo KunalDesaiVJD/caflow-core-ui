@@ -1044,7 +1044,7 @@ function ClientLedgerView() {
 function GroupLedgerView() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const [groups, setGroups] = useState<{ id: string; name: string }[]>([]);
+  const [groups, setGroups] = useState<{ id: string; name: string; firm_id?: string | null }[]>([]);
   const [firms, setFirms] = useState<{ id: string; name: string; logo_url?: string; legal_name_changes?: LegalNameChange[] | null }[]>([]);
   const [groupId, setGroupId] = useState("");
   const [firmIds, setFirmIds] = useState<string[]>([]);
@@ -1066,8 +1066,7 @@ function GroupLedgerView() {
 
   useEffect(() => {
     (async () => {
-      let groupQuery = supabase.from("client_groups").select("id, name").order("name");
-      if (user?.firm_id) groupQuery = groupQuery.eq("firm_id", user.firm_id);
+      let groupQuery = supabase.from("client_groups").select("id, name, firm_id").order("name");
       const [{ data: g }, { data: f }] = await Promise.all([
         groupQuery,
         supabase.from("firms").select("id, name, logo_url, legal_name_changes").order("name"),
@@ -1598,7 +1597,9 @@ function GroupLedgerView() {
     <div className="space-y-4">
       <div className="flex flex-wrap gap-3 items-end">
         <SearchableSelect
-          options={groups.map(g => ({ value: g.id, label: g.name }))}
+          options={groups
+            .filter(g => firmIds[0] === "all" || firmIds.length === 0 || g.firm_id === firmIds[0])
+            .map(g => ({ value: g.id, label: g.name }))}
           value={groupId}
           onValueChange={setGroupId}
           placeholder="Select Group"
@@ -1610,6 +1611,7 @@ function GroupLedgerView() {
           onValueChange={v => {
             if (v === "all") setFirmIds(["all"]);
             else setFirmIds([v]);
+            setGroupId("");
           }}
         >
           <SelectTrigger className="w-[200px]"><SelectValue placeholder="Select Firm" /></SelectTrigger>
