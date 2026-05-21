@@ -45,6 +45,10 @@ export interface StatutoryMasterData {
   audit_date_from: string;
   audit_date_to:   string;
 
+  // Income Tax Login Details (e-filing portal credentials)
+  it_id:       string;
+  it_password: string;
+
   // Section 10 — CARO applicability (for companies)
   caro_applicable: "yes" | "no" | "";
 
@@ -99,6 +103,8 @@ export const BLANK_STATUTORY_MASTER: StatutoryMasterData = {
   books_others_text: "",
   audit_date_from: "",
   audit_date_to: "",
+  it_id: "",
+  it_password: "",
   caro_applicable: "",
   audit_form_type: "",
   payments_to_relatives: "",

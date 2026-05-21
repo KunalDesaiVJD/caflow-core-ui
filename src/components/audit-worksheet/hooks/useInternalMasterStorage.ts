@@ -60,6 +60,10 @@ export interface InternalMasterData {
   gst_id:       string;
   gst_password: string;
 
+  // Income Tax Login Details (e-filing portal credentials)
+  it_id:       string;
+  it_password: string;
+
   // Field 12 — Secured/Unsecured Loan (free text)
   secured_unsecured_loan: string;
 
@@ -108,6 +112,8 @@ export const BLANK_INT_MASTER: InternalMasterData = {
 
   gst_id:       "",
   gst_password: "",
+  it_id:        "",
+  it_password:  "",
 
   secured_unsecured_loan: "",
 

@@ -33,7 +33,7 @@ import { Label }     from "@/components/ui/label";
 import { Checkbox }  from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { Save, Loader2, Wand2, Building2, Plus, Trash2 } from "lucide-react";
+import { Save, Loader2, Wand2, Building2, Plus, Trash2, Eye, EyeOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import { useStatutoryMasterStorage } from "./hooks/useStatutoryMasterStorage";
@@ -143,6 +143,7 @@ export default function StatutoryAuditMaster({ data, engagementId, onSaved }: Pr
     useStatutoryMasterStorage(engagementId, data.engagement?.firm_id);
 
   const { employees } = useEmployeeDropdown();
+  const [showItPwd, setShowItPwd] = useState(false);
 
   // Auto-fill dates on first load. Uses programmaticPatch so the
   // userTypedRef gate doesn't block the async DB load from restoring
@@ -302,12 +303,56 @@ export default function StatutoryAuditMaster({ data, engagementId, onSaved }: Pr
           </div>
         </div>
 
-        {/* ── 10. CARO Applicability ── */}
-        <SectionHeader no={10} label="CARO 2020 Applicable?" />
+        {/* ── 10. Income Tax Login Details ── */}
+        <SectionHeader no={10} label="Income Tax Login Details" />
+        <div className="flex flex-wrap items-start gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 flex-1 min-w-[300px]">
+            <div className="space-y-0.5">
+              <Label className="text-xs">Income Tax ID / Username</Label>
+              <Input
+                className="h-8 text-sm font-mono"
+                value={m.it_id}
+                onChange={e => setField("it_id", e.target.value)}
+                placeholder="PAN / Income-tax e-filing user ID…"
+              />
+            </div>
+            <div className="space-y-0.5">
+              <Label className="text-xs">Income Tax Password</Label>
+              <div className="flex gap-1">
+                <Input
+                  className="h-8 text-sm font-mono flex-1"
+                  type={showItPwd ? "text" : "password"}
+                  value={m.it_password}
+                  onChange={e => setField("it_password", e.target.value)}
+                  placeholder="Password…"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 w-8 p-0"
+                  onClick={() => setShowItPwd(v => !v)}
+                >
+                  {showItPwd ? <EyeOff size={14} /> : <Eye size={14} />}
+                </Button>
+              </div>
+            </div>
+          </div>
+          {data.pan && (
+            <div className="w-full">
+              <p className="text-[11px] text-muted-foreground">
+                PAN on file: <span className="font-mono font-medium">{data.pan}</span>
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* ── 11. CARO Applicability ── */}
+        <SectionHeader no={11} label="CARO 2020 Applicable?" />
         <YesNo value={m.caro_applicable} onChange={v => setField("caro_applicable", v)} />
 
-        {/* ── 11. Audit Carried Out By ── */}
-        <SectionHeader no={11} label="Audit Carried Out By" />
+        {/* ── 12. Audit Carried Out By ── */}
+        <SectionHeader no={12} label="Audit Carried Out By" />
         <div className="space-y-2">
           {(m.audit_carried_by || []).map((entry, idx) => (
             <div key={idx} className="flex items-center gap-2">
