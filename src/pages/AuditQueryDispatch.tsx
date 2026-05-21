@@ -12,6 +12,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { Send, Mail, MessageSquare, CheckSquare, Loader2 } from "lucide-react";
+import { buildAuditEmailHtml, buildAuditEmailSubject } from "@/components/email/EmailTemplateEngine";
 
 type Query = {
   id: string;
@@ -158,24 +159,38 @@ ${firmName}`
         dispatched_by: user?.id || null,
       } as any);
 
-      // Send notifications
-      const channels = channel === "both" ? ["email", "whatsapp"] : [channel];
-      for (const ch of channels) {
-        try {
-          await supabase.functions.invoke("send-notification", {
-            body: {
-              type: "audit_query_dispatch",
-              firm_id: user?.firm_id,
-              channel: ch,
-              content: {
-                subject: emailSubject,
-                body: ch === "whatsapp" ? waBody : emailBody,
-                client_name: clientName,
-              },
-            },
-          });
-        } catch { /* non-blocking */ }
-      }
+      // Send notifications. The email MUST carry the full query table — the
+      // edge function relays payload.custom_html verbatim — otherwise the
+      // client would only get a portal link with no query details.
+      const selectedQueries = queries.filter(q => selected.has(q.id));
+      const portalUrl = `${window.location.origin}/portal/queries`;
+      const queryHtml = buildAuditEmailHtml("audit_query_dispatch", {
+        clientName, firmName, financialYear, portalUrl,
+        queries: selectedQueries.map(q => ({
+          ref_number: q.ref_number,
+          query_text: q.query_text,
+        })),
+      });
+      const sharedPayload = {
+        client_name:    clientName,
+        firm_name:      firmName,
+        custom_subject: emailSubject || buildAuditEmailSubject("audit_query_dispatch", financialYear),
+        custom_html:    queryHtml,
+        custom_message: `${selectedQueries.length} audit ${selectedQueries.length === 1 ? "query has" : "queries have"} been raised for your attention. Please log in to the CAFlow client portal to view and respond.`,
+        portal_url:     portalUrl,
+        query_count:    String(selectedQueries.length),
+      };
+      try {
+        await supabase.functions.invoke("send-notification", {
+          body: {
+            type:           "audit_query_dispatch",
+            firm_id:        user?.firm_id,
+            client_id:      clientId,
+            send_to_client: true,   // edge function dispatches per channel rules
+            payload:        sharedPayload,
+          },
+        });
+      } catch { /* non-blocking */ }
 
       // Update query statuses to Client Acknowledged
       for (const qid of queryIds) {
