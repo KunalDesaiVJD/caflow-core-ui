@@ -124,7 +124,7 @@ export default function ReceiptsTab() {
   const [kasarDate, setKasarDate] = useState<Date | undefined>(new Date());
   const [kasarAmount, setKasarAmount] = useState("");
   const [kasarNarration, setKasarNarration] = useState("");
-  const [kasarInvoiceId, setKasarInvoiceId] = useState("");
+  const [kasarInvoiceId, setKasarInvoiceId] = useState("none");
   const [kasarInvoices, setKasarInvoices] = useState<any[]>([]);
 
   const fetchData = useCallback(async () => {
@@ -273,7 +273,7 @@ export default function ReceiptsTab() {
     setKasarDate(new Date());
     setKasarAmount("");
     setKasarNarration("");
-    setKasarInvoiceId("");
+    setKasarInvoiceId("none");
     setKasarInvoices([]);
   };
 
@@ -481,7 +481,8 @@ export default function ReceiptsTab() {
 
   const handleDelete = async (id: string) => {
     if (!window.confirm("Delete this receipt? All ledger entries will also be removed and this cannot be undone.")) return;
-    await supabase.from("client_ledger_entries").delete().eq("document_id", id);
+    const { error: ledgerErr } = await supabase.from("client_ledger_entries").delete().eq("document_id", id);
+    if (ledgerErr) { toast({ title: "Error deleting ledger entries", description: ledgerErr.message, variant: "destructive" }); return; }
     const { error } = await supabase.from("billing_receipts").delete().eq("id", id);
     if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
     else { toast({ title: "Receipt deleted" }); fetchData(); }
@@ -493,7 +494,7 @@ export default function ReceiptsTab() {
     setKasarDate(k.kasar_date ? new Date(k.kasar_date + "T00:00:00") : new Date());
     setKasarAmount(String(k.amount));
     setKasarNarration(k.narration || "");
-    setKasarInvoiceId(k.invoice_id || "");
+    setKasarInvoiceId(k.invoice_id || "none");
     setKasarDialogOpen(true);
   };
 
@@ -512,7 +513,7 @@ export default function ReceiptsTab() {
     const dateStr = format(kasarDate, "yyyy-MM-dd");
     const amt = Number(kasarAmount);
     const fy = getFYFromDate(dateStr);
-    const invId = kasarInvoiceId || null;
+    const invId = kasarInvoiceId && kasarInvoiceId !== "none" ? kasarInvoiceId : null;
     const narration = kasarNarration ? `Kasar — ${kasarNarration}` : "Kasar settlement";
 
     try {
@@ -943,7 +944,7 @@ export default function ReceiptsTab() {
                 <Select value={kasarInvoiceId} onValueChange={setKasarInvoiceId}>
                   <SelectTrigger><SelectValue placeholder="Select invoice (optional)" /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">None</SelectItem>
+                    <SelectItem value="none">None</SelectItem>
                     {kasarInvoices.map((inv: any) => (
                       <SelectItem key={inv.id} value={inv.id}>
                         {inv.invoice_no} — ₹{Number(inv.total_amount || 0).toLocaleString("en-IN")}

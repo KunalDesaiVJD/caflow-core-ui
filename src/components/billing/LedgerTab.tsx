@@ -349,12 +349,6 @@ function ClientLedgerView() {
     const resolvedFirmId = obDraftFirmId || (firmId && firmId !== "all" ? firmId : user?.firm_id);
     if (!resolvedFirmId) { toast({ title: "Select a firm first", variant: "destructive" }); return; }
     if (!obDraftDate) { toast({ title: "Balance date is required", variant: "destructive" }); return; }
-    // Validate client belongs to the selected firm to prevent cross-firm OB entries
-    const { data: clientCheck } = await supabase.from("clients").select("firm_id").eq("id", clientId).maybeSingle();
-    if (clientCheck && clientCheck.firm_id !== resolvedFirmId) {
-      toast({ title: "Client does not belong to the selected firm", variant: "destructive" });
-      return;
-    }
     setObSaving(true);
     try {
       const payload = {
@@ -1072,8 +1066,10 @@ function GroupLedgerView() {
 
   useEffect(() => {
     (async () => {
+      let groupQuery = supabase.from("client_groups").select("id, name").order("name");
+      if (user?.firm_id) groupQuery = groupQuery.eq("firm_id", user.firm_id);
       const [{ data: g }, { data: f }] = await Promise.all([
-        supabase.from("client_groups").select("id, name").order("name"),
+        groupQuery,
         supabase.from("firms").select("id, name, logo_url, legal_name_changes").order("name"),
       ]);
       setGroups(g || []);
