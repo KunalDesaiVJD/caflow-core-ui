@@ -6157,6 +6157,9 @@ export default function PipelineFinancialStatements({
                   cyYear,
                   pyYear,
                   dynamicNoteMap: nceDynamicNoteMap,
+                  capitalData: nceCapitalData ?? [],
+                  notesData:   nceNotesData   ?? [],
+                  ppeData:     ncePpeData      ?? [],
                 });
               }}
             >

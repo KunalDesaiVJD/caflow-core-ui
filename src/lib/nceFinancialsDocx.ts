@@ -3,6 +3,7 @@
  * Big4-style Word (.docx) export for NCE Financial Statements.
  *
  * Phase 1: Balance Sheet (page 1) + Profit & Loss (page 2) + Signature block
+ * Phase 2: Notes 1–28 (portrait) + PPE Schedule (landscape)
  *
  * Uses the `docx` npm package (already installed in this project).
  * No new dependencies required.
@@ -15,6 +16,7 @@ import {
   Footer,
   Packer,
   PageNumber,
+  PageOrientation,
   Paragraph,
   ShadingType,
   Table,
@@ -24,6 +26,9 @@ import {
   VerticalAlign,
   WidthType,
 } from "docx";
+
+import { NOTES_CONFIG, computeDisplayData, NOTE_META } from "@/config/nceNotesConfig";
+import type { NoteConfig } from "@/config/nceNotesConfig";
 
 // ─── Layout (all DXA: 1 inch = 1440 DXA) ─────────────────────────────────────
 const A4_W   = 11906;           // A4 width
@@ -39,6 +44,43 @@ const CW_NOTE = 400;
 const CW_CY   = 1483;
 const CW_PY   = 1483;
 // 7100 + 400 + 1483 + 1483 = 10466 ✓
+
+// ─── Phase 2 — Note table column widths ───────────────────────────────────────
+// Pattern B (3 cols): Particulars | CY | PY  →  must sum to TW = 10466
+const NW_DESC = 7550;
+const NW_CY   = 1458;
+const NW_PY   = 1458;
+// 7550+1458+1458 = 10466 ✓
+
+// Pattern A (5 cols): Particulars | LT CY | LT PY | ST CY | ST PY
+const NW_A_DESC = 5000;
+const NW_A_LTCY = 1366;
+const NW_A_LTPY = 1366;
+const NW_A_STCY = 1367;
+const NW_A_STPY = 1367;
+// 5000+1366+1366+1367+1367 = 10466 ✓
+
+// Capital Account portrait cols (8 cols): Partner + 7 numeric
+const CAP_NAME = 3000;
+const CAP_NUM  = 1066;  // × 6
+const CAP_LAST = 1070;  // 3000+6×1066+1070 = 10466 ✓
+
+// Landscape (PPE Schedule)
+const MARG_LS = 720;
+const TW_LS   = A4_H - MARG_LS * 2; // 16838 - 1440 = 15398 DXA
+// PPE cols (11 cols, sum = 15398)
+const PPE_CAT  = 2500;
+const PPE_NAME = 2700;
+const PPE_RATE =  700;
+const PPE_OPEN = 1400;
+const PPE_APRE = 1200;
+const PPE_APOST= 1200;
+const PPE_TOT  = 1400;
+const PPE_DEPR = 1400;
+const PPE_CLOS = 1400;
+const PPE_NCY  = 1249;
+const PPE_NPY  = 1249;
+// 2500+2700+700+1400+1200+1200+1400+1400+1400+1249+1249 = 15398 ✓
 
 // ─── Typography ───────────────────────────────────────────────────────────────
 const FONT     = "Arial";
@@ -168,9 +210,6 @@ function ec(w: number, bg?: string, borders?: Record<string, typeof bNone>): Tab
 
 /** Dark navy column-header row */
 function colHeaderRow(cyLabel: string, pyLabel: string): TableRow {
-  const hOpts = (text: string, align = AlignmentType.LEFT): TableCell =>
-    cell({ text, w: 0, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align });
-
   return new TableRow({
     tableHeader: true,
     children: [
@@ -352,7 +391,7 @@ function buildBSTable(
     ),
     colHeaderRow(`As at 31 Mar ${cyYear}`, `As at 31 Mar ${pyYear}`),
 
-    // ── EQUITY AND LIABILITIES ────────────────────────────────────────────
+    // ── EQUITY AND LIABILITIES ────────────────────────────────────────
     sectionRow("EQUITY AND LIABILITIES"),
 
     parentRow("(1)  Owners Funds"),
@@ -493,14 +532,14 @@ function buildPLTable(
 
     // ── Profit chain ─────────────────────────────────────────────────────
     dataRow(
-      "V.    Profit / (Loss) before exceptional items, partners’ remuneration and tax  (III − IV)",
+      "V.    Profit / (Loss) before exceptional items, partners' remuneration and tax  (III − IV)",
       null, pVcy, pVpy,
     ),
     dataRow("VI.   Exceptional items",                                                   null, excCy,   excPy),
     dataRow("VII.  Profit / (Loss) before extraordinary items and tax  (V + VI)",        null, pVIIcy, pVIIpy),
     dataRow("VIII. Extraordinary items",                                                 null, extCy,   extPy),
-    dataRow("IX.   Profit / (Loss) before partners’ remuneration and tax  (VII + VIII)", null, pIXcy, pIXpy),
-    dataRow("X.    Partners’ remuneration",                                         n(29), remCy,   remPy),
+    dataRow("IX.   Profit / (Loss) before partners' remuneration and tax  (VII + VIII)", null, pIXcy, pIXpy),
+    dataRow("X.    Partners' remuneration",                                         n(29), remCy,   remPy),
     dataRow("XI.   Profit / (Loss) before tax  (IX − X)",                          null, pXIcy,  pXIpy),
     blankRow(),
 
@@ -613,6 +652,515 @@ function makeFooter(entityName: string): Footer {
   });
 }
 
+// ─── Phase 2: Note helpers ────────────────────────────────────────────────────
+
+/** Full-width note title row (spans all columns, BG_SECT) */
+function noteTitleRow(colWidths: number[], noteNumber: string, title: string): TableRow {
+  const totalW = colWidths.reduce((s, w) => s + w, 0);
+  return new TableRow({
+    children: [
+      new TableCell({
+        columnSpan: colWidths.length,
+        width:   { size: totalW, type: WidthType.DXA },
+        shading: { fill: BG_SECT, type: ShadingType.CLEAR },
+        borders: BDR_SECT,
+        margins: { top: 80, bottom: 80, left: 100, right: 100 },
+        children: [new Paragraph({
+          spacing: { before: 0, after: 0 },
+          children: [
+            new TextRun({ text: `Note ${noteNumber}:  `, font: FONT, size: SZ_HDR, bold: true, color: NAVY }),
+            new TextRun({ text: title, font: FONT, size: SZ_HDR, bold: false, color: NAVY }),
+          ],
+        })],
+      }),
+    ],
+  });
+}
+
+/** Full-width section header within a note table (BG_TOT background) */
+function noteSecHdr(colWidths: number[], label: string): TableRow {
+  const totalW = colWidths.reduce((s, w) => s + w, 0);
+  return new TableRow({
+    children: [
+      new TableCell({
+        columnSpan: colWidths.length,
+        width:   { size: totalW, type: WidthType.DXA },
+        shading: { fill: BG_TOT, type: ShadingType.CLEAR },
+        borders: BDR_ROW,
+        margins: { top: 30, bottom: 30, left: 100, right: 100 },
+        children: [new Paragraph({
+          spacing: { before: 0, after: 0 },
+          children: [new TextRun({ text: label, font: FONT, size: SZ_BODY, bold: true, color: BLACK })],
+        })],
+      }),
+    ],
+  });
+}
+
+/** Pattern B column header (3 cols) */
+function noteHdrB(cyYear: string, pyYear: string): TableRow {
+  return new TableRow({
+    tableHeader: true,
+    children: [
+      cell({ text: "Particulars", w: NW_DESC, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, padL: 100 }),
+      cell({ text: `${cyYear}\n(₹)`, w: NW_CY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
+      cell({ text: `${pyYear}\n(₹)`, w: NW_PY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
+    ],
+  });
+}
+
+/** Pattern B data/sub-total/grand-total row (3 cols) */
+function noteRowB(
+  label: string,
+  cy: number,
+  py: number,
+  indent = 0,
+  style: "data" | "subtotal" | "total" = "data",
+): TableRow {
+  const bg   = style === "total" ? BG_GRAN : style === "subtotal" ? BG_TOT : undefined;
+  const bdr  = style === "total" ? BDR_GRAND : style === "subtotal" ? BDR_SUB : BDR_ROW;
+  const bold = style !== "data";
+  return new TableRow({
+    children: [
+      cell({ text: label, w: NW_DESC, bold, bg, borders: bdr, indent }),
+      ac(cy, NW_CY, { bold, bg, borders: bdr }),
+      ac(py, NW_PY, { bold, bg, borders: bdr }),
+    ],
+  });
+}
+
+/** Pattern A column header (2 rows: LT/ST then CY/PY) */
+function noteHdrA(cyYear: string, pyYear: string): TableRow[] {
+  const ltw = NW_A_LTCY + NW_A_LTPY;
+  const stw = NW_A_STCY + NW_A_STPY;
+  const spanCell = (text: string, w: number, span: number) =>
+    new TableCell({
+      columnSpan: span,
+      width:   { size: w, type: WidthType.DXA },
+      shading: { fill: BG_HDR, type: ShadingType.CLEAR },
+      borders: BDR_NONE,
+      margins: { top: 36, bottom: 0, left: 80, right: 80 },
+      children: [new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing: { before: 0, after: 0 },
+        children: [new TextRun({ text, font: FONT, size: SZ_SM, bold: true, color: WHITE })],
+      })],
+    });
+
+  const r1 = new TableRow({
+    children: [
+      cell({ text: "Particulars", w: NW_A_DESC, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, padL: 100 }),
+      spanCell("Long Term", ltw, 2),
+      spanCell("Short Term", stw, 2),
+    ],
+  });
+  const r2 = new TableRow({
+    children: [
+      cell({ text: "", w: NW_A_DESC, sz: SZ_SM, color: WHITE, bg: BG_HDR, borders: BDR_NONE }),
+      cell({ text: `${cyYear}\n(₹)`, w: NW_A_LTCY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
+      cell({ text: `${pyYear}\n(₹)`, w: NW_A_LTPY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
+      cell({ text: `${cyYear}\n(₹)`, w: NW_A_STCY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
+      cell({ text: `${pyYear}\n(₹)`, w: NW_A_STPY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
+    ],
+  });
+  return [r1, r2];
+}
+
+/** Pattern A data/sub-total/grand-total row (5 cols) */
+function noteRowA(
+  label: string,
+  ltCy: number, ltPy: number,
+  stCy: number, stPy: number,
+  indent = 0,
+  style: "data" | "subtotal" | "total" = "data",
+): TableRow {
+  const bg   = style === "total" ? BG_GRAN : style === "subtotal" ? BG_TOT : undefined;
+  const bdr  = style === "total" ? BDR_GRAND : style === "subtotal" ? BDR_SUB : BDR_ROW;
+  const bold = style !== "data";
+  return new TableRow({
+    children: [
+      cell({ text: label, w: NW_A_DESC, bold, bg, borders: bdr, indent }),
+      ac(ltCy, NW_A_LTCY, { bold, bg, borders: bdr }),
+      ac(ltPy, NW_A_LTPY, { bold, bg, borders: bdr }),
+      ac(stCy, NW_A_STCY, { bold, bg, borders: bdr }),
+      ac(stPy, NW_A_STPY, { bold, bg, borders: bdr }),
+    ],
+  });
+}
+
+// ─── Phase 2: Build functions ─────────────────────────────────────────────────
+
+/** Note 1 — Accounting Policies (text paragraphs) */
+const NOTE1_POLICIES = [
+  { label: "a) Property, Plant and Equipment",
+    text: "Property, Plant and Equipment are stated at cost less accumulated depreciation and impairment losses, if any. Cost includes purchase price and all directly attributable costs of bringing the asset to working condition for its intended use." },
+  { label: "b) Depreciation",
+    text: "Depreciation is charged on the Written Down Value (WDV) method at the rates prescribed under the relevant provisions of the Income Tax Act, 1961 / as estimated by the management based on the useful life of assets." },
+  { label: "c) Inventories",
+    text: "Inventories are valued at cost or net realisable value, whichever is lower. Cost is determined on First-In-First-Out (FIFO) / Weighted Average basis. Cost includes purchase price, duties and taxes (other than those subsequently recoverable), freight, and other directly attributable costs." },
+  { label: "d) Revenue Recognition",
+    text: "Revenue is recognised when it is earned and there is reasonable certainty of its ultimate collection. Revenue from sale of goods is recognised when significant risks and rewards of ownership are transferred to the buyer. Revenue from services is recognised on completion of the service." },
+  { label: "e) Investments",
+    text: "Long-term investments are stated at cost. Provision is made for diminution in value of investments, if the diminution is other than temporary in nature. Current investments are stated at cost or market value, whichever is lower." },
+  { label: "f) Provisions and Contingent Liabilities",
+    text: "Provisions are recognised when there is a present obligation as a result of a past event and it is probable that an outflow of resources will be required to settle the obligation and a reliable estimate can be made. Contingent liabilities are not recognised but are disclosed in the notes. Contingent assets are neither recognised nor disclosed." },
+  { label: "g) Employee Benefits",
+    text: "Short-term employee benefits are recognised as an expense at the undiscounted amount in the period in which the related service is rendered. Long-term employee benefits, including gratuity and leave encashment, are provided on the basis of actuarial valuation using the Projected Unit Credit method." },
+  { label: "h) Foreign Currency Transactions",
+    text: "Foreign currency transactions are recorded at the exchange rate prevailing on the date of the transaction. Monetary assets and liabilities denominated in foreign currency outstanding at the year-end are translated at the closing rate. Exchange differences arising on settlement and restatement are recognised in the Statement of Profit and Loss." },
+  { label: "i) Borrowing Costs",
+    text: "Borrowing costs directly attributable to the acquisition or construction of qualifying assets are capitalised as part of the cost of such assets. Other borrowing costs are charged to revenue in the period in which they are incurred." },
+  { label: "j) Taxes on Income",
+    text: "Tax expense comprises current and deferred tax. Current tax is determined based on the provisions of the Income Tax Act, 1961. Deferred tax is recognised for all timing differences between accounting income and taxable income, subject to the consideration of prudence." },
+  { label: "k) Use of Estimates",
+    text: "The preparation of financial statements in conformity with generally accepted accounting principles requires management to make estimates and assumptions that affect the reported amounts of assets, liabilities, revenue, and expenses. Actual results could differ from such estimates." },
+  { label: "l) Cash and Cash Equivalents",
+    text: "For the purposes of the Cash Flow Statement, cash and cash equivalents comprise cash on hand, cheques and drafts in hand, and balances with banks in current accounts." },
+];
+
+function buildNote1Section(entityName: string, cyYear: string): Paragraph[] {
+  const para = (
+    text: string,
+    bold = false,
+    indent = 0,
+    after = 40,
+  ): Paragraph =>
+    new Paragraph({
+      spacing: { before: 0, after },
+      indent:  indent ? { left: indent } : undefined,
+      children: [new TextRun({ text, font: FONT, size: SZ_BODY, bold, color: BLACK })],
+    });
+
+  return [
+    new Paragraph({
+      spacing: { before: 0, after: 120 },
+      border:  { bottom: { style: BorderStyle.SINGLE, size: 4, color: NAVY, space: 4 } },
+      children: [
+        new TextRun({ text: "Note 1:  ", font: FONT, size: SZ_HDR, bold: true, color: NAVY }),
+        new TextRun({ text: "Significant Accounting Policies", font: FONT, size: SZ_HDR, color: NAVY }),
+      ],
+    }),
+    para("1.  Basis of Preparation", true, 0, 20),
+    para(
+      `The financial statements of ${entityName} have been prepared in accordance with the Generally Accepted Accounting Principles in India (GAAP) under the historical cost convention on an accrual basis. The financial statements comply with the Accounting Standards applicable to the entity and other relevant provisions of the applicable law.`,
+      false, 0, 60,
+    ),
+    para("2.  Significant Accounting Policies", true, 0, 20),
+    ...NOTE1_POLICIES.flatMap(p => [
+      para(p.label, true, 360, 10),
+      para(p.text, false, 360, 40),
+    ]),
+  ];
+}
+
+/** Note 2 — Partners' Capital Account tables (CY + PY) */
+function buildCapitalAccountSection(
+  capitalData: any[],
+  cyYear: string,
+  pyYear: string,
+): Table[] {
+  const PY_SENTINEL    = 99;
+  const PY_PARTNER_BASE = 100;
+
+  const cyPartners = (capitalData ?? [])
+    .filter((r: any) => r.partner_no < PY_SENTINEL)
+    .sort((a: any, b: any) => a.partner_no - b.partner_no);
+
+  const pyAggregate = (capitalData ?? []).find((r: any) => r.partner_no === PY_SENTINEL);
+  const pyPartners  = (capitalData ?? [])
+    .filter((r: any) => r.partner_no >= PY_PARTNER_BASE)
+    .sort((a: any, b: any) => a.partner_no - b.partner_no);
+
+  const calcClosingCy = (p: any): number =>
+    (p.opening_balance_cy ?? 0) + (p.introduced_cy ?? 0) + (p.remuneration_cy ?? 0)
+    + (p.interest_cy ?? 0) - (p.withdrawals_cy ?? 0) + (p.profit_share_cy ?? 0);
+
+  const calcClosingPy = (p: any): number =>
+    (p.opening ?? 0) + (p.introduced ?? 0) + (p.remuneration ?? 0)
+    + (p.interest ?? 0) - (p.withdrawals ?? 0) + (p.profit_share ?? 0);
+
+  const cw = [CAP_NAME, CAP_NUM, CAP_NUM, CAP_NUM, CAP_NUM, CAP_NUM, CAP_NUM, CAP_LAST];
+
+  const makeHdrRow = (): TableRow => {
+    const h = (text: string, w: number) =>
+      cell({ text, w, sz: SZ_XS, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.CENTER, padL: 40, padR: 40 });
+    return new TableRow({
+      tableHeader: true,
+      children: [
+        h("Partner",              CAP_NAME),
+        h("Opening\nBalance (₹)", CAP_NUM),
+        h("Introduced\n(₹)",      CAP_NUM),
+        h("Remuneration\n(₹)",    CAP_NUM),
+        h("Interest\n(₹)",        CAP_NUM),
+        h("Withdrawals\n(₹)",     CAP_NUM),
+        h("Profit\nShare (₹)",    CAP_NUM),
+        h("Closing\nBalance (₹)", CAP_LAST),
+      ],
+    });
+  };
+
+  const nc = (v: number, w: number, bold = false, bg?: string, bdr = BDR_ROW) =>
+    ac(v, w, { bold, bg, borders: bdr });
+
+  // CY table
+  const cyDataRows = cyPartners.map((p: any) =>
+    new TableRow({
+      children: [
+        cell({ text: p.partner_name || "Partner", w: CAP_NAME, sz: SZ_BODY }),
+        nc(p.opening_balance_cy ?? 0, CAP_NUM),
+        nc(p.introduced_cy      ?? 0, CAP_NUM),
+        nc(p.remuneration_cy    ?? 0, CAP_NUM),
+        nc(p.interest_cy        ?? 0, CAP_NUM),
+        nc(p.withdrawals_cy     ?? 0, CAP_NUM),
+        nc(p.profit_share_cy    ?? 0, CAP_NUM),
+        nc(calcClosingCy(p),          CAP_LAST),
+      ],
+    }),
+  );
+
+  const totCyOpening  = cyPartners.reduce((s: number, p: any) => s + (p.opening_balance_cy ?? 0), 0);
+  const totCyIntro    = cyPartners.reduce((s: number, p: any) => s + (p.introduced_cy ?? 0), 0);
+  const totCyRem      = cyPartners.reduce((s: number, p: any) => s + (p.remuneration_cy ?? 0), 0);
+  const totCyInt      = cyPartners.reduce((s: number, p: any) => s + (p.interest_cy ?? 0), 0);
+  const totCyWith     = cyPartners.reduce((s: number, p: any) => s + (p.withdrawals_cy ?? 0), 0);
+  const totCyPS       = cyPartners.reduce((s: number, p: any) => s + (p.profit_share_cy ?? 0), 0);
+  const totCyClosing  = cyPartners.reduce((s: number, p: any) => s + calcClosingCy(p), 0);
+
+  const cyTotalRow = new TableRow({
+    children: [
+      cell({ text: "Total", w: CAP_NAME, bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
+      nc(totCyOpening,  CAP_NUM,  true, BG_GRAN, BDR_GRAND),
+      nc(totCyIntro,    CAP_NUM,  true, BG_GRAN, BDR_GRAND),
+      nc(totCyRem,      CAP_NUM,  true, BG_GRAN, BDR_GRAND),
+      nc(totCyInt,      CAP_NUM,  true, BG_GRAN, BDR_GRAND),
+      nc(totCyWith,     CAP_NUM,  true, BG_GRAN, BDR_GRAND),
+      nc(totCyPS,       CAP_NUM,  true, BG_GRAN, BDR_GRAND),
+      nc(totCyClosing,  CAP_LAST, true, BG_GRAN, BDR_GRAND),
+    ],
+  });
+
+  const makePeriodHdr = (label: string): TableRow =>
+    new TableRow({
+      children: [
+        new TableCell({
+          columnSpan: 8,
+          width:   { size: TW, type: WidthType.DXA },
+          shading: { fill: BG_TOT, type: ShadingType.CLEAR },
+          borders: BDR_ROW,
+          margins: { top: 30, bottom: 30, left: 100, right: 100 },
+          children: [new Paragraph({
+            spacing: { before: 0, after: 0 },
+            children: [new TextRun({ text: label, font: FONT, size: SZ_BODY, bold: true, color: NAVY })],
+          })],
+        }),
+      ],
+    });
+
+  const cyTable = new Table({
+    width:        { size: TW, type: WidthType.DXA },
+    columnWidths: cw,
+    rows: [
+      noteTitleRow(cw, "2", "Partners' Capital Account"),
+      makePeriodHdr(`Current Year — FY ${cyYear}`),
+      makeHdrRow(),
+      ...cyDataRows,
+      cyTotalRow,
+    ],
+  });
+
+  // PY table
+  const pyRows = pyPartners.length > 0 ? pyPartners : (pyAggregate ? [pyAggregate] : []);
+  const isPyPerPartner = pyPartners.length > 0;
+
+  const pyDataRows = pyRows.map((p: any) =>
+    new TableRow({
+      children: [
+        cell({ text: isPyPerPartner ? (p.partner_name || "Partner") : "Total (Prior Year)", w: CAP_NAME }),
+        nc(p.opening   ?? p.opening_balance_cy ?? 0, CAP_NUM),
+        nc(p.introduced ?? 0,   CAP_NUM),
+        nc(p.remuneration ?? 0, CAP_NUM),
+        nc(p.interest   ?? 0,   CAP_NUM),
+        nc(p.withdrawals ?? 0,  CAP_NUM),
+        nc(p.profit_share ?? 0, CAP_NUM),
+        nc(calcClosingPy(p),    CAP_LAST),
+      ],
+    }),
+  );
+
+  const pyTableRows: TableRow[] = [
+    makePeriodHdr(`Prior Year — FY ${pyYear}`),
+    makeHdrRow(),
+    ...pyDataRows,
+  ];
+
+  if (isPyPerPartner && pyRows.length > 1) {
+    const totPyOpening = pyRows.reduce((s: number, p: any) => s + (p.opening ?? 0), 0);
+    const totPyIntro   = pyRows.reduce((s: number, p: any) => s + (p.introduced ?? 0), 0);
+    const totPyRem     = pyRows.reduce((s: number, p: any) => s + (p.remuneration ?? 0), 0);
+    const totPyInt     = pyRows.reduce((s: number, p: any) => s + (p.interest ?? 0), 0);
+    const totPyWith    = pyRows.reduce((s: number, p: any) => s + (p.withdrawals ?? 0), 0);
+    const totPyPS      = pyRows.reduce((s: number, p: any) => s + (p.profit_share ?? 0), 0);
+    const totPyClose   = pyRows.reduce((s: number, p: any) => s + calcClosingPy(p), 0);
+    pyTableRows.push(new TableRow({
+      children: [
+        cell({ text: "Total", w: CAP_NAME, bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
+        nc(totPyOpening, CAP_NUM,  true, BG_GRAN, BDR_GRAND),
+        nc(totPyIntro,   CAP_NUM,  true, BG_GRAN, BDR_GRAND),
+        nc(totPyRem,     CAP_NUM,  true, BG_GRAN, BDR_GRAND),
+        nc(totPyInt,     CAP_NUM,  true, BG_GRAN, BDR_GRAND),
+        nc(totPyWith,    CAP_NUM,  true, BG_GRAN, BDR_GRAND),
+        nc(totPyPS,      CAP_NUM,  true, BG_GRAN, BDR_GRAND),
+        nc(totPyClose,   CAP_LAST, true, BG_GRAN, BDR_GRAND),
+      ],
+    }));
+  }
+
+  const pyTable = new Table({
+    width:        { size: TW, type: WidthType.DXA },
+    columnWidths: cw,
+    rows: pyTableRows,
+  });
+
+  return [cyTable, pyTable];
+}
+
+/** Notes 3–28 — generic note table from NOTES_CONFIG */
+function buildNoteSection(
+  cfg: NoteConfig,
+  rawCy: Record<string, number>,
+  rawPy: Record<string, number>,
+  displayNoteNumber: string,
+  cyYear: string,
+  pyYear: string,
+): Table {
+  const { cy, py } = computeDisplayData(cfg, rawCy, rawPy);
+  const isA = cfg.pattern === "A";
+  const colWidths = isA
+    ? [NW_A_DESC, NW_A_LTCY, NW_A_LTPY, NW_A_STCY, NW_A_STPY]
+    : [NW_DESC, NW_CY, NW_PY];
+
+  const reversedRows = [...cfg.rows].reverse();
+  const grandTotalId = reversedRows.find(r => r.isTotal)?.id ?? null;
+
+  // Strip "Note X: " prefix from config title to get just the name
+  const cleanTitle = cfg.title.replace(/^Note\s[\d &]+:\s*/i, "");
+
+  const rows: TableRow[] = [
+    noteTitleRow(colWidths, displayNoteNumber, cleanTitle),
+    ...(isA ? noteHdrA(cyYear, pyYear) : [noteHdrB(cyYear, pyYear)]),
+  ];
+
+  for (const row of cfg.rows) {
+    if (row.isSectionHeader) {
+      rows.push(noteSecHdr(colWidths, row.label));
+    } else if (row.isTotal) {
+      const style = row.id === grandTotalId ? "total" : "subtotal";
+      if (isA) {
+        rows.push(noteRowA(
+          row.label,
+          cy[row.id + "_lt"] ?? 0, py[row.id + "_lt"] ?? 0,
+          cy[row.id + "_st"] ?? 0, py[row.id + "_st"] ?? 0,
+          row.indent ?? 0, style,
+        ));
+      } else {
+        rows.push(noteRowB(row.label, cy[row.id] ?? 0, py[row.id] ?? 0, row.indent ?? 0, style));
+      }
+    } else {
+      if (isA) {
+        rows.push(noteRowA(
+          row.label,
+          cy[row.id + "_lt"] ?? 0, py[row.id + "_lt"] ?? 0,
+          cy[row.id + "_st"] ?? 0, py[row.id + "_st"] ?? 0,
+          row.indent ?? 0, "data",
+        ));
+      } else {
+        rows.push(noteRowB(row.label, cy[row.id] ?? 0, py[row.id] ?? 0, row.indent ?? 0, "data"));
+      }
+    }
+  }
+
+  return new Table({
+    width:        { size: TW, type: WidthType.DXA },
+    columnWidths: colWidths,
+    rows,
+  });
+}
+
+/** PPE Schedule — landscape table */
+function buildPPETable(ppeData: any[], cyYear: string, pyYear: string): Table {
+  const ppeColWidths = [PPE_CAT, PPE_NAME, PPE_RATE, PPE_OPEN, PPE_APRE, PPE_APOST, PPE_TOT, PPE_DEPR, PPE_CLOS, PPE_NCY, PPE_NPY];
+
+  const h = (text: string, w: number) =>
+    cell({ text, w, sz: SZ_XS, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.CENTER, padL: 40, padR: 40 });
+
+  const hdrRow = new TableRow({
+    tableHeader: true,
+    children: [
+      h("Asset Category",          PPE_CAT),
+      h("Asset Name",              PPE_NAME),
+      h("Rate\n(%)",               PPE_RATE),
+      h("Opening\nBalance",        PPE_OPEN),
+      h("Additions\n(Pre 1 Oct)",  PPE_APRE),
+      h("Additions\n(Post 1 Oct)", PPE_APOST),
+      h("Total\nCost",             PPE_TOT),
+      h("Depreciation\nCharged",   PPE_DEPR),
+      h("Closing\nBalance",        PPE_CLOS),
+      h(`Net Block\n${cyYear} (₹)`,PPE_NCY),
+      h(`Net Block\n${pyYear} (₹)`,PPE_NPY),
+    ],
+  });
+
+  const nac = (v: number | null | undefined, w: number) => ac(v ?? 0, w);
+
+  const dataRows = (ppeData ?? []).map((r: any) =>
+    new TableRow({
+      children: [
+        cell({ text: r.asset_category ?? "", w: PPE_CAT,  sz: SZ_XS }),
+        cell({ text: r.asset_name     ?? "", w: PPE_NAME, sz: SZ_XS }),
+        cell({ text: r.rate_pct != null ? `${r.rate_pct}%` : "", w: PPE_RATE, sz: SZ_XS, align: AlignmentType.CENTER }),
+        nac(r.opening_balance, PPE_OPEN),
+        nac(r.additions_pre,   PPE_APRE),
+        nac(r.additions_post,  PPE_APOST),
+        nac(r.total,           PPE_TOT),
+        nac(r.depreciation,    PPE_DEPR),
+        nac(r.closing_balance, PPE_CLOS),
+        nac(r.net_cy,          PPE_NCY),
+        nac(r.net_py,          PPE_NPY),
+      ],
+    }),
+  );
+
+  const sum = (field: string) =>
+    (ppeData ?? []).reduce((s: number, r: any) => s + (r[field] ?? 0), 0);
+
+  const totalRow = new TableRow({
+    children: [
+      cell({ text: "Total", w: PPE_CAT,  sz: SZ_XS, bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
+      cell({ text: "",      w: PPE_NAME, sz: SZ_XS, bg: BG_GRAN, borders: BDR_GRAND }),
+      cell({ text: "",      w: PPE_RATE, sz: SZ_XS, bg: BG_GRAN, borders: BDR_GRAND }),
+      ac(sum("opening_balance"), PPE_OPEN,  { bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
+      ac(sum("additions_pre"),   PPE_APRE,  { bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
+      ac(sum("additions_post"),  PPE_APOST, { bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
+      ac(sum("total"),           PPE_TOT,   { bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
+      ac(sum("depreciation"),    PPE_DEPR,  { bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
+      ac(sum("closing_balance"), PPE_CLOS,  { bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
+      ac(sum("net_cy"),          PPE_NCY,   { bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
+      ac(sum("net_py"),          PPE_NPY,   { bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
+    ],
+  });
+
+  return new Table({
+    width:        { size: TW_LS, type: WidthType.DXA },
+    columnWidths: ppeColWidths,
+    rows: [
+      noteTitleRow(ppeColWidths, "10", "Property, Plant and Equipment — PPE Schedule"),
+      hdrRow,
+      ...dataRows,
+      totalRow,
+    ],
+  });
+}
+
 // ─── PUBLIC API ───────────────────────────────────────────────────────────────
 export interface NCEDocxParams {
   engagement: any;
@@ -623,6 +1171,10 @@ export interface NCEDocxParams {
   /** Dynamic note number map (static noteRef → display number).
    *  Pass `nceDynamicNoteMap` from PipelineFinancialStatements. */
   dynamicNoteMap?: Record<number, number>;
+  /** Phase 2 data — pass from PipelineFinancialStatements state */
+  capitalData?: any[];   // from nce_capital_account
+  notesData?: any[];     // from nce_financial_notes
+  ppeData?: any[];       // from nce_ppe_schedule
 }
 
 export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<void> {
@@ -633,20 +1185,73 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     cyYear,
     pyYear,
     dynamicNoteMap = {},
+    capitalData    = [],
+    notesData      = [],
+    ppeData        = [],
   } = params;
 
   const entityName = engagement?.clients?.name ?? "Entity Name";
   const fy         = engagement?.financial_year ?? `${Number(cyYear) - 1}-${cyYear}`;
   const footer     = makeFooter(entityName);
 
+  // Phase 1 tables
   const bsTable  = buildBSTable(nceCyAmounts, ncePyAmounts, cyYear, pyYear, entityName, dynamicNoteMap);
   const plTable  = buildPLTable(nceCyAmounts, ncePyAmounts, cyYear, pyYear, entityName, dynamicNoteMap);
   const sigTable = buildSignatureTable(entityName, engagement);
 
-  const pageProps = {
+  // Phase 2 — Note 1
+  const note1Paras = buildNote1Section(entityName, cyYear);
+
+  // Phase 2 — Note 2 (Capital Account)
+  const capitalTables = buildCapitalAccountSection(capitalData, cyYear, pyYear);
+
+  // Phase 2 — Notes 3–28 from NOTES_CONFIG
+  const savedNotes: Record<string, { cy: Record<string, number>; py: Record<string, number> }> = {};
+  for (const row of notesData) {
+    const key = String((row as any).note_type ?? "");
+    if (!key) continue;
+    savedNotes[key] = {
+      cy: (row as any).cy_data && typeof (row as any).cy_data === "object"
+        ? (row as any).cy_data as Record<string, number>
+        : {},
+      py: (row as any).py_data && typeof (row as any).py_data === "object"
+        ? (row as any).py_data as Record<string, number>
+        : {},
+    };
+  }
+
+  const noteTables: Table[] = [];
+  for (const cfg of NOTES_CONFIG) {
+    const meta = NOTE_META[cfg.noteType];
+    const noteNum = meta?.noteNumber ?? cfg.noteType;
+    const data = savedNotes[cfg.noteType] ?? { cy: {}, py: {} };
+    noteTables.push(buildNoteSection(cfg, data.cy, data.py, noteNum, cyYear, pyYear));
+  }
+
+  // Phase 2 — PPE Schedule (landscape)
+  const ppeTable = buildPPETable(ppeData, cyYear, pyYear);
+
+  // Page settings
+  const portraitProps = {
     size:   { width: A4_W, height: A4_H },
     margin: { top: MARG_T, right: MARG_H, bottom: MARG_B, left: MARG_H },
   };
+  const landscapeProps = {
+    size:   { width: A4_W, height: A4_H, orientation: PageOrientation.LANDSCAPE },
+    margin: { top: MARG_T, right: MARG_LS, bottom: MARG_B, left: MARG_LS },
+  };
+
+  const spacer = () => new Paragraph({ spacing: { before: 240, after: 0 }, children: [] });
+
+  // Build notes section children: Note 1 paragraphs, Note 2 tables, Notes 3-28 tables
+  const noteChildren: (Paragraph | Table)[] = [
+    ...note1Paras,
+    spacer(),
+    capitalTables[0],
+    spacer(),
+    capitalTables[1],
+    ...noteTables.flatMap(t => [spacer(), t]),
+  ];
 
   const doc = new Document({
     styles: {
@@ -655,21 +1260,33 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
       },
     },
     sections: [
-      // ── Page 1: Balance Sheet ─────────────────────────────────────────
+      // Page 1: Balance Sheet
       {
-        properties: { page: pageProps },
+        properties: { page: portraitProps },
         footers:    { default: footer },
         children:   [bsTable],
       },
-      // ── Page 2: P&L + Signature block ────────────────────────────────
+      // Page 2+: P&L + Signature
       {
-        properties: { page: pageProps },
+        properties: { page: portraitProps },
         footers:    { default: footer },
         children: [
           plTable,
           new Paragraph({ spacing: { before: 600 }, children: [] }),
           sigTable,
         ],
+      },
+      // Notes 1–28 (portrait, flows across pages)
+      {
+        properties: { page: portraitProps },
+        footers:    { default: footer },
+        children:   noteChildren,
+      },
+      // PPE Schedule (landscape)
+      {
+        properties: { page: landscapeProps },
+        footers:    { default: footer },
+        children:   [ppeTable],
       },
     ],
   });
