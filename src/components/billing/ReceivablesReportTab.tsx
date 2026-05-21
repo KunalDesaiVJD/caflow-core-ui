@@ -163,7 +163,6 @@ export default function ReceivablesReportTab() {
       ] = await Promise.all([
         supabase.from("clients")
           .select("id, name, email")
-          .eq("firm_id", selectedFirmId)
           .order("name"),
         supabase.from("invoices")
           .select("client_id, invoice_date, total_amount")
