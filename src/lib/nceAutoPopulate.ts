@@ -518,8 +518,13 @@ export function getNCENoteFaceTotal(
     total += v;
     hasAny = true;
   }
+  // ROOT-CAUSE FIX: include ALL customRows (attached AND unattached). When a
+  // breakup ledger is attached to a catch-all static row (e.g. "Others"), that
+  // static row's own value is ZEROED — the child customRow holds the amount —
+  // so the old "attached rows are summed via their parent" assumption dropped
+  // the entire amount. Static parents with children contribute 0 to the leaf
+  // sum above, and each child contributes its value here → no double-count.
   for (const cr of customRows) {
-    if (cr.attachedTo) continue; // attached rows are summed via their parent above
     const v = numeric[cr.id];
     if (v != null) { total += v; hasAny = true; }
   }

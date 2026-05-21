@@ -621,7 +621,22 @@ export function computeDisplayData(
 
     if (config.pattern === "B") {
       let cVal = 0, pVal = 0;
-      for (const id of adds)   { cVal += outCy[id] ?? 0; pVal += outPy[id] ?? 0; }
+      for (const id of adds) {
+        cVal += outCy[id] ?? 0; pVal += outPy[id] ?? 0;
+        // ROOT-CAUSE FIX (Trade Payables / Other Current Liabilities total = 0):
+        // breakup ledgers now attach to a catch-all static row (e.g. "Others"),
+        // and that static row's own value is ZEROED to avoid double-count — the
+        // children hold the amounts. So the Total MUST add the children of each
+        // summed row, exactly like Pattern A does. Without this the note Total
+        // and the FS face (which reads this) showed blank even though the
+        // ledgers were mapped. Mirrors the Pattern A attached-row logic below.
+        if (customRows) {
+          for (const cr of customRows) {
+            if (cr.attachedTo !== id) continue;
+            cVal += outCy[cr.id] ?? 0; pVal += outPy[cr.id] ?? 0;
+          }
+        }
+      }
       for (const id of subs)   { cVal -= outCy[id] ?? 0; pVal -= outPy[id] ?? 0; }
       for (const id of extras) { cVal += outCy[id] ?? 0; pVal += outPy[id] ?? 0; }
       outCy[row.id] = Math.round(cVal * 100) / 100;
