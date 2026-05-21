@@ -135,6 +135,7 @@ export default function MergedAuditMaster({ data, engagementId, onSaved }: Props
 
   const { employees } = useEmployeeDropdown();
   const [showGstPwd, setShowGstPwd] = useState(false);
+  const [showItPwd,  setShowItPwd]  = useState(false);
 
   const t = tax.data;
   const s = stat.data;
@@ -442,6 +443,50 @@ export default function MergedAuditMaster({ data, engagementId, onSaved }: Props
             <div className="w-full">
               <p className="text-[11px] text-muted-foreground">
                 Registered GSTINs on file: <span className="font-mono font-medium">{data.gstin}</span>
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* ── 11b. Income Tax Login Details ── */}
+        <SectionHeader no={11} label="Income Tax Login Details" />
+        <div className="flex flex-wrap items-start gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 flex-1 min-w-[300px]">
+            <div className="space-y-0.5">
+              <Label className="text-xs">Income Tax ID / Username</Label>
+              <Input
+                className="h-8 text-sm font-mono"
+                value={t.it_id}
+                onChange={e => tax.setField("it_id", e.target.value)}
+                placeholder="PAN / Income-tax e-filing user ID…"
+              />
+            </div>
+            <div className="space-y-0.5">
+              <Label className="text-xs">Income Tax Password</Label>
+              <div className="flex gap-1">
+                <Input
+                  className="h-8 text-sm font-mono flex-1"
+                  type={showItPwd ? "text" : "password"}
+                  value={t.it_password}
+                  onChange={e => tax.setField("it_password", e.target.value)}
+                  placeholder="Password…"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 w-8 p-0"
+                  onClick={() => setShowItPwd(v => !v)}
+                >
+                  {showItPwd ? <EyeOff size={14} /> : <Eye size={14} />}
+                </Button>
+              </div>
+            </div>
+          </div>
+          {data.pan && (
+            <div className="w-full">
+              <p className="text-[11px] text-muted-foreground">
+                PAN on file: <span className="font-mono font-medium">{data.pan}</span>
               </p>
             </div>
           )}

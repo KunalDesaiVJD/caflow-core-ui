@@ -64,6 +64,10 @@ export interface TaxMasterData {
   gst_id: string;
   gst_password: string;
 
+  // Field 11b — Income Tax Login Details (e-filing portal credentials)
+  it_id: string;
+  it_password: string;
+
   // Fields 12-14 — YES/NO flags
   payments_to_relatives: "yes" | "no" | "";
   secured_unsecured_loan: "yes" | "no" | "";
@@ -119,6 +123,8 @@ export const BLANK_TAX_MASTER: TaxMasterData = {
   gst_details: "",
   gst_id: "",
   gst_password: "",
+  it_id: "",
+  it_password: "",
   payments_to_relatives: "",
   secured_unsecured_loan: "",
   deduction_details: "",

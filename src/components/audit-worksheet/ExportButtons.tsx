@@ -255,6 +255,8 @@ async function exportExcel(engagementId: string, data: AuditWorksheetData) {
       ["GST Registered",      yesNo(tax.gst_details)],
       ["GST ID",               tax.gst_details === "yes" ? (tax.gst_id ?? "")       : ""],
       ["GST Password",         tax.gst_details === "yes" ? (tax.gst_password ?? "") : ""],
+      ["Income Tax ID",        tax.it_id ?? ""],
+      ["Income Tax Password",  tax.it_password ?? ""],
     );
   }
 
@@ -592,6 +594,8 @@ async function exportPdf(engagementId: string, data: AuditWorksheetData) {
       masterBody.push(["GST ID", fmt(tax.gst_id)]);
       masterBody.push(["GST Password", fmt(tax.gst_password)]);
     }
+    masterBody.push(["Income Tax ID", fmt(tax.it_id)]);
+    masterBody.push(["Income Tax Password", fmt(tax.it_password)]);
   }
   if (isStat) {
     masterBody.push(["CARO 2020 Applicable?", yesNA(stat.caro_applicable) || "—"]);
