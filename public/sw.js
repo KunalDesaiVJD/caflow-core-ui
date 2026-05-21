@@ -1,4 +1,4 @@
-const CACHE_NAME = "caflow-v2";
+const CACHE_NAME = "caflow-v3";
 const PRECACHE_URLS = ["/", "/index.html"];
 
 self.addEventListener("install", (event) => {

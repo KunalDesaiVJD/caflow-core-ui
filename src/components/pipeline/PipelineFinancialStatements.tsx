@@ -35,7 +35,7 @@ import { NotesMismatchPanel } from "@/components/stage7/NotesMismatchPanel";
 import {
   ArrowRight, AlertTriangle, Download, FileSpreadsheet,
   Pencil, Loader2, BarChart3, Droplets, Lock, Database, CheckCircle2,
-  BookOpen, TrendingUp, RefreshCw,
+  BookOpen, TrendingUp, RefreshCw, FileText,
 } from "lucide-react";
 import { NCE_FS_ITEMS } from "@/config/nceLineItems";
 import type { FSLineItem } from "@/config/nceLineItems";
@@ -47,6 +47,7 @@ import {
   type NoteConfig,
 } from "@/config/nceNotesConfig";
 import { computeNceDynamicNoteMap } from "@/lib/nceDynamicNoteNumbers";
+import { generateNCEFinancialsDocx } from "@/lib/nceFinancialsDocx";
 import { sumNotesSubRowsCY, sumNotesSubRowsPY, getSharesOutstanding, getFAGridNetBlockTotal } from "@/lib/notesAutoPopulate";
 import { getNCENoteFaceTotal, NCE_CODE_TO_NOTE, NOTE_NATURE as NCE_NOTE_NATURE } from "@/lib/nceAutoPopulate";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
@@ -6142,6 +6143,26 @@ export default function PipelineFinancialStatements({
           >
             <Download size={14} /> Export Excel
           </Button>
+          {isNonCorporate && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1"
+              title="Export Balance Sheet + P&L as a Big4-style Word document (.docx)"
+              onClick={() => {
+                generateNCEFinancialsDocx({
+                  engagement,
+                  nceCyAmounts,
+                  ncePyAmounts,
+                  cyYear,
+                  pyYear,
+                  dynamicNoteMap: nceDynamicNoteMap,
+                });
+              }}
+            >
+              <FileText size={14} /> Export Word
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={saveFS} disabled={saving} className="gap-1">
             {saving ? <Loader2 size={14} className="animate-spin" /> : <FileSpreadsheet size={14} />}
             Save
