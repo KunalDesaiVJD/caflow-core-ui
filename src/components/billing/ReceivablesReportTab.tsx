@@ -171,10 +171,10 @@ export default function ReceivablesReportTab() {
         supabase.from("billing_receipts")
           .select("client_id, receipt_date, amount_received, tds_amount")
           .eq("firm_id", selectedFirmId),
-        // Opening balances manually entered in Ledger tab
+        // Opening balances — not filtered by firm (clients are cross-firm;
+        // OBs are entered once and apply to whichever firm views the client)
         (supabase as any).from("client_billing_opening_balances")
-          .select("client_id, amount")
-          .eq("firm_id", selectedFirmId),
+          .select("client_id, amount"),
         // Kasar / write-off entries
         (supabase as any).from("billing_kasars")
           .select("client_id, kasar_date, amount")
