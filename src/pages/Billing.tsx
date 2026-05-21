@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import ReceiptsTabComponent from "@/components/billing/ReceiptsTab";
 import LedgerTabComponent from "@/components/billing/LedgerTab";
 import BillingDashboardTab from "@/components/billing/BillingDashboardTab";
@@ -515,7 +515,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
       try {
         const { data: fullInv } = await supabase.from("invoices").select("*").eq("id", shareInvoice.id).single();
         if (fullInv) {
-          pdfBlob = await generateInvoicePdfBlob(fullInv as any);
+          pdfBlob = await generateInvoicePdfBlob(await enrichInvoiceMsme(fullInv) as any);
           pdfBase64 = await new Promise<string>(resolve => {
             const reader = new FileReader();
             reader.onloadend = () => resolve((reader.result as string).split(",")[1]);
@@ -632,7 +632,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
       try {
         const { data: fullInv } = await supabase.from("invoices").select("*").eq("id", inv.id).single();
         if (fullInv) {
-          const blob = await generateInvoicePdfBlob(fullInv as any);
+          const blob = await generateInvoicePdfBlob(await enrichInvoiceMsme(fullInv) as any);
           pdfBase64 = await new Promise<string>(resolve => {
             const reader = new FileReader();
             reader.onloadend = () => resolve((reader.result as string).split(",")[1]);
@@ -710,7 +710,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
       let pdfFilename: string | undefined;
       if (needsPdf && fullInvoiceMap[inv.id]) {
         try {
-          const blob = await generateInvoicePdfBlob(fullInvoiceMap[inv.id] as any);
+          const blob = await generateInvoicePdfBlob(await enrichInvoiceMsme(fullInvoiceMap[inv.id]) as any);
           pdfBase64 = await new Promise<string>(resolve => {
             const reader = new FileReader();
             reader.onloadend = () => resolve((reader.result as string).split(",")[1]);
@@ -757,6 +757,24 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
   const [dlYear, setDlYear] = useState(String(new Date().getFullYear()));
   const [dlFirm, setDlFirm] = useState("all");
   const [bulkZipProgress, setBulkZipProgress] = useState({ current: 0, total: 0, active: false });
+
+  // Fill from_msme from the firm's current settings.msme_no when the invoice
+  // snapshot lacks it (invoices created before from_msme was captured). Cached
+  // per firm_id for the lifetime of the component to avoid repeat queries.
+  const msmeCacheRef = useRef<Record<string, string>>({});
+  const enrichInvoiceMsme = async <T extends { firm_id?: string | null; from_msme?: string | null }>(inv: T): Promise<T> => {
+    if (!inv) return inv;
+    if (inv.from_msme) return inv;
+    const firmId = inv.firm_id || "";
+    if (!firmId) return inv;
+    let msme = msmeCacheRef.current[firmId];
+    if (msme === undefined) {
+      const { data: firm } = await supabase.from("firms").select("settings").eq("id", firmId).single();
+      msme = ((firm?.settings as Record<string, any> | null)?.msme_no as string) || "";
+      msmeCacheRef.current[firmId] = msme;
+    }
+    return msme ? { ...inv, from_msme: msme } : inv;
+  };
 
   // Generate ZIP from an array of full invoice records
   const generateZipFromInvoices = async (invoiceIds: string[], zipName: string) => {
@@ -849,6 +867,9 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
           from_address: firmAddress || inv.from_address || "",
           from_gstin: inv.from_gstin || sourceFirm?.gstin || "",
           from_pan: inv.from_pan || sourceFirm?.pan || "",
+          // Fall back to the firm's current MSME no. so invoices created
+          // before from_msme was snapshotted still print the MSME line.
+          from_msme: inv.from_msme || firmSettings?.msme_no || "",
           from_email: inv.from_email || billingEmail,
           from_phone: inv.from_phone || billingContact,
           logo_url: inv.firm_id ? (firmLogoMap[inv.firm_id] || null) : null,
