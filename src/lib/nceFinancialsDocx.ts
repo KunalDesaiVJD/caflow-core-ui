@@ -29,6 +29,18 @@ import {
 
 import { NOTES_CONFIG, computeDisplayData, NOTE_META } from "@/config/nceNotesConfig";
 import type { NoteConfig } from "@/config/nceNotesConfig";
+import { getActiveFsDivisor, FS_SCALES } from "@/lib/fsUnits";
+
+// ─── Export-time unit scale (set at start of generateNCEFinancialsDocx) ───────
+// These module-level vars are read by fmt() and all header helpers so every
+// amount and column label reflects the user's active Actual / '000 / Lakhs toggle.
+let _exportDivisor = 1;
+let _exportSuffix  = "(₹)";   // e.g. "(₹ in '000)"  — used in column headers
+let _exportUnit    = "₹";     // e.g. "₹ in '000"    — used in prose ("All amounts in …")
+
+function amountUnitsLabel(): string {
+  return `All amounts in ${_exportUnit}`;
+}
 
 // ─── Layout (all DXA: 1 inch = 1440 DXA) ─────────────────────────────────────
 const A4_W   = 11906;           // A4 width
@@ -112,13 +124,13 @@ const BDR_SECT  = { top: bThin, bottom: bNone, left: bNone, right: bNone };
 const BDR_SUB   = { top: bThin, bottom: bThin, left: bNone, right: bNone };
 const BDR_GRAND = { top: bBold, bottom: bBold, left: bNone, right: bNone };
 
-// ─── Amount formatter — Indian numbering system ───────────────────────────────
+// ─── Amount formatter — Indian numbering system + active unit scale ───────────
 function fmt(n: number): string {
-  if (n === 0) return "—";
-  const abs = Math.round(Math.abs(n));
-  // en-IN gives 1,23,456 format
+  const scaled = _exportDivisor === 1 ? n : n / _exportDivisor;
+  if (Math.abs(scaled) < 0.5) return "—";
+  const abs = Math.round(Math.abs(scaled));
   const str = abs.toLocaleString("en-IN");
-  return n < 0 ? `(${str})` : str;
+  return scaled < 0 ? `(${str})` : str;
 }
 
 // Sign helpers — Tally stores credits as negative, debits as positive
@@ -215,8 +227,8 @@ function colHeaderRow(cyLabel: string, pyLabel: string): TableRow {
     children: [
       cell({ text: "Particulars",    w: CW_DESC, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, padL: 100 }),
       cell({ text: "Note\nNo.",      w: CW_NOTE, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.CENTER }),
-      cell({ text: `${cyLabel}\n(₹)`, w: CW_CY,  sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
-      cell({ text: `${pyLabel}\n(₹)`, w: CW_PY,  sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
+      cell({ text: `${cyLabel}\n${_exportSuffix}`, w: CW_CY,  sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
+      cell({ text: `${pyLabel}\n${_exportSuffix}`, w: CW_PY,  sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
     ],
   });
 }
@@ -387,7 +399,7 @@ function buildBSTable(
     ...titleRows(
       entityName,
       "BALANCE SHEET",
-      `As at 31 March ${cyYear}   |   All amounts in ₹`,
+      `As at 31 March ${cyYear}   |   ${amountUnitsLabel()}`,
     ),
     colHeaderRow(`As at 31 Mar ${cyYear}`, `As at 31 Mar ${pyYear}`),
 
@@ -509,7 +521,7 @@ function buildPLTable(
     ...titleRows(
       entityName,
       "PROFIT AND LOSS STATEMENT",
-      `For the year ended 31 March ${cyYear}   |   All amounts in ₹`,
+      `For the year ended 31 March ${cyYear}   |   ${amountUnitsLabel()}`,
     ),
     colHeaderRow(`Year ended 31 Mar ${cyYear}`, `Year ended 31 Mar ${pyYear}`),
 
@@ -658,6 +670,7 @@ function makeFooter(entityName: string): Footer {
 function noteTitleRow(colWidths: number[], noteNumber: string, title: string): TableRow {
   const totalW = colWidths.reduce((s, w) => s + w, 0);
   return new TableRow({
+    cantSplit: true,
     children: [
       new TableCell({
         columnSpan: colWidths.length,
@@ -703,8 +716,8 @@ function noteHdrB(cyYear: string, pyYear: string): TableRow {
     tableHeader: true,
     children: [
       cell({ text: "Particulars", w: NW_DESC, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, padL: 100 }),
-      cell({ text: `${cyYear}\n(₹)`, w: NW_CY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
-      cell({ text: `${pyYear}\n(₹)`, w: NW_PY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
+      cell({ text: `${cyYear}\n${_exportSuffix}`, w: NW_CY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
+      cell({ text: `${pyYear}\n${_exportSuffix}`, w: NW_PY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
     ],
   });
 }
@@ -757,10 +770,10 @@ function noteHdrA(cyYear: string, pyYear: string): TableRow[] {
   const r2 = new TableRow({
     children: [
       cell({ text: "", w: NW_A_DESC, sz: SZ_SM, color: WHITE, bg: BG_HDR, borders: BDR_NONE }),
-      cell({ text: `${cyYear}\n(₹)`, w: NW_A_LTCY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
-      cell({ text: `${pyYear}\n(₹)`, w: NW_A_LTPY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
-      cell({ text: `${cyYear}\n(₹)`, w: NW_A_STCY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
-      cell({ text: `${pyYear}\n(₹)`, w: NW_A_STPY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
+      cell({ text: `${cyYear}\n${_exportSuffix}`, w: NW_A_LTCY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
+      cell({ text: `${pyYear}\n${_exportSuffix}`, w: NW_A_LTPY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
+      cell({ text: `${cyYear}\n${_exportSuffix}`, w: NW_A_STCY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
+      cell({ text: `${pyYear}\n${_exportSuffix}`, w: NW_A_STPY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
     ],
   });
   return [r1, r2];
@@ -888,13 +901,13 @@ function buildCapitalAccountSection(
       tableHeader: true,
       children: [
         h("Partner",              CAP_NAME),
-        h("Opening\nBalance (₹)", CAP_NUM),
-        h("Introduced\n(₹)",      CAP_NUM),
-        h("Remuneration\n(₹)",    CAP_NUM),
-        h("Interest\n(₹)",        CAP_NUM),
-        h("Withdrawals\n(₹)",     CAP_NUM),
-        h("Profit\nShare (₹)",    CAP_NUM),
-        h("Closing\nBalance (₹)", CAP_LAST),
+        h(`Opening Balance\n${_exportSuffix}`, CAP_NUM),
+        h(`Introduced\n${_exportSuffix}`,      CAP_NUM),
+        h(`Remuneration\n${_exportSuffix}`,    CAP_NUM),
+        h(`Interest\n${_exportSuffix}`,        CAP_NUM),
+        h(`Withdrawals\n${_exportSuffix}`,     CAP_NUM),
+        h(`Profit Share\n${_exportSuffix}`,    CAP_NUM),
+        h(`Closing Balance\n${_exportSuffix}`, CAP_LAST),
       ],
     });
   };
@@ -1105,8 +1118,8 @@ function buildPPETable(ppeData: any[], cyYear: string, pyYear: string): Table {
       h("Total\nCost",             PPE_TOT),
       h("Depreciation\nCharged",   PPE_DEPR),
       h("Closing\nBalance",        PPE_CLOS),
-      h(`Net Block\n${cyYear} (₹)`,PPE_NCY),
-      h(`Net Block\n${pyYear} (₹)`,PPE_NPY),
+      h(`Net Block ${cyYear}\n${_exportSuffix}`, PPE_NCY),
+      h(`Net Block ${pyYear}\n${_exportSuffix}`, PPE_NPY),
     ],
   });
 
@@ -1190,6 +1203,12 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     ppeData        = [],
   } = params;
 
+  // Phase 3 — sync unit scale with the active FS toggle (Actual / '000 / Lakhs)
+  _exportDivisor = getActiveFsDivisor();
+  const _scaleMeta = FS_SCALES.find(s => s.divisor === _exportDivisor) ?? FS_SCALES[0];
+  _exportSuffix  = _scaleMeta.suffix;
+  _exportUnit    = _scaleMeta.suffix.replace(/^\(|\)$/g, ""); // strip outer parens
+
   const entityName = engagement?.clients?.name ?? "Entity Name";
   const fy         = engagement?.financial_year ?? `${Number(cyYear) - 1}-${cyYear}`;
   const footer     = makeFooter(entityName);
@@ -1220,11 +1239,15 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     };
   }
 
+  // Notes 3-28: only render notes the user has actually opened and saved.
+  // Un-touched notes (no row in nce_financial_notes) are skipped so the
+  // export stays compact — a note of all dashes adds no audit value.
   const noteTables: Table[] = [];
   for (const cfg of NOTES_CONFIG) {
+    if (!(cfg.noteType in savedNotes)) continue;   // never saved → skip
     const meta = NOTE_META[cfg.noteType];
     const noteNum = meta?.noteNumber ?? cfg.noteType;
-    const data = savedNotes[cfg.noteType] ?? { cy: {}, py: {} };
+    const data = savedNotes[cfg.noteType];
     noteTables.push(buildNoteSection(cfg, data.cy, data.py, noteNum, cyYear, pyYear));
   }
 
