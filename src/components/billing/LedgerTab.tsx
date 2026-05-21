@@ -1072,8 +1072,10 @@ function GroupLedgerView() {
 
   useEffect(() => {
     (async () => {
+      let groupQuery = supabase.from("client_groups").select("id, name").order("name");
+      if (user?.firm_id) groupQuery = groupQuery.eq("firm_id", user.firm_id);
       const [{ data: g }, { data: f }] = await Promise.all([
-        supabase.from("client_groups").select("id, name").order("name"),
+        groupQuery,
         supabase.from("firms").select("id, name, logo_url, legal_name_changes").order("name"),
       ]);
       setGroups(g || []);
