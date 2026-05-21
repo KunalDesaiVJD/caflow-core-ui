@@ -349,12 +349,6 @@ function ClientLedgerView() {
     const resolvedFirmId = obDraftFirmId || (firmId && firmId !== "all" ? firmId : user?.firm_id);
     if (!resolvedFirmId) { toast({ title: "Select a firm first", variant: "destructive" }); return; }
     if (!obDraftDate) { toast({ title: "Balance date is required", variant: "destructive" }); return; }
-    // Validate client belongs to the selected firm to prevent cross-firm OB entries
-    const { data: clientCheck } = await supabase.from("clients").select("firm_id").eq("id", clientId).maybeSingle();
-    if (clientCheck && clientCheck.firm_id !== resolvedFirmId) {
-      toast({ title: "Client does not belong to the selected firm", variant: "destructive" });
-      return;
-    }
     setObSaving(true);
     try {
       const payload = {
