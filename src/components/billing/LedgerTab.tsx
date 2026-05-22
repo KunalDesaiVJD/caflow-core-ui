@@ -178,6 +178,29 @@ async function buildLedgerEntries(
     }
   });
 
+  // Kasars (write-off / settlement) — also a credit entry
+  let kasarQuery = (supabase as any).from("billing_kasars")
+    .select("id, client_id, firm_id, kasar_date, amount, narration")
+    .in("client_id", filters.clientIds)
+    .gte("kasar_date", start).lte("kasar_date", end)
+    .order("kasar_date", { ascending: true });
+  if (filters.firmIds.length > 0) kasarQuery = kasarQuery.in("firm_id", filters.firmIds);
+  const { data: kasars } = await kasarQuery;
+
+  (kasars || []).forEach((k: any) => {
+    entries.push({
+      id: `ksr-${k.id}`,
+      entry_date: k.kasar_date,
+      entry_type: "kasar",
+      document_id: k.id,
+      debit_amount: 0,
+      credit_amount: Number(k.amount) || 0,
+      narration: k.narration ? `Kasar — ${k.narration}` : "Kasar settlement",
+      client_id: k.client_id,
+      firm_id: k.firm_id || undefined,
+    });
+  });
+
   entries.sort((a, b) => a.entry_date.localeCompare(b.entry_date));
   return entries;
 }
@@ -293,8 +316,9 @@ function ClientLedgerView() {
           .select("*")
           .eq("client_id", clientId);
         if (firmId && firmId !== "all") obQ = obQ.eq("firm_id", firmId);
+        // When a specific GSTIN is selected filter by it; when "all", fetch any OB
+        // regardless of GSTIN (previously forced null which hid GSTIN-specific OBs)
         if (selectedGstin && selectedGstin !== "all") obQ = obQ.eq("gstin", selectedGstin);
-        else obQ = obQ.is("gstin", null);
         const { data: obData } = await obQ.maybeSingle();
         if (obData) {
           setObAmount(Number(obData.amount) || 0);

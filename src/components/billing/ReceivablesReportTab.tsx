@@ -164,18 +164,22 @@ export default function ReceivablesReportTab() {
         supabase.from("invoices")
           .select("client_id, invoice_date, total_amount")
           .eq("firm_id", selectedFirmId)
-          .neq("status", "voided"),
+          .neq("status", "voided")
+          .limit(10000),
         supabase.from("billing_receipts")
           .select("client_id, receipt_date, amount_received, tds_amount")
-          .eq("firm_id", selectedFirmId),
+          .eq("firm_id", selectedFirmId)
+          .limit(10000),
         // Opening balances for the selected firm only
         (supabase as any).from("client_billing_opening_balances")
           .select("client_id, amount")
-          .eq("firm_id", selectedFirmId),
+          .eq("firm_id", selectedFirmId)
+          .limit(10000),
         // Kasar / write-off entries
         (supabase as any).from("billing_kasars")
           .select("client_id, kasar_date, amount")
-          .eq("firm_id", selectedFirmId),
+          .eq("firm_id", selectedFirmId)
+          .limit(10000),
       ]);
 
       if (iErr) throw iErr;
@@ -222,7 +226,10 @@ export default function ReceivablesReportTab() {
 
         for (const rec of receipts || []) {
           if (rec.client_id !== c.id) continue;
-          const amt = Number(rec.amount_received || 0) + Number(rec.tds_amount || 0);
+          // amount_received is cash actually received; tds_amount is client-deducted tax
+          // — do NOT add tds_amount here; TDS reduces what we receive in cash but is a
+          //   separate credit shown as TDS adjustment in the detailed ledger
+          const amt = Number(rec.amount_received || 0);
           if (!amt) continue;
           if (rec.receipt_date && rec.receipt_date < fromDate) openingCr += amt;
           else if (rec.receipt_date && rec.receipt_date >= fromDate && rec.receipt_date <= toDate) credit += amt;
@@ -312,7 +319,7 @@ export default function ReceivablesReportTab() {
       ]);
 
       const obAmount: number = obResult?.data?.amount ? Number(obResult.data.amount) : 0;
-      const obDate: string   = obResult?.data?.balance_date || fromDate;
+      const obDate: string   = obResult?.data?.balance_date || "";
       const obNarration      = obResult?.data?.narration || "Opening Balance";
 
       // opening = manual OB + pre-period invoices − pre-period receipts
@@ -347,7 +354,7 @@ export default function ReceivablesReportTab() {
       }
 
       for (const rec of recData || []) {
-        const amt = Number(rec.amount_received || 0) + Number(rec.tds_amount || 0);
+        const amt = Number(rec.amount_received || 0);
         tmp.push({
           date:      rec.receipt_date,
           doc_no:    rec.id.slice(0, 8).toUpperCase(),
