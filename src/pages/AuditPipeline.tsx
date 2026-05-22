@@ -7,6 +7,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import { ensureAuditSetupForEngagement } from "@/lib/auditEngagementSync";
 import { useAuth } from "@/hooks/useAuth";
 import { useAuditContext } from "@/hooks/useAuditContext";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -766,6 +767,11 @@ export default function AuditPipeline() {
         stage_statuses: { "1": "in_progress", "2": "not_started", "3": "not_started", "4": "not_started", "5": "not_started", "6": "not_started", "7": "not_started", "8": "not_started", "9": "not_started" },
       } as any).select("id").single();
       if (error) throw error;
+
+      // Ensure this client+FY has an audit-setup row so FY-scoped consumers
+      // (e.g. the Audit Status 3CA/3CB+3CD lock) never fall back to a stale
+      // engagement_type. Fills only if missing — never overwrites.
+      await ensureAuditSetupForEngagement(form1A.client_id, form1A.financial_year, form1A.audit_type);
 
       // ── Carry-forward prior year COA mapping ─────────────────────────────
       // After the new engagement is inserted, find the immediately preceding FY

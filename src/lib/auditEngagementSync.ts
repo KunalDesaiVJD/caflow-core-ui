@@ -37,6 +37,43 @@ export function deriveMainAuditType(
   return null;
 }
 
+/**
+ * Ensure a client_fy_audit_setup row exists for the engagement's client+FY,
+ * derived from the engagement's audit_type. Called right after an engagement
+ * is created so a new engagement never leaves an FY-scoped applicability gap
+ * (which is what made the Audit Status grid fall back to engagement_type).
+ *
+ * Never overwrites an existing setup row — only fills a missing one.
+ */
+export async function ensureAuditSetupForEngagement(
+  clientId: string,
+  financialYear: string | null | undefined,
+  auditType: string | null | undefined,
+): Promise<void> {
+  if (!clientId || !financialYear) return;
+  try {
+    const { data: existing } = await (supabase as any)
+      .from("client_fy_audit_setup")
+      .select("client_id")
+      .eq("client_id", clientId)
+      .eq("financial_year", financialYear)
+      .limit(1);
+    if (existing && existing.length > 0) return; // already has a setup row — don't clobber
+    const t = (auditType || "").toLowerCase();
+    await (supabase as any).from("client_fy_audit_setup").insert({
+      client_id: clientId,
+      financial_year: financialYear,
+      statutory_audit_applicable: t === "statutory" || t === "both",
+      tax_audit_applicable:       t === "tax_audit" || t === "both",
+      caro_applicable:            false,
+      internal_audit_applicable:  t === "internal",
+      stock_audit_applicable:     t === "stock",
+    });
+  } catch (err) {
+    console.error("[auditEngagementSync] ensure setup failed:", err);
+  }
+}
+
 export async function reconcileEngagementAuditType(
   clientId: string,
   financialYear: string | null | undefined,
