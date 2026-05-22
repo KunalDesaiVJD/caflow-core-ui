@@ -154,16 +154,13 @@ export default function ReceivablesReportTab() {
     if (!selectedFirmId) return;
     setLoading(true);
     try {
+      // Fetch all transaction data for this firm first (these are small result sets)
       const [
-        { data: clients,  error: cErr },
         { data: invoices, error: iErr },
         { data: receipts, error: rErr },
         { data: obRows,   error: oErr },
         { data: kasars },
       ] = await Promise.all([
-        supabase.from("clients")
-          .select("id, name, email")
-          .order("name"),
         supabase.from("invoices")
           .select("client_id, invoice_date, total_amount")
           .eq("firm_id", selectedFirmId)
@@ -181,10 +178,30 @@ export default function ReceivablesReportTab() {
           .eq("firm_id", selectedFirmId),
       ]);
 
-      if (cErr) throw cErr;
       if (iErr) throw iErr;
       if (rErr) throw rErr;
-      // oErr is non-fatal — table might not exist yet
+
+      // Collect distinct client IDs that have ANY activity for this firm
+      // This avoids the 1000-row Supabase default limit on a full clients fetch
+      const activeClientIds = new Set<string>([
+        ...(obRows   || []).map((r: any) => r.client_id),
+        ...(invoices || []).map((r: any) => r.client_id),
+        ...(receipts || []).map((r: any) => r.client_id),
+        ...(kasars   || []).map((r: any) => r.client_id),
+      ]);
+
+      // Fetch only those clients (at most a few hundred — safe from pagination)
+      const ids = Array.from(activeClientIds);
+      let clients: { id: string; name: string; email: string | null }[] = [];
+      if (ids.length > 0) {
+        const { data: cData, error: cErr } = await supabase
+          .from("clients")
+          .select("id, name, email")
+          .in("id", ids)
+          .order("name");
+        if (cErr) throw cErr;
+        clients = cData || [];
+      }
 
       // Build OB map: client_id → amount
       const obMap: Record<string, number> = {};
@@ -192,7 +209,7 @@ export default function ReceivablesReportTab() {
         obMap[ob.client_id] = (obMap[ob.client_id] ?? 0) + Number(ob.amount || 0);
       }
 
-      const built: ClientRow[] = (clients || []).map(c => {
+      const built: ClientRow[] = clients.map(c => {
         let openingDr = 0, openingCr = 0, debit = 0, credit = 0;
 
         for (const inv of invoices || []) {
