@@ -15,6 +15,7 @@ const toLocalDateStr = (dt: Date): string => {
 };
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import { reconcileEngagementAuditType } from "@/lib/auditEngagementSync";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -863,6 +864,16 @@ const NewClientWizard = () => {
         ? ((auditSetup as any).tax_audit_type || "3CB")
         : null,
     } as any).eq("id", targetClientId);
+    // Propagate the applicability change to any existing engagement so its
+    // audit_type matches the new setup (e.g. unticking Tax Audit flips a
+    // 'tax_audit' engagement to 'statutory'). Without this the engagement and
+    // the Audit Status grid stay stale.
+    await reconcileEngagementAuditType(
+      targetClientId,
+      auditSetup.financial_year || advancedInfo.financial_year,
+      auditSetup.statutory_audit_applicable,
+      auditSetup.tax_audit_applicable,
+    );
   };
 
   /* ───── Draft → Final promotion helper ─────────────────────────────────────
