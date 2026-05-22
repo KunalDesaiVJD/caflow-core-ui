@@ -303,6 +303,9 @@ const NewInvoice = () => {
   const [status, setStatus] = useState("draft");
   const [showLogo, setShowLogo] = useState(true);
   const [remarksConditions, setRemarksConditions] = useState("");
+  // Editable payment-terms window (days). Default 45; shown on the invoice as
+  // "PAYMENT IS DUE WITHIN <N> DAYS FROM THE INVOICE DATE".
+  const [paymentDueDays, setPaymentDueDays] = useState<number>(45);
   const [baseTurnover, setBaseTurnover] = useState("");
   const [sourceDocumentId, setSourceDocumentId] = useState("");
 
@@ -506,6 +509,7 @@ const NewInvoice = () => {
         setToGstin(inv.to_gstin || "");
         setToAddress(inv.to_address || "");
         setRemarksConditions((inv as any).remarks_conditions || "");
+        setPaymentDueDays(Number((inv as any).payment_due_days) > 0 ? Number((inv as any).payment_due_days) : 45);
         setBaseTurnover((inv as any).base_turnover ? String((inv as any).base_turnover) : "");
         setSourceDocumentId((inv as any).source_document_id || "");
         setTdsSectionCode((inv as any).tds_section_code || "");
@@ -806,7 +810,8 @@ const NewInvoice = () => {
         to_address: toAddress,
         to_gstin: toGstin,
         bank_details_snapshot: bankDetails,
-        payment_terms: "PAYMENT IS DUE WITHIN 45 DAYS FROM THE INVOICE DATE",
+        payment_due_days: paymentDueDays,
+        payment_terms: `PAYMENT IS DUE WITHIN ${paymentDueDays} DAYS FROM THE INVOICE DATE`,
         line_items: items.map(li => ({
           description: li.description,
           description_details: li.description_details,
@@ -918,6 +923,7 @@ const NewInvoice = () => {
       setToGstin(source.to_gstin || "");
       setToAddress(source.to_address || "");
       setRemarksConditions((source as any).remarks_conditions || "");
+      setPaymentDueDays(Number((source as any).payment_due_days) > 0 ? Number((source as any).payment_due_days) : 45);
       setBaseTurnover((source as any).base_turnover ? String((source as any).base_turnover) : "");
       if (Array.isArray(source.line_items) && source.line_items.length > 0) {
         setLineItems(source.line_items.map((li: any, i: number) => ({
@@ -988,6 +994,7 @@ const NewInvoice = () => {
       total_amount: inrGrandTotal,
       reference_no: referenceNo || null,
       remarks_conditions: remarksConditions || null,
+      payment_due_days: paymentDueDays,
       bank_details_snapshot: bankDetails,
       signatory_name: firmName,
       logo_url: firmLogoUrl,
@@ -1001,7 +1008,7 @@ const NewInvoice = () => {
   }, [lineItems, invoiceNo, invoiceDate, referenceNo, placeOfSupply, effectiveIsIntraState,
     firm, firmName, firmFullAddress, firmGstin, bankDetails, showLogo, firmLogoUrl,
     toName, toGstin, toAddress, totalTaxable, totalGst, inrGrandTotal,
-    billingEmail, billingContact, docType, remarksConditions,
+    billingEmail, billingContact, docType, remarksConditions, paymentDueDays,
     invoiceType, exportCurrency, exchangeRate, lutNumber, isExport, isExportWithoutIGST]);
 
   if (loading) return <div className="p-6"><Skeleton className="h-[400px] w-full" /></div>;
@@ -1550,6 +1557,23 @@ const NewInvoice = () => {
               className="text-sm h-20"
               disabled={isLocked}
             />
+          </div>
+
+          {/* Payment due days — drives the "PAYMENT IS DUE WITHIN N DAYS" line */}
+          <div>
+            <Label className="text-xs">Payment Due (days)</Label>
+            <Input
+              type="number"
+              min={0}
+              value={paymentDueDays}
+              onChange={e => setPaymentDueDays(Math.max(0, Number(e.target.value) || 0))}
+              placeholder="45"
+              className="text-sm max-w-[120px]"
+              disabled={isLocked}
+            />
+            <p className="text-[11px] text-muted-foreground mt-1">
+              Prints as “PAYMENT IS DUE WITHIN {paymentDueDays} DAYS FROM THE INVOICE DATE”.
+            </p>
           </div>
 
           <Separator />

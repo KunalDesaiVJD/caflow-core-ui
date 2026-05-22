@@ -70,6 +70,7 @@ interface InvoiceRecord {
   firm_settings?: {
     logo_url?: string | null;
   } | null;
+  payment_due_days?: number | null;
   invoice_type?: string | null;
   export_currency?: string | null;
   exchange_rate?: number | null;
@@ -371,6 +372,9 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
   const firmGstin = inv.from_gstin || "";
   const firmPan = inv.from_pan || "";
   const firmMsme = inv.from_msme || "";
+  const paymentDueDays = (typeof inv.payment_due_days === "number" && inv.payment_due_days > 0)
+    ? inv.payment_due_days
+    : 45;
   const firmAddr = inv.from_address || "";
   const firmEmail = inv.from_email || "";
   const firmPhone = inv.from_phone || "";
@@ -583,7 +587,7 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
 
     <div style="margin-top:16px;padding-top:8px;padding-bottom:10px;border-top:1px solid #ddd;font-size:10px;color:#555">
       <p style="font-weight:700;margin:0 0 4px">Terms & Conditions:</p>
-      <p style="margin:0;font-weight:700;letter-spacing:0.5px">PAYMENT TERMS: PAYMENT IS DUE WITHIN 45 DAYS FROM THE INVOICE DATE</p>
+      <p style="margin:0;font-weight:700;letter-spacing:0.5px">PAYMENT TERMS: PAYMENT IS DUE WITHIN ${paymentDueDays} DAYS FROM THE INVOICE DATE</p>
       ${firmMsme ? `<p style="margin:6px 0 0;font-weight:700;letter-spacing:0.5px">MSME No: ${firmMsme}</p>` : ""}
     </div>
 
