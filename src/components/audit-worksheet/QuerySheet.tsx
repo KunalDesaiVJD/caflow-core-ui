@@ -31,7 +31,7 @@ import {
   Search, X, BookOpen, Send, CheckCircle2,
   ChevronRight, ArrowRight, AlertTriangle,
   CheckSquare, Square, Calendar, Rocket, BarChart2,
-  Sparkles, FileText,
+  Sparkles, FileText, RefreshCw,
 } from "lucide-react";
 import { LedgerSidePanel }              from "./LedgerSidePanel";
 import { QueryAnalyticsSidebar }        from "./QueryAnalyticsSidebar";
@@ -49,42 +49,6 @@ import {
   STATUS_META, PRIORITY_META,
 } from "./hooks/useQuerySheetStorage";
 import type { QueryRow, QueryStatus, QueryPriority } from "./hooks/useQuerySheetStorage";
-import {
-  buildAuditEmailHtml, buildAuditEmailSubject, type AuditQueryRow,
-} from "@/components/email/EmailTemplateEngine";
-
-/**
- * Build the send-notification payload for a query-dispatch email so the client
- * receives the FULL query table (not just a portal link). Every dispatch path
- * (single, bulk, dispatch page) routes through this so the table is always
- * included — the edge function relays payload.custom_html verbatim.
- */
-function buildQueryDispatchPayload(opts: {
-  clientName?:   string | null;
-  firmName?:     string | null;
-  financialYear?: string | null;
-  queries:       AuditQueryRow[];
-  portalPath?:   string;
-}): Record<string, any> {
-  const portalUrl = `${window.location.origin}${opts.portalPath ?? "/portal/queries"}`;
-  const n = opts.queries.length;
-  const html = buildAuditEmailHtml("audit_query_dispatch", {
-    clientName:    opts.clientName || "Client",
-    firmName:      opts.firmName || "your CA firm",
-    financialYear: opts.financialYear || undefined,
-    portalUrl,
-    queries:       opts.queries,
-  });
-  return {
-    client_name:    opts.clientName || "Client",
-    firm_name:      opts.firmName || undefined,
-    custom_subject: buildAuditEmailSubject("audit_query_dispatch", opts.financialYear || undefined),
-    custom_html:    html,
-    // Plain-text fallback (used only if a relay can't render custom_html).
-    custom_message: `${n} audit ${n === 1 ? "query has" : "queries have"} been raised for your attention. Please log in to the CAFlow client portal to view and respond.`,
-    portal_url:     portalUrl,
-  };
-}
 import { useTallyOptions } from "./hooks/useTallyOptions";
 import type { AuditWorksheetData } from "./hooks/useAuditWorksheetData";
 
@@ -451,30 +415,11 @@ function BulkDispatchDialog({
 
       onDispatched(results);
 
-      // ── Email client: notify queries dispatched (full query table) ──
-      if (firmId && clientId && results.length > 0) {
-        // Build one table row per dispatched query (use the actual rows so the
-        // client sees every query, its required docs and ledger/group).
-        const dispatchedRows = undispatched.filter(r =>
-          results.some(res => res.id === r.id));
-        const queryRows: AuditQueryRow[] = dispatchedRows.map(r => ({
-          query_text:         r.query_description || r.head || "(see ledger)",
-          required_documents: r.required_documents,
-          group_name:         r.head,
-          ledger_name:        r.particulars,
-        }));
-        supabase.functions.invoke("send-notification", {
-          body: {
-            type:      "audit_query_dispatch",
-            firm_id:   firmId,
-            client_id: clientId,
-            payload: buildQueryDispatchPayload({
-              clientName, firmName, financialYear,
-              queries: queryRows,
-            }),
-          },
-        }).catch(() => { /* email failure non-blocking */ });
-      }
+      // ISSUE 1 (root-cause fix): dispatching from the Query Sheet must NOT
+      // email the client. It only moves the queries into Stage 3 — Audit Query
+      // Tracker (the audit_client_queries inserts above). The auditor sends the
+      // consolidated email later from Stage 3 ("Dispatch Queries"), where the
+      // sent email matches the preview exactly. No email is sent here.
 
       onClose();
     } catch (err: any) {
@@ -700,53 +645,53 @@ export default function QuerySheet({
     if (!data.engagement?.client_id) { toast.error("No client linked"); return; }
     setDispatchingId(row.id);
     try {
-      const { data: created, error } = await supabase
-        .from("audit_client_queries" as any)
-        .insert({
-          query_text:         row.query_description || row.head,
-          required_documents: row.required_documents || null,
-          ledger_name:        row.particulars || null,
-          group_name:         row.head || null,
-          priority:           row.priority || "Medium",
-          due_date:           row.due_date || null,
-          engagement_id:      engagementId,
-          client_id:          data.engagement.client_id,
-          firm_id:            data.engagement.firm_id || null,
-          financial_year:     data.financialYear || null,
-          status:             "Open",
-          source:             "worksheet",
-          source_ref_id:      row.id,
-        } as any)
-        .select("id")
-        .maybeSingle();
-      if (error) throw error;
-      if (created) {
-        updateQuery(row.id, "dispatched_query_id" as any, (created as any).id);
-        if (row.query_status === "raised" || row.query_status === "draft")
-          setQueryStatus(row.id, "dispatched");
-      }
-      toast.success("Query dispatched to client portal");
+      // Shared fields for both insert (first dispatch) and update (re-dispatch).
+      const fields = {
+        query_text:         row.query_description || row.head,
+        required_documents: row.required_documents || null,
+        ledger_name:        row.particulars || null,
+        group_name:         row.head || null,
+        priority:           row.priority || "Medium",
+        due_date:           row.due_date || null,
+      };
 
-      // ── Email client: notify query dispatched (full query table) ────
-      if (data.engagement?.firm_id && data.engagement?.client_id) {
-        supabase.functions.invoke("send-notification", {
-          body: {
-            type:      "audit_query_dispatch",
-            firm_id:   data.engagement.firm_id,
-            client_id: data.engagement.client_id,
-            payload: buildQueryDispatchPayload({
-              clientName:    data.clientName,
-              firmName:      data.firmName,
-              financialYear: data.financialYear,
-              queries: [{
-                query_text:         row.query_description || row.head || "(see ledger)",
-                required_documents: row.required_documents,
-                group_name:         row.head,
-                ledger_name:        row.particulars,
-              }],
-            }),
-          },
-        }).catch(() => { /* email failure non-blocking */ });
+      if (row.dispatched_query_id) {
+        // ISSUE 4 (re-dispatch): the query is already in Stage 3 — UPDATE the
+        // existing entry (corrected text / docs / priority) instead of creating
+        // a duplicate. Lets the auditor "update & resend" the same query.
+        const { error } = await supabase
+          .from("audit_client_queries" as any)
+          .update({ ...fields, updated_at: new Date().toISOString() } as any)
+          .eq("id", row.dispatched_query_id);
+        if (error) throw error;
+        toast.success("Query updated in Stage 3 — Audit Query Tracker");
+      } else {
+        const { data: created, error } = await supabase
+          .from("audit_client_queries" as any)
+          .insert({
+            ...fields,
+            engagement_id:      engagementId,
+            client_id:          data.engagement.client_id,
+            firm_id:            data.engagement.firm_id || null,
+            financial_year:     data.financialYear || null,
+            status:             "Open",
+            source:             "worksheet",
+            source_ref_id:      row.id,
+          } as any)
+          .select("id")
+          .maybeSingle();
+        if (error) throw error;
+        if (created) {
+          updateQuery(row.id, "dispatched_query_id" as any, (created as any).id);
+          if (row.query_status === "raised" || row.query_status === "draft")
+            setQueryStatus(row.id, "dispatched");
+        }
+        // ISSUE 1 (root-cause fix): "Dispatch" in the Query Sheet must NOT email
+        // the client. It only moves the query into Stage 3 — Audit Query Tracker
+        // (the audit_client_queries insert above). The auditor then reviews and
+        // sends the consolidated email from Stage 3 ("Dispatch Queries"). This
+        // stops clients being emailed one-off the instant a query is raised.
+        toast.success("Query moved to Stage 3 — Audit Query Tracker");
       }
     } catch (err: any) {
       toast.error(err.message || "Dispatch failed");
@@ -1191,17 +1136,32 @@ export default function QuerySheet({
                       )}
                     </td>
 
-                    {/* Dispatch */}
+                    {/* Dispatch / Re-dispatch */}
                     <td className="border border-border px-2 py-2 align-middle text-center">
                       {row.dispatched_query_id ? (
-                        <div className="flex flex-col items-center gap-0.5">
-                          <CheckCircle2 size={13} className="text-green-600" />
-                          <span className="text-[9px] text-green-700">Sent</span>
+                        // ISSUE 4: keep a Re-dispatch button after the first
+                        // dispatch so the auditor can update & resend the same
+                        // query (e.g. after a correction) — it updates the
+                        // existing Stage 3 entry instead of creating a duplicate.
+                        <div className="flex items-center justify-center gap-1">
+                          <span className="flex flex-col items-center gap-0.5" title="Already in Stage 3 — Audit Query Tracker">
+                            <CheckCircle2 size={13} className="text-green-600" />
+                            <span className="text-[9px] text-green-700">Sent</span>
+                          </span>
+                          <Button size="sm" variant="ghost"
+                            className="h-7 w-7 p-0 text-muted-foreground hover:text-primary hover:bg-primary/10"
+                            title="Re-dispatch — update this query in Stage 3"
+                            disabled={dispatchingId === row.id}
+                            onClick={() => dispatchToClient(row)}>
+                            {dispatchingId === row.id
+                              ? <Loader2 size={12} className="animate-spin" />
+                              : <RefreshCw size={12} />}
+                          </Button>
                         </div>
                       ) : (
                         <Button size="sm" variant="ghost"
                           className="h-7 w-7 p-0 text-muted-foreground hover:text-primary hover:bg-primary/10"
-                          title="Dispatch to client portal"
+                          title="Dispatch to Stage 3 — Audit Query Tracker"
                           disabled={dispatchingId === row.id}
                           onClick={() => dispatchToClient(row)}>
                           {dispatchingId === row.id

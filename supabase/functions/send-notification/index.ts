@@ -418,6 +418,12 @@ async function sendEmail(
             toRecipients: [{ emailAddress: { address: toEmail } }],
             ...(ccRecipients.length > 0 ? { ccRecipients } : {}),
             from:         { emailAddress: { name: firmName, address: fromEmail } },
+            // Deliverability (Issue 3 — reduce spam classification): a valid
+            // Reply-To to a real, monitored firm mailbox makes the message look
+            // like genuine 1:1 correspondence rather than bulk mail, and lets
+            // clients reply directly. (The decisive spam fix is DNS — SPF, DKIM
+            // and DMARC for the sending domain in Microsoft 365.)
+            replyTo: [{ emailAddress: { address: payload.reply_to || fromEmail, name: firmName } }],
             // Attach PDF when base64 data is supplied by the caller
             ...(payload.pdf_base64 ? {
               attachments: [{
