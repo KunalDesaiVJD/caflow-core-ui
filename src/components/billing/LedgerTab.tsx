@@ -235,6 +235,8 @@ function ClientLedgerView() {
   const [obDraftDate, setObDraftDate] = useState<string>("");
   const [obDraftNarration, setObDraftNarration] = useState<string>("");
   const [obSaving, setObSaving] = useState(false);
+  const [obDeleting, setObDeleting] = useState(false);
+  const [obConfirmDelete, setObConfirmDelete] = useState(false);
 
   const selectedClientEmails = useMemo(() => {
     const c = clients.find(x => x.id === clientId);
@@ -373,6 +375,22 @@ function ClientLedgerView() {
       toast({ title: "Error saving opening balance", description: err.message, variant: "destructive" });
     }
     setObSaving(false);
+  };
+
+  const handleDeleteOpeningBalance = async () => {
+    if (!obId) return;
+    setObDeleting(true);
+    try {
+      const { error } = await (supabase as any).from("client_billing_opening_balances").delete().eq("id", obId);
+      if (error) throw error;
+      toast({ title: "Opening balance deleted" });
+      setObDialogOpen(false);
+      setObConfirmDelete(false);
+      loadEntries();
+    } catch (err: any) {
+      toast({ title: "Error deleting opening balance", description: err.message, variant: "destructive" });
+    }
+    setObDeleting(false);
   };
 
   const handleDownloadXlsx = () => {
@@ -762,6 +780,7 @@ function ClientLedgerView() {
               setObDraftNarration(obNarration || "");
               setObDraftGstin(selectedGstin);
               setObDraftFirmId(firmId && firmId !== "all" ? firmId : (user?.firm_id ?? ""));
+              setObConfirmDelete(false);
               setObDialogOpen(true);
             }}
           >
@@ -981,7 +1000,7 @@ function ClientLedgerView() {
       </Dialog>
 
       {/* Opening Balance Dialog */}
-      <Dialog open={obDialogOpen} onOpenChange={setObDialogOpen}>
+      <Dialog open={obDialogOpen} onOpenChange={v => { setObDialogOpen(v); if (!v) setObConfirmDelete(false); }}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>Opening Balance</DialogTitle>
@@ -1026,12 +1045,32 @@ function ClientLedgerView() {
               <Input value={obDraftNarration} onChange={e => setObDraftNarration(e.target.value)} placeholder="e.g. Balance b/f from previous year" />
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setObDialogOpen(false)} disabled={obSaving}>Cancel</Button>
-            <Button onClick={handleSaveOpeningBalance} disabled={obSaving}>
-              {obSaving ? "Saving..." : "Save"}
-            </Button>
-          </DialogFooter>
+          {obConfirmDelete ? (
+            <div className="rounded-md bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive space-y-3">
+              <p className="font-medium">Delete this opening balance?</p>
+              <p className="text-xs text-muted-foreground">This will remove the opening balance from the ledger and report. This action cannot be undone.</p>
+              <div className="flex gap-2">
+                <Button variant="destructive" size="sm" onClick={handleDeleteOpeningBalance} disabled={obDeleting} className="flex-1">
+                  {obDeleting ? "Deleting..." : "Yes, Delete"}
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setObConfirmDelete(false)} disabled={obDeleting} className="flex-1">
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <DialogFooter className="flex-col sm:flex-row gap-2">
+              {obId && (
+                <Button variant="destructive" onClick={() => setObConfirmDelete(true)} disabled={obSaving} className="sm:mr-auto">
+                  Delete
+                </Button>
+              )}
+              <Button variant="outline" onClick={() => setObDialogOpen(false)} disabled={obSaving}>Cancel</Button>
+              <Button onClick={handleSaveOpeningBalance} disabled={obSaving}>
+                {obSaving ? "Saving..." : "Save"}
+              </Button>
+            </DialogFooter>
+          )}
         </DialogContent>
       </Dialog>
     </div>
