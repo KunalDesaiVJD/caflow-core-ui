@@ -562,7 +562,14 @@ export default function AuditStatusRow({
   // CP-07 BUG D: show for statutory/both engagement_type OR corporate entity
   const showUdinStatutoryEdit = isStatutoryOrBoth(row.engagement_type) || isCorporate(draft.entityType);
   // 3CA/3CB+3CD columns are locked to "NA" when tax audit is not applicable.
-  const taxAuditApplicable = isTaxAuditApplicable(row.engagement_type);
+  // Authoritative source: the client's tax_audit_applicable flag for this FY
+  // (from client_fy_audit_setup). When that flag isn't available (null), fall
+  // back to engagement_type. engagement_type alone is unreliable — some
+  // statutory-only clients have it blank — which is why the flag wins.
+  const clientTaxFlag = clients.find(c => c.id === row.client_id)?.tax_audit_applicable;
+  const taxAuditApplicable = typeof clientTaxFlag === "boolean"
+    ? clientTaxFlag
+    : isTaxAuditApplicable(row.engagement_type);
   const showOther = draft.audit_status === "OTHERS (SPECIFY)";
 
   const statusColor = STATUS_COLORS[row.audit_status || ""] || "bg-gray-100 text-gray-600";
