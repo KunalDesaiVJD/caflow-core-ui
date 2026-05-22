@@ -62,6 +62,20 @@ function isCorporate(entityType: string | null | undefined) {
   );
 }
 
+/**
+ * Tax audit applicability for the 3CA/3CB+3CD columns.
+ * Applicable only when the engagement covers a tax audit ("tax_audit" or
+ * "both"). For statutory-only engagements (e.g. a company where tax audit is
+ * not applicable) the 3CA/3CB+3CD Prepared/Checked/Uploaded-By columns are
+ * locked to "NA". Unknown/empty engagement_type defaults to applicable so we
+ * never wrongly lock a row.
+ */
+function isTaxAuditApplicable(engType: string | null | undefined) {
+  if (!engType) return true;
+  const t = engType.toLowerCase().trim();
+  return t === "tax_audit" || t === "both";
+}
+
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -521,6 +535,13 @@ export default function AuditStatusRow({
   async function commitSave() {
     setSaving(true);
     const patch = draftToPatch(draft);
+    // Force the 3CA/3CB+3CD columns to "NA" when tax audit is not applicable,
+    // so the persisted value matches the locked "NA" shown in the grid.
+    if (!taxAuditApplicable) {
+      patch.prepared_by = "NA";
+      patch.checked_by  = "NA";
+      patch.uploaded_by = "NA";
+    }
     if (isNew && onAdd) {
       await onAdd(patch);
     } else {
@@ -540,6 +561,8 @@ export default function AuditStatusRow({
   // ── Convenience aliases ───────────────────────────────────────────────────────
   // CP-07 BUG D: show for statutory/both engagement_type OR corporate entity
   const showUdinStatutoryEdit = isStatutoryOrBoth(row.engagement_type) || isCorporate(draft.entityType);
+  // 3CA/3CB+3CD columns are locked to "NA" when tax audit is not applicable.
+  const taxAuditApplicable = isTaxAuditApplicable(row.engagement_type);
   const showOther = draft.audit_status === "OTHERS (SPECIFY)";
 
   const statusColor = STATUS_COLORS[row.audit_status || ""] || "bg-gray-100 text-gray-600";
@@ -795,25 +818,31 @@ export default function AuditStatusRow({
             </Badge>}
       </TCell>
 
-      {/* 15 · Prepared By */}
+      {/* 15 · Prepared By — locked to "NA" when tax audit not applicable */}
       <TCell className="min-w-[110px]">
-        {editing
-          ? <UserCombobox value={draft.prepared_by} onChange={v => set("prepared_by", v)} users={users} placeholder="Prepared…" />
-          : <span className="text-[11px] truncate block" title={row.prepared_by || ""}>{row.prepared_by || "—"}</span>}
+        {!taxAuditApplicable
+          ? <span className="text-[11px] text-muted-foreground" title="Tax audit not applicable">NA</span>
+          : editing
+            ? <UserCombobox value={draft.prepared_by} onChange={v => set("prepared_by", v)} users={users} placeholder="Prepared…" />
+            : <span className="text-[11px] truncate block" title={row.prepared_by || ""}>{row.prepared_by || "—"}</span>}
       </TCell>
 
-      {/* 16 · Checked By */}
+      {/* 16 · Checked By — locked to "NA" when tax audit not applicable */}
       <TCell className="min-w-[110px]">
-        {editing
-          ? <UserCombobox value={draft.checked_by} onChange={v => set("checked_by", v)} users={users} placeholder="Checked…" />
-          : <span className="text-[11px] truncate block" title={row.checked_by || ""}>{row.checked_by || "—"}</span>}
+        {!taxAuditApplicable
+          ? <span className="text-[11px] text-muted-foreground" title="Tax audit not applicable">NA</span>
+          : editing
+            ? <UserCombobox value={draft.checked_by} onChange={v => set("checked_by", v)} users={users} placeholder="Checked…" />
+            : <span className="text-[11px] truncate block" title={row.checked_by || ""}>{row.checked_by || "—"}</span>}
       </TCell>
 
-      {/* 17 · Uploaded By */}
+      {/* 17 · Uploaded By — locked to "NA" when tax audit not applicable */}
       <TCell className="min-w-[110px]">
-        {editing
-          ? <UserCombobox value={draft.uploaded_by} onChange={v => set("uploaded_by", v)} users={users} placeholder="Uploaded…" />
-          : <span className="text-[11px] truncate block" title={row.uploaded_by || ""}>{row.uploaded_by || "—"}</span>}
+        {!taxAuditApplicable
+          ? <span className="text-[11px] text-muted-foreground" title="Tax audit not applicable">NA</span>
+          : editing
+            ? <UserCombobox value={draft.uploaded_by} onChange={v => set("uploaded_by", v)} users={users} placeholder="Uploaded…" />
+            : <span className="text-[11px] truncate block" title={row.uploaded_by || ""}>{row.uploaded_by || "—"}</span>}
       </TCell>
 
       {/* 18 · Remarks */}
