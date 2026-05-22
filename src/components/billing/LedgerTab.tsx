@@ -387,11 +387,14 @@ function ClientLedgerView() {
         created_by: user?.id,
         updated_at: new Date().toISOString(),
       };
+      // Destructure error — Supabase does NOT throw on DB errors, so we must check explicitly
+      let saveErr: any = null;
       if (obId) {
-        await (supabase as any).from("client_billing_opening_balances").update(payload).eq("id", obId);
+        ({ error: saveErr } = await (supabase as any).from("client_billing_opening_balances").update(payload).eq("id", obId));
       } else {
-        await (supabase as any).from("client_billing_opening_balances").insert(payload);
+        ({ error: saveErr } = await (supabase as any).from("client_billing_opening_balances").insert(payload));
       }
+      if (saveErr) throw saveErr;
       toast({ title: "Opening balance saved" });
       setObDialogOpen(false);
       loadEntries();
@@ -786,12 +789,12 @@ function ClientLedgerView() {
       {clientId && (
         <div className="flex items-center gap-3 text-sm bg-muted/40 rounded-md px-3 py-2">
           <span className="text-muted-foreground font-medium">Opening Balance:</span>
-          {obDate ? (
+          {obId ? (
             <>
               <span className={`font-semibold tabular-nums ${obAmount >= 0 ? "text-orange-600" : "text-green-600"}`}>
                 {obAmount >= 0 ? fmtINR(obAmount) + " Dr" : fmtINR(Math.abs(obAmount)) + " Cr"}
               </span>
-              <span className="text-muted-foreground text-xs">as of {format(new Date(obDate), "dd/MM/yyyy")}</span>
+              {obDate && <span className="text-muted-foreground text-xs">as of {format(new Date(obDate), "dd/MM/yyyy")}</span>}
               {obNarration && <span className="text-muted-foreground text-xs">· {obNarration}</span>}
             </>
           ) : (
@@ -835,10 +838,10 @@ function ClientLedgerView() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {obDate && clientId && (
+                {obId && clientId && (
                   <TableRow className="bg-blue-50/50">
                     <TableCell className="text-xs text-muted-foreground">
-                      {format(new Date(obDate), "dd/MM/yyyy")}
+                      {obDate ? format(new Date(obDate), "dd/MM/yyyy") : "—"}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">—</TableCell>
                     <TableCell className="text-xs text-muted-foreground italic">
@@ -855,7 +858,7 @@ function ClientLedgerView() {
                     </TableCell>
                   </TableRow>
                 )}
-                {rows.length === 0 && !obDate ? (
+                {rows.length === 0 && !obId ? (
                   <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-8">No entries found</TableCell></TableRow>
                 ) : rows.map((r, i) => (
                   <TableRow key={r.id || i}>
@@ -1725,13 +1728,31 @@ function GroupLedgerView() {
               {data.map(({ clientId, clientName, entries }, gi) => {
                 const ob = groupObMap[clientId];
                 let bal = ob?.amount || 0;
+                // Total rows this client spans: obRow (if any) + entry rows + subtotal row
+                const totalClientRows = (ob?.date ? 1 : 0) + entries.length + 1;
+
+                // OB row — client name cell spans ALL rows for this client so the
+                // column is covered for entry rows and the subtotal row below
+                const obRow = ob?.date ? (
+                  <TableRow key={`ob-${gi}`} className="bg-blue-50/50 italic text-muted-foreground">
+                    <TableCell rowSpan={totalClientRows} className="font-medium align-top border-r not-italic text-foreground">{clientName}</TableCell>
+                    <TableCell>{format(new Date(ob.date), "dd/MM/yyyy")}</TableCell>
+                    <TableCell>—</TableCell>
+                    <TableCell>{`Opening Balance${ob.narration ? ` — ${ob.narration}` : ""}`}</TableCell>
+                    <TableCell className="text-right tabular-nums">{ob.amount > 0 ? fmtINR(ob.amount) : "—"}</TableCell>
+                    <TableCell className="text-right tabular-nums">{ob.amount < 0 ? fmtINR(Math.abs(ob.amount)) : "—"}</TableCell>
+                    <TableCell className="text-right tabular-nums font-semibold">{fmtINR(ob.amount)}</TableCell>
+                  </TableRow>
+                ) : null;
+
                 const clientRows = entries.map((e: any, ei: number) => {
                   const d = Number(e.debit_amount) || 0;
                   const c = Number(e.credit_amount) || 0;
                   bal += d - c;
                   return (
                     <TableRow key={`${gi}-${ei}`}>
-                      {ei === 0 && <TableCell rowSpan={entries.length + (ob?.date ? 2 : 1)} className="font-medium align-top border-r">{clientName}</TableCell>}
+                      {/* Show client name in first entry row only when no obRow (obRow already has it) */}
+                      {!ob?.date && ei === 0 && <TableCell rowSpan={entries.length + 1} className="font-medium align-top border-r">{clientName}</TableCell>}
                       <TableCell>{e.entry_date ? format(new Date(e.entry_date), "dd/MM/yyyy") : ""}</TableCell>
                       <TableCell className="font-mono text-xs">{getDocNo(e)}</TableCell>
                       <TableCell>{e.narration || ""}</TableCell>
@@ -1741,26 +1762,21 @@ function GroupLedgerView() {
                     </TableRow>
                   );
                 });
+
                 const subtotalD = entries.reduce((s: number, e: any) => s + (Number(e.debit_amount) || 0), 0);
                 const subtotalC = entries.reduce((s: number, e: any) => s + (Number(e.credit_amount) || 0), 0);
-                const obRow = ob?.date ? (
-                  <TableRow key={`ob-${gi}`} className="bg-blue-50/50 italic text-muted-foreground">
-                    <TableCell>{format(new Date(ob.date), "dd/MM/yyyy")}</TableCell>
-                    <TableCell>—</TableCell>
-                    <TableCell>{`Opening Balance${ob.narration ? ` — ${ob.narration}` : ""}`}</TableCell>
-                    <TableCell className="text-right tabular-nums">{ob.amount > 0 ? fmtINR(ob.amount) : "—"}</TableCell>
-                    <TableCell className="text-right tabular-nums">{ob.amount < 0 ? fmtINR(Math.abs(ob.amount)) : "—"}</TableCell>
-                    <TableCell className="text-right tabular-nums font-semibold">{fmtINR(ob.amount)}</TableCell>
-                  </TableRow>
-                ) : null;
+                // Closing balance = opening balance + period debits − period credits
+                const subtotalBalance = (ob?.amount || 0) + subtotalD - subtotalC;
+
                 return [
                   ...(obRow ? [obRow] : []),
                   ...clientRows,
                   <TableRow key={`sub-${gi}`} className="bg-muted/30 font-semibold">
-                    <TableCell colSpan={4} className="text-right">Subtotal — {clientName}</TableCell>
+                    {/* Client column already covered by rowSpan above — colSpan 3 covers Date+DocNo+Narration */}
+                    <TableCell colSpan={3} className="text-right">Subtotal — {clientName}</TableCell>
                     <TableCell className="text-right">{fmtINR(subtotalD)}</TableCell>
                     <TableCell className="text-right">{fmtINR(subtotalC)}</TableCell>
-                    <TableCell className="text-right">{fmtINR(subtotalD - subtotalC)}</TableCell>
+                    <TableCell className="text-right">{fmtINR(subtotalBalance)}</TableCell>
                   </TableRow>,
                 ];
               })}
@@ -1771,7 +1787,12 @@ function GroupLedgerView() {
                 <TableCell className="text-right">{fmtINR(data.reduce((s, d) => s + d.entries.reduce((ss: number, e: any) => ss + (Number(e.debit_amount) || 0), 0), 0))}</TableCell>
                 <TableCell className="text-right">{fmtINR(data.reduce((s, d) => s + d.entries.reduce((ss: number, e: any) => ss + (Number(e.credit_amount) || 0), 0), 0))}</TableCell>
                 <TableCell className="text-right">{fmtINR(
-                  data.reduce((s, d) => s + d.entries.reduce((ss: number, e: any) => ss + (Number(e.debit_amount) || 0) - (Number(e.credit_amount) || 0), 0), 0)
+                  // Grand Total closing balance = sum of all OBs + total period debit − total period credit
+                  data.reduce((s, d) => {
+                    const obAmt = groupObMap[d.clientId]?.amount || 0;
+                    const net = d.entries.reduce((ss: number, e: any) => ss + (Number(e.debit_amount) || 0) - (Number(e.credit_amount) || 0), 0);
+                    return s + obAmt + net;
+                  }, 0)
                 )}</TableCell>
               </TableRow>
             </TableFooter>
