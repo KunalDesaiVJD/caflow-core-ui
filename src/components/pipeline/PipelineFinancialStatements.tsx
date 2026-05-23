@@ -4009,10 +4009,19 @@ export default function PipelineFinancialStatements({
           ? `${cyEndYearT}-${(cyEndYearT + 1).toString().slice(-2)}`
           : "";
         const reportDateFmtT = (() => {
+          // The on-screen signature block binds its Date field to `sigDate`
+          // (defaults to today, user-editable) — NOT engagement.sign_off_date.
+          // Match the UI: format sigDate ("YYYY-MM-DD" → "DD/MM/YYYY").
+          // Parse the ISO parts directly to avoid any timezone day-shift.
+          if (/^\d{4}-\d{2}-\d{2}$/.test(sigDate || "")) {
+            const [y, m, d] = sigDate.split("-");
+            return `${d}/${m}/${y}`;
+          }
           const raw = (engagement as any)?.sign_off_date;
           if (!raw) return "";
           try {
             const d = new Date(raw);
+            if (isNaN(d.getTime())) return "";
             const dd = String(d.getDate()).padStart(2, "0");
             const mm = String(d.getMonth() + 1).padStart(2, "0");
             return `${dd}/${mm}/${d.getFullYear()}`;
@@ -4139,6 +4148,33 @@ export default function PipelineFinancialStatements({
             PL_EXP_OTH:  memoPl.otherExpenses.noteNo ?? null,
           } : {};
 
+        // Load Stage-7 ratios so the RATIO sheet gets filled (CY amounts +
+        // PY ratio).  Uses the SAME loader/engine as the on-screen Ratios
+        // tab, so the exported RATIO sheet matches the UI.  Non-fatal: on
+        // failure the RATIO sheet keeps the template's zeros.
+        let corpRatios: { cy: any; py: any } | undefined;
+        try {
+          const { loadStage7Ratios } = await import("@/lib/ratioAutoPopulate");
+          const s7 = await loadStage7Ratios(engagement.id);
+          corpRatios = { cy: s7.cy, py: s7.py };
+        } catch (e) {
+          console.warn("[FS Export] Could not load stage7_ratios for RATIO sheet:", e);
+        }
+
+        // Load the FA / PPE schedule for the FA sheet, using the SAME loader
+        // the on-screen FA grid uses (loadStage5Notes), so the export matches
+        // the UI exactly.  Non-fatal: on failure the FA sheet keeps template rows.
+        let corpFa: { rows: any[]; pyManual?: Record<string, number | null> } | undefined;
+        try {
+          const { loadStage5Notes } = await import("@/lib/notesAutoPopulate");
+          const s5 = await loadStage5Notes(engagement.id);
+          if (s5?.fa?.rows?.length) {
+            corpFa = { rows: s5.fa.rows, pyManual: s5.fa.py_manual ?? undefined };
+          }
+        } catch (e) {
+          console.warn("[FS Export] Could not load stage5_notes FA for FA sheet:", e);
+        }
+
         const blob = await buildCorporateFinancialsXLSX({
           entityName:    clientName,
           entityType:    clientT.entity_type ?? "Private Limited",
@@ -4161,6 +4197,14 @@ export default function PipelineFinancialStatements({
           udin:          (engagement as any)?.udin ?? "",
           amounts:       corpAmounts,
           noteNumbers:   corpNoteNos,
+          ratios:        corpRatios,
+          // Directors come from the SAME state the on-screen signature block
+          // shows (Block C → mrl_data fallback), so the export matches the UI.
+          directors:     [
+            { name: corpSigDirs.dir1Name, din: corpSigDirs.dir1Din },
+            { name: corpSigDirs.dir2Name, din: corpSigDirs.dir2Din },
+          ],
+          fa:            corpFa,
         });
         const safeNmT = (clientName || "Client").replace(/[^A-Za-z0-9]/g, "_");
         const urlT    = URL.createObjectURL(blob);
@@ -6160,6 +6204,16 @@ export default function PipelineFinancialStatements({
                   capitalData: nceCapitalData ?? [],
                   notesData:   nceNotesData   ?? [],
                   ppeData:     ncePpeData      ?? [],
+                  signature: {
+                    firmName:      sigFirmName,
+                    firmFRN:       sigFirmFRN,
+                    partnerName:   sigPartnerName,
+                    membershipNo:  sigMembershipNo,
+                    clientName:    sigClientName,
+                    signatoryName: sigSignatoryName,
+                    place:         sigPlace,
+                    date:          sigDate,
+                  },
                 });
               }}
             >
