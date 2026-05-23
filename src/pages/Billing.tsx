@@ -7,6 +7,7 @@ import ReceivablesReportTab from "@/components/billing/ReceivablesReportTab";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { useUserFirmAccess } from "@/hooks/useUserFirmAccess";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -177,7 +178,7 @@ function DocumentFilterBar({
 }
 
 // ─── Documents Sub-Tab (Invoices / Quotations / Credit Notes merged) ───────
-function DocumentsTab() {
+function DocumentsTab({ overrideFirmId }: { overrideFirmId?: string | null }) {
   const [subTab, setSubTab] = useState("invoice");
   return (
     <div className="space-y-3">
@@ -194,13 +195,13 @@ function DocumentsTab() {
           </TabsTrigger>
         </TabsList>
         <TabsContent value="invoice" className="mt-3">
-          <DocumentListTab documentType="invoice" />
+          <DocumentListTab documentType="invoice" overrideFirmId={overrideFirmId} />
         </TabsContent>
         <TabsContent value="quotation_proforma" className="mt-3">
-          <DocumentListTab documentType="quotation_proforma" />
+          <DocumentListTab documentType="quotation_proforma" overrideFirmId={overrideFirmId} />
         </TabsContent>
         <TabsContent value="credit_note" className="mt-3">
-          <DocumentListTab documentType="credit_note" />
+          <DocumentListTab documentType="credit_note" overrideFirmId={overrideFirmId} />
         </TabsContent>
       </Tabs>
     </div>
@@ -211,14 +212,54 @@ function DocumentsTab() {
 const Billing = () => {
   const [activeTab, setActiveTab] = useState("dashboard");
   const { user } = useAuth();
-  const firmId = user?.firm_id ?? null;
+  const homeFirmId = user?.firm_id ?? null;
   const userId = user?.id ?? null;
+  const isSuperadmin = user?.role === "superadmin";
+
+  // Cross-firm access: lets non-superadmin users switch to a granted firm
+  const { allAccessibleFirms, hasMultiFirmAccess } = useUserFirmAccess();
+  const [activeFirmId, setActiveFirmId] = useState<string | null>(homeFirmId);
+
+  // Keep activeFirmId in sync when home firm loads (initial render may be null)
+  useEffect(() => {
+    if (!activeFirmId && homeFirmId) setActiveFirmId(homeFirmId);
+  }, [homeFirmId]);
+
+  const isViewingOtherFirm = activeFirmId && activeFirmId !== homeFirmId;
+  const activeFirmName = allAccessibleFirms.find(f => f.id === activeFirmId)?.name;
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-foreground">Billing</h1>
-        <p className="text-sm text-muted-foreground">Dashboard, documents, receipts, ledger, and email settings</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground">Billing</h1>
+          <p className="text-sm text-muted-foreground">Dashboard, documents, receipts, ledger, and email settings</p>
+        </div>
+
+        {/* Firm switcher — shown only when user has cross-firm grants */}
+        {!isSuperadmin && hasMultiFirmAccess && (
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground whitespace-nowrap">Viewing firm:</span>
+            <Select
+              value={activeFirmId ?? ""}
+              onValueChange={v => setActiveFirmId(v)}
+            >
+              <SelectTrigger className="w-[220px] h-8 text-sm">
+                <SelectValue placeholder="Select firm" />
+              </SelectTrigger>
+              <SelectContent>
+                {allAccessibleFirms.map(f => (
+                  <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {isViewingOtherFirm && (
+              <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 font-medium whitespace-nowrap">
+                Cross-firm access
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -232,13 +273,13 @@ const Billing = () => {
           <TabsTrigger value="email-settings" className="gap-2"><Mail size={14} /> Email Settings</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="dashboard"><BillingDashboardTab firmId={firmId} /></TabsContent>
-        <TabsContent value="documents"><DocumentsTab /></TabsContent>
-        <TabsContent value="receipts"><ReceiptsTab /></TabsContent>
-        <TabsContent value="ledger"><LedgerTabComponent /></TabsContent>
+        <TabsContent value="dashboard"><BillingDashboardTab firmId={activeFirmId} /></TabsContent>
+        <TabsContent value="documents"><DocumentsTab overrideFirmId={activeFirmId} /></TabsContent>
+        <TabsContent value="receipts"><ReceiptsTab overrideFirmId={activeFirmId} /></TabsContent>
+        <TabsContent value="ledger"><LedgerTabComponent defaultFirmId={activeFirmId ?? undefined} /></TabsContent>
         <TabsContent value="item-master"><ItemMasterTab /></TabsContent>
-        <TabsContent value="report"><ReceivablesReportTab /></TabsContent>
-        <TabsContent value="email-settings"><EmailSettingsTab firmId={firmId} userId={userId} /></TabsContent>
+        <TabsContent value="report"><ReceivablesReportTab defaultFirmId={activeFirmId ?? undefined} /></TabsContent>
+        <TabsContent value="email-settings"><EmailSettingsTab firmId={activeFirmId} userId={userId} /></TabsContent>
       </Tabs>
     </div>
   );
@@ -247,12 +288,12 @@ const Billing = () => {
 // ═══════════════════════════════════════
 // DOCUMENT LIST TAB (Invoices / Quotations & Proforma / Credit Notes)
 // ═══════════════════════════════════════
-function DocumentListTab({ documentType }: { documentType: "invoice" | "quotation_proforma" | "credit_note" }) {
+function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invoice" | "quotation_proforma" | "credit_note"; overrideFirmId?: string | null }) {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { toast } = useToast();
   const isSuperadmin = user?.role === "superadmin";
-  const firmId = user?.firm_id;
+  const firmId = overrideFirmId ?? user?.firm_id;
 
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [clientMap, setClientMap] = useState<ClientMap>({});
@@ -1478,8 +1519,8 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
 // ═══════════════════════════════════════
 // RECEIPTS TAB (extracted component)
 // ═══════════════════════════════════════
-function ReceiptsTab() {
-  return <ReceiptsTabComponent />;
+function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: string | null }) {
+  return <ReceiptsTabComponent overrideFirmId={overrideFirmId} />;
 }
 
 // LedgerTab now imported from @/components/billing/LedgerTab

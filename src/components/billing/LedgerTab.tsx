@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
+import { useUserFirmAccess } from "@/hooks/useUserFirmAccess";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
@@ -199,13 +200,13 @@ async function loadLogoBase64(url: string): Promise<string | null> {
 // ═══════════════════════════════════════
 // CLIENT LEDGER VIEW
 // ═══════════════════════════════════════
-function ClientLedgerView() {
+function ClientLedgerView({ defaultFirmId }: { defaultFirmId?: string }) {
   const { user } = useAuth();
   const { toast } = useToast();
   const [clients, setClients] = useState<{ id: string; name: string; email?: string | null; compliance_flags?: Record<string, any> | null; gstin_states?: Record<string, string> | null; gstin?: string[] | null }[]>([]);
   const [firms, setFirms] = useState<{ id: string; name: string; logo_url?: string; legal_name_changes?: LegalNameChange[] | null }[]>([]);
   const [clientId, setClientId] = useState("");
-  const [firmId, setFirmId] = useState("");
+  const [firmId, setFirmId] = useState(defaultFirmId ?? "");
   const [selectedGstin, setSelectedGstin] = useState<string>("all");
   const [obDraftGstin, setObDraftGstin] = useState<string>("all");
   const [fy, setFy] = useState(getCurrentFY());
@@ -255,6 +256,9 @@ function ClientLedgerView() {
 
   useEffect(() => { setSelectedGstin("all"); }, [clientId]);
 
+  const { allAccessibleFirms } = useUserFirmAccess();
+  const isSuperadmin = user?.role === "superadmin";
+
   useEffect(() => {
     (async () => {
       const [{ data: c }, { data: f }] = await Promise.all([
@@ -262,10 +266,21 @@ function ClientLedgerView() {
         supabase.from("firms").select("id, name, logo_url, legal_name_changes").order("name"),
       ]);
       setClients(c || []);
-      setFirms(f || []);
-      if (user?.firm_id) setFirmId(user.firm_id);
+
+      // Restrict firm dropdown to accessible firms for non-superadmin
+      const allFirms = f || [];
+      if (isSuperadmin) {
+        setFirms(allFirms);
+      } else {
+        const accessIds = new Set(allAccessibleFirms.map(af => af.id));
+        setFirms(allFirms.filter(firm => accessIds.has(firm.id)));
+      }
+
+      // Set initial firm: respect defaultFirmId prop, else user's home firm
+      const initialFirm = defaultFirmId ?? user?.firm_id;
+      if (initialFirm) setFirmId(initialFirm);
     })();
-  }, [user]);
+  }, [user, isSuperadmin, defaultFirmId, allAccessibleFirms.length]);
 
   const loadEntries = useCallback(async () => {
     if (!clientId) return;
@@ -2371,7 +2386,7 @@ function FirmRevenueLedgerView() {
 // ═══════════════════════════════════════
 // MAIN LEDGER TAB
 // ═══════════════════════════════════════
-export default function LedgerTab() {
+export default function LedgerTab({ defaultFirmId }: { defaultFirmId?: string }) {
   const [view, setView] = useState("client");
 
   return (
@@ -2382,7 +2397,7 @@ export default function LedgerTab() {
           <TabsTrigger value="group" className="gap-1"><Users size={14} /> Group Ledger</TabsTrigger>
           <TabsTrigger value="firm" className="gap-1"><Building2 size={14} /> Firm Revenue Ledger</TabsTrigger>
         </TabsList>
-        <TabsContent value="client"><ClientLedgerView /></TabsContent>
+        <TabsContent value="client"><ClientLedgerView defaultFirmId={defaultFirmId} /></TabsContent>
         <TabsContent value="group"><GroupLedgerView /></TabsContent>
         <TabsContent value="firm"><FirmRevenueLedgerView /></TabsContent>
       </Tabs>
