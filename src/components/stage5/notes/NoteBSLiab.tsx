@@ -946,20 +946,6 @@ export default function NoteBSLiab({
           bold
         />
 
-        <div className="font-semibold text-[11px] mt-3">Trade Payables Ageing — CY ({cyYear})</div>
-        <AgeingTable
-          rowDefs={TP_ROWS} bucketDefs={TP_BUCKETS}
-          matrix={get("bs_liab.trade_payables.ageing_cy") as AgeingMatrix | undefined}
-          onChange={(m) => updatePath("bs_liab.trade_payables.ageing_cy", m)}
-        />
-
-        <div className="font-semibold text-[11px] mt-3">Trade Payables Ageing — PY ({pyYear})</div>
-        <AgeingTable
-          rowDefs={TP_ROWS} bucketDefs={TP_BUCKETS}
-          matrix={get("bs_liab.trade_payables.ageing_py") as AgeingMatrix | undefined}
-          onChange={(m) => updatePath("bs_liab.trade_payables.ageing_py", m)}
-        />
-
         <div className="text-[10px] italic text-muted-foreground mt-3">Notes (free text)</div>
         <EditableCell
           type="text"

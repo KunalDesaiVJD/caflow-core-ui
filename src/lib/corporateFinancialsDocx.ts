@@ -1076,43 +1076,283 @@ function buildRatiosTable(cyRatios: any, pyRatios: any): Table {
   });
 }
 
-// ─── Note key → title mapping ─────────────────────────────────────────────────
+// ─── Note row extraction helpers ─────────────────────────────────────────────
+
+type NoteRowFmt = "amount" | "eps" | "integer";
+
+interface NoteRow {
+  label:  string;
+  cy:     number;
+  py:     number;
+  style:  "data" | "subtotal" | "total";
+  fmt?:   NoteRowFmt;
+}
+
+function extractNoteRows(
+  renderType: string,
+  noteData: any,
+  amounts: Record<string, { cy: number; py: number }>,
+  fsCode: string,
+  stage5Notes: any,
+): NoteRow[] {
+  const totCy = amounts[fsCode]?.cy ?? 0;
+  const totPy = amounts[fsCode]?.py ?? 0;
+  const n = (v: any): number => { const x = Number(v); return Number.isFinite(x) ? x : 0; };
+
+  switch (renderType) {
+
+    case "breakup": {
+      const breakup: any[] = noteData?.breakup ?? [];
+      if (!breakup.length) return [];
+      const rows: NoteRow[] = [];
+      let sumCy = 0, sumPy = 0;
+      for (const r of breakup) {
+        if (!r) continue;
+        const label = String(r.description || r.label || "");
+        const cyVal = n(r.amount_cy);
+        const pyVal = n(r.amount_py);
+        if (!label && cyVal === 0 && pyVal === 0) continue;
+        sumCy += cyVal; sumPy += pyVal;
+        const style: NoteRow["style"] = r.is_total ? "total" : r.is_sub_total ? "subtotal" : "data";
+        rows.push({ label, cy: cyVal, py: pyVal, style });
+      }
+      const hasExplicitTotal = breakup.some(r => r?.is_total);
+      if (!hasExplicitTotal && rows.length > 0) {
+        rows.push({ label: "Total", cy: sumCy, py: sumPy, style: "total" });
+      }
+      return rows;
+    }
+
+    case "shareCapital": {
+      const authCy = n(noteData?.authorised_cy);
+      const authPy = n(noteData?.authorised_py);
+      return [
+        { label: "Authorised Capital",                       cy: authCy, py: authPy, style: "data" },
+        { label: "Issued, Subscribed and Paid-up Capital",   cy: totCy,  py: totPy,  style: "total" },
+      ];
+    }
+
+    case "reserves": {
+      const genResCy   = n(noteData?.gen_reserve_cy);
+      const genResPy   = n(noteData?.gen_reserve_py);
+      const spCy       = n(noteData?.share_premium_cy);
+      const spPy       = n(noteData?.share_premium_py);
+      const surpOpenCy = n(noteData?.surplus_opening_cy);
+      const surpOpenPy = n(noteData?.surplus_opening_py);
+      const npatCy     = n(stage5Notes?.pl?.eps?.npat);
+      const npatPy     = n(stage5Notes?.pl?.eps?.npat_py);
+      const deferCy    = n(noteData?.surplus_deferred_adj_cy);
+      const deferPy    = n(noteData?.surplus_deferred_adj_py);
+      const excessCy   = n(noteData?.surplus_excess_short_cy);
+      const excessPy   = n(noteData?.surplus_excess_short_py);
+      const rows: NoteRow[] = [];
+      if (genResCy !== 0 || genResPy !== 0)
+        rows.push({ label: "General Reserve",              cy: genResCy,   py: genResPy,   style: "data" });
+      if (spCy !== 0 || spPy !== 0)
+        rows.push({ label: "Securities Premium Account",   cy: spCy,       py: spPy,       style: "data" });
+      rows.push({ label: "Opening Balance — P&L",          cy: surpOpenCy, py: surpOpenPy, style: "data" });
+      rows.push({ label: "Add: Profit for the year",       cy: npatCy,     py: npatPy,     style: "data" });
+      if (deferCy !== 0 || deferPy !== 0)
+        rows.push({ label: "Deferred tax adjustment",      cy: deferCy,    py: deferPy,    style: "data" });
+      if (excessCy !== 0 || excessPy !== 0)
+        rows.push({ label: "Less: Excess / short provision", cy: excessCy, py: excessPy,   style: "data" });
+      rows.push({ label: "Total",                          cy: totCy,      py: totPy,      style: "total" });
+      return rows;
+    }
+
+    case "dtFixed": {
+      const deprExCy = n(noteData?.depr_excess_cy);
+      const deprExPy = n(noteData?.depr_excess_py);
+      const rows: NoteRow[] = [
+        { label: "Excess of depreciation in books over IT Act", cy: deprExCy, py: deprExPy, style: "data" },
+      ];
+      for (const r of (noteData?.breakup ?? [])) {
+        if (!r) continue;
+        const label = String(r.description || r.label || "");
+        const cyVal = n(r.amount_cy);
+        const pyVal = n(r.amount_py);
+        if (!label && cyVal === 0 && pyVal === 0) continue;
+        rows.push({ label, cy: cyVal, py: pyVal, style: r.is_sub_total ? "subtotal" : "data" });
+      }
+      rows.push({ label: "Total", cy: totCy, py: totPy, style: "total" });
+      return rows;
+    }
+
+    case "dtAsset": {
+      const deprExCy = n(noteData?.depr_excess_cy);
+      const deprExPy = n(noteData?.depr_excess_py);
+      return [
+        { label: "Excess of depreciation in IT Act over books", cy: deprExCy, py: deprExPy, style: "data" },
+        { label: "Total", cy: totCy, py: totPy, style: "total" },
+      ];
+    }
+
+    case "tradePayables": {
+      const msmeCy = n(noteData?.msme_cy);
+      const msmePy = n(noteData?.msme_py);
+      const othCy  = noteData?.others_cy != null ? n(noteData.others_cy) : (totCy - msmeCy);
+      const othPy  = noteData?.others_py != null ? n(noteData.others_py) : (totPy - msmePy);
+      return [
+        { label: "Due to Micro, Small and Medium Enterprises (MSME)", cy: msmeCy, py: msmePy, style: "data" },
+        { label: "Due to others",                                      cy: othCy,  py: othPy,  style: "data" },
+        { label: "Total",                                              cy: totCy,  py: totPy,  style: "total" },
+      ];
+    }
+
+    case "tradeReceivables": {
+      const gt6mCy = n(noteData?.gt6m_cy);
+      const gt6mPy = n(noteData?.gt6m_py);
+      const othCy  = noteData?.other_cy != null ? n(noteData.other_cy) : (totCy - gt6mCy);
+      const othPy  = noteData?.other_py != null ? n(noteData.other_py) : (totPy - gt6mPy);
+      return [
+        { label: "Outstanding for more than 6 months", cy: gt6mCy, py: gt6mPy, style: "data" },
+        { label: "Other receivables",                  cy: othCy,  py: othPy,  style: "data" },
+        { label: "Total",                              cy: totCy,  py: totPy,  style: "total" },
+      ];
+    }
+
+    case "costMaterials": {
+      const openCy = n(noteData?.opening_cy);
+      const openPy = n(noteData?.opening_py);
+      const purCy  = n(noteData?.purchases_cy);
+      const purPy  = n(noteData?.purchases_py);
+      const closCy = n(noteData?.closing_cy);
+      const closPy = n(noteData?.closing_py);
+      return [
+        { label: "Opening Stock of Raw Materials",       cy: openCy, py: openPy, style: "data" },
+        { label: "Add: Purchases",                       cy: purCy,  py: purPy,  style: "data" },
+        { label: "Less: Closing Stock of Raw Materials", cy: closCy, py: closPy, style: "data" },
+        { label: "Cost of Materials Consumed",           cy: totCy,  py: totPy,  style: "total" },
+      ];
+    }
+
+    case "changesInventory": {
+      const fgClosCy  = n(noteData?.fg_close_cy);  const fgClosPy  = n(noteData?.fg_close_py);
+      const wipClosCy = n(noteData?.wip_close_cy); const wipClosPy = n(noteData?.wip_close_py);
+      const sitClosCy = n(noteData?.sit_close_cy); const sitClosPy = n(noteData?.sit_close_py);
+      const fgOpenCy  = n(noteData?.fg_open_cy);   const fgOpenPy  = n(noteData?.fg_open_py);
+      const wipOpenCy = n(noteData?.wip_open_cy);  const wipOpenPy = n(noteData?.wip_open_py);
+      const sitOpenCy = n(noteData?.sit_open_cy);  const sitOpenPy = n(noteData?.sit_open_py);
+      return [
+        { label: "Closing Stock — Finished Goods",            cy: fgClosCy,  py: fgClosPy,  style: "data" },
+        { label: "Closing Stock — Work-in-Progress",          cy: wipClosCy, py: wipClosPy, style: "data" },
+        { label: "Closing Stock — Stock-in-Trade",            cy: sitClosCy, py: sitClosPy, style: "data" },
+        { label: "Less: Opening Stock — Finished Goods",      cy: fgOpenCy,  py: fgOpenPy,  style: "data" },
+        { label: "Less: Opening Stock — Work-in-Progress",    cy: wipOpenCy, py: wipOpenPy, style: "data" },
+        { label: "Less: Opening Stock — Stock-in-Trade",      cy: sitOpenCy, py: sitOpenPy, style: "data" },
+        { label: "Net Change in Inventories",                 cy: totCy,     py: totPy,     style: "total" },
+      ];
+    }
+
+    case "eps": {
+      const npatCy  = n(noteData?.npat);
+      const npatPy  = n(noteData?.npat_py);
+      const nomCy   = n(noteData?.nominal_value)    || 10;
+      const nomPy   = n(noteData?.nominal_value_py) || nomCy;
+      const wavgCy  = n(noteData?.weighted_avg_shares);
+      const wavgPy  = n(noteData?.weighted_avg_shares_py);
+      const basicCy = n(noteData?.basic);
+      const basicPy = n(noteData?.basic_py);
+      const dilCy   = n(noteData?.diluted) || basicCy;
+      const dilPy   = n(noteData?.diluted_py);
+      return [
+        { label: "Net Profit After Tax (₹)",           cy: npatCy,  py: npatPy,  style: "data" },
+        { label: "Nominal Value per Share (₹)",         cy: nomCy,   py: nomPy,   style: "data",  fmt: "eps" },
+        { label: "Weighted Avg. No. of Equity Shares",  cy: wavgCy,  py: wavgPy,  style: "data",  fmt: "integer" },
+        { label: "Basic EPS (₹)",                       cy: basicCy, py: basicPy, style: "total", fmt: "eps" },
+        { label: "Diluted EPS (₹)",                     cy: dilCy,   py: dilPy,   style: "total", fmt: "eps" },
+      ];
+    }
+
+    default:
+      return [];
+  }
+}
+
+function buildNoteTableFromRows(
+  noteNumber: string,
+  title: string,
+  rows: NoteRow[],
+  cyYear: string,
+  pyYear: string,
+): Table {
+  const fmtVal = (v: number, fmtType?: NoteRowFmt): string => {
+    if (fmtType === "eps")     return fmtEps(v);
+    if (fmtType === "integer") {
+      if (!Number.isFinite(v) || v === 0) return "—";
+      return Math.round(Math.abs(v)).toLocaleString("en-IN");
+    }
+    return fmt(v);
+  };
+
+  const tableRows: TableRow[] = [
+    noteTitleRow([NW_DESC, NW_CY, NW_PY], noteNumber, title),
+    noteHdr3(cyYear, pyYear),
+  ];
+
+  for (const row of rows) {
+    const bg   = row.style === "total" ? BG_GRAN : row.style === "subtotal" ? BG_TOT : undefined;
+    const bdr  = row.style === "total" ? BDR_GRAND : row.style === "subtotal" ? BDR_SUB : BDR_ROW;
+    const bold = row.style !== "data";
+    tableRows.push(new TableRow({
+      children: [
+        cell({ text: row.label,            w: NW_DESC, bold, bg, borders: bdr }),
+        cell({ text: fmtVal(row.cy, row.fmt), w: NW_CY, align: AlignmentType.RIGHT, padL: 20, padR: 120, bold, bg, borders: bdr }),
+        cell({ text: fmtVal(row.py, row.fmt), w: NW_PY, align: AlignmentType.RIGHT, padL: 20, padR: 120, bold, bg, borders: bdr }),
+      ],
+    }));
+  }
+
+  return new Table({
+    width:        { size: TW, type: WidthType.DXA },
+    columnWidths: [NW_DESC, NW_CY, NW_PY],
+    rows:         tableRows,
+  });
+}
+
+// ─── Note metadata — dataKey matches actual stage5_notes JSONB keys ───────────
+type NoteRenderType =
+  | "breakup" | "shareCapital" | "reserves" | "dtFixed" | "dtAsset"
+  | "tradePayables" | "tradeReceivables" | "costMaterials" | "changesInventory" | "eps";
+
 const CORP_NOTE_META: Array<{
-  noteKey: string;
-  fsCode: string;
-  section: "bs_liab" | "bs_asset" | "pl";
-  title: string;
-  isFA?: boolean;
+  dataKey:     string;
+  fsCode:      string;
+  section:     "bs_liab" | "bs_asset" | "pl";
+  title:       string;
+  renderType:  NoteRenderType;
+  isFA?:       boolean;
 }> = [
-  { noteKey: "share_capital",        fsCode: "BS_EQ_SC",    section: "bs_liab",  title: "Share Capital" },
-  { noteKey: "reserves_surplus",     fsCode: "BS_EQ_RS",    section: "bs_liab",  title: "Reserves and Surplus" },
-  { noteKey: "lt_borrowings",        fsCode: "BS_NCL_LTB",  section: "bs_liab",  title: "Long-term Borrowings" },
-  { noteKey: "deferred_tax_liab",    fsCode: "BS_NCL_DTL",  section: "bs_liab",  title: "Deferred Tax Liabilities (Net)" },
-  { noteKey: "other_lt_liab",        fsCode: "BS_NCL_OLT",  section: "bs_liab",  title: "Other Long-term Liabilities" },
-  { noteKey: "lt_provisions",        fsCode: "BS_NCL_LTP",  section: "bs_liab",  title: "Long-term Provisions" },
-  { noteKey: "st_borrowings",        fsCode: "BS_CL_STB",   section: "bs_liab",  title: "Short-term Borrowings" },
-  { noteKey: "trade_payables",       fsCode: "BS_CL_TP",    section: "bs_liab",  title: "Trade Payables" },
-  { noteKey: "other_current_liab",   fsCode: "BS_CL_OCL",   section: "bs_liab",  title: "Other Current Liabilities" },
-  { noteKey: "st_provisions",        fsCode: "BS_CL_STP",   section: "bs_liab",  title: "Short-term Provisions" },
-  { noteKey: "ppe",                  fsCode: "BS_NCA_FA",   section: "bs_asset", title: "Property, Plant and Equipment", isFA: true },
-  { noteKey: "nc_investments",       fsCode: "BS_NCA_INV",  section: "bs_asset", title: "Non-current Investments" },
-  { noteKey: "deferred_tax_assets",  fsCode: "BS_NCA_DTA",  section: "bs_asset", title: "Deferred Tax Assets (Net)" },
-  { noteKey: "lt_loans_advances",    fsCode: "BS_NCA_LLA",  section: "bs_asset", title: "Long-term Loans and Advances" },
-  { noteKey: "other_nc_assets",      fsCode: "BS_NCA_ONA",  section: "bs_asset", title: "Other Non-current Assets" },
-  { noteKey: "current_investments",  fsCode: "BS_CA_CI",    section: "bs_asset", title: "Current Investments" },
-  { noteKey: "inventories",          fsCode: "BS_CA_INV",   section: "bs_asset", title: "Inventories" },
-  { noteKey: "trade_receivables",    fsCode: "BS_CA_TR",    section: "bs_asset", title: "Trade Receivables" },
-  { noteKey: "cash_bank",            fsCode: "BS_CA_CCE",   section: "bs_asset", title: "Cash and Bank Balances" },
-  { noteKey: "st_loans_advances",    fsCode: "BS_CA_SLA",   section: "bs_asset", title: "Short-term Loans and Advances" },
-  { noteKey: "other_current_assets", fsCode: "BS_CA_OCA",   section: "bs_asset", title: "Other Current Assets" },
-  { noteKey: "revenue_from_ops",     fsCode: "PL_REV_OPS",  section: "pl",       title: "Revenue from Operations" },
-  { noteKey: "other_income",         fsCode: "PL_REV_OI",   section: "pl",       title: "Other Income" },
-  { noteKey: "cost_materials",       fsCode: "PL_EXP_MAT",  section: "pl",       title: "Cost of Materials Consumed" },
-  { noteKey: "purchases_stock",      fsCode: "PL_EXP_SIT",  section: "pl",       title: "Purchases of Stock-in-Trade" },
-  { noteKey: "changes_inventories",  fsCode: "PL_EXP_CII",  section: "pl",       title: "Changes in Inventories of FG / WIP / SIT" },
-  { noteKey: "employee_benefits",    fsCode: "PL_EXP_EMP",  section: "pl",       title: "Employee Benefits Expense" },
-  { noteKey: "finance_costs",        fsCode: "PL_EXP_FIN",  section: "pl",       title: "Finance Costs" },
-  { noteKey: "other_expenses",       fsCode: "PL_EXP_OTH",  section: "pl",       title: "Other Expenses" },
+  { dataKey: "share_capital",        fsCode: "BS_EQ_SC",    section: "bs_liab",  title: "Share Capital",                                 renderType: "shareCapital" },
+  { dataKey: "reserves_surplus",     fsCode: "BS_EQ_RS",    section: "bs_liab",  title: "Reserves and Surplus",                          renderType: "reserves" },
+  { dataKey: "lt_borrowings",        fsCode: "BS_NCL_LTB",  section: "bs_liab",  title: "Long-term Borrowings",                          renderType: "breakup" },
+  { dataKey: "deferred_tax_liab",    fsCode: "BS_NCL_DTL",  section: "bs_liab",  title: "Deferred Tax Liabilities (Net)",                renderType: "dtFixed" },
+  { dataKey: "other_lt_liabilities", fsCode: "BS_NCL_OLT",  section: "bs_liab",  title: "Other Long-term Liabilities",                   renderType: "breakup" },
+  { dataKey: "lt_provisions",        fsCode: "BS_NCL_LTP",  section: "bs_liab",  title: "Long-term Provisions",                          renderType: "breakup" },
+  { dataKey: "st_borrowings",        fsCode: "BS_CL_STB",   section: "bs_liab",  title: "Short-term Borrowings",                         renderType: "breakup" },
+  { dataKey: "trade_payables",       fsCode: "BS_CL_TP",    section: "bs_liab",  title: "Trade Payables",                                renderType: "tradePayables" },
+  { dataKey: "other_curr_liab",      fsCode: "BS_CL_OCL",   section: "bs_liab",  title: "Other Current Liabilities",                     renderType: "breakup" },
+  { dataKey: "st_provisions",        fsCode: "BS_CL_STP",   section: "bs_liab",  title: "Short-term Provisions",                         renderType: "breakup" },
+  { dataKey: "ppe",                  fsCode: "BS_NCA_FA",   section: "bs_asset", title: "Property, Plant and Equipment",                 renderType: "breakup", isFA: true },
+  { dataKey: "nc_investments",       fsCode: "BS_NCA_INV",  section: "bs_asset", title: "Non-current Investments",                       renderType: "breakup" },
+  { dataKey: "deferred_tax_asset",   fsCode: "BS_NCA_DTA",  section: "bs_asset", title: "Deferred Tax Assets (Net)",                     renderType: "dtAsset" },
+  { dataKey: "lt_loans",             fsCode: "BS_NCA_LLA",  section: "bs_asset", title: "Long-term Loans and Advances",                  renderType: "breakup" },
+  { dataKey: "other_nc_assets",      fsCode: "BS_NCA_ONA",  section: "bs_asset", title: "Other Non-current Assets",                      renderType: "breakup" },
+  { dataKey: "curr_investments",     fsCode: "BS_CA_CI",    section: "bs_asset", title: "Current Investments",                           renderType: "breakup" },
+  { dataKey: "inventories",          fsCode: "BS_CA_INV",   section: "bs_asset", title: "Inventories",                                   renderType: "breakup" },
+  { dataKey: "trade_receivables",    fsCode: "BS_CA_TR",    section: "bs_asset", title: "Trade Receivables",                             renderType: "tradeReceivables" },
+  { dataKey: "cash_bank",            fsCode: "BS_CA_CCE",   section: "bs_asset", title: "Cash and Bank Balances",                        renderType: "breakup" },
+  { dataKey: "st_loans",             fsCode: "BS_CA_SLA",   section: "bs_asset", title: "Short-term Loans and Advances",                 renderType: "breakup" },
+  { dataKey: "other_curr_assets",    fsCode: "BS_CA_OCA",   section: "bs_asset", title: "Other Current Assets",                          renderType: "breakup" },
+  { dataKey: "revenue_from_ops",     fsCode: "PL_REV_OPS",  section: "pl",       title: "Revenue from Operations",                       renderType: "breakup" },
+  { dataKey: "other_income",         fsCode: "PL_REV_OI",   section: "pl",       title: "Other Income",                                  renderType: "breakup" },
+  { dataKey: "cost_materials",       fsCode: "PL_EXP_MAT",  section: "pl",       title: "Cost of Materials Consumed",                    renderType: "costMaterials" },
+  { dataKey: "purchases_stock",      fsCode: "PL_EXP_SIT",  section: "pl",       title: "Purchases of Stock-in-Trade",                   renderType: "breakup" },
+  { dataKey: "changes_inventory",    fsCode: "PL_EXP_CII",  section: "pl",       title: "Changes in Inventories of FG / WIP / SIT",     renderType: "changesInventory" },
+  { dataKey: "employee_benefits",    fsCode: "PL_EXP_EMP",  section: "pl",       title: "Employee Benefits Expense",                     renderType: "breakup" },
+  { dataKey: "finance_costs",        fsCode: "PL_EXP_FIN",  section: "pl",       title: "Finance Costs",                                 renderType: "breakup" },
+  { dataKey: "other_expenses",       fsCode: "PL_EXP_OTH",  section: "pl",       title: "Other Expenses",                                renderType: "breakup" },
+  { dataKey: "eps",                  fsCode: "PL_EPS_B",    section: "pl",       title: "Earnings Per Share",                            renderType: "eps" },
 ];
 
 // ─── PUBLIC API ───────────────────────────────────────────────────────────────
@@ -1182,22 +1422,21 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
 
   for (const meta of CORP_NOTE_META) {
     const noteNo = noteNumbers[meta.fsCode];
-    if (!noteNo) continue;  // no note number assigned → skip
+    if (!noteNo) continue;
 
     if (meta.isFA) {
-      // FA note — use landscape FA schedule
       faRenderedAsNote = true;
       continue;  // rendered in separate landscape section below
     }
 
-    const section = (stage5Notes as any)?.[meta.section];
-    const breakup = section?.[meta.noteKey]?.breakup;
-    if (!Array.isArray(breakup) || breakup.length === 0) continue;
+    const sectionData = (stage5Notes as any)?.[meta.section];
+    const noteData    = sectionData?.[meta.dataKey];
+
+    const rows = extractNoteRows(meta.renderType, noteData, amounts, meta.fsCode, stage5Notes);
+    if (rows.length === 0) continue;
 
     noteTables.push(spacer());
-    noteTables.push(
-      buildNoteBreakupTable(String(noteNo), meta.title, breakup, cyLabel, pyLabel),
-    );
+    noteTables.push(buildNoteTableFromRows(String(noteNo), meta.title, rows, cyLabel, pyLabel));
   }
 
   // Ratios
