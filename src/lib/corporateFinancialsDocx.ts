@@ -38,6 +38,7 @@ import { computeAllRatios } from "@/lib/ratioEngine";
 let _exportDivisor = 1;
 let _exportSuffix  = "(₹)";
 let _exportUnit    = "₹";
+let _compact       = false;   // true inside buildBSTable / buildPLTable — tighter row spacing
 
 function amountUnitsLabel(): string {
   return `All amounts in ${_exportUnit}`;
@@ -174,7 +175,7 @@ function cell(o: CellOpts): TableCell {
     width:   { size: w, type: WidthType.DXA },
     shading: bg ? { fill: bg, type: ShadingType.CLEAR } : undefined,
     borders,
-    margins: { top: 36, bottom: 36, left: padL + indent * 200, right: padR },
+    margins: { top: _compact ? 20 : 36, bottom: _compact ? 20 : 36, left: padL + indent * 200, right: padR },
     verticalAlign: VerticalAlign.CENTER,
     children: [new Paragraph({
       alignment: align,
@@ -227,7 +228,7 @@ function sectionRow(label: string): TableRow {
         width:   { size: TW, type: WidthType.DXA },
         shading: { fill: BG_SECT, type: ShadingType.CLEAR },
         borders: BDR_SECT,
-        margins: { top: 60, bottom: 60, left: 100, right: 100 },
+        margins: { top: _compact ? 30 : 60, bottom: _compact ? 30 : 60, left: 100, right: 100 },
         children: [new Paragraph({
           spacing: { before: 0, after: 0 },
           children: [new TextRun({ text: label, font: FONT, size: SZ_HDR, bold: true, color: NAVY })],
@@ -244,7 +245,7 @@ function parentRow(label: string, indent = 0): TableRow {
         columnSpan: 4,
         width:   { size: TW, type: WidthType.DXA },
         borders: BDR_ROW,
-        margins: { top: 30, bottom: 30, left: 100 + indent * 200, right: 80 },
+        margins: { top: _compact ? 15 : 30, bottom: _compact ? 15 : 30, left: 100 + indent * 200, right: 80 },
         children: [new Paragraph({
           spacing: { before: 0, after: 0, line: 260, lineRule: "auto" as any },
           children: [new TextRun({ text: label, font: FONT, size: SZ_BODY, bold: true, color: BLACK })],
@@ -401,6 +402,7 @@ function buildBSTable(
   const totACy = ncaCy + caCy;
   const totAPy = ncaPy + caPy;
 
+  _compact = true;
   const rows: TableRow[] = [
     ...titleRows(entityName, "BALANCE SHEET", `AS AT 31 MARCH ${cyYear}`),
     colHeaderRow(`As at 31 Mar ${cyYear}`, `As at 31 Mar ${pyYear}`),
@@ -428,9 +430,7 @@ function buildBSTable(
     dataRow("        (d)  Short-term Provisions",             n("BS_CL_STP"), g("BS_CL_STP").cy, g("BS_CL_STP").py),
     subTotalRow("Total Current Liabilities", clCy, clPy),
 
-    blankRow(),
     grandTotalRow("TOTAL EQUITY AND LIABILITIES", totELCy, totELPy),
-    blankRow(),
 
     // ── ASSETS ────────────────────────────────────────────────────────────
     sectionRow("ASSETS"),
@@ -452,9 +452,7 @@ function buildBSTable(
     dataRow("        (f)  Other Current Assets",              n("BS_CA_OCA"), g("BS_CA_OCA").cy, g("BS_CA_OCA").py),
     subTotalRow("Total Current Assets", caCy, caPy),
 
-    blankRow(),
     grandTotalRow("TOTAL ASSETS", totACy, totAPy),
-    blankRow(),
 
     // Footnote
     new TableRow({
@@ -479,6 +477,7 @@ function buildBSTable(
     }),
   ];
 
+  _compact = false;
   return new Table({ width: { size: TW, type: WidthType.DXA }, columnWidths: [CW_DESC, CW_NOTE, CW_CY, CW_PY], rows });
 }
 
@@ -534,6 +533,7 @@ function buildPLTable(
       ],
     });
 
+  _compact = true;
   const rows: TableRow[] = [
     ...titleRows(entityName, "STATEMENT OF PROFIT AND LOSS", `FOR THE YEAR ENDED 31 MARCH ${cyYear}`),
     colHeaderRow(`Year ended 31 Mar ${cyYear}`, `Year ended 31 Mar ${pyYear}`),
@@ -543,7 +543,6 @@ function buildPLTable(
     dataRow("I.    Revenue from Operations",          n("PL_REV_OPS"), revOpsCy, revOpsPy),
     dataRow("II.   Other Income",                     n("PL_REV_OI"),  revOiCy,  revOiPy),
     subTotalRow("III.  Total Income  (I + II)", totIncCy, totIncPy),
-    blankRow(),
 
     // ── EXPENSES ──────────────────────────────────────────────────────────
     sectionRow("EXPENSES"),
@@ -555,28 +554,23 @@ function buildPLTable(
     dataRow("(f)   Depreciation and Amortisation Expense",       null,            depCy, depPy),
     dataRow("(g)   Other Expenses",                              n("PL_EXP_OTH"), othCy, othPy),
     subTotalRow("IV.   Total Expenses", totExpCy, totExpPy),
-    blankRow(),
 
     // ── Profit chain ──────────────────────────────────────────────────────
     dataRow("V.    Profit / (Loss) before Exceptional Items and Tax  (III − IV)", null, pBEICy, pBEIPy),
     dataRow("VI.   Exceptional Items",                            null, eiCy,   eiPy),
     dataRow("VII.  Profit / (Loss) before Tax  (V + VI)",         null, pBTCy,  pBTPy),
-    blankRow(),
 
     parentRow("VIII. Tax Expense"),
     dataRow("        (1)  Current Tax",                           null, taxCurCy, taxCurPy, 1),
     dataRow("        (2)  Deferred Tax",                          null, taxDefCy, taxDefPy, 1),
     subTotalRow("             Total Tax Expense", totTaxCy, totTaxPy),
-    blankRow(),
 
     grandTotalRow("IX.   Profit / (Loss) for the Year  (VII − VIII)", patCy, patPy),
-    blankRow(),
 
     // ── EPS ────────────────────────────────────────────────────────────────
     parentRow("X.    Earnings Per Share (₹)"),
     epsRow("        (1)  Basic EPS",   n("PL_EPS_B"), epsBasicCy,   epsBasicPy),
     epsRow("        (2)  Diluted EPS", n("PL_EPS_D"), epsDilutedCy, epsDilutedPy),
-    blankRow(),
 
     // Footnote
     new TableRow({
@@ -601,6 +595,7 @@ function buildPLTable(
     }),
   ];
 
+  _compact = false;
   return new Table({ width: { size: TW, type: WidthType.DXA }, columnWidths: [CW_DESC, CW_NOTE, CW_CY, CW_PY], rows });
 }
 
@@ -820,8 +815,7 @@ function noteTitleRow(colWidths: number[], noteNumber: string, title: string): T
         children: [new Paragraph({
           spacing: { before: 0, after: 0 },
           children: [
-            new TextRun({ text: `Note ${noteNumber}:  `, font: FONT, size: SZ_HDR, bold: true, color: NAVY }),
-            new TextRun({ text: title, font: FONT, size: SZ_HDR, bold: true, color: NAVY }),
+            new TextRun({ text: `Note ${noteNumber} — ${title}`, font: FONT, size: SZ_HDR, bold: true, color: NAVY }),
           ],
         })],
       }),
@@ -1081,11 +1075,12 @@ function buildRatiosTable(cyRatios: any, pyRatios: any): Table {
 type NoteRowFmt = "amount" | "eps" | "integer";
 
 interface NoteRow {
-  label:  string;
-  cy:     number;
-  py:     number;
-  style:  "data" | "subtotal" | "total";
-  fmt?:   NoteRowFmt;
+  label:   string;
+  cy:      number;
+  py:      number;
+  style:   "data" | "subtotal" | "total";
+  fmt?:    NoteRowFmt;
+  indent?: number;
 }
 
 function extractNoteRows(
@@ -1104,21 +1099,45 @@ function extractNoteRows(
     case "breakup": {
       const breakup: any[] = noteData?.breakup ?? [];
       if (!breakup.length) return [];
+
+      // Pre-compute group totals by summing member rows
+      const groupTotals = new Map<string, { cy: number; py: number }>();
+      for (const r of breakup) {
+        if (!r?.subgroup_id) continue;
+        const cur = groupTotals.get(r.subgroup_id) ?? { cy: 0, py: 0 };
+        groupTotals.set(r.subgroup_id, { cy: cur.cy + n(r.amount_cy), py: cur.py + n(r.amount_py) });
+      }
+
       const rows: NoteRow[] = [];
-      let sumCy = 0, sumPy = 0;
+
       for (const r of breakup) {
         if (!r) continue;
         const label = String(r.description || r.label || "");
-        const cyVal = n(r.amount_cy);
-        const pyVal = n(r.amount_py);
-        if (!label && cyVal === 0 && pyVal === 0) continue;
-        sumCy += cyVal; sumPy += pyVal;
-        const style: NoteRow["style"] = r.is_total ? "total" : r.is_sub_total ? "subtotal" : "data";
-        rows.push({ label, cy: cyVal, py: pyVal, style });
+
+        if (r.is_group && r.id) {
+          // GROUP header — use computed total from members
+          const gt = groupTotals.get(r.id) ?? { cy: n(r.amount_cy), py: n(r.amount_py) };
+          if (gt.cy === 0 && gt.py === 0) continue;
+          rows.push({ label, cy: gt.cy, py: gt.py, style: "subtotal" });
+        } else if (r.subgroup_id) {
+          // Member of a group — show indented, skip nil values
+          const cyVal = n(r.amount_cy);
+          const pyVal = n(r.amount_py);
+          if (cyVal === 0 && pyVal === 0) continue;
+          rows.push({ label, cy: cyVal, py: pyVal, style: "data", indent: 1 });
+        } else {
+          // Regular non-grouped row — skip nil
+          const cyVal = n(r.amount_cy);
+          const pyVal = n(r.amount_py);
+          if (cyVal === 0 && pyVal === 0) continue;
+          const style: NoteRow["style"] = r.is_total ? "total" : r.is_sub_total ? "subtotal" : "data";
+          rows.push({ label, cy: cyVal, py: pyVal, style });
+        }
       }
+
       const hasExplicitTotal = breakup.some(r => r?.is_total);
       if (!hasExplicitTotal && rows.length > 0) {
-        rows.push({ label: "Total", cy: sumCy, py: sumPy, style: "total" });
+        rows.push({ label: "Total", cy: totCy, py: totPy, style: "total" });
       }
       return rows;
     }
@@ -1295,8 +1314,9 @@ function buildNoteTableFromRows(
     const bdr  = row.style === "total" ? BDR_GRAND : row.style === "subtotal" ? BDR_SUB : BDR_ROW;
     const bold = row.style !== "data";
     tableRows.push(new TableRow({
+      cantSplit: true,
       children: [
-        cell({ text: row.label,            w: NW_DESC, bold, bg, borders: bdr }),
+        cell({ text: row.label,               w: NW_DESC, bold, bg, borders: bdr, indent: row.indent ?? 0 }),
         cell({ text: fmtVal(row.cy, row.fmt), w: NW_CY, align: AlignmentType.RIGHT, padL: 20, padR: 120, bold, bg, borders: bdr }),
         cell({ text: fmtVal(row.py, row.fmt), w: NW_PY, align: AlignmentType.RIGHT, padL: 20, padR: 120, bold, bg, borders: bdr }),
       ],
@@ -1399,7 +1419,6 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
   const fy         = engagement?.financial_year ?? `${cyYear - 1}-${String(cyYear).slice(-2)}`;
   const cyLabel    = String(cyYear);
   const pyLabel    = String(pyYear);
-  const footer     = makeFooter(entityName);
 
   // Page 1: Balance Sheet
   const bsTable  = buildBSTable(amounts, noteNumbers, cyLabel, pyLabel, entityName);
@@ -1414,7 +1433,7 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
   const note1Paras = buildNote1Section(entityName, cyLabel);
 
   // Notes 2–N: from stage5_notes
-  const spacer = () => new Paragraph({ spacing: { before: 240, after: 0 }, children: [] });
+  const spacer = () => new Paragraph({ spacing: { before: 360, after: 0 }, keepNext: true, children: [] });
 
   const noteTables: (Table | Paragraph)[] = [];
   const faRows = stage5Notes?.fa?.rows ?? [];
@@ -1457,7 +1476,7 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
     // Balance Sheet
     {
       properties: { page: portraitProps },
-      footers:    { default: footer },
+
       children: [
         bsTable,
         new Paragraph({ spacing: { before: 600 }, children: [] }),
@@ -1467,7 +1486,7 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
     // P&L
     {
       properties: { page: portraitProps },
-      footers:    { default: footer },
+
       children: [
         plTable,
         new Paragraph({ spacing: { before: 600 }, children: [] }),
@@ -1477,7 +1496,7 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
     // Notes (portrait)
     {
       properties: { page: portraitProps },
-      footers:    { default: footer },
+
       children:   [
         ...note1Paras,
         ...noteTables,
@@ -1491,7 +1510,7 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
     const faNoteNo = noteNumbers["BS_NCA_FA"];
     sections.push({
       properties: { page: landscapeProps },
-      footers:    { default: footer },
+
       children:   [buildFATable(faRows, faNoteNo ? String(faNoteNo) : "—", cyLabel, pyLabel)],
     });
   }
