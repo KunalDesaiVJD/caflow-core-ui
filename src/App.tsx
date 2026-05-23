@@ -51,6 +51,7 @@ const AdminFirms               = lazy(() => import("./pages/admin/AdminFirms"));
 const AdminLogs                = lazy(() => import("./pages/admin/AdminLogs"));
 const AdminAiSkills            = lazy(() => import("./pages/admin/AdminAiSkills"));
 const AdminThemeStudio         = lazy(() => import("./pages/admin/AdminThemeStudio"));
+const AdminFirmAccess          = lazy(() => import("./pages/admin/AdminFirmAccess"));
 const Login                    = lazy(() => import("./pages/Login"));
 const ForgotPassword           = lazy(() => import("./pages/ForgotPassword"));
 const ResetPassword            = lazy(() => import("./pages/ResetPassword"));
@@ -182,6 +183,7 @@ const App = () => (
               <Route path="/admin/users" element={<UserManagement />} />
               <Route path="/admin/services" element={<ServiceMasters />} />
               <Route path="/admin/roles" element={<RolesPermissions />} />
+              <Route path="/admin/firm-access" element={<AdminFirmAccess />} />
               <Route path="/admin/logs" element={<AdminLogs />} />
               <Route path="/admin/ai-skills" element={<AdminAiSkills />} />
               <Route path="/admin/theme-studio" element={<AdminThemeStudio />} />

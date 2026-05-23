@@ -12,6 +12,7 @@ import {
   Settings,
   Brain,
   Palette,
+  KeyRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -21,6 +22,7 @@ const navItems = [
   { title: "User Management", path: "/admin/users", icon: Users },
   { title: "Service Masters", path: "/admin/services", icon: Building2 },
   { title: "Roles & Permissions", path: "/admin/roles", icon: Shield },
+  { title: "Firm Access", path: "/admin/firm-access", icon: KeyRound },
   { title: "System Logs", path: "/admin/logs", icon: ScrollText },
   { title: "AI Skills", path: "/admin/ai-skills", icon: Brain },
   { title: "Theme Studio", path: "/admin/theme-studio", icon: Palette },

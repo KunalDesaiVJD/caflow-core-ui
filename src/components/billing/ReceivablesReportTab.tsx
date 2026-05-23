@@ -8,6 +8,7 @@
  *  3. Ledger sheet shows OB as first row, matching the Ledger tab
  */
 import { useState, useEffect, useMemo, useCallback } from "react";
+import { useUserFirmAccess } from "@/hooks/useUserFirmAccess";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -88,12 +89,13 @@ async function loadLogoBase64(url: string): Promise<string | null> {
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
-export default function ReceivablesReportTab() {
+export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?: string } = {}) {
   const { user } = useAuth();
   const isSuperAdmin = user?.role === "superadmin";
+  const { allAccessibleFirms } = useUserFirmAccess();
 
   const [firms,       setFirms]       = useState<Firm[]>([]);
-  const [selectedFirmId, setSelectedFirmId] = useState<string>(user?.firm_id ?? "");
+  const [selectedFirmId, setSelectedFirmId] = useState<string>(defaultFirmId ?? user?.firm_id ?? "");
   const [fromDate,    setFromDate]    = useState(currentFYStart());
   const [toDate,      setToDate]      = useState(todayStr());
   const [loading,     setLoading]     = useState(false);
@@ -121,26 +123,36 @@ export default function ReceivablesReportTab() {
 
   useEffect(() => {
     async function loadFirms() {
-      // All users see all firms — dropdown is always enabled
       const { data } = await supabase
         .from("firms")
         .select("id, name, settings")
         .order("name");
-      const list: Firm[] = (data || []).map(f => ({
+      const allFirms: Firm[] = (data || []).map((f: any) => ({
         id: f.id,
         name: f.name || "—",
         logo_url: (f.settings as any)?.logo_url ?? null,
       }));
+
+      // Restrict dropdown to accessible firms for non-superadmin
+      let list: Firm[];
+      if (isSuperAdmin) {
+        list = allFirms;
+      } else {
+        const accessIds = new Set(allAccessibleFirms.map(af => af.id));
+        list = allFirms.filter(f => accessIds.has(f.id));
+      }
       setFirms(list);
-      // Default to user's own firm if not yet set
-      if (!selectedFirmId) {
-        const own = list.find(f => f.id === user?.firm_id);
+
+      // Default: respect defaultFirmId prop, else user's home firm, else first in list
+      if (!selectedFirmId || !list.find(f => f.id === selectedFirmId)) {
+        const target = defaultFirmId ?? user?.firm_id;
+        const own = list.find(f => f.id === target);
         if (own) setSelectedFirmId(own.id);
         else if (list.length > 0) setSelectedFirmId(list[0].id);
       }
     }
     loadFirms();
-  }, [user?.firm_id]);
+  }, [user?.firm_id, isSuperAdmin, allAccessibleFirms.length, defaultFirmId]);
 
   // Keep logo URL in sync with selected firm
   useEffect(() => {

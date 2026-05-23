@@ -65,10 +65,10 @@ interface KasarRow {
   created_at: string | null;
 }
 
-export default function ReceiptsTab() {
+export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: string | null } = {}) {
   const { user } = useAuth();
   const { toast } = useToast();
-  const firmId = user?.firm_id;
+  const firmId = overrideFirmId ?? user?.firm_id;
   const isSuperadmin = user?.role === "superadmin";
 
   // List state
