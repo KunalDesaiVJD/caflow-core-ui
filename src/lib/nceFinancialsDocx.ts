@@ -99,8 +99,9 @@ const FONT     = "Arial";
 const SZ_XS    = 14;   // 7pt  — footnotes
 const SZ_SM    = 16;   // 8pt  — column headers, footer
 const SZ_BODY  = 18;   // 9pt  — data rows
-const SZ_HDR   = 20;   // 10pt — section labels
-const SZ_TITLE = 22;   // 11pt — entity name / page title
+const SZ_HDR    = 20;  // 10pt — section labels
+const SZ_TITLE  = 22;  // 11pt — statement title + date line
+const SZ_ENTITY = 28;  // 14pt — entity name (main heading)
 
 // ─── Colour palette ───────────────────────────────────────────────────────────
 const NAVY    = "1F3864";   // deep navy  — brand colour
@@ -333,34 +334,46 @@ function blankRow(): TableRow {
   });
 }
 
-/** Title + subtitle header rows for each statement */
+/** Title block: entity name + statement title centered, with the date
+ *  centered below and the "All amounts in …" note pushed to the right. */
 function titleRows(
   entityName: string,
   statementTitle: string,
-  subtitle: string,
+  dateLine: string,
 ): TableRow[] {
-  return [
-    // Row 1 — Entity name (left) + Statement title (right)
+  // Full-width, single-line, centered row factory
+  const centerRow = (
+    text: string,
+    opts: { sz?: number; bold?: boolean; color?: string; top?: number; bottom?: number } = {},
+  ): TableRow =>
     new TableRow({
       children: [
         new TableCell({
           columnSpan: 4,
           width:   { size: TW, type: WidthType.DXA },
           borders: BDR_NONE,
-          margins: { top: 60, bottom: 10, left: 100, right: 100 },
+          margins: { top: opts.top ?? 0, bottom: opts.bottom ?? 0, left: 100, right: 100 },
           children: [new Paragraph({
-            tabStops: [{ type: "right" as any, position: TW - 200 }],
-            spacing: { before: 0, after: 0 },
-            children: [
-              new TextRun({ text: entityName.toUpperCase(), font: FONT, size: SZ_TITLE, bold: true, color: NAVY }),
-              new TextRun({ text: "\t",                      font: FONT, size: SZ_TITLE }),
-              new TextRun({ text: statementTitle,            font: FONT, size: SZ_TITLE, bold: true, color: NAVY }),
-            ],
+            alignment: AlignmentType.CENTER,
+            spacing:   { before: 0, after: 0 },
+            children: [new TextRun({
+              text,
+              font:   FONT,
+              size:   opts.sz ?? SZ_TITLE,
+              bold:   opts.bold ?? false,
+              color:  opts.color ?? NAVY,
+            })],
           })],
         }),
       ],
-    }),
-    // Row 2 — Subtitle with bottom border
+    });
+
+  return [
+    // Entity name — centered, larger (main heading)
+    centerRow(entityName.toUpperCase(), { sz: SZ_ENTITY, bold: true, color: NAVY, top: 60, bottom: 20 }),
+    // Statement title + date on one centered line
+    centerRow(`${statementTitle} ${dateLine}`, { sz: SZ_TITLE, bold: true, color: NAVY, bottom: 10 }),
+    // "All amounts in …" note — own line below, right aligned, with bottom border
     new TableRow({
       children: [
         new TableCell({
@@ -369,8 +382,9 @@ function titleRows(
           borders: { top: bNone, bottom: bBold, left: bNone, right: bNone },
           margins: { top: 0, bottom: 60, left: 100, right: 100 },
           children: [new Paragraph({
-            spacing: { before: 0, after: 0 },
-            children: [new TextRun({ text: subtitle, font: FONT, size: SZ_SM, italic: true, color: DK_GREY })],
+            alignment: AlignmentType.RIGHT,
+            spacing:   { before: 0, after: 0 },
+            children: [new TextRun({ text: amountUnitsLabel(), font: FONT, size: SZ_SM, color: DK_GREY })],
           })],
         }),
       ],
@@ -399,7 +413,7 @@ function buildBSTable(
     ...titleRows(
       entityName,
       "BALANCE SHEET",
-      `As at 31 March ${cyYear}   |   ${amountUnitsLabel()}`,
+      `AS AT 31 MARCH ${cyYear}`,
     ),
     colHeaderRow(`As at 31 Mar ${cyYear}`, `As at 31 Mar ${pyYear}`),
 
@@ -521,7 +535,7 @@ function buildPLTable(
     ...titleRows(
       entityName,
       "PROFIT AND LOSS STATEMENT",
-      `For the year ended 31 March ${cyYear}   |   ${amountUnitsLabel()}`,
+      `FOR THE YEAR ENDED 31 MARCH ${cyYear}`,
     ),
     colHeaderRow(`Year ended 31 Mar ${cyYear}`, `Year ended 31 Mar ${pyYear}`),
 
@@ -576,29 +590,54 @@ function buildPLTable(
 }
 
 // ─── SIGNATURE BLOCK ─────────────────────────────────────────────────────────
-function buildSignatureTable(entityName: string, engagement: any): Table {
-  // Pull from engagement — adapt field names as your schema evolves
-  const caFirm    = engagement?.audit_firm_name      ?? engagement?.ca_firm_name       ?? "M/s _______________";
-  const frn       = engagement?.firm_reg_no          ?? engagement?.frn                ?? "FRN: _______________";
-  const partner   = engagement?.signing_partner_name ?? engagement?.partner_name       ?? "_______________";
-  const memNo     = engagement?.membership_number    ?? engagement?.mem_no             ?? "M.No. _______________";
-  const place     = engagement?.sign_off_place       ?? engagement?.clients?.city      ?? "_______________";
-  const rawDate   = engagement?.sign_off_date;
-  const reportDate = rawDate
-    ? new Date(rawDate).toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" })
-    : "_______________";
+export interface SigData {
+  firmName?: string;
+  firmFRN?: string;
+  partnerName?: string;
+  membershipNo?: string;
+  clientName?: string;
+  signatoryName?: string;
+  place?: string;
+  date?: string;        // "YYYY-MM-DD" from the UI date input
+}
+
+/** Format the UI's "YYYY-MM-DD" sign-off date as "DD/MM/YYYY". */
+function fmtSigDate(d?: string): string {
+  if (!d) return "_______________";
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d.trim());
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : d;
+}
+
+/**
+ * Mirrors the on-screen NCE signature block:
+ *   Left  — CA firm (auto-linked from firm settings)
+ *   Right — client + authorised signatory + Place + Date
+ * Place / Date appear once, on the right, exactly as in the UI.
+ */
+function buildSignatureTable(sig: SigData): Table {
+  const BLANK      = "_______________";
+  const firmName   = sig.firmName     || BLANK;
+  const frn        = sig.firmFRN      || BLANK;
+  const partner    = sig.partnerName  || BLANK;
+  const memNo      = sig.membershipNo || BLANK;
+  const clientName = sig.clientName   || BLANK;
+  const signatory  = sig.signatoryName || "";
+  const place      = sig.place        || BLANK;
+  const date       = fmtSigDate(sig.date);
 
   const half = Math.floor(TW / 2);
 
-  function sigLines(lines: Array<{ text: string; bold?: boolean; gap?: boolean }>): Paragraph[] {
+  function sigLines(
+    lines: Array<{ text: string; bold?: boolean; gap?: boolean; muted?: boolean }>,
+  ): Paragraph[] {
     return lines.map(l => new Paragraph({
-      spacing: { before: l.gap ? 200 : 0, after: 0 },
+      spacing: { before: l.gap ? 200 : 0, after: 20 },
       children: [new TextRun({
         text:  l.text,
         font:  FONT,
         size:  SZ_SM,
         bold:  l.bold ?? false,
-        color: l.bold ? NAVY : BLACK,
+        color: l.bold ? NAVY : (l.muted ? DK_GREY : BLACK),
       })],
     }));
   }
@@ -609,34 +648,33 @@ function buildSignatureTable(entityName: string, engagement: any): Table {
     rows: [
       new TableRow({
         children: [
+          // Left — CA firm
           new TableCell({
             width:   { size: half, type: WidthType.DXA },
             borders: BDR_NONE,
             margins: { top: 80, bottom: 80, left: 80, right: 80 },
             children: sigLines([
-              { text: "As per our report of even date", bold: true },
-              { text: `For ${caFirm}`,                  bold: true, gap: true },
+              { text: `For, ${firmName}`, bold: true },
               { text: "Chartered Accountants" },
-              { text: frn },
-              { text: "____________________________",   gap: true },
-              { text: partner,                          bold: true },
-              { text: memNo },
-              { text: `Date: ${reportDate}`,            gap: true },
-              { text: `Place: ${place}` },
+              { text: `FRN: ${frn}` },
+              { text: "__________________", gap: true },
+              { text: partner, bold: true },
+              { text: "Partner" },
+              { text: `Membership No. ${memNo}` },
             ]),
           }),
+          // Right — client / authorised signatory (indented further right)
           new TableCell({
             width:   { size: TW - half, type: WidthType.DXA },
             borders: BDR_NONE,
-            margins: { top: 80, bottom: 80, left: 80, right: 80 },
+            margins: { top: 80, bottom: 80, left: 1440, right: 80 },
             children: sigLines([
-              { text: `For ${entityName}`, bold: true },
-              { text: "____________________________", gap: true },
-              { text: "Partner / Proprietor",         bold: true },
-              { text: "____________________________", gap: true },
-              { text: "Partner",                      bold: true },
-              { text: `Date: ${reportDate}`,          gap: true },
-              { text: `Place: ${place}` },
+              { text: `For, ${clientName}`, bold: true },
+              { text: "__________________", gap: true },
+              ...(signatory ? [{ text: signatory, bold: true }] : []),
+              { text: "Authorised Signatory", muted: true },
+              { text: `Place: ${place}`, gap: true },
+              { text: `Date: ${date}` },
             ]),
           }),
         ],
@@ -682,7 +720,7 @@ function noteTitleRow(colWidths: number[], noteNumber: string, title: string): T
           spacing: { before: 0, after: 0 },
           children: [
             new TextRun({ text: `Note ${noteNumber}:  `, font: FONT, size: SZ_HDR, bold: true, color: NAVY }),
-            new TextRun({ text: title, font: FONT, size: SZ_HDR, bold: false, color: NAVY }),
+            new TextRun({ text: title, font: FONT, size: SZ_HDR, bold: true, color: NAVY }),
           ],
         })],
       }),
@@ -715,9 +753,9 @@ function noteHdrB(cyYear: string, pyYear: string): TableRow {
   return new TableRow({
     tableHeader: true,
     children: [
-      cell({ text: "Particulars", w: NW_DESC, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, padL: 100 }),
-      cell({ text: `${cyYear}\n${_exportSuffix}`, w: NW_CY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
-      cell({ text: `${pyYear}\n${_exportSuffix}`, w: NW_PY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
+      cell({ text: "Particulars", w: NW_DESC, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, padL: 100 }),
+      cell({ text: `${cyYear}\n${_exportSuffix}`, w: NW_CY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
+      cell({ text: `${pyYear}\n${_exportSuffix}`, w: NW_PY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
     ],
   });
 }
@@ -756,24 +794,24 @@ function noteHdrA(cyYear: string, pyYear: string): TableRow[] {
       children: [new Paragraph({
         alignment: AlignmentType.CENTER,
         spacing: { before: 0, after: 0 },
-        children: [new TextRun({ text, font: FONT, size: SZ_SM, bold: true, color: WHITE })],
+        children: [new TextRun({ text, font: FONT, size: SZ_BODY, bold: true, color: WHITE })],
       })],
     });
 
   const r1 = new TableRow({
     children: [
-      cell({ text: "Particulars", w: NW_A_DESC, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, padL: 100 }),
+      cell({ text: "Particulars", w: NW_A_DESC, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, padL: 100 }),
       spanCell("Long Term", ltw, 2),
       spanCell("Short Term", stw, 2),
     ],
   });
   const r2 = new TableRow({
     children: [
-      cell({ text: "", w: NW_A_DESC, sz: SZ_SM, color: WHITE, bg: BG_HDR, borders: BDR_NONE }),
-      cell({ text: `${cyYear}\n${_exportSuffix}`, w: NW_A_LTCY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
-      cell({ text: `${pyYear}\n${_exportSuffix}`, w: NW_A_LTPY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
-      cell({ text: `${cyYear}\n${_exportSuffix}`, w: NW_A_STCY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
-      cell({ text: `${pyYear}\n${_exportSuffix}`, w: NW_A_STPY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
+      cell({ text: "", w: NW_A_DESC, sz: SZ_BODY, color: WHITE, bg: BG_HDR, borders: BDR_NONE }),
+      cell({ text: `${cyYear}\n${_exportSuffix}`, w: NW_A_LTCY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
+      cell({ text: `${pyYear}\n${_exportSuffix}`, w: NW_A_LTPY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
+      cell({ text: `${cyYear}\n${_exportSuffix}`, w: NW_A_STCY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
+      cell({ text: `${pyYear}\n${_exportSuffix}`, w: NW_A_STPY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
     ],
   });
   return [r1, r2];
@@ -832,36 +870,48 @@ const NOTE1_POLICIES = [
 ];
 
 function buildNote1Section(entityName: string, cyYear: string): Paragraph[] {
-  const para = (
-    text: string,
-    bold = false,
-    indent = 0,
-    after = 40,
+  // Vertical gap between policy points (~0.07")
+  const GAP = 100;
+
+  const txt = (text: string, bold = false) =>
+    new TextRun({ text, font: FONT, size: SZ_BODY, bold, color: BLACK });
+
+  // Compact block paragraph — keepLines/keepNext bind the whole note to one page
+  const block = (
+    runs: TextRun[],
+    opts: { indent?: number; hanging?: number; after?: number; keepNext?: boolean } = {},
   ): Paragraph =>
     new Paragraph({
-      spacing: { before: 0, after },
-      indent:  indent ? { left: indent } : undefined,
-      children: [new TextRun({ text, font: FONT, size: SZ_BODY, bold, color: BLACK })],
+      spacing:   { before: 0, after: opts.after ?? 40, line: 240, lineRule: "auto" as any },
+      indent:    opts.indent ? { left: opts.indent, hanging: opts.hanging } : undefined,
+      keepLines: true,
+      keepNext:  opts.keepNext ?? true,
+      children:  runs,
     });
+
+  const last = NOTE1_POLICIES.length - 1;
 
   return [
     new Paragraph({
-      spacing: { before: 0, after: 120 },
-      border:  { bottom: { style: BorderStyle.SINGLE, size: 4, color: NAVY, space: 4 } },
+      spacing:   { before: 0, after: 100 },
+      border:    { bottom: { style: BorderStyle.SINGLE, size: 4, color: NAVY, space: 4 } },
+      keepNext:  true,
+      keepLines: true,
       children: [
         new TextRun({ text: "Note 1:  ", font: FONT, size: SZ_HDR, bold: true, color: NAVY }),
         new TextRun({ text: "Significant Accounting Policies", font: FONT, size: SZ_HDR, color: NAVY }),
       ],
     }),
-    para("1.  Basis of Preparation", true, 0, 20),
-    para(
-      `The financial statements of ${entityName} have been prepared in accordance with the Generally Accepted Accounting Principles in India (GAAP) under the historical cost convention on an accrual basis. The financial statements comply with the Accounting Standards applicable to the entity and other relevant provisions of the applicable law.`,
-      false, 0, 60,
+    block([txt("1.  Basis of Preparation", true)], { after: 20 }),
+    block(
+      [txt(`The financial statements of ${entityName} have been prepared in accordance with the Generally Accepted Accounting Principles in India (GAAP) under the historical cost convention on an accrual basis. The financial statements comply with the Accounting Standards applicable to the entity and other relevant provisions of the applicable law.`)],
+      { after: GAP },
     ),
-    para("2.  Significant Accounting Policies", true, 0, 20),
-    ...NOTE1_POLICIES.flatMap(p => [
-      para(p.label, true, 360, 10),
-      para(p.text, false, 360, 40),
+    block([txt("2.  Significant Accounting Policies", true)], { after: 40 }),
+    // Each policy = bold label heading + description below; GAP separates points
+    ...NOTE1_POLICIES.flatMap((p, i) => [
+      block([txt(p.label, true)], { indent: 280, after: 10 }),
+      block([txt(p.text)],        { indent: 280, after: i === last ? 40 : GAP, keepNext: i !== last }),
     ]),
   ];
 }
@@ -963,7 +1013,7 @@ function buildCapitalAccountSection(
           margins: { top: 30, bottom: 30, left: 100, right: 100 },
           children: [new Paragraph({
             spacing: { before: 0, after: 0 },
-            children: [new TextRun({ text: label, font: FONT, size: SZ_BODY, bold: true, color: NAVY })],
+            children: [new TextRun({ text: label, font: FONT, size: SZ_HDR, bold: true, color: NAVY })],
           })],
         }),
       ],
@@ -1188,6 +1238,9 @@ export interface NCEDocxParams {
   capitalData?: any[];   // from nce_capital_account
   notesData?: any[];     // from nce_financial_notes
   ppeData?: any[];       // from nce_ppe_schedule
+  /** Signature block data — pass the UI's resolved sig* values so the
+   *  Word block matches the on-screen signature block exactly. */
+  signature?: SigData;
 }
 
 export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<void> {
@@ -1201,6 +1254,7 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     capitalData    = [],
     notesData      = [],
     ppeData        = [],
+    signature      = {},
   } = params;
 
   // Phase 3 — sync unit scale with the active FS toggle (Actual / '000 / Lakhs)
@@ -1216,7 +1270,10 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   // Phase 1 tables
   const bsTable  = buildBSTable(nceCyAmounts, ncePyAmounts, cyYear, pyYear, entityName, dynamicNoteMap);
   const plTable  = buildPLTable(nceCyAmounts, ncePyAmounts, cyYear, pyYear, entityName, dynamicNoteMap);
-  const sigTable = buildSignatureTable(entityName, engagement);
+  // A docx Table instance can't be reused across pages, so build a fresh
+  // signature block per page (Balance Sheet + P&L) from the same data.
+  const sigArgs: SigData = { clientName: entityName, ...signature };
+  const sigBlock = () => buildSignatureTable(sigArgs);
 
   // Phase 2 — Note 1
   const note1Paras = buildNote1Section(entityName, cyYear);
@@ -1283,11 +1340,15 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
       },
     },
     sections: [
-      // Page 1: Balance Sheet
+      // Page 1: Balance Sheet + Signature
       {
         properties: { page: portraitProps },
         footers:    { default: footer },
-        children:   [bsTable],
+        children: [
+          bsTable,
+          new Paragraph({ spacing: { before: 600 }, children: [] }),
+          sigBlock(),
+        ],
       },
       // Page 2+: P&L + Signature
       {
@@ -1296,7 +1357,7 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
         children: [
           plTable,
           new Paragraph({ spacing: { before: 600 }, children: [] }),
-          sigTable,
+          sigBlock(),
         ],
       },
       // Notes 1–28 (portrait, flows across pages)
