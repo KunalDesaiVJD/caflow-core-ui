@@ -48,6 +48,7 @@ import {
 } from "@/config/nceNotesConfig";
 import { computeNceDynamicNoteMap } from "@/lib/nceDynamicNoteNumbers";
 import { generateNCEFinancialsDocx } from "@/lib/nceFinancialsDocx";
+import { generateCorporateFinancialsDocx } from "@/lib/corporateFinancialsDocx";
 import { sumNotesSubRowsCY, sumNotesSubRowsPY, getSharesOutstanding, getFAGridNetBlockTotal } from "@/lib/notesAutoPopulate";
 import { getNCENoteFaceTotal, NCE_CODE_TO_NOTE, NOTE_NATURE as NCE_NOTE_NATURE } from "@/lib/nceAutoPopulate";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
@@ -6255,6 +6256,164 @@ export default function PipelineFinancialStatements({
                     date:          sigDate,
                   },
                 });
+              }}
+            >
+              <FileText size={14} /> Export Word
+            </Button>
+          )}
+          {!isNonCorporate && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1"
+              title="Export Balance Sheet + P&L + Notes as a Big4-style Word document (.docx)"
+              onClick={() => {
+                void (async () => {
+                  try {
+                    if (!fsDisplayData) {
+                      toast.error("Financial statements not yet loaded. Please wait and try again.");
+                      return;
+                    }
+                    const { bs: memoBsD, pl: memoPLD } = fsDisplayData;
+                    if (!memoBsD || !memoPLD) {
+                      toast.error("Financial statements data not available.");
+                      return;
+                    }
+
+                    const posD = (v: number | null | undefined): number => {
+                      const n = Number(v);
+                      return Number.isFinite(n) ? Math.abs(n) : 0;
+                    };
+
+                    // Build PAT for EPS computation
+                    const patCyD = (posD(memoPLD.revFromOps.cy) + posD(memoPLD.otherIncome.cy))
+                      - (posD(memoPLD.costMaterials.cy) + posD(memoPLD.purchasesStock.cy)
+                        + (memoPLD.changesInventories.cy ?? 0)
+                        + posD(memoPLD.employeeBenefits.cy) + posD(memoPLD.financeCosts.cy)
+                        + posD(memoPLD.depreciation.cy) + posD(memoPLD.otherExpenses.cy))
+                      - posD(memoPLD.currentTax.cy) - (memoPLD.deferredTax.cy ?? 0);
+                    const patPyD = (posD(memoPLD.revFromOps.py) + posD(memoPLD.otherIncome.py))
+                      - (posD(memoPLD.costMaterials.py) + posD(memoPLD.purchasesStock.py)
+                        + (memoPLD.changesInventories.py ?? 0)
+                        + posD(memoPLD.employeeBenefits.py) + posD(memoPLD.financeCosts.py)
+                        + posD(memoPLD.depreciation.py) + posD(memoPLD.otherExpenses.py))
+                      - posD(memoPLD.currentTax.py) - (memoPLD.deferredTax.py ?? 0);
+
+                    const sharesCyD = getSharesOutstanding(stage5NotesData ?? null, "cy");
+                    const sharesPyD = getSharesOutstanding(stage5NotesData ?? null, "py");
+                    const epsBasicCyD = sharesCyD > 0 ? patCyD / sharesCyD : 0;
+                    const epsBasicPyD = sharesPyD > 0 ? patPyD / sharesPyD : 0;
+
+                    const corpDocxAmounts: Record<string, { cy: number; py: number }> = {
+                      BS_EQ_SC:    { cy: posD(memoBsD.shareCap.cy),        py: posD(memoBsD.shareCap.py) },
+                      BS_EQ_RS:    { cy: posD(memoBsD.reserves.cy),        py: posD(memoBsD.reserves.py) },
+                      BS_NCL_LTB:  { cy: posD(memoBsD.ltBorrowings.cy),    py: posD(memoBsD.ltBorrowings.py) },
+                      BS_NCL_DTL:  { cy: posD(memoBsD.dtLiab.cy),          py: posD(memoBsD.dtLiab.py) },
+                      BS_NCL_OLT:  { cy: posD(memoBsD.otherLtLiab.cy),     py: posD(memoBsD.otherLtLiab.py) },
+                      BS_NCL_LTP:  { cy: posD(memoBsD.ltProvisions.cy),    py: posD(memoBsD.ltProvisions.py) },
+                      BS_CL_STB:   { cy: posD(memoBsD.stBorrowings.cy),    py: posD(memoBsD.stBorrowings.py) },
+                      BS_CL_TP:    { cy: posD(memoBsD.tradePayOthers.cy),  py: posD(memoBsD.tradePayOthers.py) },
+                      BS_CL_OCL:   { cy: posD(memoBsD.otherCurrLiab.cy),   py: posD(memoBsD.otherCurrLiab.py) },
+                      BS_CL_STP:   { cy: posD(memoBsD.stProvisions.cy),    py: posD(memoBsD.stProvisions.py) },
+                      BS_NCA_FA:   { cy: posD(memoBsD.ppe.cy),             py: posD(memoBsD.ppe.py) },
+                      BS_NCA_INV:  { cy: posD(memoBsD.ncInvestments.cy),   py: posD(memoBsD.ncInvestments.py) },
+                      BS_NCA_DTA:  { cy: posD(memoBsD.dtAssets.cy),        py: posD(memoBsD.dtAssets.py) },
+                      BS_NCA_LLA:  { cy: posD(memoBsD.ltLoans.cy),         py: posD(memoBsD.ltLoans.py) },
+                      BS_NCA_ONA:  { cy: posD(memoBsD.otherNcAssets.cy),   py: posD(memoBsD.otherNcAssets.py) },
+                      BS_CA_CI:    { cy: posD(memoBsD.currInvestments.cy), py: posD(memoBsD.currInvestments.py) },
+                      BS_CA_INV:   { cy: posD(memoBsD.inventories.cy),     py: posD(memoBsD.inventories.py) },
+                      BS_CA_TR:    { cy: posD(memoBsD.tradeRec.cy),        py: posD(memoBsD.tradeRec.py) },
+                      BS_CA_CCE:   { cy: posD(memoBsD.cashBank.cy),        py: posD(memoBsD.cashBank.py) },
+                      BS_CA_SLA:   { cy: posD(memoBsD.stLoans.cy),         py: posD(memoBsD.stLoans.py) },
+                      BS_CA_OCA:   { cy: posD(memoBsD.otherCurrAssets.cy), py: posD(memoBsD.otherCurrAssets.py) },
+                      PL_REV_OPS:  { cy: posD(memoPLD.revFromOps.cy),      py: posD(memoPLD.revFromOps.py) },
+                      PL_REV_OI:   { cy: posD(memoPLD.otherIncome.cy),     py: posD(memoPLD.otherIncome.py) },
+                      PL_EXP_MAT:  { cy: posD(memoPLD.costMaterials.cy),   py: posD(memoPLD.costMaterials.py) },
+                      PL_EXP_SIT:  { cy: posD(memoPLD.purchasesStock.cy),  py: posD(memoPLD.purchasesStock.py) },
+                      PL_EXP_CII:  { cy: memoPLD.changesInventories.cy ?? 0, py: memoPLD.changesInventories.py ?? 0 },
+                      PL_EXP_EMP:  { cy: posD(memoPLD.employeeBenefits.cy), py: posD(memoPLD.employeeBenefits.py) },
+                      PL_EXP_FIN:  { cy: posD(memoPLD.financeCosts.cy),    py: posD(memoPLD.financeCosts.py) },
+                      PL_EXP_DEP:  { cy: posD(memoPLD.depreciation.cy),    py: posD(memoPLD.depreciation.py) },
+                      PL_EXP_OTH:  { cy: posD(memoPLD.otherExpenses.cy),   py: posD(memoPLD.otherExpenses.py) },
+                      PL_TAX_CUR:  { cy: posD(memoPLD.currentTax.cy),      py: posD(memoPLD.currentTax.py) },
+                      PL_TAX_DEF:  { cy: memoPLD.deferredTax.cy ?? 0,      py: memoPLD.deferredTax.py ?? 0 },
+                      PL_EI:       { cy: 0, py: 0 },
+                      PL_EPS_B:    { cy: epsBasicCyD,  py: epsBasicPyD },
+                      PL_EPS_D:    { cy: epsBasicCyD,  py: epsBasicPyD },
+                    };
+
+                    const corpDocxNoteNos: Record<string, number | null | undefined> = {
+                      BS_EQ_SC:    memoBsD.shareCap.noteNo ?? null,
+                      BS_EQ_RS:    memoBsD.reserves.noteNo ?? null,
+                      BS_NCL_LTB:  memoBsD.ltBorrowings.noteNo ?? null,
+                      BS_NCL_DTL:  memoBsD.dtLiab.noteNo ?? null,
+                      BS_NCL_OLT:  memoBsD.otherLtLiab.noteNo ?? null,
+                      BS_NCL_LTP:  memoBsD.ltProvisions.noteNo ?? null,
+                      BS_CL_STB:   memoBsD.stBorrowings.noteNo ?? null,
+                      BS_CL_TP:    memoBsD.tradePayables.noteNo ?? null,
+                      BS_CL_OCL:   memoBsD.otherCurrLiab.noteNo ?? null,
+                      BS_CL_STP:   memoBsD.stProvisions.noteNo ?? null,
+                      BS_NCA_FA:   memoBsD.ppe.noteNo ?? null,
+                      BS_NCA_INV:  memoBsD.ncInvestments.noteNo ?? null,
+                      BS_NCA_DTA:  memoBsD.dtAssets.noteNo ?? null,
+                      BS_NCA_LLA:  memoBsD.ltLoans.noteNo ?? null,
+                      BS_NCA_ONA:  memoBsD.otherNcAssets.noteNo ?? null,
+                      BS_CA_CI:    memoBsD.currInvestments.noteNo ?? null,
+                      BS_CA_INV:   memoBsD.inventories.noteNo ?? null,
+                      BS_CA_TR:    memoBsD.tradeRec.noteNo ?? null,
+                      BS_CA_CCE:   memoBsD.cashBank.noteNo ?? null,
+                      BS_CA_SLA:   memoBsD.stLoans.noteNo ?? null,
+                      BS_CA_OCA:   memoBsD.otherCurrAssets.noteNo ?? null,
+                      PL_REV_OPS:  memoPLD.revFromOps.noteNo ?? null,
+                      PL_REV_OI:   memoPLD.otherIncome.noteNo ?? null,
+                      PL_EXP_MAT:  memoPLD.costMaterials.noteNo ?? null,
+                      PL_EXP_SIT:  memoPLD.purchasesStock.noteNo ?? null,
+                      PL_EXP_CII:  memoPLD.changesInventories.noteNo ?? null,
+                      PL_EXP_EMP:  memoPLD.employeeBenefits.noteNo ?? null,
+                      PL_EXP_FIN:  memoPLD.financeCosts.noteNo ?? null,
+                      PL_EXP_DEP:  memoPLD.depreciation.noteNo ?? null,
+                      PL_EXP_OTH:  memoPLD.otherExpenses.noteNo ?? null,
+                      PL_EPS_B:    memoPLD.eps.noteNo ?? null,
+                      PL_EPS_D:    memoPLD.eps.noteNo ?? null,
+                    };
+
+                    // Load stage7_ratios for the ratios page
+                    let corpDocxRatios: { cy: any; py: any } | undefined;
+                    try {
+                      const { loadStage7Ratios } = await import("@/lib/ratioAutoPopulate");
+                      const s7 = await loadStage7Ratios(engagement.id);
+                      corpDocxRatios = { cy: s7.cy, py: s7.py };
+                    } catch (e) {
+                      console.warn("[FS DOCX] Could not load stage7_ratios:", e);
+                    }
+
+                    await generateCorporateFinancialsDocx({
+                      engagement,
+                      amounts:     corpDocxAmounts,
+                      noteNumbers: corpDocxNoteNos,
+                      cyYear,
+                      pyYear,
+                      signature: {
+                        firmName:     sigFirmName,
+                        firmFRN:      sigFirmFRN,
+                        partnerName:  sigPartnerName,
+                        membershipNo: sigMembershipNo,
+                        dir1Name:     corpSigDirs.dir1Name,
+                        dir1Din:      corpSigDirs.dir1Din,
+                        dir2Name:     corpSigDirs.dir2Name,
+                        dir2Din:      corpSigDirs.dir2Din,
+                        place:        sigPlace || sigFirmCity || "",
+                        date:         sigDate,
+                      },
+                      stage5Notes: stage5NotesData ?? null,
+                      ratios: corpDocxRatios,
+                    });
+                    toast.success("Financial Statements exported as Word document");
+                  } catch (err: any) {
+                    console.error("[FS DOCX] Corporate export failed:", err);
+                    toast.error(`Word export failed: ${err?.message || "Unknown error"}`);
+                  }
+                })();
               }}
             >
               <FileText size={14} /> Export Word
