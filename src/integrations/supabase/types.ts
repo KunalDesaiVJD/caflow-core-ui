@@ -4371,6 +4371,7 @@ export type Database = {
           line_items: Json | null
           notes: string | null
           paid_at: string | null
+          payment_due_days: number | null
           payment_terms: string | null
           place_of_supply: string | null
           reference_no: string | null
@@ -4426,6 +4427,7 @@ export type Database = {
           line_items?: Json | null
           notes?: string | null
           paid_at?: string | null
+          payment_due_days?: number | null
           payment_terms?: string | null
           place_of_supply?: string | null
           reference_no?: string | null
@@ -4481,6 +4483,7 @@ export type Database = {
           line_items?: Json | null
           notes?: string | null
           paid_at?: string | null
+          payment_due_days?: number | null
           payment_terms?: string | null
           place_of_supply?: string | null
           reference_no?: string | null

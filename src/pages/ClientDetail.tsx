@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import { reconcileEngagementAuditType } from "@/lib/auditEngagementSync";
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -763,6 +764,12 @@ const ClientDetail = () => {
           internal_audit_applicable:  auditForm.internal_audit_applicable,
           stock_audit_applicable:     auditForm.stock_audit_applicable,
         }, { onConflict: "client_id,financial_year" });
+        // Keep the existing engagement's audit_type in sync with the toggle.
+        await reconcileEngagementAuditType(
+          clientId, fy,
+          auditForm.statutory_audit_applicable,
+          auditForm.tax_audit_applicable,
+        );
       } catch (e) {
         console.warn("[ClientDetail] FY audit setup mirror failed:", e);
       }

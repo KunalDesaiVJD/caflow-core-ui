@@ -5,6 +5,14 @@ export interface ClientOption {
   id:          string;
   name:        string;
   entity_type: string | null;
+  /**
+   * Whether tax audit is applicable for this client in the selected FY,
+   * sourced from client_fy_audit_setup.tax_audit_applicable. Only populated
+   * when the hook is called FY-scoped; otherwise null (caller falls back to
+   * engagement_type). Used by the Audit Status grid to lock the 3CA/3CB+3CD
+   * columns to "NA" for statutory-only (tax-audit-not-applicable) clients.
+   */
+  tax_audit_applicable: boolean | null;
 }
 
 /**
@@ -52,6 +60,9 @@ export function useClients(
       if (setupErr) console.error("[useClients] audit-setup query error:", setupErr);
 
       const setupClientIds = new Set<string>();
+      // Per-client tax-audit-applicable flag for the selected FY. Only built
+      // when FY-scoped (otherwise the flag would be ambiguous across years).
+      const taxAuditMap = new Map<string, boolean>();
       for (const r of (setupRows as any[]) || []) {
         if (
           r.statutory_audit_applicable ||
@@ -61,6 +72,9 @@ export function useClients(
           r.stock_audit_applicable
         ) {
           if (r.client_id) setupClientIds.add(r.client_id as string);
+        }
+        if (financialYear && r.client_id) {
+          taxAuditMap.set(r.client_id as string, !!r.tax_audit_applicable);
         }
       }
 
@@ -116,7 +130,15 @@ export function useClients(
       if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
       const { data, error } = await q;
       if (error) console.error("[useClients] clients query error:", error);
-      setClients((data as ClientOption[]) || []);
+      const withFlags: ClientOption[] = ((data as any[]) || []).map(c => ({
+        id: c.id,
+        name: c.name,
+        entity_type: c.entity_type ?? null,
+        tax_audit_applicable: financialYear && taxAuditMap.has(c.id)
+          ? (taxAuditMap.get(c.id) as boolean)
+          : null,
+      }));
+      setClients(withFlags);
       setLoading(false);
     }
 
