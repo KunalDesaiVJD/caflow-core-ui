@@ -457,6 +457,7 @@ export type Database = {
           notes_to_accounts: Json | null
           parent_engagement_id: string | null
           partner_id: string | null
+          partner_membership_no: string | null
           partner_name: string | null
           period_label: string | null
           pipeline_stage: number | null
@@ -534,6 +535,7 @@ export type Database = {
           notes_to_accounts?: Json | null
           parent_engagement_id?: string | null
           partner_id?: string | null
+          partner_membership_no?: string | null
           partner_name?: string | null
           period_label?: string | null
           pipeline_stage?: number | null
@@ -611,6 +613,7 @@ export type Database = {
           notes_to_accounts?: Json | null
           parent_engagement_id?: string | null
           partner_id?: string | null
+          partner_membership_no?: string | null
           partner_name?: string | null
           period_label?: string | null
           pipeline_stage?: number | null

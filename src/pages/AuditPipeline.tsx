@@ -200,7 +200,7 @@ export default function AuditPipeline() {
   // ─── Stage 1 form state — must be declared before any useQuery that references form1A ───
   const [form1A, setForm1A] = useState({
     client_id: "", financial_year: "2024-25", audit_period_type: "annual", period_label: "",
-    audit_type: "statutory", entity_type: "company", audit_firm_id: "", partner_id: "", partner_name: "",
+    audit_type: "statutory", entity_type: "company", audit_firm_id: "", partner_id: "", partner_name: "", partner_membership_no: "",
   });
   const [questionnaire, setQuestionnaire] = useState<Record<string, any>>({});
   const [planning, setPlanning] = useState({
@@ -556,8 +556,9 @@ export default function AuditPipeline() {
       audit_type: engagement.audit_type || "statutory",
       entity_type: engagement.entity_type || "company",
       audit_firm_id: engagement.audit_firm_id || "",
-      partner_id:   engagement.partner_id   || "",
-      partner_name: engagement.partner_name || "",
+      partner_id:            engagement.partner_id            || "",
+      partner_name:          engagement.partner_name          || "",
+      partner_membership_no: engagement.partner_membership_no || "",
     });
     if (engagement.questionnaire_answers && typeof engagement.questionnaire_answers === "object") {
       setQuestionnaire(engagement.questionnaire_answers as Record<string, any>);
@@ -763,8 +764,9 @@ export default function AuditPipeline() {
         period_label: form1A.period_label || null,
         audit_firm_id: safeAuditFirmId,
         // partner_id kept for backward compat; partner_name is the primary display field
-        partner_id:   form1A.partner_id   || null,
-        partner_name: form1A.partner_name || null,
+        partner_id:            form1A.partner_id            || null,
+        partner_name:          form1A.partner_name          || null,
+        partner_membership_no: form1A.partner_membership_no || null,
         status: "planning",
         pipeline_stage: 1,
         stage_statuses: { "1": "in_progress", "2": "not_started", "3": "not_started", "4": "not_started", "5": "not_started", "6": "not_started", "7": "not_started", "8": "not_started", "9": "not_started" },
@@ -852,7 +854,8 @@ export default function AuditPipeline() {
       audit_period_type: form1A.audit_period_type,
       period_label: form1A.period_label || null,
       audit_firm_id: safeAuditFirmId,
-      partner_name:  form1A.partner_name  || null,
+      partner_name:          form1A.partner_name          || null,
+      partner_membership_no: form1A.partner_membership_no || null,
       questionnaire_answers: questionnaire,
       // Sync PY data-source choice to the dedicated column so Stage 10 can
       // query it without parsing questionnaire JSON. Map questionnaire values
@@ -1088,7 +1091,10 @@ export default function AuditPipeline() {
                   <Label>Engagement Partner</Label>
                   <Select
                     value={form1A.partner_name}
-                    onValueChange={v => setForm1A(f => ({ ...f, partner_name: v }))}
+                    onValueChange={v => {
+                      const mno = partnersForFirm.find(p => p.partner_name === v)?.membership_no || "";
+                      setForm1A(f => ({ ...f, partner_name: v, partner_membership_no: mno }));
+                    }}
                     disabled={partnersForFirm.length === 0}
                   >
                     <SelectTrigger>
@@ -1708,7 +1714,10 @@ export default function AuditPipeline() {
               <Label>Engagement Partner</Label>
               <Select
                 value={form1A.partner_name}
-                onValueChange={v => setForm1A(f => ({ ...f, partner_name: v }))}
+                onValueChange={v => {
+                  const mno = partnersForFirm.find(p => p.partner_name === v)?.membership_no || "";
+                  setForm1A(f => ({ ...f, partner_name: v, partner_membership_no: mno }));
+                }}
                 disabled={partnersForFirm.length === 0}
               >
                 <SelectTrigger>
