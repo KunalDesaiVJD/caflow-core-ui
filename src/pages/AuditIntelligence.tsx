@@ -220,9 +220,11 @@ export default function AuditIntelligence() {
       .order("name");
 
     Promise.all([q1, q2]).then(([r1, r2]) => {
+      // firms (r2) takes priority so the id used for partnersForFirm lookup
+      // is always a firms.id (which has membership_numbers).
       const byKey = new Map<string, { id: string; name: string }>();
-      for (const f of (r1.data || [])) byKey.set((f.name || "").toLowerCase().trim(), { id: f.id, name: f.name });
-      for (const f of (r2.data || [])) {
+      for (const f of (r2.data || [])) byKey.set((f.name || "").toLowerCase().trim(), { id: f.id, name: f.name });
+      for (const f of (r1.data || [])) {
         const key = (f.name || "").toLowerCase().trim();
         if (!byKey.has(key)) byKey.set(key, { id: f.id, name: f.name });
       }

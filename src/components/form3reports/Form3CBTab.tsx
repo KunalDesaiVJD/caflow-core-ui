@@ -276,8 +276,14 @@ export default function Form3CBTab({ engagementId }: Props) {
   const firmName     = auditFirm?.name           || caFirm?.name             || "";
   const firmFRN      = auditFirm?.icai_reg_no    || caFirm?.icai_firm_reg_no || caFirm?.icai_reg_no || "";
   const firmCity     = auditFirm?.city           || (caFirm?.address as any)?.city || "";
-  const partnerName  = auditFirm?.partner_name   || partner?.name             || "";
-  const membershipNo = auditFirm?.partner_icai_no || partner?.membership_number || "";
+  const partnerName  = auditFirm?.partner_name || partner?.name || engagement?.partner_name || "";
+  // Look up membership number from caFirm.membership_numbers when the modern
+  // partner-name flow is used (no partner_id / audit_firms.partner_icai_no set).
+  const caFirmRoster: Array<{ partner_name: string; membership_no: string }> =
+    Array.isArray(caFirm?.membership_numbers) ? (caFirm.membership_numbers as any) : [];
+  const norm = (s: string) => (s || "").trim().toLowerCase();
+  const caFirmMatch = partnerName ? caFirmRoster.find(m => norm(m.partner_name) === norm(partnerName)) : undefined;
+  const membershipNo = auditFirm?.partner_icai_no || partner?.membership_number || caFirmMatch?.membership_no || "";
 
   if (loading) return (
     <div className="flex items-center justify-center h-48">

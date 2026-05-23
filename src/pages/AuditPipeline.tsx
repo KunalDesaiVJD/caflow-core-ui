@@ -417,9 +417,12 @@ export default function AuditPipeline() {
         supabase.from("audit_firms").select("id, name").neq("active", false).order("name"),
         supabase.from("firms").select("id, name, is_audit_firm").eq("is_audit_firm", true).order("name"),
       ]);
+      // firms (r2) takes priority over audit_firms (r1) because membership_numbers
+      // lives in the firms table — using a firms.id ensures partnersForFirm can
+      // resolve the partner roster. audit_firms rows only fill gaps.
       const byKey = new Map<string, { id: string; name: string }>();
-      for (const f of (r1.data || [])) byKey.set((f.name || "").toLowerCase().trim(), { id: f.id, name: f.name });
-      for (const f of (r2.data || [])) {
+      for (const f of (r2.data || [])) byKey.set((f.name || "").toLowerCase().trim(), { id: f.id, name: f.name });
+      for (const f of (r1.data || [])) {
         const key = (f.name || "").toLowerCase().trim();
         if (!byKey.has(key)) byKey.set(key, { id: f.id, name: f.name });
       }
