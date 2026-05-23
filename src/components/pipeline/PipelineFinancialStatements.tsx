@@ -3500,15 +3500,15 @@ export default function PipelineFinancialStatements({
       return next;
     });
   };
-  // Auto-load directors: Block C (questionnaire_answers.directors) takes priority;
-  // falls back to mrl_data.header_data only when Block C is empty.
-  // Always re-runs on mount so stale localStorage is replaced by the canonical source.
+  // Auto-load directors: clients.directors (canonical) → questionnaire_answers.directors → mrl_data.header_data
+  // Always re-runs when engagementId or engagement.client_id change.
   useEffect(() => {
     if (!engagementId) return;
     let cancelled = false;
     (async () => {
       try {
-        const [engResult, mrlResult] = await Promise.all([
+        const clientId = (engagement as any)?.client_id;
+        const [engResult, mrlResult, clientResult] = await Promise.all([
           supabase
             .from("audit_engagements")
             .select("questionnaire_answers")
@@ -3519,10 +3519,30 @@ export default function PipelineFinancialStatements({
             .select("header_data")
             .eq("engagement_id", engagementId)
             .maybeSingle(),
+          clientId
+            ? (supabase as any).from("clients").select("directors").eq("id", clientId).maybeSingle()
+            : Promise.resolve({ data: null }),
         ]);
         if (cancelled) return;
 
-        // Block C directors (always canonical)
+        // Priority 1: clients.directors (set via client Advanced Info)
+        const clientDirs: { name: string; din: string }[] = Array.isArray(clientResult.data?.directors)
+          ? (clientResult.data.directors as any[]).filter((d: any) => d?.name?.trim() || d?.din?.trim())
+          : [];
+
+        if (clientDirs.length > 0) {
+          const next: DirState = {
+            dir1Name: clientDirs[0]?.name || "",
+            dir1Din:  clientDirs[0]?.din  || "",
+            dir2Name: clientDirs[1]?.name || "",
+            dir2Din:  clientDirs[1]?.din  || "",
+          };
+          setCorpSigDirs(next);
+          try { window.localStorage.setItem(SIG_DIR_KEY, JSON.stringify(next)); } catch {}
+          return;
+        }
+
+        // Priority 2: questionnaire_answers.directors (legacy engagement setup)
         const blockCDirs: { name: string; din: string }[] =
           ((engResult.data?.questionnaire_answers as any)?.directors ?? [])
             .filter((d: any) => d?.name?.trim() || d?.din?.trim());
@@ -3539,7 +3559,7 @@ export default function PipelineFinancialStatements({
           return;
         }
 
-        // Fallback: mrl_data.header_data (only when Block C has no directors)
+        // Priority 3: mrl_data.header_data fallback
         const h = (mrlResult.data as any)?.header_data || {};
         if (h.director1Name || h.director2Name) {
           const next: DirState = {
@@ -3554,7 +3574,7 @@ export default function PipelineFinancialStatements({
       } catch { /* ignore */ }
     })();
     return () => { cancelled = true; };
-  }, [engagementId]);
+  }, [engagementId, (engagement as any)?.client_id]);
 
   // ─── Open override dialog ───
   const openOverride = (code: string, name: string) => {
@@ -6076,51 +6096,71 @@ export default function PipelineFinancialStatements({
   // Shown only when isNonCorporate === true. Corporate signature handling is
   // managed elsewhere and must not be changed.
   const nceSignatureBlock = isNonCorporate ? (
-    <div className="mt-6 pt-5 border-t grid grid-cols-2 gap-10 text-xs">
-      {/* Left — Audit Firm (auto-linked) */}
-      <div className="space-y-1 text-muted-foreground">
-        <p className="font-semibold text-foreground">
-          For, {sigFirmName || <span className="italic text-muted-foreground">[Audit Firm Name]</span>}
-        </p>
-        <p>Chartered Accountants</p>
-        <p>FRN: {sigFirmFRN || <span className="italic">[FRN]</span>}</p>
-        <div className="mt-8 space-y-0.5">
-          <p className="font-semibold text-foreground">
-            {sigPartnerName || <span className="italic text-muted-foreground">[Partner Name]</span>}
-          </p>
-          <p>Partner</p>
-          <p>Membership No. {sigMembershipNo || <span className="italic">[M.No.]</span>}</p>
+    <div className="mt-4 rounded-lg border bg-card px-4 py-4 text-[11px] space-y-3">
+      <div>As per our Audit Report of even date</div>
+
+      {/* Firm header / Client header */}
+      <div className="grid grid-cols-2 gap-x-8">
+        <div>
+          <div className="font-bold">
+            For {sigFirmName || <span className="italic text-muted-foreground">[Audit Firm Name]</span>}
+          </div>
+          <div>Chartered Accountants</div>
+          <div>Firm's Registration No.: {sigFirmFRN || <span className="italic">[FRN]</span>}</div>
+        </div>
+        <div>
+          <div className="font-bold">
+            For {sigClientName || <span className="italic text-muted-foreground">[Client Name]</span>}
+          </div>
         </div>
       </div>
-      {/* Right — Client / Editable fields */}
-      <div className="space-y-2">
-        <p className="font-semibold text-foreground">
-          For, {sigClientName || <span className="italic text-muted-foreground">[Client Name]</span>}
-        </p>
-        <Input
-          placeholder="Authorised Signatory Name"
-          value={sigSignatoryName}
-          onChange={e => setSigSignatoryName(e.target.value)}
-          className="h-7 text-xs"
-        />
-        <div className="flex items-center gap-2">
-          <Label className="text-xs w-10 shrink-0 text-muted-foreground">Place</Label>
-          <Input
-            placeholder="City"
-            value={sigPlace}
-            onChange={e => setSigPlace(e.target.value)}
-            className="h-7 text-xs"
-          />
+
+      {/* Signatures — 2 columns */}
+      <div className="grid grid-cols-2 gap-x-8 pt-6">
+        {/* Partner */}
+        <div className="space-y-0.5">
+          <div className="font-bold">
+            {sigPartnerName || <span className="italic text-muted-foreground">[Partner Name]</span>}
+          </div>
+          <div>Partner</div>
+          <div>Membership No.: {sigMembershipNo || <span className="italic">—</span>}</div>
         </div>
-        <div className="flex items-center gap-2">
-          <Label className="text-xs w-10 shrink-0 text-muted-foreground">Date</Label>
+        {/* Authorised Signatory */}
+        <div className="space-y-1">
           <Input
-            type="date"
-            value={sigDate}
-            onChange={e => setSigDate(e.target.value)}
-            className="h-7 text-xs"
+            placeholder="Authorised Signatory Name"
+            value={sigSignatoryName}
+            onChange={e => setSigSignatoryName(e.target.value)}
+            className="h-6 text-[11px] px-1 font-bold"
           />
+          <div>Authorised Signatory</div>
         </div>
+      </div>
+
+      {/* Place + Date row — 2 columns matching signatures */}
+      <div className="grid grid-cols-2 gap-x-8 pt-2">
+        {[0, 1].map(i => (
+          <div key={i} className="space-y-0.5">
+            <div className="flex items-center gap-1">
+              <span className="shrink-0">Place:</span>
+              <Input
+                placeholder="City"
+                value={sigPlace}
+                onChange={e => setSigPlace(e.target.value)}
+                className="h-5 text-[11px] px-1 flex-1"
+              />
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="shrink-0">Date:</span>
+              <Input
+                type="date"
+                value={sigDate}
+                onChange={e => setSigDate(e.target.value)}
+                className="h-5 text-[11px] px-1 flex-1"
+              />
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   ) : null;

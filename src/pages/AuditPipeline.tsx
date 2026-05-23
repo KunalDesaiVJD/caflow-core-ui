@@ -654,19 +654,6 @@ export default function AuditPipeline() {
 
   const setQ = (key: string, val: string) => setQuestionnaire(q => ({ ...q, [key]: val }));
 
-  // Directors live inside questionnaire state — no separate state, no stale-closure risk
-  const directors: {name:string;din:string}[] = useMemo(() => {
-    const d = (questionnaire as any).directors;
-    return Array.isArray(d) && d.length > 0 ? d : [{name:"",din:""}];
-  }, [questionnaire]);
-
-  const addDirector = () =>
-    setQuestionnaire(q => ({ ...q, directors: [...directors, {name:"",din:""}] }));
-  const removeDirector = (idx: number) =>
-    setQuestionnaire(q => ({ ...q, directors: directors.filter((_,i) => i !== idx) }));
-  const updateDirector = (idx: number, field: "name"|"din", val: string) =>
-    setQuestionnaire(q => ({ ...q, directors: directors.map((d,i) => i===idx ? {...d,[field]:val} : d) }));
-
   // ─── Validation ───
   const block1AValid = form1A.client_id && form1A.financial_year && form1A.entity_type && form1A.audit_type && form1A.audit_firm_id;
 
@@ -1471,45 +1458,6 @@ export default function AuditPipeline() {
                           onChange={v => setQ("cash_flow_applicable", v)}
                         />
 
-                        {/* ── Director Details ── */}
-                        <div className="space-y-2 pt-1">
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <Label className="text-sm font-medium">Director Details</Label>
-                              <p className="text-xs text-muted-foreground mt-0.5">
-                                Auto-filled in Stage 7 &amp; Stage 8 signature blocks
-                              </p>
-                            </div>
-                            <Button type="button" variant="outline" size="sm" onClick={addDirector} className="gap-1">
-                              <Plus size={13} /> Add Director
-                            </Button>
-                          </div>
-                          {directors.map((dir, idx) => (
-                            <div key={idx} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
-                              <Input
-                                placeholder="Director Full Name"
-                                value={dir.name}
-                                onChange={e => updateDirector(idx, "name", e.target.value)}
-                                className="h-8 text-sm"
-                              />
-                              <Input
-                                placeholder="DIN (e.g. 02695237)"
-                                value={dir.din}
-                                onChange={e => updateDirector(idx, "din", e.target.value)}
-                                className="h-8 text-sm font-mono"
-                              />
-                              {directors.length > 1 && (
-                                <Button
-                                  type="button" variant="ghost" size="sm"
-                                  onClick={() => removeDirector(idx)}
-                                  className="h-8 w-8 p-0 text-destructive hover:bg-destructive/10"
-                                >
-                                  ×
-                                </Button>
-                              )}
-                            </div>
-                          ))}
-                        </div>
                       </AccordionContent>
                     </AccordionItem>
                   )}

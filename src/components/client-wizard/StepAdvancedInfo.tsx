@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { format } from "date-fns";
-import { CalendarIcon, AlertTriangle, CalendarClock } from "lucide-react";
+import { CalendarIcon, AlertTriangle, CalendarClock, Plus, Trash2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Input } from "@/components/ui/input";
@@ -38,6 +38,8 @@ export interface AdvancedInfoData {
   dsc_number: string;
   dsc_expiry_date: Date | undefined;
   work_group_type: string;
+  /** Director details — only used for Private Ltd / Public Ltd entities */
+  directors?: Array<{ name: string; din: string }>;
   /** Pending classification-change metadata, captured by the change-confirmation
    *  modal and consumed by NewClientWizard.saveFYClassification when writing the
    *  client_classification_history row. Optional — only present when the user
@@ -98,6 +100,7 @@ export const defaultAdvancedInfo: AdvancedInfoData = {
   dsc_number: "",
   dsc_expiry_date: undefined,
   work_group_type: "",
+  directors: [],
 };
 
 const CLASSIFICATIONS = [
@@ -429,6 +432,18 @@ export const StepAdvancedInfo = ({
   };
 
   const needsCIN = entityType === "Private Ltd" || entityType === "Public Ltd";
+  const isCorporate = entityType === "Private Ltd" || entityType === "Public Ltd";
+
+  const directors: Array<{ name: string; din: string }> = Array.isArray(data.directors) && data.directors.length > 0
+    ? data.directors
+    : [{ name: "", din: "" }];
+
+  const updateDirectors = (next: Array<{ name: string; din: string }>) =>
+    onChange({ ...data, directors: next });
+  const addDirector = () => updateDirectors([...directors, { name: "", din: "" }]);
+  const removeDirector = (idx: number) => updateDirectors(directors.filter((_, i) => i !== idx));
+  const updateDirector = (idx: number, field: "name" | "din", val: string) =>
+    updateDirectors(directors.map((d, i) => i === idx ? { ...d, [field]: val } : d));
 
   return (
     <div className="space-y-8">
@@ -620,6 +635,48 @@ export const StepAdvancedInfo = ({
           </div>
         </div>
       </div>
+
+      {/* ── SECTION D: Director Details (corporate only) ── */}
+      {isCorporate && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-semibold text-foreground">Director Details</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">Auto-filled in financial statement signature blocks</p>
+            </div>
+            <Button type="button" variant="outline" size="sm" onClick={addDirector} className="gap-1">
+              <Plus className="h-3.5 w-3.5" /> Add Director
+            </Button>
+          </div>
+          <div className="space-y-2">
+            {directors.map((dir, idx) => (
+              <div key={idx} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
+                <Input
+                  placeholder="Director Full Name"
+                  value={dir.name}
+                  onChange={e => updateDirector(idx, "name", e.target.value)}
+                  className="h-8 text-sm"
+                />
+                <Input
+                  placeholder="DIN (e.g. 02695237)"
+                  value={dir.din}
+                  onChange={e => updateDirector(idx, "din", e.target.value)}
+                  className="h-8 text-sm font-mono"
+                />
+                {directors.length > 1 && (
+                  <Button
+                    type="button" variant="ghost" size="sm"
+                    onClick={() => removeDirector(idx)}
+                    className="h-8 w-8 p-0 text-destructive hover:bg-destructive/10"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ── Classification Change Confirmation Modal ──────────────────────
        *  Captures: new classification (already selected), effective-from FY

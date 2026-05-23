@@ -351,6 +351,7 @@ const NewClientWizard = () => {
         dsc_number: client.dsc_number || "",
         dsc_expiry_date: client.dsc_expiry_date ? parseLocalDate(client.dsc_expiry_date) : undefined,
         work_group_type: client.work_group_type || "",
+        directors: Array.isArray(client.directors) ? client.directors : [],
       });
 
       if (fyAudit) {
@@ -648,6 +649,7 @@ const NewClientWizard = () => {
       registered_state: advancedInfo.registered_state || null,
       business_activity: advancedInfo.business_nature || null,
       cin: advancedInfo.cin || null,
+      directors: (advancedInfo.directors ?? []).filter(d => d.name?.trim() || d.din?.trim()),
       is_draft: false,
       is_active: true,
       updated_at: new Date().toISOString(),
@@ -1034,6 +1036,7 @@ const NewClientWizard = () => {
             registered_state: advancedInfo.registered_state || null,
             business_activity: advancedInfo.business_nature || null,
             cin: advancedInfo.cin || null,
+            directors: (advancedInfo.directors ?? []).filter(d => d.name?.trim() || d.din?.trim()),
           } as any)
           .eq("id", clientId);
         if (error) throw error;
