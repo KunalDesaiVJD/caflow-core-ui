@@ -163,9 +163,10 @@ export default function Form3CBTab({ engagementId }: Props) {
   const [saved,       setSaved]       = useState(false);
   const [engagement,  setEngagement]  = useState<any>(null);
   const [client,      setClient]      = useState<any>(null);
-  const [auditFirm,   setAuditFirm]   = useState<any>(null);
-  const [caFirm,      setCaFirm]      = useState<any>(null);
-  const [partner,     setPartner]     = useState<any>(null);
+  const [auditFirm,       setAuditFirm]       = useState<any>(null);
+  const [caFirm,          setCaFirm]          = useState<any>(null);
+  const [firmMemberships, setFirmMemberships] = useState<Array<{ partner_name: string; membership_no: string }>>([]);
+  const [partner,         setPartner]         = useState<any>(null);
 
   const { start: initYS, end: initYE } = fyYears("");
   const [formData, setFormData] = useState<CBFormData>({
@@ -205,6 +206,19 @@ export default function Form3CBTab({ engagementId }: Props) {
       const { data: af } = await supabase
         .from("audit_firms").select("*").eq("id", (eng as any).audit_firm_id).single();
       setAuditFirm(af || null);
+    }
+
+    // Membership numbers via audit_firm_id (shares the same UUID as firms.id)
+    if ((eng as any).audit_firm_id) {
+      const { data: fw } = await supabase
+        .from("firms").select("membership_numbers").eq("id", (eng as any).audit_firm_id).maybeSingle();
+      const roster = Array.isArray(fw?.membership_numbers) ? (fw!.membership_numbers as any[]) : [];
+      setFirmMemberships(
+        roster.filter((m: any) => m?.partner_name).map((m: any) => ({
+          partner_name: m.partner_name as string,
+          membership_no: (m.membership_no as string) || "",
+        }))
+      );
     }
 
     // Partner — separate fetch (multiple FKs from audit_engagements→users
@@ -277,7 +291,10 @@ export default function Form3CBTab({ engagementId }: Props) {
   const firmFRN      = auditFirm?.icai_reg_no    || caFirm?.icai_firm_reg_no || caFirm?.icai_reg_no || "";
   const firmCity     = auditFirm?.city           || (caFirm?.address as any)?.city || "";
   const partnerName  = auditFirm?.partner_name || partner?.name || engagement?.partner_name || "";
-  const membershipNo = auditFirm?.partner_icai_no || partner?.membership_number || engagement?.partner_membership_no || "";
+  const norm = (s: string) => (s || "").trim().toLowerCase();
+  const firmMnoMatch = partnerName ? firmMemberships.find(m => norm(m.partner_name) === norm(partnerName)) : undefined;
+  const membershipNo = auditFirm?.partner_icai_no || partner?.membership_number
+    || engagement?.partner_membership_no || firmMnoMatch?.membership_no || "";
 
   if (loading) return (
     <div className="flex items-center justify-center h-48">
