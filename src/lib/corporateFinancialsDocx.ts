@@ -18,6 +18,9 @@ import {
   BorderStyle,
   Document,
   Footer,
+  HeightRule,
+  PageBorderDisplay,
+  PageBorderOffsetFrom,
   Packer,
   PageNumber,
   PageOrientation,
@@ -39,6 +42,7 @@ let _exportDivisor = 1;
 let _exportSuffix  = "(₹)";
 let _exportUnit    = "₹";
 let _compact       = false;   // true inside buildBSTable / buildPLTable — tighter row spacing
+let _rowH          = 0;       // min row height DXA (0 = no minimum); set per-statement
 
 function amountUnitsLabel(): string {
   return `All amounts in ${_exportUnit}`;
@@ -92,7 +96,7 @@ const FA_NBPY  = 1100;
 // 2200+700+1300+1200+1200+1400+1100+1100+1100+1100+1499 = ... let me just use simple widths
 
 // ─── Typography ───────────────────────────────────────────────────────────────
-const FONT      = "Arial";
+let FONT        = "Arial";
 const SZ_XS     = 14;   // 7pt
 const SZ_SM     = 16;   // 8pt
 const SZ_BODY   = 18;   // 9pt
@@ -100,21 +104,24 @@ const SZ_HDR    = 20;   // 10pt
 const SZ_TITLE  = 22;   // 11pt
 const SZ_ENTITY = 28;   // 14pt
 
-// ─── Colour palette ───────────────────────────────────────────────────────────
-const NAVY    = "1F3864";
-const BG_HDR  = "1F3864";
-const BG_SECT = "D6E4F0";
-const BG_TOT  = "EBF1FA";
-const BG_GRAN = "D9E2F3";
-const DK_GREY = "505050";
+// ─── Colour palette (professional grey) ─────────────────────────────────────
+const NAVY    = "374151";   // charcoal (titles, accents)
+const BG_HDR  = "4B5563";   // slate-grey header (white text)
+const BG_SECT = "F1F3F5";   // very light grey section
+const BG_TOT  = "F8F9FA";   // near-white subtotal
+const BG_GRAN = "E8ECEF";   // light grey grand total
+const DK_GREY = "6B7280";   // medium grey (muted text)
 const BLACK   = "000000";
 const WHITE   = "FFFFFF";
+// accent for note/section left bar
+const ACCENT  = "4B5563";
 
 // ─── Borders ─────────────────────────────────────────────────────────────────
 const bNone = { style: BorderStyle.NONE,   size: 0, color: "FFFFFF" };
-const bHair = { style: BorderStyle.SINGLE, size: 2, color: "CBCBCB" };
-const bThin = { style: BorderStyle.SINGLE, size: 4, color: NAVY };
-const bBold = { style: BorderStyle.SINGLE, size: 8, color: NAVY };
+const bHair = { style: BorderStyle.SINGLE, size: 2, color: "DEE2E6" };
+const bThin = { style: BorderStyle.SINGLE, size: 4, color: "9CA3AF" };
+const bBold = { style: BorderStyle.SINGLE, size: 8, color: "374151" };
+const bAccL = { style: BorderStyle.SINGLE, size: 18, color: ACCENT };  // left-accent bar
 
 const BDR_NONE  = { top: bNone, bottom: bNone,  left: bNone, right: bNone };
 const BDR_ROW   = { top: bNone, bottom: bHair,  left: bNone, right: bNone };
@@ -211,6 +218,7 @@ function ec(w: number, bg?: string, borders?: Record<string, typeof bNone>): Tab
 function colHeaderRow(cyLabel: string, pyLabel: string): TableRow {
   return new TableRow({
     tableHeader: true,
+    height: _rowH > 0 ? { value: _rowH, rule: HeightRule.ATLEAST } : undefined,
     children: [
       cell({ text: "Particulars",    w: CW_DESC, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, padL: 100 }),
       cell({ text: "Note\nNo.",      w: CW_NOTE, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.CENTER }),
@@ -222,16 +230,17 @@ function colHeaderRow(cyLabel: string, pyLabel: string): TableRow {
 
 function sectionRow(label: string): TableRow {
   return new TableRow({
+    height: _rowH > 0 ? { value: _rowH, rule: HeightRule.ATLEAST } : undefined,
     children: [
       new TableCell({
         columnSpan: 4,
         width:   { size: TW, type: WidthType.DXA },
         shading: { fill: BG_SECT, type: ShadingType.CLEAR },
-        borders: BDR_SECT,
-        margins: { top: _compact ? 30 : 60, bottom: _compact ? 30 : 60, left: 100, right: 100 },
+        borders: { top: bThin, bottom: bHair, left: bAccL, right: bNone },
+        margins: { top: _compact ? 30 : 60, bottom: _compact ? 30 : 60, left: 140, right: 100 },
         children: [new Paragraph({
           spacing: { before: 0, after: 0 },
-          children: [new TextRun({ text: label, font: FONT, size: SZ_HDR, bold: true, color: NAVY })],
+          children: [new TextRun({ text: label, font: FONT, size: SZ_HDR, bold: true, italic: true, color: NAVY })],
         })],
       }),
     ],
@@ -240,6 +249,7 @@ function sectionRow(label: string): TableRow {
 
 function parentRow(label: string, indent = 0): TableRow {
   return new TableRow({
+    height: _rowH > 0 ? { value: _rowH, rule: HeightRule.ATLEAST } : undefined,
     children: [
       new TableCell({
         columnSpan: 4,
@@ -264,6 +274,7 @@ function dataRow(
   bg?: string,
 ): TableRow {
   return new TableRow({
+    height: _rowH > 0 ? { value: _rowH, rule: HeightRule.ATLEAST } : undefined,
     children: [
       cell({ text: label, w: CW_DESC, indent, bg, borders: BDR_ROW }),
       cell({
@@ -283,6 +294,7 @@ function dataRow(
 
 function subTotalRow(label: string, cy: number, py: number): TableRow {
   return new TableRow({
+    height: _rowH > 0 ? { value: _rowH, rule: HeightRule.ATLEAST } : undefined,
     children: [
       cell({ text: label, w: CW_DESC, bold: true, bg: BG_TOT, borders: BDR_SUB }),
       ec(CW_NOTE, BG_TOT, BDR_SUB),
@@ -294,6 +306,7 @@ function subTotalRow(label: string, cy: number, py: number): TableRow {
 
 function grandTotalRow(label: string, cy: number, py: number): TableRow {
   return new TableRow({
+    height: _rowH > 0 ? { value: _rowH, rule: HeightRule.ATLEAST } : undefined,
     children: [
       cell({ text: label, w: CW_DESC, bold: true, sz: SZ_HDR, bg: BG_GRAN, borders: BDR_GRAND, padL: 100 }),
       ec(CW_NOTE, BG_GRAN, BDR_GRAND),
@@ -336,7 +349,22 @@ function titleRows(entityName: string, statementTitle: string, dateLine: string)
     });
 
   return [
-    centerRow(entityName.toUpperCase(), { sz: SZ_ENTITY, bold: true, color: NAVY, top: 60, bottom: 20 }),
+    // Entity name with thick top accent bar
+    new TableRow({
+      children: [
+        new TableCell({
+          columnSpan: 4,
+          width:   { size: TW, type: WidthType.DXA },
+          borders: { top: { style: BorderStyle.SINGLE, size: 24, color: ACCENT }, bottom: bNone, left: bNone, right: bNone },
+          margins: { top: 60, bottom: 20, left: 100, right: 100 },
+          children: [new Paragraph({
+            alignment: AlignmentType.CENTER,
+            spacing:   { before: 0, after: 0 },
+            children:  [new TextRun({ text: entityName.toUpperCase(), font: FONT, size: SZ_ENTITY, bold: true, color: NAVY })],
+          })],
+        }),
+      ],
+    }),
     centerRow(`${statementTitle} ${dateLine}`, { sz: SZ_TITLE, bold: true, color: NAVY, bottom: 10 }),
     new TableRow({
       children: [
@@ -403,6 +431,7 @@ function buildBSTable(
   const totAPy = ncaPy + caPy;
 
   _compact = true;
+  _rowH = 360;
   const rows: TableRow[] = [
     ...titleRows(entityName, "BALANCE SHEET", `AS AT 31 MARCH ${cyYear}`),
     colHeaderRow(`As at 31 Mar ${cyYear}`, `As at 31 Mar ${pyYear}`),
@@ -478,6 +507,7 @@ function buildBSTable(
   ];
 
   _compact = false;
+  _rowH = 0;
   return new Table({ width: { size: TW, type: WidthType.DXA }, columnWidths: [CW_DESC, CW_NOTE, CW_CY, CW_PY], rows });
 }
 
@@ -525,6 +555,7 @@ function buildPLTable(
 
   const epsRow = (label: string, noteNo: number | null, valCy: number, valPy: number): TableRow =>
     new TableRow({
+      height: _rowH > 0 ? { value: _rowH, rule: HeightRule.ATLEAST } : undefined,
       children: [
         cell({ text: label, w: CW_DESC, indent: 1 }),
         cell({ text: noteNo ? String(noteNo) : "", w: CW_NOTE, align: AlignmentType.CENTER, bold: true, color: noteNo ? NAVY : BLACK }),
@@ -534,6 +565,7 @@ function buildPLTable(
     });
 
   _compact = true;
+  _rowH = 560;
   const rows: TableRow[] = [
     ...titleRows(entityName, "STATEMENT OF PROFIT AND LOSS", `FOR THE YEAR ENDED 31 MARCH ${cyYear}`),
     colHeaderRow(`Year ended 31 Mar ${cyYear}`, `Year ended 31 Mar ${pyYear}`),
@@ -596,6 +628,7 @@ function buildPLTable(
   ];
 
   _compact = false;
+  _rowH = 0;
   return new Table({ width: { size: TW, type: WidthType.DXA }, columnWidths: [CW_DESC, CW_NOTE, CW_CY, CW_PY], rows });
 }
 
@@ -783,8 +816,7 @@ function buildNote1Section(entityName: string, cyYear: string): Paragraph[] {
       keepNext:  true,
       keepLines: true,
       children: [
-        new TextRun({ text: "Note 1:  ", font: FONT, size: SZ_HDR, bold: true, color: NAVY }),
-        new TextRun({ text: "Significant Accounting Policies", font: FONT, size: SZ_HDR, color: NAVY }),
+        new TextRun({ text: "Note 1 — Significant Accounting Policies", font: FONT, size: SZ_HDR, bold: true, color: NAVY }),
       ],
     }),
     block([txt("1.  Basis of Preparation", true)], { after: 40 }),
@@ -805,13 +837,14 @@ function noteTitleRow(colWidths: number[], noteNumber: string, title: string): T
   const totalW = colWidths.reduce((s, w) => s + w, 0);
   return new TableRow({
     cantSplit: true,
+    height: { value: 480, rule: HeightRule.ATLEAST },
     children: [
       new TableCell({
         columnSpan: colWidths.length,
         width:   { size: totalW, type: WidthType.DXA },
         shading: { fill: BG_SECT, type: ShadingType.CLEAR },
-        borders: BDR_SECT,
-        margins: { top: 80, bottom: 80, left: 100, right: 100 },
+        borders: { top: bThin, bottom: bHair, left: bAccL, right: bNone },
+        margins: { top: 100, bottom: 100, left: 160, right: 100 },
         children: [new Paragraph({
           spacing: { before: 0, after: 0 },
           children: [
@@ -823,13 +856,14 @@ function noteTitleRow(colWidths: number[], noteNumber: string, title: string): T
   });
 }
 
-function noteHdr3(cyYear: string, pyYear: string): TableRow {
+function noteHdr3(cyLabel: string, pyLabel: string): TableRow {
   return new TableRow({
     tableHeader: true,
+    height: { value: 500, rule: HeightRule.ATLEAST },
     children: [
-      cell({ text: "Particulars", w: NW_DESC, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, padL: 100 }),
-      cell({ text: `${cyYear}\n${_exportSuffix}`, w: NW_CY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
-      cell({ text: `${pyYear}\n${_exportSuffix}`, w: NW_PY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
+      cell({ text: "Particulars", w: NW_DESC, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, padL: 160 }),
+      cell({ text: `${cyLabel}\n${_exportSuffix}`, w: NW_CY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
+      cell({ text: `${pyLabel}\n${_exportSuffix}`, w: NW_PY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
     ],
   });
 }
@@ -1309,16 +1343,20 @@ function buildNoteTableFromRows(
     noteHdr3(cyYear, pyYear),
   ];
 
+  let _noteRowIdx = 0;
   for (const row of rows) {
-    const bg   = row.style === "total" ? BG_GRAN : row.style === "subtotal" ? BG_TOT : undefined;
+    const isAltRow  = row.style === "data" && _noteRowIdx % 2 === 1;
+    const bg   = row.style === "total" ? BG_GRAN : row.style === "subtotal" ? BG_TOT : (isAltRow ? "F4F5F7" : undefined);
     const bdr  = row.style === "total" ? BDR_GRAND : row.style === "subtotal" ? BDR_SUB : BDR_ROW;
     const bold = row.style !== "data";
+    if (row.style === "data") _noteRowIdx++;
     tableRows.push(new TableRow({
       cantSplit: true,
+      height: { value: 340, rule: HeightRule.ATLEAST },
       children: [
-        cell({ text: row.label,               w: NW_DESC, bold, bg, borders: bdr, indent: row.indent ?? 0 }),
-        cell({ text: fmtVal(row.cy, row.fmt), w: NW_CY, align: AlignmentType.RIGHT, padL: 20, padR: 120, bold, bg, borders: bdr }),
-        cell({ text: fmtVal(row.py, row.fmt), w: NW_PY, align: AlignmentType.RIGHT, padL: 20, padR: 120, bold, bg, borders: bdr }),
+        cell({ text: row.label,               w: NW_DESC, bold, bg, borders: bdr, indent: row.indent ?? 0, padL: row.indent ? 80 : 160 }),
+        cell({ text: fmtVal(row.cy, row.fmt), w: NW_CY, align: AlignmentType.RIGHT, padL: 20, padR: 140, bold, bg, borders: bdr }),
+        cell({ text: fmtVal(row.py, row.fmt), w: NW_PY, align: AlignmentType.RIGHT, padL: 20, padR: 140, bold, bg, borders: bdr }),
       ],
     }));
   }
@@ -1386,6 +1424,8 @@ export interface CorpDocxParams {
   pyYear: number;
   /** Signature block data */
   signature: CorpSigData;
+  /** Font name for the export (default "Arial") */
+  font?: string;
   /** stage5_notes JSONB from audit_engagements.stage5_notes */
   stage5Notes?: {
     bs_liab?: Record<string, { breakup?: BreakupRow[]; [k: string]: any }>;
@@ -1408,6 +1448,9 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
     stage5Notes,
     ratios,
   } = params;
+
+  // Apply selected font
+  FONT = params.font ?? "Arial";
 
   // Sync unit scale
   _exportDivisor = getActiveFsDivisor();
@@ -1432,12 +1475,15 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
   // Note 1: Accounting Policies
   const note1Paras = buildNote1Section(entityName, cyLabel);
 
-  // Notes 2–N: from stage5_notes
-  const spacer = () => new Paragraph({ spacing: { before: 360, after: 0 }, keepNext: true, children: [] });
+  // Notes 2–N: from stage5_notes (sorted by note number ascending)
+  const spacer = () => new Paragraph({ spacing: { before: 720, after: 0 }, keepNext: true, children: [] });
 
   const noteTables: (Table | Paragraph)[] = [];
   const faRows = stage5Notes?.fa?.rows ?? [];
   let faRenderedAsNote = false;
+
+  // Collect notes with their numbers, then sort ascending
+  const pendingNotes: Array<{ noteNo: number; table: Table }> = [];
 
   for (const meta of CORP_NOTE_META) {
     const noteNo = noteNumbers[meta.fsCode];
@@ -1454,21 +1500,42 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
     const rows = extractNoteRows(meta.renderType, noteData, amounts, meta.fsCode, stage5Notes);
     if (rows.length === 0) continue;
 
-    noteTables.push(spacer());
-    noteTables.push(buildNoteTableFromRows(String(noteNo), meta.title, rows, cyLabel, pyLabel));
+    const isBS    = meta.section === "bs_liab" || meta.section === "bs_asset";
+    const cyFull  = isBS ? `As at 31 Mar ${cyLabel}` : `Year ended 31 Mar ${cyLabel}`;
+    const pyFull  = isBS ? `As at 31 Mar ${pyLabel}` : `Year ended 31 Mar ${pyLabel}`;
+
+    pendingNotes.push({
+      noteNo,
+      table: buildNoteTableFromRows(String(noteNo), meta.title, rows, cyFull, pyFull),
+    });
+  }
+
+  // Sort notes in ascending note-number order
+  pendingNotes.sort((a, b) => a.noteNo - b.noteNo);
+  for (const item of pendingNotes) {
+    noteTables.push(spacer(), item.table);
   }
 
   // Ratios
   const hasRatios = ratios && (ratios.cy || ratios.py);
 
-  // Page settings
+  // Page settings (with page border)
+  const _pgBdr = {
+    pageBorders: { display: PageBorderDisplay.ALL_PAGES, offsetFrom: PageBorderOffsetFrom.PAGE },
+    pageBorderTop:    { style: BorderStyle.SINGLE, size: 12, color: BG_HDR, space: 24 },
+    pageBorderBottom: { style: BorderStyle.SINGLE, size: 12, color: BG_HDR, space: 24 },
+    pageBorderLeft:   { style: BorderStyle.SINGLE, size: 12, color: BG_HDR, space: 24 },
+    pageBorderRight:  { style: BorderStyle.SINGLE, size: 12, color: BG_HDR, space: 24 },
+  };
   const portraitProps = {
-    size:   { width: A4_W, height: A4_H },
-    margin: { top: MARG_T, right: MARG_H, bottom: MARG_B, left: MARG_H },
+    size:    { width: A4_W, height: A4_H },
+    margin:  { top: MARG_T, right: MARG_H, bottom: MARG_B, left: MARG_H },
+    borders: _pgBdr,
   };
   const landscapeProps = {
-    size:   { width: A4_W, height: A4_H, orientation: PageOrientation.LANDSCAPE },
-    margin: { top: MARG_T, right: MARG_LS, bottom: MARG_B, left: MARG_LS },
+    size:    { width: A4_W, height: A4_H, orientation: PageOrientation.LANDSCAPE },
+    margin:  { top: MARG_T, right: MARG_LS, bottom: MARG_B, left: MARG_LS },
+    borders: _pgBdr,
   };
 
   // Build sections
