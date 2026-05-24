@@ -104,24 +104,24 @@ const SZ_HDR    = 20;   // 10pt
 const SZ_TITLE  = 22;   // 11pt
 const SZ_ENTITY = 28;   // 14pt
 
-// ─── Colour palette (professional grey) ─────────────────────────────────────
-const NAVY    = "374151";   // charcoal (titles, accents)
-const BG_HDR  = "4B5563";   // slate-grey header (white text)
+// ─── Colour palette (professional light grey — 50 % lighter than prior slate) ──
+const NAVY    = "374151";   // charcoal text / title accent  (kept dark for readability)
+const BG_HDR  = "A5AAB1";   // light grey header  (was 4B5563 — 50 % lighter)
 const BG_SECT = "F1F3F5";   // very light grey section
 const BG_TOT  = "F8F9FA";   // near-white subtotal
 const BG_GRAN = "E8ECEF";   // light grey grand total
 const DK_GREY = "6B7280";   // medium grey (muted text)
 const BLACK   = "000000";
 const WHITE   = "FFFFFF";
-// accent for note/section left bar
-const ACCENT  = "4B5563";
+// accent left bar  (50 % lighter than prior 4B5563)
+const ACCENT  = "A5AAB1";
 
 // ─── Borders ─────────────────────────────────────────────────────────────────
 const bNone = { style: BorderStyle.NONE,   size: 0, color: "FFFFFF" };
 const bHair = { style: BorderStyle.SINGLE, size: 2, color: "DEE2E6" };
-const bThin = { style: BorderStyle.SINGLE, size: 4, color: "9CA3AF" };
-const bBold = { style: BorderStyle.SINGLE, size: 8, color: "374151" };
-const bAccL = { style: BorderStyle.SINGLE, size: 18, color: ACCENT };  // left-accent bar
+const bThin = { style: BorderStyle.SINGLE, size: 4, color: "CDD1D7" };   // 50 % lighter
+const bBold = { style: BorderStyle.SINGLE, size: 8, color: "9BA0A8" };   // 50 % lighter
+const bAccL = { style: BorderStyle.SINGLE, size: 18, color: "9BA0A8" };  // left-accent bar
 
 const BDR_NONE  = { top: bNone, bottom: bNone,  left: bNone, right: bNone };
 const BDR_ROW   = { top: bNone, bottom: bHair,  left: bNone, right: bNone };
@@ -220,10 +220,10 @@ function colHeaderRow(cyLabel: string, pyLabel: string): TableRow {
     tableHeader: true,
     height: _rowH > 0 ? { value: _rowH, rule: HeightRule.ATLEAST } : undefined,
     children: [
-      cell({ text: "Particulars",    w: CW_DESC, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, padL: 100 }),
-      cell({ text: "Note\nNo.",      w: CW_NOTE, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.CENTER }),
-      cell({ text: `${cyLabel}\n${_exportSuffix}`, w: CW_CY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
-      cell({ text: `${pyLabel}\n${_exportSuffix}`, w: CW_PY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
+      cell({ text: "Particulars",    w: CW_DESC, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, padL: 100 }),
+      cell({ text: "Note\nNo.",      w: CW_NOTE, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.CENTER }),
+      cell({ text: `${cyLabel}\n${_exportSuffix}`, w: CW_CY, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
+      cell({ text: `${pyLabel}\n${_exportSuffix}`, w: CW_PY, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
     ],
   });
 }
@@ -431,7 +431,7 @@ function buildBSTable(
   const totAPy = ncaPy + caPy;
 
   _compact = true;
-  _rowH = 360;
+  _rowH = 280;   // 36 data rows × 280 + fixed overhead fits BS + signature on 1 A4 page
   const rows: TableRow[] = [
     ...titleRows(entityName, "BALANCE SHEET", `AS AT 31 MARCH ${cyYear}`),
     colHeaderRow(`As at 31 Mar ${cyYear}`, `As at 31 Mar ${pyYear}`),
@@ -565,7 +565,7 @@ function buildPLTable(
     });
 
   _compact = true;
-  _rowH = 560;
+  _rowH = 420;   // 24 data rows × 420 + fixed overhead fits PL + signature on 1 A4 page
   const rows: TableRow[] = [
     ...titleRows(entityName, "STATEMENT OF PROFIT AND LOSS", `FOR THE YEAR ENDED 31 MARCH ${cyYear}`),
     colHeaderRow(`Year ended 31 Mar ${cyYear}`, `Year ended 31 Mar ${pyYear}`),
@@ -861,9 +861,9 @@ function noteHdr3(cyLabel: string, pyLabel: string): TableRow {
     tableHeader: true,
     height: { value: 500, rule: HeightRule.ATLEAST },
     children: [
-      cell({ text: "Particulars", w: NW_DESC, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, padL: 160 }),
-      cell({ text: `${cyLabel}\n${_exportSuffix}`, w: NW_CY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
-      cell({ text: `${pyLabel}\n${_exportSuffix}`, w: NW_PY, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
+      cell({ text: "Particulars", w: NW_DESC, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, padL: 160 }),
+      cell({ text: `${cyLabel}\n${_exportSuffix}`, w: NW_CY, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
+      cell({ text: `${pyLabel}\n${_exportSuffix}`, w: NW_PY, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
     ],
   });
 }
@@ -962,7 +962,7 @@ function buildFATable(faRows: FARow[], noteNumber: string, cyYear: string, pyYea
   // sum = 2200+500+1200+1100+1100+1300+1050+1050+1050+1300+1274+1274 = 15398 ✓
 
   const h = (text: string, w: number) =>
-    cell({ text, w, sz: SZ_XS, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.CENTER, padL: 30, padR: 30 });
+    cell({ text, w, sz: SZ_XS, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.CENTER, padL: 30, padR: 30 });
 
   const hdrRow = new TableRow({
     tableHeader: true,
@@ -1062,10 +1062,10 @@ function buildRatiosTable(cyRatios: any, pyRatios: any): Table {
   const hdrRow = new TableRow({
     tableHeader: true,
     children: [
-      cell({ text: "No.", w: CW[0], sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.CENTER }),
-      cell({ text: "Ratio", w: CW[1], sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE }),
-      cell({ text: "Current Year", w: CW[2], sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.CENTER }),
-      cell({ text: "Previous Year", w: CW[3], sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.CENTER }),
+      cell({ text: "No.", w: CW[0], sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.CENTER }),
+      cell({ text: "Ratio", w: CW[1], sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE }),
+      cell({ text: "Current Year", w: CW[2], sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.CENTER }),
+      cell({ text: "Previous Year", w: CW[3], sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.CENTER }),
     ],
   });
 
@@ -1134,33 +1134,54 @@ function extractNoteRows(
       const breakup: any[] = noteData?.breakup ?? [];
       if (!breakup.length) return [];
 
-      // Pre-compute group totals by summing member rows
-      const groupTotals = new Map<string, { cy: number; py: number }>();
+      // ── Pass 1: bucket all member rows by their group id (preserving order) ──
+      const membersByGroup = new Map<string, any[]>();
       for (const r of breakup) {
         if (!r?.subgroup_id) continue;
-        const cur = groupTotals.get(r.subgroup_id) ?? { cy: 0, py: 0 };
-        groupTotals.set(r.subgroup_id, { cy: cur.cy + n(r.amount_cy), py: cur.py + n(r.amount_py) });
+        const bucket = membersByGroup.get(r.subgroup_id) ?? [];
+        bucket.push(r);
+        membersByGroup.set(r.subgroup_id, bucket);
+      }
+
+      // Pre-compute group totals from members
+      const groupTotals = new Map<string, { cy: number; py: number }>();
+      for (const [gid, members] of membersByGroup) {
+        groupTotals.set(gid, {
+          cy: members.reduce((s, m) => s + n(m.amount_cy), 0),
+          py: members.reduce((s, m) => s + n(m.amount_py), 0),
+        });
       }
 
       const rows: NoteRow[] = [];
 
+      // ── Pass 2: iterate in array order, SKIP member rows at their position;
+      //            emit members immediately after their group header — this
+      //            mirrors exactly how the UI ListTable groups sub-rows ──────
       for (const r of breakup) {
         if (!r) continue;
+        // Members are deferred — rendered right after their group header
+        if (r.subgroup_id) continue;
+
         const label = String(r.description || r.label || "");
 
         if (r.is_group && r.id) {
-          // GROUP header — use computed total from members
+          // GROUP header
           const gt = groupTotals.get(r.id) ?? { cy: n(r.amount_cy), py: n(r.amount_py) };
           if (gt.cy === 0 && gt.py === 0) continue;
           rows.push({ label, cy: gt.cy, py: gt.py, style: "subtotal" });
-        } else if (r.subgroup_id) {
-          // Member of a group — show indented, skip nil values
-          const cyVal = n(r.amount_cy);
-          const pyVal = n(r.amount_py);
-          if (cyVal === 0 && pyVal === 0) continue;
-          rows.push({ label, cy: cyVal, py: pyVal, style: "data", indent: 1 });
+          // Emit members in their original relative order, indented
+          for (const m of membersByGroup.get(r.id) ?? []) {
+            const cyVal = n(m.amount_cy);
+            const pyVal = n(m.amount_py);
+            if (cyVal === 0 && pyVal === 0) continue;
+            rows.push({
+              label: String(m.description || m.label || ""),
+              cy: cyVal, py: pyVal,
+              style: "data", indent: 1,
+            });
+          }
         } else {
-          // Regular non-grouped row — skip nil
+          // Regular standalone row
           const cyVal = n(r.amount_cy);
           const pyVal = n(r.amount_py);
           if (cyVal === 0 && pyVal === 0) continue;
