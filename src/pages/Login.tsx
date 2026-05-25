@@ -73,7 +73,13 @@ const Login = () => {
     setLoginError(null);
 
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      // Normalize credentials so a copy-pasted email/password with stray
+      // whitespace or mixed case still matches the provisioned account.
+      // (Auth emails are stored lower-cased; trimming the password guards
+      // against a trailing space/newline picked up when pasting.)
+      const normEmail    = email.trim().toLowerCase();
+      const normPassword = password.trim();
+      const { data, error } = await supabase.auth.signInWithPassword({ email: normEmail, password: normPassword });
       if (error) throw error;
 
       const session = data.session;

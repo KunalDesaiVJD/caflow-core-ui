@@ -24,6 +24,50 @@ const DEFAULT_PASSWORDS: Record<string, string> = {
   client: "Client@2025!",
 };
 
+/**
+ * Robustly resolve an existing auth user by email.
+ *
+ * Why this exists: `auth.admin.listUsers()` is PAGINATED (50 users/page by
+ * default). A single call therefore MISSES any user beyond the first page,
+ * which is exactly why "Reset Portal Password" silently failed for older
+ * clients — the lookup returned nothing, the code fell through to createUser,
+ * Supabase rejected it as "already registered", and the password was never
+ * actually reset. The displayed default ("Client@2025!") then no longer
+ * matched the real credential and login failed.
+ *
+ * Resolution order:
+ *   1. public.users by (normalized) email — unpaginated, fastest, and shares
+ *      the same id as auth.users.
+ *   2. Full paginated scan of auth.users (1000/page) as a fallback.
+ * Email is compared case-insensitively and whitespace-trimmed on both sides.
+ */
+async function findAuthUserByEmail(adminClient: any, email: string): Promise<{ id: string } | null> {
+  const norm = String(email).trim().toLowerCase();
+
+  // 1) Fast path via public.users (id === auth.users.id).
+  const { data: profileRow } = await adminClient
+    .from("users")
+    .select("id")
+    .ilike("email", norm)
+    .limit(1)
+    .maybeSingle();
+  if (profileRow?.id) {
+    const { data: byId } = await adminClient.auth.admin.getUserById(profileRow.id);
+    if (byId?.user?.id) return { id: byId.user.id };
+  }
+
+  // 2) Full paginated scan of auth users.
+  for (let page = 1; page <= 100; page++) {
+    const { data, error } = await adminClient.auth.admin.listUsers({ page, perPage: 1000 });
+    if (error) break;
+    const users = data?.users ?? [];
+    const hit = users.find((u: any) => String(u.email ?? "").trim().toLowerCase() === norm);
+    if (hit) return { id: hit.id };
+    if (users.length < 1000) break; // reached the last page
+  }
+  return null;
+}
+
 // ── Graph API helpers (for portal credentials email) ─────────────────
 
 async function getGraphToken(): Promise<string> {
@@ -412,25 +456,34 @@ Deno.serve(async (req) => {
     // ACTIVATE PORTAL — create or reset portal account for a client by email
     if (req.method === "POST" && action === "activate-portal") {
       const body = await req.json();
-      const { email, name, firm_id, client_id } = body;
+      const { email: rawEmail, name, firm_id, client_id } = body;
 
-      if (!email) {
+      if (!rawEmail) {
         return new Response(JSON.stringify({ error: "email is required" }), { status: 400, headers: corsHeaders });
       }
 
+      // Normalize the email so the provisioned account ALWAYS matches both what
+      // the UI displays and what the client types at sign-in. Mixed-case or
+      // whitespace-padded emails previously created an account the login form
+      // could not match.
+      const email = String(rawEmail).trim().toLowerCase();
       const password = DEFAULT_PASSWORDS["client"];
 
-      // Look up existing auth user by email
-      const { data: listData } = await adminClient.auth.admin.listUsers();
-      const existing = listData?.users?.find((u: any) => u.email?.toLowerCase() === email.toLowerCase());
+      // Reliable lookup — NOT the old single-page listUsers() (see helper).
+      const existing = await findAuthUserByEmail(adminClient, email);
 
       let authUserId: string;
 
-      if (existing) {
-        // Reset password + mark must_change_password
-        const { error: pwErr } = await adminClient.auth.admin.updateUserById(existing.id, { password });
+      const resetPassword = async (id: string) => {
+        // email_confirm:true guarantees the account is never blocked by an
+        // unconfirmed-email state after a reset.
+        const { error: pwErr } = await adminClient.auth.admin.updateUserById(id, { password, email_confirm: true });
         if (pwErr) throw pwErr;
-        await adminClient.from("users").update({ must_change_password: true }).eq("id", existing.id);
+        await adminClient.from("users").update({ must_change_password: true }).eq("id", id);
+      };
+
+      if (existing) {
+        await resetPassword(existing.id);
         authUserId = existing.id;
       } else {
         // Create new auth user
@@ -440,8 +493,18 @@ Deno.serve(async (req) => {
           email_confirm: true,
           user_metadata: { role: "client", firm_id, name },
         });
-        if (authError) throw authError;
-        authUserId = authUser.user.id;
+        if (authError) {
+          // The email already exists but slipped past the lookup (e.g. a stale
+          // index or a row only in auth.users). Re-resolve and RESET instead of
+          // failing the whole activation — this is the case that used to leave
+          // clients unable to log in with the displayed default password.
+          const retry = await findAuthUserByEmail(adminClient, email);
+          if (!retry) throw authError;
+          await resetPassword(retry.id);
+          authUserId = retry.id;
+        } else {
+          authUserId = authUser.user.id;
+        }
       }
 
       // Upsert users table row
