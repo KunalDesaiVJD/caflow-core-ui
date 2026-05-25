@@ -697,8 +697,10 @@ function buildCorpSignatureTable(sig: CorpSigData, entityName: string): Table {
       borders: BDR_NONE,
       margins: { top: opts.top ?? 0, bottom: 0, left: 80, right: 80 },
       children: lines.map(l => new Paragraph({
-        spacing:  { before: 0, after: 14 },
-        children: [new TextRun({ text: l.text, font: FONT, size: SZ_SM, bold: l.bold ?? false, color: l.bold ? NAVY : BLACK })],
+        // 9pt font (SZ_BODY) with comfortable line spacing to match the
+        // on-screen signature block layout the user approved.
+        spacing:  { before: 0, after: 30 },
+        children: [new TextRun({ text: l.text, font: FONT, size: SZ_BODY, bold: l.bold ?? false, color: l.bold ? NAVY : BLACK })],
       })),
     });
 
@@ -710,7 +712,7 @@ function buildCorpSignatureTable(sig: CorpSigData, entityName: string): Table {
       margins: { top: 40, bottom: 40, left: 80, right: 80 },
       children: [new Paragraph({
         spacing: { before: 0, after: 0 },
-        children: [new TextRun({ text: "As per our Audit Report of even date", font: FONT, size: SZ_SM, color: BLACK })],
+        children: [new TextRun({ text: "As per our Audit Report of even date", font: FONT, size: SZ_BODY, color: BLACK })],
       })],
     })],
   });
@@ -730,15 +732,15 @@ function buildCorpSignatureTable(sig: CorpSigData, entityName: string): Table {
 
   const sigRow = new TableRow({
     children: [
-      stack([{ text: partner, bold: true }, { text: "Partner" }, { text: `Membership No.: ${memNo}` }], { top: 240, width: widths[0] }),
+      stack([{ text: partner, bold: true }, { text: "Partner" }, { text: `Membership No.: ${memNo}` }], { top: 420, width: widths[0] }),
       ...directors.map((d, i) =>
-        stack([{ text: d.name, bold: true }, { text: "Director" }, { text: `DIN: ${d.din || "—"}` }], { top: 240, width: widths[i + 1] }),
+        stack([{ text: d.name, bold: true }, { text: "Director" }, { text: `DIN: ${d.din || "—"}` }], { top: 420, width: widths[i + 1] }),
       ),
     ],
   });
 
   const placeDateRow = new TableRow({
-    children: widths.map(w => stack([{ text: `Place: ${place}` }, { text: `Date: ${date}` }], { top: 120, width: w })),
+    children: widths.map(w => stack([{ text: `Place: ${place}` }, { text: `Date: ${date}` }], { top: 220, width: w })),
   });
 
   return new Table({
