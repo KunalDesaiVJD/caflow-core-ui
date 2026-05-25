@@ -1969,16 +1969,27 @@ export function getFAGridNetBlockTotal(
     }
     return anyData ? total : null;
   }
-  // PY column. The auditor can override the auto-computed total via the
-  // "Total — Previous year" row in FAGrid (stored in fa.py_manual.netPY).
-  // When that override is set, it WINS — the BS face PY for PPE must reflect
-  // exactly what the auditor typed in the note, not the formula-derived value.
-  // Fall back to (gross_open − depn_open) sum only when no manual override.
+  // PY column = the previous year's CLOSING net block (Balance Sheet "As at 31
+  // Mar <PY>"). In the FA grid that is the "Total — Previous year" row's
+  // **Net Block (CY)** cell — NOT its Net Block (PY) cell.
+  //
+  // ROOT-CAUSE FIX: this previously returned fa.py_manual.netPY, which is the
+  // previous year's OPENING net block (as-at-start-of-PY) — one year too far
+  // back — so the BS PPE prior-year figure was wrong (e.g. showed 3,19,335
+  // instead of the correct 3,51,421). The auditor's "Total — Previous year"
+  // closing figure lives in py_manual.netCY (or, if not directly overridden,
+  // is derivable from the PY closing gross/depreciation, or equals the
+  // current-year OPENING net block = sum(gross_open − depn_open)).
   const pyManual = (notesData?.fa as any)?.py_manual ?? {};
-  const overrideNetPY = pyManual?.netPY;
-  if (Number.isFinite(overrideNetPY) && Math.abs(Number(overrideNetPY)) > 0.005) {
-    return Math.round(Number(overrideNetPY) * 100) / 100;
+  const fin = (v: any) => Number.isFinite(Number(v)) && Math.abs(Number(v)) > 0.005;
+  // 1) Explicit "Total — Previous year" → Net Block (CY) override.
+  if (fin(pyManual?.netCY)) return Math.round(Number(pyManual.netCY) * 100) / 100;
+  // 2) Derive from PY closing gross − PY closing depreciation, if those were
+  //    entered on the "Total — Previous year" row.
+  if (fin(pyManual?.grossClose) || fin(pyManual?.depnClose)) {
+    return Math.round((Number(pyManual.grossClose || 0) - Number(pyManual.depnClose || 0)) * 100) / 100;
   }
+  // 3) Fall back to current-year OPENING net block (= previous-year closing).
   let total = 0;
   let anyData = false;
   for (const r of rows) {
