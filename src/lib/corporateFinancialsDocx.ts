@@ -1128,7 +1128,7 @@ interface NoteRow {
   label:   string;
   cy:      number;
   py:      number;
-  style:   "data" | "subtotal" | "total";
+  style:   "data" | "subtotal" | "total" | "heading";
   fmt?:    NoteRowFmt;
   indent?: number;
 }
@@ -1223,31 +1223,41 @@ function extractNoteRows(
     }
 
     case "reserves": {
+      // Issue 2(b) — ALWAYS emit every predefined line (matching the on-screen
+      // Note structure), even when the value is blank / zero. Never hide rows.
       const genResCy   = n(noteData?.gen_reserve_cy);
       const genResPy   = n(noteData?.gen_reserve_py);
       const spCy       = n(noteData?.share_premium_cy);
       const spPy       = n(noteData?.share_premium_py);
-      const surpOpenCy = n(noteData?.surplus_opening_cy);
-      const surpOpenPy = n(noteData?.surplus_opening_py);
       const npatCy     = n(stage5Notes?.pl?.eps?.npat);
       const npatPy     = n(stage5Notes?.pl?.eps?.npat_py);
       const deferCy    = n(noteData?.surplus_deferred_adj_cy);
       const deferPy    = n(noteData?.surplus_deferred_adj_py);
       const excessCy   = n(noteData?.surplus_excess_short_cy);
       const excessPy   = n(noteData?.surplus_excess_short_py);
-      const rows: NoteRow[] = [];
-      if (genResCy !== 0 || genResPy !== 0)
-        rows.push({ label: "General Reserve",              cy: genResCy,   py: genResPy,   style: "data" });
-      if (spCy !== 0 || spPy !== 0)
-        rows.push({ label: "Securities Premium Account",   cy: spCy,       py: spPy,       style: "data" });
-      rows.push({ label: "Opening Balance — P&L",          cy: surpOpenCy, py: surpOpenPy, style: "data" });
-      rows.push({ label: "Add: Profit for the year",       cy: npatCy,     py: npatPy,     style: "data" });
-      if (deferCy !== 0 || deferPy !== 0)
-        rows.push({ label: "Deferred tax adjustment",      cy: deferCy,    py: deferPy,    style: "data" });
-      if (excessCy !== 0 || excessPy !== 0)
-        rows.push({ label: "Less: Excess / short provision", cy: excessCy, py: excessPy,   style: "data" });
-      rows.push({ label: "Total",                          cy: totCy,      py: totPy,      style: "total" });
-      return rows;
+      // Opening balance (CY) carries forward the prior-year closing of
+      // Reserves & Surplus (= totPy face value) unless explicitly entered —
+      // identical to the on-screen carry-forward rule.
+      const surpOpenCy = (noteData?.surplus_opening_cy != null && noteData?.surplus_opening_cy !== "")
+        ? n(noteData.surplus_opening_cy) : totPy;
+      const surpOpenPy = (noteData?.surplus_opening_py != null && noteData?.surplus_opening_py !== "")
+        ? n(noteData.surplus_opening_py) : 0;
+      const subtotalACy = genResCy + spCy;
+      const subtotalAPy = genResPy + spPy;
+      const subtotalBCy = surpOpenCy + npatCy + deferCy + excessCy;
+      const subtotalBPy = surpOpenPy + npatPy + deferPy + excessPy;
+      return [
+        { label: "1. General Reserve",                                       cy: genResCy,   py: genResPy,   style: "data" },
+        { label: "2. Securities Premium",                                    cy: spCy,       py: spPy,       style: "data" },
+        { label: "Sub-total [a]",                                            cy: subtotalACy, py: subtotalAPy, style: "subtotal" },
+        { label: "Surplus in the Statement of Profit and Loss",              cy: 0,          py: 0,          style: "heading" },
+        { label: "Opening balance",                                          cy: surpOpenCy, py: surpOpenPy, style: "data", indent: 1 },
+        { label: "Add/(Less): Profit for the year",                          cy: npatCy,     py: npatPy,     style: "data", indent: 1 },
+        { label: "Add/(Less): Adjustments for deferred tax",                 cy: deferCy,    py: deferPy,    style: "data", indent: 1 },
+        { label: "Add/(Less): Excess/(Short) provision for income tax",      cy: excessCy,   py: excessPy,   style: "data", indent: 1 },
+        { label: "Sub-total [b]",                                            cy: subtotalBCy, py: subtotalBPy, style: "subtotal" },
+        { label: "Total — Reserves and Surplus (per BS)",                    cy: totCy,      py: totPy,      style: "total" },
+      ];
     }
 
     case "dtFixed": {
@@ -1359,6 +1369,258 @@ function extractNoteRows(
   }
 }
 
+// ─── Note 2 — Share Capital (multi-table) ────────────────────────────────────
+// Issue 2(a): export the FULL Share Capital note exactly as entered on screen:
+//   • Main amounts table  — (a) Authorised + (b) Issued/subscribed/paid-up + Total
+//   • (a) Reconciliation of number of shares outstanding  (No. + Amount, CY+PY)
+//   • (b) Particulars of shareholders holding more than 5%
+//   • (c) Promoters' shareholding (with % change + total)
+function buildShareCapitalNote(
+  noteNumber: string,
+  title: string,
+  noteData: any,
+  totCy: number,
+  totPy: number,
+  cyYearNum: number,
+  pyYearNum: number,
+): (Table | Paragraph)[] {
+  const num = (v: any): number => {
+    if (v == null || v === "") return 0;
+    const x = Number(String(v).replace(/,/g, "").trim());
+    return Number.isFinite(x) ? x : 0;
+  };
+  const fmtShares = (v: number) => (v === 0 ? "—" : Math.round(Math.abs(v)).toLocaleString("en-IN"));
+  const fmtPct    = (v: number) => (v === 0 ? "—" : `${v.toFixed(2)}%`);
+  const fmtPctChg = (v: number) => (v === 0 ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(2)}%`);
+
+  const cyDateLbl = `As at 31 Mar ${cyYearNum}`;
+  const pyDateLbl = `As at 31 Mar ${pyYearNum}`;
+  const cyLbl     = `FY ${cyYearNum - 1}-${String(cyYearNum).slice(-2)}`;
+  const pyLbl     = `FY ${pyYearNum - 1}-${String(pyYearNum).slice(-2)}`;
+
+  // Header cell for grouped sub-table headers (rowSpan / colSpan aware).
+  const hCell = (text: string, w: number, opts: { colSpan?: number; rowSpan?: number; align?: AlignmentType } = {}): TableCell =>
+    new TableCell({
+      ...(opts.colSpan ? { columnSpan: opts.colSpan } : {}),
+      ...(opts.rowSpan ? { rowSpan: opts.rowSpan } : {}),
+      width:   { size: w, type: WidthType.DXA },
+      shading: { fill: BG_HDR, type: ShadingType.CLEAR },
+      borders: BDR_NONE,
+      margins: { top: 40, bottom: 40, left: 60, right: 60 },
+      verticalAlign: VerticalAlign.CENTER,
+      children: [new Paragraph({
+        alignment: opts.align ?? AlignmentType.CENTER,
+        spacing:   { before: 0, after: 0 },
+        children:  [new TextRun({ text, font: FONT, size: SZ_XS, bold: true, color: BLACK })],
+      })],
+    });
+
+  // Full-width bold label row inside the main 3-col table.
+  const labelRow3 = (text: string): TableRow => new TableRow({
+    cantSplit: true,
+    children: [
+      new TableCell({
+        columnSpan: 3,
+        width:   { size: TW, type: WidthType.DXA },
+        shading: { fill: BG_TOT, type: ShadingType.CLEAR },
+        borders: BDR_ROW,
+        margins: { top: 36, bottom: 36, left: 120, right: 80 },
+        children: [new Paragraph({
+          spacing: { before: 0, after: 0 },
+          children: [new TextRun({ text, font: FONT, size: SZ_SM, bold: true, color: BLACK })],
+        })],
+      }),
+    ],
+  });
+
+  const subHeading = (text: string): Paragraph => new Paragraph({
+    spacing:  { before: 200, after: 60 },
+    keepNext: true,
+    children: [new TextRun({ text, font: FONT, size: SZ_SM, bold: true, color: NAVY })],
+  });
+
+  const out: (Table | Paragraph)[] = [];
+
+  // ── 1. Main amounts table ──────────────────────────────────────────────────
+  const authCy   = num(noteData?.authorised_cy);
+  const authPy   = num(noteData?.authorised_py);
+  const authText = String(noteData?.authorised_text || "").trim() || "Equity shares of face value ₹10 each";
+  const issText  = String(noteData?.issued_text || "").trim() || "Equity shares of face value ₹10 each, fully paid up";
+
+  out.push(new Table({
+    width:        { size: TW, type: WidthType.DXA },
+    columnWidths: [NW_DESC, NW_CY, NW_PY],
+    rows: [
+      noteTitleRow([NW_DESC, NW_CY, NW_PY], noteNumber, title),
+      noteHdr3(cyDateLbl, pyDateLbl),
+      labelRow3("(a) Authorised shares"),
+      noteRow3(authText, authCy, authPy, 1, "data"),
+      labelRow3("(b) Issued, subscribed and fully paid up shares"),
+      noteRow3(issText, totCy, totPy, 1, "data"),
+      noteRow3("Total", totCy, totPy, 0, "total"),
+    ],
+  }));
+
+  // ── 2. (a) Reconciliation of number of shares outstanding ───────────────────
+  const RC = [3666, 1700, 1700, 1700, 1700];
+  const openCyNum = num(noteData?.recon_open_cy_num);
+  const moveCyNum = num(noteData?.recon_move_cy_num);
+  const openPyNum = num(noteData?.recon_open_py_num);
+  const movePyNum = num(noteData?.recon_move_py_num);
+  const openCyAmt = num(noteData?.recon_open_cy_amt);
+  const moveCyAmt = num(noteData?.recon_move_cy_amt);
+  const openPyAmt = num(noteData?.recon_open_py_amt);
+  const movePyAmt = num(noteData?.recon_move_py_amt);
+  const closeCyNum = openCyNum + moveCyNum;
+  const closePyNum = openPyNum + movePyNum;
+  const closeCyAmt = openCyAmt + moveCyAmt;
+  const closePyAmt = openPyAmt + movePyAmt;
+
+  const reconRow = (label: string, cyN: number, cyA: number, pyN: number, pyA: number, style: "data" | "total" = "data"): TableRow => {
+    const bg   = style === "total" ? BG_GRAN : undefined;
+    const bdr  = style === "total" ? BDR_GRAND : BDR_ROW;
+    const bold = style === "total";
+    return new TableRow({
+      children: [
+        cell({ text: label, w: RC[0], bold, bg, borders: bdr, padL: 120 }),
+        cell({ text: fmtShares(cyN), w: RC[1], align: AlignmentType.RIGHT, padR: 120, bold, bg, borders: bdr }),
+        cell({ text: fmt(cyA),       w: RC[2], align: AlignmentType.RIGHT, padR: 120, bold, bg, borders: bdr }),
+        cell({ text: fmtShares(pyN), w: RC[3], align: AlignmentType.RIGHT, padR: 120, bold, bg, borders: bdr }),
+        cell({ text: fmt(pyA),       w: RC[4], align: AlignmentType.RIGHT, padR: 120, bold, bg, borders: bdr }),
+      ],
+    });
+  };
+
+  out.push(subHeading("(a) Reconciliation of number of shares outstanding"));
+  out.push(new Table({
+    width:        { size: TW, type: WidthType.DXA },
+    columnWidths: RC,
+    rows: [
+      new TableRow({
+        tableHeader: true,
+        children: [
+          hCell("Particulars", RC[0], { rowSpan: 2, align: AlignmentType.LEFT }),
+          hCell(cyLbl, RC[1] + RC[2], { colSpan: 2 }),
+          hCell(pyLbl, RC[3] + RC[4], { colSpan: 2 }),
+        ],
+      }),
+      new TableRow({
+        tableHeader: true,
+        children: [
+          hCell("No. of Shares", RC[1]),
+          hCell("Amount", RC[2]),
+          hCell("No. of Shares", RC[3]),
+          hCell("Amount", RC[4]),
+        ],
+      }),
+      reconRow("Opening balance at the beginning of the year", openCyNum, openCyAmt, openPyNum, openPyAmt),
+      reconRow("Add/(Less): Movement during the year",         moveCyNum, moveCyAmt, movePyNum, movePyAmt),
+      reconRow("Outstanding at the end of the year",           closeCyNum, closeCyAmt, closePyNum, closePyAmt, "total"),
+    ],
+  }));
+
+  // ── 3. (b) Shareholders holding more than 5% ────────────────────────────────
+  const SH = [3666, 1700, 1700, 1700, 1700];
+  const shareholders: any[] = Array.isArray(noteData?.shareholders) ? noteData.shareholders : [];
+  const shRows: TableRow[] = [
+    new TableRow({
+      tableHeader: true,
+      children: [
+        hCell("Name of shareholder", SH[0], { rowSpan: 2, align: AlignmentType.LEFT }),
+        hCell(cyDateLbl, SH[1] + SH[2], { colSpan: 2 }),
+        hCell(pyDateLbl, SH[3] + SH[4], { colSpan: 2 }),
+      ],
+    }),
+    new TableRow({
+      tableHeader: true,
+      children: [
+        hCell("No. of Shares", SH[1]),
+        hCell("% of Holding", SH[2]),
+        hCell("No. of Shares", SH[3]),
+        hCell("% of Holding", SH[4]),
+      ],
+    }),
+  ];
+  if (shareholders.length === 0) {
+    shRows.push(new TableRow({
+      children: [cell({ text: "No shareholders holding more than 5% of shares.", w: TW, colSpan: 5, italic: true, color: DK_GREY, borders: BDR_ROW, padL: 120 })],
+    }));
+  } else {
+    for (const r of shareholders) {
+      shRows.push(new TableRow({
+        children: [
+          cell({ text: String(r?.name || "—"), w: SH[0], borders: BDR_ROW, padL: 120 }),
+          cell({ text: fmtShares(num(r?.cy_shares)), w: SH[1], align: AlignmentType.RIGHT, padR: 120, borders: BDR_ROW }),
+          cell({ text: fmtPct(num(r?.cy_pct)),       w: SH[2], align: AlignmentType.RIGHT, padR: 120, borders: BDR_ROW }),
+          cell({ text: fmtShares(num(r?.py_shares)), w: SH[3], align: AlignmentType.RIGHT, padR: 120, borders: BDR_ROW }),
+          cell({ text: fmtPct(num(r?.py_pct)),       w: SH[4], align: AlignmentType.RIGHT, padR: 120, borders: BDR_ROW }),
+        ],
+      }));
+    }
+  }
+  out.push(subHeading("(b) Particulars of shareholders holding more than 5% shares"));
+  out.push(new Table({ width: { size: TW, type: WidthType.DXA }, columnWidths: SH, rows: shRows }));
+
+  // ── 4. (c) Promoters' shareholding ──────────────────────────────────────────
+  const PR = [2966, 1500, 1500, 1500, 1500, 1500];
+  const promoters: any[] = Array.isArray(noteData?.promoters_list) ? noteData.promoters_list : [];
+  const prRows: TableRow[] = [
+    new TableRow({
+      tableHeader: true,
+      children: [
+        hCell("Promoter name", PR[0], { rowSpan: 2, align: AlignmentType.LEFT }),
+        hCell(cyDateLbl, PR[1] + PR[2], { colSpan: 2 }),
+        hCell(pyDateLbl, PR[3] + PR[4], { colSpan: 2 }),
+        hCell("% Change", PR[5], { rowSpan: 2 }),
+      ],
+    }),
+    new TableRow({
+      tableHeader: true,
+      children: [
+        hCell("No. of Shares", PR[1]),
+        hCell("%", PR[2]),
+        hCell("No. of Shares", PR[3]),
+        hCell("%", PR[4]),
+      ],
+    }),
+  ];
+  if (promoters.length === 0) {
+    prRows.push(new TableRow({
+      children: [cell({ text: "No promoter shareholding recorded.", w: TW, colSpan: 6, italic: true, color: DK_GREY, borders: BDR_ROW, padL: 120 })],
+    }));
+  } else {
+    let tCyS = 0, tCyP = 0, tPyS = 0, tPyP = 0;
+    for (const r of promoters) {
+      const cyS = num(r?.cy_shares), cyP = num(r?.cy_pct), pyS = num(r?.py_shares), pyP = num(r?.py_pct);
+      tCyS += cyS; tCyP += cyP; tPyS += pyS; tPyP += pyP;
+      prRows.push(new TableRow({
+        children: [
+          cell({ text: String(r?.name || "—"), w: PR[0], borders: BDR_ROW, padL: 120 }),
+          cell({ text: fmtShares(cyS), w: PR[1], align: AlignmentType.RIGHT, padR: 120, borders: BDR_ROW }),
+          cell({ text: fmtPct(cyP),    w: PR[2], align: AlignmentType.RIGHT, padR: 120, borders: BDR_ROW }),
+          cell({ text: fmtShares(pyS), w: PR[3], align: AlignmentType.RIGHT, padR: 120, borders: BDR_ROW }),
+          cell({ text: fmtPct(pyP),    w: PR[4], align: AlignmentType.RIGHT, padR: 120, borders: BDR_ROW }),
+          cell({ text: fmtPctChg(cyP - pyP), w: PR[5], align: AlignmentType.RIGHT, padR: 120, borders: BDR_ROW }),
+        ],
+      }));
+    }
+    prRows.push(new TableRow({
+      children: [
+        cell({ text: "Total", w: PR[0], bold: true, bg: BG_GRAN, borders: BDR_GRAND, padL: 120 }),
+        cell({ text: fmtShares(tCyS), w: PR[1], align: AlignmentType.RIGHT, padR: 120, bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
+        cell({ text: fmtPct(tCyP),    w: PR[2], align: AlignmentType.RIGHT, padR: 120, bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
+        cell({ text: fmtShares(tPyS), w: PR[3], align: AlignmentType.RIGHT, padR: 120, bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
+        cell({ text: fmtPct(tPyP),    w: PR[4], align: AlignmentType.RIGHT, padR: 120, bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
+        cell({ text: fmtPctChg(tCyP - tPyP), w: PR[5], align: AlignmentType.RIGHT, padR: 120, bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
+      ],
+    }));
+  }
+  out.push(subHeading("(c) Promoters' shareholding"));
+  out.push(new Table({ width: { size: TW, type: WidthType.DXA }, columnWidths: PR, rows: prRows }));
+
+  return out;
+}
+
 function buildNoteTableFromRows(
   noteNumber: string,
   title: string,
@@ -1382,6 +1644,20 @@ function buildNoteTableFromRows(
 
   let _noteRowIdx = 0;
   for (const row of rows) {
+    // Heading-only row (e.g. "Surplus in the Statement of Profit and Loss") —
+    // italic label spanning the row with blank value cells.
+    if (row.style === "heading") {
+      tableRows.push(new TableRow({
+        cantSplit: true,
+        height: { value: 320, rule: HeightRule.ATLEAST },
+        children: [
+          cell({ text: row.label, w: NW_DESC, italic: true, color: DK_GREY, borders: BDR_ROW, padL: 160 }),
+          cell({ text: "", w: NW_CY, borders: BDR_ROW }),
+          cell({ text: "", w: NW_PY, borders: BDR_ROW }),
+        ],
+      }));
+      continue;
+    }
     const isAltRow  = row.style === "data" && _noteRowIdx % 2 === 1;
     const bg   = row.style === "total" ? BG_GRAN : row.style === "subtotal" ? BG_TOT : (isAltRow ? "F4F5F7" : undefined);
     const bdr  = row.style === "total" ? BDR_GRAND : row.style === "subtotal" ? BDR_SUB : BDR_ROW;
@@ -1514,13 +1790,17 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
 
   // Notes 2–N: from stage5_notes (sorted by note number ascending)
   const spacer = () => new Paragraph({ spacing: { before: 720, after: 0 }, keepNext: true, children: [] });
+  // Issue 1 — each numbered note must START ON A NEW PAGE so it is never
+  // rendered in continuation of the previous note (e.g. Note 2 — Share
+  // Capital must not flow directly after Note 1 — Accounting Policies).
+  const pageBreak = () => new Paragraph({ pageBreakBefore: true, spacing: { before: 0, after: 0 }, children: [] });
 
   const noteTables: (Table | Paragraph)[] = [];
   const faRows = stage5Notes?.fa?.rows ?? [];
   let faRenderedAsNote = false;
 
   // Collect notes with their numbers, then sort ascending
-  const pendingNotes: Array<{ noteNo: number; table: Table }> = [];
+  const pendingNotes: Array<{ noteNo: number; elements: (Table | Paragraph)[] }> = [];
 
   for (const meta of CORP_NOTE_META) {
     const noteNo = noteNumbers[meta.fsCode];
@@ -1534,6 +1814,18 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
     const sectionData = (stage5Notes as any)?.[meta.section];
     const noteData    = sectionData?.[meta.dataKey];
 
+    const totCy = amounts[meta.fsCode]?.cy ?? 0;
+    const totPy = amounts[meta.fsCode]?.py ?? 0;
+
+    // Issue 2(a) — Share Capital is a multi-table note (main amounts +
+    // reconciliation of shares + shareholders >5% + promoters), so it gets a
+    // dedicated builder rather than the single-table NoteRow path.
+    if (meta.renderType === "shareCapital") {
+      const els = buildShareCapitalNote(String(noteNo), meta.title, noteData, totCy, totPy, cyYear, pyYear);
+      if (els.length > 0) pendingNotes.push({ noteNo, elements: els });
+      continue;
+    }
+
     const rows = extractNoteRows(meta.renderType, noteData, amounts, meta.fsCode, stage5Notes);
     if (rows.length === 0) continue;
 
@@ -1543,14 +1835,14 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
 
     pendingNotes.push({
       noteNo,
-      table: buildNoteTableFromRows(String(noteNo), meta.title, rows, cyFull, pyFull),
+      elements: [buildNoteTableFromRows(String(noteNo), meta.title, rows, cyFull, pyFull)],
     });
   }
 
-  // Sort notes in ascending note-number order
+  // Sort notes in ascending note-number order; each note begins on a new page.
   pendingNotes.sort((a, b) => a.noteNo - b.noteNo);
   for (const item of pendingNotes) {
-    noteTables.push(spacer(), item.table);
+    noteTables.push(pageBreak(), ...item.elements);
   }
 
   // Ratios
