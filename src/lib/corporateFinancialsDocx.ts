@@ -448,22 +448,22 @@ function buildBSTable(
     dataRow("        (a)  Share Capital",                     n("BS_EQ_SC"), g("BS_EQ_SC").cy, g("BS_EQ_SC").py),
     dataRow("        (b)  Reserves and Surplus",              n("BS_EQ_RS"), g("BS_EQ_RS").cy, g("BS_EQ_RS").py),
     dataRow("        (c)  Money Received Against Share Warrants", null,      0,                0),
-    subTotalRow("Total Shareholders' Funds", sfCy, sfPy),
 
     parentRow("(2)  Non-Current Liabilities"),
     dataRow("        (a)  Long-term Borrowings",              n("BS_NCL_LTB"), g("BS_NCL_LTB").cy, g("BS_NCL_LTB").py),
     dataRow("        (b)  Deferred Tax Liabilities (Net)",    n("BS_NCL_DTL"), g("BS_NCL_DTL").cy, g("BS_NCL_DTL").py),
     dataRow("        (c)  Other Long-term Liabilities",       n("BS_NCL_OLT"), g("BS_NCL_OLT").cy, g("BS_NCL_OLT").py),
     dataRow("        (d)  Long-term Provisions",              n("BS_NCL_LTP"), g("BS_NCL_LTP").cy, g("BS_NCL_LTP").py),
-    subTotalRow("Total Non-Current Liabilities", nclCy, nclPy),
 
     parentRow("(3)  Current Liabilities"),
     dataRow("        (a)  Short-term Borrowings",             n("BS_CL_STB"), g("BS_CL_STB").cy, g("BS_CL_STB").py),
     dataRow("        (b)  Trade Payables",                    n("BS_CL_TP"),  g("BS_CL_TP").cy,  g("BS_CL_TP").py),
     dataRow("        (c)  Other Current Liabilities",         n("BS_CL_OCL"), g("BS_CL_OCL").cy, g("BS_CL_OCL").py),
     dataRow("        (d)  Short-term Provisions",             n("BS_CL_STP"), g("BS_CL_STP").cy, g("BS_CL_STP").py),
-    subTotalRow("Total Current Liabilities", clCy, clPy),
 
+    // Issue 1: intermediate sub-group totals (Total Shareholders' Funds / Total
+    // Non-Current Liabilities / Total Current Liabilities) removed to match the
+    // on-screen Balance Sheet and free vertical space for the signature block.
     grandTotalRow("TOTAL EQUITY AND LIABILITIES", totELCy, totELPy),
 
     // ── ASSETS ────────────────────────────────────────────────────────────
@@ -475,7 +475,6 @@ function buildBSTable(
     dataRow("        (c)  Deferred Tax Assets (Net)",         n("BS_NCA_DTA"), g("BS_NCA_DTA").cy, g("BS_NCA_DTA").py),
     dataRow("        (d)  Long-term Loans and Advances",      n("BS_NCA_LLA"), g("BS_NCA_LLA").cy, g("BS_NCA_LLA").py),
     dataRow("        (e)  Other Non-current Assets",          n("BS_NCA_ONA"), g("BS_NCA_ONA").cy, g("BS_NCA_ONA").py),
-    subTotalRow("Total Non-Current Assets", ncaCy, ncaPy),
 
     parentRow("(2)  Current Assets"),
     dataRow("        (a)  Current Investments",               n("BS_CA_CI"),  g("BS_CA_CI").cy,  g("BS_CA_CI").py),
@@ -484,8 +483,9 @@ function buildBSTable(
     dataRow("        (d)  Cash and Cash Equivalents",         n("BS_CA_CCE"), g("BS_CA_CCE").cy, g("BS_CA_CCE").py),
     dataRow("        (e)  Short-term Loans and Advances",     n("BS_CA_SLA"), g("BS_CA_SLA").cy, g("BS_CA_SLA").py),
     dataRow("        (f)  Other Current Assets",              n("BS_CA_OCA"), g("BS_CA_OCA").cy, g("BS_CA_OCA").py),
-    subTotalRow("Total Current Assets", caCy, caPy),
 
+    // Issue 1: "Total Non-Current Assets" / "Total Current Assets" sub-group
+    // totals removed — only the grand "TOTAL ASSETS" is shown.
     grandTotalRow("TOTAL ASSETS", totACy, totAPy),
 
     // Footnote
@@ -660,91 +660,91 @@ function fmtSigDate(d?: string): string {
   return m ? `${m[3]}/${m[2]}/${m[1]}` : d;
 }
 
-function buildCorpSignatureTable(sig: CorpSigData): Table {
-  const BLANK = "_______________";
+// ISSUE 2: signature block rebuilt to EXACTLY mirror the on-screen
+// CorporateSignatureBlock (src/components/shared/CorporateSignatureBlock.tsx):
+//   row 1  — "As per our Audit Report of even date"
+//   row 2  — Left: For <Firm> / Chartered Accountants / Firm's Registration No.
+//            Right: For and on behalf of the Board of Directors of <Company>
+//   row 3  — Partner column + one column per Director (Name / Director / DIN)
+//   row 4  — Place / Date repeated under every column
+function buildCorpSignatureTable(sig: CorpSigData, entityName: string): Table {
+  const firmName = sig.firmName     || "[Statutory Auditor Name]";
+  const frn      = sig.firmFRN      || "[FRN]";
+  const partner  = sig.partnerName  || "[Signing Partner / Proprietor]";
+  const memNo    = sig.membershipNo || "—";
+  const place    = sig.place        || "Ahmedabad";
+  const date     = fmtSigDate(sig.date);
 
-  const firmName    = sig.firmName     || BLANK;
-  const frn         = sig.firmFRN      || BLANK;
-  const partner     = sig.partnerName  || BLANK;
-  const memNo       = sig.membershipNo || BLANK;
-  const dir1Name    = sig.dir1Name     || BLANK;
-  const dir1Din     = sig.dir1Din      || "";
-  const dir2Name    = sig.dir2Name     || "";
-  const dir2Din     = sig.dir2Din      || "";
-  const place       = sig.place        || BLANK;
-  const date        = fmtSigDate(sig.date);
+  // Partner column + N director columns — matches the on-screen grid.
+  const directors: Array<{ name: string; din: string }> = [];
+  if (sig.dir1Name) directors.push({ name: sig.dir1Name, din: sig.dir1Din || "" });
+  if (sig.dir2Name) directors.push({ name: sig.dir2Name, din: sig.dir2Din || "" });
+  if (directors.length === 0) directors.push({ name: "[Director Name]", din: "" });
 
-  const colW = Math.floor(TW / 3);
-  const colWRight = TW - colW * 2;
+  const nCols  = 1 + directors.length;
+  const colW   = Math.floor(TW / nCols);
+  const widths = Array.from({ length: nCols }, (_, i) =>
+    i === nCols - 1 ? TW - colW * (nCols - 1) : colW);
 
-  function sigLines(
-    lines: Array<{ text: string; bold?: boolean; gap?: boolean; muted?: boolean }>,
-  ): Paragraph[] {
-    return lines.map(l => new Paragraph({
-      // Tightened so the signature block fits on the same page as the statement.
-      spacing: { before: l.gap ? 90 : 0, after: 10 },
-      children: [new TextRun({
-        text:  l.text,
-        font:  FONT,
-        size:  SZ_SM,
-        bold:  l.bold ?? false,
-        color: l.bold ? NAVY : (l.muted ? DK_GREY : BLACK),
+  type Line = { text: string; bold?: boolean };
+  const stack = (
+    lines: Line[],
+    opts: { top?: number; span?: number; width: number },
+  ): TableCell =>
+    new TableCell({
+      ...(opts.span ? { columnSpan: opts.span } : {}),
+      width:   { size: opts.width, type: WidthType.DXA },
+      borders: BDR_NONE,
+      margins: { top: opts.top ?? 0, bottom: 0, left: 80, right: 80 },
+      children: lines.map(l => new Paragraph({
+        spacing:  { before: 0, after: 14 },
+        children: [new TextRun({ text: l.text, font: FONT, size: SZ_SM, bold: l.bold ?? false, color: l.bold ? NAVY : BLACK })],
+      })),
+    });
+
+  const prefaceRow = new TableRow({
+    children: [new TableCell({
+      columnSpan: nCols,
+      width:   { size: TW, type: WidthType.DXA },
+      borders: BDR_NONE,
+      margins: { top: 40, bottom: 40, left: 80, right: 80 },
+      children: [new Paragraph({
+        spacing: { before: 0, after: 0 },
+        children: [new TextRun({ text: "As per our Audit Report of even date", font: FONT, size: SZ_SM, color: BLACK })],
       })],
-    }));
-  }
+    })],
+  });
+
+  const headerRow = new TableRow({
+    children: [
+      stack(
+        [{ text: `For ${firmName}`, bold: true }, { text: "Chartered Accountants" }, { text: `Firm's Registration No.: ${frn}` }],
+        { span: 1, width: widths[0] },
+      ),
+      stack(
+        [{ text: "For and on behalf of the Board of Directors of" }, { text: entityName, bold: true }],
+        { span: nCols - 1, width: widths.slice(1).reduce((s, w) => s + w, 0) },
+      ),
+    ],
+  });
+
+  const sigRow = new TableRow({
+    children: [
+      stack([{ text: partner, bold: true }, { text: "Partner" }, { text: `Membership No.: ${memNo}` }], { top: 240, width: widths[0] }),
+      ...directors.map((d, i) =>
+        stack([{ text: d.name, bold: true }, { text: "Director" }, { text: `DIN: ${d.din || "—"}` }], { top: 240, width: widths[i + 1] }),
+      ),
+    ],
+  });
+
+  const placeDateRow = new TableRow({
+    children: widths.map(w => stack([{ text: `Place: ${place}` }, { text: `Date: ${date}` }], { top: 120, width: w })),
+  });
 
   return new Table({
     width:        { size: TW, type: WidthType.DXA },
-    columnWidths: [colW, colW, colWRight],
-    rows: [
-      new TableRow({
-        children: [
-          // Left — CA Firm
-          new TableCell({
-            width:   { size: colW, type: WidthType.DXA },
-            borders: BDR_NONE,
-            margins: { top: 40, bottom: 40, left: 80, right: 80 },
-            children: sigLines([
-              { text: `For, ${firmName}`, bold: true },
-              { text: "Chartered Accountants" },
-              { text: `FRN: ${frn}` },
-              { text: "__________________", gap: true },
-              { text: partner, bold: true },
-              { text: "Partner" },
-              { text: `Membership No. ${memNo}` },
-              { text: `Place: ${place}`, gap: true },
-              { text: `Date: ${date}` },
-            ]),
-          }),
-          // Centre — Director 1
-          new TableCell({
-            width:   { size: colW, type: WidthType.DXA },
-            borders: BDR_NONE,
-            margins: { top: 40, bottom: 40, left: 200, right: 80 },
-            children: dir1Name !== BLANK ? sigLines([
-              { text: dir1Name, bold: true },
-              ...(dir1Din ? [{ text: `DIN: ${dir1Din}` }] : []),
-              { text: "Director" },
-              { text: `Place: ${place}`, gap: true },
-              { text: `Date: ${date}` },
-            ]) : sigLines([{ text: "" }]),
-          }),
-          // Right — Director 2 (only if a name exists)
-          new TableCell({
-            width:   { size: colWRight, type: WidthType.DXA },
-            borders: BDR_NONE,
-            margins: { top: 40, bottom: 40, left: 200, right: 80 },
-            children: dir2Name ? sigLines([
-              { text: dir2Name, bold: true },
-              ...(dir2Din ? [{ text: `DIN: ${dir2Din}` }] : []),
-              { text: "Director" },
-              { text: `Place: ${place}`, gap: true },
-              { text: `Date: ${date}` },
-            ]) : sigLines([{ text: "" }]),
-          }),
-        ],
-      }),
-    ],
+    columnWidths: widths,
+    rows: [prefaceRow, headerRow, sigRow, placeDateRow],
   });
 }
 
@@ -1500,7 +1500,7 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
   const plTable  = buildPLTable(amounts, noteNumbers, cyLabel, pyLabel, entityName);
 
   // Signature (built fresh for each page — can't reuse Table instances)
-  const sigBlock = () => buildCorpSignatureTable(signature);
+  const sigBlock = () => buildCorpSignatureTable(signature, entityName);
 
   // Note 1: Accounting Policies
   const note1Paras = buildNote1Section(entityName, cyLabel);
