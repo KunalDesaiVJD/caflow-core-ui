@@ -1905,6 +1905,9 @@ export default function PipelineFinancialStatements({
 
   const [showCorpFontDialog,  setShowCorpFontDialog]  = useState(false);
   const [corpExportFont,      setCorpExportFont]       = useState("Arial");
+  // Issue 2 — sub-group notes export COLLAPSED by default (only sub-group name
+  // + total). Individual ledgers are emitted only when this is enabled.
+  const [corpExpandSubGroups, setCorpExpandSubGroups]  = useState(false);
 
   // ─── Active tab (controlled so navigator buttons can switch programmatically) ─
   const [activeTab, setActiveTab] = useState("bs");
@@ -6310,6 +6313,7 @@ export default function PipelineFinancialStatements({
         stage5Notes: stage5NotesData ?? null,
         ratios: corpDocxRatios,
         font: corpExportFont,
+        expandSubGroups: corpExpandSubGroups,
       });
       toast.success("Financial Statements exported as Word document");
     } catch (err: any) {
@@ -7529,6 +7533,22 @@ export default function PipelineFinancialStatements({
                 </label>
               ))}
             </div>
+            {/* Issue 2 — sub-group expand/collapse control */}
+            <label className="flex items-start gap-2 cursor-pointer rounded border px-3 py-2 hover:bg-muted/50">
+              <input
+                type="checkbox"
+                checked={corpExpandSubGroups}
+                onChange={(e) => setCorpExpandSubGroups(e.target.checked)}
+                className="accent-primary mt-0.5"
+              />
+              <span className="text-sm">
+                <span className="font-medium">Expand sub-groups</span>
+                <span className="block text-[11px] text-muted-foreground">
+                  When off (default), notes with sub-groups show only the sub-group name &amp; total.
+                  Turn on to list every individual ledger under each sub-group.
+                </span>
+              </span>
+            </label>
           </div>
           <DialogFooter>
             <Button variant="ghost" size="sm" onClick={() => setShowCorpFontDialog(false)}>Cancel</Button>

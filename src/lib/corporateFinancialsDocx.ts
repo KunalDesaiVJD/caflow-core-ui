@@ -1139,6 +1139,7 @@ function extractNoteRows(
   amounts: Record<string, { cy: number; py: number }>,
   fsCode: string,
   stage5Notes: any,
+  expandSubGroups: boolean = false,
 ): NoteRow[] {
   const totCy = amounts[fsCode]?.cy ?? 0;
   const totPy = amounts[fsCode]?.py ?? 0;
@@ -1185,16 +1186,21 @@ function extractNoteRows(
           const gt = groupTotals.get(r.id) ?? { cy: n(r.amount_cy), py: n(r.amount_py) };
           if (gt.cy === 0 && gt.py === 0) continue;
           rows.push({ label, cy: gt.cy, py: gt.py, style: "subtotal" });
-          // Emit members in their original relative order, indented
-          for (const m of membersByGroup.get(r.id) ?? []) {
-            const cyVal = n(m.amount_cy);
-            const pyVal = n(m.amount_py);
-            if (cyVal === 0 && pyVal === 0) continue;
-            rows.push({
-              label: String(m.description || m.label || ""),
-              cy: cyVal, py: pyVal,
-              style: "data", indent: 1,
-            });
+          // Issue 2 — COLLAPSED by default: show only the sub-group name +
+          // total. Individual ledgers are emitted only when the export is run
+          // with "Expand sub-groups" turned on.
+          if (expandSubGroups) {
+            // Emit members in their original relative order, indented
+            for (const m of membersByGroup.get(r.id) ?? []) {
+              const cyVal = n(m.amount_cy);
+              const pyVal = n(m.amount_py);
+              if (cyVal === 0 && pyVal === 0) continue;
+              rows.push({
+                label: String(m.description || m.label || ""),
+                cy: cyVal, py: pyVal,
+                style: "data", indent: 1,
+              });
+            }
           }
         } else {
           // Regular standalone row
@@ -1748,6 +1754,9 @@ export interface CorpDocxParams {
   } | null;
   /** stage7_ratios CY and PY inputs */
   ratios?: { cy: any; py: any } | null;
+  /** When true, breakup notes list every ledger inside each sub-group.
+   *  When false (default), only the sub-group name + total are exported. */
+  expandSubGroups?: boolean;
 }
 
 export async function generateCorporateFinancialsDocx(params: CorpDocxParams): Promise<void> {
@@ -1761,6 +1770,7 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
     stage5Notes,
     ratios,
   } = params;
+  const expandSubGroups = params.expandSubGroups ?? false;
 
   // Apply selected font
   FONT = params.font ?? "Arial";
@@ -1826,7 +1836,7 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
       continue;
     }
 
-    const rows = extractNoteRows(meta.renderType, noteData, amounts, meta.fsCode, stage5Notes);
+    const rows = extractNoteRows(meta.renderType, noteData, amounts, meta.fsCode, stage5Notes, expandSubGroups);
     if (rows.length === 0) continue;
 
     const isBS    = meta.section === "bs_liab" || meta.section === "bs_asset";
@@ -1839,11 +1849,15 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
     });
   }
 
-  // Sort notes in ascending note-number order; each note begins on a new page.
+  // Sort notes in ascending note-number order.
+  // Issue 1 — ONLY the first note (Note 2) starts on a fresh page so it never
+  // runs on directly after Note 1's accounting-policy text. Every subsequent
+  // note then flows continuously (separated by a spacer, wrapping pages as
+  // needed) — notes are NOT each forced onto their own page.
   pendingNotes.sort((a, b) => a.noteNo - b.noteNo);
-  for (const item of pendingNotes) {
-    noteTables.push(pageBreak(), ...item.elements);
-  }
+  pendingNotes.forEach((item, idx) => {
+    noteTables.push(idx === 0 ? pageBreak() : spacer(), ...item.elements);
+  });
 
   // Ratios
   const hasRatios = ratios && (ratios.cy || ratios.py);
