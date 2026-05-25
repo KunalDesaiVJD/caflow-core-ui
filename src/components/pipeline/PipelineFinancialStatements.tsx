@@ -2038,6 +2038,31 @@ export default function PipelineFinancialStatements({
     enabled: !!engagement?.client_id && !!engagement?.financial_year,
   });
 
+  // ─── Prior-year FA rows (for the Word export's "Total — Previous year") ───
+  // Mirrors NotesTab/FAGrid: the FA "Total — Previous year" row is computed
+  // from the prior engagement's stage5_notes.fa.rows (pyComputed), with any
+  // fa.py_manual overrides applied on top. The export needs these rows to
+  // reproduce that row — without them the row would be blank/zero.
+  const { data: priorFaRows } = useQuery({
+    queryKey: ["prior-fa-rows", engagement?.client_id, engagement?.financial_year],
+    queryFn: async () => {
+      const fyParts = (engagement.financial_year || "").split("-");
+      if (fyParts.length !== 2) return null;
+      const prevFy = `${parseInt(fyParts[0]) - 1}-${(parseInt(fyParts[0])).toString().slice(-2)}`;
+      const { data: prevEng } = await (supabase.from as any)("audit_engagements")
+        .select("stage5_notes")
+        .eq("client_id", engagement.client_id)
+        .eq("financial_year", prevFy)
+        .or("is_py_shell.is.null,is_py_shell.eq.false")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const fa = (prevEng as any)?.stage5_notes?.fa?.rows;
+      return Array.isArray(fa) ? fa : null;
+    },
+    enabled: !!engagement?.client_id && !!engagement?.financial_year,
+  });
+
   // ─── Check whether the prior year's engagement is_finalized ──────────────
   // When finalized, PY column cells become read-only (locked).
   const { data: priorEngFinalized } = useQuery({
@@ -6314,6 +6339,7 @@ export default function PipelineFinancialStatements({
         ratios: corpDocxRatios,
         font: corpExportFont,
         expandSubGroups: corpExpandSubGroups,
+        faPyRows: (priorFaRows as any) ?? null,
       });
       toast.success("Financial Statements exported as Word document");
     } catch (err: any) {

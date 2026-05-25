@@ -858,13 +858,15 @@ function noteTitleRow(colWidths: number[], noteNumber: string, title: string): T
       new TableCell({
         columnSpan: colWidths.length,
         width:   { size: totalW, type: WidthType.DXA },
-        shading: { fill: BG_SECT, type: ShadingType.CLEAR },
-        borders: { top: bThin, bottom: bHair, left: bAccL, right: bNone },
+        // Issue 1 — note heading uses the SAME colour combination as the
+        // "Particulars" column header (grey BG_HDR fill + black bold text).
+        shading: { fill: BG_HDR, type: ShadingType.CLEAR },
+        borders: BDR_NONE,
         margins: { top: 100, bottom: 100, left: 160, right: 100 },
         children: [new Paragraph({
           spacing: { before: 0, after: 0 },
           children: [
-            new TextRun({ text: `Note ${noteNumber} — ${title}`, font: FONT, size: SZ_HDR, bold: true, color: NAVY }),
+            new TextRun({ text: `Note ${noteNumber} — ${title}`, font: FONT, size: SZ_HDR, bold: true, color: BLACK }),
           ],
         })],
       }),
@@ -891,7 +893,9 @@ function noteRow3(
   indent = 0,
   style: "data" | "subtotal" | "total" = "data",
 ): TableRow {
-  const bg   = style === "total" ? BG_GRAN : style === "subtotal" ? BG_TOT : undefined;
+  // Issue 1 — all note rows render on a WHITE background; totals/subtotals stay
+  // legible via bold text + their top/bottom rule borders.
+  const bg   = undefined;
   const bdr  = style === "total" ? BDR_GRAND : style === "subtotal" ? BDR_SUB : BDR_ROW;
   const bold = style !== "data";
   return new TableRow({
@@ -971,7 +975,14 @@ interface FARow {
   net_py?:      number | null;
 }
 
-function buildFATable(faRows: FARow[], noteNumber: string, cyYear: string, pyYear: string): Table {
+function buildFATable(
+  faRows: FARow[],
+  noteNumber: string,
+  cyYear: string,
+  pyYear: string,
+  pyManual?: Record<string, number | null> | null,
+  pyRows?: FARow[] | null,
+): Table {
   // 12 columns summing to TW_LS = 15398
   // Particulars | UL | GrossOpen | Add | Disp | GrossClos | DepnOpen | DepnAdd | DepnDisp | DepnClos | NetCY | NetPY
   const FA_COLS = [2200, 500, 1200, 1100, 1100, 1300, 1050, 1050, 1050, 1300, 1274, 1274];
@@ -1030,26 +1041,68 @@ function buildFATable(faRows: FARow[], noteNumber: string, cyYear: string, pyYea
   const sumGrossClos = sumField("gross_open") + sumField("additions") - sumField("disposals");
   const sumDepnClos  = sumField("depn_open")  + sumField("depn_add")  - sumField("depn_disp");
   const sumNetCy     = sumGrossClos - sumDepnClos;
-  const sumNetPy     = (faRows ?? []).reduce((s, r) => {
-    const gross = r.gross_open || 0;
-    const depn  = r.depn_open  || 0;
-    return s + (r.net_py != null ? Number(r.net_py) : gross - depn);
-  }, 0);
+  // Issue 2 — "Total — Current year" Net Block PY must mirror the on-screen FA
+  // grid, which sums the DERIVED opening net block Σ(gross_open − depn_open),
+  // NOT the per-row net_py override. (Previously this summed net_py, giving a
+  // figure that did not match the on-screen total.)
+  const sumNetPy     = sumField("gross_open") - sumField("depn_open");
 
-  const totalRow = new TableRow({
+  // ── Issue 1 — totals render WHITE (bold + grand-total rule keeps them legible)
+  const totalCYRow = new TableRow({
     children: [
-      cell({ text: "Total", w: FA_COLS[0],  sz: SZ_XS, bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
-      cell({ text: "",      w: FA_COLS[1],  sz: SZ_XS, bg: BG_GRAN, borders: BDR_GRAND }),
-      nac(sumField("gross_open"),    FA_COLS[2], true, BG_GRAN, BDR_GRAND),
-      nac(sumField("additions"),     FA_COLS[3], true, BG_GRAN, BDR_GRAND),
-      nac(sumField("disposals"),     FA_COLS[4], true, BG_GRAN, BDR_GRAND),
-      nac(sumGrossClos,              FA_COLS[5], true, BG_GRAN, BDR_GRAND),
-      nac(sumField("depn_open"),     FA_COLS[6], true, BG_GRAN, BDR_GRAND),
-      nac(sumField("depn_add"),      FA_COLS[7], true, BG_GRAN, BDR_GRAND),
-      nac(sumField("depn_disp"),     FA_COLS[8], true, BG_GRAN, BDR_GRAND),
-      nac(sumDepnClos,               FA_COLS[9], true, BG_GRAN, BDR_GRAND),
-      nac(sumNetCy,                  FA_COLS[10], true, BG_GRAN, BDR_GRAND),
-      nac(sumNetPy,                  FA_COLS[11], true, BG_GRAN, BDR_GRAND),
+      cell({ text: "Total — Current year", w: FA_COLS[0],  sz: SZ_XS, bold: true, borders: BDR_GRAND }),
+      cell({ text: "",      w: FA_COLS[1],  sz: SZ_XS, borders: BDR_GRAND }),
+      nac(sumField("gross_open"),    FA_COLS[2], true, undefined, BDR_GRAND),
+      nac(sumField("additions"),     FA_COLS[3], true, undefined, BDR_GRAND),
+      nac(sumField("disposals"),     FA_COLS[4], true, undefined, BDR_GRAND),
+      nac(sumGrossClos,              FA_COLS[5], true, undefined, BDR_GRAND),
+      nac(sumField("depn_open"),     FA_COLS[6], true, undefined, BDR_GRAND),
+      nac(sumField("depn_add"),      FA_COLS[7], true, undefined, BDR_GRAND),
+      nac(sumField("depn_disp"),     FA_COLS[8], true, undefined, BDR_GRAND),
+      nac(sumDepnClos,               FA_COLS[9], true, undefined, BDR_GRAND),
+      nac(sumNetCy,                  FA_COLS[10], true, undefined, BDR_GRAND),
+      nac(sumNetPy,                  FA_COLS[11], true, undefined, BDR_GRAND),
+    ],
+  });
+
+  // ── Issue 2 — "Total — Previous year" row, replicating the on-screen FAGrid
+  // pyCell(): a manual override (fa.py_manual) wins; otherwise the figure is
+  // computed from the prior-year engagement's FA rows (pyRows). This row was
+  // missing from the export entirely.
+  const gc = (r: FARow) => (r.gross_open || 0) + (r.additions || 0) - (r.disposals || 0);
+  const dc = (r: FARow) => (r.depn_open  || 0) + (r.depn_add  || 0) - (r.depn_disp  || 0);
+  const pySum = (fn: (r: FARow) => number) => (pyRows ?? []).reduce((s, r) => s + fn(r), 0);
+  const hasPy = !!(pyRows && pyRows.length > 0);
+  const pyComputed: Record<string, number> = {
+    gross_open: hasPy ? pySum(r => Number(r.gross_open) || 0) : 0,
+    additions:  hasPy ? pySum(r => Number(r.additions)  || 0) : 0,
+    disposals:  hasPy ? pySum(r => Number(r.disposals)  || 0) : 0,
+    grossClose: hasPy ? pySum(gc) : 0,
+    depn_open:  hasPy ? pySum(r => Number(r.depn_open)  || 0) : 0,
+    depn_add:   hasPy ? pySum(r => Number(r.depn_add)   || 0) : 0,
+    depn_disp:  hasPy ? pySum(r => Number(r.depn_disp)  || 0) : 0,
+    depnClose:  hasPy ? pySum(dc) : 0,
+    netCY:      hasPy ? pySum(r => gc(r) - dc(r)) : 0,
+    netPY:      hasPy ? pySum(r => (Number(r.gross_open) || 0) - (Number(r.depn_open) || 0)) : 0,
+  };
+  const pyVal = (field: string): number => {
+    const m = pyManual?.[field];
+    return (m != null) ? Number(m) : (pyComputed[field] ?? 0);
+  };
+  const totalPYRow = new TableRow({
+    children: [
+      cell({ text: "Total — Previous year", w: FA_COLS[0], sz: SZ_XS, bold: true, borders: BDR_SUB }),
+      cell({ text: "",      w: FA_COLS[1], sz: SZ_XS, borders: BDR_SUB }),
+      nac(pyVal("gross_open"), FA_COLS[2], true, undefined, BDR_SUB),
+      nac(pyVal("additions"),  FA_COLS[3], true, undefined, BDR_SUB),
+      nac(pyVal("disposals"),  FA_COLS[4], true, undefined, BDR_SUB),
+      nac(pyVal("grossClose"), FA_COLS[5], true, undefined, BDR_SUB),
+      nac(pyVal("depn_open"),  FA_COLS[6], true, undefined, BDR_SUB),
+      nac(pyVal("depn_add"),   FA_COLS[7], true, undefined, BDR_SUB),
+      nac(pyVal("depn_disp"),  FA_COLS[8], true, undefined, BDR_SUB),
+      nac(pyVal("depnClose"),  FA_COLS[9], true, undefined, BDR_SUB),
+      nac(pyVal("netCY"),      FA_COLS[10], true, undefined, BDR_SUB),
+      nac(pyVal("netPY"),      FA_COLS[11], true, undefined, BDR_SUB),
     ],
   });
 
@@ -1060,7 +1113,8 @@ function buildFATable(faRows: FARow[], noteNumber: string, cyYear: string, pyYea
       noteTitleRow(FA_COLS, noteNumber, "Property, Plant and Equipment — Fixed Assets Schedule"),
       hdrRow,
       ...dataRows,
-      totalRow,
+      totalCYRow,
+      totalPYRow,
     ],
   });
 }
@@ -1483,7 +1537,7 @@ function buildShareCapitalNote(
   const closePyAmt = openPyAmt + movePyAmt;
 
   const reconRow = (label: string, cyN: number, cyA: number, pyN: number, pyA: number, style: "data" | "total" = "data"): TableRow => {
-    const bg   = style === "total" ? BG_GRAN : undefined;
+    const bg   = undefined; // Issue 1 — white rows
     const bdr  = style === "total" ? BDR_GRAND : BDR_ROW;
     const bold = style === "total";
     return new TableRow({
@@ -1612,12 +1666,12 @@ function buildShareCapitalNote(
     }
     prRows.push(new TableRow({
       children: [
-        cell({ text: "Total", w: PR[0], bold: true, bg: BG_GRAN, borders: BDR_GRAND, padL: 120 }),
-        cell({ text: fmtShares(tCyS), w: PR[1], align: AlignmentType.RIGHT, padR: 120, bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
-        cell({ text: fmtPct(tCyP),    w: PR[2], align: AlignmentType.RIGHT, padR: 120, bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
-        cell({ text: fmtShares(tPyS), w: PR[3], align: AlignmentType.RIGHT, padR: 120, bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
-        cell({ text: fmtPct(tPyP),    w: PR[4], align: AlignmentType.RIGHT, padR: 120, bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
-        cell({ text: fmtPctChg(tCyP - tPyP), w: PR[5], align: AlignmentType.RIGHT, padR: 120, bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
+        cell({ text: "Total", w: PR[0], bold: true, borders: BDR_GRAND, padL: 120 }),
+        cell({ text: fmtShares(tCyS), w: PR[1], align: AlignmentType.RIGHT, padR: 120, bold: true, borders: BDR_GRAND }),
+        cell({ text: fmtPct(tCyP),    w: PR[2], align: AlignmentType.RIGHT, padR: 120, bold: true, borders: BDR_GRAND }),
+        cell({ text: fmtShares(tPyS), w: PR[3], align: AlignmentType.RIGHT, padR: 120, bold: true, borders: BDR_GRAND }),
+        cell({ text: fmtPct(tPyP),    w: PR[4], align: AlignmentType.RIGHT, padR: 120, bold: true, borders: BDR_GRAND }),
+        cell({ text: fmtPctChg(tCyP - tPyP), w: PR[5], align: AlignmentType.RIGHT, padR: 120, bold: true, borders: BDR_GRAND }),
       ],
     }));
   }
@@ -1648,7 +1702,6 @@ function buildNoteTableFromRows(
     noteHdr3(cyYear, pyYear),
   ];
 
-  let _noteRowIdx = 0;
   for (const row of rows) {
     // Heading-only row (e.g. "Surplus in the Statement of Profit and Loss") —
     // italic label spanning the row with blank value cells.
@@ -1664,11 +1717,11 @@ function buildNoteTableFromRows(
       }));
       continue;
     }
-    const isAltRow  = row.style === "data" && _noteRowIdx % 2 === 1;
-    const bg   = row.style === "total" ? BG_GRAN : row.style === "subtotal" ? BG_TOT : (isAltRow ? "F4F5F7" : undefined);
+    // Issue 1 — every note row is WHITE (no zebra striping, no subtotal/total
+    // shading). Totals stay legible via bold text + their rule borders.
+    const bg   = undefined;
     const bdr  = row.style === "total" ? BDR_GRAND : row.style === "subtotal" ? BDR_SUB : BDR_ROW;
     const bold = row.style !== "data";
-    if (row.style === "data") _noteRowIdx++;
     tableRows.push(new TableRow({
       cantSplit: true,
       height: { value: 340, rule: HeightRule.ATLEAST },
@@ -1757,6 +1810,9 @@ export interface CorpDocxParams {
   /** When true, breakup notes list every ledger inside each sub-group.
    *  When false (default), only the sub-group name + total are exported. */
   expandSubGroups?: boolean;
+  /** Prior-year engagement's FA rows — used to compute the FA "Total —
+   *  Previous year" row exactly as the on-screen grid does (pyComputed). */
+  faPyRows?: FARow[] | null;
 }
 
 export async function generateCorporateFinancialsDocx(params: CorpDocxParams): Promise<void> {
@@ -1921,7 +1977,7 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
     sections.push({
       properties: { page: landscapeProps },
 
-      children:   [buildFATable(faRows, faNoteNo ? String(faNoteNo) : "—", cyLabel, pyLabel)],
+      children:   [buildFATable(faRows, faNoteNo ? String(faNoteNo) : "—", cyLabel, pyLabel, stage5Notes?.fa?.py_manual ?? null, params.faPyRows ?? null)],
     });
   }
 
