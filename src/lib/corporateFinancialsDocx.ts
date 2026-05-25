@@ -802,7 +802,12 @@ const CORP_NOTE1_POLICIES = [
 ];
 
 function buildNote1Section(entityName: string, cyYear: string): Paragraph[] {
-  const GAP = 100;
+  // ROOT-CAUSE FIX: previously EVERY paragraph had keepNext:true, so Word kept
+  // all 14 accounting policies together and crammed them onto one crowded page.
+  // Now only headings/labels keep with their following paragraph (so a heading
+  // is never orphaned), body text uses keepNext:false, and spacing is roomier —
+  // the note flows naturally onto ~2 well-spaced, readable pages.
+  const GAP = 160;  // separation between policies
   const txt = (text: string, bold = false) =>
     new TextRun({ text, font: FONT, size: SZ_BODY, bold, color: BLACK });
 
@@ -811,14 +816,12 @@ function buildNote1Section(entityName: string, cyYear: string): Paragraph[] {
     opts: { indent?: number; after?: number; keepNext?: boolean } = {},
   ): Paragraph =>
     new Paragraph({
-      spacing:   { before: 0, after: opts.after ?? 40, line: 240, lineRule: "auto" as any },
+      spacing:   { before: 0, after: opts.after ?? 40, line: 276, lineRule: "auto" as any },
       indent:    opts.indent ? { left: opts.indent } : undefined,
-      keepLines: true,
-      keepNext:  opts.keepNext ?? true,
+      keepLines: true,                       // never split a single paragraph mid-way
+      keepNext:  opts.keepNext ?? false,     // allow page breaks BETWEEN policies
       children:  runs,
     });
-
-  const last = CORP_NOTE1_POLICIES.length - 1;
 
   return [
     new Paragraph({
@@ -830,15 +833,17 @@ function buildNote1Section(entityName: string, cyYear: string): Paragraph[] {
         new TextRun({ text: "Note 1 — Significant Accounting Policies", font: FONT, size: SZ_HDR, bold: true, color: NAVY }),
       ],
     }),
-    block([txt("1.  Basis of Preparation", true)], { after: 40 }),
+    block([txt("1.  Basis of Preparation", true)], { after: 40, keepNext: true }),
     block(
       [txt(`The financial statements of ${entityName} have been prepared in accordance with Schedule III to the Companies Act, 2013 and the applicable Accounting Standards as prescribed under Section 133 of the Companies Act, 2013. The financial statements comply with all material aspects of Indian GAAP.`)],
       { after: GAP },
     ),
-    block([txt("2.  Significant Accounting Policies", true)], { after: 40 }),
+    block([txt("2.  Significant Accounting Policies", true)], { after: 60, keepNext: true }),
     ...CORP_NOTE1_POLICIES.flatMap((p, i) => [
-      block([txt(p.label, true)], { indent: 280, after: 10 }),
-      block([txt(p.text)],        { indent: 280, after: i === last ? 40 : GAP, keepNext: i !== last }),
+      // Label kept with its body (keepNext); body allows a page break after it
+      // so the 14 policies flow naturally across two pages.
+      block([txt(p.label, true)], { indent: 280, after: 20, keepNext: true }),
+      block([txt(p.text)],        { indent: 280, after: GAP }),
     ]),
   ];
 }
