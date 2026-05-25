@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { AppLayout } from "./components/AppLayout";
 import { AdminLayout } from "./components/AdminLayout";
+import { InternalLayout } from "./pages/internal/InternalLayout";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { PortalLayout } from "./components/PortalLayout";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -66,6 +67,7 @@ const PortalQueries            = lazy(() => import("./pages/PortalQueries"));
 const PortalDocuments          = lazy(() => import("./pages/PortalDocuments"));
 const NoticeDetail             = lazy(() => import("./pages/NoticeDetail"));
 const RolesPermissions         = lazy(() => import("./pages/RolesPermissions"));
+const AccessPermissions        = lazy(() => import("./pages/AccessPermissions"));
 const FirmSettings             = lazy(() => import("./pages/FirmSettings"));
 const ServiceMasters           = lazy(() => import("./pages/ServiceMasters"));
 const RequiredDocsMaster       = lazy(() => import("./pages/RequiredDocsMaster"));
@@ -78,6 +80,12 @@ const AuditWorksheetPageWrapper = lazy(() => import("./pages/AuditWorksheetPageW
 const AuditTracker             = lazy(() => import("./pages/AuditTracker"));
 const TallySyncPage            = lazy(() => import("./pages/TallySyncPage"));
 const LedgerVouchersView       = lazy(() => import("./pages/LedgerVouchersView"));
+
+// ─── Internal team lazy pages ─────────────────────────────────────────────────
+const InternalOverview         = lazy(() => import("./pages/internal/InternalOverview"));
+const InternalOnboarding       = lazy(() => import("./pages/internal/InternalOnboarding"));
+const InternalTickets          = lazy(() => import("./pages/internal/InternalTickets"));
+const InternalTeam             = lazy(() => import("./pages/internal/InternalTeam"));
 
 // Minimal fallback shown while a lazy page chunk is downloading
 function PageLoader() {
@@ -121,6 +129,8 @@ function PortalGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+const INTERNAL_ROLES = ["implementation_executive", "client_success_executive"];
+
 function CAGuard({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
   if (loading) {
@@ -135,6 +145,27 @@ function CAGuard({ children }: { children: React.ReactNode }) {
     );
   }
   if (user?.role === "client") return <Navigate to="/portal" replace />;
+  // Internal team members (IE, CSE) belong in /internal, not the main app
+  if (user?.role && INTERNAL_ROLES.includes(user.role)) return <Navigate to="/internal" replace />;
+  return <>{children}</>;
+}
+
+function InternalGuard({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth();
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="space-y-4 w-64">
+          <Skeleton className="h-8 w-48 mx-auto" />
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-3/4" />
+        </div>
+      </div>
+    );
+  }
+  if (!user) return <Navigate to="/login" replace />;
+  const allowed = user.role === "superadmin" || INTERNAL_ROLES.includes(user.role);
+  if (!allowed) return <Navigate to="/" replace />;
   return <>{children}</>;
 }
 
@@ -177,13 +208,24 @@ const App = () => (
               <Route path="/portal/documents" element={<PortalDocuments />} />
             </Route>
 
+            {/* Internal team routes — IE, CSE, and superadmin */}
+            <Route element={<InternalGuard><InternalLayout /></InternalGuard>}>
+              <Route path="/internal" element={<InternalOverview />} />
+              <Route path="/internal/onboarding" element={<InternalOnboarding />} />
+              <Route path="/internal/tickets" element={<InternalTickets />} />
+              <Route path="/internal/team" element={<InternalTeam />} />
+            </Route>
+
             <Route element={<ProtectedRoute><CAGuard><AdminLayout /></CAGuard></ProtectedRoute>}>
               <Route path="/admin" element={<AdminOverview />} />
               <Route path="/admin/firms" element={<AdminFirms />} />
               <Route path="/admin/users" element={<UserManagement />} />
               <Route path="/admin/services" element={<ServiceMasters />} />
-              <Route path="/admin/roles" element={<RolesPermissions />} />
-              <Route path="/admin/firm-access" element={<AdminFirmAccess />} />
+              {/* Unified Access & Permissions — new canonical route */}
+              <Route path="/admin/access-permissions" element={<AccessPermissions />} />
+              {/* Legacy redirects — keep for 60 days to avoid broken bookmarks */}
+              <Route path="/admin/roles" element={<Navigate to="/admin/access-permissions" replace />} />
+              <Route path="/admin/firm-access" element={<Navigate to="/admin/access-permissions" replace />} />
               <Route path="/admin/logs" element={<AdminLogs />} />
               <Route path="/admin/ai-skills" element={<AdminAiSkills />} />
               <Route path="/admin/theme-studio" element={<AdminThemeStudio />} />
@@ -242,7 +284,8 @@ const App = () => (
               <Route path="/erp-ledger" element={<ErpLedger />} />
               <Route path="/erp/:clientId/bank-recon" element={<BankRecon />} />
               <Route path="/settings/firm" element={<FirmSettings />} />
-              <Route path="/settings/roles" element={<RolesPermissions />} />
+              <Route path="/settings/access-permissions" element={<AccessPermissions />} />
+              <Route path="/settings/roles" element={<Navigate to="/settings/access-permissions" replace />} />
               <Route path="/settings/services" element={<ServiceMasters />} />
               <Route path="/settings/required-docs" element={<RequiredDocsMaster />} />
               <Route path="/settings/tax-audit-templates" element={<TaxAuditTemplateSettings />} />

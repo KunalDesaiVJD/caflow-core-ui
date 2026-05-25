@@ -368,19 +368,19 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
         )}
 
 
-        {/* Roles & Permissions */}
+        {/* Access & Permissions */}
         {can("Settings", "can_view") && (
           <Link
-            to="/settings/roles"
+            to="/settings/access-permissions"
             className={cn(
               "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
-              isActive("/settings/roles")
+              isActive("/settings/access-permissions")
                 ? "bg-sidebar-gold/15 text-sidebar-gold"
                 : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
             )}
           >
             <Shield size={20} className="shrink-0" />
-            {!collapsed && <span>Roles</span>}
+            {!collapsed && <span>Access &amp; Permissions</span>}
           </Link>
         )}
 
@@ -390,7 +390,7 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
             to={settingsItem.path}
             className={cn(
               "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
-              isActive(settingsItem.path) && !isActive("/settings/users") && !isActive("/settings/firm") && !isActive("/settings/roles") && !isActive("/settings/services")
+              isActive(settingsItem.path) && !isActive("/settings/users") && !isActive("/settings/firm") && !isActive("/settings/roles") && !isActive("/settings/access-permissions") && !isActive("/settings/services")
                 ? "bg-sidebar-gold/15 text-sidebar-gold"
                 : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
             )}

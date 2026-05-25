@@ -8,25 +8,25 @@ import {
   ScrollText,
   Users,
   LogOut,
-  Shield,
+  ShieldCheck,
   Settings,
   Brain,
   Palette,
-  KeyRound,
+  ClipboardList,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navItems = [
-  { title: "Platform Overview", path: "/admin", icon: LayoutDashboard },
-  { title: "Firms Management", path: "/admin/firms", icon: Building2 },
-  { title: "User Management", path: "/admin/users", icon: Users },
-  { title: "Service Masters", path: "/admin/services", icon: Building2 },
-  { title: "Roles & Permissions", path: "/admin/roles", icon: Shield },
-  { title: "Firm Access", path: "/admin/firm-access", icon: KeyRound },
-  { title: "System Logs", path: "/admin/logs", icon: ScrollText },
-  { title: "AI Skills", path: "/admin/ai-skills", icon: Brain },
-  { title: "Theme Studio", path: "/admin/theme-studio", icon: Palette },
-  { title: "Settings", path: "/admin/settings", icon: Settings },
+  { title: "Platform Overview",    path: "/admin",                    icon: LayoutDashboard },
+  { title: "Firms Management",     path: "/admin/firms",              icon: Building2 },
+  { title: "User Management",      path: "/admin/users",              icon: Users },
+  { title: "Service Masters",      path: "/admin/services",           icon: Building2 },
+  { title: "Access & Permissions", path: "/admin/access-permissions", icon: ShieldCheck },
+  { title: "Internal Team",        path: "/internal",                 icon: ClipboardList },
+  { title: "System Logs",          path: "/admin/logs",               icon: ScrollText },
+  { title: "AI Skills",            path: "/admin/ai-skills",          icon: Brain },
+  { title: "Theme Studio",         path: "/admin/theme-studio",       icon: Palette },
+  { title: "Settings",             path: "/admin/settings",           icon: Settings },
 ];
 
 export function AdminLayout() {
