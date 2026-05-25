@@ -69,9 +69,9 @@ const AdminFirmAccess = () => {
   const [loadingAccess, setLoadingAccess] = useState(false);
   const [toggling, setToggling] = useState<string | null>(null); // "<firm_id>.<perm>"
 
-  // Guard: superadmin only
+  // Guard: superadmin only — wait for role to resolve (null = optimistic JWT phase)
   useEffect(() => {
-    if (!authLoading && (!user || user.role !== "superadmin")) {
+    if (!authLoading && user?.role && user.role !== "superadmin") {
       navigate("/", { replace: true });
     }
   }, [authLoading, user, navigate]);

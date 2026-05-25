@@ -158,7 +158,8 @@ export default function UserManagement() {
 
   /* ── Access guard ── */
   useEffect(() => {
-    if (!authLoading && user && !["superadmin", "firm_admin"].includes(user.role || "")) {
+    // Wait until role is resolved (null = optimistic JWT phase, role not yet loaded from DB)
+    if (!authLoading && user?.role && !["superadmin", "firm_admin"].includes(user.role)) {
       toast({ title: "Access Denied", variant: "destructive" });
       navigate("/", { replace: true });
     }

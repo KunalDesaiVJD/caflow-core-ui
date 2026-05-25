@@ -35,7 +35,8 @@ const AdminLogs = () => {
   });
 
   useEffect(() => {
-    if (!authLoading && (!user || user.role !== "superadmin")) {
+    // Wait for role to resolve (null = optimistic JWT phase, role not yet loaded from DB)
+    if (!authLoading && user?.role && user.role !== "superadmin") {
       toast({ title: "Access Denied", variant: "destructive" });
       navigate("/", { replace: true });
     }

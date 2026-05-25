@@ -15,7 +15,8 @@ const AdminOverview = () => {
   const [loadingStats, setLoadingStats] = useState(true);
 
   useEffect(() => {
-    if (!authLoading && (!user || user.role !== "superadmin")) {
+    // Wait until role is resolved (null = optimistic JWT phase, role not yet loaded from DB)
+    if (!authLoading && user?.role && user.role !== "superadmin") {
       toast({ title: "Access Denied", description: "You do not have permission to access this page.", variant: "destructive" });
       navigate("/", { replace: true });
     }

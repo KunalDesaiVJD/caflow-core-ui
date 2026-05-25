@@ -36,7 +36,8 @@ export function AdminLayout() {
   const { user, signOut } = useAuth();
 
   useEffect(() => {
-    if (user && user.role !== "superadmin") {
+    // Only redirect if role is explicitly wrong — null means still loading from DB
+    if (user && user.role && user.role !== "superadmin") {
       navigate("/", { replace: true });
     }
   }, [user, navigate]);
