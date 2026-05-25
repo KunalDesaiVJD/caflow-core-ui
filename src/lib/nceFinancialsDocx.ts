@@ -13,9 +13,7 @@ import {
   AlignmentType,
   BorderStyle,
   Document,
-  Footer,
   Packer,
-  PageNumber,
   PageOrientation,
   Paragraph,
   ShadingType,
@@ -27,9 +25,10 @@ import {
   WidthType,
 } from "docx";
 
-import { NOTES_CONFIG, computeDisplayData, NOTE_META } from "@/config/nceNotesConfig";
+import { NOTES_CONFIG, computeDisplayData } from "@/config/nceNotesConfig";
 import type { NoteConfig } from "@/config/nceNotesConfig";
 import { getActiveFsDivisor, FS_SCALES } from "@/lib/fsUnits";
+import { getDynamicNoteDisplay } from "@/lib/nceDynamicNoteNumbers";
 
 // ─── Export-time unit scale (set at start of generateNCEFinancialsDocx) ───────
 // These module-level vars are read by fmt() and all header helpers so every
@@ -39,23 +38,40 @@ let _exportSuffix  = "(₹)";   // e.g. "(₹ in '000)"  — used in column head
 let _exportUnit    = "₹";     // e.g. "₹ in '000"    — used in prose ("All amounts in …")
 
 function amountUnitsLabel(): string {
-  return `All amounts in ${_exportUnit}`;
+  // KD1: keep this one "Amounts in ₹" note (drop the leading "All").
+  return `Amounts in ${_exportUnit}`;
+}
+
+// KD3 + KD6: strip the ₹ glyph from every column header, but keep any scale
+// qualifier so '000 / Lakhs is still indicated.
+//   "(₹)" → ""   |   "(₹ in '000)" → "(in '000)"   |   "(₹ in Lakhs)" → "(in Lakhs)"
+function headerSuffix(): string {
+  return _exportSuffix.replace(/₹\s*/g, "").replace(/\(\s*\)/g, "").trim();
+}
+
+/** Column-header text: label, plus the (₹-free) scale qualifier on a 2nd line. */
+function hdr(label: string): string {
+  const suf = headerSuffix();
+  return suf ? `${label}\n${suf}` : label;
 }
 
 // ─── Layout (all DXA: 1 inch = 1440 DXA) ─────────────────────────────────────
 const A4_W   = 11906;           // A4 width
 const A4_H   = 16838;           // A4 height
-const MARG_H = 720;             // 0.5" left/right
+const MARG_L = 864;             // 0.6" left — modest room for hole-punch / binding
+const MARG_R = 576;             // 0.4" right
 const MARG_T = 720;             // 0.5" top
 const MARG_B = 900;             // ~0.625" bottom (room for footer)
-const TW     = A4_W - MARG_H * 2; // 10466 DXA — usable table width
+const TW     = A4_W - MARG_L - MARG_R; // 10466 DXA — usable table width (unchanged)
 
 // Columns: [Particulars, Note No., CY Amount, PY Amount]  →  must sum to TW
-const CW_DESC = 7100;
-const CW_NOTE = 400;
-const CW_CY   = 1483;
-const CW_PY   = 1483;
-// 7100 + 400 + 1483 + 1483 = 10466 ✓
+// Particulars trimmed so the Note No. + amount columns soak up the dead space
+// that used to sit after column 1; amounts get noticeably wider.
+const CW_DESC = 5800;
+const CW_NOTE = 500;
+const CW_CY   = 2083;
+const CW_PY   = 2083;
+// 5800 + 500 + 2083 + 2083 = 10466 ✓
 
 // ─── Phase 2 — Note table column widths ───────────────────────────────────────
 // Pattern B (3 cols): Particulars | CY | PY  →  must sum to TW = 10466
@@ -72,14 +88,17 @@ const NW_A_STCY = 1367;
 const NW_A_STPY = 1367;
 // 5000+1366+1366+1367+1367 = 10466 ✓
 
-// Capital Account portrait cols (8 cols): Partner + 7 numeric
-const CAP_NAME = 3000;
-const CAP_NUM  = 1066;  // × 6
-const CAP_LAST = 1070;  // 3000+6×1066+1070 = 10466 ✓
+// Capital Account portrait cols (10 cols):
+//   Sr No | Partner | Share % | Opening | Introduced | Remuneration |
+//   Interest | Withdrawals | Profit Share | Closing
+const CAP_SR   = 450;
+const CAP_NAME = 2300;
+const CAP_PCT  = 850;
+const CAP_NUM  = 980;   // × 6 (Opening … Profit Share)
+const CAP_LAST = 986;   // 450+2300+850+6×980+986 = 10466 ✓
 
-// Landscape (PPE Schedule)
-const MARG_LS = 720;
-const TW_LS   = A4_H - MARG_LS * 2; // 16838 - 1440 = 15398 DXA
+// Landscape (PPE Schedule) — same punch margin on the (left) binding edge
+const TW_LS   = A4_H - MARG_L - MARG_R; // 16838 - 1080 - 360 = 15398 DXA (unchanged)
 // PPE cols (11 cols, sum = 15398)
 const PPE_CAT  = 2500;
 const PPE_NAME = 2700;
@@ -228,8 +247,8 @@ function colHeaderRow(cyLabel: string, pyLabel: string): TableRow {
     children: [
       cell({ text: "Particulars",    w: CW_DESC, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, padL: 100 }),
       cell({ text: "Note\nNo.",      w: CW_NOTE, sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.CENTER }),
-      cell({ text: `${cyLabel}\n${_exportSuffix}`, w: CW_CY,  sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
-      cell({ text: `${pyLabel}\n${_exportSuffix}`, w: CW_PY,  sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
+      cell({ text: hdr(cyLabel), w: CW_CY,  sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
+      cell({ text: hdr(pyLabel), w: CW_PY,  sz: SZ_SM, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
     ],
   });
 }
@@ -399,9 +418,11 @@ function buildBSTable(
   cyYear: string,
   pyYear: string,
   entityName: string,
-  noteMap: Record<number, number>,
+  noteMap: Map<number, number>,
 ): Table {
-  const n = (ref: number | null) => (ref ? (noteMap[ref] ?? ref) : null);
+  // Use the dynamic note number (same map as the UI). A line whose note is
+  // inactive (no data) returns null → no number shown, matching the UI's "—".
+  const n = (ref: number | null) => (ref ? (noteMap.get(ref) ?? null) : null);
 
   // Totals
   const totELcy = L("NCE_EL",  cy);
@@ -472,10 +493,10 @@ function buildBSTable(
           children: [new Paragraph({
             spacing: { before: 0, after: 0 },
             children: [
-              new TextRun({ text: `Note ${n(1) ?? 1}  `, font: FONT, size: SZ_XS, bold: true, color: NAVY }),
+              new TextRun({ text: `Note ${n(1) ?? 1} `, font: FONT, size: SZ_BODY, bold: true, color: NAVY }),
               new TextRun({
                 text: "Significant Accounting Policies and Notes to Accounts form an integral part of the Financial Statements.",
-                font: FONT, size: SZ_XS, italic: true, color: DK_GREY,
+                font: FONT, size: SZ_BODY, italic: true, color: DK_GREY,
               }),
             ],
           })],
@@ -498,9 +519,9 @@ function buildPLTable(
   cyYear: string,
   pyYear: string,
   entityName: string,
-  noteMap: Record<number, number>,
+  noteMap: Map<number, number>,
 ): Table {
-  const n = (ref: number | null) => (ref ? (noteMap[ref] ?? ref) : null);
+  const n = (ref: number | null) => (ref ? (noteMap.get(ref) ?? null) : null);
 
   // Income
   const revOpsCy = I("NCE_REV_OPS", cy);  const revOpsPy = I("NCE_REV_OPS", py);
@@ -543,7 +564,7 @@ function buildPLTable(
     sectionRow("INCOME"),
     dataRow("I.    Revenue from operations", n(22), revOpsCy, revOpsPy),
     dataRow("II.   Other income",            n(23), revOthCy, revOthPy),
-    subTotalRow("III.  Total Income  (I + II)", totIncCy, totIncPy),
+    subTotalRow("III.  Total Income (I + II)", totIncCy, totIncPy),
     blankRow(),
 
     // ── EXPENSES ─────────────────────────────────────────────────────────
@@ -558,15 +579,15 @@ function buildPLTable(
 
     // ── Profit chain ─────────────────────────────────────────────────────
     dataRow(
-      "V.    Profit / (Loss) before exceptional items, partners' remuneration and tax  (III − IV)",
+      "V.    Profit /(Loss) before exceptional items, partners' remuneration & tax (III−IV)",
       null, pVcy, pVpy,
     ),
     dataRow("VI.   Exceptional items",                                                   null, excCy,   excPy),
-    dataRow("VII.  Profit / (Loss) before extraordinary items and tax  (V + VI)",        null, pVIIcy, pVIIpy),
+    dataRow("VII.  Profit / (Loss) before extraordinary items and tax (V + VI)",         null, pVIIcy, pVIIpy),
     dataRow("VIII. Extraordinary items",                                                 null, extCy,   extPy),
-    dataRow("IX.   Profit / (Loss) before partners' remuneration and tax  (VII + VIII)", null, pIXcy, pIXpy),
+    dataRow("IX.   Profit / (Loss) before partners' remuneration and tax (VII + VIII)",  null, pIXcy, pIXpy),
     dataRow("X.    Partners' remuneration",                                         n(29), remCy,   remPy),
-    dataRow("XI.   Profit / (Loss) before tax  (IX − X)",                          null, pXIcy,  pXIpy),
+    dataRow("XI.   Profit / (Loss) before tax (IX − X)",                           null, pXIcy,  pXIpy),
     blankRow(),
 
     parentRow("XII.  Tax expense"),
@@ -576,7 +597,7 @@ function buildPLTable(
     blankRow(),
 
     grandTotalRow(
-      "XIII. Profit / (Loss) for the year  (XI − XII)",
+      "XIII. Profit / (Loss) for the year (XI − XII)",
       netProfCy,
       netProfPy,
     ),
@@ -599,6 +620,7 @@ export interface SigData {
   signatoryName?: string;
   place?: string;
   date?: string;        // "YYYY-MM-DD" from the UI date input
+  udin?: string;        // UDIN shown under the partner block
 }
 
 /** Format the UI's "YYYY-MM-DD" sign-off date as "DD/MM/YYYY". */
@@ -624,6 +646,7 @@ function buildSignatureTable(sig: SigData): Table {
   const signatory  = sig.signatoryName || "";
   const place      = sig.place        || BLANK;
   const date       = fmtSigDate(sig.date);
+  const udin       = sig.udin         || "";
 
   const half = Math.floor(TW / 2);
 
@@ -657,45 +680,29 @@ function buildSignatureTable(sig: SigData): Table {
               { text: `For, ${firmName}`, bold: true },
               { text: "Chartered Accountants" },
               { text: `FRN: ${frn}` },
-              { text: "__________________", gap: true },
+              { text: "", gap: true },
+              { text: "__________________" },
               { text: partner, bold: true },
               { text: "Partner" },
               { text: `Membership No. ${memNo}` },
+              { text: `UDIN: ${udin}` },
             ]),
           }),
-          // Right — client / authorised signatory (indented further right)
+          // Right — Place/Date on top, then client + authorised signatory
           new TableCell({
             width:   { size: TW - half, type: WidthType.DXA },
             borders: BDR_NONE,
             margins: { top: 80, bottom: 80, left: 1440, right: 80 },
             children: sigLines([
-              { text: `For, ${clientName}`, bold: true },
-              { text: "__________________", gap: true },
+              { text: `Place: ${place}` },
+              { text: `Date: ${date}` },
+              { text: `For, ${clientName}`, bold: true, gap: true },
+              { text: "", gap: true },
+              { text: "__________________" },
               ...(signatory ? [{ text: signatory, bold: true }] : []),
               { text: "Authorised Signatory", muted: true },
-              { text: `Place: ${place}`, gap: true },
-              { text: `Date: ${date}` },
             ]),
           }),
-        ],
-      }),
-    ],
-  });
-}
-
-// ─── DOCUMENT FOOTER ─────────────────────────────────────────────────────────
-function makeFooter(entityName: string): Footer {
-  return new Footer({
-    children: [
-      new Paragraph({
-        alignment: AlignmentType.CENTER,
-        border:    { top: { style: BorderStyle.SINGLE, size: 4, color: NAVY, space: 1 } },
-        spacing:   { before: 80 },
-        children: [
-          new TextRun({ text: `${entityName}  |  Financial Statements  |  Page `, font: FONT, size: SZ_XS, color: DK_GREY }),
-          new TextRun({ children: [PageNumber.CURRENT], font: FONT, size: SZ_XS, color: DK_GREY }),
-          new TextRun({ text: " of ",                  font: FONT, size: SZ_XS, color: DK_GREY }),
-          new TextRun({ children: [PageNumber.TOTAL_PAGES], font: FONT, size: SZ_XS, color: DK_GREY }),
         ],
       }),
     ],
@@ -754,8 +761,8 @@ function noteHdrB(cyYear: string, pyYear: string): TableRow {
     tableHeader: true,
     children: [
       cell({ text: "Particulars", w: NW_DESC, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, padL: 100 }),
-      cell({ text: `${cyYear}\n${_exportSuffix}`, w: NW_CY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
-      cell({ text: `${pyYear}\n${_exportSuffix}`, w: NW_PY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
+      cell({ text: hdr(cyYear), w: NW_CY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
+      cell({ text: hdr(pyYear), w: NW_PY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
     ],
   });
 }
@@ -808,10 +815,10 @@ function noteHdrA(cyYear: string, pyYear: string): TableRow[] {
   const r2 = new TableRow({
     children: [
       cell({ text: "", w: NW_A_DESC, sz: SZ_BODY, color: WHITE, bg: BG_HDR, borders: BDR_NONE }),
-      cell({ text: `${cyYear}\n${_exportSuffix}`, w: NW_A_LTCY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
-      cell({ text: `${pyYear}\n${_exportSuffix}`, w: NW_A_LTPY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
-      cell({ text: `${cyYear}\n${_exportSuffix}`, w: NW_A_STCY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
-      cell({ text: `${pyYear}\n${_exportSuffix}`, w: NW_A_STPY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
+      cell({ text: hdr(cyYear), w: NW_A_LTCY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
+      cell({ text: hdr(pyYear), w: NW_A_LTPY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
+      cell({ text: hdr(cyYear), w: NW_A_STCY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
+      cell({ text: hdr(pyYear), w: NW_A_STPY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
     ],
   });
   return [r1, r2];
@@ -942,7 +949,9 @@ function buildCapitalAccountSection(
     (p.opening ?? 0) + (p.introduced ?? 0) + (p.remuneration ?? 0)
     + (p.interest ?? 0) - (p.withdrawals ?? 0) + (p.profit_share ?? 0);
 
-  const cw = [CAP_NAME, CAP_NUM, CAP_NUM, CAP_NUM, CAP_NUM, CAP_NUM, CAP_NUM, CAP_LAST];
+  // KD5/KD6/KD7: 10 cols — Sr No | Partner | Share % | Opening | Introduced |
+  // Remuneration | Interest | Withdrawals | Profit Share | Closing.
+  const cw = [CAP_SR, CAP_NAME, CAP_PCT, CAP_NUM, CAP_NUM, CAP_NUM, CAP_NUM, CAP_NUM, CAP_NUM, CAP_LAST];
 
   const makeHdrRow = (): TableRow => {
     const h = (text: string, w: number) =>
@@ -950,14 +959,16 @@ function buildCapitalAccountSection(
     return new TableRow({
       tableHeader: true,
       children: [
-        h("Partner",              CAP_NAME),
-        h(`Opening Balance\n${_exportSuffix}`, CAP_NUM),
-        h(`Introduced\n${_exportSuffix}`,      CAP_NUM),
-        h(`Remuneration\n${_exportSuffix}`,    CAP_NUM),
-        h(`Interest\n${_exportSuffix}`,        CAP_NUM),
-        h(`Withdrawals\n${_exportSuffix}`,     CAP_NUM),
-        h(`Profit Share\n${_exportSuffix}`,    CAP_NUM),
-        h(`Closing Balance\n${_exportSuffix}`, CAP_LAST),
+        h("Sr.\nNo.",                    CAP_SR),
+        h("Partner",                     CAP_NAME),
+        h("Share of Profit /\n(Loss) %", CAP_PCT),
+        h(hdr("Opening Balance"),        CAP_NUM),
+        h(hdr("Introduced"),             CAP_NUM),
+        h(hdr("Remuneration"),           CAP_NUM),
+        h(hdr("Interest"),               CAP_NUM),
+        h(hdr("Withdrawals"),            CAP_NUM),
+        h(hdr("Profit Share"),           CAP_NUM),
+        h(hdr("Closing Balance"),        CAP_LAST),
       ],
     });
   };
@@ -965,11 +976,16 @@ function buildCapitalAccountSection(
   const nc = (v: number, w: number, bold = false, bg?: string, bdr = BDR_ROW) =>
     ac(v, w, { bold, bg, borders: bdr });
 
-  // CY table
-  const cyDataRows = cyPartners.map((p: any) =>
+  // Share-of-profit % cell text — value comes from the UI (profit_share_pct)
+  const pctText = (v: any): string => (v != null && v !== "" ? `${v}%` : "—");
+
+  // CY table — Sr No + Share % columns prepended (KD5)
+  const cyDataRows = cyPartners.map((p: any, idx: number) =>
     new TableRow({
       children: [
+        cell({ text: String(idx + 1), w: CAP_SR, sz: SZ_BODY, align: AlignmentType.CENTER }),
         cell({ text: p.partner_name || "Partner", w: CAP_NAME, sz: SZ_BODY }),
+        cell({ text: pctText(p.profit_share_pct), w: CAP_PCT, sz: SZ_BODY, align: AlignmentType.CENTER }),
         nc(p.opening_balance_cy ?? 0, CAP_NUM),
         nc(p.introduced_cy      ?? 0, CAP_NUM),
         nc(p.remuneration_cy    ?? 0, CAP_NUM),
@@ -988,10 +1004,13 @@ function buildCapitalAccountSection(
   const totCyWith     = cyPartners.reduce((s: number, p: any) => s + (p.withdrawals_cy ?? 0), 0);
   const totCyPS       = cyPartners.reduce((s: number, p: any) => s + (p.profit_share_cy ?? 0), 0);
   const totCyClosing  = cyPartners.reduce((s: number, p: any) => s + calcClosingCy(p), 0);
+  const totCyPct      = cyPartners.reduce((s: number, p: any) => s + (Number(p.profit_share_pct) || 0), 0);
 
   const cyTotalRow = new TableRow({
     children: [
+      ec(CAP_SR, BG_GRAN, BDR_GRAND),
       cell({ text: "Total", w: CAP_NAME, bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
+      cell({ text: totCyPct ? `${+totCyPct.toFixed(2)}%` : "", w: CAP_PCT, bold: true, bg: BG_GRAN, borders: BDR_GRAND, align: AlignmentType.CENTER }),
       nc(totCyOpening,  CAP_NUM,  true, BG_GRAN, BDR_GRAND),
       nc(totCyIntro,    CAP_NUM,  true, BG_GRAN, BDR_GRAND),
       nc(totCyRem,      CAP_NUM,  true, BG_GRAN, BDR_GRAND),
@@ -1002,11 +1021,39 @@ function buildCapitalAccountSection(
     ],
   });
 
+  // KD7: drop the separate Prior-Year table; append one "Previous Year"
+  // comparison line below the CY total. Values = prior-year aggregate
+  // (per-partner rows summed, else the stored total); "—" when no PY data.
+  const pySrc = pyPartners.length > 0 ? pyPartners : (pyAggregate ? [pyAggregate] : []);
+  const sumPy = (fn: (p: any) => number) => pySrc.reduce((s: number, p: any) => s + fn(p), 0);
+  const pyOpening = sumPy((p) => p.opening ?? p.opening_balance_cy ?? 0);
+  const pyIntro   = sumPy((p) => p.introduced ?? 0);
+  const pyRem     = sumPy((p) => p.remuneration ?? 0);
+  const pyInt     = sumPy((p) => p.interest ?? 0);
+  const pyWith    = sumPy((p) => p.withdrawals ?? 0);
+  const pyPS      = sumPy((p) => p.profit_share ?? 0);
+  const pyClose   = sumPy((p) => calcClosingPy(p));
+
+  const previousYearRow = new TableRow({
+    children: [
+      ec(CAP_SR, BG_TOT, BDR_SUB),
+      cell({ text: "Previous Year", w: CAP_NAME, bold: true, bg: BG_TOT, borders: BDR_SUB }),
+      cell({ text: "", w: CAP_PCT, bg: BG_TOT, borders: BDR_SUB }),
+      nc(pyOpening, CAP_NUM,  true, BG_TOT, BDR_SUB),
+      nc(pyIntro,   CAP_NUM,  true, BG_TOT, BDR_SUB),
+      nc(pyRem,     CAP_NUM,  true, BG_TOT, BDR_SUB),
+      nc(pyInt,     CAP_NUM,  true, BG_TOT, BDR_SUB),
+      nc(pyWith,    CAP_NUM,  true, BG_TOT, BDR_SUB),
+      nc(pyPS,      CAP_NUM,  true, BG_TOT, BDR_SUB),
+      nc(pyClose,   CAP_LAST, true, BG_TOT, BDR_SUB),
+    ],
+  });
+
   const makePeriodHdr = (label: string): TableRow =>
     new TableRow({
       children: [
         new TableCell({
-          columnSpan: 8,
+          columnSpan: cw.length,
           width:   { size: TW, type: WidthType.DXA },
           shading: { fill: BG_TOT, type: ShadingType.CLEAR },
           borders: BDR_ROW,
@@ -1028,64 +1075,15 @@ function buildCapitalAccountSection(
       makeHdrRow(),
       ...cyDataRows,
       cyTotalRow,
+      previousYearRow,
     ],
   });
 
-  // PY table
-  const pyRows = pyPartners.length > 0 ? pyPartners : (pyAggregate ? [pyAggregate] : []);
-  const isPyPerPartner = pyPartners.length > 0;
-
-  const pyDataRows = pyRows.map((p: any) =>
-    new TableRow({
-      children: [
-        cell({ text: isPyPerPartner ? (p.partner_name || "Partner") : "Total (Prior Year)", w: CAP_NAME }),
-        nc(p.opening   ?? p.opening_balance_cy ?? 0, CAP_NUM),
-        nc(p.introduced ?? 0,   CAP_NUM),
-        nc(p.remuneration ?? 0, CAP_NUM),
-        nc(p.interest   ?? 0,   CAP_NUM),
-        nc(p.withdrawals ?? 0,  CAP_NUM),
-        nc(p.profit_share ?? 0, CAP_NUM),
-        nc(calcClosingPy(p),    CAP_LAST),
-      ],
-    }),
-  );
-
-  const pyTableRows: TableRow[] = [
-    makePeriodHdr(`Prior Year — FY ${pyYear}`),
-    makeHdrRow(),
-    ...pyDataRows,
-  ];
-
-  if (isPyPerPartner && pyRows.length > 1) {
-    const totPyOpening = pyRows.reduce((s: number, p: any) => s + (p.opening ?? 0), 0);
-    const totPyIntro   = pyRows.reduce((s: number, p: any) => s + (p.introduced ?? 0), 0);
-    const totPyRem     = pyRows.reduce((s: number, p: any) => s + (p.remuneration ?? 0), 0);
-    const totPyInt     = pyRows.reduce((s: number, p: any) => s + (p.interest ?? 0), 0);
-    const totPyWith    = pyRows.reduce((s: number, p: any) => s + (p.withdrawals ?? 0), 0);
-    const totPyPS      = pyRows.reduce((s: number, p: any) => s + (p.profit_share ?? 0), 0);
-    const totPyClose   = pyRows.reduce((s: number, p: any) => s + calcClosingPy(p), 0);
-    pyTableRows.push(new TableRow({
-      children: [
-        cell({ text: "Total", w: CAP_NAME, bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
-        nc(totPyOpening, CAP_NUM,  true, BG_GRAN, BDR_GRAND),
-        nc(totPyIntro,   CAP_NUM,  true, BG_GRAN, BDR_GRAND),
-        nc(totPyRem,     CAP_NUM,  true, BG_GRAN, BDR_GRAND),
-        nc(totPyInt,     CAP_NUM,  true, BG_GRAN, BDR_GRAND),
-        nc(totPyWith,    CAP_NUM,  true, BG_GRAN, BDR_GRAND),
-        nc(totPyPS,      CAP_NUM,  true, BG_GRAN, BDR_GRAND),
-        nc(totPyClose,   CAP_LAST, true, BG_GRAN, BDR_GRAND),
-      ],
-    }));
-  }
-
-  const pyTable = new Table({
-    width:        { size: TW, type: WidthType.DXA },
-    columnWidths: cw,
-    rows: pyTableRows,
-  });
-
-  return [cyTable, pyTable];
+  return [cyTable];
 }
+
+/** Custom-row shape stored in cy_data._custom_rows (subset we need). */
+interface NoteCustomRow { id: string; label?: string; section?: string; attachedTo?: string; }
 
 /** Notes 3–28 — generic note table from NOTES_CONFIG */
 function buildNoteSection(
@@ -1096,7 +1094,16 @@ function buildNoteSection(
   cyYear: string,
   pyYear: string,
 ): Table {
-  const { cy, py } = computeDisplayData(cfg, rawCy, rawPy);
+  // Auto/manual breakup rows are stored in cy_data._custom_rows; their amounts
+  // live as ordinary keys (id or id+"_lt"/"_st") in rawCy/rawPy. For notes like
+  // Borrowings the per-ledger amounts sit on custom rows ATTACHED to a static
+  // row, so they must be folded into that static row (and the totals) — exactly
+  // as the on-screen note does in its collapsed view.
+  const customRows: NoteCustomRow[] = Array.isArray((rawCy as any)._custom_rows)
+    ? ((rawCy as any)._custom_rows as NoteCustomRow[])
+    : [];
+
+  const { cy, py } = computeDisplayData(cfg, rawCy, rawPy, customRows);
   const isA = cfg.pattern === "A";
   const colWidths = isA
     ? [NW_A_DESC, NW_A_LTCY, NW_A_LTPY, NW_A_STCY, NW_A_STPY]
@@ -1104,6 +1111,36 @@ function buildNoteSection(
 
   const reversedRows = [...cfg.rows].reverse();
   const grandTotalId = reversedRows.find(r => r.isTotal)?.id ?? null;
+
+  // Suffix-aware lookup mirroring computeDisplayData: a bare key only counts
+  // when neither _lt nor _st exists (legacy data); _st never falls back to bare.
+  const suffixed = (base: Record<string, number>, id: string) => {
+    const ltKey = id + "_lt", stKey = id + "_st";
+    const useBare = !(ltKey in base) && !(stKey in base);
+    return {
+      lt: base[ltKey] ?? (useBare ? base[id] ?? 0 : 0),
+      st: base[stKey] ?? 0,
+    };
+  };
+  const attachedRows = (staticId: string) => customRows.filter(cr => cr.attachedTo === staticId);
+
+  // Displayed value for a STATIC data row = its own amount + every custom row
+  // attached to it (collapsed-view aggregate). computeDisplayData only updates
+  // the TOTAL rows, so the per-row aggregation is done here.
+  const aggA = (id: string) => {
+    let lt = cy[id + "_lt"] ?? 0, st = cy[id + "_st"] ?? 0;
+    let ltP = py[id + "_lt"] ?? 0, stP = py[id + "_st"] ?? 0;
+    for (const cr of attachedRows(id)) {
+      const c = suffixed(cy, cr.id); const p = suffixed(py, cr.id);
+      lt += c.lt; st += c.st; ltP += p.lt; stP += p.st;
+    }
+    return { lt, ltP, st, stP };
+  };
+  const aggB = (id: string) => {
+    let c = cy[id] ?? 0, p = py[id] ?? 0;
+    for (const cr of attachedRows(id)) { c += cy[cr.id] ?? 0; p += py[cr.id] ?? 0; }
+    return { c, p };
+  };
 
   // Strip "Note X: " prefix from config title to get just the name
   const cleanTitle = cfg.title.replace(/^Note\s[\d &]+:\s*/i, "");
@@ -1113,11 +1150,34 @@ function buildNoteSection(
     ...(isA ? noteHdrA(cyYear, pyYear) : [noteHdrB(cyYear, pyYear)]),
   ];
 
+  // Unattached custom rows (no attachedTo) render as their own lines: section-
+  // tagged ones just before their section total, the rest before the grand total.
+  const emittedCustoms = new Set<string>();
+  const emitCustoms = (predicate: (cr: NoteCustomRow) => boolean) => {
+    for (const cr of customRows) {
+      if (cr.attachedTo || emittedCustoms.has(cr.id) || !predicate(cr)) continue;
+      emittedCustoms.add(cr.id);
+      if (isA) {
+        const c = suffixed(cy, cr.id); const p = suffixed(py, cr.id);
+        if (!c.lt && !c.st && !p.lt && !p.st) continue;
+        rows.push(noteRowA(cr.label || "—", c.lt, p.lt, c.st, p.st, 1, "data"));
+      } else {
+        const c = cy[cr.id] ?? 0, p = py[cr.id] ?? 0;
+        if (!c && !p) continue;
+        rows.push(noteRowB(cr.label || "—", c, p, 1, "data"));
+      }
+    }
+  };
+
   for (const row of cfg.rows) {
     if (row.isSectionHeader) {
       rows.push(noteSecHdr(colWidths, row.label));
     } else if (row.isTotal) {
       const style = row.id === grandTotalId ? "total" : "subtotal";
+      // Before a section total, emit that section's unattached customs; before
+      // the grand total, emit the section-less ones.
+      if (row.id === grandTotalId) emitCustoms(cr => !cr.section);
+      else if ((row as any).sectionTag) emitCustoms(cr => cr.section === (row as any).sectionTag);
       if (isA) {
         rows.push(noteRowA(
           row.label,
@@ -1129,18 +1189,30 @@ function buildNoteSection(
         rows.push(noteRowB(row.label, cy[row.id] ?? 0, py[row.id] ?? 0, row.indent ?? 0, style));
       }
     } else {
+      // Main (static) row shows the collapsed aggregate; its attached sub-items
+      // (auto/manual breakup ledgers) are then listed indented beneath it.
+      const subIndent = (row.indent ?? 0) + 1;
       if (isA) {
-        rows.push(noteRowA(
-          row.label,
-          cy[row.id + "_lt"] ?? 0, py[row.id + "_lt"] ?? 0,
-          cy[row.id + "_st"] ?? 0, py[row.id + "_st"] ?? 0,
-          row.indent ?? 0, "data",
-        ));
+        const v = aggA(row.id);
+        rows.push(noteRowA(row.label, v.lt, v.ltP, v.st, v.stP, row.indent ?? 0, "data"));
+        for (const cr of attachedRows(row.id)) {
+          const c = suffixed(cy, cr.id); const p = suffixed(py, cr.id);
+          if (!c.lt && !c.st && !p.lt && !p.st) continue;   // skip empty sub-items
+          rows.push(noteRowA(cr.label || "—", c.lt, p.lt, c.st, p.st, subIndent, "data"));
+        }
       } else {
-        rows.push(noteRowB(row.label, cy[row.id] ?? 0, py[row.id] ?? 0, row.indent ?? 0, "data"));
+        const v = aggB(row.id);
+        rows.push(noteRowB(row.label, v.c, v.p, row.indent ?? 0, "data"));
+        for (const cr of attachedRows(row.id)) {
+          const c = cy[cr.id] ?? 0, p = py[cr.id] ?? 0;
+          if (!c && !p) continue;                            // skip empty sub-items
+          rows.push(noteRowB(cr.label || "—", c, p, subIndent, "data"));
+        }
       }
     }
   }
+  // Any remaining unattached customs (notes with no total row) — emit at end.
+  emitCustoms(() => true);
 
   return new Table({
     width:        { size: TW, type: WidthType.DXA },
@@ -1150,7 +1222,7 @@ function buildNoteSection(
 }
 
 /** PPE Schedule — landscape table */
-function buildPPETable(ppeData: any[], cyYear: string, pyYear: string): Table {
+function buildPPETable(ppeData: any[], cyYear: string, pyYear: string, noteNum: string): Table {
   const ppeColWidths = [PPE_CAT, PPE_NAME, PPE_RATE, PPE_OPEN, PPE_APRE, PPE_APOST, PPE_TOT, PPE_DEPR, PPE_CLOS, PPE_NCY, PPE_NPY];
 
   const h = (text: string, w: number) =>
@@ -1168,8 +1240,8 @@ function buildPPETable(ppeData: any[], cyYear: string, pyYear: string): Table {
       h("Total\nCost",             PPE_TOT),
       h("Depreciation\nCharged",   PPE_DEPR),
       h("Closing\nBalance",        PPE_CLOS),
-      h(`Net Block ${cyYear}\n${_exportSuffix}`, PPE_NCY),
-      h(`Net Block ${pyYear}\n${_exportSuffix}`, PPE_NPY),
+      h(hdr(`Net Block ${cyYear}`), PPE_NCY),
+      h(hdr(`Net Block ${pyYear}`), PPE_NPY),
     ],
   });
 
@@ -1216,7 +1288,7 @@ function buildPPETable(ppeData: any[], cyYear: string, pyYear: string): Table {
     width:        { size: TW_LS, type: WidthType.DXA },
     columnWidths: ppeColWidths,
     rows: [
-      noteTitleRow(ppeColWidths, "10", "Property, Plant and Equipment — PPE Schedule"),
+      noteTitleRow(ppeColWidths, noteNum, "Property, Plant and Equipment — PPE Schedule"),
       hdrRow,
       ...dataRows,
       totalRow,
@@ -1231,9 +1303,10 @@ export interface NCEDocxParams {
   ncePyAmounts: Record<string, number>;
   cyYear: string;
   pyYear: string;
-  /** Dynamic note number map (static noteRef → display number).
-   *  Pass `nceDynamicNoteMap` from PipelineFinancialStatements. */
-  dynamicNoteMap?: Record<number, number>;
+  /** Dynamic note number map (static noteRef → sequential display number).
+   *  Pass `nceDynamicNoteMap` from PipelineFinancialStatements. Notes absent
+   *  from the map are inactive (no data) and get no number / are not exported. */
+  dynamicNoteMap?: Map<number, number>;
   /** Phase 2 data — pass from PipelineFinancialStatements state */
   capitalData?: any[];   // from nce_capital_account
   notesData?: any[];     // from nce_financial_notes
@@ -1250,7 +1323,7 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     ncePyAmounts,
     cyYear,
     pyYear,
-    dynamicNoteMap = {},
+    dynamicNoteMap = new Map<number, number>(),
     capitalData    = [],
     notesData      = [],
     ppeData        = [],
@@ -1265,7 +1338,6 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
 
   const entityName = engagement?.clients?.name ?? "Entity Name";
   const fy         = engagement?.financial_year ?? `${Number(cyYear) - 1}-${cyYear}`;
-  const footer     = makeFooter(entityName);
 
   // Phase 1 tables
   const bsTable  = buildBSTable(nceCyAmounts, ncePyAmounts, cyYear, pyYear, entityName, dynamicNoteMap);
@@ -1296,29 +1368,31 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     };
   }
 
-  // Notes 3-28: only render notes the user has actually opened and saved.
-  // Un-touched notes (no row in nce_financial_notes) are skipped so the
-  // export stays compact — a note of all dashes adds no audit value.
+  // Notes 3-28: export exactly the notes the UI shows — i.e. those active in
+  // the dynamic note map (their BS/PL line carries data). The note number used
+  // is the SAME dynamic number shown on screen (handles compound refs like
+  // "3 & 6"). Inactive notes (no data) are suppressed, not exported.
   const noteTables: Table[] = [];
   for (const cfg of NOTES_CONFIG) {
-    if (!(cfg.noteType in savedNotes)) continue;   // never saved → skip
-    const meta = NOTE_META[cfg.noteType];
-    const noteNum = meta?.noteNumber ?? cfg.noteType;
-    const data = savedNotes[cfg.noteType];
-    noteTables.push(buildNoteSection(cfg, data.cy, data.py, noteNum, cyYear, pyYear));
+    const dynNum = getDynamicNoteDisplay(cfg.noteType, dynamicNoteMap);
+    if (dynNum === null) continue;                        // inactive (no data) → skip
+    const data = savedNotes[cfg.noteType] ?? { cy: {}, py: {} };
+    noteTables.push(buildNoteSection(cfg, data.cy, data.py, dynNum, cyYear, pyYear));
   }
 
-  // Phase 2 — PPE Schedule (landscape)
-  const ppeTable = buildPPETable(ppeData, cyYear, pyYear);
+  // Phase 2 — PPE Schedule (landscape). PPE is always-active (ref 10); use its
+  // dynamic number so the title matches the Balance-Sheet reference.
+  const ppeNoteNum = String(dynamicNoteMap.get(10) ?? 10);
+  const ppeTable = buildPPETable(ppeData, cyYear, pyYear, ppeNoteNum);
 
   // Page settings
   const portraitProps = {
     size:   { width: A4_W, height: A4_H },
-    margin: { top: MARG_T, right: MARG_H, bottom: MARG_B, left: MARG_H },
+    margin: { top: MARG_T, right: MARG_R, bottom: MARG_B, left: MARG_L },
   };
   const landscapeProps = {
     size:   { width: A4_W, height: A4_H, orientation: PageOrientation.LANDSCAPE },
-    margin: { top: MARG_T, right: MARG_LS, bottom: MARG_B, left: MARG_LS },
+    margin: { top: MARG_T, right: MARG_R, bottom: MARG_B, left: MARG_L },
   };
 
   const spacer = () => new Paragraph({ spacing: { before: 240, after: 0 }, children: [] });
@@ -1326,10 +1400,7 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   // Build notes section children: Note 1 paragraphs, Note 2 tables, Notes 3-28 tables
   const noteChildren: (Paragraph | Table)[] = [
     ...note1Paras,
-    spacer(),
-    capitalTables[0],
-    spacer(),
-    capitalTables[1],
+    ...capitalTables.flatMap(t => [spacer(), t]),
     ...noteTables.flatMap(t => [spacer(), t]),
   ];
 
@@ -1343,7 +1414,6 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
       // Page 1: Balance Sheet + Signature
       {
         properties: { page: portraitProps },
-        footers:    { default: footer },
         children: [
           bsTable,
           new Paragraph({ spacing: { before: 600 }, children: [] }),
@@ -1353,7 +1423,6 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
       // Page 2+: P&L + Signature
       {
         properties: { page: portraitProps },
-        footers:    { default: footer },
         children: [
           plTable,
           new Paragraph({ spacing: { before: 600 }, children: [] }),
@@ -1363,13 +1432,11 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
       // Notes 1–28 (portrait, flows across pages)
       {
         properties: { page: portraitProps },
-        footers:    { default: footer },
         children:   noteChildren,
       },
       // PPE Schedule (landscape)
       {
         properties: { page: landscapeProps },
-        footers:    { default: footer },
         children:   [ppeTable],
       },
     ],
