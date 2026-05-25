@@ -272,7 +272,7 @@ type BSDisplayRow =
   | { kind: "subhead";  label: string; noteNo?: number | null; indent?: number; code?: string }
   | { kind: "item";     label: string; noteNo?: number | null; cy: number; py: number; indent?: number; size?: 9 | 10; code?: string }
   | { kind: "spacer" }
-  | { kind: "total";    label: string; cy: number; py: number }
+  | { kind: "total";    label: string; cy: number; py: number; rightAlignLabel?: boolean }
   | { kind: "footer";   label: string; noteNo?: number | null };
 
 function buildBSRows(bs: BSRowData): BSDisplayRow[] {
@@ -1041,27 +1041,31 @@ function buildNCEBSRows(
     { kind: "item", label: "(c) Other current liabilities",    noteNo: sn(8,  cy["NCE_OCL"],  py["NCE_OCL"]),  cy: negL("NCE_OCL"),  py: negLpy("NCE_OCL"),  indent: 1, code: "NCE_OCL" },
     { kind: "item", label: "(d) Short-term provisions",        noteNo: sn(9,  cy["NCE_STP"],  py["NCE_STP"]),  cy: negL("NCE_STP"),  py: negLpy("NCE_STP"),  indent: 1, code: "NCE_STP" },
     { kind: "spacer" },
-    { kind: "total", label: "TOTAL EQUITY AND LIABILITIES", cy: totalEL, py: totalELpy },
+    // Task 6: shortened to "TOTAL"; Task 9: right-align label
+    { kind: "total", label: "TOTAL", cy: totalEL, py: totalELpy, rightAlignLabel: true },
     { kind: "spacer" },
     { kind: "section", label: "ASSETS", size: 10 },
     { kind: "subhead", label: "(1) Non-Current Assets" },
-    { kind: "item", label: "(a)(i)   Property, plant and equipment",   noteNo: sn(10, cy["NCE_PPE"],   py["NCE_PPE"]),   cy: pos("NCE_PPE"),   py: pospy("NCE_PPE"),   indent: 1, code: "NCE_PPE" },
-    { kind: "item", label: "(a)(ii)  Capital work-in-progress",        noteNo: sn(11, cy["NCE_CWIP"],  py["NCE_CWIP"]),  cy: pos("NCE_CWIP"),  py: pospy("NCE_CWIP"),  indent: 1, code: "NCE_CWIP" },
-    { kind: "item", label: "(a)(iii) Intangible assets",               noteNo: sn(12, cy["NCE_INTG"],  py["NCE_INTG"]),  cy: pos("NCE_INTG"),  py: pospy("NCE_INTG"),  indent: 1, code: "NCE_INTG" },
-    { kind: "item", label: "(b) Non-current investments",              noteNo: sn(13, cy["NCE_NCINV"], py["NCE_NCINV"]), cy: pos("NCE_NCINV"), py: pospy("NCE_NCINV"), indent: 1, code: "NCE_NCINV" },
-    { kind: "item", label: "(c) Long-term loans and advances",         noteNo: sn(14, cy["NCE_LTLA"],  py["NCE_LTLA"]),  cy: pos("NCE_LTLA"),  py: pospy("NCE_LTLA"),  indent: 1, code: "NCE_LTLA" },
-    { kind: "item", label: "(d) Other non-current assets",             noteNo: sn(15, cy["NCE_ONCA"],  py["NCE_ONCA"]),  cy: pos("NCE_ONCA"),  py: pospy("NCE_ONCA"),  indent: 1, code: "NCE_ONCA" },
+    // Task 8: grouped parent heading + sub-items matching Corporate order (PPE, Intangibles, CWIP)
+    { kind: "subhead", label: "(a) Property, Plant & Equipment and Intangible Assets", indent: 1 },
+    { kind: "item", label: "     (i)   Property, plant and equipment",  noteNo: sn(10, cy["NCE_PPE"],   py["NCE_PPE"]),   cy: pos("NCE_PPE"),   py: pospy("NCE_PPE"),   indent: 2, code: "NCE_PPE" },
+    { kind: "item", label: "     (ii)  Intangible assets",              noteNo: sn(12, cy["NCE_INTG"],  py["NCE_INTG"]),  cy: pos("NCE_INTG"),  py: pospy("NCE_INTG"),  indent: 2, code: "NCE_INTG" },
+    { kind: "item", label: "     (iii) Capital work-in-progress",       noteNo: sn(11, cy["NCE_CWIP"],  py["NCE_CWIP"]),  cy: pos("NCE_CWIP"),  py: pospy("NCE_CWIP"),  indent: 2, code: "NCE_CWIP" },
+    { kind: "item", label: "(b) Non-current investments",               noteNo: sn(13, cy["NCE_NCINV"], py["NCE_NCINV"]), cy: pos("NCE_NCINV"), py: pospy("NCE_NCINV"), indent: 1, code: "NCE_NCINV" },
+    { kind: "item", label: "(c) Long-term loans and advances",          noteNo: sn(14, cy["NCE_LTLA"],  py["NCE_LTLA"]),  cy: pos("NCE_LTLA"),  py: pospy("NCE_LTLA"),  indent: 1, code: "NCE_LTLA" },
+    { kind: "item", label: "(d) Other non-current assets",              noteNo: sn(15, cy["NCE_ONCA"],  py["NCE_ONCA"]),  cy: pos("NCE_ONCA"),  py: pospy("NCE_ONCA"),  indent: 1, code: "NCE_ONCA" },
     { kind: "spacer" },
     { kind: "subhead", label: "(2) Current Assets" },
-    { kind: "item", label: "(a) Current investments",                  noteNo: sn(16, cy["NCE_CINV"],  py["NCE_CINV"]),  cy: pos("NCE_CINV"),  py: pospy("NCE_CINV"),  indent: 1, code: "NCE_CINV" },
-    { kind: "item", label: "(b) Inventories",                          noteNo: sn(17, cy["NCE_STCK"],  py["NCE_STCK"]),  cy: pos("NCE_STCK"),  py: pospy("NCE_STCK"),  indent: 1, code: "NCE_STCK" },
-    { kind: "item", label: "(c) Trade receivables",                    noteNo: sn(18, cy["NCE_TR"],    py["NCE_TR"]),    cy: pos("NCE_TR"),    py: pospy("NCE_TR"),    indent: 1, code: "NCE_TR" },
-    { kind: "item", label: "(d) Cash and bank balances",               noteNo: sn(19, cy["NCE_CASH"],  py["NCE_CASH"]),  cy: pos("NCE_CASH"),  py: pospy("NCE_CASH"),  indent: 1, code: "NCE_CASH" },
+    { kind: "item", label: "(a) Current investments",                   noteNo: sn(16, cy["NCE_CINV"],  py["NCE_CINV"]),  cy: pos("NCE_CINV"),  py: pospy("NCE_CINV"),  indent: 1, code: "NCE_CINV" },
+    { kind: "item", label: "(b) Inventories",                           noteNo: sn(17, cy["NCE_STCK"],  py["NCE_STCK"]),  cy: pos("NCE_STCK"),  py: pospy("NCE_STCK"),  indent: 1, code: "NCE_STCK" },
+    { kind: "item", label: "(c) Trade receivables",                     noteNo: sn(18, cy["NCE_TR"],    py["NCE_TR"]),    cy: pos("NCE_TR"),    py: pospy("NCE_TR"),    indent: 1, code: "NCE_TR" },
+    { kind: "item", label: "(d) Cash and bank balances",                noteNo: sn(19, cy["NCE_CASH"],  py["NCE_CASH"]),  cy: pos("NCE_CASH"),  py: pospy("NCE_CASH"),  indent: 1, code: "NCE_CASH" },
     // NCE: short-term loans share Note 14 with long-term loans (combined LT/ST in NCENotesConfig)
-    { kind: "item", label: "(e) Short-term loans and advances",        noteNo: sn(14, cy["NCE_STLA"],  py["NCE_STLA"]),  cy: pos("NCE_STLA"),  py: pospy("NCE_STLA"),  indent: 1, code: "NCE_STLA" },
-    { kind: "item", label: "(f) Other current assets",                 noteNo: sn(21, cy["NCE_OCA"],   py["NCE_OCA"]),   cy: pos("NCE_OCA"),   py: pospy("NCE_OCA"),   indent: 1, code: "NCE_OCA" },
+    { kind: "item", label: "(e) Short-term loans and advances",         noteNo: sn(14, cy["NCE_STLA"],  py["NCE_STLA"]),  cy: pos("NCE_STLA"),  py: pospy("NCE_STLA"),  indent: 1, code: "NCE_STLA" },
+    { kind: "item", label: "(f) Other current assets",                  noteNo: sn(21, cy["NCE_OCA"],   py["NCE_OCA"]),   cy: pos("NCE_OCA"),   py: pospy("NCE_OCA"),   indent: 1, code: "NCE_OCA" },
     { kind: "spacer" },
-    { kind: "total", label: "TOTAL ASSETS", cy: totalAst, py: totalAstPy },
+    // Task 6: shortened to "TOTAL"; Task 9: right-align label
+    { kind: "total", label: "TOTAL", cy: totalAst, py: totalAstPy, rightAlignLabel: true },
     { kind: "spacer" },
     { kind: "footer", label: "Summary of Significant Accounting Policies", noteNo: 1 },
   ];
@@ -1106,10 +1110,27 @@ function buildNCEPLRows(
     { kind: "item", roman: "X.",    label: "Partners' remuneration",  noteNo: sn(29, cy["NCE_PART_REM"], py["NCE_PART_REM"]), cy: pos("NCE_PART_REM"), py: pospy("NCE_PART_REM"), code: "NCE_PART_REM" },
     { kind: "item", roman: "XI.",   label: "Profit before tax (IX − X)",                                             cy: pos("NCE_PROF_XI"),  py: pospy("NCE_PROF_XI"),  bold: true },
     { kind: "header", roman: "XII.", label: "Tax expense:" },
-    { kind: "item", label: "(1) Current tax",                            cy: pos("NCE_CUR_TAX"),   py: pospy("NCE_CUR_TAX"),   indent: 2, code: "NCE_CUR_TAX" },
-    { kind: "item", label: "(2) Short/excess provision for earlier years",cy: pos("NCE_PRIOR_TAX"),py: pospy("NCE_PRIOR_TAX"), indent: 2, code: "NCE_PRIOR_TAX" },
+    { kind: "item", label: "(1) Current tax",                             cy: pos("NCE_CUR_TAX"),   py: pospy("NCE_CUR_TAX"),   indent: 2, code: "NCE_CUR_TAX" },
+    { kind: "item", label: "(2) Short/excess provision for earlier years", cy: pos("NCE_PRIOR_TAX"), py: pospy("NCE_PRIOR_TAX"), indent: 2, code: "NCE_PRIOR_TAX" },
+    { kind: "item", label: "(3) Deferred tax charge / (benefit)",          cy: pos("NCE_DEFER_TAX"), py: pospy("NCE_DEFER_TAX"), indent: 2, code: "NCE_DEFER_TAX" },
     { kind: "spacer" },
     { kind: "total", roman: "XIII.", label: "Profit / (Loss) for the year (XI − XII)", cy: pos("NCE_NET_PROF"), py: pospy("NCE_NET_PROF") },
+    { kind: "spacer" },
+    // Task 12: Discontinued operations (XIV–XVII)
+    // XVI and XVII are computed (not stored directly)
+    ...((): PLDisplayRow[] => {
+      const discOpCy  = pos("NCE_DISC_OP");   const discOpPy  = pospy("NCE_DISC_OP");
+      const discTaxCy = pos("NCE_DISC_TAX");  const discTaxPy = pospy("NCE_DISC_TAX");
+      const discAtCy  = discOpCy - discTaxCy; const discAtPy  = discOpPy - discTaxPy;
+      const finalCy   = pos("NCE_NET_PROF") + discAtCy;
+      const finalPy   = pospy("NCE_NET_PROF") + discAtPy;
+      return [
+        { kind: "item",  roman: "XIV.",  label: "Profit/(loss) from discontinuing operations",                       cy: discOpCy,  py: discOpPy,  code: "NCE_DISC_OP" },
+        { kind: "item",  roman: "XV.",   label: "Tax expense of discontinuing operations",                           cy: discTaxCy, py: discTaxPy, code: "NCE_DISC_TAX" },
+        { kind: "item",  roman: "XVI.",  label: "Profit/(loss) from discontinuing operations (after tax) (XIV-XV)",  cy: discAtCy,  py: discAtPy },
+        { kind: "total", roman: "XVII.", label: "Profit/(Loss) for the year (XIII+XVI)", cy: finalCy, py: finalPy },
+      ];
+    })(),
   ];
 }
 
@@ -1209,7 +1230,7 @@ function NCEBalanceSheetView({
             );
             if (row.kind === "total")   return (
               <tr key={idx} className="border-t-2 border-foreground/40 bg-muted/30">
-                <td className="font-bold py-1.5 px-3 uppercase text-[12px]" colSpan={2}>{row.label}</td>
+                <td className={`font-bold py-1.5 px-3 uppercase text-[12px]${row.rightAlignLabel ? " text-right" : ""}`} colSpan={2}>{row.label}</td>
                 <td className="text-right font-bold tabular-nums py-1.5 px-3">{formatINR(row.cy)}</td>
                 <td className="text-right font-bold tabular-nums py-1.5 px-3">{formatINR(row.py)}</td>
               </tr>
@@ -1905,6 +1926,9 @@ export default function PipelineFinancialStatements({
 
   const [showCorpFontDialog,  setShowCorpFontDialog]  = useState(false);
   const [corpExportFont,      setCorpExportFont]       = useState("Arial");
+  // Task 1 — NCE font dialog (mirrors Corporate dialog)
+  const [showNCEFontDialog,   setShowNCEFontDialog]    = useState(false);
+  const [nceExportFont,       setNceExportFont]        = useState("Arial");
   // Issue 2 — sub-group notes export COLLAPSED by default (only sub-group name
   // + total). Individual ledgers are emitted only when this is enabled.
   const [corpExpandSubGroups, setCorpExpandSubGroups]  = useState(false);
@@ -6131,48 +6155,19 @@ export default function PipelineFinancialStatements({
     <div className="mt-4 rounded-lg border bg-card px-4 py-4 text-[11px] space-y-3">
       <div>As per our Audit Report of even date</div>
 
-      {/* Firm header / Client header */}
+      {/* Firm header / Client header — Task 10: Place+Date shown ONCE above "For [Client Name]" on right */}
       <div className="grid grid-cols-2 gap-x-8">
         <div>
           <div className="font-bold">
             For {sigFirmName || <span className="italic text-muted-foreground">[Audit Firm Name]</span>}
           </div>
           <div>Chartered Accountants</div>
-          <div>Firm's Registration No.: {sigFirmFRN || <span className="italic">[FRN]</span>}</div>
+          {/* Task 7 + Task 11: "Firm's Registration No." → "FRN", no colon */}
+          <div>FRN {sigFirmFRN || <span className="italic">[FRN]</span>}</div>
         </div>
         <div>
-          <div className="font-bold">
-            For {sigClientName || <span className="italic text-muted-foreground">[Client Name]</span>}
-          </div>
-        </div>
-      </div>
-
-      {/* Signatures — 2 columns */}
-      <div className="grid grid-cols-2 gap-x-8 pt-6">
-        {/* Partner */}
-        <div className="space-y-0.5">
-          <div className="font-bold">
-            {sigPartnerName || <span className="italic text-muted-foreground">[Partner Name]</span>}
-          </div>
-          <div>Partner</div>
-          <div>Membership No.: {sigMembershipNo || <span className="italic">—</span>}</div>
-        </div>
-        {/* Authorised Signatory */}
-        <div className="space-y-1">
-          <Input
-            placeholder="Authorised Signatory Name"
-            value={sigSignatoryName}
-            onChange={e => setSigSignatoryName(e.target.value)}
-            className="h-6 text-[11px] px-1 font-bold"
-          />
-          <div>Authorised Signatory</div>
-        </div>
-      </div>
-
-      {/* Place + Date row — 2 columns matching signatures */}
-      <div className="grid grid-cols-2 gap-x-8 pt-2">
-        {[0, 1].map(i => (
-          <div key={i} className="space-y-0.5">
+          {/* Task 10: Place + Date once, on right, above "For [Client Name]" */}
+          <div className="space-y-0.5 mb-2">
             <div className="flex items-center gap-1">
               <span className="shrink-0">Place:</span>
               <Input
@@ -6192,7 +6187,39 @@ export default function PipelineFinancialStatements({
               />
             </div>
           </div>
-        ))}
+          <div className="font-bold">
+            For {sigClientName || <span className="italic text-muted-foreground">[Client Name]</span>}
+          </div>
+        </div>
+      </div>
+
+      {/* Signatures — 2 columns */}
+      <div className="grid grid-cols-2 gap-x-8 pt-6">
+        {/* Partner */}
+        <div className="space-y-0.5">
+          <div className="font-bold">
+            {sigPartnerName || <span className="italic text-muted-foreground">[Partner Name]</span>}
+          </div>
+          <div>Partner</div>
+          {/* Task 11: remove colon after "Membership No." */}
+          <div>Membership No {sigMembershipNo || <span className="italic">—</span>}</div>
+        </div>
+        {/* Authorised Signatory — Task 4: designation derived from entity constitution */}
+        <div className="space-y-1">
+          <Input
+            placeholder="Authorised Signatory Name"
+            value={sigSignatoryName}
+            onChange={e => setSigSignatoryName(e.target.value)}
+            className="h-6 text-[11px] px-1 font-bold"
+          />
+          <div>{(() => {
+            const c = (entityType || "").toLowerCase().trim();
+            if (c.includes("partnership")) return "Partner / Authorised Signatory";
+            if (c.includes("proprietor"))  return "Proprietor";
+            if (c.includes("llp") || c.includes("limited liability partnership")) return "Designated Partner";
+            return "Authorised Signatory";
+          })()}</div>
+        </div>
       </div>
     </div>
   ) : null;
@@ -6411,35 +6438,13 @@ export default function PipelineFinancialStatements({
             <Download size={14} /> Export Excel
           </Button>
           {isNonCorporate && (
+            // Task 1: open font picker dialog before exporting
             <Button
               variant="outline"
               size="sm"
               className="gap-1"
               title="Export Balance Sheet + P&L as a Big4-style Word document (.docx)"
-              onClick={() => {
-                generateNCEFinancialsDocx({
-                  engagement,
-                  nceCyAmounts,
-                  ncePyAmounts,
-                  cyYear,
-                  pyYear,
-                  dynamicNoteMap: nceDynamicNoteMap,
-                  capitalData: nceCapitalData ?? [],
-                  notesData:   nceNotesData   ?? [],
-                  ppeData:     ncePpeData      ?? [],
-                  signature: {
-                    firmName:      sigFirmName,
-                    firmFRN:       sigFirmFRN,
-                    partnerName:   sigPartnerName,
-                    membershipNo:  sigMembershipNo,
-                    clientName:    sigClientName,
-                    signatoryName: sigSignatoryName,
-                    place:         sigPlace,
-                    date:          sigDate,
-                    udin:          (engagement as any)?.udin ?? "",
-                  },
-                });
-              }}
+              onClick={() => setShowNCEFontDialog(true)}
             >
               <FileText size={14} /> Export Word
             </Button>
@@ -7536,6 +7541,67 @@ export default function PipelineFinancialStatements({
         </DialogContent>
       </Dialog>
       {/* Corp Word Export — Font Picker */}
+      {/* ── NCE Word Export — font picker dialog (Task 1) ─────────────────── */}
+      <Dialog open={showNCEFontDialog} onOpenChange={setShowNCEFontDialog}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Export Financial Statements</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <p className="text-sm text-muted-foreground">Select font for the Word document:</p>
+            <div className="grid grid-cols-1 gap-2">
+              {(["Arial", "Calibri", "Times New Roman", "Garamond", "Georgia"] as const).map(f => (
+                <label key={f} className="flex items-center gap-2 cursor-pointer rounded border px-3 py-2 hover:bg-muted/50" style={{ fontFamily: f }}>
+                  <input
+                    type="radio"
+                    name="nceFont"
+                    value={f}
+                    checked={nceExportFont === f}
+                    onChange={() => setNceExportFont(f)}
+                    className="accent-primary"
+                  />
+                  <span className="text-sm font-medium">{f}</span>
+                  <span className="ml-auto text-xs text-muted-foreground" style={{ fontFamily: f }}>Aa Bb 1 2 3</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setShowNCEFontDialog(false)}>Cancel</Button>
+            <Button size="sm" onClick={() => {
+              setShowNCEFontDialog(false);
+              void generateNCEFinancialsDocx({
+                engagement,
+                nceCyAmounts,
+                ncePyAmounts,
+                cyYear,
+                pyYear,
+                dynamicNoteMap: nceDynamicNoteMap,
+                capitalData: nceCapitalData ?? [],
+                notesData:   nceNotesData   ?? [],
+                ppeData:     ncePpeData      ?? [],
+                font:        nceExportFont,
+                constitution: entityType,
+                signature: {
+                  firmName:      sigFirmName,
+                  firmFRN:       sigFirmFRN,
+                  partnerName:   sigPartnerName,
+                  membershipNo:  sigMembershipNo,
+                  clientName:    sigClientName,
+                  signatoryName: sigSignatoryName,
+                  constitution:  entityType,
+                  place:         sigPlace,
+                  date:          sigDate,
+                  udin:          (engagement as any)?.udin ?? "",
+                },
+              });
+            }}>
+              Export Word
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={showCorpFontDialog} onOpenChange={setShowCorpFontDialog}>
         <DialogContent className="max-w-sm">
           <DialogHeader>

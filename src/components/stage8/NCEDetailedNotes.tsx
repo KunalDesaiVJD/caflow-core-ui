@@ -30,7 +30,7 @@ import { toast }       from "sonner";
 import { Loader2, Save, RefreshCw, Plus, Trash2, Search, CornerUpRight, Minus, MoreVertical } from "lucide-react";
 import { cn }          from "@/lib/utils";
 import {
-  NoteConfig, NoteRowDef, NOTES_CONFIG, computeDisplayData,
+  NoteConfig, NoteRowDef, NOTES_CONFIG, computeDisplayData, extractSplitData,
 } from "@/config/nceNotesConfig";
 import {
   NCECustomRow, NCENoteData,
@@ -1374,18 +1374,22 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
     data: Record<string, NCENoteData>,
     fy:   string,
   ) => {
-    const rows = NOTES_CONFIG.map(nc => {
-      const d = data[nc.noteType] ?? { cy: {}, py: {}, customRows: [] };
-      const { cy_data, py_data } = serialiseNoteData(d);
-      return {
-        engagement_id:  engagementId,
-        financial_year: fy,
-        note_type:      nc.noteType,
-        cy_data:        cy_data as any,
-        py_data:        py_data as any,
-        updated_at:     new Date().toISOString(),
-      };
-    });
+    // Skip split notes (sourceNoteType set) — their data lives under the source key
+    // and will be persisted when the source note is processed.
+    const rows = NOTES_CONFIG
+      .filter(nc => !nc.sourceNoteType)
+      .map(nc => {
+        const d = data[nc.noteType] ?? { cy: {}, py: {}, customRows: [] };
+        const { cy_data, py_data } = serialiseNoteData(d);
+        return {
+          engagement_id:  engagementId,
+          financial_year: fy,
+          note_type:      nc.noteType,
+          cy_data:        cy_data as any,
+          py_data:        py_data as any,
+          updated_at:     new Date().toISOString(),
+        };
+      });
     const { error } = await supabase
       .from("nce_financial_notes")
       .upsert(rows, { onConflict: "engagement_id,financial_year,note_type" });
@@ -2166,7 +2170,16 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
       {/* All notes — always open */}
       <div className="space-y-4">
         {NOTES_CONFIG.map(nc => {
-          const d          = noteData[nc.noteType] ?? { cy: {}, py: {}, customRows: [] };
+          // For split notes (sourceNoteType set), read from the source note's data
+          // and extract only the relevant LT or ST side via extractSplitData().
+          const sourceKey  = nc.sourceNoteType ?? nc.noteType;
+          const rawData    = noteData[sourceKey] ?? { cy: {}, py: {}, customRows: [] };
+          const splitSide  = nc.splitSide;
+          const extracted  = splitSide ? extractSplitData(rawData, splitSide) : null;
+          const d: typeof rawData = extracted
+            ? { ...rawData, cy: extracted.cy, py: extracted.py, customRows: [] }
+            : rawData;
+
           const autoCount  = d.customRows.filter(r => r.source === "auto").length;
           const manuCount  = d.customRows.filter(r => r.source === "manual").length;
 
@@ -2176,6 +2189,15 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
             ? (getDynamicNoteDisplay(nc.noteType, dynamicNoteMap) ?? "")
             : (nc.title.match(/Note\s+([\d\s&]+):/i)?.[1]?.trim() ?? "");
           const noteTitle = nc.title.replace(/^Note\s+[\d\s&]+:\s*/i, "");
+
+          // For split notes: when the user edits a bare key (e.g. "secured_other"),
+          // write it back to the source note with the side suffix (e.g. "secured_lt_other").
+          const mkChangeCy = splitSide
+            ? (key: string, v: number) => handleChange(sourceKey, `${key}_${splitSide}`, true,  v)
+            : (key: string, v: number) => handleChange(sourceKey, key,                   true,  v);
+          const mkChangePy = splitSide
+            ? (key: string, v: number) => handleChange(sourceKey, `${key}_${splitSide}`, false, v)
+            : (key: string, v: number) => handleChange(sourceKey, key,                   false, v);
 
           return (
             <NoteCard
@@ -2198,18 +2220,18 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
                     labelOverrides={d.labelOverrides ?? {}}
                     cySources={d.cy_sources ?? {}}
                     sourceLabelOverrides={d.sourceLabelOverrides ?? {}}
-                    onChangeCy={(key, v) => handleChange(nc.noteType, key, true,  v)}
-                    onChangePy={(key, v) => handleChange(nc.noteType, key, false, v)}
-                    onAddRow={(opts) => handleAddRow(nc.noteType, opts)}
-                    onDeleteRow={id => handleDeleteRow(nc.noteType, id)}
-                    onChangeLabel={(id, lbl) => handleChangeLabel(nc.noteType, id, lbl)}
-                    onHideStatic={id => handleHideStatic(nc.noteType, id)}
-                    onChangeStaticLabel={(id, lbl) => handleChangeStaticLabel(nc.noteType, id, lbl)}
-                    onPromote={(cid, sid) => handlePromoteCustomToStatic(nc.noteType, cid, sid)}
-                    onSwapLtSt={(rid) => handleSwapLtSt(nc.noteType, rid)}
-                    onEjectSource={(rid, ledger, amt, attachToId?) => handleEjectSource(nc.noteType, rid, ledger, amt, attachToId)}
-                    onEjectCustomSource={(cid, ledger, amt, attachToId?) => handleEjectCustomSource(nc.noteType, cid, ledger, amt, attachToId)}
-                    onChangeSourceLabel={(rid, ledger, lbl) => handleChangeSourceLabel(nc.noteType, rid, ledger, lbl)}
+                    onChangeCy={mkChangeCy}
+                    onChangePy={mkChangePy}
+                    onAddRow={(opts) => handleAddRow(sourceKey, opts)}
+                    onDeleteRow={id => handleDeleteRow(sourceKey, id)}
+                    onChangeLabel={(id, lbl) => handleChangeLabel(sourceKey, id, lbl)}
+                    onHideStatic={id => handleHideStatic(sourceKey, id)}
+                    onChangeStaticLabel={(id, lbl) => handleChangeStaticLabel(sourceKey, id, lbl)}
+                    onPromote={(cid, sid) => handlePromoteCustomToStatic(sourceKey, cid, sid)}
+                    onSwapLtSt={(rid) => handleSwapLtSt(sourceKey, rid)}
+                    onEjectSource={(rid, ledger, amt, attachToId?) => handleEjectSource(sourceKey, rid, ledger, amt, attachToId)}
+                    onEjectCustomSource={(cid, ledger, amt, attachToId?) => handleEjectCustomSource(sourceKey, cid, ledger, amt, attachToId)}
+                    onChangeSourceLabel={(rid, ledger, lbl) => handleChangeSourceLabel(sourceKey, rid, ledger, lbl)}
                   />
                 ) : (
                   <PatternBTable
@@ -2221,17 +2243,17 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
                     labelOverrides={d.labelOverrides ?? {}}
                     cySources={d.cy_sources ?? {}}
                     sourceLabelOverrides={d.sourceLabelOverrides ?? {}}
-                    onChangeCy={(key, v) => handleChange(nc.noteType, key, true,  v)}
-                    onChangePy={(key, v) => handleChange(nc.noteType, key, false, v)}
-                    onAddRow={(opts) => handleAddRow(nc.noteType, opts)}
-                    onDeleteRow={id => handleDeleteRow(nc.noteType, id)}
-                    onChangeLabel={(id, lbl) => handleChangeLabel(nc.noteType, id, lbl)}
-                    onHideStatic={id => handleHideStatic(nc.noteType, id)}
-                    onChangeStaticLabel={(id, lbl) => handleChangeStaticLabel(nc.noteType, id, lbl)}
-                    onPromote={(cid, sid) => handlePromoteCustomToStatic(nc.noteType, cid, sid)}
-                    onEjectSource={(rid, ledger, amt, attachToId?) => handleEjectSource(nc.noteType, rid, ledger, amt, attachToId)}
-                    onEjectCustomSource={(cid, ledger, amt, attachToId?) => handleEjectCustomSource(nc.noteType, cid, ledger, amt, attachToId)}
-                    onChangeSourceLabel={(rid, ledger, lbl) => handleChangeSourceLabel(nc.noteType, rid, ledger, lbl)}
+                    onChangeCy={mkChangeCy}
+                    onChangePy={mkChangePy}
+                    onAddRow={(opts) => handleAddRow(sourceKey, opts)}
+                    onDeleteRow={id => handleDeleteRow(sourceKey, id)}
+                    onChangeLabel={(id, lbl) => handleChangeLabel(sourceKey, id, lbl)}
+                    onHideStatic={id => handleHideStatic(sourceKey, id)}
+                    onChangeStaticLabel={(id, lbl) => handleChangeStaticLabel(sourceKey, id, lbl)}
+                    onPromote={(cid, sid) => handlePromoteCustomToStatic(sourceKey, cid, sid)}
+                    onEjectSource={(rid, ledger, amt, attachToId?) => handleEjectSource(sourceKey, rid, ledger, amt, attachToId)}
+                    onEjectCustomSource={(cid, ledger, amt, attachToId?) => handleEjectCustomSource(sourceKey, cid, ledger, amt, attachToId)}
+                    onChangeSourceLabel={(rid, ledger, lbl) => handleChangeSourceLabel(sourceKey, rid, ledger, lbl)}
                   />
                 )}
               </div>

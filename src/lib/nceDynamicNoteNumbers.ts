@@ -101,7 +101,7 @@ export function getDynamicNoteDisplay(
   const meta = NOTE_META[noteType];
   if (!meta) return null;
 
-  // Parse static refs from strings like "3 & 6" or "5 & 9"
+  // Parse static refs from strings like "3" or "5"
   const staticRefs = meta.noteNumber
     .split(/\s*[&,]\s*/)
     .map(s => parseInt(s.trim(), 10))
@@ -113,4 +113,18 @@ export function getDynamicNoteDisplay(
 
   if (dynamicNos.length === 0) return null;
   return dynamicNos.join(" & ");
+}
+
+/**
+ * Return the dynamic display string using the SOURCE note type's meta
+ * when a split note (splitSide set) is being resolved.
+ * For split notes (borrowings_lt / borrowings_st / provisions_lt / provisions_st),
+ * the note ref is already a single number in NOTE_META, so getDynamicNoteDisplay
+ * works directly — this function is retained for compatibility.
+ */
+export function getDynamicNoteDisplayForSplit(
+  noteType:   string,
+  dynamicMap: Map<number, number>,
+): string | null {
+  return getDynamicNoteDisplay(noteType, dynamicMap);
 }
