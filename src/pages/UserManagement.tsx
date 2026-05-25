@@ -63,7 +63,8 @@ const ROLE_HIERARCHY: Record<string, number> = {
   superadmin: 5, firm_admin: 4, partner_ca: 3, manager: 2, staff_article: 1, client: 0,
 };
 
-const ALL_ROLES = ["superadmin", "firm_admin", "partner_ca", "manager", "staff_article", "client"];
+// Client role is intentionally excluded — client logins are managed through the Clients section
+const ALL_ROLES = ["superadmin", "firm_admin", "partner_ca", "manager", "staff_article"];
 
 const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID || "hubyywmodekfdzhwiumb";
 const ANON_KEY   = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh1Ynl5d21vZGVrZmR6aHdpdW1iIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI3ODkyNzgsImV4cCI6MjA4ODM2NTI3OH0.M6UQcpMLCCFja9TdeJpxawUvKhso38BmMGFJi6lLbrc";
@@ -71,7 +72,7 @@ const ANON_KEY   = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSI
 function getAllowedRoles(currentRole: string): string[] {
   const level = ROLE_HIERARCHY[currentRole] ?? 0;
   return Object.entries(ROLE_HIERARCHY)
-    .filter(([, v]) => v < level)
+    .filter(([k, v]) => v < level && k !== "client") // client logins managed via Clients section
     .map(([k]) => k)
     .sort((a, b) => (ROLE_HIERARCHY[b] ?? 0) - (ROLE_HIERARCHY[a] ?? 0));
 }
@@ -180,7 +181,8 @@ export default function UserManagement() {
     setLoading(true);
     try {
       const data = await invokeUserMgmt("list", "GET");
-      setUsers(data);
+      // Exclude clients — they are managed through the Clients section, not here
+      setUsers((data as UserRow[]).filter(u => u.role !== "client"));
     } catch (e: any) {
       toast({ title: "Error loading users", description: e.message, variant: "destructive" });
     } finally {
@@ -393,6 +395,10 @@ export default function UserManagement() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-display font-bold text-foreground">Team Members</h1>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Firm employees only. Client portal logins are managed from the{" "}
+            <a href="/clients" className="text-primary underline underline-offset-2">Clients</a> section.
+          </p>
           <div className="flex gap-2 mt-2 flex-wrap">
             {ALL_ROLES.map(r => (
               <Badge key={r} variant="outline" className={ROLE_COLORS[r]}>
@@ -402,7 +408,7 @@ export default function UserManagement() {
           </div>
         </div>
         <Button onClick={() => setShowAdd(true)} className="gap-2">
-          <UserPlus size={16} /> Add User
+          <UserPlus size={16} /> Add Team Member
         </Button>
       </div>
 
@@ -425,7 +431,7 @@ export default function UserManagement() {
             {loading ? (
               <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-10">Loading…</TableCell></TableRow>
             ) : users.length === 0 ? (
-              <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-10">No team members found</TableCell></TableRow>
+              <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-10">No team members found. Client logins are in the Clients section.</TableCell></TableRow>
             ) : users.map(u => (
               <TableRow key={u.id} className="group">
                 <TableCell>
