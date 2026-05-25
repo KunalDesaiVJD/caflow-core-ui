@@ -431,7 +431,12 @@ function buildBSTable(
   const totAPy = ncaPy + caPy;
 
   _compact = true;
-  _rowH = 280;   // 36 data rows × 280 + fixed overhead fits BS + signature on 1 A4 page
+  // FIT-TO-ONE-PAGE: the Balance Sheet has a FIXED set of Schedule III rows for
+  // every corporate client, so the height is deterministic. 250 DXA per row +
+  // the tightened spacer/signature below keeps the ENTIRE Balance Sheet AND its
+  // signature block on a single A4 page (printable height ≈ 15218 DXA) for all
+  // corporate entities — borders, fonts and formatting are unchanged.
+  _rowH = 250;
   const rows: TableRow[] = [
     ...titleRows(entityName, "BALANCE SHEET", `AS AT 31 MARCH ${cyYear}`),
     colHeaderRow(`As at 31 Mar ${cyYear}`, `As at 31 Mar ${pyYear}`),
@@ -565,7 +570,10 @@ function buildPLTable(
     });
 
   _compact = true;
-  _rowH = 420;   // 24 data rows × 420 + fixed overhead fits PL + signature on 1 A4 page
+  // FIT-TO-ONE-PAGE: fixed Schedule III P&L rows for every corporate client.
+  // 320 DXA per row + the tightened spacer/signature keeps the ENTIRE P&L AND
+  // its signature block on a single A4 page for all corporate entities.
+  _rowH = 320;
   const rows: TableRow[] = [
     ...titleRows(entityName, "STATEMENT OF PROFIT AND LOSS", `FOR THE YEAR ENDED 31 MARCH ${cyYear}`),
     colHeaderRow(`Year ended 31 Mar ${cyYear}`, `Year ended 31 Mar ${pyYear}`),
@@ -673,7 +681,8 @@ function buildCorpSignatureTable(sig: CorpSigData): Table {
     lines: Array<{ text: string; bold?: boolean; gap?: boolean; muted?: boolean }>,
   ): Paragraph[] {
     return lines.map(l => new Paragraph({
-      spacing: { before: l.gap ? 200 : 0, after: 20 },
+      // Tightened so the signature block fits on the same page as the statement.
+      spacing: { before: l.gap ? 90 : 0, after: 10 },
       children: [new TextRun({
         text:  l.text,
         font:  FONT,
@@ -694,7 +703,7 @@ function buildCorpSignatureTable(sig: CorpSigData): Table {
           new TableCell({
             width:   { size: colW, type: WidthType.DXA },
             borders: BDR_NONE,
-            margins: { top: 80, bottom: 80, left: 80, right: 80 },
+            margins: { top: 40, bottom: 40, left: 80, right: 80 },
             children: sigLines([
               { text: `For, ${firmName}`, bold: true },
               { text: "Chartered Accountants" },
@@ -711,7 +720,7 @@ function buildCorpSignatureTable(sig: CorpSigData): Table {
           new TableCell({
             width:   { size: colW, type: WidthType.DXA },
             borders: BDR_NONE,
-            margins: { top: 80, bottom: 80, left: 200, right: 80 },
+            margins: { top: 40, bottom: 40, left: 200, right: 80 },
             children: dir1Name !== BLANK ? sigLines([
               { text: dir1Name, bold: true },
               ...(dir1Din ? [{ text: `DIN: ${dir1Din}` }] : []),
@@ -724,7 +733,7 @@ function buildCorpSignatureTable(sig: CorpSigData): Table {
           new TableCell({
             width:   { size: colWRight, type: WidthType.DXA },
             borders: BDR_NONE,
-            margins: { top: 80, bottom: 80, left: 200, right: 80 },
+            margins: { top: 40, bottom: 40, left: 200, right: 80 },
             children: dir2Name ? sigLines([
               { text: dir2Name, bold: true },
               ...(dir2Din ? [{ text: `DIN: ${dir2Din}` }] : []),
@@ -1567,7 +1576,7 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
 
       children: [
         bsTable,
-        new Paragraph({ spacing: { before: 600 }, children: [] }),
+        new Paragraph({ spacing: { before: 160 }, children: [] }),
         sigBlock(),
       ],
     },
@@ -1577,7 +1586,7 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
 
       children: [
         plTable,
-        new Paragraph({ spacing: { before: 600 }, children: [] }),
+        new Paragraph({ spacing: { before: 160 }, children: [] }),
         sigBlock(),
       ],
     },
