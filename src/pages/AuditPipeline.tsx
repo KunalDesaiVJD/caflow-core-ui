@@ -240,22 +240,44 @@ export default function AuditPipeline() {
       // audit engagement for" — draft status is unrelated to that decision.
       // The eligibility filter below already restricts to clients with audit
       // applicability or active engagements, which is the correct gate.
-      let clientQuery = supabase
-        .from("clients")
-        .select("id, name, entity_type, statutory_audit_applicable, tax_audit_applicable, internal_audit_applicable, tax_audit_type, is_draft")
-        .is("deleted_at", null)
-        .order("name", { ascending: true });
-      if (firmId) clientQuery = clientQuery.eq("firm_id", firmId);
+      // ROOT-CAUSE FIX: PostgREST caps every SELECT at 1000 rows by default.
+      // A single `.from("clients").select(...)` therefore silently dropped any
+      // client beyond the 1000th row (ordered by name) — so firms with 1000+
+      // clients lost everyone alphabetically late (e.g. "Vardan Developers")
+      // from the Create-Engagement dropdown, even with Audit Setup completed.
+      // Page through ALL rows so no client is ever missed.
+      const PAGE = 1000;
+      const fetchAllPaged = async (build: (from: number, to: number) => any): Promise<any[]> => {
+        const all: any[] = [];
+        for (let from = 0; ; from += PAGE) {
+          const { data, error } = await build(from, from + PAGE - 1);
+          if (error || !data || data.length === 0) break;
+          all.push(...data);
+          if (data.length < PAGE) break;
+        }
+        return all;
+      };
 
-      let engIdQuery = supabase
-        .from("audit_engagements")
-        .select("client_id")
-        .or("is_py_shell.is.null,is_py_shell.eq.false");
-      if (firmId) engIdQuery = engIdQuery.eq("firm_id", firmId);
-
-      const [{ data: allClients }, { data: engIdRows }] = await Promise.all([
-        clientQuery,
-        engIdQuery,
+      const [allClients, engIdRows] = await Promise.all([
+        fetchAllPaged((from, to) => {
+          let q = supabase
+            .from("clients")
+            .select("id, name, entity_type, statutory_audit_applicable, tax_audit_applicable, internal_audit_applicable, tax_audit_type, is_draft")
+            .is("deleted_at", null)
+            .order("name", { ascending: true })
+            .range(from, to);
+          if (firmId) q = q.eq("firm_id", firmId);
+          return q;
+        }),
+        fetchAllPaged((from, to) => {
+          let q = supabase
+            .from("audit_engagements")
+            .select("client_id")
+            .or("is_py_shell.is.null,is_py_shell.eq.false")
+            .range(from, to);
+          if (firmId) q = q.eq("firm_id", firmId);
+          return q;
+        }),
       ]);
 
       const allFirmClients = allClients ?? [];
@@ -268,33 +290,51 @@ export default function AuditPipeline() {
       );
 
       // ── Step 2: Parallel eligibility sources ───────────────────────────────
+      // The `.in("client_id", clientIds)` filters are chunked: a clientIds array
+      // of 1000+ UUIDs would blow past the request URL length limit (causing the
+      // whole sub-query to fail) AND each sub-query is itself 1000-row capped.
+      // Chunking keeps every firm's audit-setup / service / classification flags
+      // intact no matter how many clients there are.
+      const ID_CHUNK = 300;
+      const idChunks: string[][] = [];
+      for (let i = 0; i < clientIds.length; i += ID_CHUNK) idChunks.push(clientIds.slice(i, i + ID_CHUNK));
+      const gatherIn = async (build: (ids: string[]) => any): Promise<{ data: any[] }> => {
+        const rows: any[] = [];
+        for (const ids of idChunks) {
+          if (!ids.length) continue;
+          const collected = await fetchAllPaged((from, to) => build(ids).range(from, to));
+          rows.push(...collected);
+        }
+        return { data: rows };
+      };
+
       const [classRes, classHistRes, auditSetupRes, auditSvcRes] = await Promise.all([
         // Source 3: FY classification snapshot — exact "Audit" only.
         // Wildcards like %audit% wrongly match "Non-Audit" and "Partner in
         // Audited Firm", so a client reclassified to Non-Audit would still
         // appear in the Audit pipeline.
-        supabase
+        gatherIn((ids) => supabase
           .from("client_fy_classifications")
           .select("client_id")
           .ilike("classification", "Audit")
-          .in("client_id", clientIds),
+          .in("client_id", ids)),
         // Source 4: classification history (exact match — same reason as above)
-        (supabase as any)
+        gatherIn((ids) => (supabase as any)
           .from("client_classification_history")
           .select("client_id")
           .ilike("new_classification", "Audit")
-          .in("client_id", clientIds),
+          .in("client_id", ids)),
         // Source 2: audit setup flags — IN clause scopes to firm clients (safer than RLS-only).
-        supabase
+        gatherIn((ids) => supabase
           .from("client_fy_audit_setup")
           .select("client_id, statutory_audit_applicable, tax_audit_applicable, internal_audit_applicable, stock_audit_applicable")
-          .in("client_id", clientIds),
+          .in("client_id", ids)),
         // Source 5: active audit services — LEFT join so services with no category still appear.
-        supabase
+        gatherIn((ids) => supabase
           .from("client_services")
           .select("client_id, is_active, service_categories(name, linked_module)")
-          .in("client_id", clientIds)
-          .eq("is_active", true),
+          .in("client_id", ids)
+          .eq("is_active", true)),
       ]);
 
       // Build per-client flags from setup table (source 2).
