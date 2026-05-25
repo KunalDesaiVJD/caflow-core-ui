@@ -58,7 +58,7 @@ export function AdminLayout() {
         {/* Logo */}
         <div className="flex items-center h-16 px-4 border-b border-[hsl(var(--sidebar-border))]">
           <Link to="/admin" className="flex items-center gap-2">
-            <Shield className="h-5 w-5 text-destructive" />
+            <ShieldCheck className="h-5 w-5 text-destructive" />
             <span className="text-primary-foreground font-display font-bold text-lg tracking-tight">
               CA<span className="text-primary">Flow</span>
             </span>
