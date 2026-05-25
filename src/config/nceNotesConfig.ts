@@ -32,6 +32,18 @@ export interface NoteConfig {
   title: string;
   pattern: ColPattern;
   rows: NoteRowDef[];
+  /**
+   * When set, data for this note is read from this other noteType in the DB.
+   * Used for LT/ST split display: both borrowings_lt and borrowings_st read
+   * from the "borrowings" DB record, extracting _lt or _st suffix values.
+   */
+  sourceNoteType?: string;
+  /**
+   * When set, indicates this is one side of a Pattern A split.
+   * "lt" → read keys with _lt suffix (long-term column only)
+   * "st" → read keys with _st suffix (short-term column only)
+   */
+  splitSide?: "lt" | "st";
 }
 
 export interface NoteData {
@@ -55,11 +67,13 @@ export interface NoteMeta {
 // Metadata keyed by `noteType` — kept separate from NOTES_CONFIG so the
 // editor stays layout-agnostic.
 export const NOTE_META: Record<string, NoteMeta> = {
-  borrowings:        { noteNumber: "3 & 6",   shortName: "Borrowings",                    section: "BS" },
+  borrowings_lt:     { noteNumber: "3",       shortName: "Long-Term Borrowings",          section: "BS" },
   other_lt_liab:     { noteNumber: "4",       shortName: "Other Long-Term Liabilities",   section: "BS" },
-  provisions:        { noteNumber: "5 & 9",   shortName: "Provisions",                    section: "BS" },
+  provisions_lt:     { noteNumber: "5",       shortName: "Long-Term Provisions",          section: "BS" },
+  borrowings_st:     { noteNumber: "6",       shortName: "Short-Term Borrowings",         section: "BS" },
   trade_payables:    { noteNumber: "7",       shortName: "Trade Payables",                section: "BS" },
   other_cl:          { noteNumber: "8",       shortName: "Other Current Liabilities",     section: "BS" },
+  provisions_st:     { noteNumber: "9",       shortName: "Short-Term Provisions",         section: "BS" },
   cwip:              { noteNumber: "11",      shortName: "Capital Work-in-Progress",      section: "BS" },
   investments:       { noteNumber: "13",      shortName: "Non-Current Investments",       section: "BS" },
   loans_advances:    { noteNumber: "14 & 20",  shortName: "Loans and Advances",            section: "BS" },
@@ -76,43 +90,70 @@ export const NOTE_META: Record<string, NoteMeta> = {
   other_expenses:    { noteNumber: "28",      shortName: "Other Expenses",                section: "PL" },
 };
 
-export const NOTES_CONFIG: NoteConfig[] = [
-  // ── Note: Borrowings (Pattern A) ────────────────────────────────────────
+// ─── Helper: given Pattern A data saved under sourceNoteType, produce
+//     Pattern B-compatible data by extracting _lt or _st suffixed keys.
+export function extractSplitData(
+  sourceData: { cy: Record<string, number>; py: Record<string, number> },
+  side: "lt" | "st",
+): { cy: Record<string, number>; py: Record<string, number> } {
+  const suffix = `_${side}`;
+  const outCy: Record<string, number> = {};
+  const outPy: Record<string, number> = {};
+  for (const key of Object.keys(sourceData.cy)) {
+    if (key.endsWith(suffix)) {
+      outCy[key.slice(0, -suffix.length)] = sourceData.cy[key];
+    }
+  }
+  for (const key of Object.keys(sourceData.py)) {
+    if (key.endsWith(suffix)) {
+      outPy[key.slice(0, -suffix.length)] = sourceData.py[key];
+    }
+  }
+  return { cy: outCy, py: outPy };
+}
+
+// ─── Shared row definitions for borrowings (used by both LT and ST split notes)
+const BORROWINGS_ROWS: NoteRowDef[] = [
+  { id: "sec_hdr",           label: "Secured",                                          isSectionHeader: true },
+  { id: "sec_term_bank",     label: "Term loans — Banks",                               indent: 1 },
+  { id: "sec_term_fi",       label: "Term loans — Financial institutions",              indent: 1 },
+  { id: "sec_term_others",   label: "Term loans — Others",                              indent: 1 },
+  { id: "sec_demand_bank",   label: "Loans on demand — Banks",                          indent: 1 },
+  { id: "sec_demand_other",  label: "Loans on demand — Others",                         indent: 1 },
+  { id: "sec_deferred",      label: "Deferred payment liabilities",                     indent: 1 },
+  { id: "sec_related",       label: "Loans from related parties",                       indent: 1 },
+  { id: "sec_other",         label: "Other secured loans",                              indent: 1 },
   {
-    noteType: "borrowings",
-    title: "Note 3: Borrowings",
-    pattern: "A",
-    rows: [
-      { id: "sec_hdr",           label: "Secured",                                          isSectionHeader: true },
-      { id: "sec_term_bank",     label: "Term loans — Banks",                               indent: 1 },
-      { id: "sec_term_fi",       label: "Term loans — Financial institutions",              indent: 1 },
-      { id: "sec_term_others",   label: "Term loans — Others",                              indent: 1 },
-      { id: "sec_demand_bank",   label: "Loans on demand — Banks",                          indent: 1 },
-      { id: "sec_demand_other",  label: "Loans on demand — Others",                         indent: 1 },
-      { id: "sec_deferred",      label: "Deferred payment liabilities",                     indent: 1 },
-      { id: "sec_related",       label: "Loans from related parties",                       indent: 1 },
-      { id: "sec_other",         label: "Other secured loans",                              indent: 1 },
-      {
-        id: "sec_total", label: "Total (A)", isTotal: true, sectionTag: "secured",
-        formulaAdd: ["sec_term_bank","sec_term_fi","sec_term_others","sec_demand_bank",
-                     "sec_demand_other","sec_deferred","sec_related","sec_other"],
-      },
-      { id: "unsec_hdr",           label: "Unsecured",                                        isSectionHeader: true },
-      { id: "unsec_term_bank",     label: "Term loans — Banks",                               indent: 1 },
-      { id: "unsec_term_fi",       label: "Term loans — Financial institutions",              indent: 1 },
-      { id: "unsec_term_others",   label: "Term loans — Others",                              indent: 1 },
-      { id: "unsec_demand_bank",   label: "Loans on demand — Banks",                          indent: 1 },
-      { id: "unsec_demand_other",  label: "Loans on demand — Others",                         indent: 1 },
-      { id: "unsec_deferred",      label: "Deferred payment liabilities",                     indent: 1 },
-      { id: "unsec_related",       label: "Loans from related parties",                       indent: 1 },
-      { id: "unsec_other",         label: "Other unsecured loans",                            indent: 1 },
-      {
-        id: "unsec_total", label: "Total (B)", isTotal: true, sectionTag: "unsecured",
-        formulaAdd: ["unsec_term_bank","unsec_term_fi","unsec_term_others","unsec_demand_bank",
-                     "unsec_demand_other","unsec_deferred","unsec_related","unsec_other"],
-      },
-      { id: "total_ab", label: "Total (A + B)", isTotal: true, formulaAdd: ["sec_total","unsec_total"] },
-    ],
+    id: "sec_total", label: "Total (A)", isTotal: true, sectionTag: "secured",
+    formulaAdd: ["sec_term_bank","sec_term_fi","sec_term_others","sec_demand_bank",
+                 "sec_demand_other","sec_deferred","sec_related","sec_other"],
+  },
+  { id: "unsec_hdr",           label: "Unsecured",                                        isSectionHeader: true },
+  { id: "unsec_term_bank",     label: "Term loans — Banks",                               indent: 1 },
+  { id: "unsec_term_fi",       label: "Term loans — Financial institutions",              indent: 1 },
+  { id: "unsec_term_others",   label: "Term loans — Others",                              indent: 1 },
+  { id: "unsec_demand_bank",   label: "Loans on demand — Banks",                          indent: 1 },
+  { id: "unsec_demand_other",  label: "Loans on demand — Others",                         indent: 1 },
+  { id: "unsec_deferred",      label: "Deferred payment liabilities",                     indent: 1 },
+  { id: "unsec_related",       label: "Loans from related parties",                       indent: 1 },
+  { id: "unsec_other",         label: "Other unsecured loans",                            indent: 1 },
+  {
+    id: "unsec_total", label: "Total (B)", isTotal: true, sectionTag: "unsecured",
+    formulaAdd: ["unsec_term_bank","unsec_term_fi","unsec_term_others","unsec_demand_bank",
+                 "unsec_demand_other","unsec_deferred","unsec_related","unsec_other"],
+  },
+  { id: "total_ab", label: "Total (A + B)", isTotal: true, formulaAdd: ["sec_total","unsec_total"] },
+];
+
+export const NOTES_CONFIG: NoteConfig[] = [
+  // ── Note: Long-Term Borrowings (split from borrowings Pattern A) ─────────
+  {
+    noteType:       "borrowings_lt",
+    sourceNoteType: "borrowings",
+    splitSide:      "lt",
+    title:          "Note 3: Long-Term Borrowings",
+    pattern:        "B",
+    rows:           BORROWINGS_ROWS,
   },
 
   // ── Note: Other Long-Term Liabilities (Pattern B) ───────────────────────
@@ -127,22 +168,32 @@ export const NOTES_CONFIG: NoteConfig[] = [
     ],
   },
 
-  // ── Note: Provisions (Pattern A) ────────────────────────────────────────
+  // ── Note: Long-Term Provisions (split from provisions Pattern A) ─────────
+  // Task 5: simplified — all entries grouped under "Other Provisions"
   {
-    noteType: "provisions",
-    title: "Note 5 & 9: Provisions (Long-Term & Short-Term)",
-    pattern: "A",
+    noteType:       "provisions_lt",
+    sourceNoteType: "provisions",
+    splitSide:      "lt",
+    title:          "Note 5: Long-Term Provisions",
+    pattern:        "B",
     rows: [
-      { id: "gratuity",   label: "Provision for gratuity" },
-      { id: "leave_enc",  label: "Provision for leave encashment" },
       { id: "income_tax", label: "Provision for income tax" },
-      { id: "other_prov", label: "Other provisions" },
-      { id: "specify",    label: "Others (please specify)" },
+      { id: "other_prov", label: "Other Provisions" },
       {
         id: "total", label: "Total", isTotal: true,
-        formulaAdd: ["gratuity","leave_enc","income_tax","other_prov","specify"],
+        formulaAdd: ["income_tax","other_prov"],
       },
     ],
+  },
+
+  // ── Note: Short-Term Borrowings (split from borrowings Pattern A) ────────
+  {
+    noteType:       "borrowings_st",
+    sourceNoteType: "borrowings",
+    splitSide:      "st",
+    title:          "Note 6: Short-Term Borrowings",
+    pattern:        "B",
+    rows:           BORROWINGS_ROWS,
   },
 
   // ── Note: Trade Payables (Pattern B) ────────────────────────────────────
@@ -158,22 +209,43 @@ export const NOTES_CONFIG: NoteConfig[] = [
   },
 
   // ── Note: Other Current Liabilities (Pattern B) ─────────────────────────
+  // Task 13: added "Revenue recognised on PCOS" and "Advance from Members" below "Other payables — Others"
   {
     noteType: "other_cl",
     title: "Note 8: Other Current Liabilities",
     pattern: "B",
     rows: [
-      { id: "inc_advance", label: "Income received in advance" },
-      { id: "unearned",    label: "Unearned revenue" },
-      { id: "gst_payable", label: "GST payable" },
-      { id: "tds_payable", label: "TDS payable" },
-      { id: "emp_payable", label: "Other payables — Employees" },
-      { id: "tax_payable", label: "Other payables — Tax" },
-      { id: "other_cl",    label: "Other payables — Others" },
+      { id: "inc_advance",   label: "Income received in advance" },
+      { id: "unearned",      label: "Unearned revenue" },
+      { id: "gst_payable",   label: "GST payable" },
+      { id: "tds_payable",   label: "TDS payable" },
+      { id: "emp_payable",   label: "Other payables — Employees" },
+      { id: "tax_payable",   label: "Other payables — Tax" },
+      { id: "other_cl",      label: "Other payables — Others" },
+      { id: "rev_pcos",      label: "Revenue recognised on PCOS" },
+      { id: "adv_members",   label: "Advance from Members" },
       {
         id: "total", label: "Total", isTotal: true,
         formulaAdd: ["inc_advance","unearned","gst_payable","tds_payable",
-                     "emp_payable","tax_payable","other_cl"],
+                     "emp_payable","tax_payable","other_cl","rev_pcos","adv_members"],
+      },
+    ],
+  },
+
+  // ── Note: Short-Term Provisions (split from provisions Pattern A) ─────────
+  // Task 5: simplified — all entries grouped under "Other Provisions"
+  {
+    noteType:       "provisions_st",
+    sourceNoteType: "provisions",
+    splitSide:      "st",
+    title:          "Note 9: Short-Term Provisions",
+    pattern:        "B",
+    rows: [
+      { id: "income_tax", label: "Provision for income tax" },
+      { id: "other_prov", label: "Other Provisions" },
+      {
+        id: "total", label: "Total", isTotal: true,
+        formulaAdd: ["income_tax","other_prov"],
       },
     ],
   },
@@ -349,33 +421,21 @@ export const NOTES_CONFIG: NoteConfig[] = [
   },
 
   // ── Note: Cash & Bank Balances (Pattern B) ──────────────────────────────
+  // Task 14: removed "(B) Other Bank Balances" section; renamed FD row; renamed total
   {
     noteType: "cash_bank",
     title: "Note 19: Cash and Bank Balances",
     pattern: "B",
     rows: [
-      { id: "la_hdr",       label: "(A) Cash and Cash Equivalents",               isSectionHeader: true },
-      { id: "la_current",   label: "Balance in current account",                  indent: 1 },
-      { id: "la_cc",        label: "Balance in cash credit account",              indent: 1 },
-      { id: "la_fd_3m",     label: "Fixed deposits with maturity < 3 months",     indent: 1 },
-      { id: "la_cheques",   label: "Cheques / drafts in hand",                    indent: 1 },
-      { id: "la_cash",      label: "Cash in hand",                                indent: 1 },
+      { id: "la_hdr",     label: "(A) Cash and Cash Equivalents",  isSectionHeader: true },
+      { id: "la_current", label: "Balance in current account",     indent: 1 },
+      { id: "la_cc",      label: "Balance in cash credit account", indent: 1 },
+      { id: "la_fd_3m",   label: "Fixed deposits",                 indent: 1 },
+      { id: "la_cheques", label: "Cheques / drafts in hand",       indent: 1 },
+      { id: "la_cash",    label: "Cash in hand",                   indent: 1 },
       {
-        id: "la_total", label: "Total (A)", isTotal: true, indent: 1,
+        id: "total", label: "Total", isTotal: true,
         formulaAdd: ["la_current","la_cc","la_fd_3m","la_cheques","la_cash"],
-      },
-      { id: "lb_hdr",       label: "(B) Other Bank Balances",                     isSectionHeader: true },
-      { id: "lb_earmarked", label: "Earmarked balances (e.g., unpaid dividends)", indent: 1 },
-      { id: "lb_fd_3_12",   label: "Fixed deposits with maturity 3–12 months",    indent: 1 },
-      { id: "lb_margin",    label: "Margin money deposits",                        indent: 1 },
-      { id: "lb_others",    label: "Others",                                       indent: 1 },
-      {
-        id: "lb_total", label: "Total (B)", isTotal: true, indent: 1,
-        formulaAdd: ["lb_earmarked","lb_fd_3_12","lb_margin","lb_others"],
-      },
-      {
-        id: "total_ab", label: "Total (A + B)", isTotal: true,
-        formulaAdd: ["la_total","lb_total"],
       },
     ],
   },
@@ -392,36 +452,55 @@ export const NOTES_CONFIG: NoteConfig[] = [
   },
 
   // ── Note: Revenue from Operations (Pattern B) ───────────────────────────
+  // Task 15: net sales presentation with deduction rows; "Other adjustments" → "Other"
   {
     noteType: "revenue_ops",
     title: "Note 22: Revenue from Operations",
     pattern: "B",
     rows: [
-      { id: "sale_products", label: "Sale of products" },
-      { id: "sale_services", label: "Sale of services" },
-      { id: "other_ops",     label: "Other operations" },
-      { id: "other_op_rev",  label: "Other operating revenue" },
-      { id: "other_adj",     label: "Other adjustments" },
+      { id: "sale_products",      label: "Sale of products" },
+      { id: "less_sale_return",   label: "Less: Sale Return",                    indent: 1 },
+      { id: "less_drcr_prod",     label: "Less: Dr/Cr Note & Rate difference",   indent: 1 },
+      {
+        id: "net_sale_products", label: "Net Sale of products", isTotal: true,
+        formulaAdd: ["sale_products"], formulaSub: ["less_sale_return","less_drcr_prod"],
+      },
+      { id: "sale_services",      label: "Sale of services" },
+      { id: "less_drcr_svc",      label: "Less: Dr/Cr Note & Rate difference",   indent: 1 },
+      {
+        id: "net_sale_services", label: "Net Sale of services", isTotal: true,
+        formulaAdd: ["sale_services"], formulaSub: ["less_drcr_svc"],
+      },
+      { id: "other_op_rev",       label: "Other operating revenue" },
+      { id: "other_adj",          label: "Other" },
       {
         id: "total", label: "Total", isTotal: true,
-        formulaAdd: ["sale_products","sale_services","other_ops","other_op_rev","other_adj"],
+        formulaAdd: ["net_sale_products","net_sale_services","other_op_rev","other_adj"],
       },
     ],
   },
 
   // ── Note: Other Income (Pattern B) ──────────────────────────────────────
+  // Task 16: Interest income broken into subcategories; removed "Interest On Deposit";
+  //          "Net gain on sale of investments" → "Net gain / loss on sale of investments"
   {
     noteType: "other_income",
     title: "Note 23: Other Income",
     pattern: "B",
     rows: [
-      { id: "interest",     label: "Interest income" },
-      { id: "dividend",     label: "Dividend income" },
-      { id: "net_gain",     label: "Net gain on sale of investments" },
-      { id: "other_non_op", label: "Other non-operating income" },
+      { id: "interest",        label: "Interest income",                         isSectionHeader: true },
+      { id: "bank_interest",   label: "Bank Interest Income",                    indent: 1 },
+      { id: "other_interest",  label: "Other Interest Income",                   indent: 1 },
+      {
+        id: "total_interest", label: "Total Interest Income", isTotal: true,
+        formulaAdd: ["bank_interest","other_interest"],
+      },
+      { id: "dividend",        label: "Dividend income" },
+      { id: "net_gain",        label: "Net gain / loss on sale of investments" },
+      { id: "other_non_op",    label: "Other non-operating income" },
       {
         id: "total", label: "Total", isTotal: true,
-        formulaAdd: ["interest","dividend","net_gain","other_non_op"],
+        formulaAdd: ["total_interest","dividend","net_gain","other_non_op"],
       },
     ],
   },

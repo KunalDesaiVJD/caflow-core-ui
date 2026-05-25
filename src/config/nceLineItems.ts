@@ -112,8 +112,13 @@ export const NCE_FS_ITEMS: FSLineItem[] = [
   { code: "NCE_TAX", name: "XII.  Tax expense", noteRef: null, section: "NCE_PL_profit", showTotalLast: true, children: [
     { code: "NCE_CUR_TAX",   name: "(1) Current tax",                             noteRef: null, section: "NCE_PL_profit" },
     { code: "NCE_PRIOR_TAX", name: "(2) Short/excess provision for earlier years", noteRef: null, section: "NCE_PL_profit" },
+    { code: "NCE_DEFER_TAX", name: "(3) Deferred tax charge / (benefit)",          noteRef: null, section: "NCE_PL_profit" },
   ]},
-  { code: "NCE_NET_PROF", name: "XIII. Profit / (Loss) for the year (XI − XII)", noteRef: null, section: "NCE_PL_profit" },
+  { code: "NCE_NET_PROF",   name: "XIII. Profit / (Loss) for the year (XI − XII)",                     noteRef: null, section: "NCE_PL_profit" },
+  { code: "NCE_DISC_OP",    name: "XIV.  Profit/(loss) from discontinuing operations",                 noteRef: null, section: "NCE_PL_profit" },
+  { code: "NCE_DISC_TAX",   name: "XV.   Tax expense of discontinuing operations",                     noteRef: null, section: "NCE_PL_profit" },
+  { code: "NCE_DISC_AT",    name: "XVI.  Profit/(loss) from discontinuing operations (after tax) (XIV-XV)", noteRef: null, section: "NCE_PL_profit" },
+  { code: "NCE_FINAL_PROF", name: "XVII. Profit/(Loss) for the year (XIII+XVI)",                       noteRef: null, section: "NCE_PL_profit" },
 ];
 
 // ═══════════════════════════════════════════════════════════

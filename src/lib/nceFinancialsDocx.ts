@@ -25,7 +25,7 @@ import {
   WidthType,
 } from "docx";
 
-import { NOTES_CONFIG, computeDisplayData } from "@/config/nceNotesConfig";
+import { NOTES_CONFIG, computeDisplayData, extractSplitData } from "@/config/nceNotesConfig";
 import type { NoteConfig } from "@/config/nceNotesConfig";
 import { getActiveFsDivisor, FS_SCALES } from "@/lib/fsUnits";
 import { getDynamicNoteDisplay } from "@/lib/nceDynamicNoteNumbers";
@@ -114,7 +114,8 @@ const PPE_NPY  = 1249;
 // 2500+2700+700+1400+1200+1200+1400+1400+1400+1249+1249 = 15398 ✓
 
 // ─── Typography ───────────────────────────────────────────────────────────────
-const FONT     = "Arial";
+// Task 1: mutable so the caller can pass a selected font family.
+let FONT     = "Arial";
 const SZ_XS    = 14;   // 7pt  — footnotes
 const SZ_SM    = 16;   // 8pt  — column headers, footer
 const SZ_BODY  = 18;   // 9pt  — data rows
@@ -330,10 +331,16 @@ function subTotalRow(label: string, cy: number, py: number): TableRow {
 }
 
 /** Grand total row (bold navy border) */
-function grandTotalRow(label: string, cy: number, py: number): TableRow {
+// Task 9: allow right-aligning the label (used for "TOTAL" row in the BS)
+function grandTotalRow(
+  label: string,
+  cy: number,
+  py: number,
+  labelAlign: AlignmentType = AlignmentType.LEFT,
+): TableRow {
   return new TableRow({
     children: [
-      cell({ text: label, w: CW_DESC, bold: true, sz: SZ_HDR, bg: BG_GRAN, borders: BDR_GRAND, padL: 100 }),
+      cell({ text: label, w: CW_DESC, bold: true, sz: SZ_HDR, bg: BG_GRAN, borders: BDR_GRAND, padL: 100, align: labelAlign }),
       ec(CW_NOTE, BG_GRAN, BDR_GRAND),
       ac(cy, CW_CY, { bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
       ac(py, CW_PY, { bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
@@ -456,19 +463,22 @@ function buildBSTable(
     dataRow("        (d)  Short-term provisions",        n(9), L("NCE_STP", cy), L("NCE_STP", py)),
 
     blankRow(),
-    grandTotalRow("TOTAL EQUITY AND LIABILITIES", totELcy, totELpy),
+    // Task 6: "TOTAL EQUITY AND LIABILITIES" → "TOTAL" (right-aligned in Task 9 via grandTotalRow)
+    grandTotalRow("TOTAL", totELcy, totELpy, AlignmentType.RIGHT),
     blankRow(),
 
     // ── ASSETS ───────────────────────────────────────────────────────────
     sectionRow("ASSETS"),
 
+    // Task 8: Non-Current Assets grouped heading like Corporate (a) with (i)(ii)(iii) sub-items
     parentRow("(1)  Non-Current Assets"),
-    dataRow("        (a)(i)    Property, plant and equipment",    n(10), A("NCE_PPE",   cy), A("NCE_PPE",   py)),
-    dataRow("        (a)(ii)   Capital work-in-progress",         n(11), A("NCE_CWIP",  cy), A("NCE_CWIP",  py)),
-    dataRow("        (a)(iii)  Intangible assets",                n(12), A("NCE_INTG",  cy), A("NCE_INTG",  py)),
-    dataRow("        (b)       Non-current investments",          n(13), A("NCE_NCINV", cy), A("NCE_NCINV", py)),
-    dataRow("        (c)       Long-term loans and advances",     n(14), A("NCE_LTLA",  cy), A("NCE_LTLA",  py)),
-    dataRow("        (d)       Other non-current assets",         n(15), A("NCE_ONCA",  cy), A("NCE_ONCA",  py)),
+    parentRow("        (a)  Property, Plant & Equipment and Intangible Assets"),
+    dataRow("                   (i)   Property, plant and equipment",    n(10), A("NCE_PPE",   cy), A("NCE_PPE",   py), 2),
+    dataRow("                   (ii)  Intangible assets",                n(12), A("NCE_INTG",  cy), A("NCE_INTG",  py), 2),
+    dataRow("                   (iii) Capital work-in-progress",         n(11), A("NCE_CWIP",  cy), A("NCE_CWIP",  py), 2),
+    dataRow("        (b)       Non-current investments",                 n(13), A("NCE_NCINV", cy), A("NCE_NCINV", py)),
+    dataRow("        (c)       Long-term loans and advances",            n(14), A("NCE_LTLA",  cy), A("NCE_LTLA",  py)),
+    dataRow("        (d)       Other non-current assets",                n(15), A("NCE_ONCA",  cy), A("NCE_ONCA",  py)),
 
     parentRow("(2)  Current Assets"),
     dataRow("        (a)  Current investments",                   n(16), A("NCE_CINV", cy), A("NCE_CINV", py)),
@@ -479,7 +489,8 @@ function buildBSTable(
     dataRow("        (f)  Other current assets",                  n(21), A("NCE_OCA",  cy), A("NCE_OCA",  py)),
 
     blankRow(),
-    grandTotalRow("TOTAL ASSETS", totAcy, totApy),
+    // Task 6: "TOTAL ASSETS" → "TOTAL"
+    grandTotalRow("TOTAL", totAcy, totApy, AlignmentType.RIGHT),
     blankRow(),
 
     // ── Footnote ─────────────────────────────────────────────────────────
@@ -549,8 +560,16 @@ function buildPLTable(
   const pXIcy  = pIXcy - remCy;               const pXIpy  = pIXpy - remPy;
   const curTaxCy   = A("NCE_CUR_TAX",   cy);   const curTaxPy   = A("NCE_CUR_TAX",   py);
   const priorTaxCy = A("NCE_PRIOR_TAX", cy);   const priorTaxPy = A("NCE_PRIOR_TAX", py);
-  const totTaxCy   = curTaxCy + priorTaxCy;    const totTaxPy   = curTaxPy + priorTaxPy;
+  const deferTaxCy = A("NCE_DEFER_TAX", cy);   const deferTaxPy = A("NCE_DEFER_TAX", py);
+  const totTaxCy   = curTaxCy + priorTaxCy + deferTaxCy;
+  const totTaxPy   = curTaxPy + priorTaxPy + deferTaxPy;
   const netProfCy  = pXIcy - totTaxCy;         const netProfPy  = pXIpy - totTaxPy;
+
+  // Discontinued operations (XIV–XVII)
+  const discOpCy    = A("NCE_DISC_OP",  cy);   const discOpPy    = A("NCE_DISC_OP",  py);
+  const discTaxCy   = A("NCE_DISC_TAX", cy);   const discTaxPy   = A("NCE_DISC_TAX", py);
+  const discAtCy    = discOpCy - discTaxCy;     const discAtPy    = discOpPy - discTaxPy;
+  const finalProfCy = netProfCy + discAtCy;     const finalProfPy = netProfPy + discAtPy;
 
   const rows: TableRow[] = [
     ...titleRows(
@@ -591,8 +610,9 @@ function buildPLTable(
     blankRow(),
 
     parentRow("XII.  Tax expense"),
-    dataRow("        (1)  Current tax",                                     null, curTaxCy,   curTaxPy,   1),
-    dataRow("        (2)  Short / (excess) provision for earlier years",    null, priorTaxCy, priorTaxPy, 1),
+    dataRow("        (1)  Current tax",                                          null, curTaxCy,   curTaxPy,   1),
+    dataRow("        (2)  Short / (excess) provision for earlier years",         null, priorTaxCy, priorTaxPy, 1),
+    dataRow("        (3)  Deferred tax charge / (benefit)",                      null, deferTaxCy, deferTaxPy, 1),
     subTotalRow("             Total tax expense", totTaxCy, totTaxPy),
     blankRow(),
 
@@ -601,6 +621,12 @@ function buildPLTable(
       netProfCy,
       netProfPy,
     ),
+    blankRow(),
+
+    dataRow("XIV.  Profit/(loss) from discontinuing operations",                                      null, discOpCy,    discOpPy),
+    dataRow("XV.   Tax expense of discontinuing operations",                                          null, discTaxCy,   discTaxPy),
+    dataRow("XVI.  Profit/(loss) from discontinuing operations (after tax) (XIV-XV)",                 null, discAtCy,    discAtPy),
+    grandTotalRow("XVII. Profit/(Loss) for the year (XIII+XVI)",                finalProfCy, finalProfPy),
   ];
 
   return new Table({
@@ -618,6 +644,9 @@ export interface SigData {
   membershipNo?: string;
   clientName?: string;
   signatoryName?: string;
+  /** Task 4: entity constitution type (Partnership, Proprietorship, LLP, etc.)
+   *  Used to derive the signatory designation label dynamically. */
+  constitution?: string;
   place?: string;
   date?: string;        // "YYYY-MM-DD" from the UI date input
   udin?: string;        // UDIN shown under the partner block
@@ -630,11 +659,24 @@ function fmtSigDate(d?: string): string {
   return m ? `${m[3]}/${m[2]}/${m[1]}` : d;
 }
 
+/** Task 4 — derive the correct signatory designation from constitution type. */
+function resolveSignatoryDesignation(constitution?: string): string {
+  if (!constitution) return "Authorised Signatory";
+  const c = constitution.toLowerCase().trim();
+  if (c.includes("partnership")) return "Partner / Authorised Signatory";
+  if (c.includes("proprietor"))  return "Proprietor";
+  if (c.includes("llp") || c.includes("limited liability partnership")) return "Designated Partner";
+  return "Authorised Signatory";
+}
+
 /**
  * Mirrors the on-screen NCE signature block:
  *   Left  — CA firm (auto-linked from firm settings)
- *   Right — client + authorised signatory + Place + Date
- * Place / Date appear once, on the right, exactly as in the UI.
+ *   Right — Place/Date (once only, above client block) + client + signatory
+ *
+ * Task 10: Place/Date appear ONCE, on the right, ABOVE "For [Client Name]".
+ * Task 11: FRN and Membership No. labels shown WITHOUT colon ":".
+ * Task 4:  Signatory designation is dynamic based on constitution type.
  */
 function buildSignatureTable(sig: SigData): Table {
   const BLANK      = "_______________";
@@ -647,6 +689,7 @@ function buildSignatureTable(sig: SigData): Table {
   const place      = sig.place        || BLANK;
   const date       = fmtSigDate(sig.date);
   const udin       = sig.udin         || "";
+  const designation = resolveSignatoryDesignation(sig.constitution);
 
   const half = Math.floor(TW / 2);
 
@@ -671,7 +714,7 @@ function buildSignatureTable(sig: SigData): Table {
     rows: [
       new TableRow({
         children: [
-          // Left — CA firm
+          // Left — CA firm (Task 11: no colon after FRN / Membership No.)
           new TableCell({
             width:   { size: half, type: WidthType.DXA },
             borders: BDR_NONE,
@@ -679,7 +722,7 @@ function buildSignatureTable(sig: SigData): Table {
             children: sigLines([
               { text: `For, ${firmName}`, bold: true },
               { text: "Chartered Accountants" },
-              { text: `FRN: ${frn}` },
+              { text: `FRN ${frn}` },
               { text: "", gap: true },
               { text: "__________________" },
               { text: partner, bold: true },
@@ -688,7 +731,7 @@ function buildSignatureTable(sig: SigData): Table {
               { text: `UDIN: ${udin}` },
             ]),
           }),
-          // Right — Place/Date on top, then client + authorised signatory
+          // Right — Task 10: Place/Date ABOVE "For [Client Name]"; appears only once
           new TableCell({
             width:   { size: TW - half, type: WidthType.DXA },
             borders: BDR_NONE,
@@ -700,7 +743,7 @@ function buildSignatureTable(sig: SigData): Table {
               { text: "", gap: true },
               { text: "__________________" },
               ...(signatory ? [{ text: signatory, bold: true }] : []),
-              { text: "Authorised Signatory", muted: true },
+              { text: designation, muted: true },
             ]),
           }),
         ],
@@ -1314,6 +1357,12 @@ export interface NCEDocxParams {
   /** Signature block data — pass the UI's resolved sig* values so the
    *  Word block matches the on-screen signature block exactly. */
   signature?: SigData;
+  /** Task 1: Font for the Word document (Arial / Calibri / Times New Roman etc.)
+   *  Defaults to "Arial" if not provided. */
+  font?: string;
+  /** Task 4: Entity constitution type (Partnership / Proprietorship / LLP …)
+   *  Used to derive signatory designation label. */
+  constitution?: string;
 }
 
 export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<void> {
@@ -1328,7 +1377,12 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     notesData      = [],
     ppeData        = [],
     signature      = {},
+    font           = "Arial",
+    constitution,
   } = params;
+
+  // Task 1: apply chosen font for the entire document
+  FONT = font;
 
   // Phase 3 — sync unit scale with the active FS toggle (Actual / '000 / Lakhs)
   _exportDivisor = getActiveFsDivisor();
@@ -1344,7 +1398,8 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   const plTable  = buildPLTable(nceCyAmounts, ncePyAmounts, cyYear, pyYear, entityName, dynamicNoteMap);
   // A docx Table instance can't be reused across pages, so build a fresh
   // signature block per page (Balance Sheet + P&L) from the same data.
-  const sigArgs: SigData = { clientName: entityName, ...signature };
+  // Task 4: merge constitution so buildSignatureTable can derive designation
+  const sigArgs: SigData = { clientName: entityName, constitution, ...signature };
   const sigBlock = () => buildSignatureTable(sigArgs);
 
   // Phase 2 — Note 1
@@ -1370,13 +1425,21 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
 
   // Notes 3-28: export exactly the notes the UI shows — i.e. those active in
   // the dynamic note map (their BS/PL line carries data). The note number used
-  // is the SAME dynamic number shown on screen (handles compound refs like
-  // "3 & 6"). Inactive notes (no data) are suppressed, not exported.
+  // is the SAME dynamic number shown on screen.
+  // For split notes (sourceNoteType + splitSide set), read from the source DB
+  // record and extract only the _lt or _st suffixed keys via extractSplitData().
   const noteTables: Table[] = [];
   for (const cfg of NOTES_CONFIG) {
     const dynNum = getDynamicNoteDisplay(cfg.noteType, dynamicNoteMap);
     if (dynNum === null) continue;                        // inactive (no data) → skip
-    const data = savedNotes[cfg.noteType] ?? { cy: {}, py: {} };
+
+    // Determine where to read raw data from
+    const sourceKey = cfg.sourceNoteType ?? cfg.noteType;
+    const rawData   = savedNotes[sourceKey] ?? { cy: {}, py: {} };
+
+    // For split notes, extract only the relevant side (_lt or _st suffixes)
+    const data = cfg.splitSide ? extractSplitData(rawData, cfg.splitSide) : rawData;
+
     noteTables.push(buildNoteSection(cfg, data.cy, data.py, dynNum, cyYear, pyYear));
   }
 
