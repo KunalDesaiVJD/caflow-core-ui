@@ -1534,8 +1534,10 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
                 sourceKey: string;
                 sides: Array<{ oldKey: string; side: "lt" | "st" }>;
               }> = [
-                { sourceKey: "borrowings", sides: [{ oldKey: "borrowings_lt", side: "lt"  }, { oldKey: "borrowings_st", side: "st"  }] },
-                { sourceKey: "provisions", sides: [{ oldKey: "provisions_lt", side: "lt"  }, { oldKey: "provisions_st", side: "st"  }] },
+                { sourceKey: "borrowings",    sides: [{ oldKey: "borrowings_lt",    side: "lt"  }, { oldKey: "borrowings_st",    side: "st"  }] },
+                { sourceKey: "provisions",    sides: [{ oldKey: "provisions_lt",    side: "lt"  }, { oldKey: "provisions_st",    side: "st"  }] },
+                // Task 6: loans_advances split — migrate any data stored under old combined key
+                { sourceKey: "loans_advances", sides: [{ oldKey: "loans_advances_lt", side: "lt" }, { oldKey: "loans_advances_st", side: "st" }] },
               ];
               for (const { sourceKey, sides } of SPLIT_SOURCES) {
                 const existing   = built[sourceKey];

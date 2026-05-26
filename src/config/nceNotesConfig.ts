@@ -76,7 +76,8 @@ export const NOTE_META: Record<string, NoteMeta> = {
   provisions_st:     { noteNumber: "9",       shortName: "Short-Term Provisions",         section: "BS" },
   cwip:              { noteNumber: "11",      shortName: "Capital Work-in-Progress",      section: "BS" },
   investments:       { noteNumber: "13",      shortName: "Non-Current Investments",       section: "BS" },
-  loans_advances:    { noteNumber: "14 & 20",  shortName: "Loans and Advances",            section: "BS" },
+  loans_advances_lt: { noteNumber: "14",       shortName: "Long-Term Loans and Advances",  section: "BS" },
+  loans_advances_st: { noteNumber: "20",       shortName: "Short-Term Loans and Advances", section: "BS" },
   other_nc_assets:   { noteNumber: "15",      shortName: "Other Non-Current Assets",      section: "BS" },
   inventories:       { noteNumber: "17",      shortName: "Inventories",                   section: "BS" },
   trade_receivables: { noteNumber: "18",      shortName: "Trade Receivables",             section: "BS" },
@@ -307,11 +308,18 @@ export const NOTES_CONFIG: NoteConfig[] = [
     ],
   },
 
-  // ── Note: Loans & Advances (Pattern A) ──────────────────────────────────
+  // ── Note: Loans & Advances — shared row definitions ─────────────────────
+  // Task 6: Separated into LT (Note 14) and ST (Note 20), mirroring the
+  // borrowings/provisions split pattern. Both notes read from the same
+  // "loans_advances" DB record (Pattern A); extractSplitData pulls the
+  // _lt or _st suffix keys for each respective note.
+  // ── Note: Long-Term Loans & Advances (split from loans_advances Pattern A) ─
   {
-    noteType: "loans_advances",
-    title: "Note 14: Long-Term Loans and Advances",
-    pattern: "A",
+    noteType:       "loans_advances_lt",
+    sourceNoteType: "loans_advances",
+    splitSide:      "lt",
+    title:          "Note 14: Long-Term Loans and Advances",
+    pattern:        "B",
     rows: [
       { id: "sec_hdr",        label: "Secured",                                      isSectionHeader: true },
       { id: "sec_cap_good",   label: "Capital advances — good",                      indent: 1 },
@@ -347,10 +355,45 @@ export const NOTES_CONFIG: NoteConfig[] = [
                      "unsec_adv_tax","unsec_gst","unsec_security","unsec_govt","unsec_others"],
         formulaSub: ["unsec_cap_prov"],
       },
+      { id: "total_ab", label: "Total (A + B)", isTotal: true, formulaAdd: ["sec_total","unsec_total"] },
+    ],
+  },
+
+  // ── Note: Short-Term Loans & Advances (split from loans_advances Pattern A) ─
+  {
+    noteType:       "loans_advances_st",
+    sourceNoteType: "loans_advances",
+    splitSide:      "st",
+    title:          "Note 20: Short-Term Loans and Advances",
+    pattern:        "B",
+    rows: [
+      { id: "sec_hdr",        label: "Secured",                                      isSectionHeader: true },
+      { id: "sec_related",    label: "Advances to related parties",                  indent: 1 },
+      { id: "sec_prepaid",    label: "Prepaid expenses",                             indent: 1 },
+      { id: "sec_adv_tax",    label: "Advance tax / TDS",                            indent: 1 },
+      { id: "sec_gst",        label: "GST input credit receivable",                  indent: 1 },
+      { id: "sec_security",   label: "Security deposits",                            indent: 1 },
+      { id: "sec_govt",       label: "Advances to government authorities",           indent: 1 },
+      { id: "sec_others",     label: "Others",                                       indent: 1 },
       {
-        id: "total_ab", label: "Total (A + B)", isTotal: true,
-        formulaAdd: ["sec_total","unsec_total"],
+        id: "sec_total", label: "Total (A)", isTotal: true, sectionTag: "secured",
+        formulaAdd: ["sec_related","sec_prepaid","sec_adv_tax","sec_gst",
+                     "sec_security","sec_govt","sec_others"],
       },
+      { id: "unsec_hdr",        label: "Unsecured",                                    isSectionHeader: true },
+      { id: "unsec_related",    label: "Advances to related parties",                  indent: 1 },
+      { id: "unsec_prepaid",    label: "Prepaid expenses",                             indent: 1 },
+      { id: "unsec_adv_tax",    label: "Advance tax / TDS",                            indent: 1 },
+      { id: "unsec_gst",        label: "GST input credit receivable",                  indent: 1 },
+      { id: "unsec_security",   label: "Security deposits",                            indent: 1 },
+      { id: "unsec_govt",       label: "Advances to government authorities",           indent: 1 },
+      { id: "unsec_others",     label: "Others",                                       indent: 1 },
+      {
+        id: "unsec_total", label: "Total (B)", isTotal: true, sectionTag: "unsecured",
+        formulaAdd: ["unsec_related","unsec_prepaid","unsec_adv_tax","unsec_gst",
+                     "unsec_security","unsec_govt","unsec_others"],
+      },
+      { id: "total_ab", label: "Total (A + B)", isTotal: true, formulaAdd: ["sec_total","unsec_total"] },
     ],
   },
 
