@@ -1374,22 +1374,25 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
     data: Record<string, NCENoteData>,
     fy:   string,
   ) => {
-    // Skip split notes (sourceNoteType set) — their data lives under the source key
-    // and will be persisted when the source note is processed.
-    const rows = NOTES_CONFIG
-      .filter(nc => !nc.sourceNoteType)
-      .map(nc => {
-        const d = data[nc.noteType] ?? { cy: {}, py: {}, customRows: [] };
-        const { cy_data, py_data } = serialiseNoteData(d);
-        return {
-          engagement_id:  engagementId,
-          financial_year: fy,
-          note_type:      nc.noteType,
-          cy_data:        cy_data as any,
-          py_data:        py_data as any,
-          updated_at:     new Date().toISOString(),
-        };
-      });
+    const mkRow = (key: string) => {
+      const d = data[key] ?? { cy: {}, py: {}, customRows: [] };
+      const { cy_data, py_data } = serialiseNoteData(d);
+      return {
+        engagement_id:  engagementId,
+        financial_year: fy,
+        note_type:      key,
+        cy_data:        cy_data as any,
+        py_data:        py_data as any,
+        updated_at:     new Date().toISOString(),
+      };
+    };
+    // Persist all non-split notes PLUS the source keys used by split display notes
+    // (e.g. "borrowings", "provisions"). These source keys hold the actual combined
+    // LT+ST data with _lt/_st suffixes and are NOT standalone NOTES_CONFIG entries —
+    // without this they were silently skipped and all split-note data was lost on reload.
+    const keys = new Set(NOTES_CONFIG.filter(nc => !nc.sourceNoteType).map(nc => nc.noteType));
+    NOTES_CONFIG.forEach(nc => { if (nc.sourceNoteType) keys.add(nc.sourceNoteType); });
+    const rows = [...keys].map(mkRow);
     const { error } = await supabase
       .from("nce_financial_notes")
       .upsert(rows, { onConflict: "engagement_id,financial_year,note_type" });
@@ -1443,6 +1446,54 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
             await persistNotes(populated, fy);
             toast.success("Notes populated from COA mapping");
           } else {
+            // ── MIGRATION: old split keys → unified source key ─────────────
+            // Before the sourceNoteType architecture, borrowings_lt/borrowings_st
+            // and provisions_lt/provisions_st were stored as independent DB rows
+            // with BARE row IDs (no _lt/_st suffix).  New code reads from the
+            // unified source key ("borrowings", "provisions") with suffixed keys.
+            // If the source key is absent/empty but old split rows have data,
+            // convert once so all four split display notes show the correct amounts.
+            {
+              const SPLIT_SOURCES: Array<{
+                sourceKey: string;
+                sides: Array<{ oldKey: string; side: "lt" | "st" }>;
+              }> = [
+                { sourceKey: "borrowings", sides: [{ oldKey: "borrowings_lt", side: "lt"  }, { oldKey: "borrowings_st", side: "st"  }] },
+                { sourceKey: "provisions", sides: [{ oldKey: "provisions_lt", side: "lt"  }, { oldKey: "provisions_st", side: "st"  }] },
+              ];
+              for (const { sourceKey, sides } of SPLIT_SOURCES) {
+                const existing   = built[sourceKey];
+                const srcEmpty   = !existing || Object.keys(existing.cy).length === 0;
+                const hasOldData = sides.some(({ oldKey }) => {
+                  const old = built[oldKey];
+                  return !!(old && Object.keys(old.cy).length > 0);
+                });
+                if (srcEmpty && hasOldData) {
+                  const migratedCy: Record<string, number>  = {};
+                  const migratedPy: Record<string, number>  = {};
+                  const migratedCrs: NCECustomRow[]          = [];
+                  for (const { oldKey, side } of sides) {
+                    const old = built[oldKey];
+                    if (!old) continue;
+                    for (const [k, v] of Object.entries(old.cy)) migratedCy[`${k}_${side}`] = v as number;
+                    for (const [k, v] of Object.entries(old.py)) migratedPy[`${k}_${side}`] = v as number;
+                    for (const cr of old.customRows ?? []) migratedCrs.push({ ...cr, section: side });
+                  }
+                  built[sourceKey] = {
+                    cy:                  migratedCy,
+                    py:                  migratedPy,
+                    customRows:          migratedCrs,
+                    ejectedLedgers:      existing?.ejectedLedgers      ?? [],
+                    hiddenRows:          existing?.hiddenRows           ?? [],
+                    labelOverrides:      existing?.labelOverrides       ?? {},
+                    sourceLabelOverrides:existing?.sourceLabelOverrides ?? {},
+                    cy_sources:          existing?.cy_sources           ?? {},
+                  };
+                  healed = true;
+                }
+              }
+            }
+
             // ── Self-heal: migrate legacy borrowings data ──────────────────
             // Old data may have unsecured borrowing custom rows with
             // section:"unsecured" but no attachedTo. These should be
