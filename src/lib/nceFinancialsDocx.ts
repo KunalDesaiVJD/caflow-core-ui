@@ -663,9 +663,12 @@ function fmtSigDate(d?: string): string {
 function resolveSignatoryDesignation(constitution?: string): string {
   if (!constitution) return "Authorised Signatory";
   const c = constitution.toLowerCase().trim();
-  if (c.includes("partnership")) return "Partner / Authorised Signatory";
-  if (c.includes("proprietor"))  return "Proprietor";
+  // LLP must be checked BEFORE "partnership" because
+  // "Limited Liability Partnership" contains "partnership".
   if (c.includes("llp") || c.includes("limited liability partnership")) return "Designated Partner";
+  if (c.includes("partnership")) return "Partner / Authorised Signatory";
+  // "Individual" is how Tally registers sole-proprietors.
+  if (c.includes("proprietor") || c === "individual") return "Proprietor";
   return "Authorised Signatory";
 }
 

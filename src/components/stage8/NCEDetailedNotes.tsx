@@ -2176,8 +2176,12 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
           const rawData    = noteData[sourceKey] ?? { cy: {}, py: {}, customRows: [] };
           const splitSide  = nc.splitSide;
           const extracted  = splitSide ? extractSplitData(rawData, splitSide) : null;
+          // CRITICAL: pass rawData.customRows (not []) so that Tally auto-populated
+          // amounts (stored as customRows with cy[id+"_lt"] / cy[id+"_st"] keys) are
+          // visible in split notes.  extractSplitData already maps those to bare keys
+          // in extracted.cy, so computeDisplayData Pattern B picks them up correctly.
           const d: typeof rawData = extracted
-            ? { ...rawData, cy: extracted.cy, py: extracted.py, customRows: [] }
+            ? { ...rawData, cy: extracted.cy, py: extracted.py }
             : rawData;
 
           const autoCount  = d.customRows.filter(r => r.source === "auto").length;

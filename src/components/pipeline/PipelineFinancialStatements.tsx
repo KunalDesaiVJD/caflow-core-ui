@@ -6214,9 +6214,12 @@ export default function PipelineFinancialStatements({
           />
           <div>{(() => {
             const c = (entityType || "").toLowerCase().trim();
-            if (c.includes("partnership")) return "Partner / Authorised Signatory";
-            if (c.includes("proprietor"))  return "Proprietor";
+            // LLP must be checked BEFORE "partnership" because
+            // "Limited Liability Partnership" contains "partnership".
             if (c.includes("llp") || c.includes("limited liability partnership")) return "Designated Partner";
+            if (c.includes("partnership")) return "Partner / Authorised Signatory";
+            // "Individual" is how Tally registers sole-proprietors.
+            if (c.includes("proprietor") || c === "individual") return "Proprietor";
             return "Authorised Signatory";
           })()}</div>
         </div>
