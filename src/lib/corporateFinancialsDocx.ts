@@ -106,7 +106,12 @@ const SZ_ENTITY = 28;   // 14pt
 
 // ─── Colour palette (professional light grey — 50 % lighter than prior slate) ──
 const NAVY    = "374151";   // charcoal text / title accent  (kept dark for readability)
-const BG_HDR  = "A5AAB1";   // light grey header  (was 4B5563 — 50 % lighter)
+// Issue 1 — "Particulars" column header: lighter grey (2 shades lighter than
+// the prior A5AAB1) to match the requested lighter look.
+const BG_HDR  = "C2C7CD";   // Particulars / column header — light grey
+// Issue 1 — Note HEADING: 2 shades lighter still (sits a notch above the
+// Particulars header so the note title reads softer).
+const BG_NOTE_HDR = "D5D9DD"; // note heading — lighter grey
 const BG_SECT = "F1F3F5";   // very light grey section
 const BG_TOT  = "F8F9FA";   // near-white subtotal
 const BG_GRAN = "E8ECEF";   // light grey grand total
@@ -858,9 +863,10 @@ function noteTitleRow(colWidths: number[], noteNumber: string, title: string): T
       new TableCell({
         columnSpan: colWidths.length,
         width:   { size: totalW, type: WidthType.DXA },
-        // Issue 1 — note heading uses the SAME colour combination as the
-        // "Particulars" column header (grey BG_HDR fill + black bold text).
-        shading: { fill: BG_HDR, type: ShadingType.CLEAR },
+        // Issue 1 — note heading uses a lighter grey (BG_NOTE_HDR, 2 shades
+        // lighter) with black bold text, sitting a notch above the Particulars
+        // header shade.
+        shading: { fill: BG_NOTE_HDR, type: ShadingType.CLEAR },
         borders: BDR_NONE,
         margins: { top: 100, bottom: 100, left: 160, right: 100 },
         children: [new Paragraph({
@@ -1012,16 +1018,24 @@ function buildFATable(
   const nac = (v: number | null | undefined, w: number, bold = false, bg?: string, bdr = BDR_ROW) =>
     ac(v ?? 0, w, { bold, bg, borders: bdr });
 
+  // Issue 2 — asset names render in Proper (Title) Case, mirroring the
+  // on-screen FAGrid (which displays toTitleCase).
+  const toProper = (s: string) => (s || "").toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+
   const dataRows = (faRows ?? []).map(r => {
     const grossClos = (r.gross_open || 0) + (r.additions || 0) - (r.disposals || 0);
     const depnClos  = (r.depn_open  || 0) + (r.depn_add  || 0) - (r.depn_disp || 0);
     const netCy     = grossClos - depnClos;
     const netPy     = r.net_py != null ? r.net_py : (r.gross_open || 0) - (r.depn_open || 0);
-    const ul        = r.useful_life != null ? String(r.useful_life) === "indefinite" ? "∞" : `${r.useful_life} yrs` : "";
+    // Issue 3 — Useful Life shows just the number (no "yrs"/"years" suffix).
+    const ul        = r.useful_life != null && String(r.useful_life) !== ""
+      ? (String(r.useful_life) === "indefinite" ? "∞" : String(r.useful_life))
+      : "";
     return new TableRow({
       children: [
-        cell({ text: r.particulars || "", w: FA_COLS[0], sz: SZ_XS }),
-        cell({ text: ul,                  w: FA_COLS[1], sz: SZ_XS, align: AlignmentType.CENTER }),
+        // Issue 2 — Particulars at 9pt (SZ_BODY), Proper case.
+        cell({ text: toProper(r.particulars || ""), w: FA_COLS[0], sz: SZ_BODY }),
+        cell({ text: ul,                  w: FA_COLS[1], sz: SZ_BODY, align: AlignmentType.CENTER }),
         nac(r.gross_open, FA_COLS[2]),
         nac(r.additions,  FA_COLS[3]),
         nac(r.disposals,  FA_COLS[4]),
@@ -1050,8 +1064,8 @@ function buildFATable(
   // ── Issue 1 — totals render WHITE (bold + grand-total rule keeps them legible)
   const totalCYRow = new TableRow({
     children: [
-      cell({ text: "Total — Current year", w: FA_COLS[0],  sz: SZ_XS, bold: true, borders: BDR_GRAND }),
-      cell({ text: "",      w: FA_COLS[1],  sz: SZ_XS, borders: BDR_GRAND }),
+      cell({ text: "Total — Current year", w: FA_COLS[0],  sz: SZ_BODY, bold: true, borders: BDR_GRAND }),
+      cell({ text: "",      w: FA_COLS[1],  sz: SZ_BODY, borders: BDR_GRAND }),
       nac(sumField("gross_open"),    FA_COLS[2], true, undefined, BDR_GRAND),
       nac(sumField("additions"),     FA_COLS[3], true, undefined, BDR_GRAND),
       nac(sumField("disposals"),     FA_COLS[4], true, undefined, BDR_GRAND),
@@ -1091,8 +1105,8 @@ function buildFATable(
   };
   const totalPYRow = new TableRow({
     children: [
-      cell({ text: "Total — Previous year", w: FA_COLS[0], sz: SZ_XS, bold: true, borders: BDR_SUB }),
-      cell({ text: "",      w: FA_COLS[1], sz: SZ_XS, borders: BDR_SUB }),
+      cell({ text: "Total — Previous year", w: FA_COLS[0], sz: SZ_BODY, bold: true, borders: BDR_SUB }),
+      cell({ text: "",      w: FA_COLS[1], sz: SZ_BODY, borders: BDR_SUB }),
       nac(pyVal("gross_open"), FA_COLS[2], true, undefined, BDR_SUB),
       nac(pyVal("additions"),  FA_COLS[3], true, undefined, BDR_SUB),
       nac(pyVal("disposals"),  FA_COLS[4], true, undefined, BDR_SUB),
@@ -1959,14 +1973,14 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
         sigBlock(),
       ],
     },
-    // Notes (portrait)
+    // Notes (portrait) — Issue 3: Ratios are NO LONGER appended here; they get
+    // their own section AFTER the FA schedule so they land on the final page.
     {
       properties: { page: portraitProps },
 
       children:   [
         ...note1Paras,
         ...noteTables,
-        ...(hasRatios ? [spacer(), buildRatiosTable(ratios!.cy, ratios!.py)] : []),
       ],
     },
   ];
@@ -1978,6 +1992,15 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
       properties: { page: landscapeProps },
 
       children:   [buildFATable(faRows, faNoteNo ? String(faNoteNo) : "—", cyLabel, pyLabel, stage5Notes?.fa?.py_manual ?? null, params.faPyRows ?? null)],
+    });
+  }
+
+  // Issue 3 — Financial Ratios export on their OWN page, AFTER every note
+  // (including the FA schedule). This makes the ratios the final page.
+  if (hasRatios) {
+    sections.push({
+      properties: { page: portraitProps },
+      children:   [buildRatiosTable(ratios!.cy, ratios!.py)],
     });
   }
 
