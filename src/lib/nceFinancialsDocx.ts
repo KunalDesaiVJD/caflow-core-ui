@@ -145,6 +145,18 @@ const BDR_SECT  = { top: bThin, bottom: bNone, left: bNone, right: bNone };
 const BDR_SUB   = { top: bThin, bottom: bThin, left: bNone, right: bNone };
 const BDR_GRAND = { top: bBold, bottom: bBold, left: bNone, right: bNone };
 
+// ─── Task 1 (Issue 2): FY range helper — converts "2026" → "2025-26" ─────────
+function fyRange(year: string): string {
+  const y = parseInt(year, 10);
+  if (isNaN(y)) return year;
+  return `${y - 1}-${String(y).slice(-2)}`;
+}
+
+// ─── Task 4/2 helper: is a row invisible (both amounts zero)? ─────────────────
+function blank(cy: number, py: number): boolean {
+  return !cy && !py;
+}
+
 // ─── Amount formatter — Indian numbering system + active unit scale ───────────
 function fmt(n: number): string {
   const scaled = _exportDivisor === 1 ? n : n / _exportDivisor;
@@ -206,11 +218,11 @@ function cell(o: CellOpts): TableCell {
     width:   { size: w, type: WidthType.DXA },
     shading: bg ? { fill: bg, type: ShadingType.CLEAR } : undefined,
     borders,
-    margins: { top: 36, bottom: 36, left: padL + indent * 200, right: padR },
+    margins: { top: 28, bottom: 28, left: padL + indent * 200, right: padR },
     verticalAlign: VerticalAlign.CENTER,
     children: [new Paragraph({
       alignment: align,
-      spacing:   { before: 0, after: 0, line: 260, lineRule: "auto" as any },
+      spacing:   { before: 0, after: 0, line: 240, lineRule: "auto" as any },
       children: [new TextRun({ text, font: FONT, size: sz, bold, italic, color })],
     })],
   });
@@ -419,6 +431,14 @@ function titleRows(
 }
 
 // ─── BALANCE SHEET TABLE ──────────────────────────────────────────────────────
+// Task 4: helper — returns [dataRow] or [] when both years are blank
+function maybeRow(
+  label: string, noteNo: number | null, cy: number, py: number,
+  indent = 0, bg?: string,
+): TableRow[] {
+  return blank(cy, py) ? [] : [dataRow(label, noteNo, cy, py, indent, bg)];
+}
+
 function buildBSTable(
   cy: Record<string, number>,
   py: Record<string, number>,
@@ -431,11 +451,42 @@ function buildBSTable(
   // inactive (no data) returns null → no number shown, matching the UI's "—".
   const n = (ref: number | null) => (ref ? (noteMap.get(ref) ?? null) : null);
 
+  // Pre-compute amounts for blank-row filtering
+  const capCy  = L("NCE_CAP", cy),  capPy  = L("NCE_CAP", py);
+  const ltbCy  = L("NCE_LTB", cy),  ltbPy  = L("NCE_LTB", py);
+  const oltlCy = L("NCE_OLTL",cy),  oltlPy = L("NCE_OLTL",py);
+  const ltpCy  = L("NCE_LTP", cy),  ltpPy  = L("NCE_LTP", py);
+  const stbCy  = L("NCE_STB", cy),  stbPy  = L("NCE_STB", py);
+  const tpCy   = L("NCE_TP",  cy),  tpPy   = L("NCE_TP",  py);
+  const oclCy  = L("NCE_OCL", cy),  oclPy  = L("NCE_OCL", py);
+  const stpCy  = L("NCE_STP", cy),  stpPy  = L("NCE_STP", py);
+
+  const ppeCy  = A("NCE_PPE",   cy), ppePy  = A("NCE_PPE",   py);
+  const intgCy = A("NCE_INTG",  cy), intgPy = A("NCE_INTG",  py);
+  const cwipCy = A("NCE_CWIP",  cy), cwipPy = A("NCE_CWIP",  py);
+  const ncinvCy= A("NCE_NCINV",cy), ncinvPy= A("NCE_NCINV",py);
+  const ltlaCy = A("NCE_LTLA",  cy), ltlaPy = A("NCE_LTLA",  py);
+  const oncaCy = A("NCE_ONCA",  cy), oncaPy = A("NCE_ONCA",  py);
+  const cinvCy = A("NCE_CINV",  cy), cinvPy = A("NCE_CINV",  py);
+  const stckCy = A("NCE_STCK",  cy), stckPy = A("NCE_STCK",  py);
+  const trCy   = A("NCE_TR",    cy), trPy   = A("NCE_TR",    py);
+  const cashCy = A("NCE_CASH",  cy), cashPy = A("NCE_CASH",  py);
+  const stlaCy = A("NCE_STLA",  cy), stlaPy = A("NCE_STLA",  py);
+  const ocaCy  = A("NCE_OCA",   cy), ocaPy  = A("NCE_OCA",   py);
+
   // Totals
   const totELcy = L("NCE_EL",  cy);
   const totELpy = L("NCE_EL",  py);
   const totAcy  = A("NCE_AST", cy);
   const totApy  = A("NCE_AST", py);
+
+  // Parent visibility flags (Task 4: parent shown only when ≥1 child is non-blank)
+  const hasNCL = !blank(ltbCy,ltbPy)||!blank(oltlCy,oltlPy)||!blank(ltpCy,ltpPy);
+  const hasCL  = !blank(stbCy,stbPy)||!blank(tpCy,tpPy)||!blank(oclCy,oclPy)||!blank(stpCy,stpPy);
+  const hasPPE = !blank(ppeCy,ppePy)||!blank(intgCy,intgPy)||!blank(cwipCy,cwipPy);
+  const hasNCA = hasPPE||!blank(ncinvCy,ncinvPy)||!blank(ltlaCy,ltlaPy)||!blank(oncaCy,oncaPy);
+  const hasCA  = !blank(cinvCy,cinvPy)||!blank(stckCy,stckPy)||!blank(trCy,trPy)||
+                 !blank(cashCy,cashPy)||!blank(stlaCy,stlaPy)||!blank(ocaCy,ocaPy);
 
   const rows: TableRow[] = [
     ...titleRows(
@@ -449,47 +500,54 @@ function buildBSTable(
     sectionRow("EQUITY AND LIABILITIES"),
 
     parentRow("(1)  Owners Funds"),
-    dataRow("        (a)  Owners' Capital Account", n(2), L("NCE_CAP", cy), L("NCE_CAP", py), 0),
+    ...maybeRow("        (a)  Owners' Capital Account", n(2), capCy, capPy, 0),
 
-    parentRow("(2)  Non-Current Liabilities"),
-    dataRow("        (a)  Long-term borrowings",         n(3), L("NCE_LTB",  cy), L("NCE_LTB",  py)),
-    dataRow("        (b)  Other long-term liabilities",  n(4), L("NCE_OLTL", cy), L("NCE_OLTL", py)),
-    dataRow("        (c)  Long-term provisions",         n(5), L("NCE_LTP",  cy), L("NCE_LTP",  py)),
+    ...(hasNCL ? [
+      parentRow("(2)  Non-Current Liabilities"),
+      ...maybeRow("        (a)  Long-term borrowings",        n(3), ltbCy,  ltbPy),
+      ...maybeRow("        (b)  Other long-term liabilities", n(4), oltlCy, oltlPy),
+      ...maybeRow("        (c)  Long-term provisions",        n(5), ltpCy,  ltpPy),
+    ] : []),
 
-    parentRow("(3)  Current Liabilities"),
-    dataRow("        (a)  Short-term borrowings",        n(6), L("NCE_STB", cy), L("NCE_STB", py)),
-    dataRow("        (b)  Trade payables",               n(7), L("NCE_TP",  cy), L("NCE_TP",  py)),
-    dataRow("        (c)  Other current liabilities",    n(8), L("NCE_OCL", cy), L("NCE_OCL", py)),
-    dataRow("        (d)  Short-term provisions",        n(9), L("NCE_STP", cy), L("NCE_STP", py)),
+    ...(hasCL ? [
+      parentRow("(3)  Current Liabilities"),
+      ...maybeRow("        (a)  Short-term borrowings",    n(6), stbCy, stbPy),
+      ...maybeRow("        (b)  Trade payables",           n(7), tpCy,  tpPy),
+      ...maybeRow("        (c)  Other current liabilities",n(8), oclCy, oclPy),
+      ...maybeRow("        (d)  Short-term provisions",    n(9), stpCy, stpPy),
+    ] : []),
 
     blankRow(),
-    // Task 6: "TOTAL EQUITY AND LIABILITIES" → "TOTAL" (right-aligned in Task 9 via grandTotalRow)
     grandTotalRow("TOTAL", totELcy, totELpy, AlignmentType.RIGHT),
     blankRow(),
 
     // ── ASSETS ───────────────────────────────────────────────────────────
     sectionRow("ASSETS"),
 
-    // Task 8: Non-Current Assets grouped heading like Corporate (a) with (i)(ii)(iii) sub-items
-    parentRow("(1)  Non-Current Assets"),
-    parentRow("        (a)  Property, Plant & Equipment and Intangible Assets"),
-    dataRow("                   (i)   Property, plant and equipment",    n(10), A("NCE_PPE",   cy), A("NCE_PPE",   py), 2),
-    dataRow("                   (ii)  Intangible assets",                n(12), A("NCE_INTG",  cy), A("NCE_INTG",  py), 2),
-    dataRow("                   (iii) Capital work-in-progress",         n(11), A("NCE_CWIP",  cy), A("NCE_CWIP",  py), 2),
-    dataRow("        (b)       Non-current investments",                 n(13), A("NCE_NCINV", cy), A("NCE_NCINV", py)),
-    dataRow("        (c)       Long-term loans and advances",            n(14), A("NCE_LTLA",  cy), A("NCE_LTLA",  py)),
-    dataRow("        (d)       Other non-current assets",                n(15), A("NCE_ONCA",  cy), A("NCE_ONCA",  py)),
+    ...(hasNCA ? [
+      parentRow("(1)  Non-Current Assets"),
+      ...(hasPPE ? [
+        parentRow("        (a)  Property, Plant & Equipment and Intangible Assets"),
+        ...maybeRow("                   (i)   Property, plant and equipment", n(10), ppeCy,  ppePy,  2),
+        ...maybeRow("                   (ii)  Intangible assets",             n(12), intgCy, intgPy, 2),
+        ...maybeRow("                   (iii) Capital work-in-progress",      n(11), cwipCy, cwipPy, 2),
+      ] : []),
+      ...maybeRow("        (b)       Non-current investments",    n(13), ncinvCy, ncinvPy),
+      ...maybeRow("        (c)       Long-term loans and advances",n(14), ltlaCy,  ltlaPy),
+      ...maybeRow("        (d)       Other non-current assets",   n(15), oncaCy,  oncaPy),
+    ] : []),
 
-    parentRow("(2)  Current Assets"),
-    dataRow("        (a)  Current investments",                   n(16), A("NCE_CINV", cy), A("NCE_CINV", py)),
-    dataRow("        (b)  Inventories",                           n(17), A("NCE_STCK", cy), A("NCE_STCK", py)),
-    dataRow("        (c)  Trade receivables",                     n(18), A("NCE_TR",   cy), A("NCE_TR",   py)),
-    dataRow("        (d)  Cash and bank balances",                n(19), A("NCE_CASH", cy), A("NCE_CASH", py)),
-    dataRow("        (e)  Short-term loans and advances",         n(20), A("NCE_STLA", cy), A("NCE_STLA", py)),
-    dataRow("        (f)  Other current assets",                  n(21), A("NCE_OCA",  cy), A("NCE_OCA",  py)),
+    ...(hasCA ? [
+      parentRow("(2)  Current Assets"),
+      ...maybeRow("        (a)  Current investments",          n(16), cinvCy, cinvPy),
+      ...maybeRow("        (b)  Inventories",                  n(17), stckCy, stckPy),
+      ...maybeRow("        (c)  Trade receivables",            n(18), trCy,   trPy),
+      ...maybeRow("        (d)  Cash and bank balances",       n(19), cashCy, cashPy),
+      ...maybeRow("        (e)  Short-term loans and advances",n(20), stlaCy, stlaPy),
+      ...maybeRow("        (f)  Other current assets",         n(21), ocaCy,  ocaPy),
+    ] : []),
 
     blankRow(),
-    // Task 6: "TOTAL ASSETS" → "TOTAL"
     grandTotalRow("TOTAL", totAcy, totApy, AlignmentType.RIGHT),
     blankRow(),
 
@@ -571,6 +629,13 @@ function buildPLTable(
   const discAtCy    = discOpCy - discTaxCy;     const discAtPy    = discOpPy - discTaxPy;
   const finalProfCy = netProfCy + discAtCy;     const finalProfPy = netProfPy + discAtPy;
 
+  // Task 4: visibility flags — optional / supplementary lines hidden when blank
+  const hasExc  = !blank(excCy,      excPy);
+  const hasExt  = !blank(extCy,      extPy);
+  const hasRem  = !blank(remCy,      remPy);
+  const hasTax  = !blank(curTaxCy,   curTaxPy)  || !blank(priorTaxCy, priorTaxPy) || !blank(deferTaxCy, deferTaxPy);
+  const hasDisc = !blank(discOpCy,   discOpPy)  || !blank(discTaxCy,  discTaxPy);
+
   const rows: TableRow[] = [
     ...titleRows(
       entityName,
@@ -581,18 +646,18 @@ function buildPLTable(
 
     // ── INCOME ───────────────────────────────────────────────────────────
     sectionRow("INCOME"),
-    dataRow("I.    Revenue from operations", n(22), revOpsCy, revOpsPy),
-    dataRow("II.   Other income",            n(23), revOthCy, revOthPy),
+    dataRow("I.    Revenue from operations",   n(22), revOpsCy, revOpsPy),
+    ...maybeRow("II.   Other income",          n(23), revOthCy, revOthPy),
     subTotalRow("III.  Total Income (I + II)", totIncCy, totIncPy),
     blankRow(),
 
     // ── EXPENSES ─────────────────────────────────────────────────────────
     sectionRow("EXPENSES"),
-    dataRow("(a)   Cost of goods sold",             n(24), cogsCy, cogsPy),
-    dataRow("(b)   Employee benefits expense",       n(25), empCy,  empPy),
-    dataRow("(c)   Finance costs",                   n(26), finCy,  finPy),
-    dataRow("(d)   Depreciation and amortisation",   n(27), depCy,  depPy),
-    dataRow("(e)   Other expenses",                  n(28), othCy,  othPy),
+    ...maybeRow("(a)   Cost of goods sold",            n(24), cogsCy, cogsPy),
+    ...maybeRow("(b)   Employee benefits expense",      n(25), empCy,  empPy),
+    ...maybeRow("(c)   Finance costs",                  n(26), finCy,  finPy),
+    ...maybeRow("(d)   Depreciation and amortisation",  n(27), depCy,  depPy),
+    ...maybeRow("(e)   Other expenses",                 n(28), othCy,  othPy),
     subTotalRow("IV.   Total Expenses", totExpCy, totExpPy),
     blankRow(),
 
@@ -601,20 +666,23 @@ function buildPLTable(
       "V.    Profit /(Loss) before exceptional items, partners' remuneration & tax (III−IV)",
       null, pVcy, pVpy,
     ),
-    dataRow("VI.   Exceptional items",                                                   null, excCy,   excPy),
+    ...(hasExc ? [dataRow("VI.   Exceptional items",                                             null, excCy,  excPy)]  : []),
     dataRow("VII.  Profit / (Loss) before extraordinary items and tax (V + VI)",         null, pVIIcy, pVIIpy),
-    dataRow("VIII. Extraordinary items",                                                 null, extCy,   extPy),
-    dataRow("IX.   Profit / (Loss) before partners' remuneration and tax (VII + VIII)",  null, pIXcy, pIXpy),
-    dataRow("X.    Partners' remuneration",                                         n(29), remCy,   remPy),
-    dataRow("XI.   Profit / (Loss) before tax (IX − X)",                           null, pXIcy,  pXIpy),
+    ...(hasExt ? [dataRow("VIII. Extraordinary items",                                           null, extCy,  extPy)]  : []),
+    dataRow("IX.   Profit / (Loss) before partners' remuneration and tax (VII + VIII)",  null, pIXcy,  pIXpy),
+    ...(hasRem ? [dataRow("X.    Partners' remuneration",                              n(29), remCy,  remPy)]  : []),
+    dataRow("XI.   Profit / (Loss) before tax (IX − X)",                                null, pXIcy,  pXIpy),
     blankRow(),
 
-    parentRow("XII.  Tax expense"),
-    dataRow("        (1)  Current tax",                                          null, curTaxCy,   curTaxPy,   1),
-    dataRow("        (2)  Short / (excess) provision for earlier years",         null, priorTaxCy, priorTaxPy, 1),
-    dataRow("        (3)  Deferred tax charge / (benefit)",                      null, deferTaxCy, deferTaxPy, 1),
-    subTotalRow("             Total tax expense", totTaxCy, totTaxPy),
-    blankRow(),
+    // ── Tax expense (XII) — hidden when all sub-items are blank ──────────
+    ...(hasTax ? [
+      parentRow("XII.  Tax expense"),
+      ...maybeRow("        (1)  Current tax",                                       null, curTaxCy,   curTaxPy,   1),
+      ...maybeRow("        (2)  Short / (excess) provision for earlier years",      null, priorTaxCy, priorTaxPy, 1),
+      ...maybeRow("        (3)  Deferred tax charge / (benefit)",                   null, deferTaxCy, deferTaxPy, 1),
+      subTotalRow("             Total tax expense", totTaxCy, totTaxPy),
+      blankRow(),
+    ] : []),
 
     grandTotalRow(
       "XIII. Profit / (Loss) for the year (XI − XII)",
@@ -623,10 +691,13 @@ function buildPLTable(
     ),
     blankRow(),
 
-    dataRow("XIV.  Profit/(loss) from discontinuing operations",                                      null, discOpCy,    discOpPy),
-    dataRow("XV.   Tax expense of discontinuing operations",                                          null, discTaxCy,   discTaxPy),
-    dataRow("XVI.  Profit/(loss) from discontinuing operations (after tax) (XIV-XV)",                 null, discAtCy,    discAtPy),
-    grandTotalRow("XVII. Profit/(Loss) for the year (XIII+XVI)",                finalProfCy, finalProfPy),
+    // ── Discontinued operations (XIV–XVII) — hidden when all blank ───────
+    ...(hasDisc ? [
+      ...maybeRow("XIV.  Profit/(loss) from discontinuing operations",                                   null, discOpCy,  discOpPy),
+      ...maybeRow("XV.   Tax expense of discontinuing operations",                                       null, discTaxCy, discTaxPy),
+      ...maybeRow("XVI.  Profit/(loss) from discontinuing operations (after tax) (XIV-XV)",              null, discAtCy,  discAtPy),
+      grandTotalRow("XVII. Profit/(Loss) for the year (XIII+XVI)", finalProfCy, finalProfPy),
+    ] : []),
   ];
 
   return new Table({
@@ -991,9 +1062,13 @@ function buildCapitalAccountSection(
     (p.opening_balance_cy ?? 0) + (p.introduced_cy ?? 0) + (p.remuneration_cy ?? 0)
     + (p.interest_cy ?? 0) - (p.withdrawals_cy ?? 0) + (p.profit_share_cy ?? 0);
 
+  // Task 1: pyPartners store their data in _cy-suffixed fields (same record as
+  // CY partners with partner_no >= 100).  Fall back to _cy fields when the
+  // "plain" PY field is absent so closing-balance and totals are non-zero.
   const calcClosingPy = (p: any): number =>
-    (p.opening ?? 0) + (p.introduced ?? 0) + (p.remuneration ?? 0)
-    + (p.interest ?? 0) - (p.withdrawals ?? 0) + (p.profit_share ?? 0);
+    (p.opening ?? p.opening_balance_cy ?? 0) + (p.introduced ?? p.introduced_cy ?? 0)
+    + (p.remuneration ?? p.remuneration_cy ?? 0) + (p.interest ?? p.interest_cy ?? 0)
+    - (p.withdrawals ?? p.withdrawals_cy ?? 0) + (p.profit_share ?? p.profit_share_cy ?? 0);
 
   // KD5/KD6/KD7: 10 cols — Sr No | Partner | Share % | Opening | Introduced |
   // Remuneration | Interest | Withdrawals | Profit Share | Closing.
@@ -1072,12 +1147,13 @@ function buildCapitalAccountSection(
   // (per-partner rows summed, else the stored total); "—" when no PY data.
   const pySrc = pyPartners.length > 0 ? pyPartners : (pyAggregate ? [pyAggregate] : []);
   const sumPy = (fn: (p: any) => number) => pySrc.reduce((s: number, p: any) => s + fn(p), 0);
-  const pyOpening = sumPy((p) => p.opening ?? p.opening_balance_cy ?? 0);
-  const pyIntro   = sumPy((p) => p.introduced ?? 0);
-  const pyRem     = sumPy((p) => p.remuneration ?? 0);
-  const pyInt     = sumPy((p) => p.interest ?? 0);
-  const pyWith    = sumPy((p) => p.withdrawals ?? 0);
-  const pyPS      = sumPy((p) => p.profit_share ?? 0);
+  // Task 1: fall back to _cy fields for all sumPy calls (pyPartners store data there)
+  const pyOpening = sumPy((p) => p.opening      ?? p.opening_balance_cy ?? 0);
+  const pyIntro   = sumPy((p) => p.introduced   ?? p.introduced_cy      ?? 0);
+  const pyRem     = sumPy((p) => p.remuneration ?? p.remuneration_cy    ?? 0);
+  const pyInt     = sumPy((p) => p.interest     ?? p.interest_cy        ?? 0);
+  const pyWith    = sumPy((p) => p.withdrawals  ?? p.withdrawals_cy     ?? 0);
+  const pyPS      = sumPy((p) => p.profit_share ?? p.profit_share_cy    ?? 0);
   const pyClose   = sumPy((p) => calcClosingPy(p));
 
   const previousYearRow = new TableRow({
@@ -1117,7 +1193,7 @@ function buildCapitalAccountSection(
     columnWidths: cw,
     rows: [
       noteTitleRow(cw, "2", "Partners' Capital Account"),
-      makePeriodHdr(`Current Year — FY ${cyYear}`),
+      makePeriodHdr(`Current Year — FY ${fyRange(cyYear)}`),
       makeHdrRow(),
       ...cyDataRows,
       cyTotalRow,
@@ -1215,7 +1291,34 @@ function buildNoteSection(
     }
   };
 
-  for (const row of cfg.rows) {
+  // Task 2: pre-pass — decide which static rows are visible (blank rows suppressed).
+  // Total rows are always visible.  Section headers are visible only when at least
+  // one subsequent data row (before the next header/total) is non-blank.
+  const includedIdxs = new Set<number>();
+  for (let i = 0; i < cfg.rows.length; i++) {
+    const row = cfg.rows[i];
+    if (row.isTotal) {
+      includedIdxs.add(i);
+    } else if (row.isSectionHeader) {
+      for (let j = i + 1; j < cfg.rows.length; j++) {
+        const nxt = cfg.rows[j];
+        if (nxt.isSectionHeader || nxt.isTotal) break;
+        const nonBlank = isA
+          ? (() => { const v = aggA(nxt.id); return !!(v.lt || v.ltP || v.st || v.stP); })()
+          : (() => { const v = aggB(nxt.id); return !!(v.c  || v.p); })();
+        if (nonBlank) { includedIdxs.add(i); break; }
+      }
+    } else {
+      const nonBlank = isA
+        ? (() => { const v = aggA(row.id); return !!(v.lt || v.ltP || v.st || v.stP); })()
+        : (() => { const v = aggB(row.id); return !!(v.c  || v.p); })();
+      if (nonBlank) includedIdxs.add(i);
+    }
+  }
+
+  for (let i = 0; i < cfg.rows.length; i++) {
+    if (!includedIdxs.has(i)) continue;
+    const row = cfg.rows[i];
     if (row.isSectionHeader) {
       rows.push(noteSecHdr(colWidths, row.label));
     } else if (row.isTotal) {
@@ -1267,9 +1370,10 @@ function buildNoteSection(
   });
 }
 
-/** PPE Schedule — landscape table */
+/** PPE Schedule — landscape table, grouped by asset_category (Task 3) */
 function buildPPETable(ppeData: any[], cyYear: string, pyYear: string, noteNum: string): Table {
   const ppeColWidths = [PPE_CAT, PPE_NAME, PPE_RATE, PPE_OPEN, PPE_APRE, PPE_APOST, PPE_TOT, PPE_DEPR, PPE_CLOS, PPE_NCY, PPE_NPY];
+  const totalW = ppeColWidths.reduce((s, w) => s + w, 0); // 15398
 
   const h = (text: string, w: number) =>
     cell({ text, w, sz: SZ_XS, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.CENTER, padL: 40, padR: 40 });
@@ -1291,25 +1395,62 @@ function buildPPETable(ppeData: any[], cyYear: string, pyYear: string, noteNum: 
     ],
   });
 
-  const nac = (v: number | null | undefined, w: number) => ac(v ?? 0, w);
-
-  const dataRows = (ppeData ?? []).map((r: any) =>
+  /** Task 3: full-width spanning row for each asset category heading */
+  const catHdrRow = (catName: string): TableRow =>
     new TableRow({
       children: [
-        cell({ text: r.asset_category ?? "", w: PPE_CAT,  sz: SZ_XS }),
-        cell({ text: r.asset_name     ?? "", w: PPE_NAME, sz: SZ_XS }),
-        cell({ text: r.rate_pct != null ? `${r.rate_pct}%` : "", w: PPE_RATE, sz: SZ_XS, align: AlignmentType.CENTER }),
-        nac(r.opening_balance, PPE_OPEN),
-        nac(r.additions_pre,   PPE_APRE),
-        nac(r.additions_post,  PPE_APOST),
-        nac(r.total,           PPE_TOT),
-        nac(r.depreciation,    PPE_DEPR),
-        nac(r.closing_balance, PPE_CLOS),
-        nac(r.net_cy,          PPE_NCY),
-        nac(r.net_py,          PPE_NPY),
+        new TableCell({
+          columnSpan: ppeColWidths.length,
+          width:   { size: totalW, type: WidthType.DXA },
+          shading: { fill: BG_TOT, type: ShadingType.CLEAR },
+          borders: BDR_ROW,
+          margins: { top: 30, bottom: 30, left: 100, right: 100 },
+          children: [new Paragraph({
+            spacing: { before: 0, after: 0 },
+            children: [new TextRun({ text: catName, font: FONT, size: SZ_XS, bold: true, color: BLACK })],
+          })],
+        }),
       ],
-    }),
-  );
+    });
+
+  const nac = (v: number | null | undefined, w: number) => ac(v ?? 0, w);
+
+  /** Task 3: skip assets where every numeric column is zero / null */
+  const isBlankAsset = (r: any): boolean =>
+    !r.opening_balance && !r.additions_pre && !r.additions_post &&
+    !r.total && !r.depreciation && !r.closing_balance && !r.net_cy && !r.net_py;
+
+  // Task 3: group by asset_category (insertion order preserved — Map is ES6+)
+  const categoryMap = new Map<string, any[]>();
+  for (const r of (ppeData ?? [])) {
+    const cat = r.asset_category ?? "Other";
+    if (!categoryMap.has(cat)) categoryMap.set(cat, []);
+    categoryMap.get(cat)!.push(r);
+  }
+
+  const dataRows: TableRow[] = [];
+  for (const [cat, assets] of categoryMap) {
+    const visible = assets.filter((r: any) => !isBlankAsset(r));
+    if (visible.length === 0) continue;    // skip whole category if all children blank
+    dataRows.push(catHdrRow(cat));
+    for (const r of visible) {
+      dataRows.push(new TableRow({
+        children: [
+          cell({ text: "", w: PPE_CAT,  sz: SZ_XS }),      // category shown in header
+          cell({ text: r.asset_name ?? "", w: PPE_NAME, sz: SZ_XS }),
+          cell({ text: r.rate_pct != null ? `${r.rate_pct}%` : "", w: PPE_RATE, sz: SZ_XS, align: AlignmentType.CENTER }),
+          nac(r.opening_balance, PPE_OPEN),
+          nac(r.additions_pre,   PPE_APRE),
+          nac(r.additions_post,  PPE_APOST),
+          nac(r.total,           PPE_TOT),
+          nac(r.depreciation,    PPE_DEPR),
+          nac(r.closing_balance, PPE_CLOS),
+          nac(r.net_cy,          PPE_NCY),
+          nac(r.net_py,          PPE_NPY),
+        ],
+      }));
+    }
+  }
 
   const sum = (field: string) =>
     (ppeData ?? []).reduce((s: number, r: any) => s + (r[field] ?? 0), 0);
