@@ -105,6 +105,15 @@ export function extractSplitData(
       outCy[key.slice(0, -suffix.length)] = sourceData.cy[key];
     }
   }
+  // Carry over _custom_rows so buildNoteSection / computeDisplayData can include
+  // custom-row amounts in section totals. Each custom row's amount was already
+  // extracted above (cr.id + suffix → cr.id in outCy); we just need the metadata
+  // array so attachedRows() finds the rows and aggB/aggA include them in sums.
+  // Without this, split notes (borrowings LT/ST, provisions LT/ST, loans_advances
+  // LT/ST) always get customRows = [] → section totals = 0 → "—" in export.
+  if (Array.isArray((sourceData.cy as any)._custom_rows)) {
+    (outCy as any)._custom_rows = (sourceData.cy as any)._custom_rows;
+  }
   for (const key of Object.keys(sourceData.py)) {
     if (key.endsWith(suffix)) {
       outPy[key.slice(0, -suffix.length)] = sourceData.py[key];

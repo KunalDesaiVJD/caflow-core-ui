@@ -687,6 +687,46 @@ function PatternBTable({
     [staticHeadingOptions, customRows],
   );
 
+  // ── Task 1: Group-level select-all support ────────────────────────────────────
+  // Pre-compute which custom row IDs belong to each section header so the
+  // section-header select-all checkbox knows what to select / deselect.
+  // A custom row "belongs to" a section if it is attachedTo a static row that
+  // falls between the section header and the next section header / total row.
+  const sectionCustomRows = useMemo<Record<string, string[]>>(() => {
+    const out: Record<string, string[]> = {};
+    let curSectionId: string | null = null;
+    for (const r of config.rows) {
+      if (r.isSectionHeader) {
+        curSectionId = r.id;
+        out[r.id] = [];
+      } else if (!r.isTotal && curSectionId) {
+        const attached = customRows.filter(cr => cr.attachedTo === r.id);
+        out[curSectionId].push(...attached.map(cr => cr.id));
+      }
+    }
+    return out;
+  }, [config.rows, customRows]);
+
+  /** Tri-state checked value for a group of ids. */
+  const groupChecked = (ids: string[]): boolean | "indeterminate" => {
+    if (ids.length === 0) return false;
+    const selCount = ids.filter(id => selectedCustomRows.has(id)).length;
+    if (selCount === 0)         return false;
+    if (selCount === ids.length) return true;
+    return "indeterminate";
+  };
+
+  /** Toggle all ids in a group (select-all if none/some selected; deselect-all if all selected). */
+  const toggleGroup = (ids: string[]) => {
+    const allSel = ids.every(id => selectedCustomRows.has(id));
+    setSelectedCustomRows(prev => {
+      const n = new Set(prev);
+      if (allSel) ids.forEach(id => n.delete(id));
+      else        ids.forEach(id => n.add(id));
+      return n;
+    });
+  };
+
   return (
     <Table>
       <TableHeader>
@@ -749,6 +789,29 @@ function PatternBTable({
           return (
             <>
               {/* Custom rows just before grand total */}
+              {/* Task 1: select-all header for the unattached rows group */}
+              {insertCustomBefore && unattachedAtGrand.length > 0 && (
+                <TableRow className="bg-muted/5 border-t border-dashed border-muted-foreground/20">
+                  <TableCell colSpan={4} className="py-0.5 px-2">
+                    <div className="flex items-center gap-1.5">
+                      <Checkbox
+                        checked={groupChecked(unattachedAtGrand.map(cr => cr.id))}
+                        onCheckedChange={() => toggleGroup(unattachedAtGrand.map(cr => cr.id))}
+                        className="h-3.5 w-3.5 shrink-0"
+                        aria-label="Select all unattached rows"
+                        title={
+                          groupChecked(unattachedAtGrand.map(cr => cr.id)) === true
+                            ? "Deselect all rows in this group"
+                            : "Select all rows in this group"
+                        }
+                      />
+                      <span className="text-[10px] text-muted-foreground font-medium select-none">
+                        Select all
+                      </span>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              )}
               {insertCustomBefore && unattachedAtGrand.map(cr => {
                 // Custom rows "promoted" to sit under THIS custom row
                 const customSubRows = customRows.filter(sub => sub.attachedTo === cr.id);
@@ -811,7 +874,23 @@ function PatternBTable({
               {row.isSectionHeader ? (
                 <TableRow key={row.id} className="bg-muted/20">
                   <TableCell colSpan={4} className={cn("text-xs font-semibold py-1.5 text-muted-foreground", indentCls(row.indent))}>
-                    {displayLabel}
+                    {/* Task 1: select-all checkbox for section group */}
+                    {(sectionCustomRows[row.id]?.length ?? 0) > 0 ? (
+                      <div className="flex items-center gap-1.5">
+                        <Checkbox
+                          checked={groupChecked(sectionCustomRows[row.id])}
+                          onCheckedChange={() => toggleGroup(sectionCustomRows[row.id])}
+                          className="shrink-0 h-3.5 w-3.5"
+                          aria-label={`Select all custom rows in ${displayLabel}`}
+                          title={
+                            groupChecked(sectionCustomRows[row.id]) === true
+                              ? "Deselect all in this section"
+                              : "Select all in this section"
+                          }
+                        />
+                        {displayLabel}
+                      </div>
+                    ) : displayLabel}
                   </TableCell>
                 </TableRow>
               ) : row.isTotal ? (
@@ -832,6 +911,23 @@ function PatternBTable({
                 <TableRow key={row.id} className="hover:bg-muted/10">
                   <TableCell className={cn("p-1", indentCls(row.indent))}>
                     <div className="flex items-center gap-1">
+                      {/* Task 1: group select-all — only when this static row has attached custom children */}
+                      {hasAttachedB && (() => {
+                        const ids = attachedHere.map(cr => cr.id);
+                        return (
+                          <Checkbox
+                            checked={groupChecked(ids)}
+                            onCheckedChange={() => toggleGroup(ids)}
+                            className="shrink-0 h-3.5 w-3.5"
+                            aria-label="Select all rows in this group"
+                            title={
+                              groupChecked(ids) === true
+                                ? "Deselect all sub-rows"
+                                : "Select all sub-rows"
+                            }
+                          />
+                        );
+                      })()}
                       {/* +/- expand for mapped Tally ledgers and/or attached custom rows */}
                       {showToggleB ? (
                         <button

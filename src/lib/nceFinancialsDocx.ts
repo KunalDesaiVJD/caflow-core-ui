@@ -61,7 +61,7 @@ const A4_H   = 16838;           // A4 height
 const MARG_L = 864;             // 0.6" left — modest room for hole-punch / binding
 const MARG_R = 576;             // 0.4" right
 const MARG_T = 720;             // 0.5" top
-const MARG_B = 900;             // ~0.625" bottom (room for footer)
+const MARG_B = 720;             // 0.5" bottom — tightened for better one-page BS/PL fit
 const TW     = A4_W - MARG_L - MARG_R; // 10466 DXA — usable table width (unchanged)
 
 // Columns: [Particulars, Note No., CY Amount, PY Amount]  →  must sum to TW
@@ -771,7 +771,7 @@ function buildSignatureTable(sig: SigData): Table {
     lines: Array<{ text: string; bold?: boolean; gap?: boolean; muted?: boolean }>,
   ): Paragraph[] {
     return lines.map(l => new Paragraph({
-      spacing: { before: l.gap ? 200 : 0, after: 20 },
+      spacing: { before: l.gap ? 120 : 0, after: 8 },
       children: [new TextRun({
         text:  l.text,
         font:  FONT,
@@ -1623,7 +1623,9 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
         properties: { page: portraitProps },
         children: [
           bsTable,
-          new Paragraph({ spacing: { before: 600 }, children: [] }),
+          // Task 2: minimal gap — avoids the large dead zone that triggered Word's
+          // aggressive "shrink to one page" scaling on BS/PL pages.
+          new Paragraph({ spacing: { before: 60 }, children: [] }),
           sigBlock(),
         ],
       },
@@ -1632,7 +1634,7 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
         properties: { page: portraitProps },
         children: [
           plTable,
-          new Paragraph({ spacing: { before: 600 }, children: [] }),
+          new Paragraph({ spacing: { before: 60 }, children: [] }),
           sigBlock(),
         ],
       },
