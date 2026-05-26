@@ -31,11 +31,13 @@ interface Props {
    *  Maps originalNoteRef → dynamicSequentialNoteNo so the Notes tab headings
    *  stay in sync with the note numbers shown in the BS/PL columns. */
   dynamicNoteMap?: Map<number, number>;
+  /** Task 8: Lock Preview — pass-through to NCEDetailedNotes */
+  onExpansionStateUpdate?: (state: Record<string, Set<string>>) => void;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteMap }: Props) {
+export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteMap, onExpansionStateUpdate }: Props) {
   const [activeSubTab, setActiveSubTab] = useState("capital_account");
 
   useEffect(() => {
@@ -93,7 +95,7 @@ export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteM
         </TabsContent>
 
         <TabsContent value="notes_to_accounts" className="mt-3">
-          <NCEDetailedNotes engagementId={engagementId} dynamicNoteMap={dynamicNoteMap} />
+          <NCEDetailedNotes engagementId={engagementId} dynamicNoteMap={dynamicNoteMap} onExpansionStateUpdate={onExpansionStateUpdate} />
         </TabsContent>
 
         <TabsContent value="ppe_schedule" className="mt-3">

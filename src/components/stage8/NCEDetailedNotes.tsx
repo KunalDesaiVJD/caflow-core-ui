@@ -52,6 +52,10 @@ interface Props {
    *  When omitted (e.g. when rendered standalone from Stage 8), falls back
    *  to parsing the static number from NOTES_CONFIG title strings. */
   dynamicNoteMap?: Map<number, number>;
+  /** Task 8: Lock Preview — called whenever a PatternBTable's expand/collapse
+   *  state changes. The parent can use this to capture the current expansion
+   *  state and pass it to generateNCEFinancialsDocx as expandedRows. */
+  onExpansionStateUpdate?: (state: Record<string, Set<string>>) => void;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -607,7 +611,7 @@ function PatternBTable({
   sourceLabelOverrides,
   onChangeCy, onChangePy, onAddRow, onDeleteRow, onChangeLabel,
   onHideStatic, onChangeStaticLabel, onPromote, onEjectSource, onEjectCustomSource,
-  onChangeSourceLabel,
+  onChangeSourceLabel, noteType, onExpansionChange,
 }: {
   config:       NoteConfig;
   cy:           Record<string, number>;
@@ -629,6 +633,10 @@ function PatternBTable({
   onEjectSource:(rowId: string, ledger: string, amount: number, attachToId?: string) => void;
   onEjectCustomSource:(customRowId: string, ledger: string, amount: number, attachToId?: string) => void;
   onChangeSourceLabel: (rowId: string, ledger: string, newLabel: string) => void;
+  /** Task 8: Lock Preview — note type key for expansion tracking */
+  noteType?: string;
+  /** Task 8: Lock Preview — called when the openSources set changes */
+  onExpansionChange?: (noteType: string, expandedIds: Set<string>) => void;
 }) {
   const { cy, py } = useMemo(
     () => computeDisplayData(config, rawCy, rawPy, customRows),
@@ -642,6 +650,12 @@ function PatternBTable({
     if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
+  // Task 8: notify parent when expansion state changes (Lock Preview)
+  useEffect(() => {
+    if (noteType && onExpansionChange) {
+      onExpansionChange(noteType, new Set(openSources));
+    }
+  }, [openSources, noteType, onExpansionChange]);
   // ── Bulk-select state ────────────────────────────────────────────────────────
   const [selectedCustomRows, setSelectedCustomRows] = useState<Set<string>>(new Set());
   const [bulkTarget, setBulkTarget] = useState<string>("");
@@ -1525,7 +1539,7 @@ function PatternATable({
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
+export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStateUpdate }: Props) {
   const queryClient = useQueryClient();
   const [noteData,    setNoteData]    = useState<Record<string, NCENoteData>>({});
   const [loading,     setLoading]     = useState(true);
@@ -1535,6 +1549,8 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
   // undefined = uncontrolled; true = all collapsed; false = all expanded
   const [collapseAll, setCollapseAll] = useState<boolean | undefined>(undefined);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Task 8: accumulate expansion state across all PatternBTables
+  const expansionStateRef = useRef<Record<string, Set<string>>>({});
 
   const financialYear = (eng?.financial_year as string) || "";
   const clientName    = (eng?.clients?.name  as string) || "";
@@ -2483,6 +2499,11 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap }: Props) {
                     onEjectSource={(rid, ledger, amt, attachToId?) => handleEjectSource(sourceKey, rid, ledger, amt, attachToId)}
                     onEjectCustomSource={(cid, ledger, amt, attachToId?) => handleEjectCustomSource(sourceKey, cid, ledger, amt, attachToId)}
                     onChangeSourceLabel={(rid, ledger, lbl) => handleChangeSourceLabel(sourceKey, rid, ledger, lbl)}
+                    noteType={nc.noteType}
+                    onExpansionChange={(nt, ids) => {
+                      expansionStateRef.current[nt] = ids;
+                      onExpansionStateUpdate?.(expansionStateRef.current);
+                    }}
                   />
                 )}
               </div>

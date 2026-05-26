@@ -1936,6 +1936,9 @@ export default function PipelineFinancialStatements({
   // Issue 2 — sub-group notes export COLLAPSED by default (only sub-group name
   // + total). Individual ledgers are emitted only when this is enabled.
   const [corpExpandSubGroups, setCorpExpandSubGroups]  = useState(false);
+  // Task 8: Lock Preview — captures notes expand/collapse state for export
+  const [nceIsLocked,        setNceIsLocked]        = useState(false);
+  const [nceExpandedRows,    setNceExpandedRows]     = useState<Set<string>>(new Set());
 
   // ─── Active tab (controlled so navigator buttons can switch programmatically) ─
   const [activeTab, setActiveTab] = useState("bs");
@@ -6456,6 +6459,17 @@ export default function PipelineFinancialStatements({
               <FileText size={14} /> Export Word
             </Button>
           )}
+          {isNonCorporate && (
+            <Button
+              variant={nceIsLocked ? "default" : "outline"}
+              size="sm"
+              className={cn("gap-1", nceIsLocked && "bg-amber-500 hover:bg-amber-600 border-amber-500")}
+              title={nceIsLocked ? "Preview is locked — export uses current expand/collapse state. Click to unlock." : "Lock current expand/collapse state for export"}
+              onClick={() => setNceIsLocked(v => !v)}
+            >
+              {nceIsLocked ? "🔓 Unlock Preview" : "🔒 Lock Preview"}
+            </Button>
+          )}
           {!isNonCorporate && (
             <Button
               variant="outline"
@@ -7137,6 +7151,12 @@ export default function PipelineFinancialStatements({
                 engagementId={engagementId}
                 navigateToNote={nceNavNote}
                 dynamicNoteMap={nceDynamicNoteMap}
+                onExpansionStateUpdate={(state) => {
+                  if (!nceIsLocked) {
+                    const allIds = new Set(Object.values(state).flatMap(s => [...s]));
+                    setNceExpandedRows(allIds);
+                  }
+                }}
               />
             </TabsContent>
           )}
@@ -7589,6 +7609,7 @@ export default function PipelineFinancialStatements({
                 ppeData:     ncePpeData      ?? [],
                 font:        nceExportFont,
                 constitution: entityType,
+                expandedRows: nceIsLocked ? nceExpandedRows : undefined,
                 signature: {
                   firmName:      sigFirmName,
                   firmFRN:       sigFirmFRN,
