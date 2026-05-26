@@ -6339,7 +6339,7 @@ export default function PipelineFinancialStatements({
       try {
         const { loadStage7Ratios } = await import("@/lib/ratioAutoPopulate");
         const s7 = await loadStage7Ratios(engagement.id);
-        corpDocxRatios = { cy: s7.cy, py: s7.py };
+        corpDocxRatios = { cy: s7.cy, py: s7.py, commentary: s7.commentary } as any;
       } catch (e) {
         console.warn("[FS DOCX] Could not load stage7_ratios:", e);
       }

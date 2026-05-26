@@ -35,7 +35,8 @@ import {
 } from "docx";
 
 import { getActiveFsDivisor, FS_SCALES } from "@/lib/fsUnits";
-import { computeAllRatios } from "@/lib/ratioEngine";
+import { computeAllRatios, computeVariance } from "@/lib/ratioEngine";
+import { getNoteNo } from "@/lib/noteNumberRegistry";
 
 // ─── Export-time unit scale ───────────────────────────────────────────────────
 let _exportDivisor = 1;
@@ -67,11 +68,6 @@ const NW_DESC = 7550;
 const NW_CY   = 1458;
 const NW_PY   = 1458;
 
-// Ratios table columns: No. | Ratio Name | CY | PY
-const RW_NO   =  500;
-const RW_NAME = 5000;
-const RW_CY   = 2483;
-const RW_PY   = 2483;
 
 // FA schedule (landscape 11 cols)
 const MARG_LS  = 720;
@@ -106,11 +102,10 @@ const SZ_ENTITY = 28;   // 14pt
 
 // ─── Colour palette (professional light grey — 50 % lighter than prior slate) ──
 const NAVY    = "374151";   // charcoal text / title accent  (kept dark for readability)
-// Issue 1 — "Particulars" column header: lighter grey (2 shades lighter than
-// the prior A5AAB1) to match the requested lighter look.
-const BG_HDR  = "C2C7CD";   // Particulars / column header — light grey
-// Issue 1 — Note HEADING: 2 shades lighter still (sits a notch above the
-// Particulars header so the note title reads softer).
+// Issue 1 — "Particulars" / column header now uses a BLUE colour combination
+// (light steel-blue) matching the on-screen CA Flow header.
+const BG_HDR  = "C5D9F1";   // Particulars / column header — light blue
+// Note HEADING stays a soft grey (sits a notch above the blue header row).
 const BG_NOTE_HDR = "D5D9DD"; // note heading — lighter grey
 const BG_SECT = "F1F3F5";   // very light grey section
 const BG_TOT  = "F8F9FA";   // near-white subtotal
@@ -994,8 +989,9 @@ function buildFATable(
   const FA_COLS = [2200, 500, 1200, 1100, 1100, 1300, 1050, 1050, 1050, 1300, 1274, 1274];
   // sum = 2200+500+1200+1100+1100+1300+1050+1050+1050+1300+1274+1274 = 15398 ✓
 
+  // Issue 2 — FA header row at 9pt (SZ_BODY), matching the 9pt data rows.
   const h = (text: string, w: number) =>
-    cell({ text, w, sz: SZ_XS, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.CENTER, padL: 30, padR: 30 });
+    cell({ text, w, sz: SZ_BODY, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.CENTER, padL: 30, padR: 30 });
 
   const hdrRow = new TableRow({
     tableHeader: true,
@@ -1134,57 +1130,166 @@ function buildFATable(
 }
 
 // ─── RATIOS TABLE ─────────────────────────────────────────────────────────────
-function buildRatiosTable(cyRatios: any, pyRatios: any): Table {
+// Issue 3 — replicate the on-screen "NOTE - n : RATIO" note exactly:
+//   NO | PARTICULARS | NUMERATOR / DENOMINATOR | Amount (₹) | CY | PY | Variance
+// Each ratio = numerator row + denominator row + a "Text:" commentary row.
+// Variance > +25% is shaded amber, < -25% red (same thresholds as the UI).
+function ratioPrevFy(fy: string): string {
+  const parts = (fy || "").split("-");
+  if (parts.length !== 2) return fy;
+  const startY = parseInt(parts[0], 10);
+  const endRaw = parts[1];
+  const prevEnd = endRaw.length === 2 ? String(startY).slice(-2) : String(startY);
+  return `${startY - 1}-${prevEnd}`;
+}
+
+function buildRatiosTable(
+  cyRatios: any,
+  pyRatios: any,
+  commentary?: Array<{ ratioId: number; text: string }>,
+  fy?: string,
+): Table {
   const cyResults = cyRatios ? computeAllRatios(cyRatios) : [];
   const pyResults = pyRatios ? computeAllRatios(pyRatios) : [];
+  const pyById = new Map<number, typeof pyResults[number]>();
+  for (const r of pyResults) pyById.set(r.id, r);
+  const cmtById = new Map<number, string>();
+  for (const c of (commentary ?? [])) if (c?.ratioId != null) cmtById.set(c.ratioId, c.text ?? "");
 
-  const pyMap = new Map<number, string>();
-  for (const r of pyResults) pyMap.set(r.id, r.display);
+  // 7 columns summing to TW (10466)
+  const RW = [460, 1850, 2300, 1900, 1250, 1250, 1456];
+  const noteNo = getNoteNo("ratios") ?? 31;
+  const cyLbl  = fy ? `Current Year ${fy}`            : "Current Year";
+  const pyLbl  = fy ? `Previous Year ${ratioPrevFy(fy)}` : "Previous Year";
 
-  const CW = [RW_NO, RW_NAME, RW_CY, RW_PY];
+  // Indian-grouped amount with 2 decimals (matches on-screen formatIndian).
+  const fmtAmt = (v: number | null | undefined): string =>
+    v == null ? "—" : Number(v).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  const hdrRow = new TableRow({
+  const varBg = (cy: number | null, py: number | null): string | undefined => {
+    if (cy == null || py == null || py === 0) return undefined;
+    const pct = ((cy - py) / Math.abs(py)) * 100;
+    if (pct >  25) return "FEF3C7";  // amber — significant increase
+    if (pct < -25) return "FEE2E2";  // red — significant decrease
+    return undefined;
+  };
+
+  // Header helpers
+  const hc = (t: string, w: number, align: AlignmentType = AlignmentType.CENTER) =>
+    cell({ text: t, w, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align });
+  // A vertically-merged (rowSpan 2) centred value cell.
+  const spanCell = (text: string, w: number, opts: { bold?: boolean; color?: string; bg?: string; align?: AlignmentType } = {}) =>
+    new TableCell({
+      rowSpan: 2,
+      width:   { size: w, type: WidthType.DXA },
+      borders: BDR_ROW,
+      shading: opts.bg ? { fill: opts.bg, type: ShadingType.CLEAR } : undefined,
+      verticalAlign: VerticalAlign.CENTER,
+      margins: { top: 36, bottom: 36, left: 60, right: 60 },
+      children: [new Paragraph({
+        alignment: opts.align ?? AlignmentType.CENTER,
+        spacing:   { before: 0, after: 0 },
+        children:  [new TextRun({ text, font: FONT, size: SZ_SM, bold: opts.bold, color: opts.color ?? BLACK })],
+      })],
+    });
+
+  const rows: TableRow[] = [];
+
+  // Centred title — "NOTE - n : RATIO"
+  rows.push(new TableRow({
+    cantSplit: true,
+    children: [new TableCell({
+      columnSpan: 7,
+      width:   { size: TW, type: WidthType.DXA },
+      shading: { fill: BG_NOTE_HDR, type: ShadingType.CLEAR },
+      borders: BDR_NONE,
+      margins: { top: 100, bottom: 100, left: 100, right: 100 },
+      children: [new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing:   { before: 0, after: 0 },
+        children:  [new TextRun({ text: `NOTE - ${noteNo} : RATIO`, font: FONT, size: SZ_HDR, bold: true, color: BLACK })],
+      })],
+    })],
+  }));
+
+  // Column header
+  rows.push(new TableRow({
     tableHeader: true,
     children: [
-      cell({ text: "No.", w: CW[0], sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.CENTER }),
-      cell({ text: "Ratio", w: CW[1], sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE }),
-      cell({ text: "Current Year", w: CW[2], sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.CENTER }),
-      cell({ text: "Previous Year", w: CW[3], sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.CENTER }),
+      hc("No.", RW[0]),
+      hc("Particulars", RW[1], AlignmentType.LEFT),
+      hc("Numerator / Denominator", RW[2], AlignmentType.LEFT),
+      hc("Amount (₹)", RW[3], AlignmentType.RIGHT),
+      hc(cyLbl, RW[4]),
+      hc(pyLbl, RW[5]),
+      hc("Variance", RW[6]),
     ],
-  });
+  }));
 
-  const dataRows = cyResults.map(r =>
-    new TableRow({
+  const block = (
+    no: number | string, name: string,
+    numLabel: string, numVal: number | null,
+    denLabel: string, denVal: number | null,
+    cyDisp: string, pyDisp: string,
+    cyComp: number | null, pyComp: number | null,
+    cmt: string,
+  ) => {
+    const vStr = computeVariance(cyComp, pyComp);
+    const vBg  = varBg(cyComp, pyComp);
+    // Numerator row (NO, Particulars, CY, PY, Variance are row-spanned)
+    rows.push(new TableRow({
       children: [
-        cell({ text: String(r.id), w: CW[0], align: AlignmentType.CENTER, bold: true, color: NAVY }),
-        cell({ text: r.name,       w: CW[1] }),
-        cell({ text: r.display,    w: CW[2], align: AlignmentType.CENTER }),
-        cell({ text: pyMap.get(r.id) ?? "N.A.", w: CW[3], align: AlignmentType.CENTER }),
+        spanCell(String(no), RW[0], { bold: true, color: NAVY }),
+        spanCell(name, RW[1], { bold: true, align: AlignmentType.LEFT }),
+        cell({ text: numLabel,        w: RW[2], sz: SZ_SM, color: DK_GREY, borders: BDR_ROW, padL: 100 }),
+        cell({ text: fmtAmt(numVal),  w: RW[3], sz: SZ_SM, align: AlignmentType.RIGHT, padR: 120, borders: BDR_ROW }),
+        spanCell(cyDisp, RW[4], { bold: true, color: cyComp == null ? DK_GREY : BLACK }),
+        spanCell(pyDisp, RW[5], { bold: true, color: pyComp == null ? DK_GREY : BLACK }),
+        spanCell(vStr,   RW[6], { bold: true, bg: vBg }),
       ],
-    }),
-  );
-
-  // Section title
-  const titleRow = new TableRow({
-    children: [
-      new TableCell({
-        columnSpan: 4,
+    }));
+    // Denominator row — only the two non-spanned columns
+    rows.push(new TableRow({
+      children: [
+        cell({ text: denLabel,       w: RW[2], sz: SZ_SM, color: DK_GREY, borders: BDR_ROW, padL: 100 }),
+        cell({ text: fmtAmt(denVal), w: RW[3], sz: SZ_SM, align: AlignmentType.RIGHT, padR: 120, borders: BDR_ROW }),
+      ],
+    }));
+    // Commentary row (full width)
+    rows.push(new TableRow({
+      children: [new TableCell({
+        columnSpan: 7,
         width:   { size: TW, type: WidthType.DXA },
-        shading: { fill: BG_SECT, type: ShadingType.CLEAR },
-        borders: BDR_SECT,
-        margins: { top: 80, bottom: 80, left: 100, right: 100 },
+        shading: { fill: BG_TOT, type: ShadingType.CLEAR },
+        borders: BDR_ROW,
+        margins: { top: 30, bottom: 30, left: 100, right: 100 },
         children: [new Paragraph({
           spacing: { before: 0, after: 0 },
-          children: [new TextRun({ text: "Financial Ratios  (MCA-Mandated)", font: FONT, size: SZ_HDR, bold: true, color: NAVY })],
+          children: [
+            new TextRun({ text: "Text: ", font: FONT, size: SZ_XS, bold: true, color: DK_GREY }),
+            new TextRun({ text: cmt || "", font: FONT, size: SZ_XS, color: BLACK }),
+          ],
         })],
-      }),
-    ],
-  });
+      })],
+    }));
+  };
+
+  for (const cyR of cyResults) {
+    const pyR = pyById.get(cyR.id);
+    block(
+      cyR.id, cyR.name,
+      cyR.numerator.label, cyR.numerator.value,
+      cyR.denominator.label, cyR.denominator.value,
+      cyR.display, pyR?.display ?? "N.A.",
+      cyR.computed, pyR?.computed ?? null,
+      cmtById.get(cyR.id) ?? "",
+    );
+  }
 
   return new Table({
     width:        { size: TW, type: WidthType.DXA },
-    columnWidths: CW,
-    rows: dataRows.length > 0 ? [titleRow, hdrRow, ...dataRows] : [titleRow, hdrRow],
+    columnWidths: RW,
+    rows,
   });
 }
 
@@ -1819,8 +1924,8 @@ export interface CorpDocxParams {
     pl?:       Record<string, { breakup?: BreakupRow[]; [k: string]: any }>;
     fa?:       { rows?: FARow[]; py_manual?: Record<string, number | null> | null };
   } | null;
-  /** stage7_ratios CY and PY inputs */
-  ratios?: { cy: any; py: any } | null;
+  /** stage7_ratios CY and PY inputs (+ optional per-ratio commentary) */
+  ratios?: { cy: any; py: any; commentary?: Array<{ ratioId: number; text: string }> } | null;
   /** When true, breakup notes list every ledger inside each sub-group.
    *  When false (default), only the sub-group name + total are exported. */
   expandSubGroups?: boolean;
@@ -2000,7 +2105,7 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
   if (hasRatios) {
     sections.push({
       properties: { page: portraitProps },
-      children:   [buildRatiosTable(ratios!.cy, ratios!.py)],
+      children:   [buildRatiosTable(ratios!.cy, ratios!.py, (ratios as any)?.commentary, fy)],
     });
   }
 
