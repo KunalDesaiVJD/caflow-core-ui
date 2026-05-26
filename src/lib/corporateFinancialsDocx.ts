@@ -102,9 +102,9 @@ const SZ_ENTITY = 28;   // 14pt
 
 // ─── Colour palette (professional light grey — 50 % lighter than prior slate) ──
 const NAVY    = "374151";   // charcoal text / title accent  (kept dark for readability)
-// Issue 1 — "Particulars" / column header now uses a BLUE colour combination
-// (light steel-blue) matching the on-screen CA Flow header.
-const BG_HDR  = "C5D9F1";   // Particulars / column header — light blue
+// Issue 2 — "Particulars" / column header: muted off-white with a subtle cool
+// undertone (per request).
+const BG_HDR  = "F2F6F7";   // Particulars / column header — muted cool off-white
 // Note HEADING stays a soft grey (sits a notch above the blue header row).
 const BG_NOTE_HDR = "D5D9DD"; // note heading — lighter grey
 const BG_SECT = "F1F3F5";   // very light grey section
@@ -686,16 +686,19 @@ function buildCorpSignatureTable(sig: CorpSigData, entityName: string): Table {
   const widths = Array.from({ length: nCols }, (_, i) =>
     i === nCols - 1 ? TW - colW * (nCols - 1) : colW);
 
+  // Issue 3 — the client (Board of Directors) sign area is shifted one page
+  // margin (720 DXA ≈ 0.5") to the right of the auditor block.
+  const SIG_CLIENT_INDENT = 720;
   type Line = { text: string; bold?: boolean };
   const stack = (
     lines: Line[],
-    opts: { top?: number; span?: number; width: number },
+    opts: { top?: number; span?: number; width: number; left?: number },
   ): TableCell =>
     new TableCell({
       ...(opts.span ? { columnSpan: opts.span } : {}),
       width:   { size: opts.width, type: WidthType.DXA },
       borders: BDR_NONE,
-      margins: { top: opts.top ?? 0, bottom: 0, left: 80, right: 80 },
+      margins: { top: opts.top ?? 0, bottom: 0, left: opts.left ?? 80, right: 80 },
       children: lines.map(l => new Paragraph({
         // 9pt font (SZ_BODY) with comfortable line spacing to match the
         // on-screen signature block layout the user approved.
@@ -725,7 +728,7 @@ function buildCorpSignatureTable(sig: CorpSigData, entityName: string): Table {
       ),
       stack(
         [{ text: "For and on behalf of the Board of Directors of" }, { text: entityName, bold: true }],
-        { span: nCols - 1, width: widths.slice(1).reduce((s, w) => s + w, 0) },
+        { span: nCols - 1, width: widths.slice(1).reduce((s, w) => s + w, 0), left: 80 + SIG_CLIENT_INDENT },
       ),
     ],
   });
@@ -734,13 +737,15 @@ function buildCorpSignatureTable(sig: CorpSigData, entityName: string): Table {
     children: [
       stack([{ text: partner, bold: true }, { text: "Partner" }, { text: `Membership No.: ${memNo}` }], { top: 420, width: widths[0] }),
       ...directors.map((d, i) =>
-        stack([{ text: d.name, bold: true }, { text: "Director" }, { text: `DIN: ${d.din || "—"}` }], { top: 420, width: widths[i + 1] }),
+        stack([{ text: d.name, bold: true }, { text: "Director" }, { text: `DIN: ${d.din || "—"}` }], { top: 420, width: widths[i + 1], left: 80 + SIG_CLIENT_INDENT }),
       ),
     ],
   });
 
   const placeDateRow = new TableRow({
-    children: widths.map(w => stack([{ text: `Place: ${place}` }, { text: `Date: ${date}` }], { top: 220, width: w })),
+    children: widths.map((w, i) =>
+      stack([{ text: `Place: ${place}` }, { text: `Date: ${date}` }], { top: 220, width: w, left: i === 0 ? 80 : 80 + SIG_CLIENT_INDENT }),
+    ),
   });
 
   return new Table({
@@ -1148,6 +1153,7 @@ function buildRatiosTable(
   pyRatios: any,
   commentary?: Array<{ ratioId: number; text: string }>,
   fy?: string,
+  ratioNoteNo?: number | null,
 ): Table {
   const cyResults = cyRatios ? computeAllRatios(cyRatios) : [];
   const pyResults = pyRatios ? computeAllRatios(pyRatios) : [];
@@ -1158,21 +1164,15 @@ function buildRatiosTable(
 
   // 7 columns summing to TW (10466)
   const RW = [460, 1850, 2300, 1900, 1250, 1250, 1456];
-  const noteNo = getNoteNo("ratios") ?? 31;
+  // Issue 1 — the ratio note number continues the FS note sequence (last note + 1),
+  // passed in from the caller; falls back to the static registry only if absent.
+  const noteNo = ratioNoteNo ?? getNoteNo("ratios") ?? 31;
   const cyLbl  = fy ? `Current Year ${fy}`            : "Current Year";
   const pyLbl  = fy ? `Previous Year ${ratioPrevFy(fy)}` : "Previous Year";
 
   // Indian-grouped amount with 2 decimals (matches on-screen formatIndian).
   const fmtAmt = (v: number | null | undefined): string =>
     v == null ? "—" : Number(v).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-  const varBg = (cy: number | null, py: number | null): string | undefined => {
-    if (cy == null || py == null || py === 0) return undefined;
-    const pct = ((cy - py) / Math.abs(py)) * 100;
-    if (pct >  25) return "FEF3C7";  // amber — significant increase
-    if (pct < -25) return "FEE2E2";  // red — significant decrease
-    return undefined;
-  };
 
   // Header helpers
   const hc = (t: string, w: number, align: AlignmentType = AlignmentType.CENTER) =>
@@ -1235,23 +1235,24 @@ function buildRatiosTable(
     cmt: string,
   ) => {
     const vStr = computeVariance(cyComp, pyComp);
-    const vBg  = varBg(cyComp, pyComp);
     // Numerator row (NO, Particulars, CY, PY, Variance are row-spanned)
+    // Issue 1 — Numerator/Denominator labels in BLACK (not grey/blue); the
+    // Variance cell is NOT highlighted.
     rows.push(new TableRow({
       children: [
         spanCell(String(no), RW[0], { bold: true, color: NAVY }),
         spanCell(name, RW[1], { bold: true, align: AlignmentType.LEFT }),
-        cell({ text: numLabel,        w: RW[2], sz: SZ_SM, color: DK_GREY, borders: BDR_ROW, padL: 100 }),
+        cell({ text: numLabel,        w: RW[2], sz: SZ_SM, color: BLACK, borders: BDR_ROW, padL: 100 }),
         cell({ text: fmtAmt(numVal),  w: RW[3], sz: SZ_SM, align: AlignmentType.RIGHT, padR: 120, borders: BDR_ROW }),
         spanCell(cyDisp, RW[4], { bold: true, color: cyComp == null ? DK_GREY : BLACK }),
         spanCell(pyDisp, RW[5], { bold: true, color: pyComp == null ? DK_GREY : BLACK }),
-        spanCell(vStr,   RW[6], { bold: true, bg: vBg }),
+        spanCell(vStr,   RW[6], { bold: true }),
       ],
     }));
     // Denominator row — only the two non-spanned columns
     rows.push(new TableRow({
       children: [
-        cell({ text: denLabel,       w: RW[2], sz: SZ_SM, color: DK_GREY, borders: BDR_ROW, padL: 100 }),
+        cell({ text: denLabel,       w: RW[2], sz: SZ_SM, color: BLACK, borders: BDR_ROW, padL: 100 }),
         cell({ text: fmtAmt(denVal), w: RW[3], sz: SZ_SM, align: AlignmentType.RIGHT, padR: 120, borders: BDR_ROW }),
       ],
     }));
@@ -1263,10 +1264,10 @@ function buildRatiosTable(
         shading: { fill: BG_TOT, type: ShadingType.CLEAR },
         borders: BDR_ROW,
         margins: { top: 30, bottom: 30, left: 100, right: 100 },
+        // Issue 1 — show ONLY the commentary text (no "Text:" prefix label).
         children: [new Paragraph({
           spacing: { before: 0, after: 0 },
           children: [
-            new TextRun({ text: "Text: ", font: FONT, size: SZ_XS, bold: true, color: DK_GREY }),
             new TextRun({ text: cmt || "", font: FONT, size: SZ_XS, color: BLACK }),
           ],
         })],
@@ -2103,9 +2104,15 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
   // Issue 3 — Financial Ratios export on their OWN page, AFTER every note
   // (including the FA schedule). This makes the ratios the final page.
   if (hasRatios) {
+    // Issue 1 — the Ratio note continues the FS note numbering: it is the
+    // highest note number actually used + 1 (e.g. last note 18 → ratio = 19).
+    const maxNoteNo = Object.values(noteNumbers)
+      .map(v => (typeof v === "number" ? v : 0))
+      .reduce((m, v) => Math.max(m, v), 0);
+    const ratioNoteNo = maxNoteNo > 0 ? maxNoteNo + 1 : null;
     sections.push({
       properties: { page: portraitProps },
-      children:   [buildRatiosTable(ratios!.cy, ratios!.py, (ratios as any)?.commentary, fy)],
+      children:   [buildRatiosTable(ratios!.cy, ratios!.py, (ratios as any)?.commentary, fy, ratioNoteNo)],
     });
   }
 
