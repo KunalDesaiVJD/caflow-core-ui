@@ -20,14 +20,18 @@ import { supabase }    from "@/integrations/supabase/client";
 import { Button }      from "@/components/ui/button";
 import { Input }       from "@/components/ui/input";
 import { Badge }       from "@/components/ui/badge";
+import { Checkbox }    from "@/components/ui/checkbox";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
   Popover, PopoverTrigger, PopoverContent,
 } from "@/components/ui/popover";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import { toast }       from "sonner";
-import { Loader2, Save, RefreshCw, Plus, Trash2, Search, CornerUpRight, Minus, MoreVertical } from "lucide-react";
+import { Loader2, Save, RefreshCw, Plus, Trash2, Search, CornerUpRight, Minus, MoreVertical, ArrowRightLeft } from "lucide-react";
 import { cn }          from "@/lib/utils";
 import {
   NoteConfig, NoteRowDef, NOTES_CONFIG, computeDisplayData, extractSplitData,
@@ -434,6 +438,7 @@ function CustomRowEditor({
   onSwapLtSt,
   isOpen: isOpenProp, onToggle: onToggleProp, hasSubRows,
   sourceLabelOverrides, onChangeSourceLabel,
+  isSelected, onSelect,
 }: {
   row: NCECustomRow;
   cyVal: number; pyVal: number;
@@ -460,6 +465,10 @@ function CustomRowEditor({
   sourceLabelOverrides?: Record<string, string>;
   /** Called when user edits a source-ledger display name */
   onChangeSourceLabel?: (rowId: string, ledger: string, newLabel: string) => void;
+  /** Bulk-select: whether this row is currently selected */
+  isSelected?: boolean;
+  /** Bulk-select: called when the checkbox is toggled */
+  onSelect?: (checked: boolean) => void;
 }) {
   const hasSources = (row.sources?.length ?? 0) > 0;
   const [sourcesOpenLocal, setSourcesOpenLocal] = useState(false);
@@ -470,9 +479,18 @@ function CustomRowEditor({
   const colCount = isPatternA ? 6 : 4;
   return (
     <>
-      <TableRow className={cn("hover:bg-blue-50/50", isChild ? "bg-blue-50/10 border-l-2 border-l-blue-200" : "bg-blue-50/30")}>
+      <TableRow className={cn("hover:bg-blue-50/50", isChild ? "bg-blue-50/10 border-l-2 border-l-blue-200" : "bg-blue-50/30", isSelected && "ring-1 ring-inset ring-blue-400 bg-blue-100/40")}>
         <TableCell className={cn("p-1", isPatternA && "border-r", isChild && "pl-8")}>
           <div className="flex items-center gap-1 min-w-0">
+            {/* Bulk-select checkbox — only shown in Pattern B when onSelect is provided */}
+            {onSelect && !isPatternA && (
+              <Checkbox
+                checked={!!isSelected}
+                onCheckedChange={(v) => onSelect(!!v)}
+                className="shrink-0 h-3.5 w-3.5 mr-0.5"
+                aria-label="Select row for bulk move"
+              />
+            )}
             {/* +/- toggle for merged/source ledgers and/or attached sub-rows */}
             {showToggle ? (
               <button
@@ -624,6 +642,20 @@ function PatternBTable({
     if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
+  // ── Bulk-select state ────────────────────────────────────────────────────────
+  const [selectedCustomRows, setSelectedCustomRows] = useState<Set<string>>(new Set());
+  const [bulkTarget, setBulkTarget] = useState<string>("");
+  const toggleRowSelect = (id: string, checked: boolean) =>
+    setSelectedCustomRows(prev => { const n = new Set(prev); checked ? n.add(id) : n.delete(id); return n; });
+  const handleBulkMove = () => {
+    if (!bulkTarget || selectedCustomRows.size === 0) return;
+    const count = selectedCustomRows.size;
+    for (const id of selectedCustomRows) onPromote(id, bulkTarget);
+    setSelectedCustomRows(new Set());
+    setBulkTarget("");
+    toast.success(`Moved ${count} row(s)`);
+  };
+  const clearSelection = () => { setSelectedCustomRows(new Set()); setBulkTarget(""); };
   // Build move-target options, qualifying each row's label with its section
   // header (Secured / Unsecured / Quoted / Unquoted). Without this, notes like
   // Borrowings list "Term loans — Banks" identically under BOTH Secured and
@@ -666,6 +698,44 @@ function PatternBTable({
         </TableRow>
       </TableHeader>
       <TableBody>
+        {/* ── Bulk-move toolbar — visible only when ≥1 row is selected ──────── */}
+        {selectedCustomRows.size > 0 && (
+          <TableRow className="bg-blue-50 border-b border-blue-200 sticky top-0 z-10">
+            <TableCell colSpan={4} className="py-1.5 px-3">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="flex items-center gap-1 text-xs font-semibold text-blue-700">
+                  <ArrowRightLeft className="h-3.5 w-3.5" />
+                  {selectedCustomRows.size} row{selectedCustomRows.size > 1 ? "s" : ""} selected
+                </span>
+                <Select value={bulkTarget} onValueChange={setBulkTarget}>
+                  <SelectTrigger className="h-6 text-xs w-52">
+                    <SelectValue placeholder="Move to…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {allHeadingOptions.filter(o => !selectedCustomRows.has(o.id)).map(o => (
+                      <SelectItem key={o.id} value={o.id} className="text-xs">{o.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  type="button" size="sm" variant="default"
+                  className="h-6 text-xs px-2 bg-blue-600 hover:bg-blue-700"
+                  disabled={!bulkTarget}
+                  onClick={handleBulkMove}
+                >
+                  Move
+                </Button>
+                <Button
+                  type="button" size="sm" variant="ghost"
+                  className="h-6 text-xs px-2 text-muted-foreground"
+                  onClick={clearSelection}
+                >
+                  Clear
+                </Button>
+              </div>
+            </TableCell>
+          </TableRow>
+        )}
         {config.rows.map((row, idx) => {
           if (!row.isSectionHeader && !row.isTotal && hiddenRows.includes(row.id)) return null;
           const insertCustomBefore = idx === grandTotalIdx;
@@ -706,6 +776,8 @@ function PatternBTable({
                       onToggle={() => toggleSources(cr.id)}
                       sourceLabelOverrides={sourceLabelOverrides}
                       onChangeSourceLabel={onChangeSourceLabel}
+                      isSelected={selectedCustomRows.has(cr.id)}
+                      onSelect={checked => toggleRowSelect(cr.id, checked)}
                     />
                     {customSubRows.length > 0 && crIsOpen && customSubRows.map(sub => (
                       <CustomRowEditor
@@ -728,6 +800,8 @@ function PatternBTable({
                         onAddRow={onAddRow}
                         sourceLabelOverrides={sourceLabelOverrides}
                         onChangeSourceLabel={onChangeSourceLabel}
+                        isSelected={selectedCustomRows.has(sub.id)}
+                        onSelect={checked => toggleRowSelect(sub.id, checked)}
                       />
                     ))}
                   </Fragment>
@@ -864,6 +938,8 @@ function PatternBTable({
                   onAddRow={onAddRow}
                   sourceLabelOverrides={sourceLabelOverrides}
                   onChangeSourceLabel={onChangeSourceLabel}
+                  isSelected={selectedCustomRows.has(cr.id)}
+                  onSelect={checked => toggleRowSelect(cr.id, checked)}
                 />
               ))}
             </>
