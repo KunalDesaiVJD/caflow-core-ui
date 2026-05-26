@@ -499,10 +499,10 @@ function buildBSTable(
           children: [new Paragraph({
             spacing: { before: 0, after: 0 },
             children: [
-              new TextRun({ text: "Note 1  ", font: FONT, size: SZ_XS, bold: true, color: NAVY }),
+              new TextRun({ text: "Note 1  ", font: FONT, size: SZ_BODY, bold: true, color: NAVY }),
               new TextRun({
                 text: "Significant Accounting Policies and Notes to Accounts form an integral part of the Financial Statements.",
-                font: FONT, size: SZ_XS, italic: true, color: DK_GREY,
+                font: FONT, size: SZ_BODY, italic: true, color: DK_GREY,
               }),
             ],
           })],
@@ -623,10 +623,10 @@ function buildPLTable(
           children: [new Paragraph({
             spacing: { before: 0, after: 0 },
             children: [
-              new TextRun({ text: "Note 1  ", font: FONT, size: SZ_XS, bold: true, color: NAVY }),
+              new TextRun({ text: "Note 1  ", font: FONT, size: SZ_BODY, bold: true, color: NAVY }),
               new TextRun({
                 text: "Significant Accounting Policies and Notes to Accounts form an integral part of the Financial Statements.",
-                font: FONT, size: SZ_XS, italic: true, color: DK_GREY,
+                font: FONT, size: SZ_BODY, italic: true, color: DK_GREY,
               }),
             ],
           })],
