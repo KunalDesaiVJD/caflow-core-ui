@@ -533,10 +533,14 @@ Deno.serve(async (req) => {
       if (mode === "created" || mode === "reset") usersPayload.must_change_password = true;
       await adminClient.from("users").upsert(usersPayload, { onConflict: "id" });
 
-      // Link this client record to the auth user (this is what makes the client
-      // appear in the portal's entity switcher).
+      // Link this client record to the auth user AND ensure it is active.
+      // The portal entity list (and get_portal_clients_by_email) hides clients
+      // with is_active = false, so activating a portal for an inactive client
+      // would link it yet still hide it. Provisioning a portal is an explicit
+      // "this client is live" action, so we mark it active here. (Root cause of
+      // "I activated the portal but the client never appears".)
       if (client_id) {
-        await adminClient.from("clients").update({ user_id: authUserId }).eq("id", client_id);
+        await adminClient.from("clients").update({ user_id: authUserId, is_active: true }).eq("id", client_id);
       }
 
       // Only e-mail credentials when a fresh password was actually issued — and
