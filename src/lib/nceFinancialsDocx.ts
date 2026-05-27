@@ -13,6 +13,7 @@ import {
   AlignmentType,
   BorderStyle,
   Document,
+  Header,
   Packer,
   PageOrientation,
   Paragraph,
@@ -22,6 +23,7 @@ import {
   TableRow,
   TextRun,
   VerticalAlign,
+  VerticalAlignSection,
   WidthType,
 } from "docx";
 
@@ -62,6 +64,9 @@ const MARG_L = 864;             // 0.6" left — modest room for hole-punch / bi
 const MARG_R = 576;             // 0.4" right
 const MARG_T = 720;             // 0.5" top
 const MARG_B = 720;             // 0.5" bottom — tightened for better one-page BS/PL fit
+// Task 11 (doc6): notes pages get a larger bottom margin to preserve blank area
+// for physical stamp/seal placement on printed documents.
+const MARG_B_NOTES = 1440;      // 1.0" bottom — stamp-safe space on notes pages
 const TW     = A4_W - MARG_L - MARG_R; // 10466 DXA — usable table width (unchanged)
 
 // Columns: [Particulars, Note No., CY Amount, PY Amount]  →  must sum to TW
@@ -189,6 +194,10 @@ interface CellOpts {
   padR?: number;
   indent?: number;   // each level = 200 DXA additional left pad
   colSpan?: number;
+  /** Task 10 (doc6): hanging indent for multi-line wrapped text.
+   *  Continuation lines indent by this many DXA, aligning below the description
+   *  text rather than below the row prefix (I./V./(a) etc.). */
+  hangingIndent?: number;
 }
 
 function cell(o: CellOpts): TableCell {
@@ -205,6 +214,7 @@ function cell(o: CellOpts): TableCell {
     padR    = 80,
     indent  = 0,
     colSpan,
+    hangingIndent,
   } = o;
 
   return new TableCell({
@@ -217,6 +227,8 @@ function cell(o: CellOpts): TableCell {
     children: [new Paragraph({
       alignment: align,
       spacing:   { before: 0, after: 0, line: 240, lineRule: "auto" as any },
+      // Task 10 (doc6): hanging indent so wrapped text aligns below description, not below prefix
+      ...(hangingIndent ? { indent: { left: hangingIndent, hanging: hangingIndent } } : {}),
       children: [new TextRun({ text, font: FONT, size: sz, bold, italic, color })],
     })],
   });
@@ -306,9 +318,13 @@ function dataRow(
   indent = 0,
   bg?: string,
 ): TableRow {
+  // Task 10 (doc6): hanging indent so text wrapping in multi-line labels aligns
+  // below the description text, not below the Roman/letter prefix. 280 DXA ≈
+  // width of "I.    " at 9pt Arial — keeps continuation lines visually aligned.
+  const HANGING = 280;
   return new TableRow({
     children: [
-      cell({ text: label, w: CW_DESC, indent, bg, borders: BDR_ROW }),
+      cell({ text: label, w: CW_DESC, indent, bg, borders: BDR_ROW, hangingIndent: HANGING }),
       cell({
         text: noteNo ? String(noteNo) : "",
         w: CW_NOTE,
@@ -511,9 +527,9 @@ function buildBSTable(
     dataRow("                   (i)   Property, plant and equipment", n(10), ppeCy,  ppePy,  2),
     dataRow("                   (ii)  Intangible assets",             n(12), intgCy, intgPy, 2),
     dataRow("                   (iii) Capital work-in-progress",      n(11), cwipCy, cwipPy, 2),
-    dataRow("        (b)       Non-current investments",    n(13), ncinvCy, ncinvPy),
-    dataRow("        (c)       Long-term loans and advances",n(14), ltlaCy,  ltlaPy),
-    dataRow("        (d)       Other non-current assets",   n(15), oncaCy,  oncaPy),
+    dataRow("        (b)  Non-current investments",          n(13), ncinvCy, ncinvPy),
+    dataRow("        (c)  Long-term loans and advances",    n(14), ltlaCy,  ltlaPy),
+    dataRow("        (d)  Other non-current assets",        n(15), oncaCy,  oncaPy),
 
     parentRow("(2)  Current Assets"),
     dataRow("        (a)  Current investments",          n(16), cinvCy, cinvPy),
@@ -565,6 +581,10 @@ function buildPLTable(
   pyYear: string,
   entityName: string,
   noteMap: Map<number, number>,
+  /** Task 7 (doc6): optional COGS note data for sub-classification in P&L.
+   *  When provided, "Cost of goods sold" is shown with (i)/(ii)/(iii) sub-items. */
+  cogsNoteCy?: Record<string, number>,
+  cogsNotePy?: Record<string, number>,
 ): Table {
   const n = (ref: number | null) => (ref ? (noteMap.get(ref) ?? null) : null);
 
@@ -622,7 +642,20 @@ function buildPLTable(
 
     // ── EXPENSES ─────────────────────────────────────────────────────────
     sectionRow("EXPENSES"),
-    dataRow("(a)   Cost of goods sold",            n(24), cogsCy, cogsPy),
+    // Task 7 (doc6): when COGS note data is available, show sub-classification
+    // (i) Cost of Materials Consumed, (ii) Purchases of Stock-in-Trade,
+    // (iii) Changes in Inventories — matching the Notes to Accounts structure.
+    // When note data is absent, fall back to the single combined line.
+    ...(cogsNoteCy && cogsNotePy
+      ? [
+          parentRow("(a)   Cost of goods sold", 0),
+          dataRow("         (i)    Cost of Materials Consumed",                                      n(24), cogsNoteCy["pa_total"] ?? 0, cogsNotePy["pa_total"] ?? 0, 1),
+          dataRow("         (ii)   Purchases of Stock-in-Trade",                                    null,  cogsNoteCy["pb_total"] ?? 0, cogsNotePy["pb_total"] ?? 0, 1),
+          dataRow("         (iii)  Changes in Inventories of Finished Goods, WIP & Stock-in-Trade", null,  cogsNoteCy["pc_total"] ?? 0, cogsNotePy["pc_total"] ?? 0, 1),
+        ]
+      : [
+          dataRow("(a)   Cost of goods sold",            n(24), cogsCy, cogsPy),
+        ]),
     dataRow("(b)   Employee benefits expense",      n(25), empCy,  empPy),
     dataRow("(c)   Finance costs",                  n(26), finCy,  finPy),
     dataRow("(d)   Depreciation and amortisation",  n(27), depCy,  depPy),
@@ -1336,21 +1369,43 @@ function buildPPETable(ppeData: any[], cyYear: string, pyYear: string, noteNum: 
   const ppeColWidths = [PPE_CAT, PPE_NAME, PPE_RATE, PPE_NUM, PPE_NUM, PPE_NUM, PPE_NUM, PPE_NUM, PPE_NUM];
   const totalW = ppeColWidths.reduce((s, w) => s + w, 0); // 15398
 
-  const h = (text: string, w: number) =>
-    cell({ text, w, sz: SZ_XS, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.CENTER, padL: 40, padR: 40 });
+  // Task 4 (doc6): 2-row grouped header matching the PPE Schedule UI exactly.
+  // Row 1: Category | Asset Name | Rate% | Opening | Additions (₹) colSpan=2 | Total | Depr | Closing
+  // Row 2: (only Additions sub-headers)              Pre / Post
+  const hdrCell = (text: string, w: number, rowSpan?: number, colSpan?: number) =>
+    new TableCell({
+      ...(rowSpan && rowSpan > 1 ? { rowSpan } : {}),
+      ...(colSpan && colSpan > 1 ? { columnSpan: colSpan } : {}),
+      width:   { size: w, type: WidthType.DXA },
+      shading: { fill: BG_HDR, type: ShadingType.CLEAR },
+      borders: BDR_NONE,
+      margins: { top: 40, bottom: 40, left: 40, right: 40 },
+      verticalAlign: VerticalAlign.CENTER,
+      children: [new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing:   { before: 0, after: 0 },
+        children: [new TextRun({ text, font: FONT, size: SZ_XS, bold: true, color: WHITE })],
+      })],
+    });
 
-  const hdrRow = new TableRow({
+  const hdrRow1 = new TableRow({
     tableHeader: true,
     children: [
-      h("Asset Category",             PPE_CAT),
-      h("Asset Name",                 PPE_NAME),
-      h("Rate\n(%)",                  PPE_RATE),
-      h(`Net Block\n${pyYear}`,       PPE_NUM),
-      h("Additions\n(Pre 1 Oct)",     PPE_NUM),
-      h("Additions\n(Post 1 Oct)",    PPE_NUM),
-      h("Total\nCost",                PPE_NUM),
-      h("Depreciation\nCharged",      PPE_NUM),
-      h(`Net Block\n${cyYear}`,       PPE_NUM),
+      hdrCell("Asset\nCategory",                              PPE_CAT,  2),
+      hdrCell("Asset Name",                                   PPE_NAME, 2),
+      hdrCell("Rate\n(%)",                                    PPE_RATE, 2),
+      hdrCell(`Opening Balance\nas on 01/04/${pyYear}`,       PPE_NUM,  2),
+      hdrCell("Additions (₹)",                                PPE_NUM * 2, 1, 2),
+      hdrCell("Total",                                        PPE_NUM,  2),
+      hdrCell("Depreciation\nCharged",                        PPE_NUM,  2),
+      hdrCell(`Closing Balance\nas on 31/03/${cyYear}`,       PPE_NUM,  2),
+    ],
+  });
+  const hdrRow2 = new TableRow({
+    tableHeader: true,
+    children: [
+      hdrCell(`Acquired on or\nbefore 29/09/${pyYear}`, PPE_NUM),
+      hdrCell(`Acquired\nafter 29/09/${pyYear}`,         PPE_NUM),
     ],
   });
 
@@ -1431,7 +1486,9 @@ function buildPPETable(ppeData: any[], cyYear: string, pyYear: string, noteNum: 
     columnWidths: ppeColWidths,
     rows: [
       noteTitleRow(ppeColWidths, noteNum, "Property, Plant and Equipment — PPE Schedule"),
-      hdrRow,
+      // Task 4 (doc6): two-row grouped header matching the PPE Schedule UI
+      hdrRow1,
+      hdrRow2,
       ...dataRows,
       totalRow,
     ],
@@ -1502,22 +1559,8 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   const entityName = engagement?.clients?.name ?? "Entity Name";
   const fy         = engagement?.financial_year ?? `${Number(cyYear) - 1}-${cyYear}`;
 
-  // Phase 1 tables
-  const bsTable  = buildBSTable(nceCyAmounts, ncePyAmounts, cyYear, pyYear, entityName, dynamicNoteMap);
-  const plTable  = buildPLTable(nceCyAmounts, ncePyAmounts, cyYear, pyYear, entityName, dynamicNoteMap);
-  // A docx Table instance can't be reused across pages, so build a fresh
-  // signature block per page (Balance Sheet + P&L) from the same data.
-  // Task 4: merge constitution so buildSignatureTable can derive designation
-  const sigArgs: SigData = { clientName: entityName, constitution, ...signature };
-  const sigBlock = () => buildSignatureTable(sigArgs);
-
-  // Phase 2 — Note 1
-  const note1Paras = buildNote1Section(entityName, cyYear);
-
-  // Phase 2 — Note 2 (Capital Account)
-  const capitalTables = buildCapitalAccountSection(capitalData, cyYear, pyYear);
-
-  // Phase 2 — Notes 3–28 from NOTES_CONFIG
+  // Phase 2 — Notes 3–28 from NOTES_CONFIG (build savedNotes first so COGS sub-items
+  // can be passed to buildPLTable for Task 7 sub-classification in P&L)
   const savedNotes: Record<string, { cy: Record<string, number>; py: Record<string, number> }> = {};
   for (const row of notesData) {
     const key = String((row as any).note_type ?? "");
@@ -1531,6 +1574,29 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
         : {},
     };
   }
+
+  // Task 7 (doc6): extract COGS note sub-totals (pa_total, pb_total, pc_total) so
+  // buildPLTable can render the (i)/(ii)/(iii) sub-classification under "(a) COGS".
+  // Uses computeDisplayData to compute formula-driven totals from raw note values.
+  const cogsRaw  = savedNotes["cogs"];
+  const cogsNoteCy = cogsRaw?.cy ?? null;
+  const cogsNotePy = cogsRaw?.py ?? null;
+
+  // Phase 1 tables (built after savedNotes so COGS data is available)
+  const bsTable  = buildBSTable(nceCyAmounts, ncePyAmounts, cyYear, pyYear, entityName, dynamicNoteMap);
+  const plTable  = buildPLTable(nceCyAmounts, ncePyAmounts, cyYear, pyYear, entityName, dynamicNoteMap,
+    cogsNoteCy ?? undefined, cogsNotePy ?? undefined);
+  // A docx Table instance can't be reused across pages, so build a fresh
+  // signature block per page (Balance Sheet + P&L) from the same data.
+  // Task 4: merge constitution so buildSignatureTable can derive designation
+  const sigArgs: SigData = { clientName: entityName, constitution, ...signature };
+  const sigBlock = () => buildSignatureTable(sigArgs);
+
+  // Phase 2 — Note 1
+  const note1Paras = buildNote1Section(entityName, cyYear);
+
+  // Phase 2 — Note 2 (Capital Account)
+  const capitalTables = buildCapitalAccountSection(capitalData, cyYear, pyYear);
 
   // Notes 3-28: export exactly the notes the UI shows — i.e. those active in
   // the dynamic note map (their BS/PL line carries data). The note number used
@@ -1567,19 +1633,39 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     size:   { width: A4_W, height: A4_H },
     margin: { top: MARG_T, right: MARG_R, bottom: MARG_B, left: MARG_L },
   };
+  // Task 11 (doc6): notes pages use larger bottom margin for stamp/seal space
+  const notesPortraitProps = {
+    size:   { width: A4_W, height: A4_H },
+    margin: { top: MARG_T, right: MARG_R, bottom: MARG_B_NOTES, left: MARG_L },
+  };
   const landscapeProps = {
     size:   { width: A4_W, height: A4_H, orientation: PageOrientation.LANDSCAPE },
     margin: { top: MARG_T, right: MARG_R, bottom: MARG_B, left: MARG_L },
   };
 
-  const spacer = () => new Paragraph({ spacing: { before: 240, after: 0 }, children: [] });
+  // Task 12 (doc6): each note starts on a fresh page — use pageBreakBefore on
+  // the first paragraph preceding every note table so headings never split
+  // awkwardly at the bottom of a page.
+  const notePageBreak = () => new Paragraph({ pageBreakBefore: true, spacing: { before: 0, after: 0 }, children: [] });
+  const spacer        = () => new Paragraph({ spacing: { before: 240, after: 0 }, children: [] });
 
   // Build notes section children: Note 1 paragraphs, Note 2 tables, Notes 3-28 tables
+  // Capital account gets its own page break prefix; each note table also page-breaks.
   const noteChildren: (Paragraph | Table)[] = [
     ...note1Paras,
-    ...capitalTables.flatMap(t => [spacer(), t]),
-    ...noteTables.flatMap(t => [spacer(), t]),
+    ...capitalTables.flatMap((t, i) => i === 0 ? [notePageBreak(), t] : [spacer(), t]),
+    ...noteTables.flatMap(t => [notePageBreak(), t]),
   ];
+
+  // Task 13 (doc6): client name header appears on every notes page so continuation
+  // pages remain identifiable after printing/binding.
+  const notesHeader = new Header({
+    children: [new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing:   { before: 0, after: 0 },
+      children:  [new TextRun({ text: entityName.toUpperCase(), font: FONT, size: SZ_BODY, bold: true, color: NAVY })],
+    })],
+  });
 
   const doc = new Document({
     styles: {
@@ -1590,18 +1676,19 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     sections: [
       // Page 1: Balance Sheet + Signature
       {
-        properties: { page: portraitProps },
+        // Task 6 (doc6): BOTH = justified vertical alignment — pushes the
+        // signature block to the page bottom and eliminates dead whitespace.
+        properties: { page: portraitProps, verticalAlign: VerticalAlignSection.BOTH },
         children: [
           bsTable,
-          // Task 2: minimal gap — avoids the large dead zone that triggered Word's
-          // aggressive "shrink to one page" scaling on BS/PL pages.
           new Paragraph({ spacing: { before: 60 }, children: [] }),
           sigBlock(),
         ],
       },
       // Page 2+: P&L + Signature
       {
-        properties: { page: portraitProps },
+        // Task 6 (doc6): same justified vertical fill as the BS page.
+        properties: { page: portraitProps, verticalAlign: VerticalAlignSection.BOTH },
         children: [
           plTable,
           new Paragraph({ spacing: { before: 60 }, children: [] }),
@@ -1609,8 +1696,11 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
         ],
       },
       // Notes 1–28 (portrait, flows across pages)
+      // Task 11: larger bottom margin for stamp/seal space
+      // Task 13: client name header on every notes page
       {
-        properties: { page: portraitProps },
+        properties: { page: notesPortraitProps },
+        headers:    { default: notesHeader },
         children:   noteChildren,
       },
       // PPE Schedule (landscape)

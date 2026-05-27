@@ -93,7 +93,7 @@ export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteM
         </TabsList>
 
         <TabsContent value="capital_account" className="mt-3">
-          <NCECapitalAccount engagementId={engagementId} />
+          <NCECapitalAccount engagementId={engagementId} readOnly={readOnly} />
         </TabsContent>
 
         <TabsContent value="notes_to_accounts" className="mt-3">
@@ -101,7 +101,7 @@ export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteM
         </TabsContent>
 
         <TabsContent value="ppe_schedule" className="mt-3">
-          <NCEPPESchedule engagementId={engagementId} />
+          <NCEPPESchedule engagementId={engagementId} readOnly={readOnly} />
         </TabsContent>
       </Tabs>
 

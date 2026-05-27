@@ -56,6 +56,8 @@ interface AssetRowDef {
 
 interface Props {
   engagementId: string;
+  /** Task 1 (doc6): when true, PPE schedule is read-only (locked preview mode) */
+  readOnly?: boolean;
 }
 
 // ─── Static row config ────────────────────────────────────────────────────────
@@ -185,7 +187,7 @@ function NumInput({
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export function NCEPPESchedule({ engagementId }: Props) {
+export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
   const [rows,    setRows]    = useState<AssetRow[]>(initRows);
   const [loading, setLoading] = useState(true);
   const [saving,  setSaving]  = useState(false);
@@ -532,7 +534,7 @@ export function NCEPPESchedule({ engagementId }: Props) {
 
   // ── Render ──────────────────────────────────────────────────────────────
   return (
-    <div className="space-y-4">
+    <div className={`space-y-4${readOnly ? " pointer-events-none select-none" : ""}`}>
       {/* Page header */}
       <div className="text-center space-y-0.5 pb-3 border-b">
         {clientName && (
