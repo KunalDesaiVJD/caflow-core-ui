@@ -451,12 +451,22 @@ const ClientDetail = () => {
           name: client.name || client.email,
           firm_id: client.firm_id,
           client_id: client.id,
+          // "Reset Portal Password" (client already linked) vs first "Activate".
+          reset: !!client.user_id,
         }),
       });
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || "Failed to activate portal");
       setClient(prev => prev ? { ...prev, user_id: result.user_id } : prev);
-      toast({ title: "Portal access activated", description: `Login: ${client.email} · Password: Client@2025!` });
+      if (result.default_password) {
+        // A fresh login was created, or the password was reset.
+        toast({ title: "Portal access activated", description: `Login: ${client.email} · Password: ${result.default_password}` });
+      } else {
+        // Email already had a portal login (e.g. a group login shared across
+        // entities) — this client was simply linked to it; its password is
+        // unchanged.
+        toast({ title: "Portal linked", description: `This client now uses the existing login: ${client.email}` });
+      }
     } catch (e: any) {
       toast({ title: "Activation failed", description: e.message, variant: "destructive" });
     } finally {

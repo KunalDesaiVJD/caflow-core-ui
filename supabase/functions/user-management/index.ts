@@ -207,12 +207,24 @@ Deno.serve(async (req) => {
     .eq("id", userId)
     .single();
 
-  if (!requestingUser || !["superadmin", "firm_admin"].includes(requestingUser.role)) {
-    return new Response(JSON.stringify({ error: "Forbidden" }), { status: 403, headers: corsHeaders });
-  }
-
   const url = new URL(req.url);
   const action = url.searchParams.get("action");
+
+  // Permission model:
+  //  • "activate-portal" provisions/links a CLIENT portal login (role "client",
+  //    hierarchy 0). It is a routine client-servicing task, so ANY authenticated
+  //    firm member (partner / manager / staff) may perform it — not just admins.
+  //    (Previously the blanket admin-only gate returned 403 to staff/partners,
+  //    so they could never activate a client's portal.)
+  //  • Every OTHER action manages INTERNAL staff accounts and remains restricted
+  //    to superadmin / firm_admin.
+  const FIRM_MEMBER_ROLES = ["superadmin", "firm_admin", "partner_ca", "manager", "staff_article"];
+  const isAdmin       = !!requestingUser && ["superadmin", "firm_admin"].includes(requestingUser.role);
+  const isFirmMember  = !!requestingUser && FIRM_MEMBER_ROLES.includes(requestingUser.role);
+  const allowed = action === "activate-portal" ? isFirmMember : isAdmin;
+  if (!allowed) {
+    return new Response(JSON.stringify({ error: "Forbidden" }), { status: 403, headers: corsHeaders });
+  }
 
   try {
     // LIST USERS
@@ -453,40 +465,40 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify(data), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    // ACTIVATE PORTAL — create or reset portal account for a client by email
+    // ACTIVATE PORTAL — create / link / reset a client's portal login by email.
     if (req.method === "POST" && action === "activate-portal") {
       const body = await req.json();
-      const { email: rawEmail, name, firm_id, client_id } = body;
+      const { email: rawEmail, name, firm_id, client_id, reset } = body;
 
       if (!rawEmail) {
         return new Response(JSON.stringify({ error: "email is required" }), { status: 400, headers: corsHeaders });
       }
 
-      // Normalize the email so the provisioned account ALWAYS matches both what
-      // the UI displays and what the client types at sign-in. Mixed-case or
-      // whitespace-padded emails previously created an account the login form
-      // could not match.
+      // Normalize so the provisioned account always matches what the UI shows
+      // and what the client types at sign-in.
       const email = String(rawEmail).trim().toLowerCase();
       const password = DEFAULT_PASSWORDS["client"];
 
       // Reliable lookup — NOT the old single-page listUsers() (see helper).
       const existing = await findAuthUserByEmail(adminClient, email);
 
-      let authUserId: string;
-
-      const resetPassword = async (id: string) => {
-        // email_confirm:true guarantees the account is never blocked by an
-        // unconfirmed-email state after a reset.
+      const doReset = async (id: string) => {
         const { error: pwErr } = await adminClient.auth.admin.updateUserById(id, { password, email_confirm: true });
         if (pwErr) throw pwErr;
         await adminClient.from("users").update({ must_change_password: true }).eq("id", id);
       };
 
+      let authUserId: string;
+      // mode: "created" = brand-new login, "reset" = password reset (explicit),
+      //       "linked"  = an auth user for this email ALREADY exists, so we just
+      //       link this client to it WITHOUT touching the live credential.
+      let mode: "created" | "linked" | "reset";
+
       if (existing) {
-        await resetPassword(existing.id);
         authUserId = existing.id;
+        if (reset) { await doReset(existing.id); mode = "reset"; }
+        else       { mode = "linked"; }
       } else {
-        // Create new auth user
         const { data: authUser, error: authError } = await adminClient.auth.admin.createUser({
           email,
           password,
@@ -494,39 +506,52 @@ Deno.serve(async (req) => {
           user_metadata: { role: "client", firm_id, name },
         });
         if (authError) {
-          // The email already exists but slipped past the lookup (e.g. a stale
-          // index or a row only in auth.users). Re-resolve and RESET instead of
-          // failing the whole activation — this is the case that used to leave
-          // clients unable to log in with the displayed default password.
+          // Email already exists but slipped past the lookup — re-resolve & link.
           const retry = await findAuthUserByEmail(adminClient, email);
           if (!retry) throw authError;
-          await resetPassword(retry.id);
           authUserId = retry.id;
+          if (reset) { await doReset(retry.id); mode = "reset"; } else { mode = "linked"; }
         } else {
           authUserId = authUser.user.id;
+          mode = "created";
         }
       }
 
-      // Upsert users table row
-      await adminClient.from("users").upsert({
+      // Ensure a public.users row exists WITHOUT clobbering an existing (often
+      // shared) portal account: preserve its name and only force a password
+      // change when we actually issued a fresh password (create / reset).
+      const { data: existingRow } = await adminClient
+        .from("users").select("name").eq("id", authUserId).maybeSingle();
+      const usersPayload: Record<string, any> = {
         id: authUserId,
-        name: name || email,
+        name: existingRow?.name || name || email,
         email,
         role: "client",
         firm_id: firm_id || requestingUser.firm_id,
         is_active: true,
-        must_change_password: true,
-      }, { onConflict: "id" });
+      };
+      if (mode === "created" || mode === "reset") usersPayload.must_change_password = true;
+      await adminClient.from("users").upsert(usersPayload, { onConflict: "id" });
 
-      // Link client record to auth user
+      // Link this client record to the auth user (this is what makes the client
+      // appear in the portal's entity switcher).
       if (client_id) {
         await adminClient.from("clients").update({ user_id: authUserId }).eq("id", client_id);
       }
 
-      // Send credentials email to the client from audit@vjdesai.com
-      await sendCredentialsEmail(email, name || email, password);
+      // Only e-mail credentials when a fresh password was actually issued — and
+      // never let an email failure fail the activation (the link already saved).
+      if (mode === "created" || mode === "reset") {
+        try { await sendCredentialsEmail(email, name || email, password); }
+        catch (e) { console.error("[activate-portal] credentials email failed:", e); }
+      }
 
-      return new Response(JSON.stringify({ success: true, user_id: authUserId, default_password: password }), {
+      return new Response(JSON.stringify({
+        success: true,
+        user_id: authUserId,
+        mode,
+        ...(mode === "created" || mode === "reset" ? { default_password: password } : {}),
+      }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
