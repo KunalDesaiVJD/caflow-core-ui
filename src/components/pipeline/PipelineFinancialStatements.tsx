@@ -538,7 +538,7 @@ const NCE_CODE_TO_STATIC_REF: Readonly<Record<string, number>> = {
   // Issue 1 — NCE Depreciation row shares the PPE note number (10) so the
   // FA Schedule serves both BS PPE and P&L Depreciation.  Clicks navigate
   // to the same Note 10 (FA grid) in the NCE Notes tab.
-  NCE_COGS: 24, NCE_EMP_EXP: 25, NCE_FIN_COST: 26, NCE_DEPR: 10, NCE_OTH_EXP: 28,
+  NCE_COGS: 24, NCE_CII: 26, NCE_EMP_EXP: 27, NCE_FIN_COST: 28, NCE_DEPR: 10, NCE_OTH_EXP: 30, NCE_PART_REM: 31,
 };
 
 // ── P&L FS code → registry note key ─────────────────────────────────────────
@@ -1083,7 +1083,7 @@ function buildNCEPLRows(
   // NCE_PL_INC is sum of income codes (negative), NCE_PL_EXP is sum of expense codes (positive)
   const totalIncomeCy = negI("NCE_PL_INC");
   const totalIncomePy = negIpy("NCE_PL_INC");
-  // COGS + CII combined (match Excel "(a) Cost of goods sold" single row)
+  // COGS: NCE_COGS includes cost of materials and purchases; NCE_CII is changes in inventories
   const cogsCy = pos("NCE_COGS") + pos("NCE_CII");
   const cogsPy = pospy("NCE_COGS") + pospy("NCE_CII");
 
@@ -1094,12 +1094,15 @@ function buildNCEPLRows(
     { kind: "total", roman: "III.", label: "Total Income (I + II)", cy: totalIncomeCy, py: totalIncomePy },
     { kind: "spacer" },
     { kind: "header", roman: "IV.", label: "Expenses" },
-    { kind: "item", label: "(a) Cost of goods sold",           noteNo: sn(24, cogsCy, cogsPy),                              cy: cogsCy,               py: cogsPy,                 indent: 1, code: "NCE_COGS" },
-    { kind: "item", label: "(b) Employee benefits expense",    noteNo: sn(25, cy["NCE_EMP_EXP"],  py["NCE_EMP_EXP"]),  cy: pos("NCE_EMP_EXP"),  py: pospy("NCE_EMP_EXP"),  indent: 1, code: "NCE_EMP_EXP" },
-    { kind: "item", label: "(c) Finance costs",                noteNo: sn(26, cy["NCE_FIN_COST"], py["NCE_FIN_COST"]), cy: pos("NCE_FIN_COST"), py: pospy("NCE_FIN_COST"), indent: 1, code: "NCE_FIN_COST" },
+    { kind: "item", label: "(a) Cost of goods sold",  indent: 1 },
+    { kind: "item", label: "     (i)   Cost of Materials Consumed",                                     noteNo: sn(24, cogsCy, cogsPy),                               cy: pos("NCE_COGS"),      py: pospy("NCE_COGS"),     indent: 2, code: "NCE_COGS" },
+    { kind: "item", label: "     (ii)  Purchases of Stock-in-Trade",                                    noteNo: sn(25, cogsCy, cogsPy),                               cy: undefined,            py: undefined,             indent: 2 },
+    { kind: "item", label: "     (iii) Changes in Inventories of FG, WIP & Stock-in-Trade",             noteNo: sn(26, pos("NCE_CII"), pospy("NCE_CII")),              cy: pos("NCE_CII"),       py: pospy("NCE_CII"),      indent: 2, code: "NCE_CII" },
+    { kind: "item", label: "(b) Employee benefits expense",    noteNo: sn(27, cy["NCE_EMP_EXP"],  py["NCE_EMP_EXP"]),  cy: pos("NCE_EMP_EXP"),  py: pospy("NCE_EMP_EXP"),  indent: 1, code: "NCE_EMP_EXP" },
+    { kind: "item", label: "(c) Finance costs",                noteNo: sn(28, cy["NCE_FIN_COST"], py["NCE_FIN_COST"]), cy: pos("NCE_FIN_COST"), py: pospy("NCE_FIN_COST"), indent: 1, code: "NCE_FIN_COST" },
     // Issue 1 — Depreciation note number aligned with PPE (10) — same FA Schedule.
     { kind: "item", label: "(d) Depreciation and amortisation",noteNo: sn(10, cy["NCE_DEPR"],     py["NCE_DEPR"]),     cy: pos("NCE_DEPR"),     py: pospy("NCE_DEPR"),     indent: 1, code: "NCE_DEPR" },
-    { kind: "item", label: "(e) Other expenses",               noteNo: sn(28, cy["NCE_OTH_EXP"],  py["NCE_OTH_EXP"]), cy: pos("NCE_OTH_EXP"),  py: pospy("NCE_OTH_EXP"),  indent: 1, code: "NCE_OTH_EXP" },
+    { kind: "item", label: "(e) Other expenses",               noteNo: sn(30, cy["NCE_OTH_EXP"],  py["NCE_OTH_EXP"]), cy: pos("NCE_OTH_EXP"),  py: pospy("NCE_OTH_EXP"),  indent: 1, code: "NCE_OTH_EXP" },
     { kind: "total", label: "Total Expenses (IV)", cy: pos("NCE_PL_EXP"), py: pospy("NCE_PL_EXP") },
     { kind: "spacer" },
     { kind: "item", roman: "V.",    label: "Profit/(loss) before exceptional items, partners' remuneration and tax", cy: pos("NCE_PROF_V"),   py: pospy("NCE_PROF_V"),   bold: true },
@@ -1107,7 +1110,7 @@ function buildNCEPLRows(
     { kind: "item", roman: "VII.",  label: "Profit before extraordinary items and tax",                               cy: pos("NCE_PROF_VII"), py: pospy("NCE_PROF_VII"), bold: true },
     { kind: "item", roman: "VIII.", label: "Extraordinary items",                                                     cy: pos("NCE_EXTORD"),   py: pospy("NCE_EXTORD") },
     { kind: "item", roman: "IX.",   label: "Profit before partners' remuneration and tax",                           cy: pos("NCE_PROF_IX"),  py: pospy("NCE_PROF_IX"),  bold: true },
-    { kind: "item", roman: "X.",    label: "Partners' remuneration",  noteNo: sn(29, cy["NCE_PART_REM"], py["NCE_PART_REM"]), cy: pos("NCE_PART_REM"), py: pospy("NCE_PART_REM"), code: "NCE_PART_REM" },
+    { kind: "item", roman: "X.",    label: "Partners' remuneration",  noteNo: sn(31, cy["NCE_PART_REM"], py["NCE_PART_REM"]), cy: pos("NCE_PART_REM"), py: pospy("NCE_PART_REM"), code: "NCE_PART_REM" },
     { kind: "item", roman: "XI.",   label: "Profit before tax (IX − X)",                                             cy: pos("NCE_PROF_XI"),  py: pospy("NCE_PROF_XI"),  bold: true },
     { kind: "header", roman: "XII.", label: "Tax expense:" },
     { kind: "item", label: "(1) Current tax",                             cy: pos("NCE_CUR_TAX"),   py: pospy("NCE_CUR_TAX"),   indent: 2, code: "NCE_CUR_TAX" },
@@ -7640,30 +7643,69 @@ export default function PipelineFinancialStatements({
         </DialogContent>
       </Dialog>
 
-      {/* Task 1 (doc6): NCE Lock Preview confirmation popup */}
+      {/* Task 2 (doc7): NCE Lock Preview — full-screen draft financial statement preview */}
       <Dialog open={ncePreviewOpen} onOpenChange={setNcePreviewOpen}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">🔒 Preview Locked</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-2 py-1">
-            <p className="text-sm text-muted-foreground">
-              The financial statements are now locked for preview. Notes expand/collapse state and blank-row filtering are frozen.
+        <DialogContent className="max-w-[96vw] w-full h-[92vh] p-0 flex flex-col gap-0 overflow-hidden">
+          <DialogHeader className="px-4 py-3 border-b flex-none">
+            <div className="flex items-center justify-between">
+              <DialogTitle className="flex items-center gap-2 text-base">
+                🔒 Draft Financial Statements — Preview
+              </DialogTitle>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="ghost" onClick={() => setNcePreviewOpen(false)}>
+                  Close
+                </Button>
+                <Button size="sm" onClick={() => { setNcePreviewOpen(false); setShowNCEFontDialog(true); }}>
+                  <FileText size={13} className="mr-1" /> Export Word
+                </Button>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Read-only preview. Notes are locked — blank rows hidden. Click <strong>Export Word</strong> to download.
             </p>
-            <ul className="text-xs text-muted-foreground space-y-1 list-disc list-inside">
-              <li>Notes to Accounts are read-only</li>
-              <li>Blank/zero rows will be hidden in the export</li>
-              <li>Click <strong>Unlock Preview</strong> in the toolbar to make further changes</li>
-            </ul>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto">
+            <Tabs defaultValue="bs" className="h-full flex flex-col">
+              <TabsList className="mx-4 mt-3 mb-0 flex-none">
+                <TabsTrigger value="bs">Balance Sheet</TabsTrigger>
+                <TabsTrigger value="pl">Profit &amp; Loss</TabsTrigger>
+                <TabsTrigger value="notes">Notes to Accounts</TabsTrigger>
+              </TabsList>
+              <div className="flex-1 overflow-y-auto p-4">
+                <TabsContent value="bs" className="mt-0">
+                  <NCEBalanceSheetView
+                    engagementId={engagementId}
+                    cyAmounts={nceCyAmounts}
+                    pyAmounts={ncePyAmounts}
+                    cyYear={cyYear}
+                    pyYear={pyYear}
+                    entityName={engagement?.clients?.name || ""}
+                    pyLocked={pyLocked}
+                    nceDynamicNoteMap={nceDynamicNoteMap}
+                  />
+                </TabsContent>
+                <TabsContent value="pl" className="mt-0">
+                  <NCEPLView
+                    engagementId={engagementId}
+                    cyAmounts={computedAmounts}
+                    pyAmounts={mergedPY}
+                    cyYear={cyYear}
+                    pyYear={pyYear}
+                    entityName={engagement?.clients?.name || ""}
+                    pyLocked={pyLocked}
+                    nceDynamicNoteMap={nceDynamicNoteMap}
+                  />
+                </TabsContent>
+                <TabsContent value="notes" className="mt-0">
+                  <NCENotesTab
+                    engagementId={engagementId}
+                    dynamicNoteMap={nceDynamicNoteMap}
+                    readOnly={true}
+                  />
+                </TabsContent>
+              </div>
+            </Tabs>
           </div>
-          <DialogFooter className="gap-2">
-            <Button variant="ghost" size="sm" onClick={() => setNcePreviewOpen(false)}>
-              Close
-            </Button>
-            <Button size="sm" onClick={() => { setNcePreviewOpen(false); setShowNCEFontDialog(true); }}>
-              Export Word
-            </Button>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
 

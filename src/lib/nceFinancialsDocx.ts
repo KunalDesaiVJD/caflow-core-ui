@@ -28,7 +28,7 @@ import {
 } from "docx";
 
 import { NOTES_CONFIG, computeDisplayData, extractSplitData } from "@/config/nceNotesConfig";
-import type { NoteConfig } from "@/config/nceNotesConfig";
+import type { NoteConfig, NoteRowDef } from "@/config/nceNotesConfig";
 import { getActiveFsDivisor, FS_SCALES } from "@/lib/fsUnits";
 import { getDynamicNoteDisplay } from "@/lib/nceDynamicNoteNumbers";
 
@@ -650,16 +650,16 @@ function buildPLTable(
       ? [
           parentRow("(a)   Cost of goods sold", 0),
           dataRow("         (i)    Cost of Materials Consumed",                                      n(24), cogsNoteCy["pa_total"] ?? 0, cogsNotePy["pa_total"] ?? 0, 1),
-          dataRow("         (ii)   Purchases of Stock-in-Trade",                                    null,  cogsNoteCy["pb_total"] ?? 0, cogsNotePy["pb_total"] ?? 0, 1),
-          dataRow("         (iii)  Changes in Inventories of Finished Goods, WIP & Stock-in-Trade", null,  cogsNoteCy["pc_total"] ?? 0, cogsNotePy["pc_total"] ?? 0, 1),
+          dataRow("         (ii)   Purchases of Stock-in-Trade",                                    n(25), cogsNoteCy["pb_total"] ?? 0, cogsNotePy["pb_total"] ?? 0, 1),
+          dataRow("         (iii)  Changes in Inventories of Finished Goods, WIP & Stock-in-Trade", n(26), cogsNoteCy["pc_total"] ?? 0, cogsNotePy["pc_total"] ?? 0, 1),
         ]
       : [
           dataRow("(a)   Cost of goods sold",            n(24), cogsCy, cogsPy),
         ]),
-    dataRow("(b)   Employee benefits expense",      n(25), empCy,  empPy),
-    dataRow("(c)   Finance costs",                  n(26), finCy,  finPy),
-    dataRow("(d)   Depreciation and amortisation",  n(27), depCy,  depPy),
-    dataRow("(e)   Other expenses",                 n(28), othCy,  othPy),
+    dataRow("(b)   Employee benefits expense",      n(27), empCy,  empPy),
+    dataRow("(c)   Finance costs",                  n(28), finCy,  finPy),
+    dataRow("(d)   Depreciation and amortisation",  n(10), depCy,  depPy),
+    dataRow("(e)   Other expenses",                 n(30), othCy,  othPy),
     subTotalRow("IV.   Total Expenses", totExpCy, totExpPy),
     blankRow(),
 
@@ -672,7 +672,7 @@ function buildPLTable(
     dataRow("VII.  Profit / (Loss) before extraordinary items and tax (V + VI)",  null, pVIIcy, pVIIpy),
     dataRow("VIII. Extraordinary items",                                           null, extCy,  extPy),
     dataRow("IX.   Profit / (Loss) before partners' remuneration and tax (VII + VIII)",  null, pIXcy,  pIXpy),
-    dataRow("X.    Partners' remuneration",                              n(29), remCy,  remPy),
+    dataRow("X.    Partners' remuneration",                              n(31), remCy,  remPy),
     dataRow("XI.   Profit / (Loss) before tax (IX − X)",                                null, pXIcy,  pXIpy),
     blankRow(),
 
@@ -1008,7 +1008,7 @@ function buildNote1Section(entityName: string, cyYear: string): Paragraph[] {
       spacing:   { before: 0, after: opts.after ?? 60, line: 276, lineRule: "auto" as any },
       indent:    opts.indent ? { left: opts.indent, hanging: opts.hanging } : undefined,
       keepLines: true,
-      keepNext:  opts.keepNext ?? true,
+      keepNext:  opts.keepNext ?? false,
       children:  runs,
     });
 
@@ -1025,15 +1025,15 @@ function buildNote1Section(entityName: string, cyYear: string): Paragraph[] {
         new TextRun({ text: "Significant Accounting Policies", font: FONT, size: SZ_HDR, color: NAVY }),
       ],
     }),
-    block([txt("1.  Basis of Preparation", true)], { after: 20 }),
+    block([txt("1.  Basis of Preparation", true)], { after: 20, keepNext: true }),
     block(
       [txt(`The financial statements of ${entityName} have been prepared in accordance with the Generally Accepted Accounting Principles in India (GAAP) under the historical cost convention on an accrual basis. The financial statements comply with the Accounting Standards applicable to the entity and other relevant provisions of the applicable law.`)],
       { after: GAP },
     ),
-    block([txt("2.  Significant Accounting Policies", true)], { after: 40 }),
+    block([txt("2.  Significant Accounting Policies", true)], { after: 40, keepNext: true }),
     // Each policy = bold label heading + description below; GAP separates points
     ...NOTE1_POLICIES.flatMap((p, i) => [
-      block([txt(p.label, true)], { indent: 280, after: 10 }),
+      block([txt(p.label, true)], { indent: 280, after: 10, keepNext: true }),
       block([txt(p.text)],        { indent: 280, after: i === last ? 40 : GAP, keepNext: i !== last }),
     ]),
   ];
@@ -1292,13 +1292,42 @@ function buildNoteSection(
     }
   };
 
+  // Task 5 (doc7): pre-compute which section headers are empty (all data rows blank)
+  // Only active when hideBlankNoteRows=true (locked preview / export).
+  const emptySectionHeaders = new Set<string>();
+  if (hideBlankNoteRows) {
+    let currentHdrId: string | null = null;
+    let sectionHasData = false;
+    const checkRow = (row: NoteRowDef) => {
+      if (isA) {
+        const v = aggA(row.id);
+        return !!(v.lt || v.st || v.ltP || v.stP);
+      } else {
+        const v = aggB(row.id);
+        return !!(v.c || v.p);
+      }
+    };
+    for (const row of cfg.rows) {
+      if (row.isSectionHeader) {
+        if (currentHdrId !== null && !sectionHasData) emptySectionHeaders.add(currentHdrId);
+        currentHdrId = row.id;
+        sectionHasData = false;
+      } else {
+        if (!row.isTotal && checkRow(row)) sectionHasData = true;
+      }
+    }
+    if (currentHdrId !== null && !sectionHasData) emptySectionHeaders.add(currentHdrId);
+  }
+
   // Task 4: all static rows are always exported — no blank-row suppression.
   // User requirement: export must match software structure exactly, including rows
   // with zero amounts. Section headers always show. Total rows always show.
   for (let i = 0; i < cfg.rows.length; i++) {
     const row = cfg.rows[i];
     if (row.isSectionHeader) {
-      rows.push(noteSecHdr(colWidths, row.label));
+      if (!emptySectionHeaders.has(row.id)) {
+        rows.push(noteSecHdr(colWidths, row.label));
+      }
     } else if (row.isTotal) {
       const style = row.id === grandTotalId ? "total" : "subtotal";
       // Before a section total, emit that section's unattached customs; before
@@ -1575,12 +1604,19 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     };
   }
 
-  // Task 7 (doc6): extract COGS note sub-totals (pa_total, pb_total, pc_total) so
-  // buildPLTable can render the (i)/(ii)/(iii) sub-classification under "(a) COGS".
-  // Uses computeDisplayData to compute formula-driven totals from raw note values.
-  const cogsRaw  = savedNotes["cogs"];
-  const cogsNoteCy = cogsRaw?.cy ?? null;
-  const cogsNotePy = cogsRaw?.py ?? null;
+  // Task 9 (doc7): compute COGS sub-totals via computeDisplayData so formula-driven
+  // totals (pa_total, pb_total, pc_total) are available for P&L sub-classification.
+  const cogsRaw = savedNotes["cogs"];
+  let cogsNoteCy: Record<string, number> | null = null;
+  let cogsNotePy: Record<string, number> | null = null;
+  if (cogsRaw) {
+    const cogsConfig = NOTES_CONFIG.find(nc => nc.noteType === "cogs");
+    if (cogsConfig) {
+      const computed = computeDisplayData(cogsConfig, cogsRaw.cy ?? {}, cogsRaw.py ?? {});
+      cogsNoteCy = computed.cy;
+      cogsNotePy = computed.py;
+    }
+  }
 
   // Phase 1 tables (built after savedNotes so COGS data is available)
   const bsTable  = buildBSTable(nceCyAmounts, ncePyAmounts, cyYear, pyYear, entityName, dynamicNoteMap);
@@ -1654,7 +1690,7 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   const noteChildren: (Paragraph | Table)[] = [
     ...note1Paras,
     ...capitalTables.flatMap((t, i) => i === 0 ? [notePageBreak(), t] : [spacer(), t]),
-    ...noteTables.flatMap(t => [notePageBreak(), t]),
+    ...noteTables.flatMap(t => [spacer(), t]),
   ];
 
   // Task 13 (doc6): client name header appears on every notes page so continuation
