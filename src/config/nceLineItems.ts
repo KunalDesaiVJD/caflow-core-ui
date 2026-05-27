@@ -93,11 +93,11 @@ export const NCE_FS_ITEMS: FSLineItem[] = [
   { code: "NCE_PL_EXP_HDR", name: "EXPENSES", noteRef: null, section: "NCE_PL_expenses", isDivider: true },
   { code: "NCE_PL_EXP", name: "IV. Total Expenses", noteRef: null, section: "NCE_PL_expenses", showTotalLast: true, children: [
     { code: "NCE_COGS",     name: "(a) Cost of goods sold",          noteRef: 24, section: "NCE_PL_expenses" },
-    { code: "NCE_CII",      name: "(a) Changes in inventories",      noteRef: 24, section: "NCE_PL_expenses", hideFromDisplay: true },
-    { code: "NCE_EMP_EXP",  name: "(b) Employee benefits expense",   noteRef: 25, section: "NCE_PL_expenses" },
-    { code: "NCE_FIN_COST", name: "(c) Finance costs",               noteRef: 26, section: "NCE_PL_expenses" },
-    { code: "NCE_DEPR",     name: "(d) Depreciation and amortisation", noteRef: 27, section: "NCE_PL_expenses" },
-    { code: "NCE_OTH_EXP",  name: "(e) Other expenses",              noteRef: 28, section: "NCE_PL_expenses" },
+    { code: "NCE_CII",      name: "(a) Changes in inventories",      noteRef: 26, section: "NCE_PL_expenses", hideFromDisplay: true },
+    { code: "NCE_EMP_EXP",  name: "(b) Employee benefits expense",   noteRef: 27, section: "NCE_PL_expenses" },
+    { code: "NCE_FIN_COST", name: "(c) Finance costs",               noteRef: 28, section: "NCE_PL_expenses" },
+    { code: "NCE_DEPR",     name: "(d) Depreciation and amortisation", noteRef: 10, section: "NCE_PL_expenses" },
+    { code: "NCE_OTH_EXP",  name: "(e) Other expenses",              noteRef: 30, section: "NCE_PL_expenses" },
   ]},
 
   // ── PROFIT CHAIN ──
@@ -106,7 +106,7 @@ export const NCE_FS_ITEMS: FSLineItem[] = [
   { code: "NCE_PROF_VII", name: "VII.  Profit before extraordinary items and tax",                             noteRef: null, section: "NCE_PL_profit" },
   { code: "NCE_EXTORD",   name: "VIII. Extraordinary items",                                                   noteRef: null, section: "NCE_PL_profit" },
   { code: "NCE_PROF_IX",  name: "IX.   Profit before partners' remuneration and tax",                         noteRef: null, section: "NCE_PL_profit" },
-  { code: "NCE_PART_REM", name: "X.    Partners' remuneration",                                               noteRef: 29,   section: "NCE_PL_profit" },
+  { code: "NCE_PART_REM", name: "X.    Partners' remuneration",                                               noteRef: 31,   section: "NCE_PL_profit" },
   { code: "NCE_PROF_XI",  name: "XI.   Profit before tax (IX − X)",                                          noteRef: null, section: "NCE_PL_profit" },
   // showTotalLast: sub-items render first; tax total renders after.
   { code: "NCE_TAX", name: "XII.  Tax expense", noteRef: null, section: "NCE_PL_profit", showTotalLast: true, children: [

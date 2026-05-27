@@ -76,6 +76,14 @@ export function computeNceDynamicNoteMap(
     }
   }
 
+  // Task 9 (doc7): when COGS materials (24) OR changes-in-inventories (26) is active,
+  // activate all 3 COGS sub-notes together (24=materials, 25=purchases, 26=changes).
+  if (activeRefs.has(24) || activeRefs.has(26)) {
+    activeRefs.add(24);
+    activeRefs.add(25);
+    activeRefs.add(26);
+  }
+
   // Step 2 — sort and assign sequential numbers 1, 2, 3, …
   const sorted = [...activeRefs].sort((a, b) => a - b);
   const map = new Map<number, number>();

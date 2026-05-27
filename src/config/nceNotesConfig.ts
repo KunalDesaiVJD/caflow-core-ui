@@ -44,6 +44,7 @@ export interface NoteConfig {
    * "st" → read keys with _st suffix (short-term column only)
    */
   splitSide?: "lt" | "st";
+  hidden?: boolean;
 }
 
 export interface NoteData {
@@ -85,10 +86,12 @@ export const NOTE_META: Record<string, NoteMeta> = {
   other_ca:          { noteNumber: "21",      shortName: "Other Current Assets",          section: "BS" },
   revenue_ops:       { noteNumber: "22",      shortName: "Revenue from Operations",       section: "PL" },
   other_income:      { noteNumber: "23",      shortName: "Other Income",                  section: "PL" },
-  cogs:              { noteNumber: "24",      shortName: "Cost of Goods Sold",            section: "PL" },
-  employee_exp:      { noteNumber: "25",      shortName: "Employee Benefits Expense",     section: "PL" },
-  finance_costs:     { noteNumber: "26",      shortName: "Finance Costs",                 section: "PL" },
-  other_expenses:    { noteNumber: "28",      shortName: "Other Expenses",                section: "PL" },
+  cogs_a:            { noteNumber: "24",      shortName: "Cost of Materials Consumed",                                     section: "PL" },
+  cogs_b:            { noteNumber: "25",      shortName: "Purchases of Stock-in-Trade",                                    section: "PL" },
+  cogs_c:            { noteNumber: "26",      shortName: "Changes in Inventories of FG, WIP & Stock-in-Trade",             section: "PL" },
+  employee_exp:      { noteNumber: "27",      shortName: "Employee Benefits Expense",     section: "PL" },
+  finance_costs:     { noteNumber: "28",      shortName: "Finance Costs",                 section: "PL" },
+  other_expenses:    { noteNumber: "30",      shortName: "Other Expenses",                section: "PL" },
 };
 
 // ─── Helper: given Pattern A data saved under sourceNoteType, produce
@@ -292,7 +295,7 @@ export const NOTES_CONFIG: NoteConfig[] = [
       { id: "quot_partner",  label: "Partnership interests",           indent: 1 },
       { id: "quot_other",    label: "Other NC investments",            indent: 1 },
       {
-        id: "quot_total", label: "Total Quoted (A)", isTotal: true,
+        id: "quot_total", label: "Total Quoted", isTotal: true,
         formulaAdd: ["quot_property","quot_equity","quot_pref","quot_govt",
                      "quot_deb","quot_mf","quot_partner","quot_other"],
       },
@@ -558,66 +561,152 @@ export const NOTES_CONFIG: NoteConfig[] = [
   },
 
   // ── Note: Cost of Goods Sold (Pattern B — multi-level) ──────────────────
+  // hidden: true — used for computation only; not shown in the editor.
+  // cogs_a / cogs_b / cogs_c below are the display entries.
   {
     noteType: "cogs",
     title: "Note 24: Cost of Goods Sold",
     pattern: "B",
+    hidden: true,
     rows: [
-      { id: "pa_hdr",         label: "(A) Cost of Materials Consumed",                     isSectionHeader: true },
+      // Task 7 (doc7): removed all (A)/(B)/(C)/(a)/(b)/(c)/(I)/(II) alphabet prefixes
+      { id: "pa_hdr",         label: "Cost of Materials Consumed",                         isSectionHeader: true },
       { id: "raw_open",       label: "Opening stock of raw materials",                     indent: 1 },
       { id: "raw_purch",      label: "Add: Purchases of raw materials",                   indent: 2 },
       { id: "raw_close",      label: "Less: Closing stock of raw materials",              indent: 2 },
       {
-        id: "raw_consumed", label: "Raw material consumed (a)", isTotal: true, indent: 1,
+        id: "raw_consumed", label: "Total raw material consumed", isTotal: true, indent: 1,
         formulaAdd: ["raw_open","raw_purch"], formulaSub: ["raw_close"],
       },
       { id: "pack_open",      label: "Opening stock of packing materials",                 indent: 1 },
       { id: "pack_purch",     label: "Add: Purchases of packing materials",               indent: 2 },
       { id: "pack_close",     label: "Less: Closing stock of packing materials",          indent: 2 },
       {
-        id: "pack_consumed", label: "Packing material consumed (b)", isTotal: true, indent: 1,
+        id: "pack_consumed", label: "Total packing material consumed", isTotal: true, indent: 1,
         formulaAdd: ["pack_open","pack_purch"], formulaSub: ["pack_close"],
       },
       { id: "other_open",     label: "Opening stock of other materials",                   indent: 1 },
       { id: "other_purch",    label: "Add: Purchases of other materials",                 indent: 2 },
       { id: "other_close",    label: "Less: Closing stock of other materials",            indent: 2 },
       {
-        id: "other_consumed", label: "Other material consumed (c)", isTotal: true, indent: 1,
+        id: "other_consumed", label: "Total other material consumed", isTotal: true, indent: 1,
         formulaAdd: ["other_open","other_purch"], formulaSub: ["other_close"],
       },
       {
-        id: "pa_total", label: "Total (A = a + b + c)", isTotal: true,
+        id: "pa_total", label: "Total", isTotal: true,
         formulaAdd: ["raw_consumed","pack_consumed","other_consumed"],
       },
-      { id: "pb_hdr",         label: "(B) Purchases of Stock-in-Trade",                    isSectionHeader: true },
+      { id: "pb_hdr",         label: "Purchases of Stock-in-Trade",                        isSectionHeader: true },
       { id: "pb_row1",        label: "Purchases (category 1)",                            indent: 1 },
       { id: "pb_row2",        label: "Purchases (category 2)",                            indent: 1 },
       { id: "pb_row3",        label: "Purchases (category 3)",                            indent: 1 },
       { id: "pb_total",       label: "Total", isTotal: true, formulaAdd: ["pb_row1","pb_row2","pb_row3"] },
-      { id: "pc_hdr",         label: "(C) Changes in Inventories of Finished Goods, WIP & Stock-in-Trade", isSectionHeader: true },
-      { id: "pc_i_hdr",       label: "Opening Inventories (I)",                           isSectionHeader: true, indent: 1 },
+      { id: "pc_hdr",         label: "Changes in Inventories of Finished Goods, WIP & Stock-in-Trade", isSectionHeader: true },
+      { id: "pc_i_hdr",       label: "Opening Inventories",                               isSectionHeader: true, indent: 1 },
       { id: "pc_open_trade",  label: "Opening: Stock-in-trade",                           indent: 2 },
       { id: "pc_open_wip",    label: "Opening: Work-in-progress",                         indent: 2 },
       { id: "pc_open_fg",     label: "Opening: Finished goods",                           indent: 2 },
       {
-        id: "pc_i_total", label: "Total Opening (I)", isTotal: true, indent: 1,
+        id: "pc_i_total", label: "Total Opening", isTotal: true, indent: 1,
         formulaAdd: ["pc_open_trade","pc_open_wip","pc_open_fg"],
       },
-      { id: "pc_ii_hdr",      label: "Closing Inventories (II)",                          isSectionHeader: true, indent: 1 },
+      { id: "pc_ii_hdr",      label: "Closing Inventories",                               isSectionHeader: true, indent: 1 },
       { id: "pc_close_trade", label: "Closing: Stock-in-trade",                           indent: 2 },
       { id: "pc_close_wip",   label: "Closing: Work-in-progress",                         indent: 2 },
       { id: "pc_close_fg",    label: "Closing: Finished goods",                           indent: 2 },
       {
-        id: "pc_ii_total", label: "Total Closing (II)", isTotal: true, indent: 1,
+        id: "pc_ii_total", label: "Total Closing", isTotal: true, indent: 1,
         formulaAdd: ["pc_close_trade","pc_close_wip","pc_close_fg"],
       },
       {
-        id: "pc_total", label: "(Increase) / Decrease in Inventories  (C = I − II)", isTotal: true,
+        id: "pc_total", label: "(Increase) / Decrease in Inventories", isTotal: true,
         formulaAdd: ["pc_i_total"], formulaSub: ["pc_ii_total"],
       },
       {
-        id: "total_abc", label: "Total (A + B + C)", isTotal: true,
+        id: "total_abc", label: "Total", isTotal: true,
         formulaAdd: ["pa_total","pb_total","pc_total"],
+      },
+    ],
+  },
+
+  // ── Note: Cost of Materials Consumed (cogs_a) ──
+  {
+    noteType: "cogs_a",
+    sourceNoteType: "cogs",
+    title: "Note 24: Cost of Materials Consumed",
+    pattern: "B" as const,
+    rows: [
+      { id: "pa_hdr",         label: "Cost of Materials Consumed",                         isSectionHeader: true },
+      { id: "raw_open",       label: "Opening stock of raw materials",                     indent: 1 },
+      { id: "raw_purch",      label: "Add: Purchases of raw materials",                    indent: 2 },
+      { id: "raw_close",      label: "Less: Closing stock of raw materials",               indent: 2 },
+      {
+        id: "raw_consumed", label: "Total raw material consumed", isTotal: true, indent: 1,
+        formulaAdd: ["raw_open","raw_purch"], formulaSub: ["raw_close"],
+      },
+      { id: "pack_open",      label: "Opening stock of packing materials",                 indent: 1 },
+      { id: "pack_purch",     label: "Add: Purchases of packing materials",                indent: 2 },
+      { id: "pack_close",     label: "Less: Closing stock of packing materials",           indent: 2 },
+      {
+        id: "pack_consumed", label: "Total packing material consumed", isTotal: true, indent: 1,
+        formulaAdd: ["pack_open","pack_purch"], formulaSub: ["pack_close"],
+      },
+      { id: "other_open",     label: "Opening stock of other materials",                   indent: 1 },
+      { id: "other_purch",    label: "Add: Purchases of other materials",                  indent: 2 },
+      { id: "other_close",    label: "Less: Closing stock of other materials",             indent: 2 },
+      {
+        id: "other_consumed", label: "Total other material consumed", isTotal: true, indent: 1,
+        formulaAdd: ["other_open","other_purch"], formulaSub: ["other_close"],
+      },
+      {
+        id: "pa_total", label: "Total", isTotal: true,
+        formulaAdd: ["raw_consumed","pack_consumed","other_consumed"],
+      },
+    ],
+  },
+
+  // ── Note: Purchases of Stock-in-Trade (cogs_b) ──
+  {
+    noteType: "cogs_b",
+    sourceNoteType: "cogs",
+    title: "Note 25: Purchases of Stock-in-Trade",
+    pattern: "B" as const,
+    rows: [
+      { id: "pb_hdr",         label: "Purchases of Stock-in-Trade",                        isSectionHeader: true },
+      { id: "pb_row1",        label: "Purchases (category 1)",                             indent: 1 },
+      { id: "pb_row2",        label: "Purchases (category 2)",                             indent: 1 },
+      { id: "pb_row3",        label: "Purchases (category 3)",                             indent: 1 },
+      { id: "pb_total",       label: "Total", isTotal: true, formulaAdd: ["pb_row1","pb_row2","pb_row3"] },
+    ],
+  },
+
+  // ── Note: Changes in Inventories (cogs_c) ──
+  {
+    noteType: "cogs_c",
+    sourceNoteType: "cogs",
+    title: "Note 26: Changes in Inventories of FG, WIP & Stock-in-Trade",
+    pattern: "B" as const,
+    rows: [
+      { id: "pc_hdr",         label: "Changes in Inventories of Finished Goods, WIP & Stock-in-Trade", isSectionHeader: true },
+      { id: "pc_i_hdr",       label: "Opening Inventories",                               isSectionHeader: true, indent: 1 },
+      { id: "pc_open_trade",  label: "Opening: Stock-in-trade",                           indent: 2 },
+      { id: "pc_open_wip",    label: "Opening: Work-in-progress",                         indent: 2 },
+      { id: "pc_open_fg",     label: "Opening: Finished goods",                           indent: 2 },
+      {
+        id: "pc_i_total", label: "Total Opening", isTotal: true, indent: 1,
+        formulaAdd: ["pc_open_trade","pc_open_wip","pc_open_fg"],
+      },
+      { id: "pc_ii_hdr",      label: "Closing Inventories",                               isSectionHeader: true, indent: 1 },
+      { id: "pc_close_trade", label: "Closing: Stock-in-trade",                           indent: 2 },
+      { id: "pc_close_wip",   label: "Closing: Work-in-progress",                         indent: 2 },
+      { id: "pc_close_fg",    label: "Closing: Finished goods",                           indent: 2 },
+      {
+        id: "pc_ii_total", label: "Total Closing", isTotal: true, indent: 1,
+        formulaAdd: ["pc_close_trade","pc_close_wip","pc_close_fg"],
+      },
+      {
+        id: "pc_total", label: "(Increase) / Decrease in Inventories", isTotal: true,
+        formulaAdd: ["pc_i_total"], formulaSub: ["pc_ii_total"],
       },
     ],
   },
@@ -625,7 +714,7 @@ export const NOTES_CONFIG: NoteConfig[] = [
   // ── Note: Employee Benefits Expense (Pattern B) ─────────────────────────
   {
     noteType: "employee_exp",
-    title: "Note 25: Employee Benefits Expense",
+    title: "Note 27: Employee Benefits Expense",
     pattern: "B",
     rows: [
       { id: "salaries",      label: "Salaries, wages and bonus" },
@@ -643,7 +732,7 @@ export const NOTES_CONFIG: NoteConfig[] = [
   // ── Note: Finance Costs (Pattern B) ─────────────────────────────────────
   {
     noteType: "finance_costs",
-    title: "Note 26: Finance Costs",
+    title: "Note 28: Finance Costs",
     pattern: "B",
     rows: [
       { id: "int_bank",        label: "Interest on bank borrowings" },
@@ -667,7 +756,7 @@ export const NOTES_CONFIG: NoteConfig[] = [
   // ── Note: Other Expenses (Pattern B) ────────────────────────────────────
   {
     noteType: "other_expenses",
-    title: "Note 28: Other Expenses",
+    title: "Note 30: Other Expenses",
     pattern: "B",
     // KD8: line items arranged alphabetically (A → Z); Total stays last.
     rows: [

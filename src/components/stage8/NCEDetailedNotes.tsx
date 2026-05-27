@@ -63,7 +63,7 @@ interface Props {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const INDENT_CLS = ["pl-3", "pl-7", "pl-11", "pl-14"] as const;
+const INDENT_CLS = ["pl-2", "pl-5", "pl-8", "pl-11"] as const;
 function indentCls(level = 0) {
   return INDENT_CLS[Math.min(level, INDENT_CLS.length - 1)];
 }
@@ -2420,7 +2420,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
 
       {/* All notes — always open; pointer-events disabled in read-only (lock preview) mode */}
       <div className={`space-y-4${readOnly ? " pointer-events-none select-none opacity-90" : ""}`}>
-        {NOTES_CONFIG.map(nc => {
+        {NOTES_CONFIG.filter(nc => !(nc as any).hidden).map(nc => {
           // For split notes (sourceNoteType set), read from the source note's data
           // and extract only the relevant LT or ST side via extractSplitData().
           const sourceKey  = nc.sourceNoteType ?? nc.noteType;
