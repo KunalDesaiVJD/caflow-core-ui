@@ -108,9 +108,11 @@ function NumInput({
 
 interface Props {
   engagementId: string;
+  /** Task 1 (doc6): when true, entire Capital Account is read-only (locked preview mode) */
+  readOnly?: boolean;
 }
 
-export function NCECapitalAccount({ engagementId }: Props) {
+export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
   // Start with a single partner by default — user adds more via "Add Partner"
   const [partners,    setPartners]    = useState<PartnerRow[]>([emptyPartner(1)]);
   const [pyRow,       setPyRow]       = useState<PyRow>(EMPTY_PY);
@@ -421,7 +423,7 @@ export function NCECapitalAccount({ engagementId }: Props) {
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div className="space-y-4">
+    <div className={`space-y-4${readOnly ? " pointer-events-none select-none" : ""}`}>
 
       {/* ── Header ── */}
       <div className="text-center space-y-1 pb-3 border-b">

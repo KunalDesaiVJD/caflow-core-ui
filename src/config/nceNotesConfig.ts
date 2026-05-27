@@ -134,7 +134,7 @@ const BORROWINGS_ROWS: NoteRowDef[] = [
   { id: "sec_related",       label: "Loans from related parties",                       indent: 1 },
   { id: "sec_other",         label: "Other secured loans",                              indent: 1 },
   {
-    id: "sec_total", label: "Total (A)", isTotal: true, sectionTag: "secured",
+    id: "sec_total", label: "Total", isTotal: true, sectionTag: "secured",
     formulaAdd: ["sec_term_bank","sec_term_fi","sec_term_others","sec_demand_bank",
                  "sec_demand_other","sec_deferred","sec_related","sec_other"],
   },
@@ -148,11 +148,11 @@ const BORROWINGS_ROWS: NoteRowDef[] = [
   { id: "unsec_related",       label: "Loans from related parties",                       indent: 1 },
   { id: "unsec_other",         label: "Other unsecured loans",                            indent: 1 },
   {
-    id: "unsec_total", label: "Total (B)", isTotal: true, sectionTag: "unsecured",
+    id: "unsec_total", label: "Total", isTotal: true, sectionTag: "unsecured",
     formulaAdd: ["unsec_term_bank","unsec_term_fi","unsec_term_others","unsec_demand_bank",
                  "unsec_demand_other","unsec_deferred","unsec_related","unsec_other"],
   },
-  { id: "total_ab", label: "Total (A + B)", isTotal: true, formulaAdd: ["sec_total","unsec_total"] },
+  { id: "total_ab", label: "Total", isTotal: true, formulaAdd: ["sec_total","unsec_total"] },
 ];
 
 export const NOTES_CONFIG: NoteConfig[] = [
@@ -306,12 +306,12 @@ export const NOTES_CONFIG: NoteConfig[] = [
       { id: "unquot_partner",  label: "Partnership interests",           indent: 1 },
       { id: "unquot_other",    label: "Other NC investments",            indent: 1 },
       {
-        id: "unquot_total", label: "Total Unquoted (B)", isTotal: true,
+        id: "unquot_total", label: "Total Unquoted", isTotal: true,
         formulaAdd: ["unquot_property","unquot_equity","unquot_pref","unquot_govt",
                      "unquot_deb","unquot_mf","unquot_partner","unquot_other"],
       },
       {
-        id: "total_ab", label: "Total NC Investments (A + B)", isTotal: true,
+        id: "total_ab", label: "Total NC Investments", isTotal: true,
         formulaAdd: ["quot_total","unquot_total"],
       },
     ],
@@ -342,7 +342,7 @@ export const NOTES_CONFIG: NoteConfig[] = [
       { id: "sec_govt",       label: "Advances to government authorities",           indent: 1 },
       { id: "sec_others",     label: "Others",                                       indent: 1 },
       {
-        id: "sec_total", label: "Total (A)", isTotal: true, sectionTag: "secured",
+        id: "sec_total", label: "Total", isTotal: true, sectionTag: "secured",
         formulaAdd: ["sec_cap_good","sec_cap_doubt","sec_related","sec_prepaid",
                      "sec_adv_tax","sec_gst","sec_security","sec_govt","sec_others"],
         formulaSub: ["sec_cap_prov"],
@@ -359,12 +359,12 @@ export const NOTES_CONFIG: NoteConfig[] = [
       { id: "unsec_govt",       label: "Advances to government authorities",           indent: 1 },
       { id: "unsec_others",     label: "Others",                                       indent: 1 },
       {
-        id: "unsec_total", label: "Total (B)", isTotal: true, sectionTag: "unsecured",
+        id: "unsec_total", label: "Total", isTotal: true, sectionTag: "unsecured",
         formulaAdd: ["unsec_cap_good","unsec_cap_doubt","unsec_related","unsec_prepaid",
                      "unsec_adv_tax","unsec_gst","unsec_security","unsec_govt","unsec_others"],
         formulaSub: ["unsec_cap_prov"],
       },
-      { id: "total_ab", label: "Total (A + B)", isTotal: true, formulaAdd: ["sec_total","unsec_total"] },
+      { id: "total_ab", label: "Total", isTotal: true, formulaAdd: ["sec_total","unsec_total"] },
     ],
   },
 
@@ -385,7 +385,7 @@ export const NOTES_CONFIG: NoteConfig[] = [
       { id: "sec_govt",       label: "Advances to government authorities",           indent: 1 },
       { id: "sec_others",     label: "Others",                                       indent: 1 },
       {
-        id: "sec_total", label: "Total (A)", isTotal: true, sectionTag: "secured",
+        id: "sec_total", label: "Total", isTotal: true, sectionTag: "secured",
         formulaAdd: ["sec_related","sec_prepaid","sec_adv_tax","sec_gst",
                      "sec_security","sec_govt","sec_others"],
       },
@@ -398,11 +398,11 @@ export const NOTES_CONFIG: NoteConfig[] = [
       { id: "unsec_govt",       label: "Advances to government authorities",           indent: 1 },
       { id: "unsec_others",     label: "Others",                                       indent: 1 },
       {
-        id: "unsec_total", label: "Total (B)", isTotal: true, sectionTag: "unsecured",
+        id: "unsec_total", label: "Total", isTotal: true, sectionTag: "unsecured",
         formulaAdd: ["unsec_related","unsec_prepaid","unsec_adv_tax","unsec_gst",
                      "unsec_security","unsec_govt","unsec_others"],
       },
-      { id: "total_ab", label: "Total (A + B)", isTotal: true, formulaAdd: ["sec_total","unsec_total"] },
+      { id: "total_ab", label: "Total", isTotal: true, formulaAdd: ["sec_total","unsec_total"] },
     ],
   },
 
@@ -451,7 +451,7 @@ export const NOTES_CONFIG: NoteConfig[] = [
       { id: "ka_doubtful",  label: "Doubtful",                                            indent: 1 },
       { id: "ka_less_prov", label: "Less: Provision for doubtful receivables",            indent: 2 },
       {
-        id: "ka_total", label: "Total (A)", isTotal: true, indent: 1,
+        id: "ka_total", label: "Total", isTotal: true, indent: 1,
         formulaAdd: ["ka_secured","ka_unsecured","ka_doubtful"], formulaSub: ["ka_less_prov"],
       },
       { id: "kb_hdr",       label: "(B) Outstanding for more than 6 months",              isSectionHeader: true },
@@ -461,12 +461,12 @@ export const NOTES_CONFIG: NoteConfig[] = [
       { id: "kb_less_prov", label: "Less: Provision for doubtful receivables",            indent: 2 },
       { id: "kb_unbilled",  label: "Unbilled receivables",                                indent: 1 },
       {
-        id: "kb_total", label: "Total (B)", isTotal: true, indent: 1,
+        id: "kb_total", label: "Total", isTotal: true, indent: 1,
         formulaAdd: ["kb_secured","kb_unsecured","kb_doubtful","kb_unbilled"],
         formulaSub: ["kb_less_prov"],
       },
       {
-        id: "total_ab", label: "Total (A + B)", isTotal: true,
+        id: "total_ab", label: "Total", isTotal: true,
         formulaAdd: ["ka_total","kb_total"],
       },
     ],
@@ -593,7 +593,7 @@ export const NOTES_CONFIG: NoteConfig[] = [
       { id: "pb_row1",        label: "Purchases (category 1)",                            indent: 1 },
       { id: "pb_row2",        label: "Purchases (category 2)",                            indent: 1 },
       { id: "pb_row3",        label: "Purchases (category 3)",                            indent: 1 },
-      { id: "pb_total",       label: "Total (B)", isTotal: true, formulaAdd: ["pb_row1","pb_row2","pb_row3"] },
+      { id: "pb_total",       label: "Total", isTotal: true, formulaAdd: ["pb_row1","pb_row2","pb_row3"] },
       { id: "pc_hdr",         label: "(C) Changes in Inventories of Finished Goods, WIP & Stock-in-Trade", isSectionHeader: true },
       { id: "pc_i_hdr",       label: "Opening Inventories (I)",                           isSectionHeader: true, indent: 1 },
       { id: "pc_open_trade",  label: "Opening: Stock-in-trade",                           indent: 2 },

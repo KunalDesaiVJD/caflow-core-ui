@@ -6398,7 +6398,8 @@ export default function PipelineFinancialStatements({
           <p className="text-xs text-muted-foreground">Generated from mapped trial balance</p>
         </div>
         <div className="flex items-center gap-2">
-          <FsUnitsToggle />
+          {/* Task 5 (doc6): unit toggle hidden for NCE — actual values only */}
+          {!isNonCorporate && <FsUnitsToggle />}
           <Button
             variant="outline"
             size="sm"
