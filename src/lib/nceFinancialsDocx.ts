@@ -198,6 +198,9 @@ interface CellOpts {
    *  Continuation lines indent by this many DXA, aligning below the description
    *  text rather than below the row prefix (I./V./(a) etc.). */
   hangingIndent?: number;
+  /** Task 1 (doc8): override top/bottom cell margin (DXA).
+   *  Default 28 for BS/PL rows; note-table rows use 18 for tighter page fitting. */
+  vertPad?: number;
 }
 
 function cell(o: CellOpts): TableCell {
@@ -215,6 +218,7 @@ function cell(o: CellOpts): TableCell {
     indent  = 0,
     colSpan,
     hangingIndent,
+    vertPad = 28,
   } = o;
 
   return new TableCell({
@@ -222,7 +226,7 @@ function cell(o: CellOpts): TableCell {
     width:   { size: w, type: WidthType.DXA },
     shading: bg ? { fill: bg, type: ShadingType.CLEAR } : undefined,
     borders,
-    margins: { top: 28, bottom: 28, left: padL + indent * 200, right: padR },
+    margins: { top: vertPad, bottom: vertPad, left: padL + indent * 200, right: padR },
     verticalAlign: VerticalAlign.CENTER,
     children: [new Paragraph({
       alignment: align,
@@ -238,7 +242,7 @@ function cell(o: CellOpts): TableCell {
 function ac(
   val: number,
   w: number,
-  opts: { bold?: boolean; bg?: string; borders?: Record<string, typeof bNone> } = {},
+  opts: { bold?: boolean; bg?: string; borders?: Record<string, typeof bNone>; vertPad?: number } = {},
 ): TableCell {
   return cell({
     text:    fmt(val),
@@ -249,6 +253,7 @@ function ac(
     bold:    opts.bold,
     bg:      opts.bg,
     borders: opts.borders ?? BDR_ROW,
+    vertPad: opts.vertPad,
   });
 }
 
@@ -524,9 +529,10 @@ function buildBSTable(
 
     parentRow("(1)  Non-Current Assets"),
     parentRow("        (a)  Property, Plant & Equipment and Intangible Assets"),
-    dataRow("                   (i)   Property, plant and equipment", n(10), ppeCy,  ppePy,  2),
-    dataRow("                   (ii)  Intangible assets",             n(12), intgCy, intgPy, 2),
-    dataRow("                   (iii) Capital work-in-progress",      n(11), cwipCy, cwipPy, 2),
+    // Task 3 (doc8): reduced excessive left indent on (i)/(ii)/(iii) child rows
+    dataRow("             (i)   Property, plant and equipment", n(10), ppeCy,  ppePy,  1),
+    dataRow("             (ii)  Intangible assets",             n(12), intgCy, intgPy, 1),
+    dataRow("             (iii) Capital work-in-progress",      n(11), cwipCy, cwipPy, 1),
     dataRow("        (b)  Non-current investments",          n(13), ncinvCy, ncinvPy),
     dataRow("        (c)  Long-term loans and advances",    n(14), ltlaCy,  ltlaPy),
     dataRow("        (d)  Other non-current assets",        n(15), oncaCy,  oncaPy),
@@ -645,16 +651,23 @@ function buildPLTable(
     // Task 7 (doc6): when COGS note data is available, show sub-classification
     // (i) Cost of Materials Consumed, (ii) Purchases of Stock-in-Trade,
     // (iii) Changes in Inventories — matching the Notes to Accounts structure.
-    // When note data is absent, fall back to the single combined line.
+    // Task 3 (doc8): reduced child row indentation (6 spaces + indent:1).
+    // Task 4 (doc8): use maybeRow() so sub-rows with zero data are hidden,
+    // and only show note number when the row has a non-zero amount.
     ...(cogsNoteCy && cogsNotePy
-      ? [
-          parentRow("(a)   Cost of goods sold", 0),
-          dataRow("         (i)    Cost of Materials Consumed",                                      n(24), cogsNoteCy["pa_total"] ?? 0, cogsNotePy["pa_total"] ?? 0, 1),
-          dataRow("         (ii)   Purchases of Stock-in-Trade",                                    n(25), cogsNoteCy["pb_total"] ?? 0, cogsNotePy["pb_total"] ?? 0, 1),
-          dataRow("         (iii)  Changes in Inventories of Finished Goods, WIP & Stock-in-Trade", n(26), cogsNoteCy["pc_total"] ?? 0, cogsNotePy["pc_total"] ?? 0, 1),
-        ]
+      ? (() => {
+          const paCy = cogsNoteCy["pa_total"] ?? 0; const paPy = cogsNotePy["pa_total"] ?? 0;
+          const pbCy = cogsNoteCy["pb_total"] ?? 0; const pbPy = cogsNotePy["pb_total"] ?? 0;
+          const pcCy = cogsNoteCy["pc_total"] ?? 0; const pcPy = cogsNotePy["pc_total"] ?? 0;
+          return [
+            parentRow("(a)   Cost of goods sold", 0),
+            ...maybeRow("      (i)   Cost of Materials Consumed",                                      (paCy || paPy) ? n(24) : null, paCy, paPy, 1),
+            ...maybeRow("      (ii)  Purchases of Stock-in-Trade",                                    (pbCy || pbPy) ? n(25) : null, pbCy, pbPy, 1),
+            ...maybeRow("      (iii) Changes in Inventories of Finished Goods, WIP & Stock-in-Trade", (pcCy || pcPy) ? n(26) : null, pcCy, pcPy, 1),
+          ];
+        })()
       : [
-          dataRow("(a)   Cost of goods sold",            n(24), cogsCy, cogsPy),
+          ...maybeRow("(a)   Cost of goods sold", n(24), cogsCy, cogsPy),
         ]),
     dataRow("(b)   Employee benefits expense",      n(27), empCy,  empPy),
     dataRow("(c)   Finance costs",                  n(28), finCy,  finPy),
@@ -838,7 +851,7 @@ function noteTitleRow(colWidths: number[], noteNumber: string, title: string): T
         width:   { size: totalW, type: WidthType.DXA },
         shading: { fill: BG_SECT, type: ShadingType.CLEAR },
         borders: BDR_SECT,
-        margins: { top: 80, bottom: 80, left: 100, right: 100 },
+        margins: { top: 56, bottom: 56, left: 100, right: 100 },
         children: [new Paragraph({
           spacing: { before: 0, after: 0 },
           children: [
@@ -861,7 +874,7 @@ function noteSecHdr(colWidths: number[], label: string): TableRow {
         width:   { size: totalW, type: WidthType.DXA },
         shading: { fill: BG_TOT, type: ShadingType.CLEAR },
         borders: BDR_ROW,
-        margins: { top: 60, bottom: 60, left: 100, right: 100 },
+        margins: { top: 38, bottom: 38, left: 100, right: 100 },
         children: [new Paragraph({
           spacing: { before: 0, after: 0 },
           children: [new TextRun({ text: label, font: FONT, size: SZ_BODY, bold: true, color: BLACK })],
@@ -876,9 +889,9 @@ function noteHdrB(cyYear: string, pyYear: string): TableRow {
   return new TableRow({
     tableHeader: true,
     children: [
-      cell({ text: "Particulars", w: NW_DESC, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, padL: 100 }),
-      cell({ text: hdr(cyYear), w: NW_CY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
-      cell({ text: hdr(pyYear), w: NW_PY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
+      cell({ text: "Particulars", w: NW_DESC, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, padL: 100, vertPad: 22 }),
+      cell({ text: hdr(cyYear), w: NW_CY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120, vertPad: 22 }),
+      cell({ text: hdr(pyYear), w: NW_PY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120, vertPad: 22 }),
     ],
   });
 }
@@ -894,11 +907,12 @@ function noteRowB(
   const bg   = style === "total" ? BG_GRAN : style === "subtotal" ? BG_TOT : undefined;
   const bdr  = style === "total" ? BDR_GRAND : style === "subtotal" ? BDR_SUB : BDR_ROW;
   const bold = style !== "data";
+  // Task 1 (doc8): use compact vertPad=18 for note rows (tighter page fitting)
   return new TableRow({
     children: [
-      cell({ text: label, w: NW_DESC, bold, bg, borders: bdr, indent }),
-      ac(cy, NW_CY, { bold, bg, borders: bdr }),
-      ac(py, NW_PY, { bold, bg, borders: bdr }),
+      cell({ text: label, w: NW_DESC, bold, bg, borders: bdr, indent, vertPad: 18 }),
+      ac(cy, NW_CY, { bold, bg, borders: bdr, vertPad: 18 }),
+      ac(py, NW_PY, { bold, bg, borders: bdr, vertPad: 18 }),
     ],
   });
 }
@@ -923,18 +937,18 @@ function noteHdrA(cyYear: string, pyYear: string): TableRow[] {
 
   const r1 = new TableRow({
     children: [
-      cell({ text: "Particulars", w: NW_A_DESC, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, padL: 100 }),
+      cell({ text: "Particulars", w: NW_A_DESC, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, padL: 100, vertPad: 22 }),
       spanCell("Long Term", ltw, 2),
       spanCell("Short Term", stw, 2),
     ],
   });
   const r2 = new TableRow({
     children: [
-      cell({ text: "", w: NW_A_DESC, sz: SZ_BODY, color: WHITE, bg: BG_HDR, borders: BDR_NONE }),
-      cell({ text: hdr(cyYear), w: NW_A_LTCY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
-      cell({ text: hdr(pyYear), w: NW_A_LTPY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
-      cell({ text: hdr(cyYear), w: NW_A_STCY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
-      cell({ text: hdr(pyYear), w: NW_A_STPY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80 }),
+      cell({ text: "", w: NW_A_DESC, sz: SZ_BODY, color: WHITE, bg: BG_HDR, borders: BDR_NONE, vertPad: 22 }),
+      cell({ text: hdr(cyYear), w: NW_A_LTCY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80, vertPad: 22 }),
+      cell({ text: hdr(pyYear), w: NW_A_LTPY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80, vertPad: 22 }),
+      cell({ text: hdr(cyYear), w: NW_A_STCY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80, vertPad: 22 }),
+      cell({ text: hdr(pyYear), w: NW_A_STPY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80, vertPad: 22 }),
     ],
   });
   return [r1, r2];
@@ -951,13 +965,14 @@ function noteRowA(
   const bg   = style === "total" ? BG_GRAN : style === "subtotal" ? BG_TOT : undefined;
   const bdr  = style === "total" ? BDR_GRAND : style === "subtotal" ? BDR_SUB : BDR_ROW;
   const bold = style !== "data";
+  // Task 1 (doc8): compact vertPad=18 for note rows
   return new TableRow({
     children: [
-      cell({ text: label, w: NW_A_DESC, bold, bg, borders: bdr, indent }),
-      ac(ltCy, NW_A_LTCY, { bold, bg, borders: bdr }),
-      ac(ltPy, NW_A_LTPY, { bold, bg, borders: bdr }),
-      ac(stCy, NW_A_STCY, { bold, bg, borders: bdr }),
-      ac(stPy, NW_A_STPY, { bold, bg, borders: bdr }),
+      cell({ text: label, w: NW_A_DESC, bold, bg, borders: bdr, indent, vertPad: 18 }),
+      ac(ltCy, NW_A_LTCY, { bold, bg, borders: bdr, vertPad: 18 }),
+      ac(ltPy, NW_A_LTPY, { bold, bg, borders: bdr, vertPad: 18 }),
+      ac(stCy, NW_A_STCY, { bold, bg, borders: bdr, vertPad: 18 }),
+      ac(stPy, NW_A_STPY, { bold, bg, borders: bdr, vertPad: 18 }),
     ],
   });
 }
@@ -993,19 +1008,19 @@ const NOTE1_POLICIES = [
 ];
 
 function buildNote1Section(entityName: string, cyYear: string): Paragraph[] {
-  // Vertical gap between policy points (~0.14" — improved readability per Task 5)
-  const GAP = 200;
+  // Vertical gap between policy points — reduced for better page fitting (Task 1, doc8)
+  const GAP = 140;
 
   const txt = (text: string, bold = false) =>
     new TextRun({ text, font: FONT, size: SZ_BODY, bold, color: BLACK });
 
-  // Block paragraph with improved line spacing for professional readability
+  // Block paragraph with professional line spacing
   const block = (
     runs: TextRun[],
     opts: { indent?: number; hanging?: number; after?: number; keepNext?: boolean } = {},
   ): Paragraph =>
     new Paragraph({
-      spacing:   { before: 0, after: opts.after ?? 60, line: 276, lineRule: "auto" as any },
+      spacing:   { before: 0, after: opts.after ?? 50, line: 264, lineRule: "auto" as any },
       indent:    opts.indent ? { left: opts.indent, hanging: opts.hanging } : undefined,
       keepLines: true,
       keepNext:  opts.keepNext ?? false,
@@ -1292,11 +1307,14 @@ function buildNoteSection(
     }
   };
 
-  // Task 5 (doc7): pre-compute which section headers are empty (all data rows blank)
+  // Task 5 (doc7) + Task 2 (doc8): pre-compute which section headers are empty
+  // (all data rows blank) and which section-total rows belong to empty sections.
   // Only active when hideBlankNoteRows=true (locked preview / export).
   const emptySectionHeaders = new Set<string>();
+  const emptySectionTotals  = new Set<string>();
   if (hideBlankNoteRows) {
     let currentHdrId: string | null = null;
+    let currentSectionTotalId: string | null = null;
     let sectionHasData = false;
     const checkRow = (row: NoteRowDef) => {
       if (isA) {
@@ -1309,14 +1327,24 @@ function buildNoteSection(
     };
     for (const row of cfg.rows) {
       if (row.isSectionHeader) {
-        if (currentHdrId !== null && !sectionHasData) emptySectionHeaders.add(currentHdrId);
+        if (currentHdrId !== null && !sectionHasData) {
+          emptySectionHeaders.add(currentHdrId);
+          if (currentSectionTotalId) emptySectionTotals.add(currentSectionTotalId);
+        }
         currentHdrId = row.id;
+        currentSectionTotalId = null;
         sectionHasData = false;
+      } else if (row.isTotal && row.id !== grandTotalId) {
+        // Track the nearest non-grand section total for this section
+        currentSectionTotalId = row.id;
       } else {
         if (!row.isTotal && checkRow(row)) sectionHasData = true;
       }
     }
-    if (currentHdrId !== null && !sectionHasData) emptySectionHeaders.add(currentHdrId);
+    if (currentHdrId !== null && !sectionHasData) {
+      emptySectionHeaders.add(currentHdrId);
+      if (currentSectionTotalId) emptySectionTotals.add(currentSectionTotalId);
+    }
   }
 
   // Task 4: all static rows are always exported — no blank-row suppression.
@@ -1330,6 +1358,19 @@ function buildNoteSection(
       }
     } else if (row.isTotal) {
       const style = row.id === grandTotalId ? "total" : "subtotal";
+      // Task 2 (doc8): when locked, skip section totals for empty sections and
+      // skip any non-grand total row whose computed value is 0 in both years
+      // (prevents "blank Total" rows and duplicate totals in sparse notes).
+      if (hideBlankNoteRows && row.id !== grandTotalId) {
+        if (emptySectionTotals.has(row.id)) continue;
+        const totCy = isA
+          ? (cy[row.id + "_lt"] ?? 0) + (cy[row.id + "_st"] ?? 0)
+          : (cy[row.id] ?? 0);
+        const totPy = isA
+          ? (py[row.id + "_lt"] ?? 0) + (py[row.id + "_st"] ?? 0)
+          : (py[row.id] ?? 0);
+        if (!totCy && !totPy) continue;
+      }
       // Before a section total, emit that section's unattached customs; before
       // the grand total, emit the section-less ones.
       if (row.id === grandTotalId) emitCustoms(cr => !cr.section);
@@ -1653,6 +1694,22 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     // For split notes, extract only the relevant side (_lt or _st suffixes)
     const data = cfg.splitSide ? extractSplitData(rawData, cfg.splitSide) : rawData;
 
+    // Task 4 (doc8): skip notes whose grand total is 0 in both CY and PY even
+    // when a dynamic number exists (e.g. cogs_b activated by COGS linkage but
+    // no Purchases-of-Stock-in-Trade data). Keeps export identical to UI view.
+    const displayData = computeDisplayData(cfg, data.cy, data.py);
+    const grandTotalRowDef = [...cfg.rows].reverse().find(r => r.isTotal);
+    if (grandTotalRowDef) {
+      const isPatA = cfg.pattern === "A";
+      const totalCy = isPatA
+        ? (displayData.cy[grandTotalRowDef.id + "_lt"] ?? 0) + (displayData.cy[grandTotalRowDef.id + "_st"] ?? 0)
+        : (displayData.cy[grandTotalRowDef.id] ?? 0);
+      const totalPy = isPatA
+        ? (displayData.py[grandTotalRowDef.id + "_lt"] ?? 0) + (displayData.py[grandTotalRowDef.id + "_st"] ?? 0)
+        : (displayData.py[grandTotalRowDef.id] ?? 0);
+      if (!totalCy && !totalPy) continue;   // no meaningful data → skip this note
+    }
+
     noteTablePairs.push([parseInt(dynNum, 10), buildNoteSection(cfg, data.cy, data.py, dynNum, cyYear, pyYear, expandedRows, hideBlankNoteRows)]);
   }
   // Sort ascending by note number for correct sequential order in export
@@ -1683,7 +1740,8 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   // the first paragraph preceding every note table so headings never split
   // awkwardly at the bottom of a page.
   const notePageBreak = () => new Paragraph({ pageBreakBefore: true, spacing: { before: 0, after: 0 }, children: [] });
-  const spacer        = () => new Paragraph({ spacing: { before: 240, after: 0 }, children: [] });
+  // Task 1 (doc8): reduced spacer between notes for better page utilisation
+  const spacer        = () => new Paragraph({ spacing: { before: 160, after: 0 }, children: [] });
 
   // Build notes section children: Note 1 paragraphs, Note 2 tables, Notes 3-28 tables
   // Capital account gets its own page break prefix; each note table also page-breaks.

@@ -614,7 +614,7 @@ function PatternBTable({
   sourceLabelOverrides,
   onChangeCy, onChangePy, onAddRow, onDeleteRow, onChangeLabel,
   onHideStatic, onChangeStaticLabel, onPromote, onEjectSource, onEjectCustomSource,
-  onChangeSourceLabel, noteType, onExpansionChange,
+  onChangeSourceLabel, noteType, onExpansionChange, hideEmptySections,
 }: {
   config:       NoteConfig;
   cy:           Record<string, number>;
@@ -640,12 +640,66 @@ function PatternBTable({
   noteType?: string;
   /** Task 8: Lock Preview — called when the openSources set changes */
   onExpansionChange?: (noteType: string, expandedIds: Set<string>) => void;
+  /** Task 2 (doc8): when true (lock preview / readOnly mode), hide empty section
+   *  headers and their associated totals to remove clutter from the preview. */
+  hideEmptySections?: boolean;
 }) {
   const { cy, py } = useMemo(
     () => computeDisplayData(config, rawCy, rawPy, customRows),
     [config, rawCy, rawPy, customRows],
   );
   const grandTotalIdx = config.rows.reduce((last, row, i) => row.isTotal ? i : last, -1);
+  const grandTotalId  = grandTotalIdx >= 0 ? config.rows[grandTotalIdx].id : null;
+
+  // Task 2 (doc8): pre-compute empty section header IDs when hideEmptySections is active
+  const emptySectionHdrIds = useMemo(() => {
+    if (!hideEmptySections) return new Set<string>();
+    const emptyHdrs = new Set<string>();
+    let currentHdrId: string | null = null;
+    let sectionHasData = false;
+    for (const row of config.rows) {
+      if (row.isSectionHeader) {
+        if (currentHdrId !== null && !sectionHasData) emptyHdrs.add(currentHdrId);
+        currentHdrId = row.id;
+        sectionHasData = false;
+      } else if (!row.isTotal && currentHdrId !== null && !hiddenRows.includes(row.id)) {
+        if ((cy[row.id] ?? 0) !== 0 || (py[row.id] ?? 0) !== 0) sectionHasData = true;
+        if (!sectionHasData) {
+          const attached = customRows.filter(cr => cr.attachedTo === row.id);
+          if (attached.some(cr => (rawCy[cr.id] ?? 0) !== 0 || (rawPy[cr.id] ?? 0) !== 0)) sectionHasData = true;
+        }
+      }
+    }
+    if (currentHdrId !== null && !sectionHasData) emptyHdrs.add(currentHdrId);
+    return emptyHdrs;
+  }, [hideEmptySections, config.rows, cy, py, rawCy, rawPy, customRows, hiddenRows]);
+
+  // Task 2 (doc8): pre-compute empty section total IDs
+  const emptySectionTotalIds = useMemo(() => {
+    if (!hideEmptySections) return new Set<string>();
+    const emptyTotals = new Set<string>();
+    let currentHdrId: string | null = null;
+    let currentSectionTotalId: string | null = null;
+    let sectionHasData = false;
+    for (const row of config.rows) {
+      if (row.isSectionHeader) {
+        if (currentHdrId !== null && !sectionHasData && currentSectionTotalId) emptyTotals.add(currentSectionTotalId);
+        currentHdrId = row.id;
+        currentSectionTotalId = null;
+        sectionHasData = false;
+      } else if (row.isTotal && row.id !== grandTotalId) {
+        currentSectionTotalId = row.id;
+      } else if (!row.isTotal && currentHdrId !== null && !hiddenRows.includes(row.id)) {
+        if ((cy[row.id] ?? 0) !== 0 || (py[row.id] ?? 0) !== 0) sectionHasData = true;
+        if (!sectionHasData) {
+          const attached = customRows.filter(cr => cr.attachedTo === row.id);
+          if (attached.some(cr => (rawCy[cr.id] ?? 0) !== 0 || (rawPy[cr.id] ?? 0) !== 0)) sectionHasData = true;
+        }
+      }
+    }
+    if (currentHdrId !== null && !sectionHasData && currentSectionTotalId) emptyTotals.add(currentSectionTotalId);
+    return emptyTotals;
+  }, [hideEmptySections, config.rows, cy, py, rawCy, rawPy, customRows, hiddenRows, grandTotalId]);
   // Track which static rows have their source-ledger list expanded
   const [openSources, setOpenSources] = useState<Set<string>>(new Set());
   const toggleSources = (id: string) => setOpenSources(prev => {
@@ -795,6 +849,9 @@ function PatternBTable({
         )}
         {config.rows.map((row, idx) => {
           if (!row.isSectionHeader && !row.isTotal && hiddenRows.includes(row.id)) return null;
+          // Task 2 (doc8): in lock preview mode, hide empty section headers and their totals
+          if (row.isSectionHeader && emptySectionHdrIds.has(row.id)) return null;
+          if (row.isTotal && emptySectionTotalIds.has(row.id)) return null;
           const insertCustomBefore = idx === grandTotalIdx;
           const displayLabel = labelOverrides[row.id] ?? row.label;
           const attachedHere = !row.isSectionHeader && !row.isTotal
@@ -1082,7 +1139,7 @@ function PatternATable({
   onChangeCy, onChangePy, onAddRow, onDeleteRow, onChangeLabel,
   onHideStatic, onChangeStaticLabel, onPromote, onSwapLtSt,
   onEjectSource, onEjectCustomSource,
-  onChangeSourceLabel,
+  onChangeSourceLabel, hideEmptySections,
 }: {
   config:       NoteConfig;
   cy:           Record<string, number>;
@@ -1104,12 +1161,73 @@ function PatternATable({
   onEjectSource:(rowId: string, ledger: string, amount: number, attachToId?: string) => void;
   onEjectCustomSource:(customRowId: string, ledger: string, amount: number, attachToId?: string) => void;
   onChangeSourceLabel: (rowId: string, ledger: string, newLabel: string) => void;
+  /** Task 2 (doc8): when true (lock preview / readOnly mode), hide empty section
+   *  headers and their associated totals to remove clutter from the preview. */
+  hideEmptySections?: boolean;
 }) {
   const { cy, py } = useMemo(
     () => computeDisplayData(config, rawCy, rawPy, customRows),
     [config, rawCy, rawPy, customRows],
   );
   const grandTotalIdx = config.rows.reduce((last, row, i) => row.isTotal ? i : last, -1);
+  const grandTotalId  = grandTotalIdx >= 0 ? config.rows[grandTotalIdx].id : null;
+
+  // Task 2 (doc8): pre-compute empty section header IDs when hideEmptySections is active.
+  // Pattern A stores values as key_lt / key_st, so check both suffixes.
+  const emptySectionHdrIds = useMemo(() => {
+    if (!hideEmptySections) return new Set<string>();
+    const emptyHdrs = new Set<string>();
+    let currentHdrId: string | null = null;
+    let sectionHasData = false;
+    for (const row of config.rows) {
+      if (row.isSectionHeader) {
+        if (currentHdrId !== null && !sectionHasData) emptyHdrs.add(currentHdrId);
+        currentHdrId = row.id;
+        sectionHasData = false;
+      } else if (!row.isTotal && currentHdrId !== null && !hiddenRows.includes(row.id)) {
+        if ((cy[row.id + "_lt"] ?? 0) !== 0 || (cy[row.id + "_st"] ?? 0) !== 0 ||
+            (py[row.id + "_lt"] ?? 0) !== 0 || (py[row.id + "_st"] ?? 0) !== 0) sectionHasData = true;
+        if (!sectionHasData) {
+          const attached = customRows.filter(cr => cr.attachedTo === row.id);
+          if (attached.some(cr =>
+            (rawCy[cr.id + "_lt"] ?? 0) !== 0 || (rawCy[cr.id + "_st"] ?? 0) !== 0 ||
+            (rawPy[cr.id + "_lt"] ?? 0) !== 0 || (rawPy[cr.id + "_st"] ?? 0) !== 0
+          )) sectionHasData = true;
+        }
+      }
+    }
+    if (currentHdrId !== null && !sectionHasData) emptyHdrs.add(currentHdrId);
+    return emptyHdrs;
+  }, [hideEmptySections, config.rows, cy, py, rawCy, rawPy, customRows, hiddenRows]);
+
+  // Task 2 (doc8): pre-compute empty section total IDs when hideEmptySections is active.
+  const emptySectionTotalIds = useMemo(() => {
+    if (!hideEmptySections) return new Set<string>();
+    const emptyTotals = new Set<string>();
+    let currentHdrId: string | null = null;
+    let currentSectionTotalId: string | null = null;
+    let sectionHasData = false;
+    for (const row of config.rows) {
+      if (row.isSectionHeader) {
+        if (currentHdrId !== null && !sectionHasData && currentSectionTotalId) emptyTotals.add(currentSectionTotalId);
+        currentHdrId = row.id; currentSectionTotalId = null; sectionHasData = false;
+      } else if (row.isTotal && row.id !== grandTotalId) {
+        currentSectionTotalId = row.id;
+      } else if (!row.isTotal && currentHdrId !== null && !hiddenRows.includes(row.id)) {
+        if ((cy[row.id + "_lt"] ?? 0) !== 0 || (cy[row.id + "_st"] ?? 0) !== 0 ||
+            (py[row.id + "_lt"] ?? 0) !== 0 || (py[row.id + "_st"] ?? 0) !== 0) sectionHasData = true;
+        if (!sectionHasData) {
+          const attached = customRows.filter(cr => cr.attachedTo === row.id);
+          if (attached.some(cr =>
+            (rawCy[cr.id + "_lt"] ?? 0) !== 0 || (rawCy[cr.id + "_st"] ?? 0) !== 0 ||
+            (rawPy[cr.id + "_lt"] ?? 0) !== 0 || (rawPy[cr.id + "_st"] ?? 0) !== 0
+          )) sectionHasData = true;
+        }
+      }
+    }
+    if (currentHdrId !== null && !sectionHasData && currentSectionTotalId) emptyTotals.add(currentSectionTotalId);
+    return emptyTotals;
+  }, [hideEmptySections, config.rows, cy, py, rawCy, rawPy, customRows, hiddenRows, grandTotalId]);
 
   // ISSUE 2 FIX — derive section-specific "Add row" buttons so a row added
   // under "Unsecured" gets section="unsecured" + attachedTo="unsec_other".
@@ -1245,6 +1363,9 @@ function PatternATable({
       <TableBody>
         {config.rows.map((row, idx) => {
           if (!row.isSectionHeader && !row.isTotal && hiddenRows.includes(row.id)) return null;
+          // Task 2 (doc8): in lock preview mode, hide empty section headers and their totals
+          if (row.isSectionHeader && emptySectionHdrIds.has(row.id)) return null;
+          if (row.isTotal && emptySectionTotalIds.has(row.id)) return null;
           // Determine which custom rows to render before this row:
           //  • If this is a section-total (has sectionTag) → rows with that section
           //  • If this is the grand-total (last isTotal) → global (untagged) rows
@@ -2487,6 +2608,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
                     onEjectSource={(rid, ledger, amt, attachToId?) => handleEjectSource(sourceKey, rid, ledger, amt, attachToId)}
                     onEjectCustomSource={(cid, ledger, amt, attachToId?) => handleEjectCustomSource(sourceKey, cid, ledger, amt, attachToId)}
                     onChangeSourceLabel={(rid, ledger, lbl) => handleChangeSourceLabel(sourceKey, rid, ledger, lbl)}
+                    hideEmptySections={readOnly}
                   />
                 ) : (
                   <PatternBTable
@@ -2514,6 +2636,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
                       expansionStateRef.current[nt] = ids;
                       onExpansionStateUpdate?.(expansionStateRef.current);
                     }}
+                    hideEmptySections={readOnly}
                   />
                 )}
               </div>
