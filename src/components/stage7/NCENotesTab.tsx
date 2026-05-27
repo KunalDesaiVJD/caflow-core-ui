@@ -33,11 +33,13 @@ interface Props {
   dynamicNoteMap?: Map<number, number>;
   /** Task 8: Lock Preview — pass-through to NCEDetailedNotes */
   onExpansionStateUpdate?: (state: Record<string, Set<string>>) => void;
+  /** Task 1 (doc6): when true, the entire notes panel is read-only (locked preview mode) */
+  readOnly?: boolean;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteMap, onExpansionStateUpdate }: Props) {
+export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteMap, onExpansionStateUpdate, readOnly = false }: Props) {
   const [activeSubTab, setActiveSubTab] = useState("capital_account");
 
   useEffect(() => {
@@ -95,7 +97,7 @@ export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteM
         </TabsContent>
 
         <TabsContent value="notes_to_accounts" className="mt-3">
-          <NCEDetailedNotes engagementId={engagementId} dynamicNoteMap={dynamicNoteMap} onExpansionStateUpdate={onExpansionStateUpdate} />
+          <NCEDetailedNotes engagementId={engagementId} dynamicNoteMap={dynamicNoteMap} onExpansionStateUpdate={onExpansionStateUpdate} readOnly={readOnly} />
         </TabsContent>
 
         <TabsContent value="ppe_schedule" className="mt-3">

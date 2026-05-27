@@ -56,6 +56,9 @@ interface Props {
    *  state changes. The parent can use this to capture the current expansion
    *  state and pass it to generateNCEFinancialsDocx as expandedRows. */
   onExpansionStateUpdate?: (state: Record<string, Set<string>>) => void;
+  /** Task 1 (doc6): when true, the entire notes panel is read-only (locked preview mode).
+   *  Toolbar is hidden, inputs/buttons are disabled, and a lock banner is shown. */
+  readOnly?: boolean;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -1539,7 +1542,7 @@ function PatternATable({
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStateUpdate }: Props) {
+export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStateUpdate, readOnly = false }: Props) {
   const queryClient = useQueryClient();
   const [noteData,    setNoteData]    = useState<Record<string, NCENoteData>>({});
   const [loading,     setLoading]     = useState(true);
@@ -2369,47 +2372,54 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
         </p>
       </div>
 
-      {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          type="button" size="sm" variant="outline"
-          onClick={handleResync} disabled={syncing}
-          className="h-7 text-xs gap-1.5"
-        >
-          {syncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-          Re-sync from COA
-        </Button>
-        <span className="text-[10px] text-muted-foreground">
-          <span className="text-blue-600 font-medium">Blue = Auto</span> (re-synced from TB) ·{" "}
-          <span className="text-amber-600 font-medium">Amber = Manual</span> (preserved)
-        </span>
-        <div className="ml-auto flex items-center gap-1.5">
-          <Button
-            type="button" size="sm" variant="ghost"
-            onClick={() => setCollapseAll(false)}
-            className="h-7 text-xs gap-1"
-            title="Expand all note cards"
-          >
-            <Plus className="w-3 h-3" /> Expand All
-          </Button>
-          <Button
-            type="button" size="sm" variant="ghost"
-            onClick={() => setCollapseAll(true)}
-            className="h-7 text-xs gap-1"
-            title="Collapse all note cards"
-          >
-            <Minus className="w-3 h-3" /> Collapse All
-          </Button>
-          <Button size="sm" onClick={handleSave} disabled={saving}
-            className="h-7 text-xs gap-1.5">
-            {saving ? <Loader2 className="animate-spin h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
-            Save All Notes
-          </Button>
+      {/* Toolbar — hidden in read-only (lock preview) mode */}
+      {readOnly ? (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-amber-50 border border-amber-200 text-amber-800">
+          <span className="text-sm">🔒</span>
+          <span className="text-xs font-medium">Preview Locked — Notes are read-only. Unlock to make changes.</span>
         </div>
-      </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button" size="sm" variant="outline"
+            onClick={handleResync} disabled={syncing}
+            className="h-7 text-xs gap-1.5"
+          >
+            {syncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+            Re-sync from COA
+          </Button>
+          <span className="text-[10px] text-muted-foreground">
+            <span className="text-blue-600 font-medium">Blue = Auto</span> (re-synced from TB) ·{" "}
+            <span className="text-amber-600 font-medium">Amber = Manual</span> (preserved)
+          </span>
+          <div className="ml-auto flex items-center gap-1.5">
+            <Button
+              type="button" size="sm" variant="ghost"
+              onClick={() => setCollapseAll(false)}
+              className="h-7 text-xs gap-1"
+              title="Expand all note cards"
+            >
+              <Plus className="w-3 h-3" /> Expand All
+            </Button>
+            <Button
+              type="button" size="sm" variant="ghost"
+              onClick={() => setCollapseAll(true)}
+              className="h-7 text-xs gap-1"
+              title="Collapse all note cards"
+            >
+              <Minus className="w-3 h-3" /> Collapse All
+            </Button>
+            <Button size="sm" onClick={handleSave} disabled={saving}
+              className="h-7 text-xs gap-1.5">
+              {saving ? <Loader2 className="animate-spin h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
+              Save All Notes
+            </Button>
+          </div>
+        </div>
+      )}
 
-      {/* All notes — always open */}
-      <div className="space-y-4">
+      {/* All notes — always open; pointer-events disabled in read-only (lock preview) mode */}
+      <div className={`space-y-4${readOnly ? " pointer-events-none select-none opacity-90" : ""}`}>
         {NOTES_CONFIG.map(nc => {
           // For split notes (sourceNoteType set), read from the source note's data
           // and extract only the relevant LT or ST side via extractSplitData().
@@ -2512,13 +2522,15 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
         })}
       </div>
 
-      {/* Bottom save */}
-      <div className="flex justify-end pt-2">
-        <Button size="sm" onClick={handleSave} disabled={saving} className="gap-1.5">
-          {saving ? <Loader2 className="animate-spin h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
-          Save All Notes
-        </Button>
-      </div>
+      {/* Bottom save — hidden in read-only (lock preview) mode */}
+      {!readOnly && (
+        <div className="flex justify-end pt-2">
+          <Button size="sm" onClick={handleSave} disabled={saving} className="gap-1.5">
+            {saving ? <Loader2 className="animate-spin h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
+            Save All Notes
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

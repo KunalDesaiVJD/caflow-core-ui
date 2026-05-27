@@ -733,10 +733,10 @@ function buildSignatureTable(sig: SigData): Table {
   const half = Math.floor(TW / 2);
 
   function sigLines(
-    lines: Array<{ text: string; bold?: boolean; gap?: boolean; muted?: boolean }>,
+    lines: Array<{ text: string; bold?: boolean; gap?: boolean; muted?: boolean; spacingBefore?: number }>,
   ): Paragraph[] {
     return lines.map(l => new Paragraph({
-      spacing: { before: l.gap ? 120 : 0, after: 8 },
+      spacing: { before: l.spacingBefore ?? (l.gap ? 120 : 0), after: 8 },
       children: [new TextRun({
         text:  l.text,
         font:  FONT,
@@ -771,14 +771,15 @@ function buildSignatureTable(sig: SigData): Table {
             ]),
           }),
           // Right — Task 10: Place/Date ABOVE "For [Client Name]"; appears only once
+          // Task 3 (doc6): add 1 row space between Place/Date and 2 rows before Client
           new TableCell({
             width:   { size: TW - half, type: WidthType.DXA },
             borders: BDR_NONE,
             margins: { top: 80, bottom: 80, left: 1440, right: 80 },
             children: sigLines([
               { text: `Place: ${place}` },
-              { text: `Date: ${date}` },
-              { text: `For, ${clientName}`, bold: true, gap: true },
+              { text: `Date: ${date}`, spacingBefore: 240 },         // 1 row gap before Date
+              { text: `For, ${clientName}`, bold: true, spacingBefore: 480 }, // 2 row gaps before Client
               { text: "", gap: true },
               { text: "__________________" },
               ...(signatory ? [{ text: signatory, bold: true }] : []),
@@ -1181,6 +1182,7 @@ function buildNoteSection(
   cyYear: string,
   pyYear: string,
   expandedRows?: Set<string>,
+  hideBlankNoteRows?: boolean,
 ): Table {
   // Auto/manual breakup rows are stored in cy_data._custom_rows; their amounts
   // live as ordinary keys (id or id+"_lt"/"_st") in rawCy/rawPy. For notes like
@@ -1281,6 +1283,18 @@ function buildNoteSection(
         rows.push(noteRowB(row.label, cy[row.id] ?? 0, py[row.id] ?? 0, row.indent ?? 0, style));
       }
     } else {
+      // Task 2 (doc6): when locked (hideBlankNoteRows=true), skip data rows
+      // where the aggregate value is 0 in BOTH current year and previous year.
+      // Section headers and total rows are always shown regardless.
+      if (hideBlankNoteRows) {
+        if (isA) {
+          const v = aggA(row.id);
+          if (!v.lt && !v.st && !v.ltP && !v.stP) continue;
+        } else {
+          const v = aggB(row.id);
+          if (!v.c && !v.p) continue;
+        }
+      }
       // Main (static) row shows the collapsed aggregate; its attached sub-items
       // (auto/manual breakup ledgers) are then listed indented beneath it.
       const subIndent = (row.indent ?? 0) + 1;
@@ -1452,6 +1466,10 @@ export interface NCEDocxParams {
    *  When provided, sub-item ledger rows are shown only for expanded static rows;
    *  collapsed rows show the aggregate only. When undefined, all sub-items shown. */
   expandedRows?: Set<string>;
+  /** Task 2 (doc6): when true (Lock Preview active), notes rows where both CY
+   *  and PY are blank/zero are hidden from the export. Section headers and total
+   *  rows are always shown. Totals / calculations are NOT affected. */
+  hideBlankNoteRows?: boolean;
 }
 
 export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<void> {
@@ -1469,6 +1487,7 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     font           = "Arial",
     constitution,
     expandedRows,
+    hideBlankNoteRows = false,
   } = params;
 
   // Task 1: apply chosen font for the entire document
@@ -1532,7 +1551,7 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     // For split notes, extract only the relevant side (_lt or _st suffixes)
     const data = cfg.splitSide ? extractSplitData(rawData, cfg.splitSide) : rawData;
 
-    noteTablePairs.push([parseInt(dynNum, 10), buildNoteSection(cfg, data.cy, data.py, dynNum, cyYear, pyYear, expandedRows)]);
+    noteTablePairs.push([parseInt(dynNum, 10), buildNoteSection(cfg, data.cy, data.py, dynNum, cyYear, pyYear, expandedRows, hideBlankNoteRows)]);
   }
   // Sort ascending by note number for correct sequential order in export
   noteTablePairs.sort((a, b) => a[0] - b[0]);
