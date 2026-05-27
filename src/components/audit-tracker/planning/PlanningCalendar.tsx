@@ -31,6 +31,7 @@ import PlanningEntryDialog, { type PlanSaveData } from "./PlanningEntryDialog";
 
 const MONTHS  = ["January","February","March","April","May","June",
                  "July","August","September","October","November","December"];
+const MON_ABR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const DAY_ABR = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
 // Tailwind colour pairs: bg / text — for client assignment blocks
@@ -66,6 +67,27 @@ function toISO(d: Date): string {
 function monthDates(year: number, month: number): Date[] {
   const days = new Date(year, month + 1, 0).getDate();
   return Array.from({ length: days }, (_, i) => new Date(year, month, i + 1));
+}
+
+/** Returns all dates for the Indian FY (Apr fyYear → Mar fyYear+1) */
+function fyDates(fyYear: number): Date[] {
+  const result: Date[] = [];
+  // Apr–Dec of fyYear
+  for (let m = 3; m <= 11; m++) {
+    const days = new Date(fyYear, m + 1, 0).getDate();
+    for (let d = 1; d <= days; d++) result.push(new Date(fyYear, m, d));
+  }
+  // Jan–Mar of fyYear+1
+  for (let m = 0; m <= 2; m++) {
+    const days = new Date(fyYear + 1, m + 1, 0).getDate();
+    for (let d = 1; d <= days; d++) result.push(new Date(fyYear + 1, m, d));
+  }
+  return result;
+}
+
+/** Derive FY start year from a date (Apr–Mar = Indian FY) */
+function currentFYYear(d: Date): number {
+  return d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1;
 }
 
 /** 7 dates starting from the given Monday */
@@ -257,10 +279,11 @@ export default function PlanningCalendar({
   const now = new Date();
 
   // ── View state ─────────────────────────────────────────────────────────────
-  const [view,      setView]      = useState<"month"|"week">("month");
+  const [view,      setView]      = useState<"month"|"week"|"fy">("month");
   const [year,      setYear]      = useState(now.getFullYear());
   const [month,     setMonth]     = useState(now.getMonth());
   const [weekStart, setWeekStart] = useState<Date>(mondayOf(now));
+  const [fyYear,    setFYYear]    = useState<number>(() => currentFYYear(now));
 
   // ── Dialog state ───────────────────────────────────────────────────────────
   const [dialogOpen,        setDialogOpen]        = useState(false);
@@ -279,6 +302,10 @@ export default function PlanningCalendar({
   // ── Global client filter ────────────────────────────────────────────────────
   const [globalClientFilter, setGlobalClientFilter] = useState<string>("__all__");
   const [clientFilterOpen,   setClientFilterOpen]   = useState(false);
+
+  // ── Employee filter ─────────────────────────────────────────────────────────
+  const [employeeFilter,     setEmployeeFilter]     = useState<string>("__all__");
+  const [employeeFilterOpen, setEmployeeFilterOpen] = useState(false);
 
   // All unique non-leave client names across all entries
   const allClientNames = useMemo(() => {
@@ -349,6 +376,12 @@ export default function PlanningCalendar({
     return map;
   }, [entries]);
 
+  // Columns to actually render (all staff, or just the filtered employee)
+  const displayStaff = useMemo(() => {
+    if (employeeFilter === "__all__") return planningStaff;
+    return planningStaff.filter(s => s.user_id === employeeFilter);
+  }, [planningStaff, employeeFilter]);
+
   function setColFilter(empId: string, val: string) {
     setColumnFilters(p => ({ ...p, [empId]: val }));
   }
@@ -366,11 +399,12 @@ export default function PlanningCalendar({
 
   // ── Dates to render ────────────────────────────────────────────────────────
   const allDates = useMemo<Date[]>(() => {
+    if (view === "fy")    return fyDates(fyYear);
     if (view === "month") return monthDates(year, month);
     return weekDates(weekStart);
-  }, [view, year, month, weekStart]);
+  }, [view, year, month, weekStart, fyYear]);
 
-  // Apply global client filter + per-column filters to dates
+  // Apply global client filter + employee filter + per-column filters to dates
   const dates = useMemo<Date[]>(() => {
     let filtered = allDates;
 
@@ -380,6 +414,21 @@ export default function PlanningCalendar({
         const iso = toISO(date);
         return entries.some(e =>
           e.client_name === globalClientFilter &&
+          e.planned_from <= iso &&
+          e.planned_to   >= iso
+        );
+      });
+    }
+
+    // Employee filter — in FY view collapse to only days where the employee
+    // has at least one non-leave assignment; in month/week view just restrict
+    // dates that have any assignment for that employee
+    if (employeeFilter !== "__all__") {
+      filtered = filtered.filter(date => {
+        const iso = toISO(date);
+        return entries.some(e =>
+          (e.employee_ids || []).includes(employeeFilter) &&
+          !entryIsLeave(e) &&
           e.planned_from <= iso &&
           e.planned_to   >= iso
         );
@@ -398,12 +447,13 @@ export default function PlanningCalendar({
         );
       });
     });
-  }, [allDates, globalClientFilter, columnFilters, entries]);
+  }, [allDates, globalClientFilter, employeeFilter, columnFilters, entries]);
 
   const todayISO = toISO(now);
 
   // ── Navigation ─────────────────────────────────────────────────────────────
   function prevPeriod() {
+    if (view === "fy")    { setFYYear(y => y - 1); return; }
     if (view === "month") {
       if (month === 0) { setMonth(11); setYear(y => y - 1); }
       else setMonth(m => m - 1);
@@ -412,6 +462,7 @@ export default function PlanningCalendar({
     }
   }
   function nextPeriod() {
+    if (view === "fy")    { setFYYear(y => y + 1); return; }
     if (view === "month") {
       if (month === 11) { setMonth(0); setYear(y => y + 1); }
       else setMonth(m => m + 1);
@@ -420,7 +471,9 @@ export default function PlanningCalendar({
     }
   }
 
-  const periodLabel = view === "month"
+  const periodLabel = view === "fy"
+    ? `FY ${fyYear}–${String(fyYear + 1).slice(2)}`
+    : view === "month"
     ? `${MONTHS[month]} ${year}`
     : (() => {
         const wEnd = new Date(weekStart);
@@ -467,12 +520,17 @@ export default function PlanningCalendar({
             <ChevronRight size={14} />
           </Button>
           <Button size="sm" variant="outline" className="h-8 text-xs ml-2"
-            onClick={() => { setYear(now.getFullYear()); setMonth(now.getMonth()); setWeekStart(mondayOf(now)); }}>
+            onClick={() => {
+              setYear(now.getFullYear());
+              setMonth(now.getMonth());
+              setWeekStart(mondayOf(now));
+              setFYYear(currentFYYear(now));
+            }}>
             Today
           </Button>
         </div>
 
-        {/* Right: global client filter + view toggle + add new + add employee */}
+        {/* Right: filters + view toggle + actions */}
         <div className="flex items-center gap-1.5 flex-wrap">
 
           {/* Global client filter — searchable combobox */}
@@ -484,7 +542,7 @@ export default function PlanningCalendar({
                   variant="outline"
                   role="combobox"
                   className={cn(
-                    "h-8 text-xs w-[160px] justify-between font-normal",
+                    "h-8 text-xs w-[140px] justify-between font-normal",
                     globalClientFilter !== "__all__" && "border-amber-400 text-amber-800"
                   )}
                 >
@@ -537,6 +595,69 @@ export default function PlanningCalendar({
             )}
           </div>
 
+          {/* Employee filter — shows all audits for one employee */}
+          <div className="flex items-center gap-1">
+            <Popover open={employeeFilterOpen} onOpenChange={setEmployeeFilterOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  role="combobox"
+                  className={cn(
+                    "h-8 text-xs w-[130px] justify-between font-normal",
+                    employeeFilter !== "__all__" && "border-indigo-400 bg-indigo-50 text-indigo-800"
+                  )}
+                >
+                  <span className="truncate">
+                    {employeeFilter === "__all__"
+                      ? "All employees"
+                      : (planningStaff.find(s => s.user_id === employeeFilter)?.name ?? "Employee")}
+                  </span>
+                  <ChevronsUpDown size={11} className="ml-1 shrink-0 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="p-0 w-[200px]" align="start">
+                <Command>
+                  <CommandInput placeholder="Search employee…" className="h-8 text-xs" />
+                  <CommandList className="max-h-52">
+                    <CommandEmpty className="py-2 text-xs text-center text-muted-foreground">
+                      No employee found
+                    </CommandEmpty>
+                    <CommandGroup>
+                      <CommandItem
+                        value="__all__"
+                        onSelect={() => { setEmployeeFilter("__all__"); setEmployeeFilterOpen(false); }}
+                        className="text-xs text-muted-foreground"
+                      >
+                        <Check size={11} className={cn("mr-2", employeeFilter === "__all__" ? "opacity-100" : "opacity-0")} />
+                        — All employees —
+                      </CommandItem>
+                      {planningStaff.map(s => (
+                        <CommandItem
+                          key={s.user_id}
+                          value={s.name}
+                          onSelect={() => { setEmployeeFilter(s.user_id); setEmployeeFilterOpen(false); }}
+                          className="text-xs"
+                        >
+                          <Check size={11} className={cn("mr-2", employeeFilter === s.user_id ? "opacity-100" : "opacity-0")} />
+                          {s.name}
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
+            {employeeFilter !== "__all__" && (
+              <button
+                onClick={() => setEmployeeFilter("__all__")}
+                className="text-indigo-500 hover:text-indigo-800"
+                title="Clear employee filter"
+              >
+                <XIcon size={13} />
+              </button>
+            )}
+          </div>
+
           <Button size="sm" variant={view === "month" ? "default" : "outline"}
             className="h-8 text-xs gap-1" onClick={() => setView("month")}>
             <AlignJustify size={12} /> Month
@@ -544,6 +665,15 @@ export default function PlanningCalendar({
           <Button size="sm" variant={view === "week" ? "default" : "outline"}
             className="h-8 text-xs gap-1" onClick={() => setView("week")}>
             <Calendar size={12} /> Week
+          </Button>
+          <Button size="sm" variant={view === "fy" ? "default" : "outline"}
+            className={cn(
+              "h-8 text-xs gap-1",
+              view === "fy" && "bg-emerald-600 hover:bg-emerald-700 border-emerald-600"
+            )}
+            onClick={() => setView("fy")}
+            title="Full Financial Year view — see all 12 months">
+            <Calendar size={12} /> Full FY
           </Button>
           <Button size="sm" className="h-8 text-xs gap-1 bg-indigo-600 hover:bg-indigo-700"
             onClick={() => { setDialogEntry(null); setDialogDate(""); setDialogEmpId(""); setDialogEmpName(""); setDialogOpen(true); }}>
@@ -643,17 +773,14 @@ export default function PlanningCalendar({
                     the employee header row stays visible on vertical
                     scroll.  Width kept fixed (90 px) for legibility — it
                     holds short labels like "Mon 5" so 90 px is sufficient. */}
-                <th className="sticky left-0 top-0 z-30 bg-indigo-700 border border-indigo-600 px-2 py-2.5 text-left w-[90px] min-w-[90px]">
+                <th className={cn(
+                  "sticky left-0 top-0 z-30 bg-indigo-700 border border-indigo-600 px-2 py-2.5 text-left",
+                  view === "fy" ? "w-[110px] min-w-[110px]" : "w-[90px] min-w-[90px]"
+                )}>
                   Date
                 </th>
-                {/* Employee columns — only planning staff; draggable to reorder.
-                    Issue 7 (Aesha): drop the FIXED w-[90px] / min-w-[90px]
-                    which was forcing the table to overflow whenever a few
-                    employees were added.  Use min-w-[60px] only — the
-                    table's auto layout (width: 100%) divides the remaining
-                    space evenly so columns auto-shrink/grow as rows or
-                    employees are added/removed. */}
-                {planningStaff.map((s, colIdx) => (
+                {/* Employee columns — filtered by employeeFilter (displayStaff) */}
+                {displayStaff.map((s, colIdx) => (
                   <th key={s.user_id}
                     draggable
                     onDragStart={() => handleColDragStart(colIdx)}
@@ -725,7 +852,7 @@ export default function PlanningCalendar({
                   </th>
                 ))}
                 {/* Hint when no staff added yet */}
-                {planningStaff.length === 0 && (
+                {displayStaff.length === 0 && (
                   <th className="border border-indigo-600 px-2 py-2.5 text-center w-48 text-indigo-300 text-[10px] italic">
                     Click "Add Employee" to add staff columns
                   </th>
@@ -737,14 +864,22 @@ export default function PlanningCalendar({
               {loading ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr key={i}>
-                    <td colSpan={Math.max(planningStaff.length, 1) + 1}
+                    <td colSpan={Math.max(displayStaff.length, 1) + 1}
                       className="border border-border/60 h-8 px-3 bg-muted/20 animate-pulse" />
                   </tr>
                 ))
-              ) : planningStaff.length === 0 ? (
+              ) : displayStaff.length === 0 ? (
                 <tr>
                   <td colSpan={2} className="py-12 text-center text-muted-foreground text-sm">
                     No employees added yet — click <strong>Add Employee</strong> above to add planning staff columns
+                  </td>
+                </tr>
+              ) : dates.length === 0 ? (
+                <tr>
+                  <td colSpan={displayStaff.length + 1} className="py-12 text-center text-muted-foreground text-sm">
+                    No audit assignments found
+                    {employeeFilter !== "__all__" && " for this employee"}
+                    {view === "fy" && ` in FY ${fyYear}–${String(fyYear + 1).slice(2)}`}
                   </td>
                 </tr>
               ) : (
@@ -752,7 +887,10 @@ export default function PlanningCalendar({
                   const iso      = toISO(date);
                   const isToday  = iso === todayISO;
                   const isSunday = date.getDay() === 0;
-                  const dayLabel = `${DAY_ABR[date.getDay()]} ${date.getDate()}`;
+                  // FY view: show "1 Apr 2025" style; month/week: "Mon 5"
+                  const dayLabel = view === "fy"
+                    ? `${date.getDate()} ${MON_ABR[date.getMonth()]} ${date.getFullYear()}`
+                    : `${DAY_ABR[date.getDay()]} ${date.getDate()}`;
 
                   return (
                     <tr key={iso} className={cn(
@@ -762,7 +900,7 @@ export default function PlanningCalendar({
                       {/* Sticky date cell */}
                       <td className={cn(
                         "sticky left-0 z-10 border border-border/60 px-2 align-middle select-none",
-                        view === "month" ? "h-8" : "h-16",
+                        view === "fy" ? "h-8" : view === "month" ? "h-8" : "h-16",
                         isSunday  ? "bg-red-100 text-red-700 font-semibold"
                         : isToday ? "bg-indigo-50 font-bold text-indigo-700"
                                   : "bg-card text-muted-foreground"
@@ -778,8 +916,8 @@ export default function PlanningCalendar({
                         </div>
                       </td>
 
-                      {/* Only planning-staff columns */}
-                      {planningStaff.map(staff => {
+                      {/* Only displayStaff columns (filtered by employeeFilter) */}
+                      {displayStaff.map(staff => {
                         const emp: UserOption = { id: staff.user_id, name: staff.name };
                         return (
                           <CellComponent
@@ -801,11 +939,35 @@ export default function PlanningCalendar({
         </div>
       </div>
 
-      {/* Entry count hint */}
-      <p className="text-[11px] text-muted-foreground">
-        {entries.length} assignment{entries.length !== 1 ? "s" : ""} total
-        {" · "}Click any cell to create or edit
-      </p>
+      {/* Entry count hint / FY summary */}
+      {view === "fy" && employeeFilter !== "__all__" ? (() => {
+        const empName = planningStaff.find(s => s.user_id === employeeFilter)?.name ?? "Employee";
+        const fyStart = `${fyYear}-04-01`;
+        const fyEnd   = `${fyYear + 1}-03-31`;
+        const empEntries = entries.filter(e =>
+          (e.employee_ids || []).includes(employeeFilter) &&
+          !entryIsLeave(e) &&
+          e.planned_to >= fyStart &&
+          e.planned_from <= fyEnd
+        );
+        const uniqueClients = new Set(empEntries.map(e => e.client_name)).size;
+        return (
+          <p className="text-[11px] text-muted-foreground">
+            <span className="font-semibold text-indigo-700">{empName}</span>
+            {" — "}FY {fyYear}–{String(fyYear + 1).slice(2)}:
+            {" "}<span className="font-medium text-emerald-700">{empEntries.length} audit{empEntries.length !== 1 ? "s" : ""}</span>
+            {" across "}
+            <span className="font-medium text-emerald-700">{uniqueClients} client{uniqueClients !== 1 ? "s" : ""}</span>
+            {" · "}{dates.length} assignment day{dates.length !== 1 ? "s" : ""} shown
+            {" · "}Click any cell to create or edit
+          </p>
+        );
+      })() : (
+        <p className="text-[11px] text-muted-foreground">
+          {entries.length} assignment{entries.length !== 1 ? "s" : ""} total
+          {" · "}Click any cell to create or edit
+        </p>
+      )}
 
       {/* ── Dialog ── */}
       <PlanningEntryDialog
