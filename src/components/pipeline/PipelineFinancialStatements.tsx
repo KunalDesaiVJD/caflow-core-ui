@@ -1939,6 +1939,8 @@ export default function PipelineFinancialStatements({
   // Task 8: Lock Preview — captures notes expand/collapse state for export
   const [nceIsLocked,        setNceIsLocked]        = useState(false);
   const [nceExpandedRows,    setNceExpandedRows]     = useState<Set<string>>(new Set());
+  // Task 1 (doc6): preview popup shown immediately when user locks
+  const [ncePreviewOpen,     setNcePreviewOpen]      = useState(false);
 
   // ─── Active tab (controlled so navigator buttons can switch programmatically) ─
   const [activeTab, setActiveTab] = useState("bs");
@@ -6465,7 +6467,12 @@ export default function PipelineFinancialStatements({
               size="sm"
               className={cn("gap-1", nceIsLocked && "bg-amber-500 hover:bg-amber-600 border-amber-500")}
               title={nceIsLocked ? "Preview is locked — export uses current expand/collapse state. Click to unlock." : "Lock current expand/collapse state for export"}
-              onClick={() => setNceIsLocked(v => !v)}
+              onClick={() => {
+                const next = !nceIsLocked;
+                setNceIsLocked(next);
+                // Task 1 (doc6): open preview popup immediately on lock
+                if (next) setNcePreviewOpen(true);
+              }}
             >
               {nceIsLocked ? "🔓 Unlock Preview" : "🔒 Lock Preview"}
             </Button>
@@ -7157,6 +7164,7 @@ export default function PipelineFinancialStatements({
                     setNceExpandedRows(allIds);
                   }
                 }}
+                readOnly={nceIsLocked}
               />
             </TabsContent>
           )}
@@ -7609,7 +7617,8 @@ export default function PipelineFinancialStatements({
                 ppeData:     ncePpeData      ?? [],
                 font:        nceExportFont,
                 constitution: entityType,
-                expandedRows: nceIsLocked ? nceExpandedRows : undefined,
+                expandedRows:      nceIsLocked ? nceExpandedRows : undefined,
+                hideBlankNoteRows: nceIsLocked,
                 signature: {
                   firmName:      sigFirmName,
                   firmFRN:       sigFirmFRN,
@@ -7624,6 +7633,33 @@ export default function PipelineFinancialStatements({
                 },
               });
             }}>
+              Export Word
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Task 1 (doc6): NCE Lock Preview confirmation popup */}
+      <Dialog open={ncePreviewOpen} onOpenChange={setNcePreviewOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">🔒 Preview Locked</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2 py-1">
+            <p className="text-sm text-muted-foreground">
+              The financial statements are now locked for preview. Notes expand/collapse state and blank-row filtering are frozen.
+            </p>
+            <ul className="text-xs text-muted-foreground space-y-1 list-disc list-inside">
+              <li>Notes to Accounts are read-only</li>
+              <li>Blank/zero rows will be hidden in the export</li>
+              <li>Click <strong>Unlock Preview</strong> in the toolbar to make further changes</li>
+            </ul>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setNcePreviewOpen(false)}>
+              Close
+            </Button>
+            <Button size="sm" onClick={() => { setNcePreviewOpen(false); setShowNCEFontDialog(true); }}>
               Export Word
             </Button>
           </DialogFooter>
