@@ -867,6 +867,15 @@ function PatternBTable({
           // Task 2 (doc8): in lock preview mode, hide empty section headers and their totals
           if (row.isSectionHeader && emptySectionHdrIds.has(row.id)) return null;
           if (row.isTotal && emptySectionTotalIds.has(row.id)) return null;
+          // Changes doc Task 2: in readOnly/preview mode, suppress individual static data
+          // rows where BOTH CY and PY aggregates (including attached custom sub-rows) are
+          // zero — mirrors the export's hideBlankNoteRows behaviour exactly.
+          if (hideEmptySections && !row.isSectionHeader && !row.isTotal && !hiddenRows.includes(row.id)) {
+            const attachedToRow = customRows.filter(cr => cr.attachedTo === row.id);
+            const aggCy = (rawCy[row.id] ?? 0) + attachedToRow.reduce((s, cr) => s + (rawCy[cr.id] ?? 0), 0);
+            const aggPy = (rawPy[row.id] ?? 0) + attachedToRow.reduce((s, cr) => s + (rawPy[cr.id] ?? 0), 0);
+            if (!aggCy && !aggPy) return null;
+          }
           const insertCustomBefore = idx === grandTotalIdx;
           const displayLabel = labelOverrides[row.id] ?? row.label;
           const attachedHere = !row.isSectionHeader && !row.isTotal
@@ -1381,6 +1390,16 @@ function PatternATable({
           // Task 2 (doc8): in lock preview mode, hide empty section headers and their totals
           if (row.isSectionHeader && emptySectionHdrIds.has(row.id)) return null;
           if (row.isTotal && emptySectionTotalIds.has(row.id)) return null;
+          // Changes doc Task 2: in readOnly/preview mode, suppress zero data rows.
+          // Pattern A uses _lt and _st suffixed keys for Long-Term / Short-Term columns.
+          if (hideEmptySections && !row.isSectionHeader && !row.isTotal && !hiddenRows.includes(row.id)) {
+            const attachedToRow = customRows.filter(cr => cr.attachedTo === row.id);
+            const aggCy = (rawCy[row.id + "_lt"] ?? 0) + (rawCy[row.id + "_st"] ?? 0)
+              + attachedToRow.reduce((s, cr) => s + (rawCy[cr.id + "_lt"] ?? 0) + (rawCy[cr.id + "_st"] ?? 0), 0);
+            const aggPy = (rawPy[row.id + "_lt"] ?? 0) + (rawPy[row.id + "_st"] ?? 0)
+              + attachedToRow.reduce((s, cr) => s + (rawPy[cr.id + "_lt"] ?? 0) + (rawPy[cr.id + "_st"] ?? 0), 0);
+            if (!aggCy && !aggPy) return null;
+          }
           // Determine which custom rows to render before this row:
           //  • If this is a section-total (has sectionTag) → rows with that section
           //  • If this is the grand-total (last isTotal) → global (untagged) rows
@@ -2501,22 +2520,14 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
   // ── Render ──────────────────────────────────────────────────────────────
   return (
     <div className="space-y-5">
-      {/* Page header — NCE Task 8: styling unified with BS/PL page headers */}
-      <div className={cn(
-        "text-center border-b",
-        readOnly ? "bg-muted/30 py-2 px-3" : "space-y-0.5 pb-3",
-      )}>
+      {/* Page header — NCE Tasks 1+5: company name only, identical styling to BS/PL headers.
+          NO "Notes to Financial Statements for the year ended..." subtitle (removed per
+          Changes doc: Note 1 page shows only company name then note title).
+          The "(Amount in ₹)" annotation is also omitted here — it appears inside the
+          section-heading rows below, following standard audit-report convention. */}
+      <div className="text-center border-b bg-muted/30 py-2 px-3">
         {clientName && (
           <div className="font-bold text-sm">{clientName}</div>
-        )}
-        <div className={cn(
-          "mt-0.5",
-          readOnly ? "text-xs" : "text-xs text-muted-foreground",
-        )}>
-          Notes to Financial Statements for the year ended 31st March, {cyYear}
-        </div>
-        {readOnly && (
-          <div className="text-[10px] text-muted-foreground italic mt-0.5">(Amount in ₹)</div>
         )}
       </div>
 
@@ -2603,26 +2614,31 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
             // in the preview (prevents sequence gaps and phantom note cards).
             if (readOnly && !noteNum) continue;
 
-            // NCE Task 9: insert a section transition header when the BS→PL boundary is
-            // crossed (only in readOnly preview; the docx export handles this separately).
+            // Changes doc Task 6: insert section heading before EVERY note from Note 3
+            // onwards in readOnly/preview mode (not just once at BS→PL transition).
+            // Rule: every Notes page must show "Notes to Balance Sheet as on..." or
+            // "Notes to Profit & Loss A/c as at..." — it is PAGE-BASED, not note-based.
+            // In the web preview there are no physical page breaks, so we emit the
+            // heading before each note card so it is always visible above the note.
+            // Note 1 (Significant Accounting Policies) is excluded — it is rendered in
+            // a separate component (NCECapitalAccount tab) and has its own format.
+            // Notes in NOTES_CONFIG start from Note 3 (no Note 1 or Note 2 here).
             if (readOnly) {
               const meta    = NOTE_META[nc.noteType];
               const section = meta?.section ?? "BS";
-              if (section !== currentSection) {
-                currentSection = section;
-                const dateStr  = `31.03.${cyYear}`;
-                const heading  = section === "PL"
-                  ? `Notes to Profit & Loss A/c as at ${dateStr}`
-                  : `Notes to Balance Sheet as on ${dateStr}`;
-                elements.push(
-                  <div
-                    key={`section-hdr-${section}`}
-                    className="pt-2 pb-1 border-b-2 border-foreground/30"
-                  >
-                    <span className="text-sm font-bold underline">{heading}</span>
-                  </div>
-                );
-              }
+              if (section !== currentSection) currentSection = section;
+              const dateStr  = `31.03.${cyYear}`;
+              const heading  = section === "PL"
+                ? `Notes to Profit & Loss A/c as at ${dateStr}`
+                : `Notes to Balance Sheet as on ${dateStr}`;
+              elements.push(
+                <div
+                  key={`section-hdr-per-note-${nc.noteType}`}
+                  className="pt-2 pb-1 border-b-2 border-foreground/30"
+                >
+                  <span className="text-sm font-bold underline">{heading}</span>
+                </div>
+              );
             }
 
             // For split notes: when the user edits a bare key (e.g. "secured_other"),

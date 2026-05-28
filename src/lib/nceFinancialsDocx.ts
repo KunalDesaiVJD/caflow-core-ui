@@ -1791,26 +1791,26 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   // Task 1 (doc8): reduced spacer between notes for better page utilisation
   const spacer        = () => new Paragraph({ spacing: { before: 160, after: 0 }, children: [] });
 
-  // NCE Task 9 (doc8): build notes 3-28 children with BS→PL section transition headers.
-  // Track `currentSection` so the heading is inserted exactly once per section boundary.
+  // Changes doc Task 6: every note from Note 3 onwards starts on its own page and
+  // the appropriate section heading ("Notes to Balance Sheet as on ..." or "Notes to
+  // Profit & Loss A/c as at ...") is repeated at the top of THAT page — not just once
+  // per section boundary.  This mirrors standard audit-report formatting where every
+  // Notes-to-Accounts page shows the section heading at the top.
   const noteTablesWithHeaders: (Paragraph | Table)[] = [];
-  // Pre-initialise to "BS" so the loop does NOT emit a duplicate "Notes to Balance Sheet"
-  // heading before Note 3 — the heading is already emitted before Note 2 (capitalTables) below.
-  // The PL transition still fires correctly when the first PL note is encountered.
-  let currentSection: string | null = "BS";
   for (const [, table, sectionTag] of noteTablePairs) {
-    if (sectionTag !== currentSection) {
-      currentSection = sectionTag;
-      noteTablesWithHeaders.push(sectionTransitionParagraph(sectionTag as "BS" | "PL"));
-    }
-    noteTablesWithHeaders.push(spacer(), table);
+    noteTablesWithHeaders.push(
+      notePageBreak(),                                          // each note on its own page
+      sectionTransitionParagraph(sectionTag as "BS" | "PL"),   // heading repeats on every page
+      spacer(),
+      table,
+    );
   }
 
   // Note 1 (Significant Accounting Policies) appears first — no preceding title block
   // or section heading per the document specification.
-  // "Notes to Balance Sheet as on..." appears once before Note 2 (Capital Account) on a
-  // fresh page.  "Notes to P&L A/c as at..." fires at the BS→PL boundary within
-  // noteTablesWithHeaders (Notes 3+), since currentSection is pre-seeded to "BS" above.
+  // "Notes to Balance Sheet as on..." appears before Note 2 (Capital Account) on a
+  // fresh page, and again before EVERY note in noteTablesWithHeaders (Notes 3+) per
+  // the Changes doc Task 6 requirement (page-level section heading, not note-level).
   const noteChildren: (Paragraph | Table)[] = [
     ...note1Paras,
     notePageBreak(),

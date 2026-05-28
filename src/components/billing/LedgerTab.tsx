@@ -82,7 +82,11 @@ async function buildLedgerEntries(
   const { data: leData } = await leQuery;
 
   if (leData && leData.length > 0) {
-    return leData.map(e => ({
+    // QUERRY fix (MEET CHETAN MEHTA): client_ledger_entries has entries but
+    // billing_receipts may also have receipts not yet in client_ledger_entries.
+    // Always append billing_receipts, deduplicating by document_id to avoid
+    // double-counting receipts that already appear in client_ledger_entries.
+    const leEntries: LedgerEntry[] = leData.map(e => ({
       id: e.id,
       entry_date: e.entry_date,
       entry_type: e.entry_type,
@@ -93,6 +97,61 @@ async function buildLedgerEntries(
       client_id: e.client_id,
       firm_id: e.firm_id || undefined,
     }));
+
+    // Collect document_ids already present in client_ledger_entries (receipt type)
+    const existingReceiptDocIds = new Set(
+      leEntries.filter(e => e.entry_type === "receipt" && e.document_id).map(e => e.document_id!)
+    );
+
+    let rcptMergeQ = supabase.from("billing_receipts")
+      .select("id, client_id, firm_id, receipt_date, amount_received, payment_mode, tds_amount, gst_tds_amount")
+      .in("client_id", filters.clientIds)
+      .gte("receipt_date", start).lte("receipt_date", end)
+      .order("receipt_date", { ascending: true });
+    if (filters.firmIds.length > 0) rcptMergeQ = rcptMergeQ.in("firm_id", filters.firmIds);
+    const { data: extraReceipts } = await rcptMergeQ;
+
+    (extraReceipts || []).forEach(r => {
+      if (existingReceiptDocIds.has(r.id)) return; // already in client_ledger_entries
+      leEntries.push({
+        id: `rct-${r.id}`,
+        entry_date: r.receipt_date,
+        entry_type: "receipt",
+        document_id: r.id,
+        debit_amount: 0,
+        credit_amount: Number(r.amount_received) || 0,
+        narration: `Payment received — ${r.payment_mode}`,
+        client_id: r.client_id,
+        firm_id: r.firm_id || undefined,
+      });
+      if (Number(r.tds_amount) > 0) {
+        leEntries.push({
+          id: `tds-${r.id}`,
+          entry_date: r.receipt_date,
+          entry_type: "adjustment",
+          document_id: r.id,
+          debit_amount: 0,
+          credit_amount: Number(r.tds_amount),
+          narration: "TDS deducted",
+          client_id: r.client_id,
+        });
+      }
+      if (Number(r.gst_tds_amount) > 0) {
+        leEntries.push({
+          id: `gsttds-${r.id}`,
+          entry_date: r.receipt_date,
+          entry_type: "adjustment",
+          document_id: r.id,
+          debit_amount: 0,
+          credit_amount: Number(r.gst_tds_amount),
+          narration: "GST TDS deducted",
+          client_id: r.client_id,
+        });
+      }
+    });
+
+    leEntries.sort((a, b) => a.entry_date.localeCompare(b.entry_date));
+    return leEntries;
   }
 
   // 2. Fallback: build from invoices + receipts directly
@@ -302,22 +361,48 @@ function ClientLedgerView({ defaultFirmId }: { defaultFirmId?: string }) {
       setEntries(entries);
 
       // Fetch opening balance
+      // QUERRY fix (SHREEJIKRUPA/TAMNNA): when "all" GSTINs is selected, sum ALL OBs
+      // across every GSTIN for this client (not just the null-GSTIN entry).
       if (clientId) {
         let obQ = (supabase as any)
           .from("client_billing_opening_balances")
           .select("*")
           .eq("client_id", clientId);
         if (firmId && firmId !== "all") obQ = obQ.eq("firm_id", firmId);
-        if (selectedGstin && selectedGstin !== "all") obQ = obQ.eq("gstin", selectedGstin);
-        else obQ = obQ.is("gstin", null);
-        const { data: obData } = await obQ.maybeSingle();
-        if (obData) {
-          setObAmount(Number(obData.amount) || 0);
-          setObDate(obData.balance_date || "");
-          setObNarration(obData.narration || "");
-          setObId(obData.id);
+
+        if (selectedGstin && selectedGstin !== "all") {
+          // Specific GSTIN selected — load only that state's OB
+          obQ = obQ.eq("gstin", selectedGstin);
+          const { data: obData } = await obQ.maybeSingle();
+          if (obData) {
+            setObAmount(Number(obData.amount) || 0);
+            setObDate(obData.balance_date || "");
+            setObNarration(obData.narration || "");
+            setObId(obData.id);
+          } else {
+            setObAmount(0); setObDate(""); setObNarration(""); setObId(null);
+          }
         } else {
-          setObAmount(0); setObDate(""); setObNarration(""); setObId(null);
+          // "All" GSTINs — load every OB row and sum amounts (multi-state clients
+          // may have one OB per GSTIN; show the total across all states).
+          const { data: allObs } = await obQ;
+          if (allObs && allObs.length > 0) {
+            const totalOb = allObs.reduce((sum: number, o: any) => sum + (Number(o.amount) || 0), 0);
+            // Use the most-recent OB record for date / narration display and edit
+            const latest = [...allObs].sort((a: any, b: any) =>
+              (b.balance_date || "").localeCompare(a.balance_date || "")
+            )[0];
+            setObAmount(totalOb);
+            setObDate(latest.balance_date || "");
+            setObNarration(
+              allObs.length > 1
+                ? `Opening Balance (${allObs.length} state${allObs.length > 1 ? "s" : ""} combined)`
+                : (latest.narration || "")
+            );
+            setObId(latest.id);
+          } else {
+            setObAmount(0); setObDate(""); setObNarration(""); setObId(null);
+          }
         }
       }
     } catch (err: any) {
