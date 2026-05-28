@@ -2347,7 +2347,10 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
         ...cur,
         customRows: cur.customRows.map(r => {
           if (r.id === customId) {
-            return { ...r, attachedTo: targetId, ...(targetSection !== undefined ? { section: targetSection } : {}) };
+            // Task 4 fix: mark as "manual" so nceAutoPopulate preserves this
+            // user-set placement verbatim on every subsequent re-sync / reload,
+            // instead of rebuilding from scratch and losing the attachedTo change.
+            return { ...r, source: "manual" as const, attachedTo: targetId, ...(targetSection !== undefined ? { section: targetSection } : {}) };
           }
           if (r.id === targetId && shouldPromoteTarget) {
             return { ...r, section: sourceRow!.section };
