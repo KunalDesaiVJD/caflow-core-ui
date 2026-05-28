@@ -182,7 +182,10 @@ export const NOTES_CONFIG: NoteConfig[] = [
   },
 
   // ── Note: Long-Term Provisions (split from provisions Pattern A) ─────────
-  // Task 5: simplified — all entries grouped under "Other Provisions"
+  // NCE Task 1 Issue 3: restored specific sub-rows under "Other Provisions"
+  // so that Unpaid Audit Fees, Unpaid Professional Fees, Gratuity and Leave
+  // Encashment are individually visible.  `other_prov` remains as the
+  // catch-all row for any other auto-populated custom rows.
   {
     noteType:       "provisions_lt",
     sourceNoteType: "provisions",
@@ -190,11 +193,16 @@ export const NOTES_CONFIG: NoteConfig[] = [
     title:          "Note 5: Long-Term Provisions",
     pattern:        "B",
     rows: [
-      { id: "income_tax", label: "Provision for income tax" },
-      { id: "other_prov", label: "Other Provisions" },
+      { id: "income_tax",    label: "Provision for income tax" },
+      { id: "other_prov_hdr", label: "Other Provisions", isSectionHeader: true },
+      { id: "unpaid_audit",  label: "Unpaid Audit Fees",              indent: 1 },
+      { id: "unpaid_prof",   label: "Unpaid Professional Fees",       indent: 1 },
+      { id: "gratuity",      label: "Provision for Gratuity",         indent: 1 },
+      { id: "leave_enc",     label: "Provision for Leave Encashment", indent: 1 },
+      { id: "other_prov",    label: "Other Provisions (Others)",      indent: 1 },
       {
         id: "total", label: "Total", isTotal: true,
-        formulaAdd: ["income_tax","other_prov"],
+        formulaAdd: ["income_tax","unpaid_audit","unpaid_prof","gratuity","leave_enc","other_prov"],
       },
     ],
   },
@@ -246,7 +254,8 @@ export const NOTES_CONFIG: NoteConfig[] = [
   },
 
   // ── Note: Short-Term Provisions (split from provisions Pattern A) ─────────
-  // Task 5: simplified — all entries grouped under "Other Provisions"
+  // NCE Task 1 Issue 3: restored specific sub-rows under "Other Provisions"
+  // mirroring the Long-Term Provisions structure above.
   {
     noteType:       "provisions_st",
     sourceNoteType: "provisions",
@@ -254,11 +263,16 @@ export const NOTES_CONFIG: NoteConfig[] = [
     title:          "Note 9: Short-Term Provisions",
     pattern:        "B",
     rows: [
-      { id: "income_tax", label: "Provision for income tax" },
-      { id: "other_prov", label: "Other Provisions" },
+      { id: "income_tax",    label: "Provision for income tax" },
+      { id: "other_prov_hdr", label: "Other Provisions", isSectionHeader: true },
+      { id: "unpaid_audit",  label: "Unpaid Audit Fees",              indent: 1 },
+      { id: "unpaid_prof",   label: "Unpaid Professional Fees",       indent: 1 },
+      { id: "gratuity",      label: "Provision for Gratuity",         indent: 1 },
+      { id: "leave_enc",     label: "Provision for Leave Encashment", indent: 1 },
+      { id: "other_prov",    label: "Other Provisions (Others)",      indent: 1 },
       {
         id: "total", label: "Total", isTotal: true,
-        formulaAdd: ["income_tax","other_prov"],
+        formulaAdd: ["income_tax","unpaid_audit","unpaid_prof","gratuity","leave_enc","other_prov"],
       },
     ],
   },

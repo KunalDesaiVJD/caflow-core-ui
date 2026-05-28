@@ -359,12 +359,24 @@ function subTotalRow(label: string, cy: number, py: number): TableRow {
 
 /** Grand total row (bold navy border) */
 // Task 9: allow right-aligning the label (used for "TOTAL" row in the BS)
+// NCE Task 3: when labelAlign=RIGHT, merge Particulars + Note No. cells so
+// "TOTAL" spans the full combined width, keeping Note No. column empty.
 function grandTotalRow(
   label: string,
   cy: number,
   py: number,
   labelAlign: AlignmentType = AlignmentType.LEFT,
 ): TableRow {
+  if (labelAlign === AlignmentType.RIGHT) {
+    // Merge Particulars (CW_DESC) + Note No. (CW_NOTE) into one cell
+    return new TableRow({
+      children: [
+        cell({ text: label, w: CW_DESC + CW_NOTE, colSpan: 2, bold: true, sz: SZ_HDR, bg: BG_GRAN, borders: BDR_GRAND, padL: 100, align: AlignmentType.RIGHT }),
+        ac(cy, CW_CY, { bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
+        ac(py, CW_PY, { bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
+      ],
+    });
+  }
   return new TableRow({
     children: [
       cell({ text: label, w: CW_DESC, bold: true, sz: SZ_HDR, bg: BG_GRAN, borders: BDR_GRAND, padL: 100, align: labelAlign }),

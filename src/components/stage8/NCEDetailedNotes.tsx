@@ -489,8 +489,8 @@ function CustomRowEditor({
       <TableRow className={cn("hover:bg-blue-50/50", isChild ? "bg-blue-50/10 border-l-2 border-l-blue-200" : "bg-blue-50/30", isSelected && "ring-1 ring-inset ring-blue-400 bg-blue-100/40")}>
         <TableCell className={cn("p-1", isPatternA && "border-r", isChild && "pl-8")}>
           <div className="flex items-center gap-1 min-w-0">
-            {/* Bulk-select checkbox — only shown in Pattern B when onSelect is provided */}
-            {onSelect && !isPatternA && (
+            {/* Bulk-select checkbox — shown when onSelect is provided (Pattern A and B) */}
+            {onSelect && (
               <Checkbox
                 checked={!!isSelected}
                 onCheckedChange={(v) => onSelect(!!v)}
@@ -1344,6 +1344,21 @@ function PatternATable({
     return result;
   }, [config]);
 
+  // ── NCE Task 4: Bulk-select state for Pattern A ──────────────────────────
+  const [selectedCustomRowsA, setSelectedCustomRowsA] = useState<Set<string>>(new Set());
+  const [bulkTargetA, setBulkTargetA] = useState<string>("");
+  const toggleRowSelectA = (id: string, checked: boolean) =>
+    setSelectedCustomRowsA(prev => { const n = new Set(prev); checked ? n.add(id) : n.delete(id); return n; });
+  const handleBulkMoveA = () => {
+    if (!bulkTargetA || selectedCustomRowsA.size === 0) return;
+    const count = selectedCustomRowsA.size;
+    for (const id of selectedCustomRowsA) onPromote(id, bulkTargetA);
+    setSelectedCustomRowsA(new Set());
+    setBulkTargetA("");
+    toast.success(`Moved ${count} row(s)`);
+  };
+  const clearSelectionA = () => { setSelectedCustomRowsA(new Set()); setBulkTargetA(""); };
+
   return (
     <Table>
       <TableHeader>
@@ -1361,6 +1376,44 @@ function PatternATable({
         </TableRow>
       </TableHeader>
       <TableBody>
+        {/* NCE Task 4: Bulk-move toolbar — visible only when ≥1 row is selected */}
+        {selectedCustomRowsA.size > 0 && (
+          <TableRow className="bg-blue-50 border-b border-blue-200 sticky top-0 z-10">
+            <TableCell colSpan={6} className="py-1.5 px-3">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="flex items-center gap-1 text-xs font-semibold text-blue-700">
+                  <ArrowRightLeft className="h-3.5 w-3.5" />
+                  {selectedCustomRowsA.size} row{selectedCustomRowsA.size > 1 ? "s" : ""} selected
+                </span>
+                <Select value={bulkTargetA} onValueChange={setBulkTargetA}>
+                  <SelectTrigger className="h-6 text-xs w-52">
+                    <SelectValue placeholder="Move to…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {allHeadingOptions.filter(o => !selectedCustomRowsA.has(o.id)).map(o => (
+                      <SelectItem key={o.id} value={o.id} className="text-xs">{o.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  type="button" size="sm" variant="default"
+                  className="h-6 text-xs px-2 bg-blue-600 hover:bg-blue-700"
+                  disabled={!bulkTargetA}
+                  onClick={handleBulkMoveA}
+                >
+                  Move
+                </Button>
+                <Button
+                  type="button" size="sm" variant="ghost"
+                  className="h-6 text-xs px-2 text-muted-foreground"
+                  onClick={clearSelectionA}
+                >
+                  Clear
+                </Button>
+              </div>
+            </TableCell>
+          </TableRow>
+        )}
         {config.rows.map((row, idx) => {
           if (!row.isSectionHeader && !row.isTotal && hiddenRows.includes(row.id)) return null;
           // Task 2 (doc8): in lock preview mode, hide empty section headers and their totals
@@ -1414,6 +1467,8 @@ function PatternATable({
                       onToggle={() => toggleSources(cr.id)}
                       sourceLabelOverrides={sourceLabelOverrides}
                       onChangeSourceLabel={onChangeSourceLabel}
+                      isSelected={selectedCustomRowsA.has(cr.id)}
+                      onSelect={checked => toggleRowSelectA(cr.id, checked)}
                     />
                     {customSubRows.length > 0 && crIsOpen && customSubRows.map(sub => (
                       <CustomRowEditor
@@ -1440,6 +1495,8 @@ function PatternATable({
                         onAddRow={onAddRow}
                         sourceLabelOverrides={sourceLabelOverrides}
                         onChangeSourceLabel={onChangeSourceLabel}
+                        isSelected={selectedCustomRowsA.has(sub.id)}
+                        onSelect={checked => toggleRowSelectA(sub.id, checked)}
                       />
                     ))}
                   </Fragment>
@@ -1623,6 +1680,8 @@ function PatternATable({
                   onAddRow={onAddRow}
                   sourceLabelOverrides={sourceLabelOverrides}
                   onChangeSourceLabel={onChangeSourceLabel}
+                  isSelected={selectedCustomRowsA.has(cr.id)}
+                  onSelect={checked => toggleRowSelectA(cr.id, checked)}
                 />
               ))}
             </>
@@ -1765,6 +1824,14 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
             // unified source key ("borrowings", "provisions") with suffixed keys.
             // If the source key is absent/empty but old split rows have data,
             // convert once so all four split display notes show the correct amounts.
+            //
+            // NCE Task 1 FIX: `healed` must be declared HERE — before the inner
+            // SPLIT_SOURCES block — to avoid a Temporal Dead Zone (TDZ) error.
+            // Previously it was declared after the block (let healed = false at
+            // line ~1832), causing a ReferenceError when the migration path ran
+            // (srcEmpty && hasOldData), which crashed the entire load and left
+            // noteData empty (all notes blank).
+            let healed = false;
             {
               const SPLIT_SOURCES: Array<{
                 sourceKey: string;
@@ -1829,7 +1896,6 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
               investments:    { quoted: "quot_other", unquoted: "unquot_other" },
               loans_advances: { secured: "kb_secured", unsecured: "kb_unsecured" },
             };
-            let healed = false;
             // Track ledgers to un-eject (so they re-enter the auto-aggregation
             // pipeline on next Re-sync and contribute to the proper static row
             // directly — avoiding the zero-out side-effect of being attached

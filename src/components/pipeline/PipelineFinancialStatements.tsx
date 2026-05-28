@@ -1233,11 +1233,17 @@ function NCEBalanceSheetView({
             );
             if (row.kind === "total")   return (
               <tr key={idx} className="border-t-2 border-foreground/40 bg-muted/30">
-                {/* Task 1 fix: TOTAL stays inside Particulars column only (no colSpan).
-                    rightAlignLabel right-aligns it within that cell so it touches
-                    the Note No. boundary. Note No. cell is its own empty <td>. */}
-                <td className={`font-bold py-1.5 px-3 uppercase text-[12px]${row.rightAlignLabel ? " text-right" : ""}`}>{row.label}</td>
-                <td className="py-1.5 px-3" />
+                {/* NCE Task 3: when rightAlignLabel=true, span Particulars + Note No. columns
+                    so "TOTAL" is right-aligned within the combined ~63% width, keeping the
+                    Note No. column effectively empty (it's absorbed into the colspan).
+                    For left-aligned totals (sub-totals), keep the Note No. cell separate. */}
+                <td
+                  className={`font-bold py-1.5 px-3 uppercase text-[12px]${row.rightAlignLabel ? " text-right" : ""}`}
+                  colSpan={row.rightAlignLabel ? 2 : 1}
+                >
+                  {row.label}
+                </td>
+                {!row.rightAlignLabel && <td className="py-1.5 px-3" />}
                 <td className="text-right font-bold tabular-nums py-1.5 px-3">{formatINR(row.cy)}</td>
                 <td className="text-right font-bold tabular-nums py-1.5 px-3">{formatINR(row.py)}</td>
               </tr>
