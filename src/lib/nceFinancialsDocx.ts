@@ -1794,7 +1794,10 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   // NCE Task 9 (doc8): build notes 3-28 children with BS→PL section transition headers.
   // Track `currentSection` so the heading is inserted exactly once per section boundary.
   const noteTablesWithHeaders: (Paragraph | Table)[] = [];
-  let currentSection: string | null = null;
+  // Pre-initialise to "BS" so the loop does NOT emit a duplicate "Notes to Balance Sheet"
+  // heading before Note 3 — the heading is already emitted before Note 2 (capitalTables) below.
+  // The PL transition still fires correctly when the first PL note is encountered.
+  let currentSection: string | null = "BS";
   for (const [, table, sectionTag] of noteTablePairs) {
     if (sectionTag !== currentSection) {
       currentSection = sectionTag;
@@ -1803,16 +1806,16 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     noteTablesWithHeaders.push(spacer(), table);
   }
 
-  // Build notes section children: Note 1 paragraphs, Note 2 tables, Notes 3-28 tables
-  // Capital account gets its own page break prefix; each note table also page-breaks.
-  // NCE Task 8: title block at top of notes section mirrors BS/PL page headings.
-  // NCE Task 9: "Notes to Balance Sheet" header appears before Note 1 (the very first notes entry).
-  const notesTitleBlock = buildNotesTitleBlock(entityName, String(cyYear));
+  // Note 1 (Significant Accounting Policies) appears first — no preceding title block
+  // or section heading per the document specification.
+  // "Notes to Balance Sheet as on..." appears once before Note 2 (Capital Account) on a
+  // fresh page.  "Notes to P&L A/c as at..." fires at the BS→PL boundary within
+  // noteTablesWithHeaders (Notes 3+), since currentSection is pre-seeded to "BS" above.
   const noteChildren: (Paragraph | Table)[] = [
-    ...notesTitleBlock,
-    sectionTransitionParagraph("BS"),
     ...note1Paras,
-    ...capitalTables.flatMap((t, i) => i === 0 ? [notePageBreak(), t] : [spacer(), t]),
+    notePageBreak(),
+    sectionTransitionParagraph("BS"),
+    ...capitalTables.flatMap((t, i) => i === 0 ? [t] : [spacer(), t]),
     ...noteTablesWithHeaders,
   ];
 
