@@ -150,8 +150,28 @@ async function buildLedgerEntries(
       }
     });
 
-    leEntries.sort((a, b) => a.entry_date.localeCompare(b.entry_date));
-    return leEntries;
+    // Bug A1 fix (POINT PACKERS): deduplicate invoice entries that were created
+    // by a double-submission of the New Invoice form. Two invoice entries are
+    // considered duplicates when they share the same (client, firm, date, amount).
+    // We keep the one with the LOWER invoice sequence number extracted from the
+    // narration (e.g. "Invoice raised — 31/2026-27" wins over "32/2026-27").
+    const _parseInvSeq = (narration: string): number => {
+      const m = /(\d+)\//.exec(narration ?? "");
+      return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
+    };
+    const _invDedup = new Map<string, LedgerEntry>();
+    const _nonInvEntries: LedgerEntry[] = [];
+    for (const e of leEntries) {
+      if (e.entry_type !== "invoice") { _nonInvEntries.push(e); continue; }
+      const k = `${e.client_id}|${e.firm_id ?? ""}|${e.entry_date}|${e.debit_amount}`;
+      const existing = _invDedup.get(k);
+      if (!existing || _parseInvSeq(e.narration) < _parseInvSeq(existing.narration)) {
+        _invDedup.set(k, e);
+      }
+    }
+    const dedupedEntries = [..._invDedup.values(), ..._nonInvEntries];
+    dedupedEntries.sort((a, b) => a.entry_date.localeCompare(b.entry_date));
+    return dedupedEntries;
   }
 
   // 2. Fallback: build from invoices + receipts directly
@@ -164,7 +184,19 @@ async function buildLedgerEntries(
   if (filters.firmIds.length > 0) invQuery = invQuery.in("firm_id", filters.firmIds);
   const { data: invoices } = await invQuery;
 
-  (invoices || []).forEach(inv => {
+  // Bug A1 fix: deduplicate invoices from the DB before building entries.
+  // Same (client, firm, date, amount, type) = double-submit. Keep lower invoice_no.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const _invFallbackDedup = new Map<string, any>();
+  for (const inv of (invoices || [])) {
+    const k = `${inv.client_id}|${inv.firm_id ?? ""}|${inv.invoice_date}|${inv.total_amount}|${inv.document_type ?? ""}`;
+    const ex = _invFallbackDedup.get(k);
+    if (!ex) { _invFallbackDedup.set(k, inv); continue; }
+    // Keep the one with the lower invoice sequence number
+    const parseSeq = (no: string | null) => { const m = /^(\d+)\//.exec(no ?? ""); return m ? +m[1] : Infinity; };
+    if (parseSeq(inv.invoice_no) < parseSeq(ex.invoice_no)) _invFallbackDedup.set(k, inv);
+  }
+  Array.from(_invFallbackDedup.values()).forEach(inv => {
     const isCredit = inv.document_type === "credit_note";
     entries.push({
       id: `inv-${inv.id}`,

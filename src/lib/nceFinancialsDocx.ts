@@ -14,6 +14,8 @@ import {
   BorderStyle,
   Document,
   Header,
+  PageBorderDisplay,
+  PageBorderOffsetFrom,
   Packer,
   PageOrientation,
   Paragraph,
@@ -137,6 +139,20 @@ const bNone = { style: BorderStyle.NONE,   size: 0, color: "FFFFFF" };
 const bHair = { style: BorderStyle.SINGLE, size: 2, color: "CBCBCB" };  // hairline row separator
 const bThin = { style: BorderStyle.SINGLE, size: 4, color: NAVY };       // section top border
 const bBold = { style: BorderStyle.SINGLE, size: 8, color: NAVY };       // grand total border
+
+// ─── Page border (frame around every page — Task 3 doc8) ──────────────────────
+// Matches the corporate DOCX page border: navy single rule, 12 half-points,
+// 24-twips space from edge.  Applied to portrait AND landscape sections.
+const _pgBdr = {
+  pageBorders: {
+    display: PageBorderDisplay.ALL_PAGES,
+    offsetFrom: PageBorderOffsetFrom.PAGE,
+  },
+  pageBorderTop:    { style: BorderStyle.SINGLE, size: 12, color: BG_HDR, space: 24 },
+  pageBorderBottom: { style: BorderStyle.SINGLE, size: 12, color: BG_HDR, space: 24 },
+  pageBorderLeft:   { style: BorderStyle.SINGLE, size: 12, color: BG_HDR, space: 24 },
+  pageBorderRight:  { style: BorderStyle.SINGLE, size: 12, color: BG_HDR, space: 24 },
+};
 
 const BDR_NONE  = { top: bNone, bottom: bNone, left: bNone, right: bNone };
 const BDR_ROW   = { top: bNone, bottom: bHair, left: bNone, right: bNone };
@@ -1773,15 +1789,18 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   const portraitProps = {
     size:   { width: A4_W, height: A4_H },
     margin: { top: MARG_T, right: MARG_R, bottom: MARG_B, left: MARG_L },
+    borders: _pgBdr,
   };
   // Task 11 (doc6): notes pages use larger bottom margin for stamp/seal space
   const notesPortraitProps = {
     size:   { width: A4_W, height: A4_H },
     margin: { top: MARG_T, right: MARG_R, bottom: MARG_B_NOTES, left: MARG_L },
+    borders: _pgBdr,
   };
   const landscapeProps = {
     size:   { width: A4_W, height: A4_H, orientation: PageOrientation.LANDSCAPE },
     margin: { top: MARG_T, right: MARG_R, bottom: MARG_B, left: MARG_L },
+    borders: _pgBdr,
   };
 
   // Task 12 (doc6): each note starts on a fresh page — use pageBreakBefore on
