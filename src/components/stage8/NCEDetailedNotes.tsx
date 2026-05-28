@@ -2067,6 +2067,25 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
                 }
               }
             }
+            // Task 4 heal (doc8): promote auto rows that the user previously
+            // placed under a static parent via "Move to…" back to source:"manual"
+            // so nceAutoPopulate preserves them verbatim on every subsequent
+            // re-sync. Pre-fix saves stored these moves with source:"auto",
+            // causing the hierarchy to reset on reload when auto-populate ran.
+            // This one-shot heal upgrades any such rows in the DB on first load.
+            // Idempotent: already-"manual" rows are untouched.
+            for (const [nType, d] of Object.entries(built)) {
+              const patched = (d.customRows ?? []).map(cr =>
+                cr.source === "auto" && cr.attachedTo && !cr.attachedTo.startsWith("custom_")
+                  ? { ...cr, source: "manual" as const }
+                  : cr,
+              );
+              if (patched.some((cr, i) => cr !== (d.customRows ?? [])[i])) {
+                built[nType] = { ...d, customRows: patched };
+                healed = true;
+              }
+            }
+
             if (healed) {
               persistNotes(built, fy).catch(() => {/* best-effort */});
             }
