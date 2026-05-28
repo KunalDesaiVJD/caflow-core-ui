@@ -1977,6 +1977,40 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     return amounts;
   }, [pyShellTbData, coaMapping, tbAccounts, activeFlatItems, activeTree, isNonCorporate]);
 
+  // ═══════ CORPORATE P&L CALCULATED TOTALS (PBT / PAT) ═══════
+  // Derives Profit Before Tax and Profit After Tax directly from the current
+  // COA mapping so the P&L tab of the right panel can show these calculated
+  // rows even when no ledger is explicitly mapped to PL_PAT.
+  // Only relevant for corporate entities — NCE has its own profit chain.
+  const coaPLCalc = useMemo(() => {
+    if (isNonCorporate) return null;
+    const cy = (code: string) => computedAmounts[code] || 0;
+    const py = (code: string) => pyShellPLAmounts[code] || pyAmounts[code] || 0;
+
+    // Revenue is stored as Cr-negative in Tally; negate to get positive income
+    const revCY = -(cy("PL_REV_OPS") + cy("PL_REV_OI"));
+    const revPY = -(py("PL_REV_OPS") + py("PL_REV_OI"));
+    // Expenses stored as Dr-positive
+    const expCY = cy("PL_EXP_MAT") + cy("PL_EXP_SIT") + cy("PL_EXP_CII")
+                + cy("PL_EXP_EMP") + cy("PL_EXP_FIN") + cy("PL_EXP_DEP") + cy("PL_EXP_OTH");
+    const expPY = py("PL_EXP_MAT") + py("PL_EXP_SIT") + py("PL_EXP_CII")
+                + py("PL_EXP_EMP") + py("PL_EXP_FIN") + py("PL_EXP_DEP") + py("PL_EXP_OTH");
+    // Exceptional items (Dr-positive)
+    const eiCY = cy("PL_EI");
+    const eiPY = py("PL_EI");
+    // Profit Before Tax = Income − Expenses − Exceptional Items
+    const pbtCY = Math.round((revCY - expCY - eiCY) * 100) / 100;
+    const pbtPY = Math.round((revPY - expPY - eiPY) * 100) / 100;
+    // Tax expense (Dr-positive)
+    const taxCY = cy("PL_TAX_CUR") + cy("PL_TAX_DEF");
+    const taxPY = py("PL_TAX_CUR") + py("PL_TAX_DEF");
+    // Profit After Tax = PBT − Tax
+    const patCY = Math.round((pbtCY - taxCY) * 100) / 100;
+    const patPY = Math.round((pbtPY - taxPY) * 100) / 100;
+
+    return { pbtCY, pbtPY, patCY, patPY };
+  }, [isNonCorporate, computedAmounts, pyShellPLAmounts, pyAmounts]);
+
   // ═══════ PY SHELL LEDGER AMOUNTS (per-ledger) ═══════
   // Maps ledger_name → signed closing_balance from PY shell TB.
   // Used by the Variance Drill modal to show PY amounts per ledger
@@ -3491,10 +3525,15 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                       </div>
                     );
                   })()}
-                  {filteredFsItems.map(item => {
+                  {filteredFsItems.flatMap(item => {
                     const isHeader = item.children && item.children.length > 0;
                     const mappedAccounts = tbAccounts.filter(a => coaMapping[a.account_name]?.code === item.code);
-                    const amountCY = computedAmounts[item.code]   || 0;
+                    // PL_PAT: override with calculated PAT (PBT − Tax) —
+                    // no TB ledger ever maps to PL_PAT directly; the value is always
+                    // a computed result, not a raw Tally balance.
+                    const amountCY = (item.code === "PL_PAT" && coaPLCalc != null)
+                      ? coaPLCalc.patCY
+                      : (computedAmounts[item.code] || 0);
                     // PY: BS items → opening_balance from CY TB; P&L items → PY shell TB.
                     // ROOT-CAUSE FIX (Stage 6 — PY parent total bug):
                     // For P&L items we MUST consult pyShellPLAmounts first.
@@ -3509,9 +3548,11 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                       itemSecLower.includes("pl") || itemSecLower.includes("p_l") ||
                       itemSecLower.includes("revenue") || itemSecLower.includes("expense") ||
                       itemSecLower.includes("income");
-                    const amountPY = isItemPL
-                      ? (pyShellPLAmounts[item.code] || pyAmounts[item.code] || 0)
-                      : (computedAmountsPY[item.code] || 0);
+                    const amountPY = (item.code === "PL_PAT" && coaPLCalc != null)
+                      ? coaPLCalc.patPY
+                      : isItemPL
+                        ? (pyShellPLAmounts[item.code] || pyAmounts[item.code] || 0)
+                        : (computedAmountsPY[item.code] || 0);
                     const delta    = amountCY - amountPY;
                     const pct      = Math.abs(amountPY) > 0.005
                       ? Math.round((delta / Math.abs(amountPY)) * 100)
@@ -3519,7 +3560,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                     const hasAny   = Math.abs(amountCY) > 0.005 || Math.abs(amountPY) > 0.005;
                     const isExpanded = expandedGroups[`fs:${item.code}`] ?? (mappedAccounts.length > 0 && mappedAccounts.length <= 5);
 
-                    return (
+                    const node = (
                       <div key={item.code}>
                         <div
                           onClick={() => {
@@ -3701,6 +3742,46 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                         )}
                       </div>
                     );
+                    // ── Inject "Profit Before Tax" calculated row after PL_EI ────
+                    // For corporate P&L only. PBT = Income − Expenses − Exceptional
+                    // items. Appears between Exceptional Items (VI) and Tax (X),
+                    // matching the Schedule III Statement of P&L layout exactly.
+                    if (!isNonCorporate && item.code === "PL_EI" && coaPLCalc != null) {
+                      const { pbtCY, pbtPY } = coaPLCalc;
+                      const pbtNode = (
+                        <div
+                          key="__pbt_calc__"
+                          className="py-1.5 text-[11px] rounded-sm bg-primary/5 border-t-2 border-primary/20 grid grid-cols-[1fr_90px_90px_60px] gap-0 items-stretch pr-2"
+                        >
+                          <div
+                            className="flex items-center gap-1 min-w-0 border-r-2 border-slate-300 dark:border-slate-700 pr-2 font-bold"
+                            style={{ paddingLeft: "8px" }}
+                          >
+                            <span className="truncate text-primary">Profit Before Tax</span>
+                            <Badge className="text-[8px] px-1 bg-primary/10 text-primary shrink-0 border-0">IX</Badge>
+                          </div>
+                          <span className={cn(
+                            "font-mono text-[10px] text-right border-r-2 border-slate-300 dark:border-slate-700 px-2 flex items-center justify-end font-bold",
+                            pbtCY >= 0 ? "text-foreground" : "text-destructive"
+                          )}>
+                            {Math.abs(pbtCY) > 0.005
+                              ? <>{`₹${Math.abs(pbtCY).toLocaleString("en-IN")}`}<span className="ml-0.5 text-[9px] opacity-70">{pbtCY >= 0 ? "Dr" : "Cr"}</span></>
+                              : <span className="text-muted-foreground/40">—</span>}
+                          </span>
+                          <span className={cn(
+                            "font-mono text-[10px] text-right border-r-2 border-slate-300 dark:border-slate-700 px-2 flex items-center justify-end font-bold opacity-80",
+                            pbtPY >= 0 ? "text-foreground" : "text-destructive"
+                          )}>
+                            {Math.abs(pbtPY) > 0.005
+                              ? <>{`₹${Math.abs(pbtPY).toLocaleString("en-IN")}`}<span className="ml-0.5 text-[9px] opacity-70">{pbtPY >= 0 ? "Dr" : "Cr"}</span></>
+                              : <span className="text-muted-foreground/40">—</span>}
+                          </span>
+                          <span className="text-[10px] text-right pl-2 flex items-center justify-end text-muted-foreground/40">—</span>
+                        </div>
+                      );
+                      return [node, pbtNode];
+                    }
+                    return node;
                   })}
                   </>
                   )} {/* end search ternary */}
@@ -3820,6 +3901,71 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                       {balanced
                         ? <><span>✓</span> Balance Sheet is <strong>BALANCED</strong></>
                         : <><span>✗</span> Difference: <strong>₹{diff.toLocaleString("en-IN")}</strong> — BS not balanced yet</>
+                      }
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* ── P&L Summary: PBT / PAT ──────────────────────────────────────
+                  Visible only on P&L tab (corporate) when at least one P&L item
+                  is mapped. Mirrors the BS balance check panel layout.
+              ─────────────────────────────────────────────────────────────────── */}
+              {fsPanelTab === "pl" && !isNonCorporate && !fsSearch && coaPLCalc != null && (() => {
+                const { pbtCY, pbtPY, patCY, patPY } = coaPLCalc;
+                if (Math.abs(pbtCY) < 0.005 && Math.abs(pbtPY) < 0.005 &&
+                    Math.abs(patCY) < 0.005 && Math.abs(patPY) < 0.005) return null;
+                const fmtPL = (n: number) =>
+                  Math.abs(n) < 0.005 ? "—"
+                  : `₹${Math.abs(n).toLocaleString("en-IN")} ${n >= 0 ? "Dr" : "Cr"}`;
+                const profitLabel = (n: number) =>
+                  Math.abs(n) < 0.005 ? "—" : n > 0 ? "Profit" : "Loss";
+                return (
+                  <div className="border-t bg-muted/20 px-2 pt-2 pb-2 space-y-1">
+                    <div className="grid grid-cols-[1fr_90px_90px_60px] gap-0 text-[10px] text-muted-foreground uppercase tracking-wide font-semibold border-b pb-1 mb-1">
+                      <span className="pl-2 border-r-2 border-slate-300 dark:border-slate-700 pr-2">P&amp;L Summary</span>
+                      <span className="text-right border-r-2 border-slate-300 dark:border-slate-700 px-2">Current</span>
+                      <span className="text-right border-r-2 border-slate-300 dark:border-slate-700 px-2">Prior</span>
+                      <span className="text-right pl-2"></span>
+                    </div>
+                    {/* PBT row */}
+                    <div className="grid grid-cols-[1fr_90px_90px_60px] gap-0 items-center text-[10px]">
+                      <span className="font-bold text-primary pl-2 border-r-2 border-slate-300 dark:border-slate-700 pr-2 py-0.5 truncate">
+                        Profit Before Tax
+                      </span>
+                      <span className={cn("font-mono text-right border-r-2 border-slate-300 dark:border-slate-700 px-2 font-semibold", pbtCY >= 0 ? "text-foreground" : "text-destructive")}>
+                        {fmtPL(pbtCY)}
+                      </span>
+                      <span className={cn("font-mono text-right border-r-2 border-slate-300 dark:border-slate-700 px-2 opacity-70", pbtPY >= 0 ? "text-foreground" : "text-destructive")}>
+                        {fmtPL(pbtPY)}
+                      </span>
+                      <span className="text-right pl-2" />
+                    </div>
+                    {/* PAT row */}
+                    <div className="grid grid-cols-[1fr_90px_90px_60px] gap-0 items-center text-[10px]">
+                      <span className="font-bold text-primary pl-2 border-r-2 border-slate-300 dark:border-slate-700 pr-2 py-0.5 truncate">
+                        Profit After Tax
+                      </span>
+                      <span className={cn("font-mono text-right border-r-2 border-slate-300 dark:border-slate-700 px-2 font-semibold", patCY >= 0 ? "text-foreground" : "text-destructive")}>
+                        {fmtPL(patCY)}
+                      </span>
+                      <span className={cn("font-mono text-right border-r-2 border-slate-300 dark:border-slate-700 px-2 opacity-70", patPY >= 0 ? "text-foreground" : "text-destructive")}>
+                        {fmtPL(patPY)}
+                      </span>
+                      <span className="text-right pl-2" />
+                    </div>
+                    {/* Status chip */}
+                    <div className={cn(
+                      "flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[10px] font-semibold mt-1",
+                      Math.abs(patCY) > 0.005
+                        ? patCY > 0
+                          ? "bg-green-50 border border-green-200 text-green-700 dark:bg-green-950/30 dark:border-green-800 dark:text-green-400"
+                          : "bg-red-50 border border-red-200 text-red-700 dark:bg-red-950/30 dark:border-red-800 dark:text-red-400"
+                        : "bg-muted border border-border text-muted-foreground"
+                    )}>
+                      {Math.abs(patCY) > 0.005
+                        ? <><span>{patCY > 0 ? "▲" : "▼"}</span> Net {profitLabel(patCY)}: <strong>₹{Math.abs(patCY).toLocaleString("en-IN")}</strong></>
+                        : <>Map Revenue &amp; Expense ledgers to see P&amp;L totals</>
                       }
                     </div>
                   </div>
