@@ -34,7 +34,7 @@ import { toast }       from "sonner";
 import { Loader2, Save, RefreshCw, Plus, Trash2, Search, CornerUpRight, Minus, MoreVertical, ArrowRightLeft } from "lucide-react";
 import { cn }          from "@/lib/utils";
 import {
-  NoteConfig, NoteRowDef, NOTES_CONFIG, computeDisplayData, extractSplitData,
+  NoteConfig, NoteRowDef, NOTES_CONFIG, NOTE_META, computeDisplayData, extractSplitData,
 } from "@/config/nceNotesConfig";
 import {
   NCECustomRow, NCENoteData,
@@ -193,7 +193,7 @@ function SubLedgerActionsMenu({
 // ─── Note card (collapsible) ──────────────────────────────────────────────────
 
 function NoteCard({
-  noteNumber, title, autoCount, manualCount, children, collapseControl, anchorId,
+  noteNumber, title, autoCount, manualCount, children, collapseControl, anchorId, forceOpen,
 }: {
   noteNumber:  string;
   title:       string;
@@ -203,6 +203,9 @@ function NoteCard({
   collapseControl?: boolean;
   /** Stable DOM id for scroll-to-note. Falls back to noteNumber when omitted. */
   anchorId?: string;
+  /** NCE Tasks 2+3+5: when true (readOnly preview), always show content open,
+   *  hide the collapse toggle and auto/manual badges — mimics the export rendering. */
+  forceOpen?: boolean;
 }) {
   // Default COLLAPSED: every Note in "Notes to Accounts" starts collapsed with
   // a "+" beside the heading; clicking expands to reveal the ledger breakup
@@ -212,38 +215,50 @@ function NoteCard({
   useEffect(() => {
     if (collapseControl !== undefined) setOpen(!collapseControl);
   }, [collapseControl]);
+
+  // NCE Tasks 2+3+5: in readOnly (preview) mode the card is always open,
+  // the toggle is hidden, and auto/manual badges are stripped so the view
+  // matches the final-document presentation style.
+  const isOpen = forceOpen ? true : open;
+
   return (
     <div id={anchorId ?? `nce-note-${noteNumber}`} className="border rounded-lg overflow-hidden bg-background">
-      {/* Header strip — click to collapse/expand */}
+      {/* Header strip — click to collapse/expand (hidden in forceOpen / preview mode) */}
       <div
-        className="bg-muted/40 px-4 py-2 border-b flex items-center gap-2 flex-wrap cursor-pointer select-none hover:bg-muted/60 transition-colors"
-        onClick={() => setOpen(o => !o)}
+        className={cn(
+          "bg-muted/40 px-4 py-2 border-b flex items-center gap-2 flex-wrap",
+          forceOpen ? "cursor-default" : "cursor-pointer select-none hover:bg-muted/60 transition-colors",
+        )}
+        onClick={forceOpen ? undefined : () => setOpen(o => !o)}
       >
-        {/* +/- toggle */}
-        <button
-          type="button"
-          className="w-5 h-5 flex items-center justify-center rounded border border-muted-foreground/30 bg-background text-muted-foreground hover:bg-muted shrink-0"
-          tabIndex={-1}
-          aria-label={open ? "Collapse" : "Expand"}
-        >
-          {open ? <Minus className="h-2.5 w-2.5" /> : <Plus className="h-2.5 w-2.5" />}
-        </button>
+        {/* +/- toggle — hidden in preview mode */}
+        {!forceOpen && (
+          <button
+            type="button"
+            className="w-5 h-5 flex items-center justify-center rounded border border-muted-foreground/30 bg-background text-muted-foreground hover:bg-muted shrink-0"
+            tabIndex={-1}
+            aria-label={open ? "Collapse" : "Expand"}
+          >
+            {open ? <Minus className="h-2.5 w-2.5" /> : <Plus className="h-2.5 w-2.5" />}
+          </button>
+        )}
         <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
           Note {noteNumber}
         </span>
         <span className="text-sm font-semibold text-foreground">{title}</span>
-        {autoCount > 0 && (
+        {/* auto/manual badges — shown only in edit mode, not in preview */}
+        {!forceOpen && autoCount > 0 && (
           <Badge variant="outline" className="text-[9px] px-1.5 ml-1 text-blue-600 border-blue-300">
             {autoCount} auto
           </Badge>
         )}
-        {manualCount > 0 && (
+        {!forceOpen && manualCount > 0 && (
           <Badge variant="outline" className="text-[9px] px-1.5 ml-1 text-amber-600 border-amber-300">
             {manualCount} manual
           </Badge>
         )}
       </div>
-      {open && children}
+      {isOpen && children}
     </div>
   );
 }
@@ -2483,23 +2498,27 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
   // ── Render ──────────────────────────────────────────────────────────────
   return (
     <div className="space-y-5">
-      {/* Page header */}
-      <div className="text-center space-y-0.5 pb-3 border-b">
+      {/* Page header — NCE Task 8: styling unified with BS/PL page headers */}
+      <div className={cn(
+        "text-center border-b",
+        readOnly ? "bg-muted/30 py-2 px-3" : "space-y-0.5 pb-3",
+      )}>
         {clientName && (
-          <p className="text-sm font-semibold uppercase tracking-wide">{clientName}</p>
+          <div className="font-bold text-sm">{clientName}</div>
         )}
-        <p className="text-xs text-muted-foreground">
-          Notes forming part of the Financial Statements for the year ended, 31st March, {cyYear}
-        </p>
+        <div className={cn(
+          "mt-0.5",
+          readOnly ? "text-xs" : "text-xs text-muted-foreground",
+        )}>
+          Notes to Financial Statements for the year ended 31st March, {cyYear}
+        </div>
+        {readOnly && (
+          <div className="text-[10px] text-muted-foreground italic mt-0.5">(Amount in ₹)</div>
+        )}
       </div>
 
       {/* Toolbar — hidden in read-only (lock preview) mode */}
-      {readOnly ? (
-        <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-amber-50 border border-amber-200 text-amber-800">
-          <span className="text-sm">🔒</span>
-          <span className="text-xs font-medium">Preview Locked — Notes are read-only. Unlock to make changes.</span>
-        </div>
-      ) : (
+      {readOnly ? null : (
         <div className="flex flex-wrap items-center gap-2">
           <Button
             type="button" size="sm" variant="outline"
@@ -2541,108 +2560,148 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
 
       {/* All notes — always open; pointer-events disabled in read-only (lock preview) mode */}
       <div className={`space-y-4${readOnly ? " pointer-events-none select-none opacity-90" : ""}`}>
-        {NOTES_CONFIG.filter(nc => !(nc as any).hidden).map(nc => {
-          // For split notes (sourceNoteType set), read from the source note's data
-          // and extract only the relevant LT or ST side via extractSplitData().
-          const sourceKey  = nc.sourceNoteType ?? nc.noteType;
-          const rawData    = noteData[sourceKey] ?? { cy: {}, py: {}, customRows: [] };
-          const splitSide  = nc.splitSide;
-          const extracted  = splitSide ? extractSplitData(rawData, splitSide) : null;
-          // CRITICAL: pass rawData.customRows (not []) so that Tally auto-populated
-          // amounts (stored as customRows with cy[id+"_lt"] / cy[id+"_st"] keys) are
-          // visible in split notes.  extractSplitData already maps those to bare keys
-          // in extracted.cy, so computeDisplayData Pattern B picks them up correctly.
-          const d: typeof rawData = extracted
-            ? { ...rawData, cy: extracted.cy, py: extracted.py }
-            : rawData;
+        {/* NCE Tasks 2+3+5+9: in readOnly (preview) mode use an imperative loop so we
+            can (a) skip inactive notes (no dynamic number) and (b) insert section
+            transition headers ("Notes to Balance Sheet" / "Notes to P&L") at the
+            exact point where the BS→PL boundary occurs.
+            In edit mode the original map() behaviour is preserved. */}
+        {(() => {
+          const visibleConfigs = NOTES_CONFIG.filter(nc => !(nc as any).hidden);
+          const elements: React.ReactNode[] = [];
+          let currentSection: string | null = null;
 
-          const autoCount  = d.customRows.filter(r => r.source === "auto").length;
-          const manuCount  = d.customRows.filter(r => r.source === "manual").length;
+          for (const nc of visibleConfigs) {
+            // For split notes (sourceNoteType set), read from the source note's data
+            // and extract only the relevant LT or ST side via extractSplitData().
+            const sourceKey  = nc.sourceNoteType ?? nc.noteType;
+            const rawData    = noteData[sourceKey] ?? { cy: {}, py: {}, customRows: [] };
+            const splitSide  = nc.splitSide;
+            const extracted  = splitSide ? extractSplitData(rawData, splitSide) : null;
+            // CRITICAL: pass rawData.customRows (not []) so that Tally auto-populated
+            // amounts (stored as customRows with cy[id+"_lt"] / cy[id+"_st"] keys) are
+            // visible in split notes.  extractSplitData already maps those to bare keys
+            // in extracted.cy, so computeDisplayData Pattern B picks them up correctly.
+            const d: typeof rawData = extracted
+              ? { ...rawData, cy: extracted.cy, py: extracted.py }
+              : rawData;
 
-          // Dynamic note number: use the map when available (cross-tab sync),
-          // else fall back to parsing from the title string (standalone Stage 8).
-          const noteNum = dynamicNoteMap
-            ? (getDynamicNoteDisplay(nc.noteType, dynamicNoteMap) ?? "")
-            : (nc.title.match(/Note\s+([\d\s&]+):/i)?.[1]?.trim() ?? "");
-          const noteTitle = nc.title.replace(/^Note\s+[\d\s&]+:\s*/i, "");
+            const autoCount  = d.customRows.filter(r => r.source === "auto").length;
+            const manuCount  = d.customRows.filter(r => r.source === "manual").length;
 
-          // For split notes: when the user edits a bare key (e.g. "secured_other"),
-          // write it back to the source note with the side suffix (e.g. "secured_lt_other").
-          const mkChangeCy = splitSide
-            ? (key: string, v: number) => handleChange(sourceKey, `${key}_${splitSide}`, true,  v)
-            : (key: string, v: number) => handleChange(sourceKey, key,                   true,  v);
-          const mkChangePy = splitSide
-            ? (key: string, v: number) => handleChange(sourceKey, `${key}_${splitSide}`, false, v)
-            : (key: string, v: number) => handleChange(sourceKey, key,                   false, v);
+            // Dynamic note number: use the map when available (cross-tab sync),
+            // else fall back to parsing from the title string (standalone Stage 8).
+            const noteNum = dynamicNoteMap
+              ? (getDynamicNoteDisplay(nc.noteType, dynamicNoteMap) ?? "")
+              : (nc.title.match(/Note\s+([\d\s&]+):/i)?.[1]?.trim() ?? "");
+            const noteTitle = nc.title.replace(/^Note\s+[\d\s&]+:\s*/i, "");
 
-          return (
-            <NoteCard
-              key={nc.noteType}
-              noteNumber={noteNum}
-              title={noteTitle}
-              autoCount={autoCount}
-              manualCount={manuCount}
-              collapseControl={collapseAll}
-              anchorId={noteNum ? `nce-note-${noteNum}` : `nce-note-type-${nc.noteType}`}
-            >
-              <div className="overflow-x-auto">
-                {nc.pattern === "A" ? (
-                  <PatternATable
-                    config={nc}
-                    cy={d.cy} py={d.py}
-                    cyYear={cyYear} pyYear={pyYear}
-                    customRows={d.customRows}
-                    hiddenRows={d.hiddenRows ?? []}
-                    labelOverrides={d.labelOverrides ?? {}}
-                    cySources={d.cy_sources ?? {}}
-                    sourceLabelOverrides={d.sourceLabelOverrides ?? {}}
-                    onChangeCy={mkChangeCy}
-                    onChangePy={mkChangePy}
-                    onAddRow={(opts) => handleAddRow(sourceKey, opts)}
-                    onDeleteRow={id => handleDeleteRow(sourceKey, id)}
-                    onChangeLabel={(id, lbl) => handleChangeLabel(sourceKey, id, lbl)}
-                    onHideStatic={id => handleHideStatic(sourceKey, id)}
-                    onChangeStaticLabel={(id, lbl) => handleChangeStaticLabel(sourceKey, id, lbl)}
-                    onPromote={(cid, sid) => handlePromoteCustomToStatic(sourceKey, cid, sid)}
-                    onSwapLtSt={(rid) => handleSwapLtSt(sourceKey, rid)}
-                    onEjectSource={(rid, ledger, amt, attachToId?) => handleEjectSource(sourceKey, rid, ledger, amt, attachToId)}
-                    onEjectCustomSource={(cid, ledger, amt, attachToId?) => handleEjectCustomSource(sourceKey, cid, ledger, amt, attachToId)}
-                    onChangeSourceLabel={(rid, ledger, lbl) => handleChangeSourceLabel(sourceKey, rid, ledger, lbl)}
-                    hideEmptySections={readOnly}
-                  />
-                ) : (
-                  <PatternBTable
-                    config={nc}
-                    cy={d.cy} py={d.py}
-                    cyYear={cyYear} pyYear={pyYear}
-                    customRows={d.customRows}
-                    hiddenRows={d.hiddenRows ?? []}
-                    labelOverrides={d.labelOverrides ?? {}}
-                    cySources={d.cy_sources ?? {}}
-                    sourceLabelOverrides={d.sourceLabelOverrides ?? {}}
-                    onChangeCy={mkChangeCy}
-                    onChangePy={mkChangePy}
-                    onAddRow={(opts) => handleAddRow(sourceKey, opts)}
-                    onDeleteRow={id => handleDeleteRow(sourceKey, id)}
-                    onChangeLabel={(id, lbl) => handleChangeLabel(sourceKey, id, lbl)}
-                    onHideStatic={id => handleHideStatic(sourceKey, id)}
-                    onChangeStaticLabel={(id, lbl) => handleChangeStaticLabel(sourceKey, id, lbl)}
-                    onPromote={(cid, sid) => handlePromoteCustomToStatic(sourceKey, cid, sid)}
-                    onEjectSource={(rid, ledger, amt, attachToId?) => handleEjectSource(sourceKey, rid, ledger, amt, attachToId)}
-                    onEjectCustomSource={(cid, ledger, amt, attachToId?) => handleEjectCustomSource(sourceKey, cid, ledger, amt, attachToId)}
-                    onChangeSourceLabel={(rid, ledger, lbl) => handleChangeSourceLabel(sourceKey, rid, ledger, lbl)}
-                    noteType={nc.noteType}
-                    onExpansionChange={(nt, ids) => {
-                      expansionStateRef.current[nt] = ids;
-                      onExpansionStateUpdate?.(expansionStateRef.current);
-                    }}
-                    hideEmptySections={readOnly}
-                  />
-                )}
-              </div>
-            </NoteCard>
-          );
-        })}
+            // NCE Tasks 3 & 5: in readOnly preview, skip notes that have no dynamic
+            // number — they are not referenced in any FS line item and must not appear
+            // in the preview (prevents sequence gaps and phantom note cards).
+            if (readOnly && !noteNum) continue;
+
+            // NCE Task 9: insert a section transition header when the BS→PL boundary is
+            // crossed (only in readOnly preview; the docx export handles this separately).
+            if (readOnly) {
+              const meta    = NOTE_META[nc.noteType];
+              const section = meta?.section ?? "BS";
+              if (section !== currentSection) {
+                currentSection = section;
+                const dateStr  = `31.03.${cyYear}`;
+                const heading  = section === "PL"
+                  ? `Notes to Profit & Loss A/c as at ${dateStr}`
+                  : `Notes to Balance Sheet as on ${dateStr}`;
+                elements.push(
+                  <div
+                    key={`section-hdr-${section}`}
+                    className="pt-2 pb-1 border-b-2 border-foreground/30"
+                  >
+                    <span className="text-sm font-bold underline">{heading}</span>
+                  </div>
+                );
+              }
+            }
+
+            // For split notes: when the user edits a bare key (e.g. "secured_other"),
+            // write it back to the source note with the side suffix (e.g. "secured_lt_other").
+            const mkChangeCy = splitSide
+              ? (key: string, v: number) => handleChange(sourceKey, `${key}_${splitSide}`, true,  v)
+              : (key: string, v: number) => handleChange(sourceKey, key,                   true,  v);
+            const mkChangePy = splitSide
+              ? (key: string, v: number) => handleChange(sourceKey, `${key}_${splitSide}`, false, v)
+              : (key: string, v: number) => handleChange(sourceKey, key,                   false, v);
+
+            elements.push(
+              <NoteCard
+                key={nc.noteType}
+                noteNumber={noteNum}
+                title={noteTitle}
+                autoCount={autoCount}
+                manualCount={manuCount}
+                collapseControl={readOnly ? undefined : collapseAll}
+                anchorId={noteNum ? `nce-note-${noteNum}` : `nce-note-type-${nc.noteType}`}
+                forceOpen={readOnly}
+              >
+                <div className="overflow-x-auto">
+                  {nc.pattern === "A" ? (
+                    <PatternATable
+                      config={nc}
+                      cy={d.cy} py={d.py}
+                      cyYear={cyYear} pyYear={pyYear}
+                      customRows={d.customRows}
+                      hiddenRows={d.hiddenRows ?? []}
+                      labelOverrides={d.labelOverrides ?? {}}
+                      cySources={d.cy_sources ?? {}}
+                      sourceLabelOverrides={d.sourceLabelOverrides ?? {}}
+                      onChangeCy={mkChangeCy}
+                      onChangePy={mkChangePy}
+                      onAddRow={(opts) => handleAddRow(sourceKey, opts)}
+                      onDeleteRow={id => handleDeleteRow(sourceKey, id)}
+                      onChangeLabel={(id, lbl) => handleChangeLabel(sourceKey, id, lbl)}
+                      onHideStatic={id => handleHideStatic(sourceKey, id)}
+                      onChangeStaticLabel={(id, lbl) => handleChangeStaticLabel(sourceKey, id, lbl)}
+                      onPromote={(cid, sid) => handlePromoteCustomToStatic(sourceKey, cid, sid)}
+                      onSwapLtSt={(rid) => handleSwapLtSt(sourceKey, rid)}
+                      onEjectSource={(rid, ledger, amt, attachToId?) => handleEjectSource(sourceKey, rid, ledger, amt, attachToId)}
+                      onEjectCustomSource={(cid, ledger, amt, attachToId?) => handleEjectCustomSource(sourceKey, cid, ledger, amt, attachToId)}
+                      onChangeSourceLabel={(rid, ledger, lbl) => handleChangeSourceLabel(sourceKey, rid, ledger, lbl)}
+                      hideEmptySections={readOnly}
+                    />
+                  ) : (
+                    <PatternBTable
+                      config={nc}
+                      cy={d.cy} py={d.py}
+                      cyYear={cyYear} pyYear={pyYear}
+                      customRows={d.customRows}
+                      hiddenRows={d.hiddenRows ?? []}
+                      labelOverrides={d.labelOverrides ?? {}}
+                      cySources={d.cy_sources ?? {}}
+                      sourceLabelOverrides={d.sourceLabelOverrides ?? {}}
+                      onChangeCy={mkChangeCy}
+                      onChangePy={mkChangePy}
+                      onAddRow={(opts) => handleAddRow(sourceKey, opts)}
+                      onDeleteRow={id => handleDeleteRow(sourceKey, id)}
+                      onChangeLabel={(id, lbl) => handleChangeLabel(sourceKey, id, lbl)}
+                      onHideStatic={id => handleHideStatic(sourceKey, id)}
+                      onChangeStaticLabel={(id, lbl) => handleChangeStaticLabel(sourceKey, id, lbl)}
+                      onPromote={(cid, sid) => handlePromoteCustomToStatic(sourceKey, cid, sid)}
+                      onEjectSource={(rid, ledger, amt, attachToId?) => handleEjectSource(sourceKey, rid, ledger, amt, attachToId)}
+                      onEjectCustomSource={(cid, ledger, amt, attachToId?) => handleEjectCustomSource(sourceKey, cid, ledger, amt, attachToId)}
+                      onChangeSourceLabel={(rid, ledger, lbl) => handleChangeSourceLabel(sourceKey, rid, ledger, lbl)}
+                      noteType={nc.noteType}
+                      onExpansionChange={(nt, ids) => {
+                        expansionStateRef.current[nt] = ids;
+                        onExpansionStateUpdate?.(expansionStateRef.current);
+                      }}
+                      hideEmptySections={readOnly}
+                    />
+                  )}
+                </div>
+              </NoteCard>
+            );
+          }
+          return elements;
+        })()}
       </div>
 
       {/* Bottom save — hidden in read-only (lock preview) mode */}

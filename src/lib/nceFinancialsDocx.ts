@@ -27,7 +27,7 @@ import {
   WidthType,
 } from "docx";
 
-import { NOTES_CONFIG, computeDisplayData, extractSplitData } from "@/config/nceNotesConfig";
+import { NOTES_CONFIG, NOTE_META, computeDisplayData, extractSplitData } from "@/config/nceNotesConfig";
 import type { NoteConfig, NoteRowDef } from "@/config/nceNotesConfig";
 import { getActiveFsDivisor, FS_SCALES } from "@/lib/fsUnits";
 import { getDynamicNoteDisplay } from "@/lib/nceDynamicNoteNumbers";
@@ -1680,9 +1680,10 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   // is the SAME dynamic number shown on screen.
   // For split notes (sourceNoteType + splitSide set), read from the source DB
   // record and extract only the _lt or _st suffixed keys via extractSplitData().
-  // Task 6: collect [numericNoteNumber, Table] pairs then sort by note number
+  // NCE Task 6: collect [numericNoteNumber, Table, sectionTag] triples then sort by note number
   // so export always follows chronological sequence (Note 3, 4, 5 … never random).
-  const noteTablePairs: Array<[number, Table]> = [];
+  // NCE Task 9 (doc8): sectionTag ("BS" | "PL") used to inject section transition headers.
+  const noteTablePairs: Array<[number, Table, string]> = [];
   for (const cfg of NOTES_CONFIG) {
     const dynNum = getDynamicNoteDisplay(cfg.noteType, dynamicNoteMap);
     if (dynNum === null) continue;                        // inactive (no data) → skip
@@ -1694,9 +1695,12 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     // For split notes, extract only the relevant side (_lt or _st suffixes)
     const data = cfg.splitSide ? extractSplitData(rawData, cfg.splitSide) : rawData;
 
-    // Task 4 (doc8): skip notes whose grand total is 0 in both CY and PY even
-    // when a dynamic number exists (e.g. cogs_b activated by COGS linkage but
-    // no Purchases-of-Stock-in-Trade data). Keeps export identical to UI view.
+    // NCE Task 4 (doc8): a note with a dynamic number is referenced in the BS/P&L
+    // statement and MUST appear in the export, even if the detail rows are still zero.
+    // Only skip when the note has NO dynamic number at all (handled by the guard above).
+    // We keep a soft guard for COGS sub-notes whose activation was driven by a sibling
+    // note (e.g. cogs_b activated because cogs_a has data) — if both CY and PY grand
+    // totals are zero AND this note was not directly mapped to a FS line item, skip.
     const displayData = computeDisplayData(cfg, data.cy, data.py);
     const grandTotalRowDef = [...cfg.rows].reverse().find(r => r.isTotal);
     if (grandTotalRowDef) {
@@ -1707,14 +1711,35 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
       const totalPy = isPatA
         ? (displayData.py[grandTotalRowDef.id + "_lt"] ?? 0) + (displayData.py[grandTotalRowDef.id + "_st"] ?? 0)
         : (displayData.py[grandTotalRowDef.id] ?? 0);
-      if (!totalCy && !totalPy) continue;   // no meaningful data → skip this note
+      // Only skip COGS sub-notes (cogs_b / cogs_c) when their detail is zero —
+      // these are activated by sibling note linkage, not by a direct FS reference.
+      const isCogsSub = cfg.noteType === "cogs_b" || cfg.noteType === "cogs_c";
+      if (isCogsSub && !totalCy && !totalPy) continue;
+      // For all other notes: always include when a dynamic number exists (they are
+      // directly referenced in the BS or P&L statement).
     }
 
-    noteTablePairs.push([parseInt(dynNum, 10), buildNoteSection(cfg, data.cy, data.py, dynNum, cyYear, pyYear, expandedRows, hideBlankNoteRows)]);
+    // NCE Task 9 (doc8): record each note's section (BS or PL) so the children
+    // array builder can insert "Notes to Balance Sheet" / "Notes to P&L" headers.
+    const noteSectionTag = NOTE_META[cfg.noteType]?.section ?? "BS";
+    noteTablePairs.push([parseInt(dynNum, 10), buildNoteSection(cfg, data.cy, data.py, dynNum, cyYear, pyYear, expandedRows, hideBlankNoteRows), noteSectionTag] as [number, Table, string]);
   }
   // Sort ascending by note number for correct sequential order in export
   noteTablePairs.sort((a, b) => a[0] - b[0]);
   const noteTables: Table[] = noteTablePairs.map(([, t]) => t);
+
+  // NCE Task 9 (doc8): helper to build a "Notes to Balance Sheet" / "Notes to P&L" heading.
+  // Bold, underlined, left-aligned; preceded by a spacer and followed by a thin spacer.
+  const sectionTransitionParagraph = (section: "BS" | "PL"): Paragraph => {
+    const cyYearStr = String(cyYear);
+    const text = section === "PL"
+      ? `Notes to Profit & Loss A/c as at 31.03.${cyYearStr}`
+      : `Notes to Balance Sheet as on 31.03.${cyYearStr}`;
+    return new Paragraph({
+      spacing: { before: 280, after: 80 },
+      children: [new TextRun({ text, font: FONT, size: SZ_HDR, bold: true, underline: {} })],
+    });
+  };
 
   // Phase 2 — PPE Schedule (landscape). PPE is always-active (ref 10); use its
   // dynamic number so the title matches the Balance-Sheet reference.
@@ -1743,12 +1768,26 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   // Task 1 (doc8): reduced spacer between notes for better page utilisation
   const spacer        = () => new Paragraph({ spacing: { before: 160, after: 0 }, children: [] });
 
+  // NCE Task 9 (doc8): build notes 3-28 children with BS→PL section transition headers.
+  // Track `currentSection` so the heading is inserted exactly once per section boundary.
+  const noteTablesWithHeaders: (Paragraph | Table)[] = [];
+  let currentSection: string | null = null;
+  for (const [, table, sectionTag] of noteTablePairs) {
+    if (sectionTag !== currentSection) {
+      currentSection = sectionTag;
+      noteTablesWithHeaders.push(sectionTransitionParagraph(sectionTag as "BS" | "PL"));
+    }
+    noteTablesWithHeaders.push(spacer(), table);
+  }
+
   // Build notes section children: Note 1 paragraphs, Note 2 tables, Notes 3-28 tables
   // Capital account gets its own page break prefix; each note table also page-breaks.
+  // NCE Task 9: "Notes to Balance Sheet" header appears before Note 1 (the very first notes entry).
   const noteChildren: (Paragraph | Table)[] = [
+    sectionTransitionParagraph("BS"),
     ...note1Paras,
     ...capitalTables.flatMap((t, i) => i === 0 ? [notePageBreak(), t] : [spacer(), t]),
-    ...noteTables.flatMap(t => [spacer(), t]),
+    ...noteTablesWithHeaders,
   ];
 
   // Task 13 (doc6): client name header appears on every notes page so continuation

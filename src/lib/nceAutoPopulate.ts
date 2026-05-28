@@ -535,7 +535,9 @@ export function getNCENoteFaceTotal(
 
 // Reserved keys used as JSONB metadata inside cy_data — must be filtered out
 // when reading numeric values back into the cy/py maps.
-const META_KEYS = new Set(["_custom_rows", "_hidden_rows", "_label_overrides", "_cy_sources", "_ejected_ledgers"]);
+// NCE Task 7: added _source_label_overrides so user-edited source sub-ledger labels
+// survive page reload (previously this field was in NCENoteData but never persisted).
+const META_KEYS = new Set(["_custom_rows", "_hidden_rows", "_label_overrides", "_cy_sources", "_ejected_ledgers", "_source_label_overrides"]);
 
 export function deserialiseNoteData(
   rawCy: Record<string, any>,
@@ -560,6 +562,12 @@ export function deserialiseNoteData(
     ? (rawCy._ejected_ledgers as string[])
     : [];
 
+  // NCE Task 7: restore source sub-ledger label overrides
+  const sourceLabelOverrides: Record<string, string> =
+    rawCy._source_label_overrides && typeof rawCy._source_label_overrides === "object"
+      ? (rawCy._source_label_overrides as Record<string, string>)
+      : {};
+
   const cy: Record<string, number> = {};
   for (const [k, v] of Object.entries(rawCy)) {
     if (!META_KEYS.has(k) && typeof v === "number") cy[k] = v;
@@ -571,7 +579,7 @@ export function deserialiseNoteData(
     // for opposite-side ledgers (e.g. a Dr-balance ledger under Trade Payables).
     if (!META_KEYS.has(k) && typeof v === "number") py[k] = v;
   }
-  return { cy, py, customRows, hiddenRows, labelOverrides, cy_sources, ejectedLedgers };
+  return { cy, py, customRows, hiddenRows, labelOverrides, cy_sources, ejectedLedgers, sourceLabelOverrides };
 }
 
 export function serialiseNoteData(
@@ -584,6 +592,10 @@ export function serialiseNoteData(
       _hidden_rows:      d.hiddenRows ?? [],
       _label_overrides:  d.labelOverrides ?? {},
       _ejected_ledgers:  d.ejectedLedgers ?? [],
+      // NCE Task 7: persist source sub-ledger label overrides
+      ...(d.sourceLabelOverrides && Object.keys(d.sourceLabelOverrides).length > 0
+        ? { _source_label_overrides: d.sourceLabelOverrides }
+        : {}),
       ...(d.cy_sources && Object.keys(d.cy_sources).length > 0
         ? { _cy_sources: d.cy_sources }
         : {}),

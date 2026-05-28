@@ -7643,12 +7643,13 @@ export default function PipelineFinancialStatements({
         </DialogContent>
       </Dialog>
 
-      {/* Task 2 (doc7): NCE Lock Preview — full-screen draft financial statement preview */}
+      {/* NCE Tasks 1+2+6: Lock Preview — resized to 78vw/1200px max, paper-style A4 container */}
       <Dialog open={ncePreviewOpen} onOpenChange={setNcePreviewOpen}>
-        <DialogContent className="max-w-[96vw] w-full h-[92vh] p-0 flex flex-col gap-0 overflow-hidden">
-          <DialogHeader className="px-4 py-3 border-b flex-none">
+        <DialogContent className="w-[78vw] max-w-[1200px] max-h-[88vh] p-0 flex flex-col gap-0 overflow-hidden">
+          {/* Sticky toolbar */}
+          <DialogHeader className="px-4 py-2.5 border-b flex-none bg-background/95 backdrop-blur-sm">
             <div className="flex items-center justify-between">
-              <DialogTitle className="flex items-center gap-2 text-base">
+              <DialogTitle className="flex items-center gap-2 text-sm">
                 🔒 Draft Financial Statements — Preview
               </DialogTitle>
               <div className="flex items-center gap-2">
@@ -7660,49 +7661,55 @@ export default function PipelineFinancialStatements({
                 </Button>
               </div>
             </div>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Read-only preview. Notes are locked — blank rows hidden. Click <strong>Export Word</strong> to download.
-            </p>
           </DialogHeader>
-          <div className="flex-1 overflow-y-auto">
+          {/* Scrollable content area */}
+          <div className="flex-1 overflow-y-auto bg-muted/30">
             <Tabs defaultValue="bs" className="h-full flex flex-col">
-              <TabsList className="mx-4 mt-3 mb-0 flex-none">
-                <TabsTrigger value="bs">Balance Sheet</TabsTrigger>
-                <TabsTrigger value="pl">Profit &amp; Loss</TabsTrigger>
-                <TabsTrigger value="notes">Notes to Accounts</TabsTrigger>
-              </TabsList>
-              <div className="flex-1 overflow-y-auto p-4">
-                <TabsContent value="bs" className="mt-0">
-                  <NCEBalanceSheetView
-                    engagementId={engagementId}
-                    cyAmounts={nceCyAmounts}
-                    pyAmounts={ncePyAmounts}
-                    cyYear={cyYear}
-                    pyYear={pyYear}
-                    entityName={engagement?.clients?.name || ""}
-                    pyLocked={pyLocked}
-                    nceDynamicNoteMap={nceDynamicNoteMap}
-                  />
-                </TabsContent>
-                <TabsContent value="pl" className="mt-0">
-                  <NCEPLView
-                    engagementId={engagementId}
-                    cyAmounts={computedAmounts}
-                    pyAmounts={mergedPY}
-                    cyYear={cyYear}
-                    pyYear={pyYear}
-                    entityName={engagement?.clients?.name || ""}
-                    pyLocked={pyLocked}
-                    nceDynamicNoteMap={nceDynamicNoteMap}
-                  />
-                </TabsContent>
-                <TabsContent value="notes" className="mt-0">
-                  <NCENotesTab
-                    engagementId={engagementId}
-                    dynamicNoteMap={nceDynamicNoteMap}
-                    readOnly={true}
-                  />
-                </TabsContent>
+              {/* Tab bar — sticks to top while scrolling */}
+              <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm border-b px-4 pt-2 pb-0">
+                <TabsList>
+                  <TabsTrigger value="bs">Balance Sheet</TabsTrigger>
+                  <TabsTrigger value="pl">Profit &amp; Loss</TabsTrigger>
+                  <TabsTrigger value="notes">Notes to Accounts</TabsTrigger>
+                </TabsList>
+              </div>
+              {/* NCE Task 6: paper container — A4-proportioned, centred, white, shadow, padded.
+                  width is clamped so it never overflows the dialog on smaller screens. */}
+              <div className="flex-1 overflow-y-auto py-6 px-4">
+                <div className="mx-auto bg-white shadow-md border border-border/40 rounded-sm"
+                     style={{ maxWidth: "794px", width: "100%", minHeight: "900px", padding: "28px 32px" }}>
+                  <TabsContent value="bs" className="mt-0">
+                    <NCEBalanceSheetView
+                      engagementId={engagementId}
+                      cyAmounts={nceCyAmounts}
+                      pyAmounts={ncePyAmounts}
+                      cyYear={cyYear}
+                      pyYear={pyYear}
+                      entityName={engagement?.clients?.name || ""}
+                      pyLocked={pyLocked}
+                      nceDynamicNoteMap={nceDynamicNoteMap}
+                    />
+                  </TabsContent>
+                  <TabsContent value="pl" className="mt-0">
+                    <NCEPLView
+                      engagementId={engagementId}
+                      cyAmounts={computedAmounts}
+                      pyAmounts={mergedPY}
+                      cyYear={cyYear}
+                      pyYear={pyYear}
+                      entityName={engagement?.clients?.name || ""}
+                      pyLocked={pyLocked}
+                      nceDynamicNoteMap={nceDynamicNoteMap}
+                    />
+                  </TabsContent>
+                  <TabsContent value="notes" className="mt-0">
+                    <NCENotesTab
+                      engagementId={engagementId}
+                      dynamicNoteMap={nceDynamicNoteMap}
+                      readOnly={true}
+                    />
+                  </TabsContent>
+                </div>
               </div>
             </Tabs>
           </div>
