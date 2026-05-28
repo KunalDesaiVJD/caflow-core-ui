@@ -7673,10 +7673,11 @@ export default function PipelineFinancialStatements({
                   <TabsTrigger value="notes">Notes to Accounts</TabsTrigger>
                 </TabsList>
               </div>
-              {/* NCE Task 6: paper container — A4-proportioned, centred, white, shadow, padded.
-                  width is clamped so it never overflows the dialog on smaller screens. */}
+              {/* NCE Task 3/6: A4-proportioned page container with visible border frame
+                  matching corporate entity card style (rounded-lg border bg-card).
+                  This mirrors the page-border shown in the DOCX export. */}
               <div className="flex-1 overflow-y-auto py-6 px-4">
-                <div className="mx-auto bg-white shadow-md border border-border/40 rounded-sm"
+                <div className="mx-auto bg-card shadow-md border border-border rounded-lg overflow-hidden"
                      style={{ maxWidth: "794px", width: "100%", minHeight: "900px", padding: "28px 32px" }}>
                   <TabsContent value="bs" className="mt-0">
                     <NCEBalanceSheetView
