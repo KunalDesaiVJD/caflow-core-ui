@@ -1007,6 +1007,29 @@ const NOTE1_POLICIES = [
     text: "For the purposes of the Cash Flow Statement, cash and cash equivalents comprise cash on hand, cheques and drafts in hand, and balances with banks in current accounts." },
 ];
 
+/** NCE Task 8: Notes page title block — mirrors BS/PL heading style.
+ *  The entity name is intentionally omitted here because the `notesHeader`
+ *  running page header already renders it on every notes page (page margin area).
+ *  We only need the statement subtitle + amount units in the body. */
+function buildNotesTitleBlock(_entityName: string, cyYear: string): Paragraph[] {
+  return [
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing:   { before: 60, after: 10 },
+      children: [new TextRun({
+        text: `Notes to Financial Statements for the year ended 31st March, ${cyYear}`,
+        font: FONT, size: SZ_TITLE, bold: true, color: NAVY,
+      })],
+    }),
+    new Paragraph({
+      alignment: AlignmentType.RIGHT,
+      spacing:   { before: 0, after: 60 },
+      border:    { bottom: { style: BorderStyle.SINGLE, size: 8, color: NAVY, space: 4 } },
+      children: [new TextRun({ text: amountUnitsLabel(), font: FONT, size: SZ_SM, color: DK_GREY })],
+    }),
+  ];
+}
+
 function buildNote1Section(entityName: string, cyYear: string): Paragraph[] {
   // Vertical gap between policy points — reduced for better page fitting (Task 1, doc8)
   const GAP = 140;
@@ -1782,8 +1805,11 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
 
   // Build notes section children: Note 1 paragraphs, Note 2 tables, Notes 3-28 tables
   // Capital account gets its own page break prefix; each note table also page-breaks.
+  // NCE Task 8: title block at top of notes section mirrors BS/PL page headings.
   // NCE Task 9: "Notes to Balance Sheet" header appears before Note 1 (the very first notes entry).
+  const notesTitleBlock = buildNotesTitleBlock(entityName, String(cyYear));
   const noteChildren: (Paragraph | Table)[] = [
+    ...notesTitleBlock,
     sectionTransitionParagraph("BS"),
     ...note1Paras,
     ...capitalTables.flatMap((t, i) => i === 0 ? [notePageBreak(), t] : [spacer(), t]),

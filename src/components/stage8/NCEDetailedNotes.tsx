@@ -1743,10 +1743,13 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
 
         const fy = (engRow as any)?.financial_year ?? "";
 
+        // NCE Task 7 fix: always filter by financial_year so notes from
+        // other FY rows never mix into the current year's load.
         const { data, error } = await supabase
           .from("nce_financial_notes")
           .select("note_type, cy_data, py_data")
-          .eq("engagement_id", engagementId);
+          .eq("engagement_id", engagementId)
+          .eq("financial_year", fy);
         if (cancelled) return;
         if (error) throw error;
 

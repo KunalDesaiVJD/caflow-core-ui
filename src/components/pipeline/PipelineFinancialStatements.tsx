@@ -1221,18 +1221,18 @@ function NCEBalanceSheetView({
           {rows.map((row, idx) => {
             if (row.kind === "spacer")  return <tr key={idx}><td colSpan={4} className="h-2" /></tr>;
             if (row.kind === "section") return (
-              <tr key={idx} className="bg-muted/20">
+              <tr key={idx} className="bg-muted/20 nce-fs-section-header">
                 <td colSpan={4} className="font-bold py-1.5 px-3 text-[13px]">{row.label}</td>
               </tr>
             );
             if (row.kind === "subhead") return (
-              <tr key={idx}>
+              <tr key={idx} className="nce-fs-section-header">
                 <td className="font-semibold py-1 px-3" style={{ paddingLeft: 12 + (row.indent || 0) * 16 }}>{row.label}</td>
                 <td colSpan={3} />
               </tr>
             );
             if (row.kind === "total")   return (
-              <tr key={idx} className="border-t-2 border-foreground/40 bg-muted/30">
+              <tr key={idx} className="border-t-2 border-foreground/40 bg-muted/30 nce-fs-total-row">
                 {/* Task 1 fix: TOTAL stays inside Particulars column only (no colSpan).
                     rightAlignLabel right-aligns it within that cell so it touches
                     the Note No. boundary. Note No. cell is its own empty <td>. */}
@@ -1362,13 +1362,13 @@ function NCEPLView({
           {rows.map((row, idx) => {
             if (row.kind === "spacer") return <tr key={idx}><td colSpan={5} className="h-2" /></tr>;
             if (row.kind === "header") return (
-              <tr key={idx} className="bg-muted/20">
+              <tr key={idx} className="bg-muted/20 nce-fs-section-header">
                 <td className="text-center font-bold py-1 px-1 text-[12px]">{row.roman || ""}</td>
                 <td colSpan={4} className="font-bold py-1 px-3 text-[12px]">{row.label}</td>
               </tr>
             );
             if (row.kind === "total")  return (
-              <tr key={idx} className="border-t-2 border-foreground/40 bg-muted/30">
+              <tr key={idx} className="border-t-2 border-foreground/40 bg-muted/30 nce-fs-total-row">
                 <td className="text-center font-bold py-1.5 px-1 text-[12px]">{row.roman || ""}</td>
                 <td className="font-bold py-1.5 px-3 text-[12px]">{row.label}</td>
                 <td />

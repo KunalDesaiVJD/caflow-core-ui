@@ -71,6 +71,28 @@
    All other page chrome (sidebar, toolbar, tabs) is suppressed via print:hidden
    Tailwind utilities, but the scroll containers need explicit reset here.
 ─────────────────────────────────────────────────────────────────────────── */
+/* ── NCE Financial Statement page container (Task 6, doc8) ─────────────────
+   .nce-fs-page wraps each A4-proportioned statement page in the preview.
+   On screen: white card with shadow.  On print: natural A4 flow, no box.
+──────────────────────────────────────────────────────────────────────────── */
+.nce-fs-page {
+  width: 210mm;
+  min-height: 297mm;
+  margin: 24px auto;
+  background: #fff;
+  border: 1px solid #cfcfcf;
+  box-shadow: 0 1px 8px rgba(0,0,0,0.07), 0 0 2px rgba(0,0,0,0.04);
+  padding: 24px 28px;
+  box-sizing: border-box;
+}
+
+/* Prevent section headers and total rows from orphaning at page break */
+.nce-fs-section-header,
+.nce-fs-total-row {
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
 @media print {
   /* Hide all Radix / shadcn scroll area decorations */
   [data-radix-scroll-area-viewport] {
@@ -90,6 +112,14 @@
   /* Keep amber highlight legible in B&W print */
   .bg-amber-50 {
     background: transparent !important;
+  }
+  /* NCE FS page: remove box-shadow and border for clean print output */
+  .nce-fs-page {
+    box-shadow: none !important;
+    border: none !important;
+    margin: 0 !important;
+    width: 100% !important;
+    min-height: unset !important;
   }
 }
 
