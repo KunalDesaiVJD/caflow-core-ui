@@ -499,6 +499,10 @@ function CustomRowEditor({
   const handleToggle = onToggleProp ?? (() => setSourcesOpenLocal(o => !o));
   const showToggle = hasSources || hasSubRows;
   const colCount = isPatternA ? 6 : 4;
+  // Lock figures of auto-linked rows (source === "auto"): the amount comes from
+  // the COA/Tally mapping and must be changed there, not typed over here —
+  // matching the corporate notes' isLocked behaviour. The label stays editable.
+  const amountLocked = row.source === "auto";
   return (
     <>
       <TableRow className={cn("hover:bg-blue-50/50", isChild ? "bg-blue-50/10 border-l-2 border-l-blue-200" : "bg-blue-50/30", isSelected && "ring-1 ring-inset ring-blue-400 bg-blue-100/40")}>
@@ -537,15 +541,15 @@ function CustomRowEditor({
         </TableCell>
         {isPatternA ? (
           <>
-            <TableCell className="p-1"><NumInput value={cyLtVal} onChange={onChangeCyLt} /></TableCell>
-            <TableCell className="p-1 border-r"><NumInput value={pyLtVal} onChange={onChangePyLt} /></TableCell>
-            <TableCell className="p-1"><NumInput value={cyStVal} onChange={onChangeCySt} /></TableCell>
-            <TableCell className="p-1"><NumInput value={pyStVal} onChange={onChangePySt} /></TableCell>
+            <TableCell className="p-1"><NumInput value={cyLtVal} onChange={onChangeCyLt} disabled={amountLocked} /></TableCell>
+            <TableCell className="p-1 border-r"><NumInput value={pyLtVal} onChange={onChangePyLt} disabled={amountLocked} /></TableCell>
+            <TableCell className="p-1"><NumInput value={cyStVal} onChange={onChangeCySt} disabled={amountLocked} /></TableCell>
+            <TableCell className="p-1"><NumInput value={pyStVal} onChange={onChangePySt} disabled={amountLocked} /></TableCell>
           </>
         ) : (
           <>
-            <TableCell className="p-1"><NumInput value={cyVal} onChange={onChangeCy} /></TableCell>
-            <TableCell className="p-1"><NumInput value={pyVal} onChange={onChangePy} /></TableCell>
+            <TableCell className="p-1"><NumInput value={cyVal} onChange={onChangeCy} disabled={amountLocked} /></TableCell>
+            <TableCell className="p-1"><NumInput value={pyVal} onChange={onChangePy} disabled={amountLocked} /></TableCell>
           </>
         )}
         <TableCell className="p-1 text-center w-8">
