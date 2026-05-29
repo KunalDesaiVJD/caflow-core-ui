@@ -217,6 +217,11 @@ interface CellOpts {
   /** Task 1 (doc8): override top/bottom cell margin (DXA).
    *  Default 28 for BS/PL rows; note-table rows use 18 for tighter page fitting. */
   vertPad?: number;
+  /** "Keep with next" — when true the cell's paragraph is bound to the following
+   *  block. Set on every note-table row (except via the trailing gap) so an entire
+   *  note moves to the next page intact rather than splitting across a page break.
+   *  Word still breaks a note larger than one page (keepNext is a soft constraint). */
+  keepNext?: boolean;
 }
 
 function cell(o: CellOpts): TableCell {
@@ -235,6 +240,7 @@ function cell(o: CellOpts): TableCell {
     colSpan,
     hangingIndent,
     vertPad = 28,
+    keepNext = false,
   } = o;
 
   return new TableCell({
@@ -247,6 +253,7 @@ function cell(o: CellOpts): TableCell {
     children: [new Paragraph({
       alignment: align,
       spacing:   { before: 0, after: 0, line: 240, lineRule: "auto" as any },
+      ...(keepNext ? { keepNext: true, keepLines: true } : {}),
       // Task 10 (doc6): hanging indent so wrapped text aligns below description, not below prefix
       ...(hangingIndent ? { indent: { left: hangingIndent, hanging: hangingIndent } } : {}),
       children: [new TextRun({ text, font: FONT, size: sz, bold, italic, color })],
@@ -258,7 +265,7 @@ function cell(o: CellOpts): TableCell {
 function ac(
   val: number,
   w: number,
-  opts: { bold?: boolean; bg?: string; borders?: Record<string, typeof bNone>; vertPad?: number } = {},
+  opts: { bold?: boolean; bg?: string; borders?: Record<string, typeof bNone>; vertPad?: number; keepNext?: boolean } = {},
 ): TableCell {
   return cell({
     text:    fmt(val),
@@ -270,6 +277,7 @@ function ac(
     bg:      opts.bg,
     borders: opts.borders ?? BDR_ROW,
     vertPad: opts.vertPad,
+    keepNext: opts.keepNext,
   });
 }
 
@@ -875,6 +883,7 @@ function noteTitleRow(colWidths: number[], noteNumber: string, title: string): T
         margins: { top: 56, bottom: 56, left: 100, right: 100 },
         children: [new Paragraph({
           spacing: { before: 0, after: 0 },
+          keepNext: true, keepLines: true,
           children: [
             new TextRun({ text: `Note ${noteNumber}:  `, font: FONT, size: SZ_HDR, bold: true, color: NAVY }),
             new TextRun({ text: title, font: FONT, size: SZ_HDR, bold: true, color: NAVY }),
@@ -898,6 +907,7 @@ function noteSecHdr(colWidths: number[], label: string): TableRow {
         margins: { top: 38, bottom: 38, left: 100, right: 100 },
         children: [new Paragraph({
           spacing: { before: 0, after: 0 },
+          keepNext: true, keepLines: true,
           children: [new TextRun({ text: label, font: FONT, size: SZ_BODY, bold: true, color: BLACK })],
         })],
       }),
@@ -910,9 +920,9 @@ function noteHdrB(cyYear: string, pyYear: string): TableRow {
   return new TableRow({
     tableHeader: true,
     children: [
-      cell({ text: "Particulars", w: NW_DESC, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, padL: 100, vertPad: 22 }),
-      cell({ text: hdr(cyYear), w: NW_CY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120, vertPad: 22 }),
-      cell({ text: hdr(pyYear), w: NW_PY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120, vertPad: 22 }),
+      cell({ text: "Particulars", w: NW_DESC, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, padL: 100, vertPad: 22, keepNext: true }),
+      cell({ text: hdr(cyYear), w: NW_CY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120, vertPad: 22, keepNext: true }),
+      cell({ text: hdr(pyYear), w: NW_PY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120, vertPad: 22, keepNext: true }),
     ],
   });
 }
@@ -934,9 +944,9 @@ function noteRowB(
   return new TableRow({
     cantSplit: true,
     children: [
-      cell({ text: label, w: NW_DESC, bold, bg, borders: bdr, indent, vertPad: 18 }),
-      ac(cy, NW_CY, { bold, bg, borders: bdr, vertPad: 18 }),
-      ac(py, NW_PY, { bold, bg, borders: bdr, vertPad: 18 }),
+      cell({ text: label, w: NW_DESC, bold, bg, borders: bdr, indent, vertPad: 18, keepNext: true }),
+      ac(cy, NW_CY, { bold, bg, borders: bdr, vertPad: 18, keepNext: true }),
+      ac(py, NW_PY, { bold, bg, borders: bdr, vertPad: 18, keepNext: true }),
     ],
   });
 }
@@ -955,24 +965,25 @@ function noteHdrA(cyYear: string, pyYear: string): TableRow[] {
       children: [new Paragraph({
         alignment: AlignmentType.CENTER,
         spacing: { before: 0, after: 0 },
+        keepNext: true, keepLines: true,
         children: [new TextRun({ text, font: FONT, size: SZ_BODY, bold: true, color: WHITE })],
       })],
     });
 
   const r1 = new TableRow({
     children: [
-      cell({ text: "Particulars", w: NW_A_DESC, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, padL: 100, vertPad: 22 }),
+      cell({ text: "Particulars", w: NW_A_DESC, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, padL: 100, vertPad: 22, keepNext: true }),
       spanCell("Long Term", ltw, 2),
       spanCell("Short Term", stw, 2),
     ],
   });
   const r2 = new TableRow({
     children: [
-      cell({ text: "", w: NW_A_DESC, sz: SZ_BODY, color: WHITE, bg: BG_HDR, borders: BDR_NONE, vertPad: 22 }),
-      cell({ text: hdr(cyYear), w: NW_A_LTCY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80, vertPad: 22 }),
-      cell({ text: hdr(pyYear), w: NW_A_LTPY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80, vertPad: 22 }),
-      cell({ text: hdr(cyYear), w: NW_A_STCY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80, vertPad: 22 }),
-      cell({ text: hdr(pyYear), w: NW_A_STPY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80, vertPad: 22 }),
+      cell({ text: "", w: NW_A_DESC, sz: SZ_BODY, color: WHITE, bg: BG_HDR, borders: BDR_NONE, vertPad: 22, keepNext: true }),
+      cell({ text: hdr(cyYear), w: NW_A_LTCY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80, vertPad: 22, keepNext: true }),
+      cell({ text: hdr(pyYear), w: NW_A_LTPY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80, vertPad: 22, keepNext: true }),
+      cell({ text: hdr(cyYear), w: NW_A_STCY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80, vertPad: 22, keepNext: true }),
+      cell({ text: hdr(pyYear), w: NW_A_STPY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80, vertPad: 22, keepNext: true }),
     ],
   });
   return [r1, r2];
@@ -994,11 +1005,11 @@ function noteRowA(
   return new TableRow({
     cantSplit: true,
     children: [
-      cell({ text: label, w: NW_A_DESC, bold, bg, borders: bdr, indent, vertPad: 18 }),
-      ac(ltCy, NW_A_LTCY, { bold, bg, borders: bdr, vertPad: 18 }),
-      ac(ltPy, NW_A_LTPY, { bold, bg, borders: bdr, vertPad: 18 }),
-      ac(stCy, NW_A_STCY, { bold, bg, borders: bdr, vertPad: 18 }),
-      ac(stPy, NW_A_STPY, { bold, bg, borders: bdr, vertPad: 18 }),
+      cell({ text: label, w: NW_A_DESC, bold, bg, borders: bdr, indent, vertPad: 18, keepNext: true }),
+      ac(ltCy, NW_A_LTCY, { bold, bg, borders: bdr, vertPad: 18, keepNext: true }),
+      ac(ltPy, NW_A_LTPY, { bold, bg, borders: bdr, vertPad: 18, keepNext: true }),
+      ac(stCy, NW_A_STCY, { bold, bg, borders: bdr, vertPad: 18, keepNext: true }),
+      ac(stPy, NW_A_STPY, { bold, bg, borders: bdr, vertPad: 18, keepNext: true }),
     ],
   });
 }
