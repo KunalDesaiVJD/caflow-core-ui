@@ -52,7 +52,7 @@ import { generateCorporateFinancialsDocx } from "@/lib/corporateFinancialsDocx";
 import { sumNotesSubRowsCY, sumNotesSubRowsPY, getSharesOutstanding, getFAGridNetBlockTotal } from "@/lib/notesAutoPopulate";
 import { getNCENoteFaceTotal, NCE_CODE_TO_NOTE, NOTE_NATURE as NCE_NOTE_NATURE } from "@/lib/nceAutoPopulate";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
-import { isTallyPLAccount } from "@/lib/tallyDetection";
+import { isTallyPLAccount, currentYearProfitAlreadyInReserves } from "@/lib/tallyDetection";
 
 // ═══════════════════════════════════════
 // Schedule III Line Item Definitions
@@ -2495,6 +2495,7 @@ export default function PipelineFinancialStatements({
   const tbAccounts: {
     account_name: string; account_group: string;
     balance: number; opening_balance: number;
+    tally_debit: number; tally_credit: number;
   }[] = useMemo(() => {
     if (!tallyTb?.length) return [];
     return tallyTb.map((l: any) => {
@@ -2506,6 +2507,10 @@ export default function PipelineFinancialStatements({
         balance: isDr ? cb : -cb,
         opening_balance: Math.abs(Number(l.opening_balance ?? 0)) *
                          (String(l.opening_type ?? "").toUpperCase() === "CR" ? -1 : 1),
+        // Current-year journal movement — needed by the shared books-closed
+        // detection so FS and the COA-mapping screen credit net profit identically.
+        tally_debit:  Number(l.debit_amount  ?? 0),
+        tally_credit: Number(l.credit_amount ?? 0),
       };
     }).filter((a: any) => a.account_name);
   }, [tallyTb]);
@@ -2754,11 +2759,21 @@ export default function PipelineFinancialStatements({
     // This mirrors the standard closing entry: Dr P&L A/c → Cr Reserves & Surplus.
     // Note: if the user has set a manual override on BS_EQ_RS, this still applies
     // on top — net profit is a required accounting transfer, not an optional entry.
+    //
+    // BOOKS-CLOSED GUARD (shared with PipelineStage3 via currentYearProfitAlreadyInReserves):
+    // when the firm has closed its books and already journalled the year's P&L
+    // into a reserves ledger, the closing balance ALREADY includes the profit —
+    // crediting netPL again would double-count.  Skipping it here keeps FS and the
+    // COA-mapping screen perfectly consistent.  The helper is accumulator-aware:
+    // if an un-transferred "Profit & Loss A/c" (opening ≈ 0) is present the profit
+    // has NOT been transferred, so it is still credited (the ACCU PANELS case).
     if (!isNonCorporate) {
+      const reservesLedgers = tbAccounts.filter(a => coaMapping[a.account_name]?.code === "BS_EQ_RS");
+      const booksClosed = currentYearProfitAlreadyInReserves(reservesLedgers);
       const rev   = amounts["PL_REV"] || 0; // negative (credit)
       const exp   = amounts["PL_EXP"] || 0; // positive (debit)
       const netPL = Math.round((-rev - exp) * 100) / 100;
-      if (Math.abs(netPL) > 0.005) {
+      if (!booksClosed && Math.abs(netPL) > 0.005) {
         // Credit net profit to Reserves (negative = credit in Tally sign convention)
         amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) - netPL;
         // Re-run the full tree so every parent (BS_EQ → BS root) picks up the change.

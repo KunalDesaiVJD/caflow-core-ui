@@ -34,6 +34,7 @@ import {
 import { NCE_FS_ITEMS, NCE_AUTO_MAP_RULES } from "@/config/nceLineItems";
 import type { FSLineItem } from "@/config/nceLineItems";
 import { MappingRulesPanel, type MappingRule } from "@/components/pipeline/MappingRulesPanel";
+import { currentYearProfitAlreadyInReserves } from "@/lib/tallyDetection";
 import { useAiSkills } from "@/hooks/useAiSkills";
 
 // ═══════════════════════════════════════
@@ -1714,14 +1715,9 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     //   closed → skip the netPL auto-flow.
     if (!isNonCorporate) {
       const reservesLedgers = tbAccounts.filter(a => coaMapping[a.account_name]?.code === "BS_EQ_RS");
-      const booksClosed = reservesLedgers.some(a => {
-        const isAutoFlowAccumulator =
-          isTallyPLAccount(a.account_name) && Math.abs(a.opening_balance ?? 0) < 0.005;
-        if (isAutoFlowAccumulator) return false; // current-year accumulator, not a closure indicator
-        const dr = Number(a.tally_debit  || 0);
-        const cr = Number(a.tally_credit || 0);
-        return Math.abs(dr) > 0.005 || Math.abs(cr) > 0.005;
-      });
+      // Shared with PipelineFinancialStatements so the COA-mapping screen and the
+      // Financial Statements never disagree on whether to credit current-year profit.
+      const booksClosed = currentYearProfitAlreadyInReserves(reservesLedgers);
 
       if (!booksClosed) {
         const rev   = amounts["PL_REV"] || 0; // negative (credit)
