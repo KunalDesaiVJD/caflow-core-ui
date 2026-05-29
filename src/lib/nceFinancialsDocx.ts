@@ -670,21 +670,26 @@ function buildPLTable(
     // Task 3 (doc8): reduced child row indentation (6 spaces + indent:1).
     // Task 4 (doc8): use maybeRow() so sub-rows with zero data are hidden,
     // and only show note number when the row has a non-zero amount.
-    ...(cogsNoteCy && cogsNotePy
-      ? (() => {
-          const paCy = cogsNoteCy["pa_total"] ?? 0; const paPy = cogsNotePy["pa_total"] ?? 0;
-          const pbCy = cogsNoteCy["pb_total"] ?? 0; const pbPy = cogsNotePy["pb_total"] ?? 0;
-          const pcCy = cogsNoteCy["pc_total"] ?? 0; const pcPy = cogsNotePy["pc_total"] ?? 0;
-          return [
-            parentRow("(a)   Cost of goods sold", 0),
-            ...maybeRow("      (i)   Cost of Materials Consumed",                                      (paCy || paPy) ? n(24) : null, paCy, paPy, 1),
-            ...maybeRow("      (ii)  Purchases of Stock-in-Trade",                                    (pbCy || pbPy) ? n(25) : null, pbCy, pbPy, 1),
-            ...maybeRow("      (iii) Changes in Inventories of Finished Goods, WIP & Stock-in-Trade", (pcCy || pcPy) ? n(26) : null, pcCy, pcPy, 1),
-          ];
-        })()
-      : [
-          ...maybeRow("(a)   Cost of goods sold", n(24), cogsCy, cogsPy),
-        ]),
+    // Root-cause fix (Word ≠ App on COGS sub-items): the on-screen App P&L
+    // (buildNCEPLRows) renders the three Cost-of-Goods-Sold sub-lines from the FS
+    // COMPUTED AMOUNTS — (i) = NCE_COGS, (ii) = blank, (iii) = NCE_CII — NOT from
+    // the cogs note's pa_total/pb_total/pc_total. Those note totals are frequently
+    // 0 (the breakup rows live under different keys / weren't synced) even when the
+    // FS amount is fully populated from COA mapping, so the old code silently
+    // DROPPED "Cost of Materials Consumed" (and Purchases) from the Word export
+    // while the App showed them. Mirror the App 1:1 so Word == App: same amounts,
+    // same note refs (24/25/26 resolved through the shared dynamic map), all three
+    // sub-lines always shown under "(a) Cost of goods sold".
+    ...((): TableRow[] => {
+      const matCy = A("NCE_COGS", cy); const matPy = A("NCE_COGS", py);   // (i)   materials
+      const ciiCy = A("NCE_CII",  cy); const ciiPy = A("NCE_CII",  py);   // (iii) changes in inventories
+      return [
+        parentRow("(a)   Cost of goods sold", 0),
+        dataRow("      (i)   Cost of Materials Consumed",                                      n(24), matCy, matPy, 1),
+        dataRow("      (ii)  Purchases of Stock-in-Trade",                                     n(25), 0,     0,     1),
+        dataRow("      (iii) Changes in Inventories of Finished Goods, WIP & Stock-in-Trade",  n(26), ciiCy, ciiPy, 1),
+      ];
+    })(),
     dataRow("(b)   Employee benefits expense",      n(27), empCy,  empPy),
     dataRow("(c)   Finance costs",                  n(28), finCy,  finPy),
     dataRow("(d)   Depreciation and amortisation",  n(10), depCy,  depPy),
