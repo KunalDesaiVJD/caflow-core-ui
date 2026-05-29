@@ -670,6 +670,21 @@ function PatternBTable({
   const grandTotalIdx = config.rows.reduce((last, row, i) => row.isTotal ? i : last, -1);
   const grandTotalId  = grandTotalIdx >= 0 ? config.rows[grandTotalIdx].id : null;
 
+  // Recursive display aggregate for a custom row = its own amount PLUS every
+  // custom row nested beneath it (attachedTo it), to any depth. Mirrors
+  // computeDisplayData's sumCustomB so a collapsed parent (e.g. "Bank Interest
+  // Income" holding a child "Interest On Deposit") shows the correct rolled-up
+  // figure instead of blank. `seen` guards against attachedTo cycles.
+  const sumCustomDisplayB = (id: string, seen: Set<string> = new Set()): { cy: number; py: number } => {
+    if (seen.has(id)) return { cy: 0, py: 0 };
+    seen.add(id);
+    let c = rawCy[id] ?? 0, p = rawPy[id] ?? 0;
+    for (const cr of customRows) {
+      if (cr.attachedTo === id) { const r = sumCustomDisplayB(cr.id, seen); c += r.cy; p += r.py; }
+    }
+    return { cy: c, py: p };
+  };
+
   // Task 2 (doc8): pre-compute empty section header IDs when hideEmptySections is active
   const emptySectionHdrIds = useMemo(() => {
     if (!hideEmptySections) return new Set<string>();
@@ -1007,8 +1022,8 @@ function PatternBTable({
                 const hasSrcsB = (cySources[row.id]?.filter(s => s.amountCy !== 0).length ?? 0) > 0;
                 const showToggleB = hasAttachedB || hasSrcsB;
                 const isOpenB = openSources.has(row.id);
-                const aggCyB = (rawCy[row.id] ?? 0) + (hasAttachedB ? attachedHere.reduce((s, cr) => s + (rawCy[cr.id] ?? 0), 0) : 0);
-                const aggPyB = (rawPy[row.id] ?? 0) + (hasAttachedB ? attachedHere.reduce((s, cr) => s + (rawPy[cr.id] ?? 0), 0) : 0);
+                const aggCyB = (rawCy[row.id] ?? 0) + (hasAttachedB ? attachedHere.reduce((s, cr) => s + sumCustomDisplayB(cr.id).cy, 0) : 0);
+                const aggPyB = (rawPy[row.id] ?? 0) + (hasAttachedB ? attachedHere.reduce((s, cr) => s + sumCustomDisplayB(cr.id).py, 0) : 0);
                 return (
                 <TableRow key={row.id} className="hover:bg-muted/10">
                   <TableCell className={cn("p-1", indentCls(row.indent))}>
@@ -1114,32 +1129,69 @@ function PatternBTable({
                 })
               }
 
-              {/* Custom rows attached under this static row — only visible when expanded */}
-              {attachedHere.length > 0 && openSources.has(row.id) && attachedHere.map(cr => (
-                <CustomRowEditor
-                  key={cr.id}
-                  row={cr}
-                  cyVal={rawCy[cr.id] ?? 0}
-                  pyVal={rawPy[cr.id] ?? 0}
-                  isPatternA={false}
-                  isChild={true}
-                  cyLtVal={0} cyStVal={0} pyLtVal={0} pyStVal={0}
-                  onChangeCy={v => onChangeCy(cr.id, v)}
-                  onChangePy={v => onChangePy(cr.id, v)}
-                  onChangeCyLt={() => {}} onChangeCySt={() => {}}
-                  onChangePyLt={() => {}} onChangePySt={() => {}}
-                  onChangeLabel={label => onChangeLabel(cr.id, label)}
-                  onDelete={() => onDeleteRow(cr.id)}
-                  headingOptions={allHeadingOptions.filter(o => o.id !== cr.id && o.id !== row.id)}
-                  onPromote={(targetId) => onPromote(cr.id, targetId)}
-                  onEjectCustomSource={(ledger, amt) => onEjectCustomSource(cr.id, ledger, amt)}
-                  onAddRow={onAddRow}
-                  sourceLabelOverrides={sourceLabelOverrides}
-                  onChangeSourceLabel={onChangeSourceLabel}
-                  isSelected={selectedCustomRows.has(cr.id)}
-                  onSelect={checked => toggleRowSelect(cr.id, checked)}
-                />
-              ))}
+              {/* Custom rows attached under this static row — only visible when expanded.
+                  Each may itself parent further custom sub-rows (custom-under-custom,
+                  e.g. "Interest On Deposit" under "Bank Interest Income"); render those
+                  nested children too, otherwise they'd be invisible & uneditable. */}
+              {attachedHere.length > 0 && openSources.has(row.id) && attachedHere.map(cr => {
+                const customSubRows = customRows.filter(sub => sub.attachedTo === cr.id);
+                const crIsOpen = openSources.has(cr.id);
+                const crAgg = sumCustomDisplayB(cr.id);
+                return (
+                <Fragment key={cr.id}>
+                  <CustomRowEditor
+                    row={cr}
+                    cyVal={customSubRows.length > 0 && !crIsOpen ? crAgg.cy : (rawCy[cr.id] ?? 0)}
+                    pyVal={customSubRows.length > 0 && !crIsOpen ? crAgg.py : (rawPy[cr.id] ?? 0)}
+                    isPatternA={false}
+                    isChild={true}
+                    cyLtVal={0} cyStVal={0} pyLtVal={0} pyStVal={0}
+                    onChangeCy={v => onChangeCy(cr.id, v)}
+                    onChangePy={v => onChangePy(cr.id, v)}
+                    onChangeCyLt={() => {}} onChangeCySt={() => {}}
+                    onChangePyLt={() => {}} onChangePySt={() => {}}
+                    onChangeLabel={label => onChangeLabel(cr.id, label)}
+                    onDelete={() => onDeleteRow(cr.id)}
+                    headingOptions={allHeadingOptions.filter(o => o.id !== cr.id && o.id !== row.id)}
+                    onPromote={(targetId) => onPromote(cr.id, targetId)}
+                    onEjectCustomSource={(ledger, amt) => onEjectCustomSource(cr.id, ledger, amt)}
+                    onAddRow={onAddRow}
+                    hasSubRows={customSubRows.length > 0}
+                    isOpen={crIsOpen}
+                    onToggle={() => toggleSources(cr.id)}
+                    sourceLabelOverrides={sourceLabelOverrides}
+                    onChangeSourceLabel={onChangeSourceLabel}
+                    isSelected={selectedCustomRows.has(cr.id)}
+                    onSelect={checked => toggleRowSelect(cr.id, checked)}
+                  />
+                  {customSubRows.length > 0 && crIsOpen && customSubRows.map(sub => (
+                    <CustomRowEditor
+                      key={sub.id}
+                      row={sub}
+                      cyVal={rawCy[sub.id] ?? 0}
+                      pyVal={rawPy[sub.id] ?? 0}
+                      isPatternA={false}
+                      isChild={true}
+                      cyLtVal={0} cyStVal={0} pyLtVal={0} pyStVal={0}
+                      onChangeCy={v => onChangeCy(sub.id, v)}
+                      onChangePy={v => onChangePy(sub.id, v)}
+                      onChangeCyLt={() => {}} onChangeCySt={() => {}}
+                      onChangePyLt={() => {}} onChangePySt={() => {}}
+                      onChangeLabel={label => onChangeLabel(sub.id, label)}
+                      onDelete={() => onDeleteRow(sub.id)}
+                      headingOptions={allHeadingOptions.filter(o => o.id !== sub.id && o.id !== cr.id && o.id !== row.id)}
+                      onPromote={(targetId) => onPromote(sub.id, targetId)}
+                      onEjectCustomSource={(ledger, amt) => onEjectCustomSource(sub.id, ledger, amt)}
+                      onAddRow={onAddRow}
+                      sourceLabelOverrides={sourceLabelOverrides}
+                      onChangeSourceLabel={onChangeSourceLabel}
+                      isSelected={selectedCustomRows.has(sub.id)}
+                      onSelect={checked => toggleRowSelect(sub.id, checked)}
+                    />
+                  ))}
+                </Fragment>
+                );
+              })}
             </>
           );
         })}
@@ -1199,6 +1251,21 @@ function PatternATable({
   );
   const grandTotalIdx = config.rows.reduce((last, row, i) => row.isTotal ? i : last, -1);
   const grandTotalId  = grandTotalIdx >= 0 ? config.rows[grandTotalIdx].id : null;
+
+  // Recursive LT/ST display aggregate for a custom row including every custom
+  // row nested beneath it (attachedTo it), to any depth. Mirrors
+  // computeDisplayData's sumCustomA so a collapsed parent shows the rolled-up
+  // figure. `seen` guards against attachedTo cycles.
+  const sumCustomDisplayA = (id: string, seen: Set<string> = new Set()): { lc: number; lp: number; sc: number; sp: number } => {
+    if (seen.has(id)) return { lc: 0, lp: 0, sc: 0, sp: 0 };
+    seen.add(id);
+    let lc = rawCy[id + "_lt"] ?? 0, lp = rawPy[id + "_lt"] ?? 0;
+    let sc = rawCy[id + "_st"] ?? 0, sp = rawPy[id + "_st"] ?? 0;
+    for (const cr of customRows) {
+      if (cr.attachedTo === id) { const r = sumCustomDisplayA(cr.id, seen); lc += r.lc; lp += r.lp; sc += r.sc; sp += r.sp; }
+    }
+    return { lc, lp, sc, sp };
+  };
 
   // Task 2 (doc8): pre-compute empty section header IDs when hideEmptySections is active.
   // Pattern A stores values as key_lt / key_st, so check both suffixes.
@@ -1506,10 +1573,10 @@ function PatternATable({
                 const showToggleA  = hasSrcsA || hasAttachedA;
                 const isOpenA      = openSources.has(row.id);
 
-                const aggLtCy = (rawCy[row.id + "_lt"] ?? 0) + (hasAttachedA ? attachedHere.reduce((s, cr) => s + (rawCy[cr.id + "_lt"] ?? 0), 0) : 0);
-                const aggStCy = (rawCy[row.id + "_st"] ?? 0) + (hasAttachedA ? attachedHere.reduce((s, cr) => s + (rawCy[cr.id + "_st"] ?? 0), 0) : 0);
-                const aggLtPy = (rawPy[row.id + "_lt"] ?? 0) + (hasAttachedA ? attachedHere.reduce((s, cr) => s + (rawPy[cr.id + "_lt"] ?? 0), 0) : 0);
-                const aggStPy = (rawPy[row.id + "_st"] ?? 0) + (hasAttachedA ? attachedHere.reduce((s, cr) => s + (rawPy[cr.id + "_st"] ?? 0), 0) : 0);
+                const aggLtCy = (rawCy[row.id + "_lt"] ?? 0) + (hasAttachedA ? attachedHere.reduce((s, cr) => s + sumCustomDisplayA(cr.id).lc, 0) : 0);
+                const aggStCy = (rawCy[row.id + "_st"] ?? 0) + (hasAttachedA ? attachedHere.reduce((s, cr) => s + sumCustomDisplayA(cr.id).sc, 0) : 0);
+                const aggLtPy = (rawPy[row.id + "_lt"] ?? 0) + (hasAttachedA ? attachedHere.reduce((s, cr) => s + sumCustomDisplayA(cr.id).lp, 0) : 0);
+                const aggStPy = (rawPy[row.id + "_st"] ?? 0) + (hasAttachedA ? attachedHere.reduce((s, cr) => s + sumCustomDisplayA(cr.id).sp, 0) : 0);
 
                 return (
                 <TableRow key={row.id} className="hover:bg-muted/10">
@@ -1635,34 +1702,73 @@ function PatternATable({
                 })
               }
 
-              {/* Custom rows attached under this static row — only visible when expanded */}
-              {attachedHere.length > 0 && openSources.has(row.id) && attachedHere.map(cr => (
-                <CustomRowEditor
-                  key={cr.id}
-                  row={cr}
-                  cyVal={0} pyVal={0}
-                  isPatternA={true}
-                  isChild={true}
-                  cyLtVal={rawCy[cr.id + "_lt"] ?? 0}
-                  cyStVal={rawCy[cr.id + "_st"] ?? 0}
-                  pyLtVal={rawPy[cr.id + "_lt"] ?? 0}
-                  pyStVal={rawPy[cr.id + "_st"] ?? 0}
-                  onChangeCy={() => {}} onChangePy={() => {}}
-                  onChangeCyLt={v => onChangeCy(cr.id + "_lt", v)}
-                  onChangeCySt={v => onChangeCy(cr.id + "_st", v)}
-                  onChangePyLt={v => onChangePy(cr.id + "_lt", v)}
-                  onChangePySt={v => onChangePy(cr.id + "_st", v)}
-                  onChangeLabel={label => onChangeLabel(cr.id, label)}
-                  onDelete={() => onDeleteRow(cr.id)}
-                  headingOptions={allHeadingOptions.filter(o => o.id !== cr.id && o.id !== row.id)}
-                  onPromote={(targetId) => onPromote(cr.id, targetId)}
-                  onSwapLtSt={onSwapLtSt ? () => onSwapLtSt(cr.id) : undefined}
-                  onEjectCustomSource={(ledger, amt) => onEjectCustomSource(cr.id, ledger, amt)}
-                  onAddRow={onAddRow}
-                  sourceLabelOverrides={sourceLabelOverrides}
-                  onChangeSourceLabel={onChangeSourceLabel}
-                />
-              ))}
+              {/* Custom rows attached under this static row — only visible when expanded.
+                  Each may itself parent further custom sub-rows (custom-under-custom);
+                  render those nested children too, otherwise they'd be invisible. */}
+              {attachedHere.length > 0 && openSources.has(row.id) && attachedHere.map(cr => {
+                const customSubRows = customRows.filter(sub => sub.attachedTo === cr.id);
+                const crIsOpen = openSources.has(cr.id);
+                const crAgg = sumCustomDisplayA(cr.id);
+                const showAgg = customSubRows.length > 0 && !crIsOpen;
+                return (
+                <Fragment key={cr.id}>
+                  <CustomRowEditor
+                    row={cr}
+                    cyVal={0} pyVal={0}
+                    isPatternA={true}
+                    isChild={true}
+                    cyLtVal={showAgg ? crAgg.lc : (rawCy[cr.id + "_lt"] ?? 0)}
+                    cyStVal={showAgg ? crAgg.sc : (rawCy[cr.id + "_st"] ?? 0)}
+                    pyLtVal={showAgg ? crAgg.lp : (rawPy[cr.id + "_lt"] ?? 0)}
+                    pyStVal={showAgg ? crAgg.sp : (rawPy[cr.id + "_st"] ?? 0)}
+                    onChangeCy={() => {}} onChangePy={() => {}}
+                    onChangeCyLt={v => onChangeCy(cr.id + "_lt", v)}
+                    onChangeCySt={v => onChangeCy(cr.id + "_st", v)}
+                    onChangePyLt={v => onChangePy(cr.id + "_lt", v)}
+                    onChangePySt={v => onChangePy(cr.id + "_st", v)}
+                    onChangeLabel={label => onChangeLabel(cr.id, label)}
+                    onDelete={() => onDeleteRow(cr.id)}
+                    headingOptions={allHeadingOptions.filter(o => o.id !== cr.id && o.id !== row.id)}
+                    onPromote={(targetId) => onPromote(cr.id, targetId)}
+                    onSwapLtSt={onSwapLtSt ? () => onSwapLtSt(cr.id) : undefined}
+                    onEjectCustomSource={(ledger, amt) => onEjectCustomSource(cr.id, ledger, amt)}
+                    onAddRow={onAddRow}
+                    hasSubRows={customSubRows.length > 0}
+                    isOpen={crIsOpen}
+                    onToggle={() => toggleSources(cr.id)}
+                    sourceLabelOverrides={sourceLabelOverrides}
+                    onChangeSourceLabel={onChangeSourceLabel}
+                  />
+                  {customSubRows.length > 0 && crIsOpen && customSubRows.map(sub => (
+                    <CustomRowEditor
+                      key={sub.id}
+                      row={sub}
+                      cyVal={0} pyVal={0}
+                      isPatternA={true}
+                      isChild={true}
+                      cyLtVal={rawCy[sub.id + "_lt"] ?? 0}
+                      cyStVal={rawCy[sub.id + "_st"] ?? 0}
+                      pyLtVal={rawPy[sub.id + "_lt"] ?? 0}
+                      pyStVal={rawPy[sub.id + "_st"] ?? 0}
+                      onChangeCy={() => {}} onChangePy={() => {}}
+                      onChangeCyLt={v => onChangeCy(sub.id + "_lt", v)}
+                      onChangeCySt={v => onChangeCy(sub.id + "_st", v)}
+                      onChangePyLt={v => onChangePy(sub.id + "_lt", v)}
+                      onChangePySt={v => onChangePy(sub.id + "_st", v)}
+                      onChangeLabel={label => onChangeLabel(sub.id, label)}
+                      onDelete={() => onDeleteRow(sub.id)}
+                      headingOptions={allHeadingOptions.filter(o => o.id !== sub.id && o.id !== cr.id && o.id !== row.id)}
+                      onPromote={(targetId) => onPromote(sub.id, targetId)}
+                      onSwapLtSt={onSwapLtSt ? () => onSwapLtSt(sub.id) : undefined}
+                      onEjectCustomSource={(ledger, amt) => onEjectCustomSource(sub.id, ledger, amt)}
+                      onAddRow={onAddRow}
+                      sourceLabelOverrides={sourceLabelOverrides}
+                      onChangeSourceLabel={onChangeSourceLabel}
+                    />
+                  ))}
+                </Fragment>
+                );
+              })}
             </>
           );
         })}
