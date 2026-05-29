@@ -1151,11 +1151,16 @@ export async function nceAutoPopulate(
 
       // Fallback: if nothing was populated at all, use FS-code totals.
       // Same double-count guard as Pattern A — manual rows count as "data".
+      // IMPORTANT: check BOTH cy AND py. A note whose figures live only in the
+      // PY column (e.g. a manual "Interest On Deposit" with py=8,785, cy=0)
+      // was wrongly treated as empty, so the "Auto-filled from COA total"
+      // placeholder kept being re-created on every sync and double-counted.
       const manualHasAmountB = manualRows.some(mr =>
-        Math.abs(prev.cy?.[mr.id] ?? 0) > 0.005,
+        Math.abs(prev.cy?.[mr.id] ?? 0) > 0.005 || Math.abs(prev.py?.[mr.id] ?? 0) > 0.005,
       );
       const hasData = autoRows.length > 0
-        || Object.values(newCy).some(v => v > 0)
+        || Object.values(newCy).some(v => Math.abs(v) > 0.005)
+        || Object.values(newPy).some(v => Math.abs(v) > 0.005)
         || manualHasAmountB;
       if (!hasData) {
         let fsCY = 0, fsPY = 0;
@@ -1571,13 +1576,20 @@ export async function nceAutoPopulate(
       // Previously the manual rows' amounts (preserved later from prev.cy)
       // PLUS the auto-total row were both summed into Total, inflating it by
       // 2× the manual amount.
+      // Check BOTH cy AND py (PY-only notes were wrongly treated as empty,
+      // causing the "Auto-filled from COA total" placeholder to regenerate and
+      // double-count — see the Pattern B note above).
       const manualHasAmount = manualRows.some(mr =>
         Math.abs(prev.cy?.[mr.id] ?? 0) > 0.005 ||
         Math.abs(prev.cy?.[mr.id + "_lt"] ?? 0) > 0.005 ||
-        Math.abs(prev.cy?.[mr.id + "_st"] ?? 0) > 0.005,
+        Math.abs(prev.cy?.[mr.id + "_st"] ?? 0) > 0.005 ||
+        Math.abs(prev.py?.[mr.id] ?? 0) > 0.005 ||
+        Math.abs(prev.py?.[mr.id + "_lt"] ?? 0) > 0.005 ||
+        Math.abs(prev.py?.[mr.id + "_st"] ?? 0) > 0.005,
       );
       const hasData = autoRows.length > 0
-        || Object.values(newCy).some(v => v > 0)
+        || Object.values(newCy).some(v => Math.abs(v) > 0.005)
+        || Object.values(newPy).some(v => Math.abs(v) > 0.005)
         || manualHasAmount;
       if (!hasData) {
         let ltCY = 0, ltPY = 0, stCY = 0, stPY = 0;
