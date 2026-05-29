@@ -3061,6 +3061,23 @@ export default function PipelineFinancialStatements({
       key:     string,
       fsCode:  string,
     ): number => {
+      // PY COMPARATIVE BALANCE SHEET — derive from the current-year OPENING
+      // balances (exportPy), the same self-balancing source the COA-mapping
+      // screen uses, in preference to the note breakup sum.  The note PY can be
+      // sourced from a PY-shell snapshot (py_source = "py_shell") whose closing
+      // balances no longer tie to the opening balances carried into the current
+      // year's Tally file (e.g. post-sync adjustments / reclassifications), which
+      // made the comparative Balance Sheet diverge from COA mapping and not tally.
+      //
+      // Only the BALANCE-SHEET sections do this.  P&L comparatives MUST keep the
+      // note / prior-year sourcing (opening balance is always 0 for P&L ledgers).
+      // Fall back to the note sum / pyOf when there is NO opening balance — e.g. a
+      // manual breakup note with no TB-mapped ledger (share capital keyed straight
+      // into stage5_notes), so those clients keep showing their note figure.
+      if (section !== "pl") {
+        const openingPy = exportPy[fsCode];
+        if (openingPy !== undefined && Math.abs(openingPy) > 0.005) return openingPy;
+      }
       const notesSum = sumNotesSubRowsPY(stage5NotesData ?? null, section, key);
       if (notesSum == null) return pyOf(fsCode);
       return isCreditSideCode(fsCode) ? -notesSum : notesSum;
