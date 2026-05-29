@@ -2086,6 +2086,46 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
               }
             }
 
+            // Note 4 heal (NCE — duplicate rendering after move): remove any
+            // standalone AUTO custom row whose label duplicates a MANUAL custom
+            // row in the same note. This is the leftover original auto row that
+            // a re-sync re-created after the user moved the ledger into a manual
+            // row — it caused the ledger to render twice and the totals to
+            // double-count. We keep the manual (user-placed) row and drop the
+            // duplicate auto row plus its stale cy/py keys. nceAutoPopulate now
+            // also skips re-creating it (manualLabelSet guard), so this is a
+            // one-shot cleanup of already-saved data.
+            for (const [nType, d] of Object.entries(built)) {
+              const rows = d.customRows ?? [];
+              const manualLabels = new Set(
+                rows
+                  .filter(r => r.source === "manual")
+                  .map(r => (r.label || "").trim().toLowerCase())
+                  .filter(Boolean),
+              );
+              if (manualLabels.size === 0) continue;
+              const dupAutoIds = new Set(
+                rows
+                  .filter(r =>
+                    r.source === "auto" &&
+                    manualLabels.has((r.label || "").trim().toLowerCase()),
+                  )
+                  .map(r => r.id),
+              );
+              if (dupAutoIds.size === 0) continue;
+              const keptRows = rows.filter(r => !dupAutoIds.has(r.id));
+              const cleanCy = { ...d.cy };
+              const cleanPy = { ...d.py };
+              for (const id of dupAutoIds) {
+                for (const suffix of ["", "_lt", "_st"]) {
+                  delete cleanCy[id + suffix];
+                  delete cleanPy[id + suffix];
+                }
+              }
+              built[nType] = { ...d, customRows: keptRows, cy: cleanCy, py: cleanPy };
+              healed = true;
+            }
+
             if (healed) {
               persistNotes(built, fy).catch(() => {/* best-effort */});
             }

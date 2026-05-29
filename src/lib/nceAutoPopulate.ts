@@ -874,6 +874,31 @@ export async function nceAutoPopulate(
     // be re-merged into an auto row on re-sync.
     const ejectedSet = new Set(prev.ejectedLedgers ?? []);
 
+    // Note 4 fix (NCE — duplicate rendering after move): build a set of labels
+    // belonging to MANUAL custom rows (rows the user re-parented via "Move to…"
+    // or typed by hand). A re-sync rebuilds auto rows straight from the TB, so
+    // without this guard a ledger the user already moved into a manual row gets
+    // re-created as a fresh standalone auto row → the SAME ledger then appears
+    // twice (once nested under its new parent, once standalone) and every total
+    // double-counts it. Skipping any TB ledger whose name matches a manual row
+    // label makes the move a TRUE re-parent: the ledger lives ONLY in the manual
+    // row. Also self-heals already-duplicated saved data on the next re-sync,
+    // because customRows is rebuilt as [autoRows, ...manualRows] from scratch.
+    const manualLabelSet = new Set(
+      manualRows
+        .map(mr => (mr.label || "").trim().toLowerCase())
+        .filter(Boolean),
+    );
+    // Also treat the source ledgers bundled inside manual auto-groups as claimed.
+    for (const mr of manualRows) {
+      for (const s of mr.sources ?? []) {
+        const nm = (s.ledger || "").trim().toLowerCase();
+        if (nm) manualLabelSet.add(nm);
+      }
+    }
+    const isClaimedByManual = (ledgerName: string) =>
+      manualLabelSet.has((ledgerName || "").trim().toLowerCase());
+
     const newCy:         Record<string, number> = {};
     const newPy:         Record<string, number> = {};
     const autoRows:      NCECustomRow[]         = [];
@@ -910,6 +935,9 @@ export async function nceAutoPopulate(
         if (Math.abs(amt) < 0.005) continue;
         // Skip ledgers the user has explicitly ejected to standalone rows
         if (ejectedSet.has(row.ledger_name)) continue;
+        // Note 4 fix: skip ledgers already represented by a user manual row
+        // (re-parented/typed) so we never re-create a duplicate auto row.
+        if (isClaimedByManual(row.ledger_name)) continue;
 
         const matchedRowId = smartMatch(row.ledger_name, smartRules, row.parent_group);
         if (matchedRowId) {
@@ -980,6 +1008,8 @@ export async function nceAutoPopulate(
           if (!nm) continue;
           const nmLower = nm.toLowerCase();
           if (cySeenLedger.has(nmLower)) continue;
+          // Note 4 fix: skip PY-only ledgers already claimed by a manual row.
+          if (isClaimedByManual(nm)) continue;
           // Resolution order: PY-shell exact → PY-shell lower → CY exact →
           // CY lower → parent_group inheritance. Mirrors how the variance
           // drill resolves PY ledgers, so what the auditor sees in the
@@ -1338,6 +1368,8 @@ export async function nceAutoPopulate(
         if (Math.abs(amt) < 0.005 && !keepForPy) continue;
         // Skip ledgers the user has explicitly ejected to standalone rows
         if (ejectedSet.has(row.ledger_name)) continue;
+        // Note 4 fix: skip ledgers already represented by a user manual row.
+        if (isClaimedByManual(row.ledger_name)) continue;
 
         const matchedRowId = smartMatch(row.ledger_name, smartRules, row.parent_group);
 
@@ -1394,6 +1426,8 @@ export async function nceAutoPopulate(
             const nmLower = nm.toLowerCase();
             if (cySeen.has(nmLower) || inUnmatched.has(nmLower)) continue;
             if (ejectedSet.has(nm)) continue;
+            // Note 4 fix: skip PY-only ledgers already claimed by a manual row.
+            if (isClaimedByManual(nm)) continue;
             let mapped: { code: string } | undefined =
               (pyCoaMap as any)[nm] || pyMappingLowerA[nmLower] ||
               (coaMapping as any)[nm] || cyMappingLowerA[nmLower];

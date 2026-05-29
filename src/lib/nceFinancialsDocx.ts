@@ -924,7 +924,10 @@ function noteRowB(
   const bdr  = style === "total" ? BDR_GRAND : style === "subtotal" ? BDR_SUB : BDR_ROW;
   const bold = style !== "data";
   // Task 1 (doc8): use compact vertPad=18 for note rows (tighter page fitting)
+  // Note 1 fix (intelligent pagination): cantSplit so a single row never breaks
+  // across a page boundary (prevents half-rows / broken table continuity).
   return new TableRow({
+    cantSplit: true,
     children: [
       cell({ text: label, w: NW_DESC, bold, bg, borders: bdr, indent, vertPad: 18 }),
       ac(cy, NW_CY, { bold, bg, borders: bdr, vertPad: 18 }),
@@ -982,7 +985,9 @@ function noteRowA(
   const bdr  = style === "total" ? BDR_GRAND : style === "subtotal" ? BDR_SUB : BDR_ROW;
   const bold = style !== "data";
   // Task 1 (doc8): compact vertPad=18 for note rows
+  // Note 1 fix (intelligent pagination): cantSplit so a row never breaks across pages.
   return new TableRow({
+    cantSplit: true,
     children: [
       cell({ text: label, w: NW_A_DESC, bold, bg, borders: bdr, indent, vertPad: 18 }),
       ac(ltCy, NW_A_LTCY, { bold, bg, borders: bdr, vertPad: 18 }),
@@ -1776,6 +1781,11 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
       : `Notes to Balance Sheet as on 31.03.${cyYearStr}`;
     return new Paragraph({
       spacing: { before: 280, after: 80 },
+      // Note 1 fix (intelligent pagination): keepNext binds the section heading to
+      // the following note table so it is never left orphaned at the bottom of a
+      // page — if the first rows won't fit, the whole block moves to the next page.
+      keepNext: true,
+      keepLines: true,
       children: [new TextRun({ text, font: FONT, size: SZ_HDR, bold: true, underline: {} })],
     });
   };
@@ -1803,48 +1813,70 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     borders: _pgBdr,
   };
 
-  // Task 12 (doc6): each note starts on a fresh page — use pageBreakBefore on
-  // the first paragraph preceding every note table so headings never split
-  // awkwardly at the bottom of a page.
-  const notePageBreak = () => new Paragraph({ pageBreakBefore: true, spacing: { before: 0, after: 0 }, children: [] });
-  // Task 1 (doc8): reduced spacer between notes for better page utilisation
-  const spacer        = () => new Paragraph({ spacing: { before: 160, after: 0 }, children: [] });
+  // Note 1 fix ("changes in non corporate" doc): INTELLIGENT PROFESSIONAL
+  // PAGINATION — replaces the previous forced one-note-per-page behaviour that
+  // wasted pages and produced unprofessional, lengthy exports. Notes now FLOW:
+  //   • multiple notes share a page until it genuinely fills
+  //   • the section heading ("Notes to Balance Sheet…" / "Notes to P&L…") is
+  //     emitted ONCE when the section starts, not before every note
+  //   • keepNext on the heading + cantSplit on every row prevent orphan headings,
+  //     half-tables, and separated totals (Word moves a block whole when it
+  //     cannot fit, instead of splitting awkwardly)
+  //   • large notes still continue naturally across pages with repeating headers
+  // A single page break separates the free-text Accounting Policies (Note 1) from
+  // the structured notes — that is a logical section boundary, not page wastage.
+  const pageBreakPara = () => new Paragraph({ pageBreakBefore: true, spacing: { before: 0, after: 0 }, children: [] });
+  // Slightly larger gap between consecutive notes so they read as distinct blocks
+  // while still flowing on the same page.
+  const noteGap       = () => new Paragraph({ spacing: { before: 220, after: 0 }, children: [] });
 
-  // Changes doc Task 6: every note from Note 3 onwards starts on its own page and
-  // the appropriate section heading ("Notes to Balance Sheet as on ..." or "Notes to
-  // Profit & Loss A/c as at ...") is repeated at the top of THAT page — not just once
-  // per section boundary.  This mirrors standard audit-report formatting where every
-  // Notes-to-Accounts page shows the section heading at the top.
+  // Build the flowing notes list. The Capital Account (Note 2) is a BS-section
+  // note, so we seed lastSection = "BS": the BS heading is emitted once before the
+  // capital tables and the first structured BS note does not repeat it. The P&L
+  // heading appears once, the moment the first P&L note is reached.
   const noteTablesWithHeaders: (Paragraph | Table)[] = [];
+  let lastSection: "BS" | "PL" = "BS";
   for (const [, table, sectionTag] of noteTablePairs) {
-    noteTablesWithHeaders.push(
-      notePageBreak(),                                          // each note on its own page
-      sectionTransitionParagraph(sectionTag as "BS" | "PL"),   // heading repeats on every page
-      spacer(),
-      table,
-    );
+    const sec = sectionTag as "BS" | "PL";
+    if (sec !== lastSection) {
+      // Section boundary (BS → P&L): emit the section heading once. keepNext keeps
+      // it attached to the following note table.
+      noteTablesWithHeaders.push(sectionTransitionParagraph(sec));
+      lastSection = sec;
+    } else {
+      // Same section: a small gap so the next note flows beneath the previous one.
+      noteTablesWithHeaders.push(noteGap());
+    }
+    noteTablesWithHeaders.push(table);
   }
 
-  // Note 1 (Significant Accounting Policies) appears first — no preceding title block
-  // or section heading per the document specification.
-  // "Notes to Balance Sheet as on..." appears before Note 2 (Capital Account) on a
-  // fresh page, and again before EVERY note in noteTablesWithHeaders (Notes 3+) per
-  // the Changes doc Task 6 requirement (page-level section heading, not note-level).
+  // Note 1 (Significant Accounting Policies) — free-text page, no section heading.
+  // After it, a single page break starts the structured notes. The BS section
+  // heading is shown once, then Capital Account + all BS notes flow, then the P&L
+  // heading + P&L notes flow — filling each page before moving to the next.
   const noteChildren: (Paragraph | Table)[] = [
     ...note1Paras,
-    notePageBreak(),
+    pageBreakPara(),
     sectionTransitionParagraph("BS"),
-    ...capitalTables.flatMap((t, i) => i === 0 ? [t] : [spacer(), t]),
+    ...capitalTables.flatMap((t, i) => i === 0 ? [t] : [noteGap(), t]),
     ...noteTablesWithHeaders,
   ];
 
   // Task 13 (doc6): client name header appears on every notes page so continuation
   // pages remain identifiable after printing/binding.
+  // Note 2 fix ("changes in non corporate" doc): the client/entity name MUST be
+  // visually identical across Balance Sheet, P&L and Notes pages. The BS/P&L
+  // pages render it via titleRows() at SZ_ENTITY (14pt), bold, NAVY, centered.
+  // The notes header previously used SZ_BODY (9pt) — the small/faded/inconsistent
+  // appearance reported by the user. Match the BS/P&L entity heading exactly:
+  // same font size, weight, colour and centre alignment, with a thin bottom rule
+  // mirroring the title block's underline so notes read as the same document.
   const notesHeader = new Header({
     children: [new Paragraph({
       alignment: AlignmentType.CENTER,
-      spacing:   { before: 0, after: 0 },
-      children:  [new TextRun({ text: entityName.toUpperCase(), font: FONT, size: SZ_BODY, bold: true, color: NAVY })],
+      spacing:   { before: 40, after: 40 },
+      border:    { bottom: { style: BorderStyle.SINGLE, size: 6, color: NAVY, space: 4 } },
+      children:  [new TextRun({ text: entityName.toUpperCase(), font: FONT, size: SZ_ENTITY, bold: true, color: NAVY })],
     })],
   });
 
