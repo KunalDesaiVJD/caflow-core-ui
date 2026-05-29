@@ -786,32 +786,26 @@ function makeFooter(entityName: string): Footer {
   });
 }
 
-// ─── RUNNING PAGE HEADER ──────────────────────────────────────────────────────
-// Issue 1 — the client name repeats at the top of EVERY page.
-// Issue 2 — Notes sections additionally carry a context line that repeats on
-//           every page of that section ("Notes to Balance Sheet …" / "Notes
-//           Profit & Loss A/c …").
+// ─── RUNNING PAGE HEADER (schedules format) ───────────────────────────────────
+// Matches the requested CA-firm schedule layout:
+//   • Client name  — CENTERED, bold, underlined.
+//   • Schedule line — LEFT-aligned, bold, underlined
+//     (e.g. "Schedules to Balance Sheet as at 31st March, 2026").
+// Repeats on every page of the section it is attached to. NOT used on the
+// Balance Sheet / P&L face pages, and there is no footer anywhere.
 function makeHeader(entityName: string, subtitle?: string): Header {
-  const nameRun = new TextRun({ text: entityName, font: FONT, size: SZ_SM, bold: true, color: NAVY });
-  const children: Paragraph[] = [];
+  const children: Paragraph[] = [
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing:   { before: 0, after: subtitle ? 60 : 40 },
+      children:  [new TextRun({ text: entityName, font: FONT, size: SZ_TITLE, bold: true, underline: {}, color: BLACK })],
+    }),
+  ];
   if (subtitle) {
     children.push(new Paragraph({
-      alignment: AlignmentType.CENTER,
-      spacing:   { before: 0, after: 10 },
-      children:  [nameRun],
-    }));
-    children.push(new Paragraph({
-      alignment: AlignmentType.CENTER,
-      border:    { bottom: { style: BorderStyle.SINGLE, size: 4, color: NAVY, space: 1 } },
+      alignment: AlignmentType.LEFT,
       spacing:   { before: 0, after: 40 },
-      children:  [new TextRun({ text: subtitle, font: FONT, size: SZ_SM, italic: true, color: DK_GREY })],
-    }));
-  } else {
-    children.push(new Paragraph({
-      alignment: AlignmentType.CENTER,
-      border:    { bottom: { style: BorderStyle.SINGLE, size: 4, color: NAVY, space: 1 } },
-      spacing:   { before: 0, after: 40 },
-      children:  [nameRun],
+      children:  [new TextRun({ text: subtitle, font: FONT, size: SZ_HDR, bold: true, underline: {}, color: BLACK })],
     }));
   }
   return new Header({ children });
@@ -2097,13 +2091,12 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
   // Ratios
   const hasRatios = ratios && (ratios.cy || ratios.py);
 
-  // Issue 2 — repeating context lines for the two notes sections.
-  const bsNotesSubtitle = `Notes to Balance Sheet as at 31st March, ${cyYear}`;
-  const plNotesSubtitle = `Notes Profit & Loss A/c. for Accounting year ${pyYear} - ${cyYear}`;
+  // Repeating schedule heading lines for the notes sections.
+  const bsNotesSubtitle = `Schedules to Balance Sheet as at 31st March, ${cyYear}`;
+  const plNotesSubtitle = `Schedules to Profit & Loss A/c. for Accounting year ${pyYear} - ${cyYear}`;
 
-  // Page settings (with page border). header/footer distances keep the running
-  // header/footer inside the existing margins so the BS/P&L faces still fit one
-  // page (the header sits within the top margin and does not push the body).
+  // Page settings (with page border). The header distance keeps the running
+  // header inside the existing top margin so the notes body isn't pushed.
   const _pgBdr = {
     pageBorders: { display: PageBorderDisplay.ALL_PAGES, offsetFrom: PageBorderOffsetFrom.PAGE },
     pageBorderTop:    { style: BorderStyle.SINGLE, size: 12, color: BG_HDR, space: 24 },
@@ -2122,40 +2115,38 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
     borders: _pgBdr,
   };
 
-  // Issue 1 — client name in every section's running header; Issue 2 adds the
-  // notes context line on the two notes sections.
-  const hf = (subtitle?: string) => ({
-    headers: { default: makeHeader(entityName, subtitle) },
-    footers: { default: makeFooter(entityName) },
-  });
+  // Running header ONLY on schedule/notes sections (never on the BS/P&L faces);
+  // no footer anywhere.
+  const hdr = (subtitle?: string) => ({ headers: { default: makeHeader(entityName, subtitle) } });
   const sigSpacer = () => new Paragraph({ spacing: { before: 160 }, children: [] });
 
   // Build sections
   const sections: any[] = [
-    // Balance Sheet
-    { properties: { page: portraitProps }, ...hf(), children: [bsTable, sigSpacer(), sigBlock()] },
-    // P&L
-    { properties: { page: portraitProps }, ...hf(), children: [plTable, sigSpacer(), sigBlock()] },
-    // Notes to Balance Sheet (Note 1 policies + BS notes)
-    { properties: { page: portraitProps }, ...hf(bsNotesSubtitle), children: bsNotesChildren },
+    // Balance Sheet face — NO running header, NO footer.
+    { properties: { page: portraitProps }, children: [bsTable, sigSpacer(), sigBlock()] },
+    // P&L face — NO running header, NO footer.
+    { properties: { page: portraitProps }, children: [plTable, sigSpacer(), sigBlock()] },
+    // Schedules to Balance Sheet (Note 1 policies + BS notes)
+    { properties: { page: portraitProps }, ...hdr(bsNotesSubtitle), children: bsNotesChildren },
   ];
 
-  // Notes to Profit & Loss — own section + own running header
+  // Schedules to Profit & Loss — own section + own running header
   if (plNotes.length > 0) {
-    sections.push({ properties: { page: portraitProps }, ...hf(plNotesSubtitle), children: plNotesChildren });
+    sections.push({ properties: { page: portraitProps }, ...hdr(plNotesSubtitle), children: plNotesChildren });
   }
 
-  // FA schedule (landscape) — only if FA rows exist
+  // FA schedule (landscape) — a Balance Sheet schedule, so it carries the BS
+  // schedule heading.
   if (faRows.length > 0) {
     const faNoteNo = noteNumbers["BS_NCA_FA"];
     sections.push({
       properties: { page: landscapeProps },
-      ...hf(),
+      ...hdr(bsNotesSubtitle),
       children:   [buildFATable(faRows, faNoteNo ? String(faNoteNo) : "—", cyLabel, pyLabel, stage5Notes?.fa?.py_manual ?? null, params.faPyRows ?? null)],
     });
   }
 
-  // Issue 3 (prior) — Financial Ratios export on their OWN page, AFTER every note.
+  // Financial Ratios on their OWN page, AFTER every note — client name header only.
   if (hasRatios) {
     const maxNoteNo = Object.values(noteNumbers)
       .map(v => (typeof v === "number" ? v : 0))
@@ -2163,7 +2154,7 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
     const ratioNoteNo = maxNoteNo > 0 ? maxNoteNo + 1 : null;
     sections.push({
       properties: { page: portraitProps },
-      ...hf(),
+      ...hdr(),
       children:   [buildRatiosTable(ratios!.cy, ratios!.py, (ratios as any)?.commentary, fy, ratioNoteNo)],
     });
   }
