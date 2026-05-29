@@ -17,7 +17,7 @@
 import { useState, useEffect, useMemo } from "react";
 import {
   ChevronRight, ChevronDown, BookOpen, MessageSquareWarning,
-  Loader2, BarChart3, TrendingUp, TrendingDown,
+  Loader2, BarChart3, TrendingUp, TrendingDown, Search, X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge }  from "@/components/ui/badge";
@@ -325,7 +325,7 @@ function useBsPlData(engagementId: string) {
 // ─── Ledger sub-row (inside accordion) ───────────────────────────────────────
 
 function LedgerSubRow({
-  ledger, clientId, financialYear, group, onRaiseQuery, onViewEntry,
+  ledger, clientId, financialYear, group, onRaiseQuery, onViewEntry, highlight,
 }: {
   ledger:        TBLedger;
   clientId?:     string | null;
@@ -333,13 +333,17 @@ function LedgerSubRow({
   group:         string;
   onRaiseQuery:  (group: string, ledger: string, note?: string) => void;
   onViewEntry:   (name: string, group: string) => void;
+  highlight?:    boolean;
 }) {
   const isDr = ledger.balance >= 0;
   return (
-    <div className="flex items-center gap-2 px-6 py-1.5 hover:bg-muted/10 transition-colors
-                    border-b border-border/30 last:border-b-0">
+    <div className={cn(
+      "flex items-center gap-2 px-6 py-1.5 hover:bg-muted/10 transition-colors",
+      "border-b border-border/30 last:border-b-0",
+      highlight && "bg-amber-100/70 hover:bg-amber-100",
+    )}>
       {/* Ledger name */}
-      <span className="flex-1 text-xs text-foreground truncate" title={ledger.account_name}>
+      <span className={cn("flex-1 text-xs truncate", highlight ? "text-amber-900 font-semibold" : "text-foreground")} title={ledger.account_name}>
         {ledger.account_name}
       </span>
       {/* Balance */}
@@ -380,7 +384,7 @@ function LedgerSubRow({
 
 function FsRow({
   row, amounts, tb, mapping, clientId, financialYear,
-  expanded, onToggle, onRaiseQuery, onViewEntry,
+  expanded, onToggle, onRaiseQuery, onViewEntry, search = "",
 }: {
   row:           LayoutRow;
   amounts:       AmountMap;
@@ -392,6 +396,7 @@ function FsRow({
   onToggle:      () => void;
   onRaiseQuery:  (group: string, ledger: string, note?: string) => void;
   onViewEntry:   (name: string, group: string) => void;
+  search?:       string;
 }) {
   const amt = amounts.get(row.key);
   const cy  = amt?.cy ?? 0;
@@ -400,16 +405,26 @@ function FsRow({
   const deltaPct = varPct(cy, py);
 
   const hasCy          = cy !== 0;
-  const contributors   = row.fsCodes
+  const allContributors = row.fsCodes
     ? getLedgersForCodes(tb, mapping, row.fsCodes)
     : [];
-  const canExpand      = contributors.length > 0;
+  const isSearching    = search.length > 0;
+  const matching       = isSearching
+    ? allContributors.filter(l => l.account_name.toLowerCase().includes(search))
+    : allContributors;
+  const contributors   = allContributors;
+  const canExpand      = allContributors.length > 0;
 
   const isSection  = row.type === "section";
   const isGroup    = row.type === "group";
   const isTotal    = row.type === "total";
   const isResult   = row.type === "result";
   const isSubtotal = row.type === "subtotal";
+
+  // While searching, hide everything except line items that actually contain a
+  // matching ledger — so the user sees exactly which head(s) the ledger sits in.
+  if (isSearching && (isSection || isGroup || isTotal || isResult || isSubtotal)) return null;
+  if (isSearching && !isSection && !isGroup && !isTotal && !isResult && !isSubtotal && matching.length === 0) return null;
 
   // ── Section header ───────────────────────────────────────────────────────
   if (isSection) {
@@ -503,7 +518,7 @@ function FsRow({
           )}
           title={canExpand ? `${contributors.length} ledger(s)` : undefined}
         >
-          {expanded
+          {(isSearching || expanded)
             ? <ChevronDown size={12} />
             : <ChevronRight size={12} />}
         </button>
@@ -564,8 +579,8 @@ function FsRow({
         </button>
       </div>
 
-      {/* Ledger sub-rows (expanded) */}
-      {expanded && contributors.length > 0 && (
+      {/* Ledger sub-rows (expanded, or auto-expanded while searching) */}
+      {(isSearching || expanded) && contributors.length > 0 && (
         <div className="bg-slate-50/60 border-b border-border/40">
           {/* Sub-header */}
           <div className="flex items-center gap-2 px-6 py-1 bg-slate-100/80 border-b border-slate-200">
@@ -577,7 +592,7 @@ function FsRow({
             </span>
             <div className="w-14 flex-shrink-0" />
           </div>
-          {contributors.map(l => (
+          {(isSearching ? matching : contributors).map(l => (
             <LedgerSubRow
               key={l.account_name}
               ledger={l}
@@ -586,6 +601,7 @@ function FsRow({
               group={row.label}
               onRaiseQuery={onRaiseQuery}
               onViewEntry={onViewEntry}
+              highlight={isSearching}
             />
           ))}
         </div>
@@ -610,6 +626,8 @@ export function BsPlView({ engagementId, clientId, financialYear, onRaiseQuery, 
   const { tb, mapping, pyFs, isNce, loading, error } = useBsPlData(engagementId);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [panelLedger, setPanelLedger] = useState<{ name: string; group: string } | null>(null);
+  const [search, setSearch] = useState("");
+  const searchLower = search.trim().toLowerCase();
 
   // Pick the layout that matches the engagement's entity type, then show only
   // the requested statement (BS or P&L). Amounts are always computed over the
@@ -637,6 +655,14 @@ export function BsPlView({ engagementId, clientId, financialYear, onRaiseQuery, 
     [tb, mapping],
   );
   const hasPY = Object.keys(pyFs).length > 0;
+
+  // Whether any mapped ledger in the visible statement matches the search.
+  const anyMatchInView = useMemo(() => {
+    if (!searchLower) return true;
+    return visibleRows.some(r =>
+      r.fsCodes && getLedgersForCodes(tb, mapping, r.fsCodes)
+        .some(l => l.account_name.toLowerCase().includes(searchLower)));
+  }, [searchLower, visibleRows, tb, mapping]);
 
   // ── Loading / Error ───────────────────────────────────────────────────────
 
@@ -698,10 +724,34 @@ export function BsPlView({ engagementId, clientId, financialYear, onRaiseQuery, 
             PY data not available
           </Badge>
         )}
-        <span className="text-[10px] text-muted-foreground ml-auto">
-          Click any line to expand contributing ledgers &nbsp;·&nbsp;
-          <MessageSquareWarning size={10} className="inline" /> = Raise Query
-        </span>
+        {/* Ledger search — jump straight to the head a ledger is mapped under */}
+        <div className="relative ml-auto">
+          <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          <input
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search ledger name…"
+            className="h-7 w-56 pl-7 pr-7 text-xs rounded-md border border-input bg-background
+                       focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch("")}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              title="Clear search"
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
+        {!search && (
+          <span className="text-[10px] text-muted-foreground w-full sm:w-auto">
+            Click any line to expand contributing ledgers &nbsp;·&nbsp;
+            <MessageSquareWarning size={10} className="inline" /> = Raise Query
+          </span>
+        )}
       </div>
 
       {/* Column header bar */}
@@ -732,8 +782,14 @@ export function BsPlView({ engagementId, clientId, financialYear, onRaiseQuery, 
               onToggle={() => toggleKey(row.key)}
               onRaiseQuery={onRaiseQuery}
               onViewEntry={(name, group) => setPanelLedger({ name, group })}
+              search={searchLower}
             />
           ))}
+          {searchLower && !anyMatchInView && (
+            <div className="px-4 py-6 text-center text-xs text-muted-foreground">
+              No mapped ledger matches “{search.trim()}” in this {section === "pl" ? "P&L" : "Balance Sheet"}.
+            </div>
+          )}
         </div>
       </div>
 
