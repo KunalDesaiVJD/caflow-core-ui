@@ -2637,6 +2637,7 @@ export type Database = {
           customer_id: string | null
           date_of_incorporation: string | null
           deleted_at: string | null
+          directors: Json | null
           dsc_expiry_date: string | null
           dsc_number: string | null
           email: string | null
@@ -2680,6 +2681,7 @@ export type Database = {
           customer_id?: string | null
           date_of_incorporation?: string | null
           deleted_at?: string | null
+          directors?: Json | null
           dsc_expiry_date?: string | null
           dsc_number?: string | null
           email?: string | null
@@ -2723,6 +2725,7 @@ export type Database = {
           customer_id?: string | null
           date_of_incorporation?: string | null
           deleted_at?: string | null
+          directors?: Json | null
           dsc_expiry_date?: string | null
           dsc_number?: string | null
           email?: string | null
