@@ -2086,37 +2086,43 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
               }
             }
 
-            // Note 4 heal (NCE — duplicate rendering after move): remove any
-            // standalone AUTO custom row whose label duplicates a MANUAL custom
-            // row in the same note. This is the leftover original auto row that
-            // a re-sync re-created after the user moved the ledger into a manual
-            // row — it caused the ledger to render twice and the totals to
-            // double-count. We keep the manual (user-placed) row and drop the
-            // duplicate auto row plus its stale cy/py keys. nceAutoPopulate now
-            // also skips re-creating it (manualLabelSet guard), so this is a
-            // one-shot cleanup of already-saved data.
+            // Note 4 heal (NCE — duplicate rendering / runaway accumulation):
+            // collapse EVERY duplicate custom row in a note down to a single row,
+            // regardless of source. A pre-fix loop (auto walk re-creating each
+            // ledger + the "promote to manual" heal converting them on every
+            // cycle) accumulated the SAME ledger 10-20x (e.g. "ICICI Bank Car
+            // Loan" x20, the "390 manual" purchases note), inflating totals and
+            // wasting dozens of export pages. We key on label+attachedTo+section,
+            // keep the FIRST occurrence (prefer a manual row if one exists so the
+            // user's placement wins), and purge the dropped rows' cy/py amount
+            // keys so totals stop multiplying. One-shot cleanup of saved data;
+            // nceAutoPopulate + export now also dedupe, so it cannot recur.
             for (const [nType, d] of Object.entries(built)) {
               const rows = d.customRows ?? [];
-              const manualLabels = new Set(
-                rows
-                  .filter(r => r.source === "manual")
-                  .map(r => (r.label || "").trim().toLowerCase())
-                  .filter(Boolean),
-              );
-              if (manualLabels.size === 0) continue;
-              const dupAutoIds = new Set(
-                rows
-                  .filter(r =>
-                    r.source === "auto" &&
-                    manualLabels.has((r.label || "").trim().toLowerCase()),
-                  )
-                  .map(r => r.id),
-              );
-              if (dupAutoIds.size === 0) continue;
-              const keptRows = rows.filter(r => !dupAutoIds.has(r.id));
+              if (rows.length === 0) continue;
+              const rowKey = (r: NCECustomRow) =>
+                `${(r.label || "").trim().toLowerCase()}|${r.attachedTo ?? ""}|${r.section ?? ""}`;
+              // First pass: for each key, prefer to keep a manual row over an auto row.
+              const keepByKey = new Map<string, NCECustomRow>();
+              for (const r of rows) {
+                if (!(r.label || "").trim()) continue; // never dedupe blank labels
+                const k = rowKey(r);
+                const existing = keepByKey.get(k);
+                if (!existing) { keepByKey.set(k, r); continue; }
+                if (existing.source !== "manual" && r.source === "manual") keepByKey.set(k, r);
+              }
+              const keptIds = new Set([...keepByKey.values()].map(r => r.id));
+              const keptRows: NCECustomRow[] = [];
+              const droppedIds = new Set<string>();
+              for (const r of rows) {
+                if (!(r.label || "").trim()) { keptRows.push(r); continue; }
+                if (keptIds.has(r.id)) keptRows.push(r);
+                else droppedIds.add(r.id);
+              }
+              if (droppedIds.size === 0) continue;
               const cleanCy = { ...d.cy };
               const cleanPy = { ...d.py };
-              for (const id of dupAutoIds) {
+              for (const id of droppedIds) {
                 for (const suffix of ["", "_lt", "_st"]) {
                   delete cleanCy[id + suffix];
                   delete cleanPy[id + suffix];
