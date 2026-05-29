@@ -49,3 +49,50 @@ export function isTallyPLAccount(ledgerName: string | null | undefined): boolean
   ];
   return patterns.some(p => p.test(n));
 }
+
+/** A reserves (BS_EQ_RS) ledger as seen on the trial balance — only the fields
+ *  the books-closed detection needs. */
+export interface ReservesLedger {
+  account_name:     string;
+  opening_balance?: number | null;
+  tally_debit?:     number | null;
+  tally_credit?:    number | null;
+}
+
+/**
+ * Decide whether the current-year net profit is ALREADY embedded in the
+ * Reserves & Surplus ledgers (i.e. the firm has closed its books and journalled
+ * the year's P&L straight into retained earnings).  When true, the FS engine
+ * must NOT auto-credit net P&L to BS_EQ_RS a second time (that would double-count);
+ * when false, it must auto-credit it (mirrors the closing entry Dr P&L → Cr Reserves).
+ *
+ * MUST be used by BOTH the COA-mapping screen (PipelineStage3) and the Financial
+ * Statements engine (PipelineFinancialStatements) so the two never disagree.
+ *
+ * Accumulator-aware (root-cause fix): Tally's "Profit & Loss A/c" with an opening
+ * balance of ~0 is the *current-year accumulator* — its closing balance IS the
+ * year's profit, still PENDING transfer to reserves.  When such an accumulator
+ * is present the books are, by definition, NOT closed, so the profit MUST still
+ * be credited — regardless of any unrelated movement on other reserves ledgers
+ * (e.g. a dividend/drawings debit to "Reserve & Surplus").  Without this short-
+ * circuit a benign reserve movement produced a false "books closed" reading and
+ * silently dropped the current-year profit from the Balance Sheet.
+ */
+export function currentYearProfitAlreadyInReserves(
+  reservesLedgers: ReservesLedger[],
+): boolean {
+  const isUntransferredAccumulator = (a: ReservesLedger) =>
+    isTallyPLAccount(a.account_name) && Math.abs(Number(a.opening_balance ?? 0)) < 0.005;
+
+  // If the current-year profit is still parked in the P&L A/c accumulator,
+  // books are not closed → profit has NOT been transferred to reserves.
+  if (reservesLedgers.some(isUntransferredAccumulator)) return false;
+
+  // Otherwise: books are closed iff a NON-accumulator reserves ledger shows
+  // current-year journal movement (the profit was manually transferred in).
+  return reservesLedgers.some(a => {
+    if (isUntransferredAccumulator(a)) return false;
+    return Math.abs(Number(a.tally_debit ?? 0)) > 0.005
+        || Math.abs(Number(a.tally_credit ?? 0)) > 0.005;
+  });
+}

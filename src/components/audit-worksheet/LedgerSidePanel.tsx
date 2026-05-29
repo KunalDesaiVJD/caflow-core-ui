@@ -457,8 +457,19 @@ export function LedgerSidePanel({
               No Tally sync data found. Run a Tally sync first.
             </div>
           ) : vouchers.length === 0 ? (
-            <div className="p-6 text-sm text-muted-foreground text-center">
-              No vouchers found for this ledger.
+            <div className="p-6 text-sm text-muted-foreground text-center space-y-1">
+              {tbRow ? (
+                <>
+                  <p className="font-medium text-foreground">No voucher-level data for this year.</p>
+                  <p className="text-xs">
+                    The trial balance is synced (closing ₹{fmtAmt(tbRow.closing_balance)} {tbRow.balance_type}),
+                    but no vouchers were imported for FY {financialYear}. Run a full Tally
+                    sync (voucher-level) for this year to drill into entries.
+                  </p>
+                </>
+              ) : (
+                <p>No vouchers found for this ledger.</p>
+              )}
             </div>
           ) : filteredVouchers.length === 0 ? (
             <div className="p-6 text-sm text-muted-foreground text-center">
