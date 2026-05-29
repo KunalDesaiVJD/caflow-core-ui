@@ -2022,19 +2022,28 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
             // the manual totals, doubling Total (B) / Total (A+B). Healing
             // now is safe — manual amounts remain intact; only the synthetic
             // duplicate row + its cy/py keys are removed.
+            const isFallbackRow = (cr: NCECustomRow) =>
+              cr.id === "custom_auto_total" || cr.label === "Auto-filled from COA total";
             for (const [nType, d] of Object.entries(built)) {
-              const hasManual = (d.customRows || []).some(cr =>
-                cr.source === "manual" && (
+              // The "Auto-filled from COA total" row carries the WHOLE COA
+              // fallback total. The moment any OTHER row (manual OR a real
+              // auto-matched ledger row, e.g. "Interest On Deposit" placed via
+              // "Move to…") holds a non-zero amount in CY or PY, that placeholder
+              // double-counts. Strip it whenever such a row exists. (Broadened
+              // from the old manual-only / CY-only check, which missed both
+              // auto-matched ledger rows and notes whose figures live in PY.)
+              const hasOtherData = (d.customRows || []).some(cr =>
+                !isFallbackRow(cr) && (
                   Math.abs(d.cy?.[cr.id] ?? 0) > 0.005 ||
+                  Math.abs(d.py?.[cr.id] ?? 0) > 0.005 ||
                   Math.abs(d.cy?.[cr.id + "_lt"] ?? 0) > 0.005 ||
-                  Math.abs(d.cy?.[cr.id + "_st"] ?? 0) > 0.005
+                  Math.abs(d.py?.[cr.id + "_lt"] ?? 0) > 0.005 ||
+                  Math.abs(d.cy?.[cr.id + "_st"] ?? 0) > 0.005 ||
+                  Math.abs(d.py?.[cr.id + "_st"] ?? 0) > 0.005
                 ),
               );
-              if (!hasManual) continue;
-              const autoTotalRows = (d.customRows || []).filter(
-                cr => cr.id === "custom_auto_total" ||
-                      cr.label === "Auto-filled from COA total",
-              );
+              if (!hasOtherData) continue;
+              const autoTotalRows = (d.customRows || []).filter(isFallbackRow);
               if (autoTotalRows.length === 0) continue;
               const cleanedCy = { ...d.cy };
               const cleanedPy = { ...d.py };
@@ -2412,20 +2421,48 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
         !targetCustomRow.section &&       // target has no section yet
         !!sourceRow?.section;             // source HAS a section to propagate
 
+      const movedRows = cur.customRows.map(r => {
+        if (r.id === customId) {
+          // Task 4 fix: mark as "manual" so nceAutoPopulate preserves this
+          // user-set placement verbatim on every subsequent re-sync / reload,
+          // instead of rebuilding from scratch and losing the attachedTo change.
+          return { ...r, source: "manual" as const, attachedTo: targetId, ...(targetSection !== undefined ? { section: targetSection } : {}) };
+        }
+        if (r.id === targetId && shouldPromoteTarget) {
+          return { ...r, section: sourceRow!.section };
+        }
+        return r;
+      });
+
+      // Drop the redundant "Auto-filled from COA total" placeholder row(s) once a
+      // real ledger row carries the amount — otherwise that placeholder (the
+      // whole COA fallback) double-counts and the note total balloons after the
+      // move. Check BOTH cy AND py (a note's figures may live only in the PY
+      // column). Only strip when a non-fallback row has a non-zero amount, so a
+      // note that has ONLY the placeholder keeps it.
+      const isFallback = (r: NCECustomRow) =>
+        r.id === "custom_auto_total" || r.label === "Auto-filled from COA total";
+      const nonZero = (id: string) =>
+        Math.abs(cur.cy?.[id] ?? 0) > 0.005 || Math.abs(cur.py?.[id] ?? 0) > 0.005 ||
+        Math.abs(cur.cy?.[id + "_lt"] ?? 0) > 0.005 || Math.abs(cur.py?.[id + "_lt"] ?? 0) > 0.005 ||
+        Math.abs(cur.cy?.[id + "_st"] ?? 0) > 0.005 || Math.abs(cur.py?.[id + "_st"] ?? 0) > 0.005;
+      const hasReal = movedRows.some(r => !isFallback(r) && nonZero(r.id));
+      let finalRows = movedRows;
+      let finalCy = cur.cy;
+      let finalPy = cur.py;
+      if (hasReal && movedRows.some(isFallback)) {
+        finalRows = movedRows.filter(r => !isFallback(r));
+        finalCy = { ...cur.cy };
+        finalPy = { ...cur.py };
+        // The fallback shares the id "custom_auto_total"; clear its keys once.
+        for (const sfx of ["", "_lt", "_st"]) { delete finalCy["custom_auto_total" + sfx]; delete finalPy["custom_auto_total" + sfx]; }
+      }
+
       const next = { ...prev, [noteType]: {
         ...cur,
-        customRows: cur.customRows.map(r => {
-          if (r.id === customId) {
-            // Task 4 fix: mark as "manual" so nceAutoPopulate preserves this
-            // user-set placement verbatim on every subsequent re-sync / reload,
-            // instead of rebuilding from scratch and losing the attachedTo change.
-            return { ...r, source: "manual" as const, attachedTo: targetId, ...(targetSection !== undefined ? { section: targetSection } : {}) };
-          }
-          if (r.id === targetId && shouldPromoteTarget) {
-            return { ...r, section: sourceRow!.section };
-          }
-          return r;
-        }),
+        customRows: finalRows,
+        cy: finalCy,
+        py: finalPy,
       }};
       scheduleSave(next);
       return next;
