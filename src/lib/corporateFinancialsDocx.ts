@@ -159,6 +159,10 @@ interface CellOpts {
   padR?: number;
   indent?: number;
   colSpan?: number;
+  /** "Keep with next" — set on every note-table row so an entire note moves to
+   *  the next page intact instead of splitting across a page break. Word still
+   *  breaks a note larger than one page (keepNext is a soft constraint). */
+  keepNext?: boolean;
 }
 
 function cell(o: CellOpts): TableCell {
@@ -175,6 +179,7 @@ function cell(o: CellOpts): TableCell {
     padR    = 80,
     indent  = 0,
     colSpan,
+    keepNext = false,
   } = o;
 
   return new TableCell({
@@ -187,6 +192,7 @@ function cell(o: CellOpts): TableCell {
     children: [new Paragraph({
       alignment: align,
       spacing:   { before: 0, after: 0, line: 260, lineRule: "auto" as any },
+      ...(keepNext ? { keepNext: true, keepLines: true } : {}),
       children:  [new TextRun({ text, font: FONT, size: sz, bold, italic, color })],
     })],
   });
@@ -195,7 +201,7 @@ function cell(o: CellOpts): TableCell {
 function ac(
   val: number,
   w: number,
-  opts: { bold?: boolean; bg?: string; borders?: Record<string, typeof bNone> } = {},
+  opts: { bold?: boolean; bg?: string; borders?: Record<string, typeof bNone>; keepNext?: boolean } = {},
 ): TableCell {
   return cell({
     text:    fmt(val),
@@ -206,6 +212,7 @@ function ac(
     bold:    opts.bold,
     bg:      opts.bg,
     borders: opts.borders ?? BDR_ROW,
+    keepNext: opts.keepNext,
   });
 }
 
@@ -871,6 +878,7 @@ function noteTitleRow(colWidths: number[], noteNumber: string, title: string): T
         margins: { top: 100, bottom: 100, left: 160, right: 100 },
         children: [new Paragraph({
           spacing: { before: 0, after: 0 },
+          keepNext: true, keepLines: true,
           children: [
             new TextRun({ text: `Note ${noteNumber} — ${title}`, font: FONT, size: SZ_HDR, bold: true, color: BLACK }),
           ],
@@ -885,9 +893,9 @@ function noteHdr3(cyLabel: string, pyLabel: string): TableRow {
     tableHeader: true,
     height: { value: 500, rule: HeightRule.ATLEAST },
     children: [
-      cell({ text: "Particulars", w: NW_DESC, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, padL: 160 }),
-      cell({ text: `${cyLabel}\n${_exportSuffix}`, w: NW_CY, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
-      cell({ text: `${pyLabel}\n${_exportSuffix}`, w: NW_PY, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
+      cell({ text: "Particulars", w: NW_DESC, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, padL: 160, keepNext: true }),
+      cell({ text: `${cyLabel}\n${_exportSuffix}`, w: NW_CY, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120, keepNext: true }),
+      cell({ text: `${pyLabel}\n${_exportSuffix}`, w: NW_PY, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120, keepNext: true }),
     ],
   });
 }
@@ -905,10 +913,11 @@ function noteRow3(
   const bdr  = style === "total" ? BDR_GRAND : style === "subtotal" ? BDR_SUB : BDR_ROW;
   const bold = style !== "data";
   return new TableRow({
+    cantSplit: true,
     children: [
-      cell({ text: label, w: NW_DESC, bold, bg, borders: bdr, indent }),
-      ac(cyVal, NW_CY, { bold, bg, borders: bdr }),
-      ac(pyVal, NW_PY, { bold, bg, borders: bdr }),
+      cell({ text: label, w: NW_DESC, bold, bg, borders: bdr, indent, keepNext: true }),
+      ac(cyVal, NW_CY, { bold, bg, borders: bdr, keepNext: true }),
+      ac(pyVal, NW_PY, { bold, bg, borders: bdr, keepNext: true }),
     ],
   });
 }
