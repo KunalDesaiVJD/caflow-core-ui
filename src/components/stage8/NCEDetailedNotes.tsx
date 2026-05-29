@@ -933,12 +933,16 @@ function PatternBTable({
                 // Custom rows "promoted" to sit under THIS custom row
                 const customSubRows = customRows.filter(sub => sub.attachedTo === cr.id);
                 const crIsOpen = openSources.has(cr.id);
+                // When collapsed with sub-rows, show the rolled-up aggregate
+                // (own + nested children) instead of the parent's own (often 0) value.
+                const crShowAgg = customSubRows.length > 0 && !crIsOpen;
+                const crAgg = crShowAgg ? sumCustomDisplayB(cr.id) : null;
                 return (
                   <Fragment key={cr.id}>
                     <CustomRowEditor
                       row={cr}
-                      cyVal={rawCy[cr.id] ?? 0}
-                      pyVal={rawPy[cr.id] ?? 0}
+                      cyVal={crAgg ? crAgg.cy : (rawCy[cr.id] ?? 0)}
+                      pyVal={crAgg ? crAgg.py : (rawPy[cr.id] ?? 0)}
                       isPatternA={false}
                       cyLtVal={0} cyStVal={0} pyLtVal={0} pyStVal={0}
                       onChangeCy={v => onChangeCy(cr.id, v)}
@@ -1492,16 +1496,19 @@ function PatternATable({
               {sectionRows.map(cr => {
                 const customSubRows = customRows.filter(sub => sub.attachedTo === cr.id);
                 const crIsOpen = openSources.has(cr.id);
+                // When collapsed with sub-rows, show the rolled-up aggregate.
+                const crShowAgg = customSubRows.length > 0 && !crIsOpen;
+                const crAgg = crShowAgg ? sumCustomDisplayA(cr.id) : null;
                 return (
                   <Fragment key={cr.id}>
                     <CustomRowEditor
                       row={cr}
                       cyVal={0} pyVal={0}
                       isPatternA={true}
-                      cyLtVal={rawCy[cr.id + "_lt"] ?? 0}
-                      cyStVal={rawCy[cr.id + "_st"] ?? 0}
-                      pyLtVal={rawPy[cr.id + "_lt"] ?? 0}
-                      pyStVal={rawPy[cr.id + "_st"] ?? 0}
+                      cyLtVal={crAgg ? crAgg.lc : (rawCy[cr.id + "_lt"] ?? 0)}
+                      cyStVal={crAgg ? crAgg.sc : (rawCy[cr.id + "_st"] ?? 0)}
+                      pyLtVal={crAgg ? crAgg.lp : (rawPy[cr.id + "_lt"] ?? 0)}
+                      pyStVal={crAgg ? crAgg.sp : (rawPy[cr.id + "_st"] ?? 0)}
                       onChangeCy={() => {}} onChangePy={() => {}}
                       onChangeCyLt={v => onChangeCy(cr.id + "_lt", v)}
                       onChangeCySt={v => onChangeCy(cr.id + "_st", v)}
