@@ -812,13 +812,32 @@ export function computeDisplayData(
   config: NoteConfig,
   cy: Record<string, number>,
   py: Record<string, number>,
-  customRows?: Array<{ id: string; section?: string }>,
+  customRows?: Array<{ id: string; section?: string; attachedTo?: string }>,
 ): { cy: Record<string, number>; py: Record<string, number> } {
   const outCy = { ...cy };
   const outPy = { ...py };
 
   // Find the ID of the grand-total row (last isTotal row in the config)
   const grandTotalId = [...config.rows].reverse().find(r => r.isTotal)?.id ?? null;
+
+  // Recursive contribution of a custom row = its own amount PLUS every custom
+  // row nested beneath it (attachedTo it), to any depth. Fixes the case where a
+  // user nests a ledger row under a CUSTOM head (e.g. "Interest On Deposit"
+  // under a custom "Bank Interest Income") — previously such a row was counted
+  // nowhere (it has an attachedTo, so it's excluded from `extras`, and its
+  // parent isn't a static formulaAdd id), so the note total came out blank.
+  // `seen` guards against any accidental attachedTo cycle.
+  const sumCustomB = (id: string, seen: Set<string>): { c: number; p: number } => {
+    if (seen.has(id)) return { c: 0, p: 0 };
+    seen.add(id);
+    let c = outCy[id] ?? 0, p = outPy[id] ?? 0;
+    if (customRows) {
+      for (const cr of customRows) {
+        if (cr.attachedTo === id) { const r = sumCustomB(cr.id, seen); c += r.c; p += r.p; }
+      }
+    }
+    return { c, p };
+  };
 
   for (const row of config.rows) {
     if (!row.isTotal) continue;
@@ -854,12 +873,12 @@ export function computeDisplayData(
         if (customRows) {
           for (const cr of customRows) {
             if (cr.attachedTo !== id) continue;
-            cVal += outCy[cr.id] ?? 0; pVal += outPy[cr.id] ?? 0;
+            const r = sumCustomB(cr.id, new Set()); cVal += r.c; pVal += r.p;
           }
         }
       }
       for (const id of subs)   { cVal -= outCy[id] ?? 0; pVal -= outPy[id] ?? 0; }
-      for (const id of extras) { cVal += outCy[id] ?? 0; pVal += outPy[id] ?? 0; }
+      for (const id of extras) { const r = sumCustomB(id, new Set()); cVal += r.c; pVal += r.p; }
       outCy[row.id] = Math.round(cVal * 100) / 100;
       outPy[row.id] = Math.round(pVal * 100) / 100;
     } else {
@@ -888,6 +907,20 @@ export function computeDisplayData(
           stPy: basePy[stKey] ?? 0,
         };
       };
+      // Recursive contribution of a custom row including nested children (see
+      // sumCustomB above — same fix for Pattern A's LT/ST columns).
+      const sumCustomA = (id: string, seen: Set<string>) => {
+        if (seen.has(id)) return { lc: 0, lp: 0, sc: 0, sp: 0 };
+        seen.add(id);
+        const v = lookupSuffixed(outCy, outPy, id);
+        let lc = v.ltCy, lp = v.ltPy, sc = v.stCy, sp = v.stPy;
+        if (customRows) {
+          for (const cr of customRows) {
+            if (cr.attachedTo === id) { const r = sumCustomA(cr.id, seen); lc += r.lc; lp += r.lp; sc += r.sc; sp += r.sp; }
+          }
+        }
+        return { lc, lp, sc, sp };
+      };
       for (const id of adds) {
         ltC += outCy[id + "_lt"] ?? 0; ltP += outPy[id + "_lt"] ?? 0;
         stC += outCy[id + "_st"] ?? 0; stP += outPy[id + "_st"] ?? 0;
@@ -896,9 +929,9 @@ export function computeDisplayData(
         if (customRows) {
           for (const cr of customRows) {
             if (cr.attachedTo !== id) continue;
-            const v = lookupSuffixed(outCy, outPy, cr.id);
-            ltC += v.ltCy; ltP += v.ltPy;
-            stC += v.stCy; stP += v.stPy;
+            const r = sumCustomA(cr.id, new Set());
+            ltC += r.lc; ltP += r.lp;
+            stC += r.sc; stP += r.sp;
           }
         }
       }
@@ -907,9 +940,9 @@ export function computeDisplayData(
         stC -= outCy[id + "_st"] ?? 0; stP -= outPy[id + "_st"] ?? 0;
       }
       for (const id of extras) {
-        const v = lookupSuffixed(outCy, outPy, id);
-        ltC += v.ltCy; ltP += v.ltPy;
-        stC += v.stCy; stP += v.stPy;
+        const r = sumCustomA(id, new Set());
+        ltC += r.lc; ltP += r.lp;
+        stC += r.sc; stP += r.sp;
       }
       outCy[row.id + "_lt"] = Math.round(ltC * 100) / 100;
       outPy[row.id + "_lt"] = Math.round(ltP * 100) / 100;
