@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Separator } from "@/components/ui/separator";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Plus, Trash2, RotateCcw, CalendarIcon } from "lucide-react";
+import { Plus, Trash2, RotateCcw, CalendarIcon, ClipboardPaste } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -937,6 +937,37 @@ function AnnexureTable({ columns, rows, onChange, isLocked, showTotals, totalCol
     onChange(rows.map((r, idx) => idx === ri ? { ...r, ...patch } : r));
   }
 
+  // Bulk paste from clipboard (TSV — e.g. copied from Excel). Each line is a
+  // row; cells map left-to-right onto the editable (non-readonly/auto_calc)
+  // columns. Appends to existing rows.
+  const editableCols = columns.filter(c => c.type !== 'readonly' && c.type !== 'auto_calc');
+  async function pasteRows() {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (!text.trim()) return;
+      const lines = text.replace(/\r/g, '').split('\n').filter(l => l.trim().length > 0);
+      const newRows = lines.map(line => {
+        const cells = line.split('\t');
+        const row: Record<string, any> = {};
+        editableCols.forEach((c, i) => {
+          const raw = (cells[i] ?? '').trim();
+          row[c.key] = c.type === 'numeric' ? raw.replace(/[, ₹]/g, '') : raw;
+        });
+        return row;
+      });
+      const merged = [...rows, ...newRows];
+      const srCol = columns.find(c => c.key === 'sr_no' && c.type === 'readonly');
+      if (srCol) merged.forEach((r, idx) => { r.sr_no = String(idx + 1); });
+      onChange(merged);
+    } catch {
+      /* clipboard not available / denied — silently ignore */
+    }
+  }
+
+  function clearAllRows() {
+    onChange([]);
+  }
+
   // Compute totals
   const totals: Record<string, number> = {};
   if (showTotals && totalColumns) {
@@ -1038,9 +1069,19 @@ function AnnexureTable({ columns, rows, onChange, isLocked, showTotals, totalCol
         </TableBody>
       </Table>
       {!isLocked && (
-        <Button variant="outline" size="sm" onClick={addRow}>
-          <Plus className="h-3 w-3 mr-1" /> Add Row
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" onClick={addRow}>
+            <Plus className="h-3 w-3 mr-1" /> Add Row
+          </Button>
+          <Button variant="ghost" size="sm" onClick={pasteRows} title="Paste rows from Excel/clipboard (tab-separated)">
+            <ClipboardPaste className="h-3 w-3 mr-1" /> Paste rows
+          </Button>
+          {rows.length > 0 && (
+            <Button variant="ghost" size="sm" className="text-destructive" onClick={clearAllRows} title="Delete all rows">
+              <Trash2 className="h-3 w-3 mr-1" /> Clear all
+            </Button>
+          )}
+        </div>
       )}
     </div>
   );
