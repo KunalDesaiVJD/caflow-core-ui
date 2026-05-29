@@ -9,7 +9,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
-import { Save, Loader2, CheckCircle2, Circle, Download, Printer, FileSpreadsheet, History } from "lucide-react";
+import { Save, Loader2, CheckCircle2, Circle, Download, Printer, FileSpreadsheet, History, Sparkles, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -24,6 +24,11 @@ import type { ClauseDefinition } from "@/data/form3cd-master";
 import ClauseRenderer from "@/components/form3cd/ClauseRenderer";
 import Form3CDReport from "@/components/form3cd/Form3CDReport";
 import TaxAuditVersionHistoryPanel from "@/components/form3cd/TaxAuditVersionHistoryPanel";
+import ClauseAutomationPanel from "@/components/form3cd/ClauseAutomationPanel";
+import Form3cdReconcile from "@/components/form3cd/Form3cdReconcile";
+import { useForm3cdContext } from "@/components/form3cd/useForm3cdContext";
+import { deriveClause, hasApplyableSuggestion } from "@/lib/form3cd/derive";
+import { applySuggestion, isLocked, META_KEY } from "@/lib/form3cd/apply";
 
 /* ──────── types ──────── */
 interface ClauseData { [key: string]: any; }
@@ -50,8 +55,12 @@ const ENTITY_STATUS_OPTIONS = [
 ];
 
 function isClauseFilled(data: ClauseData | undefined): boolean {
-  if (!data || Object.keys(data).length === 0) return false;
-  return Object.values(data).some(v => {
+  if (!data) return false;
+  // Ignore the automation metadata key (_3cd) so a clause isn't marked "Filled"
+  // merely because it was locked or has a ledger link recorded.
+  const entries = Object.entries(data).filter(([k]) => k !== META_KEY);
+  if (entries.length === 0) return false;
+  return entries.some(([, v]) => {
     if (typeof v === "string") return v.trim().length > 0;
     if (Array.isArray(v)) return v.length > 0;
     if (typeof v === "boolean") return true;
@@ -123,6 +132,12 @@ export default function Form3CD({ engagementIdProp }: { engagementIdProp?: strin
 
   // Version history panel state
   const [historyPanel, setHistoryPanel] = useState<{ clauseNo: string } | null>(null);
+
+  // ── Automation (auto-fill from COA) ──────────────────────────────────────
+  const { context: fsContext, loading: fsLoading } = useForm3cdContext(engagementId);
+  const [reconcileOpen, setReconcileOpen] = useState(false);
+  const [applyingAll, setApplyingAll] = useState(false);
+  const [navCollapsed, setNavCollapsed] = useState(false);
 
   // ── Templated XLSX export via edge function ──────────────────────────────
   async function exportTemplatedXlsx() {
@@ -299,9 +314,10 @@ export default function Form3CD({ engagementIdProp }: { engagementIdProp?: strin
     });
   }
 
-  async function saveAll(silent = false) {
+  async function saveAll(silent = false, dataOverride?: Record<string, ClauseData>) {
     if (!formRow) return;
     setSaving(true);
+    const cd = dataOverride || clauseData;
     const updatePayload: any = {
       status: formStatus,
       last_saved_at: new Date().toISOString(),
@@ -317,10 +333,10 @@ export default function Form3CD({ engagementIdProp }: { engagementIdProp?: strin
       if (siblingsInSameCol.length > 1) {
         // Group under parent column with clauseNo as sub-key
         if (!dbGrouped[dbCol]) dbGrouped[dbCol] = {};
-        dbGrouped[dbCol][c.clauseNo] = clauseData[stateKey] || {};
+        dbGrouped[dbCol][c.clauseNo] = cd[stateKey] || {};
       } else {
         // Single clause maps directly to DB column
-        dbGrouped[dbCol] = clauseData[stateKey] || {};
+        dbGrouped[dbCol] = cd[stateKey] || {};
       }
     });
     // Save clauses 1-7 editable data inside cl_8 (no separate cl_1_7 column exists)
@@ -344,6 +360,35 @@ export default function Form3CD({ engagementIdProp }: { engagementIdProp?: strin
     sectionRefs.current[clauseNo]?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  // Apply every derivable suggestion to clauses that aren't manually locked.
+  async function autofillAll() {
+    if (!fsContext || fsContext.empty) { toast.error("No trial balance / COA mapping to derive from."); return; }
+    setApplyingAll(true);
+    try {
+      const next: Record<string, ClauseData> = { ...clauseData };
+      let count = 0;
+      activeClauses.forEach(c => {
+        const key = clauseStateKey(c.clauseNo);
+        const cur = next[key] || {};
+        if (isLocked(cur)) return;
+        const sugg = deriveClause(c.clauseNo, fsContext);
+        if (sugg && hasApplyableSuggestion(sugg)) {
+          next[key] = applySuggestion(cur, sugg);
+          count++;
+        }
+      });
+      setClauseData(next);
+      await saveAll(true, next);
+      toast.success(`Auto-filled ${count} clause(s) from COA mapping`);
+    } finally {
+      setApplyingAll(false);
+    }
+  }
+
+  function getClauseValue(clauseNo: string): ClauseData {
+    return clauseData[clauseStateKey(clauseNo)] || {};
+  }
+
   const fy = engagement?.financial_year || "";
   const ay = computeAY(fy);
 
@@ -353,7 +398,7 @@ export default function Form3CD({ engagementIdProp }: { engagementIdProp?: strin
   return (
     <div className="flex gap-0 h-[calc(100vh-4rem)]">
       {/* LEFT SIDEBAR NAV */}
-      <div className="w-56 shrink-0 border-r bg-muted/30">
+      <div className={`${navCollapsed ? "hidden" : "w-56"} shrink-0 border-r bg-muted/30`}>
         <ScrollArea className="h-full">
           <div className="p-3 space-y-0.5">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Clauses</p>
@@ -384,6 +429,13 @@ export default function Form3CD({ engagementIdProp }: { engagementIdProp?: strin
         {/* TOP BAR */}
         <div className="sticky top-0 z-10 bg-background border-b px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
+            <Button
+              variant="ghost" size="icon" className="h-8 w-8 shrink-0"
+              onClick={() => setNavCollapsed(c => !c)}
+              title={navCollapsed ? "Show clause list" : "Hide clause list (more width)"}
+            >
+              {navCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+            </Button>
             <h1 className="text-lg font-bold">Form 3CD — Tax Audit Report u/s 44AB</h1>
             <Badge variant={formStatus === "locked" ? "destructive" : formStatus === "complete" ? "default" : "secondary"}>
               {formStatus === "locked" ? "Locked" : formStatus === "complete" ? "Complete" : "Draft"}
@@ -391,6 +443,9 @@ export default function Form3CD({ engagementIdProp }: { engagementIdProp?: strin
             {saving && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
           </div>
           <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={() => setReconcileOpen(true)}>
+              <Sparkles className="h-4 w-4 mr-1" /> Audit & Auto-fill
+            </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm">
@@ -424,7 +479,7 @@ export default function Form3CD({ engagementIdProp }: { engagementIdProp?: strin
           </div>
         </div>
 
-        <div className="p-6 max-w-5xl mx-auto space-y-8">
+        <div className="p-6 max-w-[1500px] mx-auto space-y-8">
           {/* HEADER + CLAUSES 1-7 TABLE */}
           <Card>
             <CardContent className="p-6 space-y-4">
@@ -569,6 +624,14 @@ export default function Form3CD({ engagementIdProp }: { engagementIdProp?: strin
                       </div>
                     </AccordionTrigger>
                     <AccordionContent className="px-4 pb-4 space-y-4">
+                      <ClauseAutomationPanel
+                        definition={clause}
+                        value={clauseData[key] || {}}
+                        onChange={value => updateClauseData(clause.clauseNo, value)}
+                        context={fsContext}
+                        contextLoading={fsLoading}
+                        formLocked={formStatus === 'locked'}
+                      />
                       <ClauseRenderer
                         definition={clause}
                         value={clauseData[key] || {}}
@@ -608,6 +671,17 @@ export default function Form3CD({ engagementIdProp }: { engagementIdProp?: strin
           </Accordion>
         </div>
       </div>
+
+      {/* AUDIT / RECONCILE PANEL */}
+      <Form3cdReconcile
+        open={reconcileOpen}
+        onClose={() => setReconcileOpen(false)}
+        context={fsContext}
+        contextLoading={fsLoading}
+        getValue={getClauseValue}
+        onApplyAll={autofillAll}
+        applying={applyingAll}
+      />
 
       {/* PRINT VIEW MODAL */}
       {showPrintView && (
