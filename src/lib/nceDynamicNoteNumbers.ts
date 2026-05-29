@@ -76,13 +76,15 @@ export function computeNceDynamicNoteMap(
     }
   }
 
-  // Task 9 (doc7): when COGS materials (24) OR changes-in-inventories (26) is active,
-  // activate all 3 COGS sub-notes together (24=materials, 25=purchases, 26=changes).
-  if (activeRefs.has(24) || activeRefs.has(26)) {
-    activeRefs.add(24);
-    activeRefs.add(25);
-    activeRefs.add(26);
-  }
+  // Note 3 fix ("changes in non corporate" doc): each COGS sub-note must earn its
+  // number on its OWN data, exactly like every other note and like the P&L face
+  // (which zero-suppresses a line with no amount). The previous force-activation
+  // of all three COGS sub-notes (24=materials, 25=purchases, 26=changes) reserved
+  // a note number for "Purchases of Stock-in-Trade" even when it was empty — the
+  // P&L then skipped that line, leaving a gap (e.g. Note 14 → Note 16, no 15).
+  // By NOT force-activating, a zero-value sub-note gets no number and the sequence
+  // stays continuous: materials=14, changes=15, … matching the BS/P&L references
+  // (the single source of truth).
 
   // Step 2 — sort and assign sequential numbers 1, 2, 3, …
   const sorted = [...activeRefs].sort((a, b) => a - b);

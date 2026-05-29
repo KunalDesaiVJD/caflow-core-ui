@@ -867,7 +867,21 @@ export async function nceAutoPopulate(
 
   for (const [noteType, noteFs] of Object.entries(NCE_NOTE_FS_MAP)) {
     const prev = existing[noteType] ?? { cy: {}, py: {}, customRows: [] };
-    const manualRows = prev.customRows.filter(r => r.source === "manual");
+    // Note 4 fix: collapse duplicate MANUAL rows before processing. A pre-fix
+    // runaway loop (auto walk re-creating ledgers + the "promote to manual" heal
+    // converting them every cycle) accumulated the SAME ledger 10-20x as manual
+    // rows, which are preserved verbatim across re-syncs and so never self-healed.
+    // De-duplicating by label+attachedTo+section (keep first) means a re-sync now
+    // writes ONE clean row per ledger and totals stop multiplying.
+    const _seenManual = new Set<string>();
+    const manualRows = prev.customRows.filter(r => {
+      if (r.source !== "manual") return false;
+      const key = `${(r.label || "").trim().toLowerCase()}|${r.attachedTo ?? ""}|${r.section ?? ""}`;
+      if (!(r.label || "").trim()) return true;
+      if (_seenManual.has(key)) return false;
+      _seenManual.add(key);
+      return true;
+    });
 
     // Build a set of TB ledger names the user has explicitly ejected to
     // standalone rows. These are skipped during auto-grouping so they won't
