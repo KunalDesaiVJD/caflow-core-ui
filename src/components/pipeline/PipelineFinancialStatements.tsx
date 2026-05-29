@@ -6167,19 +6167,59 @@ export default function PipelineFinancialStatements({
     <div className="mt-4 rounded-lg border bg-card px-4 py-4 text-[11px] space-y-3">
       <div>As per our Audit Report of even date</div>
 
-      {/* Firm header / Client header — Task 10: Place+Date shown ONCE above "For [Client Name]" on right */}
+      {/* Firm header / Client header — mirrors the corporate block's layout */}
       <div className="grid grid-cols-2 gap-x-8">
         <div>
           <div className="font-bold">
             For {sigFirmName || <span className="italic text-muted-foreground">[Audit Firm Name]</span>}
           </div>
           <div>Chartered Accountants</div>
-          {/* Task 7 + Task 11: "Firm's Registration No." → "FRN", no colon */}
           <div>FRN {sigFirmFRN || <span className="italic">[FRN]</span>}</div>
         </div>
         <div>
-          {/* Task 10: Place + Date once, on right, above "For [Client Name]" */}
-          <div className="space-y-0.5 mb-2">
+          <div className="font-bold">
+            For {sigClientName || <span className="italic text-muted-foreground">[Client Name]</span>}
+          </div>
+        </div>
+      </div>
+
+      {/* Signatures — Partner (left) + Authorised Signatory (right) */}
+      <div className="grid grid-cols-2 gap-x-6 pt-6">
+        {/* Partner */}
+        <div className="space-y-0.5">
+          <div className="font-bold">
+            {sigPartnerName || <span className="italic text-muted-foreground">[Partner Name]</span>}
+          </div>
+          <div>Partner</div>
+          <div>Membership No {sigMembershipNo || <span className="italic">—</span>}</div>
+        </div>
+        {/* Authorised Signatory — designation derived from entity constitution */}
+        <div className="space-y-1">
+          <Input
+            placeholder="Authorised Signatory Name"
+            value={sigSignatoryName}
+            onChange={e => setSigSignatoryName(e.target.value)}
+            className="h-6 text-[11px] px-1 font-bold"
+          />
+          <div>{(() => {
+            const c = (entityType || "").toLowerCase().trim();
+            // LLP must be checked BEFORE "partnership" because
+            // "Limited Liability Partnership" contains "partnership".
+            if (c.includes("llp") || c.includes("limited liability partnership")) return "Designated Partner";
+            if (c.includes("partnership")) return "Partner / Authorised Signatory";
+            // "Individual" is how Tally registers sole-proprietors.
+            if (c.includes("proprietor") || c === "individual") return "Proprietor";
+            return "Authorised Signatory";
+          })()}</div>
+        </div>
+      </div>
+
+      {/* Place + Date row — clean dedicated row under each column (like the
+          corporate block) instead of being cramped into the header. Both
+          columns bind to the same place/date state. */}
+      <div className="grid grid-cols-2 gap-x-6 pt-2">
+        {[0, 1].map(i => (
+          <div key={i} className="space-y-0.5">
             <div className="flex items-center gap-1">
               <span className="shrink-0">Place:</span>
               <Input
@@ -6199,42 +6239,7 @@ export default function PipelineFinancialStatements({
               />
             </div>
           </div>
-          <div className="font-bold">
-            For {sigClientName || <span className="italic text-muted-foreground">[Client Name]</span>}
-          </div>
-        </div>
-      </div>
-
-      {/* Signatures — 2 columns */}
-      <div className="grid grid-cols-2 gap-x-8 pt-6">
-        {/* Partner */}
-        <div className="space-y-0.5">
-          <div className="font-bold">
-            {sigPartnerName || <span className="italic text-muted-foreground">[Partner Name]</span>}
-          </div>
-          <div>Partner</div>
-          {/* Task 11: remove colon after "Membership No." */}
-          <div>Membership No {sigMembershipNo || <span className="italic">—</span>}</div>
-        </div>
-        {/* Authorised Signatory — Task 4: designation derived from entity constitution */}
-        <div className="space-y-1">
-          <Input
-            placeholder="Authorised Signatory Name"
-            value={sigSignatoryName}
-            onChange={e => setSigSignatoryName(e.target.value)}
-            className="h-6 text-[11px] px-1 font-bold"
-          />
-          <div>{(() => {
-            const c = (entityType || "").toLowerCase().trim();
-            // LLP must be checked BEFORE "partnership" because
-            // "Limited Liability Partnership" contains "partnership".
-            if (c.includes("llp") || c.includes("limited liability partnership")) return "Designated Partner";
-            if (c.includes("partnership")) return "Partner / Authorised Signatory";
-            // "Individual" is how Tally registers sole-proprietors.
-            if (c.includes("proprietor") || c === "individual") return "Proprietor";
-            return "Authorised Signatory";
-          })()}</div>
-        </div>
+        ))}
       </div>
     </div>
   ) : null;
