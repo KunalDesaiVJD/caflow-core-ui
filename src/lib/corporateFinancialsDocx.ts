@@ -18,6 +18,7 @@ import {
   BorderStyle,
   Document,
   Footer,
+  Header,
   HeightRule,
   PageBorderDisplay,
   PageBorderOffsetFrom,
@@ -93,8 +94,11 @@ const FA_NBPY  = 1100;
 
 // ─── Typography ───────────────────────────────────────────────────────────────
 let FONT        = "Arial";
-const SZ_XS     = 14;   // 7pt
-const SZ_SM     = 16;   // 8pt
+// Issue 4 — NO text below 9pt anywhere in the export. SZ_XS / SZ_SM are kept as
+// named tiers but floored at 9pt (18 half-points) so any caller using them
+// renders at the 9pt minimum.
+const SZ_XS     = 18;   // was 7pt — floored to 9pt
+const SZ_SM     = 18;   // was 8pt — floored to 9pt
 const SZ_BODY   = 18;   // 9pt
 const SZ_HDR    = 20;   // 10pt
 const SZ_TITLE  = 22;   // 11pt
@@ -159,8 +163,8 @@ interface CellOpts {
   padR?: number;
   indent?: number;
   colSpan?: number;
-  /** "Keep with next" — set on every note-table row so an entire note moves to
-   *  the next page intact instead of splitting across a page break. Word still
+  /** "Keep with next" — set on note-table rows so an entire note moves to the
+   *  next page intact instead of splitting across a page break. Word still
    *  breaks a note larger than one page (keepNext is a soft constraint). */
   keepNext?: boolean;
 }
@@ -191,6 +195,7 @@ function cell(o: CellOpts): TableCell {
     verticalAlign: VerticalAlign.CENTER,
     children: [new Paragraph({
       alignment: align,
+      ...(keepNext ? { keepNext: true, keepLines: true } : {}),
       spacing:   { before: 0, after: 0, line: 260, lineRule: "auto" as any },
       ...(keepNext ? { keepNext: true, keepLines: true } : {}),
       children:  [new TextRun({ text, font: FONT, size: sz, bold, italic, color })],
@@ -781,6 +786,37 @@ function makeFooter(entityName: string): Footer {
   });
 }
 
+// ─── RUNNING PAGE HEADER ──────────────────────────────────────────────────────
+// Issue 1 — the client name repeats at the top of EVERY page.
+// Issue 2 — Notes sections additionally carry a context line that repeats on
+//           every page of that section ("Notes to Balance Sheet …" / "Notes
+//           Profit & Loss A/c …").
+function makeHeader(entityName: string, subtitle?: string): Header {
+  const nameRun = new TextRun({ text: entityName, font: FONT, size: SZ_SM, bold: true, color: NAVY });
+  const children: Paragraph[] = [];
+  if (subtitle) {
+    children.push(new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing:   { before: 0, after: 10 },
+      children:  [nameRun],
+    }));
+    children.push(new Paragraph({
+      alignment: AlignmentType.CENTER,
+      border:    { bottom: { style: BorderStyle.SINGLE, size: 4, color: NAVY, space: 1 } },
+      spacing:   { before: 0, after: 40 },
+      children:  [new TextRun({ text: subtitle, font: FONT, size: SZ_SM, italic: true, color: DK_GREY })],
+    }));
+  } else {
+    children.push(new Paragraph({
+      alignment: AlignmentType.CENTER,
+      border:    { bottom: { style: BorderStyle.SINGLE, size: 4, color: NAVY, space: 1 } },
+      spacing:   { before: 0, after: 40 },
+      children:  [nameRun],
+    }));
+  }
+  return new Header({ children });
+}
+
 // ─── NOTE 1: Accounting Policies ─────────────────────────────────────────────
 const CORP_NOTE1_POLICIES = [
   { label: "a) Basis of Preparation",
@@ -861,7 +897,7 @@ function buildNote1Section(entityName: string, cyYear: string): Paragraph[] {
 }
 
 // ─── NOTE TABLE (generic breakup from stage5_notes) ──────────────────────────
-function noteTitleRow(colWidths: number[], noteNumber: string, title: string): TableRow {
+function noteTitleRow(colWidths: number[], noteNumber: string, title: string, keepNext = false): TableRow {
   const totalW = colWidths.reduce((s, w) => s + w, 0);
   return new TableRow({
     cantSplit: true,
@@ -870,15 +906,13 @@ function noteTitleRow(colWidths: number[], noteNumber: string, title: string): T
       new TableCell({
         columnSpan: colWidths.length,
         width:   { size: totalW, type: WidthType.DXA },
-        // Issue 1 — note heading uses a lighter grey (BG_NOTE_HDR, 2 shades
-        // lighter) with black bold text, sitting a notch above the Particulars
-        // header shade.
+        // Note heading uses a lighter grey (BG_NOTE_HDR) with black bold text.
         shading: { fill: BG_NOTE_HDR, type: ShadingType.CLEAR },
         borders: BDR_NONE,
         margins: { top: 100, bottom: 100, left: 160, right: 100 },
         children: [new Paragraph({
           spacing: { before: 0, after: 0 },
-          keepNext: true, keepLines: true,
+          ...(keepNext ? { keepNext: true, keepLines: true } : {}),
           children: [
             new TextRun({ text: `Note ${noteNumber} — ${title}`, font: FONT, size: SZ_HDR, bold: true, color: BLACK }),
           ],
@@ -888,14 +922,14 @@ function noteTitleRow(colWidths: number[], noteNumber: string, title: string): T
   });
 }
 
-function noteHdr3(cyLabel: string, pyLabel: string): TableRow {
+function noteHdr3(cyLabel: string, pyLabel: string, keepNext = false): TableRow {
   return new TableRow({
     tableHeader: true,
     height: { value: 500, rule: HeightRule.ATLEAST },
     children: [
-      cell({ text: "Particulars", w: NW_DESC, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, padL: 160, keepNext: true }),
-      cell({ text: `${cyLabel}\n${_exportSuffix}`, w: NW_CY, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120, keepNext: true }),
-      cell({ text: `${pyLabel}\n${_exportSuffix}`, w: NW_PY, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120, keepNext: true }),
+      cell({ text: "Particulars", w: NW_DESC, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, padL: 160, keepNext }),
+      cell({ text: `${cyLabel}\n${_exportSuffix}`, w: NW_CY, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120, keepNext }),
+      cell({ text: `${pyLabel}\n${_exportSuffix}`, w: NW_PY, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120, keepNext }),
     ],
   });
 }
@@ -1582,8 +1616,8 @@ function buildShareCapitalNote(
   const fmtPct    = (v: number) => (v === 0 ? "—" : `${v.toFixed(2)}%`);
   const fmtPctChg = (v: number) => (v === 0 ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(2)}%`);
 
-  const cyDateLbl = `As at 31 Mar ${cyYearNum}`;
-  const pyDateLbl = `As at 31 Mar ${pyYearNum}`;
+  const cyDateLbl = `As on 31.03.${cyYearNum}`;
+  const pyDateLbl = `As on 31.03.${pyYearNum}`;
   const cyLbl     = `FY ${cyYearNum - 1}-${String(cyYearNum).slice(-2)}`;
   const pyLbl     = `FY ${pyYearNum - 1}-${String(pyYearNum).slice(-2)}`;
 
@@ -1826,12 +1860,17 @@ function buildNoteTableFromRows(
     return fmt(v);
   };
 
+  // Issue 3 — keep the WHOLE note on one page: every row "keeps with next"
+  // except the last, so Word moves the entire note to the next page when it
+  // doesn't fit (no manual blank lines, no oversized top margin).
   const tableRows: TableRow[] = [
-    noteTitleRow([NW_DESC, NW_CY, NW_PY], noteNumber, title),
-    noteHdr3(cyYear, pyYear),
+    noteTitleRow([NW_DESC, NW_CY, NW_PY], noteNumber, title, true),
+    noteHdr3(cyYear, pyYear, true),
   ];
 
-  for (const row of rows) {
+  const lastIdx = rows.length - 1;
+  rows.forEach((row, idx) => {
+    const kn = idx < lastIdx; // all but the final row keep with next
     // Heading-only row (e.g. "Surplus in the Statement of Profit and Loss") —
     // italic label spanning the row with blank value cells.
     if (row.style === "heading") {
@@ -1839,12 +1878,12 @@ function buildNoteTableFromRows(
         cantSplit: true,
         height: { value: 320, rule: HeightRule.ATLEAST },
         children: [
-          cell({ text: row.label, w: NW_DESC, italic: true, color: DK_GREY, borders: BDR_ROW, padL: 160 }),
-          cell({ text: "", w: NW_CY, borders: BDR_ROW }),
-          cell({ text: "", w: NW_PY, borders: BDR_ROW }),
+          cell({ text: row.label, w: NW_DESC, italic: true, color: DK_GREY, borders: BDR_ROW, padL: 160, keepNext: kn }),
+          cell({ text: "", w: NW_CY, borders: BDR_ROW, keepNext: kn }),
+          cell({ text: "", w: NW_PY, borders: BDR_ROW, keepNext: kn }),
         ],
       }));
-      continue;
+      return;
     }
     // Issue 1 — every note row is WHITE (no zebra striping, no subtotal/total
     // shading). Totals stay legible via bold text + their rule borders.
@@ -1855,12 +1894,12 @@ function buildNoteTableFromRows(
       cantSplit: true,
       height: { value: 340, rule: HeightRule.ATLEAST },
       children: [
-        cell({ text: row.label,               w: NW_DESC, bold, bg, borders: bdr, indent: row.indent ?? 0, padL: row.indent ? 80 : 160 }),
-        cell({ text: fmtVal(row.cy, row.fmt), w: NW_CY, align: AlignmentType.RIGHT, padL: 20, padR: 140, bold, bg, borders: bdr }),
-        cell({ text: fmtVal(row.py, row.fmt), w: NW_PY, align: AlignmentType.RIGHT, padL: 20, padR: 140, bold, bg, borders: bdr }),
+        cell({ text: row.label,               w: NW_DESC, bold, bg, borders: bdr, indent: row.indent ?? 0, padL: row.indent ? 80 : 160, keepNext: kn }),
+        cell({ text: fmtVal(row.cy, row.fmt), w: NW_CY, align: AlignmentType.RIGHT, padL: 20, padR: 140, bold, bg, borders: bdr, keepNext: kn }),
+        cell({ text: fmtVal(row.py, row.fmt), w: NW_PY, align: AlignmentType.RIGHT, padL: 20, padR: 140, bold, bg, borders: bdr, keepNext: kn }),
       ],
     }));
-  }
+  });
 
   return new Table({
     width:        { size: TW, type: WidthType.DXA },
@@ -1990,12 +2029,11 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
   // Capital must not flow directly after Note 1 — Accounting Policies).
   const pageBreak = () => new Paragraph({ pageBreakBefore: true, spacing: { before: 0, after: 0 }, children: [] });
 
-  const noteTables: (Table | Paragraph)[] = [];
   const faRows = stage5Notes?.fa?.rows ?? [];
   let faRenderedAsNote = false;
 
-  // Collect notes with their numbers, then sort ascending
-  const pendingNotes: Array<{ noteNo: number; elements: (Table | Paragraph)[] }> = [];
+  // Collect notes with their numbers + which statement they belong to.
+  const pendingNotes: Array<{ noteNo: number; section: "bs" | "pl"; elements: (Table | Paragraph)[] }> = [];
 
   for (const meta of CORP_NOTE_META) {
     const noteNo = noteNumbers[meta.fsCode];
@@ -2008,6 +2046,7 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
 
     const sectionData = (stage5Notes as any)?.[meta.section];
     const noteData    = sectionData?.[meta.dataKey];
+    const stmt: "bs" | "pl" = meta.section === "pl" ? "pl" : "bs";
 
     const totCy = amounts[meta.fsCode]?.cy ?? 0;
     const totPy = amounts[meta.fsCode]?.py ?? 0;
@@ -2017,37 +2056,54 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
     // dedicated builder rather than the single-table NoteRow path.
     if (meta.renderType === "shareCapital") {
       const els = buildShareCapitalNote(String(noteNo), meta.title, noteData, totCy, totPy, cyYear, pyYear);
-      if (els.length > 0) pendingNotes.push({ noteNo, elements: els });
+      if (els.length > 0) pendingNotes.push({ noteNo, section: stmt, elements: els });
       continue;
     }
 
     const rows = extractNoteRows(meta.renderType, noteData, amounts, meta.fsCode, stage5Notes, expandSubGroups);
     if (rows.length === 0) continue;
 
-    const isBS    = meta.section === "bs_liab" || meta.section === "bs_asset";
-    const cyFull  = isBS ? `As at 31 Mar ${cyLabel}` : `Year ended 31 Mar ${cyLabel}`;
-    const pyFull  = isBS ? `As at 31 Mar ${pyLabel}` : `Year ended 31 Mar ${pyLabel}`;
+    // Issue 5 — every note's amount columns are headed "As on 31.03.YYYY"
+    // (both BS and P&L notes), instead of "As at 31 Mar …" / "Year ended 31 Mar …".
+    const cyFull  = `As on 31.03.${cyLabel}`;
+    const pyFull  = `As on 31.03.${pyLabel}`;
 
     pendingNotes.push({
       noteNo,
+      section: stmt,
       elements: [buildNoteTableFromRows(String(noteNo), meta.title, rows, cyFull, pyFull)],
     });
   }
 
-  // Sort notes in ascending note-number order.
-  // Issue 1 — ONLY the first note (Note 2) starts on a fresh page so it never
-  // runs on directly after Note 1's accounting-policy text. Every subsequent
-  // note then flows continuously (separated by a spacer, wrapping pages as
-  // needed) — notes are NOT each forced onto their own page.
+  // Issues 1 & 2 — split notes by statement so each set lives in its own
+  // section with its own repeating page header. Sort ascending first.
   pendingNotes.sort((a, b) => a.noteNo - b.noteNo);
-  pendingNotes.forEach((item, idx) => {
-    noteTables.push(idx === 0 ? pageBreak() : spacer(), ...item.elements);
+  const bsNotes = pendingNotes.filter(p => p.section === "bs");
+  const plNotes = pendingNotes.filter(p => p.section === "pl");
+
+  // BS-notes section body: Note 1 (policies) first, then Note 2 on a fresh page,
+  // remaining notes flowing continuously (separated by a spacer).
+  const bsNotesChildren: (Table | Paragraph)[] = [...note1Paras];
+  bsNotes.forEach((item, idx) => {
+    bsNotesChildren.push(idx === 0 ? pageBreak() : spacer(), ...item.elements);
+  });
+  // P&L-notes section body: the section break already starts a fresh page.
+  const plNotesChildren: (Table | Paragraph)[] = [];
+  plNotes.forEach((item, idx) => {
+    if (idx === 0) plNotesChildren.push(...item.elements);
+    else           plNotesChildren.push(spacer(), ...item.elements);
   });
 
   // Ratios
   const hasRatios = ratios && (ratios.cy || ratios.py);
 
-  // Page settings (with page border)
+  // Issue 2 — repeating context lines for the two notes sections.
+  const bsNotesSubtitle = `Notes to Balance Sheet as at 31st March, ${cyYear}`;
+  const plNotesSubtitle = `Notes Profit & Loss A/c. for Accounting year ${pyYear} - ${cyYear}`;
+
+  // Page settings (with page border). header/footer distances keep the running
+  // header/footer inside the existing margins so the BS/P&L faces still fit one
+  // page (the header sits within the top margin and does not push the body).
   const _pgBdr = {
     pageBorders: { display: PageBorderDisplay.ALL_PAGES, offsetFrom: PageBorderOffsetFrom.PAGE },
     pageBorderTop:    { style: BorderStyle.SINGLE, size: 12, color: BG_HDR, space: 24 },
@@ -2057,70 +2113,57 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
   };
   const portraitProps = {
     size:    { width: A4_W, height: A4_H },
-    margin:  { top: MARG_T, right: MARG_H, bottom: MARG_B, left: MARG_H },
+    margin:  { top: MARG_T, right: MARG_H, bottom: MARG_B, left: MARG_H, header: 280, footer: 280 },
     borders: _pgBdr,
   };
   const landscapeProps = {
     size:    { width: A4_W, height: A4_H, orientation: PageOrientation.LANDSCAPE },
-    margin:  { top: MARG_T, right: MARG_LS, bottom: MARG_B, left: MARG_LS },
+    margin:  { top: MARG_T, right: MARG_LS, bottom: MARG_B, left: MARG_LS, header: 280, footer: 280 },
     borders: _pgBdr,
   };
+
+  // Issue 1 — client name in every section's running header; Issue 2 adds the
+  // notes context line on the two notes sections.
+  const hf = (subtitle?: string) => ({
+    headers: { default: makeHeader(entityName, subtitle) },
+    footers: { default: makeFooter(entityName) },
+  });
+  const sigSpacer = () => new Paragraph({ spacing: { before: 160 }, children: [] });
 
   // Build sections
   const sections: any[] = [
     // Balance Sheet
-    {
-      properties: { page: portraitProps },
-
-      children: [
-        bsTable,
-        new Paragraph({ spacing: { before: 160 }, children: [] }),
-        sigBlock(),
-      ],
-    },
+    { properties: { page: portraitProps }, ...hf(), children: [bsTable, sigSpacer(), sigBlock()] },
     // P&L
-    {
-      properties: { page: portraitProps },
-
-      children: [
-        plTable,
-        new Paragraph({ spacing: { before: 160 }, children: [] }),
-        sigBlock(),
-      ],
-    },
-    // Notes (portrait) — Issue 3: Ratios are NO LONGER appended here; they get
-    // their own section AFTER the FA schedule so they land on the final page.
-    {
-      properties: { page: portraitProps },
-
-      children:   [
-        ...note1Paras,
-        ...noteTables,
-      ],
-    },
+    { properties: { page: portraitProps }, ...hf(), children: [plTable, sigSpacer(), sigBlock()] },
+    // Notes to Balance Sheet (Note 1 policies + BS notes)
+    { properties: { page: portraitProps }, ...hf(bsNotesSubtitle), children: bsNotesChildren },
   ];
+
+  // Notes to Profit & Loss — own section + own running header
+  if (plNotes.length > 0) {
+    sections.push({ properties: { page: portraitProps }, ...hf(plNotesSubtitle), children: plNotesChildren });
+  }
 
   // FA schedule (landscape) — only if FA rows exist
   if (faRows.length > 0) {
     const faNoteNo = noteNumbers["BS_NCA_FA"];
     sections.push({
       properties: { page: landscapeProps },
-
+      ...hf(),
       children:   [buildFATable(faRows, faNoteNo ? String(faNoteNo) : "—", cyLabel, pyLabel, stage5Notes?.fa?.py_manual ?? null, params.faPyRows ?? null)],
     });
   }
 
-  // Issue 3 — Financial Ratios export on their OWN page, AFTER every note
-  // (including the FA schedule). This makes the ratios the final page.
+  // Issue 3 (prior) — Financial Ratios export on their OWN page, AFTER every note.
   if (hasRatios) {
-    // Issue 1 — the Ratio note continues the FS note numbering: it is the
-    // highest note number actually used + 1 (e.g. last note 18 → ratio = 19).
     const maxNoteNo = Object.values(noteNumbers)
       .map(v => (typeof v === "number" ? v : 0))
       .reduce((m, v) => Math.max(m, v), 0);
     const ratioNoteNo = maxNoteNo > 0 ? maxNoteNo + 1 : null;
     sections.push({
       properties: { page: portraitProps },
+      ...hf(),
       children:   [buildRatiosTable(ratios!.cy, ratios!.py, (ratios as any)?.commentary, fy, ratioNoteNo)],
     });
   }
