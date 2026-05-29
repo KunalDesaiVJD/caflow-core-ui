@@ -756,13 +756,21 @@ function buildPLRows(pl: PLRowData, notesData?: Stage5Notes | null): PLDisplayRo
   // Total Income: negate raw values (which are stored as negative credits)
   const totalIncomeCy = negI(pl.revFromOps.cy) + negI(pl.otherIncome.cy);
   const totalIncomePy = negI(pl.revFromOps.py) + negI(pl.otherIncome.py);
-  // Total Expenses excludes "Cost of materials consumed" (Excel row 14 has
-  // note-no only, no amounts); SUM(G15:G20) covers rows 15–20.
+  // Total Expenses = SUM of every expense line, INCLUDING "Cost of materials
+  // consumed".  (The old code excluded costMaterials on an Excel-template
+  // assumption that row 14 carried a note-no only with no amount — true for
+  // pure trading entities, but manufacturers map real purchase/consumption
+  // ledgers to PL_EXP_MAT.  Dropping it understated Total Expenses by the full
+  // cost of materials and overstated PBT by the same amount, so the rendered
+  // P&L diverged from both COA mapping and the FS export/PBT figure, which
+  // both already include it.)
   const totalExpensesCy =
+    (pl.costMaterials.cy || 0) +
     (pl.purchasesStock.cy || 0) + (pl.changesInventories.cy || 0) +
     (pl.employeeBenefits.cy || 0) + (pl.financeCosts.cy || 0) +
     (pl.depreciation.cy || 0)    + (pl.otherExpenses.cy || 0);
   const totalExpensesPy =
+    (pl.costMaterials.py || 0) +
     (pl.purchasesStock.py || 0) + (pl.changesInventories.py || 0) +
     (pl.employeeBenefits.py || 0) + (pl.financeCosts.py || 0) +
     (pl.depreciation.py || 0)    + (pl.otherExpenses.py || 0);
