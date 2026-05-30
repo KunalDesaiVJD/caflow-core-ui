@@ -3541,17 +3541,45 @@ export default function PipelineFinancialStatements({
     : computedAmounts;
   const ncePyAmounts: Record<string, number> = isNonCorporate
     ? (() => {
+        // 2026-05-30 — Authority on PY BS values is the CY opening balance
+        // (= PY closing per Tally TB = the COA-mapping total). When the
+        // auditor adds custom rows in Notes for the PY column (e.g.
+        // re-classifying balances, typing PY values for codes with no TB
+        // ledger), those values can diverge from the opening balances and
+        // make the PY BS not balance — the exact symptom reported on
+        // OM REALTY (E&L PY = 53.23cr but Assets PY = 14.84cr).
+        //
+        // Fix: for BS codes, keep the opening balance (mergedPY) as the
+        // authoritative PY face value. Only fall back to note totals when
+        // the opening balance is genuinely absent (no TB ledger for that
+        // code — e.g. share capital entered manually). PL codes continue
+        // to use note totals since opening balance is always 0 for P&L.
         const out = { ...mergedPY };
+        const isBSCode = (code: string): boolean => {
+          const section = NCE_CODE_TO_SECTION[code];
+          if (section === "bs_liab" || section === "bs_asset") return true;
+          // applyNCENoteTotal codes whose section isn't in NCE_CODE_TO_SECTION
+          // (e.g. NCE_LTLA / NCE_STLA share a note) — treat asset / liability
+          // FS codes as BS by prefix.
+          return /^NCE_(CAP|LTB|OLTL|LTP|STB|TP|OCL|STP|PPE|INTG|CWIP|NCINV|LTLA|ONCA|CINV|STCK|TR|CASH|STLA|OCA)$/.test(code);
+        };
+        // Pass 1 — stage5_notes (legacy path). Skip BS-code overrides when
+        // an opening balance already exists; keep the override only for
+        // codes that genuinely have no TB-derived value.
         for (const [code, key] of Object.entries(NCE_CODE_TO_NOTE_KEY)) {
           const section = NCE_CODE_TO_SECTION[code];
           if (!section) continue;
           const sum = sumNotesSubRowsPY(stage5NotesData ?? null, section, key);
           if (sum == null) continue;
+          if (isBSCode(code) && Math.abs(Number(out[code] ?? 0)) > 0.005) continue;
           out[code] = section === "bs_liab" ? -sum : sum;
         }
         const faPy = getFAGridNetBlockTotal(stage5NotesData ?? null, "py");
         if (faPy != null) out["NCE_PPE"] = faPy;
+        // Pass 2 — nce_financial_notes (Stage 8 path, the modern one).
+        // Same rule: BS codes keep their opening balance unless absent.
         for (const code of Object.keys(NCE_CODE_TO_NOTE)) {
+          if (isBSCode(code) && Math.abs(Number(out[code] ?? 0)) > 0.005) continue;
           applyNCENoteTotal(out, code, "py");
         }
         // See nceCyAmounts — recompute PY parents from leaf codes so the
