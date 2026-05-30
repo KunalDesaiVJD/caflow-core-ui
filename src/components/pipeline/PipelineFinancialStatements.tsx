@@ -6281,83 +6281,95 @@ export default function PipelineFinancialStatements({
   // ─── NCE Signature Block (reused in BS + P&L tabs) ───────────────────────
   // Shown only when isNonCorporate === true. Corporate signature handling is
   // managed elsewhere and must not be changed.
+  //
+  // 2026-05-30 — restructured to MATCH the Word export (nceFinancialsDocx.ts
+  // → buildSignatureTable) line for line so the on-screen preview tallies
+  // with the downloaded .docx:
+  //   • Left  column: Firm / CA / FRN → blank line → __________ →
+  //                   Partner name → "Partner" → Membership No. → UDIN:
+  //   • Right column (with extra left indent, mirroring the docx's 1440 dxa
+  //                   left margin): Place → Date → blank → For, Client →
+  //                   __________ → Signatory name input → Designation
+  //   • "As per our Audit Report of even date" header removed (the Word
+  //                   export does not include it; the preview must not either).
+  //   • Place/Date are NO LONGER duplicated on both sides — only on the right,
+  //                   matching the export.
+  const designation = (() => {
+    const c = (entityType || "").toLowerCase().trim();
+    // LLP must be checked BEFORE "partnership" because
+    // "Limited Liability Partnership" contains "partnership".
+    if (c.includes("llp") || c.includes("limited liability partnership")) return "Designated Partner";
+    if (c.includes("partnership")) return "Partner / Authorised Signatory";
+    // "Individual" is how Tally registers sole-proprietors.
+    if (c.includes("proprietor") || c === "individual") return "Proprietor";
+    return "Authorised Signatory";
+  })();
+  const sigUdin = (engagement as any)?.udin ?? "";
+  const sigDateFmt = (() => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec((sigDate || "").trim());
+    return m ? `${m[3]}/${m[2]}/${m[1]}` : sigDate;
+  })();
   const nceSignatureBlock = isNonCorporate ? (
-    <div className="mt-4 rounded-lg border bg-card px-4 py-4 text-[11px] space-y-3">
-      <div>As per our Audit Report of even date</div>
-
-      {/* Firm header / Client header — mirrors the corporate block's layout */}
+    <div className="mt-4 rounded-lg border bg-card px-6 py-6 text-[11px]">
       <div className="grid grid-cols-2 gap-x-8">
-        <div>
-          <div className="font-bold">
-            For {sigFirmName || <span className="italic text-muted-foreground">[Audit Firm Name]</span>}
+        {/* ── Left — CA Firm block ─────────────────────────────────────── */}
+        <div className="space-y-0.5">
+          <div className="font-bold text-[#1A2744]">
+            For, {sigFirmName || <span className="italic text-muted-foreground">[Audit Firm Name]</span>}
           </div>
           <div>Chartered Accountants</div>
           <div>FRN {sigFirmFRN || <span className="italic">[FRN]</span>}</div>
-        </div>
-        <div>
-          <div className="font-bold">
-            For {sigClientName || <span className="italic text-muted-foreground">[Client Name]</span>}
-          </div>
-        </div>
-      </div>
 
-      {/* Signatures — Partner (left) + Authorised Signatory (right) */}
-      <div className="grid grid-cols-2 gap-x-6 pt-6">
-        {/* Partner */}
-        <div className="space-y-0.5">
-          <div className="font-bold">
+          <div className="h-6" />{/* gap row matching Word's spacing.before */}
+          <div className="font-mono">__________________</div>
+          <div className="font-bold text-[#1A2744]">
             {sigPartnerName || <span className="italic text-muted-foreground">[Partner Name]</span>}
           </div>
           <div>Partner</div>
-          <div>Membership No {sigMembershipNo || <span className="italic">—</span>}</div>
+          <div>Membership No. {sigMembershipNo || <span className="italic">—</span>}</div>
+          <div>UDIN: {sigUdin || <span className="italic text-muted-foreground">—</span>}</div>
         </div>
-        {/* Authorised Signatory — designation derived from entity constitution */}
-        <div className="space-y-1">
+
+        {/* ── Right — Place / Date + Client signatory (indented like docx) ── */}
+        <div className="pl-8 space-y-0.5">
+          <div className="flex items-center gap-2">
+            <span className="shrink-0">Place:</span>
+            <Input
+              placeholder="City"
+              value={sigPlace}
+              onChange={e => setSigPlace(e.target.value)}
+              className="h-5 text-[11px] px-1 flex-1 max-w-[160px]"
+            />
+          </div>
+          <div className="h-3" />{/* 240 dxa gap before Date */}
+          <div className="flex items-center gap-2">
+            <span className="shrink-0">Date:</span>
+            <Input
+              type="date"
+              value={sigDate}
+              onChange={e => setSigDate(e.target.value)}
+              className="h-5 text-[11px] px-1 flex-1 max-w-[160px]"
+            />
+            <span className="text-muted-foreground text-[10px] italic">
+              {sigDateFmt ? `(${sigDateFmt})` : ""}
+            </span>
+          </div>
+
+          <div className="h-8" />{/* 480 dxa gap before "For, Client" */}
+          <div className="font-bold text-[#1A2744]">
+            For, {sigClientName || <span className="italic text-muted-foreground">[Client Name]</span>}
+          </div>
+
+          <div className="h-6" />{/* gap row before signature line */}
+          <div className="font-mono">__________________</div>
           <Input
             placeholder="Authorised Signatory Name"
             value={sigSignatoryName}
             onChange={e => setSigSignatoryName(e.target.value)}
-            className="h-6 text-[11px] px-1 font-bold"
+            className="h-6 text-[11px] px-1 font-bold mt-0.5 max-w-[260px]"
           />
-          <div>{(() => {
-            const c = (entityType || "").toLowerCase().trim();
-            // LLP must be checked BEFORE "partnership" because
-            // "Limited Liability Partnership" contains "partnership".
-            if (c.includes("llp") || c.includes("limited liability partnership")) return "Designated Partner";
-            if (c.includes("partnership")) return "Partner / Authorised Signatory";
-            // "Individual" is how Tally registers sole-proprietors.
-            if (c.includes("proprietor") || c === "individual") return "Proprietor";
-            return "Authorised Signatory";
-          })()}</div>
+          <div className="text-muted-foreground">{designation}</div>
         </div>
-      </div>
-
-      {/* Place + Date row — clean dedicated row under each column (like the
-          corporate block) instead of being cramped into the header. Both
-          columns bind to the same place/date state. */}
-      <div className="grid grid-cols-2 gap-x-6 pt-2">
-        {[0, 1].map(i => (
-          <div key={i} className="space-y-0.5">
-            <div className="flex items-center gap-1">
-              <span className="shrink-0">Place:</span>
-              <Input
-                placeholder="City"
-                value={sigPlace}
-                onChange={e => setSigPlace(e.target.value)}
-                className="h-5 text-[11px] px-1 flex-1"
-              />
-            </div>
-            <div className="flex items-center gap-1">
-              <span className="shrink-0">Date:</span>
-              <Input
-                type="date"
-                value={sigDate}
-                onChange={e => setSigDate(e.target.value)}
-                className="h-5 text-[11px] px-1 flex-1"
-              />
-            </div>
-          </div>
-        ))}
       </div>
     </div>
   ) : null;
