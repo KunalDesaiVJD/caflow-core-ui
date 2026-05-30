@@ -3009,6 +3009,49 @@ export default function PipelineFinancialStatements({
       }
     }
 
+    // 2026-05-30 — NCE PY net-profit auto-credit to NCE_CAP.
+    //
+    // For partnerships / proprietorships, the PY profit is journalled into
+    // partner / proprietor capital at year-end (no Reserves & Surplus on a
+    // non-corporate BS). When the user supplies PY P&L values (via the
+    // prior engagement, PY-shell TB or "Fetch from FY-1 Tally"), the
+    // comparative BS Capital must include that PY profit — otherwise it
+    // diverges from the opening balances on the asset side by exactly the
+    // PY net profit, producing the OM REALTY symptom: Liab + Capital PY
+    // (= 22.88cr) > Assets PY (= 14.84cr) by the unflowed PY profit
+    // (= 8.04cr).
+    //
+    // Mirrors the corporate BS_EQ_RS auto-credit above. PY net profit is
+    // computed as `-PL_INC - PL_EXP` (PL_INC stored negative for Cr-side
+    // revenue, PL_EXP stored positive for Dr-side expenses). The profit
+    // is subtracted from NCE_CAP because NCE_CAP is stored negative
+    // (Cr side); subtracting a positive profit makes it more negative
+    // (larger capital balance) — the standard closing entry's effect.
+    if (isNonCorporate) {
+      const pyInc   = merged["NCE_PL_INC"] || 0;
+      const pyExp   = merged["NCE_PL_EXP"] || 0;
+      const pyPartRem = merged["NCE_PART_REM"] || 0;
+      const pyTax     = merged["NCE_TAX"]      || 0;
+      // PY net profit AFTER partners' remuneration and tax — same as the
+      // P&L statement's bottom line. Crediting only this number to Capital
+      // matches the way Tally journals partnership profit at year-end.
+      const pyNetPL = Math.round(((-pyInc) - pyExp - pyPartRem - pyTax) * 100) / 100;
+      if (Math.abs(pyNetPL) > 0.005) {
+        merged["NCE_CAP"] = (merged["NCE_CAP"] || 0) - pyNetPL;
+        // Re-run BS tree totals so NCE_EL / NCE_AST pick up the change.
+        const computeBSTotal = (item: FSLineItem): number => {
+          const sec = String(item.section || "").toLowerCase();
+          const isBS = sec.includes("bs") || sec.includes("asset") || sec.includes("liab") || sec.includes("equity");
+          if (!isBS) return 0;
+          if (!item.children || item.children.length === 0) return merged[item.code] || 0;
+          const total = item.children.reduce((sum, child) => sum + computeBSTotal(child), 0);
+          merged[item.code] = total;
+          return total;
+        };
+        for (const item of activeTree) computeBSTotal(item);
+      }
+    }
+
     return merged;
   }, [computedAmountsPY, pyAmounts, pyManualAmounts, pyShellPLAmounts, noPriorEngagement, activeFlatItems, activeTree, pyInvCII, isNonCorporate]);
 
