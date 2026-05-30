@@ -43,9 +43,13 @@ interface Props {
    * the old behaviour for stand-alone uses of NotesTab.
    */
   extraOverrideCount?: number;
+  /** 2026-05-30 — Company name shown as a banner above the toolbar to match
+   *  the format used on Balance Sheet / Profit & Loss pages so the client
+   *  name is presented identically everywhere in the report. Optional. */
+  companyName?: string;
 }
 
-export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote, extraOverrideCount = 0 }: Props) {
+export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote, extraOverrideCount = 0, companyName }: Props) {
   const [notes,         setNotes]         = useState<Stage5Notes | null>(null);
   const [loading,       setLoading]       = useState(true);
   const [syncing,       setSyncing]       = useState(false);
@@ -373,6 +377,24 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote,
 
   return (
     <div className="space-y-3">
+      {/* Entity-name banner (2026-05-30) — matches Balance Sheet / P&L title
+          format so the company name reads identically across every page. */}
+      {companyName && (
+        <div className="rounded-lg border bg-card overflow-hidden">
+          <div className="text-center border-b bg-muted/30 py-2 px-3">
+            <div className="font-bold text-sm uppercase tracking-wide text-[#1F3864]">
+              {companyName}
+            </div>
+            <div className="text-xs mt-0.5">
+              Notes to Financial Statements for the year ended 31st March, {cyYear}
+            </div>
+            <div className="text-[10px] text-muted-foreground italic mt-0.5">
+              (Amount in ₹)
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-2 px-1">
         <Button
