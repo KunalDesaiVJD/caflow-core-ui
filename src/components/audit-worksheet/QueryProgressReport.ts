@@ -245,44 +245,52 @@ export async function generateQueryProgressReport(
   // ════════════════════════════════════════════════════════════════
 
   if (total > 0) {
-    doc.addPage();
+    // Switch to landscape A4 for the detail table — eight columns including
+    // Required Documents won't fit in portrait without truncating cells.
+    // Landscape gives 297mm width (vs 210mm) so every column has enough room
+    // for autoTable's linebreak wrapping to render full text without cuts.
+    doc.addPage("a4", "landscape");
+    const LPW = 297; // landscape page width
+    const LPH = 210; // landscape page height
+    const LML = 12;
+    const LMR = 12;
 
     // Page header
     doc.setFillColor(...BRAND_DARK);
-    doc.rect(0, 0, PW, 18, "F");
+    doc.rect(0, 0, LPW, 16, "F");
     doc.setTextColor(255, 255, 255);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(10);
-    doc.text("Query Detail Table", ML, 12);
+    doc.text("Query Detail Table", LML, 11);
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8);
-    doc.text(`${total} queries  ·  ${data.clientName || ""}  ·  ${data.financialYear || ""}`, PW - MR, 12, { align: "right" });
+    doc.text(`${total} queries  ·  ${data.clientName || ""}  ·  ${data.financialYear || ""}`, LPW - LMR, 11, { align: "right" });
 
     // Orange stripe
     doc.setFillColor(...BRAND_ORANGE);
-    doc.rect(0, 18, PW, 2, "F");
+    doc.rect(0, 16, LPW, 2, "F");
 
     // Table
-    // Description is intentionally NOT hard-truncated — autoTable's
-    // `overflow: "linebreak"` wraps the full text into multiple lines so the
-    // auditor sees the complete query instead of "Clarify why both Sales GST
-    // and Sales IGST are b…". Group/Ledger still get a soft cap because their
-    // columns are narrow and a wrap would push every row to 2-3 lines.
+    // No hard truncation anywhere — every cell uses autoTable's
+    // `overflow: "linebreak"` so the full text wraps across multiple lines.
+    // This includes Group ("Property, Plant & Equipment") and Ledger
+    // ("Machinery - CNC Busbar Bending Machine") which previously cut at 22 chars.
     const tableRows = queries.map((q, i) => [
       String(i + 1),
-      truncate(q.head        || "—", 22),
-      truncate(q.particulars || "—", 22),
-      q.query_description || "—",
+      q.head               || "—",
+      q.particulars        || "—",
+      q.query_description  || "—",
+      q.required_documents || "—",
       STATUS_LABELS[q.query_status],
       q.priority || "Medium",
       q.due_date ? fmtDate(q.due_date) : "—",
     ]);
 
     autoTable(doc, {
-      startY:        24,
+      startY:        22,
       head: [[
         "Sr.", "Group", "Ledger", "Description",
-        "Status", "Priority", "Due Date",
+        "Required Documents", "Status", "Priority", "Due Date",
       ]],
       body: tableRows,
       styles: {
@@ -290,6 +298,7 @@ export async function generateQueryProgressReport(
         cellPadding: 2.5,
         overflow: "linebreak",
         textColor: TEXT_BODY,
+        valign:    "top",
       },
       headStyles: {
         fillColor:  BRAND_DARK,
@@ -302,21 +311,22 @@ export async function generateQueryProgressReport(
         fillColor: GREY_LIGHT,
       },
       columnStyles: {
-        0: { cellWidth: 8,   halign: "center" },
-        1: { cellWidth: 26 },
-        2: { cellWidth: 26 },
-        // Description widened + uses "auto" so autoTable fills any leftover
-        // content width before wrapping — full query text is preserved across
-        // multiple lines instead of being cut off mid-sentence.
-        3: { cellWidth: "auto", minCellWidth: 60 },
-        4: { cellWidth: 22 },
-        5: { cellWidth: 16, halign: "center" },
-        6: { cellWidth: 20, halign: "center" },
+        // Widths chosen so every column has enough room for its longest
+        // realistic content; Description + Required Documents get the
+        // remaining width via cellWidth:"auto" with minCellWidth floors.
+        0: { cellWidth: 8,                       halign: "center" },
+        1: { cellWidth: 36                                          },
+        2: { cellWidth: 36                                          },
+        3: { cellWidth: "auto", minCellWidth: 70                    },
+        4: { cellWidth: "auto", minCellWidth: 38                    },
+        5: { cellWidth: 22,                      halign: "center"   },
+        6: { cellWidth: 16,                      halign: "center"   },
+        7: { cellWidth: 20,                      halign: "center"   },
       },
-      margin: { left: ML, right: MR },
+      margin: { left: LML, right: LMR, top: 22 },
       didParseCell(hookData) {
-        // Colour Status column
-        if (hookData.section === "body" && hookData.column.index === 4) {
+        // Colour Status column (now index 5)
+        if (hookData.section === "body" && hookData.column.index === 5) {
           const status = (Object.keys(STATUS_LABELS) as QueryStatus[]).find(
             s => STATUS_LABELS[s] === hookData.cell.raw,
           );
@@ -325,8 +335,8 @@ export async function generateQueryProgressReport(
             hookData.cell.styles.fontStyle  = "bold";
           }
         }
-        // Colour Priority column
-        if (hookData.section === "body" && hookData.column.index === 5) {
+        // Colour Priority column (now index 6)
+        if (hookData.section === "body" && hookData.column.index === 6) {
           const p = String(hookData.cell.raw);
           if (PRIORITY_COLORS[p]) {
             hookData.cell.styles.textColor = PRIORITY_COLORS[p];
@@ -341,7 +351,7 @@ export async function generateQueryProgressReport(
         doc.setTextColor(160, 160, 170);
         doc.text(
           `Page ${pg}  ·  CAFlow Audit Query Report  ·  ${todayStr}`,
-          PW / 2, PH - 5, { align: "center" },
+          LPW / 2, LPH - 5, { align: "center" },
         );
       },
     });

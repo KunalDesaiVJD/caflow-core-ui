@@ -71,6 +71,17 @@ export default function PipelineStage6({ engagementId, engagement, onStageComple
       <AuditWorksheetPage
         engagementId={engagementId}
         onSaved={(sectionName) => logSave(sectionName)}
+        // Issue 3 (2026-05-30) — record each Query Sheet row-level edit as its
+        // own history entry. The section_name embeds the row identifier so the
+        // Version History panel can render "Status: Raised → Dispatched on
+        // [Property, Plant & Equipment / Machinery] by Super Admin on 30/05/2026".
+        onQueryFieldChange={(c) => logSave(
+          `Query Sheet — ${c.rowLabel}`,
+          c.rowLabel,
+          c.fieldLabel,
+          c.oldValue,
+          c.newValue,
+        )}
       />
 
       {/* ═══ CP-16: Version History slide-over ═══ */}

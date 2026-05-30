@@ -236,6 +236,50 @@ function HistoryRow({
   entry:  WorksheetHistoryEntry;
   isLast: boolean;
 }) {
+  // Issue 3 (2026-05-30) — render row-level edit log entries that come from
+  // Query Sheet in the user-requested format:
+  //   "Status was changed by Super Admin from Raised to Dispatched
+  //    on 30/05/2026 01:10 PM"
+  // Detected by: section_name starts with "Query Sheet — " AND both
+  // old_value and new_value are present. Falls back to the legacy
+  // section-save display for everything else.
+  const isRowLevel =
+    entry.section_name?.startsWith("Query Sheet — ")
+    && entry.field_name
+    && (entry.old_value != null || entry.new_value != null);
+
+  if (isRowLevel) {
+    const who      = entry.changed_by_name || "Unknown";
+    const what     = entry.field_name;
+    const rowLabel = entry.page_label || entry.section_name.replace(/^Query Sheet — /, "");
+    const oldV     = entry.old_value || "—";
+    const newV     = entry.new_value || "—";
+    return (
+      <li className="ml-4 pb-4">
+        <span className="absolute -left-[5px] mt-1.5 h-2.5 w-2.5 rounded-full border-2 border-orange-500 bg-white" />
+        <div className="rounded-md border bg-card px-3 py-2 shadow-sm space-y-0.5">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-semibold text-foreground">
+              {what} changed
+              <span className="ml-1 font-normal text-muted-foreground">on {rowLabel}</span>
+            </span>
+            <span className="text-[11px] text-muted-foreground whitespace-nowrap">
+              {fmtDate(entry.changed_at)}
+            </span>
+          </div>
+          <div className="text-[11px] text-muted-foreground">
+            <span className="font-medium text-foreground">{who}</span>
+            {" changed "}<span className="text-foreground">{what}</span>{" from "}
+            <span className="px-1 rounded bg-red-50 text-red-700 border border-red-200">{oldV}</span>
+            {" to "}
+            <span className="px-1 rounded bg-green-50 text-green-700 border border-green-200">{newV}</span>
+          </div>
+        </div>
+      </li>
+    );
+  }
+
+  // Legacy section-save display
   return (
     <li className={`ml-4 pb-4 ${isLast ? "" : ""}`}>
       {/* dot */}

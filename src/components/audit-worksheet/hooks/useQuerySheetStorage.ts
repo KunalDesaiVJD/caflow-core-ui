@@ -78,6 +78,17 @@ const PRIORITY_CYCLE: QueryPriority[] = ["High", "Medium", "Low"];
 
 // ─── Row type ─────────────────────────────────────────────────────────────────
 
+/** A single file attached to a query row.  Stored in Supabase storage's
+ *  `documents` bucket (same bucket Checklist uses) — only the path + display
+ *  name + size live in the row's JSON so the query_sheet_json column stays
+ *  small. PDF / Excel / image only; ≤ 5 MB each. Optional. */
+export interface QueryAttachment {
+  file_path: string;   // storage path inside the "documents" bucket
+  file_name: string;   // original filename for display
+  file_type: string;   // MIME type (image/png, application/pdf, etc.)
+  size:      number;   // bytes (sanity check on re-render)
+}
+
 export interface QueryRow {
   id:                   string;
   head:                 string;
@@ -92,6 +103,9 @@ export interface QueryRow {
   priority:             QueryPriority;
   // Phase 3C
   due_date?:            string;  // YYYY-MM-DD — response deadline
+  // Issue 2 (2026-05-30) — optional per-row attachments (PDF/Excel/images,
+  // ≤5MB each), uploaded to Supabase storage. Empty/missing array = none.
+  attachments?:         QueryAttachment[];
 }
 
 export interface QuerySheetData {
@@ -108,6 +122,7 @@ export const BLANK_QUERY: Omit<QueryRow, "id"> = {
   query_status:       "draft",
   priority:           "Medium",
   due_date:           "",
+  attachments:        [],
 };
 
 const BLANK_DATA: QuerySheetData = { queries: [] };
@@ -134,15 +149,60 @@ function newId(): string {
 
 // ─── Hook ────────────────────────────────────────────────────────────────────
 
+/** Callback signature for row-level edit logging (Issue 3 — 2026-05-30).
+ *  Called BEFORE the in-memory state is replaced so the caller sees both
+ *  the before and after value. The caller (QuerySheet) wires this to
+ *  useWorksheetHistory.logSave so each meaningful change becomes its own
+ *  timeline entry like "Status: Raised → Dispatched on row [Group/Ledger]". */
+export interface QueryFieldChange {
+  rowId:      string;
+  rowLabel:   string;        // "head / particulars" so the entry is identifiable
+  fieldLabel: string;        // human label: "Status", "Priority", "Due Date", …
+  oldValue:   string;
+  newValue:   string;
+}
+
 export function useQuerySheetStorage(
   engagementId: string,
   firmId?: string | null,
+  onFieldChange?: (c: QueryFieldChange) => void,
 ) {
   const { user } = useAuth();
   const [data,   setData]   = useState<QuerySheetData>(BLANK_DATA);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Stable ref so internal callbacks always see the latest onFieldChange
+  // without needing to re-create themselves on every render.
+  const onFieldChangeRef = useRef(onFieldChange);
+  useEffect(() => { onFieldChangeRef.current = onFieldChange; }, [onFieldChange]);
+
+  // Human-readable labels for fields surfaced in the version history.
+  const FIELD_LABEL: Partial<Record<keyof QueryRow, string>> = {
+    head:               "Group",
+    particulars:        "Ledger",
+    query_description:  "Description",
+    required_documents: "Required Documents",
+    remark:             "Remark",
+    correction_status:  "Correction Status",
+    query_status:       "Status",
+    priority:           "Priority",
+    due_date:           "Due Date",
+    attachments:        "Attachments",
+  };
+
+  /** Row identifier for the timeline ("Property, Plant & Equipment / Machinery"). */
+  const rowLabel = (r: QueryRow) => {
+    const h = (r.head || "").trim();
+    const p = (r.particulars || "").trim();
+    if (h && p) return `${h} / ${p}`;
+    return h || p || `Row ${r.id.slice(0, 6)}`;
+  };
+
+  /** Map an internal status code to its display label so the history reads
+   *  like "Raised → Dispatched" instead of "raised → dispatched". */
+  const statusLabel = (s: QueryStatus) => STATUS_META[s]?.label ?? s;
 
   // ── Load ─────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -210,12 +270,34 @@ export function useQuerySheetStorage(
   const updateQuery = useCallback(
     (id: string, field: keyof Omit<QueryRow, "id">, value: string) => {
       setData(prev => {
+        const target = prev.queries.find(q => q.id === id);
         const next: QuerySheetData = {
           queries: prev.queries.map(q =>
             q.id === id ? { ...q, [field]: value } : q,
           ),
         };
         debounce(next);
+        // Emit a row-level edit-log entry for any meaningful field change
+        // (Issue 3 — 2026-05-30). dispatched_query_id is an internal id and
+        // not worth surfacing in the timeline; everything else is.
+        if (
+          target
+          && onFieldChangeRef.current
+          && field !== "dispatched_query_id"
+          && (target as any)[field] !== value
+        ) {
+          const fl = FIELD_LABEL[field] ?? String(field);
+          let oldDisplay = String((target as any)[field] ?? "");
+          let newDisplay = String(value ?? "");
+          if (field === "query_status") {
+            oldDisplay = statusLabel(oldDisplay as QueryStatus);
+            newDisplay = statusLabel(newDisplay as QueryStatus);
+          }
+          onFieldChangeRef.current({
+            rowId: id, rowLabel: rowLabel(target),
+            fieldLabel: fl, oldValue: oldDisplay, newValue: newDisplay,
+          });
+        }
         return next;
       });
     },
@@ -274,6 +356,7 @@ export function useQuerySheetStorage(
   const advanceStatus = useCallback(
     (id: string) => {
       setData(prev => {
+        let logged: QueryFieldChange | null = null;
         const next: QuerySheetData = {
           queries: prev.queries.map(q => {
             if (q.id !== id) return q;
@@ -284,10 +367,17 @@ export function useQuerySheetStorage(
             const extra = nextStatus === "resolved"
               ? { correction_status: "Yes" as CorrectionStatus }
               : {};
+            logged = {
+              rowId: q.id, rowLabel: rowLabel(q),
+              fieldLabel: "Status",
+              oldValue:   statusLabel(current),
+              newValue:   statusLabel(nextStatus),
+            };
             return { ...q, query_status: nextStatus, ...extra };
           }),
         };
         debounce(next);
+        if (logged && onFieldChangeRef.current) onFieldChangeRef.current(logged);
         return next;
       });
     },
@@ -298,18 +388,27 @@ export function useQuerySheetStorage(
   const setQueryStatus = useCallback(
     (id: string, status: QueryStatus) => {
       setData(prev => {
+        let logged: QueryFieldChange | null = null;
         const next: QuerySheetData = {
           queries: prev.queries.map(q => {
             if (q.id !== id) return q;
+            if (q.query_status === status) return q;
             const extra = status === "resolved"
               ? { correction_status: "Yes" as CorrectionStatus }
               : status === "escalated"
               ? { correction_status: "No" as CorrectionStatus }
               : {};
+            logged = {
+              rowId: q.id, rowLabel: rowLabel(q),
+              fieldLabel: "Status",
+              oldValue:   statusLabel(q.query_status),
+              newValue:   statusLabel(status),
+            };
             return { ...q, query_status: status, ...extra };
           }),
         };
         debounce(next);
+        if (logged && onFieldChangeRef.current) onFieldChangeRef.current(logged);
         return next;
       });
     },
@@ -321,18 +420,27 @@ export function useQuerySheetStorage(
     (ids: string[], status: QueryStatus) => {
       setData(prev => {
         const idSet = new Set(ids);
+        const logged: QueryFieldChange[] = [];
         const next: QuerySheetData = {
           queries: prev.queries.map(q => {
             if (!idSet.has(q.id)) return q;
+            if (q.query_status === status) return q;
             const extra = status === "resolved"
               ? { correction_status: "Yes" as CorrectionStatus }
               : status === "escalated"
               ? { correction_status: "No" as CorrectionStatus }
               : {};
+            logged.push({
+              rowId: q.id, rowLabel: rowLabel(q),
+              fieldLabel: "Status",
+              oldValue:   statusLabel(q.query_status),
+              newValue:   statusLabel(status),
+            });
             return { ...q, query_status: status, ...extra };
           }),
         };
         debounce(next);
+        if (onFieldChangeRef.current) logged.forEach(c => onFieldChangeRef.current!(c));
         return next;
       });
     },
@@ -385,26 +493,117 @@ export function useQuerySheetStorage(
   const cyclePriority = useCallback(
     (id: string) => {
       setData(prev => {
+        let logged: QueryFieldChange | null = null;
         const next: QuerySheetData = {
           queries: prev.queries.map(q => {
             if (q.id !== id) return q;
             const cur = q.priority ?? "Medium";
             const idx = PRIORITY_CYCLE.indexOf(cur);
             const nextPriority = PRIORITY_CYCLE[(idx + 1) % PRIORITY_CYCLE.length];
+            logged = {
+              rowId: q.id, rowLabel: rowLabel(q),
+              fieldLabel: "Priority",
+              oldValue: cur, newValue: nextPriority,
+            };
             return { ...q, priority: nextPriority };
           }),
         };
         debounce(next);
+        if (logged && onFieldChangeRef.current) onFieldChangeRef.current(logged);
         return next;
       });
     },
     [debounce],
   );
 
+  // ── Attachments (Issue 2 — 2026-05-30) ────────────────────────────────────
+
+  /** Add an attachment to a row. Caller is responsible for the actual upload to
+   *  Supabase storage — this only persists the record on the row. */
+  const addAttachment = useCallback(
+    (rowId: string, attachment: QueryAttachment) => {
+      setData(prev => {
+        let logged: QueryFieldChange | null = null;
+        const next: QuerySheetData = {
+          queries: prev.queries.map(q => {
+            if (q.id !== rowId) return q;
+            const list = [...(q.attachments ?? []), attachment];
+            logged = {
+              rowId: q.id, rowLabel: rowLabel(q),
+              fieldLabel: "Attachments",
+              oldValue: `${(q.attachments ?? []).length} file(s)`,
+              newValue: `+${attachment.file_name}`,
+            };
+            return { ...q, attachments: list };
+          }),
+        };
+        debounce(next);
+        if (logged && onFieldChangeRef.current) onFieldChangeRef.current(logged);
+        return next;
+      });
+    },
+    [debounce],
+  );
+
+  /** Remove an attachment from a row by file_path. */
+  const removeAttachment = useCallback(
+    (rowId: string, file_path: string) => {
+      setData(prev => {
+        let logged: QueryFieldChange | null = null;
+        const next: QuerySheetData = {
+          queries: prev.queries.map(q => {
+            if (q.id !== rowId) return q;
+            const removed = (q.attachments ?? []).find(a => a.file_path === file_path);
+            const list = (q.attachments ?? []).filter(a => a.file_path !== file_path);
+            if (removed) {
+              logged = {
+                rowId: q.id, rowLabel: rowLabel(q),
+                fieldLabel: "Attachments",
+                oldValue: removed.file_name,
+                newValue: "removed",
+              };
+            }
+            return { ...q, attachments: list };
+          }),
+        };
+        debounce(next);
+        if (logged && onFieldChangeRef.current) onFieldChangeRef.current(logged);
+        return next;
+      });
+    },
+    [debounce],
+  );
+
+  /** Validate that every row has a non-empty Query Description before save.
+   *  Returns the count of offending rows; 0 means the save is clear to go. */
+  const validateRequired = useCallback((snapshot: QuerySheetData): {
+    missingCount: number;
+    firstMissingId: string | null;
+  } => {
+    let missingCount = 0;
+    let firstMissingId: string | null = null;
+    for (const q of snapshot.queries) {
+      if (!(q.query_description || "").trim()) {
+        missingCount += 1;
+        if (!firstMissingId) firstMissingId = q.id;
+      }
+    }
+    return { missingCount, firstMissingId };
+  }, []);
+
   const manualSave = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
+    // Issue 4 (2026-05-30) — Query Description is mandatory. Block save and
+    // surface a toast pointing the auditor at the offending row count.
+    const { missingCount } = validateRequired(data);
+    if (missingCount > 0) {
+      toast.error(
+        `${missingCount} ${missingCount === 1 ? "query is" : "queries are"} missing a Query Description. Fill them in before saving.`,
+      );
+      return Promise.reject(new Error("query_description_required"));
+    }
     return persist(data, false);
-  }, [data, persist]);
+  }, [data, persist, validateRequired]);
 
   // ── Derived values ────────────────────────────────────────────────────────
 
@@ -432,6 +631,12 @@ export function useQuerySheetStorage(
     return counts;
   }, [queries]);
 
+  // ── Derived: rows missing the mandatory Query Description ────────────────
+  const missingDescriptionIds = useMemo(
+    () => new Set(queries.filter(q => !(q.query_description || "").trim()).map(q => q.id)),
+    [queries],
+  );
+
   return {
     queries,
     addQuery,
@@ -444,11 +649,14 @@ export function useQuerySheetStorage(
     bulkSetStatus,
     syncStatusFromClient,
     cyclePriority,
+    addAttachment,
+    removeAttachment,
     manualSave,
     saving,
     loaded,
     allCorrected,
     pendingCount,
     statusCounts,
+    missingDescriptionIds,
   };
 }

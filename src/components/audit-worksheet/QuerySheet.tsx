@@ -31,7 +31,7 @@ import {
   Search, X, BookOpen, Send, CheckCircle2,
   ChevronRight, ArrowRight, AlertTriangle,
   CheckSquare, Square, Calendar, Rocket, BarChart2,
-  Sparkles, FileText, RefreshCw,
+  Sparkles, FileText, RefreshCw, Paperclip, Eye,
 } from "lucide-react";
 import { LedgerSidePanel }              from "./LedgerSidePanel";
 import { QueryAnalyticsSidebar }        from "./QueryAnalyticsSidebar";
@@ -48,7 +48,9 @@ import {
   useQuerySheetStorage,
   STATUS_META, PRIORITY_META,
 } from "./hooks/useQuerySheetStorage";
-import type { QueryRow, QueryStatus, QueryPriority } from "./hooks/useQuerySheetStorage";
+import type {
+  QueryRow, QueryStatus, QueryPriority, QueryAttachment, QueryFieldChange,
+} from "./hooks/useQuerySheetStorage";
 import { useTallyOptions } from "./hooks/useTallyOptions";
 import type { AuditWorksheetData } from "./hooks/useAuditWorksheetData";
 
@@ -149,6 +151,35 @@ interface Props {
   onSaved?:           () => void;
   externalPrefill?:   QueryPrefill | null;
   onPrefillConsumed?: () => void;
+  /** Issue 3 (2026-05-30): row-level edit log. Called for every meaningful
+   *  field change so the parent can persist to audit_worksheet_history with
+   *  the row identifier in section_name. */
+  onFieldChange?:     (change: QueryFieldChange) => void;
+}
+
+// ─── Attachment helpers (Issue 2 — 2026-05-30) ────────────────────────────────
+
+/** PDF / Excel / images only, ≤ 5MB. Returns null when the file is acceptable,
+ *  otherwise a human-readable rejection reason. */
+const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+const ALLOWED_EXTS = new Set(["pdf","xlsx","xls","xlsm","csv","jpg","jpeg","png","gif","webp","heic","heif"]);
+function validateAttachment(file: File): string | null {
+  const ext = (file.name.split(".").pop() ?? "").toLowerCase();
+  if (!ALLOWED_EXTS.has(ext)) {
+    return `"${file.name}" — only PDF, Excel and image files are allowed`;
+  }
+  if (file.size > MAX_ATTACHMENT_BYTES) {
+    return `"${file.name}" exceeds the 5 MB limit (${(file.size/1024/1024).toFixed(1)} MB)`;
+  }
+  return null;
+}
+
+/** Excel files need application/octet-stream so the documents bucket's
+ *  MIME allow-list doesn't reject them — same trick the Checklist tab uses. */
+function attachmentContentType(file: File): string {
+  const ext = (file.name.split(".").pop() ?? "").toLowerCase();
+  if (["xlsx","xls","xlsm"].includes(ext)) return "application/octet-stream";
+  return file.type || "application/octet-stream";
 }
 
 // ─── Pipeline funnel bar ──────────────────────────────────────────────────────
@@ -550,12 +581,15 @@ function BulkDispatchDialog({
 export default function QuerySheet({
   data, engagementId, onSaved,
   externalPrefill, onPrefillConsumed,
+  onFieldChange,
 }: Props) {
   const {
     queries, addQuery, addQueryPrefilled, updateQuery, deleteQuery, bulkAddQueries,
     advanceStatus, setQueryStatus, bulkSetStatus, syncStatusFromClient, cyclePriority,
+    addAttachment, removeAttachment,
     manualSave, saving, allCorrected, pendingCount, statusCounts,
-  } = useQuerySheetStorage(engagementId, data.engagement?.firm_id);
+    missingDescriptionIds,
+  } = useQuerySheetStorage(engagementId, data.engagement?.firm_id, onFieldChange);
 
   // Phase 3A: Tally options
   const { groups, getLedgersForGroup, hasTallyData } = useTallyOptions(
@@ -583,6 +617,56 @@ export default function QuerySheet({
   const [viewLedger,       setViewLedger]       = useState<{ name: string; group: string } | null>(null);
   const [dispatchingId,    setDispatchingId]    = useState<string | null>(null);
   const [dispatchingAll,   setDispatchingAll]   = useState(false);
+
+  // Attachment upload state (Issue 2 — 2026-05-30)
+  const attachInputRef         = useRef<HTMLInputElement>(null);
+  const [attachTargetRow,  setAttachTargetRow]  = useState<string | null>(null);
+  const [attachUploadingId, setAttachUploadingId] = useState<string | null>(null);
+
+  const openAttachPicker = (rowId: string) => {
+    setAttachTargetRow(rowId);
+    if (attachInputRef.current) attachInputRef.current.value = "";
+    attachInputRef.current?.click();
+  };
+
+  const handleAttachChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    const rowId = attachTargetRow;
+    setAttachTargetRow(null);
+    if (!files.length || !rowId) return;
+
+    for (const file of files) {
+      const reason = validateAttachment(file);
+      if (reason) { toast.error(reason); continue; }
+      const safe = file.name.replace(/\s+/g, "_");
+      const path = `query_attachments/${engagementId}/${rowId}/${Date.now()}_${safe}`;
+      setAttachUploadingId(rowId);
+      const { error } = await supabase.storage.from("documents").upload(path, file, {
+        upsert: true, contentType: attachmentContentType(file),
+      });
+      setAttachUploadingId(null);
+      if (error) { toast.error(`Upload failed: ${error.message}`); continue; }
+      addAttachment(rowId, {
+        file_path: path, file_name: file.name,
+        file_type: file.type || attachmentContentType(file),
+        size:      file.size,
+      });
+      toast.success(`"${file.name}" attached`);
+    }
+  };
+
+  const handleAttachPreview = (att: QueryAttachment) => {
+    const { data: pub } = supabase.storage.from("documents").getPublicUrl(att.file_path);
+    if (pub?.publicUrl) window.open(pub.publicUrl, "_blank");
+    else toast.error("Could not generate preview link");
+  };
+
+  const handleAttachDelete = async (rowId: string, att: QueryAttachment) => {
+    const { error } = await supabase.storage.from("documents").remove([att.file_path]);
+    if (error) { toast.error(error.message); return; }
+    removeAttachment(rowId, att.file_path);
+    toast.success("Attachment removed");
+  };
 
   // Phase 3F: analytics sidebar
   const [showAnalytics, setShowAnalytics] = useState(false);
@@ -643,6 +727,12 @@ export default function QuerySheet({
   // ── Single dispatch ──────────────────────────────────────────────────────────
   const dispatchToClient = async (row: QueryRow) => {
     if (!data.engagement?.client_id) { toast.error("No client linked"); return; }
+    // Issue 4 (2026-05-30): a query must have a description before it can be
+    // dispatched to the client portal — otherwise the client sees an empty card.
+    if (!(row.query_description || "").trim()) {
+      toast.error("Add a Query Description before dispatching");
+      return;
+    }
     setDispatchingId(row.id);
     try {
       // Shared fields for both insert (first dispatch) and update (re-dispatch).
@@ -884,10 +974,25 @@ export default function QuerySheet({
           <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv"
             className="hidden" onChange={handleFileChange} />
           <Button size="sm" className="gap-1 h-7 text-xs bg-orange-600 hover:bg-orange-700"
-            onClick={async () => { await manualSave(); onSaved?.(); }} disabled={saving}>
+            onClick={async () => {
+              // Issue 4 (2026-05-30): manualSave throws when Query Description is
+              // missing on any row. Swallow that here so onSaved is only called
+              // on a successful persist — the hook has already toasted the error.
+              try { await manualSave(); onSaved?.(); } catch { /* validation rejected */ }
+            }} disabled={saving}>
             {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
             Save
           </Button>
+
+          {/* Hidden file input — used by every row's paperclip button */}
+          <input
+            ref={attachInputRef}
+            type="file"
+            multiple
+            accept=".pdf,.xlsx,.xls,.xlsm,.csv,.jpg,.jpeg,.png,.gif,.webp,.heic,.heif"
+            className="hidden"
+            onChange={handleAttachChange}
+          />
         </div>
       </div>
 
@@ -978,6 +1083,7 @@ export default function QuerySheet({
               <th className="border border-orange-500 px-3 py-2.5 text-left min-w-[150px]">Required Documents</th>
               <th className="border border-orange-500 px-3 py-2.5 text-left min-w-[120px]">Remark</th>
               <th className="border border-orange-500 px-2 py-2.5 text-center min-w-[110px]">Status / Due</th>
+              <th className="border border-orange-500 px-2 py-2.5 text-center w-16">Attach</th>
               <th className="border border-orange-500 px-2 py-2.5 text-center w-16">Del</th>
               <th className="border border-orange-500 px-2 py-2.5 text-center w-20">Dispatch</th>
             </tr>
@@ -985,7 +1091,7 @@ export default function QuerySheet({
           <tbody>
             {queries.length === 0 ? (
               <tr>
-                <td colSpan={9} className="border border-border py-12 text-center text-muted-foreground">
+                <td colSpan={10} className="border border-border py-12 text-center text-muted-foreground">
                   <div className="flex flex-col items-center gap-2">
                     <MessageSquareWarning size={28} className="text-muted-foreground/40" />
                     <span className="text-sm">No queries yet.</span>
@@ -997,7 +1103,7 @@ export default function QuerySheet({
               </tr>
             ) : displayedQueries.length === 0 ? (
               <tr>
-                <td colSpan={9} className="border border-border py-8 text-center text-muted-foreground text-sm">
+                <td colSpan={10} className="border border-border py-8 text-center text-muted-foreground text-sm">
                   No queries match the current filters
                   <button type="button"
                     onClick={() => { setStatusFilter("all"); setPriorityFilter("all"); setSearchText(""); }}
@@ -1062,12 +1168,23 @@ export default function QuerySheet({
                       </div>
                     </td>
 
-                    {/* Query Description — Phase 4D: Smart Draft button; Phase 4F: auto spell fix */}
+                    {/* Query Description — Phase 4D: Smart Draft button; Phase 4F: auto spell fix
+                          Issue 4 (2026-05-30): mandatory — empty rows get a red ring + caption so the
+                          auditor can find them at a glance before saving. */}
                     <td className="border border-border px-2 py-2 align-top">
-                      <Textarea rows={2} className="text-xs resize-none w-full min-h-[52px]"
-                        placeholder="Describe the query…" value={row.query_description}
+                      <Textarea rows={2}
+                        className={cn(
+                          "text-xs resize-none w-full min-h-[52px]",
+                          missingDescriptionIds.has(row.id) && "ring-1 ring-red-400 border-red-300 focus-visible:ring-red-500",
+                        )}
+                        placeholder="Describe the query… (required)" value={row.query_description}
                         onChange={e => updateQuery(row.id, "query_description", e.target.value)}
                         onBlur={e => checkAndFix(row.id, "query_description", e.target.value)} />
+                      {missingDescriptionIds.has(row.id) && (
+                        <p className="mt-0.5 text-[10px] text-red-600 font-medium">
+                          Required — Save is blocked until every row has a description
+                        </p>
+                      )}
                       {(row.head || row.particulars) && !row.query_description?.trim() && (
                         <button
                           type="button"
@@ -1113,6 +1230,48 @@ export default function QuerySheet({
                               : dueState === "soon"  ? "border-amber-300 bg-amber-50 text-amber-700"
                               : "border-input text-muted-foreground",
                           )} />
+                      </div>
+                    </td>
+
+                    {/* Attachments (Issue 2 — 2026-05-30) */}
+                    <td className="border border-border px-2 py-2 align-middle text-center">
+                      <div className="flex flex-col items-center gap-1">
+                        <Button size="sm" variant="ghost"
+                          className="h-7 w-7 p-0 text-muted-foreground hover:text-orange-600 hover:bg-orange-50 relative"
+                          title="Attach PDF / Excel / image (max 5 MB)"
+                          disabled={attachUploadingId === row.id}
+                          onClick={() => openAttachPicker(row.id)}>
+                          {attachUploadingId === row.id
+                            ? <Loader2 size={13} className="animate-spin" />
+                            : <Paperclip size={13} />}
+                          {(row.attachments?.length ?? 0) > 0 && (
+                            <span className="absolute -top-1 -right-1 text-[8px] font-bold bg-orange-600 text-white rounded-full px-1 min-w-[14px] leading-[14px]">
+                              {row.attachments!.length}
+                            </span>
+                          )}
+                        </Button>
+                        {(row.attachments?.length ?? 0) > 0 && (
+                          <div className="flex flex-col gap-0.5 max-w-[120px]">
+                            {row.attachments!.slice(0, 3).map(att => (
+                              <div key={att.file_path} className="flex items-center gap-0.5 text-[9px]">
+                                <button type="button" onClick={() => handleAttachPreview(att)}
+                                  className="flex-1 truncate text-blue-600 hover:underline text-left"
+                                  title={`${att.file_name} (${(att.size/1024).toFixed(0)} KB)`}>
+                                  {att.file_name}
+                                </button>
+                                <button type="button" onClick={() => handleAttachPreview(att)}
+                                  className="text-muted-foreground hover:text-foreground"
+                                  title="Preview"><Eye size={9} /></button>
+                                <button type="button" onClick={() => handleAttachDelete(row.id, att)}
+                                  className="text-muted-foreground hover:text-red-600"
+                                  title="Remove"><X size={9} /></button>
+                              </div>
+                            ))}
+                            {row.attachments!.length > 3 && (
+                              <span className="text-[9px] text-muted-foreground">… +{row.attachments!.length - 3} more</span>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </td>
 

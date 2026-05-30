@@ -36,9 +36,11 @@ interface Props {
   engagementId: string;
   /** CP-16: called after each tab save with the section name for history logging */
   onSaved?: (sectionName: string) => void;
+  /** Issue 3 (2026-05-30) — row-level edit log from Query Sheet. */
+  onQueryFieldChange?: (change: import("./hooks/useQuerySheetStorage").QueryFieldChange) => void;
 }
 
-export default function AuditWorksheetPage({ engagementId, onSaved }: Props) {
+export default function AuditWorksheetPage({ engagementId, onSaved, onQueryFieldChange }: Props) {
   const data = useAuditWorksheetData(engagementId);
 
   // Determine which tabs to show
@@ -260,6 +262,7 @@ export default function AuditWorksheetPage({ engagementId, onSaved }: Props) {
             onSaved={() => onSaved?.("Query Sheet")}
             externalPrefill={pendingPrefill}
             onPrefillConsumed={() => setPendingPrefill(null)}
+            onFieldChange={onQueryFieldChange}
           />
         </TabsContent>
 
