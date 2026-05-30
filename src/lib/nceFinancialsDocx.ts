@@ -1367,6 +1367,12 @@ function buildNoteSection(
 
   // Unattached custom rows (no attachedTo) render as their own lines: section-
   // tagged ones just before their section total, the rest before the grand total.
+  // 2026-05-30 — indent 0 (was 1) so unattached customs align with the static
+  // Particulars above instead of looking like sub-items of "Rates and Taxes" /
+  // whichever static row preceded them. Reported on OM REALTY Note 18 where
+  // "Architect Fees - 18%", "Site Expense", "BU Expense" etc. (which are
+  // unmatched ledgers, not children of any static head) were getting a
+  // misleading sub-row indent in the .docx export.
   const emittedCustoms = new Set<string>();
   const emitCustoms = (predicate: (cr: NoteCustomRow) => boolean) => {
     for (const cr of customRows) {
@@ -1375,11 +1381,11 @@ function buildNoteSection(
       if (isA) {
         const c = suffixed(cy, cr.id); const p = suffixed(py, cr.id);
         if (!c.lt && !c.st && !p.lt && !p.st) continue;
-        rows.push(noteRowA(cr.label || "—", c.lt, p.lt, c.st, p.st, 1, "data"));
+        rows.push(noteRowA(cr.label || "—", c.lt, p.lt, c.st, p.st, 0, "data"));
       } else {
         const c = cy[cr.id] ?? 0, p = py[cr.id] ?? 0;
         if (!c && !p) continue;
-        rows.push(noteRowB(cr.label || "—", c, p, 1, "data"));
+        rows.push(noteRowB(cr.label || "—", c, p, 0, "data"));
       }
     }
   };
