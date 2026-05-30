@@ -26,6 +26,7 @@ import {
   PageNumber,
   PageOrientation,
   Paragraph,
+  SectionType,
   ShadingType,
   Table,
   TableCell,
@@ -372,12 +373,12 @@ function titleRows(entityName: string, statementTitle: string, dateLine: string)
           children: [new Paragraph({
             alignment: AlignmentType.CENTER,
             spacing:   { before: 0, after: 0 },
-            children:  [new TextRun({ text: entityName.toUpperCase(), font: FONT, size: SZ_ENTITY, bold: true, color: NAVY })],
+            children:  [new TextRun({ text: entityName.toUpperCase(), font: FONT, size: SZ_ENTITY, bold: true, color: BLACK })],
           })],
         }),
       ],
     }),
-    centerRow(`${statementTitle} ${dateLine}`, { sz: SZ_TITLE, bold: true, color: NAVY, bottom: 10 }),
+    centerRow(`${statementTitle} ${dateLine}`, { sz: SZ_TITLE, bold: true, color: BLACK, bottom: 10 }),
     new TableRow({
       children: [
         new TableCell({
@@ -799,7 +800,7 @@ function makeHeader(entityName: string, subtitle?: string): Header {
     new Paragraph({
       alignment: AlignmentType.CENTER,
       spacing:   { before: 0, after: subtitle ? 60 : 40 },
-      children:  [new TextRun({ text: entityName, font: FONT, size: SZ_TITLE, bold: true, color: NAVY })],
+      children:  [new TextRun({ text: entityName, font: FONT, size: SZ_TITLE, bold: true, color: BLACK })],
     }),
   ];
   if (subtitle) {
@@ -2098,14 +2099,14 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
   const bsNotesSubtitle = `Notes to Balance Sheet as at 31st March, ${cyYear}`;
   const plNotesSubtitle = `Notes Profit & Loss A/c. for Accounting year ${pyYear} - ${cyYear}`;
 
-  // Page settings (with page border). The header distance keeps the running
-  // header inside the existing top margin so the notes body isn't pushed.
+  // Border sits close to the page edge so the running-header client name
+  // (positioned in the top margin) renders INSIDE the visible page rectangle.
   const _pgBdr = {
     pageBorders: { display: PageBorderDisplay.ALL_PAGES, offsetFrom: PageBorderOffsetFrom.PAGE },
-    pageBorderTop:    { style: BorderStyle.SINGLE, size: 12, color: BG_HDR, space: 24 },
-    pageBorderBottom: { style: BorderStyle.SINGLE, size: 12, color: BG_HDR, space: 24 },
-    pageBorderLeft:   { style: BorderStyle.SINGLE, size: 12, color: BG_HDR, space: 24 },
-    pageBorderRight:  { style: BorderStyle.SINGLE, size: 12, color: BG_HDR, space: 24 },
+    pageBorderTop:    { style: BorderStyle.SINGLE, size: 12, color: BG_HDR, space: 6 },
+    pageBorderBottom: { style: BorderStyle.SINGLE, size: 12, color: BG_HDR, space: 6 },
+    pageBorderLeft:   { style: BorderStyle.SINGLE, size: 12, color: BG_HDR, space: 6 },
+    pageBorderRight:  { style: BorderStyle.SINGLE, size: 12, color: BG_HDR, space: 6 },
   };
   const portraitProps = {
     size:    { width: A4_W, height: A4_H },
@@ -2136,9 +2137,24 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
     { properties: { page: portraitProps }, ...hdr(bsNotesSubtitle), children: bsNotesChildren },
   ];
 
-  // Notes Profit & Loss — own section + own running header
+  // Notes Profit & Loss — CONTINUOUS section break (no forced new page) so the
+  // P&L notes flow on the same page where BS notes end. An inline bold heading
+  // ("Notes Profit & Loss A/c. for Accounting year YYYY - YYYY") introduces the
+  // P&L notes at the transition point. On subsequent pages the section's own
+  // running header takes over.
   if (plNotes.length > 0) {
-    sections.push({ properties: { page: portraitProps }, ...hdr(plNotesSubtitle), children: plNotesChildren });
+    const inlinePlHeading = new Paragraph({
+      alignment: AlignmentType.LEFT,
+      spacing:   { before: 200, after: 100 },
+      keepNext:  true,
+      keepLines: true,
+      children:  [new TextRun({ text: plNotesSubtitle, font: FONT, size: SZ_HDR, bold: true, color: BLACK })],
+    });
+    sections.push({
+      properties: { type: SectionType.CONTINUOUS, page: portraitProps },
+      ...hdr(plNotesSubtitle),
+      children:   [inlinePlHeading, ...plNotesChildren],
+    });
   }
 
   // FA schedule (landscape) — a Balance Sheet schedule, so it carries the BS

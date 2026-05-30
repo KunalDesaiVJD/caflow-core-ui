@@ -67,7 +67,7 @@ interface RunOpts {
 function wRun(text: string, opts: RunOpts = {}): string {
   if (!text) return "";
   const rPrParts: string[] = [
-    `<w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/>`,
+    `<w:rFonts w:ascii="Arial" w:hAnsi="Arial"/>`,
     `<w:sz w:val="20"/><w:szCs w:val="20"/>`,
   ];
   if (opts.bold)      rPrParts.push("<w:b/><w:bCs/>");
@@ -82,7 +82,7 @@ function wRun(text: string, opts: RunOpts = {}): string {
 /** Inline line-break run — used for single \n within a paragraph. */
 function wBr(opts: RunOpts = {}): string {
   const rPrParts: string[] = [
-    `<w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/>`,
+    `<w:rFonts w:ascii="Arial" w:hAnsi="Arial"/>`,
     `<w:sz w:val="20"/><w:szCs w:val="20"/>`,
   ];
   if (opts.bold) rPrParts.push("<w:b/><w:bCs/>");
@@ -218,7 +218,7 @@ function hrPara(): string {
           `<w:top w:val="single" w:sz="10" w:space="0" w:color="auto"/>` +
         `</w:pBdr>` +
         `<w:spacing w:before="120" w:after="0" w:line="240" w:lineRule="auto"/>` +
-        `<w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>` +
+        `<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>` +
       `</w:pPr>` +
     `</w:p>`
   );
@@ -245,7 +245,7 @@ function bodyParaRich(parts: Array<{ text: string; opts?: RunOpts }>): string {
 // The template uses several distinct spacer styles depending on context.
 // Replicating them exactly preserves the visual rhythm of the template.
 
-const BLANK_RPR = `<w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>`;
+const BLANK_RPR = `<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>`;
 const BLANK_BDR = `<w:pBdr><w:top w:val="none" w:sz="2" w:space="0" w:color="auto"/><w:bottom w:val="none" w:sz="2" w:space="2" w:color="auto"/></w:pBdr>`;
 
 /**
@@ -325,7 +325,7 @@ function blankRightIndent(): string {
  * Template P77 carries bold on its paragraph-mark rPr — replicated here.
  */
 function blankAfterGenNotesHeading(): string {
-  const boldRPR = `<w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:b/><w:bCs/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>`;
+  const boldRPR = `<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:b/><w:bCs/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>`;
   return (
     `<w:p><w:pPr>` +
     `<w:keepNext/>` +
@@ -385,7 +385,7 @@ function blankBetweenNotesBold(): string {
     `<w:keepNext/>` +
     `<w:spacing w:after="0" w:line="240" w:lineRule="auto"/>` +
     `<w:ind w:left="650" w:hanging="488"/>` +
-    `<w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:b/><w:bCs/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>` +
+    `<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:b/><w:bCs/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>` +
     `</w:pPr></w:p>`
   );
 }
@@ -500,7 +500,7 @@ function numberedParas(num: number, text: string): string[] {
       // PLAIN (not bold). Earlier the digit was emitted bold, which
       // didn't match the template.
       runs.push(wRun(`${num}.`));
-      runs.push(`<w:r><w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:tab/></w:r>`);
+      runs.push(`<w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:tab/></w:r>`);
       for (let si = 0; si < segments.length; si++) {
         if (si > 0) runs.push(wBr());
         if (segments[si]) runs.push(wRun(segments[si]));
@@ -741,7 +741,7 @@ export async function exportNtaToDocx(
   <w:docDefaults>
     <w:rPrDefault>
       <w:rPr>
-        <w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/>
+        <w:rFonts w:ascii="Arial" w:hAnsi="Arial"/>
         <w:sz w:val="17"/>
         <w:szCs w:val="17"/>
         <w:lang w:val="en-IN" w:eastAsia="en-IN" w:bidi="ar-SA"/>
@@ -756,7 +756,7 @@ export async function exportNtaToDocx(
   <w:style w:type="paragraph" w:default="1" w:styleId="Normal">
     <w:name w:val="Normal"/>
     <w:rPr>
-      <w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/>
+      <w:rFonts w:ascii="Arial" w:hAnsi="Arial"/>
       <w:sz w:val="17"/>
       <w:szCs w:val="17"/>
     </w:rPr>
@@ -773,7 +773,7 @@ export async function exportNtaToDocx(
       <w:spacing w:after="0" w:line="40" w:lineRule="exact"/>
     </w:pPr>
     <w:rPr>
-      <w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/>
+      <w:rFonts w:ascii="Arial" w:hAnsi="Arial"/>
       <w:sz w:val="2"/>
       <w:szCs w:val="2"/>
     </w:rPr>
@@ -785,7 +785,7 @@ export async function exportNtaToDocx(
       <w:spacing w:after="0" w:line="40" w:lineRule="exact"/>
     </w:pPr>
     <w:rPr>
-      <w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/>
+      <w:rFonts w:ascii="Arial" w:hAnsi="Arial"/>
       <w:sz w:val="2"/>
       <w:szCs w:val="2"/>
     </w:rPr>
