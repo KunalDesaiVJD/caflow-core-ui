@@ -1863,66 +1863,66 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   //   • large notes still continue naturally across pages with repeating headers
   // A single page break separates the free-text Accounting Policies (Note 1) from
   // the structured notes — that is a logical section boundary, not page wastage.
-  const pageBreakPara = () => new Paragraph({ pageBreakBefore: true, spacing: { before: 0, after: 0 }, children: [] });
   // Slightly larger gap between consecutive notes so they read as distinct blocks
   // while still flowing on the same page.
   const noteGap       = () => new Paragraph({ spacing: { before: 220, after: 0 }, children: [] });
 
-  // Build the flowing notes list. The Capital Account (Note 2) is a BS-section
-  // note, so we seed lastSection = "BS": the BS heading is emitted once before the
-  // capital tables and the first structured BS note does not repeat it. The P&L
-  // heading appears once, the moment the first P&L note is reached.
+  // 2026-05-30 (revision 5) — User wants the client name on EVERY notes page,
+  // in the SAME dark navy bold styling as the BS / P&L title rows.
+  //
+  // Word's editing view fades running-header content (~60% opacity) — that
+  // can't be overridden via XML. The only way to get a dark, full-opacity
+  // banner on every page is to make each page start with BODY content.
+  //
+  // Strategy: force a page break before every note and prepend a body banner
+  // ABOVE each note. Each note (and Note 1 / Capital Account) becomes its own
+  // page, opening with the same NAVY 14pt bold Calibri banner + thick navy
+  // underline that BS / P&L title rows use. Pagination is no longer flowing
+  // (one note per page), but the visual consistency the user asked for is
+  // guaranteed: every page opens with a dark client banner.
+  const makeNotesBanner = (opts: { pageBreak?: boolean } = {}): Paragraph =>
+    new Paragraph({
+      alignment:      AlignmentType.CENTER,
+      pageBreakBefore: opts.pageBreak ?? false,
+      spacing:        { before: 60, after: 200 },
+      border:         { bottom: { style: BorderStyle.SINGLE, size: 8, color: NAVY, space: 4 } },
+      children:       [new TextRun({
+        text: entityName.toUpperCase(),
+        font: FONT, size: SZ_ENTITY, bold: true, color: NAVY,
+      })],
+    });
+
+  // Build the per-note list. Each note gets a body banner + page break before
+  // it so every note opens its own page with the dark client banner.
   const noteTablesWithHeaders: (Paragraph | Table)[] = [];
   let lastSection: "BS" | "PL" = "BS";
   for (const [, table, sectionTag] of noteTablePairs) {
     const sec = sectionTag as "BS" | "PL";
+    // Banner-with-page-break starts a fresh page that opens with the dark
+    // client banner. The note table follows immediately below.
+    noteTablesWithHeaders.push(makeNotesBanner({ pageBreak: true }));
     if (sec !== lastSection) {
-      // Section boundary (BS → P&L): emit the section heading once. keepNext keeps
-      // it attached to the following note table.
+      // Section boundary (BS → P&L): emit the section heading once.
       noteTablesWithHeaders.push(sectionTransitionParagraph(sec));
       lastSection = sec;
-    } else {
-      // Same section: a small gap so the next note flows beneath the previous one.
-      noteTablesWithHeaders.push(noteGap());
     }
     noteTablesWithHeaders.push(table);
   }
 
-  // Note 1 (Significant Accounting Policies) — free-text page, no section heading.
-  // After it, a single page break starts the structured notes. The BS section
-  // heading is shown once, then Capital Account + all BS notes flow, then the P&L
-  // heading + P&L notes flow — filling each page before moving to the next.
+  // Notes section sequence:
+  //   Page A: banner + Note 1 (Significant Accounting Policies)
+  //   Page B: banner + "Notes to Balance Sheet" heading + Capital Account
+  //   Page C, D, …: banner + next note
+  // Each subsequent banner forces a page break so every page opens with the
+  // client banner in body content (full opacity, dark like BS / PL).
   const noteChildren: (Paragraph | Table)[] = [
+    makeNotesBanner(),                                // page A top — no page break (already at section start)
     ...note1Paras,
-    pageBreakPara(),
+    makeNotesBanner({ pageBreak: true }),             // page B
     sectionTransitionParagraph("BS"),
     ...capitalTables.flatMap((t, i) => i === 0 ? [t] : [noteGap(), t]),
-    ...noteTablesWithHeaders,
+    ...noteTablesWithHeaders,                         // each item already has its own banner+pageBreak
   ];
-
-  // 2026-05-30 (revision 4) — User reported the client name was being
-  // displayed TWICE on the first notes page (body banner + running header)
-  // and the running-header copies on subsequent pages appeared LIGHT because
-  // Word's editing view renders running-header content at reduced opacity.
-  //
-  // Resolution: show the client name banner exactly ONCE per page, as BODY
-  // content, on every notes page. We achieve this by:
-  //   1. Removing the running header entirely (eliminates the faded duplicate)
-  //   2. Building one section per note, each section begins with the same
-  //      navy body banner used on BS / P&L title rows
-  //   3. Page break BEFORE each section (sectionType: NEXT_PAGE) so every
-  //      note starts on a fresh page that opens with the dark banner
-  // Banner = Calibri 14pt bold NAVY (#1F3864) + thick navy underline,
-  // matching the BS / P&L titleRows entity row exactly.
-  const makeNotesBanner = (): Paragraph => new Paragraph({
-    alignment: AlignmentType.CENTER,
-    spacing:   { before: 60, after: 200 },
-    border:    { bottom: { style: BorderStyle.SINGLE, size: 8, color: NAVY, space: 4 } },
-    children:  [new TextRun({
-      text: entityName.toUpperCase(),
-      font: FONT, size: SZ_ENTITY, bold: true, color: NAVY,
-    })],
-  });
 
   const doc = new Document({
     styles: {
@@ -1952,31 +1952,19 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
           sigBlock(),
         ],
       },
-      // Notes 1–28 (portrait, flows across pages)
-      // Task 11: larger bottom margin for stamp/seal space
-      //
-      // 2026-05-30 (revision 4) — Banner shown ONCE at the top of the notes
-      // section as BODY content (not a running header), matching how the BS
-      // and P&L sections each show their entity-name title once on their
-      // page. This:
-      //   • eliminates the duplicate banner the user saw on the first notes
-      //     page (body banner + running header rendering both at the same
-      //     position)
-      //   • removes the faded running-header copies on continuation pages
-      //     that the user reported as "still light" — Word's editing view
-      //     fades running-header text to ~60%, while body content always
-      //     renders at full opacity
-      // Result: one dark, bold NAVY (#1F3864) banner at the start of the
-      // notes section, identical in font / size / colour / weight to the
-      // BS / P&L title rows.
+      // Notes pages — every page opens with a dark client banner.
+      // 2026-05-30 (revision 5): noteChildren itself already includes a body
+      // banner at the top AND a banner-with-page-break before every note, so
+      // each note begins on its own page with the dark navy banner.
       {
         properties: { page: notesPortraitProps },
-        children:   [makeNotesBanner(), ...noteChildren],
+        children:   noteChildren,
       },
-      // PPE Schedule (landscape)
+      // PPE Schedule (landscape) — also opens with the dark client banner so
+      // it matches every other page of the report.
       {
         properties: { page: landscapeProps },
-        children:   [ppeTable],
+        children:   [makeNotesBanner(), ppeTable],
       },
     ],
   });
