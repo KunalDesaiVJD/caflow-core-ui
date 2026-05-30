@@ -35,11 +35,18 @@ interface Props {
   onExpansionStateUpdate?: (state: Record<string, Set<string>>) => void;
   /** Task 1 (doc6): when true, the entire notes panel is read-only (locked preview mode) */
   readOnly?: boolean;
+  /** 2026-05-30 — Entity / client name shown as a header banner at the top of
+   *  the Notes page, matching the bold navy uppercase format used on the
+   *  Balance Sheet and Profit & Loss pages. Optional — when absent, the
+   *  banner is suppressed (preserves existing behaviour in Stage 8 where
+   *  the Notes tab is embedded in a different surface). */
+  entityName?: string;
+  cyYear?: string;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteMap, onExpansionStateUpdate, readOnly = false }: Props) {
+export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteMap, onExpansionStateUpdate, readOnly = false, entityName, cyYear }: Props) {
   const [activeSubTab, setActiveSubTab] = useState("capital_account");
 
   useEffect(() => {
@@ -73,10 +80,32 @@ export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteM
   return (
     <div className="space-y-3">
 
-      {/* Header — typography aligned with Stage 7's other section labels */}
-      <h2 className="text-base font-semibold tracking-tight text-foreground">
-        Notes to Financial Statements
-      </h2>
+      {/* Entity-name banner (2026-05-30) — matches BS / P&L title block format
+          so the client name is presented identically on every preview page. */}
+      {entityName && (
+        <div className="rounded-lg border bg-card overflow-hidden">
+          <div className="text-center border-b bg-muted/30 py-2 px-3">
+            <div className="font-bold text-sm uppercase tracking-wide text-[#1F3864]">
+              {entityName}
+            </div>
+            <div className="text-xs mt-0.5">
+              Notes to Financial Statements{cyYear ? ` for the year ended 31st March, ${cyYear}` : ""}
+            </div>
+            <div className="text-[10px] text-muted-foreground italic mt-0.5">
+              (Amount in ₹)
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Header — typography aligned with Stage 7's other section labels.
+          Suppressed when the banner above is rendering, so we don't show two
+          competing titles on the same page. */}
+      {!entityName && (
+        <h2 className="text-base font-semibold tracking-tight text-foreground">
+          Notes to Financial Statements
+        </h2>
+      )}
 
       {/* Sub-tabs */}
       <Tabs value={activeSubTab} onValueChange={setActiveSubTab}>

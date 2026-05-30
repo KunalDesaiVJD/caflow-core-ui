@@ -632,7 +632,9 @@ function CorporateBalanceSheetView({
     <div className="rounded-lg border bg-card overflow-hidden">
       {/* Title block — mirrors rows 2–7 of the exported sheet */}
       <div className="text-center border-b bg-muted/30 py-2 px-3">
-        <div className="font-bold text-sm">{companyName}</div>
+        <div className="font-bold text-sm uppercase tracking-wide text-[#1F3864]">
+          {companyName}
+        </div>
         <div className="text-xs mt-0.5">Balance Sheet as at 31st March, {cyYear}</div>
         <div className="text-[10px] text-muted-foreground italic mt-0.5">(Amount in ₹)</div>
         {(onCommitCY || onCommitPY) && (
@@ -911,7 +913,9 @@ function CorporatePLView({
   return (
     <div className="rounded-lg border bg-card overflow-hidden">
       <div className="text-center border-b bg-muted/30 py-2 px-3">
-        <div className="font-bold text-sm">{companyName}</div>
+        <div className="font-bold text-sm uppercase tracking-wide text-[#1F3864]">
+          {companyName}
+        </div>
         <div className="text-xs mt-0.5">
           Statement of Profit &amp; Loss Account for the year ended 31st March, {cyYear}
         </div>
@@ -1207,7 +1211,9 @@ function NCEBalanceSheetView({
   return (
     <div className="rounded-lg border bg-card overflow-hidden">
       <div className="text-center border-b bg-muted/30 py-2 px-3">
-        <div className="font-bold text-sm">{entityName}</div>
+        <div className="font-bold text-sm uppercase tracking-wide text-[#1F3864]">
+          {entityName}
+        </div>
         <div className="text-xs mt-0.5">Balance Sheet as at 31st March, {cyYear}</div>
         <div className="text-[10px] text-muted-foreground italic mt-0.5">(Amount in ₹)</div>
       </div>
@@ -1343,7 +1349,9 @@ function NCEPLView({
   return (
     <div className="rounded-lg border bg-card overflow-hidden">
       <div className="text-center border-b bg-muted/30 py-2 px-3">
-        <div className="font-bold text-sm">{entityName}</div>
+        <div className="font-bold text-sm uppercase tracking-wide text-[#1F3864]">
+          {entityName}
+        </div>
         <div className="text-xs mt-0.5">
           Statement of Profit &amp; Loss Account for the year ended 31st March, {cyYear}
         </div>
@@ -1567,7 +1575,9 @@ function CorporateCFView({ bs, pl, cfs, cyYear, pyYear, companyName, overrides, 
     <div className="space-y-3">
       <div className="rounded-lg border bg-card overflow-hidden">
         <div className="text-center border-b bg-muted/30 py-2 px-3">
-          <div className="font-bold text-sm">{companyName}</div>
+          <div className="font-bold text-sm uppercase tracking-wide text-[#1F3864]">
+            {companyName}
+          </div>
           <div className="text-xs mt-0.5">Cash Flow Statement for the year ended [31 March {cyYear}]</div>
           <div className="text-[10px] text-muted-foreground italic mt-0.5">(Amount in ₹)</div>
           <div className="text-[10px] text-primary mt-1">
@@ -7279,6 +7289,7 @@ export default function PipelineFinancialStatements({
                   Object.keys(manualOverrides).length
                   + Object.values(noteOverrides).filter(v => v != null && Number.isFinite(v as number)).length
                 }
+                companyName={engagement?.clients?.name || ""}
               />
             </TabsContent>
           )}
@@ -7304,6 +7315,8 @@ export default function PipelineFinancialStatements({
                   }
                 }}
                 readOnly={nceIsLocked}
+                entityName={engagement?.clients?.name || ""}
+                cyYear={cyYear}
               />
             </TabsContent>
           )}
@@ -7843,6 +7856,8 @@ export default function PipelineFinancialStatements({
                       engagementId={engagementId}
                       dynamicNoteMap={nceDynamicNoteMap}
                       readOnly={true}
+                      entityName={engagement?.clients?.name || ""}
+                      cyYear={cyYear}
                     />
                   </TabsContent>
                 </div>
