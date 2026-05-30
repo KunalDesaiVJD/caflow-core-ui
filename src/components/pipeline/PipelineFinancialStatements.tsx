@@ -50,7 +50,10 @@ import { computeNceDynamicNoteMap } from "@/lib/nceDynamicNoteNumbers";
 import { generateNCEFinancialsDocx } from "@/lib/nceFinancialsDocx";
 import { generateCorporateFinancialsDocx } from "@/lib/corporateFinancialsDocx";
 import { sumNotesSubRowsCY, sumNotesSubRowsPY, getSharesOutstanding, getFAGridNetBlockTotal } from "@/lib/notesAutoPopulate";
-import { getNCENoteFaceTotal, NCE_CODE_TO_NOTE, NOTE_NATURE as NCE_NOTE_NATURE } from "@/lib/nceAutoPopulate";
+import {
+  getNCENoteFaceTotal, NCE_CODE_TO_NOTE, NOTE_NATURE as NCE_NOTE_NATURE,
+  nceAutoPopulate, serialiseNoteData,
+} from "@/lib/nceAutoPopulate";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 import { isTallyPLAccount, currentYearProfitAlreadyInReserves } from "@/lib/tallyDetection";
 
@@ -1816,6 +1819,10 @@ export default function PipelineFinancialStatements({
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [saving, setSaving] = useState(false);
+  // 2026-05-30 — "Re-correct from COA" runs the same auto-populate the Notes
+  // tab's Re-sync button uses, then refreshes the FS face so the BS / P&L
+  // realign with COA mapping when the auditor has deleted breakup rows.
+  const [recorrectingFromCOA, setRecorrectingFromCOA] = useState(false);
 
   // ─── Entity-type gate ─────────────────────────────────────────────────────
   // Single source of truth: checks engagement.entity_type (set on the engagement)
@@ -4167,6 +4174,90 @@ export default function PipelineFinancialStatements({
       toast.error(err.message);
     } finally {
       setSaving(false);
+    }
+  };
+
+  // ─── Re-correct FS from COA Mapping (NCE) ────────────────────────────────
+  // 2026-05-30 — when the auditor has deleted custom rows in the Notes-to-
+  // Accounts (removing values from the breakup), the FS face stops matching
+  // COA mapping because the BS/PL face is computed off the note totals. This
+  // handler re-runs the same auto-populate the Notes Re-sync button uses,
+  // persists the rebuilt notes, then invalidates the React Query cache so
+  // the FS face re-renders with the corrected totals. Mirrors handleResync
+  // in NCEDetailedNotes — extracted here so the user can fix the BS face
+  // directly when they see an imbalance without navigating to Notes first.
+  const recorrectFromCOAMapping = async () => {
+    if (!isNonCorporate) {
+      toast.error("Re-correct from COA is currently only supported for non-corporate (NCE) entities.");
+      return;
+    }
+    const ok = window.confirm(
+      "Re-correct Financial Statements from COA Mapping?\n\n" +
+      "Auto rows in the Notes to Accounts will be refreshed from the Tally TB. " +
+      "Manual rows and any values you typed are preserved. " +
+      "The BS / P&L face will then re-align with COA mapping totals.\n\n" +
+      "Click OK to continue.",
+    );
+    if (!ok) return;
+    setRecorrectingFromCOA(true);
+    try {
+      // 1. Load whatever's currently saved so we pass it through and only
+      //    update auto-rows (mirrors NCEDetailedNotes load → populate flow).
+      const { data: existingRows } = await (supabase.from as any)("nce_financial_notes")
+        .select("note_type, cy_data, py_data")
+        .eq("engagement_id", engagementId)
+        .eq("financial_year", engagement?.financial_year ?? "");
+      const built: Record<string, any> = {};
+      for (const r of (existingRows ?? []) as any[]) {
+        // Lightweight deserialise: we only need .cy / .py / customRows for
+        // nceAutoPopulate to merge. The library does its own normalisation.
+        const cy = (r.cy_data ?? {}) as Record<string, any>;
+        const py = (r.py_data ?? {}) as Record<string, any>;
+        const customRows = Array.isArray(cy._custom_rows) ? cy._custom_rows : [];
+        const cleanCy: Record<string, number> = {};
+        const cleanPy: Record<string, number> = {};
+        for (const [k, v] of Object.entries(cy)) {
+          if (k === "_custom_rows") continue;
+          if (typeof v === "number") cleanCy[k] = v;
+        }
+        for (const [k, v] of Object.entries(py)) {
+          if (k === "_custom_rows") continue;
+          if (typeof v === "number") cleanPy[k] = v;
+        }
+        built[r.note_type] = { cy: cleanCy, py: cleanPy, customRows };
+      }
+
+      // 2. Re-populate auto rows from Tally TB + COA mapping
+      const populated = await nceAutoPopulate(engagementId, built);
+
+      // 3. Persist back to nce_financial_notes (upsert)
+      const rows = Object.entries(populated).map(([noteType, d]) => {
+        const { cy_data, py_data } = serialiseNoteData(d);
+        return {
+          engagement_id:  engagementId,
+          financial_year: engagement?.financial_year ?? "",
+          note_type:      noteType,
+          cy_data:        cy_data as any,
+          py_data:        py_data as any,
+          updated_at:     new Date().toISOString(),
+        };
+      });
+      const { error: saveErr } = await supabase
+        .from("nce_financial_notes")
+        .upsert(rows, { onConflict: "engagement_id,financial_year,note_type" });
+      if (saveErr) throw saveErr;
+
+      // 4. Invalidate the FS face query + the notes query so the next render
+      //    picks up the corrected totals.
+      queryClient.invalidateQueries({ queryKey: ["nce-financial-notes", engagementId] });
+      queryClient.invalidateQueries({ queryKey: ["engagement", engagementId] });
+
+      toast.success("Financial Statements re-corrected from COA Mapping");
+    } catch (e: any) {
+      console.error("[recorrectFromCOAMapping]", e);
+      toast.error(e?.message || "Re-correction failed");
+    } finally {
+      setRecorrectingFromCOA(false);
     }
   };
 
@@ -6749,6 +6840,39 @@ export default function PipelineFinancialStatements({
               : !coaMappingComplete
               ? "Tally sync done ✓ — Now go to Stage 6 (COA Mapping) and map all prior-year ledgers. Once COA Mapping is marked complete, return here and click \"Fetch from FY-1 Tally\" in the P&L tab."
               : "PY Shell Tally sync is complete and COA mapping is done. Use \"Fetch from FY-1 Tally\" in the P&L tab to pull PY P&L figures into this engagement."}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* 2026-05-30 — Re-correct banner: when the NCE BS doesn't balance,
+           expose a one-click action that re-runs nceAutoPopulate so the
+           BS / P&L face realigns with COA mapping. The auditor reported
+           that deleting custom rows in Notes left the FS face out of sync
+           with COA mapping; this gives them a direct fix without having to
+           navigate to the Notes tab and click Re-sync there. */}
+      {isNonCorporate && !activeBsBalanced && (
+        <Alert variant="destructive" className="border-destructive/30">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>Balance Sheet not balanced</AlertTitle>
+          <AlertDescription className="flex flex-wrap items-center gap-3">
+            <span>
+              Difference: ₹{formatINR(Math.abs(activeBsDiff))}. This usually happens when
+              breakup rows have been deleted in the Notes — the BS face stops matching
+              COA mapping. Click below to rebuild the notes from Tally TB + COA mapping.
+              Your manual rows and typed values are preserved.
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5 h-7 text-xs border-destructive text-destructive hover:bg-destructive/10"
+              disabled={recorrectingFromCOA}
+              onClick={recorrectFromCOAMapping}
+            >
+              {recorrectingFromCOA
+                ? <Loader2 className="h-3 w-3 animate-spin" />
+                : <RefreshCw className="h-3 w-3" />}
+              Re-correct from COA Mapping
+            </Button>
           </AlertDescription>
         </Alert>
       )}
