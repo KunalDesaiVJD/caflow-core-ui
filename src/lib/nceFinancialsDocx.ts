@@ -1904,13 +1904,25 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   // Task 13 (doc6): client name header appears on every notes page so continuation
   // pages remain identifiable after printing/binding.
   //
-  // 2026-05-30 — render ONLY the client name (no subtitle) using the same
-  // dark navy 14pt bold Calibri style + thick bottom rule as the BS / P&L
-  // titleRows entity row. The user explicitly does NOT want the "Notes to
-  // Financial Statements for the year ended …" subtitle repeated on every
-  // page; the running header should be the client name alone so every page
-  // of the report opens with an identical client banner — matching the way
-  // BS / P&L pages already present the name.
+  // 2026-05-30 (revision 3) — Word's editing view renders running-header text
+  // at REDUCED opacity (it's a UI helper to indicate "you're not currently
+  // editing the header"). Even though the XML colour matched the BS/PL title
+  // row exactly (#1F3864 navy), it appeared visibly LIGHTER on screen because
+  // the body title row renders at full opacity while the header is faded.
+  //
+  // Two-part fix so the entity name looks identically dark on every page:
+  //   1. Inject the client-name banner as the FIRST BODY ELEMENT of the
+  //      notes section. Body content always renders at full opacity, so on
+  //      the first notes page it appears at the exact same darkness as the
+  //      BS / P&L title rows.
+  //   2. Keep a running header for continuation pages, but switch its colour
+  //      to BLACK (#000000). Word still fades it in editing view, but black
+  //      faded to ~60% is still darker than navy faded to ~60% — so visually
+  //      it tracks the BS / P&L body title rather than appearing washed out.
+  //   3. Both forms keep the same Calibri 14pt bold + thick navy underline.
+  // Header colour is BLACK so Word's faded-header rendering still appears
+  // visibly dark (navy faded to ~60% opacity looks washed out — black faded
+  // is still a dark grey that reads as "dark, bold").
   const notesHeader = new Header({
     children: [new Paragraph({
       alignment: AlignmentType.CENTER,
@@ -1918,8 +1930,22 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
       border:    { bottom: { style: BorderStyle.SINGLE, size: 8, color: NAVY, space: 4 } },
       children:  [new TextRun({
         text: entityName.toUpperCase(),
-        font: FONT, size: SZ_ENTITY, bold: true, color: NAVY,
+        font: FONT, size: SZ_ENTITY, bold: true, color: BLACK,
       })],
+    })],
+  });
+
+  /** First-page banner — body paragraph at full opacity so it matches the
+   *  BS / P&L title rows exactly on the opening notes page. Uses NAVY (same
+   *  colour as the BS/PL title rows) so the literal "same font color" the
+   *  user asked for holds true on every body-rendered banner. */
+  const notesBodyBanner = new Paragraph({
+    alignment: AlignmentType.CENTER,
+    spacing:   { before: 60, after: 200 },
+    border:    { bottom: { style: BorderStyle.SINGLE, size: 8, color: NAVY, space: 4 } },
+    children:  [new TextRun({
+      text: entityName.toUpperCase(),
+      font: FONT, size: SZ_ENTITY, bold: true, color: NAVY,
     })],
   });
 
@@ -1954,10 +1980,15 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
       // Notes 1–28 (portrait, flows across pages)
       // Task 11: larger bottom margin for stamp/seal space
       // Task 13: client name header on every notes page
+      // 2026-05-30: prepend notesBodyBanner so the FIRST notes page shows the
+      // client name at full body opacity (matching the dark BS / P&L title
+      // rows). The running header (notesHeader, in BLACK) handles continuation
+      // pages — Word fades it in editing view but black faded is still darker
+      // than navy faded, so the visual darkness tracks the body banner.
       {
         properties: { page: notesPortraitProps },
         headers:    { default: notesHeader },
-        children:   noteChildren,
+        children:   [notesBodyBanner, ...noteChildren],
       },
       // PPE Schedule (landscape)
       {
