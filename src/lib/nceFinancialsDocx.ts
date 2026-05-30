@@ -1867,61 +1867,60 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   // while still flowing on the same page.
   const noteGap       = () => new Paragraph({ spacing: { before: 220, after: 0 }, children: [] });
 
-  // 2026-05-30 (revision 5) — User wants the client name on EVERY notes page,
-  // in the SAME dark navy bold styling as the BS / P&L title rows.
+  // 2026-05-30 (revision 6) — Restore flowing pagination at user request.
+  // Multiple notes share a page until the page is genuinely full; an
+  // individual note is kept whole via keepNext + keepLines + cantSplit
+  // applied at table-build time, so if a note doesn't fit in the remaining
+  // space it moves to the next page intact rather than splitting.
   //
-  // Word's editing view fades running-header content (~60% opacity) — that
-  // can't be overridden via XML. The only way to get a dark, full-opacity
-  // banner on every page is to make each page start with BODY content.
-  //
-  // Strategy: force a page break before every note and prepend a body banner
-  // ABOVE each note. Each note (and Note 1 / Capital Account) becomes its own
-  // page, opening with the same NAVY 14pt bold Calibri banner + thick navy
-  // underline that BS / P&L title rows use. Pagination is no longer flowing
-  // (one note per page), but the visual consistency the user asked for is
-  // guaranteed: every page opens with a dark client banner.
+  // The dark client banner is shown ONCE at the top of the notes section
+  // (body content, same NAVY / Calibri / 14pt bold / thick navy underline
+  // as the BS / P&L title rows). It does NOT repeat on continuation pages —
+  // that would require a running header, which Word's editing view fades
+  // to ~60% opacity and the user rejected the faded look. Continuation
+  // pages flow naturally without a banner, matching how the BS and P&L
+  // pages each show their title only once at the top.
   const makeNotesBanner = (opts: { pageBreak?: boolean } = {}): Paragraph =>
     new Paragraph({
-      alignment:      AlignmentType.CENTER,
+      alignment:       AlignmentType.CENTER,
       pageBreakBefore: opts.pageBreak ?? false,
-      spacing:        { before: 60, after: 200 },
-      border:         { bottom: { style: BorderStyle.SINGLE, size: 8, color: NAVY, space: 4 } },
-      children:       [new TextRun({
+      spacing:         { before: 60, after: 200 },
+      border:          { bottom: { style: BorderStyle.SINGLE, size: 8, color: NAVY, space: 4 } },
+      children:        [new TextRun({
         text: entityName.toUpperCase(),
         font: FONT, size: SZ_ENTITY, bold: true, color: NAVY,
       })],
     });
 
-  // Build the per-note list. Each note gets a body banner + page break before
-  // it so every note opens its own page with the dark client banner.
+  // Build the flowing notes list. Multiple notes share a page; a note that
+  // does not fit moves whole to the next page (cantSplit on table rows).
+  // Section boundary (BS → P&L) emits the section heading once, otherwise
+  // a small inter-note gap keeps consecutive notes visually distinct.
   const noteTablesWithHeaders: (Paragraph | Table)[] = [];
   let lastSection: "BS" | "PL" = "BS";
   for (const [, table, sectionTag] of noteTablePairs) {
     const sec = sectionTag as "BS" | "PL";
-    // Banner-with-page-break starts a fresh page that opens with the dark
-    // client banner. The note table follows immediately below.
-    noteTablesWithHeaders.push(makeNotesBanner({ pageBreak: true }));
     if (sec !== lastSection) {
-      // Section boundary (BS → P&L): emit the section heading once.
       noteTablesWithHeaders.push(sectionTransitionParagraph(sec));
       lastSection = sec;
+    } else {
+      noteTablesWithHeaders.push(noteGap());
     }
     noteTablesWithHeaders.push(table);
   }
 
-  // Notes section sequence:
-  //   Page A: banner + Note 1 (Significant Accounting Policies)
-  //   Page B: banner + "Notes to Balance Sheet" heading + Capital Account
-  //   Page C, D, …: banner + next note
-  // Each subsequent banner forces a page break so every page opens with the
-  // client banner in body content (full opacity, dark like BS / PL).
+  // Notes section opens with the dark client banner once. Then Note 1
+  // (Significant Accounting Policies) flows; a page break separates the
+  // free-text policies from the structured notes (logical section
+  // boundary). Capital Account, Balance Sheet notes and P&L notes then
+  // flow continuously, sharing pages until full.
   const noteChildren: (Paragraph | Table)[] = [
-    makeNotesBanner(),                                // page A top — no page break (already at section start)
+    makeNotesBanner(),                                       // top of section, no page break
     ...note1Paras,
-    makeNotesBanner({ pageBreak: true }),             // page B
+    makeNotesBanner({ pageBreak: true }),                    // start of structured notes — banner on this page too
     sectionTransitionParagraph("BS"),
     ...capitalTables.flatMap((t, i) => i === 0 ? [t] : [noteGap(), t]),
-    ...noteTablesWithHeaders,                         // each item already has its own banner+pageBreak
+    ...noteTablesWithHeaders,
   ];
 
   const doc = new Document({
@@ -1960,8 +1959,8 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
         properties: { page: notesPortraitProps },
         children:   noteChildren,
       },
-      // PPE Schedule (landscape) — also opens with the dark client banner so
-      // it matches every other page of the report.
+      // PPE Schedule (landscape) — opens with the dark client banner, then
+      // the PPE table flows below. Same banner style as the BS / P&L / Notes.
       {
         properties: { page: landscapeProps },
         children:   [makeNotesBanner(), ppeTable],
