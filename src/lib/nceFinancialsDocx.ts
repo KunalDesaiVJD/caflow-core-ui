@@ -13,6 +13,7 @@ import {
   AlignmentType,
   BorderStyle,
   Document,
+  Header,
   PageBorderDisplay,
   PageBorderOffsetFrom,
   Packer,
@@ -1867,19 +1868,23 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   // while still flowing on the same page.
   const noteGap       = () => new Paragraph({ spacing: { before: 220, after: 0 }, children: [] });
 
-  // 2026-05-30 (revision 6) — Restore flowing pagination at user request.
-  // Multiple notes share a page until the page is genuinely full; an
-  // individual note is kept whole via keepNext + keepLines + cantSplit
-  // applied at table-build time, so if a note doesn't fit in the remaining
-  // space it moves to the next page intact rather than splitting.
+  // 2026-05-30 (revision 7) — User insists the client banner must appear on
+  // EVERY notes page AND notes must flow (multiple notes per page).
   //
-  // The dark client banner is shown ONCE at the top of the notes section
-  // (body content, same NAVY / Calibri / 14pt bold / thick navy underline
-  // as the BS / P&L title rows). It does NOT repeat on continuation pages —
-  // that would require a running header, which Word's editing view fades
-  // to ~60% opacity and the user rejected the faded look. Continuation
-  // pages flow naturally without a banner, matching how the BS and P&L
-  // pages each show their title only once at the top.
+  // Both at once requires a RUNNING HEADER (the only mechanism Word repeats
+  // on every page of a section). The catch: Word's editing view always
+  // renders running-header text at ~60% opacity — this is a Word UI
+  // behaviour that no XML setting can override.
+  //
+  // IMPORTANT for the user: when the .docx is printed or exported to PDF,
+  // running-header text renders at FULL opacity. So the printed/PDF output
+  // will show the dark navy banner on every page, identical to the BS / P&L
+  // title rows. Only Word's on-screen editor displays the faded preview.
+  //
+  // Setup: NAVY (#1F3864) Calibri 14pt bold + thick navy underline — exact
+  // match to the BS / P&L titleRows entity row. Body-content banner on the
+  // first notes page (full opacity always) PLUS a running header for every
+  // continuation page.
   const makeNotesBanner = (opts: { pageBreak?: boolean } = {}): Paragraph =>
     new Paragraph({
       alignment:       AlignmentType.CENTER,
@@ -1891,6 +1896,24 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
         font: FONT, size: SZ_ENTITY, bold: true, color: NAVY,
       })],
     });
+
+  // Running header for the notes section — same NAVY / font / weight /
+  // underline as the body banner. Word's editor previews it faded but the
+  // printed / PDF output renders it at full opacity (dark navy on every
+  // page, matching the BS / P&L title rows exactly).
+  // The headerOnFirstPage flag is FALSE: page 1 already has the body banner,
+  // so suppressing the running header on page 1 avoids a duplicate top-of-page.
+  const notesRunningHeader = new Header({
+    children: [new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing:   { before: 60, after: 20 },
+      border:    { bottom: { style: BorderStyle.SINGLE, size: 8, color: NAVY, space: 4 } },
+      children:  [new TextRun({
+        text: entityName.toUpperCase(),
+        font: FONT, size: SZ_ENTITY, bold: true, color: NAVY,
+      })],
+    })],
+  });
 
   // Build the flowing notes list. Multiple notes share a page; a note that
   // does not fit moves whole to the next page (cantSplit on table rows).
@@ -1951,12 +1974,18 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
           sigBlock(),
         ],
       },
-      // Notes pages — every page opens with a dark client banner.
-      // 2026-05-30 (revision 5): noteChildren itself already includes a body
-      // banner at the top AND a banner-with-page-break before every note, so
-      // each note begins on its own page with the dark navy banner.
+      // Notes pages — every page shows the dark client banner.
+      // 2026-05-30 (revision 7):
+      //   • PAGE 1: body banner at the top of noteChildren (full opacity always).
+      //   • PAGE 2+: running header (suppressed on page 1 via titlePage: true
+      //     so the body banner isn't duplicated). Word's editor previews the
+      //     running header faded, but printed / PDF output is dark navy at
+      //     full opacity — identical to the BS / P&L title rows.
+      // Pagination is FLOWING (multiple notes per page, never split mid-note)
+      // as user requested.
       {
-        properties: { page: notesPortraitProps },
+        properties: { page: notesPortraitProps, titlePage: true },
+        headers:    { default: notesRunningHeader },
         children:   noteChildren,
       },
       // PPE Schedule (landscape) — opens with the dark client banner, then
