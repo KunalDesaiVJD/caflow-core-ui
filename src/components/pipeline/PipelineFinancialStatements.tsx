@@ -2609,6 +2609,60 @@ export default function PipelineFinancialStatements({
     }
   }, [priorEngagement]);
 
+  // ─── PY P&L from PY-shell TB (Issue 1 fix — Current/Deferred tax PY missing) ─
+  // The COA Mapping screen's PY column reads P&L figures from the PY-shell trial
+  // balance (Stage3.tsx → pyShellPLAmounts). The FS screen previously only read
+  // PY P&L from `priorEngagement` (saved fa_financial_statements) plus
+  // `pyManualAmounts` — for clients with a PY shell TB but no SAVED prior FS
+  // (the common case: PY shell created by sync-py.js with TB rows but no
+  // engagement-level fs_data persisted), every P&L PY value stayed at 0. The
+  // user saw "Current Tax PY 16,44,000" on COA Mapping but blank on the FS P&L
+  // for ACCU PANELS — same data, two divergent screens.
+  //
+  // Fix: derive a PY P&L map from PY-shell TB using CY coa_mapping (case-
+  // insensitive lookup) and inject it into both mergedPY and fsDisplayData's
+  // exportPy as a fallback whenever the higher-priority sources are empty.
+  // BS codes still come from CY opening balances (authoritative, self-balancing
+  // source) — only PL codes are filled here.
+  const pyShellPLAmounts: Record<string, number> = useMemo(() => {
+    if (!pyShellTb?.length) return {};
+    const amounts: Record<string, number> = {};
+    const cyMappingLower: Record<string, { code: string }> = {};
+    for (const [k, v] of Object.entries(coaMapping || {})) {
+      if (v?.code) cyMappingLower[k.toLowerCase().trim()] = v;
+    }
+    for (const row of pyShellTb) {
+      const name = String(row.ledger_name || "").trim();
+      if (!name) continue;
+      const mapped = (coaMapping as any)[name] || cyMappingLower[name.toLowerCase()];
+      if (!mapped?.code) continue;
+      const item = activeFlatItems.find(i => i.code === mapped.code);
+      if (!item) continue;
+      const sec = String((item as any).section || "").toLowerCase();
+      const isPL = sec.includes("pl") || sec.includes("revenue")
+                || sec.includes("expense") || sec.includes("income");
+      if (!isPL) continue;
+      const cb = Math.abs(Number(row.closing_balance ?? 0));
+      if (cb < 0.005) continue;
+      const isDr = String(row.balance_type ?? "").toUpperCase() === "DR";
+      // Match Tally sign convention used elsewhere: Dr positive, Cr negative.
+      amounts[mapped.code] = (amounts[mapped.code] || 0) + (isDr ? cb : -cb);
+    }
+    // Roll up parent P&L nodes so any consumer reading PL_TAX (sum of CUR+DEF)
+    // gets the aggregated total even if only the leaves were populated.
+    const computeParent = (item: FSLineItem): number => {
+      const sec = String(item.section || "").toLowerCase();
+      const isPL = sec.includes("pl") || sec.includes("revenue") || sec.includes("expense");
+      if (!isPL) return 0;
+      if (!item.children || item.children.length === 0) return amounts[item.code] || 0;
+      const total = item.children.reduce((s, c) => s + computeParent(c), 0);
+      if (total !== 0) amounts[item.code] = total;
+      return total;
+    };
+    for (const item of activeTree) computeParent(item);
+    return amounts;
+  }, [pyShellTb, coaMapping, activeFlatItems, activeTree]);
+
   // ─── Load manual PY P&L amounts from engagement.py_manual_amounts ──────
   // Supports both legacy plain-number shape and enriched { v, by, at } shape.
   useEffect(() => {
@@ -2856,6 +2910,19 @@ export default function PipelineFinancialStatements({
         merged[code] = val;
       }
     }
+    // Issue 1 fix — fall back to PY-shell TB for any P&L code still missing
+    // after pyAmounts / pyManualAmounts. Matches the COA Mapping screen which
+    // reads PY P&L from PY-shell TB closing balances. Without this, codes the
+    // prior engagement never persisted (commonly PL_TAX_CUR / PL_TAX_DEF, or
+    // every code when there's no saved PY fs_data at all) stayed at 0 on the
+    // FS while showing the correct value on COA Mapping for the same engagement.
+    for (const [code, val] of Object.entries(pyShellPLAmounts)) {
+      if (!Number.isFinite(val)) continue;
+      const cur = merged[code];
+      if (cur === undefined || cur === null || Math.abs(cur as number) < 0.005) {
+        merged[code] = val;
+      }
+    }
     for (const [code, val] of Object.entries(computedAmountsPY)) {
       // Section lookup via flat items
       const item = activeFlatItems.find(i => i.code === code);
@@ -2926,7 +2993,7 @@ export default function PipelineFinancialStatements({
     }
 
     return merged;
-  }, [computedAmountsPY, pyAmounts, pyManualAmounts, noPriorEngagement, activeFlatItems, activeTree, pyInvCII, isNonCorporate]);
+  }, [computedAmountsPY, pyAmounts, pyManualAmounts, pyShellPLAmounts, noPriorEngagement, activeFlatItems, activeTree, pyInvCII, isNonCorporate]);
 
   // ─── NCE Dynamic Note Number Map ────────────────────────────────────────────
   // Maps originalNoteRef → dynamicSequentialNoteNo for NCE entities.
@@ -2993,6 +3060,17 @@ export default function PipelineFinancialStatements({
         exportPy[code] = val;
       } else if (noPriorEngagement && (exportPy[code] === undefined || exportPy[code] === 0)) {
         exportPy[code] = val;
+      }
+    }
+    // Issue 1 fix (mirror of mergedPY fallback) — fill any P&L code still
+    // missing in exportPy from PY-shell TB so the FS P&L PY column matches
+    // the COA Mapping PY column. Critical for codes the prior engagement
+    // didn't persist (PL_TAX_CUR / PL_TAX_DEF being the most common).
+    for (const [code, val] of Object.entries(pyShellPLAmounts || {})) {
+      if (!Number.isFinite(val)) continue;
+      const cur = exportPy[code];
+      if (cur === undefined || Math.abs(cur) < 0.005) {
+        exportPy[code] = val as number;
       }
     }
     // PY Changes in Inventories: override with PY Shell TB when INV_* are mapped
@@ -3320,7 +3398,7 @@ export default function PipelineFinancialStatements({
     return { exportCy, exportPy, cyOf, pyOf, bs, pl, cfs };
   }, [
     tbAccounts, coaMapping, manualOverrides, activeTree,
-    pyAmounts, pyManualAmounts, noPriorEngagement, isNonCorporate,
+    pyAmounts, pyManualAmounts, pyShellPLAmounts, noPriorEngagement, isNonCorporate,
     computedAmounts, mergedPY, noteOverrides, pyInvCII,
     stage5NotesData,
   ]);
