@@ -1904,19 +1904,38 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   // Task 13 (doc6): client name header appears on every notes page so continuation
   // pages remain identifiable after printing/binding.
   // Note 2 fix ("changes in non corporate" doc): the client/entity name MUST be
-  // visually identical across Balance Sheet, P&L and Notes pages. The BS/P&L
-  // pages render it via titleRows() at SZ_ENTITY (14pt), bold, NAVY, centered.
-  // The notes header previously used SZ_BODY (9pt) — the small/faded/inconsistent
-  // appearance reported by the user. Match the BS/P&L entity heading exactly:
-  // same font size, weight, colour and centre alignment, with a thin bottom rule
-  // mirroring the title block's underline so notes read as the same document.
+  // visually identical across Balance Sheet, P&L and Notes pages.
+  //
+  // 2026-05-30 — match the BS / P&L titleRows block exactly (was a single
+  // entity line with thinner border, which read as a different style):
+  //   1. Same vertical rhythm as titleRows entity row (before: 60, after: 20)
+  //   2. Statement subtitle ("Notes to Financial Statements for the year
+  //      ended 31 March YYYY") on its own centred row — mirrors the BS/PL
+  //      "Balance Sheet as at …" / "Statement of Profit and Loss …" line
+  //   3. Thick bottom rule (size 8 = bBold) matching the BS/PL underline
+  // The header now renders as the same two-line + rule block readers see at
+  // the top of the BS and P&L pages, so every page of the report opens with
+  // an identical client banner.
   const notesHeader = new Header({
-    children: [new Paragraph({
-      alignment: AlignmentType.CENTER,
-      spacing:   { before: 40, after: 40 },
-      border:    { bottom: { style: BorderStyle.SINGLE, size: 6, color: NAVY, space: 4 } },
-      children:  [new TextRun({ text: entityName.toUpperCase(), font: FONT, size: SZ_ENTITY, bold: true, color: NAVY })],
-    })],
+    children: [
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing:   { before: 60, after: 20 },
+        children:  [new TextRun({
+          text: entityName.toUpperCase(),
+          font: FONT, size: SZ_ENTITY, bold: true, color: NAVY,
+        })],
+      }),
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing:   { before: 0, after: 10 },
+        border:    { bottom: { style: BorderStyle.SINGLE, size: 8, color: NAVY, space: 4 } },
+        children:  [new TextRun({
+          text: `Notes to Financial Statements for the year ended 31 March ${cyYear}`,
+          font: FONT, size: SZ_TITLE, bold: true, color: NAVY,
+        })],
+      }),
+    ],
   });
 
   const doc = new Document({
