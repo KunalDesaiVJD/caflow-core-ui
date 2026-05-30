@@ -394,8 +394,67 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
 
       if (error) throw error;
       setDeletedPartnerNos([]);
+      setDeletedPyPartnerNos([]);
+
+      // 2026-05-30 — Re-fetch from DB after a successful save so what the
+      // user sees on screen is ALWAYS the persisted state, not the in-memory
+      // form values. Reported issue: 'changed amount → hit Save → old amount
+      // still shown'. If the upsert dropped any field (column mismatch,
+      // constraint failure on one row of the batch, etc.) the re-fetch
+      // surfaces the divergence immediately instead of leaving stale state.
+      const { data: refreshed, error: refetchErr } = await supabase
+        .from("nce_capital_account")
+        .select("*")
+        .eq("engagement_id", engagementId)
+        .eq("financial_year", fy);
+      if (!refetchErr && refreshed) {
+        const reloadedPartners = refreshed
+          .filter(r => r.partner_no < PY_SENTINEL)
+          .sort((a, b) => a.partner_no - b.partner_no)
+          .map(row => ({
+            partner_no:         row.partner_no,
+            partner_name:       row.partner_name        ?? "",
+            profit_share_pct:   row.profit_share_pct    ?? 0,
+            opening_balance_cy: row.opening_balance_cy  ?? 0,
+            introduced_cy:      row.introduced_cy       ?? 0,
+            remuneration_cy:    row.remuneration_cy     ?? 0,
+            interest_cy:        row.interest_cy         ?? 0,
+            withdrawals_cy:     row.withdrawals_cy      ?? 0,
+            profit_share_cy:    row.profit_share_cy     ?? 0,
+          }));
+        if (reloadedPartners.length > 0) setPartners(reloadedPartners);
+
+        const refreshedPy = refreshed.find(r => r.partner_no === PY_SENTINEL);
+        if (refreshedPy) {
+          setPyRow({
+            opening:      refreshedPy.opening_balance_cy ?? 0,
+            introduced:   refreshedPy.introduced_cy      ?? 0,
+            remuneration: refreshedPy.remuneration_cy    ?? 0,
+            interest:     refreshedPy.interest_cy        ?? 0,
+            withdrawals:  refreshedPy.withdrawals_cy     ?? 0,
+            profit_share: refreshedPy.profit_share_cy    ?? 0,
+          });
+        }
+
+        const reloadedPyPartners = refreshed
+          .filter(r => r.partner_no >= PY_PARTNER_BASE)
+          .sort((a, b) => a.partner_no - b.partner_no)
+          .map(row => ({
+            partner_no:   row.partner_no,
+            partner_name: row.partner_name        ?? "",
+            opening:      row.opening_balance_cy  ?? 0,
+            introduced:   row.introduced_cy       ?? 0,
+            remuneration: row.remuneration_cy     ?? 0,
+            interest:     row.interest_cy         ?? 0,
+            withdrawals:  row.withdrawals_cy      ?? 0,
+            profit_share: row.profit_share_cy     ?? 0,
+          }));
+        setPyPartners(reloadedPyPartners);
+      }
+
       toast.success("Capital Account saved");
     } catch (e: any) {
+      console.error("[NCECapitalAccount.save]", e);
       toast.error(e.message || "Save failed");
     } finally {
       setSaving(false);

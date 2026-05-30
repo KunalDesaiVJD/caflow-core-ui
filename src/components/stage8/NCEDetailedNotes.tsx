@@ -2425,6 +2425,31 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
   const handleDeleteRow = useCallback((noteType: string, id: string) => {
     setNoteData(prev => {
       const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
+
+      // 2026-05-30 — guard against deleting rows that carry an amount.
+      // Removing a row with a non-zero CY / PY value silently drops it from
+      // the note's breakup sum, leaving the Balance Sheet / P&L face total
+      // (which still includes that amount via the COA mapping) divergent
+      // from the note. The user reported the BS not balancing after such
+      // deletions on OM REALTY. Block the deletion and surface a toast that
+      // points the auditor at the right tools (Move to… / set value to 0,
+      // or Re-sync from COA if they want the row back).
+      const cyAmt = Math.abs(Number(cur.cy?.[id]        ?? 0))
+                  + Math.abs(Number(cur.cy?.[id + "_lt"] ?? 0))
+                  + Math.abs(Number(cur.cy?.[id + "_st"] ?? 0));
+      const pyAmt = Math.abs(Number(cur.py?.[id]        ?? 0))
+                  + Math.abs(Number(cur.py?.[id + "_lt"] ?? 0))
+                  + Math.abs(Number(cur.py?.[id + "_st"] ?? 0));
+      if (cyAmt > 0.005 || pyAmt > 0.005) {
+        const row = cur.customRows.find(r => r.id === id);
+        const label = row?.label || "this row";
+        toast.error(
+          `"${label}" carries an amount and cannot be deleted — deletion would break the Balance Sheet / P&L total. Set the value to 0 first, or use "Move to…" to re-parent it.`,
+          { duration: 6000 },
+        );
+        return prev;     // <-- no state change
+      }
+
       const newCy = { ...cur.cy };
       const newPy = { ...cur.py };
       for (const s of ["", "_lt", "_st"]) { delete newCy[id + s]; delete newPy[id + s]; }
