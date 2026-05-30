@@ -1108,26 +1108,52 @@ export async function nceAutoPopulate(
       // (Stock-in-Trade / Packing material / etc.). Inventory ledgers are
       // routed via the cogs special block further down — they hit the fixed
       // pc_open_*/pc_close_* slots, not the unmatchedB customRow path.
-      let idx = 0;
+      //
+      // SMART-MERGE (Issue 2 fix — OM REALTY "Site Expense - 12%", "Site
+      // Expense - 18%", "Site Expense - URD" rendered as three separate
+      // rows): group unmatched ledgers by their normalised base head
+      // (deriveBaseHead/groupKey strip "- 18%", "- URD", "- IGST", trailing
+      // month names and numbers). Ledgers sharing a base head merge into ONE
+      // custom row whose label is the merged base head and whose `sources`
+      // array carries the per-ledger breakdown (shown via the ℹ️ popover).
+      // Single-ledger groups keep their verbatim label and no `sources` — so
+      // unrelated ledgers ("Unpaid Audit Fees" vs "Unpaid Professional Fees")
+      // stay as separate rows.
+      const groupedB = new Map<string, {
+        baseLabel: string;
+        ledgers:   typeof unmatchedB;
+      }>();
       for (const um of unmatchedB) {
-        const label = um.ledger;
-        const id    = makeCustomId(label, idx++);
-        newCy[id] = um.amt;
-        // PY resolution order:
-        //   1. pre-computed pyAmt from the PY-only walk (signed)
-        //   2. PY-shell TB closing for the same ledger name (positive magnitude)
-        //   3. prior engagement's saved customRow with the same label
-        // Without step 1, CLOSED ledgers (e.g. Ambition Electric, Kapadiya
-        // Hiren) get amt = 0 and pyFromTb = 0 (already filtered in PY walk)
-        // and disappear from the note even though COA Mapping shows them.
-        const pyFromWalk = um.pyAmt ?? 0;
-        const pyFromTb   = pyByLedgerB[um.ledger.toLowerCase()] ?? 0;
-        // Math.abs check (not > 0) — pyFromTb is now signed so a Dr-balance
-        // creditor's negative PY value must NOT fall through to the fallback.
-        const pyResolved = Math.abs(pyFromWalk) > 0.005
-          ? pyFromWalk
-          : (Math.abs(pyFromTb) > 0.005 ? pyFromTb : pyForCustomRow(noteType, id, label));
-        newPy[id] = pyResolved;
+        const k = groupKey(um.ledger);
+        if (!groupedB.has(k)) {
+          groupedB.set(k, { baseLabel: deriveBaseHead(um.ledger), ledgers: [] });
+        }
+        groupedB.get(k)!.ledgers.push(um);
+      }
+      let idx = 0;
+      for (const group of groupedB.values()) {
+        const isMerged = group.ledgers.length > 1;
+        const label    = isMerged ? group.baseLabel : group.ledgers[0].ledger;
+        const id       = makeCustomId(label, idx++);
+        // Aggregate CY and PY across every ledger in the group, and build a
+        // sources[] entry for each so the (i) popover can show the underlying
+        // breakdown ("Site Expense" — comprising "Site Expense - 12%" ₹57,588,
+        // "Site Expense - 18%" ₹2,42,323, "Site Expense - URD" ₹15,000).
+        let cySum = 0;
+        let pySum = 0;
+        const sources: NCEMergedSource[] = [];
+        for (const g of group.ledgers) {
+          cySum += g.amt;
+          const pyFromWalk = g.pyAmt ?? 0;
+          const pyFromTb   = pyByLedgerB[g.ledger.toLowerCase()] ?? 0;
+          const pyVal = Math.abs(pyFromWalk) > 0.005
+            ? pyFromWalk
+            : (Math.abs(pyFromTb) > 0.005 ? pyFromTb : pyForCustomRow(noteType, id, g.ledger));
+          pySum += pyVal;
+          sources.push({ ledger: g.ledger, amountCy: g.amt, amountPy: pyVal });
+        }
+        newCy[id] = cySum;
+        newPy[id] = pySum;
         // ISSUE (collapse/expand internal heads): Pattern B breakup ledgers
         // used to be created with NO attachedTo (except cogs), so they rendered
         // as a FLAT, always-visible list before the grand total with no
@@ -1145,6 +1171,7 @@ export async function nceAutoPopulate(
         const row: NCECustomRow = {
           id, label, source: "auto",
           ...(attachTarget ? { attachedTo: attachTarget } : {}),
+          ...(isMerged ? { sources } : {}),
         };
         autoRows.push(row);
       }

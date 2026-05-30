@@ -263,11 +263,16 @@ export async function generateQueryProgressReport(
     doc.rect(0, 18, PW, 2, "F");
 
     // Table
+    // Description is intentionally NOT hard-truncated — autoTable's
+    // `overflow: "linebreak"` wraps the full text into multiple lines so the
+    // auditor sees the complete query instead of "Clarify why both Sales GST
+    // and Sales IGST are b…". Group/Ledger still get a soft cap because their
+    // columns are narrow and a wrap would push every row to 2-3 lines.
     const tableRows = queries.map((q, i) => [
       String(i + 1),
       truncate(q.head        || "—", 22),
       truncate(q.particulars || "—", 22),
-      truncate(q.query_description || "—", 48),
+      q.query_description || "—",
       STATUS_LABELS[q.query_status],
       q.priority || "Medium",
       q.due_date ? fmtDate(q.due_date) : "—",
@@ -298,12 +303,15 @@ export async function generateQueryProgressReport(
       },
       columnStyles: {
         0: { cellWidth: 8,   halign: "center" },
-        1: { cellWidth: 28 },
-        2: { cellWidth: 28 },
-        3: { cellWidth: 55 },
-        4: { cellWidth: 24 },
-        5: { cellWidth: 18, halign: "center" },
-        6: { cellWidth: 22, halign: "center" },
+        1: { cellWidth: 26 },
+        2: { cellWidth: 26 },
+        // Description widened + uses "auto" so autoTable fills any leftover
+        // content width before wrapping — full query text is preserved across
+        // multiple lines instead of being cut off mid-sentence.
+        3: { cellWidth: "auto", minCellWidth: 60 },
+        4: { cellWidth: 22 },
+        5: { cellWidth: 16, halign: "center" },
+        6: { cellWidth: 20, halign: "center" },
       },
       margin: { left: ML, right: MR },
       didParseCell(hookData) {
