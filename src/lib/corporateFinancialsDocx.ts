@@ -786,11 +786,12 @@ function makeFooter(entityName: string): Footer {
   });
 }
 
-// ─── RUNNING PAGE HEADER (schedules format) ───────────────────────────────────
-// Matches the requested CA-firm schedule layout:
-//   • Client name  — CENTERED, bold, underlined.
-//   • Schedule line — LEFT-aligned, bold, underlined
-//     (e.g. "Schedules to Balance Sheet as at 31st March, 2026").
+// ─── RUNNING PAGE HEADER ──────────────────────────────────────────────────────
+// Matches the requested CA-firm format:
+//   • Client name  — CENTERED, bold, navy.
+//   • Subtitle line — LEFT-aligned, bold (e.g. "Notes to Balance Sheet as at
+//     31st March, 2026"). Subtitle is optional — Note 1 (Accounting Policies)
+//     and the Ratios section get the client name ONLY.
 // Repeats on every page of the section it is attached to. NOT used on the
 // Balance Sheet / P&L face pages, and there is no footer anywhere.
 function makeHeader(entityName: string, subtitle?: string): Header {
@@ -798,14 +799,14 @@ function makeHeader(entityName: string, subtitle?: string): Header {
     new Paragraph({
       alignment: AlignmentType.CENTER,
       spacing:   { before: 0, after: subtitle ? 60 : 40 },
-      children:  [new TextRun({ text: entityName, font: FONT, size: SZ_TITLE, bold: true, underline: {}, color: BLACK })],
+      children:  [new TextRun({ text: entityName, font: FONT, size: SZ_TITLE, bold: true, color: NAVY })],
     }),
   ];
   if (subtitle) {
     children.push(new Paragraph({
       alignment: AlignmentType.LEFT,
       spacing:   { before: 0, after: 40 },
-      children:  [new TextRun({ text: subtitle, font: FONT, size: SZ_HDR, bold: true, underline: {}, color: BLACK })],
+      children:  [new TextRun({ text: subtitle, font: FONT, size: SZ_HDR, bold: true, color: BLACK })],
     }));
   }
   return new Header({ children });
@@ -2075,11 +2076,13 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
   const bsNotes = pendingNotes.filter(p => p.section === "bs");
   const plNotes = pendingNotes.filter(p => p.section === "pl");
 
-  // BS-notes section body: Note 1 (policies) first, then Note 2 on a fresh page,
-  // remaining notes flowing continuously (separated by a spacer).
-  const bsNotesChildren: (Table | Paragraph)[] = [...note1Paras];
+  // BS-notes section body: starts with Note 2 (Note 1 lives in its own section
+  // above so the "Notes to Balance Sheet …" running header DOES NOT appear on
+  // the Accounting Policies pages). Subsequent BS notes flow continuously.
+  const bsNotesChildren: (Table | Paragraph)[] = [];
   bsNotes.forEach((item, idx) => {
-    bsNotesChildren.push(idx === 0 ? pageBreak() : spacer(), ...item.elements);
+    if (idx === 0) bsNotesChildren.push(...item.elements);
+    else           bsNotesChildren.push(spacer(), ...item.elements);
   });
   // P&L-notes section body: the section break already starts a fresh page.
   const plNotesChildren: (Table | Paragraph)[] = [];
@@ -2091,9 +2094,9 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
   // Ratios
   const hasRatios = ratios && (ratios.cy || ratios.py);
 
-  // Repeating schedule heading lines for the notes sections.
-  const bsNotesSubtitle = `Schedules to Balance Sheet as at 31st March, ${cyYear}`;
-  const plNotesSubtitle = `Schedules to Profit & Loss A/c. for Accounting year ${pyYear} - ${cyYear}`;
+  // Repeating heading lines for the notes sections.
+  const bsNotesSubtitle = `Notes to Balance Sheet as at 31st March, ${cyYear}`;
+  const plNotesSubtitle = `Notes Profit & Loss A/c. for Accounting year ${pyYear} - ${cyYear}`;
 
   // Page settings (with page border). The header distance keeps the running
   // header inside the existing top margin so the notes body isn't pushed.
@@ -2126,11 +2129,14 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
     { properties: { page: portraitProps }, children: [bsTable, sigSpacer(), sigBlock()] },
     // P&L face — NO running header, NO footer.
     { properties: { page: portraitProps }, children: [plTable, sigSpacer(), sigBlock()] },
-    // Schedules to Balance Sheet (Note 1 policies + BS notes)
+    // Note 1 (Accounting Policies) — own section with client-name header only;
+    // the "Notes to Balance Sheet …" subtitle is intentionally NOT shown here.
+    { properties: { page: portraitProps }, ...hdr(), children: [...note1Paras] },
+    // Notes to Balance Sheet (Notes 2..N)
     { properties: { page: portraitProps }, ...hdr(bsNotesSubtitle), children: bsNotesChildren },
   ];
 
-  // Schedules to Profit & Loss — own section + own running header
+  // Notes Profit & Loss — own section + own running header
   if (plNotes.length > 0) {
     sections.push({ properties: { page: portraitProps }, ...hdr(plNotesSubtitle), children: plNotesChildren });
   }
