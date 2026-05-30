@@ -13,6 +13,7 @@ import {
   AlignmentType,
   BorderStyle,
   Document,
+  Header,
   PageBorderDisplay,
   PageBorderOffsetFrom,
   Packer,
@@ -1896,44 +1897,36 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
       })],
     });
 
-  // 2026-05-30 (revision 8) — User refuses both the running-header fade
-  // (Word's editor renders running-header text at ~60% opacity, can't be
-  // overridden via XML) AND the "banner only on first page" layout.
+  // 2026-05-30 (revision 9) — Final pragmatic layout after multiple failed
+  // attempts at a perfect Word editor preview:
   //
-  // Workaround: wrap the entire notes section in a single OUTER TABLE.
-  // The first row holds the client banner and is marked `tableHeader: true`,
-  // which makes Word repeat it on every page the table spans. Repeated
-  // table-header rows are BODY content (rendered at full opacity in the
-  // editor — no fading), so the banner stays dark navy on every page,
-  // matching the BS / P&L title rows exactly. The second row holds all
-  // the notes content as nested paragraphs and tables.
-  const outerNoBorders = {
-    top:    { style: BorderStyle.NONE, size: 0, color: "auto" },
-    bottom: { style: BorderStyle.NONE, size: 0, color: "auto" },
-    left:   { style: BorderStyle.NONE, size: 0, color: "auto" },
-    right:  { style: BorderStyle.NONE, size: 0, color: "auto" },
-    insideHorizontal: { style: BorderStyle.NONE, size: 0, color: "auto" },
-    insideVertical:   { style: BorderStyle.NONE, size: 0, color: "auto" },
-  };
-  const bannerHeaderRow = new TableRow({
-    tableHeader: true,                     // ← repeats on every page the table spans
-    cantSplit:   true,
-    children: [
-      new TableCell({
-        width:   { size: TW, type: WidthType.DXA },
-        borders: BDR_NONE,
-        margins: { top: 0, bottom: 0, left: 0, right: 0 },
-        children: [new Paragraph({
-          alignment: AlignmentType.CENTER,
-          spacing:   { before: 60, after: 200 },
-          border:    { bottom: { style: BorderStyle.SINGLE, size: 8, color: NAVY, space: 4 } },
-          children:  [new TextRun({
-            text: entityName.toUpperCase(),
-            font: FONT, size: SZ_ENTITY, bold: true, color: NAVY,
-          })],
-        })],
-      }),
-    ],
+  //   • Running header on every notes page (the only Word mechanism that
+  //     repeats content across all pages of a flowing section)
+  //   • Body banner ALSO on the first notes page so page 1 reads dark in
+  //     the editor — the running header is suppressed on page 1 via
+  //     titlePage: true to avoid duplication
+  //
+  // Known Word UI behaviour: the editor renders running-header text at
+  // ~60% opacity (UI helper to indicate 'not currently editing the
+  // header'). No XML setting overrides this — every previous workaround
+  // (tableHeader rows, per-section page breaks, etc.) either broke the
+  // user's flowing-pagination requirement or introduced blank pages.
+  //
+  // The PRINTED output and PDF EXPORT render running headers at FULL
+  // opacity, so the actual deliverable shows the dark navy banner on
+  // every page identically to the BS / P&L title rows.
+  // Suppressed first-page header so the body banner on page 1 isn't duplicated.
+  const emptyFirstHeader = new Header({ children: [new Paragraph({ children: [] })] });
+  const notesRunningHeader = new Header({
+    children: [new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing:   { before: 60, after: 20 },
+      border:    { bottom: { style: BorderStyle.SINGLE, size: 8, color: NAVY, space: 4 } },
+      children:  [new TextRun({
+        text: entityName.toUpperCase(),
+        font: FONT, size: SZ_ENTITY, bold: true, color: NAVY,
+      })],
+    })],
   });
 
   // Build the flowing notes list. Multiple notes share a page; a note that
@@ -1953,39 +1946,19 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     noteTablesWithHeaders.push(table);
   }
 
-  // Notes content: Note 1 (Accounting Policies) flows first; a page break
-  // separates it from the structured notes. Capital Account, BS notes and
-  // P&L notes then flow continuously, sharing pages until full.
-  const noteContent: (Paragraph | Table)[] = [
+  // Notes section: page 1 opens with the body banner (always dark), then
+  // Note 1 flows. A page break separates the free-text policies from the
+  // structured notes. Capital Account, BS notes and P&L notes then flow
+  // continuously, sharing pages until full. The running header above
+  // repeats on every page 2+.
+  const noteChildren: (Paragraph | Table)[] = [
+    makeNotesBanner(),                                       // first-page body banner — dark navy
     ...note1Paras,
     new Paragraph({ pageBreakBefore: true, spacing: { before: 0, after: 0 }, children: [] }),
     sectionTransitionParagraph("BS"),
     ...capitalTables.flatMap((t, i) => i === 0 ? [t] : [noteGap(), t]),
     ...noteTablesWithHeaders,
   ];
-
-  // Outer table that wraps noteContent so the bannerHeaderRow repeats on
-  // every page. The single content row stretches across all the notes
-  // content; nested tables inside the cell flow as normal.
-  const outerNotesTable = new Table({
-    width:        { size: TW, type: WidthType.DXA },
-    columnWidths: [TW],
-    borders:      outerNoBorders,
-    rows: [
-      bannerHeaderRow,
-      new TableRow({
-        cantSplit: false,                  // allow the content row to span pages
-        children: [
-          new TableCell({
-            width:   { size: TW, type: WidthType.DXA },
-            borders: BDR_NONE,
-            margins: { top: 0, bottom: 0, left: 0, right: 0 },
-            children: noteContent,
-          }),
-        ],
-      }),
-    ],
-  });
 
   const doc = new Document({
     styles: {
@@ -2015,15 +1988,15 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
           sigBlock(),
         ],
       },
-      // Notes pages — banner appears on EVERY page as a repeated table-
-      // header row. tableHeader: true on bannerHeaderRow makes Word repeat
-      // it on every page the outerNotesTable spans. Repeated table-header
-      // rows are body content, rendered at FULL opacity (no header fading).
+      // Notes pages — banner on every page (body banner on page 1, running
+      // header on pages 2+). titlePage: true + first: emptyHeader suppresses
+      // the running header on page 1 so the body banner isn't duplicated.
       // Flowing pagination preserved — multiple notes per page, never
       // split mid-note (existing keepNext + cantSplit on note tables).
       {
-        properties: { page: notesPortraitProps },
-        children:   [outerNotesTable],
+        properties: { page: notesPortraitProps, titlePage: true },
+        headers:    { first: emptyFirstHeader, default: notesRunningHeader },
+        children:   noteChildren,
       },
       // PPE Schedule (landscape) — opens with the dark client banner, then
       // the PPE table flows below. Same banner style as the BS / P&L / Notes.
