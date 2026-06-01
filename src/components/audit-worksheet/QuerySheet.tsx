@@ -650,12 +650,13 @@ function RowHistoryPopover({
   return (
     <>
       <Button
-        size="sm" variant="ghost"
-        className="h-7 w-7 p-0 text-muted-foreground hover:text-indigo-600 hover:bg-indigo-50"
+        size="sm" variant="outline"
+        className="h-7 px-2 gap-1 text-[10px] text-indigo-700 border-indigo-300 hover:bg-indigo-50 hover:text-indigo-800"
         title="View edit log for this row"
         onClick={() => setOpen(true)}
       >
         <History size={12} />
+        Log
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-3xl p-0 gap-0 overflow-hidden">
