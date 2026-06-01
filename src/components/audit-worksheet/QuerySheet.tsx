@@ -33,9 +33,6 @@ import {
   CheckSquare, Square, Calendar, Rocket, BarChart2,
   Sparkles, FileText, RefreshCw, Paperclip, Eye, History,
 } from "lucide-react";
-import {
-  Popover, PopoverContent, PopoverTrigger,
-} from "@/components/ui/popover";
 import { LedgerSidePanel }              from "./LedgerSidePanel";
 import { QueryAnalyticsSidebar }        from "./QueryAnalyticsSidebar";
 import { getDraftSuggestion }           from "./QueryDraftEngine";
@@ -579,19 +576,42 @@ function BulkDispatchDialog({
   );
 }
 
-// ─── Row History Popover (2026-05-30) ────────────────────────────────────────
+// ─── Row Edit-Log Dialog (2026-06-01 redesign) ───────────────────────────────
 // Inline edit-log for a single query row — fetches audit_worksheet_history
 // rows whose section_name matches "Query Sheet — {rowLabel}" and renders a
-// compact timeline so the auditor can see who changed what when without
-// leaving the Query Sheet to open the full Version History panel.
+// clean tabular dialog so the auditor can scan who changed what when at a
+// glance without leaving the Query Sheet to open the full Version History
+// panel. Replaces the earlier card-style timeline popover that the user
+// reported as visually cluttered.
 
-function fmtHistDate(iso: string): string {
+function fmtHistDateShort(iso: string): string {
   try {
-    return new Date(iso).toLocaleString("en-IN", {
-      day: "2-digit", month: "short", year: "numeric",
-      hour: "2-digit", minute: "2-digit", hour12: true,
-    });
+    const d = new Date(iso);
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const yyyy = d.getFullYear();
+    let hh = d.getHours();
+    const mins = String(d.getMinutes()).padStart(2, "0");
+    const ampm = hh >= 12 ? "PM" : "AM";
+    hh = hh % 12 || 12;
+    return `${dd}/${mm}/${yyyy} ${String(hh).padStart(2, "0")}:${mins} ${ampm}`;
   } catch { return iso; }
+}
+
+/** Sentence describing one change ("changed from X to Y"). Falls back
+ *  gracefully when one side is empty (e.g. first time a field is set). */
+function describeChange(oldV: string | null, newV: string | null): React.ReactNode {
+  const o = (oldV ?? "").trim();
+  const n = (newV ?? "").trim();
+  if (!o && n)  return <>set to <span className="font-medium text-foreground">{n}</span></>;
+  if (o && !n)  return <>cleared (was <span className="font-medium text-foreground">{o}</span>)</>;
+  if (!o && !n) return <span className="text-muted-foreground italic">no value change</span>;
+  return (
+    <>
+      from <span className="font-medium text-foreground">{o}</span>
+      {" "}to <span className="font-medium text-foreground">{n}</span>
+    </>
+  );
 }
 
 function RowHistoryPopover({
@@ -608,7 +628,7 @@ function RowHistoryPopover({
     changed_by_name: string | null; changed_at: string;
   }>>([]);
 
-  // Fetch row history when popover opens (and again on every re-open so the
+  // Fetch row history when dialog opens (and again on every re-open so the
   // latest edits surface without remounting the row).
   useEffect(() => {
     if (!open || !engagementId) return;
@@ -621,67 +641,101 @@ function RowHistoryPopover({
           .eq("engagement_id", engagementId)
           .eq("section_name", `Query Sheet — ${rowLabel}`)
           .order("changed_at", { ascending: false })
-          .limit(100);
+          .limit(200);
         setRows(hist || []);
       } finally { setLoading(false); }
     })();
   }, [open, engagementId, rowLabel]);
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button size="sm" variant="ghost"
-          className="h-7 w-7 p-0 text-muted-foreground hover:text-indigo-600 hover:bg-indigo-50"
-          title="View edit log for this row">
-          <History size={12} />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent align="end" className="w-[360px] p-0 max-h-[400px] overflow-hidden flex flex-col">
-        <div className="px-3 py-2 border-b bg-muted/40">
-          <div className="text-xs font-semibold flex items-center gap-1.5">
-            <History size={12} className="text-indigo-600" />
-            Edit Log
+    <>
+      <Button
+        size="sm" variant="ghost"
+        className="h-7 w-7 p-0 text-muted-foreground hover:text-indigo-600 hover:bg-indigo-50"
+        title="View edit log for this row"
+        onClick={() => setOpen(true)}
+      >
+        <History size={12} />
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-3xl p-0 gap-0 overflow-hidden">
+          {/* Header */}
+          <DialogHeader className="px-5 py-3 border-b bg-muted/40 space-y-0.5">
+            <DialogTitle className="flex items-center gap-2 text-sm">
+              <History size={15} className="text-indigo-600" />
+              Edit Log
+              {!loading && rows.length > 0 && (
+                <span className="text-[10px] font-normal text-muted-foreground ml-1">
+                  · {rows.length} {rows.length === 1 ? "change" : "changes"}
+                </span>
+              )}
+            </DialogTitle>
+            <p className="text-[11px] text-muted-foreground truncate" title={rowLabel}>
+              {rowLabel}
+            </p>
+          </DialogHeader>
+
+          {/* Body — tabular */}
+          <div className="max-h-[60vh] overflow-y-auto">
+            {loading ? (
+              <div className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground py-12">
+                <Loader2 size={13} className="animate-spin" /> Loading edit log…
+              </div>
+            ) : rows.length === 0 ? (
+              <div className="text-xs text-muted-foreground py-12 text-center">
+                No edits recorded yet for this row.
+              </div>
+            ) : (
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-muted/60 text-[10px] uppercase tracking-wide font-semibold text-muted-foreground">
+                  <tr>
+                    <th className="text-left  px-3 py-2 w-12">#</th>
+                    <th className="text-left  px-3 py-2 w-32">User</th>
+                    <th className="text-left  px-3 py-2 w-28">Field</th>
+                    <th className="text-left  px-3 py-2">Change</th>
+                    <th className="text-right px-3 py-2 w-40">When</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {rows.map((h, i) => (
+                    <tr key={h.id} className="hover:bg-muted/30">
+                      <td className="px-3 py-2 text-muted-foreground font-mono text-[10px]">
+                        {rows.length - i}
+                      </td>
+                      <td className="px-3 py-2 font-medium text-foreground">
+                        {h.changed_by_name || "Unknown"}
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className="inline-flex items-center px-1.5 py-px rounded text-[10px] font-medium bg-indigo-50 text-indigo-700 border border-indigo-200">
+                          {h.field_name || "—"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-foreground/90">
+                        {describeChange(h.old_value, h.new_value)}
+                      </td>
+                      <td className="px-3 py-2 text-right text-muted-foreground whitespace-nowrap tabular-nums">
+                        {fmtHistDateShort(h.changed_at)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
-          <div className="text-[10px] text-muted-foreground truncate" title={rowLabel}>
-            {rowLabel}
+
+          {/* Footer */}
+          <div className="px-5 py-2 border-t bg-muted/30 flex items-center justify-between text-[10px] text-muted-foreground">
+            <span>Most recent change shown first.</span>
+            <DialogFooter className="m-0">
+              <Button size="sm" variant="outline" className="h-7 text-xs"
+                onClick={() => setOpen(false)}>
+                Close
+              </Button>
+            </DialogFooter>
           </div>
-        </div>
-        <div className="overflow-y-auto flex-1 px-3 py-2">
-          {loading ? (
-            <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground py-3 justify-center">
-              <Loader2 size={11} className="animate-spin" /> Loading…
-            </div>
-          ) : rows.length === 0 ? (
-            <div className="text-[11px] text-muted-foreground py-6 text-center">
-              No edits recorded yet for this row.
-            </div>
-          ) : (
-            <ol className="space-y-2">
-              {rows.map(h => (
-                <li key={h.id} className="text-[11px] border-l-2 border-indigo-300 pl-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-semibold text-foreground">
-                      {h.field_name || "Field"} changed
-                    </span>
-                    <span className="text-[10px] text-muted-foreground whitespace-nowrap">
-                      {fmtHistDate(h.changed_at)}
-                    </span>
-                  </div>
-                  <div className="text-muted-foreground leading-snug mt-0.5">
-                    <span className="font-medium text-foreground">{h.changed_by_name || "Unknown"}</span>
-                    {" changed "}<span className="text-foreground">{h.field_name}</span>
-                    {" from "}
-                    <span className="px-1 rounded bg-red-50 text-red-700 border border-red-200">{h.old_value || "—"}</span>
-                    {" to "}
-                    <span className="px-1 rounded bg-green-50 text-green-700 border border-green-200">{h.new_value || "—"}</span>
-                  </div>
-                </li>
-              ))}
-            </ol>
-          )}
-        </div>
-      </PopoverContent>
-    </Popover>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
