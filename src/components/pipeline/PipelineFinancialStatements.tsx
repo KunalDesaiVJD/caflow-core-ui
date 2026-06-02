@@ -2996,11 +2996,25 @@ export default function PipelineFinancialStatements({
       const isBS = sec.includes("bs") || sec.includes("asset") || sec.includes("liab") || sec.includes("equity");
       if (isBS && Math.abs(val) > 0.005) merged[code] = val;
     }
-    // ── Root-cause override: when the PY shell TB is present, OVERWRITE BS
-    // codes with the PY-shell-TB-closing-x-current-COA sum. This is the SAME
-    // source the COA Mapping Variance Drill reads, so the FS BS PY column is
-    // mathematically guaranteed to agree with COA Mapping for every code.
+    // ── Root-cause override: when the PY shell TB is present, the BS column
+    // is sourced EXCLUSIVELY from the PY-shell TB through the current
+    // coa_mapping (same source the COA Mapping Variance Drill reads). Two
+    // steps:
+    //   (1) clear every BS code so stale values from pyAmounts (saved prior FS),
+    //       computedAmountsPY (CY-TB opening) or pyManualAmounts cannot leak
+    //       through for codes that have NO ledger mapped to them. Without this
+    //       a code like "Short-term borrowings" with zero mapped ledgers in COA
+    //       would still display a leftover figure on the FS face while COA
+    //       Mapping shows it empty — the OM REALTY symptom the user reported.
+    //   (2) overwrite from pyShellBSAmounts. Mapped codes get the PY-shell sum;
+    //       unmapped codes remain 0 — guaranteeing FS BS PY == COA Mapping PY
+    //       for every code, on every (NCE and corporate) client.
     if (hasPyShellBS) {
+      for (const item of activeFlatItems) {
+        const sec  = String((item as any).section || "").toLowerCase();
+        const isBS = sec.includes("bs") || sec.includes("asset") || sec.includes("liab") || sec.includes("equity");
+        if (isBS) delete (merged as any)[item.code];
+      }
       for (const [code, val] of Object.entries(pyShellBSAmounts)) {
         if (!Number.isFinite(val)) continue;
         merged[code] = val;
@@ -7049,9 +7063,30 @@ export default function PipelineFinancialStatements({
              whenever notes were edited.  Now both surfaces display the
              same SUM. */}
         {(() => {
+          // Issue 2 — Manual Overrides tile must count overrides EVERYWHERE:
+          //   (a) FS-face amount overrides     — manualOverrides
+          //   (b) FS-face note-number overrides — noteOverrides (localStorage)
+          //   (c) Corporate Notes manual edits  — stage5_notes.manual_edits
+          //   (d) NCE Notes manual custom rows  — nce_financial_notes →
+          //       cy_data.customRows / py_data.customRows where source = "manual"
+          // Previously (d) was missing, so the tile read 0 on NCE engagements
+          // even when notes-to-accounts had dozens of manual rows. Counting
+          // every source here makes the tile (which is already clickable and
+          // opens a list dialog where each override can be reverted to auto)
+          // an accurate single source of truth for "what's been hand-edited".
+          let nceNoteManual = 0;
+          if (isNonCorporate && Array.isArray(nceNotesData)) {
+            for (const n of nceNotesData as any[]) {
+              const cyRows = Array.isArray(n?.cy_data?.customRows) ? n.cy_data.customRows : [];
+              const pyRows = Array.isArray(n?.py_data?.customRows) ? n.py_data.customRows : [];
+              nceNoteManual += cyRows.filter((r: any) => r?.source === "manual").length;
+              nceNoteManual += pyRows.filter((r: any) => r?.source === "manual").length;
+            }
+          }
           const overrideTotal = Object.keys(manualOverrides).length
             + Object.values(noteOverrides).filter(v => v != null && Number.isFinite(v as number)).length
-            + (Array.isArray(stage5NotesData?.manual_edits) ? stage5NotesData!.manual_edits.length : 0);
+            + (Array.isArray(stage5NotesData?.manual_edits) ? stage5NotesData!.manual_edits.length : 0)
+            + nceNoteManual;
           return (
             <Card
               className={cn(
