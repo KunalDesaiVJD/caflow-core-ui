@@ -3678,12 +3678,19 @@ export default function PipelineFinancialStatements({
           // FS codes as BS by prefix.
           return /^NCE_(CAP|LTB|OLTL|LTP|STB|TP|OCL|STP|PPE|INTG|CWIP|NCINV|LTLA|ONCA|CINV|STCK|TR|CASH|STLA|OCA)$/.test(code);
         };
-        // Pass 1 — stage5_notes (legacy path). Skip BS-code overrides when
-        // an opening balance already exists; keep the override only for
-        // codes that genuinely have no TB-derived value.
+        // When the PY-shell TB drives BS values (pyShellBSAmounts is the
+        // authoritative source via mergedPY), BS codes must NEVER be overridden
+        // by notes-derived totals for the PY column — even when a BS code has
+        // value 0 (= no ledger mapped). Otherwise stale auditor-entered note
+        // totals (e.g. Short-term borrowings = 8,04,44,734 in nce_financial_notes
+        // with no matching coa_mapping ledger) re-inject through Pass 1 / 2
+        // below, making the FS BS PY diverge from the COA Mapping screen for
+        // the same code — the OM REALTY symptom.
+        // Pass 1 — stage5_notes (legacy path).
         for (const [code, key] of Object.entries(NCE_CODE_TO_NOTE_KEY)) {
           const section = NCE_CODE_TO_SECTION[code];
           if (!section) continue;
+          if (hasPyShellBS && isBSCode(code)) continue;
           const sum = sumNotesSubRowsPY(stage5NotesData ?? null, section, key);
           if (sum == null) continue;
           if (isBSCode(code) && Math.abs(Number(out[code] ?? 0)) > 0.005) continue;
@@ -3692,8 +3699,8 @@ export default function PipelineFinancialStatements({
         const faPy = getFAGridNetBlockTotal(stage5NotesData ?? null, "py");
         if (faPy != null) out["NCE_PPE"] = faPy;
         // Pass 2 — nce_financial_notes (Stage 8 path, the modern one).
-        // Same rule: BS codes keep their opening balance unless absent.
         for (const code of Object.keys(NCE_CODE_TO_NOTE)) {
+          if (hasPyShellBS && isBSCode(code)) continue;
           if (isBSCode(code) && Math.abs(Number(out[code] ?? 0)) > 0.005) continue;
           applyNCENoteTotal(out, code, "py");
         }
