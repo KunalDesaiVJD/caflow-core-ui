@@ -2680,6 +2680,55 @@ export default function PipelineFinancialStatements({
     return amounts;
   }, [pyShellTb, coaMapping, activeFlatItems, activeTree]);
 
+  // ─── PY BS from PY-shell TB (Root-cause fix: FS PY ↔ COA Mapping PY must match) ─
+  // Same source the COA Mapping Variance Drill reads — PY-shell trial-balance
+  // closing balances aggregated through the CURRENT engagement's coa_mapping.
+  // Before this, BS PY came from CY-TB opening_balance, which can diverge from
+  // the PY-shell TB closing whenever a Tally year-end JE (e.g. profit transfer
+  // to partner capital) lands after the PY shell sync — producing FS BS PY
+  // values that don't reconcile with the COA Mapping screen for the same code.
+  // By reading the SAME source for BS codes that the COA screen uses, the two
+  // screens are mathematically guaranteed to agree (BS face PY = COA Mapping PY
+  // for every line, on every corporate and non-corporate client).
+  const pyShellBSAmounts: Record<string, number> = useMemo(() => {
+    if (!pyShellTb?.length) return {};
+    const amounts: Record<string, number> = {};
+    const cyMappingLower: Record<string, { code: string }> = {};
+    for (const [k, v] of Object.entries(coaMapping || {})) {
+      if (v?.code) cyMappingLower[k.toLowerCase().trim()] = v;
+    }
+    for (const row of pyShellTb) {
+      const name = String(row.ledger_name || "").trim();
+      if (!name) continue;
+      const mapped = (coaMapping as any)[name] || cyMappingLower[name.toLowerCase()];
+      if (!mapped?.code) continue;
+      const item = activeFlatItems.find(i => i.code === mapped.code);
+      if (!item) continue;
+      const sec = String((item as any).section || "").toLowerCase();
+      const isBS = sec.includes("bs") || sec.includes("asset") || sec.includes("liab") || sec.includes("equity");
+      if (!isBS) continue;
+      const cb = Math.abs(Number(row.closing_balance ?? 0));
+      if (cb < 0.005) continue;
+      const isDr = String(row.balance_type ?? "").toUpperCase() === "DR";
+      // Tally sign convention used throughout: Dr positive, Cr negative.
+      amounts[mapped.code] = (amounts[mapped.code] || 0) + (isDr ? cb : -cb);
+    }
+    // Roll up BS parent nodes so consumers reading NCE_OWN / NCE_EL / BS_EQ
+    // get the aggregated total when only the leaves were populated.
+    const computeParent = (item: FSLineItem): number => {
+      const sec = String(item.section || "").toLowerCase();
+      const isBS = sec.includes("bs") || sec.includes("asset") || sec.includes("liab") || sec.includes("equity");
+      if (!isBS) return 0;
+      if (!item.children || item.children.length === 0) return amounts[item.code] || 0;
+      const total = item.children.reduce((s, c) => s + computeParent(c), 0);
+      if (total !== 0) amounts[item.code] = total;
+      return total;
+    };
+    for (const item of activeTree) computeParent(item);
+    return amounts;
+  }, [pyShellTb, coaMapping, activeFlatItems, activeTree]);
+  const hasPyShellBS = Object.keys(pyShellBSAmounts).length > 0;
+
   // ─── Load manual PY P&L amounts from engagement.py_manual_amounts ──────
   // Supports both legacy plain-number shape and enriched { v, by, at } shape.
   useEffect(() => {
@@ -2947,6 +2996,16 @@ export default function PipelineFinancialStatements({
       const isBS = sec.includes("bs") || sec.includes("asset") || sec.includes("liab") || sec.includes("equity");
       if (isBS && Math.abs(val) > 0.005) merged[code] = val;
     }
+    // ── Root-cause override: when the PY shell TB is present, OVERWRITE BS
+    // codes with the PY-shell-TB-closing-x-current-COA sum. This is the SAME
+    // source the COA Mapping Variance Drill reads, so the FS BS PY column is
+    // mathematically guaranteed to agree with COA Mapping for every code.
+    if (hasPyShellBS) {
+      for (const [code, val] of Object.entries(pyShellBSAmounts)) {
+        if (!Number.isFinite(val)) continue;
+        merged[code] = val;
+      }
+    }
     // ── PY Changes in Inventories: inject from PY Shell TB when available ──
     // pyInvCII !== null means inventory codes are mapped AND PY Shell TB was loaded.
     if (pyInvCII !== null) {
@@ -2989,7 +3048,11 @@ export default function PipelineFinancialStatements({
     // PY P&L amounts are now in `merged` (from pyAmounts / pyManualAmounts).
     // Compute PY net profit and credit it to Reserves & Surplus so the
     // comparative Balance Sheet balances — same closing entry the CY side does.
-    if (!isNonCorporate) {
+    // Skipped when the PY-shell TB is the source of BS values, because the
+    // closing balance there already reflects any year-end profit-transfer JE
+    // posted in Tally — re-crediting it here would double-count and diverge
+    // from the COA Mapping screen for the same code.
+    if (!isNonCorporate && !hasPyShellBS) {
       const pyRev   = merged["PL_REV"] || 0; // negative (credit balance)
       const pyExp   = merged["PL_EXP"] || 0; // positive (debit balance)
       const pyNetPL = Math.round((-pyRev - pyExp) * 100) / 100;
@@ -3053,7 +3116,7 @@ export default function PipelineFinancialStatements({
     }
 
     return merged;
-  }, [computedAmountsPY, pyAmounts, pyManualAmounts, pyShellPLAmounts, noPriorEngagement, activeFlatItems, activeTree, pyInvCII, isNonCorporate]);
+  }, [computedAmountsPY, pyAmounts, pyManualAmounts, pyShellPLAmounts, pyShellBSAmounts, hasPyShellBS, noPriorEngagement, activeFlatItems, activeTree, pyInvCII, isNonCorporate]);
 
   // ─── NCE Dynamic Note Number Map ────────────────────────────────────────────
   // Maps originalNoteRef → dynamicSequentialNoteNo for NCE entities.
