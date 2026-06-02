@@ -7779,6 +7779,97 @@ export default function PipelineFinancialStatements({
                 </div>
               </div>
             )}
+            {/* NCE Notes-to-Accounts manual custom rows.
+                cy_data._custom_rows is the source of truth — a single array
+                per note, mirrored to the per-note "N manual" badge in Stage 8.
+                Reverting deletes the row (manual rows have no auto counterpart
+                — "back to auto" means removing the auditor's addition). */}
+            {isNonCorporate && Array.isArray(nceNotesData) && (() => {
+              const rows: Array<{ noteType: string; row: any }> = [];
+              for (const n of nceNotesData as any[]) {
+                const customRows = Array.isArray(n?.cy_data?._custom_rows)
+                  ? n.cy_data._custom_rows
+                  : [];
+                for (const r of customRows) {
+                  if (r?.source === "manual") rows.push({ noteType: n.note_type, row: r });
+                }
+              }
+              if (rows.length === 0) return null;
+              return (
+                <div>
+                  <p className="text-[11px] font-semibold text-muted-foreground uppercase mb-1">
+                    Notes-to-Accounts manual rows ({rows.length}) — ↺ to remove (back to auto)
+                  </p>
+                  <div className="space-y-1">
+                    {rows.map(({ noteType, row }) => (
+                      <div
+                        key={`${noteType}-${row.id}`}
+                        className="flex items-center justify-between gap-3 rounded border border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20 px-3 py-2 hover:bg-amber-100 dark:hover:bg-amber-950/40 cursor-pointer"
+                        onClick={() => {
+                          setManualOverrideListOpen(false);
+                          setActiveTab("notes");
+                        }}
+                      >
+                        <div className="flex-1 min-w-0">
+                          <div className="font-mono text-[11px] font-semibold text-amber-700 dark:text-amber-400 truncate">
+                            {noteType} — {row.label || row.ejectedSource || "(unnamed row)"}
+                          </div>
+                          <div className="text-[10px] text-muted-foreground truncate">
+                            row id: {row.id}
+                          </div>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-[10px] text-amber-700 hover:bg-amber-200/60 shrink-0"
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            try {
+                              const fy = engagement?.financial_year;
+                              if (!fy) throw new Error("financial year unavailable");
+                              const { data: existing } = await (supabase.from as any)("nce_financial_notes")
+                                .select("cy_data, py_data")
+                                .eq("engagement_id", engagementId)
+                                .eq("financial_year", fy)
+                                .eq("note_type", noteType)
+                                .maybeSingle();
+                              const cy = (existing?.cy_data ?? {}) as Record<string, any>;
+                              const py = (existing?.py_data ?? {}) as Record<string, any>;
+                              const oldRows: any[] = Array.isArray(cy._custom_rows) ? cy._custom_rows : [];
+                              const nextRows = oldRows.filter(x => x?.id !== row.id);
+                              // Strip the row's per-key amounts so its CY/PY
+                              // contribution disappears from totals (manual
+                              // custom rows store amounts under id-based keys
+                              // alongside _custom_rows in cy_data / py_data).
+                              const nextCy: Record<string, any> = { ...cy, _custom_rows: nextRows };
+                              const nextPy: Record<string, any> = { ...py };
+                              for (const k of Object.keys(nextCy)) {
+                                if (k.startsWith(String(row.id))) delete nextCy[k];
+                              }
+                              for (const k of Object.keys(nextPy)) {
+                                if (k.startsWith(String(row.id))) delete nextPy[k];
+                              }
+                              const { error } = await (supabase.from as any)("nce_financial_notes")
+                                .update({ cy_data: nextCy, py_data: nextPy })
+                                .eq("engagement_id", engagementId)
+                                .eq("financial_year", fy)
+                                .eq("note_type", noteType);
+                              if (error) throw error;
+                              queryClient.invalidateQueries({ queryKey: ["nce-financial-notes", engagementId, fy] });
+                              toast.success(`Removed manual row "${row.label || row.id}" from ${noteType}`);
+                            } catch (err) {
+                              toast.error(`Failed to revert: ${(err as Error).message}`);
+                            }
+                          }}
+                        >
+                          ↺ Back to auto
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setManualOverrideListOpen(false)}>Close</Button>
