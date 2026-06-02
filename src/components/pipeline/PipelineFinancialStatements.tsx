@@ -3075,22 +3075,17 @@ export default function PipelineFinancialStatements({
     // 2026-05-30 — NCE PY net-profit auto-credit to NCE_CAP.
     //
     // For partnerships / proprietorships, the PY profit is journalled into
-    // partner / proprietor capital at year-end (no Reserves & Surplus on a
-    // non-corporate BS). When the user supplies PY P&L values (via the
-    // prior engagement, PY-shell TB or "Fetch from FY-1 Tally"), the
-    // comparative BS Capital must include that PY profit — otherwise it
-    // diverges from the opening balances on the asset side by exactly the
-    // PY net profit, producing the OM REALTY symptom: Liab + Capital PY
-    // (= 22.88cr) > Assets PY (= 14.84cr) by the unflowed PY profit
-    // (= 8.04cr).
+    // partner / proprietor capital at year-end. This auto-credit is only
+    // required when BS PY codes come from CY-TB opening balances — those
+    // reflect the post-profit-transfer state on the asset side, so Capital
+    // must also be lifted by the PY profit for the BS to balance.
     //
-    // Mirrors the corporate BS_EQ_RS auto-credit above. PY net profit is
-    // computed as `-PL_INC - PL_EXP` (PL_INC stored negative for Cr-side
-    // revenue, PL_EXP stored positive for Dr-side expenses). The profit
-    // is subtracted from NCE_CAP because NCE_CAP is stored negative
-    // (Cr side); subtracting a positive profit makes it more negative
-    // (larger capital balance) — the standard closing entry's effect.
-    if (isNonCorporate) {
+    // SKIPPED when pyShellBSAmounts is the source (PY-shell TB closing values
+    // already encode whatever Tally's books had). Re-crediting profit on top
+    // of those would double-count the JE and the BS face would diverge from
+    // the COA Mapping screen for the same code — the exact OM REALTY symptom
+    // the user reported (FS Capital PY = COA Capital PY + PY profit).
+    if (isNonCorporate && !hasPyShellBS) {
       const pyInc   = merged["NCE_PL_INC"] || 0;
       const pyExp   = merged["NCE_PL_EXP"] || 0;
       const pyPartRem = merged["NCE_PART_REM"] || 0;
