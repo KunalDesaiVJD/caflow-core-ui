@@ -7081,13 +7081,19 @@ export default function PipelineFinancialStatements({
           // every source here makes the tile (which is already clickable and
           // opens a list dialog where each override can be reverted to auto)
           // an accurate single source of truth for "what's been hand-edited".
+          // NCE custom rows live in cy_data._custom_rows (single array per note,
+          // covers BOTH CY and PY — there is no separate py_data.customRows).
+          // The NCE notes badge at NCEDetailedNotes line 2850 reads from the same
+          // shape after deserialiseNoteData. Counting cy_data.customRows /
+          // py_data.customRows (an earlier guess) read undefined keys and made
+          // the tile permanently show 0 even with 100+ manual rows in notes.
           let nceNoteManual = 0;
           if (isNonCorporate && Array.isArray(nceNotesData)) {
             for (const n of nceNotesData as any[]) {
-              const cyRows = Array.isArray(n?.cy_data?.customRows) ? n.cy_data.customRows : [];
-              const pyRows = Array.isArray(n?.py_data?.customRows) ? n.py_data.customRows : [];
-              nceNoteManual += cyRows.filter((r: any) => r?.source === "manual").length;
-              nceNoteManual += pyRows.filter((r: any) => r?.source === "manual").length;
+              const rows = Array.isArray(n?.cy_data?._custom_rows)
+                ? n.cy_data._custom_rows
+                : [];
+              nceNoteManual += rows.filter((r: any) => r?.source === "manual").length;
             }
           }
           const overrideTotal = Object.keys(manualOverrides).length
