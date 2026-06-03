@@ -2193,6 +2193,51 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
                 }
               }
             }
+            // 2026-06-01 — Self-heal stale STATIC-ROW PY (and CY) values left
+            // behind by the pre-fix Move-to / Eject. When a ledger was moved
+            // off a smart-matched static row, the old eject handler only
+            // subtracted the CY amount; the static row's PY kept the moved
+            // ledger's value (e.g. REVTI INFRA: "Rates and taxes" PY stuck at
+            // 39,96,555 after "Registration and Stamp Duty Expense" was
+            // moved). cy_sources is the live list of contributing ledgers,
+            // so the static row's amount must equal sum(amountCy / amountPy)
+            // across remaining sources. Recompute and update if drifted.
+            // Idempotent: if the values already match, nothing changes.
+            for (const [nType, d] of Object.entries(built)) {
+              if (!d.cy_sources || Object.keys(d.cy_sources).length === 0) continue;
+              const cleanedCy = { ...d.cy };
+              const cleanedPy = { ...d.py };
+              let touched = false;
+              for (const [rowId, sources] of Object.entries(d.cy_sources)) {
+                if (!Array.isArray(sources)) continue;
+                // Only heal rows that have a Pattern-B-style single value
+                // (no _lt / _st suffix in cy/py). Pattern A column sums are
+                // handled by their own LT/ST keys and the eject fix already
+                // covers both columns symmetrically.
+                const hasSuffix = (rowId + "_lt") in cleanedCy
+                              || (rowId + "_st") in cleanedCy
+                              || (rowId + "_lt") in cleanedPy
+                              || (rowId + "_st") in cleanedPy;
+                if (hasSuffix) continue;
+                const expectedCy = (sources as any[]).reduce((s, x) => s + Number(x?.amountCy ?? 0), 0);
+                const expectedPy = (sources as any[]).reduce((s, x) => s + Number(x?.amountPy ?? 0), 0);
+                const curCy = Number(cleanedCy[rowId] ?? 0);
+                const curPy = Number(cleanedPy[rowId] ?? 0);
+                if (Math.abs(curCy - expectedCy) > 0.005) {
+                  cleanedCy[rowId] = Math.round(expectedCy * 100) / 100;
+                  touched = true;
+                }
+                if (Math.abs(curPy - expectedPy) > 0.005) {
+                  cleanedPy[rowId] = Math.round(expectedPy * 100) / 100;
+                  touched = true;
+                }
+              }
+              if (touched) {
+                built[nType] = { ...d, cy: cleanedCy, py: cleanedPy };
+                healed = true;
+              }
+            }
+
             // Task 4 heal (doc8): promote auto rows that the user previously
             // placed under a static parent via "Move to…" back to source:"manual"
             // so nceAutoPopulate preserves them verbatim on every subsequent
