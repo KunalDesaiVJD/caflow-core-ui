@@ -2640,14 +2640,28 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
       const newCySources = { ...(cur.cy_sources ?? {}) };
       const sourceEntry = (newCySources[rowId] ?? []).find(s => s.ledger === ledger);
       const column = (sourceEntry as any)?.column as string | undefined;
+      // PY amount carried on the source entry — needed for the symmetric
+      // PY-side subtract/assign that the original code skipped. Fixes the
+      // REVTI INFRA / Rates & Taxes bug where moving "Registration and Stamp
+      // Duty Expense" off "rates_taxes" left the static row's PY value
+      // (39,96,555) behind — `cur.py[rowId]` was never touched.
+      const amountPy = Number(sourceEntry?.amountPy ?? 0);
       const remaining = (newCySources[rowId] ?? []).filter(s => s.ledger !== ledger);
       if (remaining.length === 0) delete newCySources[rowId];
       else newCySources[rowId] = remaining;
-      // 2. Subtract amount from static row's CY (plain + Pattern-A suffixed keys)
+      // 2. Subtract amount from static row's CY + PY (plain + Pattern-A suffixed keys).
       const newCy = { ...cur.cy };
+      const newPy = { ...cur.py };
       newCy[rowId] = Math.max(0, (cur.cy[rowId] ?? 0) - amount);
-      if (column === "lt") newCy[rowId + "_lt"] = Math.max(0, (cur.cy[rowId + "_lt"] ?? 0) - amount);
-      if (column === "st") newCy[rowId + "_st"] = Math.max(0, (cur.cy[rowId + "_st"] ?? 0) - amount);
+      newPy[rowId] = Math.max(0, (cur.py[rowId] ?? 0) - amountPy);
+      if (column === "lt") {
+        newCy[rowId + "_lt"] = Math.max(0, (cur.cy[rowId + "_lt"] ?? 0) - amount);
+        newPy[rowId + "_lt"] = Math.max(0, (cur.py[rowId + "_lt"] ?? 0) - amountPy);
+      }
+      if (column === "st") {
+        newCy[rowId + "_st"] = Math.max(0, (cur.cy[rowId + "_st"] ?? 0) - amount);
+        newPy[rowId + "_st"] = Math.max(0, (cur.py[rowId + "_st"] ?? 0) - amountPy);
+      }
       // 3. Create new custom row with that ledger name + amount.
       //    Mark as "manual" so it survives Re-sync from COA.
       //    Store ejectedSource so deleting this row can clean up ejectedLedgers.
@@ -2659,14 +2673,22 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
         ...(targetSection ? { section: targetSection } : {}),
       };
       newCy[newId] = amount;
+      newPy[newId] = amountPy;
       // For Pattern A notes, also store with the column suffix so computeDisplayData picks it up
-      if (column === "lt") newCy[newId + "_lt"] = amount;
-      if (column === "st") newCy[newId + "_st"] = amount;
+      if (column === "lt") {
+        newCy[newId + "_lt"] = amount;
+        newPy[newId + "_lt"] = amountPy;
+      }
+      if (column === "st") {
+        newCy[newId + "_st"] = amount;
+        newPy[newId + "_st"] = amountPy;
+      }
       // 4. Record this ledger in ejectedLedgers so Re-sync skips it from auto-grouping
       const newEjectedLedgers = [...new Set([...(cur.ejectedLedgers ?? []), ledger])];
       const next = { ...prev, [noteType]: {
         ...cur,
         cy: newCy,
+        py: newPy,
         cy_sources: newCySources,
         customRows: [...cur.customRows, newRow],
         ejectedLedgers: newEjectedLedgers,
@@ -2683,29 +2705,48 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
     setNoteData(prev => {
       const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
       const config = NOTES_CONFIG.find(c => c.noteType === noteType);
-      // Find the source entry to get its column (Pattern A: "lt" | "st")
+      // Find the source entry to get its column (Pattern A: "lt" | "st") and
+      // its PY amount — needed for the symmetric PY-side bookkeeping that
+      // the original code skipped (CY-only update left PY on both the source
+      // merged row and the new standalone row out of sync with the move).
       const sourceEntry = cur.customRows.find(r => r.id === customRowId)?.sources?.find(s => s.ledger === ledger);
       const column = (sourceEntry as any)?.column as string | undefined;
+      const amountPy = Number(sourceEntry?.amountPy ?? 0);
       // Remove the ledger from the custom row's sources[]
       const updatedRows = cur.customRows.map(r => {
         if (r.id !== customRowId) return r;
         const newSources = (r.sources ?? []).filter(s => s.ledger !== ledger);
         return { ...r, sources: newSources };
       });
-      // Subtract from the merged row's CY amount (plain + Pattern-A suffixed keys)
+      // Subtract from the merged row's CY + PY amount (plain + Pattern-A suffixed keys)
       const newCy = { ...cur.cy };
+      const newPy = { ...cur.py };
       newCy[customRowId] = Math.max(0, (cur.cy[customRowId] ?? 0) - amountCy);
-      if (column === "lt") newCy[customRowId + "_lt"] = Math.max(0, (cur.cy[customRowId + "_lt"] ?? 0) - amountCy);
-      if (column === "st") newCy[customRowId + "_st"] = Math.max(0, (cur.cy[customRowId + "_st"] ?? 0) - amountCy);
+      newPy[customRowId] = Math.max(0, (cur.py[customRowId] ?? 0) - amountPy);
+      if (column === "lt") {
+        newCy[customRowId + "_lt"] = Math.max(0, (cur.cy[customRowId + "_lt"] ?? 0) - amountCy);
+        newPy[customRowId + "_lt"] = Math.max(0, (cur.py[customRowId + "_lt"] ?? 0) - amountPy);
+      }
+      if (column === "st") {
+        newCy[customRowId + "_st"] = Math.max(0, (cur.cy[customRowId + "_st"] ?? 0) - amountCy);
+        newPy[customRowId + "_st"] = Math.max(0, (cur.py[customRowId + "_st"] ?? 0) - amountPy);
+      }
       // Create new standalone custom row for this ledger.
       // Mark as "manual" so it survives Re-sync from COA.
       // Store ejectedSource so deleting this row can clean up ejectedLedgers.
       const newId = newCustomId();
       const targetSection = attachToId ? resolveSection(config, cur, attachToId) : undefined;
       newCy[newId] = amountCy;
+      newPy[newId] = amountPy;
       // For Pattern A notes, also store with the column suffix so computeDisplayData picks it up
-      if (column === "lt") newCy[newId + "_lt"] = amountCy;
-      if (column === "st") newCy[newId + "_st"] = amountCy;
+      if (column === "lt") {
+        newCy[newId + "_lt"] = amountCy;
+        newPy[newId + "_lt"] = amountPy;
+      }
+      if (column === "st") {
+        newCy[newId + "_st"] = amountCy;
+        newPy[newId + "_st"] = amountPy;
+      }
       const newRow: NCECustomRow = {
         id: newId, label: ledger, source: "manual", ejectedSource: ledger,
         ...(attachToId ? { attachedTo: attachToId } : {}),
@@ -2713,7 +2754,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
       };
       // Record this ledger in ejectedLedgers so Re-sync skips it from auto-grouping
       const newEjectedLedgers = [...new Set([...(cur.ejectedLedgers ?? []), ledger])];
-      const next = { ...prev, [noteType]: { ...cur, cy: newCy, customRows: [...updatedRows, newRow], ejectedLedgers: newEjectedLedgers } };
+      const next = { ...prev, [noteType]: { ...cur, cy: newCy, py: newPy, customRows: [...updatedRows, newRow], ejectedLedgers: newEjectedLedgers } };
       scheduleSave(next);
       return next;
     });
