@@ -918,6 +918,17 @@ export async function nceAutoPopulate(
     const autoRows:      NCECustomRow[]         = [];
     const staticSources: Record<string, { ledger: string; amountCy: number; amountPy?: number }[]> = {};
 
+    // STALE-MANUAL-ROW REFRESH (Pattern B strict-TB notes):
+    // For trade_payables / other_cl / other_lt_liab / cogs every customRow IS
+    // a TB ledger.  We populate these maps in the Pattern B branch below; at
+    // merge time we use them to overwrite any manual row whose label matches a
+    // current TB ledger, so stale prev.cy values cannot inflate the note total
+    // after a ledger's Tally balance changes (MAHARSH INFRA bug, June 2026).
+    // Both maps are keyed by lowercased trimmed ledger name.
+    const STRICTLY_TB_DRIVEN_B = new Set(['cogs', 'trade_payables', 'other_cl', 'other_lt_liab']);
+    let tbRefreshCy: Record<string, number> | null = null;
+    let tbRefreshPy: Record<string, number> | null = null;
+
     // PY-ledger lookup keyed by lowercase ledger name → signed PY closing.
     // Used to attach per-ledger amountPy to staticSources so the expandable
     // breakdown shows BOTH CY and PY amounts per ledger (Issue 2).
@@ -1100,6 +1111,32 @@ export async function nceAutoPopulate(
           if (!nm) continue;
           pyByLedgerB[nm.toLowerCase()] = signedLedgerAmt(r, noteType);
         }
+      }
+      // STALE-MANUAL-ROW FIX (MAHARSH INFRA, June 2026):
+      // For STRICTLY-TB-DRIVEN Pattern B notes (trade_payables, other_cl,
+      // other_lt_liab, cogs) every customRow IS a TB ledger.  When the user's
+      // Tally balance changes (e.g. a creditor is fully paid, ledger closes
+      // to 0), the customRow had been left at its stale prev.cy value because
+      // (a) the heal had promoted it from "auto" to "manual" to preserve
+      // placement, and (b) manualLabelSet correctly skips re-creating it as
+      // a fresh auto row.  Result: the note kept inflating the BS face by
+      // the difference between the stale value and the current TB closing.
+      // Build a current TB-by-ledger CY map so we can refresh those rows below.
+      const cyByLedgerB: Record<string, number> = {};
+      for (const row of tb) {
+        const mapped = coaMapping[row.ledger_name];
+        if (!mapped || !codeSet.has(mapped.code)) continue;
+        const nm = String(row.ledger_name || "").trim();
+        if (!nm) continue;
+        cyByLedgerB[nm.toLowerCase()] = signedLedgerAmt(row, noteType);
+      }
+      // Expose the maps to the merge step (outer scope) so manual-row CY/PY
+      // values get refreshed from TB.  Only for strictly-TB-driven notes —
+      // for other Pattern B notes (where users genuinely type custom amounts)
+      // the old preserve-verbatim behaviour stays.
+      if (STRICTLY_TB_DRIVEN_B.has(noteType)) {
+        tbRefreshCy = cyByLedgerB;
+        tbRefreshPy = pyByLedgerB;
       }
       // Default attachedTo for COGS auto-mapped ledgers: every plain expense
       // ledger (Hardware Purchase, Cement Purchase, etc.) lands under
@@ -1659,6 +1696,45 @@ export async function nceAutoPopulate(
         const k = mr.id + suffix;
         if (prev.cy[k] !== undefined) mergedCy[k] = prev.cy[k];
         if (prev.py[k] !== undefined) mergedPy[k] = prev.py[k];
+      }
+    }
+
+    // STALE-MANUAL-ROW REFRESH (continued — MAHARSH INFRA fix):
+    // For strictly-TB-driven Pattern B notes, after restoring manual values
+    // from prev.cy/prev.py, OVERWRITE any manual row whose label matches a
+    // current TB ledger with the TB's current signed amount.  This makes
+    // such rows track the current Tally balance instead of holding a stale
+    // value from a previous sync.  User-typed manual rows whose label does
+    // NOT match any TB ledger are left untouched (preserve verbatim).
+    if (tbRefreshCy || tbRefreshPy) {
+      let refreshedCount = 0;
+      for (const mr of absorbedManualRows) {
+        const lbl = (mr.label || "").trim().toLowerCase();
+        if (!lbl) continue;
+        const newCyVal = tbRefreshCy?.[lbl];
+        const newPyVal = tbRefreshPy?.[lbl];
+        // newCyVal===undefined means the ledger is no longer in TB at all
+        // (e.g. deleted in Tally).  In that case set the row to 0 — it would
+        // otherwise hold a stale value forever.  We deliberately do NOT
+        // remove the row itself; the user can decide to delete it.
+        if (newCyVal !== undefined) {
+          if (mergedCy[mr.id] !== newCyVal) refreshedCount++;
+          mergedCy[mr.id] = newCyVal;
+        } else if (tbRefreshCy) {
+          // Strictly-TB-driven note: ledger gone from TB → zero out
+          if ((mergedCy[mr.id] ?? 0) !== 0) refreshedCount++;
+          mergedCy[mr.id] = 0;
+        }
+        if (newPyVal !== undefined) {
+          mergedPy[mr.id] = newPyVal;
+        } else if (tbRefreshPy) {
+          mergedPy[mr.id] = 0;
+        }
+      }
+      if (refreshedCount > 0) {
+        // Diagnostic breadcrumb in console; quiet at runtime, useful in support.
+        // eslint-disable-next-line no-console
+        console.log(`[nceAutoPopulate] ${noteType}: refreshed ${refreshedCount} stale manual row(s) from current TB.`);
       }
     }
 
