@@ -1752,9 +1752,22 @@ export async function nceAutoPopulate(
 
     // Apply prior-year CY as PY for static rows if not already set.
     // Math.abs guards against stale negative values that may exist in old data.
+    //
+    // 2026-06-01 ROOT-CAUSE FIX (MAHARSH INFRA "Rates and taxes" PY stuck):
+    // previously this loop ran for EVERY key in pyNotes — including static
+    // row ids whose contributing ledger had been moved away via "Move to…".
+    // Result: even after a Re-sync that correctly produced newCy / newPy of
+    // 0 for the now-empty static row, this loop revived the prior-year PY
+    // (e.g. rates_taxes PY = 39,96,555 from the year when the ledger was
+    // still smart-matched there). Restrict the carry-forward to keys with
+    // CURRENT-YEAR activity (key already present in newCy / newPy / mergedCy
+    // / mergedPy). Static rows that have no contributing ledger this year
+    // stay at 0 instead of inheriting last year's ghost.
     if (pyNotes[noteType]) {
+      const isCurrentlyActive = (k: string): boolean =>
+        k in newCy || k in newPy || k in mergedCy || k in mergedPy;
       for (const [k, v] of Object.entries(pyNotes[noteType])) {
-        if (!(k in mergedPy)) mergedPy[k] = Math.abs(v);
+        if (!(k in mergedPy) && isCurrentlyActive(k)) mergedPy[k] = Math.abs(v);
       }
     }
 

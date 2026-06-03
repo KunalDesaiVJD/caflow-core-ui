@@ -307,6 +307,41 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
 
   // ── Save ─────────────────────────────────────────────────────────────────
   const save = async () => {
+    // 2026-06-01 — Guard against silent data loss reported on MAHARSH INFRA
+    // (Capital Account + PPE Schedule wiped to empty cells after a Re-sync
+    // from COA on the Notes tab). The Re-sync path doesn't touch
+    // nce_capital_account, but if Save was clicked while the in-memory
+    // partner amounts were all 0 (e.g. before the load completed, or after
+    // an error swallowed the load) the upsert would persist zeros over
+    // genuine non-zero saved data.
+    //
+    // Defence: if every current-year partner row has zero amounts AND the
+    // engagement clearly has been populated before (non-zero in any field
+    // would have come from a load), block the save. The auditor must make at
+    // least one non-zero entry first — protects against accidentally wiping
+    // real data while still allowing genuine "all-zero start" first saves
+    // when they confirm via the dialog.
+    const allZeroPartners = partners.every(p =>
+      !p.profit_share_pct &&
+      !p.opening_balance_cy && !p.introduced_cy &&
+      !p.remuneration_cy && !p.interest_cy &&
+      !p.withdrawals_cy   && !p.profit_share_cy,
+    );
+    const allZeroPy = pyPartners.length === 0
+      ? !pyRow.opening && !pyRow.introduced && !pyRow.remuneration
+        && !pyRow.interest && !pyRow.withdrawals && !pyRow.profit_share
+      : pyPartners.every(p =>
+          !p.opening && !p.introduced && !p.remuneration
+          && !p.interest && !p.withdrawals && !p.profit_share);
+    if (allZeroPartners && allZeroPy) {
+      const ok = window.confirm(
+        "Every Capital Account amount is zero.\n\n" +
+        "Saving now will OVERWRITE any previously-saved capital amounts with zeros. " +
+        "If the table looks empty because the page just loaded, click Cancel and wait for the data to appear first.\n\n" +
+        "Click OK only if you genuinely want to clear all capital balances.",
+      );
+      if (!ok) { return; }
+    }
     setSaving(true);
     try {
       // 1. Delete rows for CY partners removed in this session
