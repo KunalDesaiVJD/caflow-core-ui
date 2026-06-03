@@ -161,6 +161,11 @@ export function useTaxMasterStorage(engagementId: string, firmId?: string | null
   // auto-fill (programmaticPatch) so the latter never blocks DB sync.
   const userTypedRef = useRef(false);
   const dataRef      = useRef<TaxMasterData>(BLANK_TAX_MASTER);
+  // BULLETPROOF SAVE: snapshot of the state as it stood at the LAST successful
+  // save (or initial load from DB). Passed to awSave so the merge layer knows
+  // which fields the user actually changed this session — empty/untouched
+  // fields no longer overwrite real values someone else just saved.
+  const lastSavedRef = useRef<TaxMasterData | null>(null);
 
   // ── Load ─────────────────────────────────────────────────────────────────
   // Bug: fields were "disappearing" on navigate-away/return because:
@@ -190,6 +195,7 @@ export function useTaxMasterStorage(engagementId: string, firmId?: string | null
       const merged = { ...BLANK_TAX_MASTER, ...cached };
       setData(merged);
       dataRef.current = merged;
+      lastSavedRef.current = { ...merged };
     }
     awLoadFromDB<Partial<TaxMasterData>>(engagementId, "tax_master_json").then(remote => {
       // Only skip when the user has ACTUALLY typed (not just auto-fill).
@@ -198,6 +204,7 @@ export function useTaxMasterStorage(engagementId: string, firmId?: string | null
         const merged = { ...BLANK_TAX_MASTER, ...remote };
         setData(merged);
         dataRef.current = merged;
+        lastSavedRef.current = { ...merged };   // checkpoint against canonical server state
       }
     });
   }, [engagementId, loaded]);
@@ -214,7 +221,8 @@ export function useTaxMasterStorage(engagementId: string, firmId?: string | null
         timerRef.current = null;
       }
       try {
-        awSave(engagementId, "tax_master_json", dataRef.current, firmId, user?.id, user?.name || "");
+        awSave(engagementId, "tax_master_json", dataRef.current, firmId, user?.id, user?.name || "", null, lastSavedRef.current ?? undefined);
+        lastSavedRef.current = { ...dataRef.current };
       } catch { /* swallow */ }
     };
     window.addEventListener("aw:flush", flushNow);
@@ -224,7 +232,8 @@ export function useTaxMasterStorage(engagementId: string, firmId?: string | null
         clearTimeout(timerRef.current);
         timerRef.current = null;
         try {
-          awSave(engagementId, "tax_master_json", dataRef.current, firmId, user?.id, user?.name || "");
+          awSave(engagementId, "tax_master_json", dataRef.current, firmId, user?.id, user?.name || "", null, lastSavedRef.current ?? undefined);
+          lastSavedRef.current = { ...dataRef.current };
         } catch { /* swallow on unmount */ }
       }
     };
@@ -235,7 +244,12 @@ export function useTaxMasterStorage(engagementId: string, firmId?: string | null
     async (snapshot: TaxMasterData, silent: boolean) => {
       setSaving(true);
       try {
-        awSave(engagementId, "tax_master_json", snapshot, firmId, user?.id, user?.name || "");
+        awSave(
+          engagementId, "tax_master_json", snapshot, firmId, user?.id, user?.name || "", null,
+          lastSavedRef.current ?? undefined,    // ← previous snapshot for diff/safe-merge
+        );
+        // Advance the checkpoint so the next save's diff is computed against this state.
+        lastSavedRef.current = { ...snapshot };
         if (!silent) toast.success("Tax Audit Master saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");
@@ -243,7 +257,7 @@ export function useTaxMasterStorage(engagementId: string, firmId?: string | null
         setSaving(false);
       }
     },
-    [engagementId]
+    [engagementId, firmId, user?.id, user?.name]
   );
 
   // ── Set a single field + debounced auto-save ──────────────────────────────

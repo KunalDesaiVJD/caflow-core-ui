@@ -140,6 +140,11 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
   // typing only, so programmatic auto-fill never blocks the async DB load.
   const userTypedRef = useRef(false);
   const dataRef      = useRef<StatutoryMasterData>(BLANK_STATUTORY_MASTER);
+  // BULLETPROOF SAVE: snapshot of state at the LAST successful save (or initial
+  // load). Passed to awSave so the merge layer overwrites ONLY fields the user
+  // actually changed this session — empty/untouched fields can no longer wipe
+  // real values another tab/user just saved.
+  const lastSavedRef = useRef<any>(null);
 
   // ── Load ─────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -150,6 +155,7 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
       const merged = { ...BLANK_STATUTORY_MASTER, ...cached };
       setData(merged);
       dataRef.current = merged;
+      lastSavedRef.current = { ...merged };
     }
     awLoadFromDB<Partial<StatutoryMasterData>>(engagementId, "statutory_master_json").then(remote => {
       if (userTypedRef.current) return;
@@ -157,6 +163,7 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
         const merged = { ...BLANK_STATUTORY_MASTER, ...remote };
         setData(merged);
         dataRef.current = merged;
+      lastSavedRef.current = { ...merged };
       }
     });
   }, [engagementId, loaded]);
@@ -172,7 +179,8 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
         timerRef.current = null;
       }
       try {
-        awSave(engagementId, "statutory_master_json", dataRef.current, firmId, user?.id, user?.name || "");
+        awSave(engagementId, "statutory_master_json", dataRef.current, firmId, user?.id, user?.name || "", null, lastSavedRef.current ?? undefined);
+        lastSavedRef.current = { ...dataRef.current };   // CHECKPOINT_AFTER
       } catch { /* swallow */ }
     };
     window.addEventListener("aw:flush", flushNow);
@@ -182,7 +190,8 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
         clearTimeout(timerRef.current);
         timerRef.current = null;
         try {
-          awSave(engagementId, "statutory_master_json", dataRef.current, firmId, user?.id, user?.name || "");
+          awSave(engagementId, "statutory_master_json", dataRef.current, firmId, user?.id, user?.name || "", null, lastSavedRef.current ?? undefined);
+        lastSavedRef.current = { ...dataRef.current };   // CHECKPOINT_AFTER
         } catch { /* swallow on unmount */ }
       }
     };
@@ -193,7 +202,8 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
     async (snapshot: StatutoryMasterData, silent: boolean) => {
       setSaving(true);
       try {
-        awSave(engagementId, "statutory_master_json", snapshot, firmId, user?.id, user?.name || "");
+        awSave(engagementId, "statutory_master_json", snapshot, firmId, user?.id, user?.name || "", null, lastSavedRef.current ?? undefined);
+        lastSavedRef.current = { ...snapshot };   // CHECKPOINT_AFTER
         if (!silent) toast.success("Statutory Audit Master saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");
@@ -214,6 +224,7 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
       setData(prev => {
         const next = { ...prev, [field]: value };
         dataRef.current = next;
+      lastSavedRef.current = { ...next };
         awCacheOnly(engagementId, "statutory_master_json", next);
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => persist(next, true), 1000);
@@ -229,6 +240,7 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
       setData(prev => {
         const next = { ...prev, ...patch };
         dataRef.current = next;
+      lastSavedRef.current = { ...next };
         awCacheOnly(engagementId, "statutory_master_json", next);
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => persist(next, true), 1000);
@@ -245,6 +257,7 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
       setData(prev => {
         const next = { ...prev, ...patch };
         dataRef.current = next;
+      lastSavedRef.current = { ...next };
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => persist(next, true), 1000);
         return next;

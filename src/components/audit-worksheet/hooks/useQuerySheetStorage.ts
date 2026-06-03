@@ -172,6 +172,8 @@ export function useQuerySheetStorage(
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // BULLETPROOF SAVE checkpoint — see useTaxMasterStorage for full notes.
+  const lastSavedRef = useRef<QuerySheetData | null>(null);
 
   // Stable ref so internal callbacks always see the latest onFieldChange
   // without needing to re-create themselves on every render.
@@ -210,7 +212,9 @@ export function useQuerySheetStorage(
     setLoaded(true);
     const cached = awLoad<QuerySheetData>(engagementId, "query_sheet_json");
     if (cached && typeof cached === "object" && Array.isArray(cached.queries)) {
-      setData({ queries: cached.queries.map(migrateRow) });
+      const d = { queries: cached.queries.map(migrateRow) };
+      setData(d);
+      lastSavedRef.current = d;
     }
     awLoadFromDB<QuerySheetData>(engagementId, "query_sheet_json").then(remote => {
       if (remote && typeof remote === "object" && Array.isArray(remote.queries)) {
@@ -225,7 +229,9 @@ export function useQuerySheetStorage(
           const migratedRemote = remote.queries.map(migrateRow);
           const remoteIds = new Set(migratedRemote.map(q => q.id));
           const localOnly  = prev.queries.filter(q => !remoteIds.has(q.id));
-          return { queries: [...migratedRemote, ...localOnly] };
+          const next = { queries: [...migratedRemote, ...localOnly] };
+          lastSavedRef.current = next;   // checkpoint against canonical server state
+          return next;
         });
       }
     });
@@ -236,7 +242,8 @@ export function useQuerySheetStorage(
     async (snapshot: QuerySheetData, silent: boolean) => {
       setSaving(true);
       try {
-        awSave(engagementId, "query_sheet_json", snapshot, firmId, user?.id, user?.name || "");
+        awSave(engagementId, "query_sheet_json", snapshot, firmId, user?.id, user?.name || "", null, lastSavedRef.current ?? undefined);
+        lastSavedRef.current = { ...snapshot };   // CHECKPOINT_AFTER
         if (!silent) toast.success("Query Sheet saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");

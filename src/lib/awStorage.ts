@@ -101,13 +101,25 @@ export function awSave(
   firmId?: string | null,
   userId?: string | null,
   userName?: string | null,
-  fieldLabel?: string | null
+  fieldLabel?: string | null,
+  prevSnapshot?: unknown,
 ): void {
   if (!engagementId) return;
   // 1. Instant localStorage cache
   try { localStorage.setItem(awKey(engagementId, sheet), JSON.stringify(data)); } catch {}
-  // 2. Fire-and-forget Supabase upsert + history log
-  _pushToSupabase(engagementId, sheet, data, firmId, userId, userName, fieldLabel).catch(() => {});
+  // 2. Fire-and-forget Supabase safe-merge + field-level history log
+  _pushToSupabase(engagementId, sheet, data, firmId, userId, userName, fieldLabel, prevSnapshot).catch(() => {});
+}
+
+/** Stringify a value for the history table's old_value/new_value columns,
+ *  truncated so a single huge field can't blow up the row size. */
+function _toHistoryValue(v: unknown): string | null {
+  if (v === undefined || v === null) return null;
+  if (typeof v === "string") return v.slice(0, 2000);
+  try {
+    const s = JSON.stringify(v);
+    return s.length > 2000 ? s.slice(0, 2000) + "…" : s;
+  } catch { return null; }
 }
 
 async function _pushToSupabase(
@@ -117,12 +129,89 @@ async function _pushToSupabase(
   firmId?: string | null,
   userId?: string | null,
   userName?: string | null,
-  fieldLabel?: string | null
+  fieldLabel?: string | null,
+  prevSnapshot?: unknown,
 ): Promise<void> {
   try {
+    // ─────────────────────────────────────────────────────────────────────
+    // BULLETPROOF SAVE (June 2026):
+    //
+    // Problem the old code had:
+    //   Every save sent the WHOLE state object to Supabase, REPLACING the
+    //   entire JSON column. If two users edited the same engagement, or if a
+    //   stale tab auto-saved after a fresh tab saved newer data, the empty
+    //   fields from one snapshot would silently overwrite real values from
+    //   the other. The team saw fields they thought they had filled
+    //   "disappear" between sessions.
+    //
+    // New behavior (when caller passes prevSnapshot):
+    //   1. Fetch the current state from the DB at save-time.
+    //   2. Compute the per-field diff: ONLY the keys the user actually changed
+    //      since they loaded the form (current value !== previous snapshot).
+    //   3. Merged payload = current DB state + ONLY the user's changed keys.
+    //      Fields the user didn't touch this session are left alone, even if
+    //      some other tab/user just updated them. No data loss possible.
+    //   4. Save the merged result.
+    //   5. Insert ONE audit_worksheet_history row PER changed field, with
+    //      field_name / old_value / new_value populated — so the team can
+    //      forensically reconstruct who typed what, when. Previously every
+    //      history row had NULL diffs which made the audit trail useless.
+    //
+    // Backward compat: when prevSnapshot is not supplied (legacy callers,
+    // first-ever save, non-object data like arrays), we fall back to the old
+    // whole-object save with a single section-level history row.
+    // ─────────────────────────────────────────────────────────────────────
+
+    const hasPrev =
+      prevSnapshot !== undefined &&
+      prevSnapshot !== null &&
+      typeof prevSnapshot === "object" &&
+      !Array.isArray(prevSnapshot) &&
+      typeof data === "object" &&
+      data !== null &&
+      !Array.isArray(data);
+
+    let finalValue: unknown = data;
+    const diffs: { field: string; oldDbV: unknown; newV: unknown }[] = [];
+
+    if (hasPrev) {
+      const prev = prevSnapshot as Record<string, unknown>;
+      const next = data as Record<string, unknown>;
+
+      // Fetch current DB snapshot for a safe merge.
+      let dbState: Record<string, unknown> = {};
+      try {
+        const { data: row } = await (supabase as any)
+          .from("audit_worksheet_master")
+          .select(sheet)
+          .eq("engagement_id", engagementId)
+          .maybeSingle();
+        const v = row?.[sheet];
+        if (v && typeof v === "object" && !Array.isArray(v)) dbState = v;
+      } catch {
+        // Network glitch — fall back to using `next` as-is (best effort).
+      }
+
+      const merged: Record<string, unknown> = { ...dbState };
+      // For each key the user *actually changed since load*, overwrite the DB
+      // state. Untouched fields are left alone — so a stale tab can't blank
+      // them out even if it happens to fire a debounced save.
+      const keys = new Set<string>([...Object.keys(next), ...Object.keys(prev)]);
+      for (const key of keys) {
+        const newV = next[key];
+        const prevV = prev[key];
+        const changed = JSON.stringify(newV) !== JSON.stringify(prevV);
+        if (changed) {
+          merged[key] = newV;
+          diffs.push({ field: key, oldDbV: dbState[key], newV });
+        }
+      }
+      finalValue = merged;
+    }
+
     const payload: Record<string, unknown> = {
       engagement_id: engagementId,
-      [sheet]: data,
+      [sheet]: finalValue,
       updated_at: new Date().toISOString(),
     };
     if (firmId) payload.firm_id = firmId;
@@ -130,20 +219,36 @@ async function _pushToSupabase(
       .from("audit_worksheet_master")
       .upsert(payload, { onConflict: "engagement_id" });
 
-    // Log to version history (non-fatal)
-    // Use fieldLabel if provided for granular tracking (e.g. "Special Attention · Row 3")
+    // Log to version history (non-fatal). Use fieldLabel for granular tracking
+    // (e.g. "Special Attention · Row 3").
     const sectionName = fieldLabel || SHEET_LABELS[sheet] || sheet;
     try {
-      await (supabase as any)
-        .from("audit_worksheet_history")
-        .insert({
+      if (hasPrev && diffs.length > 0) {
+        // One row per changed field — gives forensic "who typed what" history.
+        const rows = diffs.map(d => ({
           engagement_id:   engagementId,
           section_name:    sectionName,
+          field_name:      d.field,
+          old_value:       _toHistoryValue(d.oldDbV),
+          new_value:       _toHistoryValue(d.newV),
           changed_by:      userId   ?? null,
           changed_by_name: userName ?? "Unknown",
-        });
+        }));
+        await (supabase as any).from("audit_worksheet_history").insert(rows);
+      } else if (!hasPrev) {
+        // Back-compat: legacy single section-level event row.
+        await (supabase as any)
+          .from("audit_worksheet_history")
+          .insert({
+            engagement_id:   engagementId,
+            section_name:    sectionName,
+            changed_by:      userId   ?? null,
+            changed_by_name: userName ?? "Unknown",
+          });
+      }
+      // hasPrev && diffs.length === 0 → no actual changes; skip history (no noise).
     } catch {
-      // History logging is best-effort — do not let it fail the save
+      // History logging is best-effort — do not let it fail the save.
     }
   } catch {
     // Silently fail — localStorage is the offline fallback

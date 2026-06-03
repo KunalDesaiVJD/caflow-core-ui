@@ -76,6 +76,8 @@ export function useWorksheetSheetStorage(
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // BULLETPROOF SAVE checkpoint — see useTaxMasterStorage for full notes.
+  const lastSavedRef = useRef<WorksheetSheetData | null>(null);
 
   // ── Load ───────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -84,12 +86,16 @@ export function useWorksheetSheetStorage(
     // 1. Instant from localStorage cache
     const cached = awLoad<WorksheetSheetData>(engagementId, "worksheet_json");
     if (cached && typeof cached === "object" && Object.keys(cached.rows ?? {}).length > 0) {
-      setData({ rows: { ...cached.rows } });
+      const d = { rows: { ...cached.rows } };
+      setData(d);
+      lastSavedRef.current = d;
     }
     // 2. Sync from Supabase for cross-device / cross-user data
     awLoadFromDB<WorksheetSheetData>(engagementId, "worksheet_json").then(remote => {
       if (remote && typeof remote === "object" && Object.keys(remote.rows ?? {}).length > 0) {
-        setData({ rows: { ...remote.rows } });
+        const d = { rows: { ...remote.rows } };
+        setData(d);
+        lastSavedRef.current = d;
       }
     });
   }, [engagementId, loaded]);
@@ -99,7 +105,8 @@ export function useWorksheetSheetStorage(
     async (snapshot: WorksheetSheetData, silent: boolean) => {
       setSaving(true);
       try {
-        awSave(engagementId, "worksheet_json", snapshot, firmId, user?.id, user?.name || "");
+        awSave(engagementId, "worksheet_json", snapshot, firmId, user?.id, user?.name || "", null, lastSavedRef.current ?? undefined);
+        lastSavedRef.current = { ...snapshot };   // CHECKPOINT_AFTER
         if (!silent) toast.success("Audit Worksheet saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");
