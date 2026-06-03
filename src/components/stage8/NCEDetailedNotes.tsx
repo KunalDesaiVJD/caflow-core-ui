@@ -630,6 +630,61 @@ function CustomRowEditor({
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// DUPLICATION SAFETY NET (June 2026)
+//
+// The BHAKTI INFRA / "other_cl" bug surfaced when COA mapping populated
+// a static row's `cy_sources[staticId]` from a ledger AND that same
+// ledger ALSO existed as a customRow attached to the same staticId
+// (because of a stale data state, a Move-to that didn't strip the source,
+// or any future auto-populate path that wrote to both channels). The
+// displayed aggregate at the per-row renderers (Pattern A and Pattern B)
+// is `rawCy[staticId] + Σ customRow amounts` — when both channels held
+// the same ledger, the same amount appeared in the user-visible total
+// TWICE.
+//
+// computeOverlap detects this: for each cy_sources entry on the static
+// whose ledger label matches one of the attached customRows' labels or
+// `ejectedSource`, return the cumulative overlap amount. The aggregate
+// formulas subtract this from the static portion BEFORE adding the
+// children — so whichever channel holds a given ledger, it counts
+// exactly once. Pattern A passes the column param so an LT-only source
+// can't cancel an ST contribution and vice-versa.
+//
+// This is a defensive renderer-side guard. Write-time guards in
+// handlePromoteCustomToStatic and nceAutoPopulate also exist; together
+// they make the BHAKTI bug structurally impossible to recur regardless
+// of how the data shape gets into a state where both channels overlap.
+// ─────────────────────────────────────────────────────────────────────────────
+type CySourceEntry = { ledger: string; amountCy: number; amountPy?: number; column?: "lt" | "st" };
+function computeOverlap(
+  cySources: Record<string, CySourceEntry[]>,
+  staticId: string,
+  attached: NCECustomRow[],
+  side: "cy" | "py",
+  column?: "lt" | "st",
+): number {
+  const srcs = cySources?.[staticId];
+  if (!srcs || srcs.length === 0 || attached.length === 0) return 0;
+  const childLedgerSet = new Set<string>();
+  for (const cr of attached) {
+    const lbl = (cr.label || "").trim().toLowerCase();
+    const ej  = ((cr as any).ejectedSource || "").trim().toLowerCase();
+    if (lbl) childLedgerSet.add(lbl);
+    if (ej)  childLedgerSet.add(ej);
+  }
+  if (childLedgerSet.size === 0) return 0;
+  let overlap = 0;
+  for (const s of srcs) {
+    if (column && s.column !== column) continue;
+    const lg = (s.ledger || "").trim().toLowerCase();
+    if (lg && childLedgerSet.has(lg)) {
+      overlap += side === "cy" ? Number(s.amountCy || 0) : Number(s.amountPy || 0);
+    }
+  }
+  return overlap;
+}
+
 // ─── Pattern B table ──────────────────────────────────────────────────────────
 
 function PatternBTable({
@@ -689,6 +744,10 @@ function PatternBTable({
     }
     return { cy: c, py: p };
   };
+
+  // Use the module-level computeOverlap helper (see definition above PatternBTable).
+  const overlapForRow = (staticId: string, attached: NCECustomRow[], side: "cy" | "py", column?: "lt" | "st") =>
+    computeOverlap(cySources, staticId, attached, side, column);
 
   // Task 2 (doc8): pre-compute empty section header IDs when hideEmptySections is active
   const emptySectionHdrIds = useMemo(() => {
@@ -1031,8 +1090,16 @@ function PatternBTable({
                 const hasSrcsB = (cySources[row.id]?.filter(s => s.amountCy !== 0).length ?? 0) > 0;
                 const showToggleB = hasAttachedB || hasSrcsB;
                 const isOpenB = openSources.has(row.id);
-                const aggCyB = (rawCy[row.id] ?? 0) + (hasAttachedB ? attachedHere.reduce((s, cr) => s + sumCustomDisplayB(cr.id).cy, 0) : 0);
-                const aggPyB = (rawPy[row.id] ?? 0) + (hasAttachedB ? attachedHere.reduce((s, cr) => s + sumCustomDisplayB(cr.id).py, 0) : 0);
+                // Safety net: subtract any overlap where the SAME ledger is
+                // both in cy_sources[row.id] (auto-mapped contribution to the
+                // static) AND in one of the attached customRows. See
+                // computeOverlap docs above. Prevents BHAKTI-style "showing
+                // all at 2 places" regressions regardless of how the data
+                // shape arrived in this state.
+                const overlapCyB = hasAttachedB ? overlapForRow(row.id, attachedHere, "cy") : 0;
+                const overlapPyB = hasAttachedB ? overlapForRow(row.id, attachedHere, "py") : 0;
+                const aggCyB = (rawCy[row.id] ?? 0) - overlapCyB + (hasAttachedB ? attachedHere.reduce((s, cr) => s + sumCustomDisplayB(cr.id).cy, 0) : 0);
+                const aggPyB = (rawPy[row.id] ?? 0) - overlapPyB + (hasAttachedB ? attachedHere.reduce((s, cr) => s + sumCustomDisplayB(cr.id).py, 0) : 0);
                 return (
                 <TableRow key={row.id} className="hover:bg-muted/10">
                   <TableCell className={cn("p-1", indentCls(row.indent))}>
@@ -1275,6 +1342,10 @@ function PatternATable({
     }
     return { lc, lp, sc, sp };
   };
+
+  // Duplication safety net — see computeOverlap docs above PatternBTable.
+  const overlapForRow = (staticId: string, attached: NCECustomRow[], side: "cy" | "py", column?: "lt" | "st") =>
+    computeOverlap(cySources, staticId, attached, side, column);
 
   // Task 2 (doc8): pre-compute empty section header IDs when hideEmptySections is active.
   // Pattern A stores values as key_lt / key_st, so check both suffixes.
@@ -1585,10 +1656,17 @@ function PatternATable({
                 const showToggleA  = hasSrcsA || hasAttachedA;
                 const isOpenA      = openSources.has(row.id);
 
-                const aggLtCy = (rawCy[row.id + "_lt"] ?? 0) + (hasAttachedA ? attachedHere.reduce((s, cr) => s + sumCustomDisplayA(cr.id).lc, 0) : 0);
-                const aggStCy = (rawCy[row.id + "_st"] ?? 0) + (hasAttachedA ? attachedHere.reduce((s, cr) => s + sumCustomDisplayA(cr.id).sc, 0) : 0);
-                const aggLtPy = (rawPy[row.id + "_lt"] ?? 0) + (hasAttachedA ? attachedHere.reduce((s, cr) => s + sumCustomDisplayA(cr.id).lp, 0) : 0);
-                const aggStPy = (rawPy[row.id + "_st"] ?? 0) + (hasAttachedA ? attachedHere.reduce((s, cr) => s + sumCustomDisplayA(cr.id).sp, 0) : 0);
+                // Safety net: per-column overlap subtract — same idea as
+                // Pattern B but split by lt/st so an LT ejection doesn't
+                // wipe an ST contribution.
+                const overlapLtCy = hasAttachedA ? overlapForRow(row.id, attachedHere, "cy", "lt") : 0;
+                const overlapStCy = hasAttachedA ? overlapForRow(row.id, attachedHere, "cy", "st") : 0;
+                const overlapLtPy = hasAttachedA ? overlapForRow(row.id, attachedHere, "py", "lt") : 0;
+                const overlapStPy = hasAttachedA ? overlapForRow(row.id, attachedHere, "py", "st") : 0;
+                const aggLtCy = (rawCy[row.id + "_lt"] ?? 0) - overlapLtCy + (hasAttachedA ? attachedHere.reduce((s, cr) => s + sumCustomDisplayA(cr.id).lc, 0) : 0);
+                const aggStCy = (rawCy[row.id + "_st"] ?? 0) - overlapStCy + (hasAttachedA ? attachedHere.reduce((s, cr) => s + sumCustomDisplayA(cr.id).sc, 0) : 0);
+                const aggLtPy = (rawPy[row.id + "_lt"] ?? 0) - overlapLtPy + (hasAttachedA ? attachedHere.reduce((s, cr) => s + sumCustomDisplayA(cr.id).lp, 0) : 0);
+                const aggStPy = (rawPy[row.id + "_st"] ?? 0) - overlapStPy + (hasAttachedA ? attachedHere.reduce((s, cr) => s + sumCustomDisplayA(cr.id).sp, 0) : 0);
 
                 return (
                 <TableRow key={row.id} className="hover:bg-muted/10">
@@ -2687,11 +2765,68 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
         for (const sfx of ["", "_lt", "_st"]) { delete finalCy["custom_auto_total" + sfx]; delete finalPy["custom_auto_total" + sfx]; }
       }
 
+      // ── DUPLICATION SAFETY NET (write-time) ──────────────────────────
+      // BHAKTI INFRA root cause: a customRow whose label/ejectedSource
+      // matched a ledger already living in cy_sources[targetId] (i.e.
+      // auto-mapped to feed cy[targetId]) was attached under that same
+      // static. The renderer summed both → "showing all at 2 places".
+      //
+      // Now: when attaching a customRow under a static, drop matching
+      // entries from cy_sources[targetId] and subtract the corresponding
+      // amounts from cy[targetId] / py[targetId] (+ _lt/_st columns for
+      // Pattern A). That removes the auto channel's contribution so the
+      // customRow's own amount represents the ledger exactly once.
+      // Pattern A honours `column` so an LT ejection only touches the
+      // LT key. This complements the renderer-side overlap guard for
+      // belt-and-braces protection. ──────────────────────────────────
+      const movedRow = finalRows.find(r => r.id === customId);
+      const targetIsStatic = !targetCustomRow; // only static heads carry cy_sources
+      let finalCySources = cur.cy_sources;
+      if (movedRow && targetIsStatic && cur.cy_sources?.[targetId]?.length) {
+        const childLedgers = new Set<string>();
+        const lbl = (movedRow.label || "").trim().toLowerCase();
+        const ej  = ((movedRow as any).ejectedSource || "").trim().toLowerCase();
+        if (lbl) childLedgers.add(lbl);
+        if (ej)  childLedgers.add(ej);
+        if (childLedgers.size > 0) {
+          const before = cur.cy_sources[targetId] as Array<{ ledger: string; amountCy: number; amountPy?: number; column?: "lt" | "st" }>;
+          const overlapping = before.filter(s => childLedgers.has((s.ledger || "").trim().toLowerCase()));
+          if (overlapping.length > 0) {
+            // Subtract overlap from the static's CY/PY (and column-specific keys).
+            const newCy = finalCy === cur.cy ? { ...cur.cy } : finalCy;
+            const newPy = finalPy === cur.py ? { ...cur.py } : finalPy;
+            for (const s of overlapping) {
+              const aCy = Number(s.amountCy || 0);
+              const aPy = Number(s.amountPy || 0);
+              newCy[targetId] = Math.max(0, (newCy[targetId] ?? 0) - aCy);
+              newPy[targetId] = Math.max(0, (newPy[targetId] ?? 0) - aPy);
+              if (s.column === "lt") {
+                newCy[targetId + "_lt"] = Math.max(0, (newCy[targetId + "_lt"] ?? 0) - aCy);
+                newPy[targetId + "_lt"] = Math.max(0, (newPy[targetId + "_lt"] ?? 0) - aPy);
+              }
+              if (s.column === "st") {
+                newCy[targetId + "_st"] = Math.max(0, (newCy[targetId + "_st"] ?? 0) - aCy);
+                newPy[targetId + "_st"] = Math.max(0, (newPy[targetId + "_st"] ?? 0) - aPy);
+              }
+            }
+            finalCy = newCy;
+            finalPy = newPy;
+            // Strip overlapping ledgers from cy_sources[targetId].
+            const remaining = before.filter(s => !childLedgers.has((s.ledger || "").trim().toLowerCase()));
+            const nextSources = { ...(cur.cy_sources ?? {}) };
+            if (remaining.length === 0) delete nextSources[targetId];
+            else nextSources[targetId] = remaining;
+            finalCySources = nextSources;
+          }
+        }
+      }
+
       const next = { ...prev, [noteType]: {
         ...cur,
         customRows: finalRows,
         cy: finalCy,
         py: finalPy,
+        cy_sources: finalCySources,
       }};
       scheduleSave(next);
       return next;
