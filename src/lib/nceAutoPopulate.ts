@@ -270,6 +270,18 @@ export interface NCECustomRow {
    *  clean up the note's `ejectedLedgers` list, allowing the ledger to be
    *  re-merged on the next Re-sync from COA. */
   ejectedSource?: string;
+  /** 2026-06-02 — When true, the amount on this row originates from a Tally
+   *  TB ledger (auto-populated, moved via "Move to…", or ejected as its own
+   *  row). The amount is LOCKED — auditor can only re-categorise it (label /
+   *  heading / section). False / undefined means the row was typed by hand
+   *  via "+ Add row" and amounts are freely editable.
+   *
+   *  Decoupled from `source` because `source: "manual"` means *only* "survives
+   *  Re-sync from COA". A moved auto-row also gets source="manual" so it
+   *  doesn't get rebuilt — but its amount is still TB-derived and must stay
+   *  locked. Reading the lock from `source` alone unlocked TB-backed amounts
+   *  on Move-to / Eject — the bug this field exists to fix. */
+  tbDerived?: boolean;
 }
 
 export interface NCENoteData {
@@ -1207,6 +1219,7 @@ export async function nceAutoPopulate(
         const attachTarget = DEFAULT_ATTACH_B[noteType];
         const row: NCECustomRow = {
           id, label, source: "auto",
+          tbDerived: true,                       // amount comes from TB → lock from edit
           ...(attachTarget ? { attachedTo: attachTarget } : {}),
           ...(isMerged ? { sources } : {}),
         };
@@ -1236,7 +1249,7 @@ export async function nceAutoPopulate(
           const id = "custom_auto_total";
           newCy[id] = fsCY;
           newPy[id] = fsPY;
-          autoRows.push({ id, label: "Auto-filled from COA total", source: "auto" });
+          autoRows.push({ id, label: "Auto-filled from COA total", source: "auto", tbDerived: true });
         }
       }
 
@@ -1628,6 +1641,7 @@ export async function nceAutoPopulate(
 
         autoRows.push({
           id, label, source: "auto",
+          tbDerived: true,                       // amount comes from TB → lock from edit
           ...(rowSection    ? { section: rowSection }       : {}),
           ...(rowAttachedTo ? { attachedTo: rowAttachedTo } : {}),
         });
@@ -1663,7 +1677,7 @@ export async function nceAutoPopulate(
           const id = "custom_auto_total";
           if (ltCY > 0 || ltPY > 0) { newCy[id + "_lt"] = ltCY; newPy[id + "_lt"] = ltPY; }
           if (stCY > 0 || stPY > 0) { newCy[id + "_st"] = stCY; newPy[id + "_st"] = stPY; }
-          autoRows.push({ id, label: "Auto-filled from COA total", source: "auto" });
+          autoRows.push({ id, label: "Auto-filled from COA total", source: "auto", tbDerived: true });
         }
       }
     }

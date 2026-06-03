@@ -502,7 +502,12 @@ function CustomRowEditor({
   // Lock figures of auto-linked rows (source === "auto"): the amount comes from
   // the COA/Tally mapping and must be changed there, not typed over here —
   // matching the corporate notes' isLocked behaviour. The label stays editable.
-  const amountLocked = row.source === "auto";
+  // 2026-06-02 — Lock the amount when the row's value originates from TB
+  // (auto-populated, moved via "Move to…", or ejected). Decoupled from
+  // `source` because moving a row sets source="manual" so it survives
+  // Re-sync — but the amount is still TB-derived and must not be editable.
+  // Hand-typed rows (+ Add row) have tbDerived undefined → editable.
+  const amountLocked = row.source === "auto" || row.tbDerived === true;
   return (
     <>
       <TableRow className={cn("hover:bg-blue-50/50", isChild ? "bg-blue-50/10 border-l-2 border-l-blue-200" : "bg-blue-50/30", isSelected && "ring-1 ring-inset ring-blue-400 bg-blue-100/40")}>
@@ -2238,6 +2243,30 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
               }
             }
 
+            // 2026-06-02 self-heal — back-fill tbDerived on legacy saved rows
+            // so the new amount-lock rule applies to previously-stored data.
+            // Rules:
+            //   • source === "auto"      → tbDerived: true (auto rows always
+            //                              came from TB).
+            //   • ejectedSource is set   → tbDerived: true (the row carries a
+            //                              TB ledger's value).
+            //   • everything else        → leave as-is (could be a hand-typed
+            //                              "+ Add row" entry the user wants
+            //                              editable — DO NOT lock retroactively).
+            for (const [nType, d] of Object.entries(built)) {
+              const patched = (d.customRows ?? []).map(cr => {
+                if (cr.tbDerived === true) return cr;
+                if (cr.source === "auto" || cr.ejectedSource) {
+                  return { ...cr, tbDerived: true };
+                }
+                return cr;
+              });
+              if (patched.some((cr, i) => cr !== (d.customRows ?? [])[i])) {
+                built[nType] = { ...d, customRows: patched };
+                healed = true;
+              }
+            }
+
             // Task 4 heal (doc8): promote auto rows that the user previously
             // placed under a static parent via "Move to…" back to source:"manual"
             // so nceAutoPopulate preserves them verbatim on every subsequent
@@ -2245,10 +2274,15 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
             // causing the hierarchy to reset on reload when auto-populate ran.
             // This one-shot heal upgrades any such rows in the DB on first load.
             // Idempotent: already-"manual" rows are untouched.
+            //
+            // 2026-06-02 — Also promote tbDerived during this conversion so
+            // the moved row's amount stays locked (was previously source=auto
+            // → locked; after this heal source=manual but we add tbDerived to
+            // keep the lock).
             for (const [nType, d] of Object.entries(built)) {
               const patched = (d.customRows ?? []).map(cr =>
                 cr.source === "auto" && cr.attachedTo && !cr.attachedTo.startsWith("custom_")
-                  ? { ...cr, source: "manual" as const }
+                  ? { ...cr, source: "manual" as const, tbDerived: true }
                   : cr,
               );
               if (patched.some((cr, i) => cr !== (d.customRows ?? [])[i])) {
@@ -2609,7 +2643,19 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
           // Task 4 fix: mark as "manual" so nceAutoPopulate preserves this
           // user-set placement verbatim on every subsequent re-sync / reload,
           // instead of rebuilding from scratch and losing the attachedTo change.
-          return { ...r, source: "manual" as const, attachedTo: targetId, ...(targetSection !== undefined ? { section: targetSection } : {}) };
+          //
+          // 2026-06-02 — A row that originated from TB (tbDerived=true OR was
+          // an auto row) must keep its amount locked even after the move.
+          // Promote tbDerived to true when the source was "auto" so legacy
+          // saved data without the flag still gets locked post-move.
+          const wasTbDerived = r.tbDerived === true || r.source === "auto";
+          return {
+            ...r,
+            source: "manual" as const,
+            attachedTo: targetId,
+            ...(wasTbDerived ? { tbDerived: true } : {}),
+            ...(targetSection !== undefined ? { section: targetSection } : {}),
+          };
         }
         if (r.id === targetId && shouldPromoteTarget) {
           return { ...r, section: sourceRow!.section };
@@ -2713,7 +2759,9 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
       const newId = newCustomId();
       const targetSection = attachToId ? resolveSection(config, cur, attachToId) : undefined;
       const newRow: NCECustomRow = {
-        id: newId, label: ledger, source: "manual", ejectedSource: ledger,
+        // 2026-06-02 — Ejected rows carry a TB-derived amount; lock the
+        // value (auditor can re-categorise but not edit the figure).
+        id: newId, label: ledger, source: "manual", tbDerived: true, ejectedSource: ledger,
         ...(attachToId ? { attachedTo: attachToId } : {}),
         ...(targetSection ? { section: targetSection } : {}),
       };
@@ -2793,7 +2841,9 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
         newPy[newId + "_st"] = amountPy;
       }
       const newRow: NCECustomRow = {
-        id: newId, label: ledger, source: "manual", ejectedSource: ledger,
+        // 2026-06-02 — Ejected rows carry a TB-derived amount; lock the
+        // value (auditor can re-categorise but not edit the figure).
+        id: newId, label: ledger, source: "manual", tbDerived: true, ejectedSource: ledger,
         ...(attachToId ? { attachedTo: attachToId } : {}),
         ...(targetSection ? { section: targetSection } : {}),
       };
