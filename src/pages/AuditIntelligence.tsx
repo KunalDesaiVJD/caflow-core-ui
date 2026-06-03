@@ -101,6 +101,10 @@ export default function AuditIntelligence() {
   const { user } = useAuth();
   const { can } = usePermissions();
   const canCreateEngagement = can("Audit Intelligence", "can_create") || user?.role === "superadmin";
+  // Engagement delete is now restricted to firm administrators and superadmins.
+  // Mirrored by an RLS policy on audit_engagements so the restriction holds
+  // even if someone bypasses the UI (the DB will reject the DELETE).
+  const canDeleteEngagement = user?.role === "firm_admin" || user?.role === "superadmin";
   const navigate = useNavigate();
   const {
     selectedClientId, setSelectedClientId,
@@ -418,8 +422,22 @@ export default function AuditIntelligence() {
   };
 
   // ─── Delete Engagement (permanent cascade) ───
+  //
+  // Restricted to firm_admin and superadmin — enforced both in the UI (the
+  // button is hidden for other roles) and in the database via the RLS policy
+  // "audit_engagements_delete_admin_only" so the DB rejects bypass attempts.
+  //
+  // Child-table cleanup is now handled by ON DELETE CASCADE on every FK that
+  // points at audit_engagements (migration 20260603000002_engagement_cascade_delete).
+  // The explicit per-table deletes below are kept as belt-and-braces so that
+  // (a) errors are surfaced loudly per table if anything ever regresses and
+  // (b) the audit trail records exactly what was cleaned up.
   const handleDelete = async () => {
     if (!selectedEngagementId) return;
+    if (!canDeleteEngagement) {
+      toast.error("Only firm administrators and superadmins can delete engagements.");
+      return;
+    }
     const eid = selectedEngagementId;
     setFormSaving(true);
     try {
@@ -679,9 +697,11 @@ export default function AuditIntelligence() {
                 <DropdownMenuItem onClick={() => openEditDialog()}>
                   <Pencil size={14} className="mr-2" /> Edit Engagement
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setShowDeleteDialog(true)} className="text-destructive focus:text-destructive">
-                  <Trash2 size={14} className="mr-2" /> Archive Engagement
-                </DropdownMenuItem>
+                {canDeleteEngagement && (
+                  <DropdownMenuItem onClick={() => setShowDeleteDialog(true)} className="text-destructive focus:text-destructive">
+                    <Trash2 size={14} className="mr-2" /> Delete Engagement
+                  </DropdownMenuItem>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -871,13 +891,15 @@ export default function AuditIntelligence() {
                       >
                         <Pencil size={11} />
                       </Button>
-                      <Button
-                        variant="ghost" size="icon" className="h-6 w-6 text-destructive hover:text-destructive"
-                        title="Archive engagement"
-                        onClick={() => { setSelectedEngagementId(e.id); setShowDeleteDialog(true); }}
-                      >
-                        <Trash2 size={11} />
-                      </Button>
+                      {canDeleteEngagement && (
+                        <Button
+                          variant="ghost" size="icon" className="h-6 w-6 text-destructive hover:text-destructive"
+                          title="Delete engagement"
+                          onClick={() => { setSelectedEngagementId(e.id); setShowDeleteDialog(true); }}
+                        >
+                          <Trash2 size={11} />
+                        </Button>
+                      )}
                     </div>
                   </div>
                 ))}
