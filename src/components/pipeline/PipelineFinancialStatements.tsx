@@ -3757,6 +3757,24 @@ export default function PipelineFinancialStatements({
     const list: Array<{ code: string; label: string; note: string;
       faceCy: number; noteCy: number; diffCy: number;
       facePy: number; notePy: number; diffPy: number; }> = [];
+    // 2026-06-01 — Mismatch RULES (user feedback round 2):
+    //   • BS code, CY column → face = TB closing + note manual rows.
+    //     Should always match — flag any divergence (real bug).
+    //   • BS code, PY column → face = TB opening balance (authoritative
+    //     per the earlier "PY follows COA mapping" fix). The note CAN
+    //     legitimately differ when the auditor types breakup rows beyond
+    //     what TB carries (HUF loans, advances, reclassifications, etc.).
+    //     Do NOT flag — the user reported false positives on Trade
+    //     Payables / Long-term borrowings / Short-term borrowings where
+    //     the face matched their COA-mapping expectation but the note
+    //     held additional manual-entered rows.
+    //   • P&L code, either column → P&L has no opening balance so face
+    //     must equal note total. Flag any divergence.
+    const NCE_BS_CODES = new Set([
+      "NCE_CAP","NCE_LTB","NCE_OLTL","NCE_LTP","NCE_STB","NCE_TP","NCE_OCL","NCE_STP",
+      "NCE_PPE","NCE_INTG","NCE_CWIP","NCE_NCINV","NCE_LTLA","NCE_ONCA",
+      "NCE_CINV","NCE_STCK","NCE_TR","NCE_CASH","NCE_STLA","NCE_OCA",
+    ]);
     for (const [code, meta] of Object.entries(NCE_CODE_TO_NOTE)) {
       const row = nceNotesByType[meta.note];
       if (!row) continue;
@@ -3772,7 +3790,11 @@ export default function PipelineFinancialStatements({
       const nPy = Math.abs(Number(notePy ?? 0));
       const diffCy = Math.round((faceCy - nCy) * 100) / 100;
       const diffPy = Math.round((facePy - nPy) * 100) / 100;
-      if (Math.abs(diffCy) > 1 || Math.abs(diffPy) > 1) {
+      const isBSCode = NCE_BS_CODES.has(code);
+      // Only flag CY drift on BS codes; flag both columns on P&L codes.
+      const cyMismatch = Math.abs(diffCy) > 1;
+      const pyMismatch = !isBSCode && Math.abs(diffPy) > 1;
+      if (cyMismatch || pyMismatch) {
         list.push({
           code, label: nceCodeLabels[code] || code, note: meta.note,
           faceCy, noteCy: nCy, diffCy,
@@ -7100,6 +7122,11 @@ export default function PipelineFinancialStatements({
               The face value (what shows on Balance Sheet / Profit &amp; Loss) and the underlying
               note&apos;s breakup total must always tie. Differences usually mean a stale row in
               the note — re-correct from COA or open the note and clear the offending row.
+            </p>
+            <p className="text-[10px] text-amber-700/80 italic">
+              Only CY drift on Balance Sheet rows and any drift on P&amp;L rows is flagged.
+              PY divergence on BS rows is normal (face follows COA opening balance; note can
+              hold additional manual rows).
             </p>
             <div className="rounded-md border border-amber-300 bg-white overflow-hidden">
               <table className="w-full text-[11px]">
