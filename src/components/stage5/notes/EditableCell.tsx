@@ -604,7 +604,7 @@ function ListRowWithSources({
             value={r.amount_cy ?? 0}
             isAutoFilled={isLinked}
             isOverridden={isManual && (r.amount_cy ?? 0) !== 0}
-            isLocked={isLinked}
+            isLocked={isLinked || !!r.linked_ledger}
             onOverride={(amt, reason) => update(origIdx, { amount_cy: amt, override_reason: reason })}
             onCommit={(v) => update(origIdx, { amount_cy: v == null ? 0 : Number(v) })}
           />
@@ -614,7 +614,7 @@ function ListRowWithSources({
             value={r.amount_py ?? 0}
             isAutoFilled={isLinked}
             isOverridden={isManual && (r.amount_py ?? 0) !== 0}
-            isLocked={isLinked}
+            isLocked={isLinked || !!r.linked_ledger}
             onOverride={(amt, reason) => update(origIdx, { amount_py: amt, override_reason: reason })}
             onCommit={(v) => update(origIdx, { amount_py: v == null ? 0 : Number(v) })}
           />
