@@ -1881,15 +1881,61 @@ export async function nceAutoPopulate(
     purgeStale(mergedCy);
     purgeStale(mergedPy);
 
+    // ── DUPLICATION SAFETY NET (auto-populate output) ─────────────────
+    // For each static row that has both cy_sources AND a customRow attached
+    // to it whose label matches one of the source ledgers, drop that ledger
+    // from cy_sources and subtract its amount from cy[staticId] (+ _lt/_st).
+    // Prevents the BHAKTI-style state where the renderer would otherwise
+    // count the same ledger twice (once via the static aggregate, once via
+    // the attached customRow). Belt-and-braces with the renderer-side
+    // overlap subtract in NCEDetailedNotes.computeOverlap.
+    const finalCustomRows = [...autoRows, ...absorbedManualRows];
+    const cleanedSources: typeof staticSources = {};
+    for (const [staticId, srcs] of Object.entries(staticSources)) {
+      const childLedgerSet = new Set<string>();
+      for (const cr of finalCustomRows) {
+        if (cr.attachedTo !== staticId) continue;
+        const lbl = (cr.label || "").trim().toLowerCase();
+        const ej  = ((cr as any).ejectedSource || "").trim().toLowerCase();
+        if (lbl) childLedgerSet.add(lbl);
+        if (ej)  childLedgerSet.add(ej);
+      }
+      if (childLedgerSet.size === 0) {
+        cleanedSources[staticId] = srcs;
+        continue;
+      }
+      const remaining: typeof srcs = [];
+      for (const s of srcs) {
+        const lg = (s.ledger || "").trim().toLowerCase();
+        if (lg && childLedgerSet.has(lg)) {
+          const aCy = Number(s.amountCy || 0);
+          const aPy = Number((s as any).amountPy || 0);
+          mergedCy[staticId] = Math.max(0, (mergedCy[staticId] ?? 0) - aCy);
+          mergedPy[staticId] = Math.max(0, (mergedPy[staticId] ?? 0) - aPy);
+          if ((s as any).column === "lt") {
+            mergedCy[staticId + "_lt"] = Math.max(0, (mergedCy[staticId + "_lt"] ?? 0) - aCy);
+            mergedPy[staticId + "_lt"] = Math.max(0, (mergedPy[staticId + "_lt"] ?? 0) - aPy);
+          }
+          if ((s as any).column === "st") {
+            mergedCy[staticId + "_st"] = Math.max(0, (mergedCy[staticId + "_st"] ?? 0) - aCy);
+            mergedPy[staticId + "_st"] = Math.max(0, (mergedPy[staticId + "_st"] ?? 0) - aPy);
+          }
+          continue;
+        }
+        remaining.push(s);
+      }
+      if (remaining.length > 0) cleanedSources[staticId] = remaining;
+    }
+
     out[noteType] = {
       cy:         mergedCy,
       py:         mergedPy,
-      customRows: [...autoRows, ...absorbedManualRows],
+      customRows: finalCustomRows,
       // Preserve user settings that survive re-sync
       hiddenRows:     prev.hiddenRows ?? [],
       labelOverrides: prev.labelOverrides ?? {},
       ejectedLedgers: prev.ejectedLedgers ?? [],
-      ...(Object.keys(staticSources).length > 0 ? { cy_sources: staticSources } : {}),
+      ...(Object.keys(cleanedSources).length > 0 ? { cy_sources: cleanedSources } : {}),
     };
   }
 
