@@ -13,6 +13,7 @@ import {
   Brain,
   Palette,
   ClipboardList,
+  History,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -24,6 +25,7 @@ const navItems = [
   { title: "Access & Permissions", path: "/admin/access-permissions", icon: ShieldCheck },
   { title: "Internal Team",        path: "/internal",                 icon: ClipboardList },
   { title: "System Logs",          path: "/admin/logs",               icon: ScrollText },
+  { title: "Audit Trail",          path: "/admin/audit-trail",        icon: History },
   { title: "AI Skills",            path: "/admin/ai-skills",          icon: Brain },
   { title: "Theme Studio",         path: "/admin/theme-studio",       icon: Palette },
   { title: "Settings",             path: "/admin/settings",           icon: Settings },
