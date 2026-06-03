@@ -105,6 +105,8 @@ export function useSpecialAttentionStorage(
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // BULLETPROOF SAVE checkpoint — see useTaxMasterStorage for full notes.
+  const lastSavedRef = useRef<SpecialAttentionFormData | null>(null);
 
   // ── Load ───────────────────────────────────────────────────────────────────
   // Helper to apply migrations to raw data from localStorage or Supabase
@@ -131,11 +133,15 @@ export function useSpecialAttentionStorage(
     setLoaded(true);
     const cached = awLoad<SpecialAttentionFormData>(engagementId, "special_attention_json");
     if (cached && typeof cached === "object" && Object.keys(cached).length > 0) {
-      setData(applyMigrations(cached));
+      const d = applyMigrations(cached);
+      setData(d);
+      lastSavedRef.current = d;
     }
     awLoadFromDB<SpecialAttentionFormData>(engagementId, "special_attention_json").then(remote => {
       if (remote && typeof remote === "object" && Object.keys(remote).length > 0) {
-        setData(applyMigrations(remote));
+        const d = applyMigrations(remote);
+        setData(d);
+        lastSavedRef.current = d;
       }
     });
   }, [engagementId, loaded]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -145,7 +151,11 @@ export function useSpecialAttentionStorage(
     async (snapshot: SpecialAttentionFormData, silent: boolean, fieldLabel?: string) => {
       setSaving(true);
       try {
-        awSave(engagementId, "special_attention_json", snapshot, firmId, user?.id, user?.name || "", fieldLabel);
+        awSave(
+          engagementId, "special_attention_json", snapshot, firmId, user?.id, user?.name || "", fieldLabel,
+          lastSavedRef.current ?? undefined,
+        );
+        lastSavedRef.current = { ...snapshot };
         if (!silent) toast.success("Special Attention checklist saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");
@@ -153,7 +163,7 @@ export function useSpecialAttentionStorage(
         setSaving(false);
       }
     },
-    [engagementId]
+    [engagementId, firmId, user?.id, user?.name]
   );
 
   // ── debounce helper ────────────────────────────────────────────────────────

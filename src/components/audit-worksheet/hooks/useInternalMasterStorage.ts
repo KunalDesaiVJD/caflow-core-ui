@@ -141,6 +141,11 @@ export function useInternalMasterStorage(
   // never blocks the async DB load that restores saved fields on return.
   const userTypedRef = useRef(false);
   const dataRef      = useRef<InternalMasterData>(BLANK_INT_MASTER);
+  // BULLETPROOF SAVE: snapshot of state at the LAST successful save (or initial
+  // load). Passed to awSave so the merge layer overwrites ONLY fields the user
+  // actually changed this session — empty/untouched fields can no longer wipe
+  // real values another tab/user just saved.
+  const lastSavedRef = useRef<any>(null);
 
   // ── Load ───────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -151,6 +156,7 @@ export function useInternalMasterStorage(
       const merged = { ...BLANK_INT_MASTER, ...cached };
       setData(merged);
       dataRef.current = merged;
+      lastSavedRef.current = { ...merged };
     }
     awLoadFromDB<Partial<InternalMasterData>>(engagementId, "int_master_json").then(remote => {
       if (userTypedRef.current) return;
@@ -158,6 +164,7 @@ export function useInternalMasterStorage(
         const merged = { ...BLANK_INT_MASTER, ...remote };
         setData(merged);
         dataRef.current = merged;
+      lastSavedRef.current = { ...merged };
       }
     });
   }, [engagementId, loaded]);
@@ -173,7 +180,8 @@ export function useInternalMasterStorage(
         timerRef.current = null;
       }
       try {
-        awSave(engagementId, "int_master_json", dataRef.current, firmId, user?.id, user?.name || "");
+        awSave(engagementId, "int_master_json", dataRef.current, firmId, user?.id, user?.name || "", null, lastSavedRef.current ?? undefined);
+        lastSavedRef.current = { ...dataRef.current };   // CHECKPOINT_AFTER
       } catch { /* swallow */ }
     };
     window.addEventListener("aw:flush", flushNow);
@@ -183,7 +191,8 @@ export function useInternalMasterStorage(
         clearTimeout(timerRef.current);
         timerRef.current = null;
         try {
-          awSave(engagementId, "int_master_json", dataRef.current, firmId, user?.id, user?.name || "");
+          awSave(engagementId, "int_master_json", dataRef.current, firmId, user?.id, user?.name || "", null, lastSavedRef.current ?? undefined);
+        lastSavedRef.current = { ...dataRef.current };   // CHECKPOINT_AFTER
         } catch { /* swallow on unmount */ }
       }
     };
@@ -194,7 +203,8 @@ export function useInternalMasterStorage(
     async (snapshot: InternalMasterData, silent: boolean) => {
       setSaving(true);
       try {
-        awSave(engagementId, "int_master_json", snapshot, firmId, user?.id, user?.name || "");
+        awSave(engagementId, "int_master_json", snapshot, firmId, user?.id, user?.name || "", null, lastSavedRef.current ?? undefined);
+        lastSavedRef.current = { ...snapshot };   // CHECKPOINT_AFTER
         if (!silent) toast.success("Internal Audit Master saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");
@@ -215,6 +225,7 @@ export function useInternalMasterStorage(
       setData(prev => {
         const next = { ...prev, [field]: value };
         dataRef.current = next;
+      lastSavedRef.current = { ...next };
         awCacheOnly(engagementId, "int_master_json", next);
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => persist(next, true), 1000);
@@ -231,6 +242,7 @@ export function useInternalMasterStorage(
       setData(prev => {
         const next = { ...prev, ...patch };
         dataRef.current = next;
+      lastSavedRef.current = { ...next };
         awCacheOnly(engagementId, "int_master_json", next);
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => persist(next, true), 1000);
@@ -246,6 +258,7 @@ export function useInternalMasterStorage(
       setData(prev => {
         const next = { ...prev, ...patch };
         dataRef.current = next;
+      lastSavedRef.current = { ...next };
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => persist(next, true), 1000);
         return next;

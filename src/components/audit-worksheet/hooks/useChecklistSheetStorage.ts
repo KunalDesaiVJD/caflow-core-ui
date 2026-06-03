@@ -87,6 +87,8 @@ export function useChecklistSheetStorage(
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // BULLETPROOF SAVE checkpoint — see useTaxMasterStorage for full notes.
+  const lastSavedRef = useRef<ChecklistSheetData | null>(null);
 
   // ── Load ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -103,11 +105,15 @@ export function useChecklistSheetStorage(
 
     const cached = awLoad<ChecklistSheetData>(engagementId, "checklist_sheet_json");
     if (cached && typeof cached === "object" && cached.rows && typeof cached.rows === "object") {
-      setData(applyData(cached));
+      const d = applyData(cached);
+      setData(d);
+      lastSavedRef.current = d;
     }
     awLoadFromDB<ChecklistSheetData>(engagementId, "checklist_sheet_json").then(remote => {
       if (remote && typeof remote === "object" && remote.rows && typeof remote.rows === "object") {
-        setData(applyData(remote));
+        const d = applyData(remote);
+        setData(d);
+        lastSavedRef.current = d;   // checkpoint against canonical server state
       }
     });
   }, [engagementId, loaded]);
@@ -117,7 +123,8 @@ export function useChecklistSheetStorage(
     async (snapshot: ChecklistSheetData, silent: boolean) => {
       setSaving(true);
       try {
-        awSave(engagementId, "checklist_sheet_json", snapshot, firmId, user?.id, user?.name || "");
+        awSave(engagementId, "checklist_sheet_json", snapshot, firmId, user?.id, user?.name || "", null, lastSavedRef.current ?? undefined);
+        lastSavedRef.current = { ...snapshot };   // CHECKPOINT_AFTER
         if (!silent) toast.success("Checklist saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");
