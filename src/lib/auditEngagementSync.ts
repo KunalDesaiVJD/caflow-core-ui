@@ -14,12 +14,20 @@
  *  - If NEITHER statutory nor tax applies, do nothing (never nuke all the
  *    client's engagements off a possibly-incomplete save).
  *  - Never create engagements here.
+ *  - **NEVER archive** — auto-archive was the root cause of 42 engagements
+ *    silently disappearing from the AuditIntelligence dropdown for months.
+ *    Many clients legitimately have BOTH a statutory eng AND a tax-audit eng
+ *    for the same FY, even when the setup row only ticks one box (user adds
+ *    the second engagement manually from AuditIntelligence). Auto-archiving
+ *    the "extra" one based on the setup checkboxes destroyed real audit work
+ *    over and over again. Archive is now an EXPLICIT user action only
+ *    (firm_admin or superadmin delete from AuditIntelligence).
  *  - A "both" engagement is converted down to the single remaining type.
- *  - A dedicated single-type engagement whose type no longer applies is:
- *      • archived if a correct engagement for the remaining type already
- *        exists (avoids leaving a stale duplicate — the SWADESHI case), or
- *      • converted to the remaining type if it's the only one (so the client
- *        isn't left without an engagement).
+ *  - A dedicated single-type engagement is converted to the remaining type
+ *    ONLY when it is the sole engagement for that client+FY (so the client
+ *    isn't left without an engagement). If another engagement already covers
+ *    the remaining type, we leave the stale one alone — it's the user's call
+ *    whether to delete it via AuditIntelligence.
  *  - PY-shell comparative engagements are never touched.
  */
 import { supabase } from "@/integrations/supabase/client";
@@ -103,8 +111,6 @@ export async function reconcileEngagementAuditType(
 
     const setType = (id: string, type: MainAuditType) =>
       (supabase as any).from("audit_engagements").update({ audit_type: type }).eq("id", id);
-    const archive = (id: string) =>
-      (supabase as any).from("audit_engagements").update({ status: "archived" }).eq("id", id);
 
     for (const e of list) {
       if (e.type === "both") {
@@ -112,12 +118,13 @@ export async function reconcileEngagementAuditType(
         const remaining = deriveMainAuditType(statApplies, taxApplies);
         if (remaining && remaining !== "both") await setType(e.id, remaining);
       } else if (e.type === "tax_audit" && !taxApplies) {
-        // tax dropped; statutory must apply (we returned early otherwise)
-        if (covers("statutory")) await archive(e.id);       // a statutory eng already exists → archive the stale one
-        else await setType(e.id, "statutory");              // only engagement → convert
+        // Tax flag turned off but a tax engagement exists. Only convert if
+        // it is the SOLE engagement (so the client isn't left without one);
+        // otherwise leave it alone. We NEVER auto-archive — that's a user-
+        // initiated action via AuditIntelligence delete. See file header.
+        if (!covers("statutory")) await setType(e.id, "statutory");
       } else if (e.type === "statutory" && !statApplies) {
-        if (covers("tax_audit")) await archive(e.id);
-        else await setType(e.id, "tax_audit");
+        if (!covers("tax_audit")) await setType(e.id, "tax_audit");
       }
     }
   } catch (err) {
