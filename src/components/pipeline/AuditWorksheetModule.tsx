@@ -9,7 +9,7 @@
  *  5. Query Sheet          (live from audit_client_queries + correction gate)
  *  6. Checklist            (audit documentation tracker)
  */
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -221,6 +221,16 @@ export default function AuditWorksheetModule({ engagementId, engagement, client:
   const [masterSaving, setMasterSaving] = useState(false);
   const [master, setMaster] = useState<WsMaster>(BLANK_MASTER);
   const [masterLoaded, setMasterLoaded] = useState(false);
+  // BULLETPROOF AUTO-SAVE (June 2026): the legacy Stage-2 form previously had
+  // no auto-save — the team could type into fields, navigate away without
+  // clicking Save, and lose their work. The "Re-fill auditor" effect plus the
+  // auto-displayed client header made the form look filled even when the DB
+  // columns were empty. We now debounce-save on every keystroke and keep a
+  // checkpoint of the last persisted state so the next save knows which fields
+  // actually changed (used for field-level audit_worksheet_history rows).
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSavedMasterRef = useRef<WsMaster | null>(null);
+  const masterRef = useRef<WsMaster>(BLANK_MASTER);
 
   // ── Fetch full client if not provided ──────────────────────────────────
   const { data: fetchedClient } = useQuery({
@@ -395,8 +405,20 @@ export default function AuditWorksheetModule({ engagementId, engagement, client:
         }));
       }
       setMasterLoaded(true);
+      // Seed the auto-save / history checkpoint with whatever we just loaded
+      // (DB row or auto-fill). The first auto-save diff is computed against this.
+      // We read masterRef in a microtask so we capture the state AFTER setMaster.
+      Promise.resolve().then(() => {
+        if (!lastSavedMasterRef.current) {
+          lastSavedMasterRef.current = { ...(masterRef.current || master) };
+        }
+      });
     })();
   }, [engagementId, masterLoaded, client, engagement, fy, fyFrom, fyTo, prevFrom, prevTo, auditFirmData]);
+
+  // Keep masterRef in sync with state on every render — used by the unmount
+  // flush and the diff computation since both run outside React's render cycle.
+  useEffect(() => { masterRef.current = master; }, [master]);
 
   // Re-fill auditor when audit_firm data loads
   useEffect(() => {
@@ -412,12 +434,63 @@ export default function AuditWorksheetModule({ engagementId, engagement, client:
     }));
   }, [auditFirmData, masterLoaded]);
 
-  const setM = (field: keyof WsMaster, val: any) =>
-    setMaster(prev => ({ ...prev, [field]: val }));
+  // ──────────────────────────────────────────────────────────────────────────
+  // Field setter + DEBOUNCED AUTO-SAVE (was: no auto-save, only manual Save).
+  // Every keystroke now schedules a silent save 1.5 s after the user stops
+  // typing, so navigating away without clicking Save no longer loses data.
+  // ──────────────────────────────────────────────────────────────────────────
+  const setM = (field: keyof WsMaster, val: any) => {
+    setMaster(prev => {
+      const next = { ...prev, [field]: val };
+      masterRef.current = next;
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = setTimeout(() => { void saveMaster(true); }, 1500);
+      return next;
+    });
+  };
 
-  const saveMaster = async () => {
+  // Flush pending auto-save on unmount or tab switch — no typing is ever lost.
+  useEffect(() => {
+    return () => {
+      if (autoSaveTimerRef.current) {
+        clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+        // Best-effort silent save with the latest known state.
+        const cur = masterRef.current;
+        if (cur && lastSavedMasterRef.current &&
+            JSON.stringify(cur) !== JSON.stringify(lastSavedMasterRef.current)) {
+          void saveMaster(true);
+        }
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** Per-field diff vs the last persisted master snapshot — used to write one
+   *  audit_worksheet_history row per changed field, so we have forensic
+   *  "who typed what" trails on the legacy Stage-2 form too. */
+  function _historyDiffs(): Array<{ field: string; oldV: any; newV: any }> {
+    const prev = lastSavedMasterRef.current as any;
+    if (!prev) return [];
+    const out: Array<{ field: string; oldV: any; newV: any }> = [];
+    const cur = masterRef.current as any;
+    for (const k of Object.keys(cur)) {
+      if (JSON.stringify(cur[k]) !== JSON.stringify(prev[k])) {
+        out.push({ field: k, oldV: prev[k], newV: cur[k] });
+      }
+    }
+    return out;
+  }
+  const _toHistVal = (v: any): string | null => {
+    if (v === null || v === undefined) return null;
+    if (typeof v === "string") return v.slice(0, 2000);
+    try { const s = JSON.stringify(v); return s.length > 2000 ? s.slice(0, 2000) + "…" : s; } catch { return null; }
+  };
+
+  const saveMaster = async (silent: boolean = false) => {
     setMasterSaving(true);
     try {
+      const diffs = _historyDiffs();
       const payload: any = {
         engagement_id:         engagementId,
         firm_id:               user?.firm_id || engagement?.firm_id || null,
@@ -467,9 +540,39 @@ export default function AuditWorksheetModule({ engagementId, engagement, client:
         .from("audit_worksheet_master")
         .upsert(payload, { onConflict: "engagement_id" });
       if (error) throw error;
-      toast.success("Master sheet saved");
+
+      // ── Field-level audit history ────────────────────────────────────────
+      // Write one audit_worksheet_history row per changed field so every save
+      // (manual or auto) leaves a forensic trail of who typed what.  Falls
+      // back to a single section-level event row if there's no prior checkpoint
+      // (first save after page load).
+      try {
+        if (diffs.length > 0) {
+          const rows = diffs.map(d => ({
+            engagement_id:   engagementId,
+            section_name:    "Audit Sheet (Stage 2)",
+            field_name:      d.field,
+            old_value:       _toHistVal(d.oldV),
+            new_value:       _toHistVal(d.newV),
+            changed_by:      user?.id || null,
+            changed_by_name: user?.name || "Unknown",
+          }));
+          await (supabase as any).from("audit_worksheet_history").insert(rows);
+        } else if (!lastSavedMasterRef.current) {
+          await (supabase as any).from("audit_worksheet_history").insert({
+            engagement_id:   engagementId,
+            section_name:    "Audit Sheet (Stage 2)",
+            changed_by:      user?.id || null,
+            changed_by_name: user?.name || "Unknown",
+          });
+        }
+      } catch { /* history logging is best-effort */ }
+
+      // Advance checkpoint so the next save's diff is computed against this state.
+      lastSavedMasterRef.current = { ...(masterRef.current || master) };
+      if (!silent) toast.success("Master sheet saved");
     } catch (e: any) {
-      toast.error(e.message || "Failed to save");
+      if (!silent) toast.error(e.message || "Failed to save");
     } finally {
       setMasterSaving(false);
     }
