@@ -3726,6 +3726,63 @@ export default function PipelineFinancialStatements({
   const nceBsBalanced       = Math.abs(nceTotalAssets + nceTotalLiabilities) < 2;
   const nceNetProfit        = computedAmounts["NCE_NET_PROF"] || 0;
 
+  // ─── NCE Notes vs Face mismatch detector (2026-06-01) ────────────────────
+  // User asked: "add a validation that notes total and heading total in B/S
+  // and P/L should always match". Iterate every NCE BS / P&L code that has a
+  // note, compare the face value (from nceCyAmounts / ncePyAmounts) against
+  // the same note's total computed by getNCENoteFaceTotal. Surface any code
+  // whose CY or PY columns diverge by > ₹1.
+  //
+  // Catches the classic OM REALTY / MAHARSH INFRA failure mode:
+  // P&L Other Expenses face = 76,89,211 but note total = 1,30,58,710 because
+  // a stale row (Rates and taxes PY = 39,96,555 etc.) is still in the note
+  // breakup. The banner names the row and the difference so the auditor knows
+  // exactly which note to re-correct.
+  const nceCodeLabels = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const item of NCE_FLAT_ITEMS) {
+      if (item.code) m[item.code] = (item.name || "")
+        .replace(/^\([a-z]+\)\s*/i, "")  // drop "(a)", "(b)" prefixes
+        .replace(/^\s*\([ivx]+\)\s*/i, "")
+        .trim();
+    }
+    return m;
+  }, []);
+  const nceNotesMismatches = useMemo((): Array<{
+    code: string; label: string; note: string;
+    faceCy: number; noteCy: number; diffCy: number;
+    facePy: number; notePy: number; diffPy: number;
+  }> => {
+    if (!isNonCorporate) return [];
+    const list: Array<{ code: string; label: string; note: string;
+      faceCy: number; noteCy: number; diffCy: number;
+      facePy: number; notePy: number; diffPy: number; }> = [];
+    for (const [code, meta] of Object.entries(NCE_CODE_TO_NOTE)) {
+      const row = nceNotesByType[meta.note];
+      if (!row) continue;
+      const isPatternA = meta.col === "lt" || meta.col === "st";
+      const noteCy = getNCENoteFaceTotal(row, "cy",
+        isPatternA ? "A" : "B", meta.col);
+      const notePy = getNCENoteFaceTotal(row, "py",
+        isPatternA ? "A" : "B", meta.col);
+      if (noteCy == null && notePy == null) continue;
+      const faceCy = Math.abs(Number(nceCyAmounts[code] ?? 0));
+      const facePy = Math.abs(Number(ncePyAmounts[code] ?? 0));
+      const nCy = Math.abs(Number(noteCy ?? 0));
+      const nPy = Math.abs(Number(notePy ?? 0));
+      const diffCy = Math.round((faceCy - nCy) * 100) / 100;
+      const diffPy = Math.round((facePy - nPy) * 100) / 100;
+      if (Math.abs(diffCy) > 1 || Math.abs(diffPy) > 1) {
+        list.push({
+          code, label: nceCodeLabels[code] || code, note: meta.note,
+          faceCy, noteCy: nCy, diffCy,
+          facePy, notePy: nPy, diffPy,
+        });
+      }
+    }
+    return list;
+  }, [isNonCorporate, nceNotesByType, nceCyAmounts, ncePyAmounts, nceCodeLabels]);
+
   // ─── Active summary values (swap between NCE and corporate in JSX) ───────
   // Issue 2 (today) — same ₹2 tolerance for corporate BS check.
   const corpBsBalanced    = Math.abs(bsDiff) < 2;
@@ -7015,6 +7072,87 @@ export default function PipelineFinancialStatements({
               size="sm"
               variant="outline"
               className="gap-1.5 h-7 text-xs border-destructive text-destructive hover:bg-destructive/10"
+              disabled={recorrectingFromCOA}
+              onClick={recorrectFromCOAMapping}
+            >
+              {recorrectingFromCOA
+                ? <Loader2 className="h-3 w-3 animate-spin" />
+                : <RefreshCw className="h-3 w-3" />}
+              Re-correct from COA Mapping
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* 2026-06-01 — NCE Notes vs Face validation: lists every BS / P&L
+           heading whose face value diverges from the underlying note's total.
+           Amber banner sits above the summary cards so the auditor sees the
+           specific lines that need re-correction (instead of just "BS is
+           imbalanced" which doesn't say WHERE). */}
+      {isNonCorporate && nceNotesMismatches.length > 0 && (
+        <Alert variant="default" className="border-amber-400/50 bg-amber-50 text-amber-900">
+          <AlertTriangle className="h-4 w-4 text-amber-700" />
+          <AlertTitle className="text-amber-900">
+            {nceNotesMismatches.length} note total{nceNotesMismatches.length === 1 ? "" : "s"} don&apos;t match the BS / P&amp;L heading
+          </AlertTitle>
+          <AlertDescription className="space-y-2 text-amber-900/90">
+            <p className="text-[11px]">
+              The face value (what shows on Balance Sheet / Profit &amp; Loss) and the underlying
+              note&apos;s breakup total must always tie. Differences usually mean a stale row in
+              the note — re-correct from COA or open the note and clear the offending row.
+            </p>
+            <div className="rounded-md border border-amber-300 bg-white overflow-hidden">
+              <table className="w-full text-[11px]">
+                <thead className="bg-amber-100 text-amber-900">
+                  <tr>
+                    <th className="text-left  px-2 py-1.5">Line</th>
+                    <th className="text-right px-2 py-1.5">Face CY</th>
+                    <th className="text-right px-2 py-1.5">Note CY</th>
+                    <th className="text-right px-2 py-1.5">Diff CY</th>
+                    <th className="text-right px-2 py-1.5">Face PY</th>
+                    <th className="text-right px-2 py-1.5">Note PY</th>
+                    <th className="text-right px-2 py-1.5">Diff PY</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-amber-200">
+                  {nceNotesMismatches.map(m => (
+                    <tr key={m.code} className="hover:bg-amber-50">
+                      <td className="px-2 py-1.5 font-medium">
+                        {m.label}
+                        <span className="ml-1 text-[9px] text-muted-foreground">({m.note})</span>
+                      </td>
+                      <td className="px-2 py-1.5 text-right font-mono tabular-nums">
+                        ₹{formatINR(m.faceCy)}
+                      </td>
+                      <td className="px-2 py-1.5 text-right font-mono tabular-nums">
+                        ₹{formatINR(m.noteCy)}
+                      </td>
+                      <td className={cn(
+                        "px-2 py-1.5 text-right font-mono tabular-nums font-semibold",
+                        Math.abs(m.diffCy) > 1 ? "text-amber-700" : "text-muted-foreground",
+                      )}>
+                        {Math.abs(m.diffCy) > 1 ? `₹${formatINR(Math.abs(m.diffCy))}` : "—"}
+                      </td>
+                      <td className="px-2 py-1.5 text-right font-mono tabular-nums">
+                        ₹{formatINR(m.facePy)}
+                      </td>
+                      <td className="px-2 py-1.5 text-right font-mono tabular-nums">
+                        ₹{formatINR(m.notePy)}
+                      </td>
+                      <td className={cn(
+                        "px-2 py-1.5 text-right font-mono tabular-nums font-semibold",
+                        Math.abs(m.diffPy) > 1 ? "text-amber-700" : "text-muted-foreground",
+                      )}>
+                        {Math.abs(m.diffPy) > 1 ? `₹${formatINR(Math.abs(m.diffPy))}` : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <Button
+              size="sm" variant="outline"
+              className="gap-1.5 h-7 text-xs border-amber-400 text-amber-800 hover:bg-amber-100"
               disabled={recorrectingFromCOA}
               onClick={recorrectFromCOAMapping}
             >
