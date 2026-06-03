@@ -2540,6 +2540,40 @@ export default function PipelineFinancialStatements({
     }).filter((a: any) => a.account_name);
   }, [tallyTb]);
 
+  // ─── Ledger aliases (Task 3 in PipelineStage3) ───────────────────────────
+  // 2026-06-01 — User reported COA Mapping screen and FS BS showing DIFFERENT
+  // PY totals on MAHARSH INFRA's Trade Payables (1,23,35,971 vs 1,26,66,373).
+  // Root cause: Stage3 applies these aliases when summing PY opening balances
+  // (line 1750-1751) — they let the auditor say "this CY ledger was previously
+  // mapped to a different code in PY". FS skipped the alias step entirely, so
+  // any opening balance the alias redirected away from a code was still
+  // counted there by FS, producing a higher PY total.
+  //
+  // Fix: load the same `ledger_aliases` table and mirror Stage3's resolution
+  // order (alias name → original name) when computing computedAmountsPY and
+  // fsDisplayData's exportPy below. Now FS uses the same aggregation logic
+  // as COA Mapping for every engagement, so the two screens always agree.
+  const { data: aliasRows } = useQuery({
+    queryKey: ["ledger-aliases-fs", engagement?.client_id],
+    queryFn: async () => {
+      if (!engagement?.client_id) return [];
+      const { data } = await (supabase.from as any)("ledger_aliases")
+        .select("prior_ledger_name, current_ledger_name")
+        .eq("client_id", engagement.client_id);
+      return (data || []) as any[];
+    },
+    enabled: !!engagement?.client_id,
+  });
+  const aliases: Record<string, string> = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const r of (aliasRows ?? []) as any[]) {
+      if (r?.prior_ledger_name && r?.current_ledger_name) {
+        m[r.prior_ledger_name] = r.current_ledger_name;
+      }
+    }
+    return m;
+  }, [aliasRows]);
+
   // ─── COA mapping from engagement prop ───
   // Applies backward-compat migration: pre-Phase-9 entries that mapped directly
   // to BS_CA_INV (now a parent node) are rewritten to INV_STOCK so that
@@ -2929,7 +2963,15 @@ export default function PipelineFinancialStatements({
   const computedAmountsPY: Record<string, number> = useMemo(() => {
     const amounts: Record<string, number> = {};
     for (const acct of tbAccounts) {
-      const mapping = coaMapping[acct.account_name];
+      // 2026-06-01 — Mirror PipelineStage3's alias resolution so FS computes
+      // the same PY opening-balance aggregate the COA Mapping screen shows.
+      // If a ledger has an alias entry, prefer the alias's mapping; fall back
+      // to the original name's mapping. The two screens must always agree on
+      // BS PY totals — divergence was causing MAHARSH INFRA Trade Payables PY
+      // to read 1,26,66,373 on the FS while COA Mapping showed 1,23,35,971.
+      const aliasName = aliases[acct.account_name];
+      const mapping = (aliasName ? coaMapping[aliasName] : null)
+                   ?? coaMapping[acct.account_name];
       if (!mapping) continue;
       const opening = acct.opening_balance ?? 0;
       if (!opening) continue;
@@ -2943,7 +2985,7 @@ export default function PipelineFinancialStatements({
     };
     for (const item of activeTree) computeTotal(item);
     return amounts;
-  }, [tbAccounts, coaMapping, activeTree]);
+  }, [tbAccounts, coaMapping, activeTree, aliases]);
 
   // ─── Merged PY: BS uses computedAmountsPY (from opening); P&L uses pyAmounts (prior engagement) ───
   // When there is no prior engagement, PY P&L is sourced from engagement.py_manual_amounts.
@@ -3150,19 +3192,26 @@ export default function PipelineFinancialStatements({
     let hasInvMappingLocal = false;
     for (const acct of tbAccounts) {
       const mapping = coaMapping[acct.account_name];
-      if (!mapping) continue;
+      // 2026-06-01 — Apply alias resolution to PY only (matches Stage3
+      // semantics). Aliases let the auditor say a CY ledger's PY closing
+      // (= opening balance on CY TB) was previously classified to a
+      // different code; without this redirection the FS PY total drifted
+      // from COA Mapping's PY total.
+      const aliasName = aliases[acct.account_name];
+      const pyMapping = (aliasName ? coaMapping[aliasName] : null) ?? mapping;
+      if (!mapping && !pyMapping) continue;
       const opening = acct.opening_balance ?? 0;
-      const plCode = INV_DUAL_MAP[mapping.code];
-      if (plCode) {
+      const plCode  = mapping ? INV_DUAL_MAP[mapping.code]  : undefined;
+      if (plCode && mapping) {
         // Dual-post CY: BS closing balance + P&L Changes in Inventories
         exportCy[mapping.code] = (exportCy[mapping.code] || 0) + (acct.balance || 0);
         exportCy[plCode] = (exportCy[plCode] || 0) + (opening - (acct.balance || 0));
-        // PY BS: opening balance (prior year closing)
-        if (opening) exportPy[mapping.code] = (exportPy[mapping.code] || 0) + opening;
+        // PY BS: opening balance routed via alias-aware mapping
+        if (opening && pyMapping) exportPy[pyMapping.code] = (exportPy[pyMapping.code] || 0) + opening;
         hasInvMappingLocal = true;
       } else {
-        exportCy[mapping.code] = (exportCy[mapping.code] || 0) + (acct.balance || 0);
-        if (opening) exportPy[mapping.code] = (exportPy[mapping.code] || 0) + opening;
+        if (mapping) exportCy[mapping.code] = (exportCy[mapping.code] || 0) + (acct.balance || 0);
+        if (opening && pyMapping) exportPy[pyMapping.code] = (exportPy[pyMapping.code] || 0) + opening;
       }
     }
     for (const [code, override] of Object.entries(manualOverrides)) {
@@ -3529,7 +3578,7 @@ export default function PipelineFinancialStatements({
 
     return { exportCy, exportPy, cyOf, pyOf, bs, pl, cfs };
   }, [
-    tbAccounts, coaMapping, manualOverrides, activeTree,
+    tbAccounts, coaMapping, manualOverrides, activeTree, aliases,
     pyAmounts, pyManualAmounts, pyShellPLAmounts, noPriorEngagement, isNonCorporate,
     computedAmounts, mergedPY, noteOverrides, pyInvCII,
     stage5NotesData,
