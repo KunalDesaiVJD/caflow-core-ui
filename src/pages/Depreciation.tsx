@@ -219,6 +219,48 @@ return (data || []) as any[];
 enabled: !!assets?.length,
 });
 
+// ── FY Apr-1 → Mar-31 window for the currently-viewed FY ────────────────
+// Used to classify each asset as "opening" (purchased before this FY)
+// vs "addition" (purchased during this FY) regardless of which column
+// the value was stored in. Indian FY string "2025-26" → 2025-04-01 to
+// 2026-03-31.
+const fyRange = useMemo(() => {
+  const [s] = (fy || '').split('-');
+  const startYear = parseInt(s, 10);
+  if (!Number.isFinite(startYear)) return null;
+  return {
+    start: new Date(startYear, 3, 1),                  // 1 Apr Y
+    end:   new Date(startYear + 1, 2, 31, 23, 59, 59), // 31 Mar Y+1
+  };
+}, [fy]);
+
+// Classify one asset into {opening, additions, disposals} for the current FY.
+// ROOT-CAUSE FIX (Issue: KWIKTEAM Mobile FY 2025-26 — 13 newly-purchased
+// assets showed their cost under "Gross Blk Open" instead of "Additions",
+// so opening of 2025-26 didn't equal closing of 2024-25):
+//   - If date_of_purchase falls within the current FY, the asset did NOT
+//     exist at the FY's opening. Whatever was stored in gross_block_opening
+//     (auditor-typed) plus additions_during_year is treated as a single
+//     ADDITION in this year. Opening = 0.
+//   - Otherwise (purchased before this FY, or date missing) the stored
+//     opening + additions remain on their respective rows — same as before.
+// Closing = opening + additions − disposals holds either way, so the
+// per-asset and per-category totals never change; only the split between
+// "opening" and "additions" gets reclassified to honour the user's intent.
+const classifyForFy = (a: any) => {
+  const gb  = parseFloat(a.gross_block_opening)    || 0;
+  const add = parseFloat(a.additions_during_year)  || 0;
+  const dis = parseFloat(a.disposals_during_year)  || 0;
+  const dop = a.date_of_purchase ? new Date(a.date_of_purchase) : null;
+  const purchasedInThisFy = !!(
+    fyRange && dop && !isNaN(dop.getTime()) && dop >= fyRange.start && dop <= fyRange.end
+  );
+  if (purchasedInThisFy) {
+    return { opening: 0, additions: gb + add, disposals: dis };
+  }
+  return { opening: gb, additions: add, disposals: dis };
+};
+
 const summary = useMemo(() => {
 if (!assets?.length) return [];
 const catMap = new Map<string, any>();
@@ -239,9 +281,7 @@ depreciation: 0, acc_dep_closing: 0, net_block: 0,
 });
 }
 const s = catMap.get(key)!;
-const gb = parseFloat(a.gross_block_opening) || 0;
-const add = parseFloat(a.additions_during_year) || 0;
-const dis = parseFloat(a.disposals_during_year) || 0;
+const { opening: gb, additions: add, disposals: dis } = classifyForFy(a);
 const ad = parseFloat(a.accumulated_dep_opening) || 0;
 const dep = parseFloat(a.depreciation_for_year) || 0;
 s.gross_block_opening += gb;
@@ -254,7 +294,8 @@ s.acc_dep_closing += (ad + dep);
 s.net_block += (gb + add - dis - ad - dep);
 }
 return Array.from(catMap.values());
-}, [assets]);
+// eslint-disable-next-line react-hooks/exhaustive-deps
+}, [assets, fyRange]);
 
 const { data: disposals } = useQuery({
 queryKey: ['dep-disp', clientId, fy],
@@ -1805,12 +1846,19 @@ return (
                     <TableCell className='text-right tabular-nums text-sm font-bold'>{fmt(parseFloat(s.net_block))}</TableCell>
                   </TableRow>
                   {isOpen && catAssets.map((a:any) => {
-                    const gb  = parseFloat(a.gross_block_opening)||0;
+                    // Date-of-purchase classification (same rule used by the
+                    // category aggregator above) so the per-asset row stays
+                    // consistent with the category total. Without this, an
+                    // asset bought IN the current FY would still appear in
+                    // the "Gross Blk Open" column at the leaf while showing
+                    // up as an addition in the rolled-up category row.
+                    const cls = classifyForFy(a);
+                    const gb  = cls.opening;
+                    const addV = cls.additions;
+                    const disV = cls.disposals;
                     const ad  = parseFloat(a.accumulated_dep_opening)||0;
-                    const addV = parseFloat(a.additions_during_year)||0;
-                    const disV = parseFloat(a.disposals_during_year)||0;
                     const dep = parseFloat(a.depreciation_for_year)||0;
-                    const wdvC = a.wdv_closing != null ? parseFloat(a.wdv_closing) : gb-ad-dep;
+                    const wdvC = a.wdv_closing != null ? parseFloat(a.wdv_closing) : gb+addV-disV-ad-dep;
                     return (
                       <TableRow key={a.id} className='bg-muted/10 text-xs'>
                         <TableCell/>
