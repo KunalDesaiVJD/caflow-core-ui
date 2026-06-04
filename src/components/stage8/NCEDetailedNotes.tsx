@@ -3080,12 +3080,35 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
             const rawData    = noteData[sourceKey] ?? { cy: {}, py: {}, customRows: [] };
             const splitSide  = nc.splitSide;
             const extracted  = splitSide ? extractSplitData(rawData, splitSide) : null;
-            // CRITICAL: pass rawData.customRows (not []) so that Tally auto-populated
-            // amounts (stored as customRows with cy[id+"_lt"] / cy[id+"_st"] keys) are
-            // visible in split notes.  extractSplitData already maps those to bare keys
-            // in extracted.cy, so computeDisplayData Pattern B picks them up correctly.
+            // 2026-06-04 — SHREE HARI (5th report): customRows are read directly
+            // from rawData.customRows here, NOT from extracted._custom_rows.
+            // Without filtering, every borrowings customRow (Bajaj Housing Finance,
+            // SBI Car Loan, all the HUF loans) rendered on BOTH the Long-Term and
+            // Short-Term split notes — empty in ST because all the amounts live on
+            // the _lt keys. Filter to ONLY rows that have non-zero amount on THIS
+            // side (cy or py). Rows whose data sits on the OTHER side are dropped
+            // from this view; rows with no suffixed amount at all (manual
+            // placeholders) stay visible so the auditor can still see them.
+            const splitCustomRows: typeof rawData.customRows = (() => {
+              if (!splitSide) return rawData.customRows;
+              const suffix      = `_${splitSide}`;
+              const otherSuffix = splitSide === "lt" ? "_st" : "_lt";
+              return rawData.customRows.filter(cr => {
+                const thisCy  = Math.abs(Number(rawData.cy[cr.id + suffix]      ?? 0));
+                const thisPy  = Math.abs(Number(rawData.py[cr.id + suffix]      ?? 0));
+                const otherCy = Math.abs(Number(rawData.cy[cr.id + otherSuffix] ?? 0));
+                const otherPy = Math.abs(Number(rawData.py[cr.id + otherSuffix] ?? 0));
+                // Has data on THIS side → keep.
+                if (thisCy > 0.005 || thisPy > 0.005) return true;
+                // Has data only on the OTHER side → drop from this view.
+                if (otherCy > 0.005 || otherPy > 0.005) return false;
+                // No suffixed amounts at all (legacy bare key / placeholder) → keep
+                // so the user can still see and edit the row in one of the views.
+                return true;
+              });
+            })();
             const d: typeof rawData = extracted
-              ? { ...rawData, cy: extracted.cy, py: extracted.py }
+              ? { ...rawData, cy: extracted.cy, py: extracted.py, customRows: splitCustomRows }
               : rawData;
 
             const autoCount  = d.customRows.filter(r => r.source === "auto").length;
