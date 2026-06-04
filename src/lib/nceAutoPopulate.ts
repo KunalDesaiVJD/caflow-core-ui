@@ -1511,7 +1511,18 @@ export async function nceAutoPopulate(
         // PY (because last year's saved breakup had it under ST). Now both
         // CY and PY apply the same isLT/isST rule, so reclassifications
         // automatically propagate across both periods.
-        const pyAmtThisLedger = signedLedgerOpeningAmt(row, noteType);
+        //
+        // Edge case: a ledger with CY opening = 0 but a non-zero PY-shell
+        // closing (TB data inconsistency, or a ledger renamed between FYs).
+        // Prefer CY opening — but when it's zero, fall back to PY-shell
+        // closing so a real PY balance isn't silently dropped. When BOTH
+        // are zero, the ledger is genuinely empty in PY too and the loop
+        // below skips it (no orphan placeholder row).
+        const pyAmtFromOpening   = signedLedgerOpeningAmt(row, noteType);
+        const pyAmtFromShellLater = pyByLedger[row.ledger_name.toLowerCase()] ?? 0;
+        const pyAmtThisLedger    = Math.abs(pyAmtFromOpening) > 0.005
+          ? pyAmtFromOpening
+          : pyAmtFromShellLater;
         // ISSUE 1 FIX (per-ledger breakup in Notes): for "borrowings",
         // "investments" and "loans_advances" — notes where the auditor expects
         // ledger-level detail under each Schedule III sub-head — we ALWAYS
@@ -1524,9 +1535,6 @@ export async function nceAutoPopulate(
           noteType === "borrowings" ||
           noteType === "investments" ||
           noteType === "loans_advances";
-        // PY balance this same ledger carried (PY shell TB closing). Needed for
-        // the CLOSED-ledger case below.
-        const pyAmtForLedger = pyByLedger[row.ledger_name.toLowerCase()] ?? 0;
         // ROOT-CAUSE FIX (Issue 1, CLOSED ledgers vanish): a ledger that closed
         // during CY still appears in the CY trial balance, but with closing 0,
         // so signedLedgerAmt() returns ~0. The old `if (<0.005) continue` then
@@ -1538,7 +1546,17 @@ export async function nceAutoPopulate(
         // a breakup row even though COA Mapping clearly classifies them.
         // For per-ledger-breakup notes, KEEP the ledger when it has a non-zero
         // PY balance so it surfaces as a CY 0 / PY <amt> breakup line.
-        const keepForPy = wantsPerLedgerBreakup && Math.abs(pyAmtForLedger) > 0.005;
+        //
+        // 2026-06-04 — keepForPy now reads from pyAmtThisLedger (which already
+        // falls back from CY opening → PY-shell closing) so it ALWAYS agrees
+        // with the value that ends up being assigned via unmatchedA.push().
+        // Previously keepForPy checked PY-shell directly while um.pyAmt was
+        // pushed from CY opening — if PY-shell had data but CY opening was 0
+        // we kept the ledger but pushed pyAmt=0, producing an orphan blank-
+        // amount row on SHREE HARI ("Bajaj Housing Finance Limited", "SBI
+        // Car Loan") in the LT note. With the new merged source, an orphan
+        // means both sources are zero → ledger skipped → no empty row.
+        const keepForPy = wantsPerLedgerBreakup && Math.abs(pyAmtThisLedger) > 0.005;
         if (Math.abs(amt) < 0.005 && !keepForPy) continue;
         // Skip ledgers the user has explicitly ejected to standalone rows
         if (ejectedSet.has(row.ledger_name)) continue;
