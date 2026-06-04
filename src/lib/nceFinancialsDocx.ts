@@ -1357,6 +1357,44 @@ function buildNoteSection(
     return out;
   };
 
+  // SHREE HARI FIX (2026-06-04, DOCX layer) — also include each customRow's
+  // own `sources[]` sub-ledger breakup array. Without this, a heading-style
+  // customRow with cy[id]=0 but `sources[]` containing the actual amounts
+  // exports as 0 in Word — disagreeing with the on-screen renderer which
+  // includes sources. Pattern A routes by `column` ("lt"|"st"); default "lt".
+  const sourcesSumB = (cr: NoteCustomRow): { cCy: number; pCy: number } => {
+    const list = (cr as any).sources;
+    if (!Array.isArray(list) || list.length === 0) return { cCy: 0, pCy: 0 };
+    // Only count sources when the row's own cy[id] is zero (heading pattern).
+    if ((cy[cr.id] ?? 0) !== 0 && (py[cr.id] ?? 0) !== 0) return { cCy: 0, pCy: 0 };
+    let cCy = 0, pCy = 0;
+    for (const x of list) {
+      cCy += Number((x as any)?.amountCy) || 0;
+      pCy += Number((x as any)?.amountPy) || 0;
+    }
+    return {
+      cCy: (cy[cr.id] ?? 0) === 0 ? cCy : 0,
+      pCy: (py[cr.id] ?? 0) === 0 ? pCy : 0,
+    };
+  };
+  const sourcesSumA = (cr: NoteCustomRow): { ltC: number; ltP: number; stC: number; stP: number } => {
+    const list = (cr as any).sources;
+    if (!Array.isArray(list) || list.length === 0) return { ltC: 0, ltP: 0, stC: 0, stP: 0 };
+    let ltC = 0, ltP = 0, stC = 0, stP = 0;
+    for (const x of list) {
+      const aC = Number((x as any)?.amountCy) || 0;
+      const aP = Number((x as any)?.amountPy) || 0;
+      if ((x as any)?.column === "st") {
+        if ((cy[cr.id + "_st"] ?? 0) === 0) stC += aC;
+        if ((py[cr.id + "_st"] ?? 0) === 0) stP += aP;
+      } else {
+        if ((cy[cr.id + "_lt"] ?? 0) === 0) ltC += aC;
+        if ((py[cr.id + "_lt"] ?? 0) === 0) ltP += aP;
+      }
+    }
+    return { ltC, ltP, stC, stP };
+  };
+
   // Displayed value for a STATIC data row = its own amount + every custom row
   // attached to it (collapsed-view aggregate, recursively). computeDisplayData
   // only updates the TOTAL rows, so the per-row aggregation is done here.
@@ -1366,12 +1404,19 @@ function buildNoteSection(
     for (const cr of allDescendantsOf(id)) {
       const c = suffixed(cy, cr.id); const p = suffixed(py, cr.id);
       lt += c.lt; st += c.st; ltP += p.lt; stP += p.st;
+      // Add this descendant's sources[] sub-ledger sum.
+      const s = sourcesSumA(cr);
+      lt += s.ltC; ltP += s.ltP; st += s.stC; stP += s.stP;
     }
     return { lt, ltP, st, stP };
   };
   const aggB = (id: string) => {
     let c = cy[id] ?? 0, p = py[id] ?? 0;
-    for (const cr of allDescendantsOf(id)) { c += cy[cr.id] ?? 0; p += py[cr.id] ?? 0; }
+    for (const cr of allDescendantsOf(id)) {
+      c += cy[cr.id] ?? 0; p += py[cr.id] ?? 0;
+      const s = sourcesSumB(cr);
+      c += s.cCy; p += s.pCy;
+    }
     return { c, p };
   };
 
@@ -1397,11 +1442,18 @@ function buildNoteSection(
       if (cr.attachedTo || emittedCustoms.has(cr.id) || !predicate(cr)) continue;
       emittedCustoms.add(cr.id);
       if (isA) {
+        // SHREE HARI fix — also pick up the row's own sources[] for export.
         const c = suffixed(cy, cr.id); const p = suffixed(py, cr.id);
-        if (!c.lt && !c.st && !p.lt && !p.st) continue;
-        rows.push(noteRowA(cr.label || "—", c.lt, p.lt, c.st, p.st, 0, "data"));
+        const s = sourcesSumA(cr);
+        const lt = c.lt + s.ltC, st = c.st + s.stC, ltP = p.lt + s.ltP, stP = p.st + s.stP;
+        if (!lt && !st && !ltP && !stP) continue;
+        rows.push(noteRowA(cr.label || "—", lt, ltP, st, stP, 0, "data"));
       } else {
-        const c = cy[cr.id] ?? 0, p = py[cr.id] ?? 0;
+        // SHREE HARI fix — include sources[] in the displayed value so headings
+        // whose amounts live only in sources[] still export with a non-zero value.
+        let c = cy[cr.id] ?? 0, p = py[cr.id] ?? 0;
+        const s = sourcesSumB(cr);
+        c += s.cCy; p += s.pCy;
         if (!c && !p) continue;
         rows.push(noteRowB(cr.label || "—", c, p, 0, "data"));
       }

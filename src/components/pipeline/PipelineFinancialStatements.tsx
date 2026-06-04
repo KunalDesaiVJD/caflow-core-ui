@@ -55,6 +55,8 @@ import {
   nceAutoPopulate, serialiseNoteData,
 } from "@/lib/nceAutoPopulate";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
+import FsHealthPanel from "@/components/pipeline/FsHealthPanel";
+import { validateFSReconciliation, logReconciliationDrift, NCE_LIAB_CODE_SET } from "@/lib/fsReconciliation";
 import { isTallyPLAccount, currentYearProfitAlreadyInReserves } from "@/lib/tallyDetection";
 
 // ═══════════════════════════════════════
@@ -7121,6 +7123,19 @@ export default function PipelineFinancialStatements({
           </AlertDescription>
         </Alert>
       )}
+
+      {/* 2026-06-05 — FS Health structural guarantee panel. Validates that
+           every NCE note's computed total equals its BS / P&L face value on
+           every render. Surfaces drift > ₹100 as a clickable details panel
+           so the auditor knows exactly which note disagrees with which face
+           cell. See src/lib/fsReconciliation.ts for the invariant logic. */}
+      <FsHealthPanel
+        engagementId={engagementId}
+        nceNotesByType={nceNotesByType}
+        bsFaceCy={nceCyAmounts}
+        bsFacePy={ncePyAmounts}
+        visible={isNonCorporate}
+      />
 
       {/* 2026-05-30 — Re-correct banner: when the NCE BS doesn't balance,
            expose a one-click action that re-runs nceAutoPopulate so the
