@@ -3707,52 +3707,50 @@ export default function PipelineFinancialStatements({
     : computedAmounts;
   const ncePyAmounts: Record<string, number> = isNonCorporate
     ? (() => {
-        // 2026-05-30 — Authority on PY BS values is the CY opening balance
-        // (= PY closing per Tally TB = the COA-mapping total). When the
-        // auditor adds custom rows in Notes for the PY column (e.g.
-        // re-classifying balances, typing PY values for codes with no TB
-        // ledger), those values can diverge from the opening balances and
-        // make the PY BS not balance — the exact symptom reported on
-        // OM REALTY (E&L PY = 53.23cr but Assets PY = 14.84cr).
+        // ─── PY BS-code authority (revised 2026-06-05) ─────────────────────
+        // Previous policy (pre-SHREE HARI INFRA fix): for BS codes, the Tally
+        // opening balance OWNED the PY face value; notes-derived totals were
+        // skipped whenever a non-zero opening balance existed. That prevented
+        // OM REALTY's stale-notes drift, but for SHREE HARI INFRA it caused a
+        // visible inconsistency — "Member Sales (POS) ₹27.9 crore" entered as
+        // a manual customRow in the other_cl note showed in the Note Total
+        // (₹55.92 cr) but was completely absent from the BS face PY column
+        // (which showed ₹14.99 lakh — just the Tally TDS payable opening).
         //
-        // Fix: for BS codes, keep the opening balance (mergedPY) as the
-        // authoritative PY face value. Only fall back to note totals when
-        // the opening balance is genuinely absent (no TB ledger for that
-        // code — e.g. share capital entered manually). PL codes continue
-        // to use note totals since opening balance is always 0 for P&L.
+        // New policy: notes total wins for PY too (mirrors the CY logic at
+        // lines 3690-3692). When the user types PY values into notes, those
+        // values flow to the BS face. If a divergence between Tally opening
+        // balance and notes appears, the FsHealthPanel surfaces it visibly
+        // (drift_minor / drift_severe). The "Re-correct from COA Mapping"
+        // button is still available to reset notes back to Tally-driven
+        // values when desired.
+        //
+        // PyShell guard preserved: when this engagement has a dedicated PY
+        // shell (pre-existing PY engagement synced from Tally), that data
+        // is authoritative — we don't let notes overwrite it. Only when the
+        // engagement is operating WITHOUT a PY shell do notes drive PY.
         const out = { ...mergedPY };
         const isBSCode = (code: string): boolean => {
           const section = NCE_CODE_TO_SECTION[code];
           if (section === "bs_liab" || section === "bs_asset") return true;
-          // applyNCENoteTotal codes whose section isn't in NCE_CODE_TO_SECTION
-          // (e.g. NCE_LTLA / NCE_STLA share a note) — treat asset / liability
-          // FS codes as BS by prefix.
           return /^NCE_(CAP|LTB|OLTL|LTP|STB|TP|OCL|STP|PPE|INTG|CWIP|NCINV|LTLA|ONCA|CINV|STCK|TR|CASH|STLA|OCA)$/.test(code);
         };
-        // When the PY-shell TB drives BS values (pyShellBSAmounts is the
-        // authoritative source via mergedPY), BS codes must NEVER be overridden
-        // by notes-derived totals for the PY column — even when a BS code has
-        // value 0 (= no ledger mapped). Otherwise stale auditor-entered note
-        // totals (e.g. Short-term borrowings = 8,04,44,734 in nce_financial_notes
-        // with no matching coa_mapping ledger) re-inject through Pass 1 / 2
-        // below, making the FS BS PY diverge from the COA Mapping screen for
-        // the same code — the OM REALTY symptom.
         // Pass 1 — stage5_notes (legacy path).
         for (const [code, key] of Object.entries(NCE_CODE_TO_NOTE_KEY)) {
           const section = NCE_CODE_TO_SECTION[code];
           if (!section) continue;
+          // Only PyShell skip preserved — see policy comment above.
           if (hasPyShellBS && isBSCode(code)) continue;
           const sum = sumNotesSubRowsPY(stage5NotesData ?? null, section, key);
           if (sum == null) continue;
-          if (isBSCode(code) && Math.abs(Number(out[code] ?? 0)) > 0.005) continue;
           out[code] = section === "bs_liab" ? -sum : sum;
         }
         const faPy = getFAGridNetBlockTotal(stage5NotesData ?? null, "py");
         if (faPy != null) out["NCE_PPE"] = faPy;
         // Pass 2 — nce_financial_notes (Stage 8 path, the modern one).
+        // Same logic: notes total wins; PyShell guard preserved.
         for (const code of Object.keys(NCE_CODE_TO_NOTE)) {
           if (hasPyShellBS && isBSCode(code)) continue;
-          if (isBSCode(code) && Math.abs(Number(out[code] ?? 0)) > 0.005) continue;
           applyNCENoteTotal(out, code, "py");
         }
         // See nceCyAmounts — recompute PY parents from leaf codes so the
