@@ -1339,13 +1339,31 @@ function buildNoteSection(
   };
   const attachedRows = (staticId: string) => customRows.filter(cr => cr.attachedTo === staticId);
 
+  // BUG N2 FIX (2026-06-04) — recursive descendant collector. The previous
+  // aggA / aggB only summed DIRECT children, so any custom row that had
+  // grand-children produced an under-counted parent figure in the Word
+  // export — making the printed value disagree with what the on-screen
+  // recursive renderer (renderTreeB/A in NCEDetailedNotes.tsx) showed.
+  // Now the export matches the screen for any nesting depth.
+  const allDescendantsOf = (parentId: string, seen: Set<string> = new Set()): NoteCustomRow[] => {
+    if (seen.has(parentId)) return [];
+    seen.add(parentId);
+    const direct = customRows.filter(cr => cr.attachedTo === parentId);
+    const out: NoteCustomRow[] = [];
+    for (const c of direct) {
+      out.push(c);
+      out.push(...allDescendantsOf(c.id, seen));
+    }
+    return out;
+  };
+
   // Displayed value for a STATIC data row = its own amount + every custom row
-  // attached to it (collapsed-view aggregate). computeDisplayData only updates
-  // the TOTAL rows, so the per-row aggregation is done here.
+  // attached to it (collapsed-view aggregate, recursively). computeDisplayData
+  // only updates the TOTAL rows, so the per-row aggregation is done here.
   const aggA = (id: string) => {
     let lt = cy[id + "_lt"] ?? 0, st = cy[id + "_st"] ?? 0;
     let ltP = py[id + "_lt"] ?? 0, stP = py[id + "_st"] ?? 0;
-    for (const cr of attachedRows(id)) {
+    for (const cr of allDescendantsOf(id)) {
       const c = suffixed(cy, cr.id); const p = suffixed(py, cr.id);
       lt += c.lt; st += c.st; ltP += p.lt; stP += p.st;
     }
@@ -1353,7 +1371,7 @@ function buildNoteSection(
   };
   const aggB = (id: string) => {
     let c = cy[id] ?? 0, p = py[id] ?? 0;
-    for (const cr of attachedRows(id)) { c += cy[cr.id] ?? 0; p += py[cr.id] ?? 0; }
+    for (const cr of allDescendantsOf(id)) { c += cy[cr.id] ?? 0; p += py[cr.id] ?? 0; }
     return { c, p };
   };
 
@@ -1483,26 +1501,44 @@ function buildNoteSection(
       }
       // Main (static) row shows the collapsed aggregate; its attached sub-items
       // (auto/manual breakup ledgers) are then listed indented beneath it.
+      // BUG N2 FIX — recurse via emitDescendants so every depth renders, not
+      // just direct children. Indent grows by 1 per depth level so the Word
+      // table visually reflects the hierarchy (e.g. "Other payables — Others"
+      // at indent 2, "A" at 3, "Office No. 201" at 4, "A-0903 Dineshbhai" at 5).
       const subIndent = (row.indent ?? 0) + 1;
+      const emitDescendants = (parentId: string, depth: number) => {
+        for (const cr of attachedRows(parentId)) {
+          if (isA) {
+            const cc = suffixed(cy, cr.id); const pp = suffixed(py, cr.id);
+            // Only skip a row whose own AND every descendant amount is empty.
+            const v = aggA(cr.id);
+            if (!v.lt && !v.st && !v.ltP && !v.stP) continue;
+            // Print this row at the collapsed aggregate so the parent indent
+            // visually matches the renderer; recurse for its own children.
+            rows.push(noteRowA(cr.label || "—", v.lt, v.ltP, v.st, v.stP, depth, "data"));
+            emitDescendants(cr.id, depth + 1);
+            // Optional: show the row's own amount when it differs from agg.
+            // Skipped intentionally — children rows below already itemise it.
+            void cc; void pp;
+          } else {
+            const v = aggB(cr.id);
+            if (!v.c && !v.p) continue;
+            rows.push(noteRowB(cr.label || "—", v.c, v.p, depth, "data"));
+            emitDescendants(cr.id, depth + 1);
+          }
+        }
+      };
       if (isA) {
         const v = aggA(row.id);
         rows.push(noteRowA(row.label, v.lt, v.ltP, v.st, v.stP, row.indent ?? 0, "data"));
         if (!expandedRows || expandedRows.has(row.id)) {
-          for (const cr of attachedRows(row.id)) {
-            const c = suffixed(cy, cr.id); const p = suffixed(py, cr.id);
-            if (!c.lt && !c.st && !p.lt && !p.st) continue;   // skip empty sub-items
-            rows.push(noteRowA(cr.label || "—", c.lt, p.lt, c.st, p.st, subIndent, "data"));
-          }
+          emitDescendants(row.id, subIndent);
         }
       } else {
         const v = aggB(row.id);
         rows.push(noteRowB(row.label, v.c, v.p, row.indent ?? 0, "data"));
         if (!expandedRows || expandedRows.has(row.id)) {
-          for (const cr of attachedRows(row.id)) {
-            const c = cy[cr.id] ?? 0, p = py[cr.id] ?? 0;
-            if (!c && !p) continue;                            // skip empty sub-items
-            rows.push(noteRowB(cr.label || "—", c, p, subIndent, "data"));
-          }
+          emitDescendants(row.id, subIndent);
         }
       }
     }

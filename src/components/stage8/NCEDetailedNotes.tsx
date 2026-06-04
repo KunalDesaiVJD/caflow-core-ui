@@ -749,6 +749,23 @@ function PatternBTable({
   const overlapForRow = (staticId: string, attached: NCECustomRow[], side: "cy" | "py", column?: "lt" | "st") =>
     computeOverlap(cySources, staticId, attached, side, column);
 
+  // BUG N4 FIX (2026-06-04): hasAnyDescendantValue walks the WHOLE attachedTo
+  // tree to detect non-zero CY or PY amounts at any depth. The previous
+  // implementation only checked direct children, which hid sections in
+  // lock-preview / DOCX export when a deeply-nested grand-child carried the
+  // amount (e.g. SHREE HARI's "A" → "Office No. 201" → "A-0903 Dineshbhai"
+  // chain would falsely flag the section as empty).
+  const hasAnyDescendantValue = (parentId: string, seen: Set<string> = new Set()): boolean => {
+    if (seen.has(parentId)) return false;
+    seen.add(parentId);
+    const directChildren = customRows.filter(cr => cr.attachedTo === parentId);
+    for (const c of directChildren) {
+      if ((rawCy[c.id] ?? 0) !== 0 || (rawPy[c.id] ?? 0) !== 0) return true;
+      if (hasAnyDescendantValue(c.id, seen)) return true;
+    }
+    return false;
+  };
+
   // Task 2 (doc8): pre-compute empty section header IDs when hideEmptySections is active
   const emptySectionHdrIds = useMemo(() => {
     if (!hideEmptySections) return new Set<string>();
@@ -762,14 +779,12 @@ function PatternBTable({
         sectionHasData = false;
       } else if (!row.isTotal && currentHdrId !== null && !hiddenRows.includes(row.id)) {
         if ((cy[row.id] ?? 0) !== 0 || (py[row.id] ?? 0) !== 0) sectionHasData = true;
-        if (!sectionHasData) {
-          const attached = customRows.filter(cr => cr.attachedTo === row.id);
-          if (attached.some(cr => (rawCy[cr.id] ?? 0) !== 0 || (rawPy[cr.id] ?? 0) !== 0)) sectionHasData = true;
-        }
+        if (!sectionHasData && hasAnyDescendantValue(row.id)) sectionHasData = true;
       }
     }
     if (currentHdrId !== null && !sectionHasData) emptyHdrs.add(currentHdrId);
     return emptyHdrs;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hideEmptySections, config.rows, cy, py, rawCy, rawPy, customRows, hiddenRows]);
 
   // Task 2 (doc8): pre-compute empty section total IDs
@@ -789,14 +804,12 @@ function PatternBTable({
         currentSectionTotalId = row.id;
       } else if (!row.isTotal && currentHdrId !== null && !hiddenRows.includes(row.id)) {
         if ((cy[row.id] ?? 0) !== 0 || (py[row.id] ?? 0) !== 0) sectionHasData = true;
-        if (!sectionHasData) {
-          const attached = customRows.filter(cr => cr.attachedTo === row.id);
-          if (attached.some(cr => (rawCy[cr.id] ?? 0) !== 0 || (rawPy[cr.id] ?? 0) !== 0)) sectionHasData = true;
-        }
+        if (!sectionHasData && hasAnyDescendantValue(row.id)) sectionHasData = true;
       }
     }
     if (currentHdrId !== null && !sectionHasData && currentSectionTotalId) emptyTotals.add(currentSectionTotalId);
     return emptyTotals;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hideEmptySections, config.rows, cy, py, rawCy, rawPy, customRows, hiddenRows, grandTotalId]);
   // Track which static rows have their source-ledger list expanded
   const [openSources, setOpenSources] = useState<Set<string>>(new Set());
@@ -1025,9 +1038,12 @@ function PatternBTable({
           // rows where BOTH CY and PY aggregates (including attached custom sub-rows) are
           // zero — mirrors the export's hideBlankNoteRows behaviour exactly.
           if (hideEmptySections && !row.isSectionHeader && !row.isTotal && !hiddenRows.includes(row.id)) {
-            const attachedToRow = customRows.filter(cr => cr.attachedTo === row.id);
-            const aggCy = (rawCy[row.id] ?? 0) + attachedToRow.reduce((s, cr) => s + (rawCy[cr.id] ?? 0), 0);
-            const aggPy = (rawPy[row.id] ?? 0) + attachedToRow.reduce((s, cr) => s + (rawPy[cr.id] ?? 0), 0);
+            // Use the recursive descendant sum so grand-children with amounts
+            // don't fall through this hide filter and disappear from the
+            // lock-preview / DOCX export.
+            const ownPlusDesc = sumCustomDisplayB(row.id);
+            const aggCy = ownPlusDesc.cy;
+            const aggPy = ownPlusDesc.py;
             if (!aggCy && !aggPy) return null;
           }
           const insertCustomBefore = idx === grandTotalIdx;
@@ -1300,6 +1316,21 @@ function PatternATable({
   const overlapForRow = (staticId: string, attached: NCECustomRow[], side: "cy" | "py", column?: "lt" | "st") =>
     computeOverlap(cySources, staticId, attached, side, column);
 
+  // BUG N4 FIX (Pattern A): recursive descendant-value check across both LT
+  // and ST columns so a deeply-nested grand-child with an amount doesn't
+  // get hidden in lock-preview / DOCX export.
+  const hasAnyDescendantValueA = (parentId: string, seen: Set<string> = new Set()): boolean => {
+    if (seen.has(parentId)) return false;
+    seen.add(parentId);
+    const directChildren = customRows.filter(cr => cr.attachedTo === parentId);
+    for (const c of directChildren) {
+      if ((rawCy[c.id + "_lt"] ?? 0) !== 0 || (rawCy[c.id + "_st"] ?? 0) !== 0 ||
+          (rawPy[c.id + "_lt"] ?? 0) !== 0 || (rawPy[c.id + "_st"] ?? 0) !== 0) return true;
+      if (hasAnyDescendantValueA(c.id, seen)) return true;
+    }
+    return false;
+  };
+
   // Task 2 (doc8): pre-compute empty section header IDs when hideEmptySections is active.
   // Pattern A stores values as key_lt / key_st, so check both suffixes.
   const emptySectionHdrIds = useMemo(() => {
@@ -1315,17 +1346,12 @@ function PatternATable({
       } else if (!row.isTotal && currentHdrId !== null && !hiddenRows.includes(row.id)) {
         if ((cy[row.id + "_lt"] ?? 0) !== 0 || (cy[row.id + "_st"] ?? 0) !== 0 ||
             (py[row.id + "_lt"] ?? 0) !== 0 || (py[row.id + "_st"] ?? 0) !== 0) sectionHasData = true;
-        if (!sectionHasData) {
-          const attached = customRows.filter(cr => cr.attachedTo === row.id);
-          if (attached.some(cr =>
-            (rawCy[cr.id + "_lt"] ?? 0) !== 0 || (rawCy[cr.id + "_st"] ?? 0) !== 0 ||
-            (rawPy[cr.id + "_lt"] ?? 0) !== 0 || (rawPy[cr.id + "_st"] ?? 0) !== 0
-          )) sectionHasData = true;
-        }
+        if (!sectionHasData && hasAnyDescendantValueA(row.id)) sectionHasData = true;
       }
     }
     if (currentHdrId !== null && !sectionHasData) emptyHdrs.add(currentHdrId);
     return emptyHdrs;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hideEmptySections, config.rows, cy, py, rawCy, rawPy, customRows, hiddenRows]);
 
   // Task 2 (doc8): pre-compute empty section total IDs when hideEmptySections is active.
@@ -1344,17 +1370,12 @@ function PatternATable({
       } else if (!row.isTotal && currentHdrId !== null && !hiddenRows.includes(row.id)) {
         if ((cy[row.id + "_lt"] ?? 0) !== 0 || (cy[row.id + "_st"] ?? 0) !== 0 ||
             (py[row.id + "_lt"] ?? 0) !== 0 || (py[row.id + "_st"] ?? 0) !== 0) sectionHasData = true;
-        if (!sectionHasData) {
-          const attached = customRows.filter(cr => cr.attachedTo === row.id);
-          if (attached.some(cr =>
-            (rawCy[cr.id + "_lt"] ?? 0) !== 0 || (rawCy[cr.id + "_st"] ?? 0) !== 0 ||
-            (rawPy[cr.id + "_lt"] ?? 0) !== 0 || (rawPy[cr.id + "_st"] ?? 0) !== 0
-          )) sectionHasData = true;
-        }
+        if (!sectionHasData && hasAnyDescendantValueA(row.id)) sectionHasData = true;
       }
     }
     if (currentHdrId !== null && !sectionHasData && currentSectionTotalId) emptyTotals.add(currentSectionTotalId);
     return emptyTotals;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hideEmptySections, config.rows, cy, py, rawCy, rawPy, customRows, hiddenRows, grandTotalId]);
 
   // ISSUE 2 FIX — derive section-specific "Add row" buttons so a row added
@@ -1552,11 +1573,11 @@ function PatternATable({
           // Changes doc Task 2: in readOnly/preview mode, suppress zero data rows.
           // Pattern A uses _lt and _st suffixed keys for Long-Term / Short-Term columns.
           if (hideEmptySections && !row.isSectionHeader && !row.isTotal && !hiddenRows.includes(row.id)) {
-            const attachedToRow = customRows.filter(cr => cr.attachedTo === row.id);
-            const aggCy = (rawCy[row.id + "_lt"] ?? 0) + (rawCy[row.id + "_st"] ?? 0)
-              + attachedToRow.reduce((s, cr) => s + (rawCy[cr.id + "_lt"] ?? 0) + (rawCy[cr.id + "_st"] ?? 0), 0);
-            const aggPy = (rawPy[row.id + "_lt"] ?? 0) + (rawPy[row.id + "_st"] ?? 0)
-              + attachedToRow.reduce((s, cr) => s + (rawPy[cr.id + "_lt"] ?? 0) + (rawPy[cr.id + "_st"] ?? 0), 0);
+            // Use sumCustomDisplayA which recurses into the entire descendant
+            // tree so grand-children with amounts keep their row visible.
+            const own = sumCustomDisplayA(row.id);
+            const aggCy = own.lc + own.sc;
+            const aggPy = own.lp + own.sp;
             if (!aggCy && !aggPy) return null;
           }
           // Determine which custom rows to render before this row:
