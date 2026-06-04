@@ -140,6 +140,7 @@ export default function Checklist({ data, engagementId, onSaved }: Props) {
     toggleNA,
     addRow,
     manualSave,
+    flushSave,
     saving,
   } = useChecklistSheetStorage(engagementId, data.engagement?.firm_id);
 
@@ -166,6 +167,12 @@ export default function Checklist({ data, engagementId, onSaved }: Props) {
   // uploadingRows: rowId → count of in-progress uploads
   const [uploadingRows, setUploadingRows] = useState<Record<string, number>>({});
   const [deletingFiles, setDeletingFiles] = useState<Record<string, boolean>>({});
+  // Failed uploads — surfaced as a persistent banner. Each entry holds the
+  // user-visible filename + a short error so the auditor sees exactly which
+  // files were dropped and can retry. Closes the previously-silent loophole
+  // where a toast scroll-off was the only indication of an upload failure.
+  const [failedUploads, setFailedUploads] = useState<{ rowId: string; fileName: string; reason: string }[]>([]);
+  const dismissFailure = (i: number) => setFailedUploads(prev => prev.filter((_, ix) => ix !== i));
 
   const openFilePicker = (rowId: string) => {
     setPendingRowId(rowId);
@@ -190,17 +197,20 @@ export default function Checklist({ data, engagementId, onSaved }: Props) {
       const def    = allDefs.find(d => d.id === rowId);
       const srNo   = def?.sr ?? 0;
       const safeName = file.name.replace(/\s+/g, "_");
-      // Add a short timestamp suffix to avoid collisions when uploading
-      // multiple files with the same name to the same row.
-      const ts = Date.now();
-      const filePath = `checklist/${engagementId}/${srNo}_${ts}_${safeName}`;
+      // Use a UUID instead of a timestamp so two near-simultaneous uploads
+      // (multi-tab / two users) of files with the same name cannot collide
+      // and silently overwrite each other in Storage. Combined with
+      // upsert:false below, the bucket physically refuses an accidental
+      // overwrite. Path format: `checklist/<engId>/<sr>_<uuid>_<name>`.
+      const uid = (crypto as any)?.randomUUID?.() || `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      const filePath = `checklist/${engagementId}/${srNo}_${uid}_${safeName}`;
       const contentType = resolveContentType(file);
 
       setUploadingRows(prev => ({ ...prev, [rowId]: (prev[rowId] ?? 0) + 1 }));
 
       const { error } = await supabase.storage
         .from("documents")
-        .upload(filePath, file, { upsert: true, contentType });
+        .upload(filePath, file, { upsert: false, contentType });
 
       setUploadingRows(prev => {
         const next = { ...prev, [rowId]: (prev[rowId] ?? 1) - 1 };
@@ -210,11 +220,27 @@ export default function Checklist({ data, engagementId, onSaved }: Props) {
 
       if (error) {
         toast.error(`Upload failed: "${file.name}" — ${error.message}`);
+        // Persistent banner so the user sees the failure even after the
+        // toast disappears, and can decide to retry.
+        setFailedUploads(prev => [...prev, { rowId, fileName: file.name, reason: error.message }]);
         continue;
       }
 
-      addFileToRow(rowId, { file_path: filePath, file_name: file.name });
-      toast.success(`"${file.name}" uploaded`);
+      // addFileToRow is now async + flushes the save synchronously, so the
+      // DB JSON reference lands together with the Storage object. No more
+      // "uploaded but reference lost on tab-close" orphans. Uploader id +
+      // timestamp are stamped inside the hook from useAuth().
+      try {
+        await addFileToRow(rowId, { file_path: filePath, file_name: file.name });
+        toast.success(`"${file.name}" uploaded`);
+      } catch (err: any) {
+        // Save failed AFTER the upload succeeded — the file is in Storage
+        // but unlinked. Roll back the Storage object so we never leave an
+        // untraceable orphan in the bucket, and surface to the user.
+        try { await supabase.storage.from("documents").remove([filePath]); } catch { /* best effort */ }
+        toast.error(`Upload saved but database link failed: "${file.name}" — rolling back. Please retry.`);
+        setFailedUploads(prev => [...prev, { rowId, fileName: file.name, reason: err?.message || "DB save failed" }]);
+      }
     }
   };
 
@@ -235,6 +261,21 @@ export default function Checklist({ data, engagementId, onSaved }: Props) {
     const key = `${rowId}__${file.file_path}`;
     setDeletingFiles(prev => ({ ...prev, [key]: true }));
 
+    // Order matters. Previously this called Storage.remove FIRST then
+    // removeFileFromRow (debounced) — if the tab closed in between, the
+    // JSON still pointed at a deleted blob and Preview would 404 silently
+    // (getPublicUrl never validates object existence, it just composes a
+    // URL). Now: drop the JSON reference + flush save FIRST, then Storage
+    // delete. If Storage delete fails the JSON is already clean — only
+    // the bucket holds an orphan, which the auditor can retry to purge.
+    try {
+      await removeFileFromRow(rowId, file.file_path);
+    } catch (err: any) {
+      setDeletingFiles(prev => { const n = { ...prev }; delete n[key]; return n; });
+      toast.error(`Save failed before delete: ${err?.message || "unknown"}`);
+      return;
+    }
+
     const { error } = await supabase.storage
       .from("documents")
       .remove([file.file_path]);
@@ -242,11 +283,11 @@ export default function Checklist({ data, engagementId, onSaved }: Props) {
     setDeletingFiles(prev => { const n = { ...prev }; delete n[key]; return n; });
 
     if (error) {
-      toast.error(`Delete failed: ${error.message}`);
+      // JSON pointer already removed — surface the storage residue without
+      // restoring the link (the user clearly wanted the row clean of it).
+      toast.error(`Reference removed but Storage delete failed: ${error.message}`);
       return;
     }
-
-    removeFileFromRow(rowId, file.file_path);
     toast.success("Document removed");
   };
 
@@ -276,6 +317,32 @@ export default function Checklist({ data, engagementId, onSaved }: Props) {
           {data.clientName ? ` — ${data.clientName}` : ""}
         </p>
       </div>
+
+      {/* ══════════ FAILED-UPLOAD BANNER ══════════ */}
+      {/* Persistent surface for every upload error so the auditor never has
+          to wonder whether a file actually attached. Replaces the previous
+          toast-only feedback (which could scroll off-screen before being
+          noticed). Each row is dismissible after the user has triaged. */}
+      {failedUploads.length > 0 && (
+        <div className="border-b bg-red-50 border-red-300 px-4 py-2.5 space-y-1.5">
+          <div className="text-xs font-semibold text-red-800">
+            ⚠ {failedUploads.length} document upload{failedUploads.length === 1 ? "" : "s"} failed — please retry
+          </div>
+          {failedUploads.map((f, i) => (
+            <div key={i} className="flex items-center justify-between text-xs bg-white border border-red-200 rounded px-2 py-1">
+              <span className="truncate">
+                <span className="font-medium">{f.fileName}</span>
+                <span className="text-muted-foreground"> — {f.reason}</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => dismissFailure(i)}
+                className="text-red-700 hover:text-red-900 ml-2 text-[11px] underline"
+              >Dismiss</button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* ══════════ TOOLBAR ══════════ */}
       <div className="border-b bg-muted/30 px-4 py-2.5">
@@ -389,7 +456,18 @@ export default function Checklist({ data, engagementId, onSaved }: Props) {
                               >
                                 <span
                                   className="text-[10px] text-muted-foreground flex-1 truncate min-w-0"
-                                  title={file.file_name}
+                                  title={(() => {
+                                    // Show forensic metadata on hover — uploader name +
+                                    // ISO timestamp — so the auditor can answer
+                                    // "who attached this and when" without leaving the page.
+                                    const lines = [file.file_name];
+                                    if (file.uploaded_by_name) lines.push(`Uploaded by: ${file.uploaded_by_name}`);
+                                    if (file.uploaded_at) {
+                                      try { lines.push(`At: ${new Date(file.uploaded_at).toLocaleString()}`); }
+                                      catch { /* fallback to raw */ lines.push(`At: ${file.uploaded_at}`); }
+                                    }
+                                    return lines.join("\n");
+                                  })()}
                                 >
                                   {file.file_name}
                                 </span>
