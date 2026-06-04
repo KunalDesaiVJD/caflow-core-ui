@@ -739,6 +739,28 @@ function PatternBTable({
     if (seen.has(id)) return { cy: 0, py: 0 };
     seen.add(id);
     let c = rawCy[id] ?? 0, p = rawPy[id] ?? 0;
+    // BUG FIX (2026-06-04, SHREE HARI INFRA): include the customRow's own
+    // `sources` sub-ledger breakdown in the aggregate. Each customRow can
+    // carry an arbitrary `sources: [{ledger, amountCy, amountPy}, ...]`
+    // array — these are sub-ledgers shown when the row is expanded. For
+    // SHREE HARI's "A" / "B" / "C" / "D" / "E" headings (each holding
+    // 9-37 sub-ledgers via this `sources` channel), rawCy[id] is 0, so
+    // the prior aggregate returned 0 and the parent static row's display
+    // also collapsed to 0 ("—") even though crores of rupees existed
+    // inside the sources arrays. The fix sums them in — but ONLY when
+    // rawCy[id] is 0 (typical "heading row" pattern where the user has
+    // not also typed a value into the parent itself), to avoid double-
+    // counting if some future code path ever populates both channels.
+    const self = customRows.find(cr => cr.id === id) as any;
+    if (self && Array.isArray(self.sources) && self.sources.length > 0) {
+      const sumSrcCy = self.sources.reduce((s: number, x: any) => s + (Number(x?.amountCy) || 0), 0);
+      const sumSrcPy = self.sources.reduce((s: number, x: any) => s + (Number(x?.amountPy) || 0), 0);
+      // If rawCy[id] is 0, the sources ARE the row's value (heading pattern).
+      // If rawCy[id] is non-zero, the user has set their own override and
+      // we trust that — don't double-count.
+      if ((rawCy[id] ?? 0) === 0) c += sumSrcCy;
+      if ((rawPy[id] ?? 0) === 0) p += sumSrcPy;
+    }
     for (const cr of customRows) {
       if (cr.attachedTo === id) { const r = sumCustomDisplayB(cr.id, seen); c += r.cy; p += r.py; }
     }
@@ -1316,6 +1338,24 @@ function PatternATable({
     seen.add(id);
     let lc = rawCy[id + "_lt"] ?? 0, lp = rawPy[id + "_lt"] ?? 0;
     let sc = rawCy[id + "_st"] ?? 0, sp = rawPy[id + "_st"] ?? 0;
+    // SHREE HARI fix mirror — include customRow's own `sources` array
+    // (sub-ledger breakdown). Each source can carry a `column` of "lt" or
+    // "st" so we route the amount to the right total. See sumCustomDisplayB.
+    const self = customRows.find(cr => cr.id === id) as any;
+    if (self && Array.isArray(self.sources) && self.sources.length > 0) {
+      for (const x of self.sources) {
+        const aCy = Number(x?.amountCy) || 0;
+        const aPy = Number(x?.amountPy) || 0;
+        if (x?.column === "st") {
+          if ((rawCy[id + "_st"] ?? 0) === 0) sc += aCy;
+          if ((rawPy[id + "_st"] ?? 0) === 0) sp += aPy;
+        } else {
+          // default → LT
+          if ((rawCy[id + "_lt"] ?? 0) === 0) lc += aCy;
+          if ((rawPy[id + "_lt"] ?? 0) === 0) lp += aPy;
+        }
+      }
+    }
     for (const cr of customRows) {
       if (cr.attachedTo === id) { const r = sumCustomDisplayA(cr.id, seen); lc += r.lc; lp += r.lp; sc += r.sc; sp += r.sp; }
     }
