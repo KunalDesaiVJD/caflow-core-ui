@@ -499,7 +499,7 @@ export function getNCENoteFaceTotal(
   if (!noteRow) return null;
   const rawCy = (column === "cy" ? noteRow.cy_data : noteRow.py_data) ?? {};
   if (!rawCy || typeof rawCy !== "object") return null;
-  const customRows: Array<{ id: string; section?: string; attachedTo?: string }> =
+  const customRows: Array<{ id: string; section?: string; attachedTo?: string; sources?: Array<{ ledger?: string; amountCy?: number; amountPy?: number; column?: "lt" | "st" }> }> =
     Array.isArray((rawCy as any)._custom_rows) ? (rawCy as any)._custom_rows : [];
 
   // Strip meta keys to get the pure numeric map.
@@ -508,6 +508,30 @@ export function getNCENoteFaceTotal(
     if (META_KEYS.has(k)) continue;
     if (typeof v === "number" && Number.isFinite(v)) numeric[k] = v;
   }
+
+  // SHREE HARI FIX (2026-06-04): some customRows carry their sub-ledger
+  // breakup in an own `sources[]` array (heading-style rows like "A" / "B" /
+  // "C" / "D" / "E" under "Other payables — Others"). The customRow's own
+  // numeric value (cy[id]) is 0; the actual amounts live inside sources.
+  // Without summing sources, the BS face under-counts by the entire
+  // sub-ledger breakup — produced visible BS imbalance of ₹3,39,50,000 on
+  // SHREE HARI INFRA (Other Current Liabilities). Helper used by both
+  // Pattern A and Pattern B branches below.
+  const isCol = column === "cy";
+  const sourcesContribution = (cr: { id: string; sources?: Array<{ amountCy?: number; amountPy?: number; column?: "lt" | "st" }> }, patternColFilter?: "lt" | "st"): number => {
+    if (!Array.isArray(cr.sources) || cr.sources.length === 0) return 0;
+    // Only count sources when the customRow's own numeric is zero — same
+    // guard as in NCEDetailedNotes / computeDisplayData to avoid double-
+    // counting if a future code path ever populates both channels.
+    const baseKey = patternColFilter ? cr.id + "_" + patternColFilter : cr.id;
+    if ((numeric[baseKey] ?? 0) !== 0) return 0;
+    let s = 0;
+    for (const src of cr.sources) {
+      if (patternColFilter && src.column !== patternColFilter) continue;
+      s += Number((isCol ? src.amountCy : src.amountPy) ?? 0);
+    }
+    return s;
+  };
 
   // Pattern A: caller asked for a specific column ("lt" or "st"). Sum every
   // non-customRow leaf suffix key plus customRows (respecting attachedTo /
@@ -533,6 +557,10 @@ export function getNCENoteFaceTotal(
     for (const cr of customRows) {
       const v = numeric[cr.id + suffix];
       if (v != null) { total += v; hasAny = true; }
+      // SHREE HARI fix — also add the row's own sources[] sub-ledger
+      // breakup, filtered to the requested LT/ST column.
+      const srcAdd = sourcesContribution(cr, patternCol);
+      if (srcAdd !== 0) { total += srcAdd; hasAny = true; }
     }
     return hasAny ? Math.round(total * 100) / 100 : null;
   }
@@ -560,6 +588,12 @@ export function getNCENoteFaceTotal(
   for (const cr of customRows) {
     const v = numeric[cr.id];
     if (v != null) { total += v; hasAny = true; }
+    // SHREE HARI fix — sum the customRow's own sources[] sub-ledger breakup
+    // (heading rows like "A" / "B" / "C" / "D" / "E" hold their amounts here,
+    // not in numeric[cr.id]). Without this, the BS face under-counted by the
+    // entire sub-ledger group and ₹3.39 cr appeared as a balance imbalance.
+    const srcAdd = sourcesContribution(cr);
+    if (srcAdd !== 0) { total += srcAdd; hasAny = true; }
   }
   return hasAny ? Math.round(total * 100) / 100 : null;
 }
