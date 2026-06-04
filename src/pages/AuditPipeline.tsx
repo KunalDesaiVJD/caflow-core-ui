@@ -354,22 +354,45 @@ export default function AuditPipeline() {
       }
 
       // Build per-client flags from active services (source 5).
-      // SIMPLE RULE: if a client has ANY active service, they are eligible.
-      // Do not filter by category name or linked_module — any client the firm
-      // has set up services for should appear in the Create Engagement dropdown.
-      const serviceMap: Record<string, { hasStat: boolean; hasTax: boolean; hasInternal: boolean }> = {};
+      //
+      // 2026-06-04 — STRICT audit detection: only services explicitly tagged
+      // as audit categories count. User reported DIXITA KUNAL DESAI (whose
+      // only services are Bookkeeping + Income Tax Returns) appearing in the
+      // Create Engagement dropdown. The previous rule fell through every
+      // unknown service to hasStat=true, AND matched the loose "tax" keyword
+      // which let "Income Tax Returns" pose as a tax-audit signal. Both are
+      // wrong — audit eligibility must come from an EXPLICIT audit service /
+      // setup flag, never bookkeeping or IT return filing.
+      //
+      // Match rules (case-insensitive):
+      //   • Statutory audit  — linked_module === "statutory_audit"  OR
+      //                         category name contains "statutory audit" (or = "statutory")
+      //   • Tax audit        — linked_module === "tax_audit"        OR
+      //                         category name contains "tax audit"   (NOT just "tax")
+      //   • Internal audit   — linked_module === "internal_audit"   OR
+      //                         category name contains "internal audit"
+      //   • Stock audit      — linked_module === "stock_audit"      OR
+      //                         category name contains "stock audit"
+      //   • Everything else (Bookkeeping, IT Returns, GST, Payroll,
+      //     Advisory, etc.) → NOT an audit signal, no flag flipped.
+      const serviceMap: Record<string, { hasStat: boolean; hasTax: boolean; hasInternal: boolean; hasStock: boolean }> = {};
       for (const row of (auditSvcRes.data ?? []) as any[]) {
         if (!row.client_id) continue;
-        if (!serviceMap[row.client_id]) serviceMap[row.client_id] = { hasStat: false, hasTax: false, hasInternal: false };
-        // Best-effort classification for audit-type hints; defaults to hasStat
         const cat = row.service_categories;
-        const n   = ((cat?.name as string) ?? "").toLowerCase();
-        const lm  = ((cat?.linked_module as string) ?? "").toLowerCase();
-        if (n.includes("internal"))                                             serviceMap[row.client_id].hasInternal = true;
-        else if (n.includes("tax") || lm === "tax" || lm === "tax_audit" || lm === "income_tax")
-                                                                                serviceMap[row.client_id].hasTax = true;
-        else if (n.includes("statutory") || lm === "statutory" || lm === "audit") serviceMap[row.client_id].hasStat = true;
-        else                                                                     serviceMap[row.client_id].hasStat = true; // any service → treat as stat
+        const n   = String((cat?.name as string) ?? "").toLowerCase().trim();
+        const lm  = String((cat?.linked_module as string) ?? "").toLowerCase().trim();
+        const isStatutory = lm === "statutory_audit" || n.includes("statutory audit") || n === "statutory";
+        const isTaxAudit  = lm === "tax_audit"       || n.includes("tax audit");
+        const isInternal  = lm === "internal_audit"  || n.includes("internal audit");
+        const isStock     = lm === "stock_audit"     || n.includes("stock audit");
+        if (!isStatutory && !isTaxAudit && !isInternal && !isStock) continue;
+        if (!serviceMap[row.client_id]) {
+          serviceMap[row.client_id] = { hasStat: false, hasTax: false, hasInternal: false, hasStock: false };
+        }
+        if (isStatutory) serviceMap[row.client_id].hasStat     = true;
+        if (isTaxAudit)  serviceMap[row.client_id].hasTax      = true;
+        if (isInternal)  serviceMap[row.client_id].hasInternal = true;
+        if (isStock)     serviceMap[row.client_id].hasStock    = true;
       }
 
       return (allFirmClients as any[])
@@ -399,7 +422,7 @@ export default function AuditPipeline() {
             statutory_audit_applicable:  hasStatDirect     || !!setup.statutory_audit_applicable || !!svc.hasStat,
             tax_audit_applicable:        hasTaxDirect      || !!setup.tax_audit_applicable        || !!svc.hasTax,
             internal_audit_applicable:   hasInternalDirect || !!setup.internal_audit_applicable   || !!svc.hasInternal,
-            stock_audit_applicable:                           !!setup.stock_audit_applicable,
+            stock_audit_applicable:                           !!setup.stock_audit_applicable || !!(svc as any).hasStock,
             has_statutory_service:       !!svc.hasStat,
             has_tax_audit_service:       !!svc.hasTax,
             has_internal_audit_service:  !!svc.hasInternal,

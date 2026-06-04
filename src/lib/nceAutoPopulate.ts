@@ -421,6 +421,27 @@ function signedLedgerAmt(
   return isDr ? +cb : -cb;
 }
 
+/** Signed PY (= opening balance) — same sign convention as signedLedgerAmt
+ *  but uses opening_balance / opening_type instead of closing_balance /
+ *  balance_type. Returns 0 when the ledger had no opening.
+ *
+ *  Used to compute the PY column of BS notes from CY's TB opening balances
+ *  under the CURRENT COA mapping classification. This fixes the DHANANI
+ *  REALTY bug where a ledger that was reclassified from NCE_STB → NCE_LTB
+ *  this year still showed under ST on the PY column (because PY was read
+ *  from last year's saved breakdown, not recomputed from TB opening). */
+function signedLedgerOpeningAmt(
+  row: { opening_balance?: number | null; opening_type?: string | null },
+  noteType: string,
+): number {
+  const ob = Math.abs(Number(row.opening_balance ?? 0));
+  if (ob === 0) return 0;
+  const isDr = String(row.opening_type ?? "").toUpperCase() === "DR";
+  const nature: "DR" | "CR" = NOTE_NATURE[noteType] ?? "CR";
+  if (nature === "CR") return isDr ? -ob : +ob;
+  return isDr ? +ob : -ob;
+}
+
 // ── Note → FS-code reverse map ────────────────────────────────────────────────
 //
 // For each NCE BS / P&L code, the noteType whose grand total feeds that code's
@@ -1434,6 +1455,15 @@ export async function nceAutoPopulate(
         // Signed amount — see signedLedgerAmt() docs. Net opposite-side
         // balances within the head so group totals match COA Mapping math.
         const amt = signedLedgerAmt(row, noteType);
+        // 2026-06-04 — PY signed amount from THIS ledger's own opening
+        // balance, classified by the CURRENT mapping's LT/ST. Replaces the
+        // earlier pyNotes-snapshot lookup that locked PY to last year's
+        // classification. Fixes DHANANI REALTY where a ledger reclassified
+        // STB → LTB this year was still being placed in the ST column on
+        // PY (because last year's saved breakup had it under ST). Now both
+        // CY and PY apply the same isLT/isST rule, so reclassifications
+        // automatically propagate across both periods.
+        const pyAmtThisLedger = signedLedgerOpeningAmt(row, noteType);
         // ISSUE 1 FIX (per-ledger breakup in Notes): for "borrowings",
         // "investments" and "loans_advances" — notes where the auditor expects
         // ledger-level detail under each Schedule III sub-head — we ALWAYS
@@ -1473,13 +1503,18 @@ export async function nceAutoPopulate(
           // Existing aggregate path for other Pattern A notes
           if (isLT) newCy[matchedRowId + "_lt"] = (newCy[matchedRowId + "_lt"] ?? 0) + amt;
           if (isST) newCy[matchedRowId + "_st"] = (newCy[matchedRowId + "_st"] ?? 0) + amt;
-          if (isLT && !(matchedRowId + "_lt" in newPy))
-            newPy[matchedRowId + "_lt"] = Math.abs(pyNotes[noteType]?.[matchedRowId + "_lt"] ?? 0);
-          if (isST && !(matchedRowId + "_st" in newPy))
-            newPy[matchedRowId + "_st"] = Math.abs(pyNotes[noteType]?.[matchedRowId + "_st"] ?? 0);
+          // 2026-06-04 — PY now sums per-ledger opening balances under the
+          // CURRENT classification (was: snapshot of last year's saved total
+          // under last year's classification — see comment on pyAmtThisLedger).
+          if (isLT) newPy[matchedRowId + "_lt"] = (newPy[matchedRowId + "_lt"] ?? 0) + Math.abs(pyAmtThisLedger);
+          if (isST) newPy[matchedRowId + "_st"] = (newPy[matchedRowId + "_st"] ?? 0) + Math.abs(pyAmtThisLedger);
         } else {
           unmatchedA.push({
-            ledger: row.ledger_name, amt, pyAmt: pyAmtForLedger, isLT, isST,
+            // 2026-06-04 — pyAmt now sourced from THIS ledger's opening
+            // balance (current classification), not last year's snapshot,
+            // so per-ledger custom rows in borrowings/investments/loans_
+            // advances show the correct PY column after a reclassification.
+            ledger: row.ledger_name, amt, pyAmt: pyAmtThisLedger, isLT, isST,
             parentGroup: row.parent_group ?? undefined,
             ...(matchedRowId ? { smartTarget: matchedRowId } : {}),
           });
