@@ -412,6 +412,13 @@ export default function AuditPipeline() {
         })
         .filter(c => {
           if (!Boolean((c.name as string)?.trim())) return false;
+          // 2026-06-04 — Exclude Trust entity type from the Create Engagement
+          // dropdown per user request. Trusts are tracked under a different
+          // workflow and shouldn't surface here even if an audit flag is set
+          // (e.g. from a legacy import).  Case-insensitive match so "Trust" /
+          // "trust" / "Public Trust" all filter out.
+          const et = String((c.entity_type as string) ?? "").toLowerCase().trim();
+          if (et === "trust" || et.includes("trust")) return false;
           // Show only clients where Audit Setup is activated for at least
           // one audit type. The merged flags above pull from THREE sources
           // so this is robust against the older data inconsistencies:

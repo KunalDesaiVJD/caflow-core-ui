@@ -19,7 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ScrollText, Search, Filter, RotateCw, FileText } from "lucide-react";
+import { ScrollText, Search, Filter, RotateCw } from "lucide-react";
 
 interface AuditRow {
   id: string;
@@ -39,25 +39,41 @@ const ACTION_BADGE: Record<AuditRow["action"], { label: string; cls: string }> =
   delete: { label: "Delete", cls: "bg-destructive/15 text-destructive border-destructive/30" },
 };
 
-function describeSnapshot(action: AuditRow["action"], snap: any): { client?: string; fy?: string; type?: string; status?: string; summary?: string } {
-  if (!snap) return {};
-  // For update: snapshot is { before, after }; for create/delete: it's the row itself
-  const row = action === "update" ? (snap.after || snap.before) : snap;
-  if (!row || typeof row !== "object") return {};
-  const out: any = {
-    fy: row.financial_year,
-    type: row.audit_type,
-    status: row.status,
-  };
-  if (action === "update" && snap.before && snap.after) {
-    const before = snap.before, after = snap.after;
-    const changes: string[] = [];
-    const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
-    for (const k of keys) {
-      if (typeof before[k] === "object" || typeof after[k] === "object") continue;
-      if (before[k] !== after[k]) changes.push(`${k}: ${before[k] ?? "∅"} → ${after[k] ?? "∅"}`);
-    }
-    out.summary = changes.length === 0 ? "(no scalar field changed)" : changes.slice(0, 6).join("  •  ") + (changes.length > 6 ? `  +${changes.length - 6} more` : "");
+// 2026-06-04 — Per user request, the trail must only surface MEANINGFUL
+// changes (firm or engagement partner). Every other field-level diff is
+// internal plumbing the auditor doesn't care about (active_tabs, stage
+// status JSON, signed_at, etc.). Update rows where neither of these fields
+// changed are dropped from the list entirely instead of cluttering it with
+// "(no scalar field changed)" placeholders.
+const MEANINGFUL_FIELDS = new Set([
+  "firm_id",
+  "audit_firm_id",
+  "partner_id",
+  "partner_name",
+]);
+
+const FIELD_LABEL: Record<string, string> = {
+  firm_id:       "Firm",
+  audit_firm_id: "Audit Firm",
+  partner_id:    "Engagement Partner",
+  partner_name:  "Engagement Partner",
+};
+
+interface MeaningfulChange { label: string; before: string; after: string; }
+
+function meaningfulChanges(snap: any): MeaningfulChange[] {
+  if (!snap?.before || !snap?.after) return [];
+  const before = snap.before, after = snap.after;
+  const out: MeaningfulChange[] = [];
+  const seenLabels = new Set<string>();
+  for (const k of MEANINGFUL_FIELDS) {
+    if (!(k in before) && !(k in after)) continue;
+    const b = before[k], a = after[k];
+    if (b === a) continue;
+    const label = FIELD_LABEL[k] ?? k;
+    if (seenLabels.has(label)) continue;   // collapse partner_id + partner_name
+    seenLabels.add(label);
+    out.push({ label, before: String(b ?? "—"), after: String(a ?? "—") });
   }
   return out;
 }
@@ -80,7 +96,6 @@ export default function AdminAuditTrail() {
   const [actionFilter, setActionFilter] = useState<"all" | AuditRow["action"]>("all");
   const [search, setSearch] = useState("");
   const [days, setDays] = useState<number>(30);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!authLoading && user && !canView) navigate("/", { replace: true });
@@ -132,6 +147,13 @@ export default function AdminAuditTrail() {
     const q = search.trim().toLowerCase();
     return rows.filter(r => {
       if (actionFilter !== "all" && r.action !== actionFilter) return false;
+      // 2026-06-04 — Drop noise: keep updates only when they touched a
+      // meaningful field (firm or engagement partner). Creates and deletes
+      // always render. Auditors don't want to see updates that only flipped
+      // an internal flag like stage_statuses / signed_at / active_tabs.
+      if (r.action === "update" && meaningfulChanges(r.snapshot).length === 0) {
+        return false;
+      }
       if (!q) return true;
       const row = r.action === "update" ? r.snapshot?.after || r.snapshot?.before : r.snapshot;
       const haystack = [
@@ -218,38 +240,47 @@ export default function AdminAuditTrail() {
         )}
         <div className="divide-y">
           {filtered.map(r => {
-            const meta = describeSnapshot(r.action, r.snapshot);
             const row = r.action === "update" ? r.snapshot?.after || r.snapshot?.before : r.snapshot;
             const clientName = clientLookup[row?.client_id] || "(unknown client)";
-            const isExpanded = expandedId === r.id;
+            const fy   = row?.financial_year ? `FY ${row.financial_year}` : "";
+            const type = row?.audit_type as string | undefined;
+            const changes = r.action === "update" ? meaningfulChanges(r.snapshot) : [];
             return (
               <div key={r.id} className="px-4 py-3 hover:bg-muted/30 transition-colors">
                 <div className="flex flex-wrap items-center gap-3 text-sm">
-                  <Badge variant="outline" className={ACTION_BADGE[r.action].cls}>{ACTION_BADGE[r.action].label}</Badge>
+                  <Badge variant="outline" className={ACTION_BADGE[r.action].cls}>
+                    {ACTION_BADGE[r.action].label}
+                  </Badge>
                   <span className="font-medium">{clientName}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {meta.type} · FY {meta.fy} · {meta.status}
-                  </span>
+                  {(fy || type) && (
+                    <span className="text-xs text-muted-foreground">
+                      {[type, fy].filter(Boolean).join(" · ")}
+                    </span>
+                  )}
                   <div className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
-                    <span>by <span className="font-medium text-foreground">{r.changed_by_name || (r.changed_by ? r.changed_by.slice(0, 8) + "…" : "system / service-role")}</span></span>
+                    <span>
+                      by <span className="font-medium text-foreground">
+                        {r.changed_by_name || (r.changed_by_email ? r.changed_by_email
+                          : (r.changed_by ? r.changed_by.slice(0, 8) + "…" : "system"))}
+                      </span>
+                    </span>
                     <span>{fmtIST(r.changed_at)} IST</span>
-                    <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setExpandedId(isExpanded ? null : r.id)}>
-                      <FileText className="h-3 w-3 mr-1" />
-                      {isExpanded ? "Hide" : "Details"}
-                    </Button>
                   </div>
                 </div>
-                {r.action === "update" && meta.summary && (
-                  <div className="mt-1 text-xs text-muted-foreground pl-1">
-                    {meta.summary}
-                  </div>
-                )}
-                {isExpanded && (
-                  <div className="mt-3 rounded-md bg-muted/40 border p-3 text-[11px] font-mono whitespace-pre-wrap break-all">
-                    <div className="text-muted-foreground mb-1">engagement_id: <span className="text-foreground">{r.engagement_id}</span></div>
-                    <div className="text-muted-foreground mb-1">changed_by: <span className="text-foreground">{r.changed_by || "(null — service-role / system)"}</span> ({r.changed_by_email || "no email"})</div>
-                    <div className="text-muted-foreground mb-2">snapshot:</div>
-                    <pre className="text-[11px] max-h-96 overflow-auto">{JSON.stringify(r.snapshot, null, 2)}</pre>
+                {/* For update rows — list only the meaningful field changes
+                     (firm / partner) the auditor cares about. Other diffs
+                     have already been filtered out above. */}
+                {changes.length > 0 && (
+                  <div className="mt-1.5 pl-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                    {changes.map((c, i) => (
+                      <span key={i}>
+                        <span className="font-medium text-foreground">{c.label}</span>
+                        {": "}
+                        <span>{c.before}</span>
+                        <span className="mx-1">→</span>
+                        <span className="font-medium text-foreground">{c.after}</span>
+                      </span>
+                    ))}
                   </div>
                 )}
               </div>
