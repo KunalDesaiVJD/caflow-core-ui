@@ -1904,7 +1904,15 @@ export function sumNotesSubRowsCY(
   const noteRow = (notesData?.[section] as Record<string, any> | undefined)?.[key];
   if (!noteRow) return null;
   const breakup: any[] = Array.isArray(noteRow.breakup) ? noteRow.breakup : [];
-  const populated = breakup.filter(r => r != null && isNonEmptyAmount(r.amount_cy));
+  // BUG C2 FIX (2026-06-04): skip is_group HEADER rows when summing breakup
+  // amounts. Group headers in the Corporate FS structure are visual roll-ups
+  // — their `amount_cy` (if present) is either zero or a stale leftover that
+  // should NEVER be counted on top of the members. Including them double-
+  // counted the breakup total, which made notesMismatch.ts fire false
+  // "Note off by ₹X" warnings on every client that used the group UI.
+  const populated = breakup.filter(r =>
+    r != null && r.is_group !== true && isNonEmptyAmount(r.amount_cy)
+  );
   if (!populated.length) return null;
   return populated.reduce((s: number, r: any) => {
     const n = Number(r.amount_cy);
@@ -1915,6 +1923,7 @@ export function sumNotesSubRowsCY(
 /**
  * Sum of all non-null `amount_py` values in the breakup array for the given
  * note section + key.  Returns null when the note has no populated sub-rows.
+ * BUG C2 FIX — same is_group skip applied to the PY sum.
  */
 export function sumNotesSubRowsPY(
   notesData: Stage5Notes | null | undefined,
@@ -1924,7 +1933,9 @@ export function sumNotesSubRowsPY(
   const noteRow = (notesData?.[section] as Record<string, any> | undefined)?.[key];
   if (!noteRow) return null;
   const breakup: any[] = Array.isArray(noteRow.breakup) ? noteRow.breakup : [];
-  const populated = breakup.filter(r => r != null && isNonEmptyAmount(r.amount_py));
+  const populated = breakup.filter(r =>
+    r != null && r.is_group !== true && isNonEmptyAmount(r.amount_py)
+  );
   if (!populated.length) return null;
   return populated.reduce((s: number, r: any) => {
     const n = Number(r.amount_py);
