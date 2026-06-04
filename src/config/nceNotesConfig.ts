@@ -835,7 +835,7 @@ export function computeDisplayData(
   config: NoteConfig,
   cy: Record<string, number>,
   py: Record<string, number>,
-  customRows?: Array<{ id: string; section?: string; attachedTo?: string }>,
+  customRows?: Array<{ id: string; section?: string; attachedTo?: string; sources?: Array<{ ledger?: string; amountCy?: number; amountPy?: number; column?: "lt" | "st" }> }>,
 ): { cy: Record<string, number>; py: Record<string, number> } {
   const outCy = { ...cy };
   const outPy = { ...py };
@@ -850,11 +850,29 @@ export function computeDisplayData(
   // nowhere (it has an attachedTo, so it's excluded from `extras`, and its
   // parent isn't a static formulaAdd id), so the note total came out blank.
   // `seen` guards against any accidental attachedTo cycle.
+  //
+  // SHREE HARI FIX (2026-06-04): also include the customRow's own `sources[]`
+  // sub-ledger breakdown array. A "heading"-style customRow (e.g. "A" / "B" /
+  // "C" / "D") often carries zero in cy[id] with the actual amounts living in
+  // a `sources: [{ledger, amountCy, amountPy}]` array. Without this addition,
+  // such headings contributed 0 to the note Total even though their sub-
+  // ledgers totalled lakhs, making the note Total inconsistent with the
+  // per-row aggregates the renderer displays. Mirrors the same fix applied
+  // in NCEDetailedNotes.tsx renderer-side sumCustomDisplayB/A.
   const sumCustomB = (id: string, seen: Set<string>): { c: number; p: number } => {
     if (seen.has(id)) return { c: 0, p: 0 };
     seen.add(id);
     let c = outCy[id] ?? 0, p = outPy[id] ?? 0;
     if (customRows) {
+      const self = customRows.find(cr => cr.id === id);
+      // Add the heading's own sources[] sum — guarded to avoid double-count
+      // if rawCy[id] is already non-zero (user explicitly set a value).
+      if (self && Array.isArray(self.sources) && self.sources.length > 0) {
+        const srcSumCy = self.sources.reduce((s, x) => s + (Number(x?.amountCy) || 0), 0);
+        const srcSumPy = self.sources.reduce((s, x) => s + (Number(x?.amountPy) || 0), 0);
+        if ((outCy[id] ?? 0) === 0) c += srcSumCy;
+        if ((outPy[id] ?? 0) === 0) p += srcSumPy;
+      }
       for (const cr of customRows) {
         if (cr.attachedTo === id) { const r = sumCustomB(cr.id, seen); c += r.c; p += r.p; }
       }
@@ -932,12 +950,29 @@ export function computeDisplayData(
       };
       // Recursive contribution of a custom row including nested children (see
       // sumCustomB above — same fix for Pattern A's LT/ST columns).
+      // SHREE HARI FIX mirror — also sum the row's own `sources[]` array,
+      // routing each source to the right column via `source.column` ("lt"|"st",
+      // default "lt"). Mirrors the renderer-side sumCustomDisplayA logic.
       const sumCustomA = (id: string, seen: Set<string>) => {
         if (seen.has(id)) return { lc: 0, lp: 0, sc: 0, sp: 0 };
         seen.add(id);
         const v = lookupSuffixed(outCy, outPy, id);
         let lc = v.ltCy, lp = v.ltPy, sc = v.stCy, sp = v.stPy;
         if (customRows) {
+          const self = customRows.find(cr => cr.id === id);
+          if (self && Array.isArray(self.sources) && self.sources.length > 0) {
+            for (const x of self.sources) {
+              const aCy = Number(x?.amountCy) || 0;
+              const aPy = Number(x?.amountPy) || 0;
+              if (x?.column === "st") {
+                if ((outCy[id + "_st"] ?? 0) === 0) sc += aCy;
+                if ((outPy[id + "_st"] ?? 0) === 0) sp += aPy;
+              } else {
+                if ((outCy[id + "_lt"] ?? 0) === 0) lc += aCy;
+                if ((outPy[id + "_lt"] ?? 0) === 0) lp += aPy;
+              }
+            }
+          }
           for (const cr of customRows) {
             if (cr.attachedTo === id) { const r = sumCustomA(cr.id, seen); lc += r.lc; lp += r.lp; sc += r.sc; sp += r.sp; }
           }
