@@ -445,6 +445,36 @@ export default function AuditIntelligence() {
     const eid = selectedEngagementId;
     setFormSaving(true);
     try {
+      // ── L8 FIX (2026-06-04): purge engagement-scoped Storage objects ────
+      // The `documents` bucket has no FK to audit_engagements, so the DB-
+      // level ON DELETE CASCADE leaves Checklist PDFs / spreadsheets behind
+      // forever, eating quota and creating a privacy risk (orphan PDFs
+      // accessible by URL guessing if the user knows the engagement id).
+      // Enumerate every known engagement-scoped path prefix in the bucket
+      // and remove the objects BEFORE the DB rows are dropped.
+      //
+      // Best-effort: failures are logged but don't block the DB delete —
+      // a follow-up reconciliation sweep can pick up any survivors. The
+      // user's intent is "permanently delete", so even partial cleanup is
+      // better than the current "leave forever" behaviour.
+      try {
+        const prefixes = [`checklist/${eid}`];
+        let removed = 0;
+        for (const prefix of prefixes) {
+          const { data: listed } = await supabase.storage.from("documents").list(prefix, { limit: 1000 });
+          if (listed && listed.length > 0) {
+            const paths = listed.map(o => `${prefix}/${o.name}`);
+            const { error: rmErr } = await supabase.storage.from("documents").remove(paths);
+            if (rmErr) console.warn(`[delete] Storage purge of ${prefix} failed:`, rmErr.message);
+            else removed += paths.length;
+          }
+        }
+        if (removed > 0) console.log(`[delete] Purged ${removed} Storage object(s) for engagement ${eid}`);
+      } catch (sErr) {
+        // Non-fatal — proceed with DB delete even if Storage purge errored.
+        console.warn("[delete] Storage purge attempt failed:", sErr);
+      }
+
       // 1. Get import batch IDs first (children reference them)
       const { data: batches } = await supabase.from("ledger_import_batches" as any).select("id").eq("engagement_id", eid);
       const batchIds = (batches ?? []).map((b: any) => b.id);
