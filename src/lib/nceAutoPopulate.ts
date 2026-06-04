@@ -907,7 +907,7 @@ export async function nceAutoPopulate(
     // De-duplicating by label+attachedTo+section (keep first) means a re-sync now
     // writes ONE clean row per ledger and totals stop multiplying.
     const _seenManual = new Set<string>();
-    const manualRows = prev.customRows.filter(r => {
+    let manualRows = prev.customRows.filter(r => {
       if (r.source !== "manual") return false;
       const key = `${(r.label || "").trim().toLowerCase()}|${r.attachedTo ?? ""}|${r.section ?? ""}`;
       if (!(r.label || "").trim()) return true;
@@ -915,6 +915,54 @@ export async function nceAutoPopulate(
       _seenManual.add(key);
       return true;
     });
+
+    // 2026-06-04 — STALE PATTERN-A LEDGER PURGE (DHANANI REALTY fix).
+    // For per-ledger-breakup Pattern A notes (borrowings / investments /
+    // loans_advances), drop any manual row whose label matches a TB ledger
+    // that is IN SCOPE for this note under the CURRENT COA mapping. This
+    // exists because:
+    //   1. A previous sync turned each in-scope TB ledger into a customRow.
+    //   2. Move-to / heal upgrades flipped those rows from source="auto"
+    //      → "manual" so they survive re-sync.
+    //   3. When the ledger is reclassified between LT and ST in COA Mapping
+    //      (e.g. NCE_STB → NCE_LTB), the saved manual row still carries the
+    //      OLD column suffix (_st or _lt) — so the wrong split note keeps
+    //      showing the figure even after Re-sync from COA.
+    //   4. The new isClaimedByManual short-circuit then prevents the TB
+    //      loop from regenerating a fresh row under the new classification.
+    // By dropping the stale manual row here, the TB loop creates a fresh
+    // customRow with the correct LT/ST split, and the purgeStale pass at
+    // the end of buildPatternNote scrubs the orphan _lt/_st keys.
+    const _wantsPerLedgerBreakup =
+      noteType === "borrowings" ||
+      noteType === "investments" ||
+      noteType === "loans_advances";
+    if (_wantsPerLedgerBreakup && tb.length > 0) {
+      const ltSet = new Set(noteFs.lt ?? []);
+      const stSet = new Set(noteFs.st ?? []);
+      if (ltSet.size > 0 || stSet.size > 0) {
+        const tbInScope = new Set<string>();
+        for (const row of tb) {
+          const mapped = coaMapping[row.ledger_name];
+          if (!mapped) continue;
+          if (ltSet.has(mapped.code) || stSet.has(mapped.code)) {
+            tbInScope.add(row.ledger_name.trim().toLowerCase());
+          }
+        }
+        if (tbInScope.size > 0) {
+          const before = manualRows.length;
+          manualRows = manualRows.filter(mr => {
+            const lbl = (mr.label || "").trim().toLowerCase();
+            return !tbInScope.has(lbl);
+          });
+          const dropped = before - manualRows.length;
+          if (dropped > 0) {
+            // eslint-disable-next-line no-console
+            console.log(`[nceAutoPopulate] ${noteType}: purged ${dropped} stale Pattern-A manual row(s) so TB reclassification (LT↔ST) can take effect.`);
+          }
+        }
+      }
+    }
 
     // Build a set of TB ledger names the user has explicitly ejected to
     // standalone rows. These are skipped during auto-grouping so they won't
