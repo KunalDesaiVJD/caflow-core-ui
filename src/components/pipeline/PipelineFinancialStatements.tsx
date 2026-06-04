@@ -3736,11 +3736,14 @@ export default function PipelineFinancialStatements({
           return /^NCE_(CAP|LTB|OLTL|LTP|STB|TP|OCL|STP|PPE|INTG|CWIP|NCINV|LTLA|ONCA|CINV|STCK|TR|CASH|STLA|OCA)$/.test(code);
         };
         // Pass 1 — stage5_notes (legacy path).
+        // PyShell guard REMOVED 2026-06-05 — see policy comment above. Notes
+        // are the audit document of record; manually-added PY entries (e.g.
+        // SHREE HARI INFRA "Member Sales POS" ₹27.9 cr in other_cl) must
+        // flow through to the BS face. Drift between PY shell TB and notes
+        // is now surfaced by FsHealthPanel instead of being silenced here.
         for (const [code, key] of Object.entries(NCE_CODE_TO_NOTE_KEY)) {
           const section = NCE_CODE_TO_SECTION[code];
           if (!section) continue;
-          // Only PyShell skip preserved — see policy comment above.
-          if (hasPyShellBS && isBSCode(code)) continue;
           const sum = sumNotesSubRowsPY(stage5NotesData ?? null, section, key);
           if (sum == null) continue;
           out[code] = section === "bs_liab" ? -sum : sum;
@@ -3748,9 +3751,8 @@ export default function PipelineFinancialStatements({
         const faPy = getFAGridNetBlockTotal(stage5NotesData ?? null, "py");
         if (faPy != null) out["NCE_PPE"] = faPy;
         // Pass 2 — nce_financial_notes (Stage 8 path, the modern one).
-        // Same logic: notes total wins; PyShell guard preserved.
+        // Same logic: notes total wins for every code, PY shell or not.
         for (const code of Object.keys(NCE_CODE_TO_NOTE)) {
-          if (hasPyShellBS && isBSCode(code)) continue;
           applyNCENoteTotal(out, code, "py");
         }
         // See nceCyAmounts — recompute PY parents from leaf codes so the
