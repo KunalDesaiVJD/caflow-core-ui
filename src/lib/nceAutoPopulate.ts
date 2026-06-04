@@ -1804,8 +1804,30 @@ export async function nceAutoPopulate(
     // value from a previous sync.  User-typed manual rows whose label does
     // NOT match any TB ledger are left untouched (preserve verbatim).
     if (tbRefreshCy || tbRefreshPy) {
+      // ── BUG N3 FIX (2026-06-04) ────────────────────────────────────
+      // Pre-compute the set of row IDs that have at least one customRow
+      // attached to them. These are INTERMEDIATE groupings created by the
+      // auditor (e.g. SHREE HARI INFRA's "A" heading under Other Payables
+      // → Others, with child rows "Office No. 201", "A-0903 Dineshbhai"…).
+      // Such a heading's own amount is meant to be the aggregate of its
+      // descendants — NEVER a TB ledger. Zeroing it out (which the old code
+      // unconditionally did when the label didn't match TB) destroyed the
+      // displayed aggregate every Re-sync. From now on: any row that has
+      // children attached to it is left strictly alone here. Its display
+      // value is computed by the renderer's recursive sumCustomDisplayB.
+      const hasChildren = new Set<string>();
+      for (const cr of absorbedManualRows) {
+        if (cr.attachedTo) hasChildren.add(cr.attachedTo);
+      }
+      // Also include auto rows from this rebuild, in case a manual was
+      // moved under an auto-row in a previous sync — same protection.
+      for (const cr of autoRows) {
+        if (cr.attachedTo) hasChildren.add(cr.attachedTo);
+      }
       let refreshedCount = 0;
       for (const mr of absorbedManualRows) {
+        // Intermediate heading guard — see comment above. Skip entirely.
+        if (hasChildren.has(mr.id)) continue;
         const lbl = (mr.label || "").trim().toLowerCase();
         if (!lbl) continue;
         const newCyVal = tbRefreshCy?.[lbl];
