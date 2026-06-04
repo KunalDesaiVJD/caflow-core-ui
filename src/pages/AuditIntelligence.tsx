@@ -399,20 +399,24 @@ export default function AuditIntelligence() {
   const handleEdit = async () => {
     if (!selectedEngagementId) return;
     setFormSaving(true);
+    // ── LOCKED EDIT (2026-06-04) ─────────────────────────────────────
+    // Per product decision, ONLY Audit Firm and Engagement Partner are
+    // editable on an existing engagement. Client, Financial Year, Audit
+    // Type, Period Type, and Entity Type are immutable — the UI shows
+    // them read-only and this UPDATE payload deliberately omits them so
+    // even a tampered form state cannot mutate them. Changing those
+    // fields would orphan TB / FS / 3CD / audit-setup linkage and break
+    // the audit_engagements_unique_live uniqueness invariant.
     const safeAuditFirmId = engForm.audit_firm_id
       ? await ensureAuditFirmRow(engForm.audit_firm_id)
       : null;
     const { error } = await supabase.from("audit_engagements").update({
       audit_firm_id: safeAuditFirmId,
-      client_id: engForm.client_id,
-      financial_year: engForm.financial_year,
-      audit_type: engForm.audit_type,
-      entity_type: engForm.entity_type,
-      audit_period_type: engForm.audit_period_type,
-      // partner_name is the primary display field (from firms.membership_numbers)
-      partner_name: engForm.partner_name || null,
-      // keep partner_id as null — not used when partner_name is set
-      partner_id: null,
+      partner_name:  engForm.partner_name || null,
+      // partner_id is legacy / no longer the source of truth — clear it
+      // so it can never disagree with partner_name. partner_name is
+      // resolved from firms.membership_numbers at render time.
+      partner_id:    null,
     } as any).eq("id", selectedEngagementId);
     setFormSaving(false);
     if (error) { toast.error(error.message); return; }
@@ -949,10 +953,15 @@ export default function AuditIntelligence() {
             </div>
             <div>
               <Label>Financial Year</Label>
-              <Select value={engForm.financial_year} onValueChange={v => setEngForm(f => ({ ...f, financial_year: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{FY_OPTIONS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
-              </Select>
+              {/* Financial Year is immutable on an existing engagement. Changing it
+                  would orphan the Tally trial balance, financial statements,
+                  comparative PY links, and every FY-scoped artefact (audit-setup
+                  flags, 3CD answers, IT return year, TDS quarter mapping).
+                  Per locked behaviour: only Audit Firm + Partner are editable. */}
+              <div className="flex items-center h-10 px-3 rounded-md border border-input bg-muted/50 text-sm text-foreground">
+                {engForm.financial_year || "—"}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">Financial Year cannot be changed on an existing engagement (read-only).</p>
             </div>
             <div>
               <Label>Audit Type</Label>
@@ -1001,10 +1010,19 @@ export default function AuditIntelligence() {
             </div>
             <div>
               <Label>Period Type</Label>
-              <Select value={engForm.audit_period_type} onValueChange={v => setEngForm(f => ({ ...f, audit_period_type: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{PERIOD_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
-              </Select>
+              {/* Period Type is immutable on an existing engagement. Switching
+                  between Full Year / Half Year / Quarter would invalidate the
+                  Tally export period filter, the financial-statements heading,
+                  and the new audit_engagements_unique_live constraint
+                  (period_type is part of the uniqueness tuple).
+                  Per locked behaviour: only Audit Firm + Partner are editable. */}
+              <div className="flex items-center h-10 px-3 rounded-md border border-input bg-muted/50 text-sm text-foreground">
+                {(() => {
+                  const p = PERIOD_TYPES.find(x => x.value === engForm.audit_period_type);
+                  return p?.label || engForm.audit_period_type || "—";
+                })()}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">Period Type cannot be changed on an existing engagement (read-only).</p>
             </div>
             <div>
               <Label>Entity Type</Label>
