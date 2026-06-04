@@ -916,50 +916,52 @@ export async function nceAutoPopulate(
       return true;
     });
 
-    // 2026-06-04 — STALE PATTERN-A LEDGER PURGE (DHANANI REALTY fix).
+    // 2026-06-04 — STALE PATTERN-A LEDGER PURGE (DHANANI REALTY + SHREE HARI).
     // For per-ledger-breakup Pattern A notes (borrowings / investments /
     // loans_advances), drop any manual row whose label matches a TB ledger
-    // that is IN SCOPE for this note under the CURRENT COA mapping. This
-    // exists because:
-    //   1. A previous sync turned each in-scope TB ledger into a customRow.
-    //   2. Move-to / heal upgrades flipped those rows from source="auto"
-    //      → "manual" so they survive re-sync.
-    //   3. When the ledger is reclassified between LT and ST in COA Mapping
-    //      (e.g. NCE_STB → NCE_LTB), the saved manual row still carries the
-    //      OLD column suffix (_st or _lt) — so the wrong split note keeps
-    //      showing the figure even after Re-sync from COA.
-    //   4. The new isClaimedByManual short-circuit then prevents the TB
-    //      loop from regenerating a fresh row under the new classification.
-    // By dropping the stale manual row here, the TB loop creates a fresh
-    // customRow with the correct LT/ST split, and the purgeStale pass at
-    // the end of buildPatternNote scrubs the orphan _lt/_st keys.
+    // — regardless of whether that TB ledger is currently mapped to one of
+    // this note's codes or not. Two failure modes converge here:
+    //
+    //   (a) Reclassification across LT/ST inside the same note (DHANANI
+    //       REALTY): the manual row still carried the OLD _st / _lt suffix
+    //       after the user flipped the ledger between NCE_STB and NCE_LTB.
+    //   (b) Reclassification across NOTES (SHREE HARI INFRA): HUF loan
+    //       ledgers once mapped to NCE_LTB persisted as manual rows in
+    //       this note, but later the user mapped them to a different code
+    //       (NCE_CAP / NCE_STLA / etc.). The earlier 'in-scope only' purge
+    //       missed them because the ledger's current mapping isn't in this
+    //       note's ltSet/stSet — so the rows kept appearing as empty
+    //       placeholders forever.
+    //
+    // Broader rule: any TB ledger is processed afresh by the appropriate
+    // note's auto-populate based on its CURRENT mapping. A manual row
+    // whose label matches a TB ledger is by definition redundant in this
+    // note — either auto-populate will recreate it correctly here (if the
+    // mapping still belongs), or it should disappear (if the mapping
+    // moved). Drop them; the purgeStale pass scrubs orphan _lt/_st keys.
+    //
+    // Manual rows whose label does NOT match any TB ledger (e.g. an HUF
+    // loan typed by hand without a Tally ledger) are kept unchanged.
     const _wantsPerLedgerBreakup =
       noteType === "borrowings" ||
       noteType === "investments" ||
       noteType === "loans_advances";
     if (_wantsPerLedgerBreakup && tb.length > 0) {
-      const ltSet = new Set(noteFs.lt ?? []);
-      const stSet = new Set(noteFs.st ?? []);
-      if (ltSet.size > 0 || stSet.size > 0) {
-        const tbInScope = new Set<string>();
-        for (const row of tb) {
-          const mapped = coaMapping[row.ledger_name];
-          if (!mapped) continue;
-          if (ltSet.has(mapped.code) || stSet.has(mapped.code)) {
-            tbInScope.add(row.ledger_name.trim().toLowerCase());
-          }
-        }
-        if (tbInScope.size > 0) {
-          const before = manualRows.length;
-          manualRows = manualRows.filter(mr => {
-            const lbl = (mr.label || "").trim().toLowerCase();
-            return !tbInScope.has(lbl);
-          });
-          const dropped = before - manualRows.length;
-          if (dropped > 0) {
-            // eslint-disable-next-line no-console
-            console.log(`[nceAutoPopulate] ${noteType}: purged ${dropped} stale Pattern-A manual row(s) so TB reclassification (LT↔ST) can take effect.`);
-          }
+      const tbLedgerSet = new Set<string>();
+      for (const row of tb) {
+        const nm = (row.ledger_name || "").trim().toLowerCase();
+        if (nm) tbLedgerSet.add(nm);
+      }
+      if (tbLedgerSet.size > 0) {
+        const before = manualRows.length;
+        manualRows = manualRows.filter(mr => {
+          const lbl = (mr.label || "").trim().toLowerCase();
+          return !tbLedgerSet.has(lbl);
+        });
+        const dropped = before - manualRows.length;
+        if (dropped > 0) {
+          // eslint-disable-next-line no-console
+          console.log(`[nceAutoPopulate] ${noteType}: purged ${dropped} stale Pattern-A manual row(s) whose ledger now lives in a different note (LT↔ST or cross-note reclassification).`);
         }
       }
     }
@@ -2028,10 +2030,50 @@ export async function nceAutoPopulate(
       if (remaining.length > 0) cleanedSources[staticId] = remaining;
     }
 
+    // 2026-06-04 — Final safety net for SHREE HARI's empty-row leak.
+    // For per-ledger-breakup Pattern A notes, drop any customRow whose
+    // CY / PY values across BOTH _lt and _st (and the bare key) all
+    // round to zero AND who has no sources[] (= isn't a smart-match
+    // aggregate that intentionally shows breakup detail with zero CY).
+    // This catches edge cases where an upstream path pushed an orphan
+    // row despite the keep-condition checks above — the user sees
+    // 'Auto' rows in the LT / ST note with both columns blank.
+    //
+    // Manual rows are NOT touched (auditor may have a future-fill
+    // placeholder). Aggregate rows with attached children are kept too
+    // (the static-row total still uses them as parents).
+    let leakFreeCustomRows: NCECustomRow[] = finalCustomRows;
+    if (_wantsPerLedgerBreakup) {
+      const isOrphanEmpty = (cr: NCECustomRow): boolean => {
+        if (cr.source !== "auto") return false;             // manual rows kept
+        if ((cr.sources?.length ?? 0) > 0) return false;    // aggregates kept
+        // Look for any non-zero value in cy/py for this row id (bare + suffixed).
+        const anyVal = (m: Record<string, number>) =>
+          Math.abs(Number(m[cr.id]        ?? 0)) > 0.005 ||
+          Math.abs(Number(m[cr.id + "_lt"] ?? 0)) > 0.005 ||
+          Math.abs(Number(m[cr.id + "_st"] ?? 0)) > 0.005;
+        return !anyVal(mergedCy) && !anyVal(mergedPy);
+      };
+      const droppedIds = finalCustomRows.filter(isOrphanEmpty).map(cr => cr.id);
+      if (droppedIds.length > 0) {
+        leakFreeCustomRows = finalCustomRows.filter(cr => !droppedIds.includes(cr.id));
+        // Also purge any orphan keys these rows might own (they should
+        // already be zero, but be explicit).
+        for (const id of droppedIds) {
+          for (const sfx of ["", "_lt", "_st"]) {
+            delete mergedCy[id + sfx];
+            delete mergedPy[id + sfx];
+          }
+        }
+        // eslint-disable-next-line no-console
+        console.log(`[nceAutoPopulate] ${noteType}: dropped ${droppedIds.length} orphan empty auto row(s) (no CY / PY data).`);
+      }
+    }
+
     out[noteType] = {
       cy:         mergedCy,
       py:         mergedPy,
-      customRows: finalCustomRows,
+      customRows: leakFreeCustomRows,
       // Preserve user settings that survive re-sync
       hiddenRows:     prev.hiddenRows ?? [],
       labelOverrides: prev.labelOverrides ?? {},
