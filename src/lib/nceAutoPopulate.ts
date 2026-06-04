@@ -1272,7 +1272,30 @@ export async function nceAutoPopulate(
         if (!mapped || !codeSet.has(mapped.code)) continue;
         const nm = String(row.ledger_name || "").trim();
         if (!nm) continue;
-        cyByLedgerB[nm.toLowerCase()] = signedLedgerAmt(row, noteType);
+        const nmLower = nm.toLowerCase();
+        cyByLedgerB[nmLower] = signedLedgerAmt(row, noteType);
+        // ── SIGN ROOT-CAUSE FIX (2026-06-05, SHREE HARI "Member Sales (Pos)") ──
+        // The PY refresh map (pyByLedgerB) is built ONLY from the PY-shell TB
+        // above. When an engagement has no PY shell (or the shell is missing
+        // this ledger), pyByLedgerB has no entry → the refresh loop below
+        // would set the manual row's PY to 0 OR leave a STALE, WRONG-SIGNED
+        // value (e.g. "Member Sales (Pos)", a Dr advance under Other Current
+        // Liabilities, was stored as +27.9 cr instead of −27.9 cr).
+        //
+        // Fix: fall back to the SIGNED CY opening balance (= prior-year close)
+        // via signedLedgerOpeningAmt, which applies the head's natural side
+        // (Dr-on-Cr-head → negative). This makes the note's stored PY match
+        // the signed trial balance that the COA-Mapping BS uses — so
+        // FS notes total === COA-Mapping BS, and the BS reconciles.
+        //
+        // Precedence: a real PY-shell value (already in pyByLedgerB) always
+        // wins; this only fills the gap when the shell didn't supply one.
+        // Idempotent: signedLedgerOpeningAmt is a pure function of the TB
+        // row's opening_type, so re-running converges and never double-flips.
+        if (pyByLedgerB[nmLower] === undefined) {
+          const signedOpening = signedLedgerOpeningAmt(row, noteType);
+          if (Math.abs(signedOpening) > 0.005) pyByLedgerB[nmLower] = signedOpening;
+        }
       }
       // Expose the maps to the merge step (outer scope) so manual-row CY/PY
       // values get refreshed from TB.  Only for strictly-TB-driven notes —
