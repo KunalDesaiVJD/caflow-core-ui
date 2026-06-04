@@ -961,9 +961,15 @@ function PatternBTable({
       if (ancestorIds.has(cr.id)) continue; // cycle guard
       const myChildren = customRows.filter(c => c.attachedTo === cr.id);
       const crIsOpen = openSources.has(cr.id);
-      const hasChildren = myChildren.length > 0;
-      const showAgg = hasChildren && !crIsOpen;
-      const crAgg = showAgg ? sumCustomDisplayB(cr.id) : null;
+      // SHREE HARI fix (2026-06-04): treat a non-empty `sources` array as
+      // "having children" too, so heading rows like "A" / "B" / "C" / "D"
+      // whose sub-ledger breakdowns live in `sources[]` (not as nested
+      // customRows) still show their rolled-up aggregate. Also: show the
+      // aggregate regardless of expand state when there ARE children —
+      // identical reasoning to the static-row fix earlier today.
+      const hasSrcs = Array.isArray((cr as any).sources) && (cr as any).sources.length > 0;
+      const hasChildren = myChildren.length > 0 || hasSrcs;
+      const crAgg = hasChildren ? sumCustomDisplayB(cr.id) : null;
       const isChild = ancestorIds.size > 0;
       const nextAncestors = new Set(ancestorIds);
       nextAncestors.add(cr.id);
@@ -1555,9 +1561,12 @@ function PatternATable({
       if (ancestorIds.has(cr.id)) continue; // cycle guard
       const myChildren = customRows.filter(c => c.attachedTo === cr.id);
       const crIsOpen = openSources.has(cr.id);
-      const hasChildren = myChildren.length > 0;
-      const showAgg = hasChildren && !crIsOpen;
-      const crAgg = showAgg ? sumCustomDisplayA(cr.id) : null;
+      // SHREE HARI mirror — sources[] array also counts as "children"
+      // for aggregate-display purposes; show aggregate regardless of
+      // expand state when there ARE children. See renderTreeB above.
+      const hasSrcs = Array.isArray((cr as any).sources) && (cr as any).sources.length > 0;
+      const hasChildren = myChildren.length > 0 || hasSrcs;
+      const crAgg = hasChildren ? sumCustomDisplayA(cr.id) : null;
       const isChild = ancestorIds.size > 0;
       const nextAncestors = new Set(ancestorIds);
       nextAncestors.add(cr.id);
