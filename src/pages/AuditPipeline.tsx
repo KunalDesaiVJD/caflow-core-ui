@@ -809,15 +809,16 @@ export default function AuditPipeline() {
       }
 
       const safeAuditFirmId = await ensureAuditFirmRow(form1A.audit_firm_id);
-      // NOTE: this remains an INSERT (not UPSERT) because the partial UNIQUE
-      // index in 20260604000001_audit_engagements_unique.sql is not yet
-      // applied to the live database (pending manual application by the
-      // user). Once that index is live, the call can be switched to:
-      //   .upsert({...}, { onConflict: "client_id,financial_year,audit_type,audit_period_type", ignoreDuplicates: false })
-      // for a defence-in-depth race-condition guard. Until then, the JS
-      // pre-check above is the sole defence — and it now catches every
-      // duplicate-creation path that previously slipped through.
-      const { data, error } = await supabase.from("audit_engagements").insert({
+      // UPSERT (not INSERT) so the partial unique index
+      // `audit_engagements_unique_live` (migration 20260604000001, applied
+      // to production 2026-06-04) acts as a race-condition backstop. If two
+      // tabs / two users hit Create at the same moment for the same
+      // (client, FY, audit_type, period_type), the second call no longer
+      // raises a UNIQUE-violation error — it returns the existing row's id
+      // and the UI navigates straight to that engagement. ignoreDuplicates:
+      // false makes upsert RETURN the existing row (not silently skip) so
+      // .select("id").single() still receives an id either way.
+      const { data, error } = await (supabase as any).from("audit_engagements").upsert({
         client_id: form1A.client_id,
         firm_id: effectiveFirmId,
         financial_year: form1A.financial_year,
@@ -833,7 +834,7 @@ export default function AuditPipeline() {
         status: "planning",
         pipeline_stage: 1,
         stage_statuses: { "1": "in_progress", "2": "not_started", "3": "not_started", "4": "not_started", "5": "not_started", "6": "not_started", "7": "not_started", "8": "not_started", "9": "not_started" },
-      } as any).select("id").single();
+      }, { onConflict: "client_id,financial_year,audit_type,audit_period_type", ignoreDuplicates: false }).select("id").single();
       if (error) throw error;
 
       // Ensure this client+FY has an audit-setup row so FY-scoped consumers
