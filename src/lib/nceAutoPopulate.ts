@@ -497,14 +497,26 @@ export function getNCENoteFaceTotal(
   patternCol?: "lt" | "st",
 ): number | null {
   if (!noteRow) return null;
-  const rawCy = (column === "cy" ? noteRow.cy_data : noteRow.py_data) ?? {};
-  if (!rawCy || typeof rawCy !== "object") return null;
+  // SCHEMA QUIRK / SHREE HARI ROOT CAUSE FIX (2026-06-05):
+  // `_custom_rows` (with its `sources[]` sub-ledger arrays) is persisted
+  // ONLY on cy_data. py_data carries the per-id PY numeric values but NOT
+  // the customRow metadata. Reading `py_data._custom_rows` returns an empty
+  // array — which means a PY column query previously saw NO customRows,
+  // counted NO sources, and silently under-reported the BS PY face by
+  // crores of rupees (SHREE HARI INFRA: ₹55.67 cr missing across A/B/C/D/E
+  // heading rows). Always pull the customRow list from cy_data; values
+  // for the requested column come from cy_data OR py_data as appropriate.
+  const cyData = noteRow.cy_data ?? {};
+  const pyData = noteRow.py_data ?? {};
+  const valuesSource = (column === "cy" ? cyData : pyData) ?? {};
+  if (!valuesSource || typeof valuesSource !== "object") return null;
+  // Master customRow list — always from cy_data, regardless of column.
   const customRows: Array<{ id: string; section?: string; attachedTo?: string; sources?: Array<{ ledger?: string; amountCy?: number; amountPy?: number; column?: "lt" | "st" }> }> =
-    Array.isArray((rawCy as any)._custom_rows) ? (rawCy as any)._custom_rows : [];
+    Array.isArray((cyData as any)._custom_rows) ? (cyData as any)._custom_rows : [];
 
-  // Strip meta keys to get the pure numeric map.
+  // Strip meta keys to get the pure numeric map for the REQUESTED column.
   const numeric: Record<string, number> = {};
-  for (const [k, v] of Object.entries(rawCy)) {
+  for (const [k, v] of Object.entries(valuesSource)) {
     if (META_KEYS.has(k)) continue;
     if (typeof v === "number" && Number.isFinite(v)) numeric[k] = v;
   }
