@@ -101,6 +101,7 @@ export function extractSplitData(
   side: "lt" | "st",
 ): { cy: Record<string, number>; py: Record<string, number> } {
   const suffix = `_${side}`;
+  const otherSuffix = side === "lt" ? "_st" : "_lt";
   const outCy: Record<string, number> = {};
   const outPy: Record<string, number> = {};
   for (const key of Object.keys(sourceData.cy)) {
@@ -114,8 +115,30 @@ export function extractSplitData(
   // array so attachedRows() finds the rows and aggB/aggA include them in sums.
   // Without this, split notes (borrowings LT/ST, provisions LT/ST, loans_advances
   // LT/ST) always get customRows = [] → section totals = 0 → "—" in export.
+  //
+  // 2026-06-04 — Filter customRows to ONLY this side. The previous version
+  // passed every customRow through to BOTH sides, so an LT-only ledger (e.g.
+  // DHANANI REALTY's "Aditya Birla Finance Ltd" — mapped to NCE_LTB) still
+  // appeared as an empty-amount row in the Short-Term Borrowings note. A
+  // row is "on this side" when it has a non-zero value in this side's _lt
+  // or _st key (CY or PY), OR when ONLY this side's key exists (handles
+  // the legacy bare-key case where no suffix was written).
   if (Array.isArray((sourceData.cy as any)._custom_rows)) {
-    (outCy as any)._custom_rows = (sourceData.cy as any)._custom_rows;
+    const allRows = (sourceData.cy as any)._custom_rows as Array<{ id: string }>;
+    const onThisSide = (cr: { id: string }): boolean => {
+      const thisCy = Math.abs(Number(sourceData.cy[cr.id + suffix]      ?? 0));
+      const thisPy = Math.abs(Number(sourceData.py[cr.id + suffix]      ?? 0));
+      const otherCy = Math.abs(Number(sourceData.cy[cr.id + otherSuffix] ?? 0));
+      const otherPy = Math.abs(Number(sourceData.py[cr.id + otherSuffix] ?? 0));
+      // Has a real amount on THIS side → include.
+      if (thisCy > 0.005 || thisPy > 0.005) return true;
+      // Has a real amount on the OTHER side and nothing on this side → exclude.
+      if (otherCy > 0.005 || otherPy > 0.005) return false;
+      // No suffixed amounts at all (placeholder / empty row) → include so the
+      // auditor can still see and fill it.
+      return true;
+    };
+    (outCy as any)._custom_rows = allRows.filter(onThisSide);
   }
   for (const key of Object.keys(sourceData.py)) {
     if (key.endsWith(suffix)) {
