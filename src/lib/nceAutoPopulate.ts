@@ -962,52 +962,67 @@ export async function nceAutoPopulate(
       return true;
     });
 
-    // 2026-06-04 — STALE PATTERN-A LEDGER PURGE (DHANANI REALTY + SHREE HARI).
-    // For per-ledger-breakup Pattern A notes (borrowings / investments /
-    // loans_advances), drop any manual row whose label matches a TB ledger
-    // — regardless of whether that TB ledger is currently mapped to one of
-    // this note's codes or not. Two failure modes converge here:
+    // 2026-06-04 — STALE-LEDGER PURGE (universal, Pattern A + Pattern B).
     //
-    //   (a) Reclassification across LT/ST inside the same note (DHANANI
-    //       REALTY): the manual row still carried the OLD _st / _lt suffix
-    //       after the user flipped the ledger between NCE_STB and NCE_LTB.
-    //   (b) Reclassification across NOTES (SHREE HARI INFRA): HUF loan
-    //       ledgers once mapped to NCE_LTB persisted as manual rows in
-    //       this note, but later the user mapped them to a different code
-    //       (NCE_CAP / NCE_STLA / etc.). The earlier 'in-scope only' purge
-    //       missed them because the ledger's current mapping isn't in this
-    //       note's ltSet/stSet — so the rows kept appearing as empty
-    //       placeholders forever.
+    // SKYLARK CORPORATION (5th report continuation): when a ledger is re-mapped
+    // in COA from one note to another (e.g. "Input CGST" / "Input SGST" moved
+    // from NCE_OCL → NCE_OCA), the NEW note picks it up via auto-populate, but
+    // the OLD note's customRow — which had been promoted to source: "manual"
+    // by an earlier self-heal or user touch — survived every Re-sync as an
+    // empty-amount ghost row attached to its original parent ("Other payables
+    // — Others" under Note 8 in SKYLARK). The earlier Pattern-A-only purge at
+    // this site (borrowings / investments / loans_advances) protected those
+    // notes but left every Pattern B note (other_cl, other_ca, trade_payables,
+    // cash_bank, …) vulnerable.
     //
-    // Broader rule: any TB ledger is processed afresh by the appropriate
-    // note's auto-populate based on its CURRENT mapping. A manual row
-    // whose label matches a TB ledger is by definition redundant in this
-    // note — either auto-populate will recreate it correctly here (if the
-    // mapping still belongs), or it should disappear (if the mapping
-    // moved). Drop them; the purgeStale pass scrubs orphan _lt/_st keys.
+    // Earlier failure modes this also still covers:
+    //   (a) DHANANI REALTY — same note, ledger flipped between NCE_STB and
+    //       NCE_LTB. New code = current mapping; if it's in our codes we keep
+    //       the row (the LT/ST suffix is rebuilt downstream).
+    //   (b) SHREE HARI INFRA — HUF loan re-mapped from NCE_LTB to NCE_CAP /
+    //       NCE_STLA. New code is NOT in borrowings' codes → drop.
+    //   (c) SKYLARK CORPORATION — Pattern B, NCE_OCL → NCE_OCA. New code is
+    //       NOT in other_cl's codes → drop.
     //
-    // Manual rows whose label does NOT match any TB ledger (e.g. an HUF
-    // loan typed by hand without a Tally ledger) are kept unchanged.
-    const _wantsPerLedgerBreakup =
-      noteType === "borrowings" ||
-      noteType === "investments" ||
-      noteType === "loans_advances";
-    if (_wantsPerLedgerBreakup && tb.length > 0) {
-      const tbLedgerSet = new Set<string>();
+    // Rule: drop any manual row whose label matches a TB ledger that is
+    // CURRENTLY mapped to a code THIS NOTE DOES NOT OWN. This is stricter
+    // (= safer) than the previous "drop if matches any TB ledger" rule —
+    // a manual row whose label coincides with a TB ledger still mapped to
+    // THIS note is preserved (the user may have intentionally typed it,
+    // and the existing silent-absorb / overlap-subtract paths will dedupe
+    // it against the auto row downstream).
+    //
+    // Manual rows whose label does NOT match any TB ledger (auditor-typed
+    // text rows like "Unpaid audit fees", HUF loans without a Tally ledger,
+    // etc.) are kept unchanged.
+    if (tb.length > 0) {
+      const ourCodes = new Set<string>([
+        ...(noteFs.all ?? []),
+        ...(noteFs.lt  ?? []),
+        ...(noteFs.st  ?? []),
+      ]);
+      // Build label → current mapping code for every TB ledger that has a
+      // mapping. Ledgers with no mapping fall through (no entry in the map).
+      const tbCodeByLabel = new Map<string, string>();
       for (const row of tb) {
         const nm = (row.ledger_name || "").trim().toLowerCase();
-        if (nm) tbLedgerSet.add(nm);
+        if (!nm) continue;
+        const mapped = coaMapping[row.ledger_name];
+        if (mapped?.code) tbCodeByLabel.set(nm, mapped.code);
       }
-      if (tbLedgerSet.size > 0) {
+      if (tbCodeByLabel.size > 0) {
         const before = manualRows.length;
         manualRows = manualRows.filter(mr => {
           const lbl = (mr.label || "").trim().toLowerCase();
-          return !tbLedgerSet.has(lbl);
+          if (!lbl) return true;
+          const currentCode = tbCodeByLabel.get(lbl);
+          if (!currentCode) return true;         // user-typed row (no TB match) → keep
+          return ourCodes.has(currentCode);      // ledger still ours → keep; moved → drop
         });
         const dropped = before - manualRows.length;
         if (dropped > 0) {
           // eslint-disable-next-line no-console
-          console.log(`[nceAutoPopulate] ${noteType}: purged ${dropped} stale Pattern-A manual row(s) whose ledger now lives in a different note (LT↔ST or cross-note reclassification).`);
+          console.log(`[nceAutoPopulate] ${noteType}: purged ${dropped} stale manual row(s) whose ledger is now mapped to a different note.`);
         }
       }
     }
@@ -2111,6 +2126,10 @@ export async function nceAutoPopulate(
     // placeholder). Aggregate rows with attached children are kept too
     // (the static-row total still uses them as parents).
     let leakFreeCustomRows: NCECustomRow[] = finalCustomRows;
+    const _wantsPerLedgerBreakup =
+      noteType === "borrowings" ||
+      noteType === "investments" ||
+      noteType === "loans_advances";
     if (_wantsPerLedgerBreakup) {
       const isOrphanEmpty = (cr: NCECustomRow): boolean => {
         if (cr.source !== "auto") return false;             // manual rows kept
