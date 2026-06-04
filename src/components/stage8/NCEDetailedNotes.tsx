@@ -2420,6 +2420,17 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
             // re-sync so notes pick up the new signed aggregation.
             const drCrMigrationKey = `nce_drcr_netting_v2_${engagementId}`;
             const drCrMigrationDone = localStorage.getItem(drCrMigrationKey) === "1";
+            // SIGN ROOT-CAUSE FIX (2026-06-05): manual TB-backed rows in
+            // strictly-TB-driven notes (trade_payables, other_cl, other_lt_liab,
+            // cogs) stored a WRONG-SIGNED PY when the engagement had no PY shell
+            // — a Dr-on-Cr-head advance (e.g. SHREE HARI's "Member Sales (Pos)")
+            // was kept as +27.9cr instead of −27.9cr, so the FS notes total and
+            // BS face diverged from the signed-TB COA-Mapping BS by 2×. The
+            // nceAutoPopulate refresh now falls back to the SIGNED CY opening
+            // (signedLedgerOpeningAmt) for PY. Bump this one-shot flag so every
+            // engagement re-runs the refresh ONCE to pick up the corrected sign.
+            const signFixMigrationKey = `nce_sign_fix_v1_${engagementId}`;
+            const signFixMigrationDone = localStorage.getItem(signFixMigrationKey) === "1";
             const needsPyAnyEmpty = Object.values(built).some(d => {
               const hasCY = Object.values(d.cy ?? {}).some(v => Math.abs(Number(v) || 0) > 0.005);
               const hasPY = Object.values(d.py ?? {}).some(v => Math.abs(Number(v) || 0) > 0.005);
@@ -2428,7 +2439,8 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
             const needsPyRefresh = needsPyAnyEmpty || !pyMigrationDone;
             const needsCySourcesPyRefresh = !pySourcesMigrationDone;
             const needsDrCrRefresh = !drCrMigrationDone;
-            if (unEjectedAny || needsCySources || needsPyRefresh || needsCySourcesPyRefresh || needsDrCrRefresh) {
+            const needsSignFixRefresh = !signFixMigrationDone;
+            if (unEjectedAny || needsCySources || needsPyRefresh || needsCySourcesPyRefresh || needsDrCrRefresh || needsSignFixRefresh) {
               // Silent background refresh — don't block the UI
               nceAutoPopulate(engagementId, built).then(refreshed => {
                 if (!cancelled) setNoteData(refreshed);
@@ -2449,6 +2461,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
                 try { localStorage.setItem(pyMigrationKey, "1"); } catch {/* private mode */}
                 try { localStorage.setItem(pySourcesMigrationKey, "1"); } catch {/* private mode */}
                 try { localStorage.setItem(drCrMigrationKey, "1"); } catch {/* private mode */}
+                try { localStorage.setItem(signFixMigrationKey, "1"); } catch {/* private mode */}
               }).catch(() => {}); // best-effort
             }
           }
