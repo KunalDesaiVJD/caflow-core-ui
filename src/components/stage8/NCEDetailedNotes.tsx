@@ -1168,14 +1168,24 @@ function PatternBTable({
                     </div>
                   </TableCell>
                   <TableCell className="p-1">
-                    {hasAttachedB && !isOpenB
+                    {/* SHREE HARI FIX (2026-06-04): when this static row has
+                        attached customRows, ALWAYS show the rolled-up aggregate
+                        — both collapsed and expanded. Previously the expanded
+                        view rendered a disabled NumInput showing rawCy[row.id]
+                        (typically 0), making "Other payables — Others" read
+                        "—" even when its 46 attached ledgers summed to ₹1.1
+                        crore. The user can't type into a parent with children
+                        anyway (NumInput was always disabled), so showing the
+                        aggregate is strictly more useful. */}
+                    {hasAttachedB
                       ? <span className="text-xs tabular-nums text-right block pr-1">{aggCyB ? fmtNum(aggCyB) : "—"}</span>
-                      : <NumInput value={rawCy[row.id] ?? 0} onChange={v => onChangeCy(row.id, v)} disabled={row.naAll || hasAttachedB} />}
+                      : <NumInput value={rawCy[row.id] ?? 0} onChange={v => onChangeCy(row.id, v)} disabled={row.naAll} />}
                   </TableCell>
                   <TableCell className="p-1">
-                    {hasAttachedB && !isOpenB
+                    {/* SHREE HARI FIX — see CY comment above. */}
+                    {hasAttachedB
                       ? <span className="text-xs tabular-nums text-right block pr-1">{aggPyB ? fmtNum(aggPyB) : "—"}</span>
-                      : <NumInput value={rawPy[row.id] ?? 0} onChange={v => onChangePy(row.id, v)} disabled={row.naAll || hasAttachedB} />}
+                      : <NumInput value={rawPy[row.id] ?? 0} onChange={v => onChangePy(row.id, v)} disabled={row.naAll} />}
                   </TableCell>
                   <TableCell className="p-1 text-center w-8">
                     <div className="flex items-center justify-end gap-1">
@@ -1665,25 +1675,30 @@ function PatternATable({
                       When expanded with children: static row's own NumInput is disabled
                       to prevent double-counting (children's amounts are separately tracked).
                       When no children: editable NumInput as normal. */}
+                  {/* SHREE HARI FIX (Pattern A) — always show the rolled-up
+                      aggregate when this row has attached children. Previously
+                      only the collapsed view did so; expanded view fell back
+                      to a disabled NumInput showing 0. Same logic as Pattern B
+                      above. */}
                   <TableCell className="p-1">
-                    {hasAttachedA && !isOpenA
+                    {hasAttachedA
                       ? <span className="text-xs tabular-nums text-right block pr-1">{aggLtCy ? fmtNum(aggLtCy) : "—"}</span>
-                      : <NumInput value={rawCy[row.id + "_lt"] ?? 0} onChange={v => onChangeCy(row.id + "_lt", v)} disabled={row.naLT || hasAttachedA} />}
+                      : <NumInput value={rawCy[row.id + "_lt"] ?? 0} onChange={v => onChangeCy(row.id + "_lt", v)} disabled={row.naLT} />}
                   </TableCell>
                   <TableCell className="p-1 border-r">
-                    {hasAttachedA && !isOpenA
+                    {hasAttachedA
                       ? <span className="text-xs tabular-nums text-right block pr-1">{aggLtPy ? fmtNum(aggLtPy) : "—"}</span>
-                      : <NumInput value={rawPy[row.id + "_lt"] ?? 0} onChange={v => onChangePy(row.id + "_lt", v)} disabled={row.naLT || hasAttachedA} />}
+                      : <NumInput value={rawPy[row.id + "_lt"] ?? 0} onChange={v => onChangePy(row.id + "_lt", v)} disabled={row.naLT} />}
                   </TableCell>
                   <TableCell className="p-1">
-                    {hasAttachedA && !isOpenA
+                    {hasAttachedA
                       ? <span className="text-xs tabular-nums text-right block pr-1">{aggStCy ? fmtNum(aggStCy) : "—"}</span>
-                      : <NumInput value={rawCy[row.id + "_st"] ?? 0} onChange={v => onChangeCy(row.id + "_st", v)} disabled={row.naST || hasAttachedA} />}
+                      : <NumInput value={rawCy[row.id + "_st"] ?? 0} onChange={v => onChangeCy(row.id + "_st", v)} disabled={row.naST} />}
                   </TableCell>
                   <TableCell className="p-1">
-                    {hasAttachedA && !isOpenA
+                    {hasAttachedA
                       ? <span className="text-xs tabular-nums text-right block pr-1">{aggStPy ? fmtNum(aggStPy) : "—"}</span>
-                      : <NumInput value={rawPy[row.id + "_st"] ?? 0} onChange={v => onChangePy(row.id + "_st", v)} disabled={row.naST || hasAttachedA} />}
+                      : <NumInput value={rawPy[row.id + "_st"] ?? 0} onChange={v => onChangePy(row.id + "_st", v)} disabled={row.naST} />}
                   </TableCell>
                   <TableCell className="p-1 text-center w-8">
                     <div className="flex items-center justify-end gap-1">
