@@ -765,29 +765,65 @@ export default function AuditPipeline() {
         );
       }
 
-      // Check for duplicate engagement
+      // ── DUPLICATE ENGAGEMENT GUARD (June 2026, hardened) ─────────────
+      //
+      // The previous check filtered on firm_id, audit_period_type AND
+      // `status != "archived"`. Any of those three differences let a
+      // duplicate row slip through:
+      //   - firm_id mismatch when legacy rows had firm_id=NULL but the
+      //     current user belongs to a firm (SWADESHI had this — three
+      //     "duplicate" statutory engagements survived the check this way)
+      //   - audit_period_type defaulted to "annual" on new rows but legacy
+      //     rows had NULL → mismatch, insert allowed
+      //   - status="archived" excluded any pre-fix archived sibling from
+      //     view, letting the user create a NEW row in front of it
+      //
+      // New rule: a duplicate is anything sharing (client_id, FY,
+      // audit_type, period_type) that is NOT a PY-shell, regardless of
+      // firm or status. Archived siblings are surfaced with a clear
+      // message so the user un-archives instead of creating a parallel.
+      // A partial UNIQUE index in migration 20260604000001 enforces the
+      // same rule at the DB layer as belt-and-braces.
+      const checkPeriodType = form1A.audit_period_type || "annual";
       const { data: existing } = await supabase
         .from("audit_engagements")
-        .select("id")
+        .select("id, status")
         .eq("client_id", form1A.client_id)
-        .eq("firm_id", effectiveFirmId)
         .eq("financial_year", form1A.financial_year)
         .eq("audit_type", form1A.audit_type)
-        .eq("audit_period_type", form1A.audit_period_type)
-        .neq("status", "archived")
+        .eq("audit_period_type", checkPeriodType)
+        .or("is_py_shell.is.null,is_py_shell.eq.false")
         .limit(1);
       if (existing && existing.length > 0) {
-        throw new Error("An engagement already exists for this client, audit type, financial year, and period.");
+        const sib = existing[0] as any;
+        if (sib.status === "archived") {
+          throw new Error(
+            "An ARCHIVED engagement already exists for this client + FY + audit type. " +
+            "Open Audit Intelligence, filter by archived, and restore it instead of creating a new one."
+          );
+        }
+        throw new Error(
+          "An engagement already exists for this client + FY + audit type + period. " +
+          "Open it from Audit Intelligence instead of creating a duplicate."
+        );
       }
 
       const safeAuditFirmId = await ensureAuditFirmRow(form1A.audit_firm_id);
+      // NOTE: this remains an INSERT (not UPSERT) because the partial UNIQUE
+      // index in 20260604000001_audit_engagements_unique.sql is not yet
+      // applied to the live database (pending manual application by the
+      // user). Once that index is live, the call can be switched to:
+      //   .upsert({...}, { onConflict: "client_id,financial_year,audit_type,audit_period_type", ignoreDuplicates: false })
+      // for a defence-in-depth race-condition guard. Until then, the JS
+      // pre-check above is the sole defence — and it now catches every
+      // duplicate-creation path that previously slipped through.
       const { data, error } = await supabase.from("audit_engagements").insert({
         client_id: form1A.client_id,
         firm_id: effectiveFirmId,
         financial_year: form1A.financial_year,
         audit_type: form1A.audit_type,
         entity_type: form1A.entity_type,
-        audit_period_type: form1A.audit_period_type,
+        audit_period_type: checkPeriodType,
         period_label: form1A.period_label || null,
         audit_firm_id: safeAuditFirmId,
         // partner_id kept for backward compat; partner_name is the primary display field
