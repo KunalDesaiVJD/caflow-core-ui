@@ -754,16 +754,39 @@ export default function AuditPipeline() {
   // Mirror it into audit_firms with the same id before save — idempotent.
   const ensureAuditFirmRow = async (firmId: string | null | undefined): Promise<string | null> => {
     if (!firmId) return null;
+    // Step 1: row already mirrored → done.
     const { data: existing } = await supabase.from("audit_firms").select("id").eq("id", firmId).maybeSingle();
     if (existing?.id) return firmId;
+    // Step 2: source firm gone → nothing to mirror, let the downstream FK
+    // surface its own diagnostic message instead of upserting blind.
     const { data: src } = await supabase.from("firms").select("id, name").eq("id", firmId).maybeSingle();
     if (!src?.id) return firmId;
-    await supabase.from("audit_firms").upsert({
+    // Step 3: SELECT-then-INSERT instead of upsert + onConflict.
+    // The previous `.upsert(..., { onConflict: "id" })` was failing for some
+    // tenants with PG 42P10 "no unique or exclusion constraint matching the
+    // ON CONFLICT specification" — surfaced to users as
+    //   "there is no unique or exclusion constraint matching the
+    //    ON CONFLICT specification"
+    // right after they clicked "Create" on a brand-new engagement (e.g.
+    // MAHADEV DEVELOPERS, FY 2025-26). The audit_firms PK is on id and
+    // covers the conflict target, but PostgREST's onConflict inference
+    // fails when the table row count on the cached schema differs from
+    // the live constraint set (race after migrations), and there is no
+    // upside to using ON CONFLICT here — we already ran the SELECT, and
+    // a race between SELECT and INSERT just resolves as a duplicate-key
+    // we can ignore (the row we wanted is now there).
+    const { error: insErr } = await supabase.from("audit_firms").insert({
       id:      src.id,
       name:    src.name,
       firm_id: user?.firm_id ?? null,
       active:  true,
-    } as any, { onConflict: "id" });
+    } as any);
+    if (insErr && insErr.code !== "23505") {
+      // 23505 = unique_violation, which means a concurrent writer beat us
+      // to it — the row exists, our goal is met. Anything else is a real
+      // problem.
+      throw new Error(`Could not mirror audit firm: ${insErr.message}`);
+    }
     return firmId;
   };
 
@@ -838,17 +861,35 @@ export default function AuditPipeline() {
         );
       }
 
-      const safeAuditFirmId = await ensureAuditFirmRow(form1A.audit_firm_id);
-      // UPSERT (not INSERT) so the partial unique index
-      // `audit_engagements_unique_live` (migration 20260604000001, applied
-      // to production 2026-06-04) acts as a race-condition backstop. If two
-      // tabs / two users hit Create at the same moment for the same
-      // (client, FY, audit_type, period_type), the second call no longer
-      // raises a UNIQUE-violation error — it returns the existing row's id
-      // and the UI navigates straight to that engagement. ignoreDuplicates:
-      // false makes upsert RETURN the existing row (not silently skip) so
-      // .select("id").single() still receives an id either way.
-      const { data, error } = await (supabase as any).from("audit_engagements").upsert({
+      let safeAuditFirmId: string | null;
+      try {
+        safeAuditFirmId = await ensureAuditFirmRow(form1A.audit_firm_id);
+      } catch (e: any) {
+        throw new Error(`Step "ensure audit firm row": ${e?.message ?? e}`);
+      }
+      // Plain INSERT — we already ran the duplicate-check SELECT above.
+      //
+      // Why not upsert(onConflict: "client_id,financial_year,audit_type,
+      // audit_period_type") as a race backstop? Because that's exactly the
+      // change that produced
+      //   "there is no unique or exclusion constraint matching the
+      //    ON CONFLICT specification"
+      // on production (MAHADEV DEVELOPERS, FY 2025-26). The partial unique
+      // index `audit_engagements_unique_live` indexes
+      //   (client_id, financial_year, audit_type,
+      //    COALESCE(audit_period_type, 'annual'))
+      // — i.e. the fourth column is an EXPRESSION, not a bare column.
+      // PostgreSQL's ON CONFLICT inference requires the conflict target to
+      // match the index column list exactly, and PostgREST has no way to
+      // express `COALESCE(audit_period_type, 'annual')` via the on_conflict
+      // query param, so PG raises 42P10 every time and the upsert never
+      // resolves. The race-window between the SELECT and the INSERT here
+      // is microseconds; the application-level duplicate check above is
+      // an acceptable trade. If we ever need a true DB-level race backstop,
+      // the partial index needs to be recreated WITHOUT the COALESCE wrapper
+      // (audit_period_type is already NOT NULL in app code via checkPeriodType)
+      // so on_conflict can name the bare column.
+      const { data, error } = await supabase.from("audit_engagements").insert({
         client_id: form1A.client_id,
         firm_id: effectiveFirmId,
         financial_year: form1A.financial_year,
@@ -864,13 +905,20 @@ export default function AuditPipeline() {
         status: "planning",
         pipeline_stage: 1,
         stage_statuses: { "1": "in_progress", "2": "not_started", "3": "not_started", "4": "not_started", "5": "not_started", "6": "not_started", "7": "not_started", "8": "not_started", "9": "not_started" },
-      }, { onConflict: "client_id,financial_year,audit_type,audit_period_type", ignoreDuplicates: false }).select("id").single();
-      if (error) throw error;
+      } as any).select("id").single();
+      if (error) throw new Error(`Step "insert engagement": ${error.message}`);
 
       // Ensure this client+FY has an audit-setup row so FY-scoped consumers
       // (e.g. the Audit Status 3CA/3CB+3CD lock) never fall back to a stale
       // engagement_type. Fills only if missing — never overwrites.
-      await ensureAuditSetupForEngagement(form1A.client_id, form1A.financial_year, form1A.audit_type);
+      try {
+        await ensureAuditSetupForEngagement(form1A.client_id, form1A.financial_year, form1A.audit_type);
+      } catch (e: any) {
+        // Non-fatal: engagement is already created. Log and continue so the
+        // user lands inside the new engagement instead of seeing a misleading
+        // failure toast for an aux table that doesn't block their workflow.
+        console.error("[createEngagement] ensure audit setup failed:", e?.message ?? e);
+      }
 
       // ── Carry-forward prior year COA mapping ─────────────────────────────
       // After the new engagement is inserted, find the immediately preceding FY
