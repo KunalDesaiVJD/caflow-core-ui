@@ -206,6 +206,91 @@ async function _pushToSupabase(
           diffs.push({ field: key, oldDbV: dbState[key], newV });
         }
       }
+
+      // ── L3/L11 FIX (2026-06-04) — granular Checklist `rows` merge ──────
+      //
+      // For most sheets a single top-level key (`rows`) holding the entire
+      // grid is fine because the safe-merge above protects the OTHER top-
+      // level keys (e.g. `dynamicRowIds`). But for `checklist_sheet_json`,
+      // `rows` is also where files[] arrays live — and concurrent file
+      // uploads from two users / two tabs that flush around the same time
+      // would otherwise have the later writer's whole `rows` object win,
+      // erasing the earlier writer's file reference (the Storage object
+      // would survive in the bucket as an unlinked orphan).
+      //
+      // Fix: when the sheet is checklist_sheet_json AND the `rows` key was
+      // marked changed above, replace the simple overwrite of `rows` with
+      // a per-rowId merge:
+      //   • If the row only exists in next OR only in dbState → keep as-is
+      //   • If both contain it: per-field merge with files[] specifically
+      //     unioned by file_path (preserves both users' uploads).
+      // Other per-row fields fall through to the existing
+      //   "user typed it since load" → win
+      //   otherwise               → keep DB state
+      // rule, mirroring the top-level safe-merge.
+      if (sheet === "checklist_sheet_json" &&
+          diffs.some(d => d.field === "rows") &&
+          merged.rows && typeof merged.rows === "object" && !Array.isArray(merged.rows)) {
+        const dbRows = (dbState.rows && typeof dbState.rows === "object") ? dbState.rows as Record<string, any> : {};
+        const prevRows = (prev.rows && typeof prev.rows === "object") ? prev.rows as Record<string, any> : {};
+        const nextRows = (next.rows && typeof next.rows === "object") ? next.rows as Record<string, any> : {};
+
+        const mergedRows: Record<string, any> = { ...dbRows };
+        const allRowIds = new Set<string>([
+          ...Object.keys(dbRows),
+          ...Object.keys(prevRows),
+          ...Object.keys(nextRows),
+        ]);
+        for (const rowId of allRowIds) {
+          const dbRow   = dbRows[rowId];
+          const prevRow = prevRows[rowId];
+          const nextRow = nextRows[rowId];
+          // Per-field decision: prefer user's typed-since-load value;
+          // otherwise keep DB. Files: union by file_path so both
+          // concurrent uploads survive.
+          if (!nextRow && !dbRow) continue;
+          if (!nextRow && dbRow) { mergedRows[rowId] = dbRow; continue; }
+          if (nextRow && !dbRow) { mergedRows[rowId] = nextRow; continue; }
+          const out: Record<string, any> = { ...dbRow };
+          const fieldKeys = new Set<string>([...Object.keys(nextRow), ...Object.keys(prevRow || {})]);
+          for (const f of fieldKeys) {
+            if (f === "files") {
+              // Union by file_path. Empty/missing arrays treated as [].
+              const dbFiles   = Array.isArray(dbRow.files)   ? dbRow.files   : [];
+              const nextFiles = Array.isArray(nextRow.files) ? nextRow.files : [];
+              const prevFiles = Array.isArray(prevRow?.files) ? prevRow.files : [];
+              // Files removed by THIS user (in prev but not in next).
+              const removedByMe = new Set(prevFiles
+                .filter((f: any) => !nextFiles.some((nf: any) => nf?.file_path === f?.file_path))
+                .map((f: any) => f?.file_path));
+              // Union: dbFiles minus removedByMe, then add any nextFiles
+              // not already present.
+              const seen = new Set<string>();
+              const unioned: any[] = [];
+              for (const file of dbFiles) {
+                if (!file?.file_path || removedByMe.has(file.file_path)) continue;
+                seen.add(file.file_path);
+                unioned.push(file);
+              }
+              for (const file of nextFiles) {
+                if (!file?.file_path || seen.has(file.file_path)) continue;
+                seen.add(file.file_path);
+                unioned.push(file);
+              }
+              out.files = unioned;
+              continue;
+            }
+            // Non-file fields: typed-since-load wins; else keep DB.
+            const wasChanged = JSON.stringify(nextRow[f]) !== JSON.stringify((prevRow ?? {})[f]);
+            if (wasChanged) out[f] = nextRow[f];
+            else if (f in dbRow) out[f] = dbRow[f];
+            else out[f] = nextRow[f];
+          }
+          mergedRows[rowId] = out;
+        }
+        merged.rows = mergedRows;
+      }
+
       finalValue = merged;
     }
 
