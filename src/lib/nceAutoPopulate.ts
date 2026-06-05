@@ -2418,6 +2418,79 @@ export async function nceAutoPopulate(
       }
     }
 
+    // ── Pattern-B TB-authoritative normalisation ─────────────────────────
+    // OM REALTY round 6: same compounding inflation symptom on Pattern B
+    // notes — Cash & Bank "Balance in current account" PY ballooned to
+    // 54,64,443 even though the COA Mapping variance drill says the
+    // ledger total is 38,66,927. Other Current Liabilities had the
+    // "Revenue recognised on PCOS" row stored with a flipped sign so the
+    // note total disagreed with COA Mapping by the row's value. Both come
+    // from the same shape: stored bare-key values left over from earlier
+    // buggy auto-populate cycles never get reset to the TB ground truth.
+    //
+    // ROOT-CAUSE FIX: for every Pattern B note (noteFs.all) — cash_bank,
+    // other_cl, trade_payables, inventories, trade_receivables, etc. —
+    // for every manual customRow whose ledger maps (via ejectedSource or
+    // label) into one of this note's owned codes, source the row's
+    // amount from the TB:
+    //   • CY column → CY tally_trial_balance closing_balance
+    //   • PY column → PY-shell tally_trial_balance closing_balance
+    //   • Write to bare cr.id key (Pattern B is unsuffixed)
+    //   • Delete the bare key entirely if the TB amount is zero
+    // The note breakup then matches COA Mapping ledger-for-ledger and
+    // the writeback is idempotent — running Re-sync ten times produces
+    // the same value, not 10×. Sign convention follows ledgerAmt() which
+    // is the same helper used by the auto-row classifier and the BS face
+    // formatter, so a credit-side ledger (e.g. Member Sales POS) lands
+    // with the correct sign instead of getting inverted.
+    if (noteFs.all && noteFs.all.length > 0) {
+      const ourCodes = new Set(noteFs.all);
+      const resolveCodeAll = (cr: NCECustomRow): string | undefined => {
+        const ejected = ((cr as any).ejectedSource as string | undefined)?.trim();
+        if (ejected) {
+          const m = coaMapping[ejected] ?? pyCoaMap[ejected];
+          if (m?.code) return m.code;
+        }
+        const lbl = (cr.label || "").trim();
+        if (lbl) {
+          const m = coaMapping[lbl] ?? pyCoaMap[lbl];
+          if (m?.code) return m.code;
+        }
+        return undefined;
+      };
+      const tbAmountForAll = (cr: NCECustomRow, col: "cy" | "py"): number => {
+        const ejected = ((cr as any).ejectedSource as string | undefined)?.trim();
+        const lbl     = (cr.label || "").trim();
+        const candidates: string[] = [];
+        if (ejected) candidates.push(ejected);
+        if (lbl && lbl !== ejected) candidates.push(lbl);
+        if (candidates.length === 0) return 0;
+        const src = col === "cy" ? tb : pyTb;
+        for (const name of candidates) {
+          const nm = name.toLowerCase();
+          const row = src.find(r => (r.ledger_name || "").trim().toLowerCase() === nm);
+          if (!row) continue;
+          return ledgerAmt(row.closing_balance);
+        }
+        return 0;
+      };
+      for (const cr of leakFreeCustomRows) {
+        if (cr.source !== "manual") continue;
+        const code = resolveCodeAll(cr);
+        if (!code) continue;            // auditor-typed row with no TB match — leave alone
+        if (!ourCodes.has(code)) continue;  // ledger no longer ours — purge above handled it
+        const cyVal = tbAmountForAll(cr, "cy");
+        const pyVal = tbAmountForAll(cr, "py");
+        for (const [buf, v] of [[mergedCy, cyVal], [mergedPy, pyVal]] as Array<[Record<string, number>, number]>) {
+          if (Math.abs(v) < 0.005) {
+            delete buf[cr.id];
+          } else {
+            buf[cr.id] = v;
+          }
+        }
+      }
+    }
+
     out[noteType] = {
       cy:         mergedCy,
       py:         mergedPy,
