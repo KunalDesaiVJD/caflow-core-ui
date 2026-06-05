@@ -2402,9 +2402,46 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
             const needsCySourcesPyRefresh = !pySourcesMigrationDone;
             const needsDrCrRefresh = !drCrMigrationDone;
             const needsSignFixRefresh = !signFixMigrationDone;
+            // ─── PHASE 7 INSTRUMENTATION (REMOVE AFTER DIAGNOSIS) ───
+            // Log silent re-sync trigger + the Member Sales py value in `built`
+            // BEFORE nceAutoPopulate is called. Helps determine whether the
+            // override is inside nceAutoPopulate or inside something upstream.
+            try {
+              const builtOcl = built["other_cl"] || { cy: {}, py: {}, customRows: [] };
+              const msRow = (builtOcl.customRows || []).find((r: any) => /member sales/i.test(r.label || ""));
+              const msId = msRow ? msRow.id : null;
+              // eslint-disable-next-line no-console
+              console.log("[SIGN-TRACE] CALLER  trigger conditions", {
+                unEjectedAny, needsCySources, needsPyRefresh,
+                needsCySourcesPyRefresh, needsDrCrRefresh, needsSignFixRefresh,
+                signFixMigrationDone,
+              });
+              if (msId) {
+                // eslint-disable-next-line no-console
+                console.log("[SIGN-TRACE] CALLER  Member Sales in `built` before nceAutoPopulate", {
+                  id: msId,
+                  builtPy_ms: builtOcl.py?.[msId],
+                  builtCy_ms: builtOcl.cy?.[msId],
+                  source: msRow.source, attachedTo: msRow.attachedTo,
+                });
+              } else {
+                // eslint-disable-next-line no-console
+                console.log("[SIGN-TRACE] CALLER  no Member Sales row in built[other_cl]");
+              }
+            } catch (e) { /* ignore */ }
             if (unEjectedAny || needsCySources || needsPyRefresh || needsCySourcesPyRefresh || needsDrCrRefresh || needsSignFixRefresh) {
               // Silent background refresh — don't block the UI
               nceAutoPopulate(engagementId, built).then(refreshed => {
+                try {
+                  const r = refreshed["other_cl"];
+                  const msRow = (r?.customRows || []).find((x: any) => /member sales/i.test(x.label || ""));
+                  if (msRow) {
+                    // eslint-disable-next-line no-console
+                    console.log("[SIGN-TRACE] CALLER  Member Sales in `refreshed` AFTER nceAutoPopulate", {
+                      id: msRow.id, py: r?.py?.[msRow.id], cy: r?.cy?.[msRow.id],
+                    });
+                  }
+                } catch (e) { /* ignore */ }
                 if (!cancelled) setNoteData(refreshed);
                 persistNotes(refreshed, fy)
                   .then(() => {
