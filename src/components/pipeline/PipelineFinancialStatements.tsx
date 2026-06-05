@@ -1825,6 +1825,22 @@ export default function PipelineFinancialStatements({
   // tab's Re-sync button uses, then refreshes the FS face so the BS / P&L
   // realign with COA mapping when the auditor has deleted breakup rows.
   const [recorrectingFromCOA, setRecorrectingFromCOA] = useState(false);
+  // 2026-06-05 Phase 2 — instrumentation for the loading-timer modal that
+  // wraps the Re-correct handler. recorrectStartedAt is the timestamp the
+  // run kicked off; recorrectElapsedSec ticks every 500ms while the run is
+  // in flight. recorrectResult holds the final summary so the modal can
+  // show "Done - X notes regenerated in Y seconds" when the run completes
+  // (cleared on dismiss).
+  const [recorrectStartedAt, setRecorrectStartedAt] = useState<number | null>(null);
+  const [recorrectElapsedSec, setRecorrectElapsedSec] = useState(0);
+  const [recorrectResult, setRecorrectResult] = useState<{ notes: number; seconds: number } | null>(null);
+  useEffect(() => {
+    if (recorrectStartedAt == null) return;
+    const id = window.setInterval(() => {
+      setRecorrectElapsedSec(Math.max(0, (Date.now() - recorrectStartedAt) / 1000));
+    }, 500);
+    return () => window.clearInterval(id);
+  }, [recorrectStartedAt]);
 
   // ─── Entity-type gate ─────────────────────────────────────────────────────
   // Single source of truth: checks engagement.entity_type (set on the engagement)
@@ -4492,6 +4508,12 @@ export default function PipelineFinancialStatements({
     );
     if (!ok) return;
     setRecorrectingFromCOA(true);
+    // Phase 2: kick off the timer modal. Cleared in the finally block so
+    // the modal stays up on failure with the elapsed time visible.
+    const t0 = Date.now();
+    setRecorrectStartedAt(t0);
+    setRecorrectElapsedSec(0);
+    setRecorrectResult(null);
     try {
       // 1. Load whatever's currently saved so we pass it through and only
       //    update auto-rows (mirrors NCEDetailedNotes load → populate flow).
@@ -4521,6 +4543,7 @@ export default function PipelineFinancialStatements({
 
       // 2. Re-populate auto rows from Tally TB + COA mapping
       const populated = await nceAutoPopulate(engagementId, built);
+      const notesRegenerated = Object.keys(populated).length;
 
       // 3. Persist back to nce_financial_notes (upsert)
       const rows = Object.entries(populated).map(([noteType, d]) => {
@@ -4545,11 +4568,21 @@ export default function PipelineFinancialStatements({
       queryClient.invalidateQueries({ queryKey: ["engagement", engagementId] });
 
       toast.success("Financial Statements re-corrected from COA Mapping");
+      setRecorrectResult({
+        notes: notesRegenerated,
+        seconds: Math.round((Date.now() - t0) / 100) / 10,
+      });
     } catch (e: any) {
       console.error("[recorrectFromCOAMapping]", e);
       toast.error(e?.message || "Re-correction failed");
+      // Surface the elapsed-on-failure number too so the modal still resolves.
+      setRecorrectResult({
+        notes: 0,
+        seconds: Math.round((Date.now() - t0) / 100) / 10,
+      });
     } finally {
       setRecorrectingFromCOA(false);
+      setRecorrectStartedAt(null);
     }
   };
 
@@ -6920,6 +6953,58 @@ export default function PipelineFinancialStatements({
 
   return (
     <FsUnitsProvider engagementId={engagementId} forceScale={isNonCorporate ? "actual" : undefined}>
+    {/* 2026-06-05 Phase 2 — Re-correct progress modal. Wraps the whole
+         FS view so it sits above every action surface (Save All Notes,
+         export, navigation, the Re-correct button itself). Visible while
+         recorrectingFromCOA is true; after completion it switches to a
+         "Done" view that the user dismisses. While in progress every
+         other interactive control is blanked behind the backdrop. */}
+    {(recorrectingFromCOA || recorrectResult !== null) && (
+      <div className="fixed inset-0 z-[200] flex items-center justify-center bg-background/70 backdrop-blur-sm">
+        <div className="rounded-lg border bg-background p-6 shadow-xl min-w-[320px] max-w-md text-center space-y-3">
+          {recorrectingFromCOA ? (
+            <>
+              <div className="flex items-center justify-center gap-2 text-base font-semibold">
+                <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                Re-correcting from COA Mapping…
+              </div>
+              <div className="text-3xl font-mono font-bold tabular-nums text-foreground">
+                {recorrectElapsedSec.toFixed(1)}s
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Rebuilding every NCE note from Tally TB + COA mapping. Manual
+                rows and typed values are preserved. Do not close this tab.
+              </p>
+            </>
+          ) : recorrectResult && recorrectResult.notes > 0 ? (
+            <>
+              <div className="flex items-center justify-center gap-2 text-base font-semibold text-emerald-700">
+                <CheckCircle2 className="h-5 w-5" />
+                Done
+              </div>
+              <p className="text-sm">
+                <span className="font-semibold">{recorrectResult.notes}</span> note
+                {recorrectResult.notes === 1 ? "" : "s"} regenerated in{" "}
+                <span className="font-semibold">{recorrectResult.seconds.toFixed(1)}s</span>.
+              </p>
+              <Button size="sm" onClick={() => setRecorrectResult(null)}>OK</Button>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center justify-center gap-2 text-base font-semibold text-destructive">
+                <AlertTriangle className="h-5 w-5" />
+                Re-correct failed
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Failed after {recorrectResult?.seconds.toFixed(1)}s.
+                See toast / console for details.
+              </p>
+              <Button size="sm" variant="outline" onClick={() => setRecorrectResult(null)}>Dismiss</Button>
+            </>
+          )}
+        </div>
+      </div>
+    )}
     <div className="max-w-6xl space-y-4">
       <EngagementHeader engagement={engagement} stageNumber={7} stageLabel="Financial Statements" />
       {/* Header */}
@@ -7135,6 +7220,56 @@ export default function PipelineFinancialStatements({
           </AlertDescription>
         </Alert>
       )}
+
+      {/* 2026-06-05 Phase 2 — PY Shell status indicator. Tells the auditor
+           which PY data source is feeding the BS / P&L PY column right now,
+           so when a sign-fix re-sync misses an engagement it's obvious WHY:
+             • "synced (X ledgers)"  - PY shell engagement exists with TB rows
+             • "exists but empty"    - PY shell created but TB not synced yet
+             • "not created"         - no FY-1 engagement at all
+             • "using prior engagement" - a regular FY-1 engagement is the source
+           When the shell is empty or missing, nceAutoPopulate's signedOpening
+           fallback (Phase 2 fix) uses the CY TB opening_balance as the PY
+           value — surfacing that here lets the auditor know the BS PY column
+           is computed via the fallback rather than a real PY-shell sync. */}
+      {isNonCorporate && (() => {
+        const isShell  = !!pyShellInfo?.isShell;
+        const shellId  = pyShellInfo?.id ?? null;
+        const ledCount = pyShellTb?.length ?? 0;
+        let label   = "";
+        let chipCls = "";
+        let detail  = "";
+        if (isShell && ledCount > 0) {
+          label   = `PY Shell: synced (${ledCount} ledgers)`;
+          chipCls = "border-emerald-300 bg-emerald-50 text-emerald-800";
+          detail  = "BS / P&L PY column reads the synced PY-shell trial balance.";
+        } else if (isShell && ledCount === 0) {
+          label   = "PY Shell: exists but empty";
+          chipCls = "border-amber-300 bg-amber-50 text-amber-800";
+          detail  = "Shell engagement exists but no TB rows have been synced. " +
+                    "BS / P&L PY falls back to CY opening balances. " +
+                    "Sync the PY shell's Tally TB to use real PY closing balances.";
+        } else if (!isShell && shellId) {
+          label   = "PY Shell: using prior engagement";
+          chipCls = "border-sky-300 bg-sky-50 text-sky-800";
+          detail  = "BS / P&L PY column reads the previous year's actual engagement.";
+        } else {
+          label   = "PY Shell: not created — using CY opening balances as PY";
+          chipCls = "border-amber-300 bg-amber-50 text-amber-800";
+          detail  = "No FY-1 engagement found. BS / P&L PY column is computed " +
+                    "from this year's TB opening balances (= prior-year close " +
+                    "by accounting identity).";
+        }
+        return (
+          <div className={cn(
+            "flex flex-wrap items-center gap-2 rounded-md border px-3 py-1.5 text-[11px]",
+            chipCls,
+          )}>
+            <span className="font-semibold">{label}</span>
+            <span className="text-[10px] opacity-80">— {detail}</span>
+          </div>
+        );
+      })()}
 
       {/* 2026-06-05 — FS Health structural guarantee panel. Validates that
            every NCE note's computed total equals its BS / P&L face value on

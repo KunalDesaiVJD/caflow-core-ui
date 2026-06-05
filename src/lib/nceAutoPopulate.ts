@@ -1299,26 +1299,30 @@ export async function nceAutoPopulate(
         const nmLower = nm.toLowerCase();
         cyByLedgerB[nmLower] = signedLedgerAmt(row, noteType);
         // ── SIGN ROOT-CAUSE FIX (2026-06-05, SHREE HARI "Member Sales (Pos)") ──
-        // The PY refresh map (pyByLedgerB) is built ONLY from the PY-shell TB
-        // above. When an engagement has no PY shell (or the shell is missing
-        // this ledger), pyByLedgerB has no entry → the refresh loop below
-        // would set the manual row's PY to 0 OR leave a STALE, WRONG-SIGNED
+        //
+        // Phase 2 of the FS Re-Architecture — the canonical fallback for the
+        // 18 engagements / 323 ledgers where PY-shell TB was never created
+        // (or was created empty). The PY refresh map (pyByLedgerB) is built
+        // ONLY from the PY-shell TB above; when the shell has no row for this
+        // ledger, pyByLedgerB has no entry → the refresh loop below would
+        // either set the manual row's PY to 0 OR leave a STALE WRONG-SIGNED
         // value (e.g. "Member Sales (Pos)", a Dr advance under Other Current
         // Liabilities, was stored as +27.9 cr instead of −27.9 cr).
         //
-        // Fix: fall back to the SIGNED CY opening balance (= prior-year close)
-        // via signedLedgerOpeningAmt, which applies the head's natural side
-        // (Dr-on-Cr-head → negative). This makes the note's stored PY match
-        // the signed trial balance that the COA-Mapping BS uses — so
-        // FS notes total === COA-Mapping BS, and the BS reconciles.
+        // Fix: fall back to the SIGNED CY opening balance (= prior-year close
+        // by accounting identity) via the shared signedOpening helper, which
+        // applies the head's natural side (Dr on a Cr-head → negative). The
+        // note's stored PY now matches the signed trial balance that COA
+        // Mapping's BS face uses — so FS Notes Total === COA-Mapping BS face,
+        // and the three-way reconciliation closes on every engagement.
         //
         // Precedence: a real PY-shell value (already in pyByLedgerB) always
         // wins; this only fills the gap when the shell didn't supply one.
-        // Idempotent: signedLedgerOpeningAmt is a pure function of the TB
-        // row's opening_type, so re-running converges and never double-flips.
+        // Idempotent: signedOpening is a pure function of the TB row's
+        // opening_type, so re-running converges and never double-flips.
         if (pyByLedgerB[nmLower] === undefined) {
-          const signedOpening = signedLedgerOpeningAmt(row, noteType);
-          if (Math.abs(signedOpening) > 0.005) pyByLedgerB[nmLower] = signedOpening;
+          const py = signedOpening(row.opening_balance, row.opening_type, noteType);
+          if (Math.abs(py) > 0.005) pyByLedgerB[nmLower] = py;
         }
       }
       // Expose the maps to the merge step (outer scope) so manual-row CY/PY
