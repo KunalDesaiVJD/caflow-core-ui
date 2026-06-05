@@ -102,8 +102,11 @@ const SZ_XS     = 18;   // was 7pt — floored to 9pt
 const SZ_SM     = 18;   // was 8pt — floored to 9pt
 const SZ_BODY   = 18;   // 9pt
 const SZ_HDR    = 20;   // 10pt
-const SZ_TITLE  = 22;   // 11pt
-const SZ_ENTITY = 28;   // 14pt
+const SZ_TITLE  = 24;   // 12pt — Balance Sheet / Profit & Loss header (was 11pt;
+                        // user asked for a darker, more prominent statement title)
+const SZ_ENTITY = 24;   // 12pt — client name on every page (was 14pt; user
+                        // asked the client-name banner to be 12pt and a darker
+                        // shade. Color is BLACK + bold below.)
 
 // ─── Colour palette (professional light grey — 50 % lighter than prior slate) ──
 const NAVY    = "374151";   // charcoal text / title accent  (kept dark for readability)
@@ -135,12 +138,23 @@ const BDR_SUB   = { top: bThin, bottom: bThin,  left: bNone, right: bNone };
 const BDR_GRAND = { top: bBold, bottom: bBold,  left: bNone, right: bNone };
 
 // ─── Amount formatter ─────────────────────────────────────────────────────────
+// In "actual" mode (divisor === 1) render whole rupees. In "thousands" / "lakhs"
+// mode render EXACTLY 2 decimal places, matching the on-screen FS toolbar — at
+// those scales the rounded integer hides ledger-level precision (e.g.
+// ₹7,18,540 must read 718.54 in '000s, not 719) and the export must stay
+// consistent with what the auditor sees in the browser.
 function fmt(n: number): string {
   const scaled = _exportDivisor === 1 ? n : n / _exportDivisor;
-  if (Math.abs(scaled) < 0.5) return "—";
-  const abs = Math.round(Math.abs(scaled));
-  const str = abs.toLocaleString("en-IN");
-  return scaled < 0 ? `(${str})` : str;
+  if (_exportDivisor === 1) {
+    if (Math.abs(scaled) < 0.5) return "—";
+    const abs = Math.round(Math.abs(scaled)).toLocaleString("en-IN");
+    return scaled < 0 ? `(${abs})` : abs;
+  }
+  if (Math.abs(scaled) < 0.005) return "—";
+  const abs = Math.abs(scaled).toLocaleString("en-IN", {
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  });
+  return scaled < 0 ? `(${abs})` : abs;
 }
 
 /** Format EPS (not scaled by divisor — it's per-share ₹) */
@@ -777,7 +791,13 @@ function makeFooter(entityName: string): Footer {
         border:    { top: { style: BorderStyle.SINGLE, size: 4, color: NAVY, space: 1 } },
         spacing:   { before: 80 },
         children: [
-          new TextRun({ text: `${entityName}  |  Financial Statements  |  Page `, font: FONT, size: SZ_XS, color: DK_GREY }),
+          // Per-page footer banner. Entity name is rendered in BLACK + bold so
+          // it reads as a darker, more legible identifier on every page (user
+          // ask: client name should appear in a darker shade everywhere).
+          // Surrounding chrome (separator pipes, "Page X of Y") stays in muted
+          // grey so the eye lands on the name first.
+          new TextRun({ text: entityName, font: FONT, size: SZ_XS, color: BLACK, bold: true }),
+          new TextRun({ text: `  |  Financial Statements  |  Page `, font: FONT, size: SZ_XS, color: DK_GREY }),
           new TextRun({ children: [PageNumber.CURRENT], font: FONT, size: SZ_XS, color: DK_GREY }),
           new TextRun({ text: " of ",                  font: FONT, size: SZ_XS, color: DK_GREY }),
           new TextRun({ children: [PageNumber.TOTAL_PAGES], font: FONT, size: SZ_XS, color: DK_GREY }),

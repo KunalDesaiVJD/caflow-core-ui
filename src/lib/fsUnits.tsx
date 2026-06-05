@@ -60,6 +60,23 @@ export function formatINRWhole(n: number | null | undefined): string {
 }
 
 /**
+ * Indian numbering with EXACTLY 2 decimal places, parens for negatives,
+ * "-" for amounts < 0.005. Used when the FS scale is "thousands" or "lakhs"
+ * — at those scales the rounded integer would hide meaningful precision
+ * (e.g. ₹7,18,540 in actuals becomes ₹719 in thousands but the auditor
+ * needs to see ₹718.54). Whole-rupee "actual" mode keeps the integer
+ * formatter to avoid the visual noise of ".00" on every line.
+ */
+export function formatINRTwoDp(n: number | null | undefined): string {
+  const v = Number(n);
+  if (!Number.isFinite(v) || Math.abs(v) < 0.005) return "-";
+  const abs = Math.abs(v).toLocaleString("en-IN", {
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  });
+  return v < 0 ? `(${abs})` : abs;
+}
+
+/**
  * Module-level active divisor. The Provider keeps this in sync with the
  * selected scale so legacy formatters (which can't easily call hooks because
  * they're invoked from non-component scopes — Excel writers, deeply nested
@@ -68,11 +85,22 @@ export function formatINRWhole(n: number | null | undefined): string {
 let _activeDivisor = 1;
 export function getActiveFsDivisor(): number { return _activeDivisor; }
 
-/** Scale + whole-rupee Indian formatter that reads the module-level scale. */
+/**
+ * Scale + Indian formatter that reads the module-level scale.
+ *   - "actual"               → whole rupees (no decimals)
+ *   - "thousands" / "lakhs"  → 2 decimals (so ₹7,18,540 → 718.54 in '000s
+ *                              instead of being rounded to 719 and losing
+ *                              the precision the auditor needs to reconcile
+ *                              against the underlying ledger).
+ *
+ * Same name kept so every call-site (Notes, BS, P&L cells, Cash Flow, FA
+ * grid, Excel writers, etc.) picks the fix up without per-site changes.
+ */
 export function formatScaledINRWhole(n: number | null | undefined): string {
   const v = Number(n);
   if (!Number.isFinite(v)) return "-";
-  return formatINRWhole(v / _activeDivisor);
+  const scaled = v / _activeDivisor;
+  return _activeDivisor === 1 ? formatINRWhole(scaled) : formatINRTwoDp(scaled);
 }
 
 interface ProviderProps {
@@ -115,17 +143,24 @@ export function FsUnitsProvider({ engagementId, children }: ProviderProps) {
 
   const value = useMemo<FsUnitsContextValue>(() => {
     const meta = FS_SCALES.find(s => s.key === scale)!;
+    // scaleAmount: divide by the unit divisor. In "actual" we still round to
+    // an integer (Sch III display rule). In thousands/lakhs we KEEP precision
+    // so the 2-dp formatter below has real decimals to render — otherwise
+    // ₹7,18,540 would become 719 in thousands and ".00" would always show.
     const scaleAmount = (n: number | null | undefined): number => {
       const v = Number(n);
       if (!Number.isFinite(v)) return 0;
-      return Math.round(v / meta.divisor);
+      const s = v / meta.divisor;
+      return meta.divisor === 1 ? Math.round(s) : s;
     };
     return {
       scale,
       setScale,
       meta,
       scaleAmount,
-      format: (n) => formatINRWhole(scaleAmount(n)),
+      format: (n) => meta.divisor === 1
+        ? formatINRWhole(scaleAmount(n))
+        : formatINRTwoDp(scaleAmount(n)),
       suffix: meta.suffix,
     };
   }, [scale, engagementId]);

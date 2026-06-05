@@ -173,12 +173,21 @@ function blank(cy: number, py: number): boolean {
 }
 
 // ─── Amount formatter — Indian numbering system + active unit scale ───────────
+// "actual" → whole rupees. "thousands" / "lakhs" → 2 decimals, matching the
+// on-screen FS toolbar so the exported Word file shows the same precision the
+// auditor sees in the browser (₹7,18,540 → 718.54 in '000s, not 719).
 function fmt(n: number): string {
   const scaled = _exportDivisor === 1 ? n : n / _exportDivisor;
-  if (Math.abs(scaled) < 0.5) return "—";
-  const abs = Math.round(Math.abs(scaled));
-  const str = abs.toLocaleString("en-IN");
-  return scaled < 0 ? `(${str})` : str;
+  if (_exportDivisor === 1) {
+    if (Math.abs(scaled) < 0.5) return "—";
+    const abs = Math.round(Math.abs(scaled)).toLocaleString("en-IN");
+    return scaled < 0 ? `(${abs})` : abs;
+  }
+  if (Math.abs(scaled) < 0.005) return "—";
+  const abs = Math.abs(scaled).toLocaleString("en-IN", {
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  });
+  return scaled < 0 ? `(${abs})` : abs;
 }
 
 // Sign helpers — Tally stores credits as negative, debits as positive
