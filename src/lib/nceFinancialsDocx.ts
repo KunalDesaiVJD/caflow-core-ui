@@ -2095,11 +2095,15 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
         headers:    { first: emptyFirstHeader, default: notesRunningHeader },
         children:   noteChildren,
       },
-      // PPE Schedule (landscape) — opens with the dark client banner, then
-      // the PPE table flows below. Same banner style as the BS / P&L / Notes.
+      // PPE Schedule (landscape) — the running header from the Notes section
+      // carries the entity name on every page, so the body banner is NOT needed
+      // here. Previously both were rendered → "OM REALTY" appeared twice at the
+      // top of the PPE page. Fix: keep the running header (inherited from
+      // the previous section's default header) and drop the body banner.
       {
         properties: { page: landscapeProps },
-        children:   [makeNotesBanner(), ppeTable],
+        headers:    { default: notesRunningHeader },
+        children:   [ppeTable],
       },
     ],
   });
