@@ -2240,6 +2240,78 @@ export async function nceAutoPopulate(
       }
     }
 
+    // ── Split-note LT/ST normalisation ────────────────────────────────────
+    // OM REALTY round 4: when the user used "Move to…" on a row in Long-Term
+    // Borrowings, the moved row's amount sat under the BARE key (cr.id)
+    // instead of under cr.id + "_lt" or cr.id + "_st", so extractSplitData's
+    // "no suffixed amounts → include in both" rule made the SAME row appear
+    // in BOTH the Long-Term and Short-Term notes (e.g. AU Small Finance
+    // Bank Ltd PY 7,99,55,015 visible in Long-Term Borrowings AND Short-
+    // Term Borrowings). User couldn't reconcile because the same ledger
+    // was being counted twice in the breakup.
+    //
+    // ROOT-CAUSE FIX: for every split note (borrowings, provisions,
+    // loans_advances — anything with noteFs.lt or noteFs.st), for every
+    // manual customRow whose label / ejected source matches a TB ledger
+    // currently mapped in CY coa_mapping to a code we own:
+    //   • mapped to an LT code (noteFs.lt) → move bare-key amount to "_lt"
+    //   • mapped to an ST code (noteFs.st) → move bare-key amount to "_st"
+    //   • clear the OTHER side's key so no residual placeholder remains
+    // extractSplitData's existing "real amount on THIS side" check then
+    // shows the row only in the side COA mapping says it belongs in,
+    // matching the BS face exactly. CY and PY are normalised independently
+    // because a settled-in-CY loan (e.g. AU SFB) lives in PY only.
+    if ((noteFs.lt && noteFs.lt.length > 0) || (noteFs.st && noteFs.st.length > 0)) {
+      const ltCodes = new Set(noteFs.lt ?? []);
+      const stCodes = new Set(noteFs.st ?? []);
+      // Resolve ledger → code: prefer the row's own ejectedSource (more
+      // reliable than label, which the auditor may have re-titled), then
+      // the label itself, then nothing.
+      const resolveCode = (cr: NCECustomRow): string | undefined => {
+        const ejected = ((cr as any).ejectedSource as string | undefined)?.trim();
+        if (ejected) {
+          const m = coaMapping[ejected] ?? pyCoaMap[ejected];
+          if (m?.code) return m.code;
+        }
+        const lbl = (cr.label || "").trim();
+        if (lbl) {
+          const m = coaMapping[lbl] ?? pyCoaMap[lbl];
+          if (m?.code) return m.code;
+        }
+        return undefined;
+      };
+      for (const cr of leakFreeCustomRows) {
+        if (cr.source !== "manual") continue;
+        const code = resolveCode(cr);
+        if (!code) continue;            // auditor-typed row with no TB match — leave alone
+        const side: "lt" | "st" | null =
+          ltCodes.has(code) ? "lt" :
+          stCodes.has(code) ? "st" : null;
+        if (!side) continue;            // ledger no longer ours — handled by the purge above
+        const wantedSfx = `_${side}`;
+        const otherSfx  = side === "lt" ? "_st" : "_lt";
+        for (const buf of [mergedCy, mergedPy]) {
+          const bareV   = Number(buf[cr.id] ?? 0);
+          const wantedV = Number(buf[cr.id + wantedSfx] ?? 0);
+          const otherV  = Number(buf[cr.id + otherSfx]  ?? 0);
+          // Merge bare-key + any stray other-side value onto the correct side.
+          // If the auditor explicitly typed an amount on this side already,
+          // sum rather than overwrite — so a partial Move-to that landed half
+          // the value here, half on the bare key, ends up correct.
+          const total = wantedV + bareV + otherV;
+          if (Math.abs(total) < 0.005) {
+            delete buf[cr.id];
+            delete buf[cr.id + wantedSfx];
+            delete buf[cr.id + otherSfx];
+          } else {
+            buf[cr.id + wantedSfx] = total;
+            delete buf[cr.id];
+            delete buf[cr.id + otherSfx];
+          }
+        }
+      }
+    }
+
     out[noteType] = {
       cy:         mergedCy,
       py:         mergedPy,
