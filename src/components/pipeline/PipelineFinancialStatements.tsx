@@ -8648,59 +8648,68 @@ export default function PipelineFinancialStatements({
               </div>
             </div>
           </DialogHeader>
-          {/* Scrollable content area */}
+          {/* Scrollable content area — matches the DOCX export exactly:
+              BS → P&L → Notes flow continuously in one scrollable view,
+              not in separate tabs. Each section has a visible page break
+              (border + spacing) to mimic the print layout. The tab bar is
+              kept for quick-jump navigation but all three sections render
+              simultaneously below it. */}
           <div className="flex-1 overflow-y-auto bg-muted/30">
-            <Tabs defaultValue="bs" className="h-full flex flex-col">
-              {/* Tab bar — sticks to top while scrolling */}
-              <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm border-b px-4 pt-2 pb-0">
-                <TabsList>
-                  <TabsTrigger value="bs">Balance Sheet</TabsTrigger>
-                  <TabsTrigger value="pl">Profit &amp; Loss</TabsTrigger>
-                  <TabsTrigger value="notes">Notes to Accounts</TabsTrigger>
-                </TabsList>
+            {/* Quick-jump nav — scrolls to the section instead of hiding others */}
+            <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm border-b px-4 pt-2 pb-0">
+              <div className="flex gap-1 pb-2">
+                <Button size="sm" variant="ghost" className="text-xs h-7" onClick={() => document.getElementById("preview-bs")?.scrollIntoView({ behavior: "smooth" })}>
+                  Balance Sheet
+                </Button>
+                <Button size="sm" variant="ghost" className="text-xs h-7" onClick={() => document.getElementById("preview-pl")?.scrollIntoView({ behavior: "smooth" })}>
+                  Profit &amp; Loss
+                </Button>
+                <Button size="sm" variant="ghost" className="text-xs h-7" onClick={() => document.getElementById("preview-notes")?.scrollIntoView({ behavior: "smooth" })}>
+                  Notes to Accounts
+                </Button>
               </div>
-              {/* NCE Task 3/6: A4-proportioned page container with visible border frame
-                  matching corporate entity card style (rounded-lg border bg-card).
-                  This mirrors the page-border shown in the DOCX export. */}
-              <div className="flex-1 overflow-y-auto py-6 px-4">
-                <div className="mx-auto bg-card shadow-md border border-border rounded-lg overflow-hidden"
-                     style={{ maxWidth: "794px", width: "100%", minHeight: "900px", padding: "28px 32px" }}>
-                  <TabsContent value="bs" className="mt-0">
-                    <NCEBalanceSheetView
-                      engagementId={engagementId}
-                      cyAmounts={nceCyAmounts}
-                      pyAmounts={ncePyAmounts}
-                      cyYear={cyYear}
-                      pyYear={pyYear}
-                      entityName={engagement?.clients?.name || ""}
-                      pyLocked={pyLocked}
-                      nceDynamicNoteMap={nceDynamicNoteMap}
-                    />
-                  </TabsContent>
-                  <TabsContent value="pl" className="mt-0">
-                    <NCEPLView
-                      engagementId={engagementId}
-                      cyAmounts={computedAmounts}
-                      pyAmounts={mergedPY}
-                      cyYear={cyYear}
-                      pyYear={pyYear}
-                      entityName={engagement?.clients?.name || ""}
-                      pyLocked={pyLocked}
-                      nceDynamicNoteMap={nceDynamicNoteMap}
-                    />
-                  </TabsContent>
-                  <TabsContent value="notes" className="mt-0">
-                    <NCENotesTab
-                      engagementId={engagementId}
-                      dynamicNoteMap={nceDynamicNoteMap}
-                      readOnly={true}
-                      entityName={engagement?.clients?.name || ""}
-                      cyYear={cyYear}
-                    />
-                  </TabsContent>
-                </div>
+            </div>
+            <div className="flex-1 overflow-y-auto py-6 px-4 space-y-8">
+              {/* ── Balance Sheet ─────────────────────────────── */}
+              <div id="preview-bs" className="mx-auto bg-card shadow-md border border-border rounded-lg overflow-hidden"
+                   style={{ maxWidth: "794px", width: "100%", minHeight: "900px", padding: "28px 32px" }}>
+                <NCEBalanceSheetView
+                  engagementId={engagementId}
+                  cyAmounts={nceCyAmounts}
+                  pyAmounts={ncePyAmounts}
+                  cyYear={cyYear}
+                  pyYear={pyYear}
+                  entityName={engagement?.clients?.name || ""}
+                  pyLocked={pyLocked}
+                  nceDynamicNoteMap={nceDynamicNoteMap}
+                />
               </div>
-            </Tabs>
+              {/* ── Profit & Loss ─────────────────────────────── */}
+              <div id="preview-pl" className="mx-auto bg-card shadow-md border border-border rounded-lg overflow-hidden"
+                   style={{ maxWidth: "794px", width: "100%", minHeight: "900px", padding: "28px 32px" }}>
+                <NCEPLView
+                  engagementId={engagementId}
+                  cyAmounts={computedAmounts}
+                  pyAmounts={mergedPY}
+                  cyYear={cyYear}
+                  pyYear={pyYear}
+                  entityName={engagement?.clients?.name || ""}
+                  pyLocked={pyLocked}
+                  nceDynamicNoteMap={nceDynamicNoteMap}
+                />
+              </div>
+              {/* ── Notes to Accounts ────────────────────────── */}
+              <div id="preview-notes" className="mx-auto bg-card shadow-md border border-border rounded-lg overflow-hidden"
+                   style={{ maxWidth: "794px", width: "100%", minHeight: "600px", padding: "28px 32px" }}>
+                <NCENotesTab
+                  engagementId={engagementId}
+                  dynamicNoteMap={nceDynamicNoteMap}
+                  readOnly={true}
+                  entityName={engagement?.clients?.name || ""}
+                  cyYear={cyYear}
+                />
+              </div>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
