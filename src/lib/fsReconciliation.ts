@@ -163,6 +163,122 @@ export function validateFSReconciliation(args: ValidateArgs): ReconResult {
   };
 }
 
+// ─── Corporate FS reconciliation (Phase 6) ──────────────────────────────────
+//
+// Mirrors validateFSReconciliation but reads from stage5_notes (corporate
+// schema) via sumNotesSubRowsCY/PY. Each entry compares:
+//   • COA Total  = computeCOATotals[code]  (signed TB × coa_mapping)
+//   • Note Total = Σ stage5_notes[section][key].breakup[*].amount_cy
+//   • BS Face    = computedAmounts[code] / computedAmountsPY[code]
+//
+// Corporate face is stored with the natural-side convention (positive
+// numbers irrespective of head nature) — so no sign flip is applied here,
+// unlike NCE where liability codes are stored negative.
+
+import type { Stage5Notes } from "@/lib/notesAutoPopulate";
+import { sumNotesSubRowsCY, sumNotesSubRowsPY } from "@/lib/notesAutoPopulate";
+
+/** CORP FS code → { section, key, label } used by the corporate validator.
+ *  Sourced from CORP_ENTRIES in notesMismatch.ts and FS_CODE_TO_NOTE_KEY in
+ *  PipelineFinancialStatements so the two surfaces always agree. PPE is
+ *  excluded — its detail lives in the FA grid (bespoke structure). */
+export const CORP_CODE_TO_NOTE: Record<string, { section: "bs_liab" | "bs_asset" | "pl"; key: string; label: string }> = {
+  BS_EQ_SC:    { section: "bs_liab",  key: "share_capital",        label: "Share Capital" },
+  BS_EQ_RS:    { section: "bs_liab",  key: "reserves_surplus",     label: "Reserves and Surplus" },
+  BS_NCL_LTB:  { section: "bs_liab",  key: "lt_borrowings",        label: "Long-term Borrowings" },
+  BS_NCL_DTL:  { section: "bs_liab",  key: "deferred_tax_liab",    label: "Deferred Tax Liab (Net)" },
+  BS_NCL_OLT:  { section: "bs_liab",  key: "other_lt_liab",        label: "Other LT Liabilities" },
+  BS_NCL_LTP:  { section: "bs_liab",  key: "lt_provisions",        label: "Long-term Provisions" },
+  BS_CL_STB:   { section: "bs_liab",  key: "st_borrowings",        label: "Short-term Borrowings" },
+  BS_CL_TP:    { section: "bs_liab",  key: "trade_payables",       label: "Trade Payables" },
+  BS_CL_OCL:   { section: "bs_liab",  key: "other_current_liab",   label: "Other Current Liabilities" },
+  BS_CL_STP:   { section: "bs_liab",  key: "st_provisions",        label: "Short-term Provisions" },
+  BS_NCA_INV:  { section: "bs_asset", key: "nc_investments",       label: "Non-current Investments" },
+  BS_NCA_DTA:  { section: "bs_asset", key: "deferred_tax_assets",  label: "Deferred Tax Assets (Net)" },
+  BS_NCA_LLA:  { section: "bs_asset", key: "lt_loans_advances",    label: "LT Loans and Advances" },
+  BS_NCA_ONA:  { section: "bs_asset", key: "other_nc_assets",      label: "Other Non-current Assets" },
+  BS_CA_CI:    { section: "bs_asset", key: "current_investments",  label: "Current Investments" },
+  BS_CA_INV:   { section: "bs_asset", key: "inventories",          label: "Inventories" },
+  BS_CA_TR:    { section: "bs_asset", key: "trade_receivables",    label: "Trade Receivables" },
+  BS_CA_CCE:   { section: "bs_asset", key: "cash_bank",            label: "Cash and Bank" },
+  BS_CA_SLA:   { section: "bs_asset", key: "st_loans_advances",    label: "ST Loans and Advances" },
+  BS_CA_OCA:   { section: "bs_asset", key: "other_current_assets", label: "Other Current Assets" },
+  PL_REV_OPS:  { section: "pl",       key: "revenue_from_ops",     label: "Revenue from Operations" },
+  PL_REV_OI:   { section: "pl",       key: "other_income",         label: "Other Income" },
+  PL_EXP_MAT:  { section: "pl",       key: "cost_materials",       label: "Cost of Materials Consumed" },
+  PL_EXP_SIT:  { section: "pl",       key: "purchases_stock",      label: "Purchases of Stock-in-Trade" },
+  PL_EXP_CII:  { section: "pl",       key: "changes_inventories",  label: "Changes in Inventories" },
+  PL_EXP_EMP:  { section: "pl",       key: "employee_benefits",    label: "Employee Benefits" },
+  PL_EXP_FIN:  { section: "pl",       key: "finance_costs",        label: "Finance Costs" },
+  PL_EXP_DEP:  { section: "pl",       key: "depreciation",         label: "Depreciation" },
+  PL_EXP_OTH:  { section: "pl",       key: "other_expenses",       label: "Other Expenses" },
+};
+
+interface ValidateCorporateArgs {
+  corporateNotes:    Stage5Notes | null | undefined;
+  bsFaceCy:          Record<string, number>;
+  bsFacePy:          Record<string, number>;
+  coaTotals?:        Record<string, { cy: number; py: number }>;
+  toleranceMinor?:   number;
+  toleranceSevere?:  number;
+}
+
+export function validateCorporateFSReconciliation(args: ValidateCorporateArgs): ReconResult {
+  const tolMinor  = args.toleranceMinor  ?? 1;
+  const tolSevere = args.toleranceSevere ?? 100;
+  const out: ReconRow[] = [];
+
+  for (const [code, meta] of Object.entries(CORP_CODE_TO_NOTE)) {
+    const ntCy = sumNotesSubRowsCY(args.corporateNotes ?? null, meta.section, meta.key);
+    const ntPy = sumNotesSubRowsPY(args.corporateNotes ?? null, meta.section, meta.key);
+    // Corporate face is stored on the natural side (already positive); no
+    // liab-flip needed. Skip codes whose note is unpopulated AND whose face
+    // is also zero — silent unused notes shouldn't clutter the panel.
+    const faceCy = args.bsFaceCy[code] ?? 0;
+    const facePy = args.bsFacePy[code] ?? 0;
+    if (ntCy == null && ntPy == null && Math.abs(faceCy) < 0.005 && Math.abs(facePy) < 0.005) continue;
+
+    const noteCy = ntCy ?? 0;
+    const notePy = ntPy ?? 0;
+
+    const coaTotal = args.coaTotals?.[code] ?? { cy: noteCy, py: notePy };
+    const mdCy = Math.round((noteCy - coaTotal.cy) * 100) / 100;
+    const mdPy = Math.round((notePy - coaTotal.py) * 100) / 100;
+
+    const dCy = Math.round((noteCy - faceCy) * 100) / 100;
+    const dPy = Math.round((notePy - facePy) * 100) / 100;
+    const worst         = Math.max(Math.abs(dCy), Math.abs(dPy));
+    const manualPresent = Math.max(Math.abs(mdCy), Math.abs(mdPy)) > tolMinor;
+    let status: ReconStatus | "manual";
+    if (worst >= tolSevere)      status = "drift_severe";
+    else if (worst >= tolMinor)  status = "drift_minor";
+    else if (manualPresent)      status = "manual";
+    else                         status = "ok";
+
+    out.push({
+      code,
+      noteType:    meta.key,
+      label:       meta.label,
+      coaTotal,
+      noteTotal:   { cy: noteCy, py: notePy },
+      bsFace:      { cy: faceCy, py: facePy },
+      manualDelta: { cy: mdCy,  py: mdPy  },
+      delta:       { cy: dCy,   py: dPy   },
+      status,
+    });
+  }
+
+  const severeCount = out.filter(r => r.status === "drift_severe").length;
+  const minorCount  = out.filter(r => r.status === "drift_minor").length;
+  return {
+    rows: out,
+    allOk: severeCount === 0 && minorCount === 0,
+    severeCount,
+    minorCount,
+    computedAt: new Date().toISOString(),
+  };
+}
+
 // ─── computeCOATotals — anchor for the three-way reconciliation ─────────────
 //
 // Sums the signed TB amount of every ledger mapped to each FS code, using

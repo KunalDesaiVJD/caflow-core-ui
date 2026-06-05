@@ -7412,14 +7412,17 @@ export default function PipelineFinancialStatements({
       {/* 2026-06-05 — FS Health structural guarantee panel. Phase 4: now
            a three-way breakdown (COA / Manual / Note / Face) so legitimate
            auditor adjustments are visible distinctly from reconciliation
-           bugs. See src/lib/fsReconciliation.ts for the invariant logic. */}
+           bugs. Phase 6: also runs for Corporate engagements (uses
+           stage5_notes via sumNotesSubRowsCY/PY). See
+           src/lib/fsReconciliation.ts for the invariant logic. */}
       <FsHealthPanel
         engagementId={engagementId}
-        nceNotesByType={nceNotesByType}
-        bsFaceCy={nceCyAmounts}
-        bsFacePy={ncePyAmounts}
+        nceNotesByType={isNonCorporate ? nceNotesByType : undefined}
+        corporateNotes={isNonCorporate ? undefined : stage5NotesData}
+        bsFaceCy={isNonCorporate ? nceCyAmounts : computedAmounts}
+        bsFacePy={isNonCorporate ? ncePyAmounts : computedAmountsPY}
         coaTotals={coaTotalsByCode}
-        visible={isNonCorporate}
+        visible={true}
       />
 
       {/* 2026-05-30 — Re-correct banner: when the NCE BS doesn't balance,
