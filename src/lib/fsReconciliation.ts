@@ -66,7 +66,7 @@ export interface ReconResult {
 
 interface ValidateArgs {
   /** Loaded nce_financial_notes rows for the engagement, keyed by note_type */
-  nceNotesByType: Record<string, { cy_data?: Record<string, any> | null; py_data?: Record<string, any> | null }>;
+  nceNotesByType: Record<string, { cy_data?: Record<string, any> | null; py_data?: Record<string, any> | null; note_type?: string }>;
   /** The same face value map used by buildBSRows (nceCyAmounts / ncePyAmounts) */
   bsFaceCy:       Record<string, number>;
   bsFacePy:       Record<string, number>;

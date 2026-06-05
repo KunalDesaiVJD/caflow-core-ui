@@ -1,3 +1,9 @@
+// 2026-06-05 Phase 3 — every note total now flows through the canonical
+// computeNoteTotals helper (see import below). This file's computeDisplayData
+// is a thin adapter that writes the canonical totals back into the cy/py
+// records its historic callers expect.
+import { computeNoteTotals } from "@/lib/nceNoteTotals";
+
 // Shared config for NCE Detailed Notes — the single source of truth for:
 //   • Row IDs used as keys in `nce_financial_notes.cy_data` / `py_data`
 //   • Section headers, indentation, and total formulas
@@ -837,175 +843,33 @@ export function computeDisplayData(
   py: Record<string, number>,
   customRows?: Array<{ id: string; section?: string; attachedTo?: string; sources?: Array<{ ledger?: string; amountCy?: number; amountPy?: number; column?: "lt" | "st" }> }>,
 ): { cy: Record<string, number>; py: Record<string, number> } {
+  // 2026-06-05 Phase 3 — this function delegates to the canonical
+  // computeNoteTotals so the Notes Total row, BS / P&L face, renderer
+  // per-row aggregate and DOCX export all read the SAME numbers.
+  // The legacy in-line algorithm that used to live here has moved to
+  // src/lib/nceNoteTotals.ts. This wrapper preserves the historic
+  // signature ({cy, py}) by writing each total row's computed value
+  // back into the cy / py records at the right keys.
   const outCy = { ...cy };
   const outPy = { ...py };
-
-  // Find the ID of the grand-total row (last isTotal row in the config)
-  const grandTotalId = [...config.rows].reverse().find(r => r.isTotal)?.id ?? null;
-
-  // Recursive contribution of a custom row = its own amount PLUS every custom
-  // row nested beneath it (attachedTo it), to any depth. Fixes the case where a
-  // user nests a ledger row under a CUSTOM head (e.g. "Interest On Deposit"
-  // under a custom "Bank Interest Income") — previously such a row was counted
-  // nowhere (it has an attachedTo, so it's excluded from `extras`, and its
-  // parent isn't a static formulaAdd id), so the note total came out blank.
-  // `seen` guards against any accidental attachedTo cycle.
-  //
-  // SHREE HARI FIX (2026-06-04): also include the customRow's own `sources[]`
-  // sub-ledger breakdown array. A "heading"-style customRow (e.g. "A" / "B" /
-  // "C" / "D") often carries zero in cy[id] with the actual amounts living in
-  // a `sources: [{ledger, amountCy, amountPy}]` array. Without this addition,
-  // such headings contributed 0 to the note Total even though their sub-
-  // ledgers totalled lakhs, making the note Total inconsistent with the
-  // per-row aggregates the renderer displays. Mirrors the same fix applied
-  // in NCEDetailedNotes.tsx renderer-side sumCustomDisplayB/A.
-  const sumCustomB = (id: string, seen: Set<string>): { c: number; p: number } => {
-    if (seen.has(id)) return { c: 0, p: 0 };
-    seen.add(id);
-    let c = outCy[id] ?? 0, p = outPy[id] ?? 0;
-    if (customRows) {
-      const self = customRows.find(cr => cr.id === id);
-      // Add the heading's own sources[] sum — guarded to avoid double-count
-      // if rawCy[id] is already non-zero (user explicitly set a value).
-      if (self && Array.isArray(self.sources) && self.sources.length > 0) {
-        const srcSumCy = self.sources.reduce((s, x) => s + (Number(x?.amountCy) || 0), 0);
-        const srcSumPy = self.sources.reduce((s, x) => s + (Number(x?.amountPy) || 0), 0);
-        if ((outCy[id] ?? 0) === 0) c += srcSumCy;
-        if ((outPy[id] ?? 0) === 0) p += srcSumPy;
-      }
-      for (const cr of customRows) {
-        if (cr.attachedTo === id) { const r = sumCustomB(cr.id, seen); c += r.c; p += r.p; }
-      }
+  const totals = computeNoteTotals(config, cy, py, customRows ?? []);
+  if (totals.pattern === "B") {
+    for (const row of config.rows) {
+      if (!row.isTotal) continue;
+      const v = totals.perRow[row.id];
+      if (!v) continue;
+      outCy[row.id] = v.cy;
+      outPy[row.id] = v.py;
     }
-    return { c, p };
-  };
-
-  for (const row of config.rows) {
-    if (!row.isTotal) continue;
-    const adds = row.formulaAdd ?? [];
-    const subs = row.formulaSub ?? [];
-
-    // Determine which custom rows contribute to THIS total:
-    //   • Section-total (sectionTag set)  → custom rows tagged with that section
-    //     BUT only rows NOT already attached to a static parent (those are counted
-    //     via the parent's own contribution in formulaAdd, avoiding double-count).
-    //   • Grand-total (last isTotal)       → custom rows with NO section tag
-    //   • Intermediate sub-totals          → no custom rows (avoids double-count)
-    let extras: string[] = [];
-    if (row.sectionTag && customRows?.length) {
-      extras = customRows
-        .filter(cr => cr.section === row.sectionTag && !cr.attachedTo)
-        .map(cr => cr.id);
-    } else if (row.id === grandTotalId && customRows?.length) {
-      extras = customRows.filter(cr => !cr.section && !cr.attachedTo).map(cr => cr.id);
-    }
-
-    if (config.pattern === "B") {
-      let cVal = 0, pVal = 0;
-      for (const id of adds) {
-        cVal += outCy[id] ?? 0; pVal += outPy[id] ?? 0;
-        // ROOT-CAUSE FIX (Trade Payables / Other Current Liabilities total = 0):
-        // breakup ledgers now attach to a catch-all static row (e.g. "Others"),
-        // and that static row's own value is ZEROED to avoid double-count — the
-        // children hold the amounts. So the Total MUST add the children of each
-        // summed row, exactly like Pattern A does. Without this the note Total
-        // and the FS face (which reads this) showed blank even though the
-        // ledgers were mapped. Mirrors the Pattern A attached-row logic below.
-        if (customRows) {
-          for (const cr of customRows) {
-            if (cr.attachedTo !== id) continue;
-            const r = sumCustomB(cr.id, new Set()); cVal += r.c; pVal += r.p;
-          }
-        }
-      }
-      for (const id of subs)   { cVal -= outCy[id] ?? 0; pVal -= outPy[id] ?? 0; }
-      for (const id of extras) { const r = sumCustomB(id, new Set()); cVal += r.c; pVal += r.p; }
-      outCy[row.id] = Math.round(cVal * 100) / 100;
-      outPy[row.id] = Math.round(pVal * 100) / 100;
-    } else {
-      let ltC = 0, ltP = 0, stC = 0, stP = 0;
-      // ROOT-CAUSE FIX (provisions LT phantom amount): the bare-key fallback
-      // (`outCy[cr.id]`) on the LT branch causes amounts saved without a
-      // suffix to leak into BOTH columns. e.g. a manual "Unpaid Audit Fees"
-      // row saved with cy[id] = 20000 AND cy[id + "_st"] = 20000 produced
-      // ltC += 20000 (bare fallback) and stC += 20000 — doubling the total.
-      // Use bare-key fallback ONLY when NEITHER _lt NOR _st key exists; if
-      // either suffix is present the row is suffix-aware and the bare key
-      // is legacy noise. Applies symmetrically to extras (sectionless rows).
-      const lookupSuffixed = (
-        baseCy: Record<string, number>,
-        basePy: Record<string, number>,
-        id: string,
-      ) => {
-        const ltKey = id + "_lt", stKey = id + "_st";
-        const hasLt = ltKey in baseCy;
-        const hasSt = stKey in baseCy;
-        const useBare = !hasLt && !hasSt;
-        return {
-          ltCy: baseCy[ltKey] ?? (useBare ? baseCy[id] ?? 0 : 0),
-          ltPy: basePy[ltKey] ?? (useBare ? basePy[id] ?? 0 : 0),
-          stCy: baseCy[stKey] ?? 0,
-          stPy: basePy[stKey] ?? 0,
-        };
-      };
-      // Recursive contribution of a custom row including nested children (see
-      // sumCustomB above — same fix for Pattern A's LT/ST columns).
-      // SHREE HARI FIX mirror — also sum the row's own `sources[]` array,
-      // routing each source to the right column via `source.column` ("lt"|"st",
-      // default "lt"). Mirrors the renderer-side sumCustomDisplayA logic.
-      const sumCustomA = (id: string, seen: Set<string>) => {
-        if (seen.has(id)) return { lc: 0, lp: 0, sc: 0, sp: 0 };
-        seen.add(id);
-        const v = lookupSuffixed(outCy, outPy, id);
-        let lc = v.ltCy, lp = v.ltPy, sc = v.stCy, sp = v.stPy;
-        if (customRows) {
-          const self = customRows.find(cr => cr.id === id);
-          if (self && Array.isArray(self.sources) && self.sources.length > 0) {
-            for (const x of self.sources) {
-              const aCy = Number(x?.amountCy) || 0;
-              const aPy = Number(x?.amountPy) || 0;
-              if (x?.column === "st") {
-                if ((outCy[id + "_st"] ?? 0) === 0) sc += aCy;
-                if ((outPy[id + "_st"] ?? 0) === 0) sp += aPy;
-              } else {
-                if ((outCy[id + "_lt"] ?? 0) === 0) lc += aCy;
-                if ((outPy[id + "_lt"] ?? 0) === 0) lp += aPy;
-              }
-            }
-          }
-          for (const cr of customRows) {
-            if (cr.attachedTo === id) { const r = sumCustomA(cr.id, seen); lc += r.lc; lp += r.lp; sc += r.sc; sp += r.sp; }
-          }
-        }
-        return { lc, lp, sc, sp };
-      };
-      for (const id of adds) {
-        ltC += outCy[id + "_lt"] ?? 0; ltP += outPy[id + "_lt"] ?? 0;
-        stC += outCy[id + "_st"] ?? 0; stP += outPy[id + "_st"] ?? 0;
-        // Also include custom rows formally attached to this static row.
-        // These are excluded from extras (see above) to prevent double-counting.
-        if (customRows) {
-          for (const cr of customRows) {
-            if (cr.attachedTo !== id) continue;
-            const r = sumCustomA(cr.id, new Set());
-            ltC += r.lc; ltP += r.lp;
-            stC += r.sc; stP += r.sp;
-          }
-        }
-      }
-      for (const id of subs) {
-        ltC -= outCy[id + "_lt"] ?? 0; ltP -= outPy[id + "_lt"] ?? 0;
-        stC -= outCy[id + "_st"] ?? 0; stP -= outPy[id + "_st"] ?? 0;
-      }
-      for (const id of extras) {
-        const r = sumCustomA(id, new Set());
-        ltC += r.lc; ltP += r.lp;
-        stC += r.sc; stP += r.sp;
-      }
-      outCy[row.id + "_lt"] = Math.round(ltC * 100) / 100;
-      outPy[row.id + "_lt"] = Math.round(ltP * 100) / 100;
-      outCy[row.id + "_st"] = Math.round(stC * 100) / 100;
-      outPy[row.id + "_st"] = Math.round(stP * 100) / 100;
+  } else {
+    for (const row of config.rows) {
+      if (!row.isTotal) continue;
+      const v = totals.perRow[row.id];
+      if (!v) continue;
+      outCy[row.id + "_lt"] = v.ltCy;
+      outPy[row.id + "_lt"] = v.ltPy;
+      outCy[row.id + "_st"] = v.stCy;
+      outPy[row.id + "_st"] = v.stPy;
     }
   }
   return { cy: outCy, py: outPy };

@@ -24,7 +24,7 @@ import { validateFSReconciliation, type ReconRow, NCE_LIAB_CODE_SET } from "@/li
 interface Props {
   engagementId:    string;
   /** nce_financial_notes rows keyed by note_type (same map fed to applyNCENoteTotal) */
-  nceNotesByType:  Record<string, { cy_data?: Record<string, any> | null; py_data?: Record<string, any> | null }>;
+  nceNotesByType:  Record<string, { cy_data?: Record<string, any> | null; py_data?: Record<string, any> | null; note_type?: string }>;
   /** The same BS face maps used by the surrounding component (nceCyAmounts / ncePyAmounts) */
   bsFaceCy:        Record<string, number>;
   bsFacePy:        Record<string, number>;

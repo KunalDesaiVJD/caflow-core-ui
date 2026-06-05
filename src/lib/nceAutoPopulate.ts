@@ -23,6 +23,11 @@
  */
 
 import { supabase } from "@/integrations/supabase/client";
+// 2026-06-05 Phase 3 — every getNCENoteFaceTotal call now reads from the
+// canonical computeNoteTotals helper instead of its own leaf-sum algorithm.
+// NOTES_CONFIG is needed to resolve note_type → NoteConfig at call time.
+import { NOTES_CONFIG } from "@/config/nceNotesConfig";
+import { computeNoteTotals } from "@/lib/nceNoteTotals";
 
 // ── FS-code map ──────────────────────────────────────────────────────────────
 //
@@ -450,12 +455,19 @@ export const NCE_CODE_TO_NOTE: Record<string, { note: string; col?: "lt" | "st" 
  *  made it to the BS face, producing visible mismatches like Trade Payables
  *  showing ₹19,84,766 on BS face vs ₹19,94,766 in the Notes total. */
 export function getNCENoteFaceTotal(
-  noteRow: { cy_data?: Record<string, any> | null; py_data?: Record<string, any> | null } | undefined | null,
+  noteRow: { cy_data?: Record<string, any> | null; py_data?: Record<string, any> | null; note_type?: string } | undefined | null,
   column: "cy" | "py",
   pattern?: "A" | "B",
   patternCol?: "lt" | "st",
 ): number | null {
   if (!noteRow) return null;
+  // 2026-06-05 Phase 3 — delegated to the canonical computeNoteTotals helper
+  // so the BS / P&L face reads the SAME number as the Notes Total row, the
+  // renderer per-row aggregate, and the DOCX export. Algorithm: walk the
+  // note's config formula DAG (matches what auditors see at "Note Total"
+  // and what the auto-populate writes back into cy_data when it runs
+  // computeDisplayData under the hood).
+  //
   // SCHEMA QUIRK / SHREE HARI ROOT CAUSE FIX (2026-06-05):
   // `_custom_rows` (with its `sources[]` sub-ledger arrays) is persisted
   // ONLY on cy_data. py_data carries the per-id PY numeric values but NOT
@@ -463,110 +475,79 @@ export function getNCENoteFaceTotal(
   // array — which means a PY column query previously saw NO customRows,
   // counted NO sources, and silently under-reported the BS PY face by
   // crores of rupees (SHREE HARI INFRA: ₹55.67 cr missing across A/B/C/D/E
-  // heading rows). Always pull the customRow list from cy_data; values
-  // for the requested column come from cy_data OR py_data as appropriate.
+  // heading rows). Always pull the customRow list from cy_data; the value
+  // matrices for the formula DAG come from cy_data + py_data respectively.
   const cyData = noteRow.cy_data ?? {};
   const pyData = noteRow.py_data ?? {};
-  const valuesSource = (column === "cy" ? cyData : pyData) ?? {};
-  if (!valuesSource || typeof valuesSource !== "object") return null;
-  // Master customRow list — always from cy_data, regardless of column.
+  if (!cyData || typeof cyData !== "object") return null;
+  if (!pyData || typeof pyData !== "object") return null;
   const customRows: Array<{ id: string; section?: string; attachedTo?: string; sources?: Array<{ ledger?: string; amountCy?: number; amountPy?: number; column?: "lt" | "st" }> }> =
     Array.isArray((cyData as any)._custom_rows) ? (cyData as any)._custom_rows : [];
 
-  // Strip meta keys to get the pure numeric map for the REQUESTED column.
-  const numeric: Record<string, number> = {};
-  for (const [k, v] of Object.entries(valuesSource)) {
+  // Strip meta keys → pure numeric maps per column.
+  const numericCy: Record<string, number> = {};
+  for (const [k, v] of Object.entries(cyData)) {
     if (META_KEYS.has(k)) continue;
-    if (typeof v === "number" && Number.isFinite(v)) numeric[k] = v;
+    if (typeof v === "number" && Number.isFinite(v)) numericCy[k] = v;
+  }
+  const numericPy: Record<string, number> = {};
+  for (const [k, v] of Object.entries(pyData)) {
+    if (META_KEYS.has(k)) continue;
+    if (typeof v === "number" && Number.isFinite(v)) numericPy[k] = v;
   }
 
-  // SHREE HARI FIX (2026-06-04): some customRows carry their sub-ledger
-  // breakup in an own `sources[]` array (heading-style rows like "A" / "B" /
-  // "C" / "D" / "E" under "Other payables — Others"). The customRow's own
-  // numeric value (cy[id]) is 0; the actual amounts live inside sources.
-  // Without summing sources, the BS face under-counts by the entire
-  // sub-ledger breakup — produced visible BS imbalance of ₹3,39,50,000 on
-  // SHREE HARI INFRA (Other Current Liabilities). Helper used by both
-  // Pattern A and Pattern B branches below.
-  const isCol = column === "cy";
-  const sourcesContribution = (cr: { id: string; sources?: Array<{ amountCy?: number; amountPy?: number; column?: "lt" | "st" }> }, patternColFilter?: "lt" | "st"): number => {
-    if (!Array.isArray(cr.sources) || cr.sources.length === 0) return 0;
-    // Only count sources when the customRow's own numeric is zero — same
-    // guard as in NCEDetailedNotes / computeDisplayData to avoid double-
-    // counting if a future code path ever populates both channels.
-    const baseKey = patternColFilter ? cr.id + "_" + patternColFilter : cr.id;
-    if ((numeric[baseKey] ?? 0) !== 0) return 0;
-    let s = 0;
-    for (const src of cr.sources) {
-      if (patternColFilter && src.column !== patternColFilter) continue;
-      s += Number((isCol ? src.amountCy : src.amountPy) ?? 0);
-    }
-    return s;
-  };
-
-  // Pattern A: caller asked for a specific column ("lt" or "st"). Sum every
-  // non-customRow leaf suffix key plus customRows (respecting attachedTo /
-  // section semantics from computeDisplayData). For simplicity here we sum
-  // ALL suffixed keys for the chosen column, then add customRows for that
-  // column. This mirrors the Total (A+B)_lt / _st row math in computeDisplayData.
+  // Resolve the NoteConfig. The note_type stored on noteRow is keyed by
+  // the underlying NCE storage record (e.g. "borrowings" — Pattern A
+  // data with _lt/_st suffixed keys), but there is NO NoteConfig with
+  // noteType "borrowings" — only the split views "borrowings_lt" and
+  // "borrowings_st", both Pattern B. For Pattern A face queries we
+  // borrow the row list from a split view and override pattern → "A"
+  // so computeNoteTotals walks the LT/ST formula correctly. Likewise
+  // for "provisions" and "loans_advances".
+  const nt = noteRow.note_type;
+  let cfg: NoteConfig | undefined;
   if (pattern === "A" && patternCol) {
-    const suffix = "_" + patternCol;
-    let total = 0;
-    let hasAny = false;
-    // Sum top-level suffixed keys, but EXCLUDE customRow ids (they're picked
-    // up via the customRows loop with section/attachedTo awareness).
-    const customIds = new Set(customRows.map(cr => cr.id));
-    for (const [k, v] of Object.entries(numeric)) {
-      if (!k.endsWith(suffix)) continue;
-      const base = k.slice(0, -suffix.length);
-      if (customIds.has(base)) continue;
-      // Skip section/grand totals — they're DERIVED from the leaves below.
-      if (base === "total" || base === "total_ab" || base === "sec_total" || base === "unsec_total") continue;
-      total += v;
-      hasAny = true;
-    }
-    for (const cr of customRows) {
-      const v = numeric[cr.id + suffix];
-      if (v != null) { total += v; hasAny = true; }
-      // SHREE HARI fix — also add the row's own sources[] sub-ledger
-      // breakup, filtered to the requested LT/ST column.
-      const srcAdd = sourcesContribution(cr, patternCol);
-      if (srcAdd !== 0) { total += srcAdd; hasAny = true; }
-    }
-    return hasAny ? Math.round(total * 100) / 100 : null;
+    const splitCfg =
+      NOTES_CONFIG.find(c => c.noteType === nt + "_lt") ??
+      NOTES_CONFIG.find(c => c.noteType === nt + "_st") ??
+      // already a split view name
+      NOTES_CONFIG.find(c => c.noteType === nt);
+    if (splitCfg) cfg = { ...splitCfg, pattern: "A" } as NoteConfig;
+  } else {
+    cfg = NOTES_CONFIG.find(c => c.noteType === nt);
   }
+  if (!cfg) return null;
 
-  // Pattern B: sum leaf keys + sectionless customRows. We deliberately read
-  // only KEYS that look like "leaf" ids (not the synthetic "total" row); for
-  // legacy data we fall back to all non-meta numeric keys minus any key whose
-  // base id collides with a customRow (avoiding double-count).
-  const customIds = new Set(customRows.map(cr => cr.id));
-  let total = 0;
-  let hasAny = false;
-  for (const [k, v] of Object.entries(numeric)) {
-    if (k === "total") continue;       // grand total — derived
-    if (k === "total_ab" || k === "sec_total" || k === "unsec_total") continue;
-    if (customIds.has(k)) continue;    // customRow — added separately below
-    total += v;
-    hasAny = true;
+  const totals = computeNoteTotals(cfg, numericCy, numericPy, customRows);
+
+  if (totals.pattern === "A") {
+    const col: "lt" | "st" = patternCol ?? "lt";
+    const gt = totals.grandTotal;
+    const v = column === "cy"
+      ? (col === "lt" ? gt.ltCy : gt.stCy)
+      : (col === "lt" ? gt.ltPy : gt.stPy);
+    if (v === 0 && !hasAnyNonZero(totals.perRow)) return null;
+    return Math.round(v * 100) / 100;
   }
-  // ROOT-CAUSE FIX: include ALL customRows (attached AND unattached). When a
-  // breakup ledger is attached to a catch-all static row (e.g. "Others"), that
-  // static row's own value is ZEROED — the child customRow holds the amount —
-  // so the old "attached rows are summed via their parent" assumption dropped
-  // the entire amount. Static parents with children contribute 0 to the leaf
-  // sum above, and each child contributes its value here → no double-count.
-  for (const cr of customRows) {
-    const v = numeric[cr.id];
-    if (v != null) { total += v; hasAny = true; }
-    // SHREE HARI fix — sum the customRow's own sources[] sub-ledger breakup
-    // (heading rows like "A" / "B" / "C" / "D" / "E" hold their amounts here,
-    // not in numeric[cr.id]). Without this, the BS face under-counted by the
-    // entire sub-ledger group and ₹3.39 cr appeared as a balance imbalance.
-    const srcAdd = sourcesContribution(cr);
-    if (srcAdd !== 0) { total += srcAdd; hasAny = true; }
+  // Pattern B
+  const v = column === "cy" ? totals.grandTotal.cy : totals.grandTotal.py;
+  if (v === 0 && !hasAnyNonZero(totals.perRow)) return null;
+  return Math.round(v * 100) / 100;
+}
+
+/** Small helper used by getNCENoteFaceTotal to distinguish a true "no data"
+ *  state (return null, matches legacy behaviour) from a computed zero
+ *  (return 0). Any non-zero per-row value flips it. */
+function hasAnyNonZero(perRow: Record<string, { cy?: number; py?: number; ltCy?: number; ltPy?: number; stCy?: number; stPy?: number }>): boolean {
+  for (const v of Object.values(perRow)) {
+    if (Math.abs(Number(v.cy   ?? 0)) > 0.005) return true;
+    if (Math.abs(Number(v.py   ?? 0)) > 0.005) return true;
+    if (Math.abs(Number(v.ltCy ?? 0)) > 0.005) return true;
+    if (Math.abs(Number(v.ltPy ?? 0)) > 0.005) return true;
+    if (Math.abs(Number(v.stCy ?? 0)) > 0.005) return true;
+    if (Math.abs(Number(v.stPy ?? 0)) > 0.005) return true;
   }
-  return hasAny ? Math.round(total * 100) / 100 : null;
+  return false;
 }
 
 // ── Serialise / deserialise ───────────────────────────────────────────────────

@@ -3648,11 +3648,14 @@ export default function PipelineFinancialStatements({
   // the augmented map — keeps display sign convention identical to before.
   // ── Build a lookup from noteType → nce_financial_notes row so getNCENoteFaceTotal
   // can pull each note's cy_data / py_data without re-querying the DB.
-  const nceNotesByType: Record<string, { cy_data?: any; py_data?: any }> = useMemo(() => {
-    const m: Record<string, { cy_data?: any; py_data?: any }> = {};
+  // Phase 3: also carry note_type onto the per-row object so
+  // getNCENoteFaceTotal can resolve the NoteConfig from it (the canonical
+  // computeNoteTotals lookup needs the config to walk the formula DAG).
+  const nceNotesByType: Record<string, { cy_data?: any; py_data?: any; note_type?: string }> = useMemo(() => {
+    const m: Record<string, { cy_data?: any; py_data?: any; note_type?: string }> = {};
     if (Array.isArray(nceNotesData)) {
       for (const n of nceNotesData as any[]) {
-        if (n?.note_type) m[n.note_type] = { cy_data: n.cy_data, py_data: n.py_data };
+        if (n?.note_type) m[n.note_type] = { cy_data: n.cy_data, py_data: n.py_data, note_type: n.note_type };
       }
     }
     return m;
