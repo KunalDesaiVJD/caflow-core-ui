@@ -31,6 +31,9 @@ import {
 
 import { NOTES_CONFIG, NOTE_META, computeDisplayData, extractSplitData } from "@/config/nceNotesConfig";
 import type { NoteConfig, NoteRowDef } from "@/config/nceNotesConfig";
+// 2026-06-05 Phase 3 — canonical per-row aggregator. DOCX aggA/aggB now
+// read perRow lookups instead of duplicating the math locally.
+import { computeNoteTotals } from "@/lib/nceNoteTotals";
 import { getActiveFsDivisor, FS_SCALES } from "@/lib/fsUnits";
 import { getDynamicNoteDisplay } from "@/lib/nceDynamicNoteNumbers";
 
@@ -1404,29 +1407,26 @@ function buildNoteSection(
     return { ltC, ltP, stC, stP };
   };
 
-  // Displayed value for a STATIC data row = its own amount + every custom row
-  // attached to it (collapsed-view aggregate, recursively). computeDisplayData
-  // only updates the TOTAL rows, so the per-row aggregation is done here.
+  // 2026-06-05 Phase 3 — aggA and aggB now read from the canonical
+  // computeNoteTotals.perRow so the DOCX export matches the on-screen
+  // Notes Total row, the BS / P&L face and the renderer's per-row
+  // aggregate exactly. The legacy inline algorithms (suffixed,
+  // allDescendantsOf, sourcesSumA, sourcesSumB) above are no longer
+  // called by aggA / aggB, but are kept in place because the row-by-row
+  // descendant walk below still uses allDescendantsOf for emit logic.
+  const docxTotals = computeNoteTotals(cfg, cy, py, customRows as any);
   const aggA = (id: string) => {
-    let lt = cy[id + "_lt"] ?? 0, st = cy[id + "_st"] ?? 0;
-    let ltP = py[id + "_lt"] ?? 0, stP = py[id + "_st"] ?? 0;
-    for (const cr of allDescendantsOf(id)) {
-      const c = suffixed(cy, cr.id); const p = suffixed(py, cr.id);
-      lt += c.lt; st += c.st; ltP += p.lt; stP += p.st;
-      // Add this descendant's sources[] sub-ledger sum.
-      const s = sourcesSumA(cr);
-      lt += s.ltC; ltP += s.ltP; st += s.stC; stP += s.stP;
-    }
-    return { lt, ltP, st, stP };
+    const v = docxTotals.pattern === "A" ? docxTotals.perRow[id] : undefined;
+    if (v) return { lt: v.ltCy, ltP: v.ltPy, st: v.stCy, stP: v.stPy };
+    return {
+      lt: cy[id + "_lt"] ?? 0, ltP: py[id + "_lt"] ?? 0,
+      st: cy[id + "_st"] ?? 0, stP: py[id + "_st"] ?? 0,
+    };
   };
   const aggB = (id: string) => {
-    let c = cy[id] ?? 0, p = py[id] ?? 0;
-    for (const cr of allDescendantsOf(id)) {
-      c += cy[cr.id] ?? 0; p += py[cr.id] ?? 0;
-      const s = sourcesSumB(cr);
-      c += s.cCy; p += s.pCy;
-    }
-    return { c, p };
+    const v = docxTotals.pattern === "B" ? docxTotals.perRow[id] : undefined;
+    if (v) return { c: v.cy, p: v.py };
+    return { c: cy[id] ?? 0, p: py[id] ?? 0 };
   };
 
   // Strip "Note X: " prefix from config title to get just the name

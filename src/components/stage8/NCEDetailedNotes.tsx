@@ -36,6 +36,10 @@ import { cn }          from "@/lib/utils";
 import {
   NoteConfig, NoteRowDef, NOTES_CONFIG, NOTE_META, computeDisplayData, extractSplitData,
 } from "@/config/nceNotesConfig";
+// 2026-06-05 Phase 3 — canonical per-row aggregator used by the renderer's
+// sumCustomDisplayB/A. Same numbers as the Notes Total row, BS / P&L face,
+// and DOCX export — all four now read from this one helper.
+import { computeNoteTotals } from "@/lib/nceNoteTotals";
 import {
   NCECustomRow, NCENoteData,
   nceAutoPopulate, deserialiseNoteData, serialiseNoteData,
@@ -730,41 +734,17 @@ function PatternBTable({
   const grandTotalIdx = config.rows.reduce((last, row, i) => row.isTotal ? i : last, -1);
   const grandTotalId  = grandTotalIdx >= 0 ? config.rows[grandTotalIdx].id : null;
 
-  // Recursive display aggregate for a custom row = its own amount PLUS every
-  // custom row nested beneath it (attachedTo it), to any depth. Mirrors
-  // computeDisplayData's sumCustomB so a collapsed parent (e.g. "Bank Interest
-  // Income" holding a child "Interest On Deposit") shows the correct rolled-up
-  // figure instead of blank. `seen` guards against attachedTo cycles.
-  const sumCustomDisplayB = (id: string, seen: Set<string> = new Set()): { cy: number; py: number } => {
-    if (seen.has(id)) return { cy: 0, py: 0 };
-    seen.add(id);
-    let c = rawCy[id] ?? 0, p = rawPy[id] ?? 0;
-    // BUG FIX (2026-06-04, SHREE HARI INFRA): include the customRow's own
-    // `sources` sub-ledger breakdown in the aggregate. Each customRow can
-    // carry an arbitrary `sources: [{ledger, amountCy, amountPy}, ...]`
-    // array — these are sub-ledgers shown when the row is expanded. For
-    // SHREE HARI's "A" / "B" / "C" / "D" / "E" headings (each holding
-    // 9-37 sub-ledgers via this `sources` channel), rawCy[id] is 0, so
-    // the prior aggregate returned 0 and the parent static row's display
-    // also collapsed to 0 ("—") even though crores of rupees existed
-    // inside the sources arrays. The fix sums them in — but ONLY when
-    // rawCy[id] is 0 (typical "heading row" pattern where the user has
-    // not also typed a value into the parent itself), to avoid double-
-    // counting if some future code path ever populates both channels.
-    const self = customRows.find(cr => cr.id === id) as any;
-    if (self && Array.isArray(self.sources) && self.sources.length > 0) {
-      const sumSrcCy = self.sources.reduce((s: number, x: any) => s + (Number(x?.amountCy) || 0), 0);
-      const sumSrcPy = self.sources.reduce((s: number, x: any) => s + (Number(x?.amountPy) || 0), 0);
-      // If rawCy[id] is 0, the sources ARE the row's value (heading pattern).
-      // If rawCy[id] is non-zero, the user has set their own override and
-      // we trust that — don't double-count.
-      if ((rawCy[id] ?? 0) === 0) c += sumSrcCy;
-      if ((rawPy[id] ?? 0) === 0) p += sumSrcPy;
-    }
-    for (const cr of customRows) {
-      if (cr.attachedTo === id) { const r = sumCustomDisplayB(cr.id, seen); c += r.cy; p += r.py; }
-    }
-    return { cy: c, py: p };
+  // 2026-06-05 Phase 3 — sumCustomDisplayB is now a thin lookup into the
+  // canonical computeNoteTotals result so the renderer, the Notes Total
+  // row, the BS / P&L face and the DOCX export ALL read the same numbers.
+  // The legacy inline algorithm moved to src/lib/nceNoteTotals.ts.
+  const totalsB = useMemo(
+    () => computeNoteTotals(config, rawCy, rawPy, customRows),
+    [config, rawCy, rawPy, customRows],
+  );
+  const sumCustomDisplayB = (id: string): { cy: number; py: number } => {
+    const v = totalsB.pattern === "B" ? totalsB.perRow[id] : undefined;
+    return v ? { cy: v.cy, py: v.py } : { cy: rawCy[id] ?? 0, py: rawPy[id] ?? 0 };
   };
 
   // Use the module-level computeOverlap helper (see definition above PatternBTable).
@@ -1335,37 +1315,19 @@ function PatternATable({
   const grandTotalIdx = config.rows.reduce((last, row, i) => row.isTotal ? i : last, -1);
   const grandTotalId  = grandTotalIdx >= 0 ? config.rows[grandTotalIdx].id : null;
 
-  // Recursive LT/ST display aggregate for a custom row including every custom
-  // row nested beneath it (attachedTo it), to any depth. Mirrors
-  // computeDisplayData's sumCustomA so a collapsed parent shows the rolled-up
-  // figure. `seen` guards against attachedTo cycles.
-  const sumCustomDisplayA = (id: string, seen: Set<string> = new Set()): { lc: number; lp: number; sc: number; sp: number } => {
-    if (seen.has(id)) return { lc: 0, lp: 0, sc: 0, sp: 0 };
-    seen.add(id);
-    let lc = rawCy[id + "_lt"] ?? 0, lp = rawPy[id + "_lt"] ?? 0;
-    let sc = rawCy[id + "_st"] ?? 0, sp = rawPy[id + "_st"] ?? 0;
-    // SHREE HARI fix mirror — include customRow's own `sources` array
-    // (sub-ledger breakdown). Each source can carry a `column` of "lt" or
-    // "st" so we route the amount to the right total. See sumCustomDisplayB.
-    const self = customRows.find(cr => cr.id === id) as any;
-    if (self && Array.isArray(self.sources) && self.sources.length > 0) {
-      for (const x of self.sources) {
-        const aCy = Number(x?.amountCy) || 0;
-        const aPy = Number(x?.amountPy) || 0;
-        if (x?.column === "st") {
-          if ((rawCy[id + "_st"] ?? 0) === 0) sc += aCy;
-          if ((rawPy[id + "_st"] ?? 0) === 0) sp += aPy;
-        } else {
-          // default → LT
-          if ((rawCy[id + "_lt"] ?? 0) === 0) lc += aCy;
-          if ((rawPy[id + "_lt"] ?? 0) === 0) lp += aPy;
-        }
-      }
-    }
-    for (const cr of customRows) {
-      if (cr.attachedTo === id) { const r = sumCustomDisplayA(cr.id, seen); lc += r.lc; lp += r.lp; sc += r.sc; sp += r.sp; }
-    }
-    return { lc, lp, sc, sp };
+  // 2026-06-05 Phase 3 — sumCustomDisplayA is now a thin lookup into the
+  // canonical computeNoteTotals result. See sumCustomDisplayB above.
+  const totalsA = useMemo(
+    () => computeNoteTotals(config, rawCy, rawPy, customRows),
+    [config, rawCy, rawPy, customRows],
+  );
+  const sumCustomDisplayA = (id: string): { lc: number; lp: number; sc: number; sp: number } => {
+    const v = totalsA.pattern === "A" ? totalsA.perRow[id] : undefined;
+    if (v) return { lc: v.ltCy, lp: v.ltPy, sc: v.stCy, sp: v.stPy };
+    return {
+      lc: rawCy[id + "_lt"] ?? 0, lp: rawPy[id + "_lt"] ?? 0,
+      sc: rawCy[id + "_st"] ?? 0, sp: rawPy[id + "_st"] ?? 0,
+    };
   };
 
   // Duplication safety net — see computeOverlap docs above PatternBTable.
