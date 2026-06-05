@@ -1214,77 +1214,82 @@ function NCEBalanceSheetView({
 
   const rows = buildNCEBSRows(cyAmounts, pyAmounts);
   return (
-    <div className="rounded-lg border bg-card overflow-hidden">
-      <div className="text-center border-b bg-muted/30 py-2 px-3">
-        <div className="font-bold text-sm uppercase tracking-wide text-[#1F3864]">
+    <div className="overflow-hidden" style={{ fontFamily: "Calibri, Arial, sans-serif" }}>
+      {/* ── Title block — matches DOCX: entity name (navy, bold, 14pt centre),
+          subtitle (11pt centre), "Amounts in ₹" (8pt right-aligned) ──────── */}
+      <div className="text-center py-1.5">
+        <div className="font-bold uppercase tracking-wide text-[#1F3864]" style={{ fontSize: "14px" }}>
           {entityName}
         </div>
-        <div className="text-xs mt-0.5">Balance Sheet as at 31st March, {cyYear}</div>
-        <div className="text-[10px] text-muted-foreground italic mt-0.5">(Amount in ₹)</div>
+        <div style={{ fontSize: "11px" }} className="mt-0.5 font-bold text-[#1F3864]">
+          BALANCE SHEET AS AT 31 MARCH {cyYear}
+        </div>
+        <div className="text-right text-[#505050] italic mt-0.5 pr-1" style={{ fontSize: "8px" }}>
+          Amounts in ₹
+        </div>
       </div>
-      <table className="w-full text-xs">
+      {/* ── Navy divider matching the DOCX border-bottom on the title block */}
+      <div className="border-b-2 border-[#1F3864] mb-0" />
+      <table className="w-full" style={{ fontSize: "11px" }}>
         <thead>
-          <tr className="bg-muted/50 border-b">
-            <th className="text-left font-semibold py-2 px-3 w-[55%]">Particulars</th>
-            <th className="text-center font-semibold py-2 px-2 w-[8%]">Note No.</th>
-            <th className="text-right font-semibold py-2 px-3 w-[18%]">As at<br />31st March, {cyYear}</th>
-            <th className="text-right font-semibold py-2 px-3 w-[19%]">
-              <span className="inline-flex flex-col items-end gap-0.5">
-                <span>As at<br />31st March, {pyYear}</span>
-                {pyLocked && <Badge className="text-[8px] px-1 bg-amber-100 text-amber-700 border-amber-300 gap-0.5"><Lock size={7} /> Finalized</Badge>}
-              </span>
+          {/* ── Navy header row — matches DOCX: white text on #1F3864 fill ── */}
+          <tr style={{ backgroundColor: "#1F3864", color: "#FFFFFF" }}>
+            <th className="text-left font-bold py-1 px-2.5 w-[55%]" style={{ fontSize: "8pt" }}>Particulars</th>
+            <th className="text-center font-bold py-1 px-2 w-[5%]" style={{ fontSize: "8pt" }}>Note<br />No.</th>
+            <th className="text-right font-bold py-1 px-2.5 w-[20%]" style={{ fontSize: "8pt" }}>
+              As at<br />31st March, {cyYear}
+            </th>
+            <th className="text-right font-bold py-1 px-2.5 w-[20%]" style={{ fontSize: "8pt" }}>
+              As at<br />31st March, {pyYear}
+              {pyLocked && <Badge className="text-[7px] px-1 ml-1 bg-amber-100 text-amber-700 border-amber-300 gap-0.5"><Lock size={7} /> Finalized</Badge>}
             </th>
           </tr>
         </thead>
         <tbody>
           {rows.map((row, idx) => {
-            if (row.kind === "spacer")  return <tr key={idx}><td colSpan={4} className="h-2" /></tr>;
+            if (row.kind === "spacer")  return <tr key={idx}><td colSpan={4} className="h-1.5" /></tr>;
             if (row.kind === "section") return (
-              <tr key={idx} className="bg-muted/20 nce-fs-section-header">
-                <td colSpan={4} className="font-bold py-1.5 px-3 text-[13px]">{row.label}</td>
+              <tr key={idx}>
+                <td colSpan={4} className="font-bold py-1 px-2.5" style={{ fontSize: "10pt" }}>{row.label}</td>
               </tr>
             );
             if (row.kind === "subhead") return (
-              <tr key={idx} className="nce-fs-section-header">
-                <td className="font-semibold py-1 px-3" style={{ paddingLeft: 12 + (row.indent || 0) * 16 }}>{row.label}</td>
+              <tr key={idx}>
+                <td className="font-semibold py-0.5 px-2.5" style={{ paddingLeft: 12 + (row.indent || 0) * 16, fontSize: "9pt" }}>{row.label}</td>
                 <td colSpan={3} />
               </tr>
             );
             if (row.kind === "total")   return (
-              <tr key={idx} className="border-t-2 border-foreground/40 bg-muted/30 nce-fs-total-row">
-                {/* Task 1 fix: TOTAL stays inside Particulars column only (no colSpan).
-                    rightAlignLabel right-aligns it within that cell so it touches
-                    the Note No. boundary. Note No. cell is its own empty <td>. */}
-                <td className={`font-bold py-1.5 px-3 uppercase text-[12px]${row.rightAlignLabel ? " text-right" : ""}`}>{row.label}</td>
-                <td className="py-1.5 px-3" />
-                <td className="text-right font-bold tabular-nums py-1.5 px-3">{formatINR(row.cy)}</td>
-                <td className="text-right font-bold tabular-nums py-1.5 px-3">{formatINR(row.py)}</td>
+              <tr key={idx} style={{ borderTop: "2px solid #1F3864" }}>
+                <td className={`font-bold py-1 px-2.5 uppercase${row.rightAlignLabel ? " text-right" : ""}`} style={{ fontSize: "9pt" }}>{row.label}</td>
+                <td className="py-1 px-2" />
+                <td className="text-right font-bold tabular-nums py-1 px-2.5" style={{ fontSize: "9pt" }}>{formatINR(row.cy)}</td>
+                <td className="text-right font-bold tabular-nums py-1 px-2.5" style={{ fontSize: "9pt" }}>{formatINR(row.py)}</td>
               </tr>
             );
             if (row.kind === "footer")  return (
               <tr key={idx}>
-                <td className="font-semibold py-1 px-3 text-[11px] italic text-muted-foreground" colSpan={3}>{row.label}</td>
+                <td className="font-semibold py-0.5 px-2.5 italic text-muted-foreground" colSpan={3} style={{ fontSize: "8pt" }}>{row.label}</td>
                 {row.noteNo != null
-                  ? <td className="text-center py-1 px-2 text-primary font-medium text-[11px] italic">{row.noteNo}</td>
+                  ? <td className="text-center py-0.5 px-2 text-primary font-medium italic" style={{ fontSize: "8pt" }}>{row.noteNo}</td>
                   : <td />}
               </tr>
             );
-            // item row
+            // item row — matches DOCX: 8pt Calibri, minimal padding
             const indentPx = (row.indent || 0) * 16;
             const editableCY = !!row.code && !!onCommitCY;
             const editablePY = !!row.code && !!onCommitPY && !pyLocked;
-            // NCE liabilities stored negative → user enters positive → store negated
             const isLiab = NCE_LIABILITY_CODES.has(row.code ?? "");
             return (
-              <tr key={idx} className="hover:bg-muted/10">
-                <td className="py-0.5 px-3 text-[11px]" style={{ paddingLeft: 12 + indentPx }}>{row.label}</td>
+              <tr key={idx} className="hover:bg-muted/10 border-b border-gray-100">
+                <td className="py-0.5 px-2.5" style={{ paddingLeft: 12 + indentPx, fontSize: "8pt" }}>{row.label}</td>
                 <NoteCell code={row.code} noteNo={row.noteNo} />
-                <td className="text-right tabular-nums py-0.5 px-1 text-[11px]">
+                <td className="text-right tabular-nums py-0.5 px-2.5" style={{ fontSize: "8pt" }}>
                   {editableCY
                     ? <EditableMoneyCell value={row.cy} onCommit={(v) => onCommitCY!(row.code!, v === null ? null : isLiab ? -v : v)} />
                     : formatINR(row.cy)}
                 </td>
-                <td className="text-right tabular-nums py-0.5 px-1 text-[11px]">
+                <td className="text-right tabular-nums py-0.5 px-2.5" style={{ fontSize: "8pt" }}>
                   {editablePY
                     ? <EditableMoneyCell value={row.py} onCommit={(v) => onCommitPY!(row.code!, v === null ? null : isLiab ? -v : v)} />
                     : formatINR(row.py)}
@@ -1352,68 +1357,69 @@ function NCEPLView({
 
   const rows = buildNCEPLRows(cyAmounts, pyAmounts);
   return (
-    <div className="rounded-lg border bg-card overflow-hidden">
-      <div className="text-center border-b bg-muted/30 py-2 px-3">
-        <div className="font-bold text-sm uppercase tracking-wide text-[#1F3864]">
+    <div className="overflow-hidden" style={{ fontFamily: "Calibri, Arial, sans-serif" }}>
+      {/* ── Title block — matches DOCX P&L title format ──────────────── */}
+      <div className="text-center py-1.5">
+        <div className="font-bold uppercase tracking-wide text-[#1F3864]" style={{ fontSize: "14px" }}>
           {entityName}
         </div>
-        <div className="text-xs mt-0.5">
-          Statement of Profit &amp; Loss Account for the year ended 31st March, {cyYear}
+        <div style={{ fontSize: "11px" }} className="mt-0.5 font-bold text-[#1F3864]">
+          STATEMENT OF PROFIT AND LOSS FOR THE YEAR ENDED 31 MARCH {cyYear}
         </div>
-        <div className="text-[10px] text-muted-foreground italic mt-0.5">(Amount in ₹)</div>
+        <div className="text-right text-[#505050] italic mt-0.5 pr-1" style={{ fontSize: "8px" }}>
+          Amounts in ₹
+        </div>
       </div>
-      <table className="w-full text-xs">
+      <div className="border-b-2 border-[#1F3864] mb-0" />
+      <table className="w-full" style={{ fontSize: "11px" }}>
         <thead>
-          <tr className="bg-muted/50 border-b">
-            <th className="text-center font-semibold py-2 px-1 w-[5%]"></th>
-            <th className="text-left font-semibold py-2 px-3 w-[50%]">Particulars</th>
-            <th className="text-center font-semibold py-2 px-2 w-[8%]">Note No.</th>
-            <th className="text-right font-semibold py-2 px-3 w-[18%]">
+          <tr style={{ backgroundColor: "#1F3864", color: "#FFFFFF" }}>
+            <th className="text-center font-bold py-1 px-1 w-[5%]" style={{ fontSize: "8pt" }}></th>
+            <th className="text-left font-bold py-1 px-2.5 w-[50%]" style={{ fontSize: "8pt" }}>Particulars</th>
+            <th className="text-center font-bold py-1 px-2 w-[5%]" style={{ fontSize: "8pt" }}>Note<br />No.</th>
+            <th className="text-right font-bold py-1 px-2.5 w-[20%]" style={{ fontSize: "8pt" }}>
               For the year ended<br />31st March, {cyYear}
             </th>
-            <th className="text-right font-semibold py-2 px-3 w-[19%]">
-              <span className="inline-flex flex-col items-end gap-0.5">
-                <span>For the year ended<br />31st March, {pyYear}</span>
-                {pyLocked && <Badge className="text-[8px] px-1 bg-amber-100 text-amber-700 border-amber-300 gap-0.5"><Lock size={7} /> Finalized</Badge>}
-              </span>
+            <th className="text-right font-bold py-1 px-2.5 w-[20%]" style={{ fontSize: "8pt" }}>
+              For the year ended<br />31st March, {pyYear}
+              {pyLocked && <Badge className="text-[7px] px-1 ml-1 bg-amber-100 text-amber-700 border-amber-300 gap-0.5"><Lock size={7} /> Finalized</Badge>}
             </th>
           </tr>
         </thead>
         <tbody>
           {rows.map((row, idx) => {
-            if (row.kind === "spacer") return <tr key={idx}><td colSpan={5} className="h-2" /></tr>;
+            if (row.kind === "spacer") return <tr key={idx}><td colSpan={5} className="h-1.5" /></tr>;
             if (row.kind === "header") return (
-              <tr key={idx} className="bg-muted/20 nce-fs-section-header">
-                <td className="text-center font-bold py-1 px-1 text-[12px]">{row.roman || ""}</td>
-                <td colSpan={4} className="font-bold py-1 px-3 text-[12px]">{row.label}</td>
+              <tr key={idx}>
+                <td className="text-center font-bold py-1 px-1" style={{ fontSize: "9pt" }}>{row.roman || ""}</td>
+                <td colSpan={4} className="font-bold py-1 px-2.5" style={{ fontSize: "9pt" }}>{row.label}</td>
               </tr>
             );
             if (row.kind === "total")  return (
-              <tr key={idx} className="border-t-2 border-foreground/40 bg-muted/30 nce-fs-total-row">
-                <td className="text-center font-bold py-1.5 px-1 text-[12px]">{row.roman || ""}</td>
-                <td className="font-bold py-1.5 px-3 text-[12px]">{row.label}</td>
+              <tr key={idx} style={{ borderTop: "2px solid #1F3864" }}>
+                <td className="text-center font-bold py-1 px-1" style={{ fontSize: "9pt" }}>{row.roman || ""}</td>
+                <td className="font-bold py-1 px-2.5" style={{ fontSize: "9pt" }}>{row.label}</td>
                 <td />
-                <td className="text-right font-bold tabular-nums py-1.5 px-3">{formatINR(row.cy)}</td>
-                <td className="text-right font-bold tabular-nums py-1.5 px-3">{formatINR(row.py)}</td>
+                <td className="text-right font-bold tabular-nums py-1 px-2.5" style={{ fontSize: "9pt" }}>{formatINR(row.cy)}</td>
+                <td className="text-right font-bold tabular-nums py-1 px-2.5" style={{ fontSize: "9pt" }}>{formatINR(row.py)}</td>
               </tr>
             );
-            // item row
             const indentPx = (row.indent || 0) * 16;
             const boldCls = row.bold ? "font-bold" : "";
             const editableCY = !!row.code && !!onCommitCY;
             const editablePY = !!row.code && !!onCommitPY && !pyLocked;
             const isInc = NCE_INCOME_CODES.has(row.code ?? "");
             return (
-              <tr key={idx} className="hover:bg-muted/10">
-                <td className={`text-center py-0.5 px-1 ${boldCls} text-[11px]`}>{row.roman || ""}</td>
-                <td className={`py-0.5 px-3 ${boldCls} text-[11px]`} style={{ paddingLeft: 12 + indentPx }}>{row.label}</td>
+              <tr key={idx} className="hover:bg-muted/10 border-b border-gray-100">
+                <td className={`text-center py-0.5 px-1 ${boldCls}`} style={{ fontSize: "8pt" }}>{row.roman || ""}</td>
+                <td className={`py-0.5 px-2.5 ${boldCls}`} style={{ paddingLeft: 12 + indentPx, fontSize: "8pt" }}>{row.label}</td>
                 <NoteCell code={row.code} noteNo={row.noteNo} />
-                <td className={`text-right tabular-nums py-0.5 px-1 ${boldCls} text-[11px]`}>
+                <td className={`text-right tabular-nums py-0.5 px-2.5 ${boldCls}`} style={{ fontSize: "8pt" }}>
                   {editableCY
                     ? <EditableMoneyCell value={row.cy ?? 0} onCommit={(v) => onCommitCY!(row.code!, v === null ? null : isInc ? -v : v)} />
                     : (row.cy === undefined ? "" : formatINR(row.cy))}
                 </td>
-                <td className={`text-right tabular-nums py-0.5 px-1 ${boldCls} text-[11px]`}>
+                <td className={`text-right tabular-nums py-0.5 px-2.5 ${boldCls}`} style={{ fontSize: "8pt" }}>
                   {editablePY
                     ? <EditableMoneyCell value={row.py ?? 0} onCommit={(v) => onCommitPY!(row.code!, v === null ? null : isInc ? -v : v)} />
                     : (row.py === undefined ? "" : formatINR(row.py))}
