@@ -1842,6 +1842,24 @@ export default function PipelineFinancialStatements({
     return () => window.clearInterval(id);
   }, [recorrectStartedAt]);
 
+  // 2026-06-05 Phase 5 — same instrumentation for the "Generate Financial
+  // Statements" (Export Excel) path. Pixel-perfect Excel generation can
+  // take 10-30 seconds on a large engagement; without the modal the
+  // auditor couldn't tell whether the click registered. Disables every
+  // other interactive surface behind the z-200 backdrop, same as the
+  // Re-correct modal.
+  const [exportingFS,        setExportingFS]        = useState(false);
+  const [exportStartedAt,    setExportStartedAt]    = useState<number | null>(null);
+  const [exportElapsedSec,   setExportElapsedSec]   = useState(0);
+  const [exportResult,       setExportResult]       = useState<{ ok: boolean; seconds: number; note?: string } | null>(null);
+  useEffect(() => {
+    if (exportStartedAt == null) return;
+    const id = window.setInterval(() => {
+      setExportElapsedSec(Math.max(0, (Date.now() - exportStartedAt) / 1000));
+    }, 500);
+    return () => window.clearInterval(id);
+  }, [exportStartedAt]);
+
   // ─── Entity-type gate ─────────────────────────────────────────────────────
   // Single source of truth: checks engagement.entity_type (set on the engagement)
   // then falls back to clients.entity_type (set on the client record).
@@ -7047,6 +7065,56 @@ export default function PipelineFinancialStatements({
         </div>
       </div>
     )}
+    {/* 2026-06-05 Phase 5 — Generate Financial Statements (Export Excel)
+         progress modal. Same shape as the Re-correct modal above so the
+         auditor gets a uniform feedback surface across both long-running
+         FS actions. Blocks every other interactive control while in
+         flight to prevent half-built workbooks. */}
+    {(exportingFS || exportResult !== null) && (
+      <div className="fixed inset-0 z-[200] flex items-center justify-center bg-background/70 backdrop-blur-sm">
+        <div className="rounded-lg border bg-background p-6 shadow-xl min-w-[320px] max-w-md text-center space-y-3">
+          {exportingFS ? (
+            <>
+              <div className="flex items-center justify-center gap-2 text-base font-semibold">
+                <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                Generating Financial Statements…
+              </div>
+              <div className="text-3xl font-mono font-bold tabular-nums text-foreground">
+                {exportElapsedSec.toFixed(1)}s
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Building the pixel-perfect Schedule III workbook (Balance Sheet,
+                P&amp;L, Cash Flow, Notes, ratios). Do not close this tab.
+              </p>
+            </>
+          ) : exportResult?.ok ? (
+            <>
+              <div className="flex items-center justify-center gap-2 text-base font-semibold text-emerald-700">
+                <CheckCircle2 className="h-5 w-5" />
+                Done
+              </div>
+              <p className="text-sm">
+                Workbook downloaded in{" "}
+                <span className="font-semibold">{exportResult.seconds.toFixed(1)}s</span>.
+              </p>
+              <Button size="sm" onClick={() => setExportResult(null)}>OK</Button>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center justify-center gap-2 text-base font-semibold text-destructive">
+                <AlertTriangle className="h-5 w-5" />
+                Export failed
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Failed after {exportResult?.seconds.toFixed(1)}s.
+                {exportResult?.note ? ` — ${exportResult.note}` : ""}
+              </p>
+              <Button size="sm" variant="outline" onClick={() => setExportResult(null)}>Dismiss</Button>
+            </>
+          )}
+        </div>
+      </div>
+    )}
     <div className="max-w-6xl space-y-4">
       <EngagementHeader engagement={engagement} stageNumber={7} stageLabel="Financial Statements" />
       {/* Header */}
@@ -7097,7 +7165,35 @@ export default function PipelineFinancialStatements({
                 });
                 return;
               }
-              exportToExcel();
+              // 2026-06-05 Phase 5 — wrap the export with the loading-timer
+              // modal so the auditor sees elapsed seconds, can't double-
+              // click into a half-built workbook, and gets a "Done in Xs"
+              // confirmation on completion. Disables every other surface
+              // behind the z-200 backdrop.
+              (async () => {
+                const t0 = Date.now();
+                setExportingFS(true);
+                setExportStartedAt(t0);
+                setExportElapsedSec(0);
+                setExportResult(null);
+                try {
+                  await exportToExcel();
+                  setExportResult({
+                    ok: true,
+                    seconds: Math.round((Date.now() - t0) / 100) / 10,
+                  });
+                } catch (e: any) {
+                  console.error("[Export FS] failed", e);
+                  setExportResult({
+                    ok: false,
+                    seconds: Math.round((Date.now() - t0) / 100) / 10,
+                    note: e?.message || "Export failed",
+                  });
+                } finally {
+                  setExportingFS(false);
+                  setExportStartedAt(null);
+                }
+              })();
             }}
             className={cn("gap-1", exportExcelBlocked && "opacity-60 hover:bg-destructive/10 hover:text-destructive")}
             title={
@@ -7332,118 +7428,50 @@ export default function PipelineFinancialStatements({
            that deleting custom rows in Notes left the FS face out of sync
            with COA mapping; this gives them a direct fix without having to
            navigate to the Notes tab and click Re-sync there. */}
-      {isNonCorporate && !activeBsBalanced && (
-        <Alert variant="destructive" className="border-destructive/30">
-          <AlertTriangle className="h-4 w-4" />
-          <AlertTitle>Balance Sheet not balanced</AlertTitle>
-          <AlertDescription className="flex flex-wrap items-center gap-3">
-            <span>
-              Difference: ₹{formatINR(Math.abs(activeBsDiff))}. This usually happens when
-              breakup rows have been deleted in the Notes — the BS face stops matching
-              COA mapping. Click below to rebuild the notes from Tally TB + COA mapping.
-              Your manual rows and typed values are preserved.
-            </span>
-            <Button
-              size="sm"
-              variant="outline"
-              className="gap-1.5 h-7 text-xs border-destructive text-destructive hover:bg-destructive/10"
-              disabled={recorrectingFromCOA}
-              onClick={recorrectFromCOAMapping}
-            >
-              {recorrectingFromCOA
-                ? <Loader2 className="h-3 w-3 animate-spin" />
-                : <RefreshCw className="h-3 w-3" />}
-              Re-correct from COA Mapping
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
-
-      {/* 2026-06-01 — NCE Notes vs Face validation: lists every BS / P&L
-           heading whose face value diverges from the underlying note's total.
-           Amber banner sits above the summary cards so the auditor sees the
-           specific lines that need re-correction (instead of just "BS is
-           imbalanced" which doesn't say WHERE). */}
-      {isNonCorporate && nceNotesMismatches.length > 0 && (
-        <Alert variant="default" className="border-amber-400/50 bg-amber-50 text-amber-900">
-          <AlertTriangle className="h-4 w-4 text-amber-700" />
-          <AlertTitle className="text-amber-900">
-            {nceNotesMismatches.length} note total{nceNotesMismatches.length === 1 ? "" : "s"} don&apos;t match the BS / P&amp;L heading
-          </AlertTitle>
-          <AlertDescription className="space-y-2 text-amber-900/90">
-            <p className="text-[11px]">
-              The face value (what shows on Balance Sheet / Profit &amp; Loss) and the underlying
-              note&apos;s breakup total must always tie. Differences usually mean a stale row in
-              the note — re-correct from COA or open the note and clear the offending row.
-            </p>
-            <p className="text-[10px] text-amber-700/80 italic">
-              Only CY drift on Balance Sheet rows and any drift on P&amp;L rows is flagged.
-              PY divergence on BS rows is normal (face follows COA opening balance; note can
-              hold additional manual rows).
-            </p>
-            <div className="rounded-md border border-amber-300 bg-white overflow-hidden">
-              <table className="w-full text-[11px]">
-                <thead className="bg-amber-100 text-amber-900">
-                  <tr>
-                    <th className="text-left  px-2 py-1.5">Line</th>
-                    <th className="text-right px-2 py-1.5">Face CY</th>
-                    <th className="text-right px-2 py-1.5">Note CY</th>
-                    <th className="text-right px-2 py-1.5">Diff CY</th>
-                    <th className="text-right px-2 py-1.5">Face PY</th>
-                    <th className="text-right px-2 py-1.5">Note PY</th>
-                    <th className="text-right px-2 py-1.5">Diff PY</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-amber-200">
-                  {nceNotesMismatches.map(m => (
-                    <tr key={m.code} className="hover:bg-amber-50">
-                      <td className="px-2 py-1.5 font-medium">
-                        {m.label}
-                        <span className="ml-1 text-[9px] text-muted-foreground">({m.note})</span>
-                      </td>
-                      <td className="px-2 py-1.5 text-right font-mono tabular-nums">
-                        ₹{formatINR(m.faceCy)}
-                      </td>
-                      <td className="px-2 py-1.5 text-right font-mono tabular-nums">
-                        ₹{formatINR(m.noteCy)}
-                      </td>
-                      <td className={cn(
-                        "px-2 py-1.5 text-right font-mono tabular-nums font-semibold",
-                        Math.abs(m.diffCy) > 1 ? "text-amber-700" : "text-muted-foreground",
-                      )}>
-                        {Math.abs(m.diffCy) > 1 ? `₹${formatINR(Math.abs(m.diffCy))}` : "—"}
-                      </td>
-                      <td className="px-2 py-1.5 text-right font-mono tabular-nums">
-                        ₹{formatINR(m.facePy)}
-                      </td>
-                      <td className="px-2 py-1.5 text-right font-mono tabular-nums">
-                        ₹{formatINR(m.notePy)}
-                      </td>
-                      <td className={cn(
-                        "px-2 py-1.5 text-right font-mono tabular-nums font-semibold",
-                        Math.abs(m.diffPy) > 1 ? "text-amber-700" : "text-muted-foreground",
-                      )}>
-                        {Math.abs(m.diffPy) > 1 ? `₹${formatINR(Math.abs(m.diffPy))}` : "—"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <Button
-              size="sm" variant="outline"
-              className="gap-1.5 h-7 text-xs border-amber-400 text-amber-800 hover:bg-amber-100"
-              disabled={recorrectingFromCOA}
-              onClick={recorrectFromCOAMapping}
-            >
-              {recorrectingFromCOA
-                ? <Loader2 className="h-3 w-3 animate-spin" />
-                : <RefreshCw className="h-3 w-3" />}
-              Re-correct from COA Mapping
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
+      {/* 2026-06-05 Phase 5 — Balance Sheet imbalance banner. Now states
+           WHICH side is heavier (assets > equity+liabilities or the other
+           way) so the auditor knows immediately whether to chase an asset
+           ledger overstatement or a missing liability. The old generic
+           "Difference: Rs.X" was just "something is wrong somewhere".
+           Removed the separate "X note total don't match" amber banner -
+           every per-line drift is already enumerated in the FsHealthPanel
+           breakdown right above, so the duplicate table was confusing
+           rather than helpful. */}
+      {isNonCorporate && !activeBsBalanced && (() => {
+        // nceTotalAssets > 0, nceTotalLiabilities < 0 (stored negative).
+        // bsDiff = assets + liabilities. Positive → assets heavier;
+        // negative → equity + liabilities heavier.
+        const assetsHeavier = activeBsDiff > 0;
+        const heavySide  = assetsHeavier ? "Total Assets" : "Total Equity + Liabilities";
+        const lightSide  = assetsHeavier ? "Total Equity + Liabilities" : "Total Assets";
+        return (
+          <Alert variant="destructive" className="border-destructive/30">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>Balance Sheet not balanced</AlertTitle>
+            <AlertDescription className="flex flex-wrap items-center gap-3">
+              <span>
+                <strong>{heavySide}</strong> exceeds <strong>{lightSide}</strong> by{" "}
+                <strong>₹{formatINR(Math.abs(activeBsDiff))}</strong>. Usually a stale
+                row left in a Note after a COA-mapping change. Re-correct rebuilds the
+                notes from Tally TB and the current COA mapping; your manual rows and
+                typed values are preserved.
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1.5 h-7 text-xs border-destructive text-destructive hover:bg-destructive/10"
+                disabled={recorrectingFromCOA}
+                onClick={recorrectFromCOAMapping}
+              >
+                {recorrectingFromCOA
+                  ? <Loader2 className="h-3 w-3 animate-spin" />
+                  : <RefreshCw className="h-3 w-3" />}
+                Re-correct from COA Mapping
+              </Button>
+            </AlertDescription>
+          </Alert>
+        );
+      })()}
 
       {/* Summary cards */}
       <div className="grid grid-cols-6 gap-3">
