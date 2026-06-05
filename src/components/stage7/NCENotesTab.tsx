@@ -107,32 +107,43 @@ export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteM
         </h2>
       )}
 
-      {/* Sub-tabs */}
-      <Tabs value={activeSubTab} onValueChange={setActiveSubTab}>
-        <TabsList>
-          <TabsTrigger value="capital_account" className="gap-1.5">
-            <Wallet size={14} /> Capital Account
-          </TabsTrigger>
-          <TabsTrigger value="notes_to_accounts" className="gap-1.5">
-            <FileText size={14} /> Notes to Accounts
-          </TabsTrigger>
-          <TabsTrigger value="ppe_schedule" className="gap-1.5">
-            <Building2 size={14} /> PPE Schedule
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="capital_account" className="mt-3">
+      {/* In read-only / preview mode: render all three sections continuously
+          (Capital Account → Notes → PPE Schedule) to match the DOCX export
+          exactly. In edit mode: keep the sub-tabs so the user can navigate
+          between the three sections without a huge scroll. */}
+      {readOnly ? (
+        <div className="space-y-6">
           <NCECapitalAccount engagementId={engagementId} readOnly={readOnly} />
-        </TabsContent>
-
-        <TabsContent value="notes_to_accounts" className="mt-3">
           <NCEDetailedNotes engagementId={engagementId} dynamicNoteMap={dynamicNoteMap} onExpansionStateUpdate={onExpansionStateUpdate} readOnly={readOnly} />
-        </TabsContent>
-
-        <TabsContent value="ppe_schedule" className="mt-3">
           <NCEPPESchedule engagementId={engagementId} readOnly={readOnly} />
-        </TabsContent>
-      </Tabs>
+        </div>
+      ) : (
+        <Tabs value={activeSubTab} onValueChange={setActiveSubTab}>
+          <TabsList>
+            <TabsTrigger value="capital_account" className="gap-1.5">
+              <Wallet size={14} /> Capital Account
+            </TabsTrigger>
+            <TabsTrigger value="notes_to_accounts" className="gap-1.5">
+              <FileText size={14} /> Notes to Accounts
+            </TabsTrigger>
+            <TabsTrigger value="ppe_schedule" className="gap-1.5">
+              <Building2 size={14} /> PPE Schedule
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="capital_account" className="mt-3">
+            <NCECapitalAccount engagementId={engagementId} readOnly={readOnly} />
+          </TabsContent>
+
+          <TabsContent value="notes_to_accounts" className="mt-3">
+            <NCEDetailedNotes engagementId={engagementId} dynamicNoteMap={dynamicNoteMap} onExpansionStateUpdate={onExpansionStateUpdate} readOnly={readOnly} />
+          </TabsContent>
+
+          <TabsContent value="ppe_schedule" className="mt-3">
+            <NCEPPESchedule engagementId={engagementId} readOnly={readOnly} />
+          </TabsContent>
+        </Tabs>
+      )}
 
     </div>
   );
