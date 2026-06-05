@@ -1972,38 +1972,73 @@ export async function nceAutoPopulate(
     // type to document explanatory line items under each Schedule III head.
     // Only fills the PY when the saved PY is zero AND a TB match exists,
     // so any user-edited PY value is preserved.
+    //
+    // 2026-06-05 ROOT-CAUSE FIX (SHREE HARI INFRA + SKYLARK CORPORATION —
+    // "Member Sales (Pos)" and any other Dr-balance ledger mapped to a Cr-
+    // natural head). Two compounding bugs at this site flipped a Dr-balance
+    // PY into a positive number stored on the manual row, inflating every
+    // affected NCE engagement's BS face by exactly 2×|ledger|:
+    //
+    //   (a) `ledgerAmt(r.closing_balance)` = Math.abs(closing_balance) — strips
+    //       the head-nature sign. For an opposite-side balance the result was
+    //       the wrong sign. Replace with `signedLedgerAmt(r, noteType)` so the
+    //       lookup matches the convention used by pyByLedgerB / the CY path
+    //       (see the comment block at the Pattern B per-ledger PY lookup).
+    //
+    //   (b) Every "is the saved PY empty?" guard compared a raw signed value
+    //       against `< 0.005`. A correctly-signed negative PY (e.g.
+    //       -27,90,28,500) trivially satisfies `< 0.005`, so the guard either
+    //       skipped a valid back-fill or, worse, treated the slot as empty and
+    //       clobbered the upstream STALE-MANUAL-ROW REFRESH's correct
+    //       negative value. Wrap every slot-read in Math.abs(...) so signed
+    //       values are properly recognised as "has data".
+    //
+    // Net effect after both fixes: for every NCE engagement, the next Re-sync
+    // walks any manual row whose label matches a PY-shell TB ledger and back-
+    // fills the manual row's PY with the SIGNED amount under the current
+    // head's nature. The buggy positive-overwrite on Dr-balance ledgers
+    // (Member Sales (Pos) etc.) is gone — the BS face PY of Other Current
+    // Liabilities / Trade Payables / etc. drops by 2×|Dr-sum| to the correct
+    // value, and Notes 4/8/etc. show the negative contribution that nets the
+    // group total instead of inflating it.
     if (pyTb.length > 0) {
       const pyByName: Record<string, number> = {};
       for (const r of pyTb) {
         const nm = String(r.ledger_name || "").trim();
         if (!nm) continue;
-        pyByName[nm.toLowerCase()] = ledgerAmt(r.closing_balance);
+        // Sign-aware — see fix-comment block above. Replaces unsigned
+        // ledgerAmt() that silently dropped the head-nature sign.
+        pyByName[nm.toLowerCase()] = signedLedgerAmt(r, noteType);
       }
       // Detect whether this note follows Pattern A (LT/ST columns).
       const isPatternA = !noteFs.all && !!(noteFs.lt || noteFs.st);
       for (const mr of absorbedManualRows) {
         if (!mr.label) continue;
         const pyAmt = pyByName[mr.label.toLowerCase()];
-        if (!pyAmt || pyAmt < 0.005) continue;
+        // Was: `pyAmt < 0.005` — wrong sign for a Dr-balance ledger.
+        if (!pyAmt || Math.abs(pyAmt) < 0.005) continue;
         // Decide which suffix to fill based on note shape and where the CY
         // amount lives on the manual row.
         if (isPatternA) {
           const cyLt = Math.abs(mergedCy[mr.id + "_lt"] ?? 0);
           const cyStV = Math.abs(mergedCy[mr.id + "_st"] ?? 0);
-          if (cyLt > 0.005 && (mergedPy[mr.id + "_lt"] ?? 0) < 0.005) {
+          if (cyLt > 0.005 && Math.abs(mergedPy[mr.id + "_lt"] ?? 0) < 0.005) {
             mergedPy[mr.id + "_lt"] = pyAmt;
-          } else if (cyStV > 0.005 && (mergedPy[mr.id + "_st"] ?? 0) < 0.005) {
+          } else if (cyStV > 0.005 && Math.abs(mergedPy[mr.id + "_st"] ?? 0) < 0.005) {
             mergedPy[mr.id + "_st"] = pyAmt;
           } else if (cyLt < 0.005 && cyStV < 0.005) {
             // No CY amount yet — default to ST since the user usually fills
             // ST first for current-liability provisions.
-            if ((mergedPy[mr.id + "_st"] ?? 0) < 0.005) {
+            if (Math.abs(mergedPy[mr.id + "_st"] ?? 0) < 0.005) {
               mergedPy[mr.id + "_st"] = pyAmt;
             }
           }
         } else {
-          // Pattern B — single column
-          if ((mergedPy[mr.id] ?? 0) < 0.005) {
+          // Pattern B — single column.  Math.abs() so an existing correctly-
+          // signed negative PY (written upstream by STALE-MANUAL-ROW REFRESH
+          // for ledgers in STRICTLY_TB_DRIVEN_B notes) is NOT treated as
+          // "empty" and overwritten with the back-fill value.
+          if (Math.abs(mergedPy[mr.id] ?? 0) < 0.005) {
             mergedPy[mr.id] = pyAmt;
           }
         }
