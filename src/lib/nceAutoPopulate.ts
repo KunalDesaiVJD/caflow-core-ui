@@ -1035,19 +1035,47 @@ export async function nceAutoPopulate(
         const mapped = coaMapping[row.ledger_name] ?? pyCoaMap[row.ledger_name];
         if (mapped?.code) tbCodeByLabel.set(nm, mapped.code);
       }
+      // SHREE HARI INFRA root cause (Loans on demand — Banks PY ghosted at
+      // Rs.87.48 cr): for per-ledger-breakup Pattern A notes — borrowings,
+      // investments, loans_advances — an older buggy version of this code
+      // attached HUF / partner-loan ledgers to the WRONG static parent
+      // (sec_demand_bank instead of unsec_related) before the
+      // isExplicitUnsecured guard was tightened. The self-heal promoted those
+      // wrongly-parented autoRows to source: "manual" to preserve placement,
+      // and every Re-sync since then has KEPT them because the stricter rule
+      // ("drop only when ledger moved to a different note") sees that the
+      // ledger is still mapped to NCE_LTB and lets the manual row survive.
+      // Meanwhile the auto loop's isClaimedByManual() short-circuit skips
+      // re-creating the same ledger with the now-correct attachedTo, so the
+      // wrong-parent row sticks forever.
+      //
+      // For these per-ledger-breakup notes the auto loop is the
+      // authoritative source of truth: every TB ledger mapped to one of this
+      // note's codes BECOMES a customRow with current-heuristic attachedTo.
+      // Manual rows whose label matches a TB ledger are by definition
+      // redundant — the auto path will rebuild them cleanly with the right
+      // parent. So drop them aggressively. User-typed rows without any TB
+      // match (e.g. a manually typed HUF loan with no Tally ledger of that
+      // name) are kept untouched. Pattern B notes and non-breakup Pattern A
+      // notes use the stricter rule below.
+      const isPerLedgerBreakup =
+        noteType === "borrowings" ||
+        noteType === "investments" ||
+        noteType === "loans_advances";
       if (tbCodeByLabel.size > 0) {
         const before = manualRows.length;
         manualRows = manualRows.filter(mr => {
           const lbl = (mr.label || "").trim().toLowerCase();
           if (!lbl) return true;
           const currentCode = tbCodeByLabel.get(lbl);
-          if (!currentCode) return true;         // user-typed row (no TB match) → keep
-          return ourCodes.has(currentCode);      // ledger still ours → keep; moved → drop
+          if (!currentCode) return true;             // user-typed row (no TB match) → keep
+          if (isPerLedgerBreakup) return false;      // breakup note → always rebuild from auto
+          return ourCodes.has(currentCode);          // others: keep if mapping still ours
         });
         const dropped = before - manualRows.length;
         if (dropped > 0) {
           // eslint-disable-next-line no-console
-          console.log(`[nceAutoPopulate] ${noteType}: purged ${dropped} stale manual row(s) whose ledger is now mapped to a different note.`);
+          console.log(`[nceAutoPopulate] ${noteType}: purged ${dropped} stale manual row(s) (${isPerLedgerBreakup ? "per-ledger-breakup: rebuilding from auto" : "ledger moved to a different note"}).`);
         }
       }
     }
