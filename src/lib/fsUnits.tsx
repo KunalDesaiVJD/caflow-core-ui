@@ -106,10 +106,20 @@ export function formatScaledINRWhole(n: number | null | undefined): string {
 interface ProviderProps {
   engagementId?: string | null;
   children:      ReactNode;
+  /**
+   * When set, this scale wins over everything (localStorage, setScale calls).
+   * Used by the NCE FS page: non-corporate clients (partnership, proprietorship,
+   * HUF, etc.) display figures in actual rupees only — no '000 / Lakhs toggle —
+   * so passing forceScale="actual" guarantees they never get stuck on a stale
+   * thousands value carried over from a previous corporate engagement that
+   * shared the same browser profile.
+   */
+  forceScale?: FsScale;
 }
 
-export function FsUnitsProvider({ engagementId, children }: ProviderProps) {
+export function FsUnitsProvider({ engagementId, children, forceScale }: ProviderProps) {
   const [scale, setScaleState] = useState<FsScale>(() => {
+    if (forceScale) return forceScale;
     if (typeof window === "undefined") return "actual";
     try {
       const stored = localStorage.getItem(STORAGE_KEY(engagementId));
@@ -120,14 +130,16 @@ export function FsUnitsProvider({ engagementId, children }: ProviderProps) {
 
   // Re-hydrate when engagement changes
   useEffect(() => {
+    if (forceScale) { setScaleState(forceScale); return; }
     try {
       const stored = localStorage.getItem(STORAGE_KEY(engagementId));
       if (stored === "actual" || stored === "thousands" || stored === "lakhs") setScaleState(stored as FsScale);
       else setScaleState("actual");
     } catch { /* ignore */ }
-  }, [engagementId]);
+  }, [engagementId, forceScale]);
 
   const setScale = (s: FsScale) => {
+    if (forceScale) return;  // locked — toggle is a no-op when scale is forced
     setScaleState(s);
     try { localStorage.setItem(STORAGE_KEY(engagementId), s); } catch { /* ignore */ }
   };

@@ -3736,14 +3736,26 @@ export default function PipelineFinancialStatements({
           return /^NCE_(CAP|LTB|OLTL|LTP|STB|TP|OCL|STP|PPE|INTG|CWIP|NCINV|LTLA|ONCA|CINV|STCK|TR|CASH|STLA|OCA)$/.test(code);
         };
         // Pass 1 — stage5_notes (legacy path).
-        // PyShell guard REMOVED 2026-06-05 — see policy comment above. Notes
-        // are the audit document of record; manually-added PY entries (e.g.
-        // SHREE HARI INFRA "Member Sales POS" ₹27.9 cr in other_cl) must
-        // flow through to the BS face. Drift between PY shell TB and notes
-        // is now surfaced by FsHealthPanel instead of being silenced here.
+        // Per the SHREE HARI INFRA policy notes are normally the audit document
+        // of record, so manually-added PY entries flow through to the BS face.
+        // EXCEPTION (OM REALTY round 2): when this engagement HAS a PY shell
+        // AND zero CY ledgers are mapped to the BS code in coa_mapping, the
+        // notes' manual rows are unambiguously stale (the auditor moved the
+        // backing ledger to a DIFFERENT BS code in COA Mapping but never
+        // deleted the original row). In that case the BS face MUST follow
+        // coa_mapping (= 0) instead of resurrecting the orphan note total —
+        // otherwise the FS face contradicts the COA Mapping screen for the
+        // same line item, which is exactly what OM REALTY's Short-term
+        // borrowings PY 80,444.73 ('000) symptom was. CY behaviour unchanged.
+        const orphanPYBsCode = (code: string): boolean => {
+          if (!hasPyShellBS) return false;
+          if (!isBSCode(code)) return false;
+          return !(code in pyShellBSAmounts);
+        };
         for (const [code, key] of Object.entries(NCE_CODE_TO_NOTE_KEY)) {
           const section = NCE_CODE_TO_SECTION[code];
           if (!section) continue;
+          if (orphanPYBsCode(code)) continue;
           const sum = sumNotesSubRowsPY(stage5NotesData ?? null, section, key);
           if (sum == null) continue;
           out[code] = section === "bs_liab" ? -sum : sum;
@@ -3751,8 +3763,8 @@ export default function PipelineFinancialStatements({
         const faPy = getFAGridNetBlockTotal(stage5NotesData ?? null, "py");
         if (faPy != null) out["NCE_PPE"] = faPy;
         // Pass 2 — nce_financial_notes (Stage 8 path, the modern one).
-        // Same logic: notes total wins for every code, PY shell or not.
         for (const code of Object.keys(NCE_CODE_TO_NOTE)) {
+          if (orphanPYBsCode(code)) continue;
           applyNCENoteTotal(out, code, "py");
         }
         // See nceCyAmounts — recompute PY parents from leaf codes so the
@@ -6907,7 +6919,7 @@ export default function PipelineFinancialStatements({
   };
 
   return (
-    <FsUnitsProvider engagementId={engagementId}>
+    <FsUnitsProvider engagementId={engagementId} forceScale={isNonCorporate ? "actual" : undefined}>
     <div className="max-w-6xl space-y-4">
       <EngagementHeader engagement={engagement} stageNumber={7} stageLabel="Financial Statements" />
       {/* Header */}
