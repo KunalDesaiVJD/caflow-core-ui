@@ -36,6 +36,11 @@ import type { FSLineItem } from "@/config/nceLineItems";
 import { MappingRulesPanel, type MappingRule } from "@/components/pipeline/MappingRulesPanel";
 import { currentYearProfitAlreadyInReserves } from "@/lib/tallyDetection";
 import { useAiSkills } from "@/hooks/useAiSkills";
+// 2026-06-05 Phase 1 (FS Re-Architecture): every TB sign-derivation goes
+// through the shared module so the BS / P&L / Notes triangle stays
+// reconciled. Stage 3's debit-positive normalisation is the same rule
+// applied with nature = "DR" — see fsSignConvention.signedBalance.
+import { signedBalance, signedOpening } from "@/lib/fsSignConvention";
 
 // ═══════════════════════════════════════
 // Non-Corporate entity detection
@@ -653,9 +658,9 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           account_group: l.parent_group || "",
           debit:  isDr ? cb : 0,
           credit: isDr ? 0  : cb,
-          balance: isDr ? cb : -cb,
-          opening_balance: Math.abs(Number(l.opening_balance ?? 0)) *
-                           (String(l.opening_type ?? "").toUpperCase() === "CR" ? -1 : 1),
+          // Sign via shared module; "DR" nature => debit-positive (Dr → +cb, Cr → -cb).
+          balance: signedBalance(cb, l.balance_type, "DR"),
+          opening_balance: signedOpening(l.opening_balance, l.opening_type, "DR"),
           tally_debit:  Number(l.debit_amount  ?? 0),
           tally_credit: Number(l.credit_amount ?? 0),
         });
@@ -673,7 +678,9 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           account_name:  name,
           account_group: l.parent_group || "",
           debit: 0, credit: 0, balance: 0,
-          opening_balance: isDr ? cb : -cb,
+          // PY shell row's CLOSING = current engagement's OPENING. Debit-positive
+          // via shared module — see fsSignConvention.signedBalance.
+          opening_balance: signedBalance(cb, l.balance_type, "DR"),
           tally_debit: 0, tally_credit: 0,
           py_only: true,
         });
@@ -1780,8 +1787,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         if (!name) continue;
         const ob = Math.abs(Number(row.opening_balance ?? 0));
         if (ob < 0.005) continue;
-        const isDr = String(row.opening_type ?? "").toUpperCase() === "DR";
-        pyShellPrevClose[name] = isDr ? ob : -ob;
+        // Debit-positive opening via shared module.
+        pyShellPrevClose[name] = signedOpening(ob, row.opening_type, "DR");
       }
       // For every CY tbAccount mapped to an inventory code, dual-post the
       // PY Changes-in-Inv contribution.
@@ -1912,8 +1919,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       if (!isPL) continue; // BS items handled via opening_balance in computedAmountsPY
       const cb = Math.abs(Number(row.closing_balance ?? 0));
       if (cb < 0.005) continue;
-      const isDr = String(row.balance_type ?? "").toUpperCase() === "DR";
-      amounts[mapping.code] = (amounts[mapping.code] || 0) + (isDr ? cb : -cb);
+      // Debit-positive contribution to PL face amount via shared module.
+      amounts[mapping.code] = (amounts[mapping.code] || 0) + signedBalance(cb, row.balance_type, "DR");
     }
     // ROOT-CAUSE FIX (Stage 6 — PY parent total bug): also inject the
     // PY Changes-in-Inventories dual-post here. Without this, the CII PL
@@ -1931,8 +1938,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       if (!name) continue;
       const ob = Math.abs(Number((row as any).opening_balance ?? 0));
       if (ob < 0.005) continue;
-      const isDr = String((row as any).opening_type ?? "").toUpperCase() === "DR";
-      pyShellPrevClose[name] = isDr ? ob : -ob;
+      // Debit-positive opening via shared module.
+      pyShellPrevClose[name] = signedOpening(ob, (row as any).opening_type, "DR");
     }
     for (const acct of tbAccounts) {
       const mapping = coaMapping[acct.account_name];
@@ -2031,8 +2038,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       if (!name) continue;
       const cb = Math.abs(Number(row.closing_balance ?? 0));
       if (cb < 0.005) continue;
-      const isDr = String(row.balance_type ?? "").toUpperCase() === "DR";
-      map[name] = isDr ? cb : -cb;
+      // Debit-positive PY closing via shared module.
+      map[name] = signedBalance(cb, row.balance_type, "DR");
     }
     return map;
   }, [pyShellTbData]);
@@ -2048,8 +2055,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       if (!name) continue;
       const cb = Math.abs(Number(row.closing_balance ?? 0));
       if (cb < 0.005) continue;
-      const isDr = String(row.balance_type ?? "").toUpperCase() === "DR";
-      const signed = isDr ? cb : -cb;
+      // Debit-positive PY closing via shared module.
+      const signed = signedBalance(cb, row.balance_type, "DR");
       // (a) lowercase + trim   (b) fully normalised (alnum-only)
       const lower = name.toLowerCase();
       if (!(lower in map)) map[lower] = signed;
@@ -2233,8 +2240,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       if (m?.code !== varianceDrill.code) continue;
       const cb = Math.abs(Number(row.closing_balance ?? 0));
       if (cb < 0.005) continue;
-      const isDr = String(row.balance_type ?? "").toUpperCase() === "DR";
-      const py = isDr ? cb : -cb;
+      // Debit-positive PY-only ledger amount via shared module.
+      const py = signedBalance(cb, row.balance_type, "DR");
       rows.push({
         ledger: name,
         group: row.parent_group || "",
