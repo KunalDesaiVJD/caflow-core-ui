@@ -56,7 +56,7 @@ import {
 } from "@/lib/nceAutoPopulate";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 import FsHealthPanel from "@/components/pipeline/FsHealthPanel";
-import { validateFSReconciliation, logReconciliationDrift, NCE_LIAB_CODE_SET } from "@/lib/fsReconciliation";
+import { validateFSReconciliation, logReconciliationDrift, NCE_LIAB_CODE_SET, computeCOATotals } from "@/lib/fsReconciliation";
 import { isTallyPLAccount, currentYearProfitAlreadyInReserves } from "@/lib/tallyDetection";
 
 // ═══════════════════════════════════════
@@ -3661,6 +3661,16 @@ export default function PipelineFinancialStatements({
     return m;
   }, [nceNotesData]);
 
+  // 2026-06-05 Phase 4 — COA Mapping line-item totals computed fresh from
+  // TB × COA mapping × signedBalance/signedOpening. Anchors the three-way
+  // reconciliation in FsHealthPanel: Note Total - COA Total = legitimate
+  // auditor manual adjustment (positive only); any drift between Note
+  // Total and BS Face is a code-path bug to fix.
+  const coaTotalsByCode = useMemo(
+    () => computeCOATotals(tallyTb ?? [], pyShellTb ?? [], coaMapping),
+    [tallyTb, pyShellTb, coaMapping],
+  );
+
   /** Apply the NCE note grand total to an FS code, respecting storage sign
    *  convention: CR-natural codes (liabilities, equity, income) are stored
    *  negative so the display layer's negL()/negI() can flip them positive. */
@@ -6633,76 +6643,105 @@ export default function PipelineFinancialStatements({
               : ""}
           </TableCell>
 
-          {/* CY amount + pencil
-               Intermediate section headers (has children, NOT a total row) never
-               show amounts — they are pure structural labels (per Excel template). */}
-          <TableCell className="text-right text-xs font-mono tabular-nums">
-            <div className="flex items-center justify-end gap-1">
-              {(isHeader && !isTotalRow) ? null : amount !== 0 ? (
-                <span className={amount < 0 ? "text-destructive" : ""}>
-                  {amount < 0 ? "(" : ""}₹{Math.round(Math.abs(amount)).toLocaleString("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}{amount < 0 ? ")" : ""}
-                </span>
-              ) : (
-                <span className="text-muted-foreground">—</span>
-              )}
-              {!isHeader && !isTotalRow && (
-                <button
-                  className="opacity-0 group-hover:opacity-100 hover:opacity-100 p-0.5 rounded hover:bg-muted ml-1"
-                  title={item.code && INV_PL_CODES.has(item.code) && hasInvMapping
-                    ? "Auto-computed from inventory TB. Override if Tally P&L opening stock differs from ledger opening balance."
-                    : "Override CY amount"}
-                  onClick={() => openOverride(item.code, item.name)}
-                >
-                  <Pencil size={9} className={item.code && INV_PL_CODES.has(item.code) && hasInvMapping ? "text-blue-400" : "text-muted-foreground"} />
-                </button>
-              )}
-            </div>
-          </TableCell>
+          {/* 2026-06-05 Phase 4 — Face cells with a linked note are READ-ONLY.
+               The face value MUST come from the Note's grand total; any
+               auditor adjustment lives inside the note as a manual row.
+               This eliminates a whole class of three-way reconciliation
+               drift (face ≠ note ≠ COA) by forbidding the most common
+               cause: a stale FS-face override left over after Notes were
+               re-corrected. Cells without a linked note (NCE_CWIP,
+               BS_NCA_FA_TAN, etc.) stay editable. */}
+          {(() => {
+            const linkedNoteRef = item.noteRef;
+            const displayNoteNo = linkedNoteRef
+              ? (nceDynamicNoteMap.get(linkedNoteRef) ?? "")
+              : "";
+            const hasLinkedNote = isNonCorporate && !!linkedNoteRef && !!displayNoteNo;
+            const lockedTip = displayNoteNo
+              ? `This value comes from Note ${displayNoteNo}. Edit the note to change it.`
+              : "This value comes from a linked note. Edit the note to change it.";
+            return (
+              <>
+                {/* CY amount + pencil */}
+                <TableCell className="text-right text-xs font-mono tabular-nums">
+                  <div className="flex items-center justify-end gap-1">
+                    {(isHeader && !isTotalRow) ? null : amount !== 0 ? (
+                      <span className={amount < 0 ? "text-destructive" : ""}>
+                        {amount < 0 ? "(" : ""}₹{Math.round(Math.abs(amount)).toLocaleString("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}{amount < 0 ? ")" : ""}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                    {!isHeader && !isTotalRow && (
+                      <button
+                        disabled={hasLinkedNote}
+                        className={`opacity-0 group-hover:opacity-100 hover:opacity-100 p-0.5 rounded ml-1 ${hasLinkedNote ? "cursor-not-allowed" : "hover:bg-muted"}`}
+                        title={hasLinkedNote ? lockedTip
+                          : item.code && INV_PL_CODES.has(item.code) && hasInvMapping
+                          ? "Auto-computed from inventory TB. Override if Tally P&L opening stock differs from ledger opening balance."
+                          : "Override CY amount"}
+                        onClick={() => !hasLinkedNote && openOverride(item.code, item.name)}
+                      >
+                        {hasLinkedNote
+                          ? <Lock size={9} className="text-muted-foreground" />
+                          : <Pencil size={9} className={item.code && INV_PL_CODES.has(item.code) && hasInvMapping ? "text-blue-400" : "text-muted-foreground"} />}
+                      </button>
+                    )}
+                  </div>
+                </TableCell>
 
-          {/* PY amount — hidden for intermediate section headers, same as CY */}
-          <TableCell className="text-right text-xs font-mono tabular-nums text-muted-foreground">
-            <div className="flex items-center justify-end gap-1">
-              {!(isHeader && !isTotalRow) && hasPyOverride && (
-                <span
-                  title={pyMeta ? `Manually overridden by ${pyMeta.by} on ${new Date(pyMeta.at).toLocaleDateString("en-IN")}` : "Manually overridden"}
-                  className="text-amber-600 cursor-help"
-                >⚠</span>
-              )}
-              {(isHeader && !isTotalRow) ? null : py !== 0 ? (
-                <span className={hasPyOverride ? "text-amber-700 dark:text-amber-400" : ""}>
-                  {py < 0 ? "(" : ""}₹{Math.round(Math.abs(py)).toLocaleString("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}{py < 0 ? ")" : ""}
-                </span>
-              ) : (
-                <span>—</span>
-              )}
-              {!isHeader && !pyLocked && (
-                <button
-                  className="opacity-0 group-hover:opacity-100 hover:opacity-100 p-0.5 rounded hover:bg-muted ml-1"
-                  title={hasPyOverride ? "Edit PY override" : "Override PY amount"}
-                  onClick={() => openPyOverride(item.code, item.name)}
-                >
-                  <Pencil size={9} className={hasPyOverride ? "text-amber-600" : "text-muted-foreground"} />
-                </button>
-              )}
-              {!isHeader && pyLocked && hasPyOverride && (
-                <Lock size={9} className="text-muted-foreground ml-1" title="PY finalized — locked" />
-              )}
-            </div>
-          </TableCell>
+                {/* PY amount — hidden for intermediate section headers, same as CY */}
+                <TableCell className="text-right text-xs font-mono tabular-nums text-muted-foreground">
+                  <div className="flex items-center justify-end gap-1">
+                    {!(isHeader && !isTotalRow) && hasPyOverride && (
+                      <span
+                        title={pyMeta ? `Manually overridden by ${pyMeta.by} on ${new Date(pyMeta.at).toLocaleDateString("en-IN")}` : "Manually overridden"}
+                        className="text-amber-600 cursor-help"
+                      >⚠</span>
+                    )}
+                    {(isHeader && !isTotalRow) ? null : py !== 0 ? (
+                      <span className={hasPyOverride ? "text-amber-700 dark:text-amber-400" : ""}>
+                        {py < 0 ? "(" : ""}₹{Math.round(Math.abs(py)).toLocaleString("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}{py < 0 ? ")" : ""}
+                      </span>
+                    ) : (
+                      <span>—</span>
+                    )}
+                    {!isHeader && !pyLocked && (
+                      <button
+                        disabled={hasLinkedNote}
+                        className={`opacity-0 group-hover:opacity-100 hover:opacity-100 p-0.5 rounded ml-1 ${hasLinkedNote ? "cursor-not-allowed" : "hover:bg-muted"}`}
+                        title={hasLinkedNote ? lockedTip : (hasPyOverride ? "Edit PY override" : "Override PY amount")}
+                        onClick={() => !hasLinkedNote && openPyOverride(item.code, item.name)}
+                      >
+                        {hasLinkedNote
+                          ? <Lock size={9} className="text-muted-foreground" />
+                          : <Pencil size={9} className={hasPyOverride ? "text-amber-600" : "text-muted-foreground"} />}
+                      </button>
+                    )}
+                    {!isHeader && pyLocked && hasPyOverride && (
+                      <Lock size={9} className="text-muted-foreground ml-1" title="PY finalized — locked" />
+                    )}
+                  </div>
+                </TableCell>
 
-          {/* CY pencil (legacy action column — kept for clarity) */}
-          <TableCell className="w-10 text-center">
-            {!isHeader && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6"
-                onClick={() => openOverride(item.code, item.name)}
-              >
-                <Pencil size={11} />
-              </Button>
-            )}
-          </TableCell>
+                {/* CY pencil (legacy action column — also gated for linked notes) */}
+                <TableCell className="w-10 text-center">
+                  {!isHeader && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6"
+                      disabled={hasLinkedNote}
+                      title={hasLinkedNote ? lockedTip : "Override CY amount"}
+                      onClick={() => !hasLinkedNote && openOverride(item.code, item.name)}
+                    >
+                      {hasLinkedNote ? <Lock size={11} /> : <Pencil size={11} />}
+                    </Button>
+                  )}
+                </TableCell>
+              </>
+            );
+          })()}
         </TableRow>
       );
     });
@@ -7274,16 +7313,16 @@ export default function PipelineFinancialStatements({
         );
       })()}
 
-      {/* 2026-06-05 — FS Health structural guarantee panel. Validates that
-           every NCE note's computed total equals its BS / P&L face value on
-           every render. Surfaces drift > ₹100 as a clickable details panel
-           so the auditor knows exactly which note disagrees with which face
-           cell. See src/lib/fsReconciliation.ts for the invariant logic. */}
+      {/* 2026-06-05 — FS Health structural guarantee panel. Phase 4: now
+           a three-way breakdown (COA / Manual / Note / Face) so legitimate
+           auditor adjustments are visible distinctly from reconciliation
+           bugs. See src/lib/fsReconciliation.ts for the invariant logic. */}
       <FsHealthPanel
         engagementId={engagementId}
         nceNotesByType={nceNotesByType}
         bsFaceCy={nceCyAmounts}
         bsFacePy={ncePyAmounts}
+        coaTotals={coaTotalsByCode}
         visible={isNonCorporate}
       />
 
