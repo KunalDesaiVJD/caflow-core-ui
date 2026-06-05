@@ -24,21 +24,28 @@
  */
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronUp, AlertCircle, CheckCircle2, AlertTriangle, Info } from "lucide-react";
-import { validateFSReconciliation, type ReconRow, NCE_LIAB_CODE_SET } from "@/lib/fsReconciliation";
+import { validateFSReconciliation, validateCorporateFSReconciliation, type ReconRow, NCE_LIAB_CODE_SET } from "@/lib/fsReconciliation";
+import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 
 interface Props {
   engagementId:    string;
-  /** nce_financial_notes rows keyed by note_type (same map fed to applyNCENoteTotal) */
-  nceNotesByType:  Record<string, { cy_data?: Record<string, any> | null; py_data?: Record<string, any> | null; note_type?: string }>;
-  /** The same BS face maps used by the surrounding component (nceCyAmounts / ncePyAmounts) */
+  /** nce_financial_notes rows keyed by note_type — NCE path. */
+  nceNotesByType?: Record<string, { cy_data?: Record<string, any> | null; py_data?: Record<string, any> | null; note_type?: string }>;
+  /** 2026-06-05 Phase 6 — stage5_notes JSON for Corporate engagements. When
+   *  supplied (and nceNotesByType empty), the panel runs the corporate
+   *  validator instead of the NCE one. Same three-way breakdown rendered. */
+  corporateNotes?: Stage5Notes | null;
+  /** The same BS face maps used by the surrounding component
+   *  (nceCyAmounts/ncePyAmounts for NCE; computedAmounts/computedAmountsPY
+   *  for Corporate). */
   bsFaceCy:        Record<string, number>;
   bsFacePy:        Record<string, number>;
   /** Phase 4 — COA Mapping line-item totals computed fresh from TB × signed
    *  mapping. When supplied the panel renders the three-way breakdown and
-   *  separates "manual adjustment" from "drift". When undefined the panel
-   *  falls back to two-way (Note vs BS face) behaviour. */
+   *  separates "manual adjustment" from "drift". */
   coaTotals?:      Record<string, { cy: number; py: number }>;
-  /** Hide the panel entirely if the engagement isn't NCE (Corporate has its own checks) */
+  /** Hide the panel entirely (the parent already gates on entity-type +
+   *  whether notes data is loaded). */
   visible:         boolean;
 }
 
@@ -48,19 +55,32 @@ function fmtINR(n: number): string {
   return sign + abs.toLocaleString("en-IN");
 }
 
-export default function FsHealthPanel({ nceNotesByType, bsFaceCy, bsFacePy, coaTotals, visible }: Props) {
+export default function FsHealthPanel({ nceNotesByType, corporateNotes, bsFaceCy, bsFacePy, coaTotals, visible }: Props) {
   const [open, setOpen] = useState(false);
 
   const result = useMemo(() => {
     if (!visible) return null;
+    // 2026-06-05 Phase 6 — branch by which notes payload was supplied.
+    // Corporate engagements pass corporateNotes (stage5_notes JSON);
+    // NCE engagements pass nceNotesByType (nce_financial_notes rows).
+    // The same ReconRow shape comes out either way, so the rendering
+    // below is unified.
+    if (corporateNotes !== undefined && corporateNotes !== null) {
+      return validateCorporateFSReconciliation({
+        corporateNotes,
+        bsFaceCy,
+        bsFacePy,
+        coaTotals,
+      });
+    }
     return validateFSReconciliation({
-      nceNotesByType,
+      nceNotesByType: nceNotesByType ?? {},
       bsFaceCy,
       bsFacePy,
       liabCodes: NCE_LIAB_CODE_SET,
       coaTotals,
     });
-  }, [visible, nceNotesByType, bsFaceCy, bsFacePy, coaTotals]);
+  }, [visible, nceNotesByType, corporateNotes, bsFaceCy, bsFacePy, coaTotals]);
 
   if (!visible || !result) return null;
 

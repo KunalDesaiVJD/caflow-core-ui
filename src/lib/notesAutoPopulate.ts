@@ -20,6 +20,12 @@
 
 import { supabase } from "@/integrations/supabase/client";
 import { cleanTallyName } from "@/lib/tallyText";
+// 2026-06-05 Phase 6 — every TB sign-derivation in the corporate
+// notes-auto-populate path now routes through the shared module so the
+// corporate FS uses the SAME signing convention as NCE (and Stage 3 TB
+// import). normalizeTB stays debit-positive (matches the existing
+// downstream sectionSign multiplier in buildBreakup).
+import { signedBalance, signedOpening } from "@/lib/fsSignConvention";
 
 // ═════════════════════════════════════════════════════════════════════════
 // Types
@@ -260,20 +266,20 @@ async function fetchAllTB(engId: string): Promise<any[]> {
   return all;
 }
 
-/** Normalise TB rows to the signed-balance shape the rest of the service uses. */
+/** Normalise TB rows to the signed-balance shape the rest of the service uses.
+ *  2026-06-05 Phase 6 — sign derivation routed through the canonical
+ *  fsSignConvention helpers. `balance` stays debit-positive (Dr → +cb,
+ *  Cr → -cb), `opening_balance` stays debit-positive too. Downstream
+ *  buildBreakup multiplies by sectionSign to convert to the head's
+ *  natural-side display. The math is byte-identical to the inline
+ *  `isDr ? cb : -cb` it replaces. */
 function normalizeTB(rows: any[]): TBLedger[] {
-  return rows.map(l => {
-    const cb   = Math.abs(Number(l.closing_balance ?? 0));
-    const isDr = String(l.balance_type ?? "").toUpperCase() === "DR";
-    const ob   = Math.abs(Number(l.opening_balance ?? 0));
-    const isObCr = String(l.opening_type ?? "").toUpperCase() === "CR";
-    return {
-      account_name:    cleanTallyName(l.ledger_name),
-      account_group:   cleanTallyName(l.parent_group),
-      balance:         isDr   ? cb :  -cb,
-      opening_balance: isObCr ? -ob :  ob,
-    };
-  }).filter(a => a.account_name);
+  return rows.map(l => ({
+    account_name:    cleanTallyName(l.ledger_name),
+    account_group:   cleanTallyName(l.parent_group),
+    balance:         signedBalance(l.closing_balance, l.balance_type, "DR"),
+    opening_balance: signedOpening(l.opening_balance, l.opening_type, "DR"),
+  })).filter(a => a.account_name);
 }
 
 export async function getTrialBalance(engagementId: string): Promise<TBLedger[]> {
