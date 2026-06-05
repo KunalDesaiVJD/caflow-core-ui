@@ -83,18 +83,19 @@ export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteM
       {/* Entity-name banner (2026-05-30) — matches BS / P&L title block format
           so the client name is presented identically on every preview page. */}
       {entityName && (
-        <div className="rounded-lg border bg-card overflow-hidden">
-          <div className="text-center border-b bg-muted/30 py-2 px-3">
-            <div className="font-bold text-sm uppercase tracking-wide text-[#1F3864]">
+        <div className="overflow-hidden" style={{ fontFamily: "Calibri, Arial, sans-serif" }}>
+          <div className="text-center py-1.5">
+            <div className="font-bold uppercase tracking-wide text-[#1F3864]" style={{ fontSize: "14px" }}>
               {entityName}
             </div>
-            <div className="text-xs mt-0.5">
-              Notes to Financial Statements{cyYear ? ` for the year ended 31st March, ${cyYear}` : ""}
+            <div style={{ fontSize: "11px" }} className="mt-0.5 font-bold text-[#1F3864]">
+              NOTES TO FINANCIAL STATEMENTS{cyYear ? ` FOR THE YEAR ENDED 31ST MARCH, ${cyYear}` : ""}
             </div>
-            <div className="text-[10px] text-muted-foreground italic mt-0.5">
-              (Amount in ₹)
+            <div className="text-right text-[#505050] italic mt-0.5 pr-1" style={{ fontSize: "8px" }}>
+              Amounts in ₹
             </div>
           </div>
+          <div className="border-b-2 border-[#1F3864]" />
         </div>
       )}
 
