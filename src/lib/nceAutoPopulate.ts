@@ -995,7 +995,7 @@ export async function nceAutoPopulate(
     // Manual rows whose label does NOT match any TB ledger (auditor-typed
     // text rows like "Unpaid audit fees", HUF loans without a Tally ledger,
     // etc.) are kept unchanged.
-    if (tb.length > 0) {
+    if (tb.length > 0 || pyTb.length > 0) {
       const ourCodes = new Set<string>([
         ...(noteFs.all ?? []),
         ...(noteFs.lt  ?? []),
@@ -1003,11 +1003,36 @@ export async function nceAutoPopulate(
       ]);
       // Build label → current mapping code for every TB ledger that has a
       // mapping. Ledgers with no mapping fall through (no entry in the map).
+      //
+      // OM REALTY (round 3) fix: also include PY-shell TB ledger names. Without
+      // this, manual rows tied to a ledger that ONLY appears in the prior-year
+      // TB (e.g. AU Small Finance Bank Ltd (OD A/c) — a loan that was settled
+      // in CY so the ledger is closed / absent from the CY TB) could never be
+      // detected as "moved to a different note". The auditor moved that ledger
+      // to NCE_LTB in CY coa_mapping, but the original NCE_STB manual row kept
+      // injecting ₹8,04,44,734 into the Short-Term Borrowings note's PY total
+      // — and therefore into the BS PY face — because the existing purge only
+      // scanned CY TB labels. Adding PY-shell labels (mapped via the same CY
+      // coa_mapping that drives the FS face) closes the loop so the note
+      // breakup ALWAYS matches what COA Mapping says, on every Re-sync. PY-
+      // shell coa_mapping is used as a fallback only when CY mapping is silent
+      // for that exact ledger string, mirroring the auto-row classification
+      // logic above.
       const tbCodeByLabel = new Map<string, string>();
       for (const row of tb) {
         const nm = (row.ledger_name || "").trim().toLowerCase();
         if (!nm) continue;
         const mapped = coaMapping[row.ledger_name];
+        if (mapped?.code) tbCodeByLabel.set(nm, mapped.code);
+      }
+      for (const row of pyTb) {
+        const nm = (row.ledger_name || "").trim().toLowerCase();
+        if (!nm) continue;
+        // Prefer CY coa_mapping (the FS face authority); fall back to the PY
+        // shell's mapping only when CY mapping has no entry for this exact
+        // ledger string. Don't clobber an existing CY-derived classification.
+        if (tbCodeByLabel.has(nm)) continue;
+        const mapped = coaMapping[row.ledger_name] ?? pyCoaMap[row.ledger_name];
         if (mapped?.code) tbCodeByLabel.set(nm, mapped.code);
       }
       if (tbCodeByLabel.size > 0) {
