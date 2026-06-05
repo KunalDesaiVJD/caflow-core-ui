@@ -46,7 +46,34 @@ export async function getClassificationForFY(
 ): Promise<Classification> {
   if (!clientId || !targetFY) return "Non-Audit";
 
-  // 1. Most recent history transition active on/before targetFY
+  // ── RESOLUTION ORDER REVISED (2026-06-05) ────────────────────────────
+  //
+  // Previous order was: history → fy_snapshot → client.classification.
+  // This caused AMBICA PLASTIC INDUSTRIES to be blocked from creating a
+  // new engagement: the history table had a stale "Non-Audit" row for FY
+  // 2025-26 (from a previous temporary switch), but the user had already
+  // corrected it in the Audit Setup UI which writes to
+  // client_fy_classifications. The history row was never updated, so it
+  // won over the corrected value and returned "Non-Audit".
+  //
+  // New order: fy_snapshot FIRST (it's the user-editable per-FY value
+  // from the Audit Setup UI), then history as fallback for FYs where no
+  // explicit snapshot exists, then client.classification as last resort.
+  // This ensures the UI-set value always wins, and stale history can't
+  // block engagement creation after the user has corrected it.
+  //
+  // 1. Per-FY snapshot row (from Audit Setup UI — user-editable, authoritative)
+  const { data: fyClass } = await (supabase as any)
+    .from("client_fy_classifications")
+    .select("classification")
+    .eq("client_id", clientId)
+    .eq("financial_year", targetFY)
+    .maybeSingle();
+
+  if (fyClass?.classification) return fyClass.classification as Classification;
+
+  // 2. Most recent history transition active on/before targetFY (fallback
+  //    for FYs where no explicit snapshot was set)
   try {
     const { data: history } = await (supabase as any)
       .from("client_classification_history")
@@ -60,19 +87,9 @@ export async function getClassificationForFY(
       return history[0].new_classification as Classification;
     }
   } catch (err) {
-    // History table may not exist yet — fall through silently to FY snapshot.
+    // History table may not exist yet — fall through silently.
     console.warn("[classificationUtils] history lookup failed:", (err as any)?.message ?? err);
   }
-
-  // 2. Per-FY snapshot row
-  const { data: fyClass } = await (supabase as any)
-    .from("client_fy_classifications")
-    .select("classification")
-    .eq("client_id", clientId)
-    .eq("financial_year", targetFY)
-    .maybeSingle();
-
-  if (fyClass?.classification) return fyClass.classification as Classification;
 
   // 3. Live "current" value on the client row
   const { data: client } = await (supabase as any)
