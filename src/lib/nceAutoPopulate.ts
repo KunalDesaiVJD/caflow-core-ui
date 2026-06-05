@@ -370,76 +370,35 @@ function ledgerAmt(closingBalance: number): number {
 
 /** Natural side of an NCE note. Liabilities, equity and income are CR-natural
  *  (a Cr closing balance is the normal side and contributes positively to the
- *  note total); assets and expenses are DR-natural. Used by signedLedgerAmt()
- *  to net opposite-side ledgers within a group total. */
-export const NOTE_NATURE: Record<string, "DR" | "CR"> = {
-  // Liabilities + Equity (Cr-natural)
-  borrowings:      "CR",
-  other_lt_liab:   "CR",
-  provisions:      "CR",
-  trade_payables:  "CR",
-  other_cl:        "CR",
-  // Income (Cr-natural)
-  revenue_ops:     "CR",
-  other_income:    "CR",
-  // Assets (Dr-natural)
-  cwip:               "DR",
-  investments:        "DR",
-  loans_advances:     "DR",
-  other_nc_assets:    "DR",
-  inventories:        "DR",
-  trade_receivables:  "DR",
-  cash_bank:          "DR",
-  other_ca:           "DR",
-  // Expenses (Dr-natural)
-  cogs:           "DR",
-  employee_exp:   "DR",
-  finance_costs:  "DR",
-  other_expenses: "DR",
-};
+ *  note total); assets and expenses are DR-natural.
+ *
+ *  2026-06-05 Phase 1 of the FS Re-Architecture: the canonical definition now
+ *  lives in src/lib/fsSignConvention.ts and is re-exported here so existing
+ *  imports keep working. Any new sign-derivation callsite must call
+ *  signedBalance / signedOpening from that module — NEVER inline
+ *  `balance_type === "DR" ? ... : ...`. */
+export { NOTE_NATURE } from "@/lib/fsSignConvention";
+import { signedBalance, signedOpening } from "@/lib/fsSignConvention";
 
-/** Signed amount of a TB ledger when contributing to a note total.
- *  Positive when balance_type matches the note's natural side (e.g. a Cr
- *  ledger under Trade Payables — the normal case); negative when opposite
- *  (e.g. a creditor whose closing is Dr because the party paid in advance —
- *  this should REDUCE the Trade Payables total, mirroring how a sundry-
- *  debtor's Cr balance reduces the Trade Receivables total).
- *  Issue: previously Math.abs() was used everywhere so opposite-side
- *  balances were silently added instead of netted, inflating group totals.
- *  We key the nature off the noteType (not the FS code) because NCE
- *  engagements use NCE_* codes that don't follow the corporate BS_CL_/
- *  BS_NCL_/PL_EXP_ prefix convention. */
+/** Signed amount of a TB ledger when contributing to a note total — thin
+ *  adapter that defers to the shared fsSignConvention module so every
+ *  caller everywhere in the codebase gets the same sign rule. See
+ *  fsSignConvention.signedBalance for the full convention. */
 function signedLedgerAmt(
   row: { closing_balance: number; balance_type: string },
   noteType: string,
 ): number {
-  const cb = Math.abs(Number(row.closing_balance ?? 0));
-  if (cb === 0) return 0;
-  const isDr = String(row.balance_type ?? "").toUpperCase() === "DR";
-  const nature: "DR" | "CR" = NOTE_NATURE[noteType] ?? "CR";
-  if (nature === "CR") return isDr ? -cb : +cb;
-  return isDr ? +cb : -cb;
+  return signedBalance(row.closing_balance, row.balance_type, noteType);
 }
 
-/** Signed PY (= opening balance) — same sign convention as signedLedgerAmt
- *  but uses opening_balance / opening_type instead of closing_balance /
- *  balance_type. Returns 0 when the ledger had no opening.
- *
- *  Used to compute the PY column of BS notes from CY's TB opening balances
- *  under the CURRENT COA mapping classification. This fixes the DHANANI
- *  REALTY bug where a ledger that was reclassified from NCE_STB → NCE_LTB
- *  this year still showed under ST on the PY column (because PY was read
- *  from last year's saved breakdown, not recomputed from TB opening). */
+/** Signed PY (= opening balance) — adapter that defers to the shared
+ *  fsSignConvention.signedOpening so PY column math matches the CY column
+ *  exactly under the current head's nature. */
 function signedLedgerOpeningAmt(
   row: { opening_balance?: number | null; opening_type?: string | null },
   noteType: string,
 ): number {
-  const ob = Math.abs(Number(row.opening_balance ?? 0));
-  if (ob === 0) return 0;
-  const isDr = String(row.opening_type ?? "").toUpperCase() === "DR";
-  const nature: "DR" | "CR" = NOTE_NATURE[noteType] ?? "CR";
-  if (nature === "CR") return isDr ? -ob : +ob;
-  return isDr ? +ob : -ob;
+  return signedOpening(row.opening_balance, row.opening_type, noteType);
 }
 
 // ── Note → FS-code reverse map ────────────────────────────────────────────────
