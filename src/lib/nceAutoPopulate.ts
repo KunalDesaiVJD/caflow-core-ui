@@ -2336,6 +2336,32 @@ export async function nceAutoPopulate(
         }
         return undefined;
       };
+      // Pre-compute the AUTHORITATIVE TB amount for each manual row.
+      // The note's breakup amount must equal the TB amount for that exact
+      // ledger — the COA Mapping ledger total. CY TB first (current
+      // engagement), then PY shell TB for the PY column. Previous fix
+      // summed wantedV + bareV + otherV which **inflated** values when
+      // prior buggy re-syncs had left stale values across multiple keys
+      // (OM REALTY round 5 symptom: AU SFB PY 7,99,55,015 ballooned to
+      // 39,97,75,075 = 5×, exactly the count of stale key buckets that
+      // had been written over time). The TB amount, by contrast, can
+      // never inflate — it's the ground truth.
+      const tbAmountFor = (cr: NCECustomRow, col: "cy" | "py"): number => {
+        const ejected = ((cr as any).ejectedSource as string | undefined)?.trim();
+        const lbl     = (cr.label || "").trim();
+        const candidates: string[] = [];
+        if (ejected) candidates.push(ejected);
+        if (lbl && lbl !== ejected) candidates.push(lbl);
+        if (candidates.length === 0) return 0;
+        const src = col === "cy" ? tb : pyTb;
+        for (const name of candidates) {
+          const nm = name.toLowerCase();
+          const row = src.find(r => (r.ledger_name || "").trim().toLowerCase() === nm);
+          if (!row) continue;
+          return ledgerAmt(row.closing_balance);
+        }
+        return 0;
+      };
       for (const cr of leakFreeCustomRows) {
         if (cr.source !== "manual") continue;
         const code = resolveCode(cr);
@@ -2346,21 +2372,17 @@ export async function nceAutoPopulate(
         if (!side) continue;            // ledger no longer ours — handled by the purge above
         const wantedSfx = `_${side}`;
         const otherSfx  = side === "lt" ? "_st" : "_lt";
-        for (const buf of [mergedCy, mergedPy]) {
-          const bareV   = Number(buf[cr.id] ?? 0);
-          const wantedV = Number(buf[cr.id + wantedSfx] ?? 0);
-          const otherV  = Number(buf[cr.id + otherSfx]  ?? 0);
-          // Merge bare-key + any stray other-side value onto the correct side.
-          // If the auditor explicitly typed an amount on this side already,
-          // sum rather than overwrite — so a partial Move-to that landed half
-          // the value here, half on the bare key, ends up correct.
-          const total = wantedV + bareV + otherV;
-          if (Math.abs(total) < 0.005) {
+        const cyTb = tbAmountFor(cr, "cy");
+        const pyTb = tbAmountFor(cr, "py");
+        for (const [buf, tbVal] of [[mergedCy, cyTb], [mergedPy, pyTb]] as Array<[Record<string, number>, number]>) {
+          // The note's row must match the TB ledger amount, not a sum of
+          // whatever residue past bugs left in (bare, _lt, _st).
+          if (Math.abs(tbVal) < 0.005) {
             delete buf[cr.id];
             delete buf[cr.id + wantedSfx];
             delete buf[cr.id + otherSfx];
           } else {
-            buf[cr.id + wantedSfx] = total;
+            buf[cr.id + wantedSfx] = tbVal;
             delete buf[cr.id];
             delete buf[cr.id + otherSfx];
           }
