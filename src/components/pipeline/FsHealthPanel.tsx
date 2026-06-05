@@ -3,14 +3,19 @@
  * are internally consistent.
  *
  * Shows at the top of the Stage 7 (Financial Statements) view. For every NCE
- * code that has a note, compares:
- *   • Note total (getNCENoteFaceTotal)
- *   • BS / P&L face value (nceCyAmounts)
+ * code that has a note, compares the three independent paths:
+ *   • COA Total      — fresh from TB × coa_mapping × signedBalance (the truth)
+ *   • Note Total     — getNCENoteFaceTotal (Phase 3 canonical aggregator)
+ *   • BS / P&L Face  — nceCyAmounts / ncePyAmounts (what the stat card displays)
  *
- * Failure modes surfaced:
- *   • "✓ All N notes reconcile" — green banner
- *   • "X notes off" — yellow / red banner with click-through to the offending
- *     row of the Reconciliation table.
+ *   plus the Phase 4 Manual Delta = Note Total - COA Total, which makes
+ *   legitimate auditor adjustments (manual rows like "Provision for SCN
+ *   demand") VISIBLE rather than confused with a reconciliation bug.
+ *
+ * Failure modes surfaced (worst-of-CY-PY):
+ *   • "✓ All N notes reconcile"  — green banner, no manual adjustments
+ *   • "N reconcile + M with manual adjustments"  — green banner, amber pill
+ *   • "X notes off"              — yellow / red banner with details table
  *
  * This is the answer to the user's question "how do I know future code
  * changes will not silently break my BS balance" — every new code path that
@@ -18,7 +23,7 @@
  * surfaces the drift on the very next page load.
  */
 import { useMemo, useState } from "react";
-import { ChevronDown, ChevronUp, AlertCircle, CheckCircle2, AlertTriangle } from "lucide-react";
+import { ChevronDown, ChevronUp, AlertCircle, CheckCircle2, AlertTriangle, Info } from "lucide-react";
 import { validateFSReconciliation, type ReconRow, NCE_LIAB_CODE_SET } from "@/lib/fsReconciliation";
 
 interface Props {
@@ -28,6 +33,11 @@ interface Props {
   /** The same BS face maps used by the surrounding component (nceCyAmounts / ncePyAmounts) */
   bsFaceCy:        Record<string, number>;
   bsFacePy:        Record<string, number>;
+  /** Phase 4 — COA Mapping line-item totals computed fresh from TB × signed
+   *  mapping. When supplied the panel renders the three-way breakdown and
+   *  separates "manual adjustment" from "drift". When undefined the panel
+   *  falls back to two-way (Note vs BS face) behaviour. */
+  coaTotals?:      Record<string, { cy: number; py: number }>;
   /** Hide the panel entirely if the engagement isn't NCE (Corporate has its own checks) */
   visible:         boolean;
 }
@@ -38,7 +48,7 @@ function fmtINR(n: number): string {
   return sign + abs.toLocaleString("en-IN");
 }
 
-export default function FsHealthPanel({ nceNotesByType, bsFaceCy, bsFacePy, visible }: Props) {
+export default function FsHealthPanel({ nceNotesByType, bsFaceCy, bsFacePy, coaTotals, visible }: Props) {
   const [open, setOpen] = useState(false);
 
   const result = useMemo(() => {
@@ -48,11 +58,13 @@ export default function FsHealthPanel({ nceNotesByType, bsFaceCy, bsFacePy, visi
       bsFaceCy,
       bsFacePy,
       liabCodes: NCE_LIAB_CODE_SET,
+      coaTotals,
     });
-  }, [visible, nceNotesByType, bsFaceCy, bsFacePy]);
+  }, [visible, nceNotesByType, bsFaceCy, bsFacePy, coaTotals]);
 
   if (!visible || !result) return null;
 
+  const manualCount = result.rows.filter(r => r.status === "manual").length;
   const tone =
     result.severeCount > 0 ? "severe"
   : result.minorCount  > 0 ? "minor"
@@ -73,18 +85,45 @@ export default function FsHealthPanel({ nceNotesByType, bsFaceCy, bsFacePy, visi
   : tone === "minor"  ? AlertTriangle
                       : CheckCircle2;
 
-  const offenders = result.rows
+  // Rows worth showing in the expanded table: every drift row + every
+  // manual-adjustment row (so auditors can see WHICH heads carry their
+  // overrides). Sorted by absolute drift first, then manual size.
+  const headlineRows = result.rows
     .filter(r => r.status !== "ok")
-    .sort((a, b) => Math.max(Math.abs(b.delta.cy), Math.abs(b.delta.py))
-                  - Math.max(Math.abs(a.delta.cy), Math.abs(a.delta.py)));
+    .sort((a, b) => {
+      const aWorst = Math.max(Math.abs(a.delta.cy), Math.abs(a.delta.py));
+      const bWorst = Math.max(Math.abs(b.delta.cy), Math.abs(b.delta.py));
+      if (aWorst !== bWorst) return bWorst - aWorst;
+      const aMan = Math.max(Math.abs(a.manualDelta.cy), Math.abs(a.manualDelta.py));
+      const bMan = Math.max(Math.abs(b.manualDelta.cy), Math.abs(b.manualDelta.py));
+      return bMan - aMan;
+    });
+
+  const rowTone = (r: ReconRow): string => {
+    switch (r.status) {
+      case "drift_severe": return "text-red-700 font-medium";
+      case "drift_minor":  return "text-amber-700";
+      case "manual":       return "text-amber-700";
+      default:             return "";
+    }
+  };
 
   return (
     <div className={`rounded-md border px-3.5 py-2.5 mb-3 ${containerCls}`}>
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 text-sm font-semibold">
           <Icon className="h-4 w-4 shrink-0" />
-          {tone === "ok" && (
-            <span>FS Health: {okCount}/{total} notes reconcile · all sub-totals, totals, BS face agree</span>
+          {tone === "ok" && manualCount === 0 && (
+            <span>FS Health: {okCount}/{total} notes reconcile · COA, Notes and BS face all agree</span>
+          )}
+          {tone === "ok" && manualCount > 0 && (
+            <span>
+              FS Health: {okCount - manualCount}/{total} reconcile cleanly ·{" "}
+              <span className="text-amber-700">
+                {manualCount} with manual adjustment{manualCount === 1 ? "" : "s"}
+              </span>{" "}
+              (legitimate audit additions)
+            </span>
           )}
           {tone === "minor" && (
             <span>FS Health: {result.minorCount} note{result.minorCount === 1 ? "" : "s"} with minor drift (≤ ₹100) — rounding only, safe to ignore</span>
@@ -93,53 +132,86 @@ export default function FsHealthPanel({ nceNotesByType, bsFaceCy, bsFacePy, visi
             <span>FS Health: {result.severeCount} note{result.severeCount === 1 ? "" : "s"} have drift &gt; ₹100 — totals do NOT agree</span>
           )}
         </div>
-        {offenders.length > 0 && (
+        {headlineRows.length > 0 && (
           <button
             type="button"
             onClick={() => setOpen(o => !o)}
             className="text-xs underline-offset-2 hover:underline flex items-center gap-1"
           >
-            {open ? "Hide" : "Show"} details
+            {open ? "Hide" : "Show"} breakdown
             {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
           </button>
         )}
       </div>
-      {open && offenders.length > 0 && (
+      {open && headlineRows.length > 0 && (
         <div className="mt-2 text-xs">
           <table className="w-full">
             <thead>
               <tr className="text-left text-[10px] uppercase tracking-wide opacity-70 border-b border-current/30">
-                <th className="py-1 pr-2 font-medium">Note</th>
-                <th className="py-1 pr-2 font-medium text-right">Note total CY</th>
-                <th className="py-1 pr-2 font-medium text-right">BS face CY</th>
-                <th className="py-1 pr-2 font-medium text-right">Δ CY</th>
-                <th className="py-1 pr-2 font-medium text-right">Δ PY</th>
+                <th rowSpan={2} className="py-1 pr-2 font-medium align-bottom">Note</th>
+                <th colSpan={4} className="py-1 px-2 font-medium text-center border-b border-current/20">CY</th>
+                <th colSpan={4} className="py-1 px-2 font-medium text-center border-b border-current/20">PY</th>
+                <th rowSpan={2} className="py-1 pr-2 font-medium align-bottom text-center">Status</th>
+              </tr>
+              <tr className="text-left text-[10px] uppercase tracking-wide opacity-70 border-b border-current/30">
+                <th className="py-1 pr-2 font-medium text-right">COA</th>
+                <th className="py-1 pr-2 font-medium text-right">Manual</th>
+                <th className="py-1 pr-2 font-medium text-right">Note</th>
+                <th className="py-1 pr-2 font-medium text-right">Face</th>
+                <th className="py-1 pr-2 font-medium text-right">COA</th>
+                <th className="py-1 pr-2 font-medium text-right">Manual</th>
+                <th className="py-1 pr-2 font-medium text-right">Note</th>
+                <th className="py-1 pr-2 font-medium text-right">Face</th>
               </tr>
             </thead>
             <tbody>
-              {offenders.map(r => (
+              {headlineRows.map(r => (
                 <tr key={`${r.code}-${r.col ?? ""}`} className="border-b border-current/10 last:border-0">
                   <td className="py-1 pr-2">
                     {r.label}
                     {r.col && <span className="text-[10px] opacity-70 ml-1">({r.col.toUpperCase()})</span>}
                   </td>
-                  <td className="py-1 pr-2 text-right tabular-nums">{fmtINR(r.noteTotal.cy)}</td>
-                  <td className="py-1 pr-2 text-right tabular-nums">{fmtINR(r.bsFace.cy)}</td>
-                  <td className={`py-1 pr-2 text-right tabular-nums font-medium ${Math.abs(r.delta.cy) > 100 ? "text-red-700" : ""}`}>
-                    {r.delta.cy ? fmtINR(r.delta.cy) : "—"}
+                  {/* CY columns */}
+                  <td className="py-1 pr-2 text-right tabular-nums opacity-80">{fmtINR(r.coaTotal.cy)}</td>
+                  <td className={`py-1 pr-2 text-right tabular-nums ${Math.abs(r.manualDelta.cy) > 1 ? "text-amber-700 font-medium" : "opacity-50"}`}>
+                    {Math.abs(r.manualDelta.cy) > 1 ? (r.manualDelta.cy > 0 ? "+" : "") + fmtINR(r.manualDelta.cy) : "—"}
                   </td>
-                  <td className={`py-1 pr-2 text-right tabular-nums font-medium ${Math.abs(r.delta.py) > 100 ? "text-red-700" : ""}`}>
-                    {r.delta.py ? fmtINR(r.delta.py) : "—"}
+                  <td className="py-1 pr-2 text-right tabular-nums">{fmtINR(r.noteTotal.cy)}</td>
+                  <td className="py-1 pr-2 text-right tabular-nums opacity-80">{fmtINR(r.bsFace.cy)}</td>
+                  {/* PY columns */}
+                  <td className="py-1 pr-2 text-right tabular-nums opacity-80">{fmtINR(r.coaTotal.py)}</td>
+                  <td className={`py-1 pr-2 text-right tabular-nums ${Math.abs(r.manualDelta.py) > 1 ? "text-amber-700 font-medium" : "opacity-50"}`}>
+                    {Math.abs(r.manualDelta.py) > 1 ? (r.manualDelta.py > 0 ? "+" : "") + fmtINR(r.manualDelta.py) : "—"}
+                  </td>
+                  <td className="py-1 pr-2 text-right tabular-nums">{fmtINR(r.noteTotal.py)}</td>
+                  <td className="py-1 pr-2 text-right tabular-nums opacity-80">{fmtINR(r.bsFace.py)}</td>
+                  <td className={`py-1 pr-2 text-center text-[10px] ${rowTone(r)}`}>
+                    {r.status === "drift_severe" && <span>drift</span>}
+                    {r.status === "drift_minor"  && <span>minor</span>}
+                    {r.status === "manual"       && (
+                      <span title="Auditor added manual rows on top of COA total — kept as legitimate audit adjustment.">
+                        manual adj.
+                      </span>
+                    )}
+                    {r.status === "ok"           && <span>—</span>}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <p className="mt-2 text-[10px] opacity-70 leading-relaxed">
-            Δ &gt; 0 means the note shows MORE than the BS face. Δ &lt; 0 means LESS. Any non-zero Δ indicates one of: (a) a customRow's
-            <code className="px-1 mx-0.5 bg-current/10 rounded">sources[]</code> array not summed by one aggregator, (b) a stale
-            cached total, or (c) a sign-convention mismatch. Hard-refresh first; if the drift persists, the note must be re-corrected from COA mapping.
-          </p>
+          <div className="mt-2 flex items-start gap-1.5 text-[10px] opacity-80 leading-relaxed">
+            <Info className="h-3 w-3 mt-0.5 shrink-0" />
+            <span>
+              <strong>COA</strong> = signed TB × current COA mapping (the source of truth).{" "}
+              <strong>Manual</strong> = Note − COA. Positive Manual values are
+              legitimate audit adjustments (e.g. provisions, SCN demand) the auditor
+              has added inside the Note; they should NOT be removed.{" "}
+              <strong>Note</strong> = the underlying note's grand total.{" "}
+              <strong>Face</strong> = what the BS / P&amp;L stat card displays.{" "}
+              Any drift between Note and Face is a code-path bug — Re-correct from
+              COA mapping to clear it.
+            </span>
+          </div>
         </div>
       )}
     </div>

@@ -25,7 +25,8 @@
  *     • Powers the FsHealthPanel banner at the top of the FS view
  */
 import { supabase } from "@/integrations/supabase/client";
-import { getNCENoteFaceTotal, NCE_CODE_TO_NOTE } from "@/lib/nceAutoPopulate";
+import { getNCENoteFaceTotal, NCE_CODE_TO_NOTE, NCE_NOTE_FS_MAP } from "@/lib/nceAutoPopulate";
+import { signedBalance, signedOpening } from "@/lib/fsSignConvention";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -40,14 +41,24 @@ export interface ReconRow {
   col?:        "lt" | "st";
   /** Human-readable label so the FS Health panel can name the offender */
   label:       string;
+  /** 2026-06-05 Phase 4 — COA Mapping line-item total, computed fresh from
+   *  TB × coa_mapping using signedBalance/signedOpening. This is the
+   *  ANCHOR of the three-way reconciliation. */
+  coaTotal:    { cy: number; py: number };
   /** Engagement-side note total = what getNCENoteFaceTotal returns */
   noteTotal:   { cy: number; py: number };
   /** What the BS / P&L stat card actually displays (post-applyNCENoteTotal) */
   bsFace:      { cy: number; py: number };
-  /** Signed deltas (noteTotal - bsFace) — direction is preserved */
+  /** Phase 4 — Manual delta = noteTotal - coaTotal. POSITIVE means the
+   *  auditor added manual rows that aren't in COA (legitimate audit
+   *  adjustments). NEGATIVE would mean the note is UNDER-reporting COA. */
+  manualDelta: { cy: number; py: number };
+  /** Signed BS-face deltas (noteTotal - bsFace) — direction preserved.
+   *  Phase 4: this stays the "does BS match the note" check. */
   delta:       { cy: number; py: number };
-  /** Worst-of-CY-and-PY classification */
-  status:      ReconStatus;
+  /** Worst-of-CY-and-PY classification of `delta` (note vs BS face).
+   *  "manual" classifies "everything reconciles AND auditor added rows". */
+  status:      ReconStatus | "manual";
 }
 
 export interface ReconResult {
@@ -76,6 +87,11 @@ interface ValidateArgs {
   /** Tolerance — anything <= ₹1 is silently OK (rounding); >= ₹100 is severe */
   toleranceMinor?: number;
   toleranceSevere?: number;
+  /** Phase 4 — pre-computed COA totals keyed by FS code. Optional; when
+   *  absent the panel falls back to coaTotal = noteTotal (so manualDelta
+   *  reads 0). Pass the result of computeCOATotals here to enable the
+   *  three-way breakdown. */
+  coaTotals?:    Record<string, { cy: number; py: number }>;
 }
 
 export function validateFSReconciliation(args: ValidateArgs): ReconResult {
@@ -105,20 +121,33 @@ export function validateFSReconciliation(args: ValidateArgs): ReconResult {
     const faceCy = args.liabCodes.has(code) ? -rawCy : rawCy;
     const facePy = args.liabCodes.has(code) ? -rawPy : rawPy;
 
+    // 2026-06-05 Phase 4 — three-way breakdown anchored on the COA Mapping
+    // line-item total (computed fresh from TB × signed mapping by
+    // computeCOATotals). manualDelta = noteTotal - coaTotal makes the
+    // auditor's legitimate manual additions VISIBLE rather than confused
+    // with drift.
+    const coaTotal = args.coaTotals?.[code] ?? { cy: ntCy, py: ntPy };
+    const mdCy = Math.round((ntCy - coaTotal.cy) * 100) / 100;
+    const mdPy = Math.round((ntPy - coaTotal.py) * 100) / 100;
+
     const dCy = Math.round((ntCy - faceCy) * 100) / 100;
     const dPy = Math.round((ntPy - facePy) * 100) / 100;
-    const worst = Math.max(Math.abs(dCy), Math.abs(dPy));
-    const status: ReconStatus =
-      worst < tolMinor   ? "ok"
-    : worst < tolSevere  ? "drift_minor"
-                         : "drift_severe";
+    const worst         = Math.max(Math.abs(dCy), Math.abs(dPy));
+    const manualPresent = Math.max(Math.abs(mdCy), Math.abs(mdPy)) > tolMinor;
+    let status: ReconStatus | "manual";
+    if (worst >= tolSevere)      status = "drift_severe";
+    else if (worst >= tolMinor)  status = "drift_minor";
+    else if (manualPresent)      status = "manual";
+    else                         status = "ok";
 
     out.push({
       code, noteType, col,
       label: NCE_NOTE_LABEL[code] || noteType,
-      noteTotal: { cy: ntCy, py: ntPy },
-      bsFace:    { cy: faceCy, py: facePy },
-      delta:     { cy: dCy,   py: dPy   },
+      coaTotal,
+      noteTotal:   { cy: ntCy, py: ntPy },
+      bsFace:      { cy: faceCy, py: facePy },
+      manualDelta: { cy: mdCy,  py: mdPy  },
+      delta:       { cy: dCy,   py: dPy   },
       status,
     });
   }
@@ -132,6 +161,104 @@ export function validateFSReconciliation(args: ValidateArgs): ReconResult {
     minorCount,
     computedAt: new Date().toISOString(),
   };
+}
+
+// ─── computeCOATotals — anchor for the three-way reconciliation ─────────────
+//
+// Sums the signed TB amount of every ledger mapped to each FS code, using
+// the canonical signedBalance / signedOpening from fsSignConvention. The
+// returned totals are what the COA Mapping page displays at the bottom of
+// each line item — i.e. the "truth" extracted directly from Tally.
+//
+// The function is pure (no DB calls) — pass the engagement's trial balance
+// rows and coa_mapping object. The caller (PipelineFinancialStatements)
+// already loads both for other purposes, so this just rehashes them.
+//
+// Pattern A codes: codes that own LT/ST splits (NCE_LTB/NCE_STB etc.) are
+// computed independently from the ledgers whose mapping.code matches. The
+// caller picks the right key — for borrowings we expose BOTH NCE_LTB and
+// NCE_STB so the panel can display each row separately.
+//
+// Sign convention follows the FS code's natural side (FS_CODE_NATURE).
+// Liabilities and equity stay positive when the ledger is Cr; the BS face
+// flip-sign step in validateFSReconciliation already brings them onto the
+// same axis as the note total.
+
+export interface TBRowLike {
+  ledger_name:      string;
+  closing_balance?: number | null;
+  balance_type?:    string | null;
+  opening_balance?: number | null;
+  opening_type?:    string | null;
+}
+
+export interface COAMappingLike {
+  [ledger_name: string]: { code: string } | undefined;
+}
+
+/** Build a code → noteType reverse index from NCE_NOTE_FS_MAP so each
+ *  ledger's contribution is signed under the NOTE's natural side (the
+ *  same convention nceAutoPopulate uses everywhere). */
+function buildCodeToNoteType(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [noteType, fs] of Object.entries(NCE_NOTE_FS_MAP)) {
+    for (const code of (fs.all ?? [])) out[code] = noteType;
+    for (const code of (fs.lt  ?? [])) out[code] = noteType;
+    for (const code of (fs.st  ?? [])) out[code] = noteType;
+  }
+  return out;
+}
+
+export function computeCOATotals(
+  tb:         TBRowLike[],
+  pyTb:       TBRowLike[],
+  coaMapping: COAMappingLike,
+  pyCoaMap?:  COAMappingLike,
+): Record<string, { cy: number; py: number }> {
+  const codeToNoteType = buildCodeToNoteType();
+  const out: Record<string, { cy: number; py: number }> = {};
+
+  // CY pass — every CY-TB ledger contributes signed closing under the
+  // CURRENT mapping. Captured into out[mapping.code] = { cy: Σ, py: Σ_opening }.
+  for (const row of tb) {
+    const mapped = coaMapping[row.ledger_name];
+    if (!mapped?.code) continue;
+    const noteType = codeToNoteType[mapped.code] ?? mapped.code;
+    const cy = signedBalance(row.closing_balance, row.balance_type, noteType);
+    // PY for a CY ledger = its signed OPENING balance (= prior-year close
+    // by accounting identity). When the engagement also has a PY-shell TB,
+    // the PY pass below overrides with the shell's actual closing.
+    const py = signedOpening(row.opening_balance, row.opening_type, noteType);
+    const slot = (out[mapped.code] ||= { cy: 0, py: 0 });
+    slot.cy += cy;
+    slot.py += py;
+  }
+
+  // PY pass — for ledgers present ONLY in PY shell (CLOSED in CY), feed
+  // their PY contribution. Pre-CY ledgers handled above; here we just
+  // augment the PY column for ledgers whose CY mapping is absent (the CY
+  // pass would have written nothing for them).
+  if (pyTb.length > 0) {
+    const cySeen = new Set(tb.map(r => (r.ledger_name || "").trim().toLowerCase()));
+    for (const row of pyTb) {
+      const nm = (row.ledger_name || "").trim();
+      if (!nm) continue;
+      if (cySeen.has(nm.toLowerCase())) continue; // already paired by the CY pass
+      const mapped = pyCoaMap?.[nm] ?? coaMapping[nm];
+      if (!mapped?.code) continue;
+      const noteType = codeToNoteType[mapped.code] ?? mapped.code;
+      const slot = (out[mapped.code] ||= { cy: 0, py: 0 });
+      slot.py += signedBalance(row.closing_balance, row.balance_type, noteType);
+    }
+  }
+
+  // Round each total to 2 decimals so the panel comparison aligns with the
+  // signed-TB display elsewhere.
+  for (const k of Object.keys(out)) {
+    out[k].cy = Math.round(out[k].cy * 100) / 100;
+    out[k].py = Math.round(out[k].py * 100) / 100;
+  }
+  return out;
 }
 
 // ─── Optional: persist severe drift to fs_reconciliation_log ──────────────────
