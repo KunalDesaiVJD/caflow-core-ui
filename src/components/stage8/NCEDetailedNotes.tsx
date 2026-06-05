@@ -1141,7 +1141,7 @@ function PatternBTable({
                 </TableRow>
               ) : (() => {
                 const hasAttachedB = attachedHere.length > 0;
-                const hasSrcsB = (cySources[row.id]?.filter(s => s.amountCy !== 0).length ?? 0) > 0;
+                const hasSrcsB = (cySources[row.id]?.filter(s => Number(s.amountCy ?? 0) !== 0 || Number((s as any).amountPy ?? 0) !== 0).length ?? 0) > 0;
                 const showToggleB = hasAttachedB || hasSrcsB;
                 const isOpenB = openSources.has(row.id);
                 // Safety net: subtract any overlap where the SAME ledger is
@@ -1236,7 +1236,7 @@ function PatternBTable({
 
               {/* Inline source-ledger sub-rows for static rows */}
               {!row.isSectionHeader && !row.isTotal && openSources.has(row.id) &&
-                cySources[row.id]?.filter(s => s.amountCy !== 0).map((s, i) => {
+                cySources[row.id]?.filter(s => Number(s.amountCy ?? 0) !== 0 || Number((s as any).amountPy ?? 0) !== 0).map((s, i) => {
                   const slKey = `${row.id}::${s.ledger}`;
                   const slLabel = sourceLabelOverrides[slKey] ?? s.ledger;
                   return (
@@ -1680,7 +1680,7 @@ function PatternATable({
               ) : (() => {
                 /* Aggregate values: own static value + any attached custom rows */
                 const hasAttachedA = attachedHere.length > 0;
-                const hasSrcsA     = (cySources[row.id]?.filter(s => s.amountCy !== 0).length ?? 0) > 0;
+                const hasSrcsA     = (cySources[row.id]?.filter(s => Number(s.amountCy ?? 0) !== 0 || Number((s as any).amountPy ?? 0) !== 0).length ?? 0) > 0;
                 const showToggleA  = hasSrcsA || hasAttachedA;
                 const isOpenA      = openSources.has(row.id);
 
@@ -1783,7 +1783,7 @@ function PatternATable({
 
               {/* Inline source-ledger sub-rows for Pattern A static rows */}
               {!row.isSectionHeader && !row.isTotal && openSources.has(row.id) &&
-                cySources[row.id]?.filter(s => s.amountCy !== 0).map((s, i) => {
+                cySources[row.id]?.filter(s => Number(s.amountCy ?? 0) !== 0 || Number((s as any).amountPy ?? 0) !== 0).map((s, i) => {
                   const slKey = `${row.id}::${s.ledger}`;
                   const slLabel = sourceLabelOverrides[slKey] ?? s.ledger;
                   return (

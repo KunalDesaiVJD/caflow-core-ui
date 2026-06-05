@@ -1230,6 +1230,18 @@ export async function nceAutoPopulate(
               amountCy: 0,
               amountPy: pyAmt,
             });
+            // 2026-06-05 ROOT-CAUSE FIX (SHREE HARI INFRA TDS 194Q;
+            // OM REALTY; SKYLARK + every other NCE). Previously the
+            // PY-only walk recorded the ledger in staticSources but
+            // FORGOT to feed its PY amount into newPy[matchedRowId].
+            // Result: CLOSED ledgers like "TDS 194 Q" (CY = 0,
+            // PY = Rs.18,984) silently vanished from the Note's static
+            // row PY total + BS face — even though the variance drill /
+            // COA Mapping FS recompute (which sums per-ledger FS codes
+            // directly) saw them. The drift was exactly equal to the
+            // PY-only ledger's amount. Now accumulate into newPy so the
+            // BS face = Notes total = COA Mapping FS total reconcile.
+            newPy[matchedRowId] = (newPy[matchedRowId] ?? 0) + pyAmt;
           } else {
             // No smart-match (e.g. trade_payables, where every creditor is its
             // own line). Push to unmatchedB so Stage 2 creates a customRow
@@ -2149,6 +2161,50 @@ export async function nceAutoPopulate(
     };
     purgeStale(mergedCy);
     purgeStale(mergedPy);
+
+    // ── 2026-06-05: Strip stale OPPOSITE-SIDE keys (Pattern A) ────────────
+    // SHREE HARI INFRA root cause: after the user re-mapped every borrowings
+    // ledger from NCE_STB → NCE_LTB, the rebuild correctly wrote each row's
+    // _lt key. But the OLD _st numeric value persisted because the existing
+    // purgeStale above only deletes keys whose customRow no longer exists at
+    // all — a row that flipped sides keeps its base ID, so its leftover
+    // counterpart survives every Re-sync and inflates BS face PY of
+    // Short-term borrowings (15.86 cr ghost on SHREE HARI; same class of
+    // ghost on OM REALTY / SKYLARK / every NCE re-classified ledger).
+    //
+    // For Pattern A notes, walk every active customRow: if data exists on
+    // ONE side and NOT the other, delete the opposite-side keys. Same for
+    // Pattern A static aggregate / total rows whose side has no leaves —
+    // sec_total_st, unsec_total_st, total_ab_st etc. survive the existing
+    // attachedStaticIds zeroing pass because those total IDs aren't
+    // attachedTo any customRow.
+    if (noteFs.lt || noteFs.st) {
+      const nz = (v: unknown) => Math.abs(Number(v ?? 0)) > 0.005;
+      const finalRows = [...autoRows, ...absorbedManualRows];
+      for (const cr of finalRows) {
+        const hasLt = nz(mergedCy[cr.id + "_lt"]) || nz(mergedPy[cr.id + "_lt"]);
+        const hasSt = nz(mergedCy[cr.id + "_st"]) || nz(mergedPy[cr.id + "_st"]);
+        if (hasLt && !hasSt) {
+          delete mergedCy[cr.id + "_st"];
+          delete mergedPy[cr.id + "_st"];
+        } else if (hasSt && !hasLt) {
+          delete mergedCy[cr.id + "_lt"];
+          delete mergedPy[cr.id + "_lt"];
+        }
+      }
+      // Static aggregate totals: drop *_lt or *_st when no customRow has
+      // data on that side. These IDs come from BORROWINGS_ROWS etc. — they
+      // are derived-by-formula rows whose stored value is a stale snapshot.
+      const TOTAL_IDS = ["total", "total_ab", "sec_total", "unsec_total"];
+      const sideHasAny = (sfx: "_lt" | "_st") =>
+        finalRows.some(cr => nz(mergedCy[cr.id + sfx]) || nz(mergedPy[cr.id + sfx]));
+      const ltAny = sideHasAny("_lt");
+      const stAny = sideHasAny("_st");
+      for (const t of TOTAL_IDS) {
+        if (!ltAny) { delete mergedCy[t + "_lt"]; delete mergedPy[t + "_lt"]; }
+        if (!stAny) { delete mergedCy[t + "_st"]; delete mergedPy[t + "_st"]; }
+      }
+    }
 
     // ── DUPLICATION SAFETY NET (auto-populate output) ─────────────────
     // For each static row that has both cy_sources AND a customRow attached
