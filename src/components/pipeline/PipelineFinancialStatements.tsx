@@ -3967,18 +3967,47 @@ export default function PipelineFinancialStatements({
     return false;
   })();
 
+  // ── Phase 8: Compute reconciliation result for export blocking ───────
+  // Re-use the same validator the FsHealthPanel uses. When there are severe
+  // drift rows (|delta| > ₹100), exports are blocked — the user MUST fix
+  // the drift in the Notes tab before generating a deliverable. This is the
+  // runtime invariant enforcement that makes the structural guarantee real.
+  const fsReconResult = useMemo(() => {
+    if (isNonCorporate) {
+      return validateFSReconciliation({
+        nceNotesByType,
+        bsFaceCy: nceCyAmounts,
+        bsFacePy: ncePyAmounts,
+        liabCodes: NCE_LIAB_CODE_SET,
+        coaTotals: coaTotalsByCode,
+      });
+    }
+    return null; // Corporate uses a different validator; add when needed
+  }, [isNonCorporate, nceNotesByType, nceCyAmounts, ncePyAmounts, coaTotalsByCode]);
+
+  const hasSevereDrift = (fsReconResult?.severeCount ?? 0) > 0;
+
+  // Phase 8 Step 2: persist severe drift to fs_reconciliation_log so
+  // historical drift is auditable. Fires once per mount when drift exists.
+  useEffect(() => {
+    if (fsReconResult && fsReconResult.severeCount > 0) {
+      logReconciliationDrift(engagementId, user?.id ?? null, fsReconResult).catch(() => {});
+    }
+  }, [fsReconResult?.computedAt]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Final Export Excel gate: corporate must satisfy ALL three; non-corporate
-  // entities use only the BS-balance subset (NCE has no FA note grid).
+  // entities use BS-balance + severe-drift check.
   const exportExcelBlocked: boolean = isNonCorporate
-    ? !nceBsBalanced
+    ? (!nceBsBalanced || hasSevereDrift)
     : (!corpBsBalanced || !corpBsBalancedPy || !faPyEntered);
   const exportExcelBlockReasons: string[] = [];
   if (!isNonCorporate) {
+    if (!nceBsBalanced)   exportExcelBlockReasons.push(`Balance Sheet out by ₹${Math.abs(nceBsDiff).toLocaleString("en-IN")}`);
+    if (hasSevereDrift)   exportExcelBlockReasons.push(`${fsReconResult!.severeCount} note(s) have drift > ₹100 — fix in Notes tab first`);
+  } else {
     if (!corpBsBalanced)   exportExcelBlockReasons.push(`CY Balance Sheet out by ₹${Math.abs(bsDiff).toLocaleString("en-IN")}`);
     if (!corpBsBalancedPy) exportExcelBlockReasons.push(`PY Balance Sheet out by ₹${Math.abs(bsDiffPy).toLocaleString("en-IN")}`);
     if (!faPyEntered)      exportExcelBlockReasons.push("FA Note — Previous-Year totals not entered");
-  } else if (!nceBsBalanced) {
-    exportExcelBlockReasons.push(`Balance Sheet out by ₹${Math.abs(nceBsDiff).toLocaleString("en-IN")}`);
   }
   const activeTotalAssets      = isNonCorporate ? nceTotalAssets      : totalAssets;
   // Use fsDisplayData-resolved totalELDisplay (same as bsDiff) so stat card
@@ -7210,13 +7239,16 @@ export default function PipelineFinancialStatements({
           >
             <Download size={14} /> Export Excel
           </Button>
+          {/* Phase 8: Export Word blocked when severe drift detected */}
           {isNonCorporate && (
-            // Task 1: open font picker dialog before exporting
             <Button
               variant="outline"
               size="sm"
-              className="gap-1"
-              title="Export Balance Sheet + P&L as a Big4-style Word document (.docx)"
+              className={cn("gap-1", hasSevereDrift && "opacity-60")}
+              title={hasSevereDrift
+                ? `Export Word blocked: ${fsReconResult!.severeCount} note(s) have drift > ₹100. Fix in Notes tab first.`
+                : "Export Balance Sheet + P&L as a Big4-style Word document (.docx)"}
+              disabled={hasSevereDrift}
               onClick={() => setShowNCEFontDialog(true)}
             >
               <FileText size={14} /> Export Word
