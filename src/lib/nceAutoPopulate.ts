@@ -886,6 +886,31 @@ export async function nceAutoPopulate(
 
   for (const [noteType, noteFs] of Object.entries(NCE_NOTE_FS_MAP)) {
     const prev = existing[noteType] ?? { cy: {}, py: {}, customRows: [] };
+    // ─── PHASE 7 INSTRUMENTATION (REMOVE AFTER SHREE HARI DIAGNOSIS) ───
+    // Traces the in-app sign override path on SHREE HARI's other_cl
+    // "Member Sales (Pos)" specifically. Fires for any engagement that
+    // has a customRow whose label matches /member sales/i in other_cl.
+    // The user provides browser console output; we identify the
+    // overriding line; we remove this instrumentation.
+    const _msTraceOn = noteType === "other_cl";
+    let _msId: string | null = null;
+    if (_msTraceOn) {
+      const ms = (prev.customRows || []).find(r => /member sales/i.test(r.label || ""));
+      _msId = ms ? ms.id : null;
+      if (_msId) {
+        // eslint-disable-next-line no-console
+        console.log(`[SIGN-TRACE] WP1  found Member Sales row  id=${_msId}  prev.cy[id]=${prev.cy?.[_msId]}  prev.py[id]=${prev.py?.[_msId]}  source=${ms?.source}  attachedTo=${ms?.attachedTo}  tbDerived=${(ms as any)?.tbDerived}`);
+      } else {
+        // eslint-disable-next-line no-console
+        console.log(`[SIGN-TRACE] WP1  no Member Sales customRow in other_cl prev (customRowCount=${(prev.customRows || []).length})`);
+      }
+    }
+    const _msLog = (where: string, extras?: Record<string, unknown>) => {
+      if (!_msTraceOn || !_msId) return;
+      const e = extras ? Object.entries(extras).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join("  ") : "";
+      // eslint-disable-next-line no-console
+      console.log(`[SIGN-TRACE] ${where}  ${e}`);
+    };
     // Note 4 fix: collapse duplicate MANUAL rows before processing. A pre-fix
     // runaway loop (auto walk re-creating ledgers + the "promote to manual" heal
     // converting them every cycle) accumulated the SAME ledger 10-20x as manual
@@ -1034,6 +1059,11 @@ export async function nceAutoPopulate(
     // double-counts it. Skipping any TB ledger whose name matches a manual row
     // label makes the move a TRUE re-parent: the ledger lives ONLY in the manual
     // row. Also self-heals already-duplicated saved data on the next re-sync,
+    // ─── WP2  manualRows after dedup + broader purge ───
+    _msLog("WP2  manualRows after dedup+purge", {
+      msInManualRows: manualRows.some(r => r.id === _msId),
+      manualRowsCount: manualRows.length,
+    });
     // because customRows is rebuilt as [autoRows, ...manualRows] from scratch.
     const manualLabelSet = new Set(
       manualRows
@@ -1306,6 +1336,13 @@ export async function nceAutoPopulate(
           if (Math.abs(py) > 0.005) pyByLedgerB[nmLower] = py;
         }
       }
+      // ─── WP3  pyByLedgerB / cyByLedgerB BEFORE tbRefresh wiring ───
+      _msLog("WP3  pyByLedgerB and cyByLedgerB built", {
+        pyTbLen: pyTb.length,
+        pyByLedgerB_ms: pyByLedgerB["member sales (pos)"],
+        cyByLedgerB_ms: cyByLedgerB["member sales (pos)"],
+        strict: STRICTLY_TB_DRIVEN_B.has(noteType),
+      });
       // Expose the maps to the merge step (outer scope) so manual-row CY/PY
       // values get refreshed from TB.  Only for strictly-TB-driven notes —
       // for other Pattern B notes (where users genuinely type custom amounts)
@@ -1314,6 +1351,10 @@ export async function nceAutoPopulate(
         tbRefreshCy = cyByLedgerB;
         tbRefreshPy = pyByLedgerB;
       }
+      _msLog("WP4  tbRefresh wired", {
+        tbRefreshCy_ms: tbRefreshCy?.["member sales (pos)"],
+        tbRefreshPy_ms: tbRefreshPy?.["member sales (pos)"],
+      });
       // Default attachedTo for COGS auto-mapped ledgers: every plain expense
       // ledger (Hardware Purchase, Cement Purchase, etc.) lands under
       // "Add: Purchases of raw materials" (raw_purch) by default. The
@@ -1896,9 +1937,23 @@ export async function nceAutoPopulate(
       return { ...mr, attachedTo: target.id, section: undefined };
     });
 
+    if (_msTraceOn && _msId) {
+      const msAbsorbed = absorbedManualRows.find(r => r.id === _msId);
+      _msLog("WP5  absorbedManualRows", {
+        msInAbsorbed: !!msAbsorbed,
+        msAttachedToAfter: msAbsorbed?.attachedTo,
+        autoRowsCount: autoRows.length,
+      });
+    }
+
     // ── Merge auto + manual ─────────────────────────────────────────────
     const mergedCy: Record<string, number> = { ...newCy };
     const mergedPy: Record<string, number> = { ...newPy };
+
+    _msLog("WP6  pre-restore", {
+      mergedPy_ms_before: _msId ? mergedPy[_msId] : "n/a",
+      prev_py_ms: _msId ? prev.py?.[_msId] : "n/a",
+    });
 
     // Restore manual custom row amounts
     for (const mr of absorbedManualRows) {
@@ -1908,6 +1963,11 @@ export async function nceAutoPopulate(
         if (prev.py[k] !== undefined) mergedPy[k] = prev.py[k];
       }
     }
+
+    _msLog("WP7  post-restore", {
+      mergedCy_ms: _msId ? mergedCy[_msId] : "n/a",
+      mergedPy_ms: _msId ? mergedPy[_msId] : "n/a",
+    });
 
     // STALE-MANUAL-ROW REFRESH (continued — MAHARSH INFRA fix):
     // For strictly-TB-driven Pattern B notes, after restoring manual values
@@ -1937,6 +1997,10 @@ export async function nceAutoPopulate(
       for (const cr of autoRows) {
         if (cr.attachedTo) hasChildren.add(cr.attachedTo);
       }
+      _msLog("WP8  refresh loop entered", {
+        msInHasChildren: _msId ? hasChildren.has(_msId) : "n/a",
+        absorbedCount: absorbedManualRows.length,
+      });
       let refreshedCount = 0;
       for (const mr of absorbedManualRows) {
         // Intermediate heading guard — see comment above. Skip entirely.
@@ -1945,6 +2009,12 @@ export async function nceAutoPopulate(
         if (!lbl) continue;
         const newCyVal = tbRefreshCy?.[lbl];
         const newPyVal = tbRefreshPy?.[lbl];
+        if (_msTraceOn && mr.id === _msId) {
+          _msLog("WP9  refresh on Member Sales row", {
+            lbl, newCyVal, newPyVal,
+            mergedPy_ms_before: mergedPy[mr.id],
+          });
+        }
         // newCyVal===undefined means the ledger is no longer in TB at all
         // (e.g. deleted in Tally).  In that case set the row to 0 — it would
         // otherwise hold a stale value forever.  We deliberately do NOT
@@ -1961,6 +2031,12 @@ export async function nceAutoPopulate(
           mergedPy[mr.id] = newPyVal;
         } else if (tbRefreshPy) {
           mergedPy[mr.id] = 0;
+        }
+        if (_msTraceOn && mr.id === _msId) {
+          _msLog("WP10  refresh after Member Sales write", {
+            mergedCy_ms_after: mergedCy[mr.id],
+            mergedPy_ms_after: mergedPy[mr.id],
+          });
         }
       }
       if (refreshedCount > 0) {
@@ -2047,12 +2123,28 @@ export async function nceAutoPopulate(
           // signed negative PY (written upstream by STALE-MANUAL-ROW REFRESH
           // for ledgers in STRICTLY_TB_DRIVEN_B notes) is NOT treated as
           // "empty" and overwritten with the back-fill value.
+          if (_msTraceOn && mr.id === _msId) {
+            _msLog("WP11  back-fill candidate (Pattern B)", {
+              pyAmt,
+              mergedPy_ms_before: mergedPy[mr.id],
+              guardEmpty: Math.abs(mergedPy[mr.id] ?? 0) < 0.005,
+            });
+          }
           if (Math.abs(mergedPy[mr.id] ?? 0) < 0.005) {
             mergedPy[mr.id] = pyAmt;
+          }
+          if (_msTraceOn && mr.id === _msId) {
+            _msLog("WP12  back-fill after", {
+              mergedPy_ms_after: mergedPy[mr.id],
+            });
           }
         }
       }
     }
+
+    _msLog("WP13  post back-fill", {
+      mergedPy_ms: _msId ? mergedPy[_msId] : "n/a",
+    });
 
     // Restore existing static-row user values (non-custom keys) — but ONLY
     // when auto-populate didn't find any fresh data this run. Reasoning: a
@@ -2109,9 +2201,19 @@ export async function nceAutoPopulate(
     if (pyNotes[noteType]) {
       const isCurrentlyActive = (k: string): boolean =>
         k in newCy || k in newPy || k in mergedCy || k in mergedPy;
+      if (_msTraceOn && _msId) {
+        _msLog("WP14  pre pyNotes carry-forward", {
+          mergedPy_ms: mergedPy[_msId],
+          msInMergedPy: _msId in mergedPy,
+          pyNotes_ms: (pyNotes[noteType] as Record<string, number>)?.[_msId],
+        });
+      }
       for (const [k, v] of Object.entries(pyNotes[noteType])) {
         if (!(k in mergedPy) && isCurrentlyActive(k)) mergedPy[k] = Math.abs(v);
       }
+      _msLog("WP15  post pyNotes carry-forward", {
+        mergedPy_ms: _msId ? mergedPy[_msId] : "n/a",
+      });
     }
 
     // ── Strip stale custom_* cy/py keys ────────────────────────────────────
@@ -2435,6 +2537,14 @@ export async function nceAutoPopulate(
       }
     }
 
+    if (_msTraceOn && _msId) {
+      _msLog("WP16  final out[other_cl]", {
+        mergedPy_ms_FINAL: mergedPy[_msId],
+        mergedCy_ms_FINAL: mergedCy[_msId],
+        msInLeakFree: leakFreeCustomRows.some(r => r.id === _msId),
+        leakFreeCount: leakFreeCustomRows.length,
+      });
+    }
     out[noteType] = {
       cy:         mergedCy,
       py:         mergedPy,
