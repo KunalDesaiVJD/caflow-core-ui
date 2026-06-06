@@ -3753,6 +3753,16 @@ export default function PipelineFinancialStatements({
         // EQUITY AND LIABILITIES" no longer equalled the sum of the rows
         // shown above them. Recompute the parents from the (now-authoritative)
         // leaf codes so the totals always reconcile with the displayed lines.
+        //
+        // 2026-06-06 FIX: Fold BS_EQ_RS (Corporate "Reserves & Surplus" code)
+        // into NCE_CAP when present. ALL 10 NCE clients had "Profit & Loss A/c"
+        // mapped to BS_EQ_RS instead of NCE_RES/NCE_CAP. Since NCE_LIAB_IDS
+        // doesn't include BS_EQ_RS, the P&L accumulation was missing from
+        // Total E&L, causing every NCE client's BS to be out by the net profit.
+        // This folds it into NCE_CAP (Capital Account) so it reaches the total.
+        if (out["BS_EQ_RS"] && Math.abs(out["BS_EQ_RS"]) > 0.005) {
+          out["NCE_CAP"] = (out["NCE_CAP"] || 0) + out["BS_EQ_RS"];
+        }
         out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (out[id] || 0), 0);
         out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
         return out;
@@ -3823,6 +3833,10 @@ export default function PipelineFinancialStatements({
         // See nceCyAmounts — recompute PY parents from leaf codes so the
         // PY "TOTAL ASSETS" / "TOTAL EQUITY AND LIABILITIES" rows reconcile
         // with the PY line items shown above them.
+        // 2026-06-06: Fold BS_EQ_RS into NCE_CAP for PY too (same as CY fix above).
+        if (out["BS_EQ_RS"] && Math.abs(out["BS_EQ_RS"]) > 0.005) {
+          out["NCE_CAP"] = (out["NCE_CAP"] || 0) + out["BS_EQ_RS"];
+        }
         out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (out[id] || 0), 0);
         out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
         return out;
