@@ -3760,8 +3760,15 @@ export default function PipelineFinancialStatements({
         // doesn't include BS_EQ_RS, the P&L accumulation was missing from
         // Total E&L, causing every NCE client's BS to be out by the net profit.
         // This folds it into NCE_CAP (Capital Account) so it reaches the total.
+        // IMPORTANT: zero BS_EQ_RS after folding so the NCE BS doesn't show
+        // both a Capital Account row (with the folded value) AND a separate
+        // "Reserves and surplus" row (reading the unzeroed BS_EQ_RS). The
+        // buildNCEBSRows function at line 319 renders BS_EQ_RS as its own
+        // row — if we leave it non-zero, the same money appears twice
+        // visually (even though Total only counts NCE_CAP).
         if (out["BS_EQ_RS"] && Math.abs(out["BS_EQ_RS"]) > 0.005) {
           out["NCE_CAP"] = (out["NCE_CAP"] || 0) + out["BS_EQ_RS"];
+          out["BS_EQ_RS"] = 0;  // zeroed after fold — prevents double-display
         }
         out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (out[id] || 0), 0);
         out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
@@ -3836,6 +3843,7 @@ export default function PipelineFinancialStatements({
         // 2026-06-06: Fold BS_EQ_RS into NCE_CAP for PY too (same as CY fix above).
         if (out["BS_EQ_RS"] && Math.abs(out["BS_EQ_RS"]) > 0.005) {
           out["NCE_CAP"] = (out["NCE_CAP"] || 0) + out["BS_EQ_RS"];
+          out["BS_EQ_RS"] = 0;
         }
         out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (out[id] || 0), 0);
         out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
