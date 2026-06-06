@@ -2466,19 +2466,40 @@ export default function PipelineFinancialStatements({
   // current TB × COA mapping. The result: notes always match COA mapping,
   // and the face (which reads note totals) matches notes. The COA→Notes→
   // Face chain is complete.
-  // v2: bumped after removing NCE_DEPR/PL_EXP_DEP from other_expenses
-  // codeSet — forces re-sync so depreciation ledgers are ejected from the
-  // Other Expenses note (they were double-counted with the Depreciation line).
-  const autoSyncKey = `caflow:nce_autosync_v2:${engagementId}`;
+  // v3: switched from sessionStorage (once-per-session) to a COA-mapping
+  // CONTENT HASH stored in localStorage. ROOT CAUSE of "Web Developing Fees
+  // Exp not showing": the v2 sessionStorage guard ran auto-sync only ONCE per
+  // browser session. If the auditor mapped a new ledger AFTER the first
+  // Stage 7 visit, the re-sync never ran again that session, so the new
+  // ledger never flowed into the note. The content-hash approach re-syncs
+  // whenever the COA mapping changes (compared to the last successful sync),
+  // persists across sessions, and skips needless re-runs when nothing changed.
   useEffect(() => {
     if (!isNonCorporate || !engagementId || !engagement?.financial_year) return;
-    // Only auto-sync once per session per engagement (avoid re-running on
-    // every tab switch within Stage 7). The flag is per-session (sessionStorage).
-    if (typeof window !== "undefined" && window.sessionStorage.getItem(autoSyncKey)) return;
     let cancelled = false;
     (async () => {
       try {
-        // 1. Load existing notes
+        // 0. Fetch the CURRENT coa_mapping and compute a stable content hash.
+        const { data: engRow } = await (supabase.from as any)("audit_engagements")
+          .select("coa_mapping")
+          .eq("id", engagementId)
+          .maybeSingle();
+        if (cancelled) return;
+        const coa = (engRow?.coa_mapping ?? {}) as Record<string, { code?: string }>;
+        // Deterministic hash: sorted "ledger=code" pairs joined. Changes
+        // whenever a ledger is mapped, remapped, or unmapped.
+        const hash = Object.keys(coa)
+          .sort()
+          .map(k => `${k}=${coa[k]?.code ?? ""}`)
+          .join("|");
+        const hashKey = `caflow:nce_coahash_v3:${engagementId}:${engagement.financial_year}`;
+        const lastHash = typeof window !== "undefined" ? window.localStorage.getItem(hashKey) : null;
+        if (lastHash === hash && hash.length > 0) {
+          // COA mapping unchanged since last successful sync — nothing to do.
+          return;
+        }
+
+        // 1. Load existing notes (to preserve manual rows / user edits)
         const { data: existingRows } = await (supabase.from as any)("nce_financial_notes")
           .select("note_type, cy_data, py_data")
           .eq("engagement_id", engagementId)
@@ -2522,13 +2543,13 @@ export default function PipelineFinancialStatements({
             .upsert(rows, { onConflict: "engagement_id,financial_year,note_type" });
         }
         if (cancelled) return;
-        // 4. Mark synced for this session
-        if (typeof window !== "undefined") window.sessionStorage.setItem(autoSyncKey, "1");
+        // 4. Store the COA hash so we don't re-sync until mapping changes again.
+        if (typeof window !== "undefined") window.localStorage.setItem(hashKey, hash);
         // 5. Invalidate queries so the face re-renders with fresh note data
         queryClient.invalidateQueries({ queryKey: ["nce-financial-notes", engagementId] });
-        console.log("[autoSync] NCE notes synced from COA mapping →", Object.keys(populated).length, "note types");
+        console.log("[autoSync v3] NCE notes synced from COA mapping →", Object.keys(populated).length, "note types (COA changed)");
       } catch (e) {
-        console.warn("[autoSync] Failed (non-fatal):", e);
+        console.warn("[autoSync v3] Failed (non-fatal):", e);
       }
     })();
     return () => { cancelled = true; };
