@@ -2986,13 +2986,24 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
       const populated = await nceAutoPopulate(engagementId, noteData);
       setNoteData(populated);
       await persistNotes(populated, financialYear);
+      // RC3 fix: delete non-manual fa_financial_statements rows so the Stage 2
+      // fallback in nceAutoPopulate doesn't re-inject stale FS totals on the
+      // next Re-sync call. Manual rows (is_manual=true) are kept — they were
+      // set explicitly by the auditor. Also invalidate ["fs-rows"] so the FS
+      // face's manualOverrides state reloads fresh from DB.
+      await supabase
+        .from("fa_financial_statements")
+        .delete()
+        .eq("engagement_id", engagementId)
+        .eq("is_manual", false);
+      queryClient.invalidateQueries({ queryKey: ["fs-rows", engagementId] });
       toast.success("Re-synced from COA mapping");
     } catch (e: any) {
       toast.error(`Re-sync failed: ${e?.message || e}`);
     } finally {
       setSyncing(false);
     }
-  }, [engagementId, financialYear, noteData, persistNotes]);
+  }, [engagementId, financialYear, noteData, persistNotes, queryClient]);
 
   // ── Explicit save ───────────────────────────────────────────────────────
   const handleSave = async () => {

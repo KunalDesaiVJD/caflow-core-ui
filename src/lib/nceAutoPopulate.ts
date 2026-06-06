@@ -1444,7 +1444,15 @@ export async function nceAutoPopulate(
         || Object.values(newCy).some(v => Math.abs(v) > 0.005)
         || Object.values(newPy).some(v => Math.abs(v) > 0.005)
         || manualHasAmountB;
-      if (!hasData) {
+      // RC1 fix: Skip Stage 2 fa_financial_statements fallback when COA mapping
+      // is empty. If coaMapping has no entries, Stage 1 found nothing NOT because
+      // this note lacks ledgers but because NOTHING is mapped at all. Using
+      // fsByCode (stale fa_financial_statements rows) re-injects old saved amounts
+      // into notes, causing the BS face to show phantom data even with empty COA.
+      // Fallback is only useful when COA is mapped but no ledgers happen to belong
+      // to this particular note — allow it only in that case.
+      const coaHasEntries = Object.keys(coaMapping).length > 0;
+      if (!hasData && coaHasEntries) {
         let fsCY = 0, fsPY = 0;
         for (const code of noteFs.all) {
           fsCY += fsByCode[code]?.cy ?? 0;
@@ -1906,7 +1914,10 @@ export async function nceAutoPopulate(
         || Object.values(newCy).some(v => Math.abs(v) > 0.005)
         || Object.values(newPy).some(v => Math.abs(v) > 0.005)
         || manualHasAmount;
-      if (!hasData) {
+      // RC1 fix (Pattern A): same guard as Pattern B above — skip Stage 2
+      // fa_financial_statements fallback when COA mapping is empty to prevent
+      // stale saved FS amounts from re-appearing in notes after COA is cleared.
+      if (!hasData && coaHasEntries) {
         let ltCY = 0, ltPY = 0, stCY = 0, stPY = 0;
         for (const code of (noteFs.lt ?? [])) { ltCY += fsByCode[code]?.cy ?? 0; ltPY += fsByCode[code]?.py ?? 0; }
         for (const code of (noteFs.st ?? [])) { stCY += fsByCode[code]?.cy ?? 0; stPY += fsByCode[code]?.py ?? 0; }

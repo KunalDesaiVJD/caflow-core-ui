@@ -4637,9 +4637,24 @@ export default function PipelineFinancialStatements({
         .upsert(rows, { onConflict: "engagement_id,financial_year,note_type" });
       if (saveErr) throw saveErr;
 
-      // 4. Invalidate the FS face query + the notes query so the next render
-      //    picks up the corrected totals.
+      // 4. Delete non-manual fa_financial_statements rows so the Stage 2
+      //    fallback in nceAutoPopulate doesn't re-inject stale FS totals on the
+      //    next Re-correct call. Manual overrides (is_manual=true) are kept —
+      //    they were set explicitly by the auditor and must survive re-correction.
+      await supabase
+        .from("fa_financial_statements")
+        .delete()
+        .eq("engagement_id", engagementId)
+        .eq("is_manual", false);
+
+      // 5. Invalidate the FS face query + the notes query so the next render
+      //    picks up the corrected totals. Also invalidate fs-rows so the
+      //    manualOverrides state reloads from DB (RC2 fix: previously stale
+      //    manualOverrides persisted after Re-correct because fs-rows wasn't
+      //    invalidated, causing manual-override amounts to keep showing even
+      //    for codes where notes had already been rebuilt to 0).
       queryClient.invalidateQueries({ queryKey: ["nce-financial-notes", engagementId] });
+      queryClient.invalidateQueries({ queryKey: ["fs-rows", engagementId] });
       queryClient.invalidateQueries({ queryKey: ["engagement", engagementId] });
 
       toast.success("Financial Statements re-corrected from COA Mapping");
