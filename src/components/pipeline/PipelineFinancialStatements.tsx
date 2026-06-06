@@ -3766,9 +3766,26 @@ export default function PipelineFinancialStatements({
         // buildNCEBSRows function at line 319 renders BS_EQ_RS as its own
         // row — if we leave it non-zero, the same money appears twice
         // visually (even though Total only counts NCE_CAP).
+        // Fold corporate/orphan codes into their NCE equivalents so they
+        // reach the NCE BS totals. Without these folds, ledgers mapped to
+        // non-NCE codes silently drop out of Total Assets / Total E&L.
+        // BS_EQ_RS → NCE_CAP: "Profit & Loss A/c" (Tally) = Capital Account in partnerships.
         if (out["BS_EQ_RS"] && Math.abs(out["BS_EQ_RS"]) > 0.005) {
           out["NCE_CAP"] = (out["NCE_CAP"] || 0) + out["BS_EQ_RS"];
-          out["BS_EQ_RS"] = 0;  // zeroed after fold — prevents double-display
+          out["BS_EQ_RS"] = 0;
+        }
+        // NCE_DEPR → NCE_PPE: Accumulated depreciation reduces the net block.
+        // ALL 10 NCE clients have fixed-asset ledgers (TV, CCTV, Furniture, etc.)
+        // mapped to NCE_DEPR which is NOT in NCE_ASSET_IDS → the debit sat on
+        // the BS without reaching Total Assets, causing BS diff = depreciation.
+        if (out["NCE_DEPR"] && Math.abs(out["NCE_DEPR"]) > 0.005) {
+          out["NCE_PPE"] = (out["NCE_PPE"] || 0) + out["NCE_DEPR"];
+          out["NCE_DEPR"] = 0;
+        }
+        // NCE_INTG (Intangible Assets) → same treatment if present
+        if (out["NCE_INTG"] && Math.abs(out["NCE_INTG"]) > 0.005) {
+          out["NCE_PPE"] = (out["NCE_PPE"] || 0) + out["NCE_INTG"];
+          out["NCE_INTG"] = 0;
         }
         out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (out[id] || 0), 0);
         out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
@@ -3840,10 +3857,18 @@ export default function PipelineFinancialStatements({
         // See nceCyAmounts — recompute PY parents from leaf codes so the
         // PY "TOTAL ASSETS" / "TOTAL EQUITY AND LIABILITIES" rows reconcile
         // with the PY line items shown above them.
-        // 2026-06-06: Fold BS_EQ_RS into NCE_CAP for PY too (same as CY fix above).
+        // 2026-06-06: Fold orphan codes into NCE equivalents for PY too.
         if (out["BS_EQ_RS"] && Math.abs(out["BS_EQ_RS"]) > 0.005) {
           out["NCE_CAP"] = (out["NCE_CAP"] || 0) + out["BS_EQ_RS"];
           out["BS_EQ_RS"] = 0;
+        }
+        if (out["NCE_DEPR"] && Math.abs(out["NCE_DEPR"]) > 0.005) {
+          out["NCE_PPE"] = (out["NCE_PPE"] || 0) + out["NCE_DEPR"];
+          out["NCE_DEPR"] = 0;
+        }
+        if (out["NCE_INTG"] && Math.abs(out["NCE_INTG"]) > 0.005) {
+          out["NCE_PPE"] = (out["NCE_PPE"] || 0) + out["NCE_INTG"];
+          out["NCE_INTG"] = 0;
         }
         out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (out[id] || 0), 0);
         out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
