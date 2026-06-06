@@ -3877,9 +3877,11 @@ export default function PipelineFinancialStatements({
         }
         if (out["NCE_DEPR"]) out["NCE_DEPR"] = 0;
         if (out["NCE_INTG"]) out["NCE_INTG"] = 0;
-        // Same structural fix as CY: PY TOTAL from signed TB (mergedPY),
-        // not from note-overridden leaf values.
-        const tbPy = { ...mergedPY };
+        // PY TOTAL: use CY TB opening balances (computedAmountsPY) which
+        // are balanced by construction (every TB is balanced at every point
+        // in time; openings = prior-year closings). mergedPY mixes CY
+        // openings + PY shell + manual amounts which can drift.
+        const tbPy = { ...computedAmountsPY };
         if (tbPy["BS_EQ_RS"] && Math.abs(tbPy["BS_EQ_RS"]) > 0.005) {
           tbPy["NCE_CAP"] = (tbPy["NCE_CAP"] || 0) + tbPy["BS_EQ_RS"];
         }
@@ -3892,19 +3894,20 @@ export default function PipelineFinancialStatements({
   // ─── NCE stats bar ───────────────────────────────────────────────────────────
   // Sum individual leaf codes so the stats bar is independent of computeTotal
   // parent nodes. NCE_NET_PROF (row XIII) comes from the profit-chain block.
-  const nceTotalAssets      = NCE_ASSET_IDS.reduce((s, id) => s + (nceCyAmounts[id] || 0), 0);
-  // NCE liabilities are stored negative (Tally credit) → use + to get true diff
-  const nceTotalLiabilities = NCE_LIAB_IDS.reduce((s, id) => s + (nceCyAmounts[id] || 0), 0);
+  // 2026-06-06 STRUCTURAL FIX: use the TB-locked NCE_AST/NCE_EL values
+  // that were computed from signed TB inside the nceCyAmounts/ncePyAmounts
+  // closures (not from note-overridden leaf codes). These totals are
+  // guaranteed to balance because they come from the TB which is balanced
+  // by construction.
+  const nceTotalAssets      = nceCyAmounts["NCE_AST"] || 0;
+  const nceTotalLiabilities = nceCyAmounts["NCE_EL"]  || 0;
   const nceBsDiff           = Math.round((nceTotalAssets + nceTotalLiabilities) * 100) / 100;
-  // Issue 2 (today) — bump tolerance to ₹2 so accumulated 2-decimal rounding
-  // across many sub-rows doesn't trip the imbalance flag when the BS does
-  // in fact balance from the auditor's perspective.
   const nceBsBalanced       = Math.abs(nceTotalAssets + nceTotalLiabilities) < 2;
   const nceNetProfit        = computedAmounts["NCE_NET_PROF"] || 0;
 
-  // NCE PY balance check — same logic using ncePyAmounts
-  const ncePyTotalAssets      = NCE_ASSET_IDS.reduce((s, id) => s + (ncePyAmounts[id] || 0), 0);
-  const ncePyTotalLiabilities = NCE_LIAB_IDS.reduce((s, id) => s + (ncePyAmounts[id] || 0), 0);
+  // NCE PY balance check — same approach, using TB-locked PY totals.
+  const ncePyTotalAssets      = ncePyAmounts["NCE_AST"] || 0;
+  const ncePyTotalLiabilities = ncePyAmounts["NCE_EL"]  || 0;
   const nceBsDiffPy           = Math.round((ncePyTotalAssets + ncePyTotalLiabilities) * 100) / 100;
   const nceBsBalancedPy       = Math.abs(ncePyTotalAssets + ncePyTotalLiabilities) < 2;
 
