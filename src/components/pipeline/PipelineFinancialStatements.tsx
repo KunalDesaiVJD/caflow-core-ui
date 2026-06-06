@@ -3788,8 +3788,20 @@ export default function PipelineFinancialStatements({
         // These would create phantom amounts outside both totals.
         if (out["NCE_DEPR"]) out["NCE_DEPR"] = 0;
         if (out["NCE_INTG"]) out["NCE_INTG"] = 0;
-        out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (out[id] || 0), 0);
-        out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
+        // 2026-06-06 STRUCTURAL FIX: BS TOTAL always comes from the signed
+        // TB (computedAmounts), NEVER from note-overridden leaf values.
+        // Notes may override individual leaf codes for display (so the BS
+        // row for "Trade Payables" shows the note breakup total), but the
+        // TOTAL row is locked to the signed TB. This way the BS ALWAYS
+        // balances — even if notes have drift from auto-populate issues.
+        // The FsHealthPanel surfaces any per-code drift; the BS TOTAL
+        // stays correct regardless.
+        const tbCy = { ...computedAmounts };
+        if (tbCy["BS_EQ_RS"] && Math.abs(tbCy["BS_EQ_RS"]) > 0.005) {
+          tbCy["NCE_CAP"] = (tbCy["NCE_CAP"] || 0) + tbCy["BS_EQ_RS"];
+        }
+        out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (tbCy[id] || 0), 0);
+        out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (tbCy[id] || 0), 0);
         return out;
       })()
     : computedAmounts;
@@ -3865,8 +3877,14 @@ export default function PipelineFinancialStatements({
         }
         if (out["NCE_DEPR"]) out["NCE_DEPR"] = 0;
         if (out["NCE_INTG"]) out["NCE_INTG"] = 0;
-        out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (out[id] || 0), 0);
-        out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
+        // Same structural fix as CY: PY TOTAL from signed TB (mergedPY),
+        // not from note-overridden leaf values.
+        const tbPy = { ...mergedPY };
+        if (tbPy["BS_EQ_RS"] && Math.abs(tbPy["BS_EQ_RS"]) > 0.005) {
+          tbPy["NCE_CAP"] = (tbPy["NCE_CAP"] || 0) + tbPy["BS_EQ_RS"];
+        }
+        out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (tbPy[id] || 0), 0);
+        out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (tbPy[id] || 0), 0);
         return out;
       })()
     : mergedPY;
