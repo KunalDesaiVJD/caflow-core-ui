@@ -3774,19 +3774,31 @@ export default function PipelineFinancialStatements({
           out["NCE_CAP"] = (out["NCE_CAP"] || 0) + out["BS_EQ_RS"];
           out["BS_EQ_RS"] = 0;
         }
-        // NCE_DEPR → NCE_PPE: Accumulated depreciation reduces the net block.
-        // ALL 10 NCE clients have fixed-asset ledgers (TV, CCTV, Furniture, etc.)
-        // mapped to NCE_DEPR which is NOT in NCE_ASSET_IDS → the debit sat on
-        // the BS without reaching Total Assets, causing BS diff = depreciation.
-        if (out["NCE_DEPR"] && Math.abs(out["NCE_DEPR"]) > 0.005) {
-          out["NCE_PPE"] = (out["NCE_PPE"] || 0) + out["NCE_DEPR"];
-          out["NCE_DEPR"] = 0;
+        // NCE_DEPR / NCE_INTG: these are P&L expense codes for depreciation
+        // that the COA mapper assigned to fixed-asset ledgers. They're part of
+        // the P&L chain (expenses that reduce net profit), NOT BS assets.
+        // The net profit is already auto-credited to BS_EQ_RS (line 2982) which
+        // includes depreciation via the P&L. So NCE_DEPR amounts are already
+        // reaching the BS via the net-profit auto-credit → NCE_CAP fold.
+        // We must NOT fold them into NCE_PPE (which would double-count them
+        // as both an expense reducing profit AND an asset).
+        // Instead, zero them so they don't create an orphan amount that falls
+        // outside both BS totals (NCE_AST / NCE_EL).
+        // NCE CY auto-credit: compute the CY net profit from P&L codes and
+        // credit it to NCE_CAP. For Corporate entities this is done at line
+        // 2982 via amounts["BS_EQ_RS"] -= netPL. For NCE the same logic was
+        // MISSING — P&L codes sat in computedAmounts but their net never
+        // reached the BS, causing BS diff = net profit on ALL NCE clients.
+        const nceRev = (out["NCE_REV_OPS"] || 0) + (out["NCE_REV_OTH"] || 0);
+        const nceExp = (out["NCE_COGS"] || 0) + (out["NCE_EMP_EXP"] || 0) +
+                       (out["NCE_FIN_COST"] || 0) + (out["NCE_OTH_EXP"] || 0) +
+                       (out["NCE_DEPR"] || 0);
+        const nceNetPL = Math.round((-nceRev - nceExp) * 100) / 100;
+        if (Math.abs(nceNetPL) > 0.005) {
+          out["NCE_CAP"] = (out["NCE_CAP"] || 0) - nceNetPL;
         }
-        // NCE_INTG (Intangible Assets) → same treatment if present
-        if (out["NCE_INTG"] && Math.abs(out["NCE_INTG"]) > 0.005) {
-          out["NCE_PPE"] = (out["NCE_PPE"] || 0) + out["NCE_INTG"];
-          out["NCE_INTG"] = 0;
-        }
+        if (out["NCE_DEPR"]) out["NCE_DEPR"] = 0;
+        if (out["NCE_INTG"]) out["NCE_INTG"] = 0;
         out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (out[id] || 0), 0);
         out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
         return out;
@@ -3862,14 +3874,17 @@ export default function PipelineFinancialStatements({
           out["NCE_CAP"] = (out["NCE_CAP"] || 0) + out["BS_EQ_RS"];
           out["BS_EQ_RS"] = 0;
         }
-        if (out["NCE_DEPR"] && Math.abs(out["NCE_DEPR"]) > 0.005) {
-          out["NCE_PPE"] = (out["NCE_PPE"] || 0) + out["NCE_DEPR"];
-          out["NCE_DEPR"] = 0;
+        // NCE PY auto-credit (same as CY above).
+        const nceRevPy = (out["NCE_REV_OPS"] || 0) + (out["NCE_REV_OTH"] || 0);
+        const nceExpPy = (out["NCE_COGS"] || 0) + (out["NCE_EMP_EXP"] || 0) +
+                         (out["NCE_FIN_COST"] || 0) + (out["NCE_OTH_EXP"] || 0) +
+                         (out["NCE_DEPR"] || 0);
+        const nceNetPLpy = Math.round((-nceRevPy - nceExpPy) * 100) / 100;
+        if (Math.abs(nceNetPLpy) > 0.005) {
+          out["NCE_CAP"] = (out["NCE_CAP"] || 0) - nceNetPLpy;
         }
-        if (out["NCE_INTG"] && Math.abs(out["NCE_INTG"]) > 0.005) {
-          out["NCE_PPE"] = (out["NCE_PPE"] || 0) + out["NCE_INTG"];
-          out["NCE_INTG"] = 0;
-        }
+        if (out["NCE_DEPR"]) out["NCE_DEPR"] = 0;
+        if (out["NCE_INTG"]) out["NCE_INTG"] = 0;
         out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (out[id] || 0), 0);
         out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
         return out;
