@@ -1095,6 +1095,12 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       queryClient.invalidateQueries({ queryKey: ["fs-rows", engagementId] });
       // Use prefix match (no financial_year) so any variant of this key clears.
       queryClient.invalidateQueries({ queryKey: ["nce-financial-notes", engagementId] });
+      // Signal to NCEDetailedNotes: skip auto-populate on next visit.
+      // Without this, visiting the Notes tab immediately after Reset & Re-map
+      // triggers "First visit" auto-populate from the freshly rebuilt COA mapping,
+      // making Notes show amounts again. The flag is consumed (removed) on the
+      // first Notes tab visit so subsequent visits auto-populate normally.
+      try { localStorage.setItem(`nce_notes_reset_${engagementId}`, "1"); } catch { /* private mode */ }
 
       // Step 2: Build fresh auto-mapping — carry-forward mappings are always preserved
       const groupTable = isNonCorporate ? PARENT_GROUP_MAP_NCE : PARENT_GROUP_MAP_CORP;

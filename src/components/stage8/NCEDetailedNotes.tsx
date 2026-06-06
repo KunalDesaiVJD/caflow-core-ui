@@ -2465,11 +2465,25 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
             }
           }
         } else {
-          // First visit — auto-populate
-          const populated = await nceAutoPopulate(engagementId, {});
-          if (!cancelled) setNoteData(populated);
-          await persistNotes(populated, fy);
-          toast.success("Notes auto-populated from COA mapping");
+          // First visit — auto-populate from COA mapping.
+          // Exception: if the user clicked "Reset & Re-map" in Stage 6,
+          // a localStorage flag is set to skip this auto-populate so the
+          // Notes tab shows a blank slate matching the cleared FS state.
+          // The flag is consumed (removed) here so subsequent visits
+          // auto-populate normally once the user has re-mapped their ledgers.
+          const resetFlagKey = `nce_notes_reset_${engagementId}`;
+          const wasReset = (() => { try { return localStorage.getItem(resetFlagKey) === "1"; } catch { return false; } })();
+          if (wasReset) {
+            try { localStorage.removeItem(resetFlagKey); } catch { /* private mode */ }
+            // Leave nce_financial_notes empty and show blank notes.
+            // The user can Re-sync manually once they finish mapping ledgers.
+            if (!cancelled) setNoteData({});
+          } else {
+            const populated = await nceAutoPopulate(engagementId, {});
+            if (!cancelled) setNoteData(populated);
+            await persistNotes(populated, fy);
+            toast.success("Notes auto-populated from COA mapping");
+          }
         }
       } catch (e: any) {
         toast.error(`Failed to load notes: ${e?.message || e}`);
