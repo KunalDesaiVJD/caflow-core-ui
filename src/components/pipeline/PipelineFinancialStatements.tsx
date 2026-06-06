@@ -3178,12 +3178,20 @@ export default function PipelineFinancialStatements({
     // reflect the post-profit-transfer state on the asset side, so Capital
     // must also be lifted by the PY profit for the BS to balance.
     //
-    // SKIPPED when pyShellBSAmounts is the source (PY-shell TB closing values
-    // already encode whatever Tally's books had). Re-crediting profit on top
-    // of those would double-count the JE and the BS face would diverge from
-    // the COA Mapping screen for the same code — the exact OM REALTY symptom
-    // the user reported (FS Capital PY = COA Capital PY + PY profit).
-    if (isNonCorporate && !hasPyShellBS) {
+    // 2026-06-06 — Refined guard (SHREE MARUTI INFRA fix):
+    // The credit is SKIPPED only when pyShellBSAmounts already contains
+    // NCE_CAP — i.e. the auditor mapped the capital / P&L ledger(s) in COA
+    // Mapping, so the pyShell closing balance already encodes the profit
+    // transfer (OM REALTY case: re-crediting would double-count and diverge
+    // from COA Mapping for that code).
+    //
+    // When hasPyShellBS=true but NCE_CAP is ABSENT from pyShellBSAmounts
+    // (capital ledger not yet mapped — "COA mapping pending"), mergedPY sets
+    // NCE_CAP = 0 (hasPyShellBS block clears every BS code then only writes
+    // back mapped ones). The Tally books still balance because Tally carries
+    // the profit in its internal P&L group, but OUR BS is short by exactly
+    // the PY net profit → apply the credit so the PY BS check is correct.
+    if (isNonCorporate && (!hasPyShellBS || !("NCE_CAP" in pyShellBSAmounts))) {
       const pyInc   = merged["NCE_PL_INC"] || 0;
       const pyExp   = merged["NCE_PL_EXP"] || 0;
       const pyPartRem = merged["NCE_PART_REM"] || 0;
