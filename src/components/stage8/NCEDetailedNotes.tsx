@@ -2482,6 +2482,9 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
             const populated = await nceAutoPopulate(engagementId, {});
             if (!cancelled) setNoteData(populated);
             await persistNotes(populated, fy);
+            // Invalidate so the BS / P&L face in Stage 7 picks up the
+            // just-written first-time notes without requiring a page refresh.
+            queryClient.invalidateQueries({ queryKey: ["nce-financial-notes", engagementId] });
             toast.success("Notes auto-populated from COA mapping");
           }
         }
@@ -2499,10 +2502,18 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
   const scheduleSave = useCallback((data: Record<string, NCENoteData>) => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
-      try { await persistNotes(data, financialYear); }
+      try {
+        await persistNotes(data, financialYear);
+        // Invalidate PipelineFinancialStatements' nce-financial-notes cache so
+        // the BS / P&L face picks up the just-saved values without requiring
+        // a manual page refresh. Without this the face shows stale DB data
+        // while the Notes tab already reflects the new in-memory amounts —
+        // the root cause of the "P&L face ≠ Note 16" discrepancy.
+        queryClient.invalidateQueries({ queryKey: ["nce-financial-notes", engagementId] });
+      }
       catch (e: any) { toast.error(`Auto-save failed: ${e?.message || e}`); }
     }, 1200);
-  }, [persistNotes, financialYear]);
+  }, [persistNotes, financialYear, queryClient, engagementId]);
 
   // ── Cell change ─────────────────────────────────────────────────────────
   const handleChange = useCallback((
@@ -3011,6 +3022,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
         .eq("engagement_id", engagementId)
         .eq("is_manual", false);
       queryClient.invalidateQueries({ queryKey: ["fs-rows", engagementId] });
+      queryClient.invalidateQueries({ queryKey: ["nce-financial-notes", engagementId] });
       toast.success("Re-synced from COA mapping");
     } catch (e: any) {
       toast.error(`Re-sync failed: ${e?.message || e}`);
@@ -3025,6 +3037,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
     try {
       if (saveTimer.current) clearTimeout(saveTimer.current);
       await persistNotes(noteData, financialYear);
+      queryClient.invalidateQueries({ queryKey: ["nce-financial-notes", engagementId] });
       toast.success("Notes saved");
     } catch (e: any) {
       toast.error(e.message || "Failed to save");

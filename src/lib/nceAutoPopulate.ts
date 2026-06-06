@@ -1120,6 +1120,20 @@ export async function nceAutoPopulate(
       // through Stage 2 as their own customRow with amt = 0 and pyAmt set.
       const unmatchedB: { ledger: string; amt: number; parentGroup?: string; pyAmt?: number }[] = [];
 
+      // DOUBLE-COUNT FIX: accumulate PY per-ledger from TB rather than
+      // initialising from pyNotes bulk value. Previously the CY walk set
+      // newPy[matchedRowId] = pyNotes aggregate (prior year total), then the
+      // PY-only walk ADDED each individual PY-only ledger on top — causing
+      // any ledger already included in pyNotes to be counted twice. The
+      // result was that "Balance in current account" PY = 1,08,024 while
+      // only HDFC Bank (54,012) was visible as a child row.
+      //
+      // New approach: newPy[matchedRowId] starts at 0 and accumulates ONLY
+      // individual TB-sourced amounts. After both walks complete a fallback
+      // block restores pyNotes for rows that have NO TB evidence at all
+      // (e.g. when PY shell TB is empty).
+      const pyFromTbStatic: Record<string, number> = {}; // tracks rows with TB-derived PY
+
       for (const row of tb) {
         const mapped = coaMapping[row.ledger_name];
         if (!mapped || !codeSet.has(mapped.code)) continue;
@@ -1150,11 +1164,10 @@ export async function nceAutoPopulate(
             amountCy: amt,
             amountPy: pyAmtLedger,
           });
-          // PY total: carry from prior-year cy_data for the same static key.
-          // Use Math.abs to guard against stale negative values stored in old data.
-          if (!(matchedRowId in newPy)) {
-            newPy[matchedRowId] = Math.abs(pyNotes[noteType]?.[matchedRowId] ?? 0);
-          }
+          // DOUBLE-COUNT FIX: accumulate per-ledger PY from PY TB (not pyNotes).
+          // pyNotes fallback applied after both walks complete (see below).
+          newPy[matchedRowId] = (newPy[matchedRowId] ?? 0) + pyAmtLedger;
+          pyFromTbStatic[matchedRowId] = (pyFromTbStatic[matchedRowId] ?? 0) + pyAmtLedger;
         } else {
           unmatchedB.push({ ledger: row.ledger_name, amt, parentGroup: row.parent_group ?? undefined });
         }
@@ -1231,18 +1244,15 @@ export async function nceAutoPopulate(
               amountCy: 0,
               amountPy: pyAmt,
             });
-            // 2026-06-05 ROOT-CAUSE FIX (SHREE HARI INFRA TDS 194Q;
-            // OM REALTY; SKYLARK + every other NCE). Previously the
-            // PY-only walk recorded the ledger in staticSources but
-            // FORGOT to feed its PY amount into newPy[matchedRowId].
-            // Result: CLOSED ledgers like "TDS 194 Q" (CY = 0,
-            // PY = Rs.18,984) silently vanished from the Note's static
-            // row PY total + BS face — even though the variance drill /
-            // COA Mapping FS recompute (which sums per-ledger FS codes
-            // directly) saw them. The drift was exactly equal to the
-            // PY-only ledger's amount. Now accumulate into newPy so the
-            // BS face = Notes total = COA Mapping FS total reconcile.
+            // DOUBLE-COUNT FIX: accumulate per-ledger PY from PY TB.
+            // Previously we called newPy[matchedRowId] += pyAmt here, but
+            // combined with the CY walk's pyNotes initialization this caused
+            // double-counting (the ledger appeared once in pyNotes and again
+            // in the per-ledger addition). Now we accumulate here and into
+            // pyFromTbStatic; pyNotes fallback is applied AFTER both walks
+            // only for rows with zero TB-derived PY evidence.
             newPy[matchedRowId] = (newPy[matchedRowId] ?? 0) + pyAmt;
+            pyFromTbStatic[matchedRowId] = (pyFromTbStatic[matchedRowId] ?? 0) + pyAmt;
           } else {
             // No smart-match (e.g. trade_payables, where every creditor is its
             // own line). Push to unmatchedB so Stage 2 creates a customRow
@@ -1258,6 +1268,22 @@ export async function nceAutoPopulate(
               pyAmt,
             });
           }
+        }
+      }
+
+      // DOUBLE-COUNT FIX — fallback: for every static row that has CY data
+      // (newCy[rowId] > 0) but ZERO accumulated TB-derived PY (pyFromTbStatic
+      // was never populated for it), restore the prior-year note value from
+      // pyNotes as a best-effort PY. This covers the case where the PY shell
+      // TB is empty or the PY shell TB doesn't carry the relevant ledgers.
+      // We do NOT fall back when pyFromTbStatic[rowId] is defined (even if 0)
+      // because a genuine zero PY is a valid result (ledger existed last year
+      // with zero balance).
+      for (const rowId of Object.keys(newCy)) {
+        if (rowId in pyFromTbStatic) continue; // TB has evidence — keep it
+        const pyNotesVal = pyNotes[noteType]?.[rowId];
+        if (pyNotesVal && Math.abs(pyNotesVal) > 0.005) {
+          newPy[rowId] = Math.abs(pyNotesVal);
         }
       }
 
