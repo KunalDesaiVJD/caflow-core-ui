@@ -1081,6 +1081,21 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       // Step 1: Clear DB mapping
       await supabase.from("audit_engagements").update({ coa_mapping: {} } as any).eq("id", engagementId);
 
+      // Step 1b: Clear ALL FS-derived data so Stage 7 shows a clean slate.
+      // When the auditor resets COA mapping they expect the Financial Statements
+      // to be blank — not carry stale auto or manual note rows / saved FS totals.
+      // We delete BOTH fa_financial_statements (all rows, manual + non-manual)
+      // AND nce_financial_notes (auto + manual custom rows) for this engagement.
+      // This is intentional: "Reset & Re-map" is a hard reset, not a soft re-sync.
+      await Promise.all([
+        supabase.from("fa_financial_statements").delete().eq("engagement_id", engagementId),
+        supabase.from("nce_financial_notes").delete().eq("engagement_id", engagementId),
+      ]);
+      // Invalidate FS caches so Stage 7 reflects the cleared state immediately.
+      queryClient.invalidateQueries({ queryKey: ["fs-rows", engagementId] });
+      // Use prefix match (no financial_year) so any variant of this key clears.
+      queryClient.invalidateQueries({ queryKey: ["nce-financial-notes", engagementId] });
+
       // Step 2: Build fresh auto-mapping — carry-forward mappings are always preserved
       const groupTable = isNonCorporate ? PARENT_GROUP_MAP_NCE : PARENT_GROUP_MAP_CORP;
       // Seed fresh map with carried-forward entries (PY-validated, never reset)
@@ -1144,7 +1159,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     } finally {
       setResetting(false);
     }
-  }, [engagementId, tbAccounts, isNonCorporate, activeAutoRules, activeLeafItems]);
+  }, [engagementId, tbAccounts, isNonCorporate, activeAutoRules, activeLeafItems, queryClient]);
   // ═══════ SMART MAP (with group propagation) ═══════
   // Whenever a user manually maps a ledger, Stage 6 learns that the Tally
   // parent_group it belongs to likely maps to the same FS code. We immediately
