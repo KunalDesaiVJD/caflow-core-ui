@@ -3932,9 +3932,6 @@ export default function PipelineFinancialStatements({
   const corpBsBalanced    = Math.abs(bsDiff) < 2;
   const activeBsDiff      = isNonCorporate ? nceBsDiff      : bsDiff;
   const activeBsBalanced  = isNonCorporate ? nceBsBalanced  : corpBsBalanced;
-  // PY equivalents — shown in the PY BS Check stat card
-  const activeBsDiffPy    = isNonCorporate ? nceBsDiffPy    : bsDiffPy;
-  const activeBsBalancedPy = isNonCorporate ? nceBsBalancedPy : corpBsBalancedPy;
 
   // ─── PY balance sheet check + FA Previous-Year entry gate ────────────────
   // Export Excel must be blocked until BOTH:
@@ -3961,6 +3958,9 @@ export default function PipelineFinancialStatements({
       ) * 100) / 100
     : 0;
   const corpBsBalancedPy: boolean = Math.abs(bsDiffPy) < 2;
+  // PY equivalents — shown in the PY BS Check stat card (must be after bsDiffPy + corpBsBalancedPy)
+  const activeBsDiffPy     = isNonCorporate ? nceBsDiffPy     : bsDiffPy;
+  const activeBsBalancedPy = isNonCorporate ? nceBsBalancedPy : corpBsBalancedPy;
 
   // FA PY check — any of (a) auto-filled pyRows from prior engagement,
   // (b) any manual override on the "Total — Previous year" row in
