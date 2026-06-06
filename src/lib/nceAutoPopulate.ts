@@ -63,13 +63,16 @@ export const NCE_NOTE_FS_MAP: Record<string, {
   other_ca:           { all: ["NCE_OCA",  "BS_CA_OCA"] },
   revenue_ops:        { all: ["NCE_REV_OPS", "PL_REV_OPS"] },
   other_income:       { all: ["NCE_REV_OTH", "PL_REV_OI"] },
-  // 2026-06-06: added PL_EXP_DEP — corporate depreciation code that users
-  // commonly map on NCE engagements. Without this, depreciation ledgers
-  // mapped to PL_EXP_DEP silently disappeared from notes.
   cogs:               { all: ["NCE_COGS", "NCE_CII", "PL_EXP_MAT", "PL_EXP_SIT", "PL_EXP_CII"] },
   employee_exp:       { all: ["NCE_EMP_EXP",  "PL_EXP_EMP"] },
   finance_costs:      { all: ["NCE_FIN_COST", "PL_EXP_FIN"] },
-  other_expenses:     { all: ["NCE_OTH_EXP",  "PL_EXP_OTH", "PL_EXP_OEX", "PL_EXP_DEP", "NCE_DEPR"] },
+  // NOTE: NCE_DEPR / PL_EXP_DEP are intentionally NOT here. Depreciation
+  // is a separate P&L line item "(d) Depreciation and amortisation" that
+  // reads directly from computedAmounts. Adding it to other_expenses would
+  // make the depreciation amount appear in BOTH the Other Expenses note AND
+  // the separate Depreciation line → DOUBLE-COUNT that breaks BS balance.
+  // Same rule for NCE_PART_REM (Partners' Remuneration) and tax codes.
+  other_expenses:     { all: ["NCE_OTH_EXP",  "PL_EXP_OTH", "PL_EXP_OEX"] },
 };
 
 

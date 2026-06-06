@@ -2465,7 +2465,10 @@ export default function PipelineFinancialStatements({
   // current TB × COA mapping. The result: notes always match COA mapping,
   // and the face (which reads note totals) matches notes. The COA→Notes→
   // Face chain is complete.
-  const autoSyncKey = `caflow:nce_autosync_v1:${engagementId}`;
+  // v2: bumped after removing NCE_DEPR/PL_EXP_DEP from other_expenses
+  // codeSet — forces re-sync so depreciation ledgers are ejected from the
+  // Other Expenses note (they were double-counted with the Depreciation line).
+  const autoSyncKey = `caflow:nce_autosync_v2:${engagementId}`;
   useEffect(() => {
     if (!isNonCorporate || !engagementId || !engagement?.financial_year) return;
     // Only auto-sync once per session per engagement (avoid re-running on
