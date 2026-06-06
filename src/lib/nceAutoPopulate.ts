@@ -638,6 +638,9 @@ export async function nceAutoPopulate(
 
   const coaMapping: Record<string, { code: string }> =
     (eng as any)?.coa_mapping ?? {};
+  // RC1 fix: hoisted here so both Pattern-A and Pattern-B Stage 2 fallback
+  // blocks can reference it without re-declaring inside each block scope.
+  const coaHasEntries = Object.keys(coaMapping).length > 0;
   const financialYear: string = (eng as any)?.financial_year ?? "";
   const clientId: string      = (eng as any)?.client_id ?? "";
 
@@ -1451,7 +1454,7 @@ export async function nceAutoPopulate(
       // into notes, causing the BS face to show phantom data even with empty COA.
       // Fallback is only useful when COA is mapped but no ledgers happen to belong
       // to this particular note — allow it only in that case.
-      const coaHasEntries = Object.keys(coaMapping).length > 0;
+      // coaHasEntries is declared at function scope (after coaMapping is built).
       if (!hasData && coaHasEntries) {
         let fsCY = 0, fsPY = 0;
         for (const code of noteFs.all) {
