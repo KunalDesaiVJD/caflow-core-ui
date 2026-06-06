@@ -3788,14 +3788,16 @@ export default function PipelineFinancialStatements({
     // spread) which reduces only NCE_ASSET_IDS / NCE_LIAB_IDS — neither
     // array contains NCE_DEPR or NCE_INTG, so they don't affect the BS
     // total. Zeroing them would break the P&L display (depreciation = 0).
-    // STRUCTURAL FIX: BS TOTAL always comes from the signed TB, not
-    // from note-overridden leaf values.
-    const tbCy = { ...computedAmounts };
-    if (tbCy["BS_EQ_RS"] && Math.abs(tbCy["BS_EQ_RS"]) > 0.005) {
-      tbCy["NCE_CAP"] = (tbCy["NCE_CAP"] || 0) + tbCy["BS_EQ_RS"];
-    }
-    out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (tbCy[id] || 0), 0);
-    out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (tbCy[id] || 0), 0);
+    // 2026-06-06 FIX: BS TOTAL must equal the sum of individual rows.
+    // Previous "structural fix" locked totals to raw TB, but this made
+    // the TOTAL diverge from the sum of note-overridden rows — the user
+    // sees rows that don't add up to the total. The correct data flow is:
+    //   COA Mapping → Notes → Notes Total → BS/PL Face (including TOTAL)
+    // So NCE_AST / NCE_EL are now computed from `out` (note-overridden)
+    // instead of `tbCy` (raw TB). If notes have manual adjustments beyond
+    // TB, the total will reflect them. FsHealthPanel flags any drift.
+    out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (out[id] || 0), 0);
+    out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
     // ── Recompute P&L parent totals + profit chain after note overrides ──
     // Note overrides change leaf P&L codes (NCE_OTH_EXP, NCE_EMP_EXP, etc.)
     // but the parent codes (NCE_PL_EXP, NCE_PL_INC) and profit chain
@@ -3855,12 +3857,9 @@ export default function PipelineFinancialStatements({
       out["BS_EQ_RS"] = 0;
     }
     // See CY comment: NCE_DEPR/NCE_INTG not zeroed — P&L needs them.
-    const tbPy = { ...computedAmountsPY };
-    if (tbPy["BS_EQ_RS"] && Math.abs(tbPy["BS_EQ_RS"]) > 0.005) {
-      tbPy["NCE_CAP"] = (tbPy["NCE_CAP"] || 0) + tbPy["BS_EQ_RS"];
-    }
-    out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (tbPy[id] || 0), 0);
-    out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (tbPy[id] || 0), 0);
+    // PY TOTAL: computed from note-overridden `out` (mirrors CY above).
+    out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (out[id] || 0), 0);
+    out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
     // PY profit chain recomputation (mirrors CY above).
     out["NCE_PL_EXP"] = (out["NCE_COGS"] || 0) + (out["NCE_CII"] || 0)
                        + (out["NCE_EMP_EXP"] || 0) + (out["NCE_FIN_COST"] || 0)

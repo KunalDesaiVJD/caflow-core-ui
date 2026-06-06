@@ -95,10 +95,11 @@ TB (Tally Trial Balance)
 
 ### Invariants (enforced by FsHealthPanel on every page load)
 1. **Note Total = COA Total + Manual Additions** (tracked separately)
-2. **BS Face = Note Total** (direct read via applyNCENoteTotal, no re-derivation)
-3. **Σ BS Face[assets] = Σ BS Face[equity + liabilities]** (BS balanced)
-4. **Export blocked** when any invariant violation detected (drift > ₹100)
-5. **Severe drift logged** to `fs_reconciliation_log` table for audit trail
+2. **BS/PL Face = Note Total** (direct read via applyNCENoteTotal, no re-derivation)
+3. **BS TOTAL = Σ individual rows** (NCE_AST / NCE_EL computed from note-overridden leaf codes, NOT from raw TB — internal consistency guaranteed)
+4. **BS balanced** when Σ note assets = Σ note liabilities (FsHealthPanel flags drift)
+5. **Export blocked** when any invariant violation detected (drift > ₹100)
+6. **Severe drift logged** to `fs_reconciliation_log` table for audit trail
 
 ### Sign Convention
 Single source of truth: `src/lib/fsSignConvention.ts`
