@@ -3842,6 +3842,12 @@ export default function PipelineFinancialStatements({
   const nceBsBalanced       = Math.abs(nceTotalAssets + nceTotalLiabilities) < 2;
   const nceNetProfit        = computedAmounts["NCE_NET_PROF"] || 0;
 
+  // NCE PY balance check — same logic using ncePyAmounts
+  const ncePyTotalAssets      = NCE_ASSET_IDS.reduce((s, id) => s + (ncePyAmounts[id] || 0), 0);
+  const ncePyTotalLiabilities = NCE_LIAB_IDS.reduce((s, id) => s + (ncePyAmounts[id] || 0), 0);
+  const nceBsDiffPy           = Math.round((ncePyTotalAssets + ncePyTotalLiabilities) * 100) / 100;
+  const nceBsBalancedPy       = Math.abs(ncePyTotalAssets + ncePyTotalLiabilities) < 2;
+
   // ─── NCE Notes vs Face mismatch detector (2026-06-01) ────────────────────
   // User asked: "add a validation that notes total and heading total in B/S
   // and P/L should always match". Iterate every NCE BS / P&L code that has a
@@ -3926,6 +3932,9 @@ export default function PipelineFinancialStatements({
   const corpBsBalanced    = Math.abs(bsDiff) < 2;
   const activeBsDiff      = isNonCorporate ? nceBsDiff      : bsDiff;
   const activeBsBalanced  = isNonCorporate ? nceBsBalanced  : corpBsBalanced;
+  // PY equivalents — shown in the PY BS Check stat card
+  const activeBsDiffPy    = isNonCorporate ? nceBsDiffPy    : bsDiffPy;
+  const activeBsBalancedPy = isNonCorporate ? nceBsBalancedPy : corpBsBalancedPy;
 
   // ─── PY balance sheet check + FA Previous-Year entry gate ────────────────
   // Export Excel must be blocked until BOTH:
@@ -7515,13 +7524,23 @@ export default function PipelineFinancialStatements({
       })()}
 
       {/* Summary cards */}
-      <div className="grid grid-cols-6 gap-3">
+      <div className="grid grid-cols-7 gap-3">
+        {/* CY BS Check */}
         <Card className={cn(activeBsBalanced ? "border-primary/30" : "border-destructive/30")}>
           <CardContent className="p-3 text-center">
             <p className={cn("text-2xl font-bold", activeBsBalanced ? "text-primary" : "text-destructive")}>
               {activeBsBalanced ? "✓" : `₹${formatINR(Math.abs(activeBsDiff))}`}
             </p>
-            <p className="text-[10px] text-muted-foreground uppercase">BS Check</p>
+            <p className="text-[10px] text-muted-foreground uppercase">BS Check (CY)</p>
+          </CardContent>
+        </Card>
+        {/* PY BS Check */}
+        <Card className={cn(activeBsBalancedPy ? "border-primary/30" : "border-destructive/30")}>
+          <CardContent className="p-3 text-center">
+            <p className={cn("text-2xl font-bold", activeBsBalancedPy ? "text-primary" : "text-destructive")}>
+              {activeBsBalancedPy ? "✓" : `₹${formatINR(Math.abs(activeBsDiffPy))}`}
+            </p>
+            <p className="text-[10px] text-muted-foreground uppercase">BS Check (PY)</p>
           </CardContent>
         </Card>
         <Card>
