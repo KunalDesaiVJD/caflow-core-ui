@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import { signedBalance as fsSignedBalance } from "@/lib/fsSignConvention";
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -113,8 +114,9 @@ export default function ComparativeStatements() {
       const name = (l.ledger_name || "").toLowerCase();
       const mapping = mappingLookup[name];
       const group = mapping?.account_group || l.parent_group || "Other";
-      const sign = (l.balance_type === "Cr" || l.balance_type === "CR") ? -1 : 1;
-      const balance = Number(l.closing_balance || 0) * sign;
+      // Break #7: use fsSignConvention to prevent double-sign if closing_balance
+      // is ever stored as a negative number. Math.abs is applied inside fsSignedBalance.
+      const balance = fsSignedBalance(l.closing_balance, l.balance_type, "DR");
       groups[group] = (groups[group] || 0) + balance;
     }
     return groups;

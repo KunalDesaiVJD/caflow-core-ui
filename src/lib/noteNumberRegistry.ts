@@ -21,6 +21,7 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { signedBalance as fsSignedBalance, signedOpening as fsSignedOpening } from "@/lib/fsSignConvention";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ── SECTION 1 — v1 (backward-compatible) static registry ────────────────────
@@ -598,16 +599,9 @@ export function useDynamicNoteRegistry(
     for (const r of tbRows) {
       const code = coaMapping[r.ledger_name]?.code;
       if (!code) continue;
-      // CY closing_balance signed by balance_type
-      const cb     = Math.abs(Number(r.closing_balance ?? 0));
-      const cIsDr  = String(r.balance_type ?? "").toUpperCase() === "DR";
-      const cyVal  = cIsDr ? cb : -cb;
-      cy[code] = (cy[code] ?? 0) + cyVal;
-      // PY opening_balance signed by opening_type
-      const ob     = Math.abs(Number(r.opening_balance ?? 0));
-      const oIsDr  = String(r.opening_type ?? "").toUpperCase() === "DR";
-      const pyVal  = oIsDr ? ob : -ob;
-      py[code] = (py[code] ?? 0) + pyVal;
+      // Break #7: use fsSignConvention instead of inline isDr logic
+      cy[code] = (cy[code] ?? 0) + fsSignedBalance(r.closing_balance, r.balance_type, "DR");
+      py[code] = (py[code] ?? 0) + fsSignedOpening(r.opening_balance, r.opening_type, "DR");
     }
     return { cy, py };
   }, [needsFallback, tbRows, coaMapping]);

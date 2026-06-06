@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import { signedBalance as fsSignedBalance, signedOpening as fsSignedOpening } from "@/lib/fsSignConvention";
 import { FsUnitsProvider, FsUnitsToggle, formatScaledINRWhole } from "@/lib/fsUnits";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -2666,14 +2667,12 @@ export default function PipelineFinancialStatements({
   }[] = useMemo(() => {
     if (!tallyTb?.length) return [];
     return tallyTb.map((l: any) => {
-      const cb   = Math.abs(Number(l.closing_balance ?? 0));
-      const isDr = String(l.balance_type ?? "").toUpperCase() === "DR";
       return {
         account_name:  String(l.ledger_name || "").trim(),
         account_group: l.parent_group || "",
-        balance: isDr ? cb : -cb,
-        opening_balance: Math.abs(Number(l.opening_balance ?? 0)) *
-                         (String(l.opening_type ?? "").toUpperCase() === "CR" ? -1 : 1),
+        // Break #7 fix: use fsSignConvention instead of inline isDr ? cb : -cb
+        balance: fsSignedBalance(l.closing_balance, l.balance_type, "DR"),
+        opening_balance: fsSignedOpening(l.opening_balance, l.opening_type, "DR"),
         // Current-year journal movement — needed by the shared books-closed
         // detection so FS and the COA-mapping screen credit net profit identically.
         tally_debit:  Number(l.debit_amount  ?? 0),
@@ -2749,11 +2748,10 @@ export default function PipelineFinancialStatements({
     for (const row of pyShellTb) {
       const name = String(row.ledger_name || "").trim();
       if (!name) continue;
-      const cb   = Math.abs(Number(row.closing_balance ?? 0));
-      const isDr = String(row.balance_type ?? "").toUpperCase() === "DR";
-      const ob   = Math.abs(Number(row.opening_balance ?? 0)) *
-                   (String(row.opening_type ?? "").toUpperCase() === "CR" ? -1 : 1);
-      m.set(name, { opening: ob, closing: isDr ? cb : -cb });
+      m.set(name, {
+        opening: fsSignedOpening(row.opening_balance, row.opening_type, "DR"),
+        closing: fsSignedBalance(row.closing_balance, row.balance_type, "DR"),
+      });
     }
     return m;
   }, [pyShellTb]);
@@ -2836,11 +2834,9 @@ export default function PipelineFinancialStatements({
       const isPL = sec.includes("pl") || sec.includes("revenue")
                 || sec.includes("expense") || sec.includes("income");
       if (!isPL) continue;
-      const cb = Math.abs(Number(row.closing_balance ?? 0));
-      if (cb < 0.005) continue;
-      const isDr = String(row.balance_type ?? "").toUpperCase() === "DR";
-      // Match Tally sign convention used elsewhere: Dr positive, Cr negative.
-      amounts[mapped.code] = (amounts[mapped.code] || 0) + (isDr ? cb : -cb);
+      const signed = fsSignedBalance(row.closing_balance, row.balance_type, "DR");
+      if (Math.abs(signed) < 0.005) continue;
+      amounts[mapped.code] = (amounts[mapped.code] || 0) + signed;
     }
     // Roll up parent P&L nodes so any consumer reading PL_TAX (sum of CUR+DEF)
     // gets the aggregated total even if only the leaves were populated.
@@ -2884,11 +2880,9 @@ export default function PipelineFinancialStatements({
       const sec = String((item as any).section || "").toLowerCase();
       const isBS = sec.includes("bs") || sec.includes("asset") || sec.includes("liab") || sec.includes("equity");
       if (!isBS) continue;
-      const cb = Math.abs(Number(row.closing_balance ?? 0));
-      if (cb < 0.005) continue;
-      const isDr = String(row.balance_type ?? "").toUpperCase() === "DR";
-      // Tally sign convention used throughout: Dr positive, Cr negative.
-      amounts[mapped.code] = (amounts[mapped.code] || 0) + (isDr ? cb : -cb);
+      const signed = fsSignedBalance(row.closing_balance, row.balance_type, "DR");
+      if (Math.abs(signed) < 0.005) continue;
+      amounts[mapped.code] = (amounts[mapped.code] || 0) + signed;
     }
     // Roll up BS parent nodes so consumers reading NCE_OWN / NCE_EL / BS_EQ
     // get the aggregated total when only the leaves were populated.
@@ -3890,20 +3884,6 @@ export default function PipelineFinancialStatements({
       const nature = NCE_NOTE_NATURE[meta.note] ?? "CR";
       out[code] = nature === "CR" ? -total : total;
     }
-    // Diagnostic: log which P&L codes got note overrides vs stayed at raw TB
-    if (typeof console !== "undefined") {
-      const diag: string[] = [];
-      for (const code of ["NCE_OTH_EXP","NCE_EMP_EXP","NCE_FIN_COST","NCE_REV_OPS","NCE_REV_OTH"]) {
-        const raw = computedAmounts[code] ?? 0;
-        const now = out[code] ?? 0;
-        if (Math.abs(raw - now) > 0.01)
-          diag.push(`${code}: TB=${raw} → Note=${now}`);
-        else
-          diag.push(`${code}: ${now} (unchanged)`);
-      }
-      console.log("[nceCyAmounts] Note override results:", diag.join(" | "));
-      console.log("[nceCyAmounts] nceNotesByType keys:", Object.keys(nceNotesByType).join(", ") || "(empty)");
-    }
     // ROOT-CAUSE FIX (Issue 2 — TOTAL rows didn't match the line items):
     // Fold BS_EQ_RS into NCE_CAP, lock BS TOTAL to TB.
     if (out["BS_EQ_RS"] && Math.abs(out["BS_EQ_RS"]) > 0.005) {
@@ -4531,9 +4511,7 @@ export default function PipelineFinancialStatements({
           (pyEngCoaMapping[name]) ||       // 1. PY shell's own mapping
           (coaMapping as any)[name];        // 2. CY fallback
         if (!mapping || !plLeafCodes.has(mapping.code)) continue;
-        const cb    = Math.abs(Number(row.closing_balance ?? 0));
-        const isDr  = String(row.balance_type ?? "").toUpperCase() === "DR";
-        const signed = isDr ? cb : -cb;
+        const signed = fsSignedBalance(row.closing_balance, row.balance_type, "DR");
         preview[mapping.code] = (preview[mapping.code] || 0) + signed;
       }
 
