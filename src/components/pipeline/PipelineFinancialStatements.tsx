@@ -2452,6 +2452,84 @@ export default function PipelineFinancialStatements({
     enabled: !!engagementId && !!engagement?.financial_year && isNonCorporate,
   });
 
+  // ─── AUTO-SYNC: Ensure NCE notes always reflect current COA mapping ─────
+  // ROOT CAUSE FIX: previously, notes were only populated when the user
+  // visited the Notes tab (Stage 8) or clicked "Re-correct from COA". If
+  // COA mapping changed (or was set up) AFTER the initial populate, the
+  // notes became stale — some COA-mapped ledgers never flowed into the
+  // notes, causing Note Total < COA Total and making the BS/PL face
+  // diverge from COA mapping.
+  //
+  // Fix: on Stage 7 mount, silently run nceAutoPopulate in the background.
+  // This preserves all manual rows and only rebuilds auto rows from the
+  // current TB × COA mapping. The result: notes always match COA mapping,
+  // and the face (which reads note totals) matches notes. The COA→Notes→
+  // Face chain is complete.
+  const autoSyncKey = `caflow:nce_autosync_v1:${engagementId}`;
+  useEffect(() => {
+    if (!isNonCorporate || !engagementId || !engagement?.financial_year) return;
+    // Only auto-sync once per session per engagement (avoid re-running on
+    // every tab switch within Stage 7). The flag is per-session (sessionStorage).
+    if (typeof window !== "undefined" && window.sessionStorage.getItem(autoSyncKey)) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        // 1. Load existing notes
+        const { data: existingRows } = await (supabase.from as any)("nce_financial_notes")
+          .select("note_type, cy_data, py_data")
+          .eq("engagement_id", engagementId)
+          .eq("financial_year", engagement.financial_year);
+        if (cancelled) return;
+        const built: Record<string, any> = {};
+        for (const r of (existingRows ?? []) as any[]) {
+          const cy = (r.cy_data ?? {}) as Record<string, any>;
+          const py = (r.py_data ?? {}) as Record<string, any>;
+          const customRows = Array.isArray(cy._custom_rows) ? cy._custom_rows : [];
+          const cleanCy: Record<string, number> = {};
+          const cleanPy: Record<string, number> = {};
+          for (const [k, v] of Object.entries(cy)) {
+            if (k === "_custom_rows" || k === "_hidden_rows" || k === "_label_overrides" || k === "_cy_sources" || k === "_ejected_ledgers" || k === "_source_label_overrides") continue;
+            if (typeof v === "number") cleanCy[k] = v;
+          }
+          for (const [k, v] of Object.entries(py)) {
+            if (k === "_custom_rows" || k === "_hidden_rows" || k === "_label_overrides" || k === "_cy_sources" || k === "_ejected_ledgers" || k === "_source_label_overrides") continue;
+            if (typeof v === "number") cleanPy[k] = v;
+          }
+          built[r.note_type] = { cy: cleanCy, py: cleanPy, customRows };
+        }
+        // 2. Re-populate from current TB × COA mapping
+        const populated = await nceAutoPopulate(engagementId, built);
+        if (cancelled) return;
+        // 3. Save back
+        const rows = Object.entries(populated).map(([noteType, d]) => {
+          const { cy_data, py_data } = serialiseNoteData(d);
+          return {
+            engagement_id:  engagementId,
+            financial_year: engagement.financial_year,
+            note_type:      noteType,
+            cy_data:        cy_data as any,
+            py_data:        py_data as any,
+            updated_at:     new Date().toISOString(),
+          };
+        });
+        if (rows.length > 0) {
+          await supabase
+            .from("nce_financial_notes")
+            .upsert(rows, { onConflict: "engagement_id,financial_year,note_type" });
+        }
+        if (cancelled) return;
+        // 4. Mark synced for this session
+        if (typeof window !== "undefined") window.sessionStorage.setItem(autoSyncKey, "1");
+        // 5. Invalidate queries so the face re-renders with fresh note data
+        queryClient.invalidateQueries({ queryKey: ["nce-financial-notes", engagementId] });
+        console.log("[autoSync] NCE notes synced from COA mapping →", Object.keys(populated).length, "note types");
+      } catch (e) {
+        console.warn("[autoSync] Failed (non-fatal):", e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [engagementId, isNonCorporate, engagement?.financial_year]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ─── Fetch NCE Stage-7 "Notes to Accounts" (Balance Confirmation, etc.) ──
   // The Note 1 sheet in the Excel export must reflect what the user has
   // typed / toggled / reordered in the Note 1 tab of Stage 7, not a hardcoded
