@@ -314,8 +314,9 @@ export interface COAMappingLike {
 
 /** Build a code → noteType reverse index from NCE_NOTE_FS_MAP so each
  *  ledger's contribution is signed under the NOTE's natural side (the
- *  same convention nceAutoPopulate uses everywhere). */
-function buildCodeToNoteType(): Record<string, string> {
+ *  same convention nceAutoPopulate uses everywhere).
+ *  PERF: computed once at module load (pure static data). */
+const CODE_TO_NOTE_TYPE: Record<string, string> = (() => {
   const out: Record<string, string> = {};
   for (const [noteType, fs] of Object.entries(NCE_NOTE_FS_MAP)) {
     for (const code of (fs.all ?? [])) out[code] = noteType;
@@ -323,7 +324,7 @@ function buildCodeToNoteType(): Record<string, string> {
     for (const code of (fs.st  ?? [])) out[code] = noteType;
   }
   return out;
-}
+})();
 
 export function computeCOATotals(
   tb:         TBRowLike[],
@@ -331,7 +332,6 @@ export function computeCOATotals(
   coaMapping: COAMappingLike,
   pyCoaMap?:  COAMappingLike,
 ): Record<string, { cy: number; py: number }> {
-  const codeToNoteType = buildCodeToNoteType();
   const out: Record<string, { cy: number; py: number }> = {};
 
   // CY pass — every CY-TB ledger contributes signed closing under the
@@ -339,7 +339,7 @@ export function computeCOATotals(
   for (const row of tb) {
     const mapped = coaMapping[row.ledger_name];
     if (!mapped?.code) continue;
-    const noteType = codeToNoteType[mapped.code] ?? mapped.code;
+    const noteType = CODE_TO_NOTE_TYPE[mapped.code] ?? mapped.code;
     const cy = signedBalance(row.closing_balance, row.balance_type, noteType);
     // PY for a CY ledger = its signed OPENING balance (= prior-year close
     // by accounting identity). When the engagement also has a PY-shell TB,
@@ -362,7 +362,7 @@ export function computeCOATotals(
       if (cySeen.has(nm.toLowerCase())) continue; // already paired by the CY pass
       const mapped = pyCoaMap?.[nm] ?? coaMapping[nm];
       if (!mapped?.code) continue;
-      const noteType = codeToNoteType[mapped.code] ?? mapped.code;
+      const noteType = CODE_TO_NOTE_TYPE[mapped.code] ?? mapped.code;
       const slot = (out[mapped.code] ||= { cy: 0, py: 0 });
       slot.py += signedBalance(row.closing_balance, row.balance_type, noteType);
     }

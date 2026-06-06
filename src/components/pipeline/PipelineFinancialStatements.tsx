@@ -2039,8 +2039,13 @@ export default function PipelineFinancialStatements({
 
   // ─── Fetch Tally Trial Balance (sole authoritative source) ───
   // Uses same 3-step lookup as PipelineStage3: direct → sync_batches → legacy engagements
+  // PERF: staleTime prevents unnecessary refetches on window focus / tab switch.
+  // FS data doesn't change externally while the user is editing — only explicit
+  // saves trigger cache invalidation via queryClient.invalidateQueries.
+  const FS_STALE_TIME = 5 * 60 * 1000; // 5 minutes
   const { data: tallyTb, isLoading: tallyTbLoading } = useQuery({
     queryKey: ["tally-tb-fs", engagementId, engagement?.client_id, engagement?.financial_year],
+    staleTime: FS_STALE_TIME,
     queryFn: async () => {
       const TB_COLS = "ledger_name, parent_group, opening_balance, opening_type, closing_balance, balance_type, debit_amount, credit_amount";
 
@@ -2102,6 +2107,7 @@ export default function PipelineFinancialStatements({
   // ─── Fetch existing FS rows ───
   const { data: existingFs, isLoading: fsLoading } = useQuery({
     queryKey: ["fs-rows", engagementId],
+    staleTime: FS_STALE_TIME,
     queryFn: async () => {
       const { data } = await supabase
         .from("fa_financial_statements")
@@ -2116,6 +2122,7 @@ export default function PipelineFinancialStatements({
   // ─── Fetch prior year FS for PY column ───
   const { data: priorEngagement } = useQuery({
     queryKey: ["prior-engagement-fs", engagement?.client_id, engagement?.financial_year],
+    staleTime: FS_STALE_TIME,
     queryFn: async () => {
       const fyParts = (engagement.financial_year || "").split("-");
       if (fyParts.length !== 2) return null;
@@ -2148,6 +2155,7 @@ export default function PipelineFinancialStatements({
   // reproduce that row — without them the row would be blank/zero.
   const { data: priorFaRows } = useQuery({
     queryKey: ["prior-fa-rows", engagement?.client_id, engagement?.financial_year],
+    staleTime: FS_STALE_TIME,
     queryFn: async () => {
       const fyParts = (engagement.financial_year || "").split("-");
       if (fyParts.length !== 2) return null;
@@ -2170,6 +2178,7 @@ export default function PipelineFinancialStatements({
   // When finalized, PY column cells become read-only (locked).
   const { data: priorEngFinalized } = useQuery({
     queryKey: ["prior-eng-finalized", engagement?.client_id, engagement?.financial_year],
+    staleTime: FS_STALE_TIME,
     queryFn: async () => {
       if (!engagement?.client_id || !engagement?.financial_year) return false;
       const fyParts = (engagement.financial_year as string).split("-");
@@ -2196,6 +2205,7 @@ export default function PipelineFinancialStatements({
   // tally_trial_balance rows — it is the authoritative PY shell.
   const { data: pyShellInfo } = useQuery({
     queryKey: ["py-shell-id", engagement?.client_id, engagement?.financial_year],
+    staleTime: FS_STALE_TIME,
     queryFn: async (): Promise<{ id: string | null; isShell: boolean }> => {
       const fyParts = (engagement.financial_year as string).split("-");
       if (fyParts.length !== 2) return { id: null, isShell: false };
@@ -2247,6 +2257,7 @@ export default function PipelineFinancialStatements({
   const pyShellId = pyShellInfo?.isShell ? pyShellInfo.id : null;
   const { data: pyShellTb } = useQuery({
     queryKey: ["py-shell-tb", pyShellId],
+    staleTime: FS_STALE_TIME,
     queryFn: async () => {
       if (!pyShellId) return [] as any[];
       const PAGE = 500;
@@ -2280,6 +2291,7 @@ export default function PipelineFinancialStatements({
     (engagement as any)?.audit_firm_id || engagement?.firm_id || null;
   const { data: firmData } = useQuery({
     queryKey: ["firm-detail-fs-v4", firmLookupId],
+    staleTime: FS_STALE_TIME,
     queryFn: async () => {
       if (!firmLookupId) return null;
       // 1. Try the firms table directly. This is the canonical source for
@@ -2344,6 +2356,7 @@ export default function PipelineFinancialStatements({
   // sigMembershipNo).
   const { data: partnerData } = useQuery({
     queryKey: ["partner-user-fs", (engagement as any)?.partner_id],
+    staleTime: FS_STALE_TIME,
     queryFn: async () => {
       const { data } = await supabase
         .from("users")
@@ -2358,6 +2371,7 @@ export default function PipelineFinancialStatements({
   // ─── Fetch NCE Capital Account rows (for Notes to Accounts-Capital sheet) ─
   const { data: nceCapitalData } = useQuery({
     queryKey: ["nce-capital-account", engagementId],
+    staleTime: FS_STALE_TIME,
     queryFn: async () => {
       const { data } = await (supabase.from as any)("nce_capital_account")
         .select("*")
@@ -2371,6 +2385,7 @@ export default function PipelineFinancialStatements({
   // ─── Fetch NCE PPE Schedule rows (for Notes to Accounts-PPE sheet) ────────
   const { data: ncePpeData } = useQuery({
     queryKey: ["nce-ppe-schedule", engagementId],
+    staleTime: FS_STALE_TIME,
     queryFn: async () => {
       const { data } = await (supabase.from as any)("nce_ppe_schedule")
         .select("*")
@@ -2389,6 +2404,7 @@ export default function PipelineFinancialStatements({
   // NCE*Letter components do.
   const { data: clientDetail } = useQuery({
     queryKey: ["client-detail-fs", engagement?.client_id],
+    staleTime: FS_STALE_TIME,
     queryFn: async () => {
       const { data } = await supabase
         .from("clients")
@@ -2405,6 +2421,7 @@ export default function PipelineFinancialStatements({
   // Pulled here so the Excel export can emit each letter as its own sheet.
   const { data: nceLettersData } = useQuery({
     queryKey: ["nce-letters", engagementId, engagement?.financial_year],
+    staleTime: FS_STALE_TIME,
     queryFn: async () => {
       if (!engagement?.financial_year) return [] as any[];
       const { data } = await (supabase.from as any)("nce_letters")
@@ -2423,6 +2440,7 @@ export default function PipelineFinancialStatements({
   // exactly what lands in the exported sheet.
   const { data: nceNotesData } = useQuery({
     queryKey: ["nce-financial-notes", engagementId, engagement?.financial_year],
+    staleTime: FS_STALE_TIME,
     queryFn: async () => {
       if (!engagement?.financial_year) return [] as any[];
       const { data } = await (supabase.from as any)("nce_financial_notes")
@@ -2440,6 +2458,7 @@ export default function PipelineFinancialStatements({
   // boilerplate list of accounting policies.
   const { data: notesToAccountsData } = useQuery({
     queryKey: ["notes-to-accounts-data", engagementId],
+    staleTime: FS_STALE_TIME,
     queryFn: async () => {
       const { data } = await (supabase.from as any)("notes_to_accounts_data")
         .select("*")
@@ -2597,6 +2616,7 @@ export default function PipelineFinancialStatements({
   // as COA Mapping for every engagement, so the two screens always agree.
   const { data: aliasRows } = useQuery({
     queryKey: ["ledger-aliases-fs", engagement?.client_id],
+    staleTime: FS_STALE_TIME,
     queryFn: async () => {
       if (!engagement?.client_id) return [];
       const { data } = await (supabase.from as any)("ledger_aliases")
@@ -3728,176 +3748,103 @@ export default function PipelineFinancialStatements({
     return true;
   };
 
-  const nceCyAmounts: Record<string, number> = isNonCorporate
-    ? (() => {
-        const out = { ...computedAmounts };
-        // Phase E (legacy stage5_notes path) — kept for backward compatibility
-        // with engagements that have stage5_notes populated. NCE notes path
-        // below overrides any value found here when present.
-        for (const [code, key] of Object.entries(NCE_CODE_TO_NOTE_KEY)) {
-          const section = NCE_CODE_TO_SECTION[code];
-          if (!section) continue;
-          const sum = sumNotesSubRowsCY(stage5NotesData ?? null, section, key);
-          if (sum == null) continue;
-          out[code] = section === "bs_liab" ? -sum : sum;
-        }
-        // Bug 6 — NCE PPE / CWIP / Intangibles use the FA grid total when
-        // populated.
-        const faCy = getFAGridNetBlockTotal(stage5NotesData ?? null, "cy");
-        if (faCy != null) out["NCE_PPE"] = faCy;
-        // Issue 3 fix — auditor's Notes-to-Accounts (nce_financial_notes)
-        // grand total drives the BS / P&L face. Includes manual customRows
-        // added via "+ Add row" which the legacy stage5_notes breakup array
-        // never carried — fixing the mismatch where Trade Payables note
-        // showed ₹19,94,766 but BS face read ₹19,84,766.
-        for (const code of Object.keys(NCE_CODE_TO_NOTE)) {
-          applyNCENoteTotal(out, code, "cy");
-        }
-        // ROOT-CAUSE FIX (Issue 2 — TOTAL rows didn't match the line items):
-        // applyNCENoteTotal overrides LEAF codes (NCE_STLA, NCE_TP, …) with
-        // the note totals, but the BS face reads the PARENT totals NCE_AST /
-        // NCE_EL which were computed earlier from the raw TB sums. After any
-        // leaf override the parents go stale, so "TOTAL ASSETS" / "TOTAL
-        // EQUITY AND LIABILITIES" no longer equalled the sum of the rows
-        // shown above them. Recompute the parents from the (now-authoritative)
-        // leaf codes so the totals always reconcile with the displayed lines.
-        //
-        // 2026-06-06 FIX: Fold BS_EQ_RS (Corporate "Reserves & Surplus" code)
-        // into NCE_CAP when present. ALL 10 NCE clients had "Profit & Loss A/c"
-        // mapped to BS_EQ_RS instead of NCE_RES/NCE_CAP. Since NCE_LIAB_IDS
-        // doesn't include BS_EQ_RS, the P&L accumulation was missing from
-        // Total E&L, causing every NCE client's BS to be out by the net profit.
-        // This folds it into NCE_CAP (Capital Account) so it reaches the total.
-        // IMPORTANT: zero BS_EQ_RS after folding so the NCE BS doesn't show
-        // both a Capital Account row (with the folded value) AND a separate
-        // "Reserves and surplus" row (reading the unzeroed BS_EQ_RS). The
-        // buildNCEBSRows function at line 319 renders BS_EQ_RS as its own
-        // row — if we leave it non-zero, the same money appears twice
-        // visually (even though Total only counts NCE_CAP).
-        // Fold corporate/orphan codes into their NCE equivalents so they
-        // reach the NCE BS totals. Without these folds, ledgers mapped to
-        // non-NCE codes silently drop out of Total Assets / Total E&L.
-        // BS_EQ_RS → NCE_CAP: "Profit & Loss A/c" (Tally) = Capital Account in partnerships.
-        if (out["BS_EQ_RS"] && Math.abs(out["BS_EQ_RS"]) > 0.005) {
-          out["NCE_CAP"] = (out["NCE_CAP"] || 0) + out["BS_EQ_RS"];
-          out["BS_EQ_RS"] = 0;
-        }
-        // NCE_DEPR / NCE_INTG: these are P&L expense codes for depreciation
-        // that the COA mapper assigned to fixed-asset ledgers. They're part of
-        // the P&L chain (expenses that reduce net profit), NOT BS assets.
-        // The net profit is already auto-credited to BS_EQ_RS (line 2982) which
-        // includes depreciation via the P&L. So NCE_DEPR amounts are already
-        // reaching the BS via the net-profit auto-credit → NCE_CAP fold.
-        // We must NOT fold them into NCE_PPE (which would double-count them
-        // as both an expense reducing profit AND an asset).
-        // Instead, zero them so they don't create an orphan amount that falls
-        // outside both BS totals (NCE_AST / NCE_EL).
-        // Zero orphan codes that aren't in NCE_ASSET_IDS or NCE_LIAB_IDS.
-        // These would create phantom amounts outside both totals.
-        if (out["NCE_DEPR"]) out["NCE_DEPR"] = 0;
-        if (out["NCE_INTG"]) out["NCE_INTG"] = 0;
-        // 2026-06-06 STRUCTURAL FIX: BS TOTAL always comes from the signed
-        // TB (computedAmounts), NEVER from note-overridden leaf values.
-        // Notes may override individual leaf codes for display (so the BS
-        // row for "Trade Payables" shows the note breakup total), but the
-        // TOTAL row is locked to the signed TB. This way the BS ALWAYS
-        // balances — even if notes have drift from auto-populate issues.
-        // The FsHealthPanel surfaces any per-code drift; the BS TOTAL
-        // stays correct regardless.
-        const tbCy = { ...computedAmounts };
-        if (tbCy["BS_EQ_RS"] && Math.abs(tbCy["BS_EQ_RS"]) > 0.005) {
-          tbCy["NCE_CAP"] = (tbCy["NCE_CAP"] || 0) + tbCy["BS_EQ_RS"];
-        }
-        out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (tbCy[id] || 0), 0);
-        out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (tbCy[id] || 0), 0);
-        return out;
-      })()
-    : computedAmounts;
-  const ncePyAmounts: Record<string, number> = isNonCorporate
-    ? (() => {
-        // ─── PY BS-code authority (revised 2026-06-05) ─────────────────────
-        // Previous policy (pre-SHREE HARI INFRA fix): for BS codes, the Tally
-        // opening balance OWNED the PY face value; notes-derived totals were
-        // skipped whenever a non-zero opening balance existed. That prevented
-        // OM REALTY's stale-notes drift, but for SHREE HARI INFRA it caused a
-        // visible inconsistency — "Member Sales (POS) ₹27.9 crore" entered as
-        // a manual customRow in the other_cl note showed in the Note Total
-        // (₹55.92 cr) but was completely absent from the BS face PY column
-        // (which showed ₹14.99 lakh — just the Tally TDS payable opening).
-        //
-        // New policy: notes total wins for PY too (mirrors the CY logic at
-        // lines 3690-3692). When the user types PY values into notes, those
-        // values flow to the BS face. If a divergence between Tally opening
-        // balance and notes appears, the FsHealthPanel surfaces it visibly
-        // (drift_minor / drift_severe). The "Re-correct from COA Mapping"
-        // button is still available to reset notes back to Tally-driven
-        // values when desired.
-        //
-        // PyShell guard preserved: when this engagement has a dedicated PY
-        // shell (pre-existing PY engagement synced from Tally), that data
-        // is authoritative — we don't let notes overwrite it. Only when the
-        // engagement is operating WITHOUT a PY shell do notes drive PY.
-        const out = { ...mergedPY };
-        const isBSCode = (code: string): boolean => {
-          const section = NCE_CODE_TO_SECTION[code];
-          if (section === "bs_liab" || section === "bs_asset") return true;
-          return /^NCE_(CAP|LTB|OLTL|LTP|STB|TP|OCL|STP|PPE|INTG|CWIP|NCINV|LTLA|ONCA|CINV|STCK|TR|CASH|STLA|OCA)$/.test(code);
-        };
-        // Pass 1 — stage5_notes (legacy path).
-        // Per the SHREE HARI INFRA policy notes are normally the audit document
-        // of record, so manually-added PY entries flow through to the BS face.
-        // EXCEPTION (OM REALTY round 2): when this engagement HAS a PY shell
-        // AND zero CY ledgers are mapped to the BS code in coa_mapping, the
-        // notes' manual rows are unambiguously stale (the auditor moved the
-        // backing ledger to a DIFFERENT BS code in COA Mapping but never
-        // deleted the original row). In that case the BS face MUST follow
-        // coa_mapping (= 0) instead of resurrecting the orphan note total —
-        // otherwise the FS face contradicts the COA Mapping screen for the
-        // same line item, which is exactly what OM REALTY's Short-term
-        // borrowings PY 80,444.73 ('000) symptom was. CY behaviour unchanged.
-        const orphanPYBsCode = (code: string): boolean => {
-          if (!hasPyShellBS) return false;
-          if (!isBSCode(code)) return false;
-          return !(code in pyShellBSAmounts);
-        };
-        for (const [code, key] of Object.entries(NCE_CODE_TO_NOTE_KEY)) {
-          const section = NCE_CODE_TO_SECTION[code];
-          if (!section) continue;
-          if (orphanPYBsCode(code)) continue;
-          const sum = sumNotesSubRowsPY(stage5NotesData ?? null, section, key);
-          if (sum == null) continue;
-          out[code] = section === "bs_liab" ? -sum : sum;
-        }
-        const faPy = getFAGridNetBlockTotal(stage5NotesData ?? null, "py");
-        if (faPy != null) out["NCE_PPE"] = faPy;
-        // Pass 2 — nce_financial_notes (Stage 8 path, the modern one).
-        for (const code of Object.keys(NCE_CODE_TO_NOTE)) {
-          if (orphanPYBsCode(code)) continue;
-          applyNCENoteTotal(out, code, "py");
-        }
-        // See nceCyAmounts — recompute PY parents from leaf codes so the
-        // PY "TOTAL ASSETS" / "TOTAL EQUITY AND LIABILITIES" rows reconcile
-        // with the PY line items shown above them.
-        // 2026-06-06: Fold orphan codes into NCE equivalents for PY too.
-        if (out["BS_EQ_RS"] && Math.abs(out["BS_EQ_RS"]) > 0.005) {
-          out["NCE_CAP"] = (out["NCE_CAP"] || 0) + out["BS_EQ_RS"];
-          out["BS_EQ_RS"] = 0;
-        }
-        if (out["NCE_DEPR"]) out["NCE_DEPR"] = 0;
-        if (out["NCE_INTG"]) out["NCE_INTG"] = 0;
-        // PY TOTAL: use CY TB opening balances (computedAmountsPY) which
-        // are balanced by construction (every TB is balanced at every point
-        // in time; openings = prior-year closings). mergedPY mixes CY
-        // openings + PY shell + manual amounts which can drift.
-        const tbPy = { ...computedAmountsPY };
-        if (tbPy["BS_EQ_RS"] && Math.abs(tbPy["BS_EQ_RS"]) > 0.005) {
-          tbPy["NCE_CAP"] = (tbPy["NCE_CAP"] || 0) + tbPy["BS_EQ_RS"];
-        }
-        out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (tbPy[id] || 0), 0);
-        out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (tbPy[id] || 0), 0);
-        return out;
-      })()
-    : mergedPY;
+  // PERF: memoize nceCyAmounts — previously an un-memoized IIFE that
+  // recomputed on every render (object spreads, NCE_CODE_TO_NOTE iteration,
+  // applyNCENoteTotal calls, sumNotesSubRowsCY, etc.). Now only recomputes
+  // when its actual inputs change.
+  const nceCyAmounts: Record<string, number> = useMemo(() => {
+    if (!isNonCorporate) return computedAmounts;
+    const out = { ...computedAmounts };
+    // Phase E (legacy stage5_notes path) — kept for backward compatibility
+    // with engagements that have stage5_notes populated. NCE notes path
+    // below overrides any value found here when present.
+    for (const [code, key] of Object.entries(NCE_CODE_TO_NOTE_KEY)) {
+      const section = NCE_CODE_TO_SECTION[code];
+      if (!section) continue;
+      const sum = sumNotesSubRowsCY(stage5NotesData ?? null, section, key);
+      if (sum == null) continue;
+      out[code] = section === "bs_liab" ? -sum : sum;
+    }
+    // Bug 6 — NCE PPE / CWIP / Intangibles use the FA grid total when
+    // populated.
+    const faCy = getFAGridNetBlockTotal(stage5NotesData ?? null, "cy");
+    if (faCy != null) out["NCE_PPE"] = faCy;
+    // Issue 3 fix — auditor's Notes-to-Accounts (nce_financial_notes)
+    // grand total drives the BS / P&L face. Includes manual customRows
+    // added via "+ Add row" which the legacy stage5_notes breakup array
+    // never carried — fixing the mismatch where Trade Payables note
+    // showed ₹19,94,766 but BS face read ₹19,84,766.
+    for (const code of Object.keys(NCE_CODE_TO_NOTE)) {
+      applyNCENoteTotal(out, code, "cy");
+    }
+    // ROOT-CAUSE FIX (Issue 2 — TOTAL rows didn't match the line items):
+    // Fold BS_EQ_RS into NCE_CAP, zero orphan codes, lock BS TOTAL to TB.
+    if (out["BS_EQ_RS"] && Math.abs(out["BS_EQ_RS"]) > 0.005) {
+      out["NCE_CAP"] = (out["NCE_CAP"] || 0) + out["BS_EQ_RS"];
+      out["BS_EQ_RS"] = 0;
+    }
+    if (out["NCE_DEPR"]) out["NCE_DEPR"] = 0;
+    if (out["NCE_INTG"]) out["NCE_INTG"] = 0;
+    // STRUCTURAL FIX: BS TOTAL always comes from the signed TB, not
+    // from note-overridden leaf values.
+    const tbCy = { ...computedAmounts };
+    if (tbCy["BS_EQ_RS"] && Math.abs(tbCy["BS_EQ_RS"]) > 0.005) {
+      tbCy["NCE_CAP"] = (tbCy["NCE_CAP"] || 0) + tbCy["BS_EQ_RS"];
+    }
+    out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (tbCy[id] || 0), 0);
+    out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (tbCy[id] || 0), 0);
+    return out;
+  }, [isNonCorporate, computedAmounts, stage5NotesData, nceNotesByType]);
+  // PERF: memoize ncePyAmounts — same pattern as nceCyAmounts above.
+  const ncePyAmounts: Record<string, number> = useMemo(() => {
+    if (!isNonCorporate) return mergedPY;
+    // ─── PY BS-code authority (revised 2026-06-05) ─────────────────────
+    // Notes total wins for PY too (mirrors the CY logic). FsHealthPanel
+    // surfaces any divergence between Tally opening and notes.
+    // PyShell guard preserved: when this engagement has a dedicated PY
+    // shell, that data is authoritative.
+    const out = { ...mergedPY };
+    const isBSCode = (code: string): boolean => {
+      const section = NCE_CODE_TO_SECTION[code];
+      if (section === "bs_liab" || section === "bs_asset") return true;
+      return /^NCE_(CAP|LTB|OLTL|LTP|STB|TP|OCL|STP|PPE|INTG|CWIP|NCINV|LTLA|ONCA|CINV|STCK|TR|CASH|STLA|OCA)$/.test(code);
+    };
+    const orphanPYBsCode = (code: string): boolean => {
+      if (!hasPyShellBS) return false;
+      if (!isBSCode(code)) return false;
+      return !(code in pyShellBSAmounts);
+    };
+    // Pass 1 — stage5_notes (legacy path).
+    for (const [code, key] of Object.entries(NCE_CODE_TO_NOTE_KEY)) {
+      const section = NCE_CODE_TO_SECTION[code];
+      if (!section) continue;
+      if (orphanPYBsCode(code)) continue;
+      const sum = sumNotesSubRowsPY(stage5NotesData ?? null, section, key);
+      if (sum == null) continue;
+      out[code] = section === "bs_liab" ? -sum : sum;
+    }
+    const faPy = getFAGridNetBlockTotal(stage5NotesData ?? null, "py");
+    if (faPy != null) out["NCE_PPE"] = faPy;
+    // Pass 2 — nce_financial_notes (Stage 8 path, the modern one).
+    for (const code of Object.keys(NCE_CODE_TO_NOTE)) {
+      if (orphanPYBsCode(code)) continue;
+      applyNCENoteTotal(out, code, "py");
+    }
+    // Fold orphan codes + lock PY TOTAL to CY TB openings.
+    if (out["BS_EQ_RS"] && Math.abs(out["BS_EQ_RS"]) > 0.005) {
+      out["NCE_CAP"] = (out["NCE_CAP"] || 0) + out["BS_EQ_RS"];
+      out["BS_EQ_RS"] = 0;
+    }
+    if (out["NCE_DEPR"]) out["NCE_DEPR"] = 0;
+    if (out["NCE_INTG"]) out["NCE_INTG"] = 0;
+    const tbPy = { ...computedAmountsPY };
+    if (tbPy["BS_EQ_RS"] && Math.abs(tbPy["BS_EQ_RS"]) > 0.005) {
+      tbPy["NCE_CAP"] = (tbPy["NCE_CAP"] || 0) + tbPy["BS_EQ_RS"];
+    }
+    out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (tbPy[id] || 0), 0);
+    out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (tbPy[id] || 0), 0);
+    return out;
+  }, [isNonCorporate, mergedPY, computedAmountsPY, stage5NotesData, nceNotesByType, hasPyShellBS, pyShellBSAmounts]);
 
   // ─── NCE stats bar ───────────────────────────────────────────────────────────
   // Sum individual leaf codes so the stats bar is independent of computeTotal
@@ -3931,72 +3878,11 @@ export default function PipelineFinancialStatements({
   // a stale row (Rates and taxes PY = 39,96,555 etc.) is still in the note
   // breakup. The banner names the row and the difference so the auditor knows
   // exactly which note to re-correct.
-  const nceCodeLabels = useMemo(() => {
-    const m: Record<string, string> = {};
-    for (const item of NCE_FLAT_ITEMS) {
-      if (item.code) m[item.code] = (item.name || "")
-        .replace(/^\([a-z]+\)\s*/i, "")  // drop "(a)", "(b)" prefixes
-        .replace(/^\s*\([ivx]+\)\s*/i, "")
-        .trim();
-    }
-    return m;
-  }, []);
-  const nceNotesMismatches = useMemo((): Array<{
-    code: string; label: string; note: string;
-    faceCy: number; noteCy: number; diffCy: number;
-    facePy: number; notePy: number; diffPy: number;
-  }> => {
-    if (!isNonCorporate) return [];
-    const list: Array<{ code: string; label: string; note: string;
-      faceCy: number; noteCy: number; diffCy: number;
-      facePy: number; notePy: number; diffPy: number; }> = [];
-    // 2026-06-01 — Mismatch RULES (user feedback round 2):
-    //   • BS code, CY column → face = TB closing + note manual rows.
-    //     Should always match — flag any divergence (real bug).
-    //   • BS code, PY column → face = TB opening balance (authoritative
-    //     per the earlier "PY follows COA mapping" fix). The note CAN
-    //     legitimately differ when the auditor types breakup rows beyond
-    //     what TB carries (HUF loans, advances, reclassifications, etc.).
-    //     Do NOT flag — the user reported false positives on Trade
-    //     Payables / Long-term borrowings / Short-term borrowings where
-    //     the face matched their COA-mapping expectation but the note
-    //     held additional manual-entered rows.
-    //   • P&L code, either column → P&L has no opening balance so face
-    //     must equal note total. Flag any divergence.
-    const NCE_BS_CODES = new Set([
-      "NCE_CAP","NCE_LTB","NCE_OLTL","NCE_LTP","NCE_STB","NCE_TP","NCE_OCL","NCE_STP",
-      "NCE_PPE","NCE_INTG","NCE_CWIP","NCE_NCINV","NCE_LTLA","NCE_ONCA",
-      "NCE_CINV","NCE_STCK","NCE_TR","NCE_CASH","NCE_STLA","NCE_OCA",
-    ]);
-    for (const [code, meta] of Object.entries(NCE_CODE_TO_NOTE)) {
-      const row = nceNotesByType[meta.note];
-      if (!row) continue;
-      const isPatternA = meta.col === "lt" || meta.col === "st";
-      const noteCy = getNCENoteFaceTotal(row, "cy",
-        isPatternA ? "A" : "B", meta.col);
-      const notePy = getNCENoteFaceTotal(row, "py",
-        isPatternA ? "A" : "B", meta.col);
-      if (noteCy == null && notePy == null) continue;
-      const faceCy = Math.abs(Number(nceCyAmounts[code] ?? 0));
-      const facePy = Math.abs(Number(ncePyAmounts[code] ?? 0));
-      const nCy = Math.abs(Number(noteCy ?? 0));
-      const nPy = Math.abs(Number(notePy ?? 0));
-      const diffCy = Math.round((faceCy - nCy) * 100) / 100;
-      const diffPy = Math.round((facePy - nPy) * 100) / 100;
-      const isBSCode = NCE_BS_CODES.has(code);
-      // Only flag CY drift on BS codes; flag both columns on P&L codes.
-      const cyMismatch = Math.abs(diffCy) > 1;
-      const pyMismatch = !isBSCode && Math.abs(diffPy) > 1;
-      if (cyMismatch || pyMismatch) {
-        list.push({
-          code, label: nceCodeLabels[code] || code, note: meta.note,
-          faceCy, noteCy: nCy, diffCy,
-          facePy, notePy: nPy, diffPy,
-        });
-      }
-    }
-    return list;
-  }, [isNonCorporate, nceNotesByType, nceCyAmounts, ncePyAmounts, nceCodeLabels]);
+  // PERF: nceCodeLabels removed — was only used by the now-removed
+  // nceNotesMismatches useMemo. Labels are in FsHealthPanel via NCE_NOTE_LABEL.
+  // PERF: nceNotesMismatches was dead code — the same drift data is now
+  // surfaced by FsHealthPanel via fsReconResult. Removed to eliminate a
+  // redundant useMemo that called getNCENoteFaceTotal for every NCE code.
 
   // ─── Active summary values (swap between NCE and corporate in JSX) ───────
   // Issue 2 (today) — same ₹2 tolerance for corporate BS check.
@@ -4068,12 +3954,25 @@ export default function PipelineFinancialStatements({
   const hasSevereDrift = (fsReconResult?.severeCount ?? 0) > 0;
 
   // Phase 8 Step 2: persist severe drift to fs_reconciliation_log so
-  // historical drift is auditable. Fires once per mount when drift exists.
+  // historical drift is auditable.
+  // PERF FIX: The old dependency `fsReconResult?.computedAt` used
+  // `new Date().toISOString()` — a new string on every recompute, so the
+  // effect fired a Supabase INSERT on every render cycle. Now we build a
+  // stable fingerprint from the severe drift codes and only log when the
+  // set of drifted codes actually changes (or on first mount).
+  const driftFingerprint = useMemo(() => {
+    if (!fsReconResult || fsReconResult.severeCount === 0) return "";
+    return fsReconResult.rows
+      .filter(r => r.status === "drift_severe")
+      .map(r => `${r.code}:${r.delta.cy}:${r.delta.py}`)
+      .sort()
+      .join("|");
+  }, [fsReconResult]);
   useEffect(() => {
-    if (fsReconResult && fsReconResult.severeCount > 0) {
+    if (driftFingerprint && fsReconResult && fsReconResult.severeCount > 0) {
       logReconciliationDrift(engagementId, user?.id ?? null, fsReconResult).catch(() => {});
     }
-  }, [fsReconResult?.computedAt]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [driftFingerprint, engagementId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Final Export Excel gate: corporate must satisfy ALL three; non-corporate
   // entities use BS-balance + severe-drift check.
@@ -7556,6 +7455,7 @@ export default function PipelineFinancialStatements({
         bsFacePy={isNonCorporate ? ncePyAmounts : computedAmountsPY}
         coaTotals={coaTotalsByCode}
         visible={true}
+        precomputedResult={fsReconResult}
       />
 
       {/* 2026-05-30 — Re-correct banner: when the NCE BS doesn't balance,

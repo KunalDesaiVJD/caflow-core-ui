@@ -47,6 +47,10 @@ interface Props {
   /** Hide the panel entirely (the parent already gates on entity-type +
    *  whether notes data is loaded). */
   visible:         boolean;
+  /** PERF: when the parent has already computed the reconciliation result
+   *  (e.g. for the export-block gate), pass it here to avoid running the
+   *  validator a second time inside the panel. */
+  precomputedResult?: import("@/lib/fsReconciliation").ReconResult | null;
 }
 
 function fmtINR(n: number): string {
@@ -55,16 +59,18 @@ function fmtINR(n: number): string {
   return sign + abs.toLocaleString("en-IN");
 }
 
-export default function FsHealthPanel({ nceNotesByType, corporateNotes, bsFaceCy, bsFacePy, coaTotals, visible }: Props) {
+export default function FsHealthPanel({ nceNotesByType, corporateNotes, bsFaceCy, bsFacePy, coaTotals, visible, precomputedResult }: Props) {
   const [open, setOpen] = useState(false);
 
-  const result = useMemo(() => {
+  // PERF: reuse the parent's pre-computed result when available. This
+  // eliminates the biggest performance bottleneck — running the full
+  // validator twice per render cycle (once in the parent for the export-
+  // block gate, once here for display).
+  const computed = useMemo(() => {
     if (!visible) return null;
-    // 2026-06-05 Phase 6 — branch by which notes payload was supplied.
-    // Corporate engagements pass corporateNotes (stage5_notes JSON);
-    // NCE engagements pass nceNotesByType (nce_financial_notes rows).
-    // The same ReconRow shape comes out either way, so the rendering
-    // below is unified.
+    if (precomputedResult) return precomputedResult;
+    // Fallback: compute locally when no pre-computed result is available
+    // (e.g. Corporate path or standalone usage).
     if (corporateNotes !== undefined && corporateNotes !== null) {
       return validateCorporateFSReconciliation({
         corporateNotes,
@@ -80,7 +86,8 @@ export default function FsHealthPanel({ nceNotesByType, corporateNotes, bsFaceCy
       liabCodes: NCE_LIAB_CODE_SET,
       coaTotals,
     });
-  }, [visible, nceNotesByType, corporateNotes, bsFaceCy, bsFacePy, coaTotals]);
+  }, [visible, precomputedResult, nceNotesByType, corporateNotes, bsFaceCy, bsFacePy, coaTotals]);
+  const result = computed;
 
   if (!visible || !result) return null;
 
