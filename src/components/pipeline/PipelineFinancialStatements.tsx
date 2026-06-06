@@ -3778,13 +3778,16 @@ export default function PipelineFinancialStatements({
       applyNCENoteTotal(out, code, "cy");
     }
     // ROOT-CAUSE FIX (Issue 2 — TOTAL rows didn't match the line items):
-    // Fold BS_EQ_RS into NCE_CAP, zero orphan codes, lock BS TOTAL to TB.
+    // Fold BS_EQ_RS into NCE_CAP, lock BS TOTAL to TB.
     if (out["BS_EQ_RS"] && Math.abs(out["BS_EQ_RS"]) > 0.005) {
       out["NCE_CAP"] = (out["NCE_CAP"] || 0) + out["BS_EQ_RS"];
       out["BS_EQ_RS"] = 0;
     }
-    if (out["NCE_DEPR"]) out["NCE_DEPR"] = 0;
-    if (out["NCE_INTG"]) out["NCE_INTG"] = 0;
+    // NOTE: NCE_DEPR / NCE_INTG are NOT zeroed here because this map is
+    // shared by both BSView and PLView. The BS TOTAL uses tbCy (a separate
+    // spread) which reduces only NCE_ASSET_IDS / NCE_LIAB_IDS — neither
+    // array contains NCE_DEPR or NCE_INTG, so they don't affect the BS
+    // total. Zeroing them would break the P&L display (depreciation = 0).
     // STRUCTURAL FIX: BS TOTAL always comes from the signed TB, not
     // from note-overridden leaf values.
     const tbCy = { ...computedAmounts };
@@ -3793,6 +3796,22 @@ export default function PipelineFinancialStatements({
     }
     out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (tbCy[id] || 0), 0);
     out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (tbCy[id] || 0), 0);
+    // ── Recompute P&L parent totals + profit chain after note overrides ──
+    // Note overrides change leaf P&L codes (NCE_OTH_EXP, NCE_EMP_EXP, etc.)
+    // but the parent codes (NCE_PL_EXP, NCE_PL_INC) and profit chain
+    // (NCE_PROF_V → NCE_NET_PROF) are still from raw TB. Recompute so
+    // "Total Expenses" and "Profit for the year" match the individual rows.
+    out["NCE_PL_EXP"] = (out["NCE_COGS"] || 0) + (out["NCE_CII"] || 0)
+                       + (out["NCE_EMP_EXP"] || 0) + (out["NCE_FIN_COST"] || 0)
+                       + (out["NCE_DEPR"] || 0) + (out["NCE_OTH_EXP"] || 0);
+    out["NCE_PL_INC"] = (out["NCE_REV_OPS"] || 0) + (out["NCE_REV_OTH"] || 0);
+    const inc = out["NCE_PL_INC"] || 0;
+    const exp = out["NCE_PL_EXP"] || 0;
+    out["NCE_PROF_V"]   = Math.round((-inc - exp) * 100) / 100;
+    out["NCE_PROF_VII"] = Math.round((out["NCE_PROF_V"]   - (out["NCE_EXCEP"]    || 0)) * 100) / 100;
+    out["NCE_PROF_IX"]  = Math.round((out["NCE_PROF_VII"] - (out["NCE_EXTORD"]   || 0)) * 100) / 100;
+    out["NCE_PROF_XI"]  = Math.round((out["NCE_PROF_IX"]  - (out["NCE_PART_REM"] || 0)) * 100) / 100;
+    out["NCE_NET_PROF"] = Math.round((out["NCE_PROF_XI"]  - (out["NCE_TAX"]      || 0)) * 100) / 100;
     return out;
   }, [isNonCorporate, computedAmounts, stage5NotesData, nceNotesByType]);
   // PERF: memoize ncePyAmounts — same pattern as nceCyAmounts above.
@@ -3835,14 +3854,25 @@ export default function PipelineFinancialStatements({
       out["NCE_CAP"] = (out["NCE_CAP"] || 0) + out["BS_EQ_RS"];
       out["BS_EQ_RS"] = 0;
     }
-    if (out["NCE_DEPR"]) out["NCE_DEPR"] = 0;
-    if (out["NCE_INTG"]) out["NCE_INTG"] = 0;
+    // See CY comment: NCE_DEPR/NCE_INTG not zeroed — P&L needs them.
     const tbPy = { ...computedAmountsPY };
     if (tbPy["BS_EQ_RS"] && Math.abs(tbPy["BS_EQ_RS"]) > 0.005) {
       tbPy["NCE_CAP"] = (tbPy["NCE_CAP"] || 0) + tbPy["BS_EQ_RS"];
     }
     out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (tbPy[id] || 0), 0);
     out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (tbPy[id] || 0), 0);
+    // PY profit chain recomputation (mirrors CY above).
+    out["NCE_PL_EXP"] = (out["NCE_COGS"] || 0) + (out["NCE_CII"] || 0)
+                       + (out["NCE_EMP_EXP"] || 0) + (out["NCE_FIN_COST"] || 0)
+                       + (out["NCE_DEPR"] || 0) + (out["NCE_OTH_EXP"] || 0);
+    out["NCE_PL_INC"] = (out["NCE_REV_OPS"] || 0) + (out["NCE_REV_OTH"] || 0);
+    const pyInc = out["NCE_PL_INC"] || 0;
+    const pyExp = out["NCE_PL_EXP"] || 0;
+    out["NCE_PROF_V"]   = Math.round((-pyInc - pyExp) * 100) / 100;
+    out["NCE_PROF_VII"] = Math.round((out["NCE_PROF_V"]   - (out["NCE_EXCEP"]    || 0)) * 100) / 100;
+    out["NCE_PROF_IX"]  = Math.round((out["NCE_PROF_VII"] - (out["NCE_EXTORD"]   || 0)) * 100) / 100;
+    out["NCE_PROF_XI"]  = Math.round((out["NCE_PROF_IX"]  - (out["NCE_PART_REM"] || 0)) * 100) / 100;
+    out["NCE_NET_PROF"] = Math.round((out["NCE_PROF_XI"]  - (out["NCE_TAX"]      || 0)) * 100) / 100;
     return out;
   }, [isNonCorporate, mergedPY, computedAmountsPY, stage5NotesData, nceNotesByType, hasPyShellBS, pyShellBSAmounts]);
 
@@ -3858,7 +3888,7 @@ export default function PipelineFinancialStatements({
   const nceTotalLiabilities = nceCyAmounts["NCE_EL"]  || 0;
   const nceBsDiff           = Math.round((nceTotalAssets + nceTotalLiabilities) * 100) / 100;
   const nceBsBalanced       = Math.abs(nceTotalAssets + nceTotalLiabilities) < 2;
-  const nceNetProfit        = computedAmounts["NCE_NET_PROF"] || 0;
+  const nceNetProfit        = nceCyAmounts["NCE_NET_PROF"] || 0;
 
   // NCE PY balance check — same approach, using TB-locked PY totals.
   const ncePyTotalAssets      = ncePyAmounts["NCE_AST"] || 0;
@@ -7946,10 +7976,15 @@ export default function PipelineFinancialStatements({
               </>
             ) : isNonCorporate ? (
               <>
+                {/* FIX: P&L must use nceCyAmounts/ncePyAmounts (note-overridden)
+                     not computedAmounts/mergedPY (raw TB). The BS view already
+                     used nceCyAmounts — P&L was left on raw TB, causing
+                     face values to diverge from note totals for SHRI RAM
+                     PRODUCTS and all other NCE clients. */}
                 <NCEPLView
                   engagementId={engagementId}
-                  cyAmounts={computedAmounts}
-                  pyAmounts={mergedPY}
+                  cyAmounts={nceCyAmounts}
+                  pyAmounts={ncePyAmounts}
                   cyYear={cyYear}
                   pyYear={pyYear}
                   entityName={engagement?.clients?.name || ""}
@@ -8735,8 +8770,8 @@ export default function PipelineFinancialStatements({
                    style={{ maxWidth: "794px", width: "100%", minHeight: "900px", padding: "28px 32px" }}>
                 <NCEPLView
                   engagementId={engagementId}
-                  cyAmounts={computedAmounts}
-                  pyAmounts={mergedPY}
+                  cyAmounts={nceCyAmounts}
+                  pyAmounts={ncePyAmounts}
                   cyYear={cyYear}
                   pyYear={pyYear}
                   entityName={engagement?.clients?.name || ""}
