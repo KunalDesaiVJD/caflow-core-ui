@@ -1741,16 +1741,26 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     //   A/c" with opening=0, whose movement IS the current-year P&L still pending
     //   transfer).  If such a non-accumulator ledger has movement → books are
     //   closed → skip the netPL auto-flow.
-    if (!isNonCorporate) {
+    // Auto-credit runs for BOTH corporate AND NCE entities.
+    // Previously guarded by `!isNonCorporate` which skipped NCE — causing the
+    // BS total at the bottom of the COA mapping screen to show an imbalance
+    // equal to the net profit for every NCE client.
+    {
       const reservesLedgers = tbAccounts.filter(a => coaMapping[a.account_name]?.code === "BS_EQ_RS");
       // Shared with PipelineFinancialStatements so the COA-mapping screen and the
       // Financial Statements never disagree on whether to credit current-year profit.
       const booksClosed = currentYearProfitAlreadyInReserves(reservesLedgers);
 
       if (!booksClosed) {
-        const rev   = amounts["PL_REV"] || 0; // negative (credit)
-        const exp   = amounts["PL_EXP"] || 0; // positive (debit)
-        const netPL = Math.round((-rev - exp) * 100) / 100;
+        // For corporate: use PL_REV + PL_EXP. For NCE: use NCE profit chain.
+        let netPL: number;
+        if (isNonCorporate) {
+          netPL = amounts["NCE_NET_PROF"] || 0;
+        } else {
+          const rev = amounts["PL_REV"] || 0; // negative (credit)
+          const exp = amounts["PL_EXP"] || 0; // positive (debit)
+          netPL = Math.round((-rev - exp) * 100) / 100;
+        }
         if (Math.abs(netPL) > 0.005) {
           amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) - netPL;
           // Re-run the full tree so every parent (BS_EQ → BS root) picks up the change
