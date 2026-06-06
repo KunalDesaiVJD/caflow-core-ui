@@ -3057,21 +3057,25 @@ export default function PipelineFinancialStatements({
       amounts["NCE_NET_PROF"] = Math.round((amounts["NCE_PROF_XI"]  - (amounts["NCE_TAX"]      || 0)) * 100) / 100;
     }
 
-    // ── Auto-flow net P&L to BS_EQ_RS for corporate entities ─────────────────
-    // Revenue (PL_REV, credit = negative) and Expenses (PL_EXP, debit = positive)
-    // are in P&L codes, not in the BS.  The current-year net profit must be
-    // credited to Reserves & Surplus so the Balance Sheet balances.
-    // This mirrors the standard closing entry: Dr P&L A/c → Cr Reserves & Surplus.
-    // Note: if the user has set a manual override on BS_EQ_RS, this still applies
-    // on top — net profit is a required accounting transfer, not an optional entry.
+    // ── Auto-flow net P&L to BS_EQ_RS ─────────────────────────────────────────
+    // Revenue and Expenses are P&L codes, not BS codes. The current-year net
+    // profit must be credited to the BS so it balances. For corporate entities
+    // this credits "Reserves & Surplus" (BS_EQ_RS). For NCE entities it credits
+    // BS_EQ_RS which is later folded into NCE_CAP (Capital Account) in
+    // nceCyAmounts.
     //
-    // BOOKS-CLOSED GUARD (shared with PipelineStage3 via currentYearProfitAlreadyInReserves):
-    // when the firm has closed its books and already journalled the year's P&L
-    // into a reserves ledger, the closing balance ALREADY includes the profit —
-    // crediting netPL again would double-count.  Skipping it here keeps FS and the
-    // COA-mapping screen perfectly consistent.  The helper is accumulator-aware:
-    // if an un-transferred "Profit & Loss A/c" (opening ≈ 0) is present the profit
-    // has NOT been transferred, so it is still credited (the ACCU PANELS case).
+    // WHY THIS IS NEEDED: Tally's TB has a "Profit & Loss A/c" ledger whose
+    // CLOSING balance = current year's net profit. The code at line ~3013 uses
+    // OPENING balance (prior retained earnings) for this ledger to avoid
+    // double-counting with the individual P&L accounts. But this means the
+    // current year's net profit is EXCLUDED from computedAmounts — unless we
+    // add it back here via auto-credit. Previously this block was guarded by
+    // `!isNonCorporate`, skipping NCE entirely — every NCE client's BS was
+    // out of balance by the net profit amount.
+    //
+    // BOOKS-CLOSED GUARD: when the firm has already journalled the year's P&L
+    // into a reserves/capital ledger, the closing balance ALREADY includes the
+    // profit — crediting again would double-count.
     if (!isNonCorporate) {
       const reservesLedgers = tbAccounts.filter(a => coaMapping[a.account_name]?.code === "BS_EQ_RS");
       const booksClosed = currentYearProfitAlreadyInReserves(reservesLedgers);
@@ -3086,6 +3090,21 @@ export default function PipelineFinancialStatements({
         for (const item of (activeTree as FSLineItem[])) {
           computeTotal(item);
         }
+      }
+    } else if (isNonCorporate) {
+      // ── NCE AUTO-CREDIT: same concept, uses NCE profit chain ────────────
+      // NCE_NET_PROF was computed at line ~3057 from the NCE P&L chain.
+      // Credit it to BS_EQ_RS so nceCyAmounts can fold it into NCE_CAP.
+      // Without this, the "Profit & Loss A/c" ledger's current-year profit
+      // is excluded from the BS (opening=0 used at line ~3016) and never
+      // auto-credited → BS out of balance by the net profit amount for
+      // EVERY NCE client.
+      const reservesLedgers = tbAccounts.filter(a => coaMapping[a.account_name]?.code === "BS_EQ_RS");
+      const booksClosed = currentYearProfitAlreadyInReserves(reservesLedgers);
+      const nceProfit = amounts["NCE_NET_PROF"] || 0;
+      if (!booksClosed && Math.abs(nceProfit) > 0.005) {
+        // Credit: negative in debit-positive convention (Cr = negative)
+        amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) - nceProfit;
       }
     }
 
