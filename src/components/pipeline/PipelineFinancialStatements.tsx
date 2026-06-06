@@ -3784,19 +3784,8 @@ export default function PipelineFinancialStatements({
         // as both an expense reducing profit AND an asset).
         // Instead, zero them so they don't create an orphan amount that falls
         // outside both BS totals (NCE_AST / NCE_EL).
-        // NCE CY auto-credit: compute the CY net profit from P&L codes and
-        // credit it to NCE_CAP. For Corporate entities this is done at line
-        // 2982 via amounts["BS_EQ_RS"] -= netPL. For NCE the same logic was
-        // MISSING — P&L codes sat in computedAmounts but their net never
-        // reached the BS, causing BS diff = net profit on ALL NCE clients.
-        const nceRev = (out["NCE_REV_OPS"] || 0) + (out["NCE_REV_OTH"] || 0);
-        const nceExp = (out["NCE_COGS"] || 0) + (out["NCE_EMP_EXP"] || 0) +
-                       (out["NCE_FIN_COST"] || 0) + (out["NCE_OTH_EXP"] || 0) +
-                       (out["NCE_DEPR"] || 0);
-        const nceNetPL = Math.round((-nceRev - nceExp) * 100) / 100;
-        if (Math.abs(nceNetPL) > 0.005) {
-          out["NCE_CAP"] = (out["NCE_CAP"] || 0) - nceNetPL;
-        }
+        // Zero orphan codes that aren't in NCE_ASSET_IDS or NCE_LIAB_IDS.
+        // These would create phantom amounts outside both totals.
         if (out["NCE_DEPR"]) out["NCE_DEPR"] = 0;
         if (out["NCE_INTG"]) out["NCE_INTG"] = 0;
         out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (out[id] || 0), 0);
@@ -3873,15 +3862,6 @@ export default function PipelineFinancialStatements({
         if (out["BS_EQ_RS"] && Math.abs(out["BS_EQ_RS"]) > 0.005) {
           out["NCE_CAP"] = (out["NCE_CAP"] || 0) + out["BS_EQ_RS"];
           out["BS_EQ_RS"] = 0;
-        }
-        // NCE PY auto-credit (same as CY above).
-        const nceRevPy = (out["NCE_REV_OPS"] || 0) + (out["NCE_REV_OTH"] || 0);
-        const nceExpPy = (out["NCE_COGS"] || 0) + (out["NCE_EMP_EXP"] || 0) +
-                         (out["NCE_FIN_COST"] || 0) + (out["NCE_OTH_EXP"] || 0) +
-                         (out["NCE_DEPR"] || 0);
-        const nceNetPLpy = Math.round((-nceRevPy - nceExpPy) * 100) / 100;
-        if (Math.abs(nceNetPLpy) > 0.005) {
-          out["NCE_CAP"] = (out["NCE_CAP"] || 0) - nceNetPLpy;
         }
         if (out["NCE_DEPR"]) out["NCE_DEPR"] = 0;
         if (out["NCE_INTG"]) out["NCE_INTG"] = 0;
