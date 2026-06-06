@@ -3770,12 +3770,39 @@ export default function PipelineFinancialStatements({
     const faCy = getFAGridNetBlockTotal(stage5NotesData ?? null, "cy");
     if (faCy != null) out["NCE_PPE"] = faCy;
     // Issue 3 fix — auditor's Notes-to-Accounts (nce_financial_notes)
-    // grand total drives the BS / P&L face. Includes manual customRows
-    // added via "+ Add row" which the legacy stage5_notes breakup array
-    // never carried — fixing the mismatch where Trade Payables note
-    // showed ₹19,94,766 but BS face read ₹19,84,766.
+    // grand total drives the BS / P&L face. Includes manual customRows.
+    // INLINED: applyNCENoteTotal was previously a closure capturing
+    // nceNotesByType from outer scope. Inlining here guarantees the
+    // useMemo always reads the CURRENT nceNotesByType value from its
+    // dependency array — eliminates any stale-closure risk.
     for (const code of Object.keys(NCE_CODE_TO_NOTE)) {
-      applyNCENoteTotal(out, code, "cy");
+      const meta = NCE_CODE_TO_NOTE[code];
+      if (!meta) continue;
+      const noteRow = nceNotesByType[meta.note];
+      if (!noteRow) continue;
+      const isPatternA = meta.col === "lt" || meta.col === "st";
+      const total = getNCENoteFaceTotal(
+        noteRow, "cy",
+        isPatternA ? "A" : "B",
+        meta.col,
+      );
+      if (total == null) continue;
+      const nature = NCE_NOTE_NATURE[meta.note] ?? "CR";
+      out[code] = nature === "CR" ? -total : total;
+    }
+    // Diagnostic: log which P&L codes got note overrides vs stayed at raw TB
+    if (typeof console !== "undefined") {
+      const diag: string[] = [];
+      for (const code of ["NCE_OTH_EXP","NCE_EMP_EXP","NCE_FIN_COST","NCE_REV_OPS","NCE_REV_OTH"]) {
+        const raw = computedAmounts[code] ?? 0;
+        const now = out[code] ?? 0;
+        if (Math.abs(raw - now) > 0.01)
+          diag.push(`${code}: TB=${raw} → Note=${now}`);
+        else
+          diag.push(`${code}: ${now} (unchanged)`);
+      }
+      console.log("[nceCyAmounts] Note override results:", diag.join(" | "));
+      console.log("[nceCyAmounts] nceNotesByType keys:", Object.keys(nceNotesByType).join(", ") || "(empty)");
     }
     // ROOT-CAUSE FIX (Issue 2 — TOTAL rows didn't match the line items):
     // Fold BS_EQ_RS into NCE_CAP, lock BS TOTAL to TB.
@@ -3846,10 +3873,22 @@ export default function PipelineFinancialStatements({
     }
     const faPy = getFAGridNetBlockTotal(stage5NotesData ?? null, "py");
     if (faPy != null) out["NCE_PPE"] = faPy;
-    // Pass 2 — nce_financial_notes (Stage 8 path, the modern one).
+    // Pass 2 — nce_financial_notes (Stage 8 path). INLINED (same as CY).
     for (const code of Object.keys(NCE_CODE_TO_NOTE)) {
       if (orphanPYBsCode(code)) continue;
-      applyNCENoteTotal(out, code, "py");
+      const meta = NCE_CODE_TO_NOTE[code];
+      if (!meta) continue;
+      const noteRow = nceNotesByType[meta.note];
+      if (!noteRow) continue;
+      const isPatternA = meta.col === "lt" || meta.col === "st";
+      const total = getNCENoteFaceTotal(
+        noteRow, "py",
+        isPatternA ? "A" : "B",
+        meta.col,
+      );
+      if (total == null) continue;
+      const nature = NCE_NOTE_NATURE[meta.note] ?? "CR";
+      out[code] = nature === "CR" ? -total : total;
     }
     // Fold orphan codes + lock PY TOTAL to CY TB openings.
     if (out["BS_EQ_RS"] && Math.abs(out["BS_EQ_RS"]) > 0.005) {
