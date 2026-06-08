@@ -1762,8 +1762,13 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           netPL = Math.round((-rev - exp) * 100) / 100;
         }
         if (Math.abs(netPL) > 0.005) {
-          amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) - netPL;
-          // Re-run the full tree so every parent (BS_EQ → BS root) picks up the change
+          // For NCE: credit NCE_CAP directly (it's in the NCE tree under NCE_EL).
+          // BS_EQ_RS is NOT in the NCE tree, so crediting it there doesn't
+          // propagate to NCE_EL via computeTotal — the BS total stays wrong.
+          // For corporate: credit BS_EQ_RS as before (it IS in the corporate tree).
+          const creditCode = isNonCorporate ? "NCE_CAP" : "BS_EQ_RS";
+          amounts[creditCode] = (amounts[creditCode] || 0) - netPL;
+          // Re-run the full tree so every parent picks up the change
           for (const item of activeTree) {
             computeTotal(item);
           }
@@ -1869,7 +1874,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         pyNetPL = Math.round((-pyRev - pyExp) * 100) / 100;
       }
       if (Math.abs(pyNetPL) > 0.005) {
-        amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) - pyNetPL;
+        const pyCode = isNonCorporate ? "NCE_CAP" : "BS_EQ_RS";
+        amounts[pyCode] = (amounts[pyCode] || 0) - pyNetPL;
         for (const item of activeTree) computeTotal(item);
       }
     }
