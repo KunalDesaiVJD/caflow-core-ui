@@ -1876,7 +1876,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     {
       if (isNonCorporate) {
         // Same P&L A/c guard as CY: only credit when P&L A/c has non-zero closing
-        const plAcLedger = reservesLedgers.find(a =>
+        const pyReservesLedgers = tbAccounts.filter(a => coaMapping[a.account_name]?.code === "BS_EQ_RS");
+        const plAcLedger = pyReservesLedgers.find(a =>
           isTallyPLAccount(a.account_name) && Math.abs(a.balance) > 0.005
         );
         if (plAcLedger) {
