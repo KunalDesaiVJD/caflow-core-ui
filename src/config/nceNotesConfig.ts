@@ -204,8 +204,8 @@ export const NOTES_CONFIG: NoteConfig[] = [
     title: "Note 4: Other Long-Term Liabilities",
     pattern: "B",
     rows: [
-      { id: "adv_customers", label: "(a) Advance from customers" },
-      { id: "others",        label: "(b) Others (please specify)" },
+      { id: "adv_customers", label: "Advance from customers" },
+      { id: "others",        label: "Others (please specify)" },
       { id: "total",         label: "Total", isTotal: true, formulaAdd: ["adv_customers","others"] },
     ],
   },
@@ -244,8 +244,8 @@ export const NOTES_CONFIG: NoteConfig[] = [
     title: "Note 7: Trade Payables",
     pattern: "B",
     rows: [
-      { id: "msme",   label: "(a) Dues to Micro and Small Enterprises (MSME)" },
-      { id: "others", label: "(b) Others" },
+      { id: "msme",   label: "Dues to Micro and Small Enterprises (MSME)" },
+      { id: "others", label: "Others" },
       { id: "total",  label: "Total", isTotal: true, formulaAdd: ["msme","others"] },
     ],
   },
@@ -477,7 +477,7 @@ export const NOTES_CONFIG: NoteConfig[] = [
     title: "Note 18: Trade Receivables",
     pattern: "B",
     rows: [
-      { id: "ka_hdr",       label: "(A) Outstanding for less than 6 months",              isSectionHeader: true },
+      { id: "ka_hdr",       label: "Outstanding for less than 6 months",              isSectionHeader: true },
       { id: "ka_secured",   label: "Secured, considered good",                            indent: 1 },
       { id: "ka_unsecured", label: "Unsecured, considered good",                          indent: 1 },
       { id: "ka_doubtful",  label: "Doubtful",                                            indent: 1 },
@@ -486,7 +486,7 @@ export const NOTES_CONFIG: NoteConfig[] = [
         id: "ka_total", label: "Total", isTotal: true, indent: 1,
         formulaAdd: ["ka_secured","ka_unsecured","ka_doubtful"], formulaSub: ["ka_less_prov"],
       },
-      { id: "kb_hdr",       label: "(B) Outstanding for more than 6 months",              isSectionHeader: true },
+      { id: "kb_hdr",       label: "Outstanding for more than 6 months",              isSectionHeader: true },
       { id: "kb_secured",   label: "Secured, considered good",                            indent: 1 },
       { id: "kb_unsecured", label: "Unsecured, considered good",                          indent: 1 },
       { id: "kb_doubtful",  label: "Doubtful",                                            indent: 1 },
@@ -511,7 +511,7 @@ export const NOTES_CONFIG: NoteConfig[] = [
     title: "Note 19: Cash and Bank Balances",
     pattern: "B",
     rows: [
-      { id: "la_hdr",     label: "(A) Cash and Cash Equivalents",  isSectionHeader: true },
+      { id: "la_hdr",     label: "Cash and Cash Equivalents",  isSectionHeader: true },
       { id: "la_current", label: "Balance in current account",     indent: 1 },
       { id: "la_cc",      label: "Balance in cash credit account", indent: 1 },
       { id: "la_fd_3m",   label: "Fixed deposits",                 indent: 1 },
