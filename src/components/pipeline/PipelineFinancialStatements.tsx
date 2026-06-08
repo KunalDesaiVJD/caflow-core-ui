@@ -3119,9 +3119,12 @@ export default function PipelineFinancialStatements({
         isTallyPLAccount(a.account_name) && Math.abs(a.balance) > 0.005
       );
       if (plAcLedger) {
-        const nceProfit = amounts["NCE_NET_PROF"] || 0;
-        if (Math.abs(nceProfit) > 0.005) {
-          amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) - nceProfit;
+        // Use P&L A/c's ACTUAL balance (not computed NCE_NET_PROF) to avoid
+        // rounding mismatch from CII dual-posting. The gap = closing - opening.
+        // BS_EQ_RS was set to opening (=0). Add the balance to restore it.
+        const plBalance = plAcLedger.balance;
+        if (Math.abs(plBalance) > 0.005) {
+          amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) + plBalance;
         }
       }
     }

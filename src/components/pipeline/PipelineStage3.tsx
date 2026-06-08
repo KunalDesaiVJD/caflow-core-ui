@@ -1765,10 +1765,19 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           );
           if (plAcLedger) {
             // P&L A/c has a non-zero closing → profit NOT yet transferred.
-            // Credit NCE_CAP directly (it's in the NCE tree under NCE_EL).
-            const netPL = amounts["NCE_NET_PROF"] || 0;
-            if (Math.abs(netPL) > 0.005) {
-              amounts["NCE_CAP"] = (amounts["NCE_CAP"] || 0) - netPL;
+            // Use the P&L A/c's ACTUAL closing balance (not the computed
+            // NCE_NET_PROF) because NCE_NET_PROF may differ by rounding
+            // from CII dual-posting. The P&L A/c balance IS the authoritative
+            // net result from Tally — guaranteed to balance.
+            // The isTallyPLAccount guard at line ~1677 used OPENING (=0) instead
+            // of CLOSING for the P&L A/c. The gap = closing - opening = balance.
+            // Add the gap back so the BS totals reconcile:
+            //   Cr closing (profit): balance = -ve → NCE_CAP += -ve → equity increases ✓
+            //   Dr closing (loss):   balance = +ve → NCE_CAP += +ve → equity decreases ✓
+            //   (NCE_CAP is Cr-natural → more negative = higher equity)
+            const plBalance = plAcLedger.balance; // debit-positive
+            if (Math.abs(plBalance) > 0.005) {
+              amounts["NCE_CAP"] = (amounts["NCE_CAP"] || 0) + plBalance;
               for (const item of activeTree) computeTotal(item);
             }
           }
@@ -1881,9 +1890,10 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           isTallyPLAccount(a.account_name) && Math.abs(a.balance) > 0.005
         );
         if (plAcLedger) {
-          const pyNetPL = amounts["NCE_NET_PROF"] || 0;
-          if (Math.abs(pyNetPL) > 0.005) {
-            amounts["NCE_CAP"] = (amounts["NCE_CAP"] || 0) - pyNetPL;
+          // PY: use P&L A/c's actual balance (same as CY fix)
+          const plBalance = plAcLedger.balance;
+          if (Math.abs(plBalance) > 0.005) {
+            amounts["NCE_CAP"] = (amounts["NCE_CAP"] || 0) + plBalance;
             for (const item of activeTree) computeTotal(item);
           }
         }
