@@ -1908,23 +1908,31 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   noteTablePairs.sort((a, b) => a[0] - b[0]);
   const noteTables: Table[] = noteTablePairs.map(([, t]) => t);
 
-  // NCE Task 9 (doc8): helper to build a "Notes to Balance Sheet" / "Notes to P&L" heading.
-  // Bold, underlined, left-aligned; preceded by a spacer and followed by a thin spacer.
-  const sectionTransitionParagraph = (section: "BS" | "PL"): Paragraph => {
-    const cyYearStr = String(cyYear);
-    const text = section === "PL"
-      ? `Notes to Profit & Loss A/c for the year ended 31.03.${cyYearStr}`
-      : `Notes to Balance Sheet as on 31.03.${cyYearStr}`;
-    return new Paragraph({
-      spacing: { before: 280, after: 80 },
-      // Note 1 fix (intelligent pagination): keepNext binds the section heading to
-      // the following note table so it is never left orphaned at the bottom of a
-      // page — if the first rows won't fit, the whole block moves to the next page.
-      keepNext: true,
-      keepLines: true,
-      children: [new TextRun({ text, font: FONT, size: SZ_HDR, bold: true, underline: {} })],
+  // Task 6 (revision 2): section headings ("Notes to Balance Sheet…" /
+  // "Notes to Profit & Loss A/c…") belong in the running page HEADER so Word
+  // repeats them automatically at the top of every page. Two separate DOCX
+  // sections are created (one BS, one PL) each with its own running header.
+  // Factory helper — entity banner paragraph + section-heading paragraph.
+  const makeNotesHeader = (sectionLine: string): Header =>
+    new Header({
+      children: [
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing:   { before: 60, after: 20 },
+          border:    { bottom: { style: BorderStyle.SINGLE, size: 8, color: NAVY, space: 4 } },
+          children:  [new TextRun({
+            text: entityName.toUpperCase(),
+            font: FONT, size: SZ_ENTITY, bold: true, color: NAVY,
+          })],
+        }),
+        new Paragraph({
+          spacing:  { before: 80, after: 40 },
+          children: [new TextRun({ text: sectionLine, font: FONT, size: SZ_HDR, bold: true, underline: {} })],
+        }),
+      ],
     });
-  };
+  const bsNotesRunningHdr = makeNotesHeader(`Notes to Balance Sheet as on 31.03.${String(cyYear)}`);
+  const plNotesRunningHdr = makeNotesHeader(`Notes to Profit & Loss A/c as on 31.03.${String(cyYear)}`);
 
   // Phase 2 — PPE Schedule (landscape). PPE is always-active (ref 10); use its
   // dynamic number so the title matches the Balance-Sheet reference.
@@ -2014,45 +2022,27 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   // every page identically to the BS / P&L title rows.
   // Suppressed first-page header so the body banner on page 1 isn't duplicated.
   const emptyFirstHeader = new Header({ children: [new Paragraph({ children: [] })] });
-  const notesRunningHeader = new Header({
-    children: [new Paragraph({
-      alignment: AlignmentType.CENTER,
-      spacing:   { before: 60, after: 20 },
-      border:    { bottom: { style: BorderStyle.SINGLE, size: 8, color: NAVY, space: 4 } },
-      children:  [new TextRun({
-        text: entityName.toUpperCase(),
-        font: FONT, size: SZ_ENTITY, bold: true, color: NAVY,
-      })],
-    })],
-  });
 
-  // Build the flowing notes list. Multiple notes share a page; a note that
-  // does not fit moves whole to the next page (cantSplit on table rows).
-  // User requirement (changes doc Task 6 revision): emit the section heading
-  // ("Notes to Balance Sheet…" / "Notes to P&L…") before EVERY note so that
-  // every note page clearly shows which FS section the note belongs to.
-  // The heading is bold + underlined and its keepNext binding anchors it to
-  // the following table so it is never left orphaned at the bottom of a page.
-  const noteTablesWithHeaders: (Paragraph | Table)[] = [];
-  for (const [, table, sectionTag] of noteTablePairs) {
-    const sec = sectionTag as "BS" | "PL";
-    noteTablesWithHeaders.push(sectionTransitionParagraph(sec));
-    noteTablesWithHeaders.push(table);
-  }
+  // Task 6 (revision 2): split notes into BS and PL groups so each gets its
+  // own DOCX section with a section-specific running header.
+  const bsNoteTablePairs = noteTablePairs.filter(([, , sec]) => sec === "BS");
+  const plNoteTablePairs = noteTablePairs.filter(([, , sec]) => sec === "PL");
 
-  // Notes section: page 1 opens with the body banner (always dark), then
-  // Note 1 flows. A page break separates the free-text policies from the
-  // structured notes. Capital Account, BS notes and P&L notes then flow
-  // continuously, sharing pages until full. The running header above
-  // repeats on every page 2+.
-  const noteChildren: (Paragraph | Table)[] = [
-    makeNotesBanner(),                                       // first-page body banner — dark navy
+  // BS notes section body.
+  // Page 1: entity body banner + Note 1 (running header suppressed via titlePage).
+  // Page 2+: bsNotesRunningHdr header carries the entity banner + BS heading.
+  //          Body starts directly with Note 2 (capital account) then flows.
+  const bsNoteChildren: (Paragraph | Table)[] = [
+    makeNotesBanner(),
     ...note1Paras,
     new Paragraph({ pageBreakBefore: true, spacing: { before: 0, after: 0 }, children: [] }),
-    sectionTransitionParagraph("BS"),
     ...capitalTables.flatMap((t, i) => i === 0 ? [t] : [noteGap(), t]),
-    ...noteTablesWithHeaders,
+    ...bsNoteTablePairs.flatMap(([, table]) => [noteGap(), table]),
   ];
+
+  // PL notes section body — empty array when no PL notes exist (section omitted).
+  const plNoteChildren: (Paragraph | Table)[] = plNoteTablePairs
+    .flatMap(([, table], i) => (i === 0 ? [table] : [noteGap(), table]));
 
   const doc = new Document({
     styles: {
@@ -2082,24 +2072,27 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
           sigBlock(),
         ],
       },
-      // Notes pages — banner on every page (body banner on page 1, running
-      // header on pages 2+). titlePage: true + first: emptyHeader suppresses
-      // the running header on page 1 so the body banner isn't duplicated.
-      // Flowing pagination preserved — multiple notes per page, never
-      // split mid-note (existing keepNext + cantSplit on note tables).
+      // BS notes section: page 1 has body banner + Note 1 (running header
+      // suppressed on first page via titlePage + emptyFirstHeader). Pages 2+
+      // carry bsNotesRunningHdr (entity banner + "Notes to Balance Sheet…")
+      // which Word repeats automatically at the top of every subsequent page.
       {
         properties: { page: notesPortraitProps, titlePage: true },
-        headers:    { first: emptyFirstHeader, default: notesRunningHeader },
-        children:   noteChildren,
+        headers:    { first: emptyFirstHeader, default: bsNotesRunningHdr },
+        children:   bsNoteChildren,
       },
-      // PPE Schedule (landscape) — the running header from the Notes section
-      // carries the entity name on every page, so the body banner is NOT needed
-      // here. Previously both were rendered → "OM REALTY" appeared twice at the
-      // top of the PPE page. Fix: keep the running header (inherited from
-      // the previous section's default header) and drop the body banner.
+      // PL notes section: separate DOCX section so running header changes to
+      // "Notes to Profit & Loss A/c…". Starts on a new page (default section-
+      // break behaviour). Omitted entirely when there are no PL notes.
+      ...(plNoteChildren.length > 0 ? ([{
+        properties: { page: notesPortraitProps },
+        headers:    { default: plNotesRunningHdr },
+        children:   plNoteChildren,
+      }] as Parameters<typeof Document>[0]["sections"]) : []),
+      // PPE Schedule (landscape) — always a BS note; uses the BS running header.
       {
         properties: { page: landscapeProps },
-        headers:    { default: notesRunningHeader },
+        headers:    { default: bsNotesRunningHdr },
         children:   [ppeTable],
       },
     ],

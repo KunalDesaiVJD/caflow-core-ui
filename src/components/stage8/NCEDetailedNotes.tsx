@@ -3176,31 +3176,32 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
             // in the preview (prevents sequence gaps and phantom note cards).
             if (readOnly && !noteNum) continue;
 
-            // Changes doc Task 6: insert section heading before EVERY note from Note 3
-            // onwards (both in readOnly preview AND in edit mode).
-            // Rule: every Notes page must show "Notes to Balance Sheet as on..." or
-            // "Notes to Profit & Loss A/c for the year ended..." — it is PAGE-BASED,
-            // not note-based. In the web UI there are no physical page breaks, so we
-            // emit the heading before each note card so it is always visible above it.
-            // Note 1 (Significant Accounting Policies) is excluded — it is rendered in
-            // a separate component (NCECapitalAccount tab) and has its own format.
-            // Notes in NOTES_CONFIG start from Note 3 (no Note 1 or Note 2 here).
-            {
+            // Task 6: in the preview/readOnly view, emit the section heading
+            // once per section boundary — "Notes to Balance Sheet as on…" at
+            // the start of the BS block, then "Notes to Profit & Loss A/c as
+            // on…" when the section switches to PL.  Not before every note
+            // (which would be wrong) and not only at the BS→PL transition
+            // (which would miss the initial BS heading).
+            // currentSection is initialised to null so the first note always
+            // triggers the heading regardless of which section it belongs to.
+            if (readOnly) {
               const meta    = NOTE_META[nc.noteType];
               const section = meta?.section ?? "BS";
-              if (section !== currentSection) currentSection = section;
-              const dateStr  = `31.03.${cyYear}`;
-              const heading  = section === "PL"
-                ? `Notes to Profit & Loss A/c for the year ended ${dateStr}`
-                : `Notes to Balance Sheet as on ${dateStr}`;
-              elements.push(
-                <div
-                  key={`section-hdr-per-note-${nc.noteType}`}
-                  className="pt-2 pb-1 border-b-2 border-foreground/30"
-                >
-                  <span className="text-sm font-bold underline">{heading}</span>
-                </div>
-              );
+              if (section !== currentSection) {
+                currentSection = section;
+                const dateStr = `31.03.${cyYear}`;
+                const heading = section === "PL"
+                  ? `Notes to Profit & Loss A/c as on ${dateStr}`
+                  : `Notes to Balance Sheet as on ${dateStr}`;
+                elements.push(
+                  <div
+                    key={`section-hdr-${section}`}
+                    className="pt-2 pb-1 border-b-2 border-foreground/30"
+                  >
+                    <span className="text-sm font-bold underline">{heading}</span>
+                  </div>
+                );
+              }
             }
 
             // For split notes: when the user edits a bare key (e.g. "secured_other"),
