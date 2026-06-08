@@ -3116,14 +3116,15 @@ export default function PipelineFinancialStatements({
       // capital closing already includes it. Crediting again DOUBLE-COUNTS.
       const reservesLedgers = tbAccounts.filter(a => coaMapping[a.account_name]?.code === "BS_EQ_RS");
       const plAcLedger = reservesLedgers.find(a =>
-        isTallyPLAccount(a.account_name) && Math.abs(a.balance) > 0.005
+        isTallyPLAccount(a.account_name) && Math.abs(a.balance) > 100
       );
       if (plAcLedger) {
-        // Use P&L A/c's ACTUAL balance (not computed NCE_NET_PROF) to avoid
-        // rounding mismatch from CII dual-posting. The gap = closing - opening.
-        // BS_EQ_RS was set to opening (=0). Add the balance to restore it.
+        // Use P&L A/c's ACTUAL balance to restore the gap from isTallyPLAccount.
+        // Only for significant amounts (>₹100). Small amounts (₹66 BAPASITARAM,
+        // ₹478 SHIVASHRAY) are rounding noise — crediting them creates visible
+        // mismatches. Stage 7 uses BS_EQ_RS (folded into NCE_CAP in nceCyAmounts).
         const plBalance = plAcLedger.balance;
-        if (Math.abs(plBalance) > 0.005) {
+        if (Math.abs(plBalance) > 100) {
           amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) + plBalance;
         }
       }

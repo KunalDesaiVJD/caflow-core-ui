@@ -1759,9 +1759,13 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           // etc.), the firm has already journalled the profit directly into
           // the capital account (Tally's closing balance already includes it).
           // Crediting again would DOUBLE-COUNT.
+          // Only auto-credit when P&L A/c has a SIGNIFICANT closing balance
+          // (> ₹100). Tiny amounts like ₹66 (BAPASITARAM) or ₹478 (SHIVASHRAY)
+          // are Tally rounding noise — crediting them creates a visible mismatch
+          // because BS_EQ_RS is NOT in the NCE tree (the gap was invisible before).
           const plAcLedger = reservesLedgers.find(a =>
             isTallyPLAccount(a.account_name) &&
-            Math.abs(a.balance) > 0.005
+            Math.abs(a.balance) > 100
           );
           if (plAcLedger) {
             // P&L A/c has a non-zero closing → profit NOT yet transferred.
@@ -1887,7 +1891,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         // Same P&L A/c guard as CY: only credit when P&L A/c has non-zero closing
         const pyReservesLedgers = tbAccounts.filter(a => coaMapping[a.account_name]?.code === "BS_EQ_RS");
         const plAcLedger = pyReservesLedgers.find(a =>
-          isTallyPLAccount(a.account_name) && Math.abs(a.balance) > 0.005
+          isTallyPLAccount(a.account_name) && Math.abs(a.balance) > 100
         );
         if (plAcLedger) {
           // PY: use P&L A/c's actual balance (same as CY fix)
