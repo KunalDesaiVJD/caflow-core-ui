@@ -1759,29 +1759,19 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           // etc.), the firm has already journalled the profit directly into
           // the capital account (Tally's closing balance already includes it).
           // Crediting again would DOUBLE-COUNT.
-          // Only auto-credit when P&L A/c has a SIGNIFICANT closing balance
-          // (> ₹100). Tiny amounts like ₹66 (BAPASITARAM) or ₹478 (SHIVASHRAY)
-          // are Tally rounding noise — crediting them creates a visible mismatch
-          // because BS_EQ_RS is NOT in the NCE tree (the gap was invisible before).
           const plAcLedger = reservesLedgers.find(a =>
             isTallyPLAccount(a.account_name) &&
-            Math.abs(a.balance) > 100
+            Math.abs(a.balance) > 0.005
           );
           if (plAcLedger) {
-            // P&L A/c has a non-zero closing → profit NOT yet transferred.
-            // Use the P&L A/c's ACTUAL closing balance (not the computed
-            // NCE_NET_PROF) because NCE_NET_PROF may differ by rounding
-            // from CII dual-posting. The P&L A/c balance IS the authoritative
-            // net result from Tally — guaranteed to balance.
-            // The isTallyPLAccount guard at line ~1677 used OPENING (=0) instead
-            // of CLOSING for the P&L A/c. The gap = closing - opening = balance.
-            // Add the gap back so the BS totals reconcile:
-            //   Cr closing (profit): balance = -ve → NCE_CAP += -ve → equity increases ✓
-            //   Dr closing (loss):   balance = +ve → NCE_CAP += +ve → equity decreases ✓
-            //   (NCE_CAP is Cr-natural → more negative = higher equity)
-            const plBalance = plAcLedger.balance; // debit-positive
+            // The isTallyPLAccount guard used OPENING (=0) instead of CLOSING.
+            // The gap = P&L A/c balance (debit-positive). SUBTRACT it from
+            // NCE_CAP to compensate (makes equity more negative by the gap):
+            //   Dr P&L A/c (+66): NCE_CAP -= 66 → equity down → balances Dr gap ✓
+            //   Cr P&L A/c (-11L): NCE_CAP -= (-11L) → equity up → balances Cr gap ✓
+            const plBalance = plAcLedger.balance;
             if (Math.abs(plBalance) > 0.005) {
-              amounts["NCE_CAP"] = (amounts["NCE_CAP"] || 0) + plBalance;
+              amounts["NCE_CAP"] = (amounts["NCE_CAP"] || 0) - plBalance;
               for (const item of activeTree) computeTotal(item);
             }
           }
@@ -1891,13 +1881,13 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         // Same P&L A/c guard as CY: only credit when P&L A/c has non-zero closing
         const pyReservesLedgers = tbAccounts.filter(a => coaMapping[a.account_name]?.code === "BS_EQ_RS");
         const plAcLedger = pyReservesLedgers.find(a =>
-          isTallyPLAccount(a.account_name) && Math.abs(a.balance) > 100
+          isTallyPLAccount(a.account_name) && Math.abs(a.balance) > 0.005
         );
         if (plAcLedger) {
           // PY: use P&L A/c's actual balance (same as CY fix)
           const plBalance = plAcLedger.balance;
           if (Math.abs(plBalance) > 0.005) {
-            amounts["NCE_CAP"] = (amounts["NCE_CAP"] || 0) + plBalance;
+            amounts["NCE_CAP"] = (amounts["NCE_CAP"] || 0) - plBalance;
             for (const item of activeTree) computeTotal(item);
           }
         }
