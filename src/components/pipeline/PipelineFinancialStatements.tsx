@@ -3119,12 +3119,11 @@ export default function PipelineFinancialStatements({
         isTallyPLAccount(a.account_name) && Math.abs(a.balance) > 0.005
       );
       if (plAcLedger) {
-        // Subtract P&L A/c balance from BS_EQ_RS to compensate for the
-        // isTallyPLAccount guard (which used opening=0 instead of closing).
+        // ADD P&L A/c balance to BS_EQ_RS to compensate for isTallyPLAccount.
         // BS_EQ_RS is folded into NCE_CAP in nceCyAmounts.
         const plBalance = plAcLedger.balance;
         if (Math.abs(plBalance) > 0.005) {
-          amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) - plBalance;
+          amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) + plBalance;
         }
       }
     }

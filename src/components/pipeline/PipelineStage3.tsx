@@ -1765,13 +1765,12 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           );
           if (plAcLedger) {
             // The isTallyPLAccount guard used OPENING (=0) instead of CLOSING.
-            // The gap = P&L A/c balance (debit-positive). SUBTRACT it from
-            // NCE_CAP to compensate (makes equity more negative by the gap):
-            //   Dr P&L A/c (+66): NCE_CAP -= 66 → equity down → balances Dr gap ✓
-            //   Cr P&L A/c (-11L): NCE_CAP -= (-11L) → equity up → balances Cr gap ✓
+            // The excluded P&L A/c balance must be ADDED to NCE_CAP:
+            //   Dr P&L A/c (+66): NCE_CAP += 66 → less negative → E&L decreases → balances ✓
+            //   Cr P&L A/c (-11L): NCE_CAP += (-11L) → more negative → E&L increases → balances ✓
             const plBalance = plAcLedger.balance;
             if (Math.abs(plBalance) > 0.005) {
-              amounts["NCE_CAP"] = (amounts["NCE_CAP"] || 0) - plBalance;
+              amounts["NCE_CAP"] = (amounts["NCE_CAP"] || 0) + plBalance;
               for (const item of activeTree) computeTotal(item);
             }
           }
@@ -1887,7 +1886,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           // PY: use P&L A/c's actual balance (same as CY fix)
           const plBalance = plAcLedger.balance;
           if (Math.abs(plBalance) > 0.005) {
-            amounts["NCE_CAP"] = (amounts["NCE_CAP"] || 0) - plBalance;
+            amounts["NCE_CAP"] = (amounts["NCE_CAP"] || 0) + plBalance;
             for (const item of activeTree) computeTotal(item);
           }
         }
