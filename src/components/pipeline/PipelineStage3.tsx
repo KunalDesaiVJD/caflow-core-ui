@@ -1857,13 +1857,17 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     }
 
     // ── Auto-credit PY net profit to BS_EQ_RS ───────────────────────────────
-    // pyAmounts holds prior-year P&L figures from fa_financial_statements.
-    // Credit the PY net profit to Reserves & Surplus so the PY Balance Sheet
-    // in the COA mapping footer balances (same logic as CY computedAmounts).
-    if (!isNonCorporate) {
-      const pyRev   = pyAmounts["PL_REV"] || 0; // negative (credit)
-      const pyExp   = pyAmounts["PL_EXP"] || 0; // positive (debit)
-      const pyNetPL = Math.round((-pyRev - pyExp) * 100) / 100;
+    // Same as CY: runs for BOTH corporate AND NCE entities.
+    {
+      let pyNetPL: number;
+      if (isNonCorporate) {
+        // NCE PY profit chain was computed above at line ~1849-1856
+        pyNetPL = amounts["NCE_NET_PROF"] || 0;
+      } else {
+        const pyRev   = pyAmounts["PL_REV"] || 0;
+        const pyExp   = pyAmounts["PL_EXP"] || 0;
+        pyNetPL = Math.round((-pyRev - pyExp) * 100) / 100;
+      }
       if (Math.abs(pyNetPL) > 0.005) {
         amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) - pyNetPL;
         for (const item of activeTree) computeTotal(item);
