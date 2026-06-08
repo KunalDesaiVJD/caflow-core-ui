@@ -3107,26 +3107,11 @@ export default function PipelineFinancialStatements({
           computeTotal(item);
         }
       }
-    } else if (isNonCorporate) {
-      // ── NCE AUTO-CREDIT ─────────────────────────────────────────────────
-      // ONLY credit when the P&L A/c has a non-zero closing balance —
-      // meaning profit IS sitting in the P&L A/c waiting to be transferred.
-      // When P&L A/c closing = 0 (DHANANI REALTY etc.), the firm already
-      // journalled the profit directly into the capital account — Tally's
-      // capital closing already includes it. Crediting again DOUBLE-COUNTS.
-      const reservesLedgers = tbAccounts.filter(a => coaMapping[a.account_name]?.code === "BS_EQ_RS");
-      const plAcLedger = reservesLedgers.find(a =>
-        isTallyPLAccount(a.account_name) && Math.abs(a.balance) > 0.005
-      );
-      if (plAcLedger) {
-        // ADD P&L A/c balance to BS_EQ_RS to compensate for isTallyPLAccount.
-        // BS_EQ_RS is folded into NCE_CAP in nceCyAmounts.
-        const plBalance = plAcLedger.balance;
-        if (Math.abs(plBalance) > 0.005) {
-          amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) + plBalance;
-        }
-      }
     }
+    // NCE entities do NOT get auto-credit. Tally's partner capital account
+    // closing balances ALREADY include the current-year profit (transferred
+    // by Tally's year-end closing). The P&L A/c's closing is already
+    // reflected in the capital accounts — adding it again would double-count.
 
     return amounts;
   }, [tbAccounts, coaMapping, manualOverrides, isNonCorporate]);

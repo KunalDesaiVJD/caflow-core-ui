@@ -1745,45 +1745,24 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     // Previously guarded by `!isNonCorporate` which skipped NCE — causing the
     // BS total at the bottom of the COA mapping screen to show an imbalance
     // equal to the net profit for every NCE client.
-    {
+    // ── Auto-flow net P&L to BS_EQ_RS for CORPORATE entities ONLY ──────────
+    // NCE entities do NOT get auto-credit because Tally's partner capital
+    // account closing balances ALREADY include the current-year profit
+    // (transferred by Tally's year-end closing). Adding it again would
+    // DOUBLE-COUNT and create a visible BS imbalance.
+    // The isTallyPLAccount guard at line ~1677 uses OPENING (=0) for the
+    // P&L A/c — this is correct for NCE because the P&L A/c's closing
+    // value is already reflected in the partner capital accounts.
+    if (!isNonCorporate) {
       const reservesLedgers = tbAccounts.filter(a => coaMapping[a.account_name]?.code === "BS_EQ_RS");
-      // Shared with PipelineFinancialStatements so the COA-mapping screen and the
-      // Financial Statements never disagree on whether to credit current-year profit.
       const booksClosed = currentYearProfitAlreadyInReserves(reservesLedgers);
-
       if (!booksClosed) {
-        if (isNonCorporate) {
-          // NCE auto-credit: ONLY when the P&L A/c has a non-zero closing
-          // balance — meaning the current-year profit IS sitting in the P&L
-          // A/c waiting to be transferred. When closing = 0 (DHANANI REALTY,
-          // etc.), the firm has already journalled the profit directly into
-          // the capital account (Tally's closing balance already includes it).
-          // Crediting again would DOUBLE-COUNT.
-          const plAcLedger = reservesLedgers.find(a =>
-            isTallyPLAccount(a.account_name) &&
-            Math.abs(a.balance) > 0.005
-          );
-          if (plAcLedger) {
-            // The isTallyPLAccount guard used OPENING (=0) instead of CLOSING.
-            // The excluded P&L A/c balance must be ADDED to NCE_CAP:
-            //   Dr P&L A/c (+66): NCE_CAP += 66 → less negative → E&L decreases → balances ✓
-            //   Cr P&L A/c (-11L): NCE_CAP += (-11L) → more negative → E&L increases → balances ✓
-            const plBalance = plAcLedger.balance;
-            if (Math.abs(plBalance) > 0.005) {
-              amounts["NCE_CAP"] = (amounts["NCE_CAP"] || 0) + plBalance;
-              for (const item of activeTree) computeTotal(item);
-            }
-          }
-          // else: P&L A/c closing = 0 → profit already in capital → no credit
-        } else {
-          // Corporate: original logic using PL_REV + PL_EXP
-          const rev = amounts["PL_REV"] || 0;
-          const exp = amounts["PL_EXP"] || 0;
-          const netPL = Math.round((-rev - exp) * 100) / 100;
-          if (Math.abs(netPL) > 0.005) {
-            amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) - netPL;
-            for (const item of activeTree) computeTotal(item);
-          }
+        const rev = amounts["PL_REV"] || 0;
+        const exp = amounts["PL_EXP"] || 0;
+        const netPL = Math.round((-rev - exp) * 100) / 100;
+        if (Math.abs(netPL) > 0.005) {
+          amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) - netPL;
+          for (const item of activeTree) computeTotal(item);
         }
       }
     }
@@ -1873,31 +1852,15 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       amounts["NCE_NET_PROF"] = Math.round((amounts["NCE_PROF_XI"]  - (amounts["NCE_TAX"]      || 0)) * 100) / 100;
     }
 
-    // ── Auto-credit PY net profit to BS_EQ_RS ───────────────────────────────
-    // Same as CY: runs for BOTH corporate AND NCE entities.
-    {
-      if (isNonCorporate) {
-        // Same P&L A/c guard as CY: only credit when P&L A/c has non-zero closing
-        const pyReservesLedgers = tbAccounts.filter(a => coaMapping[a.account_name]?.code === "BS_EQ_RS");
-        const plAcLedger = pyReservesLedgers.find(a =>
-          isTallyPLAccount(a.account_name) && Math.abs(a.balance) > 0.005
-        );
-        if (plAcLedger) {
-          // PY: use P&L A/c's actual balance (same as CY fix)
-          const plBalance = plAcLedger.balance;
-          if (Math.abs(plBalance) > 0.005) {
-            amounts["NCE_CAP"] = (amounts["NCE_CAP"] || 0) + plBalance;
-            for (const item of activeTree) computeTotal(item);
-          }
-        }
-      } else {
-        const pyRev   = pyAmounts["PL_REV"] || 0;
-        const pyExp   = pyAmounts["PL_EXP"] || 0;
-        const pyNetPL = Math.round((-pyRev - pyExp) * 100) / 100;
-        if (Math.abs(pyNetPL) > 0.005) {
-          amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) - pyNetPL;
-          for (const item of activeTree) computeTotal(item);
-        }
+    // ── Auto-credit PY net profit — CORPORATE ONLY ──────────────────────────
+    // Same as CY: NCE entities do NOT get PY auto-credit.
+    if (!isNonCorporate) {
+      const pyRev   = pyAmounts["PL_REV"] || 0;
+      const pyExp   = pyAmounts["PL_EXP"] || 0;
+      const pyNetPL = Math.round((-pyRev - pyExp) * 100) / 100;
+      if (Math.abs(pyNetPL) > 0.005) {
+        amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) - pyNetPL;
+        for (const item of activeTree) computeTotal(item);
       }
     }
 
