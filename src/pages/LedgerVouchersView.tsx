@@ -81,7 +81,13 @@ function fmtDateDisplay(iso: string): string {
 
 export default function LedgerVouchersView() {
   const { ledgerName: encodedName } = useParams<{ ledgerName: string }>();
-  const ledgerName = encodedName ? decodeURIComponent(encodedName) : "";
+  // React Router v6 already decodes URL params. Calling decodeURIComponent
+  // again fails when the ledger name contains % (e.g., "Patel-5%") because
+  // the decoded "%" is an incomplete percent-encoding sequence.
+  // Use a safe decode: try decodeURIComponent, fall back to the raw value.
+  const ledgerName = encodedName
+    ? (() => { try { return decodeURIComponent(encodedName); } catch { return encodedName; } })()
+    : "";
   const navigate   = useNavigate();
   const [searchParams] = useSearchParams();
   // ?eng=<engagement_id> overrides the global audit-context engagement so that
