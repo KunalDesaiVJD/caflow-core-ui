@@ -1752,25 +1752,35 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       const booksClosed = currentYearProfitAlreadyInReserves(reservesLedgers);
 
       if (!booksClosed) {
-        // For corporate: use PL_REV + PL_EXP. For NCE: use NCE profit chain.
-        let netPL: number;
         if (isNonCorporate) {
-          netPL = amounts["NCE_NET_PROF"] || 0;
+          // NCE auto-credit: ONLY when the P&L A/c has a non-zero closing
+          // balance — meaning the current-year profit IS sitting in the P&L
+          // A/c waiting to be transferred. When closing = 0 (DHANANI REALTY,
+          // etc.), the firm has already journalled the profit directly into
+          // the capital account (Tally's closing balance already includes it).
+          // Crediting again would DOUBLE-COUNT.
+          const plAcLedger = reservesLedgers.find(a =>
+            isTallyPLAccount(a.account_name) &&
+            Math.abs(a.balance) > 0.005
+          );
+          if (plAcLedger) {
+            // P&L A/c has a non-zero closing → profit NOT yet transferred.
+            // Credit NCE_CAP directly (it's in the NCE tree under NCE_EL).
+            const netPL = amounts["NCE_NET_PROF"] || 0;
+            if (Math.abs(netPL) > 0.005) {
+              amounts["NCE_CAP"] = (amounts["NCE_CAP"] || 0) - netPL;
+              for (const item of activeTree) computeTotal(item);
+            }
+          }
+          // else: P&L A/c closing = 0 → profit already in capital → no credit
         } else {
-          const rev = amounts["PL_REV"] || 0; // negative (credit)
-          const exp = amounts["PL_EXP"] || 0; // positive (debit)
-          netPL = Math.round((-rev - exp) * 100) / 100;
-        }
-        if (Math.abs(netPL) > 0.005) {
-          // For NCE: credit NCE_CAP directly (it's in the NCE tree under NCE_EL).
-          // BS_EQ_RS is NOT in the NCE tree, so crediting it there doesn't
-          // propagate to NCE_EL via computeTotal — the BS total stays wrong.
-          // For corporate: credit BS_EQ_RS as before (it IS in the corporate tree).
-          const creditCode = isNonCorporate ? "NCE_CAP" : "BS_EQ_RS";
-          amounts[creditCode] = (amounts[creditCode] || 0) - netPL;
-          // Re-run the full tree so every parent picks up the change
-          for (const item of activeTree) {
-            computeTotal(item);
+          // Corporate: original logic using PL_REV + PL_EXP
+          const rev = amounts["PL_REV"] || 0;
+          const exp = amounts["PL_EXP"] || 0;
+          const netPL = Math.round((-rev - exp) * 100) / 100;
+          if (Math.abs(netPL) > 0.005) {
+            amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) - netPL;
+            for (const item of activeTree) computeTotal(item);
           }
         }
       }
@@ -1864,19 +1874,26 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     // ── Auto-credit PY net profit to BS_EQ_RS ───────────────────────────────
     // Same as CY: runs for BOTH corporate AND NCE entities.
     {
-      let pyNetPL: number;
       if (isNonCorporate) {
-        // NCE PY profit chain was computed above at line ~1849-1856
-        pyNetPL = amounts["NCE_NET_PROF"] || 0;
+        // Same P&L A/c guard as CY: only credit when P&L A/c has non-zero closing
+        const plAcLedger = reservesLedgers.find(a =>
+          isTallyPLAccount(a.account_name) && Math.abs(a.balance) > 0.005
+        );
+        if (plAcLedger) {
+          const pyNetPL = amounts["NCE_NET_PROF"] || 0;
+          if (Math.abs(pyNetPL) > 0.005) {
+            amounts["NCE_CAP"] = (amounts["NCE_CAP"] || 0) - pyNetPL;
+            for (const item of activeTree) computeTotal(item);
+          }
+        }
       } else {
         const pyRev   = pyAmounts["PL_REV"] || 0;
         const pyExp   = pyAmounts["PL_EXP"] || 0;
-        pyNetPL = Math.round((-pyRev - pyExp) * 100) / 100;
-      }
-      if (Math.abs(pyNetPL) > 0.005) {
-        const pyCode = isNonCorporate ? "NCE_CAP" : "BS_EQ_RS";
-        amounts[pyCode] = (amounts[pyCode] || 0) - pyNetPL;
-        for (const item of activeTree) computeTotal(item);
+        const pyNetPL = Math.round((-pyRev - pyExp) * 100) / 100;
+        if (Math.abs(pyNetPL) > 0.005) {
+          amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) - pyNetPL;
+          for (const item of activeTree) computeTotal(item);
+        }
       }
     }
 

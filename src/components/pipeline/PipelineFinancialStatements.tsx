@@ -3108,19 +3108,21 @@ export default function PipelineFinancialStatements({
         }
       }
     } else if (isNonCorporate) {
-      // ── NCE AUTO-CREDIT: same concept, uses NCE profit chain ────────────
-      // NCE_NET_PROF was computed at line ~3057 from the NCE P&L chain.
-      // Credit it to BS_EQ_RS so nceCyAmounts can fold it into NCE_CAP.
-      // Without this, the "Profit & Loss A/c" ledger's current-year profit
-      // is excluded from the BS (opening=0 used at line ~3016) and never
-      // auto-credited → BS out of balance by the net profit amount for
-      // EVERY NCE client.
+      // ── NCE AUTO-CREDIT ─────────────────────────────────────────────────
+      // ONLY credit when the P&L A/c has a non-zero closing balance —
+      // meaning profit IS sitting in the P&L A/c waiting to be transferred.
+      // When P&L A/c closing = 0 (DHANANI REALTY etc.), the firm already
+      // journalled the profit directly into the capital account — Tally's
+      // capital closing already includes it. Crediting again DOUBLE-COUNTS.
       const reservesLedgers = tbAccounts.filter(a => coaMapping[a.account_name]?.code === "BS_EQ_RS");
-      const booksClosed = currentYearProfitAlreadyInReserves(reservesLedgers);
-      const nceProfit = amounts["NCE_NET_PROF"] || 0;
-      if (!booksClosed && Math.abs(nceProfit) > 0.005) {
-        // Credit: negative in debit-positive convention (Cr = negative)
-        amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) - nceProfit;
+      const plAcLedger = reservesLedgers.find(a =>
+        isTallyPLAccount(a.account_name) && Math.abs(a.balance) > 0.005
+      );
+      if (plAcLedger) {
+        const nceProfit = amounts["NCE_NET_PROF"] || 0;
+        if (Math.abs(nceProfit) > 0.005) {
+          amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) - nceProfit;
+        }
       }
     }
 
