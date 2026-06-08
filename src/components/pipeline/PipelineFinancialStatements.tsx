@@ -2492,7 +2492,8 @@ export default function PipelineFinancialStatements({
           .sort()
           .map(k => `${k}=${coa[k]?.code ?? ""}`)
           .join("|");
-        const hashKey = `caflow:nce_coahash_v3:${engagementId}:${engagement.financial_year}`;
+        // v4: bumped after fixing PostgREST 1000-row truncation in nceAutoPopulate
+        const hashKey = `caflow:nce_coahash_v4:${engagementId}:${engagement.financial_year}`;
         const lastHash = typeof window !== "undefined" ? window.localStorage.getItem(hashKey) : null;
         if (lastHash === hash && hash.length > 0) {
           // COA mapping unchanged since last successful sync — nothing to do.

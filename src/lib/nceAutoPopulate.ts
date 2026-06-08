@@ -668,10 +668,23 @@ export async function nceAutoPopulate(
   // prior engagement's TB.  When the two disagreed we showed the wrong value
   // (Swastik Buildcon: WIP Opening rendered 9,54,65,534 from a stale prior
   // note, but the CY TB opening was 6,45,50,000).
-  const { data: tbRows } = await supabase
-    .from("tally_trial_balance")
-    .select("ledger_name, closing_balance, balance_type, opening_balance, opening_type, parent_group")
-    .eq("engagement_id", engagementId);
+  // 2026-06-08 FIX: PostgREST default limit is 1000 rows. SHRI RAM PRODUCTS
+  // has 1229 TB rows — the old single query silently truncated at 1000,
+  // dropping ledgers like "Web Developing Fees Exp" (₹1,84,000) that
+  // appeared after the 1000th row. Paginate to fetch ALL rows.
+  const TB_COLS = "ledger_name, closing_balance, balance_type, opening_balance, opening_type, parent_group";
+  const TB_PAGE = 1000;
+  const tbRows: any[] = [];
+  for (let from = 0; ; from += TB_PAGE) {
+    const { data, error } = await supabase
+      .from("tally_trial_balance")
+      .select(TB_COLS)
+      .eq("engagement_id", engagementId)
+      .range(from, from + TB_PAGE - 1);
+    if (error || !data || data.length === 0) break;
+    tbRows.push(...data);
+    if (data.length < TB_PAGE) break;
+  }
 
   type TBRow = {
     ledger_name:      string;
