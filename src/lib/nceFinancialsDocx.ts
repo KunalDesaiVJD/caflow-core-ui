@@ -1913,7 +1913,7 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   const sectionTransitionParagraph = (section: "BS" | "PL"): Paragraph => {
     const cyYearStr = String(cyYear);
     const text = section === "PL"
-      ? `Notes to Profit & Loss A/c as at 31.03.${cyYearStr}`
+      ? `Notes to Profit & Loss A/c for the year ended 31.03.${cyYearStr}`
       : `Notes to Balance Sheet as on 31.03.${cyYearStr}`;
     return new Paragraph({
       spacing: { before: 280, after: 80 },
@@ -2028,18 +2028,15 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
 
   // Build the flowing notes list. Multiple notes share a page; a note that
   // does not fit moves whole to the next page (cantSplit on table rows).
-  // Section boundary (BS → P&L) emits the section heading once, otherwise
-  // a small inter-note gap keeps consecutive notes visually distinct.
+  // User requirement (changes doc Task 6 revision): emit the section heading
+  // ("Notes to Balance Sheet…" / "Notes to P&L…") before EVERY note so that
+  // every note page clearly shows which FS section the note belongs to.
+  // The heading is bold + underlined and its keepNext binding anchors it to
+  // the following table so it is never left orphaned at the bottom of a page.
   const noteTablesWithHeaders: (Paragraph | Table)[] = [];
-  let lastSection: "BS" | "PL" = "BS";
   for (const [, table, sectionTag] of noteTablePairs) {
     const sec = sectionTag as "BS" | "PL";
-    if (sec !== lastSection) {
-      noteTablesWithHeaders.push(sectionTransitionParagraph(sec));
-      lastSection = sec;
-    } else {
-      noteTablesWithHeaders.push(noteGap());
-    }
+    noteTablesWithHeaders.push(sectionTransitionParagraph(sec));
     noteTablesWithHeaders.push(table);
   }
 
