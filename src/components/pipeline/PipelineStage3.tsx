@@ -4555,3 +4555,4 @@ function confChipClass(confidence: string): string {
     return "bg-muted text-muted-foreground border-muted-foreground/30";
   return "bg-destructive/10 text-destructive border-destructive/30"; // low
 }
+// trigger rebuild 1780927188
