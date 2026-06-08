@@ -418,14 +418,17 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
             ) : (
               <span className="flex-1">{def.defaultName}</span>
             )}
-            <button
-              type="button"
-              className="h-5 px-1.5 inline-flex items-center gap-0.5 rounded text-[10px] text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/20 shrink-0"
-              onClick={() => addSubLedger(row.sort_order)}
-              title={`Add a sub-ledger under "${def.defaultName}"`}
-            >
-              <Plus className="h-3 w-3" /> Sub
-            </button>
+            {/* + Sub button — hidden in readOnly / preview mode */}
+            {!readOnly && (
+              <button
+                type="button"
+                className="h-5 px-1.5 inline-flex items-center gap-0.5 rounded text-[10px] text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/20 shrink-0"
+                onClick={() => addSubLedger(row.sort_order)}
+                title={`Add a sub-ledger under "${def.defaultName}"`}
+              >
+                <Plus className="h-3 w-3" /> Sub
+              </button>
+            )}
           </div>
         </TableCell>
 
@@ -490,21 +493,27 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
         <TableCell className="py-1 px-2 text-xs border-r" style={{ minWidth: "180px" }}>
           <div className="flex items-center gap-1.5 pl-5">
             <span className="text-muted-foreground/60 shrink-0 text-[11px]">└</span>
-            <Input
-              type="text"
-              className="h-7 text-xs px-2 py-0 flex-1 border-blue-200"
-              value={row.asset_name}
-              placeholder="Sub-ledger name…"
-              onChange={e => updateRow(row.sort_order, "asset_name", e.target.value)}
-            />
-            <button
-              type="button"
-              className="h-5 w-5 inline-flex items-center justify-center rounded text-muted-foreground hover:text-destructive hover:bg-red-50 shrink-0"
-              onClick={() => deleteSubLedger(row.sort_order)}
-              title="Remove this sub-ledger"
-            >
-              <Trash2 className="h-3 w-3" />
-            </button>
+            {readOnly
+              ? <span className="text-xs flex-1">{row.asset_name || "Sub-ledger"}</span>
+              : <>
+                  <Input
+                    type="text"
+                    className="h-7 text-xs px-2 py-0 flex-1 border-blue-200"
+                    value={row.asset_name}
+                    placeholder="Sub-ledger name…"
+                    onChange={e => updateRow(row.sort_order, "asset_name", e.target.value)}
+                  />
+                  {/* Delete sub-ledger — hidden in readOnly */}
+                  <button
+                    type="button"
+                    className="h-5 w-5 inline-flex items-center justify-center rounded text-muted-foreground hover:text-destructive hover:bg-red-50 shrink-0"
+                    onClick={() => deleteSubLedger(row.sort_order)}
+                    title="Remove this sub-ledger"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </>
+            }
           </div>
         </TableCell>
         <TableCell className="p-1 border-r" style={{ minWidth: "64px" }}>
@@ -551,10 +560,12 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
         </p>
       </div>
 
-      {/* Top save */}
-      <div className="flex justify-end">
-        <SaveBtn />
-      </div>
+      {/* Top save — hidden in readOnly / preview mode */}
+      {!readOnly && (
+        <div className="flex justify-end">
+          <SaveBtn />
+        </div>
+      )}
 
       {/* PPE Table */}
       <div className="overflow-x-auto rounded-lg border">
@@ -715,10 +726,12 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
         Depreciation auto-calculates as (Opening + Additions before 29/09) × Rate% + (Additions after 29/09) × Rate%/2.
       </p>
 
-      {/* Bottom save */}
-      <div className="flex justify-end pt-1">
-        <SaveBtn />
-      </div>
+      {/* Bottom save — hidden in readOnly / preview mode */}
+      {!readOnly && (
+        <div className="flex justify-end pt-1">
+          <SaveBtn />
+        </div>
+      )}
     </div>
   );
 }

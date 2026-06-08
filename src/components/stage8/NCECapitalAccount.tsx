@@ -86,19 +86,31 @@ function calcPyClosing(py: PyRow): number {
        + py.interest - py.withdrawals + py.profit_share;
 }
 
-// Inline numeric input — defined outside component to avoid React warning
+// Inline numeric input — defined outside component to avoid React warning.
+// In readOnly (preview) mode, renders as plain text that matches the fmt()
+// display in the rest of the Capital Account table — no editable widget.
 function NumInput({
-  value, onChange, className,
+  value, onChange, className, readOnly,
 }: {
   value: number;
-  onChange: (v: number) => void;
+  onChange?: (v: number) => void;
   className?: string;
+  readOnly?: boolean;
 }) {
+  if (readOnly) {
+    const abs = Math.round(Math.abs(value)).toLocaleString("en-IN", {
+      minimumFractionDigits: 0, maximumFractionDigits: 0,
+    });
+    const text = !Number.isFinite(value) || Math.abs(value) < 0.5
+      ? "—"
+      : value < 0 ? `(${abs})` : abs;
+    return <span className="text-xs text-right block w-full">{text}</span>;
+  }
   return (
     <Input
       type="number"
       value={value === 0 ? "" : value}
-      onChange={e => onChange(parseFloat(e.target.value) || 0)}
+      onChange={e => onChange!(parseFloat(e.target.value) || 0)}
       className={cn("h-7 text-xs text-right px-1 w-24", className)}
     />
   );
@@ -536,8 +548,8 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
         </p>
       </div>
 
-      {/* ── Profit-share warning ── */}
-      {profitShareWarning && (
+      {/* ── Profit-share warning (hidden in readOnly preview) ── */}
+      {!readOnly && profitShareWarning && (
         <Alert variant="destructive" className="py-2">
           <AlertTriangle className="h-4 w-4" />
           <AlertDescription className="text-xs">
@@ -576,7 +588,8 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
               <TableHead className="text-right w-28 bg-primary/5 font-semibold">
                 Closing Balance
               </TableHead>
-              <TableHead className="w-10" />
+              {/* Delete column — hidden in readOnly / preview mode */}
+              {!readOnly && <TableHead className="w-10" />}
             </TableRow>
           </TableHeader>
 
@@ -590,16 +603,17 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
                     {i + 1}
                   </TableCell>
 
-                  {/* Name */}
+                  {/* Name — plain text in readOnly, editable Input otherwise */}
                   <TableCell>
-                    <Input
-                      value={p.partner_name}
-                      onChange={e =>
-                        setPartnerField(i, "partner_name", e.target.value)
-                      }
-                      placeholder={`Partner ${i + 1}`}
-                      className="h-7 text-xs w-36"
-                    />
+                    {readOnly
+                      ? <span className="text-xs">{p.partner_name || `Partner ${i + 1}`}</span>
+                      : <Input
+                          value={p.partner_name}
+                          onChange={e => setPartnerField(i, "partner_name", e.target.value)}
+                          placeholder={`Partner ${i + 1}`}
+                          className="h-7 text-xs w-36"
+                        />
+                    }
                   </TableCell>
 
                   {/* Share % */}
@@ -608,6 +622,7 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
                       value={p.profit_share_pct}
                       onChange={v => setPartnerField(i, "profit_share_pct", v)}
                       className="w-16"
+                      readOnly={readOnly}
                     />
                   </TableCell>
 
@@ -615,9 +630,8 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
                   <TableCell className="text-right">
                     <NumInput
                       value={p.opening_balance_cy}
-                      onChange={v =>
-                        setPartnerField(i, "opening_balance_cy", v)
-                      }
+                      onChange={v => setPartnerField(i, "opening_balance_cy", v)}
+                      readOnly={readOnly}
                     />
                   </TableCell>
 
@@ -626,6 +640,7 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
                     <NumInput
                       value={p.introduced_cy}
                       onChange={v => setPartnerField(i, "introduced_cy", v)}
+                      readOnly={readOnly}
                     />
                   </TableCell>
 
@@ -634,6 +649,7 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
                     <NumInput
                       value={p.remuneration_cy}
                       onChange={v => setPartnerField(i, "remuneration_cy", v)}
+                      readOnly={readOnly}
                     />
                   </TableCell>
 
@@ -642,6 +658,7 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
                     <NumInput
                       value={p.interest_cy}
                       onChange={v => setPartnerField(i, "interest_cy", v)}
+                      readOnly={readOnly}
                     />
                   </TableCell>
 
@@ -650,6 +667,7 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
                     <NumInput
                       value={p.withdrawals_cy}
                       onChange={v => setPartnerField(i, "withdrawals_cy", v)}
+                      readOnly={readOnly}
                     />
                   </TableCell>
 
@@ -658,10 +676,11 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
                     <NumInput
                       value={p.profit_share_cy}
                       onChange={v => setPartnerField(i, "profit_share_cy", v)}
+                      readOnly={readOnly}
                     />
                   </TableCell>
 
-                  {/* Closing — READ-ONLY, auto-calculated */}
+                  {/* Closing — always READ-ONLY, auto-calculated */}
                   <TableCell
                     className={cn(
                       "text-right font-semibold bg-primary/5",
@@ -671,24 +690,26 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
                     {fmt(closing)}
                   </TableCell>
 
-                  {/* Delete button (disabled when only one partner remains) */}
-                  <TableCell className="text-center">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6 text-muted-foreground hover:text-destructive disabled:opacity-30"
-                      onClick={() => removePartner(i)}
-                      disabled={partners.length <= 1}
-                      title={
-                        partners.length <= 1
-                          ? "At least one partner required"
-                          : "Remove partner"
-                      }
-                    >
-                      <Trash2 size={12} />
-                    </Button>
-                  </TableCell>
+                  {/* Delete button — hidden in readOnly / preview mode */}
+                  {!readOnly && (
+                    <TableCell className="text-center">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 text-muted-foreground hover:text-destructive disabled:opacity-30"
+                        onClick={() => removePartner(i)}
+                        disabled={partners.length <= 1}
+                        title={
+                          partners.length <= 1
+                            ? "At least one partner required"
+                            : "Remove partner"
+                        }
+                      >
+                        <Trash2 size={12} />
+                      </Button>
+                    </TableCell>
+                  )}
                 </TableRow>
               );
             })}
@@ -734,7 +755,8 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
               >
                 {fmt(totals.closing)}
               </TableCell>
-              <TableCell />
+              {/* Empty spacer for delete column — hidden in readOnly */}
+              {!readOnly && <TableCell />}
             </TableRow>
 
             {/* ── Previous Year section ── */}
@@ -746,45 +768,52 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
                   return (
                     <TableRow key={p.partner_no} className="bg-blue-50/40 text-muted-foreground">
                       <TableCell />
+                      {/* Name — plain text in readOnly */}
                       <TableCell>
-                        <Input
-                          value={p.partner_name}
-                          onChange={e => setPyPartnerField(i, "partner_name", e.target.value)}
-                          placeholder={`PY Partner ${i + 1}`}
-                          className="h-7 text-xs px-1 w-36 italic"
-                        />
+                        {readOnly
+                          ? <span className="text-xs italic">{p.partner_name || `PY Partner ${i + 1}`}</span>
+                          : <Input
+                              value={p.partner_name}
+                              onChange={e => setPyPartnerField(i, "partner_name", e.target.value)}
+                              placeholder={`PY Partner ${i + 1}`}
+                              className="h-7 text-xs px-1 w-36 italic"
+                            />
+                        }
                       </TableCell>
                       <TableCell />
                       <TableCell className="text-right">
-                        <NumInput value={p.opening}      onChange={v => setPyPartnerField(i, "opening", v)} />
+                        <NumInput value={p.opening}      onChange={v => setPyPartnerField(i, "opening", v)}      readOnly={readOnly} />
                       </TableCell>
                       <TableCell className="text-right">
-                        <NumInput value={p.introduced}   onChange={v => setPyPartnerField(i, "introduced", v)} />
+                        <NumInput value={p.introduced}   onChange={v => setPyPartnerField(i, "introduced", v)}   readOnly={readOnly} />
                       </TableCell>
                       <TableCell className="text-right">
-                        <NumInput value={p.remuneration} onChange={v => setPyPartnerField(i, "remuneration", v)} />
+                        <NumInput value={p.remuneration} onChange={v => setPyPartnerField(i, "remuneration", v)} readOnly={readOnly} />
                       </TableCell>
                       <TableCell className="text-right">
-                        <NumInput value={p.interest}     onChange={v => setPyPartnerField(i, "interest", v)} />
+                        <NumInput value={p.interest}     onChange={v => setPyPartnerField(i, "interest", v)}     readOnly={readOnly} />
                       </TableCell>
                       <TableCell className="text-right">
-                        <NumInput value={p.withdrawals}  onChange={v => setPyPartnerField(i, "withdrawals", v)} />
+                        <NumInput value={p.withdrawals}  onChange={v => setPyPartnerField(i, "withdrawals", v)}  readOnly={readOnly} />
                       </TableCell>
                       <TableCell className="text-right">
-                        <NumInput value={p.profit_share} onChange={v => setPyPartnerField(i, "profit_share", v)} />
+                        <NumInput value={p.profit_share} onChange={v => setPyPartnerField(i, "profit_share", v)} readOnly={readOnly} />
                       </TableCell>
                       <TableCell className={cn("text-right bg-primary/5 font-semibold", pyClosing < 0 && "text-destructive")}>
                         {fmt(pyClosing)}
                       </TableCell>
-                      <TableCell className="text-center">
-                        <Button
-                          type="button" variant="ghost" size="icon"
-                          className="h-6 w-6 text-muted-foreground hover:text-destructive"
-                          onClick={() => removePyPartner(i)}
-                        >
-                          <Trash2 size={12} />
-                        </Button>
-                      </TableCell>
+                      {/* Delete button — hidden in readOnly */}
+                      {!readOnly && (
+                        <TableCell className="text-center">
+                          <Button
+                            type="button" variant="ghost" size="icon"
+                            className="h-6 w-6 text-muted-foreground hover:text-destructive"
+                            onClick={() => removePyPartner(i)}
+                          >
+                            <Trash2 size={12} />
+                          </Button>
+                        </TableCell>
+                      )}
                     </TableRow>
                   );
                 })}
@@ -813,7 +842,8 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
                       <TableCell className={cn("text-right bg-primary/10 font-bold text-xs", pyTotals.closing < 0 && "text-destructive")}>
                         {fmt(pyTotals.closing)}
                       </TableCell>
-                      <TableCell />
+                      {/* Spacer for delete column — hidden in readOnly */}
+                      {!readOnly && <TableCell />}
                     </TableRow>
                   );
                 })()}
@@ -827,35 +857,36 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
                 </TableCell>
                 <TableCell />
                 <TableCell className="text-right">
-                  <NumInput value={pyRow.opening}      onChange={v => setPyField("opening", v)} />
+                  <NumInput value={pyRow.opening}      onChange={v => setPyField("opening", v)}      readOnly={readOnly} />
                 </TableCell>
                 <TableCell className="text-right">
-                  <NumInput value={pyRow.introduced}   onChange={v => setPyField("introduced", v)} />
+                  <NumInput value={pyRow.introduced}   onChange={v => setPyField("introduced", v)}   readOnly={readOnly} />
                 </TableCell>
                 <TableCell className="text-right">
-                  <NumInput value={pyRow.remuneration} onChange={v => setPyField("remuneration", v)} />
+                  <NumInput value={pyRow.remuneration} onChange={v => setPyField("remuneration", v)} readOnly={readOnly} />
                 </TableCell>
                 <TableCell className="text-right">
-                  <NumInput value={pyRow.interest}     onChange={v => setPyField("interest", v)} />
+                  <NumInput value={pyRow.interest}     onChange={v => setPyField("interest", v)}     readOnly={readOnly} />
                 </TableCell>
                 <TableCell className="text-right">
-                  <NumInput value={pyRow.withdrawals}  onChange={v => setPyField("withdrawals", v)} />
+                  <NumInput value={pyRow.withdrawals}  onChange={v => setPyField("withdrawals", v)}  readOnly={readOnly} />
                 </TableCell>
                 <TableCell className="text-right">
-                  <NumInput value={pyRow.profit_share} onChange={v => setPyField("profit_share", v)} />
+                  <NumInput value={pyRow.profit_share} onChange={v => setPyField("profit_share", v)} readOnly={readOnly} />
                 </TableCell>
                 <TableCell className={cn("text-right bg-primary/5 font-semibold", calcPyClosing(pyRow) < 0 && "text-destructive")}>
                   {fmt(calcPyClosing(pyRow))}
                 </TableCell>
-                <TableCell />
+                {/* Spacer for delete column — hidden in readOnly */}
+                {!readOnly && <TableCell />}
               </TableRow>
             )}
           </TableBody>
         </Table>
       </div>
 
-      {/* ── Actions ── */}
-      <div className="flex items-center justify-between flex-wrap gap-2">
+      {/* ── Actions — hidden in readOnly / preview mode ── */}
+      {!readOnly && <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2">
           <Button
             type="button"
@@ -877,7 +908,7 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
             : <Save size={13} />}
           Save Capital Account
         </Button>
-      </div>
+      </div>}
 
     </div>
   );
