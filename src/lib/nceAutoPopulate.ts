@@ -2611,6 +2611,48 @@ export async function nceAutoPopulate(
         leakFreeCount: leakFreeCustomRows.length,
       });
     }
+    // ── FINAL SIGN CORRECTION (2026-06-08) ─────────────────────────────────
+    // For strictly-TB-driven notes (trade_payables, other_cl, other_lt_liab,
+    // cogs), force EVERY custom row whose label matches a TB ledger to use
+    // the SIGNED TB amount. This overrides any unsigned/stale manual values.
+    // Ensures: Note Total = COA Total (Dr netted against Cr for contra).
+    // Runs AFTER all restore/refresh cycles so nothing can override it.
+    if (STRICTLY_TB_DRIVEN_B.has(noteType)) {
+      // Build a fresh lookup from TB with signed amounts
+      const signedCyLookup: Record<string, number> = {};
+      const signedPyLookup: Record<string, number> = {};
+      for (const row of tb) {
+        const mapped = coaMapping[row.ledger_name];
+        if (!mapped || !new Set([...(noteFs.all ?? []), ...(noteFs.lt ?? []), ...(noteFs.st ?? [])]).has(mapped.code)) continue;
+        const nm = String(row.ledger_name || "").trim().toLowerCase();
+        if (!nm) continue;
+        signedCyLookup[nm] = signedLedgerAmt(row, noteType);
+        signedPyLookup[nm] = signedLedgerOpeningAmt(row, noteType);
+      }
+      // Also include PY TB ledgers
+      for (const row of pyTb) {
+        const nm = String(row.ledger_name || "").trim().toLowerCase();
+        if (!nm) continue;
+        if (signedPyLookup[nm] === undefined) {
+          const mapped = coaMapping[row.ledger_name] ?? pyCoaMap[row.ledger_name];
+          if (mapped && new Set([...(noteFs.all ?? []), ...(noteFs.lt ?? []), ...(noteFs.st ?? [])]).has(mapped.code)) {
+            signedPyLookup[nm] = signedLedgerAmt(row, noteType);
+          }
+        }
+      }
+      // Overwrite custom row values with signed TB amounts
+      for (const cr of leakFreeCustomRows) {
+        const lbl = (cr.label || "").trim().toLowerCase();
+        if (!lbl) continue;
+        if (signedCyLookup[lbl] !== undefined) {
+          mergedCy[cr.id] = signedCyLookup[lbl];
+        }
+        if (signedPyLookup[lbl] !== undefined) {
+          mergedPy[cr.id] = signedPyLookup[lbl];
+        }
+      }
+    }
+
     out[noteType] = {
       cy:         mergedCy,
       py:         mergedPy,
