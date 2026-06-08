@@ -19,6 +19,7 @@ import {
   Packer,
   PageOrientation,
   Paragraph,
+  SectionType,
   ShadingType,
   Table,
   TableCell,
@@ -2082,10 +2083,13 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
         children:   bsNoteChildren,
       },
       // PL notes section: separate DOCX section so running header changes to
-      // "Notes to Profit & Loss A/c…". Starts on a new page (default section-
-      // break behaviour). Omitted entirely when there are no PL notes.
+      // "Notes to Profit & Loss A/c…". CONTINUOUS break so PL notes flow
+      // directly onto the same page as the last BS note (no forced page break),
+      // maximising page utilisation. The PL running header kicks in from the
+      // first full PL page (the page containing the section break shows the BS
+      // header since it started in the BS section). Omitted when no PL notes.
       ...(plNoteChildren.length > 0 ? ([{
-        properties: { page: notesPortraitProps },
+        properties: { page: notesPortraitProps, type: SectionType.CONTINUOUS },
         headers:    { default: plNotesRunningHdr },
         children:   plNoteChildren,
       }] as Parameters<typeof Document>[0]["sections"]) : []),
