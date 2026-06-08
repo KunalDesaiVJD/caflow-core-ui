@@ -2557,19 +2557,77 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       toast.success("Financial Statements generated — view in Stage 5 Financial Statements");
       queryClient.invalidateQueries({ queryKey: ["fs-rows"] });
 
-      // ── Auto-populate Notes (Stage 5) so notes are ready for this engagement ──
-      // This runs silently in the background; a failure does not block the user.
-      (async () => {
-        try {
-          const { loadStage5Notes, saveStage5Notes, autoPopulateNotes } =
-            await import("@/lib/notesAutoPopulate");
-          const existing = await loadStage5Notes(engagementId);
-          const fresh    = await autoPopulateNotes(engagementId, { existing });
-          await saveStage5Notes(engagementId, fresh);
-        } catch (notesErr: any) {
-          console.warn("Notes auto-population failed (non-critical):", notesErr?.message);
-        }
-      })();
+      // ── Auto-populate Notes so notes are ready when the user opens Stage 7 ──
+      // For NCE: runs nceAutoPopulate which creates all note rows from TB × COA
+      // mapping with properly SIGNED amounts (Dr netted against Cr for contra
+      // balances). This ensures Note Total = COA Total for every note.
+      // For Corporate: runs the existing stage5_notes auto-populate.
+      // Runs silently in the background; a failure does not block the user.
+      if (isNonCorporate) {
+        (async () => {
+          try {
+            const { nceAutoPopulate, serialiseNoteData } = await import("@/lib/nceAutoPopulate");
+            // 1. Load existing notes (to preserve manual rows)
+            const { data: existingRows } = await supabase
+              .from("nce_financial_notes")
+              .select("note_type, cy_data, py_data")
+              .eq("engagement_id", engagementId)
+              .eq("financial_year", engagement?.financial_year ?? "");
+            const built: Record<string, any> = {};
+            for (const r of (existingRows ?? []) as any[]) {
+              const cy = (r.cy_data ?? {}) as Record<string, any>;
+              const py = (r.py_data ?? {}) as Record<string, any>;
+              const customRows = Array.isArray(cy._custom_rows) ? cy._custom_rows : [];
+              const cleanCy: Record<string, number> = {};
+              const cleanPy: Record<string, number> = {};
+              for (const [k, v] of Object.entries(cy)) {
+                if (k.startsWith("_")) continue;
+                if (typeof v === "number") cleanCy[k] = v;
+              }
+              for (const [k, v] of Object.entries(py)) {
+                if (k.startsWith("_")) continue;
+                if (typeof v === "number") cleanPy[k] = v;
+              }
+              built[r.note_type] = { cy: cleanCy, py: cleanPy, customRows };
+            }
+            // 2. Re-populate from current TB × COA mapping (with signed netting)
+            const populated = await nceAutoPopulate(engagementId, built);
+            // 3. Save back
+            const noteRows = Object.entries(populated).map(([noteType, d]) => {
+              const { cy_data, py_data } = serialiseNoteData(d);
+              return {
+                engagement_id: engagementId,
+                financial_year: engagement?.financial_year ?? "",
+                note_type: noteType,
+                cy_data: cy_data as any,
+                py_data: py_data as any,
+                updated_at: new Date().toISOString(),
+              };
+            });
+            if (noteRows.length > 0) {
+              await supabase
+                .from("nce_financial_notes")
+                .upsert(noteRows, { onConflict: "engagement_id,financial_year,note_type" });
+            }
+            queryClient.invalidateQueries({ queryKey: ["nce-financial-notes", engagementId] });
+            console.log("[generateFS] NCE notes populated →", noteRows.length, "note types");
+          } catch (notesErr: any) {
+            console.warn("[generateFS] NCE notes population failed:", notesErr?.message);
+          }
+        })();
+      } else {
+        (async () => {
+          try {
+            const { loadStage5Notes, saveStage5Notes, autoPopulateNotes } =
+              await import("@/lib/notesAutoPopulate");
+            const existing = await loadStage5Notes(engagementId);
+            const fresh    = await autoPopulateNotes(engagementId, { existing });
+            await saveStage5Notes(engagementId, fresh);
+          } catch (notesErr: any) {
+            console.warn("Notes auto-population failed (non-critical):", notesErr?.message);
+          }
+        })();
+      }
     } catch (err: any) {
       toast.error(err.message);
     } finally {
