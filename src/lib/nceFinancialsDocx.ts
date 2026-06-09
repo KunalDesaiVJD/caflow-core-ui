@@ -1138,12 +1138,12 @@ function buildCapitalAccountSection(
 
   const cyPartners = (capitalData ?? [])
     .filter((r: any) => r.partner_no < PY_SENTINEL)
-    .sort((a: any, b: any) => a.partner_no - b.partner_no);
+    .sort((a: any, b: any) => (a.partner_name ?? "").localeCompare(b.partner_name ?? ""));
 
   const pyAggregate = (capitalData ?? []).find((r: any) => r.partner_no === PY_SENTINEL);
   const pyPartners  = (capitalData ?? [])
     .filter((r: any) => r.partner_no >= PY_PARTNER_BASE)
-    .sort((a: any, b: any) => a.partner_no - b.partner_no);
+    .sort((a: any, b: any) => (a.partner_name ?? "").localeCompare(b.partner_name ?? ""));
 
   const calcClosingCy = (p: any): number =>
     (p.opening_balance_cy ?? 0) + (p.introduced_cy ?? 0) + (p.remuneration_cy ?? 0)
@@ -1448,8 +1448,12 @@ function buildNoteSection(
   // misleading sub-row indent in the .docx export.
   const emittedCustoms = new Set<string>();
   const emitCustoms = (predicate: (cr: NoteCustomRow) => boolean) => {
-    for (const cr of customRows) {
-      if (cr.attachedTo || emittedCustoms.has(cr.id) || !predicate(cr)) continue;
+    // Sort unattached custom rows alphabetically by label before emitting so the
+    // exported order matches the user-facing alphabetical convention (Issue 2).
+    const toEmit = [...customRows]
+      .filter(cr => !cr.attachedTo && !emittedCustoms.has(cr.id) && predicate(cr))
+      .sort((a, b) => (a.label ?? "").localeCompare(b.label ?? ""));
+    for (const cr of toEmit) {
       emittedCustoms.add(cr.id);
       if (isA) {
         // SHREE HARI fix — also pick up the row's own sources[] for export.
@@ -1488,12 +1492,21 @@ function buildNoteSection(
         return !!(v.c || v.p);
       }
     };
+    // nonEmptySectionTotalSet tracks subtotals belonging to sections that DO have
+    // data.  Used below to detect the "only one section has data" case.
+    const nonEmptySectionTotalSet = new Set<string>();
+    const _flushSection = () => {
+      if (currentHdrId === null) return;
+      if (!sectionHasData) {
+        emptySectionHeaders.add(currentHdrId);
+        if (currentSectionTotalId) emptySectionTotals.add(currentSectionTotalId);
+      } else {
+        if (currentSectionTotalId) nonEmptySectionTotalSet.add(currentSectionTotalId);
+      }
+    };
     for (const row of cfg.rows) {
       if (row.isSectionHeader) {
-        if (currentHdrId !== null && !sectionHasData) {
-          emptySectionHeaders.add(currentHdrId);
-          if (currentSectionTotalId) emptySectionTotals.add(currentSectionTotalId);
-        }
+        _flushSection();
         currentHdrId = row.id;
         currentSectionTotalId = null;
         sectionHasData = false;
@@ -1504,9 +1517,14 @@ function buildNoteSection(
         if (!row.isTotal && checkRow(row)) sectionHasData = true;
       }
     }
-    if (currentHdrId !== null && !sectionHasData) {
-      emptySectionHeaders.add(currentHdrId);
-      if (currentSectionTotalId) emptySectionTotals.add(currentSectionTotalId);
+    _flushSection();
+
+    // Issue 1 fix: when exactly ONE section has data its subtotal ("Total")
+    // is numerically identical to the grand total — showing both produces a
+    // duplicate "Total" row.  Suppress the section subtotal in that case.
+    if (nonEmptySectionTotalSet.size === 1) {
+      const [onlyId] = nonEmptySectionTotalSet;
+      emptySectionTotals.add(onlyId);
     }
   }
 
@@ -1569,7 +1587,11 @@ function buildNoteSection(
       // at indent 2, "A" at 3, "Office No. 201" at 4, "A-0903 Dineshbhai" at 5).
       const subIndent = (row.indent ?? 0) + 1;
       const emitDescendants = (parentId: string, depth: number) => {
-        for (const cr of attachedRows(parentId)) {
+        // Sort children alphabetically by label so sub-ledger breakups (e.g.
+        // under "Rates and Taxes", "Other payables") also export in A-Z order.
+        const children = [...attachedRows(parentId)]
+          .sort((a, b) => (a.label ?? "").localeCompare(b.label ?? ""));
+        for (const cr of children) {
           if (isA) {
             const cc = suffixed(cy, cr.id); const pp = suffixed(py, cr.id);
             // Only skip a row whose own AND every descendant amount is empty.
