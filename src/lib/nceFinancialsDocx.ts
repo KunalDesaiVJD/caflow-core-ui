@@ -2134,10 +2134,12 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
         headers:    { default: bsNotesRunningHdr },
         children:   bsNotesSectionChildren,
       },
-      // Section C — PL notes (border restored, plNotesRunningHdr on every page).
-      // Omitted when there are no PL notes.
+      // Section C — PL notes (NO border — same reason as Section B: Word forces
+      // NEXT_PAGE on a CONTINUOUS break when the destination section carries
+      // <w:pgBorders>).  plNotesRunningHdr provides "Notes to Profit & Loss A/c
+      // as on…" on every PL page.  Omitted when there are no PL notes.
       ...(plNotesSectionChildren.length > 0 ? ([{
-        properties: { page: notesPortraitProps },
+        properties: { page: notesPortraitPropsNoBdr },
         headers:    { default: plNotesRunningHdr },
         children:   plNotesSectionChildren,
       }] as Parameters<typeof Document>[0]["sections"]) : []),
