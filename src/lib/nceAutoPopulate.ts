@@ -2156,7 +2156,11 @@ export async function nceAutoPopulate(
         // was in group "A"'s 15 sources AND as a standalone manual row
         // → ₹3,30,000 double-counted → BS imbalance.
         const mrSources = (mr.sources ?? []).length;
-        if (mrSources === 0 && tbRefreshCy && tbRefreshCy[lbl] !== undefined) {
+        // Skip cogs — its hierarchical structure (pa_hdr/raw_purch/etc.)
+        // means standalone purchase ledgers are NOT duplicates; they're
+        // legitimate entries matched to different sections by the cogs-
+        // specific auto-populate. Zeroing them corrupts the COGS total.
+        if (noteType !== "cogs" && mrSources === 0 && tbRefreshCy && tbRefreshCy[lbl] !== undefined) {
           if ((mergedCy[mr.id] ?? 0) !== 0) {
             refreshedCount++;
             // eslint-disable-next-line no-console
@@ -2753,7 +2757,8 @@ export async function nceAutoPopulate(
       // have sources). Computed ONCE before the loop for efficiency and to
       // ensure the check is applied consistently.
       const duplicateIds = new Set<string>();
-      const anyRowHasSources = leakFreeCustomRows.some(cr => (cr.sources ?? []).length > 0);
+      // Skip cogs — hierarchical structure means standalone rows aren't duplicates
+      const anyRowHasSources = noteType !== "cogs" && leakFreeCustomRows.some(cr => (cr.sources ?? []).length > 0);
       if (anyRowHasSources) {
         for (const cr of leakFreeCustomRows) {
           if ((cr.sources ?? []).length === 0) {

@@ -2529,12 +2529,10 @@ export default function PipelineFinancialStatements({
           .sort()
           .map(k => `${k}=${coa[k]?.code ?? ""}`)
           .join("|");
-        // v6: reverted from v9 — aggressive hash bumps forced re-sync on
-        // ALL clients, breaking P&L notes by dropping auto-populated ledgers.
-        // Double-count guard stays in nceAutoPopulate but only triggers when
-        // user clicks "Re-correct from COA Mapping" / "Generate FS", not on
-        // every page load auto-sync.
-        const hashKey = `caflow:nce_coahash_v6:${engagementId}:${engagement.financial_year}`;
+        // v7: force re-sync to restore COGS note data that was corrupted
+        // by the double-count guard. The guard now excludes cogs notes so
+        // this re-sync will produce correct COGS totals.
+        const hashKey = `caflow:nce_coahash_v7:${engagementId}:${engagement.financial_year}`;
         const lastHash = typeof window !== "undefined" ? window.localStorage.getItem(hashKey) : null;
         if (lastHash === hash && hash.length > 0) {
           // COA mapping unchanged since last successful sync — nothing to do.
@@ -3947,10 +3945,12 @@ export default function PipelineFinancialStatements({
       const section = NCE_CODE_TO_SECTION[code];
       if (section === "pl") {
         const coaVal = out[code] || 0;
-        // Only override if note total >= COA total in absolute terms.
-        // When note total < COA total, the note is likely incomplete
-        // (auto-populate didn't capture all ledgers) → keep COA total.
-        if (Math.abs(noteVal) >= Math.abs(coaVal) - 1) {
+        // COGS codes (with sub-config) always use note value — the cogs
+        // auto-populate is accurate and the double-count guard now
+        // correctly skips cogs. Other P&L codes use the safety guard.
+        if (meta.config) {
+          out[code] = noteVal;
+        } else if (Math.abs(noteVal) >= Math.abs(coaVal) - 1) {
           out[code] = noteVal;
         }
         // else: keep computedAmounts (COA total) — note is incomplete
@@ -4048,7 +4048,9 @@ export default function PipelineFinancialStatements({
       const section = NCE_CODE_TO_SECTION[code];
       if (section === "pl") {
         const coaVal = out[code] || 0;
-        if (Math.abs(noteVal) >= Math.abs(coaVal) - 1) {
+        if (meta.config) {
+          out[code] = noteVal;
+        } else if (Math.abs(noteVal) >= Math.abs(coaVal) - 1) {
           out[code] = noteVal;
         }
       } else {
