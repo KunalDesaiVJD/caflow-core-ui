@@ -2131,10 +2131,17 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     margin: { top: MARG_T, right: MARG_R, bottom: MARG_B, left: MARG_L },
     borders: _pgBdr,
   };
-  // Task 11 (doc6): notes pages use larger bottom margin for stamp/seal space.
-  // MARG_T_NOTES (0.94") + explicit header distance (MARG_HDR_NOTES = 0.31")
-  // ensure the two-line running header (entity name + section heading) fits
-  // within the top margin and leaves a visible gap before the first note row.
+  // Note 1 uses an EMPTY running header (body banner provides the title).
+  // It keeps the original compact top margin so the accounting policies
+  // text is not pushed down by unnecessary whitespace.
+  const note1PortraitProps = {
+    size:   { width: A4_W, height: A4_H },
+    margin: { top: MARG_T, right: MARG_R, bottom: MARG_B_NOTES, left: MARG_L },
+    borders: _pgBdr,
+  };
+  // Task 11 (doc6): structured notes pages (Sections B + C) use larger top
+  // margin + explicit header distance so the two-line running header (entity
+  // name + section heading) sits above the body content with a visible gap.
   const notesPortraitProps = {
     size:   { width: A4_W, height: A4_H },
     margin: { top: MARG_T_NOTES, right: MARG_R, bottom: MARG_B_NOTES, left: MARG_L, header: MARG_HDR_NOTES },
@@ -2142,8 +2149,7 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   };
   // Border-free variant — used only for Section B (BS notes 2-11) which ends
   // with type: CONTINUOUS. Word silently promotes CONTINUOUS → NEXT_PAGE when
-  // the section carries <w:pgBorders>, so the border is omitted here. Note 1
-  // and PL notes sections keep _pgBdr; PPE and cover pages are unaffected.
+  // the section carries <w:pgBorders>, so the border is omitted here.
   const notesPortraitPropsNoBdr = {
     size:   { width: A4_W, height: A4_H },
     margin: { top: MARG_T_NOTES, right: MARG_R, bottom: MARG_B_NOTES, left: MARG_L, header: MARG_HDR_NOTES },
@@ -2309,9 +2315,13 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
           sigBlock(),
         ],
       },
-      // Section A — Note 1 page (border, empty header, next-page break into B).
+      // Section A — Note 1 page. Uses note1PortraitProps (compact top margin,
+      // no header distance) because the running header is empty — the body
+      // banner (makeNotesBanner) provides the title inline. The larger
+      // notesPortraitProps margin is only needed for Sections B/C which carry
+      // a real two-line running header.
       {
-        properties: { page: notesPortraitProps },
+        properties: { page: note1PortraitProps },
         headers:    { default: emptyFirstHeader },
         children:   note1SectionChildren,
       },
