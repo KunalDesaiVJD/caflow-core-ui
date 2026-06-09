@@ -2741,26 +2741,36 @@ export async function nceAutoPopulate(
       // guard above (the ledger's amount is counted through another row's
       // sources aggregate). Without this skip, the final sign correction
       // undoes the zeroing by writing signedCyLookup[lbl] back.
+      // Build set of IDs that are duplicates (0 sources + TB match + others
+      // have sources). Computed ONCE before the loop for efficiency and to
+      // ensure the check is applied consistently.
+      const duplicateIds = new Set<string>();
+      const anyRowHasSources = leakFreeCustomRows.some(cr => (cr.sources ?? []).length > 0);
+      if (anyRowHasSources) {
+        for (const cr of leakFreeCustomRows) {
+          if ((cr.sources ?? []).length === 0) {
+            const lbl = (cr.label || "").trim().toLowerCase();
+            if (lbl && signedCyLookup[lbl] !== undefined) {
+              duplicateIds.add(cr.id);
+            }
+          }
+        }
+      }
       for (const cr of leakFreeCustomRows) {
+        if (duplicateIds.has(cr.id)) continue; // Skip duplicate rows
         const lbl = (cr.label || "").trim().toLowerCase();
         if (!lbl) continue;
-        // Skip duplicate rows: 0 sources + label matches TB = the ledger
-        // is already counted inside a group row's sources aggregate.
-        // Writing the TB amount here would double-count it.
-        if ((cr.sources ?? []).length === 0 && signedCyLookup[lbl] !== undefined) {
-          // Only skip if at least one OTHER row has sources (i.e. the note
-          // uses group headings with TB ledgers, making this a duplicate).
-          const anyOtherHasSources = leakFreeCustomRows.some(
-            other => other.id !== cr.id && (other.sources ?? []).length > 0
-          );
-          if (anyOtherHasSources) continue;
-        }
         if (signedCyLookup[lbl] !== undefined) {
           mergedCy[cr.id] = signedCyLookup[lbl];
         }
         if (signedPyLookup[lbl] !== undefined) {
           mergedPy[cr.id] = signedPyLookup[lbl];
         }
+      }
+      // Zero out duplicate rows that were skipped (ensure they stay at 0)
+      for (const id of duplicateIds) {
+        mergedCy[id] = 0;
+        mergedPy[id] = 0;
       }
     }
 

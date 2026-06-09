@@ -2492,8 +2492,8 @@ export default function PipelineFinancialStatements({
           .sort()
           .map(k => `${k}=${coa[k]?.code ?? ""}`)
           .join("|");
-        // v8: force re-sync — double-count guard v3 (final sign correction fix)
-        const hashKey = `caflow:nce_coahash_v8:${engagementId}:${engagement.financial_year}`;
+        // v9: force re-sync — double-count guard v4 (explicit zero enforcement)
+        const hashKey = `caflow:nce_coahash_v9:${engagementId}:${engagement.financial_year}`;
         const lastHash = typeof window !== "undefined" ? window.localStorage.getItem(hashKey) : null;
         if (lastHash === hash && hash.length > 0) {
           // COA mapping unchanged since last successful sync — nothing to do.
