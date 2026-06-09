@@ -212,7 +212,7 @@ export function useInternalMasterStorage(
         setSaving(false);
       }
     },
-    [engagementId]
+    [engagementId, firmId, user?.id, user?.name]
   );
 
   // ── setField — single field + debounced auto-save ──────────────────────────
@@ -225,7 +225,11 @@ export function useInternalMasterStorage(
       setData(prev => {
         const next = { ...prev, [field]: value };
         dataRef.current = next;
-      lastSavedRef.current = { ...next };
+        // NOTE: lastSavedRef intentionally NOT updated here.
+        // It must only advance after a successful Supabase write (inside
+        // persist / flush). Advancing it here would make prev === next in
+        // _pushToSupabase, producing an empty diff and silently discarding
+        // the user's changes on every auto-save.
         awCacheOnly(engagementId, "int_master_json", next);
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => persist(next, true), 1000);
@@ -242,7 +246,7 @@ export function useInternalMasterStorage(
       setData(prev => {
         const next = { ...prev, ...patch };
         dataRef.current = next;
-      lastSavedRef.current = { ...next };
+        // NOTE: lastSavedRef intentionally NOT updated here — see setField.
         awCacheOnly(engagementId, "int_master_json", next);
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => persist(next, true), 1000);
@@ -258,7 +262,7 @@ export function useInternalMasterStorage(
       setData(prev => {
         const next = { ...prev, ...patch };
         dataRef.current = next;
-      lastSavedRef.current = { ...next };
+        // NOTE: lastSavedRef intentionally NOT updated here — see setField.
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => persist(next, true), 1000);
         return next;
