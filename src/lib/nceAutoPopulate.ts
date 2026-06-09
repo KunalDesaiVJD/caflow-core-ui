@@ -457,12 +457,14 @@ export const NCE_CODE_TO_NOTE: Record<string, { note: string; col?: "lt" | "st";
   // P&L
   NCE_REV_OPS: { note: "revenue_ops" },
   NCE_REV_OTH: { note: "other_income" },
-  // COGS: the "cogs" note stores all three sections (materials, stock-in-trade,
-  // inventory changes) in one DB row. The P&L face needs each as a separate
-  // line item, so we point each code to its sub-config (cogs_a / cogs_c)
-  // which computes the section-specific subtotal from the shared data.
-  NCE_COGS:    { note: "cogs", config: "cogs_a" },
-  NCE_CII:     { note: "cogs", config: "cogs_c" },
+  // NOTE: NCE_COGS and NCE_CII are intentionally NOT here.
+  // The COGS note auto-populate doesn't reliably produce totals matching
+  // the COA mapping (the hierarchical structure with raw_purch/pack_purch/
+  // opening/closing stock means individual ledger values don't aggregate
+  // the same way as the COA mapping's flat sum). The P&L face for COGS
+  // reads from computedAmounts (COA mapping total) which is always correct.
+  // The cogs note provides the BREAKDOWN for the auditor in Stage 8 but
+  // does NOT drive the P&L face value — same pattern as Depreciation.
   NCE_EMP_EXP: { note: "employee_exp" },
   NCE_FIN_COST:{ note: "finance_costs" },
   NCE_OTH_EXP: { note: "other_expenses" },

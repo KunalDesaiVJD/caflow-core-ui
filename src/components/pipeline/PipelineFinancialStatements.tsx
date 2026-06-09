@@ -2530,9 +2530,9 @@ export default function PipelineFinancialStatements({
           .map(k => `${k}=${coa[k]?.code ?? ""}`)
           .join("|");
         // v7: force re-sync to restore COGS note data that was corrupted
-        // by the double-count guard. The guard now excludes cogs notes so
-        // this re-sync will produce correct COGS totals.
-        const hashKey = `caflow:nce_coahash_v7:${engagementId}:${engagement.financial_year}`;
+        // v6: stable. COGS face reads from computedAmounts (COA total),
+        // not from notes. No more forced re-syncs needed.
+        const hashKey = `caflow:nce_coahash_v6:${engagementId}:${engagement.financial_year}`;
         const lastHash = typeof window !== "undefined" ? window.localStorage.getItem(hashKey) : null;
         if (lastHash === hash && hash.length > 0) {
           // COA mapping unchanged since last successful sync — nothing to do.
@@ -3945,12 +3945,7 @@ export default function PipelineFinancialStatements({
       const section = NCE_CODE_TO_SECTION[code];
       if (section === "pl") {
         const coaVal = out[code] || 0;
-        // COGS codes (with sub-config) always use note value — the cogs
-        // auto-populate is accurate and the double-count guard now
-        // correctly skips cogs. Other P&L codes use the safety guard.
-        if (meta.config) {
-          out[code] = noteVal;
-        } else if (Math.abs(noteVal) >= Math.abs(coaVal) - 1) {
+        if (Math.abs(noteVal) >= Math.abs(coaVal) - 1) {
           out[code] = noteVal;
         }
         // else: keep computedAmounts (COA total) — note is incomplete
@@ -4048,9 +4043,7 @@ export default function PipelineFinancialStatements({
       const section = NCE_CODE_TO_SECTION[code];
       if (section === "pl") {
         const coaVal = out[code] || 0;
-        if (meta.config) {
-          out[code] = noteVal;
-        } else if (Math.abs(noteVal) >= Math.abs(coaVal) - 1) {
+        if (Math.abs(noteVal) >= Math.abs(coaVal) - 1) {
           out[code] = noteVal;
         }
       } else {
