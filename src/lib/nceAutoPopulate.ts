@@ -2091,9 +2091,29 @@ export async function nceAutoPopulate(
       for (const cr of autoRows) {
         if (cr.attachedTo) hasChildren.add(cr.attachedTo);
       }
+      // ── DOUBLE-COUNT FIX (DBS REALTY, June 2026) ─────────────────────
+      // Build a set of ledger names (lowercased) that are already counted
+      // as `sources` inside another custom row's breakdown. If a manual
+      // row's label matches one of these, it is a DUPLICATE — the same
+      // ledger is already included in the group row's aggregate total. In
+      // that case we must zero it out instead of refreshing it to the TB
+      // value, otherwise the ledger amount is counted twice: once through
+      // the group's sources-sum and once as the standalone manual row.
+      // Example: DBS REALTY "A-603 Rajesh Desai" (₹3,30,000) was in
+      // group "A" sources AND as a standalone row → ₹3,30,000 BS drift.
+      const alreadySourcedLedgers = new Set<string>();
+      for (const cr of [...absorbedManualRows, ...autoRows]) {
+        if (!cr.sources || !Array.isArray(cr.sources)) continue;
+        for (const src of cr.sources) {
+          const sLbl = (src.ledger || "").trim().toLowerCase();
+          if (sLbl) alreadySourcedLedgers.add(sLbl);
+        }
+      }
+
       _msLog("WP8  refresh loop entered", {
         msInHasChildren: _msId ? hasChildren.has(_msId) : "n/a",
         absorbedCount: absorbedManualRows.length,
+        alreadySourcedCount: alreadySourcedLedgers.size,
       });
       let refreshedCount = 0;
       for (const mr of absorbedManualRows) {
@@ -2101,6 +2121,24 @@ export async function nceAutoPopulate(
         if (hasChildren.has(mr.id)) continue;
         const lbl = (mr.label || "").trim().toLowerCase();
         if (!lbl) continue;
+
+        // ── DOUBLE-COUNT GUARD ───────────────────────────────────────
+        // If this manual row has NO sources of its own (it's a standalone
+        // entry, not a group heading) and its label matches a ledger that
+        // IS already counted as a source inside another row's breakdown,
+        // the row is a duplicate. Zero it out to prevent double-counting.
+        const mrSources = (mr.sources ?? []).length;
+        if (mrSources === 0 && alreadySourcedLedgers.has(lbl)) {
+          if ((mergedCy[mr.id] ?? 0) !== 0) {
+            refreshedCount++;
+            // eslint-disable-next-line no-console
+            console.log(`[nceAutoPopulate] ${noteType}: zeroed duplicate row "${mr.label}" (already in a group's sources).`);
+          }
+          mergedCy[mr.id] = 0;
+          mergedPy[mr.id] = 0;
+          continue;
+        }
+
         const newCyVal = tbRefreshCy?.[lbl];
         const newPyVal = tbRefreshPy?.[lbl];
         if (_msTraceOn && mr.id === _msId) {

@@ -2492,8 +2492,8 @@ export default function PipelineFinancialStatements({
           .sort()
           .map(k => `${k}=${coa[k]?.code ?? ""}`)
           .join("|");
-        // v5: force re-sync to apply tbRefresh signed values for contra ledgers
-        const hashKey = `caflow:nce_coahash_v5:${engagementId}:${engagement.financial_year}`;
+        // v6: force re-sync to apply double-count guard + COGS note override
+        const hashKey = `caflow:nce_coahash_v6:${engagementId}:${engagement.financial_year}`;
         const lastHash = typeof window !== "undefined" ? window.localStorage.getItem(hashKey) : null;
         if (lastHash === hash && hash.length > 0) {
           // COA mapping unchanged since last successful sync — nothing to do.
