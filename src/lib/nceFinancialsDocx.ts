@@ -2104,7 +2104,10 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
       children: [
         new Paragraph({
           alignment: AlignmentType.CENTER,
-          spacing:   { before: 60, after: 20 },
+          // spacing.before = 200 DXA ≈ 10 pt — pushes entity name away from
+          // the page border (drawn at 24 pt from page edge via _pgBdr space:24)
+          // so there is a visible gap between the border line and the text.
+          spacing:   { before: 200, after: 20 },
           border:    { bottom: { style: BorderStyle.SINGLE, size: 8, color: NAVY, space: 4 } },
           children:  [new TextRun({
             text: entityName.toUpperCase(),
