@@ -2127,19 +2127,30 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
         headers:    { default: emptyFirstHeader },
         children:   note1SectionChildren,
       },
-      // Section B — BS notes 2-11 (NO border → CONTINUOUS honoured by Word).
-      // bsNotesRunningHdr repeats "Notes to Balance Sheet as on…" on every page.
+      // Section B — BS notes 2-11.  No type → defaults to nextPage, so BS
+      // notes always start on a fresh page after Note 1.  No pgBorders because
+      // the CONTINUOUS break from Section C shares this physical page and Word
+      // would need a full page to render the border frame.
       {
-        properties: { page: notesPortraitPropsNoBdr, type: SectionType.CONTINUOUS },
+        properties: { page: notesPortraitPropsNoBdr },
         headers:    { default: bsNotesRunningHdr },
         children:   bsNotesSectionChildren,
       },
-      // Section C — PL notes (NO border — same reason as Section B: Word forces
-      // NEXT_PAGE on a CONTINUOUS break when the destination section carries
-      // <w:pgBorders>).  plNotesRunningHdr provides "Notes to Profit & Loss A/c
-      // as on…" on every PL page.  Omitted when there are no PL notes.
+      // Section C — PL notes.
+      //
+      // ECMA-376 §17.6.18: w:type says how THE CURRENT section begins, NOT
+      // how the next one does.  So type=CONTINUOUS here means "PL notes begin
+      // without a page break, on the same page where BS notes end" — which is
+      // exactly what we want.  (Putting CONTINUOUS on Section B would have made
+      // BS notes start on the same page as Note 1, which is the wrong section.)
+      //
+      // No pgBorders: Word forces NEXT_PAGE when a CONTINUOUS section carries
+      // <w:pgBorders> because it cannot render the full border frame on a page
+      // that starts mid-content.  plNotesRunningHdr provides
+      // "Notes to Profit & Loss A/c as on…" on every full PL page.
+      // Omitted entirely when there are no PL notes.
       ...(plNotesSectionChildren.length > 0 ? ([{
-        properties: { page: notesPortraitPropsNoBdr },
+        properties: { page: notesPortraitPropsNoBdr, type: SectionType.CONTINUOUS },
         headers:    { default: plNotesRunningHdr },
         children:   plNotesSectionChildren,
       }] as Parameters<typeof Document>[0]["sections"]) : []),
