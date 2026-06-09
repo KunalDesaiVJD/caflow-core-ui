@@ -19,6 +19,7 @@ import {
   Packer,
   PageOrientation,
   Paragraph,
+  SectionType,
   ShadingType,
   Table,
   TableCell,
@@ -1932,24 +1933,7 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
       ],
     });
   const bsNotesRunningHdr = makeNotesHeader(`Notes to Balance Sheet as on 31.03.${String(cyYear)}`);
-  // notesEntityHdr — entity banner ONLY (no section heading). Used as the
-  // default running header for pages 2+ of the unified notes section so that
-  // both BS and PL pages show the same header. The section headings themselves
-  // ("Notes to Balance Sheet…" / "Notes to P&L A/c…") appear once as styled
-  // inline body paragraphs at each section transition.
-  const notesEntityHdr = new Header({
-    children: [
-      new Paragraph({
-        alignment: AlignmentType.CENTER,
-        spacing:   { before: 60, after: 20 },
-        border:    { bottom: { style: BorderStyle.SINGLE, size: 8, color: NAVY, space: 4 } },
-        children:  [new TextRun({
-          text: entityName.toUpperCase(),
-          font: FONT, size: SZ_ENTITY, bold: true, color: NAVY,
-        })],
-      }),
-    ],
-  });
+  const plNotesRunningHdr = makeNotesHeader(`Notes to Profit & Loss A/c as on 31.03.${String(cyYear)}`);
 
   // Phase 2 — PPE Schedule (landscape). PPE is always-active (ref 10); use its
   // dynamic number so the title matches the Balance-Sheet reference.
@@ -1967,6 +1951,14 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     size:   { width: A4_W, height: A4_H },
     margin: { top: MARG_T, right: MARG_R, bottom: MARG_B_NOTES, left: MARG_L },
     borders: _pgBdr,
+  };
+  // Border-free variant — used only for Section B (BS notes 2-11) which ends
+  // with type: CONTINUOUS. Word silently promotes CONTINUOUS → NEXT_PAGE when
+  // the section carries <w:pgBorders>, so the border is omitted here. Note 1
+  // and PL notes sections keep _pgBdr; PPE and cover pages are unaffected.
+  const notesPortraitPropsNoBdr = {
+    size:   { width: A4_W, height: A4_H },
+    margin: { top: MARG_T, right: MARG_R, bottom: MARG_B_NOTES, left: MARG_L },
   };
   const landscapeProps = {
     size:   { width: A4_W, height: A4_H, orientation: PageOrientation.LANDSCAPE },
@@ -2045,21 +2037,28 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   const bsNoteTablePairs = noteTablePairs.filter(([, , sec]) => sec === "BS");
   const plNoteTablePairs = noteTablePairs.filter(([, , sec]) => sec === "PL");
 
-  // ── Single unified notes section ────────────────────────────────────────────
-  // All notes (BS + PL) live in ONE DOCX section so notes flow naturally across
-  // pages with no forced section-break page jumps. Having CONTINUOUS + page
-  // borders in the same section causes Word to silently promote CONTINUOUS to
-  // NEXT_PAGE — the single-section approach avoids this entirely.
+  // ── Notes sections ───────────────────────────────────────────────────────────
+  // Three DOCX sections so BS and PL each get their own running header while
+  // notes still flow continuously across the BS→PL boundary:
   //
-  // Layout:
-  //   Page 1 — Note 1: makeNotesBanner() body banner + accounting policies.
-  //             Running header suppressed via titlePage + emptyFirstHeader so
-  //             the body banner is not duplicated.
-  //   Page 2+ — Notes 2-end: notesEntityHdr (entity banner only) running header.
-  //             Inline "Notes to Balance Sheet…" heading before Note 2.
-  //             Inline "Notes to Profit & Loss A/c…" heading before Note 12.
-  //             Both headings styled to match the running header section line.
-  //             Notes flow continuously — no forced page break between BS and PL.
+  //   Section A — Note 1 page: body banner + accounting policies.
+  //               emptyFirstHeader suppresses running header so makeNotesBanner()
+  //               is not duplicated. Ends with nextPage (default) → Note 2
+  //               starts on its own page with the BS running header.
+  //
+  //   Section B — Notes 2-11 (structured BS tables): bsNotesRunningHdr on every
+  //               page. type: CONTINUOUS so PL notes flow on the same page as
+  //               the last BS note (no forced page break, no wasted space).
+  //               IMPORTANT: notesPortraitPropsNoBdr (no _pgBdr) is used here —
+  //               Word silently promotes CONTINUOUS → NEXT_PAGE when the section
+  //               carries <w:pgBorders>. Removing the border from this section
+  //               is the only way to honour the continuous break.
+  //
+  //   Section C — PL notes (Notes 12+): plNotesRunningHdr on every page.
+  //               notesPortraitProps (with border) restores the page frame.
+  //               Inline mkSectionHeading paragraph makes "Notes to P&L A/c…"
+  //               visible on the transition page (which carries the BS running
+  //               header since the page started in Section B).
 
   const mkSectionHeading = (text: string, before = 200): Paragraph =>
     new Paragraph({
@@ -2068,22 +2067,31 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
       children: [new TextRun({ text, font: FONT, size: SZ_HDR, bold: true, underline: {} })],
     });
 
-  const allNotesChildren: (Paragraph | Table)[] = [
-    // ── Note 1 page ──────────────────────────────────────────────────────────
+  // Section A children — Note 1 page only (no pageBreakBefore needed; the
+  // section boundary already forces a new page before Section B content).
+  const note1SectionChildren: (Paragraph | Table)[] = [
     makeNotesBanner(),
     ...note1Paras,
-    // Page break to Notes 2+ (logical section boundary, not page wastage)
-    new Paragraph({ pageBreakBefore: true, spacing: { before: 0, after: 0 }, children: [] }),
-    // ── BS structured notes (Notes 2–11) ─────────────────────────────────────
-    mkSectionHeading(`Notes to Balance Sheet as on 31.03.${String(cyYear)}`, 0),
+  ];
+
+  // Section B children — BS structured notes (capital account + BS note tables).
+  // No inline BS heading; the bsNotesRunningHdr running header provides it on
+  // every page of this section.
+  const bsNotesSectionChildren: (Paragraph | Table)[] = [
     ...capitalTables.flatMap((t, i) => i === 0 ? [t] : [noteGap(), t]),
     ...bsNoteTablePairs.flatMap(([, table]) => [noteGap(), table]),
-    // ── PL notes (Notes 12+) — flow directly, no page break ──────────────────
-    ...(plNoteTablePairs.length > 0 ? [
-      mkSectionHeading(`Notes to Profit & Loss A/c as on 31.03.${String(cyYear)}`),
-      ...plNoteTablePairs.flatMap(([, table], i) => (i === 0 ? [table] : [noteGap(), table])),
-    ] : []),
   ];
+
+  // Section C children — PL notes. The inline heading appears on the transition
+  // page (mid-page after BS notes end) so the PL section start is clearly
+  // labelled even though the running header on that page still shows the BS
+  // heading (Word locks the header when the page starts).
+  const plNotesSectionChildren: (Paragraph | Table)[] = plNoteTablePairs.length > 0
+    ? [
+        mkSectionHeading(`Notes to Profit & Loss A/c as on 31.03.${String(cyYear)}`),
+        ...plNoteTablePairs.flatMap(([, table], i) => (i === 0 ? [table] : [noteGap(), table])),
+      ]
+    : [];
 
   const doc = new Document({
     styles: {
@@ -2113,19 +2121,26 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
           sigBlock(),
         ],
       },
-      // Unified notes section — all BS + PL notes in one flowing section.
-      // titlePage suppresses the running header on Note 1's page (the body banner
-      // makeNotesBanner() provides the entity name there at full opacity).
-      // Pages 2+ get notesEntityHdr (entity banner only — no section-heading
-      // text in the running header, since BS and PL share this section).
-      // The inline mkSectionHeading() paragraphs mark each section transition
-      // in the body. Notes flow naturally; no CONTINUOUS needed; no page-border
-      // vs section-break conflict.
+      // Section A — Note 1 page (border, empty header, next-page break into B).
       {
-        properties: { page: notesPortraitProps, titlePage: true },
-        headers:    { first: emptyFirstHeader, default: notesEntityHdr },
-        children:   allNotesChildren,
+        properties: { page: notesPortraitProps },
+        headers:    { default: emptyFirstHeader },
+        children:   note1SectionChildren,
       },
+      // Section B — BS notes 2-11 (NO border → CONTINUOUS honoured by Word).
+      // bsNotesRunningHdr repeats "Notes to Balance Sheet as on…" on every page.
+      {
+        properties: { page: notesPortraitPropsNoBdr, type: SectionType.CONTINUOUS },
+        headers:    { default: bsNotesRunningHdr },
+        children:   bsNotesSectionChildren,
+      },
+      // Section C — PL notes (border restored, plNotesRunningHdr on every page).
+      // Omitted when there are no PL notes.
+      ...(plNotesSectionChildren.length > 0 ? ([{
+        properties: { page: notesPortraitProps },
+        headers:    { default: plNotesRunningHdr },
+        children:   plNotesSectionChildren,
+      }] as Parameters<typeof Document>[0]["sections"]) : []),
       // PPE Schedule (landscape) — always a BS note; uses the BS running header.
       {
         properties: { page: landscapeProps },
