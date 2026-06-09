@@ -2315,6 +2315,29 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
               }
             }
 
+            // Task 4b heal: backfill userMoved flag for existing manual rows
+            // that were placed by the user (Move To or Eject-to-heading).
+            // source:"manual" + tbDerived:true + attachedTo (pointing at a
+            // static row) can ONLY arise from a user Move To / Eject action
+            // or the Task 4 heal above. Marking them userMoved prevents the
+            // per-ledger-breakup purge from destroying the placement.
+            // Rows with ejectedSource are already protected by ejectedLedgers
+            // but also benefit from userMoved as a belt-and-suspenders guard.
+            for (const [nType, d] of Object.entries(built)) {
+              const patched = (d.customRows ?? []).map(cr => {
+                if (cr.source === "manual" && cr.tbDerived === true &&
+                    cr.attachedTo && !cr.attachedTo.startsWith("custom_") &&
+                    !cr.userMoved) {
+                  return { ...cr, userMoved: true };
+                }
+                return cr;
+              });
+              if (patched.some((cr, i) => cr !== (d.customRows ?? [])[i])) {
+                built[nType] = { ...d, customRows: patched };
+                healed = true;
+              }
+            }
+
             // Note 4 heal (NCE — duplicate rendering / runaway accumulation):
             // collapse EVERY duplicate custom row in a note down to a single row,
             // regardless of source. A pre-fix loop (auto walk re-creating each
@@ -2371,8 +2394,14 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
             // restores Total (B) for clients whose stage8 state had orphan
             // ejected ledgers under deleted parents.
             const unEjectedAny = Object.keys(unEjectByNote).length > 0;
-            // Back-fill cy_sources for engagements saved before the feature was added
-            const needsCySources = Object.values(built).some(
+            // Back-fill cy_sources for engagements saved before the feature was added.
+            // FIX: gate behind a one-shot localStorage flag — without this, notes
+            // that legitimately have no cy_sources (e.g. only custom-row amounts)
+            // would trigger re-sync on every page load, same class of bug as
+            // the needsPyAnyEmpty infinite loop.
+            const cySourcesMigrationKey = `nce_cy_sources_backfill_v1_${engagementId}`;
+            const cySourcesMigrationDone = localStorage.getItem(cySourcesMigrationKey) === "1";
+            const needsCySources = !cySourcesMigrationDone && Object.values(built).some(
               d => Object.keys(d.cy ?? {}).some(k => !k.startsWith("custom_")) &&
                    (!d.cy_sources || Object.keys(d.cy_sources).length === 0)
             );
@@ -2411,7 +2440,10 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
               const hasPY = Object.values(d.py ?? {}).some(v => Math.abs(Number(v) || 0) > 0.005);
               return hasCY && !hasPY;
             });
-            const needsPyRefresh = needsPyAnyEmpty || !pyMigrationDone;
+            // FIX: gate needsPyAnyEmpty behind the migration flag. Previously
+            // the || made re-sync run on EVERY load for entities with any note
+            // lacking PY data, destroying user Move To placements each time.
+            const needsPyRefresh = !pyMigrationDone && needsPyAnyEmpty;
             const needsCySourcesPyRefresh = !pySourcesMigrationDone;
             const needsDrCrRefresh = !drCrMigrationDone;
             const needsSignFixRefresh = !signFixMigrationDone;
@@ -2474,6 +2506,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
                 try { localStorage.setItem(pySourcesMigrationKey, "1"); } catch {/* private mode */}
                 try { localStorage.setItem(drCrMigrationKey, "1"); } catch {/* private mode */}
                 try { localStorage.setItem(signFixMigrationKey, "1"); } catch {/* private mode */}
+                try { localStorage.setItem(cySourcesMigrationKey, "1"); } catch {/* private mode */}
               }).catch(() => {}); // best-effort
             }
           }
@@ -2752,6 +2785,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
             ...r,
             source: "manual" as const,
             attachedTo: targetId,
+            userMoved: true,
             ...(wasTbDerived ? { tbDerived: true } : {}),
             ...(targetSection !== undefined ? { section: targetSection } : {}),
           };
@@ -2918,7 +2952,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
         // 2026-06-02 — Ejected rows carry a TB-derived amount; lock the
         // value (auditor can re-categorise but not edit the figure).
         id: newId, label: ledger, source: "manual", tbDerived: true, ejectedSource: ledger,
-        ...(attachToId ? { attachedTo: attachToId } : {}),
+        ...(attachToId ? { attachedTo: attachToId, userMoved: true } : {}),
         ...(targetSection ? { section: targetSection } : {}),
       };
       newCy[newId] = amount;
@@ -3000,7 +3034,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
         // 2026-06-02 — Ejected rows carry a TB-derived amount; lock the
         // value (auditor can re-categorise but not edit the figure).
         id: newId, label: ledger, source: "manual", tbDerived: true, ejectedSource: ledger,
-        ...(attachToId ? { attachedTo: attachToId } : {}),
+        ...(attachToId ? { attachedTo: attachToId, userMoved: true } : {}),
         ...(targetSection ? { section: targetSection } : {}),
       };
       // Record this ledger in ejectedLedgers so Re-sync skips it from auto-grouping

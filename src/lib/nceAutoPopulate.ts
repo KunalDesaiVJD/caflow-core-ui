@@ -300,6 +300,11 @@ export interface NCECustomRow {
    *  locked. Reading the lock from `source` alone unlocked TB-backed amounts
    *  on Move-to / Eject — the bug this field exists to fix. */
   tbDerived?: boolean;
+  /** When true, the user explicitly moved this row via "Move to…" or
+   *  ejected it to a specific heading. Rows with this flag are NEVER
+   *  purged by the per-ledger-breakup stale-artifact cleanup in
+   *  nceAutoPopulate — they represent intentional user placements. */
+  userMoved?: boolean;
 }
 
 export interface NCENoteData {
@@ -1074,6 +1079,7 @@ export async function nceAutoPopulate(
           if (!lbl) return true;
           const currentCode = tbCodeByLabel.get(lbl);
           if (!currentCode) return true;             // user-typed row (no TB match) → keep
+          if (mr.userMoved === true) return true;    // user explicitly moved this row — never purge
           if (isPerLedgerBreakup) return false;      // breakup note → always rebuild from auto
           return ourCodes.has(currentCode);          // others: keep if mapping still ours
         });
