@@ -1596,6 +1596,7 @@ function buildNoteSection(
           // Merge all static + custom data rows into one A-Z sorted block.
           flatRows.sort((a, b) => a.label.localeCompare(b.label));
           flatRows.forEach(f => f.emit());
+          flatRows.length = 0; // clear so end-of-loop fallback does not double-emit
         }
       } else if ((row as any).sectionTag) {
         emitCustoms(cr => cr.section === (row as any).sectionTag);
