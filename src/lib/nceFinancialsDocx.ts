@@ -1673,16 +1673,28 @@ function buildNoteSection(
         }
       } else {
         const v = aggB(row.id);
+        // Helper: is this row "expanded" (descendants should be printed)?
+        // True when expandedRows is absent (show all) or explicitly contains this id.
+        const isExpandedB = (id: string) => !expandedRows || expandedRows.has(id);
+        // Helper: does the row have at least one attached child with a non-zero
+        // amount?  When true AND the row is expanded, the parent's own amount is
+        // suppressed (shows "—") so the same total is not displayed twice.
+        const hasChildrenB = (id: string) =>
+          isExpandedB(id) &&
+          attachedRows(id).some(cr => { const cv = aggB(cr.id); return cv.c !== 0 || cv.p !== 0; });
         if (isFlatNote) {
-          const capturedRow = noteRowB(row.label, v.c, v.p, row.indent ?? 0, "data");
-          const capturedId  = row.id;
+          const capturedId = row.id;
+          const capturedCy = v.c;
+          const capturedPy = v.p;
           flatRows.push({ label: row.label, emit: () => {
-            rows.push(capturedRow);
-            if (!expandedRows || expandedRows.has(capturedId)) emitDescendants(capturedId, subIndent);
+            const hide = hasChildrenB(capturedId);
+            rows.push(noteRowB(row.label, hide ? 0 : capturedCy, hide ? 0 : capturedPy, row.indent ?? 0, "data"));
+            if (isExpandedB(capturedId)) emitDescendants(capturedId, subIndent);
           }});
         } else {
-          rows.push(noteRowB(row.label, v.c, v.p, row.indent ?? 0, "data"));
-          if (!expandedRows || expandedRows.has(row.id)) emitDescendants(row.id, subIndent);
+          const hide = hasChildrenB(row.id);
+          rows.push(noteRowB(row.label, hide ? 0 : v.c, hide ? 0 : v.p, row.indent ?? 0, "data"));
+          if (isExpandedB(row.id)) emitDescendants(row.id, subIndent);
         }
       }
     }

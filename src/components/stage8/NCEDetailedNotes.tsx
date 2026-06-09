@@ -1197,16 +1197,25 @@ function PatternBTable({
                         "—" even when its 46 attached ledgers summed to ₹1.1
                         crore. The user can't type into a parent with children
                         anyway (NumInput was always disabled), so showing the
-                        aggregate is strictly more useful. */}
-                    {hasAttachedB
-                      ? <span className="text-xs tabular-nums text-right block pr-1">{aggCyB ? fmtNum(aggCyB) : "—"}</span>
-                      : <NumInput value={rawCy[row.id] ?? 0} onChange={v => onChangeCy(row.id, v)} disabled={row.naAll} />}
+                        aggregate is strictly more useful.
+                        Preview/Export fix: when in readOnly (preview) mode and
+                        the row is expanded with visible children (source ledgers
+                        OR attached custom rows), suppress the parent's own amount
+                        so the same total is not shown twice. */}
+                    {hideEmptySections && isOpenB && (hasSrcsB || hasAttachedB)
+                      ? <span className="text-xs tabular-nums text-right block pr-1">—</span>
+                      : hasAttachedB
+                        ? <span className="text-xs tabular-nums text-right block pr-1">{aggCyB ? fmtNum(aggCyB) : "—"}</span>
+                        : <NumInput value={rawCy[row.id] ?? 0} onChange={v => onChangeCy(row.id, v)} disabled={row.naAll} />}
                   </TableCell>
                   <TableCell className="p-1">
-                    {/* SHREE HARI FIX — see CY comment above. */}
-                    {hasAttachedB
-                      ? <span className="text-xs tabular-nums text-right block pr-1">{aggPyB ? fmtNum(aggPyB) : "—"}</span>
-                      : <NumInput value={rawPy[row.id] ?? 0} onChange={v => onChangePy(row.id, v)} disabled={row.naAll} />}
+                    {/* SHREE HARI FIX — see CY comment above.
+                        Same preview/export suppression for PY. */}
+                    {hideEmptySections && isOpenB && (hasSrcsB || hasAttachedB)
+                      ? <span className="text-xs tabular-nums text-right block pr-1">—</span>
+                      : hasAttachedB
+                        ? <span className="text-xs tabular-nums text-right block pr-1">{aggPyB ? fmtNum(aggPyB) : "—"}</span>
+                        : <NumInput value={rawPy[row.id] ?? 0} onChange={v => onChangePy(row.id, v)} disabled={row.naAll} />}
                   </TableCell>
                   <TableCell className="p-1 text-center w-8">
                     <div className="flex items-center justify-end gap-1">
