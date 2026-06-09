@@ -2163,7 +2163,9 @@ export async function nceAutoPopulate(
             console.log(`[nceAutoPopulate] ${noteType}: zeroed duplicate row "${mr.label}" (already in a group's sources).`);
           }
           mergedCy[mr.id] = 0;
-          mergedPy[mr.id] = 0;
+          // NOTE: only zero CY — PY may have legitimate values from PY
+          // shell that aren't duplicated. Zeroing PY broke DBS REALTY PY
+          // BS by ₹13.42 cr (37 trade_payables PY values wiped).
           continue;
         }
 
@@ -2773,10 +2775,10 @@ export async function nceAutoPopulate(
           mergedPy[cr.id] = signedPyLookup[lbl];
         }
       }
-      // Zero out duplicate rows that were skipped (ensure they stay at 0)
+      // Zero out CY for duplicate rows (ensure they stay at 0).
+      // Only CY — PY may hold legitimate PY-shell values.
       for (const id of duplicateIds) {
         mergedCy[id] = 0;
-        mergedPy[id] = 0;
       }
     }
 

@@ -3932,10 +3932,10 @@ export default function PipelineFinancialStatements({
       const section = NCE_CODE_TO_SECTION[code];
       if (section === "pl") {
         const coaVal = out[code] || 0;
-        // Only override if note total >= COA total in absolute terms
-        // (i.e. note adds manual items), or for COGS codes which use
-        // sub-configs and are always accurate.
-        if (meta.config || Math.abs(noteVal) >= Math.abs(coaVal) - 1) {
+        // Only override if note total >= COA total in absolute terms.
+        // When note total < COA total, the note is likely incomplete
+        // (auto-populate didn't capture all ledgers) → keep COA total.
+        if (Math.abs(noteVal) >= Math.abs(coaVal) - 1) {
           out[code] = noteVal;
         }
         // else: keep computedAmounts (COA total) — note is incomplete
@@ -4033,7 +4033,7 @@ export default function PipelineFinancialStatements({
       const section = NCE_CODE_TO_SECTION[code];
       if (section === "pl") {
         const coaVal = out[code] || 0;
-        if (meta.config || Math.abs(noteVal) >= Math.abs(coaVal) - 1) {
+        if (Math.abs(noteVal) >= Math.abs(coaVal) - 1) {
           out[code] = noteVal;
         }
       } else {
