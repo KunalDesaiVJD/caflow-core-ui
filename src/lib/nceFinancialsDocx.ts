@@ -1302,6 +1302,9 @@ function buildCapitalAccountSection(
 interface NoteCustomRow { id: string; label?: string; section?: string; attachedTo?: string; }
 
 /** Notes 3–28 — generic note table from NOTES_CONFIG */
+/** Source-ledger entry stored in cy_sources[staticRowId] */
+type CySourceEntry = { ledger: string; amountCy: number; amountPy?: number; column?: "lt" | "st" };
+
 function buildNoteSection(
   cfg: NoteConfig,
   rawCy: Record<string, number>,
@@ -1311,6 +1314,8 @@ function buildNoteSection(
   pyYear: string,
   expandedRows?: Set<string>,
   hideBlankNoteRows?: boolean,
+  /** GL breakup ledgers per static row — mirrors NCEDetailedNotes cySources prop */
+  cySources?: Record<string, CySourceEntry[]>,
 ): Table {
   // Auto/manual breakup rows are stored in cy_data._custom_rows; their amounts
   // live as ordinary keys (id or id+"_lt"/"_st") in rawCy/rawPy. For notes like
@@ -1683,12 +1688,23 @@ function buildNoteSection(
         // Helper: is this row "expanded" (descendants should be printed)?
         // True when expandedRows is absent (show all) or explicitly contains this id.
         const isExpandedB = (id: string) => !expandedRows || expandedRows.has(id);
-        // Helper: does the row have at least one attached child with a non-zero
-        // amount?  When true AND the row is expanded, the parent's own amount is
-        // suppressed (blank cell, not "—") so the same total is not shown twice.
+        // Helper: does this row have non-zero source-ledger (GL) entries?
+        const hasSrcsB = (id: string) =>
+          (cySources?.[id] ?? []).some(s => (s.amountCy ?? 0) !== 0 || (s.amountPy ?? 0) !== 0);
+        // Emit the source-ledger breakdown rows (indented one level below parent).
+        const emitSourcesB = (id: string, indent: number) => {
+          if (!cySources?.[id]) return;
+          const srcs = cySources[id].filter(s => (s.amountCy ?? 0) !== 0 || (s.amountPy ?? 0) !== 0);
+          for (const s of srcs) {
+            rows.push(noteRowB(s.ledger, s.amountCy, s.amountPy ?? 0, indent, "data"));
+          }
+        };
+        // Helper: does the row have at least one attached custom child OR source-ledger
+        // entry with a non-zero amount?  When true AND the row is expanded, the parent's
+        // own amount is suppressed (blank cell) so the same total is not shown twice.
         const hasChildrenB = (id: string) =>
           isExpandedB(id) &&
-          attachedRows(id).some(cr => { const cv = aggB(cr.id); return cv.c !== 0 || cv.p !== 0; });
+          (attachedRows(id).some(cr => { const cv = aggB(cr.id); return cv.c !== 0 || cv.p !== 0; }) || hasSrcsB(id));
         if (isFlatNote) {
           const capturedId = row.id;
           const capturedCy = v.c;
@@ -1697,13 +1713,19 @@ function buildNoteSection(
             // null → blank cell (no "—") when children already represent the total.
             const hide = hasChildrenB(capturedId);
             rows.push(noteRowB(row.label, hide ? null : capturedCy, hide ? null : capturedPy, row.indent ?? 0, "data"));
-            if (isExpandedB(capturedId)) emitDescendants(capturedId, subIndent);
+            if (isExpandedB(capturedId)) {
+              if (hasSrcsB(capturedId)) emitSourcesB(capturedId, subIndent);
+              emitDescendants(capturedId, subIndent);
+            }
           }});
         } else {
           const hide = hasChildrenB(row.id);
           // null → blank cell (no "—") when children already represent the total.
           rows.push(noteRowB(row.label, hide ? null : v.c, hide ? null : v.p, row.indent ?? 0, "data"));
-          if (isExpandedB(row.id)) emitDescendants(row.id, subIndent);
+          if (isExpandedB(row.id)) {
+            if (hasSrcsB(row.id)) emitSourcesB(row.id, subIndent);
+            emitDescendants(row.id, subIndent);
+          }
         }
       }
     }
@@ -1921,6 +1943,9 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   // Phase 2 — Notes 3–28 from NOTES_CONFIG (build savedNotes first so COGS sub-items
   // can be passed to buildPLTable for Task 7 sub-classification in P&L)
   const savedNotes: Record<string, { cy: Record<string, number>; py: Record<string, number> }> = {};
+  // cy_sources per note type — GL breakup ledgers for each static row.
+  // Keyed exactly like savedNotes (note_type string → Record<staticRowId, CySourceEntry[]>).
+  const savedCySources: Record<string, Record<string, CySourceEntry[]>> = {};
   for (const row of notesData) {
     const key = String((row as any).note_type ?? "");
     if (!key) continue;
@@ -1932,6 +1957,9 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
         ? (row as any).py_data as Record<string, number>
         : {},
     };
+    if ((row as any).cy_sources && typeof (row as any).cy_sources === "object") {
+      savedCySources[key] = (row as any).cy_sources as Record<string, CySourceEntry[]>;
+    }
   }
 
   // Task 9 (doc7): compute COGS sub-totals via computeDisplayData so formula-driven
@@ -2011,7 +2039,7 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     // NCE Task 9 (doc8): record each note's section (BS or PL) so the children
     // array builder can insert "Notes to Balance Sheet" / "Notes to P&L" headers.
     const noteSectionTag = NOTE_META[cfg.noteType]?.section ?? "BS";
-    noteTablePairs.push([parseInt(dynNum, 10), buildNoteSection(cfg, data.cy, data.py, dynNum, cyYear, pyYear, expandedRows, hideBlankNoteRows), noteSectionTag] as [number, Table, string]);
+    noteTablePairs.push([parseInt(dynNum, 10), buildNoteSection(cfg, data.cy, data.py, dynNum, cyYear, pyYear, expandedRows, hideBlankNoteRows, savedCySources[sourceKey]), noteSectionTag] as [number, Table, string]);
   }
   // Sort ascending by note number for correct sequential order in export
   noteTablePairs.sort((a, b) => a[0] - b[0]);
