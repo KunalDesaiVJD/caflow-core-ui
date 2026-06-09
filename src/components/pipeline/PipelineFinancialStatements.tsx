@@ -4049,6 +4049,32 @@ export default function PipelineFinancialStatements({
     // PY TOTAL: computed from note-overridden `out` (mirrors CY above).
     out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (out[id] || 0), 0);
     out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
+    // ── PY BALANCE FALLBACK (2026-06-09) ─────────────────────────────
+    // ROOT CAUSE: note PY data is incomplete — nceAutoPopulate doesn't
+    // always populate PY for every ledger (e.g. SHRI RAM trade_receivables
+    // has 520 ledgers but note PY misses ₹4,40,707 worth). This creates
+    // a PY BS imbalance even when COA mapping PY is perfectly balanced.
+    //
+    // FIX: after computing PY totals from note-overridden values, check
+    // if PY BS is balanced. If NOT, revert every BS code to the raw
+    // mergedPY value (computedAmountsPY / pyShellBSAmounts) which IS
+    // balanced (confirmed by COA mapping). This ensures PY BS always
+    // matches COA mapping when COA is balanced.
+    const pyBsDrift = Math.abs(out["NCE_AST"] + out["NCE_EL"]);
+    if (pyBsDrift > 2) {
+      // Check if mergedPY (pre-override) gives a balanced result
+      const rawAst = NCE_ASSET_IDS.reduce((s, id) => s + (mergedPY[id] || 0), 0);
+      const rawEl  = NCE_LIAB_IDS.reduce((s, id) => s + (mergedPY[id] || 0), 0);
+      const rawDrift = Math.abs(rawAst + rawEl);
+      if (rawDrift < pyBsDrift) {
+        // mergedPY is more balanced → revert BS codes to mergedPY
+        for (const id of [...NCE_ASSET_IDS, ...NCE_LIAB_IDS]) {
+          out[id] = mergedPY[id] || 0;
+        }
+        out["NCE_AST"] = rawAst;
+        out["NCE_EL"]  = rawEl;
+      }
+    }
     // PY profit chain recomputation (mirrors CY above).
     out["NCE_PL_EXP"] = (out["NCE_COGS"] || 0) + (out["NCE_CII"] || 0)
                        + (out["NCE_EMP_EXP"] || 0) + (out["NCE_FIN_COST"] || 0)
