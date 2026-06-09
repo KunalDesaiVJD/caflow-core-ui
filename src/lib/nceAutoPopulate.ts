@@ -2130,7 +2130,7 @@ export async function nceAutoPopulate(
       _msLog("WP8  refresh loop entered", {
         msInHasChildren: _msId ? hasChildren.has(_msId) : "n/a",
         absorbedCount: absorbedManualRows.length,
-        alreadySourcedCount: alreadySourcedLedgers.size,
+        tbLedgerToOwnerCount: tbLedgerToOwnerRow.size,
       });
       let refreshedCount = 0;
       for (const mr of absorbedManualRows) {
