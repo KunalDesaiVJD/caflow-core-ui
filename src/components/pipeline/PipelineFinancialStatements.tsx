@@ -3935,23 +3935,10 @@ export default function PipelineFinancialStatements({
       if (total == null) continue;
       const nature = NCE_NOTE_NATURE[meta.note] ?? "CR";
       const noteVal = nature === "CR" ? -total : total;
-      // SAFETY GUARD: for P&L codes, if the note total is LESS than the
-      // COA total (computedAmounts), the note is likely incomplete —
-      // auto-populate didn't capture all COA-mapped ledgers. In that case,
-      // keep the COA total so the P&L face matches COA mapping. Notes can
-      // ADD manual items above the COA total (overriding upward) but should
-      // never reduce it (incomplete auto-populate underreporting).
-      // BS codes always use note total (BS balance depends on it).
-      const section = NCE_CODE_TO_SECTION[code];
-      if (section === "pl") {
-        const coaVal = out[code] || 0;
-        if (Math.abs(noteVal) >= Math.abs(coaVal) - 1) {
-          out[code] = noteVal;
-        }
-        // else: keep computedAmounts (COA total) — note is incomplete
-      } else {
-        out[code] = noteVal;
-      }
+      // Notes always drive the face — both BS and P&L codes.
+      // If the note is incomplete, the face shows the incomplete total;
+      // the auditor fixes the notes directly.
+      out[code] = noteVal;
     }
     // ROOT-CAUSE FIX (Issue 2 — TOTAL rows didn't match the line items):
     // Fold BS_EQ_RS into NCE_CAP, lock BS TOTAL to TB.
@@ -4039,16 +4026,7 @@ export default function PipelineFinancialStatements({
       if (total == null) continue;
       const nature = NCE_NOTE_NATURE[meta.note] ?? "CR";
       const noteVal = nature === "CR" ? -total : total;
-      // Same P&L safety guard as CY (see comment above).
-      const section = NCE_CODE_TO_SECTION[code];
-      if (section === "pl") {
-        const coaVal = out[code] || 0;
-        if (Math.abs(noteVal) >= Math.abs(coaVal) - 1) {
-          out[code] = noteVal;
-        }
-      } else {
-        out[code] = noteVal;
-      }
+      out[code] = noteVal;
     }
     // Fold orphan codes + lock PY TOTAL to CY TB openings.
     if (out["BS_EQ_RS"] && Math.abs(out["BS_EQ_RS"]) > 0.005) {
