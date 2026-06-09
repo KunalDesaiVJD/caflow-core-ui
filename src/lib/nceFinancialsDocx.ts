@@ -68,7 +68,13 @@ const A4_W   = 11906;           // A4 width
 const A4_H   = 16838;           // A4 height
 const MARG_L = 864;             // 0.6" left — modest room for hole-punch / binding
 const MARG_R = 576;             // 0.4" right
-const MARG_T = 720;             // 0.5" top
+const MARG_T = 720;             // 0.5" top — used for BS / P&L pages
+// Notes pages need a taller top margin so the two-line running header
+// (entity name + section heading) sits comfortably above the body content
+// without overlapping. 1350 DXA ≈ 0.94" gives ~0.4" of breathing room
+// after the header text while keeping the layout compact.
+const MARG_T_NOTES   = 1350;   // 0.94" top for notes portrait pages
+const MARG_HDR_NOTES =  450;   // 0.31" from page top to running header start
 const MARG_B = 720;             // 0.5" bottom — tightened for better one-page BS/PL fit
 // Task 11 (doc6): notes pages get a larger bottom margin to preserve blank area
 // for physical stamp/seal placement on printed documents.
@@ -2106,7 +2112,7 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
           })],
         }),
         new Paragraph({
-          spacing:  { before: 80, after: 40 },
+          spacing:  { before: 80, after: 120 },
           children: [new TextRun({ text: sectionLine, font: FONT, size: SZ_HDR, bold: true, underline: {} })],
         }),
       ],
@@ -2125,10 +2131,13 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     margin: { top: MARG_T, right: MARG_R, bottom: MARG_B, left: MARG_L },
     borders: _pgBdr,
   };
-  // Task 11 (doc6): notes pages use larger bottom margin for stamp/seal space
+  // Task 11 (doc6): notes pages use larger bottom margin for stamp/seal space.
+  // MARG_T_NOTES (0.94") + explicit header distance (MARG_HDR_NOTES = 0.31")
+  // ensure the two-line running header (entity name + section heading) fits
+  // within the top margin and leaves a visible gap before the first note row.
   const notesPortraitProps = {
     size:   { width: A4_W, height: A4_H },
-    margin: { top: MARG_T, right: MARG_R, bottom: MARG_B_NOTES, left: MARG_L },
+    margin: { top: MARG_T_NOTES, right: MARG_R, bottom: MARG_B_NOTES, left: MARG_L, header: MARG_HDR_NOTES },
     borders: _pgBdr,
   };
   // Border-free variant — used only for Section B (BS notes 2-11) which ends
@@ -2137,7 +2146,7 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   // and PL notes sections keep _pgBdr; PPE and cover pages are unaffected.
   const notesPortraitPropsNoBdr = {
     size:   { width: A4_W, height: A4_H },
-    margin: { top: MARG_T, right: MARG_R, bottom: MARG_B_NOTES, left: MARG_L },
+    margin: { top: MARG_T_NOTES, right: MARG_R, bottom: MARG_B_NOTES, left: MARG_L, header: MARG_HDR_NOTES },
   };
   const landscapeProps = {
     size:   { width: A4_W, height: A4_H, orientation: PageOrientation.LANDSCAPE },
