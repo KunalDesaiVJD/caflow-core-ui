@@ -2144,19 +2144,24 @@ export async function nceAutoPopulate(
         // ── DOUBLE-COUNT GUARD ───────────────────────────────────────
         // For STRICTLY_TB_DRIVEN notes, a manual row that has 0 sources
         // (no TB ledgers directly attached) but whose label matches a
-        // current TB ledger (tbRefreshCy[lbl] defined) is necessarily a
-        // duplicate: the auto-populate already counted this ledger as a
-        // source inside one of the group headings (A, B, C, etc.).
-        // Refreshing this row to the TB value would double-count it.
-        // Example: DBS REALTY "A-603 Rajeshbhai Kanubhai Desai" ₹3,30,000
-        // was in group "A"'s 15 sources AND as a standalone manual row
-        // → ₹3,30,000 double-counted → BS imbalance.
+        // current TB ledger that is ALREADY counted as a source inside
+        // another row (tbLedgerToOwnerRow tracks this), zero it to
+        // prevent double-counting. Example: DBS REALTY "A-603
+        // Rajeshbhai Kanubhai Desai" ₹3,30,000 was in group "A"'s
+        // 15 sources AND as a standalone manual row → double-counted.
+        //
+        // SHREE MARUTI FIX: previously this guard zeroed ANY manual row
+        // with 0 sources whose label matched a TB ledger, assuming it
+        // was "necessarily a duplicate". That assumption is wrong when
+        // the ledger is NOT a source inside any other row — e.g. "PLOT
+        // NO : 054 MAHESHBHAI PATEL" is a standalone plot that's not
+        // bundled into the "PLOT NO : B" aggregate. Zeroing it dropped
+        // ₹13.97L from the other_cl note total and broke BS balance.
+        // Fix: only zero when tbLedgerToOwnerRow confirms the ledger
+        // is actually owned by another row.
         const mrSources = (mr.sources ?? []).length;
-        // Skip cogs — its hierarchical structure (pa_hdr/raw_purch/etc.)
-        // means standalone purchase ledgers are NOT duplicates; they're
-        // legitimate entries matched to different sections by the cogs-
-        // specific auto-populate. Zeroing them corrupts the COGS total.
-        if (noteType !== "cogs" && mrSources === 0 && tbRefreshCy && tbRefreshCy[lbl] !== undefined) {
+        if (noteType !== "cogs" && mrSources === 0 && tbRefreshCy && tbRefreshCy[lbl] !== undefined
+            && tbLedgerToOwnerRow.has(lbl)) {
           if ((mergedCy[mr.id] ?? 0) !== 0) {
             refreshedCount++;
             // eslint-disable-next-line no-console
@@ -2769,10 +2774,19 @@ export async function nceAutoPopulate(
       // Skip cogs — hierarchical structure means standalone rows aren't duplicates
       const anyRowHasSources = noteType !== "cogs" && leakFreeCustomRows.some(cr => (cr.sources ?? []).length > 0);
       if (anyRowHasSources) {
+        // Build set of TB ledger names that are already owned as sources
+        // by another row. Only those are true duplicates.
+        const ownedBySource = new Set<string>();
+        for (const cr of leakFreeCustomRows) {
+          for (const s of cr.sources ?? []) {
+            const sn = (s.ledger || "").trim().toLowerCase();
+            if (sn) ownedBySource.add(sn);
+          }
+        }
         for (const cr of leakFreeCustomRows) {
           if ((cr.sources ?? []).length === 0) {
             const lbl = (cr.label || "").trim().toLowerCase();
-            if (lbl && signedCyLookup[lbl] !== undefined) {
+            if (lbl && signedCyLookup[lbl] !== undefined && ownedBySource.has(lbl)) {
               duplicateIds.add(cr.id);
             }
           }
