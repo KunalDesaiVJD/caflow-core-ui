@@ -429,7 +429,7 @@ function signedLedgerOpeningAmt(
 // Used by getNCENoteFaceTotal() so the BS face picks up manual customRows the
 // auditor added in Stage 7 Notes — without this the face only reflects the raw
 // TB sum (auto-mapped ledgers) and ignores any "+ Add row" entries.
-export const NCE_CODE_TO_NOTE: Record<string, { note: string; col?: "lt" | "st" }> = {
+export const NCE_CODE_TO_NOTE: Record<string, { note: string; col?: "lt" | "st"; config?: string }> = {
   // Liabilities + Equity
   NCE_LTB:    { note: "borrowings",     col: "lt" },
   NCE_STB:    { note: "borrowings",     col: "st" },
@@ -452,6 +452,12 @@ export const NCE_CODE_TO_NOTE: Record<string, { note: string; col?: "lt" | "st" 
   // P&L
   NCE_REV_OPS: { note: "revenue_ops" },
   NCE_REV_OTH: { note: "other_income" },
+  // COGS: the "cogs" note stores all three sections (materials, stock-in-trade,
+  // inventory changes) in one DB row. The P&L face needs each as a separate
+  // line item, so we point each code to its sub-config (cogs_a / cogs_c)
+  // which computes the section-specific subtotal from the shared data.
+  NCE_COGS:    { note: "cogs", config: "cogs_a" },
+  NCE_CII:     { note: "cogs", config: "cogs_c" },
   NCE_EMP_EXP: { note: "employee_exp" },
   NCE_FIN_COST:{ note: "finance_costs" },
   NCE_OTH_EXP: { note: "other_expenses" },
@@ -472,6 +478,7 @@ export function getNCENoteFaceTotal(
   column: "cy" | "py",
   pattern?: "A" | "B",
   patternCol?: "lt" | "st",
+  configNoteType?: string,
 ): number | null {
   if (!noteRow) return null;
   // 2026-06-05 Phase 3 — delegated to the canonical computeNoteTotals helper
@@ -517,7 +524,11 @@ export function getNCENoteFaceTotal(
   // borrow the row list from a split view and override pattern → "A"
   // so computeNoteTotals walks the LT/ST formula correctly. Likewise
   // for "provisions" and "loans_advances".
-  const nt = noteRow.note_type;
+  // When configNoteType is provided (e.g. "cogs_a" for the materials-consumed
+  // sub-section of the combined "cogs" note), look up that sub-config instead
+  // of the storage note_type. This lets the P&L face read section-specific
+  // totals from a multi-section note stored in a single DB row.
+  const nt = configNoteType || noteRow.note_type;
   let cfg: NoteConfig | undefined;
   if (pattern === "A" && patternCol) {
     const splitCfg =

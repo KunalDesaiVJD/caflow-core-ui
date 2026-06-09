@@ -112,8 +112,8 @@ export function validateFSReconciliation(args: ValidateArgs): ReconResult {
     // For Pattern B codes (no col), the BS face is the grand total.
     const pattern: "A" | "B" = col ? "A" : "B";
 
-    const ntCy = getNCENoteFaceTotal(noteRow, "cy", pattern, col) ?? 0;
-    const ntPy = getNCENoteFaceTotal(noteRow, "py", pattern, col) ?? 0;
+    const ntCy = getNCENoteFaceTotal(noteRow, "cy", pattern, col, conf.config) ?? 0;
+    const ntPy = getNCENoteFaceTotal(noteRow, "py", pattern, col, conf.config) ?? 0;
 
     // BS face — flip sign for liability codes (stored negative in nceCyAmounts).
     const rawCy = args.bsFaceCy[code] ?? 0;

@@ -3846,6 +3846,7 @@ export default function PipelineFinancialStatements({
       row, column,
       isPatternA ? "A" : "B",
       meta.col,
+      meta.config,
     );
     if (total == null) return false;
     const nature = NCE_NOTE_NATURE[meta.note] ?? "CR";
@@ -3890,6 +3891,7 @@ export default function PipelineFinancialStatements({
         noteRow, "cy",
         isPatternA ? "A" : "B",
         meta.col,
+        meta.config,
       );
       if (total == null) continue;
       const nature = NCE_NOTE_NATURE[meta.note] ?? "CR";
@@ -3976,6 +3978,7 @@ export default function PipelineFinancialStatements({
         noteRow, "py",
         isPatternA ? "A" : "B",
         meta.col,
+        meta.config,
       );
       if (total == null) continue;
       const nature = NCE_NOTE_NATURE[meta.note] ?? "CR";
