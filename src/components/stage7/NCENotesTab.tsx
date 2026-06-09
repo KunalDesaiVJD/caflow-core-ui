@@ -42,11 +42,15 @@ interface Props {
    *  the Notes tab is embedded in a different surface). */
   entityName?: string;
   cyYear?: string;
+  /** Bug 1: initial expand/collapse state for the notes preview.  When present,
+   *  PatternBTable rows that were expanded in the editor will also be expanded
+   *  in the preview instead of defaulting to collapsed. */
+  initialExpandedRows?: Set<string>;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteMap, onExpansionStateUpdate, readOnly = false, entityName, cyYear }: Props) {
+export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteMap, onExpansionStateUpdate, readOnly = false, entityName, cyYear, initialExpandedRows }: Props) {
   const [activeSubTab, setActiveSubTab] = useState("capital_account");
 
   useEffect(() => {
@@ -115,7 +119,7 @@ export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteM
       {readOnly ? (
         <div className="space-y-6">
           <NCECapitalAccount engagementId={engagementId} readOnly={readOnly} />
-          <NCEDetailedNotes engagementId={engagementId} dynamicNoteMap={dynamicNoteMap} onExpansionStateUpdate={onExpansionStateUpdate} readOnly={readOnly} />
+          <NCEDetailedNotes engagementId={engagementId} dynamicNoteMap={dynamicNoteMap} onExpansionStateUpdate={onExpansionStateUpdate} readOnly={readOnly} initialExpandedRows={initialExpandedRows} />
           <NCEPPESchedule engagementId={engagementId} readOnly={readOnly} />
         </div>
       ) : (
@@ -137,7 +141,7 @@ export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteM
           </TabsContent>
 
           <TabsContent value="notes_to_accounts" className="mt-3">
-            <NCEDetailedNotes engagementId={engagementId} dynamicNoteMap={dynamicNoteMap} onExpansionStateUpdate={onExpansionStateUpdate} readOnly={readOnly} />
+            <NCEDetailedNotes engagementId={engagementId} dynamicNoteMap={dynamicNoteMap} onExpansionStateUpdate={onExpansionStateUpdate} readOnly={readOnly} initialExpandedRows={initialExpandedRows} />
           </TabsContent>
 
           <TabsContent value="ppe_schedule" className="mt-3">

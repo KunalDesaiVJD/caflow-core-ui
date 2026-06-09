@@ -63,6 +63,10 @@ interface Props {
   /** Task 1 (doc6): when true, the entire notes panel is read-only (locked preview mode).
    *  Toolbar is hidden, inputs/buttons are disabled, and a lock banner is shown. */
   readOnly?: boolean;
+  /** Bug 1: initial expand/collapse state.  When opening the locked preview,
+   *  PipelineFinancialStatements passes the captured nceExpandedRows here so
+   *  every PatternBTable starts with the same rows expanded as in the editor. */
+  initialExpandedRows?: Set<string>;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -697,7 +701,7 @@ function PatternBTable({
   sourceLabelOverrides,
   onChangeCy, onChangePy, onAddRow, onDeleteRow, onChangeLabel,
   onHideStatic, onChangeStaticLabel, onPromote, onEjectSource, onEjectCustomSource,
-  onChangeSourceLabel, noteType, onExpansionChange, hideEmptySections,
+  onChangeSourceLabel, noteType, onExpansionChange, hideEmptySections, initialExpandedRows,
 }: {
   config:       NoteConfig;
   cy:           Record<string, number>;
@@ -726,6 +730,11 @@ function PatternBTable({
   /** Task 2 (doc8): when true (lock preview / readOnly mode), hide empty section
    *  headers and their associated totals to remove clutter from the preview. */
   hideEmptySections?: boolean;
+  /** Bug 1: when provided (e.g. from the locked preview), PatternBTable starts
+   *  with these row IDs already expanded instead of the default fully-collapsed
+   *  state.  The flat Set spans all note types; only IDs present in this note's
+   *  data will actually match anything. */
+  initialExpandedRows?: Set<string>;
 }) {
   const { cy, py } = useMemo(
     () => computeDisplayData(config, rawCy, rawPy, customRows),
@@ -813,8 +822,12 @@ function PatternBTable({
     return emptyTotals;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hideEmptySections, config.rows, cy, py, rawCy, rawPy, customRows, hiddenRows, grandTotalId]);
-  // Track which static rows have their source-ledger list expanded
-  const [openSources, setOpenSources] = useState<Set<string>>(new Set());
+  // Track which static rows have their source-ledger list expanded.
+  // Bug 1 fix: seed from initialExpandedRows when provided (preview mode) so
+  // the preview shows the same expand/collapse state as the editor.
+  const [openSources, setOpenSources] = useState<Set<string>>(() =>
+    initialExpandedRows ? new Set(initialExpandedRows) : new Set()
+  );
   const toggleSources = (id: string) => setOpenSources(prev => {
     const next = new Set(prev);
     if (next.has(id)) next.delete(id); else next.add(id);
@@ -1830,7 +1843,7 @@ function PatternATable({
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStateUpdate, readOnly = false }: Props) {
+export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStateUpdate, readOnly = false, initialExpandedRows }: Props) {
   const queryClient = useQueryClient();
   const [noteData,    setNoteData]    = useState<Record<string, NCENoteData>>({});
   const [loading,     setLoading]     = useState(true);
@@ -3276,6 +3289,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
                         onExpansionStateUpdate?.(expansionStateRef.current);
                       }}
                       hideEmptySections={readOnly}
+                      initialExpandedRows={initialExpandedRows}
                     />
                   )}
                 </div>

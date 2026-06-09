@@ -2013,6 +2013,28 @@ export default function PipelineFinancialStatements({
   // Task 1 (doc6): preview popup shown immediately when user locks
   const [ncePreviewOpen,     setNcePreviewOpen]      = useState(false);
 
+  // Bug 2 fix: restore nceIsLocked from localStorage when the engagement changes
+  // so a page refresh does not silently unlock a locked preview.
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(`nce_lock_${engagementId}`);
+      setNceIsLocked(stored === "1");
+    } catch {
+      setNceIsLocked(false);
+    }
+  }, [engagementId]);
+
+  // Bug 2 fix: persist nceIsLocked to localStorage whenever it changes.
+  useEffect(() => {
+    try {
+      if (nceIsLocked) {
+        localStorage.setItem(`nce_lock_${engagementId}`, "1");
+      } else {
+        localStorage.removeItem(`nce_lock_${engagementId}`);
+      }
+    } catch { /* storage unavailable — ignore */ }
+  }, [nceIsLocked, engagementId]);
+
   // ─── Active tab (controlled so navigator buttons can switch programmatically) ─
   const [activeTab, setActiveTab] = useState("bs");
 
@@ -8918,6 +8940,7 @@ export default function PipelineFinancialStatements({
                   readOnly={true}
                   entityName={engagement?.clients?.name || ""}
                   cyYear={cyYear}
+                  initialExpandedRows={nceExpandedRows}
                 />
               </div>
             </div>
