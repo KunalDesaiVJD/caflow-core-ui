@@ -141,7 +141,11 @@ export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteM
           </TabsContent>
 
           <TabsContent value="notes_to_accounts" className="mt-3">
-            <NCEDetailedNotes engagementId={engagementId} dynamicNoteMap={dynamicNoteMap} onExpansionStateUpdate={onExpansionStateUpdate} readOnly={readOnly} initialExpandedRows={initialExpandedRows} />
+            {/* Bug 1 fix: do NOT pass initialExpandedRows in edit mode — it changes
+                on every expansion update and would re-render NCEDetailedNotes on
+                every keystroke, causing a stale-effect loop (PatternBTable effects
+                re-fire → setNceExpandedRows → re-render → repeat). */}
+            <NCEDetailedNotes engagementId={engagementId} dynamicNoteMap={dynamicNoteMap} onExpansionStateUpdate={onExpansionStateUpdate} readOnly={readOnly} />
           </TabsContent>
 
           <TabsContent value="ppe_schedule" className="mt-3">

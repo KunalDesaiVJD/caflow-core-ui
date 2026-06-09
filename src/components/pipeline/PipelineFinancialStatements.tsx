@@ -2035,6 +2035,21 @@ export default function PipelineFinancialStatements({
     } catch { /* storage unavailable — ignore */ }
   }, [nceIsLocked, engagementId]);
 
+  // Bug 1 fix: memoized handler so onExpansionStateUpdate keeps the same
+  // reference across renders (only recreated when nceIsLocked changes).
+  // Without this, every nceExpandedRows state update would recreate the
+  // inline function → NCEDetailedNotes re-renders → PatternBTable effects
+  // re-fire → setNceExpandedRows again → infinite render loop.
+  const handleNceExpansionStateUpdate = useCallback(
+    (state: Record<string, Set<string>>) => {
+      if (!nceIsLocked) {
+        const allIds = new Set(Object.values(state).flatMap(s => [...s]));
+        setNceExpandedRows(allIds);
+      }
+    },
+    [nceIsLocked]
+  );
+
   // ─── Active tab (controlled so navigator buttons can switch programmatically) ─
   const [activeTab, setActiveTab] = useState("bs");
 
@@ -8344,19 +8359,22 @@ export default function PipelineFinancialStatements({
           {/* ── NCE Notes (UI-7) — Capital Account / Notes to Accounts / PPE ── */}
           {isNonCorporate && (
             <TabsContent value="notes" className="mt-3">
+              {/* Bug 1 fix: initialExpandedRows is only passed when locked so the
+                  editor's readOnly flat-div layout (tabs→flat remount) restores
+                  expansion state.  In edit mode, omit it to avoid a render loop
+                  (nceExpandedRows change → prop change → NCEDetailedNotes re-renders
+                  → onExpansionChange effects re-fire → setNceExpandedRows → repeat).
+                  When locked, nceExpandedRows is frozen (handleNceExpansionStateUpdate
+                  guards against updates while locked), so no loop occurs. */}
               <NCENotesTab
                 engagementId={engagementId}
                 navigateToNote={nceNavNote}
                 dynamicNoteMap={nceDynamicNoteMap}
-                onExpansionStateUpdate={(state) => {
-                  if (!nceIsLocked) {
-                    const allIds = new Set(Object.values(state).flatMap(s => [...s]));
-                    setNceExpandedRows(allIds);
-                  }
-                }}
+                onExpansionStateUpdate={handleNceExpansionStateUpdate}
                 readOnly={nceIsLocked}
                 entityName={engagement?.clients?.name || ""}
                 cyYear={cyYear}
+                initialExpandedRows={nceIsLocked ? nceExpandedRows : undefined}
               />
             </TabsContent>
           )}
