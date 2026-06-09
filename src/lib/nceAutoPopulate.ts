@@ -1403,8 +1403,25 @@ export async function nceAutoPopulate(
       // for other Pattern B notes (where users genuinely type custom amounts)
       // the old preserve-verbatim behaviour stays.
       if (STRICTLY_TB_DRIVEN_B.has(noteType)) {
-        tbRefreshCy = cyByLedgerB;
-        tbRefreshPy = pyByLedgerB;
+        // Also add entries keyed by the merged base head (groupKey) so that
+        // custom rows whose labels were derived by deriveBaseHead (stripping
+        // "- 18%", "- URD", etc.) can be looked up during the tbRefresh step.
+        // Without this, "Steel Purchase" (merged label) can't find
+        // "steel purchase - 18%" in the map → PY stays 0.
+        const augCy = { ...cyByLedgerB };
+        const augPy = { ...pyByLedgerB };
+        for (const [fullName, amt] of Object.entries(cyByLedgerB)) {
+          const gk = groupKey(fullName);
+          if (gk && gk !== fullName && !(gk in augCy)) augCy[gk] = amt;
+          else if (gk && gk !== fullName && gk in augCy) augCy[gk] += amt;
+        }
+        for (const [fullName, amt] of Object.entries(pyByLedgerB)) {
+          const gk = groupKey(fullName);
+          if (gk && gk !== fullName && !(gk in augPy)) augPy[gk] = amt;
+          else if (gk && gk !== fullName && gk in augPy) augPy[gk] += amt;
+        }
+        tbRefreshCy = augCy;
+        tbRefreshPy = augPy;
       }
       _msLog("WP4  tbRefresh wired", {
         tbRefreshCy_ms: tbRefreshCy?.["member sales (pos)"],
