@@ -1446,6 +1446,13 @@ function buildNoteSection(
   // "Architect Fees - 18%", "Site Expense", "BU Expense" etc. (which are
   // unmatched ledgers, not children of any static head) were getting a
   // misleading sub-row indent in the .docx export.
+  // Flat note: a note with no section headers (e.g. Other Expenses, Employee
+  // Benefits Expense). For flat notes we collect ALL data rows (static + custom)
+  // into flatRows, sort them A-Z, then flush the entire sorted block before
+  // the grand-total row — giving true full-alphabetical interleaving.
+  const isFlatNote = !cfg.rows.some(r => r.isSectionHeader);
+  const flatRows: { label: string; emit: () => void }[] = [];
+
   const emittedCustoms = new Set<string>();
   const emitCustoms = (predicate: (cr: NoteCustomRow) => boolean) => {
     // Sort unattached custom rows alphabetically by label before emitting so the
@@ -1461,7 +1468,9 @@ function buildNoteSection(
         const s = sourcesSumA(cr);
         const lt = c.lt + s.ltC, st = c.st + s.stC, ltP = p.lt + s.ltP, stP = p.st + s.stP;
         if (!lt && !st && !ltP && !stP) continue;
-        rows.push(noteRowA(cr.label || "—", lt, ltP, st, stP, 0, "data"));
+        const tableRow = noteRowA(cr.label || "—", lt, ltP, st, stP, 0, "data");
+        if (isFlatNote) flatRows.push({ label: cr.label || "—", emit: () => rows.push(tableRow) });
+        else rows.push(tableRow);
       } else {
         // SHREE HARI fix — include sources[] in the displayed value so headings
         // whose amounts live only in sources[] still export with a non-zero value.
@@ -1469,10 +1478,38 @@ function buildNoteSection(
         const s = sourcesSumB(cr);
         c += s.cCy; p += s.pCy;
         if (!c && !p) continue;
-        rows.push(noteRowB(cr.label || "—", c, p, 0, "data"));
+        const tableRow = noteRowB(cr.label || "—", c, p, 0, "data");
+        if (isFlatNote) flatRows.push({ label: cr.label || "—", emit: () => rows.push(tableRow) });
+        else rows.push(tableRow);
       }
     }
   };
+
+  // Always-on: detect the "single active section" case — when only ONE of the
+  // note's sections has data, its subtotal equals the grand total, producing a
+  // duplicate "Total" row.  suppressSubtotal holds that subtotal's id so the
+  // render loop skips it regardless of lock / hideBlankNoteRows state.
+  const suppressSubtotal = new Set<string>();
+  {
+    let _hdr: string | null = null;
+    let _sub: string | null = null;
+    let _has = false;
+    const _chkRow = (row: NoteRowDef) =>
+      isA ? (() => { const v = aggA(row.id); return !!(v.lt || v.st || v.ltP || v.stP); })()
+           : (() => { const v = aggB(row.id); return !!(v.c || v.p); })();
+    const _nonEmpty = new Set<string>();
+    const _flush = () => {
+      if (_hdr === null) return;
+      if (_has && _sub) _nonEmpty.add(_sub);
+    };
+    for (const row of cfg.rows) {
+      if (row.isSectionHeader)                          { _flush(); _hdr = row.id; _sub = null; _has = false; }
+      else if (row.isTotal && row.id !== grandTotalId)  { _sub = row.id; }
+      else if (!row.isTotal && _chkRow(row))            { _has = true; }
+    }
+    _flush();
+    if (_nonEmpty.size === 1) { const [id] = _nonEmpty; suppressSubtotal.add(id); }
+  }
 
   // Task 5 (doc7) + Task 2 (doc8): pre-compute which section headers are empty
   // (all data rows blank) and which section-total rows belong to empty sections.
@@ -1492,17 +1529,15 @@ function buildNoteSection(
         return !!(v.c || v.p);
       }
     };
-    // nonEmptySectionTotalSet tracks subtotals belonging to sections that DO have
-    // data.  Used below to detect the "only one section has data" case.
-    const nonEmptySectionTotalSet = new Set<string>();
     const _flushSection = () => {
       if (currentHdrId === null) return;
       if (!sectionHasData) {
         emptySectionHeaders.add(currentHdrId);
         if (currentSectionTotalId) emptySectionTotals.add(currentSectionTotalId);
-      } else {
-        if (currentSectionTotalId) nonEmptySectionTotalSet.add(currentSectionTotalId);
       }
+      // Note: the single-active-section case (suppressing the non-empty section's
+      // subtotal) is now handled by suppressSubtotal above (always-on), so
+      // nonEmptySectionTotalSet is no longer needed here.
     };
     for (const row of cfg.rows) {
       if (row.isSectionHeader) {
@@ -1511,21 +1546,12 @@ function buildNoteSection(
         currentSectionTotalId = null;
         sectionHasData = false;
       } else if (row.isTotal && row.id !== grandTotalId) {
-        // Track the nearest non-grand section total for this section
         currentSectionTotalId = row.id;
       } else {
         if (!row.isTotal && checkRow(row)) sectionHasData = true;
       }
     }
     _flushSection();
-
-    // Issue 1 fix: when exactly ONE section has data its subtotal ("Total")
-    // is numerically identical to the grand total — showing both produces a
-    // duplicate "Total" row.  Suppress the section subtotal in that case.
-    if (nonEmptySectionTotalSet.size === 1) {
-      const [onlyId] = nonEmptySectionTotalSet;
-      emptySectionTotals.add(onlyId);
-    }
   }
 
   // Task 4: all static rows are always exported — no blank-row suppression.
@@ -1539,9 +1565,18 @@ function buildNoteSection(
       }
     } else if (row.isTotal) {
       const style = row.id === grandTotalId ? "total" : "subtotal";
+      // Always: suppress this subtotal when it's the lone non-empty section
+      // subtotal (its value equals the grand total → duplicate "Total" row).
+      // suppressSubtotal is computed unconditionally above, so this fix applies
+      // to all exports regardless of lock state.
+      if (row.id !== grandTotalId && suppressSubtotal.has(row.id)) {
+        // Still emit section-tagged custom rows before skipping the subtotal.
+        if ((row as any).sectionTag) emitCustoms(cr => cr.section === (row as any).sectionTag);
+        continue;
+      }
       // Task 2 (doc8): when locked, skip section totals for empty sections and
       // skip any non-grand total row whose computed value is 0 in both years
-      // (prevents "blank Total" rows and duplicate totals in sparse notes).
+      // (prevents "blank Total" rows in sparse notes).
       if (hideBlankNoteRows && row.id !== grandTotalId) {
         if (emptySectionTotals.has(row.id)) continue;
         const totCy = isA
@@ -1553,9 +1588,18 @@ function buildNoteSection(
         if (!totCy && !totPy) continue;
       }
       // Before a section total, emit that section's unattached customs; before
-      // the grand total, emit the section-less ones.
-      if (row.id === grandTotalId) emitCustoms(cr => !cr.section);
-      else if ((row as any).sectionTag) emitCustoms(cr => cr.section === (row as any).sectionTag);
+      // the grand total, emit the section-less ones.  For flat notes, emitCustoms
+      // collects into flatRows; the sorted flush happens just before grand total.
+      if (row.id === grandTotalId) {
+        emitCustoms(cr => !cr.section);
+        if (isFlatNote) {
+          // Merge all static + custom data rows into one A-Z sorted block.
+          flatRows.sort((a, b) => a.label.localeCompare(b.label));
+          flatRows.forEach(f => f.emit());
+        }
+      } else if ((row as any).sectionTag) {
+        emitCustoms(cr => cr.section === (row as any).sectionTag);
+      }
       if (isA) {
         rows.push(noteRowA(
           row.label,
@@ -1614,21 +1658,41 @@ function buildNoteSection(
       };
       if (isA) {
         const v = aggA(row.id);
-        rows.push(noteRowA(row.label, v.lt, v.ltP, v.st, v.stP, row.indent ?? 0, "data"));
-        if (!expandedRows || expandedRows.has(row.id)) {
-          emitDescendants(row.id, subIndent);
+        if (isFlatNote) {
+          // Capture row + descendants as a unit; sort key is the row label.
+          const capturedRow = noteRowA(row.label, v.lt, v.ltP, v.st, v.stP, row.indent ?? 0, "data");
+          const capturedId  = row.id;
+          flatRows.push({ label: row.label, emit: () => {
+            rows.push(capturedRow);
+            if (!expandedRows || expandedRows.has(capturedId)) emitDescendants(capturedId, subIndent);
+          }});
+        } else {
+          rows.push(noteRowA(row.label, v.lt, v.ltP, v.st, v.stP, row.indent ?? 0, "data"));
+          if (!expandedRows || expandedRows.has(row.id)) emitDescendants(row.id, subIndent);
         }
       } else {
         const v = aggB(row.id);
-        rows.push(noteRowB(row.label, v.c, v.p, row.indent ?? 0, "data"));
-        if (!expandedRows || expandedRows.has(row.id)) {
-          emitDescendants(row.id, subIndent);
+        if (isFlatNote) {
+          const capturedRow = noteRowB(row.label, v.c, v.p, row.indent ?? 0, "data");
+          const capturedId  = row.id;
+          flatRows.push({ label: row.label, emit: () => {
+            rows.push(capturedRow);
+            if (!expandedRows || expandedRows.has(capturedId)) emitDescendants(capturedId, subIndent);
+          }});
+        } else {
+          rows.push(noteRowB(row.label, v.c, v.p, row.indent ?? 0, "data"));
+          if (!expandedRows || expandedRows.has(row.id)) emitDescendants(row.id, subIndent);
         }
       }
     }
   }
   // Any remaining unattached customs (notes with no total row) — emit at end.
   emitCustoms(() => true);
+  // For flat notes with no grand-total row: flush here (edge case).
+  if (isFlatNote && flatRows.length > 0) {
+    flatRows.sort((a, b) => a.label.localeCompare(b.label));
+    flatRows.forEach(f => f.emit());
+  }
 
   return new Table({
     width:        { size: TW, type: WidthType.DXA },
