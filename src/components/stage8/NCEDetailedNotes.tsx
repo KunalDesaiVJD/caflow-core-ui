@@ -1731,6 +1731,10 @@ function PatternATable({
                 const hasSrcsA     = (cySources[row.id]?.filter(s => Number(s.amountCy ?? 0) !== 0 || Number((s as any).amountPy ?? 0) !== 0).length ?? 0) > 0;
                 const showToggleA  = hasSrcsA || hasAttachedA;
                 const isOpenA      = openSources.has(row.id);
+                // Preview: blank only the column(s) covered by visible source-ledger entries —
+                // LT sources blank LT cells; ST sources blank ST cells; custom children blank all.
+                const hasLtSrcsA = hideEmptySections && isOpenA && (cySources[row.id]?.some(s => (s.column === "lt" || !s.column) && (Number(s.amountCy ?? 0) !== 0 || Number((s as any).amountPy ?? 0) !== 0)) ?? false);
+                const hasStSrcsA = hideEmptySections && isOpenA && (cySources[row.id]?.some(s => s.column === "st" && (Number(s.amountCy ?? 0) !== 0 || Number((s as any).amountPy ?? 0) !== 0)) ?? false);
 
                 // Safety net: per-column overlap subtract — same idea as
                 // Pattern B but split by lt/st so an LT ejection doesn't
@@ -1778,24 +1782,32 @@ function PatternATable({
                       to a disabled NumInput showing 0. Same logic as Pattern B
                       above. */}
                   <TableCell className="p-1">
-                    {hasAttachedA
-                      ? <span className="text-xs tabular-nums text-right block pr-1">{aggLtCy ? fmtNum(aggLtCy) : "—"}</span>
-                      : <NumInput value={rawCy[row.id + "_lt"] ?? 0} onChange={v => onChangeCy(row.id + "_lt", v)} disabled={row.naLT} />}
+                    {(hideEmptySections && isOpenA && hasAttachedA) || hasLtSrcsA
+                      ? <span className="text-xs tabular-nums text-right block pr-1" />
+                      : hasAttachedA
+                        ? <span className="text-xs tabular-nums text-right block pr-1">{aggLtCy ? fmtNum(aggLtCy) : "—"}</span>
+                        : <NumInput value={rawCy[row.id + "_lt"] ?? 0} onChange={v => onChangeCy(row.id + "_lt", v)} disabled={row.naLT} />}
                   </TableCell>
                   <TableCell className="p-1 border-r">
-                    {hasAttachedA
-                      ? <span className="text-xs tabular-nums text-right block pr-1">{aggLtPy ? fmtNum(aggLtPy) : "—"}</span>
-                      : <NumInput value={rawPy[row.id + "_lt"] ?? 0} onChange={v => onChangePy(row.id + "_lt", v)} disabled={row.naLT} />}
+                    {(hideEmptySections && isOpenA && hasAttachedA) || hasLtSrcsA
+                      ? <span className="text-xs tabular-nums text-right block pr-1" />
+                      : hasAttachedA
+                        ? <span className="text-xs tabular-nums text-right block pr-1">{aggLtPy ? fmtNum(aggLtPy) : "—"}</span>
+                        : <NumInput value={rawPy[row.id + "_lt"] ?? 0} onChange={v => onChangePy(row.id + "_lt", v)} disabled={row.naLT} />}
                   </TableCell>
                   <TableCell className="p-1">
-                    {hasAttachedA
-                      ? <span className="text-xs tabular-nums text-right block pr-1">{aggStCy ? fmtNum(aggStCy) : "—"}</span>
-                      : <NumInput value={rawCy[row.id + "_st"] ?? 0} onChange={v => onChangeCy(row.id + "_st", v)} disabled={row.naST} />}
+                    {(hideEmptySections && isOpenA && hasAttachedA) || hasStSrcsA
+                      ? <span className="text-xs tabular-nums text-right block pr-1" />
+                      : hasAttachedA
+                        ? <span className="text-xs tabular-nums text-right block pr-1">{aggStCy ? fmtNum(aggStCy) : "—"}</span>
+                        : <NumInput value={rawCy[row.id + "_st"] ?? 0} onChange={v => onChangeCy(row.id + "_st", v)} disabled={row.naST} />}
                   </TableCell>
                   <TableCell className="p-1">
-                    {hasAttachedA
-                      ? <span className="text-xs tabular-nums text-right block pr-1">{aggStPy ? fmtNum(aggStPy) : "—"}</span>
-                      : <NumInput value={rawPy[row.id + "_st"] ?? 0} onChange={v => onChangePy(row.id + "_st", v)} disabled={row.naST} />}
+                    {(hideEmptySections && isOpenA && hasAttachedA) || hasStSrcsA
+                      ? <span className="text-xs tabular-nums text-right block pr-1" />
+                      : hasAttachedA
+                        ? <span className="text-xs tabular-nums text-right block pr-1">{aggStPy ? fmtNum(aggStPy) : "—"}</span>
+                        : <NumInput value={rawPy[row.id + "_st"] ?? 0} onChange={v => onChangePy(row.id + "_st", v)} disabled={row.naST} />}
                   </TableCell>
                   <TableCell className="p-1 text-center w-8">
                     <div className="flex items-center justify-end gap-1">

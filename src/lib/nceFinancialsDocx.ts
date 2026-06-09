@@ -1671,17 +1671,44 @@ function buildNoteSection(
       };
       if (isA) {
         const v = aggA(row.id);
+        // Pattern A: source-ledger entries route to LT or ST column via the
+        // optional `column` field ("lt" | "st").  Default when absent is "lt".
+        const hasSrcsA = (id: string) =>
+          (cySources?.[id] ?? []).some(s => (s.amountCy ?? 0) !== 0 || (s.amountPy ?? 0) !== 0);
+        const emitSourcesA = (id: string, indent: number) => {
+          if (!cySources?.[id]) return;
+          const srcs = cySources[id].filter(s => (s.amountCy ?? 0) !== 0 || (s.amountPy ?? 0) !== 0);
+          for (const s of srcs) {
+            const isLT = !s.column || s.column === "lt";
+            rows.push(noteRowA(
+              s.ledger,
+              isLT ? s.amountCy : 0,
+              isLT ? (s.amountPy ?? 0) : 0,
+              isLT ? 0 : s.amountCy,
+              isLT ? 0 : (s.amountPy ?? 0),
+              indent,
+              "data",
+            ));
+          }
+        };
+        const isExpandedA = (id: string) => !expandedRows || expandedRows.has(id);
         if (isFlatNote) {
           // Capture row + descendants as a unit; sort key is the row label.
           const capturedRow = noteRowA(row.label, v.lt, v.ltP, v.st, v.stP, row.indent ?? 0, "data");
           const capturedId  = row.id;
           flatRows.push({ label: row.label, emit: () => {
             rows.push(capturedRow);
-            if (!expandedRows || expandedRows.has(capturedId)) emitDescendants(capturedId, subIndent);
+            if (isExpandedA(capturedId)) {
+              if (hasSrcsA(capturedId)) emitSourcesA(capturedId, subIndent);
+              emitDescendants(capturedId, subIndent);
+            }
           }});
         } else {
           rows.push(noteRowA(row.label, v.lt, v.ltP, v.st, v.stP, row.indent ?? 0, "data"));
-          if (!expandedRows || expandedRows.has(row.id)) emitDescendants(row.id, subIndent);
+          if (isExpandedA(row.id)) {
+            if (hasSrcsA(row.id)) emitSourcesA(row.id, subIndent);
+            emitDescendants(row.id, subIndent);
+          }
         }
       } else {
         const v = aggB(row.id);
