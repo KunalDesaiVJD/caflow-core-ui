@@ -2638,21 +2638,28 @@ export async function nceAutoPopulate(
       // Build a fresh lookup from TB with signed amounts
       const signedCyLookup: Record<string, number> = {};
       const signedPyLookup: Record<string, number> = {};
+      const noteCodeSet = new Set([...(noteFs.all ?? []), ...(noteFs.lt ?? []), ...(noteFs.st ?? [])]);
       for (const row of tb) {
         const mapped = coaMapping[row.ledger_name];
-        if (!mapped || !new Set([...(noteFs.all ?? []), ...(noteFs.lt ?? []), ...(noteFs.st ?? [])]).has(mapped.code)) continue;
+        if (!mapped || !noteCodeSet.has(mapped.code)) continue;
         const nm = String(row.ledger_name || "").trim().toLowerCase();
         if (!nm) continue;
         signedCyLookup[nm] = signedLedgerAmt(row, noteType);
-        signedPyLookup[nm] = signedLedgerOpeningAmt(row, noteType);
+        // Only set PY from CY opening when it's non-zero. P&L accounts
+        // always have 0 opening — setting 0 here blocks the PY shell
+        // lookup below, causing all COGS PY values to stay at 0.
+        const pyFromOpening = signedLedgerOpeningAmt(row, noteType);
+        if (Math.abs(pyFromOpening) > 0.005) {
+          signedPyLookup[nm] = pyFromOpening;
+        }
       }
-      // Also include PY TB ledgers
+      // PY shell TB provides PY for P&L accounts (whose CY opening = 0)
       for (const row of pyTb) {
         const nm = String(row.ledger_name || "").trim().toLowerCase();
         if (!nm) continue;
         if (signedPyLookup[nm] === undefined) {
           const mapped = coaMapping[row.ledger_name] ?? pyCoaMap[row.ledger_name];
-          if (mapped && new Set([...(noteFs.all ?? []), ...(noteFs.lt ?? []), ...(noteFs.st ?? [])]).has(mapped.code)) {
+          if (mapped && noteCodeSet.has(mapped.code)) {
             signedPyLookup[nm] = signedLedgerAmt(row, noteType);
           }
         }
