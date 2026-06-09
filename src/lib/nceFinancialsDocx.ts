@@ -1972,20 +1972,24 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   const savedNotes: Record<string, { cy: Record<string, number>; py: Record<string, number> }> = {};
   // cy_sources per note type — GL breakup ledgers for each static row.
   // Keyed exactly like savedNotes (note_type string → Record<staticRowId, CySourceEntry[]>).
+  // cy_sources is stored as _cy_sources INSIDE cy_data (same pattern as _custom_rows).
+  // Key: note_type; value: Record<staticRowId, CySourceEntry[]>
   const savedCySources: Record<string, Record<string, CySourceEntry[]>> = {};
   for (const row of notesData) {
     const key = String((row as any).note_type ?? "");
     if (!key) continue;
+    const rawCyData = ((row as any).cy_data && typeof (row as any).cy_data === "object")
+      ? (row as any).cy_data as Record<string, any>
+      : {};
     savedNotes[key] = {
-      cy: (row as any).cy_data && typeof (row as any).cy_data === "object"
-        ? (row as any).cy_data as Record<string, number>
-        : {},
+      cy: rawCyData,
       py: (row as any).py_data && typeof (row as any).py_data === "object"
         ? (row as any).py_data as Record<string, number>
         : {},
     };
-    if ((row as any).cy_sources && typeof (row as any).cy_sources === "object") {
-      savedCySources[key] = (row as any).cy_sources as Record<string, CySourceEntry[]>;
+    // _cy_sources lives inside cy_data — extract it from the same JSON blob
+    if (rawCyData._cy_sources && typeof rawCyData._cy_sources === "object") {
+      savedCySources[key] = rawCyData._cy_sources as Record<string, CySourceEntry[]>;
     }
   }
 
@@ -2066,7 +2070,19 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     // NCE Task 9 (doc8): record each note's section (BS or PL) so the children
     // array builder can insert "Notes to Balance Sheet" / "Notes to P&L" headers.
     const noteSectionTag = NOTE_META[cfg.noteType]?.section ?? "BS";
-    noteTablePairs.push([parseInt(dynNum, 10), buildNoteSection(cfg, data.cy, data.py, dynNum, cyYear, pyYear, expandedRows, hideBlankNoteRows, savedCySources[sourceKey]), noteSectionTag] as [number, Table, string]);
+    // For split notes (Pattern A LT/ST), filter cy_sources to only the relevant
+    // side — entries with column="lt" go to the LT note, column="st" to the ST note.
+    const rawSources = savedCySources[sourceKey];
+    let noteCySources = rawSources;
+    if (rawSources && cfg.splitSide) {
+      const filtered: Record<string, CySourceEntry[]> = {};
+      for (const [rowId, srcs] of Object.entries(rawSources)) {
+        const relevant = srcs.filter(s => !s.column || s.column === cfg.splitSide);
+        if (relevant.length > 0) filtered[rowId] = relevant;
+      }
+      noteCySources = Object.keys(filtered).length > 0 ? filtered : undefined;
+    }
+    noteTablePairs.push([parseInt(dynNum, 10), buildNoteSection(cfg, data.cy, data.py, dynNum, cyYear, pyYear, expandedRows, hideBlankNoteRows, noteCySources), noteSectionTag] as [number, Table, string]);
   }
   // Sort ascending by note number for correct sequential order in export
   noteTablePairs.sort((a, b) => a[0] - b[0]);
