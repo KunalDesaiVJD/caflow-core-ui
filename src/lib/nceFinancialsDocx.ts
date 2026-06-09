@@ -943,14 +943,21 @@ function noteHdrB(cyYear: string, pyYear: string): TableRow {
 /** Pattern B data/sub-total/grand-total row (3 cols) */
 function noteRowB(
   label: string,
-  cy: number,
-  py: number,
+  cy: number | null,
+  py: number | null,
   indent = 0,
   style: "data" | "subtotal" | "total" = "data",
 ): TableRow {
   const bg   = style === "total" ? BG_GRAN : style === "subtotal" ? BG_TOT : undefined;
   const bdr  = style === "total" ? BDR_GRAND : style === "subtotal" ? BDR_SUB : BDR_ROW;
   const bold = style !== "data";
+  // null → blank cell (same border/padding as a normal amount cell but no text).
+  // Used when a parent row is expanded and its children already represent the total
+  // — passing null prevents "—" from appearing where the amount should be invisible.
+  const amtCell = (val: number | null, w: number) =>
+    val !== null
+      ? ac(val, w, { bold, bg, borders: bdr, vertPad: 18, keepNext: true })
+      : cell({ text: "", w, align: AlignmentType.RIGHT, padL: 20, padR: 120, bold, bg, borders: bdr, vertPad: 18, keepNext: true });
   // Task 1 (doc8): use compact vertPad=18 for note rows (tighter page fitting)
   // Note 1 fix (intelligent pagination): cantSplit so a single row never breaks
   // across a page boundary (prevents half-rows / broken table continuity).
@@ -958,8 +965,8 @@ function noteRowB(
     cantSplit: true,
     children: [
       cell({ text: label, w: NW_DESC, bold, bg, borders: bdr, indent, vertPad: 18, keepNext: true }),
-      ac(cy, NW_CY, { bold, bg, borders: bdr, vertPad: 18, keepNext: true }),
-      ac(py, NW_PY, { bold, bg, borders: bdr, vertPad: 18, keepNext: true }),
+      amtCell(cy, NW_CY),
+      amtCell(py, NW_PY),
     ],
   });
 }
@@ -1678,7 +1685,7 @@ function buildNoteSection(
         const isExpandedB = (id: string) => !expandedRows || expandedRows.has(id);
         // Helper: does the row have at least one attached child with a non-zero
         // amount?  When true AND the row is expanded, the parent's own amount is
-        // suppressed (shows "—") so the same total is not displayed twice.
+        // suppressed (blank cell, not "—") so the same total is not shown twice.
         const hasChildrenB = (id: string) =>
           isExpandedB(id) &&
           attachedRows(id).some(cr => { const cv = aggB(cr.id); return cv.c !== 0 || cv.p !== 0; });
@@ -1687,13 +1694,15 @@ function buildNoteSection(
           const capturedCy = v.c;
           const capturedPy = v.p;
           flatRows.push({ label: row.label, emit: () => {
+            // null → blank cell (no "—") when children already represent the total.
             const hide = hasChildrenB(capturedId);
-            rows.push(noteRowB(row.label, hide ? 0 : capturedCy, hide ? 0 : capturedPy, row.indent ?? 0, "data"));
+            rows.push(noteRowB(row.label, hide ? null : capturedCy, hide ? null : capturedPy, row.indent ?? 0, "data"));
             if (isExpandedB(capturedId)) emitDescendants(capturedId, subIndent);
           }});
         } else {
           const hide = hasChildrenB(row.id);
-          rows.push(noteRowB(row.label, hide ? 0 : v.c, hide ? 0 : v.p, row.indent ?? 0, "data"));
+          // null → blank cell (no "—") when children already represent the total.
+          rows.push(noteRowB(row.label, hide ? null : v.c, hide ? null : v.p, row.indent ?? 0, "data"));
           if (isExpandedB(row.id)) emitDescendants(row.id, subIndent);
         }
       }

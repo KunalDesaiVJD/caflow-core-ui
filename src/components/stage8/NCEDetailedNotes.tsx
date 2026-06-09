@@ -1203,7 +1203,7 @@ function PatternBTable({
                         OR attached custom rows), suppress the parent's own amount
                         so the same total is not shown twice. */}
                     {hideEmptySections && isOpenB && (hasSrcsB || hasAttachedB)
-                      ? <span className="text-xs tabular-nums text-right block pr-1">—</span>
+                      ? <span className="text-xs tabular-nums text-right block pr-1" />
                       : hasAttachedB
                         ? <span className="text-xs tabular-nums text-right block pr-1">{aggCyB ? fmtNum(aggCyB) : "—"}</span>
                         : <NumInput value={rawCy[row.id] ?? 0} onChange={v => onChangeCy(row.id, v)} disabled={row.naAll} />}
@@ -1212,7 +1212,7 @@ function PatternBTable({
                     {/* SHREE HARI FIX — see CY comment above.
                         Same preview/export suppression for PY. */}
                     {hideEmptySections && isOpenB && (hasSrcsB || hasAttachedB)
-                      ? <span className="text-xs tabular-nums text-right block pr-1">—</span>
+                      ? <span className="text-xs tabular-nums text-right block pr-1" />
                       : hasAttachedB
                         ? <span className="text-xs tabular-nums text-right block pr-1">{aggPyB ? fmtNum(aggPyB) : "—"}</span>
                         : <NumInput value={rawPy[row.id] ?? 0} onChange={v => onChangePy(row.id, v)} disabled={row.naAll} />}
