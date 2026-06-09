@@ -2735,10 +2735,26 @@ export async function nceAutoPopulate(
           }
         }
       }
-      // Overwrite custom row values with signed TB amounts
+      // Overwrite custom row values with signed TB amounts.
+      // DOUBLE-COUNT GUARD (2026-06-09): skip rows that have 0 sources and
+      // match a TB ledger — those were already zeroed by the double-count
+      // guard above (the ledger's amount is counted through another row's
+      // sources aggregate). Without this skip, the final sign correction
+      // undoes the zeroing by writing signedCyLookup[lbl] back.
       for (const cr of leakFreeCustomRows) {
         const lbl = (cr.label || "").trim().toLowerCase();
         if (!lbl) continue;
+        // Skip duplicate rows: 0 sources + label matches TB = the ledger
+        // is already counted inside a group row's sources aggregate.
+        // Writing the TB amount here would double-count it.
+        if ((cr.sources ?? []).length === 0 && signedCyLookup[lbl] !== undefined) {
+          // Only skip if at least one OTHER row has sources (i.e. the note
+          // uses group headings with TB ledgers, making this a duplicate).
+          const anyOtherHasSources = leakFreeCustomRows.some(
+            other => other.id !== cr.id && (other.sources ?? []).length > 0
+          );
+          if (anyOtherHasSources) continue;
+        }
         if (signedCyLookup[lbl] !== undefined) {
           mergedCy[cr.id] = signedCyLookup[lbl];
         }
