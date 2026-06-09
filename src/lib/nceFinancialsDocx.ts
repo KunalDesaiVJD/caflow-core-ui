@@ -2078,18 +2078,22 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
       // carry bsNotesRunningHdr (entity banner + "Notes to Balance Sheet…")
       // which Word repeats automatically at the top of every subsequent page.
       {
-        properties: { page: notesPortraitProps, titlePage: true },
+        // type: CONTINUOUS here means the break at the END of this BS-notes
+        // section is continuous — so PL notes flow onto the same physical page
+        // rather than forcing a new page. (In OOXML, w:type on a sectPr controls
+        // the break exiting that section into the next, NOT how this section
+        // starts; so this does NOT affect how BS-notes starts after the PL cover.)
+        properties: { page: notesPortraitProps, titlePage: true, type: SectionType.CONTINUOUS },
         headers:    { first: emptyFirstHeader, default: bsNotesRunningHdr },
         children:   bsNoteChildren,
       },
       // PL notes section: separate DOCX section so running header changes to
-      // "Notes to Profit & Loss A/c…". CONTINUOUS break so PL notes flow
-      // directly onto the same page as the last BS note (no forced page break),
-      // maximising page utilisation. The PL running header kicks in from the
-      // first full PL page (the page containing the section break shows the BS
-      // header since it started in the BS section). Omitted when no PL notes.
+      // "Notes to Profit & Loss A/c…". Starts continuously (no page break) thanks
+      // to CONTINUOUS on the BS section above. The PL running header takes effect
+      // from the first page that starts inside the PL section. Omitted when no
+      // PL notes exist.
       ...(plNoteChildren.length > 0 ? ([{
-        properties: { page: notesPortraitProps, type: SectionType.CONTINUOUS },
+        properties: { page: notesPortraitProps },
         headers:    { default: plNotesRunningHdr },
         children:   plNoteChildren,
       }] as Parameters<typeof Document>[0]["sections"]) : []),
