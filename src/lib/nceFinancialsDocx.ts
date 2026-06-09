@@ -19,7 +19,6 @@ import {
   Packer,
   PageOrientation,
   Paragraph,
-  SectionType,
   ShadingType,
   Table,
   TableCell,
@@ -1933,7 +1932,24 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
       ],
     });
   const bsNotesRunningHdr = makeNotesHeader(`Notes to Balance Sheet as on 31.03.${String(cyYear)}`);
-  const plNotesRunningHdr = makeNotesHeader(`Notes to Profit & Loss A/c as on 31.03.${String(cyYear)}`);
+  // notesEntityHdr — entity banner ONLY (no section heading). Used as the
+  // default running header for pages 2+ of the unified notes section so that
+  // both BS and PL pages show the same header. The section headings themselves
+  // ("Notes to Balance Sheet…" / "Notes to P&L A/c…") appear once as styled
+  // inline body paragraphs at each section transition.
+  const notesEntityHdr = new Header({
+    children: [
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing:   { before: 60, after: 20 },
+        border:    { bottom: { style: BorderStyle.SINGLE, size: 8, color: NAVY, space: 4 } },
+        children:  [new TextRun({
+          text: entityName.toUpperCase(),
+          font: FONT, size: SZ_ENTITY, bold: true, color: NAVY,
+        })],
+      }),
+    ],
+  });
 
   // Phase 2 — PPE Schedule (landscape). PPE is always-active (ref 10); use its
   // dynamic number so the title matches the Balance-Sheet reference.
@@ -2029,46 +2045,45 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   const bsNoteTablePairs = noteTablePairs.filter(([, , sec]) => sec === "BS");
   const plNoteTablePairs = noteTablePairs.filter(([, , sec]) => sec === "PL");
 
-  // BS notes split into TWO DOCX sections to avoid titlePage + CONTINUOUS
-  // conflict. Word silently demotes CONTINUOUS to NEXT_PAGE when the preceding
-  // section carries <w:titlePg/> — so we eliminate titlePage entirely.
+  // ── Single unified notes section ────────────────────────────────────────────
+  // All notes (BS + PL) live in ONE DOCX section so notes flow naturally across
+  // pages with no forced section-break page jumps. Having CONTINUOUS + page
+  // borders in the same section causes Word to silently promote CONTINUOUS to
+  // NEXT_PAGE — the single-section approach avoids this entirely.
   //
-  // Section A — Note 1 page: body banner (makeNotesBanner) + accounting-policy
-  // text. Running header is suppressed (emptyFirstHeader) so the body banner
-  // appears once at full opacity without duplication. Section ends with the
-  // default next-page break → Note 2 starts on a fresh page.
-  const note1SectionChildren: (Paragraph | Table)[] = [
+  // Layout:
+  //   Page 1 — Note 1: makeNotesBanner() body banner + accounting policies.
+  //             Running header suppressed via titlePage + emptyFirstHeader so
+  //             the body banner is not duplicated.
+  //   Page 2+ — Notes 2-end: notesEntityHdr (entity banner only) running header.
+  //             Inline "Notes to Balance Sheet…" heading before Note 2.
+  //             Inline "Notes to Profit & Loss A/c…" heading before Note 12.
+  //             Both headings styled to match the running header section line.
+  //             Notes flow continuously — no forced page break between BS and PL.
+
+  const mkSectionHeading = (text: string, before = 200): Paragraph =>
+    new Paragraph({
+      spacing: { before, after: 60 },
+      border:  { bottom: { style: BorderStyle.SINGLE, size: 8, color: NAVY, space: 4 } },
+      children: [new TextRun({ text, font: FONT, size: SZ_HDR, bold: true, underline: {} })],
+    });
+
+  const allNotesChildren: (Paragraph | Table)[] = [
+    // ── Note 1 page ──────────────────────────────────────────────────────────
     makeNotesBanner(),
     ...note1Paras,
-  ];
-  //
-  // Section B — Notes 2-11 (structured BS tables): entity banner + BS heading
-  // in the running header; ends with CONTINUOUS → PL notes flow on the same
-  // physical page, eliminating the whitespace gap.
-  const bsNotesTables: (Paragraph | Table)[] = [
+    // Page break to Notes 2+ (logical section boundary, not page wastage)
+    new Paragraph({ pageBreakBefore: true, spacing: { before: 0, after: 0 }, children: [] }),
+    // ── BS structured notes (Notes 2–11) ─────────────────────────────────────
+    mkSectionHeading(`Notes to Balance Sheet as on 31.03.${String(cyYear)}`, 0),
     ...capitalTables.flatMap((t, i) => i === 0 ? [t] : [noteGap(), t]),
     ...bsNoteTablePairs.flatMap(([, table]) => [noteGap(), table]),
+    // ── PL notes (Notes 12+) — flow directly, no page break ──────────────────
+    ...(plNoteTablePairs.length > 0 ? [
+      mkSectionHeading(`Notes to Profit & Loss A/c as on 31.03.${String(cyYear)}`),
+      ...plNoteTablePairs.flatMap(([, table], i) => (i === 0 ? [table] : [noteGap(), table])),
+    ] : []),
   ];
-
-  // PL notes section body — empty array when no PL notes exist (section omitted).
-  // Starts with a visible section-heading paragraph so the "Notes to P&L…"
-  // heading appears inline on the transition page (where the CONTINUOUS section
-  // break lands mid-page and Word's running header still shows the BS heading).
-  // Subsequent full PL pages get the heading via the plNotesRunningHdr.
-  const plSectionHeading = new Paragraph({
-    spacing: { before: 200, after: 60 },
-    border:  { bottom: { style: BorderStyle.SINGLE, size: 8, color: NAVY, space: 4 } },
-    children: [new TextRun({
-      text:      `Notes to Profit & Loss A/c as on 31.03.${String(cyYear)}`,
-      font:      FONT,
-      size:      SZ_HDR,
-      bold:      true,
-      underline: {},
-    })],
-  });
-  const plNoteChildren: (Paragraph | Table)[] = plNoteTablePairs.length > 0
-    ? [plSectionHeading, ...plNoteTablePairs.flatMap(([, table], i) => (i === 0 ? [table] : [noteGap(), table]))]
-    : [];
 
   const doc = new Document({
     styles: {
@@ -2098,37 +2113,19 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
           sigBlock(),
         ],
       },
-      // BS notes — Section A: Note 1 page.
-      // Body banner (makeNotesBanner) provides entity header at full opacity.
-      // Running header is empty so the body banner isn't duplicated.
-      // Default (nextPage) break → Note 2 starts on a fresh page.
+      // Unified notes section — all BS + PL notes in one flowing section.
+      // titlePage suppresses the running header on Note 1's page (the body banner
+      // makeNotesBanner() provides the entity name there at full opacity).
+      // Pages 2+ get notesEntityHdr (entity banner only — no section-heading
+      // text in the running header, since BS and PL share this section).
+      // The inline mkSectionHeading() paragraphs mark each section transition
+      // in the body. Notes flow naturally; no CONTINUOUS needed; no page-border
+      // vs section-break conflict.
       {
-        properties: { page: notesPortraitProps },
-        headers:    { default: emptyFirstHeader },
-        children:   note1SectionChildren,
+        properties: { page: notesPortraitProps, titlePage: true },
+        headers:    { first: emptyFirstHeader, default: notesEntityHdr },
+        children:   allNotesChildren,
       },
-      // BS notes — Section B: Notes 2–11 structured tables.
-      // BS running header on every page of this section.
-      // type: CONTINUOUS — the break EXITING this section is continuous, so PL
-      // notes flow directly onto the same physical page (no forced page break,
-      // no wasted whitespace). Word honours CONTINUOUS only when the section
-      // carries no <w:titlePg/> — that is why Note 1 is a separate section above.
-      {
-        properties: { page: notesPortraitProps, type: SectionType.CONTINUOUS },
-        headers:    { default: bsNotesRunningHdr },
-        children:   bsNotesTables,
-      },
-      // PL notes section: separate DOCX section → running header changes to
-      // "Notes to Profit & Loss A/c…". Flows continuously from BS section B
-      // above (no page break). The PL running header takes effect from the first
-      // page that starts entirely within the PL section. The inline
-      // plSectionHeading paragraph makes the PL heading visible on the
-      // transition page even when it starts mid-page. Omitted when no PL notes.
-      ...(plNoteChildren.length > 0 ? ([{
-        properties: { page: notesPortraitProps },
-        headers:    { default: plNotesRunningHdr },
-        children:   plNoteChildren,
-      }] as Parameters<typeof Document>[0]["sections"]) : []),
       // PPE Schedule (landscape) — always a BS note; uses the BS running header.
       {
         properties: { page: landscapeProps },
