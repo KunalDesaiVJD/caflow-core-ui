@@ -2514,8 +2514,12 @@ export default function PipelineFinancialStatements({
           .sort()
           .map(k => `${k}=${coa[k]?.code ?? ""}`)
           .join("|");
-        // v9: force re-sync — double-count guard v4 (explicit zero enforcement)
-        const hashKey = `caflow:nce_coahash_v9:${engagementId}:${engagement.financial_year}`;
+        // v6: reverted from v9 — aggressive hash bumps forced re-sync on
+        // ALL clients, breaking P&L notes by dropping auto-populated ledgers.
+        // Double-count guard stays in nceAutoPopulate but only triggers when
+        // user clicks "Re-correct from COA Mapping" / "Generate FS", not on
+        // every page load auto-sync.
+        const hashKey = `caflow:nce_coahash_v6:${engagementId}:${engagement.financial_year}`;
         const lastHash = typeof window !== "undefined" ? window.localStorage.getItem(hashKey) : null;
         if (lastHash === hash && hash.length > 0) {
           // COA mapping unchanged since last successful sync — nothing to do.
