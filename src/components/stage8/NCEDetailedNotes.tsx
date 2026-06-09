@@ -822,6 +822,37 @@ function PatternBTable({
     return emptyTotals;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hideEmptySections, config.rows, cy, py, rawCy, rawPy, customRows, hiddenRows, grandTotalId]);
+
+  // Suppress the lone section subtotal when ONLY ONE section has non-zero data —
+  // its subtotal equals the grand total, so showing both is redundant (double Total).
+  // Mirrors the DOCX suppressSubtotal pre-pass in nceFinancialsDocx.ts.
+  const suppressSubtotalIds = useMemo(() => {
+    if (!hideEmptySections) return new Set<string>();
+    const nonEmptySubtotals = new Set<string>();
+    let currentHdrId: string | null = null;
+    let currentSectionTotalId: string | null = null;
+    let sectionHasData = false;
+    const flush = () => {
+      if (currentHdrId !== null && sectionHasData && currentSectionTotalId)
+        nonEmptySubtotals.add(currentSectionTotalId);
+    };
+    for (const row of config.rows) {
+      if (row.isSectionHeader) {
+        flush();
+        currentHdrId = row.id; currentSectionTotalId = null; sectionHasData = false;
+      } else if (row.isTotal && row.id !== grandTotalId) {
+        currentSectionTotalId = row.id;
+      } else if (!row.isTotal && currentHdrId !== null && !hiddenRows.includes(row.id)) {
+        if ((cy[row.id] ?? 0) !== 0 || (py[row.id] ?? 0) !== 0) sectionHasData = true;
+        if (!sectionHasData && hasAnyDescendantValue(row.id)) sectionHasData = true;
+      }
+    }
+    flush();
+    // Only suppress when exactly ONE section is non-empty
+    return nonEmptySubtotals.size === 1 ? nonEmptySubtotals : new Set<string>();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hideEmptySections, config.rows, cy, py, rawCy, rawPy, customRows, hiddenRows, grandTotalId]);
+
   // Track which static rows have their source-ledger list expanded.
   // Bug 1 fix: seed from initialExpandedRows when provided (preview mode) so
   // the preview shows the same expand/collapse state as the editor.
@@ -1055,6 +1086,8 @@ function PatternBTable({
           // Task 2 (doc8): in lock preview mode, hide empty section headers and their totals
           if (row.isSectionHeader && emptySectionHdrIds.has(row.id)) return null;
           if (row.isTotal && emptySectionTotalIds.has(row.id)) return null;
+          // Suppress lone section subtotal that equals grand total (double-Total fix)
+          if (row.isTotal && suppressSubtotalIds.has(row.id)) return null;
           // Changes doc Task 2: in readOnly/preview mode, suppress individual static data
           // rows where BOTH CY and PY aggregates (including attached custom sub-rows) are
           // zero — mirrors the export's hideBlankNoteRows behaviour exactly.
@@ -1418,6 +1451,35 @@ function PatternATable({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hideEmptySections, config.rows, cy, py, rawCy, rawPy, customRows, hiddenRows, grandTotalId]);
 
+  // Suppress the lone section subtotal when ONLY ONE section has non-zero data
+  // (mirrors Pattern B's suppressSubtotalIds, but uses Pattern A's _lt/_st key suffixes).
+  const suppressSubtotalIds = useMemo(() => {
+    if (!hideEmptySections) return new Set<string>();
+    const nonEmptySubtotals = new Set<string>();
+    let currentHdrId: string | null = null;
+    let currentSectionTotalId: string | null = null;
+    let sectionHasData = false;
+    const flush = () => {
+      if (currentHdrId !== null && sectionHasData && currentSectionTotalId)
+        nonEmptySubtotals.add(currentSectionTotalId);
+    };
+    for (const row of config.rows) {
+      if (row.isSectionHeader) {
+        flush();
+        currentHdrId = row.id; currentSectionTotalId = null; sectionHasData = false;
+      } else if (row.isTotal && row.id !== grandTotalId) {
+        currentSectionTotalId = row.id;
+      } else if (!row.isTotal && currentHdrId !== null && !hiddenRows.includes(row.id)) {
+        if ((cy[row.id + "_lt"] ?? 0) !== 0 || (cy[row.id + "_st"] ?? 0) !== 0 ||
+            (py[row.id + "_lt"] ?? 0) !== 0 || (py[row.id + "_st"] ?? 0) !== 0) sectionHasData = true;
+        if (!sectionHasData && hasAnyDescendantValueA(row.id)) sectionHasData = true;
+      }
+    }
+    flush();
+    return nonEmptySubtotals.size === 1 ? nonEmptySubtotals : new Set<string>();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hideEmptySections, config.rows, cy, py, rawCy, rawPy, customRows, hiddenRows, grandTotalId]);
+
   // ISSUE 2 FIX — derive section-specific "Add row" buttons so a row added
   // under "Unsecured" gets section="unsecured" + attachedTo="unsec_other".
   // Without these, handleAddRow created a sectionless row that only fed Total
@@ -1613,6 +1675,8 @@ function PatternATable({
           // Task 2 (doc8): in lock preview mode, hide empty section headers and their totals
           if (row.isSectionHeader && emptySectionHdrIds.has(row.id)) return null;
           if (row.isTotal && emptySectionTotalIds.has(row.id)) return null;
+          // Suppress lone section subtotal that equals grand total (double-Total fix)
+          if (row.isTotal && suppressSubtotalIds.has(row.id)) return null;
           // Changes doc Task 2: in readOnly/preview mode, suppress zero data rows.
           // Pattern A uses _lt and _st suffixed keys for Long-Term / Short-Term columns.
           if (hideEmptySections && !row.isSectionHeader && !row.isTotal && !hiddenRows.includes(row.id)) {
