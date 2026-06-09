@@ -2334,6 +2334,16 @@ export async function nceAutoPopulate(
     // value AND the child custom rows as extras — if the static row has a stale
     // non-zero value from an old auto-populate run, the total would be inflated.
     // After this step the static row acts purely as a visual "heading" container.
+    //
+    // EXCEPTION: if the static row was freshly populated by the smart-match path
+    // in THIS re-sync (newCy/newPy has a non-zero value for it), KEEP the fresh
+    // value. The smart-matched TB ledger amounts are distinct from the attached
+    // custom row amounts — zeroing them loses legitimate TB data. Example:
+    // SHIVASHRAY Other Expenses "labour" static row has smart-matched "Labour
+    // Expense - URD" (54.2L) + "Labour Expense - Composition" (43.6L) = 97.8L,
+    // PLUS an attached manual row "Loading - Unloading Expense". Without this
+    // guard, the 97.8L smart-match amount is zeroed, and only the attached row
+    // survives — losing 97.8L from the note total and the P&L face.
     const attachedStaticIds = new Set(
       [...autoRows, ...absorbedManualRows]
         .map(cr => cr.attachedTo)
@@ -2342,8 +2352,11 @@ export async function nceAutoPopulate(
     for (const staticId of attachedStaticIds) {
       // Clear all variants: plain, _lt, _st
       for (const suffix of ["", "_lt", "_st"]) {
-        mergedCy[staticId + suffix] = 0;
-        mergedPy[staticId + suffix] = 0;
+        const k = staticId + suffix;
+        // Preserve freshly smart-matched values from this re-sync.
+        // newCy/newPy contain ONLY amounts computed in THIS run from TB.
+        if (Math.abs(newCy[k] ?? 0) < 0.005) mergedCy[k] = 0;
+        if (Math.abs(newPy[k] ?? 0) < 0.005) mergedPy[k] = 0;
       }
     }
 
