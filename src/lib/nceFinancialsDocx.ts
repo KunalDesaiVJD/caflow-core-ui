@@ -2115,9 +2115,9 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
           })],
         }),
         new Paragraph({
-          // after: 360 DXA ≈ 18 pt — creates a visible gap between the
-          // "Notes to Balance Sheet / P&L" line and the first note row.
-          spacing:  { before: 80, after: 360 },
+          // after: 40 DXA — minimal trailer; the reliable gap comes from the
+          // body-level notesSectionTopSpacer paragraph in Sections B/C.
+          spacing:  { before: 80, after: 40 },
           children: [new TextRun({ text: sectionLine, font: FONT, size: SZ_HDR, bold: true, underline: {} })],
         }),
       ],
@@ -2181,10 +2181,11 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   // while still flowing on the same page.
   const noteGap       = () => new Paragraph({ spacing: { before: 220, after: 0 }, children: [] });
   // Spacer placed at the very top of the body in Sections B and C so there is
-  // a reliable 260 DXA (≈13 pt) gap between the running section-heading line
-  // and the first note.  Using a body paragraph is more dependable than relying
-  // on spacing.after inside the running header (Word may clip header overflow).
-  const notesSectionTopSpacer = () => new Paragraph({ spacing: { before: 0, after: 260 }, children: [] });
+  // a reliable gap between the running section-heading line and the first note.
+  // Using a body paragraph is more dependable than relying on spacing.after
+  // inside the running header (Word may clip header overflow).
+  // 120 DXA ≈ 6 pt — modest but visible breathing room.
+  const notesSectionTopSpacer = () => new Paragraph({ spacing: { before: 0, after: 120 }, children: [] });
 
   // 2026-05-30 (revision 7) — User insists the client banner must appear on
   // EVERY notes page AND notes must flow (multiple notes per page).
