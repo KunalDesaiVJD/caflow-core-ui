@@ -2092,21 +2092,38 @@ export async function nceAutoPopulate(
         if (cr.attachedTo) hasChildren.add(cr.attachedTo);
       }
       // ── DOUBLE-COUNT FIX (DBS REALTY, June 2026) ─────────────────────
-      // Build a set of ledger names (lowercased) that are already counted
-      // as `sources` inside another custom row's breakdown. If a manual
-      // row's label matches one of these, it is a DUPLICATE — the same
-      // ledger is already included in the group row's aggregate total. In
-      // that case we must zero it out instead of refreshing it to the TB
-      // value, otherwise the ledger amount is counted twice: once through
-      // the group's sources-sum and once as the standalone manual row.
-      // Example: DBS REALTY "A-603 Rajesh Desai" (₹3,30,000) was in
-      // group "A" sources AND as a standalone row → ₹3,30,000 BS drift.
-      const alreadySourcedLedgers = new Set<string>();
+      // Build a set of row IDs that already have TB-sourced ledgers. Also
+      // build a mapping from TB ledger name → owning row ID, so we can
+      // detect when a standalone manual row (0 sources) duplicates a
+      // ledger that's already counted as a source under another row.
+      // The source label stored in sources[].ledger may differ from the
+      // TB ledger_name (e.g. "A-603 Rajesh Desai" vs "A-603 Rajeshbhai
+      // Kanubhai Desai"), so we must match via the CURRENT tbRefreshCy
+      // keys (which ARE TB ledger names) against the manual row labels.
+      const tbLedgerToOwnerRow = new Map<string, string>();
       for (const cr of [...absorbedManualRows, ...autoRows]) {
         if (!cr.sources || !Array.isArray(cr.sources)) continue;
         for (const src of cr.sources) {
           const sLbl = (src.ledger || "").trim().toLowerCase();
-          if (sLbl) alreadySourcedLedgers.add(sLbl);
+          if (sLbl) tbLedgerToOwnerRow.set(sLbl, cr.id);
+        }
+      }
+      // Also map using the tbRefreshCy keys → find which custom row each
+      // TB ledger ends up in. For each TB ledger name in tbRefreshCy, if
+      // the groupKey of the TB ledger matches a source in some group,
+      // register the TB ledger name as owned by that group.
+      // This handles the case where sources store a shortened name but
+      // the TB has the full name.
+      if (tbRefreshCy) {
+        for (const tbName of Object.keys(tbRefreshCy)) {
+          if (tbLedgerToOwnerRow.has(tbName)) continue;
+          // Check if any group's sources contain this ledger by checking
+          // source amounts — if a group row's CY value includes this TB
+          // ledger's amount, it's already counted. Use groupKey matching.
+          const gk = groupKey(tbName);
+          if (gk && tbLedgerToOwnerRow.has(gk)) {
+            tbLedgerToOwnerRow.set(tbName, tbLedgerToOwnerRow.get(gk)!);
+          }
         }
       }
 
@@ -2123,12 +2140,17 @@ export async function nceAutoPopulate(
         if (!lbl) continue;
 
         // ── DOUBLE-COUNT GUARD ───────────────────────────────────────
-        // If this manual row has NO sources of its own (it's a standalone
-        // entry, not a group heading) and its label matches a ledger that
-        // IS already counted as a source inside another row's breakdown,
-        // the row is a duplicate. Zero it out to prevent double-counting.
+        // For STRICTLY_TB_DRIVEN notes, a manual row that has 0 sources
+        // (no TB ledgers directly attached) but whose label matches a
+        // current TB ledger (tbRefreshCy[lbl] defined) is necessarily a
+        // duplicate: the auto-populate already counted this ledger as a
+        // source inside one of the group headings (A, B, C, etc.).
+        // Refreshing this row to the TB value would double-count it.
+        // Example: DBS REALTY "A-603 Rajeshbhai Kanubhai Desai" ₹3,30,000
+        // was in group "A"'s 15 sources AND as a standalone manual row
+        // → ₹3,30,000 double-counted → BS imbalance.
         const mrSources = (mr.sources ?? []).length;
-        if (mrSources === 0 && alreadySourcedLedgers.has(lbl)) {
+        if (mrSources === 0 && tbRefreshCy && tbRefreshCy[lbl] !== undefined) {
           if ((mergedCy[mr.id] ?? 0) !== 0) {
             refreshedCount++;
             // eslint-disable-next-line no-console
