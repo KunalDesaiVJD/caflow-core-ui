@@ -2115,7 +2115,9 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
           })],
         }),
         new Paragraph({
-          spacing:  { before: 80, after: 120 },
+          // after: 360 DXA ≈ 18 pt — creates a visible gap between the
+          // "Notes to Balance Sheet / P&L" line and the first note row.
+          spacing:  { before: 80, after: 360 },
           children: [new TextRun({ text: sectionLine, font: FONT, size: SZ_HDR, bold: true, underline: {} })],
         }),
       ],
