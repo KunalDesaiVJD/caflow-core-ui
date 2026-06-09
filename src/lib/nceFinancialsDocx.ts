@@ -2042,8 +2042,24 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   ];
 
   // PL notes section body — empty array when no PL notes exist (section omitted).
-  const plNoteChildren: (Paragraph | Table)[] = plNoteTablePairs
-    .flatMap(([, table], i) => (i === 0 ? [table] : [noteGap(), table]));
+  // Starts with a visible section-heading paragraph so the "Notes to P&L…"
+  // heading appears inline on the transition page (where the CONTINUOUS section
+  // break lands mid-page and Word's running header still shows the BS heading).
+  // Subsequent full PL pages get the heading via the plNotesRunningHdr.
+  const plSectionHeading = new Paragraph({
+    spacing: { before: 200, after: 60 },
+    border:  { bottom: { style: BorderStyle.SINGLE, size: 8, color: NAVY, space: 4 } },
+    children: [new TextRun({
+      text:      `Notes to Profit & Loss A/c as on 31.03.${String(cyYear)}`,
+      font:      FONT,
+      size:      SZ_HDR,
+      bold:      true,
+      underline: {},
+    })],
+  });
+  const plNoteChildren: (Paragraph | Table)[] = plNoteTablePairs.length > 0
+    ? [plSectionHeading, ...plNoteTablePairs.flatMap(([, table], i) => (i === 0 ? [table] : [noteGap(), table]))]
+    : [];
 
   const doc = new Document({
     styles: {
