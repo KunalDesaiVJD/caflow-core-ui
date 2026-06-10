@@ -171,10 +171,16 @@ export function computeNoteTotals(
       seen.add(id);
       let c = rawCy[id] ?? 0;
       let p = rawPy[id] ?? 0;
+      const hasDescendants = (childrenOf[id] ?? []).length > 0;
       // sources[] — heading-style customRow pattern. Only contribute when
       // the row's own raw is 0 (per side). Static rows never have sources.
+      // MAHARSH INFRA FIX: when a row has children attached, do NOT add
+      // sources — the children carry the individual amounts. Adding both
+      // sources and children double-counts (e.g. "Plot No. A" parent had
+      // sources [A-016, A-039] whose amounts also appeared inside child
+      // rows, inflating the note total by ₹1.32 cr).
       const self = crById[id];
-      if (self?.sources && self.sources.length > 0) {
+      if (!hasDescendants && self?.sources && self.sources.length > 0) {
         const srcCy = self.sources.reduce((s, x) => s + (Number(x?.amountCy) || 0), 0);
         const srcPy = self.sources.reduce((s, x) => s + (Number(x?.amountPy) || 0), 0);
         if ((rawCy[id] ?? 0) === 0) c += srcCy;
@@ -253,8 +259,11 @@ export function computeNoteTotals(
     seen.add(id);
     const v = lookupSuffixed(rawCy, rawPy, id);
     let ltC = v.ltCy, ltP = v.ltPy, stC = v.stCy, stP = v.stPy;
+    const hasDescendants = (childrenOf[id] ?? []).length > 0;
+    // Same MAHARSH INFRA fix as Pattern B: skip sources when children
+    // carry the leaf amounts, preventing double-count.
     const self = crById[id];
-    if (self?.sources && self.sources.length > 0) {
+    if (!hasDescendants && self?.sources && self.sources.length > 0) {
       for (const x of self.sources) {
         const aC = Number(x?.amountCy) || 0;
         const aP = Number(x?.amountPy) || 0;

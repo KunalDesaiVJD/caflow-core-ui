@@ -2046,6 +2046,33 @@ export async function nceAutoPopulate(
     const mergedCy: Record<string, number> = { ...newCy };
     const mergedPy: Record<string, number> = { ...newPy };
 
+    // ── PARENT-WITH-CHILDREN ZERO-OUT (MAHARSH INFRA double-count fix) ──
+    // When an auto row (e.g. merged "Plot No. A" with 2 TB sources) later
+    // acquires manual children (user dragged 30+ individual plot rows under
+    // it), its own raw CY/PY value duplicates amounts already carried by
+    // the children — because computeNoteTotals sums raw + children, and
+    // the children include rows whose sources overlap with the parent's.
+    // Fix: zero the raw value of any auto row that has manual children
+    // attached to it. The children carry all leaf amounts; the parent is
+    // now purely a grouping header.
+    const autoIdsWithChildren = new Set<string>();
+    for (const mr of absorbedManualRows) {
+      if (mr.attachedTo) autoIdsWithChildren.add(mr.attachedTo);
+    }
+    for (const ar of autoRows) {
+      if (ar.attachedTo) autoIdsWithChildren.add(ar.attachedTo);
+    }
+    for (const arId of autoIdsWithChildren) {
+      // Only zero auto-row values; static config rows are untouched.
+      if (arId in mergedCy && autoRows.some(ar => ar.id === arId)) {
+        for (const suffix of ["", "_lt", "_st"]) {
+          const k = arId + suffix;
+          if (k in mergedCy) mergedCy[k] = 0;
+          if (k in mergedPy) mergedPy[k] = 0;
+        }
+      }
+    }
+
     _msLog("WP6  pre-restore", {
       mergedPy_ms_before: _msId ? mergedPy[_msId] : "n/a",
       prev_py_ms: _msId ? prev.py?.[_msId] : "n/a",
