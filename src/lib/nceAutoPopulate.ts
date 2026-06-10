@@ -2055,6 +2055,14 @@ export async function nceAutoPopulate(
     // Fix: zero the raw value of any auto row that has manual children
     // attached to it. The children carry all leaf amounts; the parent is
     // now purely a grouping header.
+    // When an auto row's sources overlap with its children's sources,
+    // zero the parent's raw CY/PY to prevent double-counting in
+    // computeNoteTotals (which sums raw + children). Only zero when
+    // there IS actual overlap — otherwise the parent's sources are
+    // distinct ledgers and zeroing them loses legitimate data.
+    // SWASTIK FIX: "Site Expense" parent had sources [Site Expense -
+    // 18%, Site Expense - URD] and child [Site Survay Expense]. The
+    // child is a DIFFERENT ledger — zeroing the parent destroyed 2.87L.
     const autoIdsWithChildren = new Set<string>();
     for (const mr of absorbedManualRows) {
       if (mr.attachedTo) autoIdsWithChildren.add(mr.attachedTo);
@@ -2063,8 +2071,28 @@ export async function nceAutoPopulate(
       if (ar.attachedTo) autoIdsWithChildren.add(ar.attachedTo);
     }
     for (const arId of autoIdsWithChildren) {
-      // Only zero auto-row values; static config rows are untouched.
-      if (arId in mergedCy && autoRows.some(ar => ar.id === arId)) {
+      if (!(arId in mergedCy) || !autoRows.some(ar => ar.id === arId)) continue;
+      const parentRow = autoRows.find(ar => ar.id === arId);
+      if (!parentRow?.sources || parentRow.sources.length === 0) continue;
+      const parentSourceLabels = new Set(
+        parentRow.sources.map(s => (s.ledger || "").trim().toLowerCase()).filter(Boolean),
+      );
+      const childLabels = new Set(
+        [...absorbedManualRows, ...autoRows]
+          .filter(cr => cr.attachedTo === arId)
+          .flatMap(cr => {
+            const labels: string[] = [];
+            const lbl = (cr.label || "").trim().toLowerCase();
+            if (lbl) labels.push(lbl);
+            for (const s of cr.sources ?? []) {
+              const sl = (s.ledger || "").trim().toLowerCase();
+              if (sl) labels.push(sl);
+            }
+            return labels;
+          }),
+      );
+      const hasOverlap = [...parentSourceLabels].some(l => childLabels.has(l));
+      if (hasOverlap) {
         for (const suffix of ["", "_lt", "_st"]) {
           const k = arId + suffix;
           if (k in mergedCy) mergedCy[k] = 0;
