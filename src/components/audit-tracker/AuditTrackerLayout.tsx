@@ -187,18 +187,29 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
           body.push(row);
         }
 
+        // Calculate per-row height so every row of this month (+ 1 header row)
+        // exactly fits the available space — guarantees one page per month.
+        // A3 landscape = 297 mm tall; startY=24, bottomMargin=10 → 263 mm usable.
+        const pageH       = doc.internal.pageSize.getHeight();
+        const availableH  = pageH - 24 - 10;           // startY=24, bottomMargin=10
+        const totalRows   = daysInMonth + 1;            // data rows + 1 header row
+        const rowH        = availableH / totalRows;
+
         autoTable(doc, {
           head,
           body,
           startY: 24,
           margin: { left: 10, right: 10, bottom: 10 },
+          // tableHeight forces autoTable to not overflow onto a new page.
+          tableHeight: availableH,
           styles: {
             fontSize: 7,
-            cellPadding: { top: 2, right: 3, bottom: 2, left: 3 },
+            cellPadding: { top: 1.5, right: 3, bottom: 1.5, left: 3 },
             font: "helvetica",
             lineWidth: 0.2,
             lineColor: [200, 200, 210] as [number,number,number],
-            overflow: "linebreak",
+            overflow: "ellipsize",   // was "linebreak" — prevents row-height growth
+            minCellHeight: rowH,
           },
           headStyles: {
             fillColor: [67, 56, 202] as [number,number,number],
@@ -206,6 +217,7 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
             fontStyle: "bold",
             fontSize: 8,
             halign: "center",
+            minCellHeight: rowH,
           },
           columnStyles: {
             0: { cellWidth: 16, fontStyle: "bold", halign: "left" },
