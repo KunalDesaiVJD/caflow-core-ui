@@ -20,14 +20,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { toast } from "sonner";
 import {
-  ArrowRight, AlertTriangle, MessageSquareWarning, MailCheck, ShieldAlert,
+  ArrowRight, AlertTriangle, MessageSquareWarning, MailCheck,
 } from "lucide-react";
 
 import EngagementHeader from "@/components/pipeline/EngagementHeader";
 import { useAuditWorksheetData } from "@/components/audit-worksheet/hooks/useAuditWorksheetData";
 import { AuditClientInboxTab }   from "@/components/audit-worksheet/AuditClientInboxTab";
 import { CommunicationLogTab }   from "@/components/audit-worksheet/CommunicationLogTab";
-import { FindingsTab }           from "@/components/audit-worksheet/FindingsTab";
 
 interface PipelineStage5Props {
   engagementId:    string;
@@ -41,7 +40,7 @@ export default function PipelineStage5({
 }: PipelineStage5Props) {
   const data = useAuditWorksheetData(engagementId);
 
-  const [activeTab, setActiveTab] = useState<"client_inbox" | "comm_log" | "findings">("client_inbox");
+  const [activeTab, setActiveTab] = useState<"client_inbox" | "comm_log">("client_inbox");
   const [saving,    setSaving]    = useState(false);
 
   // Snap to the default tab once data finishes loading (parity with
@@ -116,7 +115,7 @@ export default function PipelineStage5({
         <div>
           <h1 className="text-lg font-bold text-foreground">Stage 3 — Audit Query Tracker</h1>
           <p className="text-sm text-muted-foreground">
-            Client communications and audit findings
+            Client communications
           </p>
         </div>
         <div className="flex gap-2">
@@ -138,9 +137,6 @@ export default function PipelineStage5({
           <TabsTrigger value="comm_log" className="text-xs gap-1">
             <MailCheck size={11} /> Comm. Log
           </TabsTrigger>
-          <TabsTrigger value="findings" className="text-xs gap-1">
-            <ShieldAlert size={11} /> Findings
-          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="client_inbox" className="mt-3">
@@ -149,15 +145,6 @@ export default function PipelineStage5({
 
         <TabsContent value="comm_log" className="mt-3">
           <CommunicationLogTab data={data} engagementId={engagementId} />
-        </TabsContent>
-
-        <TabsContent value="findings" className="mt-3">
-          <FindingsTab
-            data={data}
-            engagementId={engagementId}
-            externalPrefill={null}
-            onPrefillConsumed={() => {}}
-          />
         </TabsContent>
       </Tabs>
     </div>

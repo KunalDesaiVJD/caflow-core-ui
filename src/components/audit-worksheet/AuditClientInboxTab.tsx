@@ -18,11 +18,8 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
-} from "@/components/ui/dialog";
-import {
   MessageSquareWarning, Send, Loader2, Paperclip, Download, X,
-  Plus, ChevronDown, ChevronUp, CheckCircle2, Clock, Users, Mail,
+  FileDown, ChevronDown, ChevronUp, CheckCircle2, Clock, Users, Mail,
   AlertTriangle, Bell,
 } from "lucide-react";
 import { EmailComposeDialog, EmailComposePayload } from "@/components/email/EmailComposeDialog";
@@ -408,105 +405,7 @@ function QueryThread({
   );
 }
 
-// ─── New Query Dialog ─────────────────────────────────────────────────────────
-
-function NewQueryDialog({
-  open, onClose, engagementId, clientId, firmId, financialYear, onCreated,
-}: {
-  open: boolean; onClose: () => void;
-  engagementId: string; clientId: string; firmId: string | null;
-  financialYear: string; onCreated: () => void;
-}) {
-  const [form, setForm] = useState({
-    query_text: "", required_documents: "", ledger_name: "", group_name: "",
-    priority: "Medium", due_date: "",
-  });
-  const [saving, setSaving] = useState(false);
-  const set = (k: string, v: string) => setForm(p => ({ ...p, [k]: v }));
-
-  const submit = async () => {
-    if (!form.query_text.trim()) { toast.error("Query text is required"); return; }
-    setSaving(true);
-    const { error } = await supabase
-      .from("audit_client_queries" as any)
-      .insert({
-        query_text:         form.query_text,
-        required_documents: form.required_documents || null,
-        ledger_name:        form.ledger_name || null,
-        group_name:         form.group_name || null,
-        priority:           form.priority,
-        due_date:           form.due_date || null,
-        engagement_id:      engagementId,
-        client_id:          clientId,
-        firm_id:            firmId,
-        financial_year:     financialYear,
-        status:             "Open",
-        source:             "manual",
-      } as any);
-    setSaving(false);
-    if (error) { toast.error(error.message); return; }
-    toast.success("Query sent to client");
-    onCreated(); onClose();
-    setForm({ query_text:"", required_documents:"", ledger_name:"", group_name:"", priority:"Medium", due_date:"" });
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={v => { if (!v) onClose(); }}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <MessageSquareWarning size={16}/> New Query to Client
-          </DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3 py-2">
-          <div>
-            <label className="text-xs font-medium mb-1 block">Query *</label>
-            <Textarea value={form.query_text} onChange={e => set("query_text", e.target.value)}
-              placeholder="Describe the query for the client…" rows={3} className="text-sm resize-none"/>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-medium mb-1 block">Group / Subgroup</label>
-              <Input value={form.group_name} onChange={e => set("group_name", e.target.value)}
-                placeholder="e.g. Sundry Creditors" className="h-8 text-xs"/>
-            </div>
-            <div>
-              <label className="text-xs font-medium mb-1 block">Ledger</label>
-              <Input value={form.ledger_name} onChange={e => set("ledger_name", e.target.value)}
-                placeholder="e.g. ABC Traders" className="h-8 text-xs"/>
-            </div>
-          </div>
-          <div>
-            <label className="text-xs font-medium mb-1 block">Required Documents</label>
-            <Input value={form.required_documents} onChange={e => set("required_documents", e.target.value)}
-              placeholder="e.g. Invoice, Bank statement, TDS certificate" className="h-8 text-xs"/>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-medium mb-1 block">Priority</label>
-              <Select value={form.priority} onValueChange={v => set("priority", v)}>
-                <SelectTrigger className="h-8 text-xs"><SelectValue/></SelectTrigger>
-                <SelectContent>
-                  {PRIORITIES.map(p => <SelectItem key={p} value={p} className="text-xs">{p}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <label className="text-xs font-medium mb-1 block">Due Date</label>
-              <Input type="date" value={form.due_date} onChange={e => set("due_date", e.target.value)} className="h-8 text-xs"/>
-            </div>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
-          <Button size="sm" onClick={submit} disabled={saving} className="gap-1">
-            {saving ? <Loader2 size={13} className="animate-spin"/> : <Send size={13}/>} Send to Client
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
+// (NewQueryDialog removed — replaced by Export PDF)
 
 // ─── Main Tab ─────────────────────────────────────────────────────────────────
 
@@ -518,7 +417,7 @@ interface Props {
 export function AuditClientInboxTab({ data, engagementId }: Props) {
   const [queries,      setQueries]      = useState<ClientQuery[]>([]);
   const [loading,      setLoading]      = useState(true);
-  const [newQueryOpen, setNewQueryOpen] = useState(false);
+  const [exporting,    setExporting]    = useState(false);
   const [filter,       setFilter]       = useState<"all"|"open"|"replied"|"closed">("all");
   const [emailPayload, setEmailPayload] = useState<EmailComposePayload | null>(null);
 
@@ -587,6 +486,169 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
     // markEscalated called in onSent below
   };
 
+  // ── Export PDF — current filter tab, full chat thread per query ──────────
+  const exportPdf = async () => {
+    if (displayed.length === 0) { toast.error("No queries to export"); return; }
+    setExporting(true);
+    try {
+      const { jsPDF } = await import("jspdf");
+
+      // Fetch all messages for every displayed query up-front
+      const allMessages: Record<string, Message[]> = {};
+      for (const q of displayed) {
+        const { data: msgs } = await (supabase as any)
+          .from("portal_query_messages")
+          .select("*")
+          .eq("query_id", q.id)
+          .order("created_at", { ascending: true });
+        allMessages[q.id] = (msgs as Message[]) || [];
+      }
+
+      const doc   = new jsPDF({ orientation: "portrait", format: "a4", unit: "mm" });
+      const pw    = doc.internal.pageSize.getWidth();
+      const ph    = doc.internal.pageSize.getHeight();
+      const ml    = 14;  // left/right margin
+      const cw    = pw - ml * 2;  // content width
+      let y       = 0;
+
+      const ensureSpace = (h: number) => {
+        if (y + h > ph - ml) { doc.addPage(); y = ml; }
+      };
+
+      // Cover header band
+      doc.setFillColor(30, 41, 59);
+      doc.rect(0, 0, pw, 20, "F");
+      doc.setTextColor(255, 255, 255);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(11);
+      const filterLabel = filter === "all" ? "All Queries"
+        : filter === "open" ? "Open Queries"
+        : filter === "replied" ? "Replied Queries"
+        : "Closed Queries";
+      doc.text(`Client Query Inbox — ${filterLabel}`, ml, 9);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.text(
+        `${data.clientName || ""} · ${displayed.length} quer${displayed.length === 1 ? "y" : "ies"}`,
+        ml, 15,
+      );
+      doc.text(
+        new Date().toLocaleDateString("en-IN", { day:"2-digit", month:"short", year:"numeric" }),
+        pw - ml, 15, { align: "right" },
+      );
+      y = 26;
+
+      for (let qi = 0; qi < displayed.length; qi++) {
+        const q    = displayed[qi];
+        const msgs = allMessages[q.id] || [];
+
+        // ── Query meta band ─────────────────────────────────────────────
+        ensureSpace(14);
+        doc.setFillColor(235, 238, 255);
+        doc.rect(ml, y, cw, 11, "F");
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(8);
+        doc.setTextColor(30, 41, 59);
+        const metaParts = [
+          q.ref_number || `#${qi + 1}`,
+          q.status,
+          q.priority,
+          q.financial_year ? `FY ${q.financial_year}` : "",
+          q.ledger_name || "",
+          q.group_name  || "",
+        ].filter(Boolean);
+        doc.text(metaParts.join("  ·  "), ml + 3, y + 4.5);
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(7);
+        doc.setTextColor(90, 90, 120);
+        if (q.due_date) doc.text(`Due: ${q.due_date}`, pw - ml - 3, y + 4.5, { align: "right" });
+        if (q.required_documents) {
+          doc.text(`Required: ${q.required_documents}`, ml + 3, y + 9);
+        }
+        y += 13;
+
+        // ── Query text ──────────────────────────────────────────────────
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(9);
+        doc.setTextColor(20, 20, 40);
+        const qLines = doc.splitTextToSize(q.query_text, cw - 4) as string[];
+        ensureSpace(qLines.length * 4.5 + 4);
+        doc.text(qLines, ml + 2, y);
+        y += qLines.length * 4.5 + 5;
+
+        // ── Chat messages ───────────────────────────────────────────────
+        const renderMsgs: Array<{ isAuditor: boolean; sender: string; time: string; text: string }> = [];
+
+        // Legacy reply bridge
+        if (q.client_reply && msgs.length === 0) {
+          renderMsgs.push({ isAuditor: false, sender: "Client", time: "", text: q.client_reply });
+        }
+        for (const msg of msgs) {
+          renderMsgs.push({
+            isAuditor: msg.sender_role === "auditor",
+            sender:    msg.sender_role === "auditor" ? (msg.sender_name || "Auditor") : "Client",
+            time:      fmtTime(msg.created_at),
+            text:      msg.message || (msg.attachment_name ? `[Attachment: ${msg.attachment_name}]` : ""),
+          });
+        }
+
+        if (renderMsgs.length === 0) {
+          ensureSpace(8);
+          doc.setFont("helvetica", "italic");
+          doc.setFontSize(8);
+          doc.setTextColor(160, 160, 160);
+          doc.text("No messages yet.", ml + 2, y);
+          y += 8;
+        } else {
+          const bubbleW = cw * 0.68;
+          for (const m of renderMsgs) {
+            const textLines = doc.splitTextToSize(m.text, bubbleW - 6) as string[];
+            const bubbleH   = textLines.length * 4 + 10;
+            ensureSpace(bubbleH + 3);
+
+            const bx = m.isAuditor ? ml + cw - bubbleW : ml;
+
+            // Bubble background
+            doc.setFillColor(...(m.isAuditor ? [232, 240, 254] : [240, 253, 244]) as [number,number,number]);
+            doc.rect(bx, y, bubbleW, bubbleH, "F");
+
+            // Sender + time
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(7);
+            doc.setTextColor(m.isAuditor ? 37 : 22, m.isAuditor ? 99 : 101, m.isAuditor ? 235 : 52);
+            doc.text(`${m.sender}${m.time ? `  ·  ${m.time}` : ""}`, bx + 3, y + 5);
+
+            // Message text
+            doc.setFont("helvetica", "normal");
+            doc.setFontSize(8.5);
+            doc.setTextColor(20, 20, 40);
+            doc.text(textLines, bx + 3, y + 9.5);
+
+            y += bubbleH + 2.5;
+          }
+        }
+
+        // ── Separator between queries ───────────────────────────────────
+        if (qi < displayed.length - 1) {
+          y += 4;
+          ensureSpace(6);
+          doc.setDrawColor(210, 215, 230);
+          doc.line(ml, y, pw - ml, y);
+          y += 6;
+        }
+      }
+
+      const safe = (data.clientName || "Client").replace(/[^a-z0-9]/gi, "_");
+      const stamp = new Date().toISOString().split("T")[0];
+      doc.save(`Queries_${filterLabel.replace(/ /g,"_")}_${safe}_${stamp}.pdf`);
+      toast.success(`Exported ${displayed.length} quer${displayed.length === 1 ? "y" : "ies"} as PDF`);
+    } catch (e: any) {
+      toast.error(`Export failed: ${e.message}`);
+    } finally {
+      setExporting(false);
+    }
+  };
+
   // Phase 3F: urgency-sorted displayed list
   const filtered = queries.filter(q => {
     if (filter === "open")    return q.status === "Open" || q.status === "Client Acknowledged";
@@ -648,9 +710,10 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
             onClick={() => openEmail("audit_query_reminder")}>
             <Mail size={13}/> Send Reminder
           </Button>
-          <Button size="sm" className="gap-1 h-8 text-xs bg-orange-600 hover:bg-orange-700"
-            onClick={() => setNewQueryOpen(true)}>
-            <Plus size={13}/> New Query
+          <Button size="sm" className="gap-1 h-8 text-xs bg-indigo-600 hover:bg-indigo-700"
+            onClick={exportPdf} disabled={exporting}>
+            {exporting ? <Loader2 size={13} className="animate-spin"/> : <FileDown size={13}/>}
+            Export PDF
           </Button>
         </div>
       </div>
@@ -690,12 +753,8 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
           <MessageSquareWarning size={36} className="opacity-25"/>
           <div className="text-center">
             <p className="text-sm font-medium text-foreground">No client queries yet</p>
-            <p className="text-xs mt-1">Create a new query to start communicating with the client.</p>
+            <p className="text-xs mt-1">Use Dispatch Queries to send queries to the client.</p>
           </div>
-          <Button size="sm" className="gap-1 mt-2 bg-orange-600 hover:bg-orange-700"
-            onClick={() => setNewQueryOpen(true)}>
-            <Plus size={13}/> New Query to Client
-          </Button>
         </div>
       ) : displayed.length === 0 ? (
         <p className="text-sm text-muted-foreground text-center py-8">No queries in this category.</p>
@@ -711,17 +770,6 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
           ))}
         </div>
       )}
-
-      {/* New Query dialog */}
-      <NewQueryDialog
-        open={newQueryOpen}
-        onClose={() => setNewQueryOpen(false)}
-        engagementId={engagementId}
-        clientId={data.engagement?.client_id || ""}
-        firmId={data.engagement?.firm_id || null}
-        financialYear={data.financialYear}
-        onCreated={fetchQueries}
-      />
 
       {/* Email Compose dialog */}
       {emailPayload && (
