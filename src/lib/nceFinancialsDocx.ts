@@ -2115,7 +2115,9 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
           })],
         }),
         new Paragraph({
-          spacing:  { before: 80, after: 120 },
+          // after: 40 DXA — minimal trailer; the reliable gap comes from the
+          // body-level notesSectionTopSpacer paragraph in Sections B/C.
+          spacing:  { before: 80, after: 40 },
           children: [new TextRun({ text: sectionLine, font: FONT, size: SZ_HDR, bold: true, underline: {} })],
         }),
       ],
@@ -2178,6 +2180,12 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   // Slightly larger gap between consecutive notes so they read as distinct blocks
   // while still flowing on the same page.
   const noteGap       = () => new Paragraph({ spacing: { before: 220, after: 0 }, children: [] });
+  // Spacer placed at the very top of the body in Sections B and C so there is
+  // a reliable gap between the running section-heading line and the first note.
+  // Using a body paragraph is more dependable than relying on spacing.after
+  // inside the running header (Word may clip header overflow).
+  // 120 DXA ≈ 6 pt — modest but visible breathing room.
+  const notesSectionTopSpacer = () => new Paragraph({ spacing: { before: 0, after: 120 }, children: [] });
 
   // 2026-05-30 (revision 7) — User insists the client banner must appear on
   // EVERY notes page AND notes must flow (multiple notes per page).
@@ -2275,6 +2283,7 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   // No inline BS heading; the bsNotesRunningHdr running header provides it on
   // every page of this section.
   const bsNotesSectionChildren: (Paragraph | Table)[] = [
+    notesSectionTopSpacer(),
     ...capitalTables.flatMap((t, i) => i === 0 ? [t] : [noteGap(), t]),
     ...bsNoteTablePairs.flatMap(([, table]) => [noteGap(), table]),
   ];
@@ -2285,6 +2294,7 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   // heading (Word locks the header when the page starts).
   const plNotesSectionChildren: (Paragraph | Table)[] = plNoteTablePairs.length > 0
     ? [
+        notesSectionTopSpacer(),
         mkSectionHeading(`Notes to Profit & Loss A/c as on 31.03.${String(cyYear)}`),
         ...plNoteTablePairs.flatMap(([, table], i) => (i === 0 ? [table] : [noteGap(), table])),
       ]
