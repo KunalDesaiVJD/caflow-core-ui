@@ -153,22 +153,7 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
         const mo = cur.getMonth();
         const daysInMonth = new Date(yr, mo + 1, 0).getDate();
 
-        if (!firstPage) doc.addPage();
-        firstPage = false;
-
-        // Header band
-        const pw = doc.internal.pageSize.getWidth();
-        doc.setFillColor(67, 56, 202);
-        doc.rect(0, 0, pw, 20, "F");
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(14);
-        doc.setTextColor(255, 255, 255);
-        doc.text("Planning Calendar", 14, 10);
-        doc.setFont("helvetica", "normal");
-        doc.setFontSize(9);
-        doc.text(`${CAL_MONTHS[mo]} ${yr}`, 14, 17);
-        doc.text(`${entries.length} assignment${entries.length !== 1 ? "s" : ""} total`, pw - 14, 17, { align: "right" });
-
+        // Build body rows first so we can skip months with no assignments.
         const head = [["DATE", ...empCols.map(e => e.name.split(" ")[0].toUpperCase())]];
         const body: string[][] = [];
 
@@ -187,29 +172,44 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
           body.push(row);
         }
 
-        // Calculate per-row height so every row of this month (+ 1 header row)
-        // exactly fits the available space — guarantees one page per month.
-        // A3 landscape = 297 mm tall; startY=24, bottomMargin=10 → 263 mm usable.
-        const pageH       = doc.internal.pageSize.getHeight();
-        const availableH  = pageH - 24 - 10;           // startY=24, bottomMargin=10
-        const totalRows   = daysInMonth + 1;            // data rows + 1 header row
-        const rowH        = availableH / totalRows;
+        // Skip months with no assignments — avoids blank pages between active months.
+        const hasData = body.some(row => row.slice(1).some(cell => cell !== ""));
+        if (!hasData) {
+          cur.setMonth(cur.getMonth() + 1);
+          continue;
+        }
 
+        if (!firstPage) doc.addPage();
+        firstPage = false;
+
+        // Header band
+        const pw = doc.internal.pageSize.getWidth();
+        doc.setFillColor(67, 56, 202);
+        doc.rect(0, 0, pw, 20, "F");
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(14);
+        doc.setTextColor(255, 255, 255);
+        doc.text("Planning Calendar", 14, 10);
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(9);
+        doc.text(`${CAL_MONTHS[mo]} ${yr}`, 14, 17);
+        doc.text(`${entries.length} assignment${entries.length !== 1 ? "s" : ""} total`, pw - 14, 17, { align: "right" });
+
+        // Reduced cellPadding (1.5 vs 2) ensures that even if every row wraps to
+        // 2 lines, the whole month still fits on one A3 page:
+        // 2 lines × 2.47 mm + 3 mm pad = 7.94 mm × 32 rows = 254 mm < 263 mm usable.
         autoTable(doc, {
           head,
           body,
           startY: 24,
           margin: { left: 10, right: 10, bottom: 10 },
-          // tableHeight forces autoTable to not overflow onto a new page.
-          tableHeight: availableH,
           styles: {
             fontSize: 7,
             cellPadding: { top: 1.5, right: 3, bottom: 1.5, left: 3 },
             font: "helvetica",
             lineWidth: 0.2,
             lineColor: [200, 200, 210] as [number,number,number],
-            overflow: "ellipsize",   // was "linebreak" — prevents row-height growth
-            minCellHeight: rowH,
+            overflow: "linebreak",   // allow wrapping so full client names are visible
           },
           headStyles: {
             fillColor: [67, 56, 202] as [number,number,number],
@@ -217,7 +217,6 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
             fontStyle: "bold",
             fontSize: 8,
             halign: "center",
-            minCellHeight: rowH,
           },
           columnStyles: {
             0: { cellWidth: 16, fontStyle: "bold", halign: "left" },
