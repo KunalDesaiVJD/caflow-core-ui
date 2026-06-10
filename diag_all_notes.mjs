@@ -89,7 +89,7 @@ function signedSumExprOpening(nature) {
 
 // â”€â”€â”€ DB helper (READ-ONLY) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-function dbQuery(sql) {
+function dbQuery(sql, attempt = 1) {
   const clean = sql.replace(/\s+/g, " ").trim();
   if (!/^select\b/i.test(clean) && !/^with\b/i.test(clean)) {
     throw new Error("SAFETY: refusing non-SELECT statement: " + clean.slice(0, 80));
@@ -97,16 +97,28 @@ function dbQuery(sql) {
   if (clean.includes('"') || clean.includes("%")) {
     throw new Error("SAFETY: SQL contains unsafe chars: " + clean.slice(0, 80));
   }
-  const raw = execSync(`npx supabase db query --linked "${clean}"`, {
-    encoding: "utf-8",
-    maxBuffer: 400 * 1024 * 1024,
-    timeout: 240_000,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const jsonStart = raw.indexOf("{");
-  if (jsonStart < 0) throw new Error("No JSON in db query output: " + raw.slice(0, 300));
-  const parsed = JSON.parse(raw.slice(jsonStart));
-  return parsed.rows ?? [];
+  try {
+    const raw = execSync(`npx supabase db query --linked "${clean}"`, {
+      encoding: "utf-8",
+      maxBuffer: 400 * 1024 * 1024,
+      timeout: 240_000,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const jsonStart = raw.indexOf("{");
+    if (jsonStart < 0) throw new Error("No JSON in db query output: " + raw.slice(0, 300));
+    const parsed = JSON.parse(raw.slice(jsonStart));
+    return parsed.rows ?? [];
+  } catch (e) {
+    const msg = String(e.message || e);
+    const retriable = /50\d|timeout|ECONNRESET|EAI_AGAIN|fetch failed/i.test(msg);
+    if (retriable && attempt < 5) {
+      const wait = Math.min(8000, 800 * Math.pow(2, attempt - 1));
+      const end = Date.now() + wait;
+      while (Date.now() < end) {} // synchronous wait so retry counter shows in log
+      return dbQuery(sql, attempt + 1);
+    }
+    throw e;
+  }
 }
 
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
@@ -578,10 +590,23 @@ function classify(cell, cyLedgers, pyLedgers) {
 
 // To stay within reasonable runtime, deep-classify ONLY drifted/no_note cells.
 let processed = 0;
+let failed = 0;
 for (const cell of drifted) {
   processed++;
-  const cyLedgers = ledgerDetailCy(cell.eng, cell.def);
-  const pyLedgers = cell.eng._shell ? ledgerDetailPy(cell.eng, cell.def) : [];
+  let cyLedgers = [];
+  let pyLedgers = [];
+  try {
+    cyLedgers = ledgerDetailCy(cell.eng, cell.def);
+    if (cell.eng._shell) pyLedgers = ledgerDetailPy(cell.eng, cell.def);
+  } catch (e) {
+    failed++;
+    cell.patterns = ["P7"];
+    cell.evidence = [`Detail fetch failed: ${String(e.message || e).slice(0, 200)}`];
+    cell.cyLedgerCount = -1;
+    cell.pyLedgerCount = -1;
+    if (processed % 25 === 0) log(`  classified ${processed}/${drifted.length} (failed: ${failed})`);
+    continue;
+  }
   if (!cell.hasNote) {
     cell.patterns = ["P5"];
     cell.evidence = ["Note row absent from nce_financial_notes."];
@@ -594,9 +619,9 @@ for (const cell of drifted) {
   cell.evidence = c.evidence;
   cell.cyLedgerCount = cyLedgers.length;
   cell.pyLedgerCount = pyLedgers.length;
-  if (processed % 25 === 0) log(`  classified ${processed}/${drifted.length}`);
+  if (processed % 25 === 0) log(`  classified ${processed}/${drifted.length} (failed: ${failed})`);
 }
-log(`  classified ${processed}/${drifted.length}`);
+log(`  classified ${processed}/${drifted.length} (failed: ${failed})`);
 
 // â”€â”€â”€ Step 6: build Markdown report â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
