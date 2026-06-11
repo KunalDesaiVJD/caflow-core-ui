@@ -4692,6 +4692,13 @@ export default function PipelineFinancialStatements({
   // in NCEDetailedNotes — extracted here so the user can fix the BS face
   // directly when they see an imbalance without navigating to Notes first.
   const recorrectFromCOAMapping = async () => {
+    // WRITE-PROTECTED: function disabled. Was rebuilding notes from COA on
+    // demand and overwriting audit-verified note data. The button that
+    // called this is already removed; this guard hardens the function
+    // itself in case any other path tries to invoke it.
+    toast.error("Re-correct from COA Mapping is disabled. Notes are write-protected.");
+    return;
+    // eslint-disable-next-line @typescript-eslint/no-unreachable-code, no-unreachable
     if (!isNonCorporate) {
       toast.error("Re-correct from COA is currently only supported for non-corporate (NCE) entities.");
       return;
