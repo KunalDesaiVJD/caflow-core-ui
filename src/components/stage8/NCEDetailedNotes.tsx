@@ -2629,22 +2629,12 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engagementId]);
 
-  // ── Auto-save ───────────────────────────────────────────────────────────
-  const scheduleSave = useCallback((data: Record<string, NCENoteData>) => {
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async () => {
-      try {
-        await persistNotes(data, financialYear);
-        // Invalidate PipelineFinancialStatements' nce-financial-notes cache so
-        // the BS / P&L face picks up the just-saved values without requiring
-        // a manual page refresh. Without this the face shows stale DB data
-        // while the Notes tab already reflects the new in-memory amounts —
-        // the root cause of the "P&L face ≠ Note 16" discrepancy.
-        queryClient.invalidateQueries({ queryKey: ["nce-financial-notes", engagementId] });
-      }
-      catch (e: any) { toast.error(`Auto-save failed: ${e?.message || e}`); }
-    }, 1200);
-  }, [persistNotes, financialYear, queryClient, engagementId]);
+  // AUTO-SAVE DISABLED — was overwriting audit-verified note data whenever
+  // the Notes tab loaded. The toolbar "Save All Notes" button has also been
+  // removed. Notes are now write-protected from the UI; direct DB writes only.
+  const scheduleSave = useCallback((_data: Record<string, NCENoteData>) => {
+    // no-op
+  }, []);
 
   // ── Cell change ─────────────────────────────────────────────────────────
   const handleChange = useCallback((
@@ -3203,19 +3193,13 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
       </div>
 
       {/* Toolbar — hidden in read-only (lock preview) mode */}
+      {/* NOTE: "Re-sync from COA" and "Save All Notes" buttons removed to
+          prevent accidental overwrites of audit-verified note data. */}
       {readOnly ? null : (
         <div className="flex flex-wrap items-center gap-2">
-          <Button
-            type="button" size="sm" variant="outline"
-            onClick={handleResync} disabled={syncing}
-            className="h-7 text-xs gap-1.5"
-          >
-            {syncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-            Re-sync from COA
-          </Button>
           <span className="text-[10px] text-muted-foreground">
-            <span className="text-blue-600 font-medium">Blue = Auto</span> (re-synced from TB) ·{" "}
-            <span className="text-amber-600 font-medium">Amber = Manual</span> (preserved)
+            <span className="text-blue-600 font-medium">Blue = Auto</span> ·{" "}
+            <span className="text-amber-600 font-medium">Amber = Manual</span>
           </span>
           <div className="ml-auto flex items-center gap-1.5">
             <Button
@@ -3233,11 +3217,6 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
               title="Collapse all note cards"
             >
               <Minus className="w-3 h-3" /> Collapse All
-            </Button>
-            <Button size="sm" onClick={handleSave} disabled={saving}
-              className="h-7 text-xs gap-1.5">
-              {saving ? <Loader2 className="animate-spin h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
-              Save All Notes
             </Button>
           </div>
         </div>
@@ -3419,15 +3398,8 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
         })()}
       </div>
 
-      {/* Bottom save — hidden in read-only (lock preview) mode */}
-      {!readOnly && (
-        <div className="flex justify-end pt-2">
-          <Button size="sm" onClick={handleSave} disabled={saving} className="gap-1.5">
-            {saving ? <Loader2 className="animate-spin h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
-            Save All Notes
-          </Button>
-        </div>
-      )}
+      {/* Bottom save button removed to prevent accidental overwrites of
+          audit-verified note data. */}
     </div>
   );
 }

@@ -2511,89 +2511,11 @@ export default function PipelineFinancialStatements({
   // ledger never flowed into the note. The content-hash approach re-syncs
   // whenever the COA mapping changes (compared to the last successful sync),
   // persists across sessions, and skips needless re-runs when nothing changed.
-  useEffect(() => {
-    if (!isNonCorporate || !engagementId || !engagement?.financial_year) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        // 0. Fetch the CURRENT coa_mapping and compute a stable content hash.
-        const { data: engRow } = await (supabase.from as any)("audit_engagements")
-          .select("coa_mapping")
-          .eq("id", engagementId)
-          .maybeSingle();
-        if (cancelled) return;
-        const coa = (engRow?.coa_mapping ?? {}) as Record<string, { code?: string }>;
-        // Deterministic hash: sorted "ledger=code" pairs joined. Changes
-        // whenever a ledger is mapped, remapped, or unmapped.
-        const hash = Object.keys(coa)
-          .sort()
-          .map(k => `${k}=${coa[k]?.code ?? ""}`)
-          .join("|");
-        // v7: force re-sync to restore COGS note data that was corrupted
-        // v6: stable. COGS face reads from computedAmounts (COA total),
-        // not from notes. No more forced re-syncs needed.
-        const hashKey = `caflow:nce_coahash_v6:${engagementId}:${engagement.financial_year}`;
-        const lastHash = typeof window !== "undefined" ? window.localStorage.getItem(hashKey) : null;
-        if (lastHash === hash && hash.length > 0) {
-          // COA mapping unchanged since last successful sync — nothing to do.
-          return;
-        }
-
-        // 1. Load existing notes (to preserve manual rows / user edits)
-        const { data: existingRows } = await (supabase.from as any)("nce_financial_notes")
-          .select("note_type, cy_data, py_data")
-          .eq("engagement_id", engagementId)
-          .eq("financial_year", engagement.financial_year);
-        if (cancelled) return;
-        const built: Record<string, any> = {};
-        for (const r of (existingRows ?? []) as any[]) {
-          const cy = (r.cy_data ?? {}) as Record<string, any>;
-          const py = (r.py_data ?? {}) as Record<string, any>;
-          const customRows = Array.isArray(cy._custom_rows) ? cy._custom_rows : [];
-          const cleanCy: Record<string, number> = {};
-          const cleanPy: Record<string, number> = {};
-          for (const [k, v] of Object.entries(cy)) {
-            if (k === "_custom_rows" || k === "_hidden_rows" || k === "_label_overrides" || k === "_cy_sources" || k === "_ejected_ledgers" || k === "_source_label_overrides") continue;
-            if (typeof v === "number") cleanCy[k] = v;
-          }
-          for (const [k, v] of Object.entries(py)) {
-            if (k === "_custom_rows" || k === "_hidden_rows" || k === "_label_overrides" || k === "_cy_sources" || k === "_ejected_ledgers" || k === "_source_label_overrides") continue;
-            if (typeof v === "number") cleanPy[k] = v;
-          }
-          built[r.note_type] = { cy: cleanCy, py: cleanPy, customRows };
-        }
-        // 2. Re-populate from current TB × COA mapping
-        const populated = await nceAutoPopulate(engagementId, built);
-        if (cancelled) return;
-        // 3. Save back
-        const rows = Object.entries(populated).map(([noteType, d]) => {
-          const { cy_data, py_data } = serialiseNoteData(d);
-          return {
-            engagement_id:  engagementId,
-            financial_year: engagement.financial_year,
-            note_type:      noteType,
-            cy_data:        cy_data as any,
-            py_data:        py_data as any,
-            updated_at:     new Date().toISOString(),
-          };
-        });
-        if (rows.length > 0) {
-          await supabase
-            .from("nce_financial_notes")
-            .upsert(rows, { onConflict: "engagement_id,financial_year,note_type" });
-        }
-        if (cancelled) return;
-        // 4. Store the COA hash so we don't re-sync until mapping changes again.
-        if (typeof window !== "undefined") window.localStorage.setItem(hashKey, hash);
-        // 5. Invalidate queries so the face re-renders with fresh note data
-        queryClient.invalidateQueries({ queryKey: ["nce-financial-notes", engagementId] });
-        console.log("[autoSync v3] NCE notes synced from COA mapping →", Object.keys(populated).length, "note types (COA changed)");
-      } catch (e) {
-        console.warn("[autoSync v3] Failed (non-fatal):", e);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [engagementId, isNonCorporate, engagement?.financial_year]); // eslint-disable-line react-hooks/exhaustive-deps
+  // AUTO-SYNC DISABLED — was overwriting audit-verified note data on every
+  // Stage 7 visit. The Notes tab "Re-sync from COA" button has also been
+  // removed. Notes are now only modified by direct DB writes (audit-team
+  // SQL fixes that should persist).
+  useEffect(() => { /* no-op */ }, [engagementId, isNonCorporate, engagement?.financial_year]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Fetch NCE Stage-7 "Notes to Accounts" (Balance Confirmation, etc.) ──
   // The Note 1 sheet in the Excel export must reflect what the user has
@@ -7714,26 +7636,11 @@ export default function PipelineFinancialStatements({
           <Alert variant="destructive" className="border-destructive/30">
             <AlertTriangle className="h-4 w-4" />
             <AlertTitle>Balance Sheet not balanced</AlertTitle>
-            <AlertDescription className="flex flex-wrap items-center gap-3">
+            <AlertDescription>
               <span>
                 <strong>{heavySide}</strong> exceeds <strong>{lightSide}</strong> by{" "}
-                <strong>₹{formatINR(Math.abs(activeBsDiff))}</strong>. Usually a stale
-                row left in a Note after a COA-mapping change. Re-correct rebuilds the
-                notes from Tally TB and the current COA mapping; your manual rows and
-                typed values are preserved.
+                <strong>₹{formatINR(Math.abs(activeBsDiff))}</strong>.
               </span>
-              <Button
-                size="sm"
-                variant="outline"
-                className="gap-1.5 h-7 text-xs border-destructive text-destructive hover:bg-destructive/10"
-                disabled={recorrectingFromCOA}
-                onClick={recorrectFromCOAMapping}
-              >
-                {recorrectingFromCOA
-                  ? <Loader2 className="h-3 w-3 animate-spin" />
-                  : <RefreshCw className="h-3 w-3" />}
-                Re-correct from COA Mapping
-              </Button>
             </AlertDescription>
           </Alert>
         );
