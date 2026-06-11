@@ -1,0 +1,68 @@
+[
+  {
+    "client": "MAHARSH INFRA",
+    "note": "borrowings",
+    "section": "BS-Liab",
+    "coaCy": 38911987,
+    "noteCy": 38911987,
+    "cyDrift": 0,
+    "coaPy": -5991743,
+    "notePy": 30424831,
+    "pyDrift": -36416574
+  },
+  {
+    "client": "MAHARSH INFRA",
+    "note": "loans_advances",
+    "section": "BS-Asst",
+    "coaCy": 105592088,
+    "noteCy": 105592088,
+    "cyDrift": 0,
+    "coaPy": 51866109,
+    "notePy": 54266109,
+    "pyDrift": -2400000
+  },
+  {
+    "client": "MAHIL INFRA",
+    "note": "borrowings",
+    "section": "BS-Liab",
+    "coaCy": 95328844,
+    "noteCy": 95328844,
+    "cyDrift": 0,
+    "coaPy": 104246598,
+    "notePy": 108296848,
+    "pyDrift": -4050250
+  },
+  {
+    "client": "NIRALI PERFUMERY PRODUCTS",
+    "note": "other_expenses",
+    "section": "PL-Exp",
+    "coaCy": 2555583.98,
+    "noteCy": 2555583.98,
+    "cyDrift": 0,
+    "coaPy": 3721511.31,
+    "notePy": 3492180.31,
+    "pyDrift": 229331
+  },
+  {
+    "client": "REVTI INFRA",
+    "note": "loans_advances",
+    "section": "BS-Asst",
+    "coaCy": 75483871,
+    "noteCy": 75483871,
+    "cyDrift": 0,
+    "coaPy": 30484638,
+    "notePy": 39922312,
+    "pyDrift": -9437674
+  },
+  {
+    "client": "SKYLARK CORPORATION",
+    "note": "other_expenses",
+    "section": "PL-Exp",
+    "coaCy": 65849270.78,
+    "noteCy": 65849270.78,
+    "cyDrift": 0,
+    "coaPy": 29373677.29,
+    "notePy": 29398526.29,
+    "pyDrift": -24849
+  }
+]
