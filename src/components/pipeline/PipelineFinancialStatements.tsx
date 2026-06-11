@@ -4023,8 +4023,13 @@ export default function PipelineFinancialStatements({
     const faPy = getFAGridNetBlockTotal(stage5NotesData ?? null, "py");
     if (faPy != null) out["NCE_PPE"] = faPy;
     // Pass 2 — nce_financial_notes (Stage 8 path). INLINED (same as CY).
+    // 2026-06-12 — orphan skip lifted when the note carries a NON-ZERO PY
+    // value. SKYLARK other_cl PY had Pattern G data (₹25cr) sitting in the
+    // note but was being ignored because pyShellBSAmounts didn't carry
+    // NCE_OCL — orphan check would skip the override and the face fell back
+    // to a raw COA value that didn't reflect the note. We trust the note
+    // when it has data and only honour orphan-skip for empty / null notes.
     for (const code of Object.keys(NCE_CODE_TO_NOTE)) {
-      if (orphanPYBsCode(code)) continue;
       const meta = NCE_CODE_TO_NOTE[code];
       if (!meta) continue;
       const noteRow = nceNotesByType[meta.note];
@@ -4037,6 +4042,10 @@ export default function PipelineFinancialStatements({
         meta.config,
       );
       if (total == null) continue;
+      // Honour orphan skip ONLY when the note has no PY data to contribute
+      // (total is 0). When the note carries an actual value, the auditor
+      // wants it on the face regardless of pyShell coverage.
+      if (orphanPYBsCode(code) && Math.abs(total) < 0.005) continue;
       const nature = NCE_NOTE_NATURE[meta.note] ?? "CR";
       const noteVal = nature === "CR" ? -total : total;
       out[code] = noteVal;
