@@ -4059,32 +4059,13 @@ export default function PipelineFinancialStatements({
     // PY TOTAL: computed from note-overridden `out` (mirrors CY above).
     out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (out[id] || 0), 0);
     out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
-    // ── PY BALANCE FALLBACK (2026-06-09) ─────────────────────────────
-    // ROOT CAUSE: note PY data is incomplete — nceAutoPopulate doesn't
-    // always populate PY for every ledger (e.g. SHRI RAM trade_receivables
-    // has 520 ledgers but note PY misses ₹4,40,707 worth). This creates
-    // a PY BS imbalance even when COA mapping PY is perfectly balanced.
-    //
-    // FIX: after computing PY totals from note-overridden values, check
-    // if PY BS is balanced. If NOT, revert every BS code to the raw
-    // mergedPY value (computedAmountsPY / pyShellBSAmounts) which IS
-    // balanced (confirmed by COA mapping). This ensures PY BS always
-    // matches COA mapping when COA is balanced.
-    const pyBsDrift = Math.abs(out["NCE_AST"] + out["NCE_EL"]);
-    if (pyBsDrift > 2) {
-      // Check if mergedPY (pre-override) gives a balanced result
-      const rawAst = NCE_ASSET_IDS.reduce((s, id) => s + (mergedPY[id] || 0), 0);
-      const rawEl  = NCE_LIAB_IDS.reduce((s, id) => s + (mergedPY[id] || 0), 0);
-      const rawDrift = Math.abs(rawAst + rawEl);
-      if (rawDrift < pyBsDrift) {
-        // mergedPY is more balanced → revert BS codes to mergedPY
-        for (const id of [...NCE_ASSET_IDS, ...NCE_LIAB_IDS]) {
-          out[id] = mergedPY[id] || 0;
-        }
-        out["NCE_AST"] = rawAst;
-        out["NCE_EL"]  = rawEl;
-      }
-    }
+    // 2026-06-12 — The blanket "revert BS codes to mergedPY when notes-
+    // overridden drift is worse" fallback was removed. It was discarding
+    // legitimate note values (SKYLARK Pattern G added ₹25cr of plot-advance
+    // ledgers to other_cl PY; the revert wiped that out and the face fell
+    // back to ₹-28L). The residual absorber below now handles any drift
+    // by landing it in NCE_CAP — which is the proper place per user
+    // instruction. Note overrides always win at the face.
     // 2026-06-12 — PY BS residual absorber (mirror of the CY one in nceCyAmounts).
     // Any leftover gap after the mergedPY revert (rawDrift was equal/worse,
     // so we kept the note-overridden totals) gets absorbed into Capital so BS
