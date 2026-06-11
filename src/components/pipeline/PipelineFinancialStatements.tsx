@@ -3068,11 +3068,42 @@ export default function PipelineFinancialStatements({
           computeTotal(item);
         }
       }
+    } else {
+      // 2026-06-11 — NCE CY net-profit auto-credit (smart-gated mirror of the
+      // corporate path above + the PY auto-credit in mergedPY).
+      //
+      // The historical assumption "Tally's partner capital closing already
+      // includes the current-year profit" holds ONLY when the firm has actually
+      // posted Tally's year-end closing JE. For NCE clients whose books are
+      // STILL open at audit time (SUKIRTI, SKYLARK, ...), the P&L group has
+      // not been transferred to capital — so BS shows drift = exactly the
+      // year's net profit (this is the recurring SUKIRTI / SKYLARK pattern
+      // we'd been calling a "deferred next-phase issue").
+      //
+      // Drift-aware gate: snapshot BS CY drift WITH the credit vs WITHOUT,
+      // apply only if it improves balance by ≥ ₹1. Books-not-closed → credit
+      // fires. Books-already-closed → credit reduces balance → skip → no
+      // double-count.
+      const nceInc = amounts["NCE_PL_INC"] || 0;
+      const nceExp = amounts["NCE_PL_EXP"] || 0;
+      const partRem = amounts["NCE_PART_REM"] || 0;
+      const tax    = amounts["NCE_TAX"]      || 0;
+      const cyNetPL = Math.round(((-nceInc) - nceExp - partRem - tax) * 100) / 100;
+      if (Math.abs(cyNetPL) > 0.005) {
+        const astSum = NCE_ASSET_IDS.reduce((s, id) => s + (amounts[id] || 0), 0);
+        const elSum  = NCE_LIAB_IDS.reduce((s, id) => s + (amounts[id] || 0), 0);
+        const driftWithout = Math.abs(astSum + elSum);
+        const driftWith    = Math.abs(astSum + elSum - cyNetPL);
+        if (driftWith + 1 < driftWithout) {
+          // Credit lands on BS_EQ_RS — the same intermediate slot used by the
+          // corporate path. nceCyAmounts will fold BS_EQ_RS → NCE_CAP later.
+          amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) - cyNetPL;
+          for (const item of (activeTree as FSLineItem[])) {
+            computeTotal(item);
+          }
+        }
+      }
     }
-    // NCE entities do NOT get auto-credit. Tally's partner capital account
-    // closing balances ALREADY include the current-year profit (transferred
-    // by Tally's year-end closing). The P&L A/c's closing is already
-    // reflected in the capital accounts — adding it again would double-count.
 
     return amounts;
   }, [tbAccounts, coaMapping, manualOverrides, isNonCorporate]);
