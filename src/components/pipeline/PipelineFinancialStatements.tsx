@@ -3277,7 +3277,7 @@ export default function PipelineFinancialStatements({
     // back mapped ones). The Tally books still balance because Tally carries
     // the profit in its internal P&L group, but OUR BS is short by exactly
     // the PY net profit → apply the credit so the PY BS check is correct.
-    if (isNonCorporate && (!hasPyShellBS || !("NCE_CAP" in pyShellBSAmounts))) {
+    if (isNonCorporate) {
       const pyInc   = merged["NCE_PL_INC"] || 0;
       const pyExp   = merged["NCE_PL_EXP"] || 0;
       const pyPartRem = merged["NCE_PART_REM"] || 0;
@@ -3286,7 +3286,29 @@ export default function PipelineFinancialStatements({
       // P&L statement's bottom line. Crediting only this number to Capital
       // matches the way Tally journals partnership profit at year-end.
       const pyNetPL = Math.round(((-pyInc) - pyExp - pyPartRem - pyTax) * 100) / 100;
-      if (Math.abs(pyNetPL) > 0.005) {
+      // 2026-06-11 — Smart-gate the auto-credit so it ALWAYS fires when the
+      // BS PY would balance better WITH the credit than WITHOUT, regardless of
+      // whether pyShellBSAmounts contains NCE_CAP. This covers the common NCE
+      // case where the auditor mapped capital in COA but Tally PY books are
+      // not yet closed (capital ledger closing does NOT yet include profit) —
+      // BS would otherwise show drift equal to PY net profit. The earlier gate
+      // skipped this case and is now retained as an EXPLICIT trigger only for
+      // the unconditional path (no pyShellBS), with the additional drift-aware
+      // path below it.
+      const unconditional = !hasPyShellBS || !("NCE_CAP" in pyShellBSAmounts);
+      let shouldCredit = unconditional;
+      if (!unconditional && Math.abs(pyNetPL) > 0.005) {
+        // Snapshot BS PY drift WITHOUT credit vs WITH credit. Liability codes
+        // are stored negative in merged (CR-natural), so adding the credit to
+        // NCE_CAP — which makes it MORE negative when pyNetPL > 0 — moves the
+        // Σ(NCE_AST) + Σ(NCE_EL) sum toward 0. Pick whichever path balances.
+        const astSum = NCE_ASSET_IDS.reduce((s, id) => s + (merged[id] || 0), 0);
+        const elSum  = NCE_LIAB_IDS.reduce((s, id) => s + (merged[id] || 0), 0);
+        const driftWithout = Math.abs(astSum + elSum);
+        const driftWith    = Math.abs(astSum + elSum - pyNetPL);
+        shouldCredit = driftWith + 1 < driftWithout; // require ≥ ₹1 improvement
+      }
+      if (shouldCredit && Math.abs(pyNetPL) > 0.005) {
         merged["NCE_CAP"] = (merged["NCE_CAP"] || 0) - pyNetPL;
         // Re-run BS tree totals so NCE_EL / NCE_AST pick up the change.
         const computeBSTotal = (item: FSLineItem): number => {
