@@ -334,32 +334,35 @@ export function computeCOATotals(
 ): Record<string, { cy: number; py: number }> {
   const out: Record<string, { cy: number; py: number }> = {};
 
-  // CY pass — every CY-TB ledger contributes signed closing under the
-  // CURRENT mapping. Captured into out[mapping.code] = { cy: Σ, py: Σ_opening }.
+  // CY pass — every CY-TB ledger contributes its signed closing balance to
+  // the CY column. For PY: prefer the PY-shell TB's actual closing (computed
+  // in the PY pass below); fall back to signed OPENING when there is no
+  // pyTb (e.g. legacy engagements without a PY shell). signedOpening is
+  // accounting-identity correct for BS codes (PY close == CY open) but is
+  // ALWAYS 0 for P&L codes (income / expense ledgers always open at 0 in
+  // Tally), so the fallback only carries BS values — exactly what we want.
+  const hasPyTb = pyTb.length > 0;
   for (const row of tb) {
     const mapped = coaMapping[row.ledger_name];
     if (!mapped?.code) continue;
     const noteType = CODE_TO_NOTE_TYPE[mapped.code] ?? mapped.code;
     const cy = signedBalance(row.closing_balance, row.balance_type, noteType);
-    // PY for a CY ledger = its signed OPENING balance (= prior-year close
-    // by accounting identity). When the engagement also has a PY-shell TB,
-    // the PY pass below overrides with the shell's actual closing.
-    const py = signedOpening(row.opening_balance, row.opening_type, noteType);
     const slot = (out[mapped.code] ||= { cy: 0, py: 0 });
     slot.cy += cy;
-    slot.py += py;
+    if (!hasPyTb) {
+      slot.py += signedOpening(row.opening_balance, row.opening_type, noteType);
+    }
   }
 
-  // PY pass — for ledgers present ONLY in PY shell (CLOSED in CY), feed
-  // their PY contribution. Pre-CY ledgers handled above; here we just
-  // augment the PY column for ledgers whose CY mapping is absent (the CY
-  // pass would have written nothing for them).
-  if (pyTb.length > 0) {
-    const cySeen = new Set(tb.map(r => (r.ledger_name || "").trim().toLowerCase()));
+  // PY pass — when a PY-shell TB exists, it is the AUTHORITATIVE source of
+  // every PY column value (BS opening = prior close, AND P&L gets the
+  // proper revenue / expense figures that signedOpening can never produce).
+  // Sums every PY ledger's signed closing under its mapping. The CY pass
+  // above intentionally skipped PY for these so the PY pass owns it cleanly.
+  if (hasPyTb) {
     for (const row of pyTb) {
       const nm = (row.ledger_name || "").trim();
       if (!nm) continue;
-      if (cySeen.has(nm.toLowerCase())) continue; // already paired by the CY pass
       const mapped = pyCoaMap?.[nm] ?? coaMapping[nm];
       if (!mapped?.code) continue;
       const noteType = CODE_TO_NOTE_TYPE[mapped.code] ?? mapped.code;
@@ -436,8 +439,22 @@ const NCE_NOTE_LABEL: Record<string, string> = {
   NCE_OTH_EXP: "Other Expenses",
 };
 
-/** Default NCE liability codes (face stored negative — sign-flip before comparing). */
+/** Default NCE liability + income codes — every Cr-natural face value (stored
+ *  NEGATIVE under the Tally credit convention) needs a sign-flip before its
+ *  POSITIVE Note Total can be compared. Liability codes (BS_EQ + BS_LIAB) AND
+ *  income codes (P&L revenue/other income) ALL belong here. Previously the
+ *  set was BS-liability-only, so PL income codes (NCE_REV_OPS, NCE_REV_OTH)
+ *  reported a phantom drift of 2× the note total on EVERY engagement that
+ *  had any revenue mapped — the canonical recurring "FS Health: 2 notes have
+ *  drift > ₹100" SHRI RAM symptom.
+ *  Capital Account (NCE_CAP) is added so the smart-gated auto-credit doesn't
+ *  surface as drift either. */
 export const NCE_LIAB_CODE_SET = new Set([
-  "NCE_PCAP", "NCE_RES", "NCE_NCB", "NCE_LTB", "NCE_LTP", "NCE_OLTL",
+  // BS — Equity / Capital
+  "NCE_PCAP", "NCE_RES", "NCE_NCB", "NCE_CAP",
+  // BS — Liabilities
+  "NCE_LTB", "NCE_LTP", "NCE_OLTL",
   "NCE_STB",  "NCE_TP",  "NCE_OCL", "NCE_STP",
+  // P&L — Income (Cr-natural)
+  "NCE_REV_OPS", "NCE_REV_OTH",
 ]);

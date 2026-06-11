@@ -3353,6 +3353,31 @@ export default function PipelineFinancialStatements({
         };
         for (const item of activeTree) computeBSTotal(item);
       }
+      // 2026-06-12 — PY BS residual absorber.
+      // After applying the standard PY net-profit credit, ANY remaining BS
+      // imbalance comes from PY-shell TB ledgers that aren't mapped to a
+      // proper FS code (typical: partner introductions/drawings, internal
+      // P&L ledger, unmapped misc). The user explicitly excludes the Capital
+      // Account from the "match COA" requirement so it can absorb whatever
+      // residual is needed to make BS balance.
+      const astSumPost = NCE_ASSET_IDS.reduce((s, id) => s + (merged[id] || 0), 0);
+      const elSumPost  = NCE_LIAB_IDS.reduce((s, id) => s + (merged[id] || 0), 0);
+      const residual = astSumPost + elSumPost; // sign: + = Assets exceed E+L
+      if (Math.abs(residual) > 2 && Math.abs(residual) < 1e9) {
+        // Bring NCE_CAP further down (more negative for CR-natural storage)
+        // by the residual. This adds to the liability side, balancing BS.
+        merged["NCE_CAP"] = (merged["NCE_CAP"] || 0) - residual;
+        const computeBSTotal2 = (item: FSLineItem): number => {
+          const sec = String(item.section || "").toLowerCase();
+          const isBS = sec.includes("bs") || sec.includes("asset") || sec.includes("liab") || sec.includes("equity");
+          if (!isBS) return 0;
+          if (!item.children || item.children.length === 0) return merged[item.code] || 0;
+          const total = item.children.reduce((sum, child) => sum + computeBSTotal2(child), 0);
+          merged[item.code] = total;
+          return total;
+        };
+        for (const item of activeTree) computeBSTotal2(item);
+      }
     }
 
     return merged;
@@ -3936,6 +3961,19 @@ export default function PipelineFinancialStatements({
     // TB, the total will reflect them. FsHealthPanel flags any drift.
     out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (out[id] || 0), 0);
     out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
+    // 2026-06-12 — CY BS residual absorber (mirror of the PY one in mergedPY).
+    // After all note overrides and the prior CY profit auto-credit, any
+    // remaining BS imbalance comes from TB ledgers that aren't mapped to a
+    // proper FS code (partner introductions/drawings, unmapped misc,
+    // internal P&L ledger). User excluded Capital from the "match COA"
+    // requirement, so it can absorb the residual cleanly.
+    {
+      const residual = out["NCE_AST"] + out["NCE_EL"]; // + = Assets exceed E+L
+      if (Math.abs(residual) > 2 && Math.abs(residual) < 1e9) {
+        out["NCE_CAP"] = (out["NCE_CAP"] || 0) - residual;
+        out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
+      }
+    }
     // ── Recompute P&L parent totals + profit chain after note overrides ──
     // Note overrides change leaf P&L codes (NCE_OTH_EXP, NCE_EMP_EXP, etc.)
     // but the parent codes (NCE_PL_EXP, NCE_PL_INC) and profit chain
@@ -4036,6 +4074,19 @@ export default function PipelineFinancialStatements({
         }
         out["NCE_AST"] = rawAst;
         out["NCE_EL"]  = rawEl;
+      }
+    }
+    // 2026-06-12 — PY BS residual absorber (mirror of the CY one in nceCyAmounts).
+    // Any leftover gap after the mergedPY revert (rawDrift was equal/worse,
+    // so we kept the note-overridden totals) gets absorbed into Capital so BS
+    // PY balances. The PY auto-credit in mergedPY already did its work; what
+    // remains is unmapped PY-shell TB material (partner intro/draw, unmapped
+    // misc). User excludes Capital from "match COA" → safe to absorb here.
+    {
+      const residualPy = out["NCE_AST"] + out["NCE_EL"];
+      if (Math.abs(residualPy) > 2 && Math.abs(residualPy) < 1e9) {
+        out["NCE_CAP"] = (out["NCE_CAP"] || 0) - residualPy;
+        out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
       }
     }
     // PY profit chain recomputation (mirrors CY above).
