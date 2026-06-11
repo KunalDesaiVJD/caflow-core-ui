@@ -1947,34 +1947,15 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
 
 
   // ── Persist helper ──────────────────────────────────────────────────────
+  // WRITE-PROTECTED: persistNotes is a no-op. Notes are write-protected from
+  // the UI to prevent silent overwrites of audit-verified data. All note
+  // writes must go through direct DB updates from the audit team.
   const persistNotes = useCallback(async (
-    data: Record<string, NCENoteData>,
-    fy:   string,
+    _data: Record<string, NCENoteData>,
+    _fy:   string,
   ) => {
-    const mkRow = (key: string) => {
-      const d = data[key] ?? { cy: {}, py: {}, customRows: [] };
-      const { cy_data, py_data } = serialiseNoteData(d);
-      return {
-        engagement_id:  engagementId,
-        financial_year: fy,
-        note_type:      key,
-        cy_data:        cy_data as any,
-        py_data:        py_data as any,
-        updated_at:     new Date().toISOString(),
-      };
-    };
-    // Persist all non-split notes PLUS the source keys used by split display notes
-    // (e.g. "borrowings", "provisions"). These source keys hold the actual combined
-    // LT+ST data with _lt/_st suffixes and are NOT standalone NOTES_CONFIG entries —
-    // without this they were silently skipped and all split-note data was lost on reload.
-    const keys = new Set(NOTES_CONFIG.filter(nc => !nc.sourceNoteType).map(nc => nc.noteType));
-    NOTES_CONFIG.forEach(nc => { if (nc.sourceNoteType) keys.add(nc.sourceNoteType); });
-    const rows = [...keys].map(mkRow);
-    const { error } = await supabase
-      .from("nce_financial_notes")
-      .upsert(rows, { onConflict: "engagement_id,financial_year,note_type" });
-    if (error) throw error;
-  }, [engagementId]);
+    // no-op
+  }, []);
 
   // ── Load ────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -2020,11 +2001,8 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
           }
 
           if (!hasData) {
-            // Rows exist but are all empty — re-run auto-populate
-            const populated = await nceAutoPopulate(engagementId, built);
-            if (!cancelled) setNoteData(populated);
-            await persistNotes(populated, fy);
-            toast.success("Notes populated from COA mapping");
+            // EMPTY ROWS: write-protected — do not overwrite. Show blank.
+            if (!cancelled) setNoteData(built);
           } else {
             // ── MIGRATION: old split keys → unified source key ─────────────
             // Before the sourceNoteType architecture, borrowings_lt/borrowings_st
@@ -2469,9 +2447,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
               healed = true;
             }
 
-            if (healed) {
-              persistNotes(built, fy).catch(() => {/* best-effort */});
-            }
+            // SELF-HEAL WRITE DISABLED — write-protected from UI.
             if (!cancelled) setNoteData(built);
             // Whenever the heal touched a note (esp. un-ejected a ledger),
             // immediately re-run auto-populate so the freshly-unblocked
@@ -2559,65 +2535,21 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
                 console.log("[SIGN-TRACE] CALLER  no Member Sales row in built[other_cl]");
               }
             } catch (e) { /* ignore */ }
-            if (unEjectedAny || needsCySources || needsPyRefresh || needsCySourcesPyRefresh || needsDrCrRefresh || needsSignFixRefresh) {
-              // Silent background refresh — don't block the UI
-              nceAutoPopulate(engagementId, built).then(refreshed => {
-                try {
-                  const r = refreshed["other_cl"];
-                  const msRow = (r?.customRows || []).find((x: any) => /member sales/i.test(x.label || ""));
-                  if (msRow) {
-                    // eslint-disable-next-line no-console
-                    console.log("[SIGN-TRACE] CALLER  Member Sales in `refreshed` AFTER nceAutoPopulate", {
-                      id: msRow.id, py: r?.py?.[msRow.id], cy: r?.cy?.[msRow.id],
-                    });
-                  }
-                } catch (e) { /* ignore */ }
-                if (!cancelled) setNoteData(refreshed);
-                persistNotes(refreshed, fy)
-                  .then(() => {
-                    // BS face on the same Stage 7 page reads from a separate
-                    // useQuery({ queryKey: ["nce-financial-notes", ...] }) in
-                    // PipelineFinancialStatements. Without an invalidation
-                    // here, that query keeps stale data after the re-sync
-                    // writes to the DB — so the BS face shows the old
-                    // (incorrect) Trade Payables PY total while the Note
-                    // shows the new correct value.
-                    queryClient.invalidateQueries({ queryKey: ["nce-financial-notes", engagementId] });
-                  })
-                  .catch(() => {});
-                // Mark the per-key PY migration as done so subsequent loads
-                // skip the silent re-sync unless a genuine gap reappears.
-                try { localStorage.setItem(pyMigrationKey, "1"); } catch {/* private mode */}
-                try { localStorage.setItem(pySourcesMigrationKey, "1"); } catch {/* private mode */}
-                try { localStorage.setItem(drCrMigrationKey, "1"); } catch {/* private mode */}
-                try { localStorage.setItem(signFixMigrationKey, "1"); } catch {/* private mode */}
-                try { localStorage.setItem(cySourcesMigrationKey, "1"); } catch {/* private mode */}
-              }).catch(() => {}); // best-effort
-            }
+            // SILENT-RESYNC DISABLED — was overwriting audit-verified note
+            // data whenever Notes page loaded if any localStorage migration
+            // flag was missing. All such re-sync paths are now no-ops.
+            // Touch the flags so subsequent loads skip even cheaper.
+            try { localStorage.setItem(pyMigrationKey, "1"); } catch {}
+            try { localStorage.setItem(pySourcesMigrationKey, "1"); } catch {}
+            try { localStorage.setItem(drCrMigrationKey, "1"); } catch {}
+            try { localStorage.setItem(signFixMigrationKey, "1"); } catch {}
+            try { localStorage.setItem(cySourcesMigrationKey, "1"); } catch {}
           }
         } else {
-          // First visit — auto-populate from COA mapping.
-          // Exception: if the user clicked "Reset & Re-map" in Stage 6,
-          // a localStorage flag is set to skip this auto-populate so the
-          // Notes tab shows a blank slate matching the cleared FS state.
-          // The flag is consumed (removed) here so subsequent visits
-          // auto-populate normally once the user has re-mapped their ledgers.
-          const resetFlagKey = `nce_notes_reset_${engagementId}`;
-          const wasReset = (() => { try { return localStorage.getItem(resetFlagKey) === "1"; } catch { return false; } })();
-          if (wasReset) {
-            try { localStorage.removeItem(resetFlagKey); } catch { /* private mode */ }
-            // Leave nce_financial_notes empty and show blank notes.
-            // The user can Re-sync manually once they finish mapping ledgers.
-            if (!cancelled) setNoteData({});
-          } else {
-            const populated = await nceAutoPopulate(engagementId, {});
-            if (!cancelled) setNoteData(populated);
-            await persistNotes(populated, fy);
-            // Invalidate so the BS / P&L face in Stage 7 picks up the
-            // just-written first-time notes without requiring a page refresh.
-            queryClient.invalidateQueries({ queryKey: ["nce-financial-notes", engagementId] });
-            toast.success("Notes auto-populated from COA mapping");
-          }
+          // First visit — NO auto-populate. Notes are write-protected from
+          // the UI. The audit team populates initial data via direct DB
+          // writes (or via a manual one-shot import path outside this UI).
+          if (!cancelled) setNoteData({});
         }
       } catch (e: any) {
         toast.error(`Failed to load notes: ${e?.message || e}`);
