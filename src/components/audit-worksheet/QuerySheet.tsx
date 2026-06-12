@@ -385,6 +385,30 @@ function BulkDispatchDialog({
             groupRows.some(r => (priority === "keep" ? r.priority : priority) === p)
           ) ?? "Medium";
 
+          // ROOT-CAUSE FIX (attachments on dispatch): the auditor attaches
+          // supporting documents to individual query rows on the Stage 2
+          // Query Sheet (PDF / Excel / image uploaded to the "documents"
+          // bucket — see QueryAttachment in useQuerySheetStorage). When
+          // dispatched, those attachments must travel with the dispatched
+          // query into audit_client_queries → Stage 3 Audit Query Tracker /
+          // client portal — otherwise the auditor's supporting docs are
+          // silently dropped and only the text query reaches the client.
+          // Concatenate all attachments across the rows in this group;
+          // de-dupe by file_path so the same upload doesn't appear twice
+          // if two grouped rows happened to share a reference.
+          const groupedAttachments = (() => {
+            const seen = new Set<string>();
+            const out: any[] = [];
+            for (const r of groupRows) {
+              for (const att of (r.attachments ?? [])) {
+                if (!att?.file_path || seen.has(att.file_path)) continue;
+                seen.add(att.file_path);
+                out.push(att);
+              }
+            }
+            return out;
+          })();
+
           const { data: created, error } = await supabase
             .from("audit_client_queries" as any)
             .insert({
@@ -401,6 +425,7 @@ function BulkDispatchDialog({
               status:             "Open",
               source:             "worksheet_grouped",
               source_ref_id:      groupRows[0].id,
+              attachments:        groupedAttachments,
             } as any)
             .select("id")
             .maybeSingle();
@@ -435,6 +460,11 @@ function BulkDispatchDialog({
               status:             "Open",
               source:             "worksheet",
               source_ref_id:      row.id,
+              // Carry the row's Stage-2 attachments through to Stage 3 /
+              // client portal so the auditor's supporting documents reach
+              // the client. See the grouped-mode branch above for the
+              // architecture comment.
+              attachments:        row.attachments ?? [],
             } as any)
             .select("id")
             .maybeSingle();
