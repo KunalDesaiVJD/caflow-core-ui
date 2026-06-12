@@ -1,20 +1,34 @@
-# MASTER PROMPT — CAFlow Full-System FS Reconciliation Audit, Fix & Assurance Report
+# MASTER PROMPT — CAFlow Full-System FS Reconciliation DIAGNOSTIC AUDIT (READ-ONLY)
 
 > Paste this entire prompt into a fresh Claude Code session opened in the
-> `caflow-core-ui` repository. It is self-contained: no prior conversation
-> context is required. Expected duration: 1–3 hours autonomous run.
+> `caflow-core-ui` repository. It is self-contained — no prior conversation
+> context required. Expected duration: 1–2 hours autonomous run.
 
 ---
 
-## ROLE
+## ROLE & MISSION
 
-You are the lead reconciliation auditor for CAFlow, a CA-firm audit platform
-(React/TypeScript frontend on Vercel, Supabase Postgres backend). Your mandate
-is a **360° audit of the financial-statement reconciliation chain** for every
-engagement in the Audit Intelligence module, **fixing every divergence with
-real ledger-level data**, and producing an **enterprise-grade assurance
-report** that proves — per engagement, per note, per year — that everything
-tallies.
+You are the independent reconciliation auditor for CAFlow, a CA-firm audit
+platform (React/TypeScript frontend on Vercel, Supabase Postgres backend).
+Your mission is a **360° DIAGNOSTIC audit** of the financial-statement
+reconciliation chain for **every engagement** in the Audit Intelligence
+module, and an **enterprise-grade evidence report** that proves — per
+engagement, per note, per year (CY and PY separately) — whether everything
+tallies, and if not, exactly where, by how much, and why.
+
+## ⛔ ABSOLUTE RULE — DIAGNOSE ONLY
+
+**You are FORBIDDEN from fixing anything.** Specifically:
+- NO `UPDATE` / `INSERT` / `DELETE` / `DO $$` blocks that mutate data —
+  every SQL you run must be a pure `SELECT` (a transient temp table inside a
+  read-only analysis query is acceptable only if nothing persists).
+- NO edits to any source file, NO git commits, NO deploys, NO builds.
+- NO clicks in the browser that change state (no Save, no Refresh-that-writes,
+  no Complete Stage, no form inputs). Navigation, tab switches, expanding
+  notes, screenshots, and reading values are allowed.
+- If you discover a defect, you DOCUMENT it (root cause, evidence, exact
+  proposed remediation) and **STOP — ask the user before any fix**. Every
+  finding goes in the report with a proposed-fix column; none is applied.
 
 ## THE CHAIN UNDER AUDIT
 
@@ -26,149 +40,141 @@ Tally TB (tally_ledgers: ledger_name, opening/closing balance + Dr/Cr type)
         → FsHealthPanel (runtime three-way check, src/lib/fsReconciliation.ts)
 ```
 
-## NON-NEGOTIABLE CONSTRAINTS
+Exempt from the match requirement: **Capital Account and Fixed Assets/PPE
+only**. Everything else is in scope — including the COGS family and
+Inventories (checked via the inventory accounting identity, see RC-D).
 
-1. **NEVER modify COA mapping** (`audit_engagements.coa_mapping`). Read-only.
-2. **NEVER insert plug/balancing rows** (e.g. "COA Reconciliation Adjustment").
-   Every rupee in a note must trace to a real TB ledger or a pre-existing
-   auditor manual row. If COA has figures, push the REAL per-ledger breakup
-   into the note. A fix that merely makes totals tally is a failure.
-3. **Exempt from the match requirement: Capital Account and Fixed Assets/PPE
-   only.** Everything else — including COGS family and Inventories
-   (via the inventory accounting identity) — is in scope.
-4. **Assertion-guarded writes**: any data fix is saved ONLY if the note's
-   post-fix total equals the true COA total for BOTH years (±₹1). Otherwise
-   leave the note untouched and report it. Never make data worse.
-5. **No UI write paths**: persistNotes/auto-save/re-sync are intentionally
-   disabled (write-protected). All data fixes go through SQL via
-   `npx supabase db query --linked --file <file>.sql`.
-6. Work autonomously; do not ask for confirmation mid-run. Commit to a
-   `claude/auto-YYYY-MM-DD-HH-MM` branch, build (`npm run build`, zero TS
-   errors), merge to main, verify the Vercel deploy picked up a new bundle
-   hash before browser verification.
+## THE FOUR-READER VERIFICATION DOCTRINE (the core lesson of v1–v10)
 
-## THE VERIFICATION DOCTRINE (the most important lesson)
+"Tallied" means **all FOUR readers agree**, per year, per note:
 
-"Reconciled" means **all FOUR readers agree**, per year:
+| # | Reader | How to read it |
+|---|---|---|
+| 1 | COA Mapping page totals | Stage 6 UI (left-nav "COA Mapping"), BS + P&L tabs |
+| 2 | Notes to Accounts UI | Stage 7 → Notes tab → Notes to Accounts → Expand All — the RENDERED totals the auditor's eyes see |
+| 3 | BS / P&L face | Stage 7 Balance Sheet + P&L tabs — values live in `<input>` elements; scrape `input.value` via JS, innerText does NOT contain them |
+| 4 | Database ground truth | SQL sweep: signed TB × COA vs note JSONB sums |
 
-| Reader | Where |
-|---|---|
-| 1. COA Mapping page totals | Stage 6 UI (left-nav "COA Mapping"), BS + P&L tabs |
-| 2. Notes to Accounts UI | Stage 7 → Notes tab → Notes to Accounts → Expand All — the RENDERED totals |
-| 3. BS / P&L face | Stage 7 Balance Sheet + P&L tabs (scrape `<input>` values — innerText does NOT contain input values!) |
-| 4. Database ground truth | SQL sweep vs signed TB × COA |
+History proves SQL-only checks lie: two prior root causes (RC-10, RC-11)
+were invisible to every back-end check and existed ONLY on the rendered
+screen. A note is "VERIFIED" in your report only when readers 1–4 agree;
+"DB-CLEAN" (reader 4 only) is a weaker status and must be labelled as such.
 
-History proves SQL-only checks lie: two root causes (RC-10, RC-11) were
-invisible to every back-end check and existed only on the rendered screen.
-**Final sign-off requires live browser verification** (Claude-in-Chrome) of at
-least 5 engagements including every engagement you modified, with the FS
-Health banner green and note totals visually matching face values.
+## CATALOG OF THE 14 KNOWN ROOT-CAUSE CLASSES — test every one explicitly
 
-## CATALOG OF THE 13 KNOWN ROOT-CAUSE CLASSES (audit each explicitly)
+Data-layer classes (scan for instances):
+- **RC-A Missing PY rows/values** — PY-only ledgers with no note row; rows missing PY values (historic: SHRI RAM Telephone/Travelling/Water/Web Dev).
+- **RC-B Sign flips** — a Dr balance on a CR-natural note must contribute NEGATIVE (advance to a creditor reduces borrowings; historic: BHAKTI "Maharsh Infra" +1.5cr stored instead of −1.5cr). Single source of truth: `src/lib/fsSignConvention.ts`.
+- **RC-C Stale/junk rows** — rows whose label matches no mapped ledger yet carry values (historic: MAHIL manual row "B", PY ₹44.8L).
+- **RC-D Inventory identity** — cogs note PY-closing stock must equal CY-opening stock per category (pc_open/close_trade|wip|fg, raw, pack, other). Historic: OM REALTY/DHANANI blank PY closing.
+- **RC-P Plug rows** — any row named like "COA Reconciliation Adjustment" or JSONB keys `coa_reconcile_balance%`. Zero tolerance: these were inserted by an earlier flawed remediation and must not exist. Report any survivor.
 
-Data-layer classes:
-- **RC-A Missing PY rows/values**: PY-only ledgers with no note row; rows missing PY values (SHRI RAM: Telephone, Travelling, Water, Web Dev).
-- **RC-B Sign flips**: Dr-balance on a CR-natural note must be NEGATIVE (advance to creditor reduces borrowings — BHAKTI "Maharsh Infra" +1.5cr should be −1.5cr). Single source of truth: `src/lib/fsSignConvention.ts` (signedBalance/signedOpening).
-- **RC-C Stale/junk rows**: rows whose label matches no mapped ledger carrying values (MAHIL row "B" PY ₹44.8L).
-- **RC-D Inventory identity**: cogs note PY-closing stock MUST equal CY-opening stock per category (pc_open/close_trade|wip|fg, raw, pack, other). OM REALTY/DHANANI class.
+Code-layer classes (verify the deployed code still contains each fix; cite file:line):
+- **RC-E FsHealthPanel sign set** — `NCE_LIAB_CODE_SET` (fsReconciliation.ts) must include income codes NCE_REV_OPS/NCE_REV_OTH + NCE_CAP, else phantom 2× drift on revenue.
+- **RC-F COA PY anchor** — computeCOATotals must use PY-shell TB closings for PY; CY-opening fallback ONLY when no PY engagement exists (P&L ledgers always open at 0).
+- **RC-G BS residual absorber** — CY+PY net-profit auto-credit + residual into NCE_CAP (PipelineFinancialStatements.tsx, ~line 3072 CY / ~3280+ PY) keeps BS balanced when Tally books are unclosed.
+- **RC-H Orphan-skip** — a note's PY override must reach the face even when its code is absent from pyShellBSAmounts, whenever the note carries non-zero data.
+- **RC-I Pattern A bare keys** — LT/ST split notes (borrowings, provisions, loans_advances, investments) render ONLY `_lt`/`_st` suffixed keys; bare numeric keys are invisible to the renderer while still counted by aggregators (screen ≠ face).
+- **RC-J Load-time self-heal guard** — NCEDetailedNotes' cy_sources heal must not overwrite saved PY when source entries lack `amountPy` (`anyPyDefined` guard).
+- **RC-K lookupSuffixed per-column bare decision** (nceNoteTotals.ts) — a bare PY key must survive a suffixed CY.
 
-Code-layer classes (verify the fixes are still in place; do not regress):
-- **RC-E FsHealthPanel sign set**: `NCE_LIAB_CODE_SET` in fsReconciliation.ts must include income codes (NCE_REV_OPS/OTH) + NCE_CAP.
-- **RC-F COA PY anchor**: computeCOATotals must use PY-shell TB closing for PY; CY-opening fallback ONLY when no PY engagement exists (P&L ledgers always open at 0 — signedOpening alone produces phantom "manual" deltas).
-- **RC-G BS residual absorber**: CY+PY net-profit auto-credit + residual into NCE_CAP (PipelineFinancialStatements.tsx ~line 3072 CY / ~3280+ PY) keeps BS balanced when Tally books are unclosed.
-- **RC-H Orphan-skip**: a note's PY override must reach the face even when the code is absent from pyShellBSAmounts, whenever the note has non-zero data.
-- **RC-I Pattern A bare keys**: LT/ST split notes (borrowings, provisions, loans_advances, investments) render ONLY `_lt`/`_st` suffixed keys. Bare numeric keys are invisible to the renderer while counted by aggregators → screen ≠ face. Sweep column `bare_key_pattern_a` must be 0.
-- **RC-J Load-time self-heal**: NCEDetailedNotes' cy_sources heal must not overwrite saved PY when source entries lack `amountPy` (guard `anyPyDefined`).
-- **RC-K lookupSuffixed per-column bare decision** in nceNoteTotals.ts (PY bare key must survive a suffixed CY).
+Tooling/semantics classes — these broke the PREVIOUS audits themselves; bake
+them into every query you write, and verify the standing sweep honours them:
+- **RC-L Duplicate mapping keys** — the same physical ledger can appear twice in coa_mapping with different case AND different codes (historic: MAHIL ~25 dupes, "ASMITA COMPUTERS"→NCE_OTH_EXP vs "Asmita Computers"→NCE_TP). The app resolves by EXACT lookup `coaMapping[tb.ledger_name]` — only the variant exactly matching the TB name is live. Every SQL must dedupe `DISTINCT ON (lower(trim(key)))` ordered by exact-CY-TB-match DESC, then exact-PY-TB-match DESC. Iterating raw mapping keys double-counts.
+- **RC-M No-PY-engagement clients** — PY truth = CY TB opening balances (the app's fallback). Treating PY as 0 creates false drift (historic: SWENI).
+- **RC-N Attribution is a PRIORITY chain, not a sum** — a ledger's presence in a note = its label-matched row value; the row's `sources[]` array and `_cy_sources` metadata are the COMPOSITION of that value, not additional amounts. Priority: label-matched row → custom-row sources[] → _cy_sources meta. Summing levels double-counts (historic: AMBER GUM).
+- Also: all ledger-name joins must be `lower(trim(a)) = lower(trim(b))`; Pattern A column side must follow the ledger's code (NCE_STP → `_st`, NCE_LTP → `_lt`) — combined totals can match while the per-column face is wrong; the cogs note's COA comparison is structural (cogs_a materials vs cogs_c changes-in-inventories) — use the inventory identity, not naive sums.
 
-Tooling/semantics classes (these broke MY OWN earlier audits — bake into every query you write):
-- **RC-L Duplicate mapping keys**: the same physical ledger can appear 2× in coa_mapping with different case AND different codes (MAHIL: ~25 dupes, "ASMITA COMPUTERS"→NCE_OTH_EXP vs "Asmita Computers"→NCE_TP). The app resolves by EXACT lookup `coaMapping[tb.ledger_name]` — only the variant exactly matching the TB name is live. Every SQL you write must dedupe `DISTINCT ON (lower(trim(key)))` ordered by exact-CY-TB-match DESC, exact-PY-TB-match DESC. Iterating mapping keys without this DOUBLE-COUNTS.
-- **RC-M No-PY-engagement clients**: PY truth = CY TB opening balances (app fallback). Treating PY as 0 creates false drift (SWENI class).
-- **RC-N Attribution is a PRIORITY chain, not a sum**: a ledger's presence in a note = its label-matched row value; the row's `sources[]` array and `_cy_sources` metadata are the COMPOSITION of that value. Summing row + sources double-counts (AMBER GUM class). Priority: label-matched row → custom-row sources[] → _cy_sources meta.
-- Also: ledger-name joins must be `lower(trim(x)) = lower(trim(y))`; Pattern A column side must follow the ledger's code (NCE_STP → `_st`, NCE_LTP → `_lt`); cogs uses config split (cogs_a materials / cogs_c changes-in-inventories) — its COA comparison is structural, validate via the inventory identity instead of naive sums.
+## EXISTING READ-ONLY TOOLING (repo root)
 
-## EXISTING TOOLING (in repo root — extend, don't rebuild from scratch)
+- `nce_assurance_peryear.sql` — full-book per-year sweep (already RC-L/M-aware). Columns: client, notes, drift_cy, drift_py, cogs_identity_gaps, bare_key_pattern_a, has_py. Pure SELECT — safe to run.
+- `nce_drift_fix.sql`, `nce_ledger_fix*.sql`, `fix_*.sql` — historical FIX scripts. **DO NOT RUN ANY OF THEM** (this is a diagnostic engagement).
+- Key code files to audit: `src/lib/fsSignConvention.ts`, `src/lib/nceNoteTotals.ts`, `src/lib/nceAutoPopulate.ts` (NCE_NOTE_FS_MAP, NCE_CODE_TO_NOTE, getNCENoteFaceTotal), `src/lib/fsReconciliation.ts` (computeCOATotals, validateFSReconciliation, CANONICAL_NCE_CODE, NCE_LIAB_CODE_SET), `src/components/pipeline/PipelineFinancialStatements.tsx`, `src/components/stage8/NCEDetailedNotes.tsx`.
+- DB navigation: NCE clients = clients.entity_type ∈ (Partnership, Individual, HUF, AOP, Trust, LLP, Proprietorship); engagements live in **`audit_engagements`** (NOT the `engagements` table); CY = financial_year '2025-26'; PY = '2024-25' for the same client_id; corporates use stage5_notes + validateCorporateFSReconciliation.
+- SQL runner: `npx supabase db query --linked --file <file>.sql -o csv`. Note: `RAISE NOTICE` output is NOT returned by the Management API — design queries to SELECT their results.
 
-- `nce_assurance_peryear.sql` — full-book per-year sweep (RC-L/M-aware). Columns: client, notes, drift_cy, drift_py, cogs_identity_gaps, bare_key_pattern_a, has_py. PASS = every count 0.
-- `nce_ledger_fix_v6.sql` (latest evolution v8 + `fix_pattern_a_column_side.sql`) — assertion-guarded per-ledger reconstructor (FWD priority attribution / new real rows / REV stale-zeroing / post-fix assertion). Adapt its selection filter to your target set.
-- `nce_drift_fix.sql` — **DEPRECATED plug generator. NEVER RUN.**
-- Key code files: `src/lib/fsSignConvention.ts`, `src/lib/nceNoteTotals.ts`, `src/lib/nceAutoPopulate.ts` (NCE_NOTE_FS_MAP, NCE_CODE_TO_NOTE, getNCENoteFaceTotal), `src/lib/fsReconciliation.ts` (computeCOATotals, validateFSReconciliation, CANONICAL_NCE_CODE), `src/components/pipeline/PipelineFinancialStatements.tsx`, `src/components/stage8/NCEDetailedNotes.tsx`.
-- DB navigation: clients.entity_type ∈ (Partnership, Individual, HUF, AOP, Trust, LLP, Proprietorship) = NCE; engagements live in `audit_engagements` (NOT `engagements`); CY = financial_year '2025-26', PY = '2024-25' same client_id; corporates use stage5_notes + validateCorporateFSReconciliation.
+## EXECUTION PLAN (all phases read-only)
 
-## EXECUTION PLAN
+**Phase 0 — Inventory.** Counts: engagements by entity type and FY; notes per
+engagement; clients without a PY engagement; duplicate mapping keys per
+engagement (count + worst offenders + conflicting-code dupes); any
+`coa_reconcile_balance%` keys (RC-P). Snapshot into CSVs.
 
-**Phase 0 — Baseline (read-only).** Run the assurance sweep; snapshot results.
-Inventory: engagement counts by entity type, notes per engagement, duplicate
-mapping keys per engagement, no-PY-engagement clients. Browser-verify ONE
-known-good engagement to calibrate your scraping (BS/P&L face values live in
-`<input>` elements — scrape `input.value` via JS, not innerText).
+**Phase 1 — Database sweep (reader 4).** Run `nce_assurance_peryear.sql`.
+Independently re-derive a second-opinion sweep of your own construction
+(per-cell: engagement × note × year — COA total, note total, delta) honouring
+RC-L/M/N, and DIFF the two sweeps: any cell where your sweep and the standing
+sweep disagree is itself a finding (tooling defect class). Also produce the
+per-cell detail dataset for the report appendix.
 
-**Phase 1 — Code regression audit.** Verify every RC-E…RC-K fix is present at
-the cited locations. Launch parallel Explore agents to hunt for NEW divergence
-classes beyond the 13 — minimum surfaces to sweep: every reader of
-cy_data/py_data, every writer, every aggregation path, DOCX/Excel exports
-(nceFinancialsDocx.ts, fsExcelTemplateNCE.ts — do exports use the canonical
-aggregator?), corporate validator parity, lock-preview/readonly render paths,
-and the dynamic note-number map. Any new class found: document trigger
-conditions, fix in code, deploy.
+**Phase 2 — Code regression audit.** Verify each RC-E…RC-K fix is present at
+the cited file/location; record file:line + a quote in the report. Launch
+parallel read-only Explore agents to hunt for NEW divergence classes beyond
+the 14 — minimum surfaces: every reader/writer of cy_data/py_data; every
+aggregation path; DOCX/Excel exports (nceFinancialsDocx.ts,
+fsExcelTemplateNCE.ts — do exports use the canonical aggregator?); corporate
+validator parity; lock-preview/readonly render paths; dynamic note-number
+map; Stage 6 COA page total computation vs computeCOATotals. New suspicions
+are FINDINGS with evidence + proposed fix — not fixes.
 
-**Phase 2 — Data audit & fix.** Run the per-ledger reconstructor across all
-NCE engagements (assertion-guarded). For every SKIP, diagnose the attribution
-hole per-ledger (write a diagnostic dump comparing expected-signed-TB vs
-row/sources attribution for that note) and extend the reconstructor — never
-lower the assertion bar. Apply the inventory-identity fix and the Pattern A
-column-side fix. Target: 0 skips, 0 drift, 0 plugs (`coa_reconcile_balance%`
-keys must not exist anywhere).
+**Phase 3 — Four-reader browser verification (readers 1–3).** For AT LEAST 8
+engagements — must include SHRI RAM PRODUCTS, BHAKTI INFRA, MAHIL INFRA,
+DHANANI REALTY, OM REALTY, AMBER GUM INDUSTRIES, SKYLARK CORPORATION,
+SUKIRTI DEVELOPERS — verify per engagement:
+  (a) FS Health banner text (expect "N/N reconcile · COA, Notes and BS face
+      all agree"; record the exact text; expand the breakdown if not green);
+  (b) BS CHECK CY and PY ticks; TOTAL assets = TOTAL equity+liabilities,
+      both columns;
+  (c) at least 3 notes per engagement: open the rendered note, read its
+      on-screen total (CY and PY) and compare to the corresponding face line
+      and the Stage 6 COA page line;
+  (d) screenshot every screen used as evidence.
+Use a fresh cache-busting query param (`&v=<n>`) per navigation. Stage 7 (FS)
+is `?stage=10`; reach COA Mapping via the left-nav link, not `?stage=6`.
+Browser quirks: face values live in `<input>`s (scrape input.value via JS);
+text extraction shows blanks for inputs — never report a blank cell as a
+mismatch without checking input.value first (a prior false alarm).
 
-**Phase 3 — Four-reader verification.** Re-run the sweep (all zeros). Then in
-the browser, for AT LEAST 5 engagements (must include every engagement whose
-data you changed, and always SHRI RAM PRODUCTS, BHAKTI INFRA, MAHIL INFRA,
-DHANANI REALTY, OM REALTY): confirm FS Health banner green ("N/N reconcile"),
-BS CHECK CY ✓ and PY ✓, and for at least 2 notes per engagement open the
-rendered note and compare its on-screen total to the face value for both
-years. Screenshot each. Any mismatch: STOP, root-cause it as a potential
-RC-14+, fix, redeploy, re-verify.
+**Phase 4 — Report.** Generate `CAFlow_FS_Diagnostic_Report_<date>.docx`
+(use the `docx` npm package; `build_docx_v10.mjs` in repo root is a working
+template) AND a companion `.xlsx`/CSV set with raw data. Required content:
 
-**Phase 4 — Report.** Generate `CAFlow_FS_Assurance_Report_<date>.docx`
-(use the `docx` npm package; builders `build_docx_v9.mjs`/`v10` are templates)
-AND a companion `.xlsx` with the raw per-cell data. Required content:
-
-1. **Executive summary** — pass/fail counts, what changed, what was verified.
-2. **Per-engagement assurance table** (every NCE engagement + corporates
+1. **Executive summary** — overall verdict (TALLIED / NOT TALLIED), counts,
+   and the one-paragraph answer to "can my team trust these statements?"
+2. **Per-engagement assurance table** (every NCE engagement + all corporates
    listed) with columns:
    `Client | Engagement ID | Entity type | Notes count | Drift cells CY |
-   Drift cells PY | COGS identity gaps | Renderer-invisible keys | Plug rows |
-   BS balanced CY (✓/✗) | BS balanced PY (✓/✗) | FS Health banner (from
-   browser, for verified set) | Verified on screen (Y/–) | Status`
-3. **Per-note detail appendix (xlsx)** — one row per (engagement × note ×
-   year): COA total, Note total, Face value, deltas, status.
-4. **Change log** — every data mutation this run: engagement, note, ledger,
-   old value, new value, justification (TB figure cited).
-5. **Root-cause register** — RC-A…RC-N + any new, each with: description,
-   trigger, detection query, fix, regression guard.
-6. **Honest disclosures** — anything skipped/unverifiable and why, with the
-   exact follow-up needed.
+   Drift cells PY | Worst drift ₹ | COGS identity gaps | Renderer-invisible
+   keys | Plug rows | Duplicate mapping keys | BS balanced CY (✓/✗) |
+   BS balanced PY (✓/✗) | FS Health banner (verified set) | Four-reader
+   verified (Y/–) | Status (VERIFIED / DB-CLEAN / FINDING)`
+3. **Per-note detail appendix (xlsx/CSV)** — one row per engagement × note ×
+   year: COA total, Note total (DB), Note total (on-screen, where captured),
+   Face value, delta COA↔Note, delta Note↔Face, status.
+4. **Findings register** — every defect found, each with: ID, class (RC-A…N
+   or NEW), affected engagement(s)/note(s), evidence (query output, file:line,
+   or screenshot ref), amount impact, root cause, **proposed remediation
+   (NOT applied)**, risk if left unfixed.
+5. **Code-regression checklist** — RC-E…RC-K each with file:line evidence of
+   the guard being present (or a finding if absent).
+6. **Honest disclosures** — anything unverifiable in this run and why, with
+   the exact follow-up needed.
 
-## ACCEPTANCE CRITERIA (all must hold)
+## ACCEPTANCE CRITERIA FOR THE DIAGNOSTIC
 
-1. BS balanced CY AND PY on every NCE engagement (face TOTAL assets = TOTAL
-   equity+liabilities, both columns).
-2. Sweep: 0 drift_cy, 0 drift_py, 0 cogs_identity_gaps, 0 bare_key_pattern_a
-   across every engagement.
-3. 0 plug rows in the database; no new artificial/manual rows introduced.
-4. Browser-verified four-reader agreement on the verification set, screenshots
-   captured, with FS Health green.
-5. Report delivered with every column above populated; no cell left "assumed".
-6. All code/SQL committed to main; deprecated tools clearly marked.
+1. Every NCE engagement appears in the assurance table with every column
+   populated — no cell "assumed" or left blank.
+2. CY and PY assessed independently everywhere.
+3. The browser-verified set covers ≥ 8 engagements with screenshots on file.
+4. Zero data/code/state mutations occurred (re-state this in the report and
+   list every command category you ran as evidence of read-only compliance).
+5. Every finding carries evidence + proposed remediation, and the report
+   explicitly says: **"No fixes were applied. Awaiting user approval per
+   finding."**
 
-## OPERATIONAL NOTES (hard-won; ignore at your peril)
+## FINAL INSTRUCTION
 
-- `RAISE NOTICE` output is NOT returned by the Supabase Management API — write
-  results into a real table (`fix_report`) and SELECT it.
-- plpgsql: don't reuse a DECLAREd record variable name as a CTE/table alias.
-- Browser tabs cache aggressively: append a changing `&v=N` query param and
-  hard-reload; confirm the deployed bundle hash changed before verifying.
-- Stage URL param quirk: Stage 7 (FS) = `?stage=10`; COA Mapping is reached
-  via the left-nav link, not `?stage=6`.
-- A "fixed" claim without a fresh screenshot of the rendered screen is not a
-  fixed claim. The user has been burned eight times by back-end-only checks.
+When the report is complete, present in chat: the verdict, the assurance
+table summary, the findings register (even if empty), and the file paths.
+Then STOP. Do not fix anything — not even a "trivial" one-liner — without
+the user's explicit, per-finding approval.
