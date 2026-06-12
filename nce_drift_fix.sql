@@ -1,3 +1,11 @@
+-- ============================================================================
+-- DEPRECATED — DO NOT RUN.
+-- This script inserted "COA Reconciliation Adjustment" PLUG rows. The user
+-- correctly rejected that approach: notes must carry REAL per-ledger figures,
+-- not balancing plugs. All plugs it ever created have been removed and
+-- replaced by per-ledger reconstruction. Use nce_ledger_fix_v6.sql (whole
+-- book, assertion-guarded) instead. Kept only for history.
+-- ============================================================================
 -- NCE Notes vs COA universal reconciliation fix.
 -- For every drift cell (Note Total != COA Total) in scope notes, add a
 -- balancing customRow "coa_reconcile_balance" so Note Total = COA Total.

@@ -53,22 +53,38 @@ py_eng AS (
   WHERE ae.financial_year='2024-25'
 ),
 coa_per_eng AS (
-  SELECT ce.id as engagement_id, lname as ledger_name, (info->>'code') as code
+  -- RC-12: dedupe by case-insensitive name — duplicate mapping keys (same
+  -- ledger, different case) must count the physical TB ledger ONCE, matching
+  -- the app (which iterates TB rows, not mapping keys).
+  SELECT DISTINCT ON (ce.id, lower(trim(lname)))
+         ce.id as engagement_id, lname as ledger_name, (info->>'code') as code
   FROM cy_eng ce, jsonb_each(ce.coa_mapping) m(lname, info)
   WHERE info->>'code' IS NOT NULL
+  ORDER BY ce.id, lower(trim(lname)),
+    -- the app looks up coaMapping[tb.ledger_name] EXACTLY: the variant whose
+    -- key equals the physical TB name is the live one; others are dead keys
+    (EXISTS (SELECT 1 FROM tally_ledgers t WHERE t.engagement_id=ce.id AND t.ledger_name = lname)) DESC,
+    (EXISTS (SELECT 1 FROM py_eng pe2 JOIN tally_ledgers t2 ON t2.engagement_id=pe2.py_id
+             WHERE pe2.client_id=ce.client_id AND t2.ledger_name = lname)) DESC,
+    lname
 ),
 joined AS (
+  -- PY source: PY-shell TB closing when the client has a 2024-25 engagement;
+  -- otherwise the CY TB OPENING balance (the app's computeCOATotals fallback).
   SELECT cpe.engagement_id, cm.note_type, cm.nature,
     tc.closing_balance::numeric as cy_amt, tc.closing_type as cy_type,
-    tp.closing_balance::numeric as py_amt, tp.closing_type as py_type
+    CASE WHEN pe.py_id IS NOT NULL THEN tp.closing_balance::numeric
+         ELSE tc.opening_balance::numeric END as py_amt,
+    CASE WHEN pe.py_id IS NOT NULL THEN tp.closing_type
+         ELSE tc.opening_type END as py_type
   FROM coa_per_eng cpe
   JOIN code_map cm ON cm.code = cpe.code
   JOIN cy_eng ce ON ce.id = cpe.engagement_id
   LEFT JOIN py_eng pe ON pe.client_id = ce.client_id
   LEFT JOIN tally_ledgers tc ON tc.engagement_id = cpe.engagement_id
-       AND lower(tc.ledger_name) = lower(cpe.ledger_name)
+       AND lower(trim(tc.ledger_name)) = lower(trim(cpe.ledger_name))
   LEFT JOIN tally_ledgers tp ON tp.engagement_id = pe.py_id
-       AND lower(tp.ledger_name) = lower(cpe.ledger_name)
+       AND lower(trim(tp.ledger_name)) = lower(trim(cpe.ledger_name))
 ),
 coa_totals AS (
   SELECT engagement_id, note_type,
