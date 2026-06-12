@@ -98,8 +98,13 @@ const sectionA = [
 ];
 
 const sectionB = [
-  H1("Section B — 4 new latent root causes (found by code audit, closed pre-emptively)"),
-  P("You asked for at least 5-6 more root causes. Three parallel code audits examined every surface where COA, Notes, and Face could diverge. Result: 4 REAL latent vectors (closed in commit b9fcbfbb) + 3 audited-and-cleared areas (no bug, verified safe). That's 7 surfaces examined in depth.", { spacing: { after: 200 } }),
+  H1("Section B — 5 new root causes (1 caught by you, 4 by code audit) + 3 cleared"),
+  P("You asked for at least 5-6 more root causes. Result: 5 REAL vectors closed (commits b9fcbfbb + c06c0a5c) + 3 audited-and-cleared areas. 8 surfaces examined in depth.", { spacing: { after: 200 } }),
+
+  H2("RC-10 (ACTIVE — the BHAKTI INFRA mismatch you screenshotted)"),
+  P("Borrowings is a Long-Term/Short-Term split note (Pattern A): every row value is stored under _lt / _st suffixed keys, and the Notes UI renderer reads ONLY suffixed keys. The COA Reconciliation Adjustment was written as a BARE key — the canonical aggregator picked it up via a fallback (so the BS face and the health panel showed \"reconciled\"), but the renderer displayed the row blank and excluded it from the on-screen total. You saw ₹3,74,94,223 on the note vs ₹73,30,715 on the face — both \"correct\" by their own reader, disagreeing on screen."),
+  P("Fix: one-time migration moved the value to coa_reconcile_balance_lt on all 4 affected notes (BHAKTI, MAHIL, AMBER GUM, SHRI RAM); the fix-SQL template now always writes suffixed keys for Pattern A note types. Verified live after the fix: BHAKTI Note 3 grand total reads ₹73,30,715 CY / ₹2,61,15,547 PY — identical to the BS face, with the adjustment row now visible.", { color: GREEN }),
+  P("Lesson encoded: \"reconciled\" must mean ALL FOUR readers agree — canonical aggregator, BS face, health panel, AND the renderer the auditor actually looks at. The renderer was the missing fourth check.", { italics: true }),
 
   H2("RC-6 (ACTIVE in your data) — Legacy corporate codes invisible to the validator"),
   P("A ledger on an NCE engagement can be mapped to a corporate twin code — BS_CL_STB instead of NCE_STB, PL_EXP_OTH instead of NCE_OTH_EXP. The note auto-populate accepts these (by design), so the amount enters the note. But the COA anchor was keyed by the raw code, while the health panel reads only NCE_* keys → the amount vanished from the COA side → phantom drift."),
