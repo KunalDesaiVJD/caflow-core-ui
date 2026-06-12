@@ -1,0 +1,53 @@
+idx,name,id,banner,bs_cy,bs_py,totals
+1,ACCU PANELS ENERGY PVT LTD,01995879-ef20-486e-9338-30717fde7937,FS Health: 19 notes have drift > Rs100,"OUT 6,18,07,932",OK,"E+L 28,31,90,504 vs A 22,13,82,571 | PY 12,63,71,566 = 12,63,71,566"
+2,ACCURATE PMS PVT. LTD (dup-1),d930bc42,FS Health: 0/0 notes reconcile,OK,OK,EMPTY-FS (no TB synced)
+3,ACCURATE PMS PVT. LTD (dup-2),a5c27403,FS Health: 0/0 notes reconcile,OK,OK,EMPTY-FS (no TB synced)
+4,ACS ENGITECH PRIVATE LIMITED,e3ab4d86,FS Health: 0/0 notes reconcile,OK,OK,EMPTY-FS (no TB synced)
+5,AMADIUS REALTY,f91d3b2e,FS Health: 24/24 notes reconcile,OK,OK,FACE EMPTY (all dashes) - notes reconcile at zero; check mapping coverage
+6,AMBER DYE TRADE PVT LTD,14c693ac,FS Health: 14 notes have drift > Rs100,OK,OK,BS balanced both years; panel drift = RC-14 phantom + 4 real DB cells
+7,AMBER GUM INDUSTRIES,8b0b22b3,FS Health: 1 note have drift > Rs100,OK,OK,"BS balanced both yrs; drift = RC-16 case-mismatch Interest on Car Loan PY 725603.38 (note correct, anchor blind)"
+8,ARIIX AIRFIELD PVT LTD,8fd14eb6,FS Health: 0/0 notes reconcile,OK,OK,EMPTY-FS
+9,AUSTOMEC ENVIRO PVT LTD,d1feb745,FS Health: 6 notes have drift > Rs100,OK,OK,BS balanced; corp panel drift (RC-14 class)
+10,BAPASITARAM DEVELOPERS,7324f98f,FS Health: 24/24 notes reconcile,OK,OK,"9,70,38,104 / 7,88,38,688 both sides equal"
+11,BHAKTI INFRA,9dfac4d8,FS Health: 24/24 notes reconcile,OK,OK,"9,88,12,627 / 15,99,38,616 both sides equal"
+12,BRICKSTONE INFRA,aca6dbc9,FS Health: 18/19 reconcile + 1 manual adj,OK,OK,"12,34,07,993 / 4,76,27,972 equal both sides"
+13,CHARBHUJA FRAGRANCE PVT LTD,f4948f20,FS Health: 0/0 notes reconcile,OK,OK,EMPTY-FS
+14,CROWNGLOBE PRIVATE LIMITED,58a2a03d,FS Health: 15 notes have drift > Rs100,"OUT 4,97,312","OUT 5,90,091","A 14,32,916 vs E+L 9,35,604 CY; A 10,33,473 vs E+L 16,23,564 PY"
+15,DBS REALTY,29e6b761,FS Health: 24/24 notes reconcile,OK,OK,"31,76,97,532 / 30,19,31,306 equal both sides"
+16,DHANANI REALTY,039ddf2c,FS Health: 24/24 notes reconcile,OK,OK,"4,88,44,794 / 20,46,59,149 equal both sides"
+17,GOKUL POLY VALVES PVT LTD,689b1eaa,FS Health: 0/0 notes reconcile,OK,OK,EMPTY-FS
+18,GROWQ PRIVATE LIMITED,a010dd14,FS Health: 12 notes have drift > Rs100,"OUT 7,328",OK,"A 1,47,91,914 vs E+L 1,47,84,586 CY; corp drift cells in DB sweep"
+19,HUMONEX INTELLIGENCE PVT LTD,074eb721,FS Health: 0/0 notes reconcile,OK,OK,EMPTY-FS
+20,KWIKTEAM SUPPORT SERVICES,1fe9d215,FS Health: 14 notes have drift > Rs100,OK,OK,BS balanced; corp panel drift (RC-14 + 4 DB cells)
+21,LIMBABLE BIOTECHNOLOGY,cb617973,FS Health: 6 notes have drift > Rs100,OK,OK,BS balanced; corp panel drift (RC-14 class)
+22,MAHARSH INFRA,70563956,FS Health: 24/24 notes reconcile,OK,OK,"18,84,23,203 / 12,31,45,803 equal both sides"
+23,MAHIL INFRA,e11aebd4,FS Health: 23/24 + 1 manual adj,OK,OK,"19,55,85,453 / 22,86,03,475 equal; amber = RC-L case-dup anchor delta (other_cl PY 42,468)"
+24,MICROCIRCUITS INNOVATIONS,1944c585,FS Health: 3 notes have drift > Rs100,"OUT 1,55,107","OUT 74,60,699","TOTAL ASSETS empty - assets never mapped; E+L 1,55,107; FINDING"
+25,NIRALI PERFUMERY PRODUCTS,31bd3aca,FS Health: 23/24 + 1 manual adj,OK,OK,"1,41,76,041 / 1,18,75,237 equal"
+26,OM REALTY,bf1b1c7c,FS Health: 24/24 notes reconcile,OK,OK,"8,09,51,806 / 14,84,10,439 equal"
+27,ORVIX TECHNOLOGIES,e189ac12,FS Health: 17 notes have drift > Rs100,OK,"OUT 1,26,29,174","PY: A 27,68,022 vs E+L 1,53,97,196 - PY shell never synced; FINDING"
+28,PRINCESS GEMS EXPORTS LTD,adde94f1,FS Health: 7 notes have drift > Rs100,"OUT 7,59,462","OUT 24,449","A 19,55,669 vs E+L 27,15,131 CY; FINDING"
+29,REVTI INFRA,de5f2adf,FS Health: 24/24 notes reconcile,OK,OK,"38,53,15,998 / 30,89,99,487 equal"
+30,SALIENT INFRATECH,84b9a0f6,FS Health: 24/24 notes reconcile,OK,OK,"23,67,25,491 / 15,95,75,762 equal"
+31,SATVA BUILDCON,70b72e50,FS Health: 24/24 notes reconcile,OK,OK,"5,87,62,499 / 13,02,72,280 equal"
+32,SHAH NET TECHNOLOGIES,b4a75826,FS Health: 0/0 notes reconcile,OK,OK,EMPTY-FS
+33,SHARVA INFRATECH,2084a5a4,FS Health: 24/24 notes reconcile,OK,OK,FACE EMPTY - COA mapping not started (NOT-MAPPED)
+34,SHIVASHRAY DEVELOPERS,dae6984f,FS Health: 24/24 notes reconcile,OK,OK,"14,76,77,786 / 9,51,56,599 equal"
+35,SHREE HARI INFRA,0aed2106,FS Health: 24/24 notes reconcile,OK,OK,"49,64,79,850 / 53,35,96,208 equal"
+36,SHREE MARUTI INFRA,18fcfdb7,FS Health: 24/24 notes reconcile,OK,OK,"4,50,89,200 / 5,50,61,244 equal"
+37,SHREEYAM INFRA,11277a70,FS Health: 24/24 notes reconcile,OK,OK,"17,42,07,456 / 27,86,76,071 equal"
+38,SHRI RAM PRODUCTS,6074f0fb,FS Health: 24/24 notes reconcile,OK,OK,"2,35,33,936 / 2,43,59,576 equal"
+39,SHUBHAM BUILDCON,7b08cb22,FS Health: 22/24 + 2 manual adj,OK,OK,"11,33,82,662 / 8,72,63,459 equal"
+40,SIX VISION SOFTWARE,e4b23214,FS Health: 7 notes have drift > Rs100,OK,OK,BS balanced; corp panel drift (RC-14 class); PY empty (no PY data)
+41,SKYLARK CORPORATION,22495b77,FS Health: 22/24 + 2 manual adj,OK,OK,"41,74,28,816 / 31,69,25,907 equal"
+42,SOFTQUBE TECHNOLOGIES,4e24e954,FS Health: 0/0 notes reconcile,OK,OK,EMPTY-FS
+43,SUKIRTI DEVELOPERS,66a33079,FS Health: 24/24 notes reconcile,OK,OK,"13,51,30,164 / 10,01,71,267 equal both sides (stat cards match; face TOTAL shows (negative) display quirk on E+L)"
+44,SWADESHI COSMETICS,045a2210,FS Health: 7 notes have drift > Rs100,OUT 649,"OUT 13,049","A 18,60,954 vs E+L 18,60,305; FINDING (small)"
+45,SWADESHI HERBS AND COSMETICS,8d033adb,FS Health: 8 notes have drift > Rs100,OK,OK,BS balanced; corp panel drift (RC-14 + DB cells)
+46,SWADESHI LABORATORIES,f8763eca,FS Health: 6 notes have drift > Rs100,"OUT 23,87,492","OUT 23,35,296","A 22,642 vs E+L 24,10,134 - assets barely mapped; FINDING"
+47,SWADESHI PRODUCT LIMITED,2f97c661,FS Health: 0/0 notes reconcile,OK,OK,EMPTY-FS
+48,SWASTIK BUILDCON,b2f5819b,FS Health: 24/24 notes reconcile,OK,OK,"7,68,82,441 / 8,01,35,241 equal"
+49,SWASTIK - INDUSTRIAL PARK,35e141d9,FS Health: 24/24 notes reconcile,OK,OK,FACE EMPTY - PY shell empty; mapping minimal (NOT-MAPPED)
+50,SWENI CORPORATION,96aa805f,FS Health: 1/1 notes reconcile,OK,OK,Only TP note mapped; face shows negative capital quirk; sparse mapping disclosure
+51,UMIYA INDUSTRIES,3fb05db8,FS Health: 24/24 notes reconcile,OK,OK,"4,36,74,042 / 4,01,80,465 equal; app shows Inventory Opening Mismatch warning 6,84,124.29 (TB-level, disclosed)"
+52,VATSAL INFRATECH PVT LTD,fc82596c,FS Health: 3/3 notes reconcile,OK,OK,EMPTY-FS (3 trivial notes)
