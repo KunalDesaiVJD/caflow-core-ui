@@ -92,10 +92,12 @@ note_totals AS (
   SELECT
     n.engagement_id, n.note_type, n.cy_data, n.py_data,
     round((coalesce((SELECT sum((v)::numeric) FROM jsonb_each_text(n.cy_data) x(k,v)
-                     WHERE substring(k,1,1) != '_' AND k != 'coa_reconcile_balance'
+                     WHERE substring(k,1,1) != '_'
+                       AND k NOT IN ('coa_reconcile_balance','coa_reconcile_balance_lt','coa_reconcile_balance_st')
                        AND v ~ '^-?[0-9]'),0))::numeric, 2) as note_cy_base,
     round((coalesce((SELECT sum((v)::numeric) FROM jsonb_each_text(n.py_data) x(k,v)
-                     WHERE substring(k,1,1) != '_' AND k != 'coa_reconcile_balance'
+                     WHERE substring(k,1,1) != '_'
+                       AND k NOT IN ('coa_reconcile_balance','coa_reconcile_balance_lt','coa_reconcile_balance_st')
                        AND v ~ '^-?[0-9]'),0))::numeric, 2) as note_py_base
   FROM nce_financial_notes n
   WHERE n.engagement_id IN (SELECT id FROM cy_eng)
@@ -115,13 +117,19 @@ fix_cells AS (
      OR abs(ct.coa_py - coalesce(nt.note_py_base, 0)) > 1
 ),
 -- ── 2. update existing rows: append/refresh balance customRow ────────────
+-- RC-10: Pattern A notes (borrowings / provisions / loans_advances /
+-- investments) store row values under _lt/_st suffixed keys and the Notes
+-- UI renderer reads ONLY suffixed keys. The balance value for those notes
+-- must therefore be written as coa_reconcile_balance_lt — a bare key would
+-- reconcile the face but stay invisible (and uncounted) on the Notes UI.
 updated AS (
   UPDATE nce_financial_notes n SET
     cy_data = (
       -- strip prior balance row from _custom_rows, then append the fresh one
       jsonb_set(
         jsonb_set(
-          coalesce(n.cy_data, '{}'::jsonb),
+          -- remove any stale bare/suffixed key before writing the right one
+          coalesce(n.cy_data, '{}'::jsonb) - 'coa_reconcile_balance' - 'coa_reconcile_balance_lt',
           ARRAY['_custom_rows'],
           (
             SELECT coalesce(jsonb_agg(elem), '[]'::jsonb) || jsonb_build_array(
@@ -135,13 +143,15 @@ updated AS (
             WHERE elem->>'id' != 'coa_reconcile_balance'
           )
         ),
-        ARRAY['coa_reconcile_balance'],
+        ARRAY[CASE WHEN n.note_type IN ('borrowings','provisions','loans_advances','investments')
+                   THEN 'coa_reconcile_balance_lt' ELSE 'coa_reconcile_balance' END],
         to_jsonb(f.need_cy)
       )
     ),
     py_data = jsonb_set(
-      coalesce(n.py_data, '{}'::jsonb),
-      ARRAY['coa_reconcile_balance'],
+      coalesce(n.py_data, '{}'::jsonb) - 'coa_reconcile_balance' - 'coa_reconcile_balance_lt',
+      ARRAY[CASE WHEN n.note_type IN ('borrowings','provisions','loans_advances','investments')
+                 THEN 'coa_reconcile_balance_lt' ELSE 'coa_reconcile_balance' END],
       to_jsonb(f.need_py)
     ),
     updated_at = now()
