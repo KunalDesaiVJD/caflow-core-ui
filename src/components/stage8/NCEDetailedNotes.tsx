@@ -2319,7 +2319,19 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
                   cleanedCy[rowId] = Math.round(expectedCy * 100) / 100;
                   touched = true;
                 }
-                if (Math.abs(curPy - expectedPy) > 0.005) {
+                // 2026-06-12 — RC-11 (OM REALTY Note 14): heal PY ONLY when the
+                // sources actually carry PY data. Legacy cy_sources entries
+                // (pre-amountPy feature) have no amountPy field at all —
+                // expectedPy computes to 0 and this block was DESTROYING the
+                // correct saved PY value in memory (cogs pc_close_wip PY
+                // ₹13,65,98,000 → 0, so the note displayed PY Increase/Decrease
+                // ₹17,53,11,000 while the P&L face correctly showed
+                // ₹3,87,13,000 from the same DB row). If no source defines
+                // amountPy, the saved PY value is the only truth — keep it.
+                const anyPyDefined = (sources as any[]).some(
+                  x => x && x.amountPy !== undefined && x.amountPy !== null,
+                );
+                if (anyPyDefined && Math.abs(curPy - expectedPy) > 0.005) {
                   cleanedPy[rowId] = Math.round(expectedPy * 100) / 100;
                   touched = true;
                 }
