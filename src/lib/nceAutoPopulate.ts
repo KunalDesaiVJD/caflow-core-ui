@@ -506,15 +506,30 @@ export function getNCENoteFaceTotal(
     Array.isArray((cyData as any)._custom_rows) ? (cyData as any)._custom_rows : [];
 
   // Strip meta keys → pure numeric maps per column.
+  // 2026-06-12 — numeric STRINGS are coerced instead of dropped (latent-RC
+  // audit). A value saved as "45000" (legacy save / SQL data fix) was
+  // silently excluded from the face while the renderer's Number() coercion
+  // still displayed it — Note Total ≠ Face with no visible cause. Strings
+  // that don't parse cleanly are still skipped.
+  const coerce = (v: unknown): number | null => {
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string" && v.trim() !== "") {
+      const n = Number(v);
+      if (Number.isFinite(n)) return n;
+    }
+    return null;
+  };
   const numericCy: Record<string, number> = {};
   for (const [k, v] of Object.entries(cyData)) {
     if (META_KEYS.has(k)) continue;
-    if (typeof v === "number" && Number.isFinite(v)) numericCy[k] = v;
+    const n = coerce(v);
+    if (n !== null) numericCy[k] = n;
   }
   const numericPy: Record<string, number> = {};
   for (const [k, v] of Object.entries(pyData)) {
     if (META_KEYS.has(k)) continue;
-    if (typeof v === "number" && Number.isFinite(v)) numericPy[k] = v;
+    const n = coerce(v);
+    if (n !== null) numericPy[k] = n;
   }
 
   // Resolve the NoteConfig. The note_type stored on noteRow is keyed by

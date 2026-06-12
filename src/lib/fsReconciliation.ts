@@ -326,6 +326,30 @@ const CODE_TO_NOTE_TYPE: Record<string, string> = (() => {
   return out;
 })();
 
+/** 2026-06-12 — Legacy-code fold (RC: SWASTIK "Plot No-43" → BS_CL_STB).
+ *  COA mapping on NCE engagements sometimes carries corporate codes
+ *  (BS_CL_STB, PL_EXP_OTH, BS_CL_TP_MSME, ...) — the AI mapper or a human
+ *  picked the corporate twin of an NCE code. nceAutoPopulate ALREADY
+ *  accepts these (every NCE_NOTE_FS_MAP list includes the corporate
+ *  variants), so the ledger lands in the note. But computeCOATotals used
+ *  to key its output by the RAW mapped code — coaTotals["BS_CL_STB"] —
+ *  while validateFSReconciliation looks up coaTotals["NCE_STB"]. The
+ *  amount silently vanished from the COA anchor → phantom manual-delta /
+ *  drift on the panel for any engagement using a legacy code.
+ *  Fold target = the FIRST code in the same NCE_NOTE_FS_MAP list (always
+ *  the canonical NCE_* code). */
+export const CANONICAL_NCE_CODE: Record<string, string> = (() => {
+  const out: Record<string, string> = {};
+  for (const fs of Object.values(NCE_NOTE_FS_MAP)) {
+    for (const list of [fs.all, fs.lt, fs.st]) {
+      if (!list || list.length < 2) continue;
+      const canon = list[0];
+      for (const code of list.slice(1)) out[code] = canon;
+    }
+  }
+  return out;
+})();
+
 export function computeCOATotals(
   tb:         TBRowLike[],
   pyTb:       TBRowLike[],
@@ -333,6 +357,31 @@ export function computeCOATotals(
   pyCoaMap?:  COAMappingLike,
 ): Record<string, { cy: number; py: number }> {
   const out: Record<string, { cy: number; py: number }> = {};
+
+  // 2026-06-12 — Hardening (latent-RC audit):
+  //   • Lookup fallback: exact name → trimmed name. The CY pass previously
+  //     used ONLY exact match while the PY pass trimmed — a trailing space
+  //     in either the TB name or the mapping key silently dropped the
+  //     ledger from one column but not the other.
+  //   • Exact-duplicate dedupe: if the same ledger name appears twice in
+  //     the TB rows (double sync without cleanup), only the LAST row
+  //     counts — matching what Tally itself would report.
+  //   • Legacy-code fold: out[] is keyed by CANONICAL_NCE_CODE so a
+  //     ledger mapped to BS_CL_STB lands in coaTotals["NCE_STB"] — the
+  //     key the validator actually reads.
+  const lookupMapping = (name: string) => {
+    if (!name) return undefined;
+    return coaMapping[name] ?? coaMapping[name.trim()];
+  };
+  const dedupe = (rows: TBRowLike[]): TBRowLike[] => {
+    const byName = new Map<string, TBRowLike>();
+    for (const r of rows) {
+      const nm = String(r.ledger_name ?? "");
+      if (!nm) continue;
+      byName.set(nm, r); // last row wins
+    }
+    return [...byName.values()];
+  };
 
   // CY pass — every CY-TB ledger contributes its signed closing balance to
   // the CY column. For PY: prefer the PY-shell TB's actual closing (computed
@@ -342,12 +391,13 @@ export function computeCOATotals(
   // ALWAYS 0 for P&L codes (income / expense ledgers always open at 0 in
   // Tally), so the fallback only carries BS values — exactly what we want.
   const hasPyTb = pyTb.length > 0;
-  for (const row of tb) {
-    const mapped = coaMapping[row.ledger_name];
+  for (const row of dedupe(tb)) {
+    const mapped = lookupMapping(String(row.ledger_name ?? ""));
     if (!mapped?.code) continue;
-    const noteType = CODE_TO_NOTE_TYPE[mapped.code] ?? mapped.code;
+    const code = CANONICAL_NCE_CODE[mapped.code] ?? mapped.code;
+    const noteType = CODE_TO_NOTE_TYPE[code] ?? code;
     const cy = signedBalance(row.closing_balance, row.balance_type, noteType);
-    const slot = (out[mapped.code] ||= { cy: 0, py: 0 });
+    const slot = (out[code] ||= { cy: 0, py: 0 });
     slot.cy += cy;
     if (!hasPyTb) {
       slot.py += signedOpening(row.opening_balance, row.opening_type, noteType);
@@ -360,13 +410,14 @@ export function computeCOATotals(
   // Sums every PY ledger's signed closing under its mapping. The CY pass
   // above intentionally skipped PY for these so the PY pass owns it cleanly.
   if (hasPyTb) {
-    for (const row of pyTb) {
+    for (const row of dedupe(pyTb)) {
       const nm = (row.ledger_name || "").trim();
       if (!nm) continue;
-      const mapped = pyCoaMap?.[nm] ?? coaMapping[nm];
+      const mapped = pyCoaMap?.[nm] ?? pyCoaMap?.[row.ledger_name ?? ""] ?? lookupMapping(nm);
       if (!mapped?.code) continue;
-      const noteType = CODE_TO_NOTE_TYPE[mapped.code] ?? mapped.code;
-      const slot = (out[mapped.code] ||= { cy: 0, py: 0 });
+      const code = CANONICAL_NCE_CODE[mapped.code] ?? mapped.code;
+      const noteType = CODE_TO_NOTE_TYPE[code] ?? code;
+      const slot = (out[code] ||= { cy: 0, py: 0 });
       slot.py += signedBalance(row.closing_balance, row.balance_type, noteType);
     }
   }

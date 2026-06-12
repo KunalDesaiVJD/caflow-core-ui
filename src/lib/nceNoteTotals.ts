@@ -98,12 +98,20 @@ function lookupSuffixed(
   id: string,
 ): { ltCy: number; ltPy: number; stCy: number; stPy: number } {
   const ltKey = id + "_lt", stKey = id + "_st";
-  const hasLt = ltKey in cy;
-  const hasSt = stKey in cy;
-  const useBare = !hasLt && !hasSt;
+  // 2026-06-12 — Per-column bare-key decision (latent-RC audit fix).
+  // Previously `useBare` was decided from the CY map alone. When cy_data
+  // carried suffixed keys but py_data carried only the bare key (legacy
+  // PY save, partial migration, or a SQL data fix writing a bare key —
+  // e.g. coa_reconcile_balance), the PY side returned 0 and the value
+  // silently vanished from the PY total. Each column now makes its own
+  // bare-vs-suffixed decision. The original double-count guard (bare
+  // NEVER counted when a suffixed key exists in the SAME column) is
+  // preserved per column.
+  const useBareCy = !(ltKey in cy) && !(stKey in cy);
+  const useBarePy = !(ltKey in py) && !(stKey in py);
   return {
-    ltCy: cy[ltKey] ?? (useBare ? cy[id] ?? 0 : 0),
-    ltPy: py[ltKey] ?? (useBare ? py[id] ?? 0 : 0),
+    ltCy: cy[ltKey] ?? (useBareCy ? cy[id] ?? 0 : 0),
+    ltPy: py[ltKey] ?? (useBarePy ? py[id] ?? 0 : 0),
     stCy: cy[stKey] ?? 0,
     stPy: py[stKey] ?? 0,
   };
