@@ -423,7 +423,9 @@ function FsRow({
     : [];
   const isSearching    = search.length > 0;
   const matching       = isSearching
-    ? allContributors.filter(l => l.account_name.toLowerCase().includes(search))
+    ? allContributors.filter(l =>
+        l.account_name.toLowerCase().includes(search) ||
+        l.account_group.toLowerCase().includes(search))
     : allContributors;
   const contributors   = allContributors;
   const canExpand      = allContributors.length > 0;
@@ -686,14 +688,21 @@ export function BsPlView({ engagementId, clientId, financialYear, onRaiseQuery, 
     () => tb.filter(l => !!mapping[l.account_name]?.code).length,
     [tb, mapping],
   );
+  const unmappedLedgers = useMemo(
+    () => tb.filter(l => !mapping[l.account_name]?.code),
+    [tb, mapping],
+  );
   const hasPY = Object.keys(pyFs).length > 0;
 
-  // Whether any mapped ledger in the visible statement matches the search.
+  // Whether any mapped ledger in the visible statement matches the search
+  // (checks both ledger name AND Tally group name).
   const anyMatchInView = useMemo(() => {
     if (!searchLower) return true;
     return visibleRows.some(r =>
       r.fsCodes && getLedgersForCodes(tb, mapping, r.fsCodes)
-        .some(l => l.account_name.toLowerCase().includes(searchLower)));
+        .some(l =>
+          l.account_name.toLowerCase().includes(searchLower) ||
+          l.account_group.toLowerCase().includes(searchLower)));
   }, [searchLower, visibleRows, tb, mapping]);
 
   // ── Loading / Error ───────────────────────────────────────────────────────
@@ -763,7 +772,7 @@ export function BsPlView({ engagementId, clientId, financialYear, onRaiseQuery, 
             type="text"
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="Search ledger name…"
+            placeholder="Search ledger or group…"
             className="h-7 w-56 pl-7 pr-7 text-xs rounded-md border border-input bg-background
                        focus:outline-none focus:ring-1 focus:ring-primary"
           />
@@ -848,6 +857,45 @@ export function BsPlView({ engagementId, clientId, financialYear, onRaiseQuery, 
           </div>
         );
       })()}
+
+      {/* ── Unmapped Ledgers ── */}
+      {unmappedLedgers.length > 0 && !searchLower && (
+        <div className="rounded-lg border border-amber-200 overflow-hidden">
+          <div className="flex items-center gap-2 px-4 py-2 bg-amber-50 border-b border-amber-200">
+            <span className="text-[11px] font-semibold text-amber-800 uppercase tracking-wide">
+              Unmapped Ledgers
+            </span>
+            <Badge variant="outline" className="text-[10px] h-4 px-1 border-amber-300 text-amber-700">
+              {unmappedLedgers.length}
+            </Badge>
+            <span className="text-[10px] text-amber-600 ml-auto">
+              These ledgers have no COA mapping — go to COA Mapping (Stage 3) to assign them
+            </span>
+          </div>
+          <div className="divide-y divide-border/30 bg-background max-h-60 overflow-y-auto">
+            {groupByTallyGroup(unmappedLedgers).map(({ group: g, ledgers: gLedgers }) => (
+              <div key={g}>
+                <div className="flex items-center gap-2 px-4 py-1 bg-slate-50 border-b border-border/40">
+                  <span className="text-[10px] font-semibold text-slate-600 uppercase tracking-wide">{g}</span>
+                  <span className="text-[10px] text-muted-foreground">({gLedgers.length})</span>
+                </div>
+                {gLedgers.map(l => (
+                  <div key={l.account_name} className="flex items-center gap-2 px-6 py-1.5 hover:bg-muted/10 border-b border-border/30 last:border-b-0">
+                    <span className="flex-1 text-xs text-foreground truncate" title={l.account_name}>{l.account_name}</span>
+                    <span className={cn(
+                      "text-xs font-mono tabular-nums w-36 text-right",
+                      l.balance >= 0 ? "text-blue-700" : "text-rose-600",
+                    )}>
+                      ₹{fmtAmt(l.balance)}
+                      <span className="ml-1 text-[10px]">{l.balance >= 0 ? "Dr" : "Cr"}</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Ledger side panel — pass engagementId so useTallyEngagementId can
           take its STEP 0 path (probe tally_groups / tally_trial_balance

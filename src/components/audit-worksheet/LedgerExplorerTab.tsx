@@ -1,27 +1,23 @@
 /**
  * LedgerExplorerTab  (Phase 2B)
  *
- * Two view modes toggled from the toolbar:
- *   [BS / P&L]   — FS-mapped financial statement with CY | PY | Variance
- *   [Anomalies]  — anomaly feed
- *
- * Phase 2B changes:
- *   • "Group Tree" view removed (per user request — redundant with BS/PL).
- *   • All Tally-sourced group / ledger names sanitised through
- *     cleanTallyName() so the bogus "&#4; Primary" label never reaches
- *     the screen.
+ * View modes toggled from the toolbar:
+ *   [BS / P&L]      — FS-mapped financial statement with CY | PY | Variance
+ *   [Tally Groups]  — all Tally groups & ledgers in native hierarchy
+ *   [Anomalies]     — anomaly feed
  */
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import {
-  Loader2, DatabaseZap, BarChart3, TrendingUp, Zap,
+  Loader2, DatabaseZap, BarChart3, TrendingUp, Zap, FolderTree,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTallyEngagementId } from "./hooks/useTallyEngagementId";
 import { BsPlView } from "./BsPlView";
 import { AnomalyFeedView } from "./AnomalyFeedView";
+import { TallyGroupsView } from "./TallyGroupsView";
 
-type ViewMode = "bs" | "pl" | "anomaly";
+type ViewMode = "bs" | "pl" | "groups" | "anomaly";
 
 interface Props {
   engagementId:    string;
@@ -127,6 +123,18 @@ export function LedgerExplorerTab({ engagementId, clientId, financialYear, onRai
           </button>
           <button
             type="button"
+            onClick={() => setViewMode("groups")}
+            className={cn(
+              "flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium transition-colors border-r",
+              viewMode === "groups"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:bg-muted/60",
+            )}
+          >
+            <FolderTree size={11} /> Tally Groups
+          </button>
+          <button
+            type="button"
             onClick={() => setViewMode("anomaly")}
             className={cn(
               "flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium transition-colors",
@@ -159,6 +167,16 @@ export function LedgerExplorerTab({ engagementId, clientId, financialYear, onRai
           financialYear={financialYear}
           onRaiseQuery={onRaiseQuery}
           section="pl"
+        />
+      )}
+
+      {/* ── Tally Groups view ── */}
+      {viewMode === "groups" && (
+        <TallyGroupsView
+          engagementId={engagementId}
+          clientId={clientId}
+          financialYear={financialYear}
+          onRaiseQuery={onRaiseQuery}
         />
       )}
 
