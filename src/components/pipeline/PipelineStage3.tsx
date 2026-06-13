@@ -41,6 +41,7 @@ import { useAiSkills } from "@/hooks/useAiSkills";
 // reconciled. Stage 3's debit-positive normalisation is the same rule
 // applied with nature = "DR" — see fsSignConvention.signedBalance.
 import { signedBalance, signedOpening } from "@/lib/fsSignConvention";
+import { cleanTallyName } from "@/lib/tallyText";
 
 // ═══════════════════════════════════════
 // Non-Corporate entity detection
@@ -289,7 +290,7 @@ function matchParentGroup(
   parentGroup: string,
   table: { match: string[]; code: string; confidence: "high" | "medium" | "low" }[],
 ) {
-  const g = (parentGroup || "").toLowerCase().trim();
+  const g = cleanTallyName(parentGroup).toLowerCase();
   if (!g) return null;
   for (const row of table) {
     for (const token of row.match) {
@@ -648,14 +649,14 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     const seen = new Set<string>();
     if (tallyTb?.length) {
       for (const l of tallyTb as any[]) {
-        const name = String(l.ledger_name || "").trim();
+        const name = cleanTallyName(l.ledger_name);
         if (!name) continue;
         const cb   = Math.abs(Number(l.closing_balance ?? 0));
         const isDr = String(l.balance_type ?? "").toUpperCase() === "DR";
         seen.add(name.toLowerCase());
         out.push({
           account_name:  name,
-          account_group: l.parent_group || "",
+          account_group: cleanTallyName(l.parent_group),
           debit:  isDr ? cb : 0,
           credit: isDr ? 0  : cb,
           // Sign via shared module; "DR" nature => debit-positive (Dr → +cb, Cr → -cb).
@@ -669,14 +670,14 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     const pyRows = pyShellTbData?.tbRows as any[] | undefined;
     if (pyRows && pyRows.length) {
       for (const l of pyRows) {
-        const name = String(l.ledger_name || "").trim();
+        const name = cleanTallyName(l.ledger_name);
         if (!name) continue;
         if (seen.has(name.toLowerCase())) continue;
         const cb   = Math.abs(Number(l.closing_balance ?? 0));
         const isDr = String(l.balance_type ?? "").toUpperCase() === "DR";
         out.push({
           account_name:  name,
-          account_group: l.parent_group || "",
+          account_group: cleanTallyName(l.parent_group),
           debit: 0, credit: 0, balance: 0,
           // PY shell row's CLOSING = current engagement's OPENING. Debit-positive
           // via shared module — see fsSignConvention.signedBalance.

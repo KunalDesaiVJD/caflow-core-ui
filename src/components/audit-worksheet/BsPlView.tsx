@@ -286,6 +286,19 @@ function getLedgersForCodes(
   return tb.filter(l => codeSet.has(mapping[l.account_name]?.code ?? ""));
 }
 
+/** Group ledgers by their Tally parent group for structured sub-display */
+function groupByTallyGroup(ledgers: TBLedger[]): { group: string; ledgers: TBLedger[] }[] {
+  const map = new Map<string, TBLedger[]>();
+  for (const l of ledgers) {
+    const g = l.account_group || "Other";
+    if (!map.has(g)) map.set(g, []);
+    map.get(g)!.push(l);
+  }
+  return Array.from(map.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([group, items]) => ({ group, ledgers: items }));
+}
+
 // ─── Data hook ────────────────────────────────────────────────────────────────
 
 function useBsPlData(engagementId: string) {
@@ -580,7 +593,11 @@ function FsRow({
       </div>
 
       {/* Ledger sub-rows (expanded, or auto-expanded while searching) */}
-      {(isSearching || expanded) && contributors.length > 0 && (
+      {(isSearching || expanded) && contributors.length > 0 && (() => {
+        const displayLedgers = isSearching ? matching : contributors;
+        const grouped = groupByTallyGroup(displayLedgers);
+        const showGroupHeaders = grouped.length > 1;
+        return (
         <div className="bg-slate-50/60 border-b border-border/40">
           {/* Sub-header */}
           <div className="flex items-center gap-2 px-6 py-1 bg-slate-100/80 border-b border-slate-200">
@@ -592,20 +609,35 @@ function FsRow({
             </span>
             <div className="w-14 flex-shrink-0" />
           </div>
-          {(isSearching ? matching : contributors).map(l => (
-            <LedgerSubRow
-              key={l.account_name}
-              ledger={l}
-              clientId={clientId}
-              financialYear={financialYear}
-              group={row.label}
-              onRaiseQuery={onRaiseQuery}
-              onViewEntry={onViewEntry}
-              highlight={isSearching}
-            />
+          {grouped.map(({ group: tallyGroup, ledgers: groupLedgers }) => (
+            <div key={tallyGroup}>
+              {showGroupHeaders && (
+                <div className="flex items-center gap-2 px-6 py-1 bg-amber-50/60 border-b border-amber-200/40">
+                  <span className="text-[10px] font-semibold text-amber-800 uppercase tracking-wide">
+                    {tallyGroup}
+                  </span>
+                  <span className="text-[10px] text-amber-600">
+                    ({groupLedgers.length})
+                  </span>
+                </div>
+              )}
+              {groupLedgers.map(l => (
+                <LedgerSubRow
+                  key={l.account_name}
+                  ledger={l}
+                  clientId={clientId}
+                  financialYear={financialYear}
+                  group={tallyGroup}
+                  onRaiseQuery={onRaiseQuery}
+                  onViewEntry={onViewEntry}
+                  highlight={isSearching}
+                />
+              ))}
+            </div>
           ))}
         </div>
-      )}
+        );
+      })()}
     </>
   );
 }

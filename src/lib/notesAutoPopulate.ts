@@ -335,8 +335,16 @@ export async function getCOAMapping(engagementId: string): Promise<COAMapping> {
     .eq("id", engagementId)
     .maybeSingle();
   const raw = (data as any)?.coa_mapping;
-  if (raw && typeof raw === "object") return raw as COAMapping;
-  return {};
+  if (!raw || typeof raw !== "object") return {};
+  // Normalize keys through cleanTallyName so lookups from the TB side
+  // (which also cleans names) always match, even if older mappings were
+  // saved with HTML entities or control chars in the key.
+  const out: COAMapping = {};
+  for (const [key, val] of Object.entries(raw)) {
+    const clean = cleanTallyName(key);
+    if (clean && val) out[clean] = val as { code: string };
+  }
+  return out;
 }
 
 // Exact entity_type strings that classify an engagement as Non-Corporate (NCE).
@@ -521,10 +529,17 @@ export async function getPreviousYearFsAmountsFromTB(
 
   // Mapping: prefer the prior engagement's own coa_mapping; fall back to the
   // current engagement's (ledger names are stable across years for a client).
-  let mapping: COAMapping | null =
-    prev.coa_mapping && typeof prev.coa_mapping === "object"
-      ? (prev.coa_mapping as COAMapping)
-      : null;
+  // Normalize keys through cleanTallyName so they match the cleaned TB names.
+  let mapping: COAMapping | null = null;
+  if (prev.coa_mapping && typeof prev.coa_mapping === "object") {
+    const raw = prev.coa_mapping as Record<string, any>;
+    const cleaned: COAMapping = {};
+    for (const [key, val] of Object.entries(raw)) {
+      const clean = cleanTallyName(key);
+      if (clean && val) cleaned[clean] = val as { code: string };
+    }
+    if (Object.keys(cleaned).length > 0) mapping = cleaned;
+  }
   if (!mapping || Object.keys(mapping).length === 0) {
     mapping = await getCOAMapping(engagementId);
   }
