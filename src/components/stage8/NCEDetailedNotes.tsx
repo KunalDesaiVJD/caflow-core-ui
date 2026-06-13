@@ -3216,8 +3216,26 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
               ? { ...rawData, cy: extracted.cy, py: extracted.py, customRows: splitCustomRows }
               : rawData;
 
-            const autoCount  = d.customRows.filter(r => r.source === "auto").length;
-            const manuCount  = d.customRows.filter(r => r.source === "manual").length;
+            // 2026-06-13 — value-aware badge counts. Previously the "N manual"
+            // / "N auto" badge counted rows by EXISTENCE, so an empty note full
+            // of zero-valued placeholder rows (e.g. "Purchases (category 1/2/3)")
+            // still showed "12 manual". Count only rows that actually carry data
+            // — a non-zero CY or PY amount (any suffix), a non-zero source[]
+            // contribution, or attached children that do. Empty placeholders no
+            // longer inflate the badge.
+            const rowHasData = (cr: typeof d.customRows[number]): boolean => {
+              const own =
+                Math.abs(Number(d.cy[cr.id] ?? 0)) + Math.abs(Number(d.cy[cr.id + "_lt"] ?? 0)) + Math.abs(Number(d.cy[cr.id + "_st"] ?? 0)) +
+                Math.abs(Number(d.py[cr.id] ?? 0)) + Math.abs(Number(d.py[cr.id + "_lt"] ?? 0)) + Math.abs(Number(d.py[cr.id + "_st"] ?? 0));
+              if (own > 0.005) return true;
+              const srcs = (cr as any).sources;
+              if (Array.isArray(srcs) && srcs.some((s: any) =>
+                Math.abs(Number(s?.amountCy ?? 0)) > 0.005 || Math.abs(Number(s?.amountPy ?? 0)) > 0.005)) return true;
+              if (d.customRows.some(c => c.attachedTo === cr.id)) return true;
+              return false;
+            };
+            const autoCount  = d.customRows.filter(r => r.source === "auto"   && rowHasData(r)).length;
+            const manuCount  = d.customRows.filter(r => r.source === "manual" && rowHasData(r)).length;
 
             // Dynamic note number: use the map when available (cross-tab sync),
             // else fall back to parsing from the title string (standalone Stage 8).

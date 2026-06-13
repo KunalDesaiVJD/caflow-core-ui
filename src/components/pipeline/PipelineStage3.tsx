@@ -647,6 +647,27 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   }[] = useMemo(() => {
     const out: any[] = [];
     const seen = new Set<string>();
+    // 2026-06-13 — Q1 fix: a ledger present in BOTH the CY TB and the PY shell
+    // takes its PY value from the PY-shell CLOSING balance (the authoritative
+    // prior-year close), NOT the CY-TB opening_balance — which can be 0 /
+    // incomplete when the CY Tally export omitted opening balances. SHRI RAM
+    // "Axis Bank Machinery Loan" had CY opening 0 but PY-shell closing
+    // 1,35,457, so the COA Mapping page PY column undercounted the borrowings
+    // note by 1,47,457 vs the Notes / Face (which read the PY shell). Build a
+    // PY-shell closing lookup and prefer it whenever it carries a value.
+    const pyShellClose: Record<string, number> = {};
+    {
+      const pyShellRows0 = pyShellTbData?.tbRows as any[] | undefined;
+      if (pyShellRows0?.length) {
+        for (const l of pyShellRows0) {
+          const nm = cleanTallyName(l.ledger_name);
+          if (!nm) continue;
+          const cb0 = Math.abs(Number(l.closing_balance ?? 0));
+          if (cb0 < 0.005) continue;
+          pyShellClose[nm.toLowerCase()] = signedBalance(cb0, l.balance_type, "DR");
+        }
+      }
+    }
     if (tallyTb?.length) {
       for (const l of tallyTb as any[]) {
         const name = cleanTallyName(l.ledger_name);
@@ -654,6 +675,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         const cb   = Math.abs(Number(l.closing_balance ?? 0));
         const isDr = String(l.balance_type ?? "").toUpperCase() === "DR";
         seen.add(name.toLowerCase());
+        const cyOpen  = signedOpening(l.opening_balance, l.opening_type, "DR");
+        const shellPy = pyShellClose[name.toLowerCase()];
         out.push({
           account_name:  name,
           account_group: cleanTallyName(l.parent_group),
@@ -661,7 +684,9 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           credit: isDr ? 0  : cb,
           // Sign via shared module; "DR" nature => debit-positive (Dr → +cb, Cr → -cb).
           balance: signedBalance(cb, l.balance_type, "DR"),
-          opening_balance: signedOpening(l.opening_balance, l.opening_type, "DR"),
+          // Prefer PY-shell closing (authoritative prior-year close) over the
+          // CY-TB opening when the shell carries a value for this ledger.
+          opening_balance: (shellPy !== undefined && Math.abs(shellPy) > 0.005) ? shellPy : cyOpen,
           tally_debit:  Number(l.debit_amount  ?? 0),
           tally_credit: Number(l.credit_amount ?? 0),
         });
@@ -1660,6 +1685,24 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     setReclassifyReason("");
   };
 
+  // 2026-06-13 — RC-16: case-insensitive COA-mapping index. The COA Mapping
+  // page resolved ledgers by EXACT name (coaMapping[ledger]); a ledger named
+  // "Gst Payable" in the TB but mapped under key "GST PAYABLE" was silently
+  // dropped from BOTH the CY and PY columns — undercounting the note vs the
+  // Notes/Face (which match case-insensitively via nceAutoPopulate). Final
+  // fallback resolves the same way the note auto-populate does.
+  const coaMapCI = useMemo(() => {
+    const m: Record<string, { code: string }> = {};
+    for (const [k, v] of Object.entries(coaMapping || {})) {
+      if (!(v as any)?.code) continue;
+      const kk = String(k).trim().toLowerCase();
+      if (!(kk in m)) m[kk] = v as any;
+    }
+    return m;
+  }, [coaMapping]);
+  const resolveMapping = (name: string): { code: string } | undefined =>
+    coaMapping[name] ?? coaMapping[String(name).trim()] ?? coaMapCI[String(name).trim().toLowerCase()];
+
   // ═══════ COMPUTED FS AMOUNTS ═══════
   const computedAmounts: Record<string, number> = useMemo(() => {
     const amounts: Record<string, number> = {};
@@ -1667,7 +1710,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
     // Aggregate TB accounts into FS line items
     for (const acct of tbAccounts) {
-      const mapping = coaMapping[acct.account_name];
+      const mapping = resolveMapping(acct.account_name);
       if (!mapping) continue;
       const plCode = INV_DUAL_MAP[mapping.code];
       if (plCode) {
@@ -1784,7 +1827,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       // current-year ledger, aggregate under the current ledger's mapping.
       let mappingSource = acct.account_name;
       if (aliases[acct.account_name]) mappingSource = aliases[acct.account_name];
-      const mapping = coaMapping[mappingSource] || coaMapping[acct.account_name];
+      const mapping = resolveMapping(mappingSource) || resolveMapping(acct.account_name);
       if (!mapping) continue;
       const opening = acct.opening_balance ?? 0;
       if (!opening) continue;
@@ -1821,7 +1864,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       // For every CY tbAccount mapped to an inventory code, dual-post the
       // PY Changes-in-Inv contribution.
       for (const acct of tbAccounts) {
-        const mapping = coaMapping[acct.account_name];
+        const mapping = resolveMapping(acct.account_name);
         if (!mapping) continue;
         const plCode = INV_DUAL_MAP[mapping.code];
         if (!plCode) continue;

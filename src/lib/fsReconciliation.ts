@@ -369,9 +369,27 @@ export function computeCOATotals(
   //   • Legacy-code fold: out[] is keyed by CANONICAL_NCE_CODE so a
   //     ledger mapped to BS_CL_STB lands in coaTotals["NCE_STB"] — the
   //     key the validator actually reads.
+  // 2026-06-13 — RC-16 fix (MAHIL "Gst Payable" vs mapping key "GST PAYABLE").
+  // nceAutoPopulate matches ledgers CASE-INSENSITIVELY, so its note total
+  // includes a case-mismatched ledger; computeCOATotals previously used only
+  // exact + trimmed lookup (case-SENSITIVE) and dropped that ledger from the
+  // anchor → the FsHealthPanel reported a phantom "+manual adjustment" that no
+  // auditor ever entered. Build a case-insensitive index (trim+lowercase) as
+  // the final fallback so the anchor resolves ledgers exactly like the note
+  // auto-populate does. First-writer-wins on duplicate keys; truly conflicting
+  // duplicate keys (same name, different code) are a separate data-hygiene
+  // item (exact/trim match still wins for the live TB-name variant).
+  const ciIndex: Record<string, { code: string }> = {};
+  for (const [k, v] of Object.entries(coaMapping)) {
+    if (!v?.code) continue;
+    const kk = String(k).trim().toLowerCase();
+    if (!(kk in ciIndex)) ciIndex[kk] = v;
+  }
   const lookupMapping = (name: string) => {
     if (!name) return undefined;
-    return coaMapping[name] ?? coaMapping[name.trim()];
+    return coaMapping[name]
+        ?? coaMapping[name.trim()]
+        ?? ciIndex[String(name).trim().toLowerCase()];
   };
   const dedupe = (rows: TBRowLike[]): TBRowLike[] => {
     const byName = new Map<string, TBRowLike>();
@@ -409,11 +427,22 @@ export function computeCOATotals(
   // proper revenue / expense figures that signedOpening can never produce).
   // Sums every PY ledger's signed closing under its mapping. The CY pass
   // above intentionally skipped PY for these so the PY pass owns it cleanly.
+  // Case-insensitive index for the PY-specific mapping (when supplied) — same
+  // RC-16 rationale as the CY index above.
+  const pyCiIndex: Record<string, { code: string }> = {};
+  if (pyCoaMap) {
+    for (const [k, v] of Object.entries(pyCoaMap)) {
+      if (!v?.code) continue;
+      const kk = String(k).trim().toLowerCase();
+      if (!(kk in pyCiIndex)) pyCiIndex[kk] = v;
+    }
+  }
   if (hasPyTb) {
     for (const row of dedupe(pyTb)) {
       const nm = (row.ledger_name || "").trim();
       if (!nm) continue;
-      const mapped = pyCoaMap?.[nm] ?? pyCoaMap?.[row.ledger_name ?? ""] ?? lookupMapping(nm);
+      const mapped = pyCoaMap?.[nm] ?? pyCoaMap?.[row.ledger_name ?? ""]
+                  ?? pyCiIndex[nm.toLowerCase()] ?? lookupMapping(nm);
       if (!mapped?.code) continue;
       const code = CANONICAL_NCE_CODE[mapped.code] ?? mapped.code;
       const noteType = CODE_TO_NOTE_TYPE[code] ?? code;
