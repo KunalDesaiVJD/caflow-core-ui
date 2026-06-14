@@ -362,7 +362,7 @@ function useBsPlData(engagementId: string) {
 // ─── Ledger sub-row (inside accordion) ───────────────────────────────────────
 
 function LedgerSubRow({
-  ledger, clientId, financialYear, group, onRaiseQuery, onViewEntry, highlight, pyBalance,
+  ledger, clientId, financialYear, group, onRaiseQuery, onViewEntry, highlight, pyBalance, sign = 1,
 }: {
   ledger:        TBLedger;
   clientId?:     string | null;
@@ -373,14 +373,20 @@ function LedgerSubRow({
   highlight?:    boolean;
   /** PY closing balance for this ledger (signed Dr+); undefined if absent in PY */
   pyBalance?:    number;
+  /** Section sign of the parent line (1 = asset/expense, -1 = liab/income) so
+   *  the ledger's variance reads the same direction as the parent line. */
+  sign?:         1 | -1;
 }) {
   const isDr   = ledger.balance >= 0;
   const hasPy  = pyBalance !== undefined && pyBalance !== null;
   const pyIsDr = (pyBalance ?? 0) >= 0;
-  // Per-ledger variance (signed Dr+), shown only when a PY balance exists —
-  // mirrors the parent line so the Variance / Var % columns are never blank.
-  const delta    = hasPy ? ledger.balance - (pyBalance ?? 0) : 0;
-  const deltaPct = hasPy ? varPct(ledger.balance, pyBalance ?? 0) : null;
+  // Per-ledger variance, computed on the section-signed value so a growing
+  // reserve / liability reads as a positive variance exactly like the parent
+  // line (raw Dr+ would flip the sign for Cr-natural heads). "—" when no PY.
+  const sCy      = sign * ledger.balance;
+  const sPy      = sign * (pyBalance ?? 0);
+  const delta    = hasPy ? sCy - sPy : 0;
+  const deltaPct = hasPy ? varPct(sCy, sPy) : null;
   return (
     <div className={cn(
       "flex items-center gap-2 px-4 py-1.5 hover:bg-muted/10 transition-colors",
@@ -714,6 +720,7 @@ function FsRow({
                   onViewEntry={onViewEntry}
                   highlight={isSearching}
                   pyBalance={pyByLedger[l.account_name.trim().toLowerCase()]}
+                  sign={row.sign ?? 1}
                 />
               ))}
             </div>
