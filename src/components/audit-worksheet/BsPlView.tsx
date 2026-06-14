@@ -377,14 +377,20 @@ function LedgerSubRow({
   const isDr   = ledger.balance >= 0;
   const hasPy  = pyBalance !== undefined && pyBalance !== null;
   const pyIsDr = (pyBalance ?? 0) >= 0;
+  // Per-ledger variance (signed Dr+), shown only when a PY balance exists —
+  // mirrors the parent line so the Variance / Var % columns are never blank.
+  const delta    = hasPy ? ledger.balance - (pyBalance ?? 0) : 0;
+  const deltaPct = hasPy ? varPct(ledger.balance, pyBalance ?? 0) : null;
   return (
     <div className={cn(
-      "flex items-center gap-2 px-6 py-1.5 hover:bg-muted/10 transition-colors",
+      "flex items-center gap-2 px-4 py-1.5 hover:bg-muted/10 transition-colors",
       "border-b border-border/30 last:border-b-0",
       highlight && "bg-amber-100/70 hover:bg-amber-100",
     )}>
-      {/* Ledger name */}
-      <span className={cn("flex-1 text-xs truncate", highlight ? "text-amber-900 font-semibold" : "text-foreground")} title={ledger.account_name}>
+      {/* Leading spacer — aligns ledger name under the parent's expand toggle */}
+      <div className="w-5 flex-shrink-0" />
+      {/* Ledger name (indented for hierarchy) */}
+      <span className={cn("flex-1 text-xs truncate pl-2", highlight ? "text-amber-900 font-semibold" : "text-foreground")} title={ledger.account_name}>
         {ledger.account_name}
       </span>
       {/* CY Closing */}
@@ -407,8 +413,22 @@ function LedgerSubRow({
           </>
         ) : "—"}
       </span>
-      {/* Actions */}
-      <div className="flex items-center gap-0.5 flex-shrink-0">
+      {/* Variance ₹ */}
+      <span className={cn(
+        "text-xs tabular-nums w-24 text-right",
+        delta > 0 ? "text-teal-700" : delta < 0 ? "text-rose-600" : "text-muted-foreground",
+      )}>
+        {hasPy && delta !== 0 ? `${delta > 0 ? "+" : ""}₹${fmtAmt(delta)}` : "—"}
+      </span>
+      {/* Var % */}
+      <span className={cn(
+        "text-[10px] tabular-nums w-14 text-right",
+        delta > 0 ? "text-teal-600" : delta < 0 ? "text-rose-500" : "text-muted-foreground",
+      )}>
+        {deltaPct != null ? `${deltaPct > 0 ? "+" : ""}${deltaPct}%` : "—"}
+      </span>
+      {/* Actions — fixed w-16 slot matching the parent line */}
+      <div className="w-16 flex-shrink-0 flex items-center justify-end gap-0.5">
         <button
           type="button"
           title="View journal entries"
@@ -514,6 +534,8 @@ function FsRow({
           ? "bg-slate-100 border-slate-300 font-bold"
           : "bg-muted/30 border-border/60 font-semibold",
       )}>
+        {/* Leading spacer — keeps label aligned with expandable line items */}
+        <div className="w-5 flex-shrink-0" />
         <span className={cn(
           "flex-1 text-xs uppercase tracking-wide",
           isResult ? "text-slate-800" : "text-slate-700",
@@ -547,8 +569,8 @@ function FsRow({
         )}>
           {deltaPct != null ? `${deltaPct > 0 ? "+" : ""}${deltaPct}%` : "—"}
         </span>
-        {/* Spacer for raise-query col */}
-        <div className="w-6" />
+        {/* Spacer for action col */}
+        <div className="w-16 flex-shrink-0" />
       </div>
     );
   }
@@ -619,20 +641,22 @@ function FsRow({
             : "—"}
         </span>
 
-        {/* Raise query */}
-        <button
-          type="button"
-          title="Raise query for this line item"
-          onClick={() => onRaiseQuery(
-            row.label, "",
-            `[BS/PL] ${row.label} — CY ₹${fmtClosing(cy)}${py ? ` vs PY ₹${fmtClosing(py)}` : ""}`,
-          )}
-          className="h-6 w-6 flex items-center justify-center rounded
-                     text-amber-500 hover:bg-amber-50 hover:text-amber-700 transition-colors
-                     flex-shrink-0"
-        >
-          <MessageSquareWarning size={12} />
-        </button>
+        {/* Raise query — fixed w-16 action slot keeps every numeric column
+            aligned across line, total and ledger sub-rows */}
+        <div className="w-16 flex-shrink-0 flex items-center justify-end">
+          <button
+            type="button"
+            title="Raise query for this line item"
+            onClick={() => onRaiseQuery(
+              row.label, "",
+              `[BS/PL] ${row.label} — CY ₹${fmtClosing(cy)}${py ? ` vs PY ₹${fmtClosing(py)}` : ""}`,
+            )}
+            className="h-6 w-6 flex items-center justify-center rounded
+                       text-amber-500 hover:bg-amber-50 hover:text-amber-700 transition-colors"
+          >
+            <MessageSquareWarning size={12} />
+          </button>
+        </div>
       </div>
 
       {/* Ledger sub-rows (expanded, or auto-expanded while searching) */}
@@ -645,9 +669,11 @@ function FsRow({
         const showGroupHeaders = grouped.length > 1 || isSearching;
         return (
         <div className="bg-slate-50/60 border-b border-border/40">
-          {/* Sub-header */}
-          <div className="flex items-center gap-2 px-6 py-1 bg-slate-100/80 border-b border-slate-200">
-            <span className="flex-1 text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
+          {/* Sub-header — same column grid as the parent line so every value
+              sits directly under its CY / PY / Variance / Var % heading */}
+          <div className="flex items-center gap-2 px-4 py-1 bg-slate-100/80 border-b border-slate-200">
+            <div className="w-5 flex-shrink-0" />
+            <span className="flex-1 text-[10px] uppercase tracking-wide text-muted-foreground font-semibold pl-2">
               Ledger
             </span>
             <span className="text-[10px] uppercase tracking-wide text-muted-foreground w-32 text-right">
@@ -656,13 +682,20 @@ function FsRow({
             <span className="text-[10px] uppercase tracking-wide text-muted-foreground w-32 text-right">
               PY Closing
             </span>
-            <div className="w-14 flex-shrink-0" />
+            <span className="text-[10px] uppercase tracking-wide text-muted-foreground w-24 text-right">
+              Variance ₹
+            </span>
+            <span className="text-[10px] uppercase tracking-wide text-muted-foreground w-14 text-right">
+              Var %
+            </span>
+            <div className="w-16 flex-shrink-0" />
           </div>
           {grouped.map(({ group: tallyGroup, ledgers: groupLedgers }) => (
             <div key={tallyGroup}>
               {showGroupHeaders && (
-                <div className="flex items-center gap-2 px-6 py-1 bg-amber-50/60 border-b border-amber-200/40">
-                  <span className="text-[10px] font-semibold text-amber-800 uppercase tracking-wide">
+                <div className="flex items-center gap-2 px-4 py-1 bg-amber-50/60 border-b border-amber-200/40">
+                  <div className="w-5 flex-shrink-0" />
+                  <span className="text-[10px] font-semibold text-amber-800 uppercase tracking-wide pl-2">
                     {tallyGroup}
                   </span>
                   <span className="text-[10px] text-amber-600">
@@ -873,7 +906,7 @@ export function BsPlView({ engagementId, clientId, financialYear, onRaiseQuery, 
           <span className="w-32 text-right">PY Closing (₹)</span>
           <span className="w-24 text-right">Variance ₹</span>
           <span className="w-14 text-right">Var %</span>
-          <div className="w-6 flex-shrink-0" />
+          <div className="w-16 flex-shrink-0" />
         </div>
 
         {/* All rows */}
@@ -949,6 +982,12 @@ export function BsPlView({ engagementId, clientId, financialYear, onRaiseQuery, 
               These ledgers have no COA mapping — go to COA Mapping (Stage 3) to assign them
             </span>
           </div>
+          {/* Column header */}
+          <div className="flex items-center gap-2 px-6 py-1 bg-slate-100/80 border-b border-slate-200 text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
+            <span className="flex-1">Ledger</span>
+            <span className="w-32 text-right">CY Closing</span>
+            <span className="w-32 text-right">PY Closing</span>
+          </div>
           <div className="divide-y divide-border/30 bg-background max-h-60 overflow-y-auto">
             {groupByTallyGroup(list).map(({ group: g, ledgers: gLedgers }) => (
               <div key={g}>
@@ -1010,6 +1049,12 @@ export function BsPlView({ engagementId, clientId, financialYear, onRaiseQuery, 
             <span className="text-[10px] text-indigo-600 ml-auto">
               Mapped to a code outside the standard {section === "pl" ? "P&L" : "Balance Sheet"} layout — shown so no ledger is hidden
             </span>
+          </div>
+          {/* Column header */}
+          <div className="flex items-center gap-2 px-6 py-1 bg-slate-100/80 border-b border-slate-200 text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
+            <span className="flex-1">Ledger</span>
+            <span className="w-32 text-right">CY Closing</span>
+            <span className="w-32 text-right">PY Closing</span>
           </div>
           <div className="divide-y divide-border/30 bg-background max-h-60 overflow-y-auto">
             {groupByTallyGroup(list).map(({ group: g, ledgers: gLedgers }) => (
