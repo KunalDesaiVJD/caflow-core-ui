@@ -58,7 +58,8 @@ const BS_PL_LAYOUT: LayoutRow[] = [
   L("grp_equity",    "Shareholders' Funds",              "group"),
   L("share_cap",     "Share Capital",                    "line", { fsCodes: ["BS_EQ_SC"], sign: -1 }),
   L("reserves",      "Reserves & Surplus",               "line", { fsCodes: ["BS_EQ_RS"], sign: -1 }),
-  L("tot_equity",    "Total Shareholders' Funds",        "subtotal", { sumKeys: ["share_cap", "reserves"] }),
+  L("share_warr",    "Money Received Against Share Warrants", "line", { fsCodes: ["BS_EQ_MS"], sign: -1 }),
+  L("tot_equity",    "Total Shareholders' Funds",        "subtotal", { sumKeys: ["share_cap", "reserves", "share_warr"] }),
 
   L("grp_ncl",       "Non-Current Liabilities",          "group"),
   L("lt_borr",       "Long-term Borrowings",             "line", { fsCodes: ["BS_NCL_LTB"], sign: -1 }),
@@ -90,7 +91,7 @@ const BS_PL_LAYOUT: LayoutRow[] = [
 
   L("grp_ca",        "Current Assets",                   "group"),
   L("curr_inv",      "Current Investments",              "line", { fsCodes: ["BS_CA_CI"],  sign: 1 }),
-  L("inventories",   "Inventories",                      "line", { fsCodes: ["BS_CA_INV"], sign: 1 }),
+  L("inventories",   "Inventories",                      "line", { fsCodes: ["BS_CA_INV", "INV_STOCK"], sign: 1 }),
   L("trade_rec",     "Trade Receivables",                "line", { fsCodes: ["BS_CA_TR"],  sign: 1 }),
   L("cash_bank",     "Cash & Bank Equivalents",          "line", { fsCodes: ["BS_CA_CCE"], sign: 1 }),
   L("st_loans",      "Short-term Loans & Advances",      "line", { fsCodes: ["BS_CA_SLA"], sign: 1 }),
@@ -119,6 +120,15 @@ const BS_PL_LAYOUT: LayoutRow[] = [
 
   // PBT = Revenue − Expenses  (sumKeys added, subKeys subtracted)
   L("pbt", "PROFIT / (LOSS) BEFORE TAX", "result", { sumKeys: ["tot_rev"], subKeys: ["tot_exp"] }),
+
+  // Tax expense + PAT — without these lines any ledger mapped to PL_TAX_CUR /
+  // PL_TAX_DEF was silently dropped from the Explorer (mapped, but the layout
+  // referenced no code to place it under). Mirrors the corporate FS tree.
+  L("grp_tax",   "Tax Expense",                      "group"),
+  L("cur_tax",   "Current Tax",                      "line", { fsCodes: ["PL_TAX_CUR"], sign: 1 }),
+  L("def_tax",   "Deferred Tax",                     "line", { fsCodes: ["PL_TAX_DEF"], sign: 1 }),
+  L("tot_tax",   "Total Tax Expense",                "subtotal", { sumKeys: ["cur_tax", "def_tax"] }),
+  L("pat",       "PROFIT / (LOSS) AFTER TAX",        "result", { sumKeys: ["pbt"], subKeys: ["tot_tax"] }),
 ];
 
 // ─── NCE (Non-Corporate Entity) FS Layout ──────────────────────────────────────
@@ -598,7 +608,10 @@ function FsRow({
       {(isSearching || expanded) && contributors.length > 0 && (() => {
         const displayLedgers = isSearching ? matching : contributors;
         const grouped = groupByTallyGroup(displayLedgers);
-        const showGroupHeaders = grouped.length > 1;
+        // Always surface the Tally group header while searching, even when only
+        // one group matches — otherwise searching "duties" showed the Duties &
+        // Taxes ledgers but hid the "Duties & Taxes" group label entirely.
+        const showGroupHeaders = grouped.length > 1 || isSearching;
         return (
         <div className="bg-slate-50/60 border-b border-border/40">
           {/* Sub-header */}
@@ -692,6 +705,26 @@ export function BsPlView({ engagementId, clientId, financialYear, onRaiseQuery, 
     () => tb.filter(l => !mapping[l.account_name]?.code),
     [tb, mapping],
   );
+
+  // Every FS code the active layout actually places somewhere. A ledger whose
+  // code is NOT in this set is "orphaned": it has a mapping (so it never shows
+  // in the Unmapped box) yet no line references its code (so it never shows in
+  // the statement either) — it silently vanishes. We surface these so the
+  // Explorer always replicates 100% of the synced Tally ledgers, for both
+  // corporate and NCE. (KWIKTEAM: PL_PAT etc. were disappearing this way.)
+  const layoutCodes = useMemo(() => {
+    const s = new Set<string>();
+    for (const r of fullLayout) (r.fsCodes ?? []).forEach(c => s.add(c));
+    return s;
+  }, [fullLayout]);
+  const orphanLedgers = useMemo(
+    () => tb.filter(l => {
+      const code = mapping[l.account_name]?.code;
+      return !!code && !layoutCodes.has(code);
+    }),
+    [tb, mapping, layoutCodes],
+  );
+
   const hasPY = Object.keys(pyFs).length > 0;
 
   // Whether any mapped ledger in the visible statement matches the search
@@ -858,22 +891,30 @@ export function BsPlView({ engagementId, clientId, financialYear, onRaiseQuery, 
         );
       })()}
 
-      {/* ── Unmapped Ledgers ── */}
-      {unmappedLedgers.length > 0 && !searchLower && (
+      {/* ── Unmapped Ledgers ── (filtered by search, never hidden, so the
+           "replica of Tally" guarantee holds even while searching) */}
+      {(() => {
+        const list = searchLower
+          ? unmappedLedgers.filter(l =>
+              l.account_name.toLowerCase().includes(searchLower) ||
+              l.account_group.toLowerCase().includes(searchLower))
+          : unmappedLedgers;
+        if (list.length === 0) return null;
+        return (
         <div className="rounded-lg border border-amber-200 overflow-hidden">
           <div className="flex items-center gap-2 px-4 py-2 bg-amber-50 border-b border-amber-200">
             <span className="text-[11px] font-semibold text-amber-800 uppercase tracking-wide">
               Unmapped Ledgers
             </span>
             <Badge variant="outline" className="text-[10px] h-4 px-1 border-amber-300 text-amber-700">
-              {unmappedLedgers.length}
+              {list.length}
             </Badge>
             <span className="text-[10px] text-amber-600 ml-auto">
               These ledgers have no COA mapping — go to COA Mapping (Stage 3) to assign them
             </span>
           </div>
           <div className="divide-y divide-border/30 bg-background max-h-60 overflow-y-auto">
-            {groupByTallyGroup(unmappedLedgers).map(({ group: g, ledgers: gLedgers }) => (
+            {groupByTallyGroup(list).map(({ group: g, ledgers: gLedgers }) => (
               <div key={g}>
                 <div className="flex items-center gap-2 px-4 py-1 bg-slate-50 border-b border-border/40">
                   <span className="text-[10px] font-semibold text-slate-600 uppercase tracking-wide">{g}</span>
@@ -895,7 +936,65 @@ export function BsPlView({ engagementId, clientId, financialYear, onRaiseQuery, 
             ))}
           </div>
         </div>
-      )}
+        );
+      })()}
+
+      {/* ── Other Mapped Ledgers (outside standard layout) ──
+           Ledgers that ARE mapped but to an FS code no line in the active
+           layout places (e.g. PL_PAT, or any future code). Without this they
+           are invisible — neither summed into a line nor listed as unmapped.
+           Surfacing them guarantees the Explorer is a complete replica of the
+           Tally sync for both corporate and NCE engagements. */}
+      {(() => {
+        const list = searchLower
+          ? orphanLedgers.filter(l =>
+              l.account_name.toLowerCase().includes(searchLower) ||
+              l.account_group.toLowerCase().includes(searchLower))
+          : orphanLedgers;
+        if (list.length === 0) return null;
+        return (
+        <div className="rounded-lg border border-indigo-200 overflow-hidden">
+          <div className="flex items-center gap-2 px-4 py-2 bg-indigo-50 border-b border-indigo-200">
+            <span className="text-[11px] font-semibold text-indigo-800 uppercase tracking-wide">
+              Other Mapped Ledgers
+            </span>
+            <Badge variant="outline" className="text-[10px] h-4 px-1 border-indigo-300 text-indigo-700">
+              {list.length}
+            </Badge>
+            <span className="text-[10px] text-indigo-600 ml-auto">
+              Mapped to a code outside the standard {section === "pl" ? "P&L" : "Balance Sheet"} layout — shown so no ledger is hidden
+            </span>
+          </div>
+          <div className="divide-y divide-border/30 bg-background max-h-60 overflow-y-auto">
+            {groupByTallyGroup(list).map(({ group: g, ledgers: gLedgers }) => (
+              <div key={g}>
+                <div className="flex items-center gap-2 px-4 py-1 bg-slate-50 border-b border-border/40">
+                  <span className="text-[10px] font-semibold text-slate-600 uppercase tracking-wide">{g}</span>
+                  <span className="text-[10px] text-muted-foreground">({gLedgers.length})</span>
+                </div>
+                {gLedgers.map(l => (
+                  <div key={l.account_name} className="flex items-center gap-2 px-6 py-1.5 hover:bg-muted/10 border-b border-border/30 last:border-b-0">
+                    <span className="flex-1 text-xs text-foreground truncate" title={l.account_name}>
+                      {l.account_name}
+                      <span className="ml-1.5 text-[10px] text-indigo-500 font-mono">
+                        {mapping[l.account_name]?.code}
+                      </span>
+                    </span>
+                    <span className={cn(
+                      "text-xs font-mono tabular-nums w-36 text-right",
+                      l.balance >= 0 ? "text-blue-700" : "text-rose-600",
+                    )}>
+                      ₹{fmtAmt(l.balance)}
+                      <span className="ml-1 text-[10px]">{l.balance >= 0 ? "Dr" : "Cr"}</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+        );
+      })()}
 
       {/* Ledger side panel — pass engagementId so useTallyEngagementId can
           take its STEP 0 path (probe tally_groups / tally_trial_balance
