@@ -204,10 +204,50 @@ export function LedgerSidePanel({
         .maybeSingle();
       setTbRow(tb ?? null);
 
-      const { data: vchData, error } = await (supabase as any).rpc("get_ledger_vouchers", {
+      // The engagement that carries this ledger's TB is not always the one the
+      // voucher import wrote to: a client's Tally data can land under several
+      // engagement_ids (audit id, PY shell, original sync id) with only the
+      // sync id holding vouchers — and that id's client_id / financial_year
+      // metadata is often wrong, so it can't be matched on. Resolve the voucher
+      // engagement at fetch time: keep the primary id when it has vouchers,
+      // else probe every engagement that carries this ledger and pick the one
+      // whose vouchers fall in this engagement's financial year.
+      let voucherEngId = tallyEngId;
+      let { data: vchData, error } = await (supabase as any).rpc("get_ledger_vouchers", {
         p_engagement_id: tallyEngId,
         p_ledger_name:   ledgerName,
       });
+
+      if ((!vchData || vchData.length === 0)) {
+        const { data: cands } = await (supabase as any)
+          .from("tally_trial_balance")
+          .select("engagement_id")
+          .eq("ledger_name", ledgerName)
+          .neq("engagement_id", tallyEngId)
+          .limit(200);
+        const ids = Array.from(new Set((cands ?? []).map((c: any) => c.engagement_id)));
+        // FY date window e.g. "2025-26" → 2025-04-01 .. 2026-03-31
+        const yr = parseInt(String(financialYear ?? "").slice(0, 4), 10);
+        const fyStart = Number.isFinite(yr) ? `${yr}-04-01` : null;
+        const fyEnd   = Number.isFinite(yr) ? `${yr + 1}-03-31` : null;
+        let bestInRange = -1, bestOverall = -1;
+        for (const id of ids) {
+          const { data: alt } = await (supabase as any).rpc("get_ledger_vouchers", {
+            p_engagement_id: id,
+            p_ledger_name:   ledgerName,
+          });
+          if (!alt || alt.length === 0) continue;
+          const inRange = (fyStart && fyEnd)
+            ? alt.filter((v: any) => v.voucher_date >= fyStart && v.voucher_date <= fyEnd).length
+            : 0;
+          // Prefer the engagement with the most vouchers inside this FY; fall
+          // back to raw count when no engagement has dated rows in range.
+          if (inRange > bestInRange || (inRange === bestInRange && alt.length > bestOverall)) {
+            bestInRange = inRange; bestOverall = alt.length;
+            vchData = alt; voucherEngId = id; error = null;
+          }
+        }
+      }
 
       if (!error && vchData) {
         const processed: LedgerVoucher[] = (vchData as any[]).map(v => {
@@ -257,7 +297,7 @@ export function LedgerSidePanel({
       }
 
       const { data: rec } = await (supabase as any).rpc("get_ledger_reconciliation", {
-        p_engagement_id: tallyEngId,
+        p_engagement_id: voucherEngId,
         p_ledger_name:   ledgerName,
       });
       if (Array.isArray(rec) && rec.length > 0) {
