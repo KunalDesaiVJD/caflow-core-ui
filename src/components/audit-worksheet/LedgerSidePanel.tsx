@@ -213,6 +213,7 @@ export function LedgerSidePanel({
       // else probe every engagement that carries this ledger and pick the one
       // whose vouchers fall in this engagement's financial year.
       let voucherEngId = tallyEngId;
+      let voucherList: LedgerVoucher[] = [];
       let { data: vchData, error } = await (supabase as any).rpc("get_ledger_vouchers", {
         p_engagement_id: tallyEngId,
         p_ledger_name:   ledgerName,
@@ -293,17 +294,39 @@ export function LedgerSidePanel({
         const withBalance = tb
           ? attachRunningBalance(processed, tb.opening_balance, tb.opening_type)
           : processed;
+        voucherList = withBalance;
         setVouchers(withBalance);
       }
 
-      const { data: rec } = await (supabase as any).rpc("get_ledger_reconciliation", {
-        p_engagement_id: voucherEngId,
-        p_ledger_name:   ledgerName,
-      });
-      if (Array.isArray(rec) && rec.length > 0) {
-        const r = { ...(rec[0] as Reconciliation) };
-        r.reconciled = Math.abs(r.variance) < 0.01;
-        setRecon(r);
+      if (voucherEngId === tallyEngId) {
+        // Normal case — reconcile against the same engagement's TB via RPC.
+        const { data: rec } = await (supabase as any).rpc("get_ledger_reconciliation", {
+          p_engagement_id: voucherEngId,
+          p_ledger_name:   ledgerName,
+        });
+        if (Array.isArray(rec) && rec.length > 0) {
+          const r = { ...(rec[0] as Reconciliation) };
+          r.reconciled = Math.abs(r.variance) < 0.01;
+          setRecon(r);
+        }
+      } else if (tb && voucherList.length > 0) {
+        // Fallback engagement — its own TB is unreliable (that's why it was a
+        // fallback), so reconcile the vouchers against THIS engagement's TB
+        // (correct opening/closing) instead of the RPC. Avoids a phantom
+        // variance banner when the ledger actually ties out.
+        const drTotal = voucherList.filter(v => v.thisDrCr === "Dr").reduce((s, v) => s + v.thisAmount, 0);
+        const crTotal = voucherList.filter(v => v.thisDrCr === "Cr").reduce((s, v) => s + v.thisAmount, 0);
+        const openSigned  = tb.opening_type === "Dr" ? tb.opening_balance : -tb.opening_balance;
+        const derived     = openSigned + drTotal - crTotal;
+        const tallySigned = tb.balance_type === "Dr" ? tb.closing_balance : -tb.closing_balance;
+        const variance    = Math.abs(derived - tallySigned);
+        setRecon({
+          opening_balance: tb.opening_balance, opening_type: tb.opening_type,
+          debit_total: drTotal, credit_total: crTotal,
+          derived_closing: Math.abs(derived), derived_closing_type: derived >= 0 ? "Dr" : "Cr",
+          tally_closing: tb.closing_balance, tally_closing_type: tb.balance_type,
+          variance, reconciled: variance < 0.01, voucher_count: voucherList.length,
+        });
       }
 
       setLoading(false);
