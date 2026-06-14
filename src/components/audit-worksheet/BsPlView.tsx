@@ -27,6 +27,7 @@ import {
   getCOAMapping,
   getPreviousYearFsAmounts,
   getPreviousYearFsAmountsFromTB,
+  getPreviousYearTrialBalance,
   getEngagementIsNonCorporate,
   sumLedgersByFsCodes,
   type COAMapping,
@@ -315,6 +316,11 @@ function useBsPlData(engagementId: string) {
   const [tb,      setTb]      = useState<TBLedger[]>([]);
   const [mapping, setMapping] = useState<COAMapping>({});
   const [pyFs,    setPyFs]    = useState<Record<string, number>>({});
+  // Per-ledger PY closing (lowercased name → signed balance). Lets the
+  // expanded sub-rows show a PY Closing column next to CY, same as the
+  // parent line item — previously each contributing ledger showed only a
+  // single Closing Balance with no PY comparison.
+  const [pyByLedger, setPyByLedger] = useState<Record<string, number>>({});
   const [isNce,   setIsNce]   = useState(false);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState<string | null>(null);
@@ -331,24 +337,32 @@ function useBsPlData(engagementId: string) {
       getPreviousYearFsAmountsFromTB(engagementId),
       getPreviousYearFsAmounts(engagementId),
       getEngagementIsNonCorporate(engagementId),
+      // Per-ledger PY closing balances (PY-shell trial balance).
+      getPreviousYearTrialBalance(engagementId),
     ])
-      .then(([tbData, mapData, pyFromTb, pyFromFs, nce]) => {
+      .then(([tbData, mapData, pyFromTb, pyFromFs, nce, pyTb]) => {
         setTb(tbData as TBLedger[]);
         setMapping(mapData);
         setPyFs(Object.keys(pyFromTb).length > 0 ? pyFromTb : pyFromFs);
+        const pyMap: Record<string, number> = {};
+        for (const l of (pyTb as TBLedger[]) ?? []) {
+          const k = l.account_name.trim().toLowerCase();
+          if (k) pyMap[k] = (pyMap[k] ?? 0) + l.balance;
+        }
+        setPyByLedger(pyMap);
         setIsNce(!!nce);
       })
       .catch(e => setError(e?.message || "Failed to load BS/PL data"))
       .finally(() => setLoading(false));
   }, [engagementId]);
 
-  return { tb, mapping, pyFs, isNce, loading, error };
+  return { tb, mapping, pyFs, pyByLedger, isNce, loading, error };
 }
 
 // ─── Ledger sub-row (inside accordion) ───────────────────────────────────────
 
 function LedgerSubRow({
-  ledger, clientId, financialYear, group, onRaiseQuery, onViewEntry, highlight,
+  ledger, clientId, financialYear, group, onRaiseQuery, onViewEntry, highlight, pyBalance,
 }: {
   ledger:        TBLedger;
   clientId?:     string | null;
@@ -357,8 +371,12 @@ function LedgerSubRow({
   onRaiseQuery:  (group: string, ledger: string, note?: string) => void;
   onViewEntry:   (name: string, group: string) => void;
   highlight?:    boolean;
+  /** PY closing balance for this ledger (signed Dr+); undefined if absent in PY */
+  pyBalance?:    number;
 }) {
-  const isDr = ledger.balance >= 0;
+  const isDr   = ledger.balance >= 0;
+  const hasPy  = pyBalance !== undefined && pyBalance !== null;
+  const pyIsDr = (pyBalance ?? 0) >= 0;
   return (
     <div className={cn(
       "flex items-center gap-2 px-6 py-1.5 hover:bg-muted/10 transition-colors",
@@ -369,13 +387,25 @@ function LedgerSubRow({
       <span className={cn("flex-1 text-xs truncate", highlight ? "text-amber-900 font-semibold" : "text-foreground")} title={ledger.account_name}>
         {ledger.account_name}
       </span>
-      {/* Balance */}
+      {/* CY Closing */}
       <span className={cn(
-        "text-xs font-mono tabular-nums font-medium w-36 text-right",
+        "text-xs font-mono tabular-nums font-medium w-32 text-right",
         isDr ? "text-blue-700" : "text-rose-600",
       )}>
         ₹{fmtAmt(ledger.balance)}
         <span className="ml-1 text-[10px] font-normal">{isDr ? "Dr" : "Cr"}</span>
+      </span>
+      {/* PY Closing */}
+      <span className={cn(
+        "text-xs font-mono tabular-nums w-32 text-right",
+        !hasPy ? "text-muted-foreground" : pyIsDr ? "text-blue-700/80" : "text-rose-600/80",
+      )}>
+        {hasPy ? (
+          <>
+            ₹{fmtAmt(pyBalance!)}
+            <span className="ml-1 text-[10px] font-normal">{pyIsDr ? "Dr" : "Cr"}</span>
+          </>
+        ) : "—"}
       </span>
       {/* Actions */}
       <div className="flex items-center gap-0.5 flex-shrink-0">
@@ -407,7 +437,7 @@ function LedgerSubRow({
 
 function FsRow({
   row, amounts, tb, mapping, clientId, financialYear,
-  expanded, onToggle, onRaiseQuery, onViewEntry, search = "",
+  expanded, onToggle, onRaiseQuery, onViewEntry, search = "", pyByLedger = {},
 }: {
   row:           LayoutRow;
   amounts:       AmountMap;
@@ -420,6 +450,7 @@ function FsRow({
   onRaiseQuery:  (group: string, ledger: string, note?: string) => void;
   onViewEntry:   (name: string, group: string) => void;
   search?:       string;
+  pyByLedger?:   Record<string, number>;
 }) {
   const amt = amounts.get(row.key);
   const cy  = amt?.cy ?? 0;
@@ -619,8 +650,11 @@ function FsRow({
             <span className="flex-1 text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
               Ledger
             </span>
-            <span className="text-[10px] uppercase tracking-wide text-muted-foreground w-36 text-right">
-              Closing Balance
+            <span className="text-[10px] uppercase tracking-wide text-muted-foreground w-32 text-right">
+              CY Closing
+            </span>
+            <span className="text-[10px] uppercase tracking-wide text-muted-foreground w-32 text-right">
+              PY Closing
             </span>
             <div className="w-14 flex-shrink-0" />
           </div>
@@ -646,6 +680,7 @@ function FsRow({
                   onRaiseQuery={onRaiseQuery}
                   onViewEntry={onViewEntry}
                   highlight={isSearching}
+                  pyBalance={pyByLedger[l.account_name.trim().toLowerCase()]}
                 />
               ))}
             </div>
@@ -670,7 +705,7 @@ interface Props {
 }
 
 export function BsPlView({ engagementId, clientId, financialYear, onRaiseQuery, section = "bs" }: Props) {
-  const { tb, mapping, pyFs, isNce, loading, error } = useBsPlData(engagementId);
+  const { tb, mapping, pyFs, pyByLedger, isNce, loading, error } = useBsPlData(engagementId);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [panelLedger, setPanelLedger] = useState<{ name: string; group: string } | null>(null);
   const [search, setSearch] = useState("");
@@ -857,6 +892,7 @@ export function BsPlView({ engagementId, clientId, financialYear, onRaiseQuery, 
               onRaiseQuery={onRaiseQuery}
               onViewEntry={(name, group) => setPanelLedger({ name, group })}
               search={searchLower}
+              pyByLedger={pyByLedger}
             />
           ))}
           {searchLower && !anyMatchInView && (
@@ -920,18 +956,28 @@ export function BsPlView({ engagementId, clientId, financialYear, onRaiseQuery, 
                   <span className="text-[10px] font-semibold text-slate-600 uppercase tracking-wide">{g}</span>
                   <span className="text-[10px] text-muted-foreground">({gLedgers.length})</span>
                 </div>
-                {gLedgers.map(l => (
+                {gLedgers.map(l => {
+                  const py = pyByLedger[l.account_name.trim().toLowerCase()];
+                  const hasPy = py !== undefined && py !== null;
+                  return (
                   <div key={l.account_name} className="flex items-center gap-2 px-6 py-1.5 hover:bg-muted/10 border-b border-border/30 last:border-b-0">
                     <span className="flex-1 text-xs text-foreground truncate" title={l.account_name}>{l.account_name}</span>
                     <span className={cn(
-                      "text-xs font-mono tabular-nums w-36 text-right",
+                      "text-xs font-mono tabular-nums w-32 text-right",
                       l.balance >= 0 ? "text-blue-700" : "text-rose-600",
                     )}>
                       ₹{fmtAmt(l.balance)}
                       <span className="ml-1 text-[10px]">{l.balance >= 0 ? "Dr" : "Cr"}</span>
                     </span>
+                    <span className={cn(
+                      "text-xs font-mono tabular-nums w-32 text-right",
+                      !hasPy ? "text-muted-foreground" : py >= 0 ? "text-blue-700/80" : "text-rose-600/80",
+                    )}>
+                      {hasPy ? <>₹{fmtAmt(py)}<span className="ml-1 text-[10px]">{py >= 0 ? "Dr" : "Cr"}</span></> : "—"}
+                    </span>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             ))}
           </div>
@@ -972,7 +1018,10 @@ export function BsPlView({ engagementId, clientId, financialYear, onRaiseQuery, 
                   <span className="text-[10px] font-semibold text-slate-600 uppercase tracking-wide">{g}</span>
                   <span className="text-[10px] text-muted-foreground">({gLedgers.length})</span>
                 </div>
-                {gLedgers.map(l => (
+                {gLedgers.map(l => {
+                  const py = pyByLedger[l.account_name.trim().toLowerCase()];
+                  const hasPy = py !== undefined && py !== null;
+                  return (
                   <div key={l.account_name} className="flex items-center gap-2 px-6 py-1.5 hover:bg-muted/10 border-b border-border/30 last:border-b-0">
                     <span className="flex-1 text-xs text-foreground truncate" title={l.account_name}>
                       {l.account_name}
@@ -981,14 +1030,21 @@ export function BsPlView({ engagementId, clientId, financialYear, onRaiseQuery, 
                       </span>
                     </span>
                     <span className={cn(
-                      "text-xs font-mono tabular-nums w-36 text-right",
+                      "text-xs font-mono tabular-nums w-32 text-right",
                       l.balance >= 0 ? "text-blue-700" : "text-rose-600",
                     )}>
                       ₹{fmtAmt(l.balance)}
                       <span className="ml-1 text-[10px]">{l.balance >= 0 ? "Dr" : "Cr"}</span>
                     </span>
+                    <span className={cn(
+                      "text-xs font-mono tabular-nums w-32 text-right",
+                      !hasPy ? "text-muted-foreground" : py >= 0 ? "text-blue-700/80" : "text-rose-600/80",
+                    )}>
+                      {hasPy ? <>₹{fmtAmt(py)}<span className="ml-1 text-[10px]">{py >= 0 ? "Dr" : "Cr"}</span></> : "—"}
+                    </span>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             ))}
           </div>

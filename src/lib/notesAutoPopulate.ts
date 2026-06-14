@@ -382,7 +382,7 @@ export async function getEngagementIsNonCorporate(engagementId: string): Promise
  * prior-year closing balances instead of current-year opening balances
  * (which are 0 for P&L accounts that reset each year).
  */
-async function getPreviousYearTrialBalance(engagementId: string): Promise<TBLedger[]> {
+export async function getPreviousYearTrialBalance(engagementId: string): Promise<TBLedger[]> {
   const { data: eng } = await supabase
     .from("audit_engagements")
     .select("client_id, financial_year")
