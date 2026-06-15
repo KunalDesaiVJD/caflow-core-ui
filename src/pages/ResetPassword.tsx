@@ -16,63 +16,88 @@ const ResetPassword = () => {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    // Issue 7 (today) — make the recovery-link detection robust across every
-    // path Supabase + email clients can produce:
+    // Establish a recovery session before enabling the form. Supabase's
+    // recovery emails can deliver the token in three different shapes,
+    // each requiring its own verification call. The form does NOT enable
+    // until one of them produces a live session — otherwise updateUser
+    // later fails with "Auth session missing!".
     //
-    //   (a) /reset-password#access_token=...&type=recovery   (legacy hash)
-    //   (b) /reset-password?type=recovery&token_hash=...     (PKCE token_hash)
-    //   (c) /reset-password?code=<pkce-code>                  (PKCE code-exchange)
-    //   (d) No URL hint — supabase.auth has already processed the token
-    //       SYNCHRONOUSLY during client init, fires PASSWORD_RECOVERY,
-    //       clears the hash, and leaves us a live session.
-    //
-    // Run all four checks in parallel; whichever succeeds first flips
-    // `ready=true`.  Without this combined strategy, email clients that
-    // mangle the hash into a query (Outlook, some Apple Mail variants)
-    // produced "Invalid or expired link" even with a valid token.
+    //   (a) /reset-password#access_token=...&type=recovery   — legacy hash
+    //       Supabase's detectSessionInUrl=true auto-consumes the hash
+    //       and emits SIGNED_IN / PASSWORD_RECOVERY. We just listen.
+    //   (b) /reset-password?token_hash=...&type=recovery     — PKCE token_hash
+    //       Must call verifyOtp({ type: "recovery", token_hash }) ourselves.
+    //   (c) /reset-password?code=<pkce-code>                 — PKCE code exchange
+    //       Must call exchangeCodeForSession(code) ourselves.
     let cancelled = false;
 
-    // (a) + (b) — URL hint
-    const hash       = window.location.hash || "";
-    const search     = window.location.search || "";
-    const hashParams = new URLSearchParams(hash.replace(/^#/, ""));
-    const qsParams   = new URLSearchParams(search);
-    if (
-      hash.includes("type=recovery") ||
-      hash.includes("access_token=") ||
-      hashParams.get("type") === "recovery" ||
-      qsParams.get("type")   === "recovery"
-    ) {
-      setReady(true);
+    const fail = (msg: string) => {
+      if (cancelled) return;
+      toast({ title: "Recovery link failed", description: msg, variant: "destructive" });
+    };
+
+    const hash     = window.location.hash || "";
+    const search   = window.location.search || "";
+    const qsParams = new URLSearchParams(search);
+
+    // (b) token_hash flow — the one used by the customised email template
+    const tokenHash = qsParams.get("token_hash");
+    const qsType    = qsParams.get("type");
+    if (tokenHash && (qsType === "recovery" || !qsType)) {
+      supabase.auth.verifyOtp({ type: "recovery", token_hash: tokenHash })
+        .then(({ data, error }) => {
+          if (cancelled) return;
+          if (error || !data.session) {
+            fail(error?.message || "Link is invalid or expired.");
+            return;
+          }
+          setReady(true);
+        });
     }
 
     // (c) PKCE code-exchange
     const code = qsParams.get("code");
     if (code) {
-      supabase.auth.exchangeCodeForSession(code).then(({ error }) => {
+      supabase.auth.exchangeCodeForSession(code).then(({ data, error }) => {
         if (cancelled) return;
-        if (error) {
-          toast({ title: "Recovery link failed", description: error.message, variant: "destructive" });
-        } else {
-          setReady(true);
+        if (error || !data.session) {
+          fail(error?.message || "Link is invalid or expired.");
+          return;
         }
+        setReady(true);
       });
     }
 
-    // (d) Auth-state listener — catches PASSWORD_RECOVERY when the token
-    // takes >1 frame to land OR a SIGNED_IN that came from the recovery
-    // link (Supabase v2 sometimes only emits SIGNED_IN after token swap).
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+    // (a) Legacy hash flow — listen for the auth state change Supabase
+    // emits after auto-consuming the URL hash.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (cancelled) return;
-      if (event === "PASSWORD_RECOVERY" || event === "SIGNED_IN") setReady(true);
+      if ((event === "PASSWORD_RECOVERY" || event === "SIGNED_IN") && session) {
+        setReady(true);
+      }
     });
 
-    // (d-cont.) Probe an already-restored session for the common case
-    // where Supabase processed the recovery hash BEFORE React mounted.
+    // Common case: Supabase already restored a session before this
+    // component mounted (legacy hash flow lands here on first paint).
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (cancelled) return;
       if (session) setReady(true);
     });
+
+    // Final safety net: if nothing established a session within 4s AND
+    // there were no URL params at all, surface a clear message instead
+    // of letting the user stare at a spinner forever.
+    const noUrlHint = !tokenHash && !code && !hash.includes("access_token=");
+    if (noUrlHint) {
+      const t = setTimeout(() => {
+        if (!cancelled) fail("No recovery token found in the URL. Request a new link.");
+      }, 200);
+      return () => {
+        cancelled = true;
+        clearTimeout(t);
+        subscription.unsubscribe();
+      };
+    }
 
     return () => {
       cancelled = true;
@@ -92,12 +117,31 @@ const ResetPassword = () => {
     }
 
     setLoading(true);
+    // Double-check we actually hold a live session before calling
+    // updateUser. If we don't, the call fails with the generic
+    // "Auth session missing!" — surface a useful message instead.
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) {
+      toast({
+        title: "Session expired",
+        description: "The recovery link is no longer valid. Request a new one.",
+        variant: "destructive",
+      });
+      setLoading(false);
+      navigate("/forgot-password", { replace: true });
+      return;
+    }
+
     const { error } = await supabase.auth.updateUser({ password });
 
     if (error) {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
+      toast({ title: "Could not update password", description: error.message, variant: "destructive" });
     } else {
-      toast({ title: "Password updated successfully" });
+      // Sign the recovery session out so the user lands on a clean login
+      // page with their new password — otherwise they'd be silently
+      // signed in via the recovery session, which is confusing.
+      await supabase.auth.signOut();
+      toast({ title: "Password updated successfully — sign in with the new password" });
       navigate("/login", { replace: true });
     }
     setLoading(false);
