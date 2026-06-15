@@ -647,27 +647,13 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   }[] = useMemo(() => {
     const out: any[] = [];
     const seen = new Set<string>();
-    // 2026-06-13 — Q1 fix: a ledger present in BOTH the CY TB and the PY shell
-    // takes its PY value from the PY-shell CLOSING balance (the authoritative
-    // prior-year close), NOT the CY-TB opening_balance — which can be 0 /
-    // incomplete when the CY Tally export omitted opening balances. SHRI RAM
-    // "Axis Bank Machinery Loan" had CY opening 0 but PY-shell closing
-    // 1,35,457, so the COA Mapping page PY column undercounted the borrowings
-    // note by 1,47,457 vs the Notes / Face (which read the PY shell). Build a
-    // PY-shell closing lookup and prefer it whenever it carries a value.
-    const pyShellClose: Record<string, number> = {};
-    {
-      const pyShellRows0 = pyShellTbData?.tbRows as any[] | undefined;
-      if (pyShellRows0?.length) {
-        for (const l of pyShellRows0) {
-          const nm = cleanTallyName(l.ledger_name);
-          if (!nm) continue;
-          const cb0 = Math.abs(Number(l.closing_balance ?? 0));
-          if (cb0 < 0.005) continue;
-          pyShellClose[nm.toLowerCase()] = signedBalance(cb0, l.balance_type, "DR");
-        }
-      }
-    }
+    // COA Mapping is FROZEN = Tally Sync only. The opening column shows the
+    // current-year Tally OPENING balance, never a PY-shell-derived figure.
+    // (Reverted the 2026-06-13 injection that pushed PY-shell closing into
+    // opening_balance — COA Mapping must carry no derived/edited number. The
+    // CY-opening vs PY-shell-closing identity is now enforced by the FS gate
+    // [validateOpeningVsPriorClose], which BLOCKS generation and names every
+    // ledger where the two disagree, instead of silently overwriting here.)
     if (tallyTb?.length) {
       for (const l of tallyTb as any[]) {
         const name = cleanTallyName(l.ledger_name);
@@ -676,7 +662,6 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         const isDr = String(l.balance_type ?? "").toUpperCase() === "DR";
         seen.add(name.toLowerCase());
         const cyOpen  = signedOpening(l.opening_balance, l.opening_type, "DR");
-        const shellPy = pyShellClose[name.toLowerCase()];
         out.push({
           account_name:  name,
           account_group: cleanTallyName(l.parent_group),
@@ -684,9 +669,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           credit: isDr ? 0  : cb,
           // Sign via shared module; "DR" nature => debit-positive (Dr → +cb, Cr → -cb).
           balance: signedBalance(cb, l.balance_type, "DR"),
-          // Prefer PY-shell closing (authoritative prior-year close) over the
-          // CY-TB opening when the shell carries a value for this ledger.
-          opening_balance: (shellPy !== undefined && Math.abs(shellPy) > 0.005) ? shellPy : cyOpen,
+          // Frozen Tally Sync — pure current-year opening, no PY-shell override.
+          opening_balance: cyOpen,
           tally_debit:  Number(l.debit_amount  ?? 0),
           tally_credit: Number(l.credit_amount ?? 0),
         });

@@ -57,7 +57,7 @@ import {
 } from "@/lib/nceAutoPopulate";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 import FsHealthPanel from "@/components/pipeline/FsHealthPanel";
-import { validateFSReconciliation, logReconciliationDrift, NCE_LIAB_CODE_SET, computeCOATotals } from "@/lib/fsReconciliation";
+import { validateFSReconciliation, logReconciliationDrift, NCE_LIAB_CODE_SET, computeCOATotals, validateOpeningVsPriorClose } from "@/lib/fsReconciliation";
 import { isTallyPLAccount, currentYearProfitAlreadyInReserves } from "@/lib/tallyDetection";
 
 // ═══════════════════════════════════════
@@ -4201,6 +4201,25 @@ export default function PipelineFinancialStatements({
 
   const hasSevereDrift = (fsReconResult?.severeCount ?? 0) > 0;
 
+  // ── Single-PY-source gate: CY Tally opening MUST equal PY-shell closing ──
+  // for every Balance-Sheet ledger (accounting identity: this year's opening
+  // = last year's close). PY is sourced ONLY from the PY-shell closing; the
+  // COA Mapping page is frozen Tally Sync. When the two disagree, FS
+  // generation is BLOCKED and each offending ledger is named below so the
+  // user fixes the source in Tally rather than shipping wrong financials.
+  // Runs only when a PY-shell TB exists (first-year engagements have nothing
+  // to reconcile against).
+  const openingReconResult = useMemo(
+    () => validateOpeningVsPriorClose({
+      cyTb:       tallyTb ?? [],
+      pyShellTb:  pyShellTb ?? [],
+      coaMapping,
+      aliases,
+    }),
+    [tallyTb, pyShellTb, coaMapping, aliases],
+  );
+  const hasOpeningMismatch = openingReconResult.mismatches.length > 0;
+
   // Phase 8 Step 2: persist severe drift to fs_reconciliation_log so
   // historical drift is auditable.
   // PERF FIX: The old dependency `fsReconResult?.computedAt` used
@@ -4225,8 +4244,8 @@ export default function PipelineFinancialStatements({
   // Final Export Excel gate: corporate must satisfy ALL three; non-corporate
   // entities use BS-balance + severe-drift check.
   const exportExcelBlocked: boolean = isNonCorporate
-    ? (!nceBsBalanced || hasSevereDrift)
-    : (!corpBsBalanced || !corpBsBalancedPy || !faPyEntered);
+    ? (!nceBsBalanced || hasSevereDrift || hasOpeningMismatch)
+    : (!corpBsBalanced || !corpBsBalancedPy || !faPyEntered || hasOpeningMismatch);
   const exportExcelBlockReasons: string[] = [];
   if (!isNonCorporate) {
     if (!nceBsBalanced)   exportExcelBlockReasons.push(`Balance Sheet out by ₹${Math.abs(nceBsDiff).toLocaleString("en-IN")}`);
@@ -4235,6 +4254,14 @@ export default function PipelineFinancialStatements({
     if (!corpBsBalanced)   exportExcelBlockReasons.push(`CY Balance Sheet out by ₹${Math.abs(bsDiff).toLocaleString("en-IN")}`);
     if (!corpBsBalancedPy) exportExcelBlockReasons.push(`PY Balance Sheet out by ₹${Math.abs(bsDiffPy).toLocaleString("en-IN")}`);
     if (!faPyEntered)      exportExcelBlockReasons.push("FA Note — Previous-Year totals not entered");
+  }
+  // Single-PY-source gate reason — applies to BOTH entity paths (pushed
+  // outside the if/else so it is never swallowed by branch wiring).
+  if (hasOpeningMismatch) {
+    const n = openingReconResult.mismatches.length;
+    exportExcelBlockReasons.push(
+      `${n} ledger(s) where CY opening ≠ PY-shell closing — fix the opening balance in Tally (see “Opening balances do not tie to prior year” banner below)`,
+    );
   }
   const activeTotalAssets      = isNonCorporate ? nceTotalAssets      : totalAssets;
   // Use fsDisplayData-resolved totalELDisplay (same as bsDiff) so stat card
@@ -7491,11 +7518,13 @@ export default function PipelineFinancialStatements({
             <Button
               variant="outline"
               size="sm"
-              className={cn("gap-1", hasSevereDrift && "opacity-60")}
+              className={cn("gap-1", (hasSevereDrift || hasOpeningMismatch) && "opacity-60")}
               title={hasSevereDrift
                 ? `Export Word blocked: ${fsReconResult!.severeCount} note(s) have drift > ₹100. Fix in Notes tab first.`
+                : hasOpeningMismatch
+                ? `Export Word blocked: ${openingReconResult.mismatches.length} ledger(s) where CY opening ≠ PY-shell closing. Fix the opening balance in Tally (see banner above).`
                 : "Export Balance Sheet + P&L as a Big4-style Word document (.docx)"}
-              disabled={hasSevereDrift}
+              disabled={hasSevereDrift || hasOpeningMismatch}
               onClick={() => setShowNCEFontDialog(true)}
             >
               <FileText size={14} /> Export Word
@@ -7693,6 +7722,57 @@ export default function PipelineFinancialStatements({
           </div>
         );
       })()}
+
+      {/* Single-PY-source gate banner — names every Balance-Sheet ledger
+           whose CY Tally opening does not equal its PY-shell closing. While
+           any such ledger exists, FS generation (Excel + Word) is blocked so
+           the user cannot ship financials built on a broken opening balance. */}
+      {hasOpeningMismatch && (
+        <Alert variant="destructive" className="border-destructive/40 mb-3">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>
+            Opening balances do not tie to prior year — financial statements blocked
+          </AlertTitle>
+          <AlertDescription>
+            <p className="mb-2 text-xs">
+              PY is sourced only from the PY-shell closing, and the COA Mapping
+              (Tally Sync) opening must equal it. The Balance-Sheet ledger(s)
+              below do not match. Fix the opening balance in Tally (or the
+              PY-shell), re-sync, and the statements unblock automatically.
+            </p>
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-left text-[10px] uppercase tracking-wide opacity-70 border-b border-current/30">
+                  <th className="py-1 pr-2 font-medium">Ledger</th>
+                  <th className="py-1 pr-2 font-medium text-right">CY opening</th>
+                  <th className="py-1 pr-2 font-medium text-right">PY closing</th>
+                  <th className="py-1 pr-2 font-medium text-right">Difference</th>
+                </tr>
+              </thead>
+              <tbody>
+                {openingReconResult.mismatches.slice(0, 50).map((m) => (
+                  <tr key={`${m.ledger}-${m.code}`} className="border-b border-current/10 last:border-0">
+                    <td className="py-1 pr-2">
+                      {m.ledger}
+                      {m.kind === "py_only" && (
+                        <span className="text-[10px] opacity-70 ml-1">(not in current-year TB)</span>
+                      )}
+                    </td>
+                    <td className="py-1 pr-2 text-right tabular-nums">{m.cyOpening.toLocaleString("en-IN")}</td>
+                    <td className="py-1 pr-2 text-right tabular-nums">{m.pyClosing.toLocaleString("en-IN")}</td>
+                    <td className="py-1 pr-2 text-right tabular-nums font-medium">{m.diff.toLocaleString("en-IN")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {openingReconResult.mismatches.length > 50 && (
+              <p className="mt-1 text-[10px] opacity-70">
+                + {openingReconResult.mismatches.length - 50} more ledger(s)…
+              </p>
+            )}
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* 2026-06-05 — FS Health structural guarantee panel. Phase 4: now
            a three-way breakdown (COA / Manual / Note / Face) so legitimate

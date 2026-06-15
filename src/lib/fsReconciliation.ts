@@ -538,3 +538,155 @@ export const NCE_LIAB_CODE_SET = new Set([
   // P&L — Income (Cr-natural)
   "NCE_REV_OPS", "NCE_REV_OTH",
 ]);
+
+// ─── Opening-vs-PriorClose gate — single PY source enforcement ───────────────
+//
+// Accounting identity: a BALANCE-SHEET ledger's CURRENT-YEAR opening balance
+// MUST equal its PRIOR-YEAR closing balance. CAFlow sources PY exclusively
+// from the PY-Shell trial balance closing, and the COA Mapping page is frozen
+// to Tally Sync (current-year opening). This validator compares the two per
+// ledger; on any mismatch > tolerance the caller BLOCKS FS generation and
+// names the offending ledger(s) so the user fixes the source in Tally —
+// instead of silently overwriting one number with the other.
+//
+// Scope = BALANCE-SHEET ledgers only. P&L ledgers always open at 0 in Tally
+// while their PY-shell closing carries last year's revenue/expense, so the
+// identity does not apply — they are skipped via isBSCode(). Unmapped ledgers
+// are skipped too (mapping-completeness is a separate gate).
+//
+// Only runs when a PY-Shell TB is present; first-year / no-shell engagements
+// have nothing to reconcile against and are not blocked by this check.
+
+/** P&L note types from NCE_NOTE_FS_MAP — everything else is Balance Sheet. */
+const PL_NOTE_TYPES = new Set<string>([
+  "revenue_ops", "other_income", "cogs",
+  "employee_exp", "finance_costs", "other_expenses",
+]);
+
+/** BS FS codes derived from the canonical note→code map (all non-P&L note
+ *  types). Used to scope the opening/closing identity to Balance Sheet codes. */
+const BS_CODE_SET: Set<string> = (() => {
+  const s = new Set<string>();
+  for (const [noteType, fs] of Object.entries(NCE_NOTE_FS_MAP)) {
+    if (PL_NOTE_TYPES.has(noteType)) continue;
+    for (const c of [...(fs.all ?? []), ...(fs.lt ?? []), ...(fs.st ?? [])]) s.add(c);
+  }
+  return s;
+})();
+
+/** Conservative BS classifier: BS_ and INV_ prefixes plus the derived NCE BS
+ *  set. Anything ambiguous (depreciation, tax, partner remuneration, P&L) is
+ *  NOT BS, so it is skipped and can never produce a false opening/close
+ *  mismatch. */
+function isBSCode(code: string | undefined | null): boolean {
+  if (!code) return false;
+  if (code.startsWith("BS_")) return true;
+  if (code.startsWith("INV_")) return true;
+  return BS_CODE_SET.has(code);
+}
+
+export interface OpeningMismatchRow {
+  /** Current-year ledger name (display). */
+  ledger:    string;
+  /** Mapped FS code (always a BS code). */
+  code:      string;
+  /** Signed CY Tally opening (debit-positive). */
+  cyOpening: number;
+  /** Signed PY-shell closing (debit-positive). */
+  pyClosing: number;
+  /** cyOpening − pyClosing. */
+  diff:      number;
+  /** "cy_vs_py" = ledger exists both years and disagrees;
+   *  "py_only"  = PY-shell ledger whose closing was never carried to CY. */
+  kind:      "cy_vs_py" | "py_only";
+}
+
+export interface OpeningReconResult {
+  mismatches: OpeningMismatchRow[];
+  allOk:      boolean;
+  /** True only when a PY-shell TB was actually present (gate active). */
+  hasShell:   boolean;
+  computedAt: string;
+}
+
+const normName = (s: string | null | undefined): string =>
+  String(s ?? "").trim().toLowerCase();
+
+export function validateOpeningVsPriorClose(args: {
+  cyTb:       TBRowLike[];
+  pyShellTb:  TBRowLike[];
+  coaMapping: COAMappingLike;
+  /** prior_ledger_name → current_ledger_name (handles renames). */
+  aliases?:   Record<string, string>;
+  tolerance?: number;
+}): OpeningReconResult {
+  const tol = args.tolerance ?? 100;
+  const computedAt = new Date().toISOString();
+  const hasShell = (args.pyShellTb?.length ?? 0) > 0;
+  if (!hasShell) return { mismatches: [], allOk: true, hasShell: false, computedAt };
+
+  // Case-insensitive mapping lookup (mirrors computeCOATotals).
+  const ciIndex: Record<string, { code: string }> = {};
+  for (const [k, v] of Object.entries(args.coaMapping || {})) {
+    if (!v?.code) continue;
+    const kk = normName(k);
+    if (!(kk in ciIndex)) ciIndex[kk] = v;
+  }
+  const codeOf = (name: string): string | undefined =>
+    (args.coaMapping?.[name] ?? args.coaMapping?.[name.trim()] ?? ciIndex[normName(name)])?.code;
+
+  // PY-shell signed closing keyed by EFFECTIVE CURRENT name (alias-resolved)
+  // so a renamed ledger lines up with its current-year counterpart.
+  const aliasMap = args.aliases ?? {};
+  const pyByCurrent = new Map<string, { closing: number; origName: string; effName: string }>();
+  for (const r of args.pyShellTb) {
+    const raw = String(r.ledger_name ?? "");
+    if (!raw) continue;
+    const effName = aliasMap[raw] ?? aliasMap[raw.trim()] ?? raw;
+    pyByCurrent.set(normName(effName), {
+      closing: signedBalance(r.closing_balance, r.balance_type, "DR"),
+      origName: raw,
+      effName,
+    });
+  }
+
+  const mismatches: OpeningMismatchRow[] = [];
+  const seenCurrent = new Set<string>();
+
+  // Pass 1 — every CY BS ledger: signed opening must equal the PY-shell close.
+  for (const r of args.cyTb) {
+    const name = String(r.ledger_name ?? "");
+    if (!name) continue;
+    const key = normName(name);
+    seenCurrent.add(key);
+    const code = codeOf(name);
+    if (!isBSCode(code)) continue;
+    const cyOpening = signedOpening(r.opening_balance, r.opening_type, "DR");
+    const pyClosing = pyByCurrent.get(key)?.closing ?? 0;
+    const diff = Math.round((cyOpening - pyClosing) * 100) / 100;
+    if (Math.abs(diff) > tol) {
+      mismatches.push({ ledger: name, code: code!, cyOpening, pyClosing, diff, kind: "cy_vs_py" });
+    }
+  }
+
+  // Pass 2 — PY-shell BS ledgers with a non-zero close that never appear in
+  // the CY TB: their opening was not carried forward this year.
+  for (const [key, py] of pyByCurrent) {
+    if (seenCurrent.has(key)) continue;
+    if (Math.abs(py.closing) <= tol) continue;
+    const code = codeOf(py.effName) ?? codeOf(py.origName);
+    if (!isBSCode(code)) continue;
+    mismatches.push({
+      ledger: py.origName, code: code!, cyOpening: 0,
+      pyClosing: py.closing, diff: Math.round(-py.closing * 100) / 100,
+      kind: "py_only",
+    });
+  }
+
+  return {
+    mismatches: mismatches.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff)),
+    allOk: mismatches.length === 0,
+    hasShell: true,
+    computedAt,
+  };
+}
