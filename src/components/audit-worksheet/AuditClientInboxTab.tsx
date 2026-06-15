@@ -31,6 +31,13 @@ import type { AuditWorksheetData } from "./hooks/useAuditWorksheetData";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+interface QueryAttachment {
+  file_path: string;
+  file_name: string;
+  file_type: string;
+  size:      number;
+}
+
 interface ClientQuery {
   id: string;
   ref_number: string | null;
@@ -45,6 +52,10 @@ interface ClientQuery {
   client_reply: string | null;
   internal_notes: string | null;
   created_at: string | null;
+  /** Attachments carried over from Stage 2 Query Sheet at dispatch time.
+   *  See migration 20260612000001 — JSONB array of { file_path, file_name,
+   *  file_type, size } pointing into the "documents" storage bucket. */
+  attachments: QueryAttachment[] | null;
 }
 
 interface Message {
@@ -191,6 +202,16 @@ function QueryThread({
     const a = document.createElement("a"); a.href = data.signedUrl; a.download = name; a.click();
   };
 
+  // Dispatched attachments (from Stage 2 Query Sheet) live in the "documents"
+  // bucket, not "firm-assets". Use a separate downloader so the signed-URL
+  // call goes to the right bucket — without this the auditor sees the
+  // attachments listed but every click 404s.
+  const downloadDispatchedAttachment = async (path: string, name: string) => {
+    const { data, error } = await supabase.storage.from("documents").createSignedUrl(path, 60);
+    if (error) { toast.error("Download failed"); return; }
+    const a = document.createElement("a"); a.href = data.signedUrl; a.download = name; a.click();
+  };
+
   const updateStatus = async (status: string) => {
     await supabase.from("audit_client_queries" as any).update({ status } as any).eq("id", query.id);
     onStatusChange();
@@ -305,6 +326,38 @@ function QueryThread({
               </span>
             )}
           </div>
+
+          {/* Dispatched attachments from Stage 2 Query Sheet.
+              When the auditor attached supporting documents to a query row
+              in Stage 2, those files travel into audit_client_queries.attachments
+              at dispatch time (see migration 20260612000001 + the
+              BulkDispatchDialog handler in QuerySheet.tsx). Display them here
+              so the auditor doesn't have to re-attach the same docs to send
+              an email — they're already on the dispatched query, just not
+              previously surfaced in Stage 3's UI. */}
+          {Array.isArray(query.attachments) && query.attachments.length > 0 && (
+            <div className="rounded-md border bg-muted/30 px-3 py-2 space-y-1.5">
+              <p className="text-[11px] font-semibold text-muted-foreground uppercase flex items-center gap-1.5">
+                <Paperclip size={11} />
+                Attached at dispatch ({query.attachments.length})
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {query.attachments.map(att => (
+                  <button
+                    key={att.file_path}
+                    type="button"
+                    onClick={() => downloadDispatchedAttachment(att.file_path, att.file_name)}
+                    className="inline-flex items-center gap-1.5 text-xs rounded border bg-card px-2 py-1 hover:bg-primary/5 hover:border-primary/40 transition-colors"
+                    title={`${att.file_name} (${(att.size / 1024).toFixed(0)} KB)`}
+                  >
+                    <Paperclip size={10} className="text-primary shrink-0" />
+                    <span className="truncate max-w-[200px]">{att.file_name}</span>
+                    <Download size={10} className="text-muted-foreground shrink-0" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Conversation thread */}
           <div className="space-y-1">
@@ -432,7 +485,7 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
     if (!engagementId) return;
     const { data: rows } = await (supabase as any)
       .from("audit_client_queries")
-      .select("id,ref_number,query_text,status,priority,due_date,financial_year,required_documents,ledger_name,group_name,client_reply,internal_notes,created_at")
+      .select("id,ref_number,query_text,status,priority,due_date,financial_year,required_documents,ledger_name,group_name,client_reply,internal_notes,created_at,attachments")
       .eq("engagement_id", engagementId)
       .order("created_at", { ascending: false });
     setQueries((rows as ClientQuery[]) || []);
