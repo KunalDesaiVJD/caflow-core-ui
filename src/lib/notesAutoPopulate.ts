@@ -670,6 +670,7 @@ const CORP_SMART_MERGE: Record<string, SmartMergeRule[]> = {
  *  to derive the "base head" of a ledger name. */
 function deriveLedgerBaseHead(name: string): string {
   return name.trim()
+    .replace(/\s*\([^)]*\).*$/, "")                          // "(Survey No. 1166)", "(Branch X)"
     .replace(/\s*[-—]\s*\d{4}\s*[-—]\s*\d{2,4}\s*$/, "")  // "- 2024-25"
     .replace(/\s*[-—]\s*\d{2}\s*[-—]\s*\d{2}\s*$/, "")     // "- 24-25"
     .replace(/\s*[-—]\s*\d{4}\s*$/, "")                     // "- 2425"

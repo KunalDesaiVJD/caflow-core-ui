@@ -351,6 +351,8 @@ function makeCustomId(name: string, idx: number): string {
 function deriveBaseHead(name: string): string {
   return name
     .trim()
+    // strip parenthetical disambiguators e.g. "(Survey No. 1166)", "(Branch X)"
+    .replace(/\s*\([^)]*\).*$/, "")
     // strip "- 18%", "-5%" etc
     .replace(/\s*[-—]\s*\d+\s*%.*$/i, "")
     // strip GST/regn classifiers
