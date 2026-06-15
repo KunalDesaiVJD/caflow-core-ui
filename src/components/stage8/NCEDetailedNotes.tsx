@@ -2957,18 +2957,19 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
         }
       }
 
-      const next = { ...prev, [noteType]: {
+      const nextNote: NCENoteData = {
         ...cur,
         customRows: finalRows,
         cy: finalCy,
         py: finalPy,
         cy_sources: finalCySources,
-      }};
-      scheduleSave(next);
-      return next;
+      };
+      // Guarded auto-save: this is the path a manual/custom row takes when the
+      // user picks "Move to…" a heading (e.g. ICICI Car Loan from Loans on
+      // demand → Term loans). Persists only when the note total is unchanged.
+      return { ...prev, [noteType]: commitMoveGuarded(noteType, cur, nextNote, "Moved to selected heading") };
     });
-    toast.success("Attached under selected heading");
-  }, [scheduleSave]);
+  }, [commitMoveGuarded]);
 
   // Shared helper: resolve the sectionTag for a given target row/custom-row id.
   const resolveSection = useCallback((
