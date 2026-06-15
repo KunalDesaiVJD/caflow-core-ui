@@ -617,20 +617,27 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
         }
         y += 10;
 
-        // ── Query text in a bordered box ─────────────────────────────────
-        doc.setFont("helvetica", "normal");
-        doc.setFontSize(9);
-        doc.setTextColor(15, 20, 40);
-        const qLines = doc.splitTextToSize(q.query_text, cw - 8) as string[];
-        const qH = qLines.length * 5 + 9;
-        ensureSpace(qH);
-        doc.setFillColor(252, 252, 255);
-        doc.setDrawColor(210, 215, 240);
-        doc.setLineWidth(0.3);
-        doc.rect(ml, y, cw, qH, "FD");
-        doc.setLineWidth(0.2);
-        doc.text(qLines, ml + 4, y + 6.5);
-        y += qH + 3;
+        // ── Query text — autoTable so long/special-char text wraps reliably ────
+        autoTable(doc, {
+          startY:     y,
+          margin:     { left: ml, right: ml },
+          tableWidth: cw,
+          body:       [[q.query_text]],
+          showHead:   false,
+          styles: {
+            font:        "helvetica",
+            fontSize:    9,
+            textColor:   [15, 20, 40]    as [number, number, number],
+            fillColor:   [252, 252, 255] as [number, number, number],
+            cellPadding: { top: 5, right: 5, bottom: 5, left: 5 },
+            lineWidth:   0.3,
+            lineColor:   [210, 215, 240] as [number, number, number],
+            overflow:    "linebreak",
+          },
+          columnStyles: { 0: { cellWidth: cw, overflow: "linebreak" } },
+          didDrawPage: () => { drawPageHeader(); },
+        });
+        y = (doc as any).lastAutoTable.finalY + 3;
 
         // Required documents note
         if (q.required_documents) {

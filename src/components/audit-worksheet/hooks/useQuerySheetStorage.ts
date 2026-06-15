@@ -180,6 +180,14 @@ export function useQuerySheetStorage(
   const onFieldChangeRef = useRef(onFieldChange);
   useEffect(() => { onFieldChangeRef.current = onFieldChange; }, [onFieldChange]);
 
+  // Debounce edit-log emission for free-text fields so typing a sentence doesn't
+  // create dozens of history entries. logTimerRef holds the pending timeout per
+  // "rowId:field" key; logStartRef captures the old value at the START of each
+  // typing session so the log shows the real before/after, not intermediate chars.
+  const logTimerRef  = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const logStartRef  = useRef<Record<string, string>>({});
+  const TEXT_LOG_FIELDS = new Set<string>(["head", "particulars", "query_description", "required_documents", "remark"]);
+
   // Human-readable labels for fields surfaced in the version history.
   const FIELD_LABEL: Partial<Record<keyof QueryRow, string>> = {
     head:               "Group",
@@ -284,9 +292,10 @@ export function useQuerySheetStorage(
           ),
         };
         debounce(next);
-        // Emit a row-level edit-log entry for any meaningful field change
-        // (Issue 3 — 2026-05-30). dispatched_query_id is an internal id and
-        // not worth surfacing in the timeline; everything else is.
+        // Emit a row-level edit-log entry for meaningful field changes.
+        // Text fields are debounced (1500 ms) so that typing a sentence doesn't
+        // flood the log with one entry per character — only the final value is
+        // recorded. Discrete fields (status, priority, etc.) fire immediately.
         if (
           target
           && onFieldChangeRef.current
@@ -300,10 +309,33 @@ export function useQuerySheetStorage(
             oldDisplay = statusLabel(oldDisplay as QueryStatus);
             newDisplay = statusLabel(newDisplay as QueryStatus);
           }
-          onFieldChangeRef.current({
-            rowId: id, rowLabel: rowLabel(target),
-            fieldLabel: fl, oldValue: oldDisplay, newValue: newDisplay,
-          });
+          if (TEXT_LOG_FIELDS.has(field as string)) {
+            const logKey = `${id}:${field}`;
+            if (!logTimerRef.current[logKey]) {
+              // First keystroke in this typing session — save the original value
+              logStartRef.current[logKey] = oldDisplay;
+            } else {
+              clearTimeout(logTimerRef.current[logKey]);
+            }
+            const capturedNew = newDisplay;
+            const capturedLabel = rowLabel(target);
+            logTimerRef.current[logKey] = setTimeout(() => {
+              delete logTimerRef.current[logKey];
+              const startOld = logStartRef.current[logKey] ?? "";
+              delete logStartRef.current[logKey];
+              if (startOld !== capturedNew && onFieldChangeRef.current) {
+                onFieldChangeRef.current({
+                  rowId: id, rowLabel: capturedLabel,
+                  fieldLabel: fl, oldValue: startOld, newValue: capturedNew,
+                });
+              }
+            }, 1500);
+          } else {
+            onFieldChangeRef.current({
+              rowId: id, rowLabel: rowLabel(target),
+              fieldLabel: fl, oldValue: oldDisplay, newValue: newDisplay,
+            });
+          }
         }
         return next;
       });
