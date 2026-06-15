@@ -596,15 +596,24 @@ const ItReturns = () => {
           remarks: profile.remarks || null,
           ...patch,
         };
-        const { error } = await supabase.from("itr_profiles").insert(payload);
+        // .select() so RLS / NOT-NULL violations surface as either an error
+        // OR an empty-data response we can detect and report.
+        const { data, error } = await supabase.from("itr_profiles").insert(payload).select();
         if (error) throw error;
+        if (!data || data.length === 0) {
+          throw new Error("Row was not created (possible RLS policy block). Check Supabase logs.");
+        }
       } else {
-        const { error } = await supabase.from("itr_profiles").update(patch as any).eq("id", profile.id);
+        const { data, error } = await supabase.from("itr_profiles").update(patch as any).eq("id", profile.id).select();
         if (error) throw error;
+        if (!data || data.length === 0) {
+          throw new Error("Row was not updated (possible RLS policy block). Check Supabase logs.");
+        }
       }
       queryClient.invalidateQueries({ queryKey: ["itr_profiles"] });
     } catch (e: any) {
-      toast({ title: "Error", description: e.message, variant: "destructive" });
+      console.error("ITR inline update failed", { field, value, profileId: profile.id, error: e });
+      toast({ title: "Save failed", description: e.message, variant: "destructive" });
     }
   };
 
