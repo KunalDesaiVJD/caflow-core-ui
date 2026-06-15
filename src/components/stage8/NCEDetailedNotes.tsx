@@ -46,6 +46,16 @@ import {
 } from "@/lib/nceAutoPopulate";
 import { getDynamicNoteDisplay } from "@/lib/nceDynamicNoteNumbers";
 
+/** The note's grand total (CY & PY), via the single canonical aggregator — the
+ *  SAME function the Note Total row and the BS/P&L face read. Used by the
+ *  guarded auto-save to prove a reclassification leaves the total untouched. */
+function noteGrandTotal(config: NoteConfig, nd: NCENoteData): { cy: number; py: number } {
+  const t = computeNoteTotals(config, nd.cy, nd.py, nd.customRows);
+  return t.pattern === "A"
+    ? { cy: t.grandTotal.ltCy + t.grandTotal.stCy, py: t.grandTotal.ltPy + t.grandTotal.stPy }
+    : { cy: t.grandTotal.cy, py: t.grandTotal.py };
+}
+
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface Props {
@@ -2580,6 +2590,58 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
     // no-op
   }, []);
 
+  // ── Guarded auto-save (total-preserving reclassification only) ────────────
+  // The blanket write-protection above stays in force for every figure edit.
+  // The ONLY exception is a whole-ledger reclassification between sub-heads of
+  // the same note (e.g. GST → TDS within Other Current Liabilities): it changes
+  // no figure, so the note grand total — and therefore the BS/P&L face and the
+  // BS/P&L grand totals — are mathematically unchanged. persistOneNote writes
+  // exactly one note; commitMoveGuarded re-checks the note total before AND
+  // after the move and only persists when it is byte-identical (CY and PY).
+  // If a move would shift the total by even ₹1 it is reverted, never saved.
+  const persistOneNote = useCallback(async (noteType: string, nd: NCENoteData) => {
+    if (!engagementId || !financialYear) return;
+    try {
+      const { cy_data, py_data } = serialiseNoteData(nd);
+      const { data: existing } = await supabase
+        .from("nce_financial_notes")
+        .select("id")
+        .eq("engagement_id", engagementId)
+        .eq("financial_year", financialYear)
+        .eq("note_type", noteType)
+        .maybeSingle();
+      if ((existing as any)?.id) {
+        await supabase.from("nce_financial_notes")
+          .update({ cy_data, py_data, updated_at: new Date().toISOString() })
+          .eq("id", (existing as any).id);
+      } else {
+        await supabase.from("nce_financial_notes")
+          .insert({ engagement_id: engagementId, financial_year: financialYear, note_type: noteType, cy_data, py_data });
+      }
+    } catch {
+      toast.error("Auto-save failed — change not persisted.");
+    }
+  }, [engagementId, financialYear]);
+
+  const commitMoveGuarded = useCallback((
+    noteType: string, cur: NCENoteData, nextNote: NCENoteData, okMsg: string,
+  ): NCENoteData => {
+    const config = NOTES_CONFIG.find(c => c.noteType === noteType);
+    const before = config ? noteGrandTotal(config, cur)      : { cy: 0, py: 0 };
+    const after  = config ? noteGrandTotal(config, nextNote) : { cy: 0, py: 0 };
+    const dCy = Math.abs(after.cy - before.cy);
+    const dPy = Math.abs(after.py - before.py);
+    if (dCy > 0.5 || dPy > 0.5) {
+      const delta = Math.max(dCy, dPy);
+      queueMicrotask(() => toast.error(
+        `Move blocked — it would change the note total by ₹${Math.round(delta).toLocaleString("en-IN")}. Nothing was changed.`,
+      ));
+      return cur; // revert — keep the note exactly as it was
+    }
+    queueMicrotask(() => { void persistOneNote(noteType, nextNote); toast.success(`${okMsg} — saved`); });
+    return nextNote;
+  }, [persistOneNote]);
+
   // ── Cell change ─────────────────────────────────────────────────────────
   const handleChange = useCallback((
     noteType: string, key: string, isCY: boolean, value: number,
@@ -2987,19 +3049,20 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
       }
       // 4. Record this ledger in ejectedLedgers so Re-sync skips it from auto-grouping
       const newEjectedLedgers = [...new Set([...(cur.ejectedLedgers ?? []), ledger])];
-      const next = { ...prev, [noteType]: {
+      const nextNote: NCENoteData = {
         ...cur,
         cy: newCy,
         py: newPy,
         cy_sources: newCySources,
         customRows: [...cur.customRows, newRow],
         ejectedLedgers: newEjectedLedgers,
-      }};
-      scheduleSave(next);
-      return next;
+      };
+      return { ...prev, [noteType]: commitMoveGuarded(
+        noteType, cur, nextNote,
+        attachToId ? `"${ledger}" moved to heading` : `"${ledger}" moved to a separate row`,
+      )};
     });
-    toast.success(attachToId ? `"${ledger}" moved to heading` : `"${ledger}" moved to a separate row`);
-  }, [scheduleSave, resolveSection]);
+  }, [commitMoveGuarded, resolveSection]);
 
   // Eject a source ledger from a CUSTOM (auto/merged) row → new standalone custom row.
   // If attachToId is provided the new row is immediately attached to that heading.
@@ -3058,12 +3121,13 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
       };
       // Record this ledger in ejectedLedgers so Re-sync skips it from auto-grouping
       const newEjectedLedgers = [...new Set([...(cur.ejectedLedgers ?? []), ledger])];
-      const next = { ...prev, [noteType]: { ...cur, cy: newCy, py: newPy, customRows: [...updatedRows, newRow], ejectedLedgers: newEjectedLedgers } };
-      scheduleSave(next);
-      return next;
+      const nextNote: NCENoteData = { ...cur, cy: newCy, py: newPy, customRows: [...updatedRows, newRow], ejectedLedgers: newEjectedLedgers };
+      return { ...prev, [noteType]: commitMoveGuarded(
+        noteType, cur, nextNote,
+        attachToId ? `"${ledger}" moved to heading` : `"${ledger}" moved to its own row`,
+      )};
     });
-    toast.success(attachToId ? `"${ledger}" moved to heading` : `"${ledger}" moved to its own row`);
-  }, [scheduleSave, resolveSection]);
+  }, [commitMoveGuarded, resolveSection]);
 
   // ── Re-sync ─────────────────────────────────────────────────────────────
   const handleResync = useCallback(async () => {
