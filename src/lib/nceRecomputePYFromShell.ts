@@ -69,8 +69,8 @@ export interface NoteRecomputeResult {
   duplicateLedgers: Array<{ ledger: string; rows: string[] }>;
   /** True if any ambiguity was found (caller should NOT auto-write this note). */
   hasAmbiguity: boolean;
-  /** Pattern-A note (LT/ST) — engine refused to touch it; needs column-aware pass. */
-  patternA: boolean;
+  /** Rows left untouched because their LT/ST column couldn't be resolved safely. */
+  skippedRows: string[];
 }
 
 const norm = (s: string | null | undefined) => String(s ?? "").trim().toLowerCase();
@@ -139,22 +139,37 @@ function buildRowOwnership(
   return { owner, ledgerRows };
 }
 
+/**
+ * A row's amount lives at `rowId` (Pattern B) or `rowId_lt` / `rowId_st`
+ * (Pattern A, LT/ST column split). Resolve which key holds this row's amount,
+ * using the keys ALREADY present in the saved data so we preserve the row's
+ * column placement instead of re-deriving it.
+ *   - rowId present                  → Pattern B
+ *   - exactly one of _lt/_st present → that column
+ *   - both present                   → ambiguous (can't split one total) → skip
+ *   - none present (under-populated) → rowId for Pattern B; skip for Pattern A
+ *     (column unknown)
+ */
+function resolveAmountKey(
+  rowId: string, noteType: string,
+  cyData: Record<string, any>, pyData: Record<string, number>,
+): { key: string | null; ambiguous: boolean } {
+  const has = (k: string) => k in cyData || k in pyData;
+  if (has(rowId)) return { key: rowId, ambiguous: false };
+  const lt = has(`${rowId}_lt`), st = has(`${rowId}_st`);
+  if (lt && st) return { key: null, ambiguous: true };
+  if (lt) return { key: `${rowId}_lt`, ambiguous: false };
+  if (st) return { key: `${rowId}_st`, ambiguous: false };
+  if (PATTERN_A_NOTES.has(noteType)) return { key: null, ambiguous: true }; // column unknown
+  return { key: rowId, ambiguous: false };
+}
+
 export function recomputeNotePYFromShell(
   input: NoteRecomputeInput,
   cyTb: TBRow[],
   shellTb: TBRow[],
 ): NoteRecomputeResult {
   const { noteType, cyData, pyData } = input;
-
-  // Refuse Pattern-A notes — their amounts live under _lt/_st keys; touching
-  // them with rowId keys would corrupt the note. Return unchanged + flag.
-  if (PATTERN_A_NOTES.has(noteType)) {
-    return {
-      noteType, newPyData: { ...pyData }, newCyData: { ...cyData },
-      changes: [], duplicateLedgers: [], hasAmbiguity: false, patternA: true,
-    };
-  }
-
   const shellMap = signedCloseMap(shellTb, noteType);
   const cyMap = signedCloseMap(cyTb, noteType);
 
@@ -173,9 +188,12 @@ export function recomputeNotePYFromShell(
   const newPyData: Record<string, number> = { ...pyData };
   const newCyData: Record<string, any> = { ...cyData };
   const changes: RowChange[] = [];
+  const skippedRows: string[] = [];
 
   for (const [rowId, ledgerKeys] of owner) {
-    if (dupRowIds.has(rowId)) continue;            // ambiguous — leave untouched
+    if (dupRowIds.has(rowId)) continue;            // ledger owned by >1 row — leave untouched
+    const { key, ambiguous } = resolveAmountKey(rowId, noteType, cyData, pyData);
+    if (ambiguous || !key) { skippedRows.push(rowId); continue; } // LT/ST column unresolved
     const uniqLedgers = Array.from(new Set(ledgerKeys));
     let py = 0, cy = 0;
     for (const lk of uniqLedgers) {                // each ledger once
@@ -183,13 +201,13 @@ export function recomputeNotePYFromShell(
       cy += cyMap.get(lk) ?? 0;
     }
     py = round2(py); cy = round2(cy);
-    const oldPy = round2(Number(pyData[rowId] ?? 0));
-    const oldCy = round2(Number((cyData[rowId] as number) ?? 0));
+    const oldPy = round2(Number(pyData[key] ?? 0));
+    const oldCy = round2(Number((cyData[key] as number) ?? 0));
     if (Math.abs(py - oldPy) > 0.5 || Math.abs(cy - oldCy) > 0.5) {
-      changes.push({ rowId, ledgers: uniqLedgers, oldPy, newPy: py, oldCy, newCy: cy });
+      changes.push({ rowId: key, ledgers: uniqLedgers, oldPy, newPy: py, oldCy, newCy: cy });
     }
-    newPyData[rowId] = py;
-    newCyData[rowId] = cy;
+    newPyData[key] = py;
+    newCyData[key] = cy;
   }
 
   return {
@@ -198,7 +216,7 @@ export function recomputeNotePYFromShell(
     newCyData,
     changes,
     duplicateLedgers,
-    hasAmbiguity: duplicateLedgers.length > 0,
-    patternA: false,
+    hasAmbiguity: duplicateLedgers.length > 0 || skippedRows.length > 0,
+    skippedRows,
   };
 }

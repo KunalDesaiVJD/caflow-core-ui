@@ -17,7 +17,6 @@ describe("recomputeNotePYFromShell", () => {
       [tb("Dilipbhai Mandanka", 0, "Dr")],   // CY closing 0
       [tb("Dilipbhai Mandanka", 0, "Dr")],   // shell closing 0
     );
-    expect(r.patternA).toBe(false);
     expect(r.newPyData.custom_dilip_0).toBe(0);
     expect(r.changes).toContainEqual(
       expect.objectContaining({ rowId: "custom_dilip_0", oldPy: 12000, newPy: 0 }),
@@ -77,16 +76,33 @@ describe("recomputeNotePYFromShell", () => {
     expect(r.changes).toHaveLength(0);
   });
 
-  it("refuses Pattern-A notes (borrowings) and returns them unchanged", () => {
-    const cyData = { custom_loan_0_lt: 135457, _custom_rows: [{ id: "custom_loan_0", label: "Axis Machinery" }] };
+  it("fixes a Pattern-A (borrowings) opening-leak by writing the row's existing _lt key", () => {
+    // SHRI RAM: a loan repaid in PY (shell closing 0) whose note carries the
+    // leaked PY OPENING 1,35,457 under the LT column key.
+    const cyData = { custom_loan_0_lt: 0, _custom_rows: [{ id: "custom_loan_0", label: "Axis Machinery" }] };
     const pyData = { custom_loan_0_lt: 135457 };
     const r = recomputeNotePYFromShell(
       { noteType: "borrowings", cyData, pyData },
       [tb("Axis Machinery", 0, "Cr")],
-      [tb("Axis Machinery", 0, "Cr")],
+      [tb("Axis Machinery", 0, "Cr")], // shell closing 0 → correct PY = 0
     );
-    expect(r.patternA).toBe(true);
-    expect(r.newPyData).toEqual(pyData); // untouched
+    expect(r.newPyData.custom_loan_0_lt).toBe(0);            // leak removed at the right key
+    expect(r.newPyData.custom_loan_0).toBeUndefined();        // did NOT write a bare rowId key
+    expect(r.changes).toContainEqual(
+      expect.objectContaining({ rowId: "custom_loan_0_lt", oldPy: 135457, newPy: 0 }),
+    );
+  });
+
+  it("skips a Pattern-A row whose LT/ST column can't be resolved (no existing key)", () => {
+    const cyData = { _custom_rows: [{ id: "custom_new_0", label: "New Loan" }] };
+    const pyData = {}; // no _lt or _st key → column unknown
+    const r = recomputeNotePYFromShell(
+      { noteType: "borrowings", cyData, pyData },
+      [tb("New Loan", 100000, "Cr")],
+      [tb("New Loan", 100000, "Cr")],
+    );
+    expect(r.skippedRows).toContain("custom_new_0");
+    expect(r.changes).toHaveLength(0);
   });
 
   it("never mutates the note structure (_custom_rows preserved)", () => {
