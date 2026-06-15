@@ -556,8 +556,26 @@ const ItReturns = () => {
   }, [profiles, clientGroupMap]);
 
   // ─── Inline update handler ───
-  const handleInlineUpdate = async (profile: ItrProfile, field: string, value: any) => {
+  const handleInlineUpdate = async (
+    profile: ItrProfile,
+    field: string,
+    value: any,
+    extraPatch?: Record<string, any>,
+  ) => {
     const isNew = isUnsavedItrProfile(profile);
+    // Auto-fill Prepared By when status moves to "Ready for Review", and
+    // Checked By when status moves to "Verified" — using the signed-in user.
+    // Only fills when the slot is currently empty so manual overrides survive.
+    const autoPatch: Record<string, any> = {};
+    if (field === "filing_status" && user?.id) {
+      if (value === "Ready for Review" && !(profile as any).prepared_by) {
+        autoPatch.prepared_by = user.id;
+      }
+      if (value === "Verified" && !(profile as any).checked_by) {
+        autoPatch.checked_by = user.id;
+      }
+    }
+    const patch = { [field]: value ?? null, ...autoPatch, ...(extraPatch || {}) };
     try {
       if (isNew) {
         const payload: any = {
@@ -576,12 +594,12 @@ const ItReturns = () => {
           prepared_by: profile.prepared_by || null,
           checked_by: profile.checked_by || null,
           remarks: profile.remarks || null,
-          [field]: value || null,
+          ...patch,
         };
         const { error } = await supabase.from("itr_profiles").insert(payload);
         if (error) throw error;
       } else {
-        const { error } = await supabase.from("itr_profiles").update({ [field]: value || null } as any).eq("id", profile.id);
+        const { error } = await supabase.from("itr_profiles").update(patch as any).eq("id", profile.id);
         if (error) throw error;
       }
       queryClient.invalidateQueries({ queryKey: ["itr_profiles"] });
@@ -1348,15 +1366,24 @@ function InfoPanel({ open, onOpenChange, profile, onUpdate, staffUsers }: {
     setRemarks((p as any).remarks || "");
   }, [p.id]);
 
-  const handleSave = () => {
-    // Validation: if Filed, Ack No is mandatory
-    if ((p.filing_status === "Filed" || p.filing_status === "Verified" || p.filing_status === "Sent to CPC") && !ackNo.trim()) {
+  const ackRequired =
+    p.filing_status === "Filed" ||
+    p.filing_status === "Verified" ||
+    p.filing_status === "Sent to CPC";
+
+  // Auto-save on blur — no Save button. Validation still runs on Ack No so the
+  // auditor can't silently leave it blank when the status requires it.
+  const commitAck = () => {
+    if (ackNo === (p.acknowledgment_no || "")) return;
+    if (ackRequired && !ackNo.trim()) {
       toast({ title: "Ack No is mandatory when status is Filed/Verified/Sent to CPC", variant: "destructive" });
       return;
     }
-    if (ackNo !== (p.acknowledgment_no || "")) onUpdate(p, "acknowledgment_no", ackNo);
-    if (remarks !== ((p as any).remarks || "")) onUpdate(p, "remarks", remarks || null);
-    onOpenChange(false);
+    onUpdate(p, "acknowledgment_no", ackNo || null);
+  };
+  const commitRemarks = () => {
+    if (remarks === ((p as any).remarks || "")) return;
+    onUpdate(p, "remarks", remarks || null);
   };
 
   return (
@@ -1367,15 +1394,25 @@ function InfoPanel({ open, onOpenChange, profile, onUpdate, staffUsers }: {
         </SheetHeader>
         <div className="space-y-4 mt-4">
           <div className="space-y-1.5">
-            <Label>Ack No {(p.filing_status === "Filed" || p.filing_status === "Verified" || p.filing_status === "Sent to CPC") && <span className="text-destructive">*</span>}</Label>
-            <Input value={ackNo} onChange={e => setAckNo(e.target.value)} placeholder="Enter acknowledgement number" />
+            <Label>Ack No {ackRequired && <span className="text-destructive">*</span>}</Label>
+            <Input
+              value={ackNo}
+              onChange={e => setAckNo(e.target.value)}
+              onBlur={commitAck}
+              placeholder="Enter acknowledgement number"
+            />
           </div>
           <div className="space-y-1.5">
             <Label>Remarks</Label>
-            <Textarea value={remarks} onChange={e => setRemarks(e.target.value)} rows={3} placeholder="Any notes..." />
+            <Textarea
+              value={remarks}
+              onChange={e => setRemarks(e.target.value)}
+              onBlur={commitRemarks}
+              rows={3}
+              placeholder="Any notes..."
+            />
           </div>
-          <Separator />
-          <Button onClick={handleSave} className="w-full">Save & Close</Button>
+          <p className="text-[11px] text-muted-foreground">Changes save automatically.</p>
         </div>
       </SheetContent>
     </Sheet>
