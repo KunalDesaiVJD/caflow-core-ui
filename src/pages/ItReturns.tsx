@@ -501,6 +501,13 @@ const ItReturns = () => {
     // from running in cases where itrClientIds hadn't resolved yet, causing
     // clients to only appear after manual "Add Row" instead of auto-populating.
     enabled: !!user?.id,
+    // The global QueryClient sets staleTime to 5 min — too long for this
+    // grid where the auditor immediately wants their own status / prep /
+    // check / ack edits reflected. Force an always-fresh fetch on every
+    // mount and window-focus so stale cached rows never linger.
+    staleTime: 0,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
   });
 
   // ─── Filtered profiles ───
