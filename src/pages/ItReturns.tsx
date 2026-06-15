@@ -576,6 +576,25 @@ const ItReturns = () => {
       }
     }
     const patch = { [field]: value ?? null, ...autoPatch, ...(extraPatch || {}) };
+    // ── Optimistic cache update ──────────────────────────────────────────
+    // The IT Returns query (`["itr_profiles", firmId, selectedAY, ...]`)
+    // returns an array of enriched profiles. We patch the matching row
+    // immediately so the dropdown reflects the new value the moment the
+    // user clicks, without waiting for the round-trip + refetch. On
+    // error we roll back; on success we await refetch to get any
+    // server-side denormalisations.
+    const previousCaches: Array<[readonly unknown[], unknown]> =
+      queryClient.getQueriesData({ queryKey: ["itr_profiles"] }) as any;
+    queryClient.setQueriesData(
+      { queryKey: ["itr_profiles"] },
+      (old: any) => {
+        if (!Array.isArray(old)) return old;
+        return old.map((row: any) =>
+          row.client_id === profile.client_id ? { ...row, ...patch } : row,
+        );
+      },
+    );
+
     try {
       if (isNew) {
         const payload: any = {
@@ -596,8 +615,6 @@ const ItReturns = () => {
           remarks: profile.remarks || null,
           ...patch,
         };
-        // .select() so RLS / NOT-NULL violations surface as either an error
-        // OR an empty-data response we can detect and report.
         const { data, error } = await supabase.from("itr_profiles").insert(payload).select();
         if (error) throw error;
         if (!data || data.length === 0) {
@@ -610,8 +627,12 @@ const ItReturns = () => {
           throw new Error("Row was not updated (possible RLS policy block). Check Supabase logs.");
         }
       }
-      queryClient.invalidateQueries({ queryKey: ["itr_profiles"] });
+      // Await refetch so the next render uses authoritative server data,
+      // not just our optimistic patch.
+      await queryClient.invalidateQueries({ queryKey: ["itr_profiles"] });
     } catch (e: any) {
+      // Roll back the optimistic patch
+      previousCaches.forEach(([key, data]) => queryClient.setQueryData(key, data));
       console.error("ITR inline update failed", { field, value, profileId: profile.id, error: e });
       toast({ title: "Save failed", description: e.message, variant: "destructive" });
     }
