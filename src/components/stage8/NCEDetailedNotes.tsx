@@ -2623,8 +2623,29 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
     }
   }, [engagementId, financialYear]);
 
+  // Latest note-data snapshot, kept fresh so the debounced persist below always
+  // serialises the FINAL state — not a mid-bulk-move snapshot.
+  const noteDataRef = useRef<Record<string, NCENoteData>>(noteData);
+  useEffect(() => { noteDataRef.current = noteData; }, [noteData]);
+
+  // Debounced, coalesced persist. A bulk "Move to…" reclassifies many rows in
+  // one tick; persisting each move separately fired concurrent DB writes that
+  // RACED, so a partial (mid-bulk) state won and rows reverted on reload. Now
+  // every move just schedules one write per note, 500 ms after the last move,
+  // serialising the final state once.
+  const pendingPersist = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const scheduleNotePersist = useCallback((noteType: string) => {
+    const timers = pendingPersist.current;
+    if (timers[noteType]) clearTimeout(timers[noteType]);
+    timers[noteType] = setTimeout(() => {
+      delete timers[noteType];
+      const nd = noteDataRef.current[noteType];
+      if (nd) void persistOneNote(noteType, nd).then(() => toast.success("Reclassification saved"));
+    }, 500);
+  }, [persistOneNote]);
+
   const commitMoveGuarded = useCallback((
-    noteType: string, cur: NCENoteData, nextNote: NCENoteData, okMsg: string,
+    noteType: string, cur: NCENoteData, nextNote: NCENoteData, _okMsg: string,
   ): NCENoteData => {
     const config = NOTES_CONFIG.find(c => c.noteType === noteType);
     const before = config ? noteGrandTotal(config, cur)      : { cy: 0, py: 0 };
@@ -2638,9 +2659,12 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
       ));
       return cur; // revert — keep the note exactly as it was
     }
-    queueMicrotask(() => { void persistOneNote(noteType, nextNote); toast.success(`${okMsg} — saved`); });
+    // Coalesced auto-save: one debounced write per note, immune to the bulk-move
+    // race. The guard above already ran per move, so the accumulated state is
+    // total-preserving.
+    scheduleNotePersist(noteType);
     return nextNote;
-  }, [persistOneNote]);
+  }, [scheduleNotePersist]);
 
   // ── Cell change ─────────────────────────────────────────────────────────
   const handleChange = useCallback((
