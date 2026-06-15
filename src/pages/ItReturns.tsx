@@ -615,11 +615,31 @@ const ItReturns = () => {
           remarks: profile.remarks || null,
           ...patch,
         };
-        const { data, error } = await supabase.from("itr_profiles").insert(payload).select();
+        // Upsert on the (client_id, assessment_year, firm_id) unique
+        // constraint so rapid double-clicks during the brief window
+        // between INSERT and refetch don't pile up duplicate rows.
+        // Returns the canonical row regardless of insert-vs-update.
+        const { data, error } = await supabase
+          .from("itr_profiles")
+          .upsert(payload, { onConflict: "client_id,assessment_year,firm_id" })
+          .select();
         if (error) throw error;
         if (!data || data.length === 0) {
           throw new Error("Row was not created (possible RLS policy block). Check Supabase logs.");
         }
+        // Swap the virtual id for the real DB id in the cache so the
+        // NEXT edit on this row hits the UPDATE branch instead of
+        // creating yet another duplicate.
+        const realId = (data[0] as any).id as string;
+        queryClient.setQueriesData(
+          { queryKey: ["itr_profiles"] },
+          (old: any) => {
+            if (!Array.isArray(old)) return old;
+            return old.map((row: any) =>
+              row.id === profile.id ? { ...row, id: realId } : row,
+            );
+          },
+        );
       } else {
         const { data, error } = await supabase.from("itr_profiles").update(patch as any).eq("id", profile.id).select();
         if (error) throw error;
