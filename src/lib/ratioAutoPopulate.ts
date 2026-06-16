@@ -40,7 +40,6 @@ import {
   sumLedgersByFsCodes,
   getPreviousYearFsAmounts,
 } from "./notesAutoPopulate";
-import { supabase } from "@/integrations/supabase/client";
 
 // ═════════════════════════════════════════════════════════════════════════
 // FS-code groupings
