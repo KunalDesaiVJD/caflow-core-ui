@@ -1194,8 +1194,11 @@ function buildNote1Section(
       .replace(/\[DEP_NOTE\]/g,      String(header.depNoteNum   || ""))
       .replace(/\[LAST_NOTE\]/g,     lastNoteNum);
 
-  // Vertical gap between notes — reduced for better page fitting.
-  const GAP = 140;
+  // Tight vertical gap between numbered notes — matches the firm-standard
+  // reference image (screenshot 4) where consecutive items sit close enough
+  // to read as one continuous list. 60 DXA ≈ 3pt extra below each line on
+  // top of the standard line spacing.
+  const GAP = 60;
 
   const txt = (text: string, bold = false) =>
     new TextRun({ text, font: FONT, size: SZ_BODY, bold, color: BLACK });
@@ -1215,47 +1218,47 @@ function buildNote1Section(
   // Re-number the SELECTED notes 1..N so the Word file matches the on-screen
   // view (un-ticked notes are hidden and the rest re-number 1..N).
   //
-  // Layout chosen to match the firm-standard NCE Notes page reference image
-  // (V J Desai & Co. master template):
-  //   • "NOTES - 1" badge top-left (small navy label).
-  //   • Underlined navy heading "NOTES FORMING PARTS OF ACCOUNTS FOR THE
-  //     YEAR ENDED OF 31.03.<yyyy>". No "DISCLOSURE OF ACCOUNTING POLICIES…"
-  //     wording — that was an internal placeholder the auditor never wanted.
-  //   • Plain numbered list (1 .. N) with no bold "Balance Confirmation:"
-  //     title prefix on each line. The on-screen Stage 7 page also stores
-  //     the title separately for organisation; the printed Word file omits
-  //     it so the page reads as a continuous numbered statement.
+  // Layout — locked to match screenshots 2 (heading style) + 4 (body style)
+  // from the user's reference set:
+  //   • Heading: SINGLE LINE — "Note 1:  NOTES FORMING PARTS OF ACCOUNTS FOR
+  //     THE YEAR ENDED OF 31.03.<yyyy>" — left-aligned, navy bold with a
+  //     full-width bottom border so it reads as a banner that spans the
+  //     page (same style as the prior "DISCLOSURE OF ACCOUNTING POLICIES"
+  //     header, just new wording). NO separate "NOTES - 1" badge, NO
+  //     centred underlined text — those were dropped per the user's
+  //     "format of heading should be same as previous" feedback.
+  //   • Body: numbered "<n>. <Title>: <text>" — bold black number, bold
+  //     navy title ("Balance Confirmation:", "Rearrangement of Figures:",
+  //     etc.), plain black body. Title comes from notes_to_accounts_data
+  //     notes_json so the auditor's renames flow through unchanged.
+  //   • Spacing: tight (GAP = 60 DXA) so the list reads as a continuous
+  //     block instead of a series of well-spaced paragraphs.
   const headingYear = String(cyYear || "").slice(-4) || "20XX";
   const out: Paragraph[] = [
-    // Top-left small "NOTES - 1" badge.
     new Paragraph({
-      alignment: AlignmentType.LEFT,
-      spacing:   { before: 0, after: 60 },
-      children: [
-        new TextRun({ text: "NOTES - 1", font: FONT, size: SZ_SM, bold: true, color: NAVY }),
-      ],
-    }),
-    // Underlined navy heading.
-    new Paragraph({
-      alignment: AlignmentType.CENTER,
-      spacing:   { before: 0, after: 160 },
+      spacing:   { before: 0, after: 100 },
+      border:    { bottom: { style: BorderStyle.SINGLE, size: 4, color: NAVY, space: 4 } },
       keepNext:  true,
+      keepLines: true,
       children: [
+        new TextRun({ text: "Note 1:  ", font: FONT, size: SZ_HDR, bold: true, color: NAVY }),
         new TextRun({
           text: `NOTES FORMING PARTS OF ACCOUNTS FOR THE YEAR ENDED OF 31.03.${headingYear}`,
-          font: FONT, size: SZ_HDR, bold: true, color: NAVY, underline: {},
+          font: FONT, size: SZ_HDR, bold: true, color: NAVY,
         }),
       ],
     }),
   ];
 
   selectedNotes.forEach((n, i) => {
-    const num = i + 1;
+    const num   = i + 1;
+    const title = (n.title || "").trim();
     out.push(
       block(
         [
-          new TextRun({ text: `${num}.  `,                          font: FONT, size: SZ_BODY, bold: true, color: BLACK }),
-          new TextRun({ text: resolveTokens(n.text || ""),            font: FONT, size: SZ_BODY,            color: BLACK }),
+          new TextRun({ text: `${num}.  `,                       font: FONT, size: SZ_BODY, bold: true, color: BLACK }),
+          new TextRun({ text: title ? `${title}: ` : "",          font: FONT, size: SZ_BODY, bold: true, color: NAVY  }),
+          new TextRun({ text: resolveTokens(n.text || ""),         font: FONT, size: SZ_BODY,             color: BLACK }),
         ],
         { indent: 0, after: i === selectedNotes.length - 1 ? 40 : GAP },
       ),
