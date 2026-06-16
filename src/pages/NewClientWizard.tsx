@@ -990,6 +990,27 @@ const NewClientWizard = () => {
           if (basicInfo.gstin_states[g]) gstin_states[g] = basicInfo.gstin_states[g];
           if (basicInfo.gstin_addresses[g]) gstin_addresses[g] = basicInfo.gstin_addresses[g];
         });
+
+        // ROOT-CAUSE FIX (MILL POWER scenario): if the auditor is editing an
+        // existing client whose portal is already active AND they're changing
+        // the email, we MUST also rename the linked auth.users.email — otherwise
+        // the client tries to sign in with the new address and gets "Incorrect
+        // email or password" because the auth row still points at the OLD
+        // email. Detect the change BEFORE we overwrite clients.email below.
+        let portalEmailChange: { user_id: string; newEmail: string } | null = null;
+        const newEmailNormalised = (basicInfo.email || "").trim().toLowerCase();
+        if (clientId && newEmailNormalised) {
+          const { data: prev } = await supabase
+            .from("clients")
+            .select("email, user_id")
+            .eq("id", clientId)
+            .maybeSingle();
+          const prevEmail = (prev?.email || "").trim().toLowerCase();
+          if (prev?.user_id && prevEmail && prevEmail !== newEmailNormalised) {
+            portalEmailChange = { user_id: prev.user_id, newEmail: newEmailNormalised };
+          }
+        }
+
         const { error } = await supabase
           .from("clients")
           .update({
@@ -1007,6 +1028,60 @@ const NewClientWizard = () => {
           } as any)
           .eq("id", clientId);
         if (error) throw error;
+
+        // Propagate the email change to the linked portal login. Done after
+        // the clients.update succeeds so we never rename auth on a failed
+        // save. Failure here surfaces as a toast warning but does NOT roll
+        // back the clients table — the auditor can re-trigger the rename by
+        // saving Basic Info again.
+        if (portalEmailChange) {
+          try {
+            const { data: { session } } = await supabase.auth.getSession();
+            const res = await fetch(`${(supabase as any).supabaseUrl}/functions/v1/user-management?action=change-portal-email`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${session?.access_token}`,
+              },
+              body: JSON.stringify({
+                client_id: clientId,
+                new_email: portalEmailChange.newEmail,
+              }),
+            });
+            const result = await res.json().catch(() => ({}));
+            if (!res.ok) {
+              toast({
+                title: "Portal email not updated",
+                description: result?.error || "Sign in will still use the previous email until this is fixed.",
+                variant: "destructive",
+              });
+            } else if (result.mode === "linked") {
+              toast({
+                title: "Portal linked to existing login",
+                description: `The new email already had a portal login — this client now points at it. Use the existing password.`,
+              });
+            } else if (result.mode === "renamed") {
+              toast({
+                title: "Portal email updated",
+                description: `Sign in now uses ${portalEmailChange.newEmail}. Existing password is unchanged.`,
+              });
+            } else if (result.mode === "forked") {
+              // Shared-login fork: this client's portal login was split off
+              // from a multi-tenant auth user so the other co-tenants are
+              // unaffected. A fresh password was issued — surface it.
+              toast({
+                title: "Portal login created for this client",
+                description: `This client previously shared its login with other clients. A separate portal login has been created. Sign in with ${portalEmailChange.newEmail} · Password: ${result.default_password || "Client@2025!"}`,
+              });
+            }
+          } catch (emailErr: any) {
+            toast({
+              title: "Portal email not updated",
+              description: emailErr?.message || "Sign in will still use the previous email.",
+              variant: "destructive",
+            });
+          }
+        }
         // extra_emails — separate update, safe-fails if column not yet migrated
         await saveExtraEmails(clientId);
         // Save group memberships

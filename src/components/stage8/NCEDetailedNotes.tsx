@@ -2568,10 +2568,52 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
             try { localStorage.setItem(cySourcesMigrationKey, "1"); } catch {}
           }
         } else {
-          // First visit — NO auto-populate. Notes are write-protected from
-          // the UI. The audit team populates initial data via direct DB
-          // writes (or via a manual one-shot import path outside this UI).
-          if (!cancelled) setNoteData({});
+          // FIRST VISIT (no rows in nce_financial_notes for this engagement
+          // + FY yet) — SHREEYAM INFRA scenario. Run the standard auto-
+          // populate so every NCE note gets its ledger bifurcation + amounts
+          // from the COA mapping the auditor just completed, then SEED the
+          // DB with those rows.
+          //
+          // The general write-protection above prevents silent overwrites of
+          // audit-verified data — but on a fresh engagement there's nothing
+          // to protect. Without this seed the Notes tab opens completely
+          // empty (no rows, no totals) even though the BS / P&L face read
+          // correct totals straight from the COA mapping, leaving the
+          // auditor with no breakup at all.
+          //
+          // Concurrency guard: the auto-populate result is upserted with
+          // onConflict on (engagement_id, financial_year, note_type) so a
+          // second concurrent first-visit (e.g. two tabs) merges cleanly
+          // instead of crashing on the unique index.
+          try {
+            const populated = await nceAutoPopulate(engagementId, {});
+            if (!cancelled) setNoteData(populated);
+            const noteTypes = Object.keys(populated);
+            if (noteTypes.length > 0 && fy) {
+              const rows = noteTypes.map(noteType => {
+                const { cy_data, py_data } = serialiseNoteData(populated[noteType]);
+                return {
+                  engagement_id:  engagementId,
+                  financial_year: fy,
+                  note_type:      noteType,
+                  cy_data,
+                  py_data,
+                };
+              });
+              try {
+                await supabase
+                  .from("nce_financial_notes")
+                  .upsert(rows, { onConflict: "engagement_id,financial_year,note_type" });
+                toast.success("Notes populated from COA mapping");
+              } catch (writeErr) {
+                console.warn("[NCEDetailedNotes] first-visit seed write failed", writeErr);
+                toast.error("Notes loaded but could not be saved. Please refresh.");
+              }
+            }
+          } catch (popErr) {
+            console.error("[NCEDetailedNotes] first-visit auto-populate failed", popErr);
+            if (!cancelled) setNoteData({});
+          }
         }
       } catch (e: any) {
         toast.error(`Failed to load notes: ${e?.message || e}`);

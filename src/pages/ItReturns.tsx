@@ -39,7 +39,7 @@ import {
   FileText, Plus, Download, Search, Filter, X, Eye, Info,
   AlertTriangle, Clock, CheckCircle2, Scale, ChevronRight, ChevronLeft,
   ChevronsLeft, ChevronsRight,
-  CalendarDays, Sparkles, Copy, Send, Mail,
+  CalendarDays, Sparkles, Copy, Send, Mail, History, Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getClassificationsForFY } from "@/utils/classificationUtils";
@@ -388,10 +388,42 @@ const ItReturns = () => {
       const allClientIds = (cData || []).map(c => c.id);
       if (allClientIds.length === 0) return [];
 
-      let q = supabase.from("itr_profiles").select("*").eq("assessment_year", selectedAY);
-      if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
-      q = q.in("client_id", allClientIds);
-      const { data: pData } = await q;
+      // ROOT-CAUSE FIX (V J Desai 703 clients showing every status as
+       // "Data Pending" even after save): the previous .in("client_id",
+       // allClientIds) sent every active client id as a URL-based IN
+       // clause. 703 × 36-char UUIDs + commas = ~26 KB of URL — well past
+       // PostgREST / Supabase's URL length ceiling, so the request was
+       // silently dropping rows (or returning none). The saved profiles
+       // in the DB never reached the front-end, the page only showed the
+       // virtual-row fallback, and every dropdown change appeared to
+       // "revert" on refetch.
+       //
+       // Drop the .in() entirely: filtering by firm_id (RLS-enforced) and
+       // assessment_year is already constraining enough — itr_profiles
+       // for other firms can't leak in. Rows for clients that aren't in
+       // the active cData list (deleted / draft / inactive) still get
+       // filtered out downstream at line 430 (clientMap.has(clientId)
+       // check). Net result: no data lost, no URL-length cliff.
+       const fetchSize = 5000;
+       let pData: any[] = [];
+       let from = 0;
+       while (true) {
+         let q = supabase
+           .from("itr_profiles")
+           .select("*")
+           .eq("assessment_year", selectedAY)
+           .range(from, from + fetchSize - 1);
+         if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
+         const { data: batch, error } = await q;
+         if (error) {
+           console.error("[ItReturns] itr_profiles fetch failed", error);
+           break;
+         }
+         if (!batch || batch.length === 0) break;
+         pData = pData.concat(batch);
+         if (batch.length < fetchSize) break;
+         from += fetchSize;
+       }
 
       // ── FY-aware classification resolution ────────────────────────────────
       // Use the shared util which consults client_classification_history first
@@ -501,6 +533,13 @@ const ItReturns = () => {
     // from running in cases where itrClientIds hadn't resolved yet, causing
     // clients to only appear after manual "Add Row" instead of auto-populating.
     enabled: !!user?.id,
+    // The global QueryClient sets staleTime to 5 min — too long for this
+    // grid where the auditor immediately wants their own status / prep /
+    // check / ack edits reflected. Force an always-fresh fetch on every
+    // mount and window-focus so stale cached rows never linger.
+    staleTime: 0,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
   });
 
   // ─── Filtered profiles ───
@@ -556,8 +595,96 @@ const ItReturns = () => {
   }, [profiles, clientGroupMap]);
 
   // ─── Inline update handler ───
-  const handleInlineUpdate = async (profile: ItrProfile, field: string, value: any) => {
+  const handleInlineUpdate = async (
+    profile: ItrProfile,
+    field: string,
+    value: any,
+    extraPatch?: Record<string, any>,
+  ) => {
     const isNew = isUnsavedItrProfile(profile);
+    // Auto-fill / auto-clear policy tied to filing_status transitions:
+    //
+    //  • Ready for Review  → fills Prepared By with the signed-in user
+    //                        (only if currently empty — manual overrides win).
+    //                        Also clears Checked By if the row was previously
+    //                        Verified — the new reviewer hasn't checked yet,
+    //                        so the prior "Checked By" claim is stale.
+    //  • Verified          → fills Checked By with the signed-in user
+    //                        (only if currently empty).
+    //  • Filed             → stamps date_filed with today (YYYY-MM-DD) if
+    //                        the auditor hasn't already entered one, and
+    //                        fills Upload By with the signed-in user when
+    //                        empty (the auditor who marks the return as
+    //                        Filed is the one who uploaded it). Requires
+    //                        a non-blank Ack No — without it, the status
+    //                        change is rejected with a toast so the auditor
+    //                        types the ARN before the row can be marked Filed.
+    //  • Data Pending      → resets the whole "filed" footprint (prepared_by,
+    //                        checked_by, date_filed, acknowledgment_no,
+    //                        upload_by) back to NULL. Without this clear,
+    //                        a row that briefly hit "Filed" and then got
+    //                        reverted left stale Prepared-By / Filed-Date
+    //                        values that contradicted the new Data Pending
+    //                        state.
+    const autoPatch: Record<string, any> = {};
+    if (field === "filing_status" && user?.id) {
+      // Ack No gate: refuse to move into "Filed" without an acknowledgement
+      // number. Surface a destructive toast so the auditor sees exactly why
+      // the dropdown reverted, and stop here — no DB write, no optimistic
+      // patch, no history-log entry.
+      if (value === "Filed" && !((profile as any).acknowledgment_no || "").trim()) {
+        toast({
+          title: "Ack No is required",
+          description: "Enter the ARN (Ack No) on this row's Info panel before marking it as Filed.",
+          variant: "destructive",
+        });
+        return;
+      }
+      if (value === "Ready for Review") {
+        if (!(profile as any).prepared_by) autoPatch.prepared_by = user.id;
+        // Demoting from Verified → Ready for Review means the prior
+        // Checked-By no longer holds — the new review hasn't been done.
+        if ((profile as any).checked_by) autoPatch.checked_by = null;
+      }
+      if (value === "Verified" && !(profile as any).checked_by) {
+        autoPatch.checked_by = user.id;
+      }
+      if (value === "Filed") {
+        if (!(profile as any).date_filed) {
+          autoPatch.date_filed = new Date().toISOString().slice(0, 10);
+        }
+        if (!(profile as any).upload_by) {
+          autoPatch.upload_by = user.id;
+        }
+      }
+      if (value === "Data Pending") {
+        autoPatch.prepared_by       = null;
+        autoPatch.checked_by        = null;
+        autoPatch.date_filed        = null;
+        autoPatch.acknowledgment_no = null;
+        autoPatch.upload_by         = null;
+      }
+    }
+    const patch = { [field]: value ?? null, ...autoPatch, ...(extraPatch || {}) };
+    // ── Optimistic cache update ──────────────────────────────────────────
+    // The IT Returns query (`["itr_profiles", firmId, selectedAY, ...]`)
+    // returns an array of enriched profiles. We patch the matching row
+    // immediately so the dropdown reflects the new value the moment the
+    // user clicks, without waiting for the round-trip + refetch. On
+    // error we roll back; on success we await refetch to get any
+    // server-side denormalisations.
+    const previousCaches: Array<[readonly unknown[], unknown]> =
+      queryClient.getQueriesData({ queryKey: ["itr_profiles"] }) as any;
+    queryClient.setQueriesData(
+      { queryKey: ["itr_profiles"] },
+      (old: any) => {
+        if (!Array.isArray(old)) return old;
+        return old.map((row: any) =>
+          row.client_id === profile.client_id ? { ...row, ...patch } : row,
+        );
+      },
+    );
+
     try {
       if (isNew) {
         const payload: any = {
@@ -576,17 +703,74 @@ const ItReturns = () => {
           prepared_by: profile.prepared_by || null,
           checked_by: profile.checked_by || null,
           remarks: profile.remarks || null,
-          [field]: value || null,
+          ...patch,
         };
-        const { error } = await supabase.from("itr_profiles").insert(payload);
+        // Upsert on the (client_id, assessment_year, firm_id) unique
+        // constraint so rapid double-clicks during the brief window
+        // between INSERT and refetch don't pile up duplicate rows.
+        // Returns the canonical row regardless of insert-vs-update.
+        const { data, error } = await supabase
+          .from("itr_profiles")
+          .upsert(payload, { onConflict: "client_id,assessment_year,firm_id" })
+          .select();
         if (error) throw error;
+        if (!data || data.length === 0) {
+          throw new Error("Row was not created (possible RLS policy block). Check Supabase logs.");
+        }
+        // Swap the virtual id for the real DB id in the cache so the
+        // NEXT edit on this row hits the UPDATE branch instead of
+        // creating yet another duplicate.
+        const realId = (data[0] as any).id as string;
+        queryClient.setQueriesData(
+          { queryKey: ["itr_profiles"] },
+          (old: any) => {
+            if (!Array.isArray(old)) return old;
+            return old.map((row: any) =>
+              row.id === profile.id ? { ...row, id: realId } : row,
+            );
+          },
+        );
       } else {
-        const { error } = await supabase.from("itr_profiles").update({ [field]: value || null } as any).eq("id", profile.id);
+        const { data, error } = await supabase.from("itr_profiles").update(patch as any).eq("id", profile.id).select();
         if (error) throw error;
+        if (!data || data.length === 0) {
+          throw new Error("Row was not updated (possible RLS policy block). Check Supabase logs.");
+        }
       }
-      queryClient.invalidateQueries({ queryKey: ["itr_profiles"] });
+      // Write the change(s) to the per-row edit log. One row per field changed
+      // (including auto-filled fields from autoPatch above) so the auditor can
+      // see who flipped status to "Filed" and when, who cleared the Prepared
+      // By, etc. Best-effort — log failure must not roll back the user's save.
+      try {
+        const formatVal = (v: any): string | null => {
+          if (v == null) return null;
+          if (typeof v === "string") return v;
+          return String(v);
+        };
+        const histRows = Object.entries(patch).map(([f, newV]) => ({
+          client_id:       profile.client_id,
+          firm_id:         firmId ?? (profile as any).firm_id ?? null,
+          assessment_year: selectedAY,
+          field_name:      f,
+          old_value:       formatVal((profile as any)[f]),
+          new_value:       formatVal(newV),
+          changed_by:      user?.id ?? null,
+          changed_by_name: user?.name ?? null,
+        }));
+        if (histRows.length > 0) {
+          await (supabase as any).from("itr_profile_history").insert(histRows);
+        }
+      } catch (logErr) {
+        console.warn("[ItReturns] edit-log write failed", logErr);
+      }
+      // Await refetch so the next render uses authoritative server data,
+      // not just our optimistic patch.
+      await queryClient.invalidateQueries({ queryKey: ["itr_profiles"] });
     } catch (e: any) {
-      toast({ title: "Error", description: e.message, variant: "destructive" });
+      // Roll back the optimistic patch
+      previousCaches.forEach(([key, data]) => queryClient.setQueryData(key, data));
+      console.error("ITR inline update failed", { field, value, profileId: profile.id, error: e });
+      toast({ title: "Save failed", description: e.message, variant: "destructive" });
     }
   };
 
@@ -1176,6 +1360,198 @@ function FilingTab({
   );
 }
 
+// ─── Per-row edit log (mirrors the Stage-2 Query Sheet "Log" pattern) ────────
+//
+// Reads itr_profile_history rows keyed by client_id + assessment_year (firm
+// scoping happens via RLS). The journal is field-by-field — every status /
+// prepared-by / filed-date change yields one row — so the auditor can see
+// who flipped Status to "Filed" and when, and who cleared a Prepared-By, etc.
+// Same UX as the Query Sheet edit log: button → dialog → table.
+const FIELD_LABELS: Record<string, string> = {
+  filing_status:        "Status",
+  prepared_by:          "Prepared By",
+  checked_by:           "Checked By",
+  date_filed:           "Filed Date",
+  upload_by:            "Upload By",
+  acknowledgment_no:    "Ack No",
+  remarks:              "Remarks",
+  itr_form:             "ITR Form",
+  itr_work_group_id:    "Work Group",
+  assigned_to:          "Assigned To",
+  date_data_received:   "Data Received",
+};
+
+function fmtHistDateShort(iso: string): string {
+  if (!iso) return "";
+  try {
+    const d = new Date(iso);
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const yyyy = d.getFullYear();
+    let hh = d.getHours();
+    const mins = String(d.getMinutes()).padStart(2, "0");
+    const ampm = hh >= 12 ? "PM" : "AM";
+    hh = hh % 12 || 12;
+    return `${dd}/${mm}/${yyyy} ${String(hh).padStart(2, "0")}:${mins} ${ampm}`;
+  } catch { return iso; }
+}
+
+function describeItrChange(oldV: string | null, newV: string | null): React.ReactNode {
+  const o = (oldV ?? "").trim();
+  const n = (newV ?? "").trim();
+  if (!o && n)  return <>set to <span className="font-medium text-foreground">{n}</span></>;
+  if (o && !n)  return <>cleared (was <span className="font-medium text-foreground">{o}</span>)</>;
+  if (!o && !n) return <span className="text-muted-foreground italic">no value change</span>;
+  return (
+    <>
+      from <span className="font-medium text-foreground">{o}</span>
+      {" "}to <span className="font-medium text-foreground">{n}</span>
+    </>
+  );
+}
+
+function ItrRowHistoryButton({ clientId, assessmentYear, rowLabel }: {
+  clientId: string; assessmentYear: string; rowLabel: string;
+}) {
+  const [open,    setOpen]    = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [staffMap, setStaffMap] = useState<Map<string, string>>(new Map());
+  const [rows,    setRows]    = useState<Array<{
+    id: string; field_name: string;
+    old_value: string | null; new_value: string | null;
+    changed_by: string | null; changed_by_name: string | null;
+    changed_at: string;
+  }>>([]);
+
+  // Build a uuid → staff-name map once (lets us pretty-print prepared_by /
+  // checked_by / upload_by values that are stored as user ids).
+  useEffect(() => {
+    if (!open) return;
+    (async () => {
+      const { data } = await supabase.from("users").select("id, name");
+      const m = new Map<string, string>();
+      for (const u of (data || [])) {
+        if ((u as any).id) m.set((u as any).id, (u as any).name || (u as any).id);
+      }
+      setStaffMap(m);
+    })();
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || !clientId || !assessmentYear) return;
+    setLoading(true);
+    (async () => {
+      try {
+        const { data: hist } = await (supabase as any)
+          .from("itr_profile_history")
+          .select("id, field_name, old_value, new_value, changed_by, changed_by_name, changed_at")
+          .eq("client_id", clientId)
+          .eq("assessment_year", assessmentYear)
+          .order("changed_at", { ascending: false })
+          .limit(200);
+        setRows(hist || []);
+      } finally { setLoading(false); }
+    })();
+  }, [open, clientId, assessmentYear]);
+
+  const prettyValue = (field: string, raw: string | null): string | null => {
+    if (!raw) return raw;
+    if (field === "prepared_by" || field === "checked_by" || field === "upload_by" || field === "assigned_to") {
+      return staffMap.get(raw) || raw;
+    }
+    return raw;
+  };
+
+  return (
+    <>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-7 w-7 text-indigo-600 hover:bg-indigo-50 hover:text-indigo-800"
+        title="View edit log for this client"
+        onClick={() => setOpen(true)}
+      >
+        <History size={14} />
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-3xl p-0 gap-0 overflow-hidden">
+          <DialogHeader className="px-5 py-3 border-b bg-muted/40 space-y-0.5">
+            <DialogTitle className="flex items-center gap-2 text-sm">
+              <History size={15} className="text-indigo-600" />
+              Edit Log
+              {!loading && rows.length > 0 && (
+                <span className="text-[10px] font-normal text-muted-foreground ml-1">
+                  · {rows.length} {rows.length === 1 ? "change" : "changes"}
+                </span>
+              )}
+            </DialogTitle>
+            <p className="text-[11px] text-muted-foreground truncate" title={rowLabel}>
+              {rowLabel}
+            </p>
+          </DialogHeader>
+
+          <div className="max-h-[60vh] overflow-y-auto">
+            {loading ? (
+              <div className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground py-12">
+                <Loader2 size={13} className="animate-spin" /> Loading edit log…
+              </div>
+            ) : rows.length === 0 ? (
+              <div className="text-xs text-muted-foreground py-12 text-center">
+                No edits recorded yet for this client.
+              </div>
+            ) : (
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-muted/60 text-[10px] uppercase tracking-wide font-semibold text-muted-foreground">
+                  <tr>
+                    <th className="text-left  px-3 py-2 w-12">#</th>
+                    <th className="text-left  px-3 py-2 w-32">User</th>
+                    <th className="text-left  px-3 py-2 w-28">Field</th>
+                    <th className="text-left  px-3 py-2">Change</th>
+                    <th className="text-right px-3 py-2 w-40">When</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {rows.map((h, i) => (
+                    <tr key={h.id} className="hover:bg-muted/30">
+                      <td className="px-3 py-2 text-muted-foreground font-mono text-[10px]">
+                        {rows.length - i}
+                      </td>
+                      <td className="px-3 py-2 font-medium text-foreground">
+                        {h.changed_by_name || (h.changed_by && staffMap.get(h.changed_by)) || "Unknown"}
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className="inline-flex items-center px-1.5 py-px rounded text-[10px] font-medium bg-indigo-50 text-indigo-700 border border-indigo-200">
+                          {FIELD_LABELS[h.field_name] || h.field_name}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-foreground/90">
+                        {describeItrChange(prettyValue(h.field_name, h.old_value), prettyValue(h.field_name, h.new_value))}
+                      </td>
+                      <td className="px-3 py-2 text-right text-muted-foreground whitespace-nowrap tabular-nums">
+                        {fmtHistDateShort(h.changed_at)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          <div className="px-5 py-2 border-t bg-muted/30 flex items-center justify-between text-[10px] text-muted-foreground">
+            <span>Most recent change shown first.</span>
+            <DialogFooter className="m-0">
+              <Button size="sm" variant="outline" className="h-7 text-xs"
+                onClick={() => setOpen(false)}>
+                Close
+              </Button>
+            </DialogFooter>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
 // ─── Inline Editable Row ───
 function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, onDelete, navigate }: {
   profile: ItrProfile; staffUsers: StaffUser[]; workGroups: any[];
@@ -1311,6 +1687,11 @@ function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, onDelete
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setInfoOpen(true)}>
               <Info size={14} />
             </Button>
+            <ItrRowHistoryButton
+              clientId={p.client_id || ""}
+              assessmentYear={p.assessment_year || ""}
+              rowLabel={p.client_name || ""}
+            />
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onDelete(p)}>
               <X size={14} />
             </Button>
@@ -1348,15 +1729,24 @@ function InfoPanel({ open, onOpenChange, profile, onUpdate, staffUsers }: {
     setRemarks((p as any).remarks || "");
   }, [p.id]);
 
-  const handleSave = () => {
-    // Validation: if Filed, Ack No is mandatory
-    if ((p.filing_status === "Filed" || p.filing_status === "Verified" || p.filing_status === "Sent to CPC") && !ackNo.trim()) {
+  const ackRequired =
+    p.filing_status === "Filed" ||
+    p.filing_status === "Verified" ||
+    p.filing_status === "Sent to CPC";
+
+  // Auto-save on blur — no Save button. Validation still runs on Ack No so the
+  // auditor can't silently leave it blank when the status requires it.
+  const commitAck = () => {
+    if (ackNo === (p.acknowledgment_no || "")) return;
+    if (ackRequired && !ackNo.trim()) {
       toast({ title: "Ack No is mandatory when status is Filed/Verified/Sent to CPC", variant: "destructive" });
       return;
     }
-    if (ackNo !== (p.acknowledgment_no || "")) onUpdate(p, "acknowledgment_no", ackNo);
-    if (remarks !== ((p as any).remarks || "")) onUpdate(p, "remarks", remarks || null);
-    onOpenChange(false);
+    onUpdate(p, "acknowledgment_no", ackNo || null);
+  };
+  const commitRemarks = () => {
+    if (remarks === ((p as any).remarks || "")) return;
+    onUpdate(p, "remarks", remarks || null);
   };
 
   return (
@@ -1367,15 +1757,25 @@ function InfoPanel({ open, onOpenChange, profile, onUpdate, staffUsers }: {
         </SheetHeader>
         <div className="space-y-4 mt-4">
           <div className="space-y-1.5">
-            <Label>Ack No {(p.filing_status === "Filed" || p.filing_status === "Verified" || p.filing_status === "Sent to CPC") && <span className="text-destructive">*</span>}</Label>
-            <Input value={ackNo} onChange={e => setAckNo(e.target.value)} placeholder="Enter acknowledgement number" />
+            <Label>Ack No {ackRequired && <span className="text-destructive">*</span>}</Label>
+            <Input
+              value={ackNo}
+              onChange={e => setAckNo(e.target.value)}
+              onBlur={commitAck}
+              placeholder="Enter acknowledgement number"
+            />
           </div>
           <div className="space-y-1.5">
             <Label>Remarks</Label>
-            <Textarea value={remarks} onChange={e => setRemarks(e.target.value)} rows={3} placeholder="Any notes..." />
+            <Textarea
+              value={remarks}
+              onChange={e => setRemarks(e.target.value)}
+              onBlur={commitRemarks}
+              rows={3}
+              placeholder="Any notes..."
+            />
           </div>
-          <Separator />
-          <Button onClick={handleSave} className="w-full">Save & Close</Button>
+          <p className="text-[11px] text-muted-foreground">Changes save automatically.</p>
         </div>
       </SheetContent>
     </Sheet>
