@@ -221,7 +221,12 @@ Deno.serve(async (req) => {
   const FIRM_MEMBER_ROLES = ["superadmin", "firm_admin", "partner_ca", "manager", "staff_article"];
   const isAdmin       = !!requestingUser && ["superadmin", "firm_admin"].includes(requestingUser.role);
   const isFirmMember  = !!requestingUser && FIRM_MEMBER_ROLES.includes(requestingUser.role);
-  const allowed = action === "activate-portal" ? isFirmMember : isAdmin;
+  // "change-portal-email" is the same scope of work as "activate-portal" —
+  // routine client servicing performed by any firm member — so it shares the
+  // wider gate. Without this a staff/partner editing a client's email would
+  // silently hit 403 from inside NewClientWizard's save path.
+  const isPortalTask = action === "activate-portal" || action === "change-portal-email";
+  const allowed = isPortalTask ? isFirmMember : isAdmin;
   if (!allowed) {
     return new Response(JSON.stringify({ error: "Forbidden" }), { status: 403, headers: corsHeaders });
   }
@@ -555,6 +560,116 @@ Deno.serve(async (req) => {
         user_id: authUserId,
         mode,
         ...(mode === "created" || mode === "reset" ? { default_password: password } : {}),
+      }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // CHANGE PORTAL EMAIL — rename a client's portal login when the auditor
+    // edits the client's email. Without this, the wizard updates clients.email
+    // but auth.users.email stays on the OLD value, so the client gets
+    // "Incorrect email or password" on the new address (MILL POWER PVT LTD
+    // scenario: clients.email changed to rightledgerworks@gmail.com, but the
+    // auth row still pointed at the prior address so sign-in failed).
+    //
+    // Body: { client_id, new_email }
+    //
+    // Behaviour:
+    //   • Validates client_id belongs to caller's firm (firm members allowed).
+    //   • Resolves the linked auth user via clients.user_id.
+    //   • If new_email matches the current auth.users.email — no-op success.
+    //   • If new_email already has a DIFFERENT auth user that's a portal account
+    //     ("client" role), re-link the client to that existing auth user
+    //     instead of trying to email-rename and collide on the unique index.
+    //   • Otherwise rename auth.users.email + public.users.email + clients.email
+    //     in lock-step so all three rows agree. email_confirm=true so the
+    //     client doesn't have to re-verify, and the EXISTING password is left
+    //     untouched (no surprise password reset on a routine email correction).
+    if (req.method === "POST" && action === "change-portal-email") {
+      const body = await req.json();
+      const { client_id, new_email: rawNewEmail } = body;
+      if (!client_id || !rawNewEmail) {
+        return new Response(JSON.stringify({ error: "client_id and new_email required" }), { status: 400, headers: corsHeaders });
+      }
+      const newEmail = String(rawNewEmail).trim().toLowerCase();
+
+      const { data: clientRow, error: clientErr } = await adminClient
+        .from("clients")
+        .select("id, firm_id, user_id, email")
+        .eq("id", client_id)
+        .maybeSingle();
+      if (clientErr || !clientRow) {
+        return new Response(JSON.stringify({ error: "Client not found" }), { status: 404, headers: corsHeaders });
+      }
+      // Same firm-scope check as the rest of the file (superadmin bypass).
+      if (requestingUser.role !== "superadmin" && clientRow.firm_id !== requestingUser.firm_id) {
+        return new Response(JSON.stringify({ error: "Cannot change email on another firm's client" }), { status: 403, headers: corsHeaders });
+      }
+      if (!clientRow.user_id) {
+        return new Response(JSON.stringify({ error: "Client has no portal login to rename — use activate-portal instead" }), { status: 400, headers: corsHeaders });
+      }
+
+      // Existing auth user behind clients.user_id.
+      const { data: currentAuth, error: getErr } = await adminClient.auth.admin.getUserById(clientRow.user_id);
+      if (getErr || !currentAuth?.user) {
+        return new Response(JSON.stringify({ error: "Linked portal login not found in auth — please re-activate the portal" }), { status: 404, headers: corsHeaders });
+      }
+      const currentEmail = String(currentAuth.user.email || "").trim().toLowerCase();
+      if (currentEmail === newEmail) {
+        // Nothing to do — the auth row already matches.
+        return new Response(JSON.stringify({ success: true, mode: "noop", user_id: clientRow.user_id }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      // Does the new email already belong to a different auth user?
+      const collision = await findAuthUserByEmail(adminClient, newEmail);
+      let finalUserId: string;
+      let mode: "renamed" | "linked";
+      if (collision && collision.id !== clientRow.user_id) {
+        // The new address belongs to someone else's login. Don't try to rename
+        // — that would violate the unique index — re-link this client to that
+        // existing auth user. Password on that account stays intact.
+        finalUserId = collision.id;
+        mode = "linked";
+      } else {
+        // Safe to rename in-place. Keep password intact; just flip the email.
+        const { error: updErr } = await adminClient.auth.admin.updateUserById(clientRow.user_id, {
+          email: newEmail,
+          email_confirm: true,
+        });
+        if (updErr) {
+          return new Response(JSON.stringify({ error: `Email rename failed: ${updErr.message}` }), { status: 500, headers: corsHeaders });
+        }
+        finalUserId = clientRow.user_id;
+        mode = "renamed";
+      }
+
+      // Mirror into public.users (the table that drives every UI surface that
+      // shows "logged-in user email"). Upsert so a missing mirror row is healed
+      // rather than returning a confusing error.
+      await adminClient.from("users").upsert({
+        id: finalUserId,
+        email: newEmail,
+        role: "client",
+        firm_id: clientRow.firm_id,
+        is_active: true,
+      }, { onConflict: "id" });
+
+      // Keep the clients table in sync — most call-sites have already written
+      // clients.email at the wizard level, but doing it here too means the
+      // function is callable standalone (e.g. from a future admin tool) and
+      // the result is always consistent.
+      await adminClient.from("clients")
+        .update({ email: newEmail, user_id: finalUserId })
+        .eq("id", client_id);
+
+      return new Response(JSON.stringify({
+        success: true,
+        mode,
+        user_id: finalUserId,
+        previous_email: currentEmail,
+        new_email: newEmail,
       }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
