@@ -388,10 +388,42 @@ const ItReturns = () => {
       const allClientIds = (cData || []).map(c => c.id);
       if (allClientIds.length === 0) return [];
 
-      let q = supabase.from("itr_profiles").select("*").eq("assessment_year", selectedAY);
-      if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
-      q = q.in("client_id", allClientIds);
-      const { data: pData } = await q;
+      // ROOT-CAUSE FIX (V J Desai 703 clients showing every status as
+       // "Data Pending" even after save): the previous .in("client_id",
+       // allClientIds) sent every active client id as a URL-based IN
+       // clause. 703 × 36-char UUIDs + commas = ~26 KB of URL — well past
+       // PostgREST / Supabase's URL length ceiling, so the request was
+       // silently dropping rows (or returning none). The saved profiles
+       // in the DB never reached the front-end, the page only showed the
+       // virtual-row fallback, and every dropdown change appeared to
+       // "revert" on refetch.
+       //
+       // Drop the .in() entirely: filtering by firm_id (RLS-enforced) and
+       // assessment_year is already constraining enough — itr_profiles
+       // for other firms can't leak in. Rows for clients that aren't in
+       // the active cData list (deleted / draft / inactive) still get
+       // filtered out downstream at line 430 (clientMap.has(clientId)
+       // check). Net result: no data lost, no URL-length cliff.
+       const fetchSize = 5000;
+       let pData: any[] = [];
+       let from = 0;
+       while (true) {
+         let q = supabase
+           .from("itr_profiles")
+           .select("*")
+           .eq("assessment_year", selectedAY)
+           .range(from, from + fetchSize - 1);
+         if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
+         const { data: batch, error } = await q;
+         if (error) {
+           console.error("[ItReturns] itr_profiles fetch failed", error);
+           break;
+         }
+         if (!batch || batch.length === 0) break;
+         pData = pData.concat(batch);
+         if (batch.length < fetchSize) break;
+         from += fetchSize;
+       }
 
       // ── FY-aware classification resolution ────────────────────────────────
       // Use the shared util which consults client_classification_history first
