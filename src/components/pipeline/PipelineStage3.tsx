@@ -1687,6 +1687,71 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   const resolveMapping = (name: string): { code: string } | undefined =>
     coaMapping[name] ?? coaMapping[String(name).trim()] ?? coaMapCI[String(name).trim().toLowerCase()];
 
+  // ═══════ Phase 2 + 4 (re-sync flow): ORPHANED-MAPPING QUARANTINE ═══════
+  // After a Tally re-sync, ledgers that were renamed or deleted leave their
+  // coa_mapping entry behind, keyed to a ledger_name that no longer exists in
+  // the TB. These orphans silently stop contributing to the FS and accumulate
+  // as dead JSONB. We surface them explicitly so the auditor can either clear
+  // them or carry the mapping forward to the likely-renamed new ledger.
+  //
+  // py_only rows ARE present in tbAccounts, so a mapping pointing at a
+  // legitimately-closed prior-year ledger is NOT treated as an orphan.
+  const orphanedMappings = useMemo(() => {
+    const liveNames = new Set<string>();
+    for (const a of tbAccounts) {
+      const n = String(a.account_name || "").trim().toLowerCase();
+      if (n) liveNames.add(n);
+    }
+    // Tokenise a ledger name into significant words for rename matching.
+    const tokensOf = (s: string): Set<string> =>
+      new Set(
+        String(s).toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/)
+          .filter((w) => w.length >= 3),
+      );
+    // Unmapped live ledgers are the candidates a rename could have become.
+    const unmappedLive = tbAccounts
+      .filter((a) => !resolveMapping(a.account_name))
+      .map((a) => ({ name: a.account_name, tokens: tokensOf(a.account_name) }));
+
+    const out: { name: string; code: string; suggestion: string | null }[] = [];
+    for (const [key, val] of Object.entries(coaMapping || {})) {
+      if (key.startsWith("__")) continue;           // skip meta keys (__patched)
+      const code = (val as any)?.code;
+      if (!code) continue;
+      if (liveNames.has(key.trim().toLowerCase())) continue;  // still mapped to a live ledger
+      // Best rename candidate by Jaccard token overlap.
+      const orphanTokens = tokensOf(key);
+      let best: string | null = null;
+      let bestScore = 0;
+      for (const cand of unmappedLive) {
+        let inter = 0;
+        for (const t of orphanTokens) if (cand.tokens.has(t)) inter++;
+        const union = new Set([...orphanTokens, ...cand.tokens]).size || 1;
+        const score = inter / union;
+        if (score > bestScore) { bestScore = score; best = cand.name; }
+      }
+      out.push({ name: key, code, suggestion: bestScore >= 0.5 ? best : null });
+    }
+    return out;
+  }, [tbAccounts, coaMapping, coaMapCI]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Carry an orphan's mapping forward to the (renamed) live ledger, then drop
+  // the orphan. Auditor-confirmed — never automatic.
+  const carryMappingForward = useCallback(async (orphanName: string, targetName: string) => {
+    const entry = coaMapping[orphanName];
+    if (!entry) return;
+    const updated = { ...coaMapping };
+    updated[targetName] = { ...(entry as any), confidence: "carried_forward" };
+    delete updated[orphanName];
+    setCoaMapping(updated);
+    try {
+      await supabase.from("audit_engagements").update({ coa_mapping: updated } as any).eq("id", engagementId);
+      toast.success(`Carried mapping "${orphanName}" → "${targetName}"`);
+    } catch (e: any) {
+      toast.error("Carry-forward saved locally, failed to persist: " + e.message);
+    }
+  }, [coaMapping, engagementId]);
+
   // ═══════ COMPUTED FS AMOUNTS ═══════
   const computedAmounts: Record<string, number> = useMemo(() => {
     const amounts: Record<string, number> = {};
@@ -2628,6 +2693,54 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   return (
     <div className="max-w-6xl space-y-4">
       <EngagementHeader engagement={engagement} stageNumber={6} stageLabel="COA Mapping" />
+
+      {/* Phase 2 + 4 (re-sync flow) — Orphaned-mapping quarantine. Mappings
+          whose ledger no longer exists in the (re-synced) TB. Carry forward to
+          the likely-renamed ledger, or clear. */}
+      {orphanedMappings.length > 0 && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+              {orphanedMappings.length} mapped ledger(s) no longer in the trial balance
+            </span>
+          </div>
+          <p className="text-xs text-amber-700 dark:text-amber-400 mb-2">
+            These were likely renamed or deleted in Tally after mapping. They no
+            longer flow to the financial statements. Carry the mapping forward to
+            the renamed ledger, or clear it.
+          </p>
+          <div className="space-y-1.5">
+            {orphanedMappings.map((o) => (
+              <div key={o.name} className="flex items-center justify-between gap-2 text-xs bg-background/60 rounded px-2 py-1.5">
+                <span className="truncate">
+                  <span className="font-medium">{o.name}</span>
+                  <span className="text-muted-foreground"> → {o.code}</span>
+                </span>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {o.suggestion && (
+                    <Button
+                      size="sm" variant="outline"
+                      className="h-6 text-[11px] border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                      onClick={() => carryMappingForward(o.name, o.suggestion!)}
+                      title={`Carry mapping forward to "${o.suggestion}"`}
+                    >
+                      Carry → {o.suggestion}
+                    </Button>
+                  )}
+                  <Button
+                    size="sm" variant="ghost"
+                    className="h-6 text-[11px] text-destructive hover:bg-destructive/10"
+                    onClick={() => unmapAccount(o.name)}
+                  >
+                    Clear
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
