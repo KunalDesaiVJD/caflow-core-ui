@@ -1093,14 +1093,113 @@ function buildNotesTitleBlock(_entityName: string, cyYear: string): Paragraph[] 
   ];
 }
 
-function buildNote1Section(entityName: string, cyYear: string): Paragraph[] {
-  // Vertical gap between policy points — reduced for better page fitting (Task 1, doc8)
+/**
+ * Mirror of the on-screen NCE Stage 7 Notes-to-Accounts template that lives
+ * in src/components/stage7/NotesToAccounts.tsx::buildNotesTemplate(). Used as
+ * the fallback when notes_to_accounts_data has no saved notes_json yet (fresh
+ * engagement, auditor hasn't visited Stage 7 → Notes to Accounts) so the
+ * Word file never exports an empty Note 1 page.
+ *
+ * IF YOU EDIT THIS, UPDATE THE STAGE 7 TEMPLATE TOO — the two must agree so
+ * the Word file matches the on-screen rendering byte-for-byte.
+ */
+function defaultNceNote1Template(auditYear: string): Array<{
+  id: string; label: string; title: string; selected: boolean; text: string;
+}> {
+  return [
+    { id: "note-1", label: "Note 1", title: "Balance Confirmation", selected: true,
+      text: "All debit and credit balances and accounts squared up during the year are subject to confirmation from respective parties." },
+    { id: "note-2", label: "Note 2", title: "Rearrangement of Figures", selected: true,
+      text: "The figures are rearranged/regrouped wherever considered necessary and rounded off to the nearest rupee." },
+    { id: "note-3", label: "Note 3", title: "Cash Balance & Closing Stock", selected: true,
+      text: `Cash balance on hand was Rs. [CASH_AMOUNT]/- and value of Closing Stock Rs. [CLOSING_STOCK]/- as at 31st March, ${auditYear} are taken as certified by proprietor.` },
+    { id: "note-4", label: "Note 4", title: "Current Assets Valuation", selected: true,
+      text: "In opinion of assessee, current assets, loans & advances are approximately of the value at which these are stated in the balance sheet." },
+    { id: "note-5", label: "Note 5", title: "Fixed Assets", selected: true,
+      text: "Fixed Assets are stated at Cost less depreciation as shown in Note- [FA_NOTE]. Details of rate and amount of Depreciation claimed has been stated in Note-[DEP_NOTE]." },
+    { id: "note-6", label: "Note 6", title: "Reliance on Vouchers", selected: true,
+      text: "Whenever the supporting proof for the entries made in the books of accounts are not available for the purpose of audit, we are relied on the vouchers prepared and authenticated by the partner." },
+    { id: "note-7", label: "Note 7", title: "Loans via Cheque/DD/ECS", selected: true,
+      text: "As informed by the partner, the amount of loan or deposits or specified sums taken or accepted or repaid by the assessee through a/c. payee cheque/demand draft or ECS only. However, it is not possible for us to verify the same as necessary evidence are not in possession of the assessee." },
+    { id: "note-8", label: "Note 8", title: "Notes form Part of Accounts", selected: true,
+      text: `Notes No. 1 to [LAST_NOTE] forms part of accounts for the year ended on 31st March, ${auditYear}.` },
+  ];
+}
+
+function buildNote1Section(
+  entityName: string,
+  cyYear: string,
+  ntaData?: any | null,
+): Paragraph[] {
+  // ROOT-CAUSE FIX (BHAKTI INFRA Word export of Note 1 didn't match the app):
+  // the previous implementation hardcoded a corporate-style "Significant
+  // Accounting Policies" boilerplate (NOTE1_POLICIES). For non-corporate
+  // entities the auditor uses Stage 7 → Notes to Accounts which holds
+  // "Balance Confirmation", "Rearrangement of Figures", etc. — the Word
+  // file must render THOSE notes, with the same numbering / selection /
+  // header overrides / token substitutions the on-screen view uses.
+  //
+  // Source order:
+  //   1. ntaData.notes_json  (saved by the auditor in Stage 7).
+  //   2. Built-in template (defaultNceNote1Template) when the auditor
+  //      hasn't visited Stage 7 yet — keeps the Word file populated on
+  //      a fresh engagement instead of emitting an empty Note 1 page.
+
+  const auditYear = cyYear; // e.g. "2026" — matches the Stage 7 page
+  const saved: any[] = Array.isArray(ntaData?.notes_json) ? ntaData.notes_json : [];
+  const template = defaultNceNote1Template(auditYear);
+  const templateMap = new Map(template.map(t => [t.id, t]));
+
+  // Merge saved overrides into the template (selected / text / title) and
+  // append any custom notes the auditor added beyond the 8 built-ins.
+  const merged: Array<{
+    id: string; label: string; title: string; selected: boolean; text: string;
+  }> = saved.length === 0
+    ? template
+    : saved.map((r: any) => {
+        const tmpl = templateMap.get(r.id);
+        if (tmpl) {
+          return {
+            ...tmpl,
+            selected: r.selected ?? tmpl.selected,
+            text:     r.text     ?? tmpl.text,
+            title:    r.title    ?? tmpl.title,
+          };
+        }
+        return {
+          id:       String(r.id ?? ""),
+          label:    String(r.label ?? r.title ?? ""),
+          title:    String(r.title ?? ""),
+          selected: r.selected ?? true,
+          text:     String(r.text  ?? ""),
+        };
+      });
+
+  // Header overrides (Cash amount, Closing stock, FA note num, …) are typed
+  // by the auditor in the Stage 7 page header and stored in
+  // notes_to_accounts_data.header_overrides. We substitute them into every
+  // note body the same way the on-screen renderer / Excel export does.
+  const header = (ntaData?.header_overrides || {}) as Record<string, any>;
+  const lastNoteOverride = header.lastNoteOverride;
+  const selectedNotes    = merged.filter(n => n.selected !== false);
+  const lastNoteNum      = lastNoteOverride
+    ? String(lastNoteOverride)
+    : String(selectedNotes.length);
+
+  const resolveTokens = (text: string): string =>
+    (text || "")
+      .replace(/\[CASH_AMOUNT\]/g,   String(header.cashAmount   || ""))
+      .replace(/\[CLOSING_STOCK\]/g, String(header.closingStock || ""))
+      .replace(/\[FA_NOTE\]/g,       String(header.faNoteNum    || ""))
+      .replace(/\[DEP_NOTE\]/g,      String(header.depNoteNum   || ""))
+      .replace(/\[LAST_NOTE\]/g,     lastNoteNum);
+
+  // Vertical gap between notes — reduced for better page fitting.
   const GAP = 140;
 
   const txt = (text: string, bold = false) =>
     new TextRun({ text, font: FONT, size: SZ_BODY, bold, color: BLACK });
 
-  // Block paragraph with professional line spacing
   const block = (
     runs: TextRun[],
     opts: { indent?: number; hanging?: number; after?: number; keepNext?: boolean } = {},
@@ -1113,31 +1212,59 @@ function buildNote1Section(entityName: string, cyYear: string): Paragraph[] {
       children:  runs,
     });
 
-  const last = NOTE1_POLICIES.length - 1;
-
-  return [
+  // Re-number the SELECTED notes 1..N so the Word file matches what the
+  // app shows (the on-screen view hides un-selected notes and re-numbers
+  // the rest 1..N in the order they appear).
+  const out: Paragraph[] = [
+    // Header banner — same shade / weight pair the rest of the export uses
+    // for the navy underlined "Notes to ..." headings so Note 1 visually
+    // matches every other note page.
     new Paragraph({
       spacing:   { before: 0, after: 100 },
       border:    { bottom: { style: BorderStyle.SINGLE, size: 4, color: NAVY, space: 4 } },
       keepNext:  true,
       keepLines: true,
       children: [
-        new TextRun({ text: "Note 1:  ", font: FONT, size: SZ_HDR, bold: true, color: NAVY }),
-        new TextRun({ text: "Significant Accounting Policies", font: FONT, size: SZ_HDR, color: NAVY }),
+        new TextRun({ text: `Note 1:  `,                     font: FONT, size: SZ_HDR, bold: true, color: NAVY }),
+        new TextRun({ text: "DISCLOSURE OF ACCOUNTING POLICIES & NOTES FORMING PART OF THE ANNUAL ACCOUNTS",
+                      font: FONT, size: SZ_HDR, bold: true, color: NAVY }),
       ],
     }),
-    block([txt("1.  Basis of Preparation", true)], { after: 20, keepNext: true }),
-    block(
-      [txt(`The financial statements of ${entityName} have been prepared in accordance with the Generally Accepted Accounting Principles in India (GAAP) under the historical cost convention on an accrual basis. The financial statements comply with the Accounting Standards applicable to the entity and other relevant provisions of the applicable law.`)],
-      { after: GAP },
-    ),
-    block([txt("2.  Significant Accounting Policies", true)], { after: 40, keepNext: true }),
-    // Each policy = bold label heading + description below; GAP separates points
-    ...NOTE1_POLICIES.flatMap((p, i) => [
-      block([txt(p.label, true)], { indent: 280, after: 10, keepNext: true }),
-      block([txt(p.text)],        { indent: 280, after: i === last ? 40 : GAP, keepNext: i !== last }),
-    ]),
   ];
+
+  selectedNotes.forEach((n, i) => {
+    const num   = i + 1;
+    const title = (n.title || "").trim();
+    out.push(
+      block(
+        [
+          new TextRun({ text: `${num}.  `,                       font: FONT, size: SZ_BODY, bold: true, color: BLACK }),
+          new TextRun({ text: title ? `${title}: ` : "",          font: FONT, size: SZ_BODY, bold: true, color: NAVY  }),
+          new TextRun({ text: resolveTokens(n.text || ""),         font: FONT, size: SZ_BODY,             color: BLACK }),
+        ],
+        { indent: 0, after: i === selectedNotes.length - 1 ? 40 : GAP },
+      ),
+    );
+  });
+
+  // Optional Note 1 "new entity" paragraph the Stage 7 page exposes via a
+  // toggle. Appended after the standard notes when enabled, mirroring the
+  // on-screen render.
+  if (ntaData?.note1_new_entity_enabled && (ntaData?.note1_new_entity_text || "").trim()) {
+    out.push(
+      block(
+        [new TextRun({ text: String(ntaData.note1_new_entity_text), font: FONT, size: SZ_BODY, color: BLACK })],
+        { indent: 0, after: 40 },
+      ),
+    );
+  }
+
+  // Reference NOTE1_POLICIES so the legacy boilerplate constant doesn't
+  // become a dead-code lint warning while we keep it around for any
+  // corporate-style consumer still relying on it.
+  void NOTE1_POLICIES;
+
+  return out;
 }
 
 /** Note 2 — Partners' Capital Account tables (CY + PY) */
@@ -1924,6 +2051,14 @@ export interface NCEDocxParams {
   capitalData?: any[];   // from nce_capital_account
   notesData?: any[];     // from nce_financial_notes
   ppeData?: any[];       // from nce_ppe_schedule
+  /** Stage 7 Notes-to-Accounts row from `notes_to_accounts_data` — drives
+   *  the Note 1 page so the Word file mirrors the on-screen Note 1
+   *  ("Balance Confirmation", "Rearrangement of Figures", etc.) instead of
+   *  a hardcoded boilerplate of accounting policies that doesn't match
+   *  what the auditor sees in CAFlow. Single DB row (not an array) —
+   *  contains notes_json, header_overrides, note1_new_entity_*,
+   *  note3_variant, and similar fields the Excel export already reads. */
+  ntaData?: any | null;
   /** Signature block data — pass the UI's resolved sig* values so the
    *  Word block matches the on-screen signature block exactly. */
   signature?: SigData;
@@ -1954,6 +2089,7 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     capitalData    = [],
     notesData      = [],
     ppeData        = [],
+    ntaData        = null,
     signature      = {},
     font           = "Arial",
     constitution,
@@ -2023,8 +2159,8 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   const sigArgs: SigData = { clientName: entityName, constitution, ...signature };
   const sigBlock = () => buildSignatureTable(sigArgs);
 
-  // Phase 2 — Note 1
-  const note1Paras = buildNote1Section(entityName, cyYear);
+  // Phase 2 — Note 1 (uses Stage 7 user-edited notes when present)
+  const note1Paras = buildNote1Section(entityName, cyYear, ntaData);
 
   // Phase 2 — Note 2 (Capital Account)
   const capitalTables = buildCapitalAccountSection(capitalData, cyYear, pyYear);

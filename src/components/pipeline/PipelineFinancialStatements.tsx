@@ -9168,6 +9168,7 @@ export default function PipelineFinancialStatements({
                 capitalData: nceCapitalData ?? [],
                 notesData:   nceNotesData   ?? [],
                 ppeData:     ncePpeData      ?? [],
+                ntaData:     notesToAccountsData ?? null,
                 font:        nceExportFont,
                 constitution: entityType,
                 expandedRows:      nceIsLocked ? nceExpandedRows : undefined,
