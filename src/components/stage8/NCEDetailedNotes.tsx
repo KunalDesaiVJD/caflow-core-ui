@@ -2021,6 +2021,17 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
     return undefined;
   }, [initialExpandedRows, engagementId]);
 
+  // Stable expansion-change handler. Passing an INLINE arrow here re-created the
+  // function every render, so PatternBTable's [openSources, noteType,
+  // onExpansionChange] effect re-fired on every render → onExpansionStateUpdate →
+  // parent setNceExpandedRows → re-render → effect re-fires → "Maximum update
+  // depth exceeded". Memoising on the (already-stable) onExpansionStateUpdate
+  // prop means the effect now only fires when openSources actually changes.
+  const handleExpansionChange = useCallback((nt: string, ids: Set<string>) => {
+    expansionStateRef.current[nt] = ids;
+    onExpansionStateUpdate?.(expansionStateRef.current);
+  }, [onExpansionStateUpdate]);
+
   const financialYear = (eng?.financial_year as string) || "";
   const clientName    = (eng?.clients?.name  as string) || "";
   const { cy: cyYear, py: pyYear } = useMemo(() => parseFY(financialYear), [financialYear]);
@@ -3621,10 +3632,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
                       onEjectCustomSource={(cid, ledger, amt, attachToId?) => handleEjectCustomSource(sourceKey, cid, ledger, amt, attachToId)}
                       onChangeSourceLabel={(rid, ledger, lbl) => handleChangeSourceLabel(sourceKey, rid, ledger, lbl)}
                       noteType={nc.noteType}
-                      onExpansionChange={(nt, ids) => {
-                        expansionStateRef.current[nt] = ids;
-                        onExpansionStateUpdate?.(expansionStateRef.current);
-                      }}
+                      onExpansionChange={handleExpansionChange}
                       hideEmptySections={readOnly}
                       initialExpandedRows={seedExpanded}
                     />
