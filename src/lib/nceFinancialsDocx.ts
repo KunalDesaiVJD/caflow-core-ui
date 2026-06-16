@@ -1322,6 +1322,9 @@ function buildNoteSection(
   hideBlankNoteRows?: boolean,
   /** GL breakup ledgers per static row — mirrors NCEDetailedNotes cySources prop */
   cySources?: Record<string, CySourceEntry[]>,
+  /** Sub-ledger name overrides, keyed `${staticRowId}::${ledger}` — mirrors
+   *  NCEDetailedNotes sourceLabelOverrides so renamed Tally ledgers print. */
+  sourceLabelOverrides?: Record<string, string>,
 ): Table {
   // Auto/manual breakup rows are stored in cy_data._custom_rows; their amounts
   // live as ordinary keys (id or id+"_lt"/"_st") in rawCy/rawPy. For notes like
@@ -1686,8 +1689,9 @@ function buildNoteSection(
           const srcs = cySources[id].filter(s => (s.amountCy ?? 0) !== 0 || (s.amountPy ?? 0) !== 0);
           for (const s of srcs) {
             const isLT = !s.column || s.column === "lt";
+            const slLabel = sourceLabelOverrides?.[`${id}::${s.ledger}`] ?? s.ledger;
             rows.push(noteRowA(
-              s.ledger,
+              slLabel,
               isLT ? s.amountCy : 0,
               isLT ? (s.amountPy ?? 0) : 0,
               isLT ? 0 : s.amountCy,
@@ -1729,7 +1733,8 @@ function buildNoteSection(
           if (!cySources?.[id]) return;
           const srcs = cySources[id].filter(s => (s.amountCy ?? 0) !== 0 || (s.amountPy ?? 0) !== 0);
           for (const s of srcs) {
-            rows.push(noteRowB(s.ledger, s.amountCy, s.amountPy ?? 0, indent, "data"));
+            const slLabel = sourceLabelOverrides?.[`${id}::${s.ledger}`] ?? s.ledger;
+            rows.push(noteRowB(slLabel, s.amountCy, s.amountPy ?? 0, indent, "data"));
           }
         };
         // Helper: does the row have at least one attached custom child OR source-ledger
@@ -1981,6 +1986,10 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   // cy_sources is stored as _cy_sources INSIDE cy_data (same pattern as _custom_rows).
   // Key: note_type; value: Record<staticRowId, CySourceEntry[]>
   const savedCySources: Record<string, Record<string, CySourceEntry[]>> = {};
+  // Sub-ledger name overrides (user-renamed Tally ledgers) — stored as
+  // _source_label_overrides inside cy_data, keyed `${staticRowId}::${ledger}`.
+  // Threaded into buildNoteSection so a corrected ledger name prints in DOCX.
+  const savedSourceLabelOverrides: Record<string, Record<string, string>> = {};
   for (const row of notesData) {
     const key = String((row as any).note_type ?? "");
     if (!key) continue;
@@ -1996,6 +2005,10 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     // _cy_sources lives inside cy_data — extract it from the same JSON blob
     if (rawCyData._cy_sources && typeof rawCyData._cy_sources === "object") {
       savedCySources[key] = rawCyData._cy_sources as Record<string, CySourceEntry[]>;
+    }
+    // _source_label_overrides lives in the same blob — renamed sub-ledger names.
+    if (rawCyData._source_label_overrides && typeof rawCyData._source_label_overrides === "object") {
+      savedSourceLabelOverrides[key] = rawCyData._source_label_overrides as Record<string, string>;
     }
   }
 
@@ -2088,7 +2101,8 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
       }
       noteCySources = Object.keys(filtered).length > 0 ? filtered : undefined;
     }
-    noteTablePairs.push([parseInt(dynNum, 10), buildNoteSection(cfg, data.cy, data.py, dynNum, cyYear, pyYear, expandedRows, hideBlankNoteRows, noteCySources), noteSectionTag] as [number, Table, string]);
+    const noteSourceOverrides = savedSourceLabelOverrides[sourceKey];
+    noteTablePairs.push([parseInt(dynNum, 10), buildNoteSection(cfg, data.cy, data.py, dynNum, cyYear, pyYear, expandedRows, hideBlankNoteRows, noteCySources, noteSourceOverrides), noteSectionTag] as [number, Table, string]);
   }
   // Sort ascending by note number for correct sequential order in export
   noteTablePairs.sort((a, b) => a[0] - b[0]);

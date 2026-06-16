@@ -2022,6 +2022,11 @@ export default function PipelineFinancialStatements({
     try {
       const stored = localStorage.getItem(`nce_lock_${engagementId}`);
       setNceIsLocked(stored === "1");
+      // Fix E: restore the persisted expand/collapse layout so a refresh — or
+      // unlocking the preview — does not reset the notes to the default layout.
+      const exp = localStorage.getItem(`nce_expanded_${engagementId}`);
+      const parsed = exp ? JSON.parse(exp) : [];
+      setNceExpandedRows(Array.isArray(parsed) ? new Set<string>(parsed) : new Set());
     } catch {
       setNceIsLocked(false);
     }
@@ -2037,6 +2042,18 @@ export default function PipelineFinancialStatements({
       }
     } catch { /* storage unavailable — ignore */ }
   }, [nceIsLocked, engagementId]);
+
+  // Fix E: persist the edit-mode expand/collapse layout. Only written while
+  // UNLOCKED — during a locked preview nceExpandedRows is frozen by the guard
+  // in handleNceExpansionStateUpdate, so localStorage keeps the exact state the
+  // user had when they pressed Lock. On unlock the editor remounts and seeds its
+  // tables from this value, restoring that layout instead of the default.
+  useEffect(() => {
+    if (nceIsLocked) return;
+    try {
+      localStorage.setItem(`nce_expanded_${engagementId}`, JSON.stringify([...nceExpandedRows]));
+    } catch { /* storage unavailable — ignore */ }
+  }, [nceExpandedRows, nceIsLocked, engagementId]);
 
   // Bug 1 fix: memoized handler so onExpansionStateUpdate keeps the same
   // reference across renders (only recreated when nceIsLocked changes).

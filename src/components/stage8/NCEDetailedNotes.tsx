@@ -31,8 +31,9 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast }       from "sonner";
-import { Loader2, Save, RefreshCw, Plus, Trash2, Search, CornerUpRight, Minus, MoreVertical, ArrowRightLeft } from "lucide-react";
+import { Loader2, Save, RefreshCw, Plus, Trash2, Search, CornerUpRight, Minus, MoreVertical, ArrowRightLeft, SpellCheck } from "lucide-react";
 import { cn }          from "@/lib/utils";
+import { findSpellIssues, applyAllSuggestions } from "@/lib/spellSuggest";
 import {
   NoteConfig, NoteRowDef, NOTES_CONFIG, NOTE_META, computeDisplayData, extractSplitData,
 } from "@/config/nceNotesConfig";
@@ -470,8 +471,36 @@ function RowActionsMenu({
 
 // ─── Custom-row inline editor ─────────────────────────────────────────────────
 
+/**
+ * Fix D — inline spelling suggestion (suggest-only, never auto-applies).
+ * Renders nothing when the label has no known misspelling. When it does, shows a
+ * small amber "Fix" pill whose tooltip lists every correction; clicking applies
+ * them via onApply (which routes through the normal label-edit → persist path).
+ * Hidden in read-only/preview mode so the printed preview stays clean.
+ */
+function SpellFix({ value, onApply, hidden }: {
+  value: string;
+  onApply: (fixed: string) => void;
+  hidden?: boolean;
+}) {
+  const issues = useMemo(() => findSpellIssues(value), [value]);
+  if (hidden || issues.length === 0) return null;
+  const tip = issues.map(i => `${i.word} → ${i.suggestion}`).join(", ");
+  return (
+    <button
+      type="button"
+      onClick={() => onApply(applyAllSuggestions(value))}
+      title={`Fix spelling: ${tip}`}
+      aria-label={`Fix spelling: ${tip}`}
+      className="shrink-0 inline-flex items-center gap-0.5 h-5 px-1 rounded border border-amber-300 bg-amber-50 text-amber-700 text-[10px] leading-none hover:bg-amber-100"
+    >
+      <SpellCheck className="h-3 w-3" /> Fix
+    </button>
+  );
+}
+
 function CustomRowEditor({
-  row, cyVal, pyVal, isPatternA, isChild,
+  row, cyVal, pyVal, isPatternA, isChild, readOnly,
   cyLtVal, cyStVal, pyLtVal, pyStVal,
   onChangeCy, onChangePy, onChangeCyLt, onChangeCySt, onChangePyLt, onChangePySt,
   onChangeLabel, onDelete, headingOptions, onPromote, onEjectCustomSource, onAddRow,
@@ -484,6 +513,8 @@ function CustomRowEditor({
   cyVal: number; pyVal: number;
   isPatternA: boolean;
   isChild?: boolean;
+  /** Read-only/preview mode — hides the inline spell-fix affordance. */
+  readOnly?: boolean;
   cyLtVal: number; cyStVal: number; pyLtVal: number; pyStVal: number;
   onChangeCy: (v: number) => void; onChangePy: (v: number) => void;
   onChangeCyLt: (v: number) => void; onChangeCySt: (v: number) => void;
@@ -559,6 +590,7 @@ function CustomRowEditor({
               className="h-6 text-xs px-1.5 min-w-[120px]"
               placeholder="Row description"
             />
+            <SpellFix value={row.label} onApply={onChangeLabel} hidden={readOnly} />
             <SourceBadge source={row.source} />
           </div>
         </TableCell>
@@ -600,6 +632,7 @@ function CustomRowEditor({
                 className="h-5 text-xs px-1 border border-input/40 hover:border-input focus:border-input bg-background/50 italic flex-1 min-w-0"
                 title={`Original: ${s.ledger}`}
               />
+              <SpellFix value={slLabel} onApply={fixed => onChangeSourceLabel?.(row.id, s.ledger, fixed)} hidden={readOnly} />
               {s.column && (
                 <span className="text-[9px] uppercase shrink-0 font-semibold text-muted-foreground/60">
                   [{s.column}]
@@ -1014,6 +1047,7 @@ function PatternBTable({
           cyVal={crAgg ? crAgg.cy : (rawCy[cr.id] ?? 0)}
           pyVal={crAgg ? crAgg.py : (rawPy[cr.id] ?? 0)}
           isPatternA={false}
+          readOnly={hideEmptySections}
           isChild={isChild}
           cyLtVal={0} cyStVal={0} pyLtVal={0} pyStVal={0}
           onChangeCy={v => onChangeCy(cr.id, v)}
@@ -1224,10 +1258,16 @@ function PatternBTable({
                       ) : (
                         <div className="w-5 shrink-0" />
                       )}
+                      {/* Template caption — LOCKED for editing (2026-06-17).
+                          Only Tally-derived rows (custom rows + sub-ledger
+                          names) are renameable; the statutory note captions are
+                          read-only so the audit-report structure cannot drift. */}
                       <Input
                         value={displayLabel}
-                        onChange={e => onChangeStaticLabel(row.id, e.target.value)}
-                        className="h-6 text-xs px-1.5 border-transparent hover:border-input focus:border-input bg-transparent"
+                        readOnly
+                        tabIndex={-1}
+                        title="Statutory caption — locked. Rename the Tally-derived ledger rows instead."
+                        className="h-6 text-xs px-1.5 border-transparent bg-transparent cursor-default focus-visible:ring-0 focus-visible:ring-offset-0"
                       />
                     </div>
                   </TableCell>
@@ -1632,6 +1672,7 @@ function PatternATable({
           row={cr}
           cyVal={0} pyVal={0}
           isPatternA={true}
+          readOnly={hideEmptySections}
           isChild={isChild}
           cyLtVal={crAgg ? crAgg.lc : (rawCy[cr.id + "_lt"] ?? 0)}
           cyStVal={crAgg ? crAgg.sc : (rawCy[cr.id + "_st"] ?? 0)}
@@ -1775,10 +1816,16 @@ function PatternATable({
                       ) : (
                         <div className="w-5 shrink-0" />
                       )}
+                      {/* Template caption — LOCKED for editing (2026-06-17).
+                          Only Tally-derived rows (custom rows + sub-ledger
+                          names) are renameable; the statutory note captions are
+                          read-only so the audit-report structure cannot drift. */}
                       <Input
                         value={displayLabel}
-                        onChange={e => onChangeStaticLabel(row.id, e.target.value)}
-                        className="h-6 text-xs px-1.5 border-transparent hover:border-input focus:border-input bg-transparent"
+                        readOnly
+                        tabIndex={-1}
+                        title="Statutory caption — locked. Rename the Tally-derived ledger rows instead."
+                        className="h-6 text-xs px-1.5 border-transparent bg-transparent cursor-default focus-visible:ring-0 focus-visible:ring-offset-0"
                       />
                     </div>
                   </TableCell>
@@ -1950,6 +1997,29 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Task 8: accumulate expansion state across all PatternBTables
   const expansionStateRef = useRef<Record<string, Set<string>>>({});
+  // Label-edit persistence guards (2026-06-17).
+  //  • initializedRef → false until the first DB load completes, so the initial
+  //    deserialise / first-visit seed / one-shot heals never trigger a write.
+  //  • notesFinalizedRef → mirrors audit_engagements.notes_finalized so every
+  //    write path can hard-block edits on a finalized (rolled-over / closed)
+  //    engagement. App-level enforcement of the "notes write-protected" rule.
+  const initializedRef    = useRef(false);
+  const notesFinalizedRef = useRef(false);
+  // Fix E: when the parent omits initialExpandedRows (edit mode), fall back to
+  // the expand/collapse layout persisted in localStorage so unlocking the
+  // preview (or a refresh) restores the state the user had at lock time. This is
+  // a STABLE memo (deps don't change while editing) so it only seeds the table's
+  // openSources at mount — it never feeds a reactive prop back into the render
+  // loop the way passing live nceExpandedRows in edit mode would.
+  const seedExpanded = useMemo<Set<string> | undefined>(() => {
+    if (initialExpandedRows) return initialExpandedRows;
+    try {
+      const raw = localStorage.getItem(`nce_expanded_${engagementId}`);
+      const arr = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(arr) && arr.length > 0) return new Set<string>(arr);
+    } catch { /* ignore */ }
+    return undefined;
+  }, [initialExpandedRows, engagementId]);
 
   const financialYear = (eng?.financial_year as string) || "";
   const clientName    = (eng?.clients?.name  as string) || "";
@@ -1976,11 +2046,12 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
       try {
         const { data: engRow } = await supabase
           .from("audit_engagements")
-          .select("financial_year, clients(name)")
+          .select("financial_year, notes_finalized, clients(name)")
           .eq("id", engagementId)
           .single();
         if (cancelled) return;
         if (engRow) setEng(engRow);
+        notesFinalizedRef.current = (engRow as any)?.notes_finalized === true;
 
         const fy = (engRow as any)?.financial_year ?? "";
 
@@ -2618,7 +2689,9 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
       } catch (e: any) {
         toast.error(`Failed to load notes: ${e?.message || e}`);
       } finally {
-        if (!cancelled) setLoading(false);
+        // Mark initialised AFTER the load (incl. first-visit seed + heals) has
+        // settled, so label-edit persistence only fires on genuine user edits.
+        if (!cancelled) { setLoading(false); initializedRef.current = true; }
       }
     })();
     return () => { cancelled = true; };
@@ -2643,6 +2716,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
   // If a move would shift the total by even ₹1 it is reverted, never saved.
   const persistOneNote = useCallback(async (noteType: string, nd: NCENoteData) => {
     if (!engagementId || !financialYear) return;
+    if (notesFinalizedRef.current) { toast.error("Notes are finalized — editing is locked."); return; }
     try {
       const { cy_data, py_data } = serialiseNoteData(nd);
       const { data: existing } = await supabase
@@ -2660,10 +2734,76 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
         await supabase.from("nce_financial_notes")
           .insert({ engagement_id: engagementId, financial_year: financialYear, note_type: noteType, cy_data, py_data });
       }
+      // Keep the pipeline's react-query cache (and therefore the DOCX export,
+      // which reads from it) in sync with what was just written.
+      queryClient.invalidateQueries({ queryKey: ["nce-financial-notes", engagementId] });
     } catch {
       toast.error("Auto-save failed — change not persisted.");
     }
-  }, [engagementId, financialYear]);
+  }, [engagementId, financialYear, queryClient]);
+
+  // ── Labels-only guarded persist (2026-06-17) ──────────────────────────────
+  // Renames (custom-row labels + sub-ledger overrides) must SAVE and survive a
+  // refresh, but a rename must NEVER change an audit-verified figure. So instead
+  // of writing the whole in-memory note (which could carry unsaved figure edits
+  // or heal-time transforms), we fetch the existing DB row and overlay ONLY the
+  // label-bearing metadata (_custom_rows, _label_overrides,
+  // _source_label_overrides), keeping every numeric key byte-identical. This is
+  // total-preserving by construction, so it cannot trip the reconciliation /
+  // export-block invariants. Still hard-blocked when notes are finalized.
+  const persistNoteLabels = useCallback(async (noteType: string) => {
+    if (!engagementId || !financialYear) return;
+    if (!initializedRef.current) return;
+    if (notesFinalizedRef.current) { toast.error("Notes are finalized — editing is locked."); return; }
+    const nd = noteDataRef.current[noteType];
+    if (!nd) return;
+    try {
+      const { cy_data: memCy, py_data: memPy } = serialiseNoteData(nd);
+      const { data: existing } = await supabase
+        .from("nce_financial_notes")
+        .select("id, cy_data")
+        .eq("engagement_id", engagementId)
+        .eq("financial_year", financialYear)
+        .eq("note_type", noteType)
+        .maybeSingle();
+      if ((existing as any)?.id) {
+        const dbCy = ((existing as any).cy_data ?? {}) as Record<string, any>;
+        // Preserve ALL existing keys (numeric figures + other meta) from the DB;
+        // overlay only the label metadata from memory. Figures are untouched.
+        const mergedCy: Record<string, any> = {
+          ...dbCy,
+          _custom_rows:     (memCy as any)._custom_rows,
+          _label_overrides: (memCy as any)._label_overrides,
+          ...((memCy as any)._source_label_overrides
+            ? { _source_label_overrides: (memCy as any)._source_label_overrides }
+            : {}),
+        };
+        await supabase.from("nce_financial_notes")
+          .update({ cy_data: mergedCy, updated_at: new Date().toISOString() })
+          .eq("id", (existing as any).id);
+      } else {
+        // No row yet (rename before the note was seeded) → write the full note.
+        await supabase.from("nce_financial_notes")
+          .insert({ engagement_id: engagementId, financial_year: financialYear, note_type: noteType, cy_data: memCy, py_data: memPy });
+      }
+      queryClient.invalidateQueries({ queryKey: ["nce-financial-notes", engagementId] });
+    } catch {
+      toast.error("Save failed — name not persisted.");
+    }
+  }, [engagementId, financialYear, queryClient]);
+
+  // Debounced wrapper for label-only persistence (separate timer namespace from
+  // the move-persist below so a rename and a reclassification never collide).
+  const pendingLabelPersist = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const scheduleLabelPersist = useCallback((noteType: string) => {
+    if (!initializedRef.current) return;
+    const timers = pendingLabelPersist.current;
+    if (timers[noteType]) clearTimeout(timers[noteType]);
+    timers[noteType] = setTimeout(() => {
+      delete timers[noteType];
+      void persistNoteLabels(noteType).then(() => toast.success("Name saved"));
+    }, 600);
+  }, [persistNoteLabels]);
 
   // Latest note-data snapshot, kept fresh so the debounced persist below always
   // serialises the FINAL state — not a mid-bulk-move snapshot.
@@ -2677,6 +2817,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
   // serialising the final state once.
   const pendingPersist = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const scheduleNotePersist = useCallback((noteType: string) => {
+    if (!initializedRef.current) return;
     const timers = pendingPersist.current;
     if (timers[noteType]) clearTimeout(timers[noteType]);
     timers[noteType] = setTimeout(() => {
@@ -2833,13 +2974,17 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
   }, [scheduleSave]);
 
   const handleChangeLabel = useCallback((noteType: string, id: string, label: string) => {
+    if (readOnly || notesFinalizedRef.current) return;
     setNoteData(prev => {
       const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
-      const next = { ...prev, [noteType]: { ...cur, customRows: cur.customRows.map(r => r.id === id ? { ...r, label, source: "manual" as const } : r) } };
-      scheduleSave(next);
+      // Rename → mark source "manual" AND userMoved so the per-ledger-breakup
+      // re-sync purge (nceAutoPopulate) can never rebuild over the corrected
+      // name. Labels are metadata only — the row's amount is unchanged.
+      const next = { ...prev, [noteType]: { ...cur, customRows: cur.customRows.map(r => r.id === id ? { ...r, label, source: "manual" as const, userMoved: true } : r) } };
       return next;
     });
-  }, [scheduleSave]);
+    scheduleLabelPersist(noteType);
+  }, [readOnly, scheduleLabelPersist]);
 
   // ── Static row hide / label override / promote custom→static ───────────
   const handleHideStatic = useCallback((noteType: string, id: string) => {
@@ -2864,15 +3009,16 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
   }, [scheduleSave]);
 
   const handleChangeSourceLabel = useCallback((noteType: string, rowId: string, ledger: string, newLabel: string) => {
+    if (readOnly || notesFinalizedRef.current) return;
     setNoteData(prev => {
       const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
       const key = `${rowId}::${ledger}`;
       const overrides = { ...(cur.sourceLabelOverrides ?? {}), [key]: newLabel };
       const next = { ...prev, [noteType]: { ...cur, sourceLabelOverrides: overrides } };
-      scheduleSave(next);
       return next;
     });
-  }, [scheduleSave]);
+    scheduleLabelPersist(noteType);
+  }, [readOnly, scheduleLabelPersist]);
 
   const handlePromoteCustomToStatic = useCallback((noteType: string, customId: string, targetId: string) => {
     setNoteData(prev => {
@@ -3480,7 +3626,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
                         onExpansionStateUpdate?.(expansionStateRef.current);
                       }}
                       hideEmptySections={readOnly}
-                      initialExpandedRows={initialExpandedRows}
+                      initialExpandedRows={seedExpanded}
                     />
                   )}
                 </div>
