@@ -39,7 +39,7 @@ import {
   FileText, Plus, Download, Search, Filter, X, Eye, Info,
   AlertTriangle, Clock, CheckCircle2, Scale, ChevronRight, ChevronLeft,
   ChevronsLeft, ChevronsRight,
-  CalendarDays, Sparkles, Copy, Send, Mail,
+  CalendarDays, Sparkles, Copy, Send, Mail, History, Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getClassificationsForFY } from "@/utils/classificationUtils";
@@ -602,9 +602,23 @@ const ItReturns = () => {
     extraPatch?: Record<string, any>,
   ) => {
     const isNew = isUnsavedItrProfile(profile);
-    // Auto-fill Prepared By when status moves to "Ready for Review", and
-    // Checked By when status moves to "Verified" — using the signed-in user.
-    // Only fills when the slot is currently empty so manual overrides survive.
+    // Auto-fill / auto-clear policy tied to filing_status transitions:
+    //
+    //  • Ready for Review  → fills Prepared By with the signed-in user
+    //                        (only if currently empty — manual overrides win).
+    //  • Verified          → fills Checked By with the signed-in user
+    //                        (only if currently empty).
+    //  • Filed             → stamps date_filed with today (YYYY-MM-DD) if
+    //                        the auditor hasn't already entered one. The
+    //                        Filed Date column then renders automatically;
+    //                        the auditor doesn't have to open the calendar.
+    //  • Data Pending      → resets the whole "filed" footprint (prepared_by,
+    //                        checked_by, date_filed, acknowledgment_no,
+    //                        upload_by) back to NULL. Without this clear,
+    //                        a row that briefly hit "Filed" and then got
+    //                        reverted left stale Prepared-By / Filed-Date
+    //                        values that contradicted the new Data Pending
+    //                        state.
     const autoPatch: Record<string, any> = {};
     if (field === "filing_status" && user?.id) {
       if (value === "Ready for Review" && !(profile as any).prepared_by) {
@@ -612,6 +626,16 @@ const ItReturns = () => {
       }
       if (value === "Verified" && !(profile as any).checked_by) {
         autoPatch.checked_by = user.id;
+      }
+      if (value === "Filed" && !(profile as any).date_filed) {
+        autoPatch.date_filed = new Date().toISOString().slice(0, 10);
+      }
+      if (value === "Data Pending") {
+        autoPatch.prepared_by       = null;
+        autoPatch.checked_by        = null;
+        autoPatch.date_filed        = null;
+        autoPatch.acknowledgment_no = null;
+        autoPatch.upload_by         = null;
       }
     }
     const patch = { [field]: value ?? null, ...autoPatch, ...(extraPatch || {}) };
@@ -685,6 +709,32 @@ const ItReturns = () => {
         if (!data || data.length === 0) {
           throw new Error("Row was not updated (possible RLS policy block). Check Supabase logs.");
         }
+      }
+      // Write the change(s) to the per-row edit log. One row per field changed
+      // (including auto-filled fields from autoPatch above) so the auditor can
+      // see who flipped status to "Filed" and when, who cleared the Prepared
+      // By, etc. Best-effort — log failure must not roll back the user's save.
+      try {
+        const formatVal = (v: any): string | null => {
+          if (v == null) return null;
+          if (typeof v === "string") return v;
+          return String(v);
+        };
+        const histRows = Object.entries(patch).map(([f, newV]) => ({
+          client_id:       profile.client_id,
+          firm_id:         firmId ?? (profile as any).firm_id ?? null,
+          assessment_year: selectedAY,
+          field_name:      f,
+          old_value:       formatVal((profile as any)[f]),
+          new_value:       formatVal(newV),
+          changed_by:      user?.id ?? null,
+          changed_by_name: user?.name ?? null,
+        }));
+        if (histRows.length > 0) {
+          await (supabase as any).from("itr_profile_history").insert(histRows);
+        }
+      } catch (logErr) {
+        console.warn("[ItReturns] edit-log write failed", logErr);
       }
       // Await refetch so the next render uses authoritative server data,
       // not just our optimistic patch.
@@ -1283,6 +1333,198 @@ function FilingTab({
   );
 }
 
+// ─── Per-row edit log (mirrors the Stage-2 Query Sheet "Log" pattern) ────────
+//
+// Reads itr_profile_history rows keyed by client_id + assessment_year (firm
+// scoping happens via RLS). The journal is field-by-field — every status /
+// prepared-by / filed-date change yields one row — so the auditor can see
+// who flipped Status to "Filed" and when, and who cleared a Prepared-By, etc.
+// Same UX as the Query Sheet edit log: button → dialog → table.
+const FIELD_LABELS: Record<string, string> = {
+  filing_status:        "Status",
+  prepared_by:          "Prepared By",
+  checked_by:           "Checked By",
+  date_filed:           "Filed Date",
+  upload_by:            "Upload By",
+  acknowledgment_no:    "Ack No",
+  remarks:              "Remarks",
+  itr_form:             "ITR Form",
+  itr_work_group_id:    "Work Group",
+  assigned_to:          "Assigned To",
+  date_data_received:   "Data Received",
+};
+
+function fmtHistDateShort(iso: string): string {
+  if (!iso) return "";
+  try {
+    const d = new Date(iso);
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const yyyy = d.getFullYear();
+    let hh = d.getHours();
+    const mins = String(d.getMinutes()).padStart(2, "0");
+    const ampm = hh >= 12 ? "PM" : "AM";
+    hh = hh % 12 || 12;
+    return `${dd}/${mm}/${yyyy} ${String(hh).padStart(2, "0")}:${mins} ${ampm}`;
+  } catch { return iso; }
+}
+
+function describeItrChange(oldV: string | null, newV: string | null): React.ReactNode {
+  const o = (oldV ?? "").trim();
+  const n = (newV ?? "").trim();
+  if (!o && n)  return <>set to <span className="font-medium text-foreground">{n}</span></>;
+  if (o && !n)  return <>cleared (was <span className="font-medium text-foreground">{o}</span>)</>;
+  if (!o && !n) return <span className="text-muted-foreground italic">no value change</span>;
+  return (
+    <>
+      from <span className="font-medium text-foreground">{o}</span>
+      {" "}to <span className="font-medium text-foreground">{n}</span>
+    </>
+  );
+}
+
+function ItrRowHistoryButton({ clientId, assessmentYear, rowLabel }: {
+  clientId: string; assessmentYear: string; rowLabel: string;
+}) {
+  const [open,    setOpen]    = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [staffMap, setStaffMap] = useState<Map<string, string>>(new Map());
+  const [rows,    setRows]    = useState<Array<{
+    id: string; field_name: string;
+    old_value: string | null; new_value: string | null;
+    changed_by: string | null; changed_by_name: string | null;
+    changed_at: string;
+  }>>([]);
+
+  // Build a uuid → staff-name map once (lets us pretty-print prepared_by /
+  // checked_by / upload_by values that are stored as user ids).
+  useEffect(() => {
+    if (!open) return;
+    (async () => {
+      const { data } = await supabase.from("users").select("id, name");
+      const m = new Map<string, string>();
+      for (const u of (data || [])) {
+        if ((u as any).id) m.set((u as any).id, (u as any).name || (u as any).id);
+      }
+      setStaffMap(m);
+    })();
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || !clientId || !assessmentYear) return;
+    setLoading(true);
+    (async () => {
+      try {
+        const { data: hist } = await (supabase as any)
+          .from("itr_profile_history")
+          .select("id, field_name, old_value, new_value, changed_by, changed_by_name, changed_at")
+          .eq("client_id", clientId)
+          .eq("assessment_year", assessmentYear)
+          .order("changed_at", { ascending: false })
+          .limit(200);
+        setRows(hist || []);
+      } finally { setLoading(false); }
+    })();
+  }, [open, clientId, assessmentYear]);
+
+  const prettyValue = (field: string, raw: string | null): string | null => {
+    if (!raw) return raw;
+    if (field === "prepared_by" || field === "checked_by" || field === "upload_by" || field === "assigned_to") {
+      return staffMap.get(raw) || raw;
+    }
+    return raw;
+  };
+
+  return (
+    <>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-7 w-7 text-indigo-600 hover:bg-indigo-50 hover:text-indigo-800"
+        title="View edit log for this client"
+        onClick={() => setOpen(true)}
+      >
+        <History size={14} />
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-3xl p-0 gap-0 overflow-hidden">
+          <DialogHeader className="px-5 py-3 border-b bg-muted/40 space-y-0.5">
+            <DialogTitle className="flex items-center gap-2 text-sm">
+              <History size={15} className="text-indigo-600" />
+              Edit Log
+              {!loading && rows.length > 0 && (
+                <span className="text-[10px] font-normal text-muted-foreground ml-1">
+                  · {rows.length} {rows.length === 1 ? "change" : "changes"}
+                </span>
+              )}
+            </DialogTitle>
+            <p className="text-[11px] text-muted-foreground truncate" title={rowLabel}>
+              {rowLabel}
+            </p>
+          </DialogHeader>
+
+          <div className="max-h-[60vh] overflow-y-auto">
+            {loading ? (
+              <div className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground py-12">
+                <Loader2 size={13} className="animate-spin" /> Loading edit log…
+              </div>
+            ) : rows.length === 0 ? (
+              <div className="text-xs text-muted-foreground py-12 text-center">
+                No edits recorded yet for this client.
+              </div>
+            ) : (
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-muted/60 text-[10px] uppercase tracking-wide font-semibold text-muted-foreground">
+                  <tr>
+                    <th className="text-left  px-3 py-2 w-12">#</th>
+                    <th className="text-left  px-3 py-2 w-32">User</th>
+                    <th className="text-left  px-3 py-2 w-28">Field</th>
+                    <th className="text-left  px-3 py-2">Change</th>
+                    <th className="text-right px-3 py-2 w-40">When</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {rows.map((h, i) => (
+                    <tr key={h.id} className="hover:bg-muted/30">
+                      <td className="px-3 py-2 text-muted-foreground font-mono text-[10px]">
+                        {rows.length - i}
+                      </td>
+                      <td className="px-3 py-2 font-medium text-foreground">
+                        {h.changed_by_name || (h.changed_by && staffMap.get(h.changed_by)) || "Unknown"}
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className="inline-flex items-center px-1.5 py-px rounded text-[10px] font-medium bg-indigo-50 text-indigo-700 border border-indigo-200">
+                          {FIELD_LABELS[h.field_name] || h.field_name}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-foreground/90">
+                        {describeItrChange(prettyValue(h.field_name, h.old_value), prettyValue(h.field_name, h.new_value))}
+                      </td>
+                      <td className="px-3 py-2 text-right text-muted-foreground whitespace-nowrap tabular-nums">
+                        {fmtHistDateShort(h.changed_at)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          <div className="px-5 py-2 border-t bg-muted/30 flex items-center justify-between text-[10px] text-muted-foreground">
+            <span>Most recent change shown first.</span>
+            <DialogFooter className="m-0">
+              <Button size="sm" variant="outline" className="h-7 text-xs"
+                onClick={() => setOpen(false)}>
+                Close
+              </Button>
+            </DialogFooter>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
 // ─── Inline Editable Row ───
 function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, onDelete, navigate }: {
   profile: ItrProfile; staffUsers: StaffUser[]; workGroups: any[];
@@ -1418,6 +1660,11 @@ function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, onDelete
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setInfoOpen(true)}>
               <Info size={14} />
             </Button>
+            <ItrRowHistoryButton
+              clientId={p.client_id || ""}
+              assessmentYear={p.assessment_year || ""}
+              rowLabel={p.client_name || ""}
+            />
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onDelete(p)}>
               <X size={14} />
             </Button>
