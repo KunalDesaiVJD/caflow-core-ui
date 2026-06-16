@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { UserPlus, Pencil, KeyRound, Activity, Trash2, Upload, Camera, Mail, ShieldCheck, Eye, EyeOff } from "lucide-react";
+import { UserPlus, Pencil, KeyRound, Activity, Trash2, Upload, Camera, Mail, ShieldCheck, Eye, EyeOff, Search, X as XIcon } from "lucide-react";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Separator } from "@/components/ui/separator";
 import { UserAvatar } from "@/components/ui/UserAvatar";
@@ -116,6 +116,10 @@ export default function UserManagement() {
   const [users, setUsers]         = useState<UserRow[]>([]);
   const [loading, setLoading]     = useState(true);
   const [firmsList, setFirmsList] = useState<{ id: string; name: string }[]>([]);
+  // Search query — matches case-insensitively against name, email, phone, firm
+  // name, and role label, so the auditor can find a teammate by whichever
+  // attribute they remember.
+  const [searchQuery, setSearchQuery] = useState("");
 
   /* ── Add user ── */
   const [showAdd, setShowAdd]   = useState(false);
@@ -412,6 +416,27 @@ export default function UserManagement() {
         </Button>
       </div>
 
+      {/* ── Search ── */}
+      <div className="relative max-w-md">
+        <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+        <Input
+          value={searchQuery}
+          onChange={e => setSearchQuery(e.target.value)}
+          placeholder="Search by name, email, phone, firm, or role…"
+          className="pl-9 pr-9"
+        />
+        {searchQuery && (
+          <button
+            type="button"
+            onClick={() => setSearchQuery("")}
+            className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
+            aria-label="Clear search"
+          >
+            <XIcon size={14} />
+          </button>
+        )}
+      </div>
+
       {/* ── Users Table ── */}
       <div className="bg-card rounded-lg border border-border overflow-hidden">
         <Table>
@@ -428,11 +453,34 @@ export default function UserManagement() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {loading ? (
-              <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-10">Loading…</TableCell></TableRow>
-            ) : users.length === 0 ? (
-              <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-10">No team members found. Client logins are in the Clients section.</TableCell></TableRow>
-            ) : users.map(u => (
+            {(() => {
+              // Filter once per render so the no-results and rows branches
+              // share the same source of truth. Lowercase + .includes() across
+              // every column the user might type — name, email, phone, firm
+              // name, role display label, raw role key.
+              const q = searchQuery.trim().toLowerCase();
+              const visibleUsers = !q ? users : users.filter(u => {
+                const firmName = firmsList.find(f => f.id === u.firm_id)?.name || "";
+                const roleLabel = ROLE_LABELS[u.role || "staff_article"] || u.role || "";
+                return (
+                  (u.name  || "").toLowerCase().includes(q) ||
+                  (u.email || "").toLowerCase().includes(q) ||
+                  (u.phone || "").toLowerCase().includes(q) ||
+                  firmName.toLowerCase().includes(q) ||
+                  roleLabel.toLowerCase().includes(q) ||
+                  (u.role || "").toLowerCase().includes(q)
+                );
+              });
+              if (loading) {
+                return <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-10">Loading…</TableCell></TableRow>;
+              }
+              if (users.length === 0) {
+                return <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-10">No team members found. Client logins are in the Clients section.</TableCell></TableRow>;
+              }
+              if (visibleUsers.length === 0) {
+                return <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-10">No team members match "{searchQuery}".</TableCell></TableRow>;
+              }
+              return visibleUsers.map(u => (
               <TableRow key={u.id} className="group">
                 <TableCell>
                   <div className="flex items-center gap-3">
@@ -483,7 +531,8 @@ export default function UserManagement() {
                   </div>
                 </TableCell>
               </TableRow>
-            ))}
+              ));
+            })()}
           </TableBody>
         </Table>
       </div>

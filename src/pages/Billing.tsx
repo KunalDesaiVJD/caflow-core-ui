@@ -1559,8 +1559,19 @@ function ItemMasterTab() {
   const addItem = async () => {
     if (!desc.trim()) return;
     setSaving(true);
+    // ROOT-CAUSE FIX (Manager couldn't add items — RLS blocked the insert):
+    // invoice_item_masters has firm_scope_insert policy:
+    //   WITH CHECK (is_superadmin() OR firm_id = current_user_firm_id())
+    // The previous code wrote firm_id: null, so for a non-superadmin Manager
+    // (current_user_firm_id() != null) the check failed and PG returned
+    //   "new row violates row-level security policy for table
+    //    'invoice_item_masters'"
+    // — the toast the user reported. firm_id IS NULL rows are reserved for
+    // superadmin-seeded GLOBAL items (still visible to every firm via the
+    // SELECT policy's "firm_id IS NULL" branch). Firm-added items must be
+    // scoped to that firm's id so the policy passes.
     const { error } = await supabase.from("invoice_item_masters").insert({
-      firm_id: null,
+      firm_id: user?.firm_id ?? null,
       description: desc.trim(),
       hsn_sac_code: hsn.trim() || null,
       default_rate: rate ? Number(rate) : null,
@@ -1580,10 +1591,13 @@ function ItemMasterTab() {
 
   const saveEdit = async () => {
     if (!editId || !editDesc.trim()) return;
+    // Don't blindly reset firm_id on update — leave whatever the row had so
+    // a global (firm_id IS NULL) item stays global and a firm-scoped item
+    // stays scoped to its firm. firm_scope_update RLS still rejects a write
+    // that targets another firm's row, so this is safe.
     const { error } = await supabase.from("invoice_item_masters").update({
       description: editDesc.trim(), hsn_sac_code: editHsn.trim() || null,
       default_rate: editRate ? Number(editRate) : null,
-      firm_id: null,
     }).eq("id", editId);
     if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
     else { setEditId(null); fetchItems(); toast({ title: "Item updated" }); }
@@ -1618,8 +1632,10 @@ function ItemMasterTab() {
         const ws = wb.Sheets[wb.SheetNames[0]];
         const rows: any[] = XLSX.utils.sheet_to_json(ws);
         if (rows.length === 0) { toast({ title: "No rows found", variant: "destructive" }); return; }
+        // Same RLS fix as addItem — bulk inserts must carry the firm_id so
+        // the firm_scope_insert policy passes for non-superadmin uploads.
         const inserts = rows.map(r => ({
-          firm_id: null,
+          firm_id: user?.firm_id ?? null,
           description: String(r["Description"] || r["description"] || "").trim(),
           hsn_sac_code: String(r["HSN/SAC Code"] || r["hsn_sac_code"] || r["HSN"] || "").trim() || null,
           default_rate: r["Default Rate"] || r["default_rate"] || r["Rate"] ? Number(r["Default Rate"] || r["default_rate"] || r["Rate"]) : null,
@@ -1640,7 +1656,9 @@ function ItemMasterTab() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end gap-3">
-        <p className="text-sm text-muted-foreground">Item Master is shared across all firms.</p>
+        <p className="text-sm text-muted-foreground">
+          Your firm&apos;s Item Master. Global items (seeded by superadmin) are also visible to every firm.
+        </p>
         <div className="flex-1" />
         <Button variant="outline" size="sm" className="gap-1" onClick={handleDownloadTemplate}>
           <Download size={14} /> Download Template
