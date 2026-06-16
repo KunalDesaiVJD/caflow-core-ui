@@ -57,6 +57,7 @@ import {
 } from "@/lib/nceAutoPopulate";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 import FsHealthPanel from "@/components/pipeline/FsHealthPanel";
+import { evaluateNotesStaleness } from "@/lib/notesStaleness";
 import { validateFSReconciliation, logReconciliationDrift, NCE_LIAB_CODE_SET, computeCOATotals, validateOpeningVsPriorClose } from "@/lib/fsReconciliation";
 import { isTallyPLAccount, currentYearProfitAlreadyInReserves } from "@/lib/tallyDetection";
 
@@ -1832,6 +1833,8 @@ export default function PipelineFinancialStatements({
   // tab's Re-sync button uses, then refreshes the FS face so the BS / P&L
   // realign with COA mapping when the auditor has deleted breakup rows.
   const [recorrectingFromCOA, setRecorrectingFromCOA] = useState(false);
+  // Phase 1 (re-sync flow): non-destructive, finalization-gated notes refresh.
+  const [refreshingNotes, setRefreshingNotes] = useState(false);
   // 2026-06-05 Phase 2 — instrumentation for the loading-timer modal that
   // wraps the Re-correct handler. recorrectStartedAt is the timestamp the
   // run kicked off; recorrectElapsedSec ticks every 500ms while the run is
@@ -2489,6 +2492,56 @@ export default function PipelineFinancialStatements({
     },
     enabled: !!engagementId && !!engagement?.financial_year && isNonCorporate,
   });
+
+  // ─── Phase 1 (re-sync flow): Notes-staleness detection ───────────────────
+  // The BS/PL face reads the persisted nce_financial_notes snapshot, not live
+  // TB. After a Tally re-sync the COA anchor moves but the note snapshot does
+  // not, so the face silently shows stale figures behind a red drift panel.
+  // We compare the latest TB sync time against the latest notes update time
+  // and surface a clear banner. This is detection only — it never mutates any
+  // data (notes remain write-protected; refresh is a separate, gated action).
+  const { data: notesStalenessRaw } = useQuery({
+    queryKey: ["notes-staleness", engagementId, engagement?.financial_year],
+    staleTime: 30_000,
+    queryFn: async () => {
+      // Latest TB sync timestamp for this engagement.
+      const { data: tbRow } = await (supabase.from as any)("tally_trial_balance")
+        .select("synced_at")
+        .eq("engagement_id", engagementId)
+        .order("synced_at", { ascending: false, nullsFirst: false })
+        .limit(1)
+        .maybeSingle();
+      // Latest notes update timestamp for this engagement + FY.
+      const { data: noteRow } = await (supabase.from as any)("nce_financial_notes")
+        .select("updated_at")
+        .eq("engagement_id", engagementId)
+        .eq("financial_year", engagement?.financial_year ?? "")
+        .order("updated_at", { ascending: false, nullsFirst: false })
+        .limit(1)
+        .maybeSingle();
+      // notes_finalized flag — when true, notes are write-protected and the
+      // refresh action must NOT be offered.
+      const { data: engRow } = await (supabase.from as any)("audit_engagements")
+        .select("notes_finalized")
+        .eq("id", engagementId)
+        .maybeSingle();
+      return {
+        latestTbSyncedAt: (tbRow as any)?.synced_at ?? null,
+        latestNotesUpdatedAt: (noteRow as any)?.updated_at ?? null,
+        notesFinalized: (engRow as any)?.notes_finalized ?? false,
+      };
+    },
+    enabled: !!engagementId && !!engagement?.financial_year && isNonCorporate,
+  });
+
+  const notesStaleness = useMemo(
+    () => evaluateNotesStaleness({
+      latestTbSyncedAt: notesStalenessRaw?.latestTbSyncedAt,
+      latestNotesUpdatedAt: notesStalenessRaw?.latestNotesUpdatedAt,
+      notesFinalized: notesStalenessRaw?.notesFinalized,
+    }),
+    [notesStalenessRaw],
+  );
 
   // ─── AUTO-SYNC: Ensure NCE notes always reflect current COA mapping ─────
   // ROOT CAUSE FIX: previously, notes were only populated when the user
@@ -4800,6 +4853,105 @@ export default function PipelineFinancialStatements({
       toast.error(err.message);
     } finally {
       setSaving(false);
+    }
+  };
+
+  // ─── Phase 1 (re-sync flow): Refresh Notes from re-synced Trial Balance ──
+  // Unlike the disabled recorrectFromCOAMapping (which ran on every mount and
+  // overwrote audit-verified data), this is an EXPLICIT, auditor-initiated
+  // action, offered ONLY when:
+  //   (a) the TB was re-synced AFTER the notes were last built (stale), AND
+  //   (b) notes are NOT finalized (write-protection honoured).
+  // It re-runs nceAutoPopulate, which rebuilds ONLY the TB-derived auto rows
+  // while preserving every manual custom row, and persists both cy_data and
+  // py_data — so the revised figures flow TB → Notes → BS/PL face for CY & PY.
+  const refreshNotesFromTB = async () => {
+    if (!isNonCorporate) {
+      toast.error("Notes refresh is only supported for non-corporate (NCE) entities.");
+      return;
+    }
+    // Hard gate: never overwrite finalized / write-protected notes.
+    if (!notesStaleness.canRefresh) {
+      toast.error(
+        notesStaleness.verdict === "stale_locked"
+          ? "Notes are finalized (write-protected). Unlock notes before refreshing from TB."
+          : "Notes are already up to date with the trial balance.",
+      );
+      return;
+    }
+    const ok = window.confirm(
+      "Refresh Notes to Accounts from the re-synced Trial Balance?\n\n" +
+      "Auto rows will be rebuilt from the current Tally TB × COA mapping. " +
+      "Manual rows and any values you typed are PRESERVED. " +
+      "The CY and PY columns of the Notes — and the BS / P&L face that reads " +
+      "them — will re-align with the latest TB.\n\nClick OK to continue.",
+    );
+    if (!ok) return;
+    setRefreshingNotes(true);
+    try {
+      // 1. Load currently-saved notes so manual rows pass through untouched.
+      const { data: existingRows } = await (supabase.from as any)("nce_financial_notes")
+        .select("note_type, cy_data, py_data")
+        .eq("engagement_id", engagementId)
+        .eq("financial_year", engagement?.financial_year ?? "");
+      const built: Record<string, any> = {};
+      for (const r of (existingRows ?? []) as any[]) {
+        const cy = (r.cy_data ?? {}) as Record<string, any>;
+        const py = (r.py_data ?? {}) as Record<string, any>;
+        const customRows = Array.isArray(cy._custom_rows) ? cy._custom_rows : [];
+        const cleanCy: Record<string, number> = {};
+        const cleanPy: Record<string, number> = {};
+        for (const [k, v] of Object.entries(cy)) {
+          if (k === "_custom_rows") continue;
+          if (typeof v === "number") cleanCy[k] = v;
+        }
+        for (const [k, v] of Object.entries(py)) {
+          if (k === "_custom_rows") continue;
+          if (typeof v === "number") cleanPy[k] = v;
+        }
+        built[r.note_type] = { cy: cleanCy, py: cleanPy, customRows };
+      }
+
+      // 2. Rebuild auto rows from the live (re-synced) TB + COA mapping.
+      const populated = await nceAutoPopulate(engagementId, built);
+
+      // 3. Persist both cy_data and py_data.
+      const rows = Object.entries(populated).map(([noteType, d]) => {
+        const { cy_data, py_data } = serialiseNoteData(d);
+        return {
+          engagement_id:  engagementId,
+          financial_year: engagement?.financial_year ?? "",
+          note_type:      noteType,
+          cy_data:        cy_data as any,
+          py_data:        py_data as any,
+          updated_at:     new Date().toISOString(),
+        };
+      });
+      const { error: saveErr } = await supabase
+        .from("nce_financial_notes")
+        .upsert(rows, { onConflict: "engagement_id,financial_year,note_type" });
+      if (saveErr) throw saveErr;
+
+      // 4. Drop non-manual FS rows so the Stage-2 fallback in nceAutoPopulate
+      //    doesn't re-inject stale FS totals next time. Manual overrides kept.
+      await supabase
+        .from("fa_financial_statements")
+        .delete()
+        .eq("engagement_id", engagementId)
+        .eq("is_manual", false);
+
+      // 5. Invalidate the dependent queries so the face + staleness banner refresh.
+      queryClient.invalidateQueries({ queryKey: ["nce-financial-notes", engagementId] });
+      queryClient.invalidateQueries({ queryKey: ["fs-rows", engagementId] });
+      queryClient.invalidateQueries({ queryKey: ["engagement", engagementId] });
+      queryClient.invalidateQueries({ queryKey: ["notes-staleness", engagementId] });
+
+      toast.success("Notes refreshed from the re-synced trial balance");
+    } catch (e: any) {
+      console.error("[refreshNotesFromTB]", e);
+      toast.error(e?.message || "Notes refresh failed");
+    } finally {
+      setRefreshingNotes(false);
     }
   };
 
@@ -7780,6 +7932,45 @@ export default function PipelineFinancialStatements({
            bugs. Phase 6: also runs for Corporate engagements (uses
            stage5_notes via sumNotesSubRowsCY/PY). See
            src/lib/fsReconciliation.ts for the invariant logic. */}
+      {/* Phase 1 (re-sync flow) — Notes-staleness banner. The BS/PL face reads
+           the persisted notes snapshot, so after a Tally re-sync the figures
+           below can be stale. Surface it explicitly instead of leaving the
+           auditor to decode a red drift panel. Refresh is offered ONLY when
+           notes are not finalized (write-protection honoured). */}
+      {isNonCorporate && notesStaleness.isStale && (
+        <Alert variant="destructive" className="border-amber-400/50 bg-amber-50 dark:bg-amber-950/20">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>Trial balance re-synced after notes were built</AlertTitle>
+          <AlertDescription>
+            <p className="text-xs mb-2">
+              The Notes to Accounts (and the BS / P&amp;L figures below, which read
+              from them) were last built on{" "}
+              <strong>{notesStaleness.latestNotesUpdatedAt
+                ? new Date(notesStaleness.latestNotesUpdatedAt).toLocaleString("en-IN")
+                : "—"}</strong>, but the trial balance was re-synced on{" "}
+              <strong>{notesStaleness.latestTbSyncedAt
+                ? new Date(notesStaleness.latestTbSyncedAt).toLocaleString("en-IN")
+                : "—"}</strong>. The figures shown may not reflect the latest TB.
+            </p>
+            {notesStaleness.canRefresh ? (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={refreshingNotes}
+                onClick={refreshNotesFromTB}
+              >
+                {refreshingNotes ? "Refreshing…" : "Refresh notes from TB"}
+              </Button>
+            ) : (
+              <p className="text-xs font-medium">
+                Notes are finalized (write-protected). Unlock notes to refresh, or
+                reconcile the difference manually before exporting.
+              </p>
+            )}
+          </AlertDescription>
+        </Alert>
+      )}
+
       <FsHealthPanel
         engagementId={engagementId}
         nceNotesByType={isNonCorporate ? nceNotesByType : undefined}

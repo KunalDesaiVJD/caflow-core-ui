@@ -537,6 +537,60 @@ export default function TallySyncPage({ engagementOverride, hideHeader = false }
       toast({ title: "No engagements record found for this client/FY", description: "Run node auto-setup.js first.", variant: "destructive" });
       return;
     }
+
+    // ── Phase 3 + 5 (re-sync flow): guard re-syncs over protected data ───────
+    // A Tally re-sync does a delete-then-insert of this engagement's TB. That is
+    // safe for a fresh engagement, but destructive when figures downstream have
+    // been finalized — so confirm explicitly before overwriting. We read the
+    // flags fresh (the context engagement may not carry them).
+    const { data: engState } = await supabase
+      .from("audit_engagements" as any)
+      .select("is_finalized, notes_finalized, is_py_shell, client_id, financial_year")
+      .eq("id", tallyEngId)
+      .maybeSingle();
+    const es = (engState as any) ?? {};
+
+    // Phase 3 — finalized / write-protected engagement.
+    if (es.is_finalized || es.notes_finalized) {
+      const ok = window.confirm(
+        "This engagement's financial statements / notes are FINALIZED.\n\n" +
+        "Re-syncing replaces the trial balance and can change finalized figures. " +
+        "The Notes to Accounts are write-protected, so the re-synced balances will " +
+        "NOT flow to the face until notes are unlocked and refreshed.\n\n" +
+        "Continue with the re-sync?",
+      );
+      if (!ok) return;
+    }
+
+    // Phase 5 — PY shell that a finalized current-year engagement depends on.
+    if (es.is_py_shell && es.client_id && es.financial_year) {
+      const parts = String(es.financial_year).split("-");
+      if (parts.length === 2) {
+        const startYr = parseInt(parts[0], 10);
+        const cyFy = `${startYr + 1}-${String(startYr + 2).slice(-2)}`;
+        const { data: cySiblings } = await supabase
+          .from("audit_engagements" as any)
+          .select("id, is_finalized, notes_finalized")
+          .eq("client_id", es.client_id)
+          .eq("financial_year", cyFy)
+          .or("is_py_shell.is.null,is_py_shell.eq.false");
+        const dependentFinalized = ((cySiblings ?? []) as any[]).some(
+          (s) => s.is_finalized || s.notes_finalized,
+        );
+        if (dependentFinalized) {
+          const ok = window.confirm(
+            "This is a PRIOR-YEAR shell, and the current-year engagement that " +
+            "depends on it is already finalized.\n\n" +
+            "Re-syncing the PY shell changes last year's comparative figures and " +
+            "the CY opening-balance reconciliation. This can silently move signed " +
+            "prior-year numbers.\n\n" +
+            "Break the freeze and re-sync the PY shell anyway?",
+          );
+          if (!ok) return;
+        }
+      }
+    }
+
     setSyncing(true);
 
     // Auto-fail stuck batches + stale requests older than 30 min before queuing a new one
