@@ -606,12 +606,19 @@ const ItReturns = () => {
     //
     //  • Ready for Review  → fills Prepared By with the signed-in user
     //                        (only if currently empty — manual overrides win).
+    //                        Also clears Checked By if the row was previously
+    //                        Verified — the new reviewer hasn't checked yet,
+    //                        so the prior "Checked By" claim is stale.
     //  • Verified          → fills Checked By with the signed-in user
     //                        (only if currently empty).
     //  • Filed             → stamps date_filed with today (YYYY-MM-DD) if
-    //                        the auditor hasn't already entered one. The
-    //                        Filed Date column then renders automatically;
-    //                        the auditor doesn't have to open the calendar.
+    //                        the auditor hasn't already entered one, and
+    //                        fills Upload By with the signed-in user when
+    //                        empty (the auditor who marks the return as
+    //                        Filed is the one who uploaded it). Requires
+    //                        a non-blank Ack No — without it, the status
+    //                        change is rejected with a toast so the auditor
+    //                        types the ARN before the row can be marked Filed.
     //  • Data Pending      → resets the whole "filed" footprint (prepared_by,
     //                        checked_by, date_filed, acknowledgment_no,
     //                        upload_by) back to NULL. Without this clear,
@@ -621,14 +628,34 @@ const ItReturns = () => {
     //                        state.
     const autoPatch: Record<string, any> = {};
     if (field === "filing_status" && user?.id) {
-      if (value === "Ready for Review" && !(profile as any).prepared_by) {
-        autoPatch.prepared_by = user.id;
+      // Ack No gate: refuse to move into "Filed" without an acknowledgement
+      // number. Surface a destructive toast so the auditor sees exactly why
+      // the dropdown reverted, and stop here — no DB write, no optimistic
+      // patch, no history-log entry.
+      if (value === "Filed" && !((profile as any).acknowledgment_no || "").trim()) {
+        toast({
+          title: "Ack No is required",
+          description: "Enter the ARN (Ack No) on this row's Info panel before marking it as Filed.",
+          variant: "destructive",
+        });
+        return;
+      }
+      if (value === "Ready for Review") {
+        if (!(profile as any).prepared_by) autoPatch.prepared_by = user.id;
+        // Demoting from Verified → Ready for Review means the prior
+        // Checked-By no longer holds — the new review hasn't been done.
+        if ((profile as any).checked_by) autoPatch.checked_by = null;
       }
       if (value === "Verified" && !(profile as any).checked_by) {
         autoPatch.checked_by = user.id;
       }
-      if (value === "Filed" && !(profile as any).date_filed) {
-        autoPatch.date_filed = new Date().toISOString().slice(0, 10);
+      if (value === "Filed") {
+        if (!(profile as any).date_filed) {
+          autoPatch.date_filed = new Date().toISOString().slice(0, 10);
+        }
+        if (!(profile as any).upload_by) {
+          autoPatch.upload_by = user.id;
+        }
       }
       if (value === "Data Pending") {
         autoPatch.prepared_by       = null;
