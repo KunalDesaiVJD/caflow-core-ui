@@ -1212,35 +1212,50 @@ function buildNote1Section(
       children:  runs,
     });
 
-  // Re-number the SELECTED notes 1..N so the Word file matches what the
-  // app shows (the on-screen view hides un-selected notes and re-numbers
-  // the rest 1..N in the order they appear).
+  // Re-number the SELECTED notes 1..N so the Word file matches the on-screen
+  // view (un-ticked notes are hidden and the rest re-number 1..N).
+  //
+  // Layout chosen to match the firm-standard NCE Notes page reference image
+  // (V J Desai & Co. master template):
+  //   • "NOTES - 1" badge top-left (small navy label).
+  //   • Underlined navy heading "NOTES FORMING PARTS OF ACCOUNTS FOR THE
+  //     YEAR ENDED OF 31.03.<yyyy>". No "DISCLOSURE OF ACCOUNTING POLICIES…"
+  //     wording — that was an internal placeholder the auditor never wanted.
+  //   • Plain numbered list (1 .. N) with no bold "Balance Confirmation:"
+  //     title prefix on each line. The on-screen Stage 7 page also stores
+  //     the title separately for organisation; the printed Word file omits
+  //     it so the page reads as a continuous numbered statement.
+  const headingYear = String(cyYear || "").slice(-4) || "20XX";
   const out: Paragraph[] = [
-    // Header banner — same shade / weight pair the rest of the export uses
-    // for the navy underlined "Notes to ..." headings so Note 1 visually
-    // matches every other note page.
+    // Top-left small "NOTES - 1" badge.
     new Paragraph({
-      spacing:   { before: 0, after: 100 },
-      border:    { bottom: { style: BorderStyle.SINGLE, size: 4, color: NAVY, space: 4 } },
-      keepNext:  true,
-      keepLines: true,
+      alignment: AlignmentType.LEFT,
+      spacing:   { before: 0, after: 60 },
       children: [
-        new TextRun({ text: `Note 1:  `,                     font: FONT, size: SZ_HDR, bold: true, color: NAVY }),
-        new TextRun({ text: "DISCLOSURE OF ACCOUNTING POLICIES & NOTES FORMING PART OF THE ANNUAL ACCOUNTS",
-                      font: FONT, size: SZ_HDR, bold: true, color: NAVY }),
+        new TextRun({ text: "NOTES - 1", font: FONT, size: SZ_SM, bold: true, color: NAVY }),
+      ],
+    }),
+    // Underlined navy heading.
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing:   { before: 0, after: 160 },
+      keepNext:  true,
+      children: [
+        new TextRun({
+          text: `NOTES FORMING PARTS OF ACCOUNTS FOR THE YEAR ENDED OF 31.03.${headingYear}`,
+          font: FONT, size: SZ_HDR, bold: true, color: NAVY, underline: {},
+        }),
       ],
     }),
   ];
 
   selectedNotes.forEach((n, i) => {
-    const num   = i + 1;
-    const title = (n.title || "").trim();
+    const num = i + 1;
     out.push(
       block(
         [
-          new TextRun({ text: `${num}.  `,                       font: FONT, size: SZ_BODY, bold: true, color: BLACK }),
-          new TextRun({ text: title ? `${title}: ` : "",          font: FONT, size: SZ_BODY, bold: true, color: NAVY  }),
-          new TextRun({ text: resolveTokens(n.text || ""),         font: FONT, size: SZ_BODY,             color: BLACK }),
+          new TextRun({ text: `${num}.  `,                          font: FONT, size: SZ_BODY, bold: true, color: BLACK }),
+          new TextRun({ text: resolveTokens(n.text || ""),            font: FONT, size: SZ_BODY,            color: BLACK }),
         ],
         { indent: 0, after: i === selectedNotes.length - 1 ? 40 : GAP },
       ),
@@ -2410,9 +2425,18 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
 
   // Section A children — Note 1 page only (no pageBreakBefore needed; the
   // section boundary already forces a new page before Section B content).
+  // Signature block (assessee + auditor sign-off) is appended so the printed
+  // Note 1 page ends with the same Place / Date / "For <client>" / "(Signature
+  // of assessee)" — "As per our Audit Report of even date" / "For <firm>" /
+  // "Chartered Accountants" / "Firm Regi No" / partner / membership block
+  // the on-screen NCE Stage 7 → Notes to Accounts page shows. Re-uses the
+  // exact same sigBlock() helper as the BS / P&L pages so styling stays
+  // identical across the document.
   const note1SectionChildren: (Paragraph | Table)[] = [
     makeNotesBanner(),
     ...note1Paras,
+    new Paragraph({ spacing: { before: 240 }, children: [] }),
+    sigBlock(),
   ];
 
   // Section B children — BS structured notes (capital account + BS note tables).
@@ -2469,8 +2493,15 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
       // banner (makeNotesBanner) provides the title inline. The larger
       // notesPortraitProps margin is only needed for Sections B/C which carry
       // a real two-line running header.
+      //
+      // verticalAlign: BOTH — same justified vertical fill the BS / P&L pages
+      // use so the signature block at the end of note1SectionChildren is
+      // pushed to the page bottom (Place / Date / "For <client>" /
+      // "(Signature of assessee)" on the left; "As per our Audit Report of
+      // even date" / firm / partner / membership on the right) instead of
+      // floating mid-page after the numbered notes.
       {
-        properties: { page: note1PortraitProps },
+        properties: { page: note1PortraitProps, verticalAlign: VerticalAlignSection.BOTH },
         headers:    { default: emptyFirstHeader },
         children:   note1SectionChildren,
       },
