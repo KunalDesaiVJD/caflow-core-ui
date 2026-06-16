@@ -1065,6 +1065,14 @@ const NewClientWizard = () => {
                 title: "Portal email updated",
                 description: `Sign in now uses ${portalEmailChange.newEmail}. Existing password is unchanged.`,
               });
+            } else if (result.mode === "forked") {
+              // Shared-login fork: this client's portal login was split off
+              // from a multi-tenant auth user so the other co-tenants are
+              // unaffected. A fresh password was issued — surface it.
+              toast({
+                title: "Portal login created for this client",
+                description: `This client previously shared its login with other clients. A separate portal login has been created. Sign in with ${portalEmailChange.newEmail} · Password: ${result.default_password || "Client@2025!"}`,
+              });
             }
           } catch (emailErr: any) {
             toast({

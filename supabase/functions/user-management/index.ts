@@ -622,18 +622,53 @@ Deno.serve(async (req) => {
         });
       }
 
+      // Is this auth user shared by OTHER clients (group / family login)?
+      // If yes, renaming it in place would change the sign-in email for every
+      // co-tenant — exactly what bit MILL POWER PRIVATE LTD round 1: the
+      // shared chitragupt_80 login was used by 40 clients, and renaming it
+      // to rightledgerworks@gmail.com surfaced all 40 in the new email's
+      // portal. The right move on a shared account is to FORK a fresh auth
+      // user for just this client and leave the shared one untouched.
+      const { count: sharedClientCount } = await adminClient
+        .from("clients")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", clientRow.user_id)
+        .neq("id", clientRow.id)
+        .is("deleted_at", null);
+      const isShared = (sharedClientCount ?? 0) > 0;
+
       // Does the new email already belong to a different auth user?
       const collision = await findAuthUserByEmail(adminClient, newEmail);
       let finalUserId: string;
-      let mode: "renamed" | "linked";
+      let mode: "renamed" | "linked" | "forked";
+      let defaultPassword: string | undefined;
+
       if (collision && collision.id !== clientRow.user_id) {
         // The new address belongs to someone else's login. Don't try to rename
         // — that would violate the unique index — re-link this client to that
         // existing auth user. Password on that account stays intact.
         finalUserId = collision.id;
         mode = "linked";
+      } else if (isShared) {
+        // Shared portal login — create a NEW auth user for this client and
+        // re-point clients.user_id at it. The other co-tenants keep their
+        // existing shared auth user (and its existing email).
+        const newPassword = "Client@2025!";
+        const { data: created, error: createErr } = await adminClient.auth.admin.createUser({
+          email: newEmail,
+          password: newPassword,
+          email_confirm: true,
+          user_metadata: { role: "client", firm_id: clientRow.firm_id },
+        });
+        if (createErr || !created?.user) {
+          return new Response(JSON.stringify({ error: `Could not create portal login: ${createErr?.message || "unknown error"}` }), { status: 500, headers: corsHeaders });
+        }
+        finalUserId = created.user.id;
+        mode = "forked";
+        defaultPassword = newPassword;
       } else {
-        // Safe to rename in-place. Keep password intact; just flip the email.
+        // Solo login — safe to rename in place. Keep password intact; just
+        // flip the email.
         const { error: updErr } = await adminClient.auth.admin.updateUserById(clientRow.user_id, {
           email: newEmail,
           email_confirm: true,
@@ -670,6 +705,7 @@ Deno.serve(async (req) => {
         user_id: finalUserId,
         previous_email: currentEmail,
         new_email: newEmail,
+        ...(defaultPassword ? { default_password: defaultPassword } : {}),
       }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
