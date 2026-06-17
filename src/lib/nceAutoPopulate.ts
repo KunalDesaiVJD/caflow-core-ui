@@ -723,6 +723,140 @@ export function serialiseNoteData(
   };
 }
 
+// ─── Phase 1: edit-ledger mutation + overlay helpers ─────────────────────────
+//
+// These power the build-then-overlay re-sync model. nceAutoPopulate (later,
+// behind a flag) will produce a PURE auto layer from TB+COA, then
+// respectNceManualEdits replays the auditor's edit-ledger on top — so re-sync
+// reclassifies ledgers (incl. LT↔ST from a COA mapping change) WITHOUT discarding
+// manual edits. Pure + side-effect-free; exported for unit tests and the upcoming
+// engine wiring (NOT yet on the live path).
+
+/** Stable dedupe/lookup key for an edit (kind + note + target + column).
+ *  Includes noteType so colliding custom-row ids across notes never collide. */
+function nceEditKey(e: NceEdit): string {
+  switch (e.kind) {
+    case "reclass": return `reclass|${e.noteType}|${e.ledger}`;
+    case "value":   return `value|${e.noteType}|${e.rowId}|${e.col ?? "all"}`;
+    case "label":   return `label|${e.noteType}|${e.rowId}|${e.ledger ?? ""}`;
+    default:        return `${e.kind}|${e.noteType}|${e.rowId}`;
+  }
+}
+
+/** Add an edit, replacing any existing edit with the same key (last-write-wins).
+ *  Returns a NEW array. */
+export function addNceEdit(edits: NceEdit[] | undefined, edit: NceEdit): NceEdit[] {
+  const k = nceEditKey(edit);
+  const out = (edits ?? []).filter(e => nceEditKey(e) !== k);
+  out.push(edit);
+  return out;
+}
+
+/** Remove every edit matching the predicate. Returns a NEW array. */
+export function removeNceEdit(edits: NceEdit[] | undefined, pred: (e: NceEdit) => boolean): NceEdit[] {
+  return (edits ?? []).filter(e => !pred(e));
+}
+
+/** Find the first edit matching the predicate. */
+export function findNceEdit(edits: NceEdit[] | undefined, pred: (e: NceEdit) => boolean): NceEdit | undefined {
+  return (edits ?? []).find(pred);
+}
+
+const uniqPush = (arr: string[] | undefined, v: string): string[] => {
+  const s = new Set(arr ?? []); s.add(v); return [...s];
+};
+
+/** Apply ONE edit to a single note (mutates `note`). `customById` indexes the
+ *  note's current custom rows. */
+function applyNceEditTo(
+  note: NCENoteData,
+  e: NceEdit,
+  customById: Map<string, NCECustomRow>,
+): void {
+  switch (e.kind) {
+    case "hide":
+      note.hiddenRows = uniqPush(note.hiddenRows, e.rowId);
+      return;
+    case "label":
+      if (e.ledger) {
+        note.sourceLabelOverrides = { ...(note.sourceLabelOverrides ?? {}), [`${e.rowId}::${e.ledger}`]: e.text };
+      } else {
+        note.labelOverrides = { ...(note.labelOverrides ?? {}), [e.rowId]: e.text };
+      }
+      return;
+    case "move": {
+      const row = customById.get(e.rowId);
+      if (!row) return;
+      if (e.attachedTo !== undefined) row.attachedTo = e.attachedTo;
+      if (e.section !== undefined) row.section = e.section;
+      row.userMoved = true;
+      return;
+    }
+    case "reclass":
+      note.ejectedLedgers = uniqPush(note.ejectedLedgers, e.ledger);
+      return;
+    case "value": {
+      // KEY-SPECIFIC GATE: only override a numeric key the fresh build actually
+      // produced. After a COA LT↔ST reclassification the build writes the new
+      // column key (e.g. `${id}_st`) and omits the old one (`${id}_lt`); gating
+      // on the exact key means a stale LT edit can NOT resurrect the old column
+      // — the exact ST↔LT corruption this guard exists to prevent.
+      const key = e.col ? `${e.rowId}_${e.col}` : e.rowId;
+      if (!(key in note.cy) && !(key in note.py)) return;
+      if (e.cy !== undefined) note.cy[key] = e.cy;   // SIGNED verbatim (never Math.abs)
+      if (e.py !== undefined) note.py[key] = e.py;
+      return;
+    }
+    case "custom": {
+      if (customById.has(e.rowId)) return;     // already produced by the build
+      if (e.tbDerived || e.ledgerRef) return;  // TB-sourced rows are the build's job
+      const row: NCECustomRow = {
+        id: e.rowId, label: e.label ?? "", source: "manual",
+        ...(e.section ? { section: e.section } : {}),
+        ...(e.attachedTo ? { attachedTo: e.attachedTo } : {}),
+      };
+      note.customRows.push(row);
+      customById.set(e.rowId, row);
+      for (const [k, v] of Object.entries(e.keys ?? {})) {
+        if (v.cy !== undefined) note.cy[k] = v.cy;   // signed verbatim
+        if (v.py !== undefined) note.py[k] = v.py;
+      }
+      return;
+    }
+  }
+}
+
+/** Overlay one note's edit-ledger onto its freshly-built auto layer. */
+function overlayNoteEdits(noteType: string, autoNote: NCENoteData, edits: NceEdit[]): NCENoteData {
+  const note: NCENoteData = JSON.parse(JSON.stringify(autoNote));
+  note.manualEdits = [...edits];
+  const customById = new Map<string, NCECustomRow>(note.customRows.map(r => [r.id, r]));
+  for (const e of edits) {
+    if (e.noteType !== noteType) continue;
+    applyNceEditTo(note, e, customById);
+  }
+  return note;
+}
+
+/**
+ * Build-then-overlay re-sync: replay each note's edit-ledger (carried on the
+ * EXISTING saved notes) onto the freshly rebuilt `auto` layer. The auto layer is
+ * the authority for TB-derived figures and classification (so a COA LT↔ST change
+ * flows straight through), and the ledger restores only the auditor's manual
+ * intent. Mirrors Corporate's respectManualEdits but for the structural NCE
+ * model. PURE — returns a new map, never mutates inputs.
+ */
+export function respectNceManualEdits(
+  auto: Record<string, NCENoteData>,
+  existing: Record<string, NCENoteData>,
+): Record<string, NCENoteData> {
+  const out: Record<string, NCENoteData> = {};
+  for (const [noteType, autoNote] of Object.entries(auto)) {
+    out[noteType] = overlayNoteEdits(noteType, autoNote, existing[noteType]?.manualEdits ?? []);
+  }
+  return out;
+}
+
 // ── Main auto-populate ────────────────────────────────────────────────────────
 
 export async function nceAutoPopulate(
