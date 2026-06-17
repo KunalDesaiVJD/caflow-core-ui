@@ -1657,7 +1657,16 @@ function buildNoteSection(
   // Benefits Expense). For flat notes we collect ALL data rows (static + custom)
   // into flatRows, sort them A-Z, then flush the entire sorted block before
   // the grand-total row — giving true full-alphabetical interleaving.
-  const isFlatNote = !cfg.rows.some(r => r.isSectionHeader);
+  // A "flat" note is a simple list (data rows + one grand total) whose rows are
+  // sorted A-Z for export (e.g. Other Expenses). A note with SUBTOTALS — isTotal
+  // rows other than the grand total, e.g. Revenue from Operations' "Net Sale of
+  // products" — is NOT flat: its rows must stay in config order so each subtotal
+  // renders AFTER the components it sums, instead of being hoisted above them by
+  // the A-Z sort (and by the subtotal being emitted at its config position while
+  // the data rows are deferred to the grand-total flush). Such notes have no
+  // section headers either, so the original header-only check mis-flagged them.
+  const isFlatNote = !cfg.rows.some(r => r.isSectionHeader)
+    && !cfg.rows.some(r => r.isTotal && r.id !== grandTotalId);
   const flatRows: { label: string; emit: () => void }[] = [];
 
   const emittedCustoms = new Set<string>();
