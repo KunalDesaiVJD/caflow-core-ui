@@ -100,3 +100,100 @@ describe("recomputeNotePYFromShell", () => {
     expect(r.newCyData._custom_rows).toEqual(customRows); // structure intact
   });
 });
+
+describe("recomputeNotePYFromShell — Pattern-A column-aware path (opt-in)", () => {
+  it("still REFUSES Pattern-A notes by default (no opts) — backward compatible", () => {
+    const cyData = { custom_loan_0_lt: 135457, _custom_rows: [{ id: "custom_loan_0", label: "Axis Machinery" }] };
+    const pyData = { custom_loan_0_lt: 135457 };
+    const r = recomputeNotePYFromShell(
+      { noteType: "borrowings", cyData, pyData },
+      [tb("Axis Machinery", 0, "Cr")],
+      [tb("Axis Machinery", 0, "Cr")],
+    );
+    expect(r.patternA).toBe(true);
+    expect(r.changes).toHaveLength(0);
+    expect(r.newPyData).toEqual(pyData);
+  });
+
+  it("recomputes an LT row from its _lt suffix key when opted in (production shape: id+label, no sources/column)", () => {
+    const cyData = { custom_loan_0_lt: 0, _custom_rows: [{ id: "custom_loan_0", label: "Axis Machinery" }] };
+    const pyData = { custom_loan_0_lt: 0 };
+    const r = recomputeNotePYFromShell(
+      { noteType: "borrowings", cyData, pyData },
+      [tb("Axis Machinery", 0, "Cr")],
+      [tb("Axis Machinery", 135457, "Cr")], // shell closing — CR head, Cr → +
+      { enablePatternA: true },
+    );
+    expect(r.patternA).toBe(true);
+    expect(r.newPyData.custom_loan_0_lt).toBe(135457);
+    expect(r.newCyData.custom_loan_0_lt).toBe(0);
+    // CRITICAL: no money slid into the ST column.
+    expect(r.newPyData.custom_loan_0_st).toBeUndefined();
+    expect(r.changes).toContainEqual(
+      expect.objectContaining({ rowId: "custom_loan_0", oldPy: 0, newPy: 135457 }),
+    );
+  });
+
+  it("recomputes an ST row into the _st key — never into _lt (the ST→LT landmine)", () => {
+    const cyData = { custom_od_0_st: 0, _custom_rows: [{ id: "custom_od_0", label: "Bank OD" }] };
+    const pyData = { custom_od_0_st: 0 };
+    const r = recomputeNotePYFromShell(
+      { noteType: "borrowings", cyData, pyData },
+      [tb("Bank OD", 0, "Cr")],
+      [tb("Bank OD", 80000, "Cr")],
+      { enablePatternA: true },
+    );
+    expect(r.newPyData.custom_od_0_st).toBe(80000);
+    expect(r.newPyData.custom_od_0_lt).toBeUndefined(); // not moved to long-term
+  });
+
+  it("leaves a BOTH-column row untouched (manual LT/ST split TB cannot reproduce)", () => {
+    const cyData = { custom_mix_0_lt: 100, custom_mix_0_st: 200, _custom_rows: [{ id: "custom_mix_0", label: "Mixed Loan" }] };
+    const pyData = { custom_mix_0_lt: 100, custom_mix_0_st: 200 };
+    const r = recomputeNotePYFromShell(
+      { noteType: "borrowings", cyData, pyData },
+      [tb("Mixed Loan", 500, "Cr")],
+      [tb("Mixed Loan", 500, "Cr")],
+      { enablePatternA: true },
+    );
+    expect(r.changes).toHaveLength(0);
+    expect(r.newPyData.custom_mix_0_lt).toBe(100);
+    expect(r.newPyData.custom_mix_0_st).toBe(200);
+  });
+
+  it("same ledger split across LT and ST is NOT a duplicate — both columns recompute", () => {
+    const cyData = {
+      custom_a_lt: 0, custom_b_st: 0,
+      _custom_rows: [{ id: "custom_a", label: "Loan" }, { id: "custom_b", label: "Loan" }],
+    };
+    const pyData = { custom_a_lt: 0, custom_b_st: 0 };
+    const r = recomputeNotePYFromShell(
+      { noteType: "borrowings", cyData, pyData },
+      [tb("Loan", 0, "Cr")],
+      [tb("Loan", 90000, "Cr")],
+      { enablePatternA: true },
+    );
+    expect(r.hasAmbiguity).toBe(false);
+    expect(r.newPyData.custom_a_lt).toBe(90000);
+    expect(r.newPyData.custom_b_st).toBe(90000);
+  });
+
+  it("same ledger in the SAME column across two rows IS flagged ambiguous and left untouched", () => {
+    const cyData = {
+      custom_a_lt: 0, custom_b_lt: 0,
+      _custom_rows: [{ id: "custom_a", label: "Loan" }, { id: "custom_b", label: "Loan" }],
+    };
+    const pyData = { custom_a_lt: 0, custom_b_lt: 0 };
+    const r = recomputeNotePYFromShell(
+      { noteType: "borrowings", cyData, pyData },
+      [tb("Loan", 0, "Cr")],
+      [tb("Loan", 90000, "Cr")],
+      { enablePatternA: true },
+    );
+    expect(r.hasAmbiguity).toBe(true);
+    expect(r.duplicateLedgers).toContainEqual(expect.objectContaining({ ledger: "loan" }));
+    expect(r.newPyData.custom_a_lt).toBe(0);
+    expect(r.newPyData.custom_b_lt).toBe(0);
+    expect(r.changes).toHaveLength(0);
+  });
+});

@@ -2,7 +2,7 @@
 // computeNoteTotals helper (see import below). This file's computeDisplayData
 // is a thin adapter that writes the canonical totals back into the cy/py
 // records its historic callers expect.
-import { computeNoteTotals } from "@/lib/nceNoteTotals";
+import { computeNoteTotals, keyFor } from "@/lib/nceNoteTotals";
 
 // Shared config for NCE Detailed Notes — the single source of truth for:
 //   • Row IDs used as keys in `nce_financial_notes.cy_data` / `py_data`
@@ -866,10 +866,12 @@ export function computeDisplayData(
       if (!row.isTotal) continue;
       const v = totals.perRow[row.id];
       if (!v) continue;
-      outCy[row.id + "_lt"] = v.ltCy;
-      outPy[row.id + "_lt"] = v.ltPy;
-      outCy[row.id + "_st"] = v.stCy;
-      outPy[row.id + "_st"] = v.stPy;
+      // keyFor(id,"lt") === `${id}_lt` — value-identical to the previous inline
+      // suffixing, now routed through the single LT/ST-convention helper.
+      outCy[keyFor(row.id, "lt")] = v.ltCy;
+      outPy[keyFor(row.id, "lt")] = v.ltPy;
+      outCy[keyFor(row.id, "st")] = v.stCy;
+      outPy[keyFor(row.id, "st")] = v.stPy;
     }
   }
   return { cy: outCy, py: outPy };

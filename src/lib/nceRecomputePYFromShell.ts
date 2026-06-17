@@ -24,6 +24,7 @@
  *   • Rows with no resolvable ledger (hand-typed manual rows) are preserved.
  */
 import { signedBalance } from "@/lib/fsSignConvention";
+import { keyFor } from "@/lib/nceNoteTotals";
 
 export interface TBRow {
   ledger_name: string;
@@ -69,7 +70,10 @@ export interface NoteRecomputeResult {
   duplicateLedgers: Array<{ ledger: string; rows: string[] }>;
   /** True if any ambiguity was found (caller should NOT auto-write this note). */
   hasAmbiguity: boolean;
-  /** Pattern-A note (LT/ST) — engine refused to touch it; needs column-aware pass. */
+  /** Informational: this is a Pattern-A (LT/ST split) note. When the engine is
+   *  called WITHOUT opts.enablePatternA it still refuses these (changes empty,
+   *  data unchanged); with the flag set it recomputes them column-aware. Callers
+   *  should gate on `changes`/`hasAmbiguity`, not on this flag. */
   patternA: boolean;
 }
 
@@ -79,9 +83,20 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 /**
  * Pattern-A notes store amounts under `${rowId}_lt` / `${rowId}_st` keys (the
  * LT/ST column split), NOT `${rowId}`. Recomputing them requires column-aware
- * attribution which this engine does not yet do — so it REFUSES to touch them
- * (returns patternA=true) rather than write the wrong key. Handled in a
- * follow-up. Pattern-B notes (single amount per rowId) are safe here.
+ * attribution: the column a row belongs to is encoded in which suffixed key
+ * already holds its value (NOT in sources[].column, which is absent on real
+ * auto-populated rows). The column-aware path below derives the column from
+ * suffix-key presence and writes back via keyFor(rowId, col).
+ *
+ * This is a STORAGE-side classification keyed by note_type — distinct from
+ * columnsFor(config) in nceNoteTotals (config.pattern), which the recompute has
+ * no NoteConfig for. The two are intentionally separate.
+ *
+ * GATING: by default the engine still REFUSES these (returns patternA=true,
+ * unchanged) so existing callers are unaffected; pass opts.enablePatternA to
+ * opt in to the column-aware recompute. Gated because this engine has no
+ * production caller yet — wire it on only after validating against a captured
+ * real borrowings/provisions note (mixed LT/ST) with no FsHealthPanel drift.
  */
 export const PATTERN_A_NOTES = new Set([
   "borrowings", "provisions", "investments", "loans_advances",
@@ -143,12 +158,15 @@ export function recomputeNotePYFromShell(
   input: NoteRecomputeInput,
   cyTb: TBRow[],
   shellTb: TBRow[],
+  opts: { enablePatternA?: boolean } = {},
 ): NoteRecomputeResult {
   const { noteType, cyData, pyData } = input;
+  const isPatternA = PATTERN_A_NOTES.has(noteType);
 
-  // Refuse Pattern-A notes — their amounts live under _lt/_st keys; touching
-  // them with rowId keys would corrupt the note. Return unchanged + flag.
-  if (PATTERN_A_NOTES.has(noteType)) {
+  // Pattern-A notes store amounts under _lt/_st keys. By default still REFUSE
+  // them (return patternA=true, unchanged) so existing callers are unaffected.
+  // Opt in via opts.enablePatternA for the column-aware recompute below.
+  if (isPatternA && !opts.enablePatternA) {
     return {
       noteType, newPyData: { ...pyData }, newCyData: { ...cyData },
       changes: [], duplicateLedgers: [], hasAmbiguity: false, patternA: true,
@@ -157,6 +175,10 @@ export function recomputeNotePYFromShell(
 
   const shellMap = signedCloseMap(shellTb, noteType);
   const cyMap = signedCloseMap(cyTb, noteType);
+
+  if (isPatternA) {
+    return recomputePatternAFromShell(input, cyMap, shellMap);
+  }
 
   const { owner, ledgerRows } = buildRowOwnership(cyData, shellMap);
 
@@ -200,5 +222,105 @@ export function recomputeNotePYFromShell(
     duplicateLedgers,
     hasAmbiguity: duplicateLedgers.length > 0,
     patternA: false,
+  };
+}
+
+/**
+ * The column(s) a Pattern-A row currently occupies, derived from which suffixed
+ * key already holds its value in cyData. A value under `${rowId}_lt` → LT;
+ * under `${rowId}_st` → ST; a row can occupy BOTH. When neither suffix key is
+ * present (a genuinely new row) fall back to the row's sources[].column,
+ * defaulting to "lt".
+ *
+ * This is the load-bearing fix: the column lives in the KEY SUFFIX, never in
+ * sources[].column for real auto rows. Deriving it from sources would default
+ * every short-term ledger to LT and silently slide Short-Term Borrowings into
+ * Long-Term on the Balance Sheet.
+ */
+function rowColumns(
+  cyData: Record<string, any>,
+  rowId: string,
+  sourcesCol?: "lt" | "st",
+): Array<"lt" | "st"> {
+  const cols: Array<"lt" | "st"> = [];
+  if (keyFor(rowId, "lt") in cyData) cols.push("lt");
+  if (keyFor(rowId, "st") in cyData) cols.push("st");
+  if (cols.length === 0) cols.push(sourcesCol ?? "lt");
+  return cols;
+}
+
+/**
+ * Column-aware Pattern-A recompute. Mirrors the Pattern-B engine but attributes
+ * each row to its column via suffix-key presence and writes back through
+ * keyFor(rowId, col). A ledger owned by >1 row IN THE SAME COLUMN is ambiguous
+ * and left untouched; the same ledger split across LT and ST is NOT a duplicate.
+ * A row occupying BOTH columns carries a manual LT/ST split the TB closing
+ * cannot reproduce, so it is left untouched.
+ */
+function recomputePatternAFromShell(
+  input: NoteRecomputeInput,
+  cyMap: Map<string, number>,
+  shellMap: Map<string, number>,
+): NoteRecomputeResult {
+  const { noteType, cyData, pyData } = input;
+  const { owner } = buildRowOwnership(cyData, shellMap);
+  const customRows: CustomRow[] = Array.isArray(cyData._custom_rows) ? cyData._custom_rows : [];
+  const crById = new Map(customRows.map(cr => [cr.id, cr]));
+
+  // Per-row column(s) (from suffix keys) + per-(ledger,column) duplicate detection.
+  const rowCols = new Map<string, Array<"lt" | "st">>();
+  const ledgerColRows = new Map<string, string[]>();   // `${ledger}::${col}` -> [rowId]
+  for (const [rowId, ledgers] of owner) {
+    const srcCol = crById.get(rowId)?.sources?.find(s => s?.column)?.column ?? undefined;
+    const cols = rowColumns(cyData, rowId, srcCol);
+    rowCols.set(rowId, cols);
+    for (const lk of new Set(ledgers)) {
+      for (const col of cols) {
+        const k = `${lk}::${col}`;
+        if (!ledgerColRows.has(k)) ledgerColRows.set(k, []);
+        ledgerColRows.get(k)!.push(rowId);
+      }
+    }
+  }
+
+  const duplicateLedgers: Array<{ ledger: string; rows: string[] }> = [];
+  const dupRowIds = new Set<string>();
+  for (const [k, rows] of ledgerColRows) {
+    const uniq = Array.from(new Set(rows));
+    if (uniq.length > 1) {
+      duplicateLedgers.push({ ledger: k.slice(0, k.lastIndexOf("::")), rows: uniq });
+      uniq.forEach(r => dupRowIds.add(r));
+    }
+  }
+
+  const newPyData: Record<string, number> = { ...pyData };
+  const newCyData: Record<string, any> = { ...cyData };
+  const changes: RowChange[] = [];
+
+  for (const [rowId, ledgers] of owner) {
+    if (dupRowIds.has(rowId)) continue;              // ambiguous in some column
+    const cols = rowCols.get(rowId)!;
+    if (cols.length !== 1) continue;                 // both-column manual split — leave it
+    const col = cols[0];
+    const uniqLedgers = Array.from(new Set(ledgers));
+    let py = 0, cy = 0;
+    for (const lk of uniqLedgers) {
+      py += shellMap.get(lk) ?? 0;
+      cy += cyMap.get(lk) ?? 0;
+    }
+    py = round2(py); cy = round2(cy);
+    const key = keyFor(rowId, col);
+    const oldPy = round2(Number(pyData[key] ?? 0));
+    const oldCy = round2(Number((cyData[key] as number) ?? 0));
+    if (Math.abs(py - oldPy) > 0.5 || Math.abs(cy - oldCy) > 0.5) {
+      changes.push({ rowId, ledgers: uniqLedgers, oldPy, newPy: py, oldCy, newCy: cy });
+    }
+    newPyData[key] = py;
+    newCyData[key] = cy;
+  }
+
+  return {
+    noteType, newPyData, newCyData, changes, duplicateLedgers,
+    hasAmbiguity: duplicateLedgers.length > 0, patternA: true,
   };
 }

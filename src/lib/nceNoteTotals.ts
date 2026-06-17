@@ -85,36 +85,84 @@ export interface NoteTotalsResultA {
 
 export type NoteTotalsResult = NoteTotalsResultA | NoteTotalsResultB;
 
+// ─── Column model (Phase 3 — first-class Pattern A) ─────────────────────────────
+//
+// THE single source of truth for two things:
+//   (1) "which columns does a note have"  → columnsFor(config)
+//   (2) "what storage key holds a (row, column) value" → keyFor(rowId, col)
+//
+// Pattern A notes (borrowings, provisions, investments, loans_advances) split
+// each row into a long-term and a short-term column stored under
+// `${rowId}_lt` / `${rowId}_st`; every other note is a single column stored
+// under the bare `${rowId}`. Nothing else in the codebase may hard-code
+// `["lt","st"]` or the `_lt`/`_st` suffix — route through these helpers so the
+// LT/ST convention lives in exactly one place.
+
+/** A note column: "all" = the single column of a Pattern B note; "lt"/"st" =
+ *  the long-term / short-term columns of a Pattern A note. */
+export type NoteColumn = "all" | "lt" | "st";
+
+/** The columns a note has, derived from its config pattern. THE map from
+ *  config.pattern → columns. NOTE: the recompute engine's storage-side
+ *  classification (PATTERN_A_NOTES in nceRecomputePYFromShell) is a SEPARATE
+ *  dimension keyed by storage noteType, not by NoteConfig — the two are
+ *  intentionally distinct and must not be unified. */
+export function columnsFor(config: Pick<NoteConfig, "pattern">): NoteColumn[] {
+  return config.pattern === "A" ? ["lt", "st"] : ["all"];
+}
+
+/** The storage key for a (rowId, column) pair. The "all" column lives under the
+ *  bare rowId; "lt"/"st" under the suffixed key. */
+export function keyFor(rowId: string, col: NoteColumn): string {
+  return col === "all" ? rowId : `${rowId}_${col}`;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Pattern A look-up that picks _lt and _st keys explicitly, falling back
- *  to the bare key ONLY when neither suffix is present (legacy data). This
- *  mirrors `lookupSuffixed` inside computeDisplayData — without this rule a
- *  legacy bare-key value would inflate BOTH the LT and ST totals (the
- *  provisions / Other Current Liabilities double-count bug). */
+/** Read a SINGLE column's CY/PY for a row id, applying the legacy bare-key
+ *  fallback rule. The bare key (`${id}`) is consulted ONLY for the "lt" and
+ *  "all" columns, and (for "lt") ONLY when neither suffixed key exists in that
+ *  map — the "st" column NEVER falls back to the bare key. This asymmetry is
+ *  the 2026-06-12 per-column decision that prevents a single legacy bare value
+ *  from inflating BOTH the LT and ST totals (the provisions / Other Current
+ *  Liabilities double-count bug). Each map (cy, py) decides bare-vs-suffixed
+ *  independently so a value present under the bare key in only one column still
+ *  resolves. */
+export function lookupColumn(
+  cy: Record<string, number>,
+  py: Record<string, number>,
+  id: string,
+  col: NoteColumn,
+): { cy: number; py: number } {
+  if (col === "all") {
+    return { cy: cy[id] ?? 0, py: py[id] ?? 0 };
+  }
+  if (col === "st") {
+    // ST never falls back to the bare key (the load-bearing asymmetry).
+    const stKey = keyFor(id, "st");
+    return { cy: cy[stKey] ?? 0, py: py[stKey] ?? 0 };
+  }
+  // LT: bare fallback only when NEITHER suffix key exists in that column's map.
+  const ltKey = keyFor(id, "lt"), stKey = keyFor(id, "st");
+  const useBareCy = !(ltKey in cy) && !(stKey in cy);
+  const useBarePy = !(ltKey in py) && !(stKey in py);
+  return {
+    cy: cy[ltKey] ?? (useBareCy ? cy[id] ?? 0 : 0),
+    py: py[ltKey] ?? (useBarePy ? py[id] ?? 0 : 0),
+  };
+}
+
+/** Pattern A look-up that picks the _lt and _st columns. Thin wrapper over
+ *  lookupColumn so the bare-key asymmetry lives in exactly one place. Behaviour
+ *  is identical to the pre-Phase-3 inline implementation. */
 function lookupSuffixed(
   cy: Record<string, number>,
   py: Record<string, number>,
   id: string,
 ): { ltCy: number; ltPy: number; stCy: number; stPy: number } {
-  const ltKey = id + "_lt", stKey = id + "_st";
-  // 2026-06-12 — Per-column bare-key decision (latent-RC audit fix).
-  // Previously `useBare` was decided from the CY map alone. When cy_data
-  // carried suffixed keys but py_data carried only the bare key (legacy
-  // PY save, partial migration, or a SQL data fix writing a bare key —
-  // e.g. coa_reconcile_balance), the PY side returned 0 and the value
-  // silently vanished from the PY total. Each column now makes its own
-  // bare-vs-suffixed decision. The original double-count guard (bare
-  // NEVER counted when a suffixed key exists in the SAME column) is
-  // preserved per column.
-  const useBareCy = !(ltKey in cy) && !(stKey in cy);
-  const useBarePy = !(ltKey in py) && !(stKey in py);
-  return {
-    ltCy: cy[ltKey] ?? (useBareCy ? cy[id] ?? 0 : 0),
-    ltPy: py[ltKey] ?? (useBarePy ? py[id] ?? 0 : 0),
-    stCy: cy[stKey] ?? 0,
-    stPy: py[stKey] ?? 0,
-  };
+  const lt = lookupColumn(cy, py, id, "lt");
+  const st = lookupColumn(cy, py, id, "st");
+  return { ltCy: lt.cy, ltPy: lt.py, stCy: st.cy, stPy: st.py };
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
