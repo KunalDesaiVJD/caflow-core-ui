@@ -2011,7 +2011,7 @@ function buildPPETable(ppeData: any[], cyYear: string, pyYear: string, noteNum: 
       hdrCell("Additions (₹)",                                PPE_NUM * 2, 1, 2),
       hdrCell("Deletions\nduring the year",                   PPE_NUM,  2),
       hdrCell("Total",                                        PPE_NUM,  2),
-      hdrCell("Depreciation\nCharged",                        PPE_NUM,  2),
+      hdrCell("Depreciation",                                 PPE_NUM,  2),
       hdrCell(`Closing Balance\nas on 31/03/${cyYear}`,       PPE_NUM,  2),
     ],
   });
