@@ -8,6 +8,7 @@ import {
   removeNceEdit,
   findNceEdit,
   computeResyncDiff,
+  keepManualRowOnResync,
   type NceEdit,
   type NCENoteData,
 } from "@/lib/nceAutoPopulate";
@@ -186,5 +187,49 @@ describe("computeResyncDiff — dry-run preview for the safe Re-sync", () => {
     const diff = computeResyncDiff(a, b);
     expect(diff).toHaveLength(1);
     expect(diff[0].changes).toContainEqual({ key: "x", oldCy: 100, newCy: 0 });
+  });
+});
+
+describe("keepManualRowOnResync — stale-ledger purge (WASTIK BUILDCON dup fix)", () => {
+  // loans_advances (Short-Term Loans & Advances) owns these codes.
+  const ours = new Set(["NCE_LTLA", "BS_NCA_LLA", "NCE_STLA", "BS_CA_SLA"]);
+
+  it("DROPS a row whose ledger was re-mapped to a different note — even if userMoved", () => {
+    // The exact bug: ledger moved Short-Term Loans → Other Current Assets (NCE_OCA).
+    expect(keepManualRowOnResync({
+      hasLabel: true, currentCode: "NCE_OCA", ourCodes: ours,
+      userMoved: true, isPerLedgerBreakup: true,
+    })).toBe(false);
+    // also drops when not userMoved
+    expect(keepManualRowOnResync({
+      hasLabel: true, currentCode: "NCE_OCA", ourCodes: ours,
+      userMoved: false, isPerLedgerBreakup: true,
+    })).toBe(false);
+  });
+
+  it("KEEPS a userMoved row whose ledger is still mapped to this note (intra-note placement)", () => {
+    expect(keepManualRowOnResync({
+      hasLabel: true, currentCode: "NCE_STLA", ourCodes: ours,
+      userMoved: true, isPerLedgerBreakup: true,
+    })).toBe(true);
+  });
+
+  it("rebuilds-from-auto: still-ours, non-userMoved, breakup note → drop (auto recreates)", () => {
+    expect(keepManualRowOnResync({
+      hasLabel: true, currentCode: "NCE_STLA", ourCodes: ours,
+      userMoved: false, isPerLedgerBreakup: true,
+    })).toBe(false);
+  });
+
+  it("keeps still-ours rows in non-breakup notes", () => {
+    expect(keepManualRowOnResync({
+      hasLabel: true, currentCode: "NCE_OCL", ourCodes: new Set(["NCE_OCL"]),
+      userMoved: false, isPerLedgerBreakup: false,
+    })).toBe(true);
+  });
+
+  it("keeps auditor-typed rows (no label / no TB match)", () => {
+    expect(keepManualRowOnResync({ hasLabel: false, currentCode: undefined, ourCodes: ours, userMoved: false, isPerLedgerBreakup: true })).toBe(true);
+    expect(keepManualRowOnResync({ hasLabel: true, currentCode: undefined, ourCodes: ours, userMoved: false, isPerLedgerBreakup: true })).toBe(true);
   });
 });

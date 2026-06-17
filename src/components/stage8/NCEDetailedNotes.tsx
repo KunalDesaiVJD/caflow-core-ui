@@ -212,32 +212,29 @@ function SubLedgerActionsMenu({
 // ─── Note card (collapsible) ──────────────────────────────────────────────────
 
 function NoteCard({
-  noteNumber, title, autoCount, manualCount, children, collapseControl, anchorId, forceOpen,
+  noteNumber, title, autoCount, manualCount, children, open = false, onToggle, anchorId, forceOpen,
 }: {
   noteNumber:  string;
   title:       string;
   autoCount:   number;
   manualCount: number;
   children:    React.ReactNode;
-  collapseControl?: boolean;
+  /** Controlled open/collapsed state. Lifted to the parent's persisted
+   *  `openNotes` set so this layout survives the lock→unlock remount (NCENotesTab
+   *  swaps flat↔tabs trees) and a page refresh. Default collapsed. */
+  open?: boolean;
+  /** Called when the user clicks the header to toggle this card. */
+  onToggle?: () => void;
   /** Stable DOM id for scroll-to-note. Falls back to noteNumber when omitted. */
   anchorId?: string;
   /** NCE Tasks 2+3+5: when true (readOnly preview), always show content open,
    *  hide the collapse toggle and auto/manual badges — mimics the export rendering. */
   forceOpen?: boolean;
 }) {
-  // Default COLLAPSED: every Note in "Notes to Accounts" starts collapsed with
-  // a "+" beside the heading; clicking expands to reveal the ledger breakup
-  // (Word-file requirement). The global Expand All / Collapse All control still
-  // overrides via collapseControl.
-  const [open, setOpen] = useState(false);
-  useEffect(() => {
-    if (collapseControl !== undefined) setOpen(!collapseControl);
-  }, [collapseControl]);
-
-  // NCE Tasks 2+3+5: in readOnly (preview) mode the card is always open,
-  // the toggle is hidden, and auto/manual badges are stripped so the view
-  // matches the final-document presentation style.
+  // NCE Tasks 2+3+5: in readOnly (preview) mode the card is always open, the
+  // toggle is hidden, and auto/manual badges are stripped so the view matches
+  // the final-document presentation style. Otherwise it reflects the
+  // parent-controlled `open` prop (default collapsed).
   const isOpen = forceOpen ? true : open;
 
   return (
@@ -248,7 +245,7 @@ function NoteCard({
           "bg-muted/40 px-4 py-2 border-b flex items-center gap-2 flex-wrap",
           forceOpen ? "cursor-default" : "cursor-pointer select-none hover:bg-muted/60 transition-colors",
         )}
-        onClick={forceOpen ? undefined : () => setOpen(o => !o)}
+        onClick={forceOpen ? undefined : onToggle}
       >
         {/* +/- toggle — hidden in preview mode */}
         {!forceOpen && (
@@ -1993,7 +1990,40 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
   const [syncing,     setSyncing]     = useState(false);
   const [eng,         setEng]         = useState<any>(null);
   // undefined = uncontrolled; true = all collapsed; false = all expanded
-  const [collapseAll, setCollapseAll] = useState<boolean | undefined>(undefined);
+  // ── Note-card open/collapsed layout (Option A — persisted) ────────────────
+  // The lock→unlock toggle remounts this component (NCENotesTab swaps a flat
+  // read-only tree for a tabbed edit tree), which previously reset every
+  // NoteCard's private open state to collapsed. We now own that layout here as a
+  // Set of open note types, seeded once from localStorage at mount, so unlocking
+  // the preview — and a full page refresh — restore exactly what the user had.
+  const allNoteTypes = useMemo(
+    () => NOTES_CONFIG.filter(nc => !(nc as any).hidden).map(nc => nc.noteType),
+    [],
+  );
+  const [openNotes, setOpenNotes] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(`nce_open_notes_${engagementId}`);
+      const arr = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(arr)) return new Set<string>(arr as string[]);
+    } catch { /* ignore */ }
+    return new Set<string>();
+  });
+  const toggleNoteOpen = useCallback((noteType: string) => {
+    setOpenNotes(prev => {
+      const next = new Set(prev);
+      if (next.has(noteType)) next.delete(noteType); else next.add(noteType);
+      return next;
+    });
+  }, []);
+  // Persist the layout whenever it changes — edit mode only. During a locked
+  // preview the toggles are hidden (forceOpen) so it can't change, and we must
+  // not overwrite the pre-lock layout that the unlock remount will restore.
+  useEffect(() => {
+    if (readOnly) return;
+    try {
+      localStorage.setItem(`nce_open_notes_${engagementId}`, JSON.stringify([...openNotes]));
+    } catch { /* storage unavailable — ignore */ }
+  }, [openNotes, readOnly, engagementId]);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Task 8: accumulate expansion state across all PatternBTables
   const expansionStateRef = useRef<Record<string, Set<string>>>({});
@@ -3471,7 +3501,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
             </Button>
             <Button
               type="button" size="sm" variant="ghost"
-              onClick={() => setCollapseAll(false)}
+              onClick={() => setOpenNotes(new Set(allNoteTypes))}
               className="h-7 text-xs gap-1"
               title="Expand all note cards"
             >
@@ -3479,7 +3509,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
             </Button>
             <Button
               type="button" size="sm" variant="ghost"
-              onClick={() => setCollapseAll(true)}
+              onClick={() => setOpenNotes(new Set())}
               className="h-7 text-xs gap-1"
               title="Collapse all note cards"
             >
@@ -3619,7 +3649,8 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
                 title={noteTitle}
                 autoCount={autoCount}
                 manualCount={manuCount}
-                collapseControl={readOnly ? undefined : collapseAll}
+                open={openNotes.has(nc.noteType)}
+                onToggle={() => toggleNoteOpen(nc.noteType)}
                 anchorId={noteNum ? `nce-note-${noteNum}` : `nce-note-type-${nc.noteType}`}
                 forceOpen={readOnly}
               >

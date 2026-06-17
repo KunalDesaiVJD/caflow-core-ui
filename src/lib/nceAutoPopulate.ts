@@ -891,6 +891,36 @@ export function computeResyncDiff(
   return out;
 }
 
+/**
+ * Whether a prior MANUAL row survives the stale-ledger purge on re-sync.
+ * Pure + exported for testing.
+ *
+ *   - `currentCode` = the row's underlying ledger's CURRENT CY COA code, or
+ *     undefined when the row's label matches no TB ledger (auditor-typed text).
+ *   - `ourCodes`    = the FS codes THIS note owns.
+ *
+ * Order matters — CROSS-NOTE RE-MAP WINS: if the ledger is now mapped to a code
+ * this note does NOT own, the row is dropped even when `userMoved` is set, so a
+ * COA re-map (e.g. moving a ledger from Short-Term Loans → Other Current Assets)
+ * removes it from the OLD note instead of leaving it duplicated in both
+ * (WASTIK BUILDCON). `userMoved` only protects an INTRA-note placement.
+ */
+export function keepManualRowOnResync(args: {
+  hasLabel:           boolean;
+  currentCode:        string | undefined;
+  ourCodes:           Set<string>;
+  userMoved:          boolean;
+  isPerLedgerBreakup: boolean;
+}): boolean {
+  const { hasLabel, currentCode, ourCodes, userMoved, isPerLedgerBreakup } = args;
+  if (!hasLabel) return true;                 // unlabeled row → keep
+  if (!currentCode) return true;              // user-typed (no TB match) → keep
+  if (!ourCodes.has(currentCode)) return false; // mapped to a DIFFERENT note → drop
+  if (userMoved) return true;                 // still ours + user-placed → keep placement
+  if (isPerLedgerBreakup) return false;       // breakup note → rebuild from auto
+  return true;                                // still ours → keep
+}
+
 // ── Main auto-populate ────────────────────────────────────────────────────────
 
 export async function nceAutoPopulate(
@@ -1313,15 +1343,13 @@ export async function nceAutoPopulate(
         noteType === "loans_advances";
       if (tbCodeByLabel.size > 0) {
         const before = manualRows.length;
-        manualRows = manualRows.filter(mr => {
-          const lbl = (mr.label || "").trim().toLowerCase();
-          if (!lbl) return true;
-          const currentCode = tbCodeByLabel.get(lbl);
-          if (!currentCode) return true;             // user-typed row (no TB match) → keep
-          if (mr.userMoved === true) return true;    // user explicitly moved this row — never purge
-          if (isPerLedgerBreakup) return false;      // breakup note → always rebuild from auto
-          return ourCodes.has(currentCode);          // others: keep if mapping still ours
-        });
+        manualRows = manualRows.filter(mr => keepManualRowOnResync({
+          hasLabel: !!(mr.label || "").trim(),
+          currentCode: tbCodeByLabel.get((mr.label || "").trim().toLowerCase()),
+          ourCodes,
+          userMoved: mr.userMoved === true,
+          isPerLedgerBreakup,
+        }));
         const dropped = before - manualRows.length;
         if (dropped > 0) {
           // eslint-disable-next-line no-console
