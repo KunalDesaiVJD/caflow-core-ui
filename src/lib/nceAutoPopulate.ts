@@ -307,6 +307,44 @@ export interface NCECustomRow {
   userMoved?: boolean;
 }
 
+export type NceEditCol = "lt" | "st";
+
+/**
+ * A single auditor edit, recorded so a fresh rebuild from TB + COA can re-apply
+ * the auditor's intent (mirrors Corporate's `manual_edits[]`, but typed and
+ * structural — NCE edits include custom rows, hides, moves and reclasses, not
+ * just leaf-value overrides).
+ *
+ * Phase 1 (FS re-architecture). This ledger is PERSISTED (dual-written alongside
+ * the legacy metadata channels) as the foundation; the build-then-overlay engine
+ * that CONSUMES it to drive re-sync lands behind a flag in a later step. Contract
+ * notes (from the design review — get these wrong and the BS silently mis-states):
+ *   • `cy`/`py` figures are SIGNED post-edit values copied verbatim from the
+ *     numeric maps — NEVER Math.abs (opposite-side ledgers store negatives).
+ *   • a `custom` edit carries `keys` — the exact populated numeric-key topology
+ *     (bare / `_lt` / `_st`) with each key's cy/py — so Pattern-A rows round-trip
+ *     byte-stable instead of collapsing to a single column.
+ *   • every variant carries `noteType` so dedupe/lookup keys are globally unique
+ *     (custom row ids are only unique within a note).
+ *   • a TB-derived/ejected `custom` edit carries `ledgerRef` so the overlay can
+ *     RE-SOURCE the figure from current TB rather than replay a frozen snapshot.
+ */
+export type NceEdit =
+  | { kind: "value";   noteType: string; rowId: string; col?: NceEditCol; cy?: number; py?: number }
+  | { kind: "label";   noteType: string; rowId: string; ledger?: string; text: string }
+  | { kind: "hide";    noteType: string; rowId: string }
+  | { kind: "move";    noteType: string; rowId: string; attachedTo?: string; section?: string }
+  | { kind: "reclass"; noteType: string; ledger: string; toNote?: string; ejectFrom?: string }
+  | {
+      kind: "custom"; noteType: string; rowId: string;
+      label?: string; section?: string; attachedTo?: string;
+      tbDerived?: boolean; userMoved?: boolean;
+      ledgerRef?: string; ejectedSource?: string;
+      /** Exact populated numeric keys for this row (bare / `_lt` / `_st`) with
+       *  their SIGNED cy/py values — preserves Pattern-A column topology. */
+      keys: Record<string, { cy?: number; py?: number }>;
+    };
+
 export interface NCENoteData {
   cy:         Record<string, number>;
   py:         Record<string, number>;
@@ -331,6 +369,12 @@ export interface NCENoteData {
    *  Keyed as `${staticRowId}::${originalLedgerName}`.
    *  Amounts remain locked to Tally TB data; only the label is overridden. */
   sourceLabelOverrides?: Record<string, string>;
+  /** Phase 1 — unified edit-ledger. Persisted as cy_data._manual_edits and
+   *  dual-written alongside the legacy channels above for one release.
+   *  deserialiseNoteData always returns this (defaulting to []); other
+   *  constructors may omit it. Optional so the ~40 existing NCENoteData literals
+   *  don't all have to set it. */
+  manualEdits?: NceEdit[];
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -598,7 +642,7 @@ function hasAnyNonZero(perRow: Record<string, { cy?: number; py?: number; ltCy?:
 // when reading numeric values back into the cy/py maps.
 // NCE Task 7: added _source_label_overrides so user-edited source sub-ledger labels
 // survive page reload (previously this field was in NCENoteData but never persisted).
-const META_KEYS = new Set(["_custom_rows", "_hidden_rows", "_label_overrides", "_cy_sources", "_ejected_ledgers", "_source_label_overrides"]);
+const META_KEYS = new Set(["_custom_rows", "_hidden_rows", "_label_overrides", "_cy_sources", "_ejected_ledgers", "_source_label_overrides", "_manual_edits"]);
 
 export function deserialiseNoteData(
   rawCy: Record<string, any>,
@@ -629,6 +673,13 @@ export function deserialiseNoteData(
       ? (rawCy._source_label_overrides as Record<string, string>)
       : {};
 
+  // Phase 1 — unified edit-ledger. Read it back verbatim if present; default to
+  // []. (No legacy-channel fold yet — that synthesis lands with the consuming
+  // build-then-overlay engine so it can be validated against its actual reader.)
+  const manualEdits: NceEdit[] = Array.isArray(rawCy._manual_edits)
+    ? (rawCy._manual_edits as NceEdit[])
+    : [];
+
   const cy: Record<string, number> = {};
   for (const [k, v] of Object.entries(rawCy)) {
     if (!META_KEYS.has(k) && typeof v === "number") cy[k] = v;
@@ -640,7 +691,7 @@ export function deserialiseNoteData(
     // for opposite-side ledgers (e.g. a Dr-balance ledger under Trade Payables).
     if (!META_KEYS.has(k) && typeof v === "number") py[k] = v;
   }
-  return { cy, py, customRows, hiddenRows, labelOverrides, cy_sources, ejectedLedgers, sourceLabelOverrides };
+  return { cy, py, customRows, hiddenRows, labelOverrides, cy_sources, ejectedLedgers, sourceLabelOverrides, manualEdits };
 }
 
 export function serialiseNoteData(
@@ -659,6 +710,13 @@ export function serialiseNoteData(
         : {}),
       ...(d.cy_sources && Object.keys(d.cy_sources).length > 0
         ? { _cy_sources: d.cy_sources }
+        : {}),
+      // Phase 1 — dual-write the edit-ledger. Conditional emit (like the two
+      // channels above) keeps the round-trip a fixed point: absent -> [] on
+      // read -> omitted on write -> absent. Legacy channels above are passed
+      // through verbatim (NOT re-derived) so an older build reads byte-identical.
+      ...(d.manualEdits && d.manualEdits.length > 0
+        ? { _manual_edits: d.manualEdits }
         : {}),
     },
     py_data: d.py,
