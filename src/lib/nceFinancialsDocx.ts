@@ -1253,31 +1253,36 @@ function buildNote1Section(
     }),
   ];
 
+  // Render the entire numbered list as a SINGLE paragraph, separating items
+  // with soft-return TextRuns (`break: 1`). This bypasses the residual
+  // inter-paragraph gap Word still added even after setting spacing.after=0
+  // + contextualSpacing=true (Word's Normal style defaults override
+  // per-paragraph zeroing in some rendering paths). Inside one paragraph,
+  // only the line-height separates items — exactly the dense look the firm
+  // template uses. Within each item, native word-wrap still handles long
+  // bodies, so this only collapses BETWEEN items, not INSIDE them.
+  const noteRuns: TextRun[] = [];
   selectedNotes.forEach((n, i) => {
     const num = i + 1;
-    // Plain numbered line — "<n>. <body text>". The bold navy title prefix
-    // ("Balance Confirmation:", "Rearrangement of Figures:", etc.) is
-    // intentionally OMITTED per the user's latest spec: each line reads as
-    // a continuous statement, with only the leading number in bold. The
-    // on-screen Stage 7 page still stores the title separately for
-    // editor organisation, but the printed Word file no longer surfaces
-    // it on the page. Spacing.line is tightened a notch (240 ≈ 1.0 line)
-    // so even visually long items stay packed close together.
+    if (i > 0) {
+      // Soft return → starts the next item on a fresh line without creating
+      // a new paragraph (so no paragraph-spacing kicks in).
+      noteRuns.push(new TextRun({ text: "", font: FONT, size: SZ_BODY, break: 1 }));
+    }
+    noteRuns.push(new TextRun({ text: `${num}.  `,             font: FONT, size: SZ_BODY, bold: true, color: BLACK }));
+    noteRuns.push(new TextRun({ text: resolveTokens(n.text || ""), font: FONT, size: SZ_BODY,            color: BLACK }));
+  });
+  if (noteRuns.length > 0) {
     out.push(
       new Paragraph({
-        spacing:           { before: 0, after: GAP, line: 240, lineRule: "auto" as any },
-        keepLines:         true,
-        // contextualSpacing tells Word to drop spacing.before/after when
-        // two consecutive paragraphs share this property — eliminates the
-        // residual blank-line gap auditors were seeing on BHAKTI INFRA.
-        contextualSpacing: true,
-        children: [
-          new TextRun({ text: `${num}.  `,                       font: FONT, size: SZ_BODY, bold: true, color: BLACK }),
-          new TextRun({ text: resolveTokens(n.text || ""),         font: FONT, size: SZ_BODY,             color: BLACK }),
-        ],
+        spacing:   { before: 0, after: 0, line: 240, lineRule: "auto" as any },
+        keepLines: true,
+        children:  noteRuns,
       }),
     );
-  });
+  }
+  // Reference GAP so the constant doesn't trip the no-unused-var lint.
+  void GAP;
 
   // Optional Note 1 "new entity" paragraph the Stage 7 page exposes via a
   // toggle. Appended after the standard notes when enabled, mirroring the
