@@ -1195,10 +1195,11 @@ function buildNote1Section(
       .replace(/\[LAST_NOTE\]/g,     lastNoteNum);
 
   // Tight vertical gap between numbered notes — matches the firm-standard
-  // reference image (screenshot 4) where consecutive items sit close enough
-  // to read as one continuous list. 60 DXA ≈ 3pt extra below each line on
-  // top of the standard line spacing.
-  const GAP = 60;
+  // reference (latest revision screenshot 2) where consecutive items sit
+  // immediately under one another. 30 DXA ≈ 1.5pt extra below each line on
+  // top of the standard 264-line spacing — keeps the list visually
+  // continuous without the items overlapping.
+  const GAP = 30;
 
   const txt = (text: string, bold = false) =>
     new TextRun({ text, font: FONT, size: SZ_BODY, bold, color: BLACK });
@@ -1251,17 +1252,24 @@ function buildNote1Section(
   ];
 
   selectedNotes.forEach((n, i) => {
-    const num   = i + 1;
-    const title = (n.title || "").trim();
+    const num = i + 1;
+    // Plain numbered line — "<n>. <body text>". The bold navy title prefix
+    // ("Balance Confirmation:", "Rearrangement of Figures:", etc.) is
+    // intentionally OMITTED per the user's latest spec: each line reads as
+    // a continuous statement, with only the leading number in bold. The
+    // on-screen Stage 7 page still stores the title separately for
+    // editor organisation, but the printed Word file no longer surfaces
+    // it on the page. Spacing.line is tightened a notch (240 ≈ 1.0 line)
+    // so even visually long items stay packed close together.
     out.push(
-      block(
-        [
+      new Paragraph({
+        spacing:   { before: 0, after: i === selectedNotes.length - 1 ? 30 : GAP, line: 240, lineRule: "auto" as any },
+        keepLines: true,
+        children: [
           new TextRun({ text: `${num}.  `,                       font: FONT, size: SZ_BODY, bold: true, color: BLACK }),
-          new TextRun({ text: title ? `${title}: ` : "",          font: FONT, size: SZ_BODY, bold: true, color: NAVY  }),
           new TextRun({ text: resolveTokens(n.text || ""),         font: FONT, size: SZ_BODY,             color: BLACK }),
         ],
-        { indent: 0, after: i === selectedNotes.length - 1 ? 40 : GAP },
-      ),
+      }),
     );
   });
 
