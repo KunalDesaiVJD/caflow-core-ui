@@ -935,13 +935,16 @@ function noteSecHdr(colWidths: number[], label: string): TableRow {
 }
 
 /** Pattern B column header (3 cols) */
-function noteHdrB(cyYear: string, pyYear: string): TableRow {
+function noteHdrB(cyLabel: string, pyLabel: string): TableRow {
+  // Issue 3 — "Particulars" header rendered with NO fill + black bold text
+  // (firm-reference style). A bottom hairline (BDR_ROW) keeps it reading as a
+  // header now that the navy background is gone.
   return new TableRow({
     tableHeader: true,
     children: [
-      cell({ text: "Particulars", w: NW_DESC, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, padL: 100, vertPad: 22, keepNext: true }),
-      cell({ text: hdr(cyYear), w: NW_CY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120, vertPad: 22, keepNext: true }),
-      cell({ text: hdr(pyYear), w: NW_PY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120, vertPad: 22, keepNext: true }),
+      cell({ text: "Particulars", w: NW_DESC, sz: SZ_BODY, bold: true, color: BLACK, borders: BDR_ROW, padL: 100, vertPad: 22, keepNext: true }),
+      cell({ text: hdr(cyLabel), w: NW_CY, sz: SZ_BODY, bold: true, color: BLACK, borders: BDR_ROW, align: AlignmentType.RIGHT, padR: 120, vertPad: 22, keepNext: true }),
+      cell({ text: hdr(pyLabel), w: NW_PY, sz: SZ_BODY, bold: true, color: BLACK, borders: BDR_ROW, align: AlignmentType.RIGHT, padR: 120, vertPad: 22, keepNext: true }),
     ],
   });
 }
@@ -962,15 +965,20 @@ function noteRowB(
   // — passing null prevents "—" from appearing where the amount should be invisible.
   const amtCell = (val: number | null, w: number) =>
     val !== null
-      ? ac(val, w, { bold, bg, borders: bdr, vertPad: 18, keepNext: true })
-      : cell({ text: "", w, align: AlignmentType.RIGHT, padL: 20, padR: 120, bold, bg, borders: bdr, vertPad: 18, keepNext: true });
+      ? ac(val, w, { bold, bg, borders: bdr, vertPad: 18 })
+      : cell({ text: "", w, align: AlignmentType.RIGHT, padL: 20, padR: 120, bold, bg, borders: bdr, vertPad: 18 });
   // Task 1 (doc8): use compact vertPad=18 for note rows (tighter page fitting)
   // Note 1 fix (intelligent pagination): cantSplit so a single row never breaks
   // across a page boundary (prevents half-rows / broken table continuity).
+  // Issue 1 (page utilization): keepNext is intentionally NOT set on body rows.
+  // The note title + column header keep keepNext (orphan control binds the
+  // header to the first data row), but the remaining rows flow freely so a
+  // short note packs into leftover space on the current page instead of the
+  // whole note being bumped to the next page as one atomic block.
   return new TableRow({
     cantSplit: true,
     children: [
-      cell({ text: label, w: NW_DESC, bold, bg, borders: bdr, indent, vertPad: 18, keepNext: true }),
+      cell({ text: label, w: NW_DESC, bold, bg, borders: bdr, indent, vertPad: 18 }),
       amtCell(cy, NW_CY),
       amtCell(py, NW_PY),
     ],
@@ -978,38 +986,39 @@ function noteRowB(
 }
 
 /** Pattern A column header (2 rows: LT/ST then CY/PY) */
-function noteHdrA(cyYear: string, pyYear: string): TableRow[] {
+function noteHdrA(cyLabel: string, pyLabel: string): TableRow[] {
   const ltw = NW_A_LTCY + NW_A_LTPY;
   const stw = NW_A_STCY + NW_A_STPY;
+  // Issue 3 — Pattern A header rendered with NO fill + black bold text; a
+  // bottom hairline (BDR_ROW) preserves the header separation.
   const spanCell = (text: string, w: number, span: number) =>
     new TableCell({
       columnSpan: span,
       width:   { size: w, type: WidthType.DXA },
-      shading: { fill: BG_HDR, type: ShadingType.CLEAR },
-      borders: BDR_NONE,
+      borders: BDR_ROW,
       margins: { top: 36, bottom: 0, left: 80, right: 80 },
       children: [new Paragraph({
         alignment: AlignmentType.CENTER,
         spacing: { before: 0, after: 0 },
         keepNext: true, keepLines: true,
-        children: [new TextRun({ text, font: FONT, size: SZ_BODY, bold: true, color: WHITE })],
+        children: [new TextRun({ text, font: FONT, size: SZ_BODY, bold: true, color: BLACK })],
       })],
     });
 
   const r1 = new TableRow({
     children: [
-      cell({ text: "Particulars", w: NW_A_DESC, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, padL: 100, vertPad: 22, keepNext: true }),
+      cell({ text: "Particulars", w: NW_A_DESC, sz: SZ_BODY, bold: true, color: BLACK, borders: BDR_ROW, padL: 100, vertPad: 22, keepNext: true }),
       spanCell("Long Term", ltw, 2),
       spanCell("Short Term", stw, 2),
     ],
   });
   const r2 = new TableRow({
     children: [
-      cell({ text: "", w: NW_A_DESC, sz: SZ_BODY, color: WHITE, bg: BG_HDR, borders: BDR_NONE, vertPad: 22, keepNext: true }),
-      cell({ text: hdr(cyYear), w: NW_A_LTCY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80, vertPad: 22, keepNext: true }),
-      cell({ text: hdr(pyYear), w: NW_A_LTPY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80, vertPad: 22, keepNext: true }),
-      cell({ text: hdr(cyYear), w: NW_A_STCY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80, vertPad: 22, keepNext: true }),
-      cell({ text: hdr(pyYear), w: NW_A_STPY, sz: SZ_BODY, bold: true, color: WHITE, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 80, vertPad: 22, keepNext: true }),
+      cell({ text: "", w: NW_A_DESC, sz: SZ_BODY, color: BLACK, borders: BDR_ROW, vertPad: 22, keepNext: true }),
+      cell({ text: hdr(cyLabel), w: NW_A_LTCY, sz: SZ_BODY, bold: true, color: BLACK, borders: BDR_ROW, align: AlignmentType.RIGHT, padR: 80, vertPad: 22, keepNext: true }),
+      cell({ text: hdr(pyLabel), w: NW_A_LTPY, sz: SZ_BODY, bold: true, color: BLACK, borders: BDR_ROW, align: AlignmentType.RIGHT, padR: 80, vertPad: 22, keepNext: true }),
+      cell({ text: hdr(cyLabel), w: NW_A_STCY, sz: SZ_BODY, bold: true, color: BLACK, borders: BDR_ROW, align: AlignmentType.RIGHT, padR: 80, vertPad: 22, keepNext: true }),
+      cell({ text: hdr(pyLabel), w: NW_A_STPY, sz: SZ_BODY, bold: true, color: BLACK, borders: BDR_ROW, align: AlignmentType.RIGHT, padR: 80, vertPad: 22, keepNext: true }),
     ],
   });
   return [r1, r2];
@@ -1616,9 +1625,14 @@ function buildNoteSection(
   // Strip "Note X: " prefix from config title to get just the name
   const cleanTitle = cfg.title.replace(/^Note\s[\d &]+:\s*/i, "");
 
+  // Issue 4 — note tables label the amount columns with the full closing date
+  // (31.03.YYYY) instead of the bare year, matching the firm reference format.
+  // BS/P&L face headers and the Capital Account / PPE schedules are unaffected.
+  const cyColHdr = `31.03.${cyYear}`;
+  const pyColHdr = `31.03.${pyYear}`;
   const rows: TableRow[] = [
     noteTitleRow(colWidths, displayNoteNumber, cleanTitle),
-    ...(isA ? noteHdrA(cyYear, pyYear) : [noteHdrB(cyYear, pyYear)]),
+    ...(isA ? noteHdrA(cyColHdr, pyColHdr) : [noteHdrB(cyColHdr, pyColHdr)]),
   ];
 
   // Unattached custom rows (no attachedTo) render as their own lines: section-
