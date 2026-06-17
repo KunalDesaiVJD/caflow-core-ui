@@ -1,0 +1,109 @@
+PHASE: Phase 6 — Single source-of-truth NCE note registry + corporate-twin normalization at COA-mapping save
+
+SUMMARY:
+Introduce ONE array of NCE note definitions (NCE_NOTE_REGISTRY) from which all seven scattered registration structures are derived at module load: NCE_NOTE_FS_MAP, NCE_CODE_TO_NOTE, NOTE_NATURE, FS_CODE_NATURE (NCE half), CANONICAL_NCE_CODE, NCE_LIAB_CODE_SET, and (via re-export) the NCE_CODE_TO_NOTE_KEY/NCE_NOTE_NATURE consumers in PipelineFinancialStatements. Each registry entry carries the note's storage key, BS/PL FS code, nature, pattern column (lt/st/none), and an explicit list of legacy corporate twin codes it ACCEPTS. The derivation reproduces the EXACT current contents of every hand-maintained map (verified byte-for-byte against the existing literals) so behavior is unchanged on day one; it is purely a refactor that collapses ~7 edit sites to 1. Separately, add a normalizeCoaCodes() pass invoked once at every COA-mapping save in PipelineStage3.tsx that folds corporate twin codes (BS_CL_STB, PL_EXP_OTH, BS_CL_TP_MSME, BS_NCA_DTA, etc.) to their canonical NCE_* code BEFORE persisting, so newly-saved engagements only ever store NCE_* codes — while the registry continues to accept corporate codes from already-saved engagements.
+
+DEPENDS ON: Phase 1 (manual-edit ledger inside cy_data) — Phase 6 must not disturb the _custom_rows / manual-edits metadata channels Phase 1 adds; both are additive and independent, but Phase 6 should land LAST so registry derivation reflects any note added in Phases 1-5., Phases 2-5 (whatever they register) — any new NCE note introduced by an earlier phase MUST be added to NCE_NOTE_REGISTRY as part of that phase's merge, otherwise Phase 6's parity assertion will fail. Phase 6 is explicitly the hardening pass that lands after all note-adding phases.
+
+NEW TYPES:
+  // src/config/nceNoteRegistry.ts
+  export type FsNature = 'DR' | 'CR';
+  export interface NceNoteFsCode { code: string; /* the canonical/twin FS code */ twin?: boolean; /* true if a corporate twin alias */ }
+  export interface NceNoteDef {
+    /** storage note_type key in nce_financial_notes (e.g. 'borrowings','trade_payables','cogs'). */
+    noteType: string;
+    /** natural side of the whole note — drives NOTE_NATURE + nce code nature. */
+    nature: FsNature;
+    /** Pattern A (lt/st split) vs Pattern B (single 'all' column). */
+    pattern: 'A' | 'B';
+    /** Pattern B: single fs-code list. Canonical NCE_* code MUST be index 0; remaining entries are corporate twins/aliases the derivation still ACCEPTS. */
+    all?: string[];
+    /** Pattern A long-term column list — canonical NCE_* at index 0, corporate twins after. */
+    lt?: string[];
+    /** Pattern A short-term column list — canonical NCE_* at index 0, corporate twins after. */
+    st?: string[];
+    /** Per-canonical-code overrides for NCE_CODE_TO_NOTE (config sub-note for multi-section notes like cogs->cogs_a/cogs_c). Keyed by FS code. */
+    codeToNote?: Record<string, { note: string; col?: 'lt'|'st'; config?: string }>;
+    /** Legacy stage5_notes key for NCE_CODE_TO_NOTE_KEY derivation (optional; only for notes that have one). */
+    legacyNoteKey?: string;
+  }
+  /** Equity/capital codes that have a nature but no note mapping (NCE_PCAP/NCE_RES/NCE_NCB/NCE_CAP). */
+  export const NCE_EXTRA_CODE_NATURE: Record<string, FsNature>;
+  export const NCE_NOTE_REGISTRY: NceNoteDef[];
+  // Derivation builders (pure, called at module load by consumers):
+  export function deriveNoteFsMap(): Record<string, { lt?: string[]; st?: string[]; all?: string[] }>;
+  export function deriveCodeToNote(): Record<string, { note: string; col?: 'lt'|'st'; config?: string }>;
+  export function deriveNoteNature(): Record<string, FsNature>;
+  export function deriveNceCodeNature(): Record<string, FsNature>; // every NCE fs code (+ extras) -> nature
+  export function deriveCanonicalNceCode(): Record<string, string>; // twin code -> canonical NCE_* (index-0 fold)
+  export function deriveLiabCodeSet(): Set<string>; // CR-nature canonical NCE codes + equity extras
+  export function deriveCodeToNoteKey(): Record<string, string>; // canonical code -> legacyNoteKey
+  /** Fold corporate twin codes in a coa_mapping to canonical NCE_* codes. Pure; returns new object; non-twin/unknown codes pass through untouched. */
+  export function normalizeCoaCodes<T extends Record<string, any>>(mapping: T): T;
+  /** Dev-only parity guard against frozen legacy snapshots. */
+  export function assertRegistryParity(): void;
+
+BACK-COMPAT:
+"NO DB schema change and NO change to nce_financial_notes data channels — this phase only refactors in-code registration maps and adds a save-time normalization, so every existing nce_financial_notes row (cy_data/py_data, _custom_rows, etc.) reads back byte-identically. Backward-compat for already-saved coa_mapping that stores CORPORATE codes is preserved on TWO levels: (1) the registry's fs-code lists STILL contain the corporate twins as accepted aliases, so deriveNoteFsMap()/CODE_TO_NOTE_TYPE/CANONICAL_NCE_CODE/computeCOATotals all continue to fold BS_CL_STB->NCE_STB etc. exactly as today — an old engagement that never re-saves keeps working with zero drift; (2) normalizeCoaCodes only rewrites the PERSISTED mapping going forward (on next user save), so the migration is lazy and opt-in per engagement, never a bulk rewrite. The derivation outputs are asserted (dev-only assertRegistryParity) to be deep-equal to the current hand-written literals, guaranteeing identical runtime behavior on release day. Corporate (non-NCE) engagements are fully untouched: FS_CODE_NATURE keeps its hand-maintained corporate half, NCE_CODE_TO_NOTE_KEY merges legacy extras, and the PipelineStage3 normalization is gated on isNonCorporate."
+
+FILES:
+
+  === C:/Users/kvdes/OneDrive/Desktop/Audit/caflow-core-ui-main/src/config/nceNoteRegistry.ts ===
+   - NEW FILE. Define `export interface NceNoteDef` and `export const NCE_NOTE_REGISTRY: NceNoteDef[]` — the single source of truth. One entry per NCE note that participates in FS-code mapping / face / reconciliation. Each entry MUST reproduce the existing data exactly (see newTypes for shape).
+   - Populate exactly 21 entries mirroring NCE_NOTE_FS_MAP keys (nceAutoPopulate.ts L39-76): borrowings(split lt=NCE_LTB/st=NCE_STB, twins BS_NCL_LTB / BS_CL_STB), other_lt_liab(NCE_OLTL, twins BS_NCL_OLT,BS_NCL_DTL), provisions(lt=NCE_LTP/st=NCE_STP, twins BS_NCL_LTP / BS_CL_STP), trade_payables(NCE_TP, twins BS_CL_TP,BS_CL_TP_MSME,BS_CL_TP_OTH), other_cl(NCE_OCL, twin BS_CL_OCL), cwip(NCE_CWIP, twin BS_NCA_FA_WIP), investments(lt=NCE_NCINV/st=NCE_CINV, twins BS_NCA_INV / BS_CA_CI), loans_advances(lt=NCE_LTLA/st=NCE_STLA, twins BS_NCA_LLA / BS_CA_SLA), other_nc_assets(NCE_ONCA, twins BS_NCA_ONA,BS_NCA_DTA), inventories(NCE_STCK, twins BS_CA_INV,INV_RM,INV_WIP,INV_FG,INV_STT,INV_STOCK), trade_receivables(NCE_TR, twin BS_CA_TR), cash_bank(NCE_CASH, twin BS_CA_CCE), other_ca(NCE_OCA, twin BS_CA_OCA), revenue_ops(NCE_REV_OPS, twin PL_REV_OPS), other_income(NCE_REV_OTH, twin PL_REV_OI), cogs(NCE_COGS+NCE_CII, twins PL_EXP_MAT,PL_EXP_SIT,PL_EXP_CII), employee_exp(NCE_EMP_EXP, twin PL_EXP_EMP), finance_costs(NCE_FIN_COST, twin PL_EXP_FIN), other_expenses(NCE_OTH_EXP, twins PL_EXP_OTH,PL_EXP_OEX).
+   - CRITICAL ordering: the canonical NCE_* code MUST be list-position-0 in each fs-code list so CANONICAL_NCE_CODE derivation (currently fsReconciliation.ts L341-351 `list[0]` = canon) produces identical output. Preserve cogs's two-code form (NCE_COGS canonical + NCE_CII) — investigate that NCE_CII maps to note 'cogs' config 'cogs_c' in NCE_CODE_TO_NOTE L463 and must keep doing so.
+   - Add the registry-aware codes that exist ONLY in NCE_CODE_TO_NOTE / NOTE_NATURE but have NO twin (still need entries for derivation completeness): the registry's deriveCodeToNote must emit NCE_CINV->investments(col st) and NCE_NCINV->investments(col lt), NCE_CII->cogs(config cogs_c), NCE_COGS->cogs(config cogs_a). Encode optional per-code `config` + `col` on a sub-shape so deriveCodeToNote reproduces nceAutoPopulate.ts L439-467 exactly.
+   - Add equity/capital codes that live in FS_CODE_NATURE + NCE_LIAB_CODE_SET but NOT in NCE_NOTE_FS_MAP (NCE_PCAP,NCE_RES,NCE_NCB,NCE_CAP — all CR). These are NOT note-mapped; represent them in a small adjunct array `NCE_EXTRA_CODE_NATURE` in the same file so FS_CODE_NATURE + NCE_LIAB_CODE_SET stay derivable without inventing fake notes.
+   - Export derivation builders (pure, run at module load): `deriveNoteFsMap()`, `deriveCodeToNote()`, `deriveNoteNature()`, `deriveNceCodeNature()`, `deriveCanonicalNceCode()`, `deriveLiabCodeSet()`, `deriveCodeToNoteKey()`. Each returns the SAME shape the corresponding hand-map currently has.
+   - Export `normalizeCoaCodes(mapping: Record<string,{code:string}|any>): Record<string,any>` — pure, returns a NEW object; for each entry whose `.code` is in deriveCanonicalNceCode(), rewrite to the canonical NCE_* code, leaving everything else (already-NCE codes, corporate-only-engagement codes that have no NCE twin, unmapped) untouched. Preserve all other properties on each entry via spread.
+   - Add a self-check `assertRegistryParity()` (dev-only, behind import.meta.env.DEV) that deep-equals each derived map against a frozen snapshot of the legacy literals to guarantee the refactor is non-breaking; throw in dev if drift detected. Optional but recommended.
+
+  === C:/Users/kvdes/OneDrive/Desktop/Audit/caflow-core-ui-main/src/lib/nceAutoPopulate.ts ===
+   - Replace the hand-written `NCE_NOTE_FS_MAP` literal (L39-76) with `export const NCE_NOTE_FS_MAP = deriveNoteFsMap();` imported from @/config/nceNoteRegistry. Keep the export name + shape ({lt?,st?,all?}) IDENTICAL so fsReconciliation.ts L321-326 (CODE_TO_NOTE_TYPE) and L343-351 (CANONICAL_NCE_CODE) and L570-575 (BS_CODE_SET) keep working unchanged.
+   - Replace the hand-written `NCE_CODE_TO_NOTE` literal (L439-467) with `export const NCE_CODE_TO_NOTE = deriveCodeToNote();` — must reproduce {note,col?,config?} for all 25 keys including NCE_COGS{note:cogs,config:cogs_a}, NCE_CII{note:cogs,config:cogs_c}, the lt/st split pairs, etc.
+   - Do NOT touch the `export { NOTE_NATURE } from '@/lib/fsSignConvention'` re-export (L405) — NOTE_NATURE remains owned by fsSignConvention which itself becomes registry-derived (see below). serialise/deserialise (L603-666), getNCENoteFaceTotal (L479-578), META_KEYS (L601) and NCENoteData type are UNCHANGED — Phase 6 touches only the registration maps, not the data channels.
+   - Add import line: `import { deriveNoteFsMap, deriveCodeToNote } from '@/config/nceNoteRegistry';` near the existing config imports (L29-30).
+
+  === C:/Users/kvdes/OneDrive/Desktop/Audit/caflow-core-ui-main/src/lib/fsSignConvention.ts ===
+   - Replace hand-written `NOTE_NATURE` literal (L40-64) with `export const NOTE_NATURE = deriveNoteNature();` from the registry. Must reproduce all 20 noteType->DR/CR entries exactly (borrowings CR, ... other_expenses DR).
+   - Replace hand-written `FS_CODE_NATURE` literal (L73-150) NCE half with derivation: `export const FS_CODE_NATURE = { ...deriveNceCodeNature(), ...CORP_CODE_NATURE };` where CORP_CODE_NATURE keeps the corporate BS_*/PL_* entries (L107-149) as a local literal. RATIONALE: corporate codes are NOT in the NCE registry and must stay hand-maintained here; only the NCE_* + equity entries (L74-106) become derived. Verify deriveNceCodeNature() emits NCE_PCAP,NCE_RES,NCE_NCB,NCE_CAP (from NCE_EXTRA_CODE_NATURE) plus every note's fs codes with the note's nature.
+   - Keep resolveNature/normaliseSide/signedBalance/signedOpening (L154-222) 100% UNCHANGED — they read NOTE_NATURE by reference, which now points at the derived object.
+   - Add import: `import { deriveNoteNature, deriveNceCodeNature } from '@/config/nceNoteRegistry';`. WATCH FOR CIRCULAR IMPORT: nceNoteRegistry must NOT import from fsSignConvention. Keep registry self-contained (it owns nature literals); fsSignConvention imports FROM registry, never the reverse.
+
+  === C:/Users/kvdes/OneDrive/Desktop/Audit/caflow-core-ui-main/src/lib/fsReconciliation.ts ===
+   - Replace the `CANONICAL_NCE_CODE` IIFE (L341-351) with `export const CANONICAL_NCE_CODE = deriveCanonicalNceCode();` from the registry. The derivation must fold every non-first code in each fs-code list to list[0] — byte-identical to current output (e.g. BS_CL_STB->NCE_STB, PL_EXP_OTH->NCE_OTH_EXP, BS_NCA_DTA->NCE_ONCA).
+   - Replace the `NCE_LIAB_CODE_SET` literal (L532-540) with `export const NCE_LIAB_CODE_SET = deriveLiabCodeSet();` — must contain exactly: equity NCE_PCAP,NCE_RES,NCE_NCB,NCE_CAP + CR-nature note codes NCE_LTB,NCE_LTP,NCE_OLTL,NCE_STB,NCE_TP,NCE_OCL,NCE_STP,NCE_REV_OPS,NCE_REV_OTH. Derivation rule: every NCE_* canonical code whose registry nature is CR, plus the equity extras. Verify the set is IDENTICAL (the literal omits NCE_CINV/NCE_NCINV which are DR assets — derivation must too).
+   - Leave CODE_TO_NOTE_TYPE IIFE (L319-327) and BS_CODE_SET IIFE (L568-575) AS-IS — they already derive from NCE_NOTE_FS_MAP which is now registry-backed, so they transitively benefit with zero edits. computeCOATotals (L353-461) UNCHANGED.
+   - Add import: `import { deriveCanonicalNceCode, deriveLiabCodeSet } from '@/config/nceNoteRegistry';`. Keep existing imports from @/lib/nceAutoPopulate (L28) since NCE_NOTE_FS_MAP/NCE_CODE_TO_NOTE still re-export from there.
+
+  === C:/Users/kvdes/OneDrive/Desktop/Audit/caflow-core-ui-main/src/components/pipeline/PipelineFinancialStatements.tsx ===
+   - Replace the local `NCE_CODE_TO_NOTE_KEY` literal (L496-529) with `const NCE_CODE_TO_NOTE_KEY = deriveCodeToNoteKey();` from the registry. CAUTION: this map is the LEGACY stage5_notes key map (note keys like 'lt_borrowings','trade_payables','ppe') and includes codes NOT in the FS-code registry path: NCE_PPE,NCE_INTG (both ->'ppe'), NCE_DEPR->'nce_depreciation', NCE_CAP->'owners_capital'. These need a `legacyNoteKey` field on registry entries AND a small adjunct map for the non-note codes (NCE_PPE/NCE_INTG/NCE_DEPR/NCE_CAP). If reproducing exactly is risky, leave this literal in place for Phase 6 and only derive the 21 note-mapped keys, merging `{...deriveCodeToNoteKey(), ...LEGACY_EXTRA_NOTE_KEYS}`. Prefer the merge approach to avoid scope creep.
+   - Keep imports at L55 (`getNCENoteFaceTotal, NCE_CODE_TO_NOTE, NOTE_NATURE as NCE_NOTE_NATURE`) UNCHANGED — NCE_NOTE_NATURE already aliases the now-derived NOTE_NATURE, so callsites L3961/L4006/L4119 keep working. Add `deriveCodeToNoteKey` to the @/config/nceNoteRegistry import.
+   - No logic changes to the NCE diff/recon callsites (L2636-2649, L3961-4119) — they read the maps by reference.
+
+  === C:/Users/kvdes/OneDrive/Desktop/Audit/caflow-core-ui-main/src/components/pipeline/PipelineStage3.tsx ===
+   - Add import: `import { normalizeCoaCodes } from '@/config/nceNoteRegistry';` near other lib imports.
+   - In `saveMapping` (L2526-2554): change the persisted payload from `coa_mapping: coaMapping` (L2530) to `coa_mapping: isNonCorporate ? normalizeCoaCodes(coaMapping) : coaMapping`. Gate on isNonCorporate (L332) so the corporate path is provably untouched per project rules.
+   - In `generateFS` (L2556-...): change the second persist (L2612-2614) `coa_mapping: coaMapping` to the same `isNonCorporate ? normalizeCoaCodes(coaMapping) : coaMapping`. NOTE: generateFS computes computedAmounts from coaMapping in component state BEFORE this save — normalization only affects the PERSISTED copy, not in-memory FS computation, so no double-count risk this render. Next load reads normalized codes which the registry still accepts.
+   - DECISION on the other ~15 coa_mapping update sites (L796,1012,1092,1165,1224,1310,1444,1477,1490,1503,1540,1611,1663,1748,3916): these are auto-map / clear / merge / re-sync writes. To avoid sprawl AND guarantee no corporate code ever lands unnormalized, prefer a SINGLE choke-point: introduce a local helper `const persistCoaMapping = (m) => supabase.from('audit_engagements').update({ coa_mapping: isNonCorporate ? normalizeCoaCodes(m) : m } as any).eq('id', engagementId);` and replace the inline `.update({ coa_mapping: ... })` calls with it. If a full sweep is too broad for one PR, AT MINIMUM normalize the two explicit user-facing saves (saveMapping, generateFS) — those are where corporate twins are most likely introduced by manual code selection.
+   - Do NOT normalize in-memory `coaMapping` state on every keystroke — keep normalization at persist time only, so the auditor can still SELECT a corporate twin in the dropdown (it gets folded on save) and existing-engagement reloads display whatever was last persisted.
+
+RISKS:
+  - Parity drift: a single transcription error in NCE_NOTE_REGISTRY (wrong twin list order, missing INV_* alias, dropped NCE_CII) silently changes CANONICAL_NCE_CODE or NCE_NOTE_FS_MAP and reintroduces the exact phantom-drift bugs Phases 1-5 fixed. MITIGATION: assertRegistryParity() deep-equals every derived map against frozen copies of the current literals; run it in dev + a unit test before deleting the literals.
+  - Index-0 invariant is load-bearing: CANONICAL_NCE_CODE folds to list[0]. If a registry author puts a corporate twin first, canonicalization inverts (NCE_STB->BS_CL_STB) and corrupts every recon anchor. MITIGATION: add a runtime guard in deriveCanonicalNceCode that throws if list[0] is not /^NCE_/.
+  - Circular import: fsSignConvention <-> nceNoteRegistry. Registry must be a leaf (own its nature literals, import nothing from fsSignConvention/nceAutoPopulate/fsReconciliation). Verify with the build; a cycle can yield undefined maps at module init (silent all-zero FS).
+  - NCE_CODE_TO_NOTE_KEY has codes (NCE_PPE/NCE_INTG/NCE_DEPR/NCE_CAP) that don't fit the FS-code-list model. Forcing them into the registry risks polluting deriveNoteFsMap with non-note codes. MITIGATION: keep them in a small LEGACY_EXTRA_NOTE_KEYS adjunct and merge — do not over-model.
+  - normalizeCoaCodes applied at the WRONG layer (mutating in-memory state vs persist payload) could change FS computedAmounts mid-session or break the auditor's ability to pick a corporate twin. MITIGATION: normalize ONLY the persisted copy, never component state; gate on isNonCorporate.
+  - Sweeping all ~15 coa_mapping update sites in PipelineStage3 in one PR is broad and error-prone. MITIGATION: land the registry refactor + the 2 explicit-save normalizations first; convert the remaining writes to a persistCoaMapping helper in a follow-up if scope demands.
+
+TEST PLAN:
+  - Unit: assert deepEqual(deriveNoteFsMap(), <frozen copy of current NCE_NOTE_FS_MAP L39-76>) — including key order-insensitive list equality for borrowings.lt/st, cogs.all (NCE_COGS,NCE_CII,PL_EXP_MAT,PL_EXP_SIT,PL_EXP_CII), inventories.all (8 codes incl INV_*).
+  - Unit: assert deepEqual(deriveCodeToNote(), <frozen NCE_CODE_TO_NOTE L439-467>) — all 25 keys with col/config (NCE_COGS config cogs_a, NCE_CII config cogs_c, lt/st pairs).
+  - Unit: assert deepEqual(deriveNoteNature(), <frozen NOTE_NATURE L40-64>) and deriveNceCodeNature covers every NCE_* in FS_CODE_NATURE L74-106 + extras.
+  - Unit: assert deriveCanonicalNceCode() === <frozen CANONICAL_NCE_CODE> (spot-check BS_CL_STB->NCE_STB, PL_EXP_OTH->NCE_OTH_EXP, BS_NCA_DTA->NCE_ONCA, BS_CA_CI->NCE_CINV).
+  - Unit: assert setsEqual(deriveLiabCodeSet(), <frozen NCE_LIAB_CODE_SET L532-540>) — must include equity extras + CR note codes, must EXCLUDE DR asset codes NCE_CINV/NCE_NCINV.
+  - Unit: normalizeCoaCodes({'Plot 43':{code:'BS_CL_STB'},'Sales':{code:'PL_REV_OPS'},'Bank':{code:'NCE_CASH'},'Misc':{code:'SOME_UNKNOWN'}}) -> {'Plot 43':{code:'NCE_STB'},'Sales':{code:'NCE_REV_OPS'},'Bank':{code:'NCE_CASH'},'Misc':{code:'SOME_UNKNOWN'}} and verify input object is NOT mutated + non-code props on each entry are preserved.
+  - Unit: deriveCanonicalNceCode guard throws when a registry list has a non-NCE_ code at index 0.
+  - Integration: load an existing NCE engagement whose coa_mapping stores corporate twins (e.g. SWASTIK BS_CL_STB) WITHOUT re-saving; FsHealthPanel shows zero drift (proves registry still accepts twins). Then trigger saveMapping; reload; coa_mapping now stores NCE_STB and FsHealthPanel still shows zero drift (proves normalization is behavior-preserving).
+  - Build: `npm run build` zero TS errors; verify no import cycle by confirming NOTE_NATURE/FS_CODE_NATURE/NCE_NOTE_FS_MAP are defined (not undefined) at first use (add a temporary console assert or a vitest that imports each consumer).
+  - Regression: corporate engagement end-to-end (Stage 6 save -> generate FS) unchanged — confirm isNonCorporate gate leaves corporate coa_mapping un-normalized.
