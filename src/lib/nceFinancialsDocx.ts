@@ -1261,11 +1261,19 @@ function buildNote1Section(
   // continuous wall of text in the rendered output).
   selectedNotes.forEach((n, i) => {
     const num = i + 1;
-    const isLast = i === selectedNotes.length - 1;
+    // lineRule="exact" forces Word to use the literal value (twentieths of a
+    // point) as the line height regardless of font ascender / descender /
+    // leading. At line=220 → 11pt exact line height with 9pt Arial body =
+    // 2pt of total leading per line, packed snug to match Word's standard
+    // "single line" numbered-list output. With lineRule="auto" Word added
+    // half a line of "auto leading" between paragraphs even with after=0
+    // and the document pPrDefault override — which is the residual gap the
+    // user kept seeing after the GAP=0 commit. "exact" sidesteps that
+    // entirely and matches a hand-formatted Word numbered list.
+    void GAP;
     out.push(
       new Paragraph({
-        spacing:   { before: 0, after: isLast ? 40 : GAP, line: 240, lineRule: "auto" as any },
-        keepLines: true,
+        spacing:  { before: 0, after: 0, line: 220, lineRule: "exact" as any },
         children: [
           new TextRun({ text: `${num}.  `,                       font: FONT, size: SZ_BODY, bold: true, color: BLACK }),
           new TextRun({ text: resolveTokens(n.text || ""),         font: FONT, size: SZ_BODY,            color: BLACK }),
