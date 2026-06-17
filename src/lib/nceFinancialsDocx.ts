@@ -1194,12 +1194,12 @@ function buildNote1Section(
       .replace(/\[DEP_NOTE\]/g,      String(header.depNoteNum   || ""))
       .replace(/\[LAST_NOTE\]/g,     lastNoteNum);
 
-  // User reference (screenshot 2): items get a clear but modest gap — not
-  // packed flush together (that read as one wall of text), not a full blank
-  // line (that wasted vertical space). 80 DXA ≈ 4pt — exactly the breathing
-  // room shown in the reference image where consecutive notes are visually
-  // distinct but the page still feels dense and professional.
-  const GAP = 80;
+  // User reference (latest screenshot 2): items packed tight with no extra
+  // paragraph spacing — only the line-height separates them so the page
+  // reads as a single compact list. GAP=0 disables our explicit
+  // spacing.after; the per-paragraph pPr override below also disables the
+  // default-style spacing Word silently applies on top of explicit values.
+  const GAP = 0;
 
   const txt = (text: string, bold = false) =>
     new TextRun({ text, font: FONT, size: SZ_BODY, bold, color: BLACK });
@@ -2475,7 +2475,17 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   const doc = new Document({
     styles: {
       default: {
-        document: { run: { font: FONT, size: SZ_BODY } },
+        // Document-level defaults — applied to every paragraph in the file.
+        // The paragraph block zeroes spacing.before / after so Word never
+        // adds the Normal-style default 8pt-after on top of our explicit
+        // values. (Word silently inherits the default when an explicit
+        // value isn't repeated at every nesting level.) Tables build their
+        // own pPr so they're not affected; the BS / P&L tables read fine
+        // because cells override line spacing inside makeRow().
+        document: {
+          run:       { font: FONT, size: SZ_BODY },
+          paragraph: { spacing: { before: 0, after: 0, line: 240, lineRule: "auto" as any } },
+        },
       },
     },
     sections: [
