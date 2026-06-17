@@ -1194,14 +1194,12 @@ function buildNote1Section(
       .replace(/\[DEP_NOTE\]/g,      String(header.depNoteNum   || ""))
       .replace(/\[LAST_NOTE\]/g,     lastNoteNum);
 
-  // Latest user feedback: even GAP=30 looked like a full blank line between
-  // items in the rendered Word file (Word applies an additional default
-  // "space-after" from the body paragraph style on top of our explicit
-  // spacing.after). Drop to 0 and rely on `contextualSpacing: true` to tell
-  // Word to suppress spacing between consecutive same-style paragraphs.
-  // Visual result: items sit on consecutive lines with only the line-height
-  // separating them — exactly the dense list look the firm template uses.
-  const GAP = 0;
+  // User reference (screenshot 2): items get a clear but modest gap — not
+  // packed flush together (that read as one wall of text), not a full blank
+  // line (that wasted vertical space). 80 DXA ≈ 4pt — exactly the breathing
+  // room shown in the reference image where consecutive notes are visually
+  // distinct but the page still feels dense and professional.
+  const GAP = 80;
 
   const txt = (text: string, bold = false) =>
     new TextRun({ text, font: FONT, size: SZ_BODY, bold, color: BLACK });
@@ -1253,36 +1251,28 @@ function buildNote1Section(
     }),
   ];
 
-  // Render the entire numbered list as a SINGLE paragraph, separating items
-  // with soft-return TextRuns (`break: 1`). This bypasses the residual
-  // inter-paragraph gap Word still added even after setting spacing.after=0
-  // + contextualSpacing=true (Word's Normal style defaults override
-  // per-paragraph zeroing in some rendering paths). Inside one paragraph,
-  // only the line-height separates items — exactly the dense look the firm
-  // template uses. Within each item, native word-wrap still handles long
-  // bodies, so this only collapses BETWEEN items, not INSIDE them.
-  const noteRuns: TextRun[] = [];
+  // Render each numbered item as a separate paragraph with a modest
+  // GAP-DXA spacing after — matches the firm reference (screenshot 2)
+  // where consecutive items have a clear visual separation but the page
+  // stays dense. Multi-line items wrap naturally within their own
+  // paragraph; the inter-item gap comes from `spacing.after`. Plain
+  // "<n>.  <body>" rendering — no bold title prefix (Issue 2 from the
+  // last revision) and no soft-return collapsing (which read as one
+  // continuous wall of text in the rendered output).
   selectedNotes.forEach((n, i) => {
     const num = i + 1;
-    if (i > 0) {
-      // Soft return → starts the next item on a fresh line without creating
-      // a new paragraph (so no paragraph-spacing kicks in).
-      noteRuns.push(new TextRun({ text: "", font: FONT, size: SZ_BODY, break: 1 }));
-    }
-    noteRuns.push(new TextRun({ text: `${num}.  `,             font: FONT, size: SZ_BODY, bold: true, color: BLACK }));
-    noteRuns.push(new TextRun({ text: resolveTokens(n.text || ""), font: FONT, size: SZ_BODY,            color: BLACK }));
-  });
-  if (noteRuns.length > 0) {
+    const isLast = i === selectedNotes.length - 1;
     out.push(
       new Paragraph({
-        spacing:   { before: 0, after: 0, line: 240, lineRule: "auto" as any },
+        spacing:   { before: 0, after: isLast ? 40 : GAP, line: 240, lineRule: "auto" as any },
         keepLines: true,
-        children:  noteRuns,
+        children: [
+          new TextRun({ text: `${num}.  `,                       font: FONT, size: SZ_BODY, bold: true, color: BLACK }),
+          new TextRun({ text: resolveTokens(n.text || ""),         font: FONT, size: SZ_BODY,            color: BLACK }),
+        ],
       }),
     );
-  }
-  // Reference GAP so the constant doesn't trip the no-unused-var lint.
-  void GAP;
+  });
 
   // Optional Note 1 "new entity" paragraph the Stage 7 page exposes via a
   // toggle. Appended after the standard notes when enabled, mirroring the
