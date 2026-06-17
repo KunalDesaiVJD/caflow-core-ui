@@ -7,6 +7,7 @@ import {
   addNceEdit,
   removeNceEdit,
   findNceEdit,
+  computeResyncDiff,
   type NceEdit,
   type NCENoteData,
 } from "@/lib/nceAutoPopulate";
@@ -145,5 +146,45 @@ describe("respectNceManualEdits — overlay onto fresh auto layer", () => {
     const snap = JSON.stringify(auto);
     respectNceManualEdits(auto, existing);
     expect(JSON.stringify(auto)).toBe(snap);
+  });
+});
+
+describe("computeResyncDiff — dry-run preview for the safe Re-sync", () => {
+  it("returns no diffs when nothing changed", () => {
+    const a = { other_cl: makeNote({ x: 100 }) };
+    const b = { other_cl: makeNote({ x: 100 }) };
+    expect(computeResyncDiff(a, b)).toEqual([]);
+  });
+
+  it("reports a changed value key", () => {
+    const a = { other_cl: makeNote({ x: 100 }) };
+    const b = { other_cl: makeNote({ x: 250 }) };
+    const diff = computeResyncDiff(a, b);
+    expect(diff).toHaveLength(1);
+    expect(diff[0]).toMatchObject({ noteType: "other_cl" });
+    expect(diff[0].changes).toContainEqual({ key: "x", oldCy: 100, newCy: 250 });
+  });
+
+  it("surfaces an LT→ST reclassification as BOTH columns changing", () => {
+    const before = { borrowings: makeNote({ custom_x_lt: 60000 }) };
+    const after = { borrowings: makeNote({ custom_x_st: 60000 }) }; // moved LT→ST
+    const diff = computeResyncDiff(before, after);
+    expect(diff).toHaveLength(1);
+    expect(diff[0].changes).toContainEqual({ key: "custom_x_lt", oldCy: 60000, newCy: 0 });
+    expect(diff[0].changes).toContainEqual({ key: "custom_x_st", oldCy: 0, newCy: 60000 });
+  });
+
+  it("ignores sub-tolerance noise", () => {
+    const a = { n: makeNote({ x: 100 }) };
+    const b = { n: makeNote({ x: 100.3 }) };
+    expect(computeResyncDiff(a, b)).toEqual([]);
+  });
+
+  it("reports a note that appears or disappears", () => {
+    const a = { n: makeNote({ x: 100 }) };
+    const b = {};
+    const diff = computeResyncDiff(a, b);
+    expect(diff).toHaveLength(1);
+    expect(diff[0].changes).toContainEqual({ key: "x", oldCy: 100, newCy: 0 });
   });
 });

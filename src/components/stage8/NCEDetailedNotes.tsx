@@ -3449,8 +3449,10 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
       </div>
 
       {/* Toolbar — hidden in read-only (lock preview) mode */}
-      {/* NOTE: "Re-sync from COA" and "Save All Notes" buttons removed to
-          prevent accidental overwrites of audit-verified note data. */}
+      {/* "Re-sync from COA" is the SAFE gated path: it previews every per-note
+          change and writes only on confirmation, and is hard-blocked when notes
+          are finalized. It is the only way a COA mapping change (incl. moving a
+          ledger LT↔ST) reaches the notes + FS. */}
       {readOnly ? null : (
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-[10px] text-muted-foreground">
@@ -3458,6 +3460,15 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
             <span className="text-amber-600 font-medium">Amber = Manual</span>
           </span>
           <div className="ml-auto flex items-center gap-1.5">
+            <Button
+              type="button" size="sm" variant="outline"
+              onClick={handleResync}
+              disabled={syncing || notesFinalizedRef.current}
+              className="h-7 text-xs gap-1"
+              title="Rebuild notes from the current Trial Balance + COA mapping. You confirm a preview of every change before anything is saved; manual edits are preserved. Locked when notes are finalized."
+            >
+              <RefreshCw className={`w-3 h-3${syncing ? " animate-spin" : ""}`} /> {syncing ? "Re-syncing…" : "Re-sync from COA"}
+            </Button>
             <Button
               type="button" size="sm" variant="ghost"
               onClick={() => setCollapseAll(false)}

@@ -1,5 +1,0 @@
-Phase 1 — Unified NCE edit-ledger (NceEdit[]) replacing the 6 metadata channels + 3 per-row flags
-Phase 2 — Restore NCE "Re-sync from COA" and "Save All Notes" toolbar buttons safely
-Phase 3 — First-class column model (Pattern A LT/ST) across computeNoteTotals, getNCENoteFaceTotal, computeDisplayData, and nceRecomputePYFromShell
-Phase 5 — Collapse the NCE FS face to a single read path
-Phase 6 — Single source-of-truth NCE note registry + corporate-twin normalization at COA-mapping save
