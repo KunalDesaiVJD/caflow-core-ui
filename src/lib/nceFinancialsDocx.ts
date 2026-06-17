@@ -1037,14 +1037,15 @@ function noteRowA(
   const bold = style !== "data";
   // Task 1 (doc8): compact vertPad=18 for note rows
   // Note 1 fix (intelligent pagination): cantSplit so a row never breaks across pages.
+  // Issue 1 (page utilization): keepNext omitted on body rows (see noteRowB).
   return new TableRow({
     cantSplit: true,
     children: [
-      cell({ text: label, w: NW_A_DESC, bold, bg, borders: bdr, indent, vertPad: 18, keepNext: true }),
-      ac(ltCy, NW_A_LTCY, { bold, bg, borders: bdr, vertPad: 18, keepNext: true }),
-      ac(ltPy, NW_A_LTPY, { bold, bg, borders: bdr, vertPad: 18, keepNext: true }),
-      ac(stCy, NW_A_STCY, { bold, bg, borders: bdr, vertPad: 18, keepNext: true }),
-      ac(stPy, NW_A_STPY, { bold, bg, borders: bdr, vertPad: 18, keepNext: true }),
+      cell({ text: label, w: NW_A_DESC, bold, bg, borders: bdr, indent, vertPad: 18 }),
+      ac(ltCy, NW_A_LTCY, { bold, bg, borders: bdr, vertPad: 18 }),
+      ac(ltPy, NW_A_LTPY, { bold, bg, borders: bdr, vertPad: 18 }),
+      ac(stCy, NW_A_STCY, { bold, bg, borders: bdr, vertPad: 18 }),
+      ac(stPy, NW_A_STPY, { bold, bg, borders: bdr, vertPad: 18 }),
     ],
   });
 }
@@ -2322,7 +2323,10 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
       ],
     });
   const bsNotesRunningHdr = makeNotesHeader(`Notes to Balance Sheet as on 31.03.${String(cyYear)}`);
-  const plNotesRunningHdr = makeNotesHeader(`Notes to Profit & Loss A/c as on 31.03.${String(cyYear)}`);
+  // Issue 2 — P&L is a period statement, so its notes heading reads "for the
+  // accounting year YYYY-YYYY" (e.g. 2025-2026) rather than the point-in-time
+  // "as on 31.03.YYYY". The Balance Sheet heading above keeps "as on …".
+  const plNotesRunningHdr = makeNotesHeader(`Notes to Profit & Loss A/c for the accounting year ${Number(cyYear) - 1}-${cyYear}`);
 
   // Phase 2 — PPE Schedule (landscape). PPE is always-active (ref 10); use its
   // dynamic number so the title matches the Balance-Sheet reference.
@@ -2503,7 +2507,7 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   const plNotesSectionChildren: (Paragraph | Table)[] = plNoteTablePairs.length > 0
     ? [
         notesSectionTopSpacer(),
-        mkSectionHeading(`Notes to Profit & Loss A/c as on 31.03.${String(cyYear)}`),
+        mkSectionHeading(`Notes to Profit & Loss A/c for the accounting year ${Number(cyYear) - 1}-${cyYear}`),
         ...plNoteTablePairs.flatMap(([, table], i) => (i === 0 ? [table] : [noteGap(), table])),
       ]
     : [];
@@ -2581,7 +2585,7 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
       // Borders: Section B and Section C share the same pgBorders definition
       // so there is no layout conflict on the transition page.  Word can apply
       // the border to all pages normally.  plNotesRunningHdr provides
-      // "Notes to Profit & Loss A/c as on…" on every full PL page.
+      // "Notes to Profit & Loss A/c for the accounting year…" on every full PL page.
       // Omitted entirely when there are no PL notes.
       ...(plNotesSectionChildren.length > 0 ? ([{
         properties: { page: notesPortraitProps, type: SectionType.CONTINUOUS },
