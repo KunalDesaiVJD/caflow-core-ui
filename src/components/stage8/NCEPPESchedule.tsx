@@ -42,6 +42,7 @@ interface AssetRow {
   opening_balance:  number;
   additions_pre:    number;
   additions_post:   number;
+  deletions:        number;
   depreciation:     number;
   // total and closing_balance are auto-computed, not stored in state
 }
@@ -90,6 +91,7 @@ function initRows(): AssetRow[] {
     opening_balance: 0,
     additions_pre:   0,
     additions_post:  0,
+    deletions:       0,
     depreciation:    0,
   }));
 }
@@ -109,14 +111,14 @@ function parseFY(fy: string): { cy: number; py: number } {
 }
 
 function calcRowTotal(r: AssetRow): number {
-  return Math.round((r.opening_balance + r.additions_pre + r.additions_post) * 100) / 100;
+  return Math.round((r.opening_balance + r.additions_pre + r.additions_post - r.deletions) * 100) / 100;
 }
 
 /** Auto-compute depreciation per Companies Act / Income Tax half-year rule:
  *  • Opening balance + additions on or before 29/09 → full-year rate
  *  • Additions after 29/09 → half-year rate (half of the rate %)
  *
- *  depn = (opening + additions_pre) * rate% + additions_post * rate%/2
+ *  depn = (opening + additions_pre - deletions) * rate% + additions_post * rate%/2
  *
  *  Previously this column was a manual input — auditors had to compute and
  *  type the figure by hand, prone to error. Now the input is read-only and
@@ -125,7 +127,13 @@ function calcRowTotal(r: AssetRow): number {
 function calcDepreciation(r: AssetRow): number {
   const rate = Number(r.rate_pct) || 0;
   if (rate <= 0) return 0;
-  const base = (Number(r.opening_balance) || 0) + (Number(r.additions_pre) || 0);
+  // Deletions reduce the full-year depreciable base (Income-Tax block method).
+  // Clamp at 0 so a disposal larger than (opening + pre-additions) never
+  // produces negative (added-back) depreciation.
+  const base = Math.max(
+    0,
+    (Number(r.opening_balance) || 0) + (Number(r.additions_pre) || 0) - (Number(r.deletions) || 0),
+  );
   const post = Number(r.additions_post) || 0;
   const depn = base * (rate / 100) + post * (rate / 200);
   return Math.round(depn * 100) / 100;
@@ -236,6 +244,7 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
               opening_balance: Number(db.opening_balance) || 0,
               additions_pre:   Number(db.additions_pre)   || 0,
               additions_post:  Number(db.additions_post)  || 0,
+              deletions:       Number(db.deletions)       || 0,
               depreciation:    Number(db.depreciation)    || 0,
             };
             if (isSubLedger(so)) {
@@ -274,6 +283,7 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
         opening_balance: 0,
         additions_pre:   0,
         additions_post:  0,
+        deletions:       0,
         depreciation:    0,
       };
       return [...prev, newRow].sort((a, b) => a.sort_order - b.sort_order);
@@ -294,6 +304,7 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
       opening:      sum("opening_balance"),
       addPre:       sum("additions_pre"),
       addPost:      sum("additions_post"),
+      deletions:    sum("deletions"),
       total:        Math.round(totalTotal   * 100) / 100,
       depreciation: Math.round(totalDepn    * 100) / 100,
       closing:      Math.round(totalClosing * 100) / 100,
@@ -322,6 +333,7 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
         opening_balance: r.opening_balance,
         additions_pre:   r.additions_pre,
         additions_post:  r.additions_post,
+        deletions:       r.deletions,
         total:           calcRowTotal(r),
         depreciation:    calcDepreciation(r),
         closing_balance: calcClosing(r),
@@ -464,6 +476,14 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
           />
         </TableCell>
 
+        {/* Deletions (editable) */}
+        <TableCell className="p-1 border-r" style={{ minWidth: "88px" }}>
+          <NumInput
+            value={row.deletions}
+            onChange={v => updateRow(row.sort_order, "deletions", v)}
+          />
+        </TableCell>
+
         {/* Col 7: Total (read-only) */}
         <TableCell className="p-1 border-r" style={{ minWidth: "88px" }}>
           <NumInput value={rowTotal} readOnly />
@@ -529,6 +549,9 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
           <NumInput value={row.additions_post} onChange={v => updateRow(row.sort_order, "additions_post", v)} />
         </TableCell>
         <TableCell className="p-1 border-r" style={{ minWidth: "88px" }}>
+          <NumInput value={row.deletions} onChange={v => updateRow(row.sort_order, "deletions", v)} />
+        </TableCell>
+        <TableCell className="p-1 border-r" style={{ minWidth: "88px" }}>
           <NumInput value={rowTotal} readOnly />
         </TableCell>
         <TableCell className="p-1 border-r" style={{ minWidth: "88px" }}>
@@ -569,7 +592,7 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
 
       {/* PPE Table */}
       <div className="overflow-x-auto rounded-lg border">
-        <Table style={{ tableLayout: "fixed", minWidth: "920px" }}>
+        <Table style={{ tableLayout: "fixed", minWidth: "1010px" }}>
           {/* ── 2-Row Header ── */}
           <TableHeader>
             {/* Header row 1 */}
@@ -613,6 +636,15 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
                 className="text-xs text-center border-b border-r w-[196px]"
               >
                 Additions (₹)
+              </TableHead>
+              {/* Deletions (rowSpan=2) — disposals during the year */}
+              <TableHead
+                rowSpan={2}
+                className="text-xs text-center align-middle border-r w-[96px]"
+              >
+                Deletions
+                <br />
+                <span className="font-normal text-[10px]">during the year</span>
               </TableHead>
               {/* Col 7: Total (rowSpan=2) */}
               <TableHead
@@ -703,6 +735,10 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
               <TableCell className="text-xs text-right py-2 px-3 border-r font-semibold">
                 {fmtNum(totals.addPost)}
               </TableCell>
+              {/* Deletions total */}
+              <TableCell className="text-xs text-right py-2 px-3 border-r font-semibold">
+                {fmtNum(totals.deletions)}
+              </TableCell>
               {/* Total total */}
               <TableCell className="text-xs text-right py-2 px-3 border-r font-semibold">
                 {fmtNum(totals.total)}
@@ -722,8 +758,8 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
 
       {/* Legend */}
       <p className="text-[11px] text-muted-foreground pl-1">
-        * Shaded columns (Total, Closing Balance) are auto-calculated.&ensp;
-        Depreciation auto-calculates as (Opening + Additions before 29/09) × Rate% + (Additions after 29/09) × Rate%/2.
+        * Shaded columns (Total, Closing Balance) are auto-calculated. Total = Opening + Additions − Deletions; Closing = Total − Depreciation.&ensp;
+        Depreciation auto-calculates as (Opening + Additions before 29/09 − Deletions) × Rate% + (Additions after 29/09) × Rate%/2.
       </p>
 
       {/* Bottom save — hidden in readOnly / preview mode */}

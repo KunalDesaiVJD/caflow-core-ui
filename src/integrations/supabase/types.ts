@@ -5187,6 +5187,7 @@ export type Database = {
           asset_name: string
           closing_balance: number | null
           created_at: string | null
+          deletions: number | null
           depreciation: number | null
           engagement_id: string
           financial_year: string
@@ -5203,6 +5204,7 @@ export type Database = {
           asset_name: string
           closing_balance?: number | null
           created_at?: string | null
+          deletions?: number | null
           depreciation?: number | null
           engagement_id: string
           financial_year: string
@@ -5219,6 +5221,7 @@ export type Database = {
           asset_name?: string
           closing_balance?: number | null
           created_at?: string | null
+          deletions?: number | null
           depreciation?: number | null
           engagement_id?: string
           financial_year?: string

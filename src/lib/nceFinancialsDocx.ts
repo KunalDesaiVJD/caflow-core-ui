@@ -116,13 +116,14 @@ const CAP_LAST = 986;   // 450+2300+850+6×980+986 = 10466 ✓
 
 // Landscape (PPE Schedule) — same punch margin on the (left) binding edge
 const TW_LS   = A4_H - MARG_L - MARG_R; // 16838 - 864 - 576 = 15398 DXA
-// PPE cols — 9 cols after removing duplicate Net Block CY/PY columns (Task 7)
-// (TW_LS - PPE_CAT - PPE_NAME - PPE_RATE) / 6 numeric cols = (15398-2500-2700-700)/6 = 1583
-const PPE_CAT  = 2500;
+// PPE cols — 9 cols: Asset Name | Rate | Opening | Add-pre | Add-post |
+// Deletions | Total | Depreciation | Closing. (Category column removed per
+// client request; Deletions column added — net column count unchanged.)
+// (TW_LS - PPE_NAME - PPE_RATE) / 7 numeric cols = (15398-2700-700)/7 = 1714
 const PPE_NAME = 2700;
 const PPE_RATE =  700;
-const PPE_NUM  = 1583;  // equal width for all 6 numeric columns
-// 2500+2700+700+6×1583 = 5900+9498 = 15398 ✓
+const PPE_NUM  = 1714;  // equal width for all 7 numeric columns
+// 2700+700+7×1714 = 3400+11998 = 15398 ✓
 
 // ─── Typography ───────────────────────────────────────────────────────────────
 // Task 1: mutable so the caller can pass a selected font family.
@@ -1965,8 +1966,7 @@ function buildNoteSection(
 
 /** PPE Schedule — landscape table, grouped by asset_category (Task 3) */
 function buildPPETable(ppeData: any[], cyYear: string, pyYear: string, noteNum: string): Table {
-  const ppeColWidths = [PPE_CAT, PPE_NAME, PPE_RATE, PPE_NUM, PPE_NUM, PPE_NUM, PPE_NUM, PPE_NUM, PPE_NUM];
-  const totalW = ppeColWidths.reduce((s, w) => s + w, 0); // 15398
+  const ppeColWidths = [PPE_NAME, PPE_RATE, PPE_NUM, PPE_NUM, PPE_NUM, PPE_NUM, PPE_NUM, PPE_NUM, PPE_NUM];
 
   // Task 4 (doc6): 2-row grouped header matching the PPE Schedule UI exactly.
   // Row 1: Category | Asset Name | Rate% | Opening | Additions (₹) colSpan=2 | Total | Depr | Closing
@@ -1990,11 +1990,11 @@ function buildPPETable(ppeData: any[], cyYear: string, pyYear: string, noteNum: 
   const hdrRow1 = new TableRow({
     tableHeader: true,
     children: [
-      hdrCell("Asset\nCategory",                              PPE_CAT,  2),
       hdrCell("Asset Name",                                   PPE_NAME, 2),
       hdrCell("Rate\n(%)",                                    PPE_RATE, 2),
       hdrCell(`Opening Balance\nas on 01/04/${pyYear}`,       PPE_NUM,  2),
       hdrCell("Additions (₹)",                                PPE_NUM * 2, 1, 2),
+      hdrCell("Deletions\nduring the year",                   PPE_NUM,  2),
       hdrCell("Total",                                        PPE_NUM,  2),
       hdrCell("Depreciation\nCharged",                        PPE_NUM,  2),
       hdrCell(`Closing Balance\nas on 31/03/${cyYear}`,       PPE_NUM,  2),
@@ -2008,59 +2008,41 @@ function buildPPETable(ppeData: any[], cyYear: string, pyYear: string, noteNum: 
     ],
   });
 
-  /** Task 3: full-width spanning row for each asset category heading */
-  const catHdrRow = (catName: string): TableRow =>
-    new TableRow({
-      children: [
-        new TableCell({
-          columnSpan: ppeColWidths.length,
-          width:   { size: totalW, type: WidthType.DXA },
-          shading: { fill: BG_TOT, type: ShadingType.CLEAR },
-          borders: BDR_ROW,
-          margins: { top: 30, bottom: 30, left: 100, right: 100 },
-          children: [new Paragraph({
-            spacing: { before: 0, after: 0 },
-            children: [new TextRun({ text: catName, font: FONT, size: SZ_XS, bold: true, color: BLACK })],
-          })],
-        }),
-      ],
-    });
-
   const nac = (v: number | null | undefined, w: number) => ac(v ?? 0, w);
 
-  /** Task 3: skip assets where every numeric column is zero / null */
+  /** skip assets where every numeric column is zero / null */
   const isBlankAsset = (r: any): boolean =>
-    !r.opening_balance && !r.additions_pre && !r.additions_post &&
+    !r.opening_balance && !r.additions_pre && !r.additions_post && !r.deletions &&
     !r.total && !r.depreciation && !r.closing_balance && !r.net_cy && !r.net_py;
 
-  // Task 3: group by asset_category (insertion order preserved — Map is ES6+)
-  const categoryMap = new Map<string, any[]>();
-  for (const r of (ppeData ?? [])) {
-    const cat = r.asset_category ?? "Other";
-    if (!categoryMap.has(cat)) categoryMap.set(cat, []);
-    categoryMap.get(cat)!.push(r);
-  }
+  // Category column + per-category heading rows removed per client request:
+  // assets render as one flat list. Order tangible block first, then intangible,
+  // each sorted by sort_order (parents 1–11, then sub-ledgers ≥ 100) so the list
+  // reads in the same order as the on-screen schedule.
+  const bySortOrder = (a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0);
+  const inCat = (cat: string) =>
+    (ppeData ?? []).filter((r: any) => (r.asset_category ?? "") === cat).sort(bySortOrder);
+  const otherCat = (ppeData ?? [])
+    .filter((r: any) => !["tangible", "intangible"].includes(r.asset_category ?? ""))
+    .sort(bySortOrder);
+  const orderedAssets = [...inCat("tangible"), ...inCat("intangible"), ...otherCat];
 
   const dataRows: TableRow[] = [];
-  for (const [cat, assets] of categoryMap) {
-    const visible = assets.filter((r: any) => !isBlankAsset(r));
-    if (visible.length === 0) continue;    // skip whole category if all children blank
-    dataRows.push(catHdrRow(cat));
-    for (const r of visible) {
-      dataRows.push(new TableRow({
-        children: [
-          cell({ text: "", w: PPE_CAT,  sz: SZ_XS }),      // category shown in header
-          cell({ text: r.asset_name ?? "", w: PPE_NAME, sz: SZ_XS }),
-          cell({ text: r.rate_pct != null ? `${r.rate_pct}%` : "", w: PPE_RATE, sz: SZ_XS, align: AlignmentType.CENTER }),
-          nac(r.opening_balance, PPE_NUM),
-          nac(r.additions_pre,   PPE_NUM),
-          nac(r.additions_post,  PPE_NUM),
-          nac(r.total,           PPE_NUM),
-          nac(r.depreciation,    PPE_NUM),
-          nac(r.closing_balance, PPE_NUM),
-        ],
-      }));
-    }
+  for (const r of orderedAssets) {
+    if (isBlankAsset(r)) continue;
+    dataRows.push(new TableRow({
+      children: [
+        cell({ text: r.asset_name ?? "", w: PPE_NAME, sz: SZ_XS }),
+        cell({ text: r.rate_pct != null ? `${r.rate_pct}%` : "", w: PPE_RATE, sz: SZ_XS, align: AlignmentType.CENTER }),
+        nac(r.opening_balance, PPE_NUM),
+        nac(r.additions_pre,   PPE_NUM),
+        nac(r.additions_post,  PPE_NUM),
+        nac(r.deletions,       PPE_NUM),
+        nac(r.total,           PPE_NUM),
+        nac(r.depreciation,    PPE_NUM),
+        nac(r.closing_balance, PPE_NUM),
+      ],
+    }));
   }
 
   const sum = (field: string) =>
@@ -2068,12 +2050,12 @@ function buildPPETable(ppeData: any[], cyYear: string, pyYear: string, noteNum: 
 
   const totalRow = new TableRow({
     children: [
-      cell({ text: "Total", w: PPE_CAT,  sz: SZ_XS, bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
-      cell({ text: "",      w: PPE_NAME, sz: SZ_XS, bg: BG_GRAN, borders: BDR_GRAND }),
+      cell({ text: "Total", w: PPE_NAME, sz: SZ_XS, bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
       cell({ text: "",      w: PPE_RATE, sz: SZ_XS, bg: BG_GRAN, borders: BDR_GRAND }),
       ac(sum("opening_balance"), PPE_NUM, { bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
       ac(sum("additions_pre"),   PPE_NUM, { bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
       ac(sum("additions_post"),  PPE_NUM, { bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
+      ac(sum("deletions"),       PPE_NUM, { bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
       ac(sum("total"),           PPE_NUM, { bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
       ac(sum("depreciation"),    PPE_NUM, { bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
       ac(sum("closing_balance"), PPE_NUM, { bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
@@ -2084,7 +2066,7 @@ function buildPPETable(ppeData: any[], cyYear: string, pyYear: string, noteNum: 
     width:        { size: TW_LS, type: WidthType.DXA },
     columnWidths: ppeColWidths,
     rows: [
-      noteTitleRow(ppeColWidths, noteNum, "Property, Plant and Equipment — PPE Schedule"),
+      noteTitleRow(ppeColWidths, noteNum, "Property, Plant and Equipment and Intangible Assets"),
       // Task 4 (doc6): two-row grouped header matching the PPE Schedule UI
       hdrRow1,
       hdrRow2,
