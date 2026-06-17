@@ -51,6 +51,11 @@ interface Props {
    *  (e.g. for the export-block gate), pass it here to avoid running the
    *  validator a second time inside the panel. */
   precomputedResult?: import("@/lib/fsReconciliation").ReconResult | null;
+  /** Phase 5 — TRUE BS imbalance (the residual BEFORE the FS-face absorber plugs
+   *  it into Capital). When |cy| or |py| > tolerance the panel renders a red
+   *  "BS does not balance" row even when every per-note check is green (or
+   *  result is null). null / undefined on the Corporate path. */
+  bsResidual?: { cy: number; py: number } | null;
 }
 
 function fmtINR(n: number): string {
@@ -59,7 +64,7 @@ function fmtINR(n: number): string {
   return sign + abs.toLocaleString("en-IN");
 }
 
-export default function FsHealthPanel({ nceNotesByType, corporateNotes, bsFaceCy, bsFacePy, coaTotals, visible, precomputedResult }: Props) {
+export default function FsHealthPanel({ nceNotesByType, corporateNotes, bsFaceCy, bsFacePy, coaTotals, visible, precomputedResult, bsResidual }: Props) {
   const [open, setOpen] = useState(false);
 
   // PERF: reuse the parent's pre-computed result when available. This
@@ -89,8 +94,32 @@ export default function FsHealthPanel({ nceNotesByType, corporateNotes, bsFaceCy
   }, [visible, precomputedResult, nceNotesByType, corporateNotes, bsFaceCy, bsFacePy, coaTotals]);
   const result = computed;
 
-  if (!visible || !result) return null;
+  if (!visible) return null;
 
+  // Phase 5 — surface the TRUE (pre-absorber) BS imbalance even when every
+  // per-note check is green (or result is null). The residual absorber in
+  // PipelineFinancialStatements forces NCE_AST+NCE_EL to ~0, so without this a
+  // genuinely-unbalanced BS could hide behind an all-green panel.
+  const TOL = 2;
+  const cyImb = bsResidual?.cy ?? 0;
+  const pyImb = bsResidual?.py ?? 0;
+  const hasBsImbalance = Math.abs(cyImb) > TOL || Math.abs(pyImb) > TOL;
+  const imbalanceRow = hasBsImbalance ? (
+    <div className="rounded-md border px-3.5 py-2.5 mb-3 border-red-300 bg-red-50/60 text-red-900">
+      <div className="flex items-center gap-2 text-sm font-semibold">
+        <AlertCircle className="h-4 w-4 shrink-0" />
+        <span>Balance Sheet does not balance by ₹{fmtINR(Math.max(Math.abs(cyImb), Math.abs(pyImb)))} — assets ≠ equity + liabilities</span>
+      </div>
+      {Math.abs(cyImb) > TOL && Math.abs(pyImb) > TOL && (
+        <div className="mt-1 text-xs opacity-80">CY ₹{fmtINR(cyImb)} · PY ₹{fmtINR(pyImb)}</div>
+      )}
+    </div>
+  ) : null;
+
+  // Result-dependent panel, wrapped so the imbalance row above can render even
+  // when `result` is null (notes not loaded) WITHOUT a null-deref throw.
+  const renderNormalPanel = () => {
+    if (!result) return null;
   const manualCount = result.rows.filter(r => r.status === "manual").length;
   const tone =
     result.severeCount > 0 ? "severe"
@@ -243,4 +272,7 @@ export default function FsHealthPanel({ nceNotesByType, corporateNotes, bsFaceCy
       )}
     </div>
   );
+  };
+
+  return <>{imbalanceRow}{renderNormalPanel()}</>;
 }

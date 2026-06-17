@@ -4073,7 +4073,13 @@ export default function PipelineFinancialStatements({
     // internal P&L ledger). User excluded Capital from the "match COA"
     // requirement, so it can absorb the residual cleanly.
     {
-      const residual = out["NCE_AST"] + out["NCE_EL"]; // + = Assets exceed E+L
+      // Phase 5 — capture the TRUE imbalance BEFORE the absorber hides it in
+      // NCE_CAP, so FsHealthPanel can surface it. The absorber body below is
+      // UNCHANGED → every face number stays byte-identical. The synthetic key
+      // is never iterated (no Object.keys/entries over nceCyAmounts) and is not
+      // an NCE code with a note, so the reconciliation validator ignores it.
+      out["__NCE_BS_RESIDUAL__"] = Math.round((out["NCE_AST"] + out["NCE_EL"]) * 100) / 100;
+      const residual = out["__NCE_BS_RESIDUAL__"]; // + = Assets exceed E+L
       if (Math.abs(residual) > 2 && Math.abs(residual) < 1e9) {
         out["NCE_CAP"] = (out["NCE_CAP"] || 0) - residual;
         out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
@@ -4178,7 +4184,9 @@ export default function PipelineFinancialStatements({
     // remains is unmapped PY-shell TB material (partner intro/draw, unmapped
     // misc). User excludes Capital from "match COA" → safe to absorb here.
     {
-      const residualPy = out["NCE_AST"] + out["NCE_EL"];
+      // Phase 5 — capture the TRUE PY imbalance before the absorber (see CY).
+      out["__NCE_BS_RESIDUAL__"] = Math.round((out["NCE_AST"] + out["NCE_EL"]) * 100) / 100;
+      const residualPy = out["__NCE_BS_RESIDUAL__"];
       if (Math.abs(residualPy) > 2 && Math.abs(residualPy) < 1e9) {
         out["NCE_CAP"] = (out["NCE_CAP"] || 0) - residualPy;
         out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
@@ -4218,6 +4226,13 @@ export default function PipelineFinancialStatements({
   const ncePyTotalLiabilities = ncePyAmounts["NCE_EL"]  || 0;
   const nceBsDiffPy           = Math.round((ncePyTotalAssets + ncePyTotalLiabilities) * 100) / 100;
   const nceBsBalancedPy       = Math.abs(ncePyTotalAssets + ncePyTotalLiabilities) < 2;
+
+  // Phase 5 — TRUE (pre-absorber) BS imbalance for the FsHealthPanel diagnostic.
+  // When |residual| <= 2 the absorber block never ran so the synthetic key is
+  // absent → `|| 0` correctly reports balanced. Surfacing only; the absorber
+  // still balances the displayed face until its removal is reviewed on real data.
+  const nceBsResidualCy = nceCyAmounts["__NCE_BS_RESIDUAL__"] || 0;
+  const nceBsResidualPy = ncePyAmounts["__NCE_BS_RESIDUAL__"] || 0;
 
   // ─── NCE Notes vs Face mismatch detector (2026-06-01) ────────────────────
   // User asked: "add a validation that notes total and heading total in B/S
@@ -8054,6 +8069,7 @@ export default function PipelineFinancialStatements({
         coaTotals={coaTotalsByCode}
         visible={true}
         precomputedResult={fsReconResult}
+        bsResidual={isNonCorporate ? { cy: nceBsResidualCy, py: nceBsResidualPy } : null}
       />
 
       {/* 2026-05-30 — Re-correct banner: when the NCE BS doesn't balance,
