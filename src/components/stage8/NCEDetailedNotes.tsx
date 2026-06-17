@@ -3551,8 +3551,11 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
               if (section !== currentSection) {
                 currentSection = section;
                 const dateStr = `31.03.${cyYear}`;
+                // Issue 2 — P&L is a period statement, so its heading reads "for
+                // the accounting year YYYY-YYYY" (mirrors the Word export); the
+                // Balance Sheet stays point-in-time "as on 31.03.YYYY".
                 const heading = section === "PL"
-                  ? `Notes to Profit & Loss A/c as on ${dateStr}`
+                  ? `Notes to Profit & Loss A/c for the accounting year ${Number(cyYear) - 1}-${cyYear}`
                   : `Notes to Balance Sheet as on ${dateStr}`;
                 elements.push(
                   <div

@@ -936,15 +936,17 @@ function noteSecHdr(colWidths: number[], label: string): TableRow {
 
 /** Pattern B column header (3 cols) */
 function noteHdrB(cyLabel: string, pyLabel: string): TableRow {
-  // Issue 3 — "Particulars" header rendered with NO fill + black bold text
-  // (firm-reference style). A bottom hairline (BDR_ROW) keeps it reading as a
-  // header now that the navy background is gone.
+  // Issue 3 — "Particulars" header rendered with NO fill + black BOLD text
+  // (firm-reference style). Issue-4 refinement: framed with top+bottom navy
+  // rules (BDR_SUB) for a clear, distinct header band, and the text is bumped
+  // +2 (SZ_BODY 18 → SZ_HDR 20, i.e. 9pt → 10pt) so it stands apart from the
+  // 9pt data rows below.
   return new TableRow({
     tableHeader: true,
     children: [
-      cell({ text: "Particulars", w: NW_DESC, sz: SZ_BODY, bold: true, color: BLACK, borders: BDR_ROW, padL: 100, vertPad: 22, keepNext: true }),
-      cell({ text: hdr(cyLabel), w: NW_CY, sz: SZ_BODY, bold: true, color: BLACK, borders: BDR_ROW, align: AlignmentType.RIGHT, padR: 120, vertPad: 22, keepNext: true }),
-      cell({ text: hdr(pyLabel), w: NW_PY, sz: SZ_BODY, bold: true, color: BLACK, borders: BDR_ROW, align: AlignmentType.RIGHT, padR: 120, vertPad: 22, keepNext: true }),
+      cell({ text: "Particulars", w: NW_DESC, sz: SZ_HDR, bold: true, color: BLACK, borders: BDR_SUB, padL: 100, vertPad: 22, keepNext: true }),
+      cell({ text: hdr(cyLabel), w: NW_CY, sz: SZ_HDR, bold: true, color: BLACK, borders: BDR_SUB, align: AlignmentType.RIGHT, padR: 120, vertPad: 22, keepNext: true }),
+      cell({ text: hdr(pyLabel), w: NW_PY, sz: SZ_HDR, bold: true, color: BLACK, borders: BDR_SUB, align: AlignmentType.RIGHT, padR: 120, vertPad: 22, keepNext: true }),
     ],
   });
 }
@@ -989,36 +991,37 @@ function noteRowB(
 function noteHdrA(cyLabel: string, pyLabel: string): TableRow[] {
   const ltw = NW_A_LTCY + NW_A_LTPY;
   const stw = NW_A_STCY + NW_A_STPY;
-  // Issue 3 — Pattern A header rendered with NO fill + black bold text; a
-  // bottom hairline (BDR_ROW) preserves the header separation.
+  // Issue 3 + Issue-4 refinement — Pattern A header: NO fill, black BOLD text,
+  // framed with navy top+bottom rules (BDR_SUB) for a clear header band, and
+  // text bumped +2 (SZ_HDR 20 = 10pt) to stand apart from the 9pt data rows.
   const spanCell = (text: string, w: number, span: number) =>
     new TableCell({
       columnSpan: span,
       width:   { size: w, type: WidthType.DXA },
-      borders: BDR_ROW,
+      borders: BDR_SUB,
       margins: { top: 36, bottom: 0, left: 80, right: 80 },
       children: [new Paragraph({
         alignment: AlignmentType.CENTER,
         spacing: { before: 0, after: 0 },
         keepNext: true, keepLines: true,
-        children: [new TextRun({ text, font: FONT, size: SZ_BODY, bold: true, color: BLACK })],
+        children: [new TextRun({ text, font: FONT, size: SZ_HDR, bold: true, color: BLACK })],
       })],
     });
 
   const r1 = new TableRow({
     children: [
-      cell({ text: "Particulars", w: NW_A_DESC, sz: SZ_BODY, bold: true, color: BLACK, borders: BDR_ROW, padL: 100, vertPad: 22, keepNext: true }),
+      cell({ text: "Particulars", w: NW_A_DESC, sz: SZ_HDR, bold: true, color: BLACK, borders: BDR_SUB, padL: 100, vertPad: 22, keepNext: true }),
       spanCell("Long Term", ltw, 2),
       spanCell("Short Term", stw, 2),
     ],
   });
   const r2 = new TableRow({
     children: [
-      cell({ text: "", w: NW_A_DESC, sz: SZ_BODY, color: BLACK, borders: BDR_ROW, vertPad: 22, keepNext: true }),
-      cell({ text: hdr(cyLabel), w: NW_A_LTCY, sz: SZ_BODY, bold: true, color: BLACK, borders: BDR_ROW, align: AlignmentType.RIGHT, padR: 80, vertPad: 22, keepNext: true }),
-      cell({ text: hdr(pyLabel), w: NW_A_LTPY, sz: SZ_BODY, bold: true, color: BLACK, borders: BDR_ROW, align: AlignmentType.RIGHT, padR: 80, vertPad: 22, keepNext: true }),
-      cell({ text: hdr(cyLabel), w: NW_A_STCY, sz: SZ_BODY, bold: true, color: BLACK, borders: BDR_ROW, align: AlignmentType.RIGHT, padR: 80, vertPad: 22, keepNext: true }),
-      cell({ text: hdr(pyLabel), w: NW_A_STPY, sz: SZ_BODY, bold: true, color: BLACK, borders: BDR_ROW, align: AlignmentType.RIGHT, padR: 80, vertPad: 22, keepNext: true }),
+      cell({ text: "", w: NW_A_DESC, sz: SZ_HDR, color: BLACK, borders: BDR_SUB, vertPad: 22, keepNext: true }),
+      cell({ text: hdr(cyLabel), w: NW_A_LTCY, sz: SZ_HDR, bold: true, color: BLACK, borders: BDR_SUB, align: AlignmentType.RIGHT, padR: 80, vertPad: 22, keepNext: true }),
+      cell({ text: hdr(pyLabel), w: NW_A_LTPY, sz: SZ_HDR, bold: true, color: BLACK, borders: BDR_SUB, align: AlignmentType.RIGHT, padR: 80, vertPad: 22, keepNext: true }),
+      cell({ text: hdr(cyLabel), w: NW_A_STCY, sz: SZ_HDR, bold: true, color: BLACK, borders: BDR_SUB, align: AlignmentType.RIGHT, padR: 80, vertPad: 22, keepNext: true }),
+      cell({ text: hdr(pyLabel), w: NW_A_STPY, sz: SZ_HDR, bold: true, color: BLACK, borders: BDR_SUB, align: AlignmentType.RIGHT, padR: 80, vertPad: 22, keepNext: true }),
     ],
   });
   return [r1, r2];
