@@ -1194,12 +1194,14 @@ function buildNote1Section(
       .replace(/\[DEP_NOTE\]/g,      String(header.depNoteNum   || ""))
       .replace(/\[LAST_NOTE\]/g,     lastNoteNum);
 
-  // Tight vertical gap between numbered notes — matches the firm-standard
-  // reference (latest revision screenshot 2) where consecutive items sit
-  // immediately under one another. 30 DXA ≈ 1.5pt extra below each line on
-  // top of the standard 264-line spacing — keeps the list visually
-  // continuous without the items overlapping.
-  const GAP = 30;
+  // Latest user feedback: even GAP=30 looked like a full blank line between
+  // items in the rendered Word file (Word applies an additional default
+  // "space-after" from the body paragraph style on top of our explicit
+  // spacing.after). Drop to 0 and rely on `contextualSpacing: true` to tell
+  // Word to suppress spacing between consecutive same-style paragraphs.
+  // Visual result: items sit on consecutive lines with only the line-height
+  // separating them — exactly the dense list look the firm template uses.
+  const GAP = 0;
 
   const txt = (text: string, bold = false) =>
     new TextRun({ text, font: FONT, size: SZ_BODY, bold, color: BLACK });
@@ -1263,8 +1265,12 @@ function buildNote1Section(
     // so even visually long items stay packed close together.
     out.push(
       new Paragraph({
-        spacing:   { before: 0, after: i === selectedNotes.length - 1 ? 30 : GAP, line: 240, lineRule: "auto" as any },
-        keepLines: true,
+        spacing:           { before: 0, after: GAP, line: 240, lineRule: "auto" as any },
+        keepLines:         true,
+        // contextualSpacing tells Word to drop spacing.before/after when
+        // two consecutive paragraphs share this property — eliminates the
+        // residual blank-line gap auditors were seeing on BHAKTI INFRA.
+        contextualSpacing: true,
         children: [
           new TextRun({ text: `${num}.  `,                       font: FONT, size: SZ_BODY, bold: true, color: BLACK }),
           new TextRun({ text: resolveTokens(n.text || ""),         font: FONT, size: SZ_BODY,             color: BLACK }),
