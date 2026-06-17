@@ -857,6 +857,40 @@ export function respectNceManualEdits(
   return out;
 }
 
+export interface ResyncNoteDiff {
+  noteType: string;
+  /** Per-key CY changes. Covers LT↔ST moves: a reclassification shows BOTH
+   *  `${id}_lt` (dropping) and `${id}_st` (rising). */
+  changes: { key: string; oldCy: number; newCy: number }[];
+}
+
+/**
+ * Dry-run diff for the safe Re-sync: per note, which CY numeric keys would change
+ * if the freshly rebuilt notes replaced the current ones. Powers the pre-write
+ * confirmation so the auditor sees every change — including an LT↔ST
+ * reclassification — before anything is saved. Pure.
+ */
+export function computeResyncDiff(
+  oldData: Record<string, NCENoteData>,
+  newData: Record<string, NCENoteData>,
+  tol = 0.5,
+): ResyncNoteDiff[] {
+  const out: ResyncNoteDiff[] = [];
+  const noteTypes = new Set([...Object.keys(oldData), ...Object.keys(newData)]);
+  for (const nt of [...noteTypes].sort()) {
+    const o = oldData[nt]?.cy ?? {};
+    const n = newData[nt]?.cy ?? {};
+    const keys = new Set([...Object.keys(o), ...Object.keys(n)]);
+    const changes: { key: string; oldCy: number; newCy: number }[] = [];
+    for (const k of keys) {
+      const ov = Number(o[k] ?? 0), nv = Number(n[k] ?? 0);
+      if (Math.abs(ov - nv) > tol) changes.push({ key: k, oldCy: ov, newCy: nv });
+    }
+    if (changes.length) out.push({ noteType: nt, changes });
+  }
+  return out;
+}
+
 // ── Main auto-populate ────────────────────────────────────────────────────────
 
 export async function nceAutoPopulate(

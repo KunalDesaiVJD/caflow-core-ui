@@ -914,7 +914,11 @@ function noteTitleRow(colWidths: number[], noteNumber: string, title: string): T
   });
 }
 
-/** Full-width section header within a note table (BG_TOT background) */
+/** Full-width category/group header within a note table.
+ *  Issue 4 — rendered with NO fill (just bold black text + bottom hairline) so
+ *  group headers like "Interest income" stay consistent with the no-color
+ *  "Particulars" header. A light-blue BG_TOT fill here used to clash visually
+ *  with the now-uncoloured Particulars row. */
 function noteSecHdr(colWidths: number[], label: string): TableRow {
   const totalW = colWidths.reduce((s, w) => s + w, 0);
   return new TableRow({
@@ -922,7 +926,6 @@ function noteSecHdr(colWidths: number[], label: string): TableRow {
       new TableCell({
         columnSpan: colWidths.length,
         width:   { size: totalW, type: WidthType.DXA },
-        shading: { fill: BG_TOT, type: ShadingType.CLEAR },
         borders: BDR_ROW,
         margins: { top: 38, bottom: 38, left: 100, right: 100 },
         children: [new Paragraph({
@@ -966,22 +969,22 @@ function noteRowB(
   // null → blank cell (same border/padding as a normal amount cell but no text).
   // Used when a parent row is expanded and its children already represent the total
   // — passing null prevents "—" from appearing where the amount should be invisible.
+  // Issue 2 — keep every note whole: bind all rows with keepNext so Word never
+  // splits a note across a page boundary (a note that doesn't fit moves to the
+  // next page intact, column header repeating via tableHeader). The grand-total
+  // row (style "total", always the LAST row of a note) is left free
+  // (keepNext=false) so the note does NOT chain to the following note — that
+  // lets a short next note still pack into leftover space rather than be dragged.
+  // cantSplit additionally prevents a single tall row from breaking mid-row.
+  const keepNext = style !== "total";
   const amtCell = (val: number | null, w: number) =>
     val !== null
-      ? ac(val, w, { bold, bg, borders: bdr, vertPad: 18 })
-      : cell({ text: "", w, align: AlignmentType.RIGHT, padL: 20, padR: 120, bold, bg, borders: bdr, vertPad: 18 });
-  // Task 1 (doc8): use compact vertPad=18 for note rows (tighter page fitting)
-  // Note 1 fix (intelligent pagination): cantSplit so a single row never breaks
-  // across a page boundary (prevents half-rows / broken table continuity).
-  // Issue 1 (page utilization): keepNext is intentionally NOT set on body rows.
-  // The note title + column header keep keepNext (orphan control binds the
-  // header to the first data row), but the remaining rows flow freely so a
-  // short note packs into leftover space on the current page instead of the
-  // whole note being bumped to the next page as one atomic block.
+      ? ac(val, w, { bold, bg, borders: bdr, vertPad: 18, keepNext })
+      : cell({ text: "", w, align: AlignmentType.RIGHT, padL: 20, padR: 120, bold, bg, borders: bdr, vertPad: 18, keepNext });
   return new TableRow({
     cantSplit: true,
     children: [
-      cell({ text: label, w: NW_DESC, bold, bg, borders: bdr, indent, vertPad: 18 }),
+      cell({ text: label, w: NW_DESC, bold, bg, borders: bdr, indent, vertPad: 18, keepNext }),
       amtCell(cy, NW_CY),
       amtCell(py, NW_PY),
     ],
@@ -1041,15 +1044,17 @@ function noteRowA(
   const bold = style !== "data";
   // Task 1 (doc8): compact vertPad=18 for note rows
   // Note 1 fix (intelligent pagination): cantSplit so a row never breaks across pages.
-  // Issue 1 (page utilization): keepNext omitted on body rows (see noteRowB).
+  // Issue 2 — keep every note whole (see noteRowB): keepNext on all rows except
+  // the grand total (last row) so the note is atomic but doesn't chain forward.
+  const keepNext = style !== "total";
   return new TableRow({
     cantSplit: true,
     children: [
-      cell({ text: label, w: NW_A_DESC, bold, bg, borders: bdr, indent, vertPad: 18 }),
-      ac(ltCy, NW_A_LTCY, { bold, bg, borders: bdr, vertPad: 18 }),
-      ac(ltPy, NW_A_LTPY, { bold, bg, borders: bdr, vertPad: 18 }),
-      ac(stCy, NW_A_STCY, { bold, bg, borders: bdr, vertPad: 18 }),
-      ac(stPy, NW_A_STPY, { bold, bg, borders: bdr, vertPad: 18 }),
+      cell({ text: label, w: NW_A_DESC, bold, bg, borders: bdr, indent, vertPad: 18, keepNext }),
+      ac(ltCy, NW_A_LTCY, { bold, bg, borders: bdr, vertPad: 18, keepNext }),
+      ac(ltPy, NW_A_LTPY, { bold, bg, borders: bdr, vertPad: 18, keepNext }),
+      ac(stCy, NW_A_STCY, { bold, bg, borders: bdr, vertPad: 18, keepNext }),
+      ac(stPy, NW_A_STPY, { bold, bg, borders: bdr, vertPad: 18, keepNext }),
     ],
   });
 }
@@ -1665,22 +1670,23 @@ function buildNoteSection(
     for (const cr of toEmit) {
       emittedCustoms.add(cr.id);
       if (isA) {
-        // SHREE HARI fix — also pick up the row's own sources[] for export.
-        const c = suffixed(cy, cr.id); const p = suffixed(py, cr.id);
-        const s = sourcesSumA(cr);
-        const lt = c.lt + s.ltC, st = c.st + s.stC, ltP = p.lt + s.ltP, stP = p.st + s.stP;
-        if (!lt && !st && !ltP && !stP) continue;
-        const tableRow = noteRowA(cr.label || "—", lt, ltP, st, stP, 0, "data");
+        // Issue 3 — use the recursive aggregator aggA (own raw amount + attached
+        // child custom rows + source ledgers) instead of the row's bare own value.
+        // An expandable manual parent whose amounts live in its children used to
+        // compute as 0 here and was silently dropped by the guard below — even
+        // though the on-screen note shows it (the renderer uses the same aggregate).
+        const v = aggA(cr.id);
+        if (!v.lt && !v.st && !v.ltP && !v.stP) continue;
+        const tableRow = noteRowA(cr.label || "—", v.lt, v.ltP, v.st, v.stP, 0, "data");
         if (isFlatNote) flatRows.push({ label: cr.label || "—", emit: () => rows.push(tableRow) });
         else rows.push(tableRow);
       } else {
-        // SHREE HARI fix — include sources[] in the displayed value so headings
-        // whose amounts live only in sources[] still export with a non-zero value.
-        let c = cy[cr.id] ?? 0, p = py[cr.id] ?? 0;
-        const s = sourcesSumB(cr);
-        c += s.cCy; p += s.pCy;
-        if (!c && !p) continue;
-        const tableRow = noteRowB(cr.label || "—", c, p, 0, "data");
+        // Issue 3 — see aggA note above; aggB already folds in descendants and
+        // sources[], so one aggregated line is emitted (matching the clean
+        // one-line-per-head format of flat notes such as Other Expenses).
+        const v = aggB(cr.id);
+        if (!v.c && !v.p) continue;
+        const tableRow = noteRowB(cr.label || "—", v.c, v.p, 0, "data");
         if (isFlatNote) flatRows.push({ label: cr.label || "—", emit: () => rows.push(tableRow) });
         else rows.push(tableRow);
       }

@@ -43,7 +43,7 @@ import {
 import { computeNoteTotals } from "@/lib/nceNoteTotals";
 import {
   NCECustomRow, NCENoteData,
-  nceAutoPopulate, deserialiseNoteData, serialiseNoteData,
+  nceAutoPopulate, deserialiseNoteData, serialiseNoteData, computeResyncDiff,
 } from "@/lib/nceAutoPopulate";
 import { getDynamicNoteDisplay } from "@/lib/nceDynamicNoteNumbers";
 
@@ -3353,37 +3353,61 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
     });
   }, [commitMoveGuarded, resolveSection]);
 
-  // ── Re-sync ─────────────────────────────────────────────────────────────
+  // ── Re-sync (safe, gated, dry-run preview) ───────────────────────────────
+  // Rebuilds notes from the CURRENT Trial Balance + COA mapping — the ONLY path
+  // by which a COA change (e.g. moving a ledger Long-Term↔Short-Term) reaches the
+  // notes and the FS face. Safety: hard-blocked when notes are finalized; shows a
+  // per-note change PREVIEW and writes ONLY on explicit confirmation; manual rows
+  // and edits are preserved by nceAutoPopulate. (The old persistNotes was a
+  // no-op — this is the explicit, confirmed, finalized-gated write.)
   const handleResync = useCallback(async () => {
-    const ok = window.confirm(
-      "Re-sync from COA mapping?\n\nAuto rows will be refreshed from Tally TB. " +
-      "Manual rows and static-row values you entered are preserved. Click OK to continue.",
-    );
-    if (!ok) return;
+    if (notesFinalizedRef.current) { toast.error("Notes are finalized — re-sync is locked."); return; }
+    if (!engagementId || !financialYear) return;
     setSyncing(true);
     try {
       const populated = await nceAutoPopulate(engagementId, noteData);
-      setNoteData(populated);
-      await persistNotes(populated, financialYear);
-      // RC3 fix: delete non-manual fa_financial_statements rows so the Stage 2
-      // fallback in nceAutoPopulate doesn't re-inject stale FS totals on the
-      // next Re-sync call. Manual rows (is_manual=true) are kept — they were
-      // set explicitly by the auditor. Also invalidate ["fs-rows"] so the FS
-      // face's manualOverrides state reloads fresh from DB.
+      const diff = computeResyncDiff(noteData, populated);
+      const totalRows = diff.reduce((s, d) => s + d.changes.length, 0);
+      const lines = diff.slice(0, 20).map(d => {
+        const label = NOTE_META[d.noteType]?.shortName
+          ?? NOTE_META[`${d.noteType}_lt`]?.shortName
+          ?? d.noteType;
+        return `• ${label}: ${d.changes.length} row(s) change`;
+      });
+      const msg = diff.length === 0
+        ? "Re-sync from COA mapping?\n\nNo changes detected — notes already match the current Trial Balance + COA mapping.\n\nClick OK to refresh anyway, Cancel to keep current notes."
+        : `Re-sync from COA mapping?\n\n${diff.length} note(s), ${totalRows} row(s) will update from the current Trial Balance + COA mapping (this is how an LT↔ST mapping change reaches the statements). Manual rows and edits are preserved.\n\n`
+          + lines.join("\n")
+          + (diff.length > 20 ? `\n…and ${diff.length - 20} more note(s)` : "")
+          + "\n\nClick OK to apply, Cancel to keep current notes.";
+      if (!window.confirm(msg)) { setSyncing(false); return; }
+
+      // Persist the rebuilt notes (explicit, confirmed, finalized-gated write).
+      const rows = Object.keys(populated).map(noteType => {
+        const { cy_data, py_data } = serialiseNoteData(populated[noteType]);
+        return { engagement_id: engagementId, financial_year: financialYear, note_type: noteType, cy_data, py_data };
+      });
+      await supabase
+        .from("nce_financial_notes")
+        .upsert(rows, { onConflict: "engagement_id,financial_year,note_type" });
+      // Clear non-manual FS fallback rows so the Stage-2 fallback can't re-inject
+      // stale totals; manual (is_manual=true) overrides are kept. Invalidate
+      // ["fs-rows"] so the FS face's manualOverrides state reloads fresh.
       await supabase
         .from("fa_financial_statements")
         .delete()
         .eq("engagement_id", engagementId)
         .eq("is_manual", false);
+      setNoteData(populated);
       queryClient.invalidateQueries({ queryKey: ["fs-rows", engagementId] });
       queryClient.invalidateQueries({ queryKey: ["nce-financial-notes", engagementId] });
-      toast.success("Re-synced from COA mapping");
+      toast.success(diff.length === 0 ? "Notes refreshed (already in sync)" : `Re-synced — ${diff.length} note(s) updated`);
     } catch (e: any) {
       toast.error(`Re-sync failed: ${e?.message || e}`);
     } finally {
       setSyncing(false);
     }
-  }, [engagementId, financialYear, noteData, persistNotes, queryClient]);
+  }, [engagementId, financialYear, noteData, queryClient]);
 
   // ── Explicit save ───────────────────────────────────────────────────────
   const handleSave = async () => {

@@ -244,8 +244,8 @@ export const NOTES_CONFIG: NoteConfig[] = [
     title: "Note 7: Trade Payables",
     pattern: "B",
     rows: [
-      { id: "msme",   label: "Dues to Micro and Small Enterprises (MSME)" },
-      { id: "others", label: "Others" },
+      { id: "msme",   label: "Total outstanding dues to Micro and Small Enterprises (MSME)" },
+      { id: "others", label: "Total outstanding dues to creditors other than Micro, Small and Medium Enterprises (MSME)" },
       { id: "total",  label: "Total", isTotal: true, formulaAdd: ["msme","others"] },
     ],
   },
