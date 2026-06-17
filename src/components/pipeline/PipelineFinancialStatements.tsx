@@ -3072,6 +3072,28 @@ export default function PipelineFinancialStatements({
       amounts[code] = override.amount; // manual override always wins
     }
 
+    // ── PPE Schedule → FS (authoritative source) ──────────────────────────
+    // The nce_ppe_schedule closing balances drive the BS face, and its total
+    // depreciation drives the P&L charge: tangible closing → NCE_PPE,
+    // intangible closing → NCE_INTG, total depreciation → NCE_DEPR. NCE_DEPR is
+    // a child of NCE_PL_EXP, so the computeTotal roll-up + profit chain below
+    // recompute net profit (and hence Capital) from the schedule figure — the
+    // BS stays internally consistent. When the schedule disagrees with the book
+    // (TB) value the BS no longer balances → export is blocked (strict),
+    // forcing the auditor to reconcile the schedule to the ledger. An empty
+    // schedule yields 0, so note 10 earns no number and is not exported.
+    if (isNonCorporate && Array.isArray(ncePpeData)) {
+      const ppeClosingOf = (cat: string) =>
+        ncePpeData
+          .filter((r: any) => (r.asset_category ?? "") === cat)
+          .reduce((s: number, r: any) => s + (Number(r.closing_balance) || 0), 0);
+      amounts["NCE_PPE"]  = Math.round(ppeClosingOf("tangible")   * 100) / 100;
+      amounts["NCE_INTG"] = Math.round(ppeClosingOf("intangible") * 100) / 100;
+      amounts["NCE_DEPR"] = Math.round(
+        ncePpeData.reduce((s: number, r: any) => s + (Number(r.depreciation) || 0), 0) * 100,
+      ) / 100;
+    }
+
     // Compute parent totals (recursive)
     const computeTotal = (item: FSLineItem): number => {
       if (!item.children || item.children.length === 0) {
@@ -3176,7 +3198,7 @@ export default function PipelineFinancialStatements({
     }
 
     return amounts;
-  }, [tbAccounts, coaMapping, manualOverrides, isNonCorporate]);
+  }, [tbAccounts, coaMapping, manualOverrides, isNonCorporate, ncePpeData]);
 
   // True when at least one TB ledger is mapped to any dual-posting inventory code.
   // Used to lock the corresponding P&L code from manual overrides.
@@ -3455,8 +3477,9 @@ export default function PipelineFinancialStatements({
 
   // ─── NCE Dynamic Note Number Map ────────────────────────────────────────────
   // Maps originalNoteRef → dynamicSequentialNoteNo for NCE entities.
-  // Only notes with non-zero CY or PY FS amounts (plus always-active notes 1,2,10)
-  // get a dynamic number. Inactive notes return undefined → suppressed in display.
+  // Only notes with non-zero CY or PY FS amounts (plus always-active notes 1,2)
+  // get a dynamic number. Note 10 (PPE) is now data-driven via the schedule
+  // override in computedAmounts. Inactive notes return undefined → suppressed.
   const nceDynamicNoteMap = useMemo(
     () => computeNceDynamicNoteMap(computedAmounts, mergedPY),
     [computedAmounts, mergedPY],
@@ -4029,6 +4052,18 @@ export default function PipelineFinancialStatements({
     // So NCE_AST / NCE_EL are now computed from `out` (note-overridden)
     // instead of `tbCy` (raw TB). If notes have manual adjustments beyond
     // TB, the total will reflect them. FsHealthPanel flags any drift.
+    // PPE Schedule wins over the FA-grid (faCy) override above: computedAmounts
+    // already seeded NCE_PPE/NCE_INTG from the schedule, but the faCy override
+    // may have clobbered NCE_PPE. Re-apply the schedule so it stays the
+    // authoritative source for the BS face and the NCE_AST roll-up below.
+    if (Array.isArray(ncePpeData)) {
+      const ppeClosingOf = (cat: string) =>
+        ncePpeData
+          .filter((r: any) => (r.asset_category ?? "") === cat)
+          .reduce((s: number, r: any) => s + (Number(r.closing_balance) || 0), 0);
+      out["NCE_PPE"]  = Math.round(ppeClosingOf("tangible")   * 100) / 100;
+      out["NCE_INTG"] = Math.round(ppeClosingOf("intangible") * 100) / 100;
+    }
     out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (out[id] || 0), 0);
     out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
     // 2026-06-12 — CY BS residual absorber (mirror of the PY one in mergedPY).
@@ -4061,7 +4096,7 @@ export default function PipelineFinancialStatements({
     out["NCE_PROF_XI"]  = Math.round((out["NCE_PROF_IX"]  - (out["NCE_PART_REM"] || 0)) * 100) / 100;
     out["NCE_NET_PROF"] = Math.round((out["NCE_PROF_XI"]  - (out["NCE_TAX"]      || 0)) * 100) / 100;
     return out;
-  }, [isNonCorporate, computedAmounts, stage5NotesData, nceNotesByType]);
+  }, [isNonCorporate, computedAmounts, stage5NotesData, nceNotesByType, ncePpeData]);
   // PERF: memoize ncePyAmounts — same pattern as nceCyAmounts above.
   const ncePyAmounts: Record<string, number> = useMemo(() => {
     if (!isNonCorporate) return mergedPY;
@@ -4271,6 +4306,19 @@ export default function PipelineFinancialStatements({
 
   const hasSevereDrift = (fsReconResult?.severeCount ?? 0) > 0;
 
+  // ── PPE schedule ↔ book (TB) reconciliation (strict block) ──────────────
+  // The PPE schedule now drives the BS PPE/Intangibles face. A schedule that
+  // disagrees with the COA/TB book value would otherwise be silently absorbed
+  // into Capital by the BS residual plug, so compare the schedule closing total
+  // to the book NCE_PPE + NCE_INTG and block export on any drift > ₹100, naming
+  // PPE as the offender. The schedule is CY-only, so this is a CY check.
+  const ppeScheduleClosing = (ncePpeData ?? []).reduce(
+    (s: number, r: any) => s + (Number(r.closing_balance) || 0), 0);
+  const ppeBookClosing =
+    (coaTotalsByCode["NCE_PPE"]?.cy ?? 0) + (coaTotalsByCode["NCE_INTG"]?.cy ?? 0);
+  const ppeScheduleDrift = Math.round((ppeScheduleClosing - ppeBookClosing) * 100) / 100;
+  const hasPpeScheduleDrift = isNonCorporate && Math.abs(ppeScheduleDrift) > 100;
+
   // ── Single-PY-source gate: CY Tally opening MUST equal PY-shell closing ──
   // for every Balance-Sheet ledger (accounting identity: this year's opening
   // = last year's close). PY is sourced ONLY from the PY-shell closing; the
@@ -4314,7 +4362,7 @@ export default function PipelineFinancialStatements({
   // Final Export Excel gate: corporate must satisfy ALL three; non-corporate
   // entities use BS-balance + severe-drift check.
   const exportExcelBlocked: boolean = isNonCorporate
-    ? (!nceBsBalanced || hasSevereDrift || hasOpeningMismatch)
+    ? (!nceBsBalanced || hasSevereDrift || hasOpeningMismatch || hasPpeScheduleDrift)
     : (!corpBsBalanced || !corpBsBalancedPy || !faPyEntered || hasOpeningMismatch);
   const exportExcelBlockReasons: string[] = [];
   if (!isNonCorporate) {
@@ -4324,6 +4372,13 @@ export default function PipelineFinancialStatements({
     if (!corpBsBalanced)   exportExcelBlockReasons.push(`CY Balance Sheet out by ₹${Math.abs(bsDiff).toLocaleString("en-IN")}`);
     if (!corpBsBalancedPy) exportExcelBlockReasons.push(`PY Balance Sheet out by ₹${Math.abs(bsDiffPy).toLocaleString("en-IN")}`);
     if (!faPyEntered)      exportExcelBlockReasons.push("FA Note — Previous-Year totals not entered");
+  }
+  // PPE schedule reconciliation reason — applies to NCE only (guard already
+  // includes isNonCorporate). Pushed outside the if/else like the gate below.
+  if (hasPpeScheduleDrift) {
+    exportExcelBlockReasons.push(
+      `PPE schedule closing (₹${Math.abs(ppeScheduleClosing).toLocaleString("en-IN")}) does not match the books (₹${Math.abs(ppeBookClosing).toLocaleString("en-IN")}) — reconcile the PPE Schedule to the ledger`,
+    );
   }
   // Single-PY-source gate reason — applies to BOTH entity paths (pushed
   // outside the if/else so it is never swallowed by branch wiring).
@@ -7687,13 +7742,15 @@ export default function PipelineFinancialStatements({
             <Button
               variant="outline"
               size="sm"
-              className={cn("gap-1", (hasSevereDrift || hasOpeningMismatch) && "opacity-60")}
+              className={cn("gap-1", (hasSevereDrift || hasOpeningMismatch || hasPpeScheduleDrift) && "opacity-60")}
               title={hasSevereDrift
                 ? `Export Word blocked: ${fsReconResult!.severeCount} note(s) have drift > ₹100. Fix in Notes tab first.`
+                : hasPpeScheduleDrift
+                ? `Export Word blocked: PPE schedule closing (₹${Math.abs(ppeScheduleClosing).toLocaleString("en-IN")}) does not match the books (₹${Math.abs(ppeBookClosing).toLocaleString("en-IN")}). Reconcile the PPE Schedule.`
                 : hasOpeningMismatch
                 ? `Export Word blocked: ${openingReconResult.mismatches.length} ledger(s) where CY opening ≠ PY-shell closing. Fix the opening balance in Tally (see banner above).`
                 : "Export Balance Sheet + P&L as a Big4-style Word document (.docx)"}
-              disabled={hasSevereDrift || hasOpeningMismatch}
+              disabled={hasSevereDrift || hasOpeningMismatch || hasPpeScheduleDrift}
               onClick={() => setShowNCEFontDialog(true)}
             >
               <FileText size={14} /> Export Word

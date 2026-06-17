@@ -44,9 +44,13 @@ const NCE_LEAF_ITEMS = flattenLeaves(NCE_FS_ITEMS);
  * Note refs that are ALWAYS considered active, regardless of FS amounts.
  *   1  = Accounting Policies (BS footnote — no FS line item)
  *   2  = Capital Account     (NCECapitalAccount component)
- *   10 = PPE                 (NCEPPESchedule component)
+ *
+ * Note 10 (PPE) is NO LONGER force-active. The PPE schedule now drives the
+ * BS PPE / Intangibles face and the P&L depreciation charge, so note 10 earns
+ * its number from data like every other note (NCE_PPE / NCE_DEPR non-zero). An
+ * empty schedule → no note number → the schedule is not exported.
  */
-const ALWAYS_ACTIVE = new Set<number>([1, 2, 10]);
+const ALWAYS_ACTIVE = new Set<number>([1, 2]);
 
 // ── Public API ────────────────────────────────────────────────────────────────
 

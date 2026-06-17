@@ -2313,10 +2313,17 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   // "as on 31.03.YYYY". The Balance Sheet heading above keeps "as on …".
   const plNotesRunningHdr = makeNotesHeader(`Notes to Profit & Loss A/c for the accounting year ${Number(cyYear) - 1}-${cyYear}`);
 
-  // Phase 2 — PPE Schedule (landscape). PPE is always-active (ref 10); use its
-  // dynamic number so the title matches the Balance-Sheet reference.
-  const ppeNoteNum = String(dynamicNoteMap.get(10) ?? 10);
-  const ppeTable = buildPPETable(ppeData, cyYear, pyYear, ppeNoteNum);
+  // Phase 2 — PPE Schedule (landscape). Note 10 is now data-driven: it is
+  // active only when the dynamic map assigned it a number (the schedule has
+  // data). An empty/all-zero schedule → no note number and the landscape page
+  // is omitted entirely (nothing about PPE is exported).
+  const ppeDynNum  = dynamicNoteMap.get(10);
+  const ppeHasData = (ppeData ?? []).some((r: any) =>
+    r.opening_balance || r.additions_pre || r.additions_post || r.deletions ||
+    r.total || r.depreciation || r.closing_balance);
+  const ppeTable = (ppeDynNum !== undefined && ppeHasData)
+    ? buildPPETable(ppeData, cyYear, pyYear, String(ppeDynNum))
+    : null;
 
   // Page settings
   const portraitProps = {
@@ -2577,12 +2584,13 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
         headers:    { default: plNotesRunningHdr },
         children:   plNotesSectionChildren,
       }] as Parameters<typeof Document>[0]["sections"]) : []),
-      // PPE Schedule (landscape) — always a BS note; uses the BS running header.
-      {
+      // PPE Schedule (landscape) — BS note; omitted entirely when the schedule
+      // has no data (note 10 gets no number, nothing about PPE is exported).
+      ...(ppeTable ? [{
         properties: { page: landscapeProps },
         headers:    { default: bsNotesRunningHdr },
         children:   [ppeTable],
-      },
+      }] as Parameters<typeof Document>[0]["sections"] : []),
     ],
   });
 
