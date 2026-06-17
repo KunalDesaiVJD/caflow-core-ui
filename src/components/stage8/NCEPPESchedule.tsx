@@ -674,14 +674,14 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
             {/* Header row 2 — Additions sub-headers only */}
             <TableRow className="bg-muted/40">
               <TableHead className="text-[10px] text-center border-r w-[98px]">
-                Put to use for
+                Acquired on or
                 <br />
-                180 days or more
+                before 180 days
               </TableHead>
               <TableHead className="text-[10px] text-center border-r w-[98px]">
-                Put to use for
+                Acquired
                 <br />
-                less than 180 days
+                after 180 days
               </TableHead>
             </TableRow>
           </TableHeader>
@@ -759,7 +759,7 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
       {/* Legend */}
       <p className="text-[11px] text-muted-foreground pl-1">
         * Shaded columns (Total, Closing Balance) are auto-calculated. Total = Opening + Additions − Deletions; Closing = Total − Depreciation.&ensp;
-        Depreciation auto-calculates as (Opening + Additions put to use 180 days or more − Deletions) × Rate% + (Additions put to use less than 180 days) × Rate%/2.
+        Depreciation auto-calculates as (Opening + Additions acquired on or before 180 days − Deletions) × Rate% + (Additions acquired after 180 days) × Rate%/2.
       </p>
 
       {/* Bottom save — hidden in readOnly / preview mode */}

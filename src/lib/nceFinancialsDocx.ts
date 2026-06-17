@@ -2018,8 +2018,8 @@ function buildPPETable(ppeData: any[], cyYear: string, pyYear: string, noteNum: 
   const hdrRow2 = new TableRow({
     tableHeader: true,
     children: [
-      hdrCell("Put to use for\n180 days or more",   PPE_NUM),
-      hdrCell("Put to use for\nless than 180 days", PPE_NUM),
+      hdrCell("Acquired on or\nbefore 180 days", PPE_NUM),
+      hdrCell("Acquired\nafter 180 days",        PPE_NUM),
     ],
   });
 
