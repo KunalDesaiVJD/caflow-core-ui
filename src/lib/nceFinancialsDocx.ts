@@ -2563,7 +2563,21 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
       // even date" / firm / partner / membership on the right) instead of
       // floating mid-page after the numbered notes.
       {
-        properties: { page: note1PortraitProps, verticalAlign: VerticalAlignSection.BOTH },
+        properties: {
+          page: note1PortraitProps,
+          verticalAlign: VerticalAlignSection.BOTH,
+          // grid.type "default" disables Word's per-paragraph line-grid
+          // snapping. Without this, each section silently emits
+          // <w:docGrid w:linePitch="360"/> (the docx-js default) and
+          // Word snaps every paragraph onto an 18pt vertical grid —
+          // adding ~half a line of empty space between consecutive
+          // <w:p> blocks regardless of paragraph-level spacing.before /
+          // after / line / lineRule. Setting type=default makes
+          // linePitch advisory only, so our lineRule="exact" line=220
+          // numbered-note paragraphs stack flush against each other
+          // exactly as a hand-formatted Word numbered list does.
+          grid:          { type: "default" as any, linePitch: 360 },
+        },
         headers:    { default: emptyFirstHeader },
         children:   note1SectionChildren,
       },
