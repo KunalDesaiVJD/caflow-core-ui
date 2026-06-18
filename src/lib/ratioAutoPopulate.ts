@@ -559,16 +559,40 @@ export async function autoPopulateRatios(
   engagementId: string,
   options: { existing?: Stage7Ratios | null } = {},
 ): Promise<Stage7Ratios> {
-  // Fetch prior-year FS amounts first so buildCYInputs can compute averages.
-  // If the prior engagement has NO fa_financial_statements rows (typical for
-  // a freshly-created PY shell), pyFs is empty and the PY ratio annexure
-  // stays blank. Fall back to deriving a pyFs map from the prior-year TB,
-  // mirroring the same FS-code aggregation used for the CY column.
-  let pyFs = await getPreviousYearFsAmounts(engagementId);
-  if (Object.keys(pyFs).length === 0) {
-    try {
-      pyFs = await buildPyFsFromPriorTb(engagementId);
-    } catch { /* leave as empty */ }
+  // ── Build pyFs from prior-year data, current-mapping-first ──────────────
+  // User report (MICROCIRCUITS INNOVATIONS PVT LTD, June 2026): PY NPBT in
+  // the Ratio annexure showed 86,42,236.68 while the P&L PY column showed
+  // 1,15,42,237 (difference = 29,00,000 = PY current tax). Root cause: the
+  // prior engagement's fa_financial_statements was saved when "Income Tax
+  // Expense" was mapped to PL_EXP_OTH (now correctly re-mapped to
+  // PL_TAX_CUR). The saved snapshot preserves the OLD code routing →
+  // FS_ALL_EXPENSES sum included the 29L of tax → NPBT understated.
+  //
+  // ROOT-CAUSE FIX: always re-aggregate prior-year balances from the
+  // prior TB using the CURRENT engagement's coa_mapping. That guarantees
+  // every code-routing decision the auditor makes in the current year
+  // flows through to the PY column — PY ledgers are re-bucketed by the
+  // same mapping rules CY uses, so re-classifications never produce CY/PY
+  // drift in the Ratio annexure (or in any other consumer of pyFs).
+  //
+  // Prior fa_financial_statements is used only as a fallback when no
+  // prior TB exists (e.g. the very first year of an engagement chain
+  // with no PY-shell upload). Even then, merge: TB-derived codes win
+  // when present; FS values fill BS slots TB doesn't cover. This was a
+  // bug across EVERY corporate client that re-mapped Income Tax or any
+  // other reclassified ledger from one head to another.
+  const tbDerivedPyFs = await buildPyFsFromPriorTb(engagementId).catch(() => ({}) as Record<string, number>);
+  const fsSavedPyFs   = await getPreviousYearFsAmounts(engagementId);
+  let pyFs: Record<string, number>;
+  if (Object.keys(tbDerivedPyFs).length > 0) {
+    // Prefer TB-derived values (current mapping applied to prior TB ledgers).
+    // Layer in FS-saved values ONLY for codes TB-derived doesn't cover —
+    // typical examples: equity / share-capital breakup rows whose detail
+    // lives in stage5_notes and not in any TB ledger. This preserves
+    // auditor-typed values while ignoring stale code routings.
+    pyFs = { ...fsSavedPyFs, ...tbDerivedPyFs };
+  } else {
+    pyFs = fsSavedPyFs;
   }
 
   const [cyInputs, pyInputs] = await Promise.all([
