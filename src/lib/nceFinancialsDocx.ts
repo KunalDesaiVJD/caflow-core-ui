@@ -939,6 +939,39 @@ function noteSecHdr(colWidths: number[], label: string): TableRow {
   });
 }
 
+/** Right-aligned "In ₹" units line shown at the top of every note table
+ *  (Notes 3+), between the note title and the column header — mirroring the
+ *  firm reference where each note carries an "In ₹" indicator.
+ *  Scale-aware via _exportUnit ("₹" / "₹ in '000" / "₹ in Lakhs"). The ₹ glyph
+ *  is rendered in Arial regardless of the chosen export font, because some
+ *  fonts (e.g. Garamond / Georgia) lack the ₹ (U+20B9) glyph and would
+ *  otherwise show a missing-glyph box. */
+function noteUnitsRow(colWidths: number[]): TableRow {
+  const totalW = colWidths.reduce((s, w) => s + w, 0);
+  // _exportUnit always begins with "₹"; force just that glyph to Arial.
+  const after = _exportUnit.startsWith("₹") ? _exportUnit.slice(1) : ` ${_exportUnit}`;
+  return new TableRow({
+    children: [
+      new TableCell({
+        columnSpan: colWidths.length,
+        width:   { size: totalW, type: WidthType.DXA },
+        borders: BDR_NONE,
+        margins: { top: 24, bottom: 8, left: 100, right: 100 },
+        children: [new Paragraph({
+          alignment: AlignmentType.RIGHT,
+          spacing:   { before: 0, after: 0 },
+          keepNext:  true, keepLines: true,
+          children: [
+            new TextRun({ text: "In ", font: FONT,    size: SZ_SM, color: DK_GREY }),
+            new TextRun({ text: "₹",    font: "Arial", size: SZ_SM, color: DK_GREY }),
+            ...(after ? [new TextRun({ text: after, font: FONT, size: SZ_SM, color: DK_GREY })] : []),
+          ],
+        })],
+      }),
+    ],
+  });
+}
+
 /** Pattern B column header (3 cols) */
 function noteHdrB(cyLabel: string, pyLabel: string): TableRow {
   // Issue 3 — "Particulars" header rendered with NO fill + black BOLD text
@@ -1811,6 +1844,7 @@ function buildNoteSection(
   const pyColHdr = `31.03.${pyYear}`;
   const rows: TableRow[] = [
     noteTitleRow(colWidths, displayNoteNumber, cleanTitle),
+    noteUnitsRow(colWidths),
     ...(isA ? noteHdrA(cyColHdr, pyColHdr) : [noteHdrB(cyColHdr, pyColHdr)]),
   ];
 
