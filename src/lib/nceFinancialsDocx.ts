@@ -1245,120 +1245,76 @@ function buildNote1Section(
   // residual whitespace problem the prior revisions kept hitting.
   const headingYear = String(cyYear || "").slice(-4) || "20XX";
 
-  const HEADER_HEIGHT_ENTITY = 555;  // ≈ 27.75 pt in DXA (Excel row 2 h=27.75)
-  const HEADER_HEIGHT_TITLE  = 450;  // ≈ 22.5  pt
-  const HEADER_SPACER_HEIGHT = 105;  // ≈ 5.25  pt
-  const HEADER_HEIGHT_NOTE   = 350;  // ≈ 17.5  pt — "Note : 1 Summary..."
-  const NOTE_COL_NUM_W       = 700;  // narrow number column
-  const NOTE_COL_TEXT_W      = TW - NOTE_COL_NUM_W;
-  const HDR_ROW_NOTE_LBL_W   = 700;  // "Note :"
-  const HDR_ROW_NOTE_NUM_W   = 400;  // "1"
-  const HDR_ROW_NOTE_TTL_W   = TW - HDR_ROW_NOTE_LBL_W - HDR_ROW_NOTE_NUM_W;
+  const NOTE_COL_NUM_W = 700;             // narrow number column
+  const NOTE_COL_TEXT_W = TW - NOTE_COL_NUM_W;
 
-  const thinBorderAll = {
-    top:    { style: BorderStyle.SINGLE, size: 4, color: NAVY },
-    bottom: { style: BorderStyle.SINGLE, size: 4, color: NAVY },
-    left:   { style: BorderStyle.SINGLE, size: 4, color: NAVY },
-    right:  { style: BorderStyle.SINGLE, size: 4, color: NAVY },
-  };
   const noBorderAll: any = BDR_NONE;
 
-  // Build a centred bold paragraph for header rows
-  const headerPara = (text: string, size: number, color = NAVY): Paragraph =>
-    new Paragraph({
-      alignment: AlignmentType.CENTER,
-      spacing:   { before: 40, after: 40, line: 264, lineRule: "auto" as any },
-      children: [new TextRun({ text, font: FONT, size, bold: true, color })],
-    });
+  // ── 1) Banner-style headers — three Paragraph banners (NO outer box) ──────
+  // User correction (2026-06-17): the previous revision wrapped the entity
+  // name + subtitle + "Note 1 — Summary…" inside a 4-row bordered table.
+  // That table draws a rectangular border around every side which the user
+  // does NOT want. The reference style (screenshot 2) shows each heading as
+  // a centred NAVY-bold line with thin NAVY horizontal rules above AND
+  // below it — same banner geometry the BS / P&L title rows use elsewhere
+  // in this document. Implementing as three Paragraph nodes with
+  // top + bottom NAVY borders only (no left / right) gives that banner
+  // look natively, with no nested table required.
+  //
+  // ROOT-CAUSE FIX: paragraph-level borders honour Word's flow layout
+  // (heading sits flush against the page margins, no inner-cell padding,
+  // no merge-cell artefacts) so the visual output is identical to the
+  // BS / P&L title rows the user already approved. Lives in the shared
+  // nceFinancialsDocx.ts helper → applies to EVERY non-corporate client
+  // automatically.
+  const NAVY_RULE = { style: BorderStyle.SINGLE, size: 8, color: NAVY, space: 4 };
+  const NAVY_RULE_THIN = { style: BorderStyle.SINGLE, size: 4, color: NAVY, space: 2 };
 
-  // Bold left-aligned paragraph (for "Note :", "1", title in Row D)
-  const leftBoldPara = (text: string, size = SZ_HDR, color = NAVY): Paragraph =>
-    new Paragraph({
-      alignment: AlignmentType.LEFT,
-      spacing:   { before: 40, after: 40, line: 264, lineRule: "auto" as any },
-      children: [new TextRun({ text, font: FONT, size, bold: true, color })],
-    });
+  // Entity-name banner — 14pt bold NAVY, thick NAVY rules top + bottom.
+  const entityBanner = new Paragraph({
+    alignment: AlignmentType.CENTER,
+    spacing:   { before: 200, after: 80 },
+    border:    { top: NAVY_RULE, bottom: NAVY_RULE },
+    keepNext:  true,
+    keepLines: true,
+    children: [new TextRun({
+      text: entityName.toUpperCase(),
+      font: FONT, size: SZ_ENTITY, bold: true, color: NAVY,
+    })],
+  });
 
-  // ── 1) Bordered header table ───────────────────────────────────────────────
-  const headerTable = new Table({
-    width:        { size: TW, type: WidthType.DXA },
-    columnWidths: [HDR_ROW_NOTE_LBL_W, HDR_ROW_NOTE_NUM_W, HDR_ROW_NOTE_TTL_W],
-    rows: [
-      // Row A — Entity name
-      new TableRow({
-        cantSplit: true,
-        height: { value: HEADER_HEIGHT_ENTITY, rule: HeightRule.ATLEAST },
-        children: [
-          new TableCell({
-            columnSpan: 3,
-            width:   { size: TW, type: WidthType.DXA },
-            borders: thinBorderAll,
-            shading: { fill: BG_SECT, type: ShadingType.CLEAR },
-            margins: { top: 80, bottom: 80, left: 100, right: 100 },
-            verticalAlign: VerticalAlign.CENTER,
-            children: [headerPara(entityName.toUpperCase(), SZ_ENTITY)],
-          }),
-        ],
+  // Subtitle banner — 10pt bold NAVY, thin rule below only (sits visually
+  // beneath the entity banner with a single line of separation).
+  const subtitleBanner = new Paragraph({
+    alignment: AlignmentType.CENTER,
+    spacing:   { before: 0, after: 120 },
+    border:    { bottom: NAVY_RULE_THIN },
+    keepNext:  true,
+    keepLines: true,
+    children: [new TextRun({
+      text: `Notes forming part of the Financial Statements for the year ended, 31st March, ${headingYear}`,
+      font: FONT, size: SZ_HDR, bold: true, color: NAVY,
+    })],
+  });
+
+  // Note 1 heading banner — left-aligned (matches the on-screen "Note 1 |
+  // Summary of Significant accounting policies" row), thin rule below.
+  // Combines "Note 1 — " prefix and the title into one paragraph so the
+  // bottom rule spans the full row.
+  const note1HeadingBanner = new Paragraph({
+    alignment: AlignmentType.LEFT,
+    spacing:   { before: 0, after: 60 },   // small after-gap → tight body coupling
+    border:    { bottom: NAVY_RULE_THIN },
+    keepNext:  true,
+    keepLines: true,
+    children: [
+      new TextRun({
+        text: "Note 1 — ",
+        font: FONT, size: SZ_HDR, bold: true, color: NAVY,
       }),
-      // Row B — Subtitle
-      new TableRow({
-        cantSplit: true,
-        height: { value: HEADER_HEIGHT_TITLE, rule: HeightRule.ATLEAST },
-        children: [
-          new TableCell({
-            columnSpan: 3,
-            width:   { size: TW, type: WidthType.DXA },
-            borders: thinBorderAll,
-            margins: { top: 60, bottom: 60, left: 100, right: 100 },
-            verticalAlign: VerticalAlign.CENTER,
-            children: [headerPara(
-              `Notes forming part of the Financial Statements  for the year ended, 31st March, ${headingYear}`,
-              SZ_HDR, NAVY,
-            )],
-          }),
-        ],
-      }),
-      // Row C — thin spacer inside the border box
-      new TableRow({
-        cantSplit: true,
-        height: { value: HEADER_SPACER_HEIGHT, rule: HeightRule.ATLEAST },
-        children: [
-          new TableCell({
-            columnSpan: 3,
-            width:   { size: TW, type: WidthType.DXA },
-            borders: thinBorderAll,
-            margins: { top: 0, bottom: 0, left: 100, right: 100 },
-            children: [new Paragraph({ spacing: { before: 0, after: 0 }, children: [] })],
-          }),
-        ],
-      }),
-      // Row D — "Note :" | "1" | "Summary of Significant accounting policies"
-      new TableRow({
-        cantSplit: true,
-        height: { value: HEADER_HEIGHT_NOTE, rule: HeightRule.ATLEAST },
-        children: [
-          new TableCell({
-            width:   { size: HDR_ROW_NOTE_LBL_W, type: WidthType.DXA },
-            borders: thinBorderAll,
-            margins: { top: 60, bottom: 60, left: 140, right: 60 },
-            verticalAlign: VerticalAlign.CENTER,
-            children: [leftBoldPara("Note 1", SZ_HDR, NAVY)],
-          }),
-          new TableCell({
-            width:   { size: HDR_ROW_NOTE_NUM_W, type: WidthType.DXA },
-            borders: thinBorderAll,
-            margins: { top: 60, bottom: 60, left: 60, right: 60 },
-            verticalAlign: VerticalAlign.CENTER,
-            children: [leftBoldPara("", SZ_HDR, NAVY)],
-          }),
-          new TableCell({
-            width:   { size: HDR_ROW_NOTE_TTL_W, type: WidthType.DXA },
-            borders: thinBorderAll,
-            margins: { top: 60, bottom: 60, left: 100, right: 100 },
-            verticalAlign: VerticalAlign.CENTER,
-            children: [leftBoldPara("Summary of Significant accounting policies", SZ_HDR, NAVY)],
-          }),
-        ],
+      new TextRun({
+        text: "Summary of Significant accounting policies",
+        font: FONT, size: SZ_HDR, bold: true, color: NAVY,
       }),
     ],
   });
@@ -1520,9 +1476,14 @@ function buildNote1Section(
   // corporate-style consumer still relying on it.
   void NOTE1_POLICIES;
 
+  // Banner stack → body table directly (NO interstitial spacer paragraph).
+  // The note1HeadingBanner already carries `spacing.after: 60` so the body
+  // table sits tight below the heading — fixes Issue 2 ("too much gap
+  // between Note 1 heading & note description").
   return [
-    headerTable,
-    new Paragraph({ spacing: { before: 80, after: 0 }, children: [] }),
+    entityBanner,
+    subtitleBanner,
+    note1HeadingBanner,
     bodyTable,
     preSigSpacer,
     signatureTable,
