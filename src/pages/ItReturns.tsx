@@ -49,7 +49,7 @@ import { format, differenceInDays, isBefore, addDays, parse } from "date-fns";
 const ITR_FORMS = ["ITR-1", "ITR-2", "ITR-3", "ITR-4", "ITR-5", "ITR-6", "ITR-7"];
 const FILING_STATUSES = ["Data Pending", "In Progress", "Ready for Review", "Pending Approval from Client", "Filed", "Verified", "Sent to CPC"];
 const ASSESSMENT_YEARS = ["2026-27", "2025-26", "2024-25", "2023-24", "2022-23"];
-const DEFAULT_AY = "2025-26";
+const DEFAULT_AY = "2026-27";
 
 const STATUS_COLORS: Record<string, string> = {
   "Data Pending": "bg-blue-500/15 text-blue-600",
@@ -144,6 +144,21 @@ function getCurrentFY(): string {
   const month = today.getMonth(); // 0-indexed; April = 3
   const startYear = month >= 3 ? year : year - 1;
   return `${startYear}-${String(startYear + 1).slice(-2)}`;
+}
+
+function staffName(users: { id: string; name?: string | null }[], id: string | null | undefined): string {
+  if (!id) return "—";
+  const u = users.find(x => x.id === id);
+  return (u?.name && u.name.trim()) || "—";
+}
+
+function formatFiledDate(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  try {
+    return format(new Date(iso), "dd MMM yyyy");
+  } catch {
+    return iso;
+  }
 }
 
 function isUnsavedItrProfile(profile: Pick<ItrProfile, "id">): boolean {
@@ -1626,60 +1641,24 @@ function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, onDelete
           </Select>
         </TableCell>
 
-        {/* Prepared By */}
-        <TableCell>
-          <Select
-            value={(p as any).prepared_by || "none"}
-            onValueChange={v => onUpdate(p, "prepared_by", v === "none" ? null : v)}
-          >
-            <SelectTrigger className="h-7 text-xs border-none shadow-none bg-transparent px-1">
-              <SelectValue placeholder="—" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">—</SelectItem>
-              {staffUsers.map((u: StaffUser) => <SelectItem key={u.id} value={u.id}>{u.name || u.id}</SelectItem>)}
-            </SelectContent>
-          </Select>
+        {/* Prepared By — auto-stamped when Status moves to "Ready for Review" */}
+        <TableCell className="text-xs text-muted-foreground px-2">
+          {staffName(staffUsers, (p as any).prepared_by)}
         </TableCell>
 
-        {/* Checked By */}
-        <TableCell>
-          <Select
-            value={(p as any).checked_by || "none"}
-            onValueChange={v => onUpdate(p, "checked_by", v === "none" ? null : v)}
-          >
-            <SelectTrigger className="h-7 text-xs border-none shadow-none bg-transparent px-1">
-              <SelectValue placeholder="—" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">—</SelectItem>
-              {staffUsers.map((u: StaffUser) => <SelectItem key={u.id} value={u.id}>{u.name || u.id}</SelectItem>)}
-            </SelectContent>
-          </Select>
+        {/* Checked By — auto-stamped when Status moves to "Verified" */}
+        <TableCell className="text-xs text-muted-foreground px-2">
+          {staffName(staffUsers, (p as any).checked_by)}
         </TableCell>
 
-        {/* Filed Date — moved to end (after Checked By) */}
-        <TableCell>
-          <InlineDatePicker
-            value={p.date_filed}
-            onChange={v => onUpdate(p, "date_filed", v)}
-          />
+        {/* Filed Date — auto-stamped (today) when Status moves to "Filed" */}
+        <TableCell className="text-xs text-muted-foreground px-2">
+          {formatFiledDate(p.date_filed)}
         </TableCell>
 
-        {/* Upload By — moved to end (after Filed Date) */}
-        <TableCell>
-          <Select
-            value={(p as any).upload_by || "none"}
-            onValueChange={v => onUpdate(p, "upload_by", v === "none" ? null : v)}
-          >
-            <SelectTrigger className="h-7 text-xs border-none shadow-none bg-transparent px-1">
-              <SelectValue placeholder="—" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">—</SelectItem>
-              {staffUsers.map((u: StaffUser) => <SelectItem key={u.id} value={u.id}>{u.name || u.id}</SelectItem>)}
-            </SelectContent>
-          </Select>
+        {/* Upload By — auto-stamped when Status moves to "Sent to CPC" */}
+        <TableCell className="text-xs text-muted-foreground px-2">
+          {staffName(staffUsers, (p as any).upload_by)}
         </TableCell>
 
         <TableCell>
