@@ -366,7 +366,7 @@ function makeCustomId(name: string, idx: number): string {
  *  "Site Expense - 18%" → "Site Expense"
  *  "Site Expense - URD" → "Site Expense"
  *  "Salary - January"   → "Salary" */
-function deriveBaseHead(name: string): string {
+export function deriveBaseHead(name: string): string {
   return name
     .trim()
     // strip parenthetical disambiguators e.g. "(Survey No. 1166)", "(Branch X)"
@@ -380,6 +380,63 @@ function deriveBaseHead(name: string): string {
     // strip plain trailing numbers e.g. "Loan A/c - 123"
     .replace(/\s*[-—]\s*\d+.*$/, "")
     .trim();
+}
+
+/** Strict near-duplicate collapse for custom rows.
+ *
+ *  ROOT CAUSE (DBS REALTY, June 2026): a COA re-sync produced, for the same
+ *  ledger, BOTH a full-label row ("Aluminium Section Purchase - 18%") and a
+ *  base-head row ("Aluminium Section Purchase"). The dedup heal + export + face
+ *  total all keyed on the EXACT label, so the two were never recognised as the
+ *  same line item → both rendered AND both summed → the note total double-counted.
+ *
+ *  Two rows are collapsed ONLY when ALL of these match:
+ *    • the makeCustomId SLUG BASE (the id with its trailing "_<idx>" stripped) —
+ *      this is derived from the SOURCE LEDGER NAME, so "X - 18%" duplicated as
+ *      "X" share it ("custom_x_18__0" / "custom_x_18__1"), while genuinely
+ *      different ledgers ("Cement - 18%" vs "Cement - 28%" →
+ *      "custom_cement_18_" vs "custom_cement_28_") do NOT
+ *    • attachedTo parent + section tag
+ *    • the per-column CY signature AND per-column PY signature (bare / _lt / _st)
+ *  Keying on the id slug (not the label base head) avoids ever merging two
+ *  distinct ledgers that happen to share a base head and amount; the identical-
+ *  amount guard is a second safety net. The longest (most descriptive) label is
+ *  kept. Returns the kept rows + the dropped ids so callers can also strip the
+ *  dropped ids' amounts from their numeric maps. */
+export function collapseDuplicateCustomRows<
+  T extends { id: string; label?: string; attachedTo?: string; section?: string },
+>(
+  rows: T[],
+  cy: Record<string, number>,
+  py: Record<string, number>,
+): { rows: T[]; droppedIds: string[] } {
+  const sig = (m: Record<string, number>, id: string) =>
+    `${Math.round(Number(m[id] ?? 0))}_${Math.round(Number(m[id + "_lt"] ?? 0))}_${Math.round(Number(m[id + "_st"] ?? 0))}`;
+  // Strip the trailing "_<idx>" that makeCustomId appends, leaving the slug that
+  // encodes the source ledger name. Hand-typed rows (newCustomId → random) have
+  // no shared slug, so they never collapse against each other.
+  const slugBase = (id: string) => String(id).replace(/_\d+$/, "");
+  const groups = new Map<string, T[]>();
+  for (const r of rows) {
+    const k =
+      slugBase(r.id) +
+      "|" + (r.attachedTo ?? "") +
+      "|" + (r.section ?? "") +
+      "|" + sig(cy, r.id) +
+      "|" + sig(py, r.id);
+    const g = groups.get(k);
+    if (g) g.push(r); else groups.set(k, [r]);
+  }
+  const kept: T[] = [];
+  const droppedIds: string[] = [];
+  for (const g of groups.values()) {
+    if (g.length === 1) { kept.push(g[0]); continue; }
+    // Keep the longest (most descriptive) label, e.g. "X - 18%" over "X".
+    g.sort((a, b) => String(b.label ?? "").trim().length - String(a.label ?? "").trim().length);
+    kept.push(g[0]);
+    for (const d of g.slice(1)) droppedIds.push(d.id);
+  }
+  return { rows: kept, droppedIds };
 }
 
 /** Group key for unmatched ledgers — the FULL normalised base head, lowercased.
@@ -536,7 +593,7 @@ export function getNCENoteFaceTotal(
   const pyData = noteRow.py_data ?? {};
   if (!cyData || typeof cyData !== "object") return null;
   if (!pyData || typeof pyData !== "object") return null;
-  const customRows: Array<{ id: string; section?: string; attachedTo?: string; sources?: Array<{ ledger?: string; amountCy?: number; amountPy?: number; column?: "lt" | "st" }> }> =
+  const customRows: Array<{ id: string; label?: string; section?: string; attachedTo?: string; sources?: Array<{ ledger?: string; amountCy?: number; amountPy?: number; column?: "lt" | "st" }> }> =
     Array.isArray((cyData as any)._custom_rows) ? (cyData as any)._custom_rows : [];
 
   // Strip meta keys → pure numeric maps per column.
@@ -592,7 +649,17 @@ export function getNCENoteFaceTotal(
   }
   if (!cfg) return null;
 
-  const totals = computeNoteTotals(cfg, numericCy, numericPy, customRows);
+  // Collapse re-sync near-duplicates (full-label "X - 18%" + base-head "X" of
+  // the SAME ledger, same parent, same amount) so the face / reconciliation
+  // total can never double-count them. Strict amount match → genuinely distinct
+  // rows are never merged. Also strip the dropped ids from the numeric maps so
+  // computeNoteTotals does not sum the removed copy.
+  const { rows: dedupedCustomRows, droppedIds: dupDroppedIds } =
+    collapseDuplicateCustomRows(customRows, numericCy, numericPy);
+  for (const id of dupDroppedIds) {
+    for (const sfx of ["", "_lt", "_st"]) { delete numericCy[id + sfx]; delete numericPy[id + sfx]; }
+  }
+  const totals = computeNoteTotals(cfg, numericCy, numericPy, dedupedCustomRows);
 
   if (totals.pattern === "A") {
     const col: "lt" | "st" = patternCol ?? "lt";

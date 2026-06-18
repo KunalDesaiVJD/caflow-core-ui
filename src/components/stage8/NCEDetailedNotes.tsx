@@ -44,6 +44,7 @@ import { computeNoteTotals } from "@/lib/nceNoteTotals";
 import {
   NCECustomRow, NCENoteData,
   nceAutoPopulate, deserialiseNoteData, serialiseNoteData, computeResyncDiff,
+  collapseDuplicateCustomRows,
 } from "@/lib/nceAutoPopulate";
 import { NCE_RESYNC_DELETE_FIRST } from "@/lib/nceFeatureFlags";
 import { getDynamicNoteDisplay } from "@/lib/nceDynamicNoteNumbers";
@@ -2564,26 +2565,13 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
             for (const [nType, d] of Object.entries(built)) {
               const rows = d.customRows ?? [];
               if (rows.length === 0) continue;
-              const rowKey = (r: NCECustomRow) =>
-                `${(r.label || "").trim().toLowerCase()}|${r.attachedTo ?? ""}|${r.section ?? ""}`;
-              // First pass: for each key, prefer to keep a manual row over an auto row.
-              const keepByKey = new Map<string, NCECustomRow>();
-              for (const r of rows) {
-                if (!(r.label || "").trim()) continue; // never dedupe blank labels
-                const k = rowKey(r);
-                const existing = keepByKey.get(k);
-                if (!existing) { keepByKey.set(k, r); continue; }
-                if (existing.source !== "manual" && r.source === "manual") keepByKey.set(k, r);
-              }
-              const keptIds = new Set([...keepByKey.values()].map(r => r.id));
-              const keptRows: NCECustomRow[] = [];
-              const droppedIds = new Set<string>();
-              for (const r of rows) {
-                if (!(r.label || "").trim()) { keptRows.push(r); continue; }
-                if (keptIds.has(r.id)) keptRows.push(r);
-                else droppedIds.add(r.id);
-              }
-              if (droppedIds.size === 0) continue;
+              // Strict slug+amount collapse (shared with the face total + export):
+              // catches re-sync near-duplicates ("X - 18%" + base-head "X" of the
+              // same ledger) that the old exact-label key missed, and never merges
+              // genuinely distinct ledgers. Purge the dropped rows' amount keys so
+              // the in-memory total stops double-counting.
+              const { rows: keptRows, droppedIds } = collapseDuplicateCustomRows(rows, d.cy ?? {}, d.py ?? {});
+              if (droppedIds.length === 0) continue;
               const cleanCy = { ...d.cy };
               const cleanPy = { ...d.py };
               for (const id of droppedIds) {

@@ -36,6 +36,7 @@ import type { NoteConfig, NoteRowDef } from "@/config/nceNotesConfig";
 // 2026-06-05 Phase 3 — canonical per-row aggregator. DOCX aggA/aggB now
 // read perRow lookups instead of duplicating the math locally.
 import { computeNoteTotals } from "@/lib/nceNoteTotals";
+import { collapseDuplicateCustomRows } from "@/lib/nceAutoPopulate";
 import { getActiveFsDivisor, FS_SCALES } from "@/lib/fsUnits";
 import { getDynamicNoteDisplay } from "@/lib/nceDynamicNoteNumbers";
 
@@ -1718,22 +1719,17 @@ function buildNoteSection(
     ? ((rawCy as any)._custom_rows as NoteCustomRow[])
     : [];
 
-  // Note 4 fix (render-time safety net): legacy saved data can carry the SAME
-  // breakup ledger many times (a pre-fix runaway re-sync appended a fresh copy
-  // of every ledger on each cycle — e.g. "ICICI Bank Car Loan" x20, the "390
-  // manual" purchases note). Rendering them verbatim inflates every total and
-  // wastes dozens of pages. Collapse duplicates by label+parent+section and keep
-  // the FIRST occurrence, so the export is clean regardless of DB corruption.
-  // computeDisplayData also receives the deduped list so totals stop multiplying.
-  const _seenRow = new Set<string>();
-  const customRows: NoteCustomRow[] = rawCustomRows.filter(cr => {
-    const key = `${(cr.label || "").trim().toLowerCase()}|${cr.attachedTo ?? ""}|${cr.section ?? ""}`;
-    // Keep rows with no label as-is (can't safely dedupe blank labels).
-    if (!(cr.label || "").trim()) return true;
-    if (_seenRow.has(key)) return false;
-    _seenRow.add(key);
-    return true;
-  });
+  // Render-time safety net: collapse re-sync near-duplicates so the export is
+  // clean regardless of DB corruption. Uses the shared strict collapse (id slug
+  // + parent + identical amounts) so it catches both legacy runaway accumulation
+  // ("ICICI Bank Car Loan" x20) AND the full-label/base-head pair of one ledger
+  // ("X - 18%" + "X"), while never merging genuinely distinct ledgers. The
+  // deduped list also drives computeDisplayData so totals stop multiplying.
+  const { rows: customRows } = collapseDuplicateCustomRows(
+    rawCustomRows,
+    rawCy as Record<string, number>,
+    rawPy as Record<string, number>,
+  );
 
   const { cy, py } = computeDisplayData(cfg, rawCy, rawPy, customRows);
   const isA = cfg.pattern === "A";
