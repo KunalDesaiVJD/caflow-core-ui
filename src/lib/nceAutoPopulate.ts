@@ -422,6 +422,7 @@ function ledgerAmt(closingBalance: number): number {
  *  `balance_type === "DR" ? ... : ...`. */
 export { NOTE_NATURE } from "@/lib/fsSignConvention";
 import { signedBalance, signedOpening } from "@/lib/fsSignConvention";
+import { NCE_SIGNED_NOTE_AMOUNTS } from "@/lib/nceFeatureFlags";
 
 /** Signed amount of a TB ledger when contributing to a note total — thin
  *  adapter that defers to the shared fsSignConvention module so every
@@ -432,6 +433,19 @@ function signedLedgerAmt(
   noteType: string,
 ): number {
   return signedBalance(row.closing_balance, row.balance_type, noteType);
+}
+
+/** BUG 1 (sign) choke-point. The ONE converter every TB→note-amount writer
+ *  should call. When NCE_SIGNED_NOTE_AMOUNTS is ON it returns the head-signed
+ *  amount (a contra DEDUCTS); when OFF it returns the legacy magnitude
+ *  (ledgerAmt = Math.abs), so the default build is byte-identical to pre-fix.
+ *  `signed` is overridable for unit tests. Exported for testing. */
+export function noteAmt(
+  row: { closing_balance: number; balance_type: string },
+  noteType: string,
+  signed: boolean = NCE_SIGNED_NOTE_AMOUNTS,
+): number {
+  return signed ? signedLedgerAmt(row, noteType) : ledgerAmt(row.closing_balance);
 }
 
 /** Signed PY (= opening balance) — adapter that defers to the shared
@@ -1106,7 +1120,7 @@ export async function nceAutoPopulate(
               for (const row of pyTb) {
                 const mapped = pyCoaMap[row.ledger_name] ?? coaMapping[row.ledger_name];
                 if (!mapped || !codeSet.has(mapped.code)) continue;
-                const amt = ledgerAmt(row.closing_balance);
+                const amt = noteAmt(row, nType);
                 if (amt === 0) continue;
                 const rid = smartMatch(row.ledger_name, pyRules, row.parent_group);
                 if (rid) {
@@ -1122,7 +1136,7 @@ export async function nceAutoPopulate(
                 const isLT = ltSet.has(mapped.code);
                 const isST = stSet.has(mapped.code);
                 if (!isLT && !isST) continue;
-                const amt = ledgerAmt(row.closing_balance);
+                const amt = noteAmt(row, nType);
                 if (amt === 0) continue;
                 const rid = smartMatch(row.ledger_name, pyRules, row.parent_group);
                 if (rid) {
@@ -1964,7 +1978,7 @@ export async function nceAutoPopulate(
           const nm = String(r.ledger_name || "").trim();
           if (!nm) continue;
           const m = coaMapping[nm];
-          pyByLedger[nm.toLowerCase()] = m ? signedLedgerAmt(r, noteType) : ledgerAmt(r.closing_balance);
+          pyByLedger[nm.toLowerCase()] = m ? signedLedgerAmt(r, noteType) : noteAmt(r, noteType);
         }
       }
 
@@ -2046,8 +2060,10 @@ export async function nceAutoPopulate(
           // 2026-06-04 — PY now sums per-ledger opening balances under the
           // CURRENT classification (was: snapshot of last year's saved total
           // under last year's classification — see comment on pyAmtThisLedger).
-          if (isLT) newPy[matchedRowId + "_lt"] = (newPy[matchedRowId + "_lt"] ?? 0) + Math.abs(pyAmtThisLedger);
-          if (isST) newPy[matchedRowId + "_st"] = (newPy[matchedRowId + "_st"] ?? 0) + Math.abs(pyAmtThisLedger);
+          // BUG 1 (sign): pyAmtThisLedger is already head-signed. When the sign
+          // flag is OFF we keep the legacy Math.abs (magnitude) for parity.
+          if (isLT) newPy[matchedRowId + "_lt"] = (newPy[matchedRowId + "_lt"] ?? 0) + (NCE_SIGNED_NOTE_AMOUNTS ? pyAmtThisLedger : Math.abs(pyAmtThisLedger));
+          if (isST) newPy[matchedRowId + "_st"] = (newPy[matchedRowId + "_st"] ?? 0) + (NCE_SIGNED_NOTE_AMOUNTS ? pyAmtThisLedger : Math.abs(pyAmtThisLedger));
         } else {
           unmatchedA.push({
             // 2026-06-04 — pyAmt now sourced from THIS ledger's opening
@@ -2987,7 +3003,7 @@ export async function nceAutoPopulate(
           const nm = name.toLowerCase();
           const row = src.find(r => (r.ledger_name || "").trim().toLowerCase() === nm);
           if (!row) continue;
-          return ledgerAmt(row.closing_balance);
+          return noteAmt(row, noteType);
         }
         return 0;
       };
@@ -3040,10 +3056,12 @@ export async function nceAutoPopulate(
     //   • Delete the bare key entirely if the TB amount is zero
     // The note breakup then matches COA Mapping ledger-for-ledger and
     // the writeback is idempotent — running Re-sync ten times produces
-    // the same value, not 10×. Sign convention follows ledgerAmt() which
-    // is the same helper used by the auto-row classifier and the BS face
-    // formatter, so a credit-side ledger (e.g. Member Sales POS) lands
-    // with the correct sign instead of getting inverted.
+    // the same value, not 10×. Sign convention: the amount is sourced via
+    // noteAmt(row, noteType). With NCE_SIGNED_NOTE_AMOUNTS ON it is head-signed
+    // (a Dr ledger in a Cr-natural head, or a Cr write-back in an expense head,
+    // DEDUCTS — see fsSignConvention); with the flag OFF it falls back to the
+    // legacy ledgerAmt magnitude (which does NOT preserve sign — that was the
+    // BUG 1 defect this flag fixes).
     if (noteFs.all && noteFs.all.length > 0) {
       const ourCodes = new Set(noteFs.all);
       const resolveCodeAll = (cr: NCECustomRow): string | undefined => {
@@ -3071,7 +3089,7 @@ export async function nceAutoPopulate(
           const nm = name.toLowerCase();
           const row = src.find(r => (r.ledger_name || "").trim().toLowerCase() === nm);
           if (!row) continue;
-          return ledgerAmt(row.closing_balance);
+          return noteAmt(row, noteType);
         }
         return 0;
       };

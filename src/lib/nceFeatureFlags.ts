@@ -1,0 +1,42 @@
+// ─────────────────────────────────────────────────────────────────────────
+// nceFeatureFlags.ts — gated rollout of the sign-correctness (BUG 1) and
+// re-sync rebuild (BUG 2) fixes for Notes-to-Accounts.
+//
+// All flags DEFAULT OFF, so production behaviour is byte-identical to the
+// pre-fix code path until each flag is flipped AFTER real-data parity review
+// on MAHARSH INFRA / DBS REALTY (these changes move displayed FS figures).
+// This mirrors the project rule that engine switches stay flag-gated OFF until
+// a real-data parity check passes.
+//
+// To enable after verification: flip the relevant constant to `true` (or, in a
+// follow-up, source it from a per-engagement column so rollout is gradual).
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * BUG 1 — SIGN. When true, every TB→note-amount conversion is signed per the
+ * head's natural side (src/lib/fsSignConvention.ts): a Dr balance inside a
+ * Cr-natural head (e.g. a debit party in Long-Term Borrowings) and a Cr
+ * balance inside a Dr-natural head (e.g. a write-back inside an expense note)
+ * correctly DEDUCT from the note total. When false, the legacy Math.abs
+ * magnitude is used (the row is ADDED regardless of side).
+ */
+export const NCE_SIGNED_NOTE_AMOUNTS = false;
+
+/**
+ * BUG 1 — SIGN (corporate). Same correction for the corporate Stage-5 note
+ * display totals (NoteBSLiab / NoteBSAsset signedTotal). When true, a note
+ * whose breakup nets to the abnormal side displays its true signed total
+ * instead of flipping to a positive magnitude.
+ */
+export const CORP_SIGNED_NOTE_TOTALS = false;
+
+/**
+ * BUG 2 — RENAME + RE-SYNC. When true:
+ *   - a ledger rename in Notes is stored as a labelOverride (display only),
+ *     NOT by mutating the row label or promoting it to manual — so re-sync
+ *     keeps the row claimed by its TB ledger and never re-creates a duplicate;
+ *   - re-sync does a DELETE-first rebuild of nce_financial_notes so orphan
+ *     note rows are removed and the Notes total is a pure function of TB×COA
+ *     plus the preserved manual overlay.
+ */
+export const NCE_RESYNC_DELETE_FIRST = false;

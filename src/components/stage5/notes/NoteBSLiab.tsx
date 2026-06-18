@@ -21,6 +21,7 @@ import {
 } from "./EditableCell";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 import { useDynamicNoteRegistry } from "@/lib/noteNumberRegistry";
+import { CORP_SIGNED_NOTE_TOTALS } from "@/lib/nceFeatureFlags";
 import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -136,13 +137,19 @@ export default function NoteBSLiab({
     const stored = Number(notes.bs_liab[key]?.cy ?? 0);
     const { sum, hasAny } = sumBreakup(key, "amount_cy");
     const magnitude = hasAny ? sum : Math.abs(stored);
-    return signedTotal(stored, magnitude);
+    // BUG 1 (sign): when ON, a populated breakup already nets contras (sum is
+    // signed), so return it directly — avoids signedTotal flipping a net-abnormal
+    // balance to a positive magnitude. OFF = legacy behaviour.
+    return CORP_SIGNED_NOTE_TOTALS && hasAny ? sum : signedTotal(stored, magnitude);
   };
   const py = (key: string) => {
     const stored = Number(notes.bs_liab[key]?.py ?? 0);
     const { sum, hasAny } = sumBreakup(key, "amount_py");
     const magnitude = hasAny ? sum : Math.abs(stored);
-    return signedTotal(stored, magnitude);
+    // BUG 1 (sign): when ON, a populated breakup already nets contras (sum is
+    // signed), so return it directly — avoids signedTotal flipping a net-abnormal
+    // balance to a positive magnitude. OFF = legacy behaviour.
+    return CORP_SIGNED_NOTE_TOTALS && hasAny ? sum : signedTotal(stored, magnitude);
   };
   const get = (path: string) => path.split(".").reduce<any>((c, k) => c?.[k], notes);
 
