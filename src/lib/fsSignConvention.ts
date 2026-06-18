@@ -30,6 +30,8 @@
  * so the same function services both paths.
  */
 
+import { buildNoteNature, buildNceFsCodeNature } from "@/lib/nceNoteRegistry";
+
 // ─── Note nature ─────────────────────────────────────────────────────────────
 //
 // Every noteType used by the NCE financial statements maps to "DR" or "CR".
@@ -37,31 +39,9 @@
 // natural. This is identical to NOTE_NATURE in nceAutoPopulate.ts (which
 // now re-exports from here for backward compatibility).
 
-export const NOTE_NATURE: Record<string, "DR" | "CR"> = {
-  // Liabilities + Equity (Cr-natural)
-  borrowings:      "CR",
-  other_lt_liab:   "CR",
-  provisions:      "CR",
-  trade_payables:  "CR",
-  other_cl:        "CR",
-  // Income (Cr-natural)
-  revenue_ops:     "CR",
-  other_income:    "CR",
-  // Assets (Dr-natural)
-  cwip:               "DR",
-  investments:        "DR",
-  loans_advances:     "DR",
-  other_nc_assets:    "DR",
-  inventories:        "DR",
-  trade_receivables:  "DR",
-  cash_bank:          "DR",
-  other_ca:           "DR",
-  // Expenses (Dr-natural)
-  cogs:           "DR",
-  employee_exp:   "DR",
-  finance_costs:  "DR",
-  other_expenses: "DR",
-};
+// Phase 6 — DERIVED from the single-source nceNoteRegistry (was a hand-literal;
+// the parity test asserts buildNoteNature() reproduces it byte-for-byte).
+export const NOTE_NATURE: Record<string, "DR" | "CR"> = buildNoteNature();
 
 // ─── FS code nature ──────────────────────────────────────────────────────────
 //
@@ -71,39 +51,10 @@ export const NOTE_NATURE: Record<string, "DR" | "CR"> = {
 // here AND in NOTE_NATURE (if they own a noteType) at the same time.
 
 export const FS_CODE_NATURE: Record<string, "DR" | "CR"> = {
-  // ── NCE — Equity / Capital Account (Cr-natural) ──────────────────────────
-  NCE_PCAP:    "CR",
-  NCE_RES:     "CR",
-  NCE_NCB:     "CR",
-  NCE_CAP:     "CR",
-  // ── NCE — Liabilities (Cr-natural) ───────────────────────────────────────
-  NCE_LTB:     "CR",
-  NCE_STB:     "CR",
-  NCE_OLTL:    "CR",
-  NCE_LTP:     "CR",
-  NCE_STP:     "CR",
-  NCE_TP:      "CR",
-  NCE_OCL:     "CR",
-  // ── NCE — Assets (Dr-natural) ────────────────────────────────────────────
-  NCE_CWIP:    "DR",
-  NCE_NCINV:   "DR",
-  NCE_CINV:    "DR",
-  NCE_LTLA:    "DR",
-  NCE_STLA:    "DR",
-  NCE_ONCA:    "DR",
-  NCE_STCK:    "DR",
-  NCE_TR:      "DR",
-  NCE_CASH:    "DR",
-  NCE_OCA:     "DR",
-  // ── NCE — Income (Cr-natural) ────────────────────────────────────────────
-  NCE_REV_OPS: "CR",
-  NCE_REV_OTH: "CR",
-  // ── NCE — Expenses (Dr-natural) ──────────────────────────────────────────
-  NCE_COGS:     "DR",
-  NCE_CII:      "DR",
-  NCE_EMP_EXP:  "DR",
-  NCE_FIN_COST: "DR",
-  NCE_OTH_EXP:  "DR",
+  // ── NCE half — DERIVED from nceNoteRegistry (Phase 6 single source). The
+  //    corporate half below stays a hand-literal. Parity test asserts the NCE
+  //    subset of this object equals buildNceFsCodeNature() exactly. ───────────
+  ...buildNceFsCodeNature(),
   // ── Corporate — Equity (Cr-natural) ──────────────────────────────────────
   BS_EQ_SC:     "CR",
   BS_EQ_RES:    "CR",

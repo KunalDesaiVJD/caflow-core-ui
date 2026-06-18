@@ -28,6 +28,7 @@ import { supabase } from "@/integrations/supabase/client";
 // NOTES_CONFIG is needed to resolve note_type → NoteConfig at call time.
 import { NOTES_CONFIG } from "@/config/nceNotesConfig";
 import { computeNoteTotals } from "@/lib/nceNoteTotals";
+import { buildNoteFsMap } from "@/lib/nceNoteRegistry";
 
 // ── FS-code map ──────────────────────────────────────────────────────────────
 //
@@ -36,44 +37,17 @@ import { computeNoteTotals } from "@/lib/nceNoteTotals";
 // codes (BS_*/PL_*) because the COA mapping can use either depending on how
 // ledgers were auto-assigned or manually mapped.
 
+// Phase 6 — DERIVED from the single-source nceNoteRegistry (was a hand-literal).
+// The registry carries the same note→codes wiring incl. the corporate / INV
+// twins (BS_CL_TP_MSME, BS_CA_CI, INV_*, …). NCE_DEPR / PL_EXP_DEP are
+// intentionally still absent (depreciation is a standalone P&L line; including
+// it would double-count). The parity test asserts buildNoteFsMap() reproduces
+// the old literal byte-for-byte.
 export const NCE_NOTE_FS_MAP: Record<string, {
-  lt?:  string[];   // Pattern-A long-term
-  st?:  string[];   // Pattern-A short-term
-  all?: string[];   // Pattern-B
-}> = {
-  borrowings:         { lt: ["NCE_LTB",   "BS_NCL_LTB"],               st: ["NCE_STB",      "BS_CL_STB"] },
-  other_lt_liab:      { all: ["NCE_OLTL",  "BS_NCL_OLT", "BS_NCL_DTL"] },
-  provisions:         { lt: ["NCE_LTP",   "BS_NCL_LTP"],               st: ["NCE_STP",      "BS_CL_STP"] },
-  // 2026-06-06: added BS_CL_TP_MSME, BS_CL_TP_OTH — corporate trade payable
-  // split codes that users may select on NCE engagements.
-  trade_payables:     { all: ["NCE_TP",   "BS_CL_TP", "BS_CL_TP_MSME", "BS_CL_TP_OTH"] },
-  other_cl:           { all: ["NCE_OCL",  "BS_CL_OCL"] },
-  cwip:               { all: ["NCE_CWIP", "BS_NCA_FA_WIP"] },
-  // 2026-06-06: added BS_CA_CI — corporate current investments code
-  investments:        { lt: ["NCE_NCINV", "BS_NCA_INV"],               st: ["NCE_CINV",     "BS_CA_CI"] },
-  // 2026-06-06: added BS_NCA_LLA — corporate long-term loans code
-  loans_advances:     { lt: ["NCE_LTLA",  "BS_NCA_LLA"],               st: ["NCE_STLA",     "BS_CA_SLA"] },
-  // 2026-06-06: added BS_NCA_DTA — deferred tax assets (corporate code)
-  other_nc_assets:    { all: ["NCE_ONCA", "BS_NCA_ONA", "BS_NCA_DTA"] },
-  // 2026-06-06: added INV_* dual-posting codes so inventory-detail ledgers
-  // also flow into the inventories note (previously silently dropped)
-  inventories:        { all: ["NCE_STCK", "BS_CA_INV", "INV_RM", "INV_WIP", "INV_FG", "INV_STT", "INV_STOCK"] },
-  trade_receivables:  { all: ["NCE_TR",   "BS_CA_TR"] },
-  cash_bank:          { all: ["NCE_CASH", "BS_CA_CCE"] },
-  other_ca:           { all: ["NCE_OCA",  "BS_CA_OCA"] },
-  revenue_ops:        { all: ["NCE_REV_OPS", "PL_REV_OPS"] },
-  other_income:       { all: ["NCE_REV_OTH", "PL_REV_OI"] },
-  cogs:               { all: ["NCE_COGS", "NCE_CII", "PL_EXP_MAT", "PL_EXP_SIT", "PL_EXP_CII"] },
-  employee_exp:       { all: ["NCE_EMP_EXP",  "PL_EXP_EMP"] },
-  finance_costs:      { all: ["NCE_FIN_COST", "PL_EXP_FIN"] },
-  // NOTE: NCE_DEPR / PL_EXP_DEP are intentionally NOT here. Depreciation
-  // is a separate P&L line item "(d) Depreciation and amortisation" that
-  // reads directly from computedAmounts. Adding it to other_expenses would
-  // make the depreciation amount appear in BOTH the Other Expenses note AND
-  // the separate Depreciation line → DOUBLE-COUNT that breaks BS balance.
-  // Same rule for NCE_PART_REM (Partners' Remuneration) and tax codes.
-  other_expenses:     { all: ["NCE_OTH_EXP",  "PL_EXP_OTH", "PL_EXP_OEX"] },
-};
+  lt?:  string[];
+  st?:  string[];
+  all?: string[];
+}> = buildNoteFsMap();
 
 
 // ── Smart static-row mapping ──────────────────────────────────────────────────

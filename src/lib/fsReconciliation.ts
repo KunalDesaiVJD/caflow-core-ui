@@ -27,6 +27,7 @@
 import { supabase } from "@/integrations/supabase/client";
 import { getNCENoteFaceTotal, NCE_CODE_TO_NOTE, NCE_NOTE_FS_MAP } from "@/lib/nceAutoPopulate";
 import { signedBalance, signedOpening } from "@/lib/fsSignConvention";
+import { buildCanonicalNceCode, buildNceLiabCodeSet } from "@/lib/nceNoteRegistry";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -338,17 +339,10 @@ const CODE_TO_NOTE_TYPE: Record<string, string> = (() => {
  *  drift on the panel for any engagement using a legacy code.
  *  Fold target = the FIRST code in the same NCE_NOTE_FS_MAP list (always
  *  the canonical NCE_* code). */
-export const CANONICAL_NCE_CODE: Record<string, string> = (() => {
-  const out: Record<string, string> = {};
-  for (const fs of Object.values(NCE_NOTE_FS_MAP)) {
-    for (const list of [fs.all, fs.lt, fs.st]) {
-      if (!list || list.length < 2) continue;
-      const canon = list[0];
-      for (const code of list.slice(1)) out[code] = canon;
-    }
-  }
-  return out;
-})();
+// Phase 6 — DERIVED from the single-source nceNoteRegistry (was an inline IIFE
+// over NCE_NOTE_FS_MAP). Equity codes are never folded; parity test asserts
+// byte-for-byte equality with the prior fold.
+export const CANONICAL_NCE_CODE: Record<string, string> = buildCanonicalNceCode();
 
 export function computeCOATotals(
   tb:         TBRowLike[],
@@ -529,15 +523,8 @@ const NCE_NOTE_LABEL: Record<string, string> = {
  *  drift > ₹100" SHRI RAM symptom.
  *  Capital Account (NCE_CAP) is added so the smart-gated auto-credit doesn't
  *  surface as drift either. */
-export const NCE_LIAB_CODE_SET = new Set([
-  // BS — Equity / Capital
-  "NCE_PCAP", "NCE_RES", "NCE_NCB", "NCE_CAP",
-  // BS — Liabilities
-  "NCE_LTB", "NCE_LTP", "NCE_OLTL",
-  "NCE_STB",  "NCE_TP",  "NCE_OCL", "NCE_STP",
-  // P&L — Income (Cr-natural)
-  "NCE_REV_OPS", "NCE_REV_OTH",
-]);
+// Phase 6 — DERIVED from the single-source nceNoteRegistry (was a hand-literal).
+export const NCE_LIAB_CODE_SET = buildNceLiabCodeSet();
 
 // ─── Opening-vs-PriorClose gate — single PY source enforcement ───────────────
 //
