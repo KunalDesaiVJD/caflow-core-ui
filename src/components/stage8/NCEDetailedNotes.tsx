@@ -45,6 +45,7 @@ import {
   NCECustomRow, NCENoteData,
   nceAutoPopulate, deserialiseNoteData, serialiseNoteData, computeResyncDiff,
 } from "@/lib/nceAutoPopulate";
+import { NCE_RESYNC_DELETE_FIRST } from "@/lib/nceFeatureFlags";
 import { getDynamicNoteDisplay } from "@/lib/nceDynamicNoteNumbers";
 
 /** The note's grand total (CY & PY), via the single canonical aggregator — the
@@ -3032,9 +3033,16 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
     if (readOnly || notesFinalizedRef.current) return;
     setNoteData(prev => {
       const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
-      // Rename → mark source "manual" AND userMoved so the per-ledger-breakup
-      // re-sync purge (nceAutoPopulate) can never rebuild over the corrected
-      // name. Labels are metadata only — the row's amount is unchanged.
+      if (NCE_RESYNC_DELETE_FIRST) {
+        // BUG 2 fix: store the rename as a display-only labelOverride. We do NOT
+        // mutate r.label or promote the row to manual, so on re-sync the row stays
+        // claimed by its original TB ledger and the auto walk never re-creates a
+        // duplicate. The renderer already reads labelOverrides[id] ?? r.label.
+        const overrides = { ...(cur.labelOverrides ?? {}), [id]: label };
+        return { ...prev, [noteType]: { ...cur, labelOverrides: overrides } };
+      }
+      // LEGACY (flag OFF): rename mutates r.label + marks manual/userMoved. This
+      // is the path that causes the re-sync duplication (see BUG 2).
       const next = { ...prev, [noteType]: { ...cur, customRows: cur.customRows.map(r => r.id === id ? { ...r, label, source: "manual" as const, userMoved: true } : r) } };
       return next;
     });
@@ -3431,6 +3439,17 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
         const { cy_data, py_data } = serialiseNoteData(populated[noteType]);
         return { engagement_id: engagementId, financial_year: financialYear, note_type: noteType, cy_data, py_data };
       });
+      // BUG 2 fix: delete-first rebuild so the persisted notes are a pure
+      // function of (TB × COA) + the in-memory manual overlay carried by
+      // nceAutoPopulate. Removes orphan note_type rows no longer produced;
+      // the upsert below re-inserts the current set. OFF = legacy upsert-merge.
+      if (NCE_RESYNC_DELETE_FIRST) {
+        await supabase
+          .from("nce_financial_notes")
+          .delete()
+          .eq("engagement_id", engagementId)
+          .eq("financial_year", financialYear);
+      }
       await supabase
         .from("nce_financial_notes")
         .upsert(rows, { onConflict: "engagement_id,financial_year,note_type" });

@@ -10,6 +10,7 @@ import {
 } from "./EditableCell";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 import { useDynamicNoteRegistry } from "@/lib/noteNumberRegistry";
+import { CORP_SIGNED_NOTE_TOTALS } from "@/lib/nceFeatureFlags";
 
 interface Props {
   notes:           Stage5Notes;
@@ -59,20 +60,26 @@ export default function NoteBSAsset({
     const stored = Number(notes.bs_asset[key]?.cy ?? 0);
     const { sum, hasAny } = sumBreakup(key, "amount_cy");
     const magnitude = hasAny ? sum : Math.abs(stored);
-    return signedTotal(stored, magnitude);
+    // BUG 1 (sign): when ON, a populated breakup already nets contras (sum is
+    // signed) — return it directly so a net-abnormal balance keeps its sign.
+    return CORP_SIGNED_NOTE_TOTALS && hasAny ? sum : signedTotal(stored, magnitude);
   };
   const py = (key: string) => {
     const stored = Number(notes.bs_asset[key]?.py ?? 0);
     const { sum, hasAny } = sumBreakup(key, "amount_py");
     const magnitude = hasAny ? sum : Math.abs(stored);
-    return signedTotal(stored, magnitude);
+    // BUG 1 (sign): when ON, a populated breakup already nets contras (sum is
+    // signed) — return it directly so a net-abnormal balance keeps its sign.
+    return CORP_SIGNED_NOTE_TOTALS && hasAny ? sum : signedTotal(stored, magnitude);
   };
 
   const effectivePY = (key: string, breakupPath?: string): number => {
     const stored = Number(notes.bs_asset[key]?.py ?? 0);
     const { sum, hasAny } = sumBreakup(key, "amount_py", breakupPath);
     const magnitude = hasAny ? sum : Math.abs(stored);
-    return signedTotal(stored, magnitude);
+    // BUG 1 (sign): when ON, a populated breakup already nets contras (sum is
+    // signed) — return it directly so a net-abnormal balance keeps its sign.
+    return CORP_SIGNED_NOTE_TOTALS && hasAny ? sum : signedTotal(stored, magnitude);
   };
 
   // Smart note: only show a note number when at least one year has data.

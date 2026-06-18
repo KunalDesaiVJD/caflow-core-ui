@@ -58,6 +58,7 @@ import {
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 import FsHealthPanel from "@/components/pipeline/FsHealthPanel";
 import { evaluateNotesStaleness } from "@/lib/notesStaleness";
+import { NCE_RESYNC_DELETE_FIRST } from "@/lib/nceFeatureFlags";
 import { validateFSReconciliation, logReconciliationDrift, NCE_LIAB_CODE_SET, computeCOATotals, validateOpeningVsPriorClose } from "@/lib/fsReconciliation";
 import { isTallyPLAccount, currentYearProfitAlreadyInReserves } from "@/lib/tallyDetection";
 
@@ -5014,6 +5015,16 @@ export default function PipelineFinancialStatements({
           updated_at:     new Date().toISOString(),
         };
       });
+      // BUG 2 fix: delete-first rebuild so the persisted notes are a pure
+      // function of (TB × COA) + the in-memory manual overlay; removes orphan
+      // note_type rows. OFF = legacy upsert-merge.
+      if (NCE_RESYNC_DELETE_FIRST) {
+        await supabase
+          .from("nce_financial_notes")
+          .delete()
+          .eq("engagement_id", engagementId)
+          .eq("financial_year", engagement?.financial_year ?? "");
+      }
       const { error: saveErr } = await supabase
         .from("nce_financial_notes")
         .upsert(rows, { onConflict: "engagement_id,financial_year,note_type" });
