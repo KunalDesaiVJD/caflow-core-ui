@@ -75,6 +75,7 @@ const FS_CURR_LIAB: string[] = [
 
 // Non-current liabilities
 const FS_LT_BORROWINGS:  string[] = ["BS_NCL_LTB"];
+const FS_DTL:            string[] = ["BS_NCL_DTL"];   // Deferred Tax Liabilities — Capital Employed
 
 // Equity
 const FS_SHARE_CAP:  string[] = ["BS_EQ_SC"];
@@ -101,6 +102,9 @@ const FS_ALL_EXPENSES: string[] = [
   "PL_EXP_EMP", "PL_EXP_FIN", "PL_EXP_DEP",
   "PL_EXP_OTH", "PL_EXP_OEX",
 ];
+const FS_EXCEPTIONAL:  string[] = ["PL_EI"];        // Exceptional Items — subtracted from PBT
+const FS_TAX_CURRENT:  string[] = ["PL_TAX_CUR"];   // Current Tax
+const FS_TAX_DEFERRED: string[] = ["PL_TAX_DEF"];   // Deferred Tax
 
 // ═════════════════════════════════════════════════════════════════════════
 // Stage7Ratios — the shape persisted in audit_engagements.stage7_ratios
@@ -307,6 +311,10 @@ async function buildCYInputs(
   const stBorr          = tbSum(["BS_CL_STB"],     CR_SIGN);
   const totalDebt       = ltBorr + stBorr;
 
+  // Deferred Tax Liabilities — appears in Capital Employed denominator of
+  // Return on Capital Employed. Schedule III non-current liability, Cr-natural.
+  const dtLiab          = tbSum(FS_DTL,            CR_SIGN);
+
   // ── Balance Sheet: individual CA lines (for averages) ──────────────────
   const cyInventories   = tbSum(FS_INVENTORIES, ASSET_SIGN);
   const cyTradeRec      = tbSum(FS_TRADE_REC,   ASSET_SIGN);
@@ -339,10 +347,32 @@ async function buildCYInputs(
   const financeCosts    = tbSum(FS_FINANCE,    ASSET_SIGN);
   // (depreciation is NOT derived separately — non_cash_op_exp is manual)
 
-  // NPBT = total revenue − total expenses (before tax)
+  // ── P&L: NPBT and NPAT (Schedule III "IX." and "XV.") ─────────────────────
+  // User correction (2026-06-18): both must auto-populate from the live P&L
+  // face — previous code left NPAT as null (auditor manual entry) and
+  // computed NPBT without subtracting Exceptional Items, so "IX. Profit
+  // before tax" disagreed with the Ratio Analysis "Net Profit Before Tax"
+  // line by exactly the exceptional-items amount.
+  //
+  //   Schedule III formula chain (corporate):
+  //     IX  Profit before tax              = Revenue (I + II) − Expenses (IV) − Exceptional (VI)
+  //     XII Tax expense                    = Current tax + Deferred tax
+  //     XV  Profit for the period (NPAT)   = IX − XII
+  //
+  // ROOT-CAUSE FIX (every corporate client): derive both figures from TB
+  // using the same FS-code groupings the P&L face uses, sign-corrected to
+  // the same convention as the rest of this module. Sign convention:
+  //   • CR_SIGN flips Cr-natural totals (revenue, exceptional credits) → +ve
+  //   • ASSET_SIGN keeps Dr-natural totals (expenses, taxes) as +ve
+  // NPBT = Revenue − Expenses − Exceptional Items
+  // NPAT = NPBT − Current Tax − Deferred Tax
   const totalRevenue    = tbSum(FS_ALL_REVENUE,  CR_SIGN);
   const totalExpenses   = tbSum(FS_ALL_EXPENSES, ASSET_SIGN);
-  const npbt            = totalRevenue - totalExpenses;
+  const exceptional     = tbSum(FS_EXCEPTIONAL,  ASSET_SIGN);  // Dr-side; net of any Cr credits
+  const currentTax      = tbSum(FS_TAX_CURRENT,  ASSET_SIGN);
+  const deferredTax     = tbSum(FS_TAX_DEFERRED, ASSET_SIGN);
+  const npbt            = totalRevenue - totalExpenses - exceptional;
+  const npat            = npbt - currentTax - deferredTax;
 
   // Working capital
   const workingCapital  = currentAssets - currentLiab;
@@ -352,8 +382,9 @@ async function buildCYInputs(
     current_liabilities:     nullIfZero(currentLiab),
     total_debt:              nullIfZero(totalDebt),
     shareholders_equity:     nullIfZero(equity),
-    /** NPAT cannot be derived without tax FS codes — leave for manual entry */
-    npat:                    null,
+    /** NPAT auto-populates from P&L "XV. Profit for the period" =
+     *  NPBT − Current Tax − Deferred Tax. */
+    npat:                    nullIfZero(npat),
     /** Non-cash op exp (depreciation + provisions + write-offs): manual entry */
     non_cash_op_exp:         null,
     interest:                nullIfZero(financeCosts),
@@ -371,10 +402,14 @@ async function buildCYInputs(
     net_credit_purchases:    null,
     avg_trade_payables:      avgTradePay,
     working_capital:         nullIfZero(workingCapital),
+    /** NPBT auto-populates from P&L "IX. Profit before tax" =
+     *  Revenue − Expenses − Exceptional Items. */
     npbt:                    nullIfZero(npbt),
     /** Net worth = shareholders' equity for standard ratio computation */
     net_worth:               nullIfZero(equity),
     lt_borrowings:           nullIfZero(ltBorr),
+    /** Deferred Tax Liabilities — flows into Capital Employed of ROCE. */
+    deferred_tax_liabilities: nullIfZero(dtLiab),
     /** Return / Profit / Earnings: manual entry (ratio 11 measure varies by firm) */
     return_profit:           null,
     avg_investment_fund:     avgInvFund,
@@ -452,11 +487,18 @@ function buildPYInputsFromFs(pyFs: Record<string, number>): RatioInputs {
   const ltBorr          = get(FS_LT_BORROWINGS,   CR_SIGN);
   const stBorr          = get(["BS_CL_STB"],       CR_SIGN);
   const totalDebt       = ltBorr + stBorr;
+  const dtLiab          = get(FS_DTL,             CR_SIGN);
   const revOps          = get(FS_REV_OPS,     CR_SIGN);
   const financeCosts    = get(FS_FINANCE,      ASSET_SIGN);
   const totalRevenue    = get(FS_ALL_REVENUE,  CR_SIGN);
   const totalExpenses   = get(FS_ALL_EXPENSES,      ASSET_SIGN);
-  const npbt            = totalRevenue - totalExpenses;
+  const exceptional     = get(FS_EXCEPTIONAL,       ASSET_SIGN);
+  const currentTax      = get(FS_TAX_CURRENT,       ASSET_SIGN);
+  const deferredTax     = get(FS_TAX_DEFERRED,      ASSET_SIGN);
+  // Same Schedule III chain as buildCYInputs — keep CY/PY symmetric so the
+  // ratios reconcile to the P&L face on BOTH years.
+  const npbt            = totalRevenue - totalExpenses - exceptional;
+  const npat            = npbt - currentTax - deferredTax;
   const inventories     = get(FS_INVENTORIES,       ASSET_SIGN);
   const tradeRec        = get(FS_TRADE_REC,         ASSET_SIGN);
   const tradePay        = get(FS_TRADE_PAY,         CR_SIGN);
@@ -469,7 +511,7 @@ function buildPYInputsFromFs(pyFs: Record<string, number>): RatioInputs {
     current_liabilities:     nullIfZero(currentLiab),
     total_debt:              nullIfZero(totalDebt),
     shareholders_equity:     nullIfZero(equity),
-    npat:                    null,
+    npat:                    nullIfZero(npat),
     /** Non-cash op exp: manual entry (depreciation alone is incomplete) */
     non_cash_op_exp:         null,
     interest:                nullIfZero(financeCosts),
@@ -488,6 +530,7 @@ function buildPYInputsFromFs(pyFs: Record<string, number>): RatioInputs {
     npbt:                    nullIfZero(npbt),
     net_worth:               nullIfZero(equity),
     lt_borrowings:           nullIfZero(ltBorr),
+    deferred_tax_liabilities: nullIfZero(dtLiab),
     return_profit:           null,
     avg_investment_fund:     nullIfZero(ncInv + currInv),
   };

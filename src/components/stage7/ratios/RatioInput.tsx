@@ -7,11 +7,20 @@
  *   - isAuto=true  → blue tint + "(auto)" badge while not overridden.
  *   - isOverridden → amber tint + "× Reset" button (calls onReset).
  *   - readOnly=true → display-only, no interaction.
+ *   - When `sourceLabel` is set on an auto-linked cell, clicking the "auto"
+ *     badge opens a popover with the human-readable source — e.g.
+ *     "P&L → Net Profit Before Tax (CY)". Lets auditors trace any
+ *     auto-populated figure back to its BS/P&L line in one click.
  */
 
 import { useState, useRef, useEffect, KeyboardEvent } from "react";
-import { X } from "lucide-react";
+import { X, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 
 const IND_FMT = new Intl.NumberFormat("en-IN", {
   maximumFractionDigits: 2,
@@ -32,6 +41,11 @@ interface RatioInputProps {
   readOnly?:   boolean;
   className?:  string;
   placeholder?: string;
+  /** Human-readable description of where the auto value came from, e.g.
+   *  "P&L → Net Profit Before Tax (CY)" or "BS → Deferred Tax Liabilities (PY)".
+   *  When set on an auto-linked cell, the badge becomes a click target that
+   *  opens a popover with this text. Sourced from AUTO_LINK_MAP. */
+  sourceLabel?: string;
 }
 
 export function RatioInput({
@@ -43,6 +57,7 @@ export function RatioInput({
   readOnly     = false,
   className,
   placeholder  = "Enter amount",
+  sourceLabel,
 }: RatioInputProps) {
   const [editing, setEditing]       = useState(false);
   const [raw, setRaw]               = useState("");
@@ -116,9 +131,33 @@ export function RatioInput({
       <span>{formatIndian(value)}</span>
 
       {isAutoActive && (
-        <span className="ml-1 rounded bg-blue-100 px-1 py-0 text-[9px] font-semibold text-blue-600 leading-tight shrink-0">
-          auto
-        </span>
+        sourceLabel ? (
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                title="Click to view the auto-link source"
+                onClick={(e) => e.stopPropagation()}
+                className="ml-1 inline-flex items-center gap-0.5 rounded bg-blue-100 px-1 py-0 text-[9px] font-semibold text-blue-600 leading-tight shrink-0 hover:bg-blue-200 focus:outline-none focus:ring-1 focus:ring-blue-400"
+              >
+                auto
+                <Info className="h-2.5 w-2.5" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent
+              align="end"
+              className="w-64 p-3 text-xs"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <p className="font-semibold text-blue-700 mb-1">Auto-linked from</p>
+              <p className="text-slate-700 leading-snug">{sourceLabel}</p>
+            </PopoverContent>
+          </Popover>
+        ) : (
+          <span className="ml-1 rounded bg-blue-100 px-1 py-0 text-[9px] font-semibold text-blue-600 leading-tight shrink-0">
+            auto
+          </span>
+        )
       )}
 
       {isOverridden && onReset && (

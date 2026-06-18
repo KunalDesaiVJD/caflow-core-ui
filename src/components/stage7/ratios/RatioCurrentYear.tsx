@@ -50,13 +50,15 @@ const RATIO_DEFS: RatioRowDef[] = [
   {
     id: 3, name: "DEBT SERVICE COVERAGE RATIO",
     numLines: [
-      { label: "Net Profit After Taxes",     field: "npat" },
+      // 2026-06-18: Net Profit BEFORE Taxes (npbt). Pulls from P&L "IX. Profit
+      // before tax". Previously used `npat` which is never auto-populated.
+      { label: "Net Profit Before Taxes",    field: "npbt" },
       { label: "Non Cash Operating Exp",     field: "non_cash_op_exp" },
       { label: "Interest",                   field: "interest" },
       { label: "Other Non Cash Adjustment",  field: "other_non_cash_adj" },
       {
         label: "TOTAL", field: null, bold: true,
-        sumOf: ["npat", "non_cash_op_exp", "interest", "other_non_cash_adj"],
+        sumOf: ["npbt", "non_cash_op_exp", "interest", "other_non_cash_adj"],
       },
     ],
     denLines: [
@@ -107,9 +109,16 @@ const RATIO_DEFS: RatioRowDef[] = [
       { label: "TOTAL",                 field: null, bold: true, sumOf: ["npbt", "interest"] },
     ],
     denLines: [
-      { label: "Net Worth",             field: "net_worth" },
-      { label: "Long-Term Borrowings",  field: "lt_borrowings" },
-      { label: "TOTAL",                 field: null, bold: true, sumOf: ["net_worth", "lt_borrowings"] },
+      // 2026-06-18 — Capital Employed must include Deferred Tax Liabilities
+      // alongside Net Worth and Long-Term Borrowings. All three are stable
+      // long-term sources of funds employed by the business.
+      { label: "Net Worth",                field: "net_worth" },
+      { label: "Long-Term Borrowings",     field: "lt_borrowings" },
+      { label: "Deferred Tax Liabilities", field: "deferred_tax_liabilities" },
+      {
+        label: "TOTAL", field: null, bold: true,
+        sumOf: ["net_worth", "lt_borrowings", "deferred_tax_liabilities"],
+      },
     ],
   },
   {
@@ -122,6 +131,12 @@ const RATIO_DEFS: RatioRowDef[] = [
 
 // Set of auto-linkable keys for quick lookup
 const AUTO_KEYS = new Set(AUTO_LINK_MAP.map(e => e.key));
+
+// Map from RatioInputs key → human-readable source description, surfaced in
+// the popover that opens when the auditor clicks the "auto" badge.
+const AUTO_SOURCE_LABEL: Record<string, string> = Object.fromEntries(
+  AUTO_LINK_MAP.map(e => [e.key, e.label]),
+);
 
 // ── Helper ───────────────────────────────────────────────────────────────────
 
@@ -222,6 +237,7 @@ export function RatioCurrentYear({
             value={val}
             isAuto={isAutoKey}
             isOverridden={isOverride}
+            sourceLabel={isAuto ? AUTO_SOURCE_LABEL[line.field as string] : undefined}
             onChange={(v) => {
               onFieldChange(line.field as Field, v);
             }}
@@ -335,6 +351,7 @@ export function RatioCurrentYear({
                                   value={val}
                                   isAuto={isAutoKey}
                                   isOverridden={isOverride}
+                                  sourceLabel={isAutoKey && !isOverride ? AUTO_SOURCE_LABEL[numLine.field as string] : undefined}
                                   onChange={(v) => onFieldChange(numLine.field as Field, v)}
                                   onReset={isAutoKey ? () => onOverrideReset(numLine.field as Field) : undefined}
                                 />
@@ -369,6 +386,7 @@ export function RatioCurrentYear({
                                   value={val}
                                   isAuto={isAutoKey}
                                   isOverridden={isOverride}
+                                  sourceLabel={isAutoKey && !isOverride ? AUTO_SOURCE_LABEL[denLine.field as string] : undefined}
                                   onChange={(v) => onFieldChange(denLine.field as Field, v)}
                                   onReset={isAutoKey ? () => onOverrideReset(denLine.field as Field) : undefined}
                                 />
