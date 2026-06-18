@@ -14,6 +14,7 @@ import {
   BorderStyle,
   Document,
   Header,
+  HeightRule,
   PageBorderDisplay,
   PageBorderOffsetFrom,
   Packer,
@@ -1149,7 +1150,8 @@ function buildNote1Section(
   entityName: string,
   cyYear: string,
   ntaData?: any | null,
-): Paragraph[] {
+  sigData?: SigData,
+): (Paragraph | Table)[] {
   // ROOT-CAUSE FIX (BHAKTI INFRA Word export of Note 1 didn't match the app):
   // the previous implementation hardcoded a corporate-style "Significant
   // Accounting Policies" boilerplate (NOTE1_POLICIES). For non-corporate
@@ -1213,112 +1215,279 @@ function buildNote1Section(
       .replace(/\[DEP_NOTE\]/g,      String(header.depNoteNum   || ""))
       .replace(/\[LAST_NOTE\]/g,     lastNoteNum);
 
-  // User reference (latest screenshot 2): items packed tight with no extra
-  // paragraph spacing — only the line-height separates them so the page
-  // reads as a single compact list. GAP=0 disables our explicit
-  // spacing.after; the per-paragraph pPr override below also disables the
-  // default-style spacing Word silently applies on top of explicit values.
-  const GAP = 0;
-
-  const txt = (text: string, bold = false) =>
-    new TextRun({ text, font: FONT, size: SZ_BODY, bold, color: BLACK });
-
-  const block = (
-    runs: TextRun[],
-    opts: { indent?: number; hanging?: number; after?: number; keepNext?: boolean } = {},
-  ): Paragraph =>
-    new Paragraph({
-      spacing:   { before: 0, after: opts.after ?? 50, line: 264, lineRule: "auto" as any },
-      indent:    opts.indent ? { left: opts.indent, hanging: opts.hanging } : undefined,
-      keepLines: true,
-      keepNext:  opts.keepNext ?? false,
-      children:  runs,
-    });
-
-  // Re-number the SELECTED notes 1..N so the Word file matches the on-screen
-  // view (un-ticked notes are hidden and the rest re-number 1..N).
+  // ─── Note 1 layout (Excel-parity, 2026-06-17) ─────────────────────────────
+  // The Word export of Note 1 now MIRRORS the Stage 7 → Notes to Accounts
+  // Excel export (see NotesToAccounts.tsx ~750-918) so both deliverables
+  // look identical to the auditor:
   //
-  // Layout — locked to match screenshots 2 (heading style) + 4 (body style)
-  // from the user's reference set:
-  //   • Heading: SINGLE LINE — "Note 1:  NOTES FORMING PARTS OF ACCOUNTS FOR
-  //     THE YEAR ENDED OF 31.03.<yyyy>" — left-aligned, navy bold with a
-  //     full-width bottom border so it reads as a banner that spans the
-  //     page (same style as the prior "DISCLOSURE OF ACCOUNTING POLICIES"
-  //     header, just new wording). NO separate "NOTES - 1" badge, NO
-  //     centred underlined text — those were dropped per the user's
-  //     "format of heading should be same as previous" feedback.
-  //   • Body: numbered "<n>. <Title>: <text>" — bold black number, bold
-  //     navy title ("Balance Confirmation:", "Rearrangement of Figures:",
-  //     etc.), plain black body. Title comes from notes_to_accounts_data
-  //     notes_json so the auditor's renames flow through unchanged.
-  //   • Spacing: tight (GAP = 60 DXA) so the list reads as a continuous
-  //     block instead of a series of well-spaced paragraphs.
+  //   1. Bordered header table
+  //        Row A — Entity name (centred, bold, NAVY)
+  //        Row B — "Notes forming part of the Financial Statements for
+  //                 the year ended, 31st March, <yyyy>" (centred, bold)
+  //        Row C — thin spacer (kept inside the border box)
+  //        Row D — "Note :  | 1 | Summary of Significant accounting policies"
+  //   2. Borderless body table — col 1 (narrow, centred) = number,
+  //                              col 2 (wide, top-aligned) = body text.
+  //      Multi-paragraph items split on "\n\n" → each segment becomes its
+  //      own <w:p> inside the same cell so newEntity / note-3 variants
+  //      flow cleanly. Inter-paragraph gap = 60 DXA (3pt) — matches the
+  //      Excel rendering when wrapText breaks long policies across lines.
+  //   3. Borderless signature block — left col = assessee; right col = CA
+  //      firm. Lays out exactly like the Excel cells C/D/E (assessee) and
+  //      H/I (firm) — see NotesToAccounts.tsx rows 846-918.
+  //
+  // ROOT-CAUSE FIX: previous revisions emitted a single NAVY-banner heading
+  // plus loose <w:p> paragraphs. The Excel deliverable uses a TABLE-based
+  // layout with thin borders for the header and zero borders for the body
+  // — fundamentally different geometry. Rebuilt as tables so the gap
+  // between numbered items is row-driven (cell margins + paragraph after)
+  // instead of paragraph-driven (lineRule + grid snap), which removes the
+  // residual whitespace problem the prior revisions kept hitting.
   const headingYear = String(cyYear || "").slice(-4) || "20XX";
-  const out: Paragraph[] = [
-    new Paragraph({
-      spacing:   { before: 0, after: 100 },
-      border:    { bottom: { style: BorderStyle.SINGLE, size: 4, color: NAVY, space: 4 } },
-      keepNext:  true,
-      keepLines: true,
-      children: [
-        new TextRun({ text: "Note 1:  ", font: FONT, size: SZ_HDR, bold: true, color: NAVY }),
-        new TextRun({
-          text: `NOTES FORMING PARTS OF ACCOUNTS FOR THE YEAR ENDED OF 31.03.${headingYear}`,
-          font: FONT, size: SZ_HDR, bold: true, color: NAVY,
-        }),
-      ],
-    }),
-  ];
 
-  // Render each numbered item as a separate paragraph with a modest
-  // GAP-DXA spacing after — matches the firm reference (screenshot 2)
-  // where consecutive items have a clear visual separation but the page
-  // stays dense. Multi-line items wrap naturally within their own
-  // paragraph; the inter-item gap comes from `spacing.after`. Plain
-  // "<n>.  <body>" rendering — no bold title prefix (Issue 2 from the
-  // last revision) and no soft-return collapsing (which read as one
-  // continuous wall of text in the rendered output).
-  selectedNotes.forEach((n, i) => {
-    const num = i + 1;
-    // lineRule="exact" forces Word to use the literal value (twentieths of a
-    // point) as the line height regardless of font ascender / descender /
-    // leading. At line=220 → 11pt exact line height with 9pt Arial body =
-    // 2pt of total leading per line, packed snug to match Word's standard
-    // "single line" numbered-list output. With lineRule="auto" Word added
-    // half a line of "auto leading" between paragraphs even with after=0
-    // and the document pPrDefault override — which is the residual gap the
-    // user kept seeing after the GAP=0 commit. "exact" sidesteps that
-    // entirely and matches a hand-formatted Word numbered list.
-    void GAP;
-    out.push(
-      new Paragraph({
-        spacing:  { before: 0, after: 0, line: 220, lineRule: "exact" as any },
-        children: [
-          new TextRun({ text: `${num}.  `,                       font: FONT, size: SZ_BODY, bold: true, color: BLACK }),
-          new TextRun({ text: resolveTokens(n.text || ""),         font: FONT, size: SZ_BODY,            color: BLACK }),
-        ],
-      }),
-    );
+  const NOTE_COL_NUM_W = 700;             // narrow number column
+  const NOTE_COL_TEXT_W = TW - NOTE_COL_NUM_W;
+
+  const noBorderAll: any = BDR_NONE;
+
+  // ── 1) Banner-style headers — three Paragraph banners (NO outer box) ──────
+  // User correction (2026-06-17): the previous revision wrapped the entity
+  // name + subtitle + "Note 1 — Summary…" inside a 4-row bordered table.
+  // That table draws a rectangular border around every side which the user
+  // does NOT want. The reference style (screenshot 2) shows each heading as
+  // a centred NAVY-bold line with thin NAVY horizontal rules above AND
+  // below it — same banner geometry the BS / P&L title rows use elsewhere
+  // in this document. Implementing as three Paragraph nodes with
+  // top + bottom NAVY borders only (no left / right) gives that banner
+  // look natively, with no nested table required.
+  //
+  // ROOT-CAUSE FIX: paragraph-level borders honour Word's flow layout
+  // (heading sits flush against the page margins, no inner-cell padding,
+  // no merge-cell artefacts) so the visual output is identical to the
+  // BS / P&L title rows the user already approved. Lives in the shared
+  // nceFinancialsDocx.ts helper → applies to EVERY non-corporate client
+  // automatically.
+  const NAVY_RULE = { style: BorderStyle.SINGLE, size: 8, color: NAVY, space: 4 };
+  const NAVY_RULE_THIN = { style: BorderStyle.SINGLE, size: 4, color: NAVY, space: 2 };
+
+  // Entity-name banner — 14pt bold NAVY, thick NAVY rules top + bottom.
+  const entityBanner = new Paragraph({
+    alignment: AlignmentType.CENTER,
+    spacing:   { before: 200, after: 80 },
+    border:    { top: NAVY_RULE, bottom: NAVY_RULE },
+    keepNext:  true,
+    keepLines: true,
+    children: [new TextRun({
+      text: entityName.toUpperCase(),
+      font: FONT, size: SZ_ENTITY, bold: true, color: NAVY,
+    })],
   });
 
-  // Optional Note 1 "new entity" paragraph the Stage 7 page exposes via a
-  // toggle. Appended after the standard notes when enabled, mirroring the
-  // on-screen render.
-  if (ntaData?.note1_new_entity_enabled && (ntaData?.note1_new_entity_text || "").trim()) {
-    out.push(
-      block(
-        [new TextRun({ text: String(ntaData.note1_new_entity_text), font: FONT, size: SZ_BODY, color: BLACK })],
-        { indent: 0, after: 40 },
-      ),
-    );
-  }
+  // Subtitle banner — 10pt bold NAVY, thin rule below only (sits visually
+  // beneath the entity banner with a single line of separation).
+  const subtitleBanner = new Paragraph({
+    alignment: AlignmentType.CENTER,
+    spacing:   { before: 0, after: 120 },
+    border:    { bottom: NAVY_RULE_THIN },
+    keepNext:  true,
+    keepLines: true,
+    children: [new TextRun({
+      text: `Notes forming part of the Financial Statements for the year ended, 31st March, ${headingYear}`,
+      font: FONT, size: SZ_HDR, bold: true, color: NAVY,
+    })],
+  });
+
+  // Note 1 heading banner — left-aligned (matches the on-screen "Note 1 |
+  // Summary of Significant accounting policies" row), thin rule below.
+  // Combines "Note 1 — " prefix and the title into one paragraph so the
+  // bottom rule spans the full row.
+  const note1HeadingBanner = new Paragraph({
+    alignment: AlignmentType.LEFT,
+    spacing:   { before: 0, after: 60 },   // small after-gap → tight body coupling
+    border:    { bottom: NAVY_RULE_THIN },
+    keepNext:  true,
+    keepLines: true,
+    children: [
+      new TextRun({
+        text: "Note 1 — ",
+        font: FONT, size: SZ_HDR, bold: true, color: NAVY,
+      }),
+      new TextRun({
+        text: "Summary of Significant accounting policies",
+        font: FONT, size: SZ_HDR, bold: true, color: NAVY,
+      }),
+    ],
+  });
+
+  // ── 2) Borderless body table ───────────────────────────────────────────────
+  // Build the body text for each note. Stage 7 supports note-1 newEntity
+  // and note-3 variant appendages — same logic the Excel export uses.
+  const note1NewEntityText = String(ntaData?.note1_new_entity_text ?? "").trim();
+  const note1NewEntityOn   = !!ntaData?.note1_new_entity_enabled && note1NewEntityText.length > 0;
+  const note3Variant       = (ntaData?.header_overrides?.note3Variant
+                          || ntaData?.note3_variant
+                          || "none") as string;
+  const note3VariantText   = String(
+    ntaData?.header_overrides?.note3VariantText
+    || ntaData?.note3_variant_text
+    || ""
+  ).trim();
+
+  // Multi-paragraph body: split on \n\n into segments, each rendered as its
+  // own <w:p> inside the cell with a 60-DXA gap below for visual breathing.
+  const bodyParas = (body: string): Paragraph[] => {
+    const segments = body.split(/\n{2,}/).map(s => s.trim()).filter(s => s.length > 0);
+    if (segments.length === 0) return [new Paragraph({ spacing: { before: 0, after: 0 }, children: [] })];
+    return segments.map((seg, idx) => new Paragraph({
+      alignment: AlignmentType.LEFT,
+      spacing: { before: 0, after: idx === segments.length - 1 ? 0 : 80, line: 264, lineRule: "auto" as any },
+      children: [new TextRun({ text: seg, font: FONT, size: SZ_BODY, color: BLACK })],
+    }));
+  };
+
+  const numberPara = (n: number): Paragraph => new Paragraph({
+    alignment: AlignmentType.CENTER,
+    spacing:   { before: 0, after: 0, line: 264, lineRule: "auto" as any },
+    children: [new TextRun({ text: String(n), font: FONT, size: SZ_BODY, color: BLACK })],
+  });
+
+  const bodyRows: TableRow[] = selectedNotes.map((n, i) => {
+    const num = i + 1;
+    let body  = resolveTokens(n.text || "");
+    if (n.id === "note-1" && note1NewEntityOn) {
+      body += "\n\n" + resolveTokens(note1NewEntityText);
+    }
+    if (n.id === "note-3" && note3Variant !== "none" && note3VariantText) {
+      body += "\n\n" + resolveTokens(note3VariantText);
+    }
+    return new TableRow({
+      cantSplit: false, // allow long notes to break across pages
+      children: [
+        new TableCell({
+          width:   { size: NOTE_COL_NUM_W, type: WidthType.DXA },
+          borders: noBorderAll,
+          margins: { top: 80, bottom: 80, left: 100, right: 100 },
+          verticalAlign: VerticalAlign.TOP,
+          children: [numberPara(num)],
+        }),
+        new TableCell({
+          width:   { size: NOTE_COL_TEXT_W, type: WidthType.DXA },
+          borders: noBorderAll,
+          margins: { top: 80, bottom: 80, left: 100, right: 100 },
+          verticalAlign: VerticalAlign.TOP,
+          children: bodyParas(body),
+        }),
+      ],
+    });
+  });
+
+  const bodyTable = new Table({
+    width:        { size: TW, type: WidthType.DXA },
+    columnWidths: [NOTE_COL_NUM_W, NOTE_COL_TEXT_W],
+    borders: {
+      top:           bNone, bottom:        bNone, left:          bNone, right:         bNone,
+      insideHorizontal: bNone, insideVertical:   bNone,
+    } as any,
+    rows: bodyRows,
+  });
+
+  // ── 3) Borderless signature block (Note-1-specific) ───────────────────────
+  // Mirrors the Excel signature layout exactly (NotesToAccounts.tsx ~846-918).
+  // Different from the universal buildSignatureTable() used on BS / P&L
+  // pages so Note 1 reads identically to the Excel deliverable the auditor
+  // is comparing it against.
+  const sig = sigData || {};
+  const assesseeName    = (sig.clientName     || entityName || "").trim();
+  const firmName        = (sig.firmName       || "_______________");
+  const firmFRN         = (sig.firmFRN        || "_______________");
+  const partnerName     = (sig.partnerName    || "_______________");
+  const partnerMembNo   = (sig.membershipNo   || "_______________");
+  const assesseePlace   = (sig.place          || "_______________");
+  const assesseeDate    = fmtSigDate(sig.date);
+
+  const sigLineL = (text: string, bold = false): Paragraph => new Paragraph({
+    alignment: AlignmentType.LEFT,
+    spacing:   { before: 0, after: 40, line: 264, lineRule: "auto" as any },
+    children:  [new TextRun({ text, font: FONT, size: SZ_BODY, bold, color: BLACK })],
+  });
+  const sigLineR = (text: string, bold = false): Paragraph => new Paragraph({
+    alignment: AlignmentType.RIGHT,
+    spacing:   { before: 0, after: 40, line: 264, lineRule: "auto" as any },
+    children:  [new TextRun({ text, font: FONT, size: SZ_BODY, bold, color: BLACK })],
+  });
+  const sigBlankL = sigLineL("");
+  const sigBlankR = sigLineR("");
+
+  const half = Math.floor(TW / 2);
+  const signatureTable = new Table({
+    width:        { size: TW, type: WidthType.DXA },
+    columnWidths: [half, TW - half],
+    borders: {
+      top:    bNone, bottom: bNone, left:   bNone, right:  bNone,
+      insideHorizontal: bNone, insideVertical:   bNone,
+    } as any,
+    rows: [
+      new TableRow({
+        cantSplit: true,
+        children: [
+          // Left col — Assessee block
+          new TableCell({
+            width:   { size: half, type: WidthType.DXA },
+            borders: noBorderAll,
+            margins: { top: 80, bottom: 80, left: 100, right: 100 },
+            verticalAlign: VerticalAlign.TOP,
+            children: [
+              sigLineL(`For, ${assesseeName}`, true),
+              sigBlankL,
+              sigLineL("x__________________", true),
+              sigLineL("Signature of assessee", true),
+              sigBlankL,
+              sigLineL(`Place: ${assesseePlace}`, true),
+              sigLineL(`Date : ${assesseeDate}`, true),
+            ],
+          }),
+          // Right col — CA firm block
+          new TableCell({
+            width:   { size: TW - half, type: WidthType.DXA },
+            borders: noBorderAll,
+            margins: { top: 80, bottom: 80, left: 100, right: 100 },
+            verticalAlign: VerticalAlign.TOP,
+            children: [
+              sigLineR(`For ${firmName}`, true),
+              sigLineR("Chartered Accountants", true),
+              sigLineR(`FRN: ${firmFRN}`, true),
+              sigBlankR,
+              sigLineR(partnerName, true),
+              sigLineR("Partner", true),
+              sigLineR(`Membership No.: ${partnerMembNo}`, true),
+            ],
+          }),
+        ],
+      }),
+    ],
+  });
+
+  // Pre-signature breathing room (~12 pt) so the signature isn't glued to
+  // the last numbered policy.
+  const preSigSpacer = new Paragraph({ spacing: { before: 240, after: 0 }, children: [] });
 
   // Reference NOTE1_POLICIES so the legacy boilerplate constant doesn't
   // become a dead-code lint warning while we keep it around for any
   // corporate-style consumer still relying on it.
   void NOTE1_POLICIES;
 
-  return out;
+  // Banner stack → body table directly (NO interstitial spacer paragraph).
+  // The note1HeadingBanner already carries `spacing.after: 60` so the body
+  // table sits tight below the heading — fixes Issue 2 ("too much gap
+  // between Note 1 heading & note description").
+  return [
+    entityBanner,
+    subtitleBanner,
+    note1HeadingBanner,
+    bodyTable,
+    preSigSpacer,
+    signatureTable,
+  ];
 }
 
 /** Note 2 — Partners' Capital Account tables (CY + PY) */
@@ -2222,8 +2391,13 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   const sigArgs: SigData = { clientName: entityName, constitution, ...signature };
   const sigBlock = () => buildSignatureTable(sigArgs);
 
-  // Phase 2 — Note 1 (uses Stage 7 user-edited notes when present)
-  const note1Paras = buildNote1Section(entityName, cyYear, ntaData);
+  // Phase 2 — Note 1 (uses Stage 7 user-edited notes when present).
+  // Returns a self-contained section (bordered header table + borderless
+  // body table + custom signature block) that mirrors the Stage 7 Excel
+  // export pixel-for-pixel. sigArgs is threaded through so the right-hand
+  // CA-firm column reads the same firm name / FRN / partner / membership
+  // the BS / P&L pages use.
+  const note1Paras = buildNote1Section(entityName, cyYear, ntaData, sigArgs);
 
   // Phase 2 — Note 2 (Capital Account)
   const capitalTables = buildCapitalAccountSection(capitalData, cyYear, pyYear);
@@ -2491,12 +2665,18 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   // the on-screen NCE Stage 7 → Notes to Accounts page shows. Re-uses the
   // exact same sigBlock() helper as the BS / P&L pages so styling stays
   // identical across the document.
+  // 2026-06-17: Note 1 now mirrors the Stage 7 Excel export — the new
+  // buildNote1Section() returns its OWN bordered entity-name header and
+  // Note-1-specific signature block, so the universal makeNotesBanner()
+  // and sigBlock() (used on BS / P&L pages) are intentionally omitted
+  // here to avoid a duplicate header / signature stack.
   const note1SectionChildren: (Paragraph | Table)[] = [
-    makeNotesBanner(),
     ...note1Paras,
-    new Paragraph({ spacing: { before: 240 }, children: [] }),
-    sigBlock(),
   ];
+  // Keep makeNotesBanner referenced for the other sections — preserved
+  // here to avoid an unused-import / dead-helper TypeScript warning
+  // since the helper is still defined inside the same closure.
+  void makeNotesBanner;
 
   // Section B children — BS structured notes (capital account + BS note tables).
   // No inline BS heading; the bsNotesRunningHdr running header provides it on

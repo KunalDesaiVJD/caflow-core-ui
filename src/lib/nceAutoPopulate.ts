@@ -2768,7 +2768,68 @@ export async function nceAutoPopulate(
     // count the same ledger twice (once via the static aggregate, once via
     // the attached customRow). Belt-and-braces with the renderer-side
     // overlap subtract in NCEDetailedNotes.computeOverlap.
-    const finalCustomRows = [...autoRows, ...absorbedManualRows];
+    let finalCustomRows: NCECustomRow[] = [...autoRows, ...absorbedManualRows];
+
+    // ── CROSS-ROW DEDUP — drop manual rows whose ledger is already counted
+    //    inside ANOTHER row's sources[] (DBS REALTY Note 19 fix, June 2026)
+    // ────────────────────────────────────────────────────────────────────
+    // BUG: an auto re-sync creates a fresh autoRow for each TB ledger
+    // ("Fabrication Expense - URD", ₹30,80,000 — sources=[{ledger:"Fabrication
+    // Expense - URD"}]). A pre-existing manual row labelled "Fabrication
+    // Expense" — either auditor-typed long ago OR demoted from auto by a
+    // legacy self-heal — survives the re-sync because (a) the ledger is still
+    // mapped to this note (keepManualRowOnResync returns true), and (b) Note
+    // 19 is NOT in STRICTLY_TB_DRIVEN_B so the existing tbLedgerToOwnerRow
+    // dedup at line ~2422 never runs. Both rows then render in Note 19 with
+    // the SAME amount → Note total double-counts → P&L "Other expenses"
+    // inflates by exactly that amount.
+    //
+    // ROOT-CAUSE FIX (universal, every Pattern B note): a standalone manual
+    // row (`sources.length === 0`, `!userMoved`) whose label's `baseHead`
+    // matches the `baseHead` of ANY source ledger captured in ANOTHER row's
+    // `sources[]` is, by definition, a duplicate — the canonical TB-derived
+    // amount is already aggregated through that other row. Drop the manual
+    // row and its cy/py keys. Auditor-typed rows that don't match any TB
+    // source are left untouched.
+    //
+    // INVARIANT KEPT: amounts flow TB → COA → Notes → BS/PL. The notes layer
+    // never double-counts the same ledger across two custom rows.
+    if (finalCustomRows.length > 1) {
+      const sourceBaseHeadOwners = new Map<string, string>(); // baseHead → owning row id
+      for (const cr of finalCustomRows) {
+        for (const s of cr.sources ?? []) {
+          const bh = deriveBaseHead(s.ledger || "").toLowerCase().trim();
+          if (bh && !sourceBaseHeadOwners.has(bh)) {
+            sourceBaseHeadOwners.set(bh, cr.id);
+          }
+        }
+      }
+      const dropDuplicateIds = new Set<string>();
+      for (const cr of finalCustomRows) {
+        if (cr.source !== "manual") continue;
+        if (cr.userMoved === true) continue;
+        if ((cr.sources?.length ?? 0) > 0) continue;
+        const bh = deriveBaseHead(cr.label || "").toLowerCase().trim();
+        if (!bh) continue;
+        const ownerId = sourceBaseHeadOwners.get(bh);
+        if (ownerId && ownerId !== cr.id) {
+          dropDuplicateIds.add(cr.id);
+        }
+      }
+      if (dropDuplicateIds.size > 0) {
+        finalCustomRows = finalCustomRows.filter(cr => !dropDuplicateIds.has(cr.id));
+        for (const id of dropDuplicateIds) {
+          for (const sfx of ["", "_lt", "_st"]) {
+            delete mergedCy[id + sfx];
+            delete mergedPy[id + sfx];
+          }
+        }
+        // eslint-disable-next-line no-console
+        console.log(
+          `[nceAutoPopulate] ${noteType}: dropped ${dropDuplicateIds.size} duplicate manual row(s) (already counted via another row's sources[]).`,
+        );
+      }
+    }
     const cleanedSources: typeof staticSources = {};
     for (const [staticId, srcs] of Object.entries(staticSources)) {
       const childLedgerSet = new Set<string>();

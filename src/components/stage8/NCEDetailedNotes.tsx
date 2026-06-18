@@ -342,8 +342,22 @@ function NumInput({
 
 // ─── Source badge ─────────────────────────────────────────────────────────────
 
-function SourceBadge({ source }: { source: "auto" | "manual" }) {
-  return source === "auto"
+function SourceBadge({ source, tbDerived }: { source: "auto" | "manual"; tbDerived?: boolean }) {
+  // 2026-06-18 fix (Issue 2 in DBS REALTY report): the badge previously
+  // read only `source`, which mixes two different concepts —
+  //   (a) "where did the AMOUNT come from?" (TB ledger vs. auditor-typed)
+  //   (b) "should this row survive Re-sync from COA?"
+  // The `source === "manual"` flag was being set on rows whose amount
+  // ACTUALLY came from TB (e.g. ejected rows, moved-via Move-to, or
+  // demoted-by-legacy-self-heal). Those rows badged as "Manual" even
+  // though the auditor never edited them — confusing every NCE client.
+  //
+  // ROOT-CAUSE FIX: derive the badge from `tbDerived` (the canonical
+  // "amount comes from TB" flag), falling back to `source === "auto"` for
+  // legacy rows saved before tbDerived existed. Only truly auditor-typed
+  // rows (source === "manual" AND tbDerived !== true) badge as "Manual".
+  const isAutoBacked = tbDerived === true || source === "auto";
+  return isAutoBacked
     ? <Badge variant="outline" className="text-[9px] px-1 py-0 shrink-0 text-blue-600 border-blue-300">Auto</Badge>
     : <Badge variant="outline" className="text-[9px] px-1 py-0 shrink-0 text-amber-600 border-amber-300">Manual</Badge>;
 }
@@ -588,7 +602,7 @@ function CustomRowEditor({
               placeholder="Row description"
             />
             <SpellFix value={row.label} onApply={onChangeLabel} hidden={readOnly} />
-            <SourceBadge source={row.source} />
+            <SourceBadge source={row.source} tbDerived={row.tbDerived} />
           </div>
         </TableCell>
         {isPatternA ? (
