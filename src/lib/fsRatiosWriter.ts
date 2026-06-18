@@ -212,7 +212,9 @@ function ratioComputed(
       den = v(inp, "shareholders_equity");
       break;
     case 3:  // DSCR — TOTAL = SUM(E14:E17) / SUM(G14:G15)
-      num = v(inp, "npat") + v(inp, "non_cash_op_exp")
+      // 2026-06-18 — numerator uses NPBT (Schedule III "IX. Profit before
+      // tax"), matching ratioEngine.computeAllRatios and the on-screen UI.
+      num = v(inp, "npbt") + v(inp, "non_cash_op_exp")
           + v(inp, "interest") + v(inp, "other_non_cash_adj");
       den = v(inp, "interest_lease") + v(inp, "principal_repayments");
       break;
@@ -241,8 +243,11 @@ function ratioComputed(
       den = v(inp, "revenue_ops");
       break;
     case 10: // Return On Capital Employed — TOTAL = SUM(E33:E38) / SUM(G33:G38)
+      // 2026-06-18 — Capital Employed includes Deferred Tax Liabilities so
+      // CY/PY Excel column ratios match ratioEngine.computeAllRatios.
       num = v(inp, "npbt") + v(inp, "interest");
-      den = v(inp, "net_worth") + v(inp, "lt_borrowings");
+      den = v(inp, "net_worth") + v(inp, "lt_borrowings")
+          + v(inp, "deferred_tax_liabilities");
       break;
     case 11: // Return On Investment
       num = v(inp, "return_profit");
@@ -551,13 +556,17 @@ function writeDscrBlock(ws: ExcelJS.Worksheet, inp: RatioInputs | null): void {
   // r0+3: Interest                    | (blank)
   // r0+4: Other Non Cash Adjustment   | (blank)
   // r0+5: TOTAL = SUM(E14:E17) / SUM(G14:G15)
-  setDetail(ws, r0 + 1, "NET PROFIT AFTER TAXES",   v(inp, "npat"),                "INTEREST & LEASE PAYMENT", v(inp, "interest_lease"));
+  // 2026-06-18 — DSCR numerator switched from NPAT → NPBT to match the UI
+  // (Schedule III "IX. Profit before tax"). The Excel deliverable must
+  // mirror the on-screen formula or the auditor sees a different ratio on
+  // each output.
+  setDetail(ws, r0 + 1, "NET PROFIT BEFORE TAXES",  v(inp, "npbt"),                "INTEREST & LEASE PAYMENT", v(inp, "interest_lease"));
   setDetail(ws, r0 + 2, "NON CASH OPERATING EXP",   v(inp, "non_cash_op_exp"),     "PRINCIPAL REPAYMENTS",     v(inp, "principal_repayments"));
   setDetail(ws, r0 + 3, "INTEREST",                 v(inp, "interest"),            "",                         null);
   setDetail(ws, r0 + 4, "OTHER NON CASH ADJUSTMENT", v(inp, "other_non_cash_adj"), "",                         null);
 
   // TOTAL row — pre-compute results so Excel shows the right value on open
-  const dscrNumTotal = v(inp, "npat") + v(inp, "non_cash_op_exp")
+  const dscrNumTotal = v(inp, "npbt") + v(inp, "non_cash_op_exp")
                      + v(inp, "interest") + v(inp, "other_non_cash_adj");
   const dscrDenTotal = v(inp, "interest_lease") + v(inp, "principal_repayments");
   const dscrRatio: number | string = dscrDenTotal !== 0 ? dscrNumTotal / dscrDenTotal : "N.A.";
@@ -620,16 +629,21 @@ function writeRoceBlock(ws: ExcelJS.Worksheet, inp: RatioInputs | null): void {
   // r0+2: INTEREST              | LONG-TERM BORROWINGS
   // r0+3..r0+6: blank reserved rows
   // r0+7: TOTAL = SUM(E33:E38) / SUM(G33:G38)
-  setDetail(ws, r0 + 1, "NET PROFIT BEFORE TAX", v(inp, "npbt"),     "NET WORTH",            v(inp, "net_worth"));
-  setDetail(ws, r0 + 2, "INTEREST",              v(inp, "interest"), "LONG-TERM BORROWINGS", v(inp, "lt_borrowings"));
+  // 2026-06-18 — Capital Employed now includes Deferred Tax Liabilities
+  // (Schedule III non-current liability). r0+3 carries this line so the
+  // denominator on the Excel deliverable matches the on-screen formula.
+  setDetail(ws, r0 + 1, "NET PROFIT BEFORE TAX", v(inp, "npbt"),     "NET WORTH",                v(inp, "net_worth"));
+  setDetail(ws, r0 + 2, "INTEREST",              v(inp, "interest"), "LONG-TERM BORROWINGS",     v(inp, "lt_borrowings"));
+  setDetail(ws, r0 + 3, "",                      null,               "DEFERRED TAX LIABILITIES", v(inp, "deferred_tax_liabilities"));
   // Template cross-ref: ROCE Interest (E34) = DSCR Interest row E16.
   // Cache the actual interest value so the cell isn't blank pre-recalc.
   ws.getCell(r0 + 2, 5).value = f("E16", v(inp, "interest"));
-  for (let i = 3; i <= 6; i++) setDetail(ws, r0 + i, "", null, "", null);
+  for (let i = 4; i <= 6; i++) setDetail(ws, r0 + i, "", null, "", null);
 
   // Pre-compute ROCE totals so the cached cell value matches the formula
   const roceNumTotal = v(inp, "npbt") + v(inp, "interest");
-  const roceDenTotal = v(inp, "net_worth") + v(inp, "lt_borrowings");
+  const roceDenTotal = v(inp, "net_worth") + v(inp, "lt_borrowings")
+                     + v(inp, "deferred_tax_liabilities");
   const roceRatio: number | string = roceDenTotal !== 0 ? roceNumTotal / roceDenTotal : "N.A.";
 
   setLabel(ws, r0 + 7, 4, "TOTAL", { bold: true });

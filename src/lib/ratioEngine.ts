@@ -27,6 +27,9 @@ export interface RatioInputs {
   npbt:                    number | null;
   net_worth:               number | null;
   lt_borrowings:           number | null;
+  /** Deferred Tax Liabilities — used in Capital Employed (denominator of
+   *  Return on Capital Employed). Sourced from BS_NCL_DTL. */
+  deferred_tax_liabilities: number | null;
   return_profit:           number | null;
   avg_investment_fund:     number | null;
 }
@@ -54,10 +57,15 @@ export function computeAllRatios(inputs: RatioInputs): RatioResult[] {
 
   // ── Composite numerators / denominators ──────────────────────────────────
 
-  // Debt Service Coverage: (NPAT + Non-Cash Op Exp + Interest + Other Non-Cash Adj)
+  // Debt Service Coverage: (NPBT + Non-Cash Op Exp + Interest + Other Non-Cash Adj)
   //                      ÷ (Interest on Lease + Principal Repayments)
+  // User correction (2026-06-18): the numerator must use NPBT — auditors compute
+  // "Earnings Available for Debt Service" on a pre-tax basis. Previously this
+  // pulled NPAT which (a) was never auto-populated → always 0 → ratio always
+  // N.A., and (b) understated the numerator by the tax expense. NPBT is the
+  // canonical Schedule III "IX. Profit before tax" figure.
   const dscNum =
-    (inputs.npat             ?? 0) +
+    (inputs.npbt             ?? 0) +
     (inputs.non_cash_op_exp  ?? 0) +
     (inputs.interest         ?? 0) +
     (inputs.other_non_cash_adj ?? 0);
@@ -65,9 +73,17 @@ export function computeAllRatios(inputs: RatioInputs): RatioResult[] {
     (inputs.interest_lease       ?? 0) +
     (inputs.principal_repayments ?? 0);
 
-  // Return on Capital Employed: (NPBT + Interest) ÷ (Net Worth + LT Borrowings)
+  // Return on Capital Employed:
+  //   (NPBT + Interest) ÷ (Net Worth + LT Borrowings + Deferred Tax Liabilities)
+  // User correction (2026-06-18): Capital Employed must include Deferred Tax
+  // Liabilities — they are a long-term source of funds employed by the
+  // business. Previously the denominator only summed Net Worth + LT Borrowings,
+  // understating Capital Employed and inflating the ratio.
   const roceNum = (inputs.npbt ?? 0) + (inputs.interest ?? 0);
-  const roceDen = (inputs.net_worth ?? 0) + (inputs.lt_borrowings ?? 0);
+  const roceDen =
+    (inputs.net_worth ?? 0)
+    + (inputs.lt_borrowings ?? 0)
+    + (inputs.deferred_tax_liabilities ?? 0);
 
   // ── Ratio definitions ────────────────────────────────────────────────────
 
@@ -92,8 +108,10 @@ export function computeAllRatios(inputs: RatioInputs): RatioResult[] {
       id:          3,
       name:        "Debt Service Coverage Ratio",
       unit:        "times",
-      numerator:   { label: "Earning Available for Debt Service", value: dscNum },
-      denominator: { label: "Debt Service",                       value: dscDen },
+      // 2026-06-18: numerator label updated to reflect the NPBT-based
+      // computation. Auditor-facing label keeps the standard ratio name.
+      numerator:   { label: "Earning Available for Debt Service (PBT basis)", value: dscNum },
+      denominator: { label: "Debt Service",                                   value: dscDen },
       computed:    safeDiv(dscNum, dscDen),
     },
     {
@@ -214,6 +232,7 @@ export function blankRatioInputs(): RatioInputs {
     npbt:                    null,
     net_worth:               null,
     lt_borrowings:           null,
+    deferred_tax_liabilities: null,
     return_profit:           null,
     avg_investment_fund:     null,
   };
@@ -259,6 +278,11 @@ export const AUTO_LINK_MAP: AutoLinkEntry[] = [
     key:    "lt_borrowings",
     source: "bs.ltBorrowings.cy",
     label:  "BS → Long-Term Borrowings (CY)",
+  },
+  {
+    key:    "deferred_tax_liabilities",
+    source: "bs.dtLiab.cy",
+    label:  "BS → Deferred Tax Liabilities (CY)",
   },
   {
     key:    "avg_inventories",

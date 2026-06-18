@@ -13,8 +13,22 @@ import { useMemo } from "react";
 import { Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { computeAllRatios, type RatioInputs } from "@/lib/ratioEngine";
+import { AUTO_LINK_MAP } from "@/lib/ratioEngine";
 import { type Stage7Ratios, type CustomRatio } from "@/lib/ratioAutoPopulate";
 import { RatioInput, formatIndian } from "./RatioInput";
+
+// PY values come from the prior engagement's fa_financial_statements (or its
+// PY-shell TB) via autoPopulateRatios → buildPYInputsFromFs. The same set of
+// keys that auto-link on the CY side also auto-link on PY — only the year
+// origin differs. Surface that origin in the click-to-trace popover so the
+// auditor can verify any PY auto value against last year's FS.
+const AUTO_KEYS = new Set(AUTO_LINK_MAP.map(e => e.key));
+const AUTO_SOURCE_LABEL_PY: Record<string, string> = Object.fromEntries(
+  AUTO_LINK_MAP.map(e => [
+    e.key,
+    e.label.replace(/\(CY\)/, "(PY — prior engagement FS)"),
+  ]),
+);
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -51,12 +65,14 @@ const RATIO_DEFS: RatioRowDef[] = [
   {
     id: 3, name: "DEBT SERVICE COVERAGE RATIO",
     numLines: [
-      { label: "Net Profit After Taxes",    field: "npat" },
+      // Mirrors CY definition (2026-06-18): NPBT-based numerator so CY/PY use
+      // the same formula and the ratio comparison is meaningful.
+      { label: "Net Profit Before Taxes",   field: "npbt" },
       { label: "Non Cash Operating Exp",    field: "non_cash_op_exp" },
       { label: "Interest",                  field: "interest" },
       { label: "Other Non Cash Adjustment", field: "other_non_cash_adj" },
       { label: "TOTAL", field: null, bold: true,
-        sumOf: ["npat", "non_cash_op_exp", "interest", "other_non_cash_adj"] },
+        sumOf: ["npbt", "non_cash_op_exp", "interest", "other_non_cash_adj"] },
     ],
     denLines: [
       { label: "Interest & Lease Payment",  field: "interest_lease" },
@@ -104,9 +120,13 @@ const RATIO_DEFS: RatioRowDef[] = [
       { label: "TOTAL", field: null, bold: true, sumOf: ["npbt", "interest"] },
     ],
     denLines: [
-      { label: "Net Worth",            field: "net_worth" },
-      { label: "Long-Term Borrowings", field: "lt_borrowings" },
-      { label: "TOTAL", field: null, bold: true, sumOf: ["net_worth", "lt_borrowings"] },
+      // Mirrors CY definition (2026-06-18): Capital Employed includes Deferred
+      // Tax Liabilities on the PY side too so CY/PY comparison is consistent.
+      { label: "Net Worth",                field: "net_worth" },
+      { label: "Long-Term Borrowings",     field: "lt_borrowings" },
+      { label: "Deferred Tax Liabilities", field: "deferred_tax_liabilities" },
+      { label: "TOTAL", field: null, bold: true,
+        sumOf: ["net_worth", "lt_borrowings", "deferred_tax_liabilities"] },
     ],
   },
   {
@@ -192,6 +212,14 @@ export function RatioPreviousYear({
   const pyFY    = prevFY(fy);
   const yearLabel = pyFY ? `PY ${pyFY}` : "Previous Year";
 
+  // PY-side manual overrides: prefixed "py." in the saved override list. Same
+  // contract as the CY tab so reset / source-label behaviour stays consistent.
+  const overrides = new Set(
+    ratios.manual_overrides
+      .filter(p => p.startsWith("py."))
+      .map(p => p.slice(3)),
+  );
+
   return (
     <div className="overflow-auto rounded-md border border-slate-300 shadow-sm">
       {/* Title */}
@@ -254,19 +282,26 @@ export function RatioPreviousYear({
                               {formatIndian(sumFields(inputs, numLine.sumOf))}
                             </TD>
                           </>
-                        ) : (
-                          <>
-                            <TD className={cn("pl-3", numLine.bold && "font-semibold")}>
-                              {numLine.label}
-                            </TD>
-                            <TD className="py-0.5 pr-1">
-                              <RatioInput
-                                value={inputs[numLine.field] as number | null}
-                                onChange={(v) => onFieldChange(numLine.field as Field, v)}
-                              />
-                            </TD>
-                          </>
-                        )
+                        ) : (() => {
+                          const isAutoKey  = AUTO_KEYS.has(numLine.field);
+                          const isOverride = overrides.has(numLine.field);
+                          return (
+                            <>
+                              <TD className={cn("pl-3", numLine.bold && "font-semibold")}>
+                                {numLine.label}
+                              </TD>
+                              <TD className="py-0.5 pr-1">
+                                <RatioInput
+                                  value={inputs[numLine.field] as number | null}
+                                  isAuto={isAutoKey}
+                                  isOverridden={isOverride}
+                                  sourceLabel={isAutoKey && !isOverride ? AUTO_SOURCE_LABEL_PY[numLine.field as string] : undefined}
+                                  onChange={(v) => onFieldChange(numLine.field as Field, v)}
+                                />
+                              </TD>
+                            </>
+                          );
+                        })()
                       ) : (
                         <><TD /><TD /></>
                       )}
@@ -280,19 +315,26 @@ export function RatioPreviousYear({
                               {formatIndian(sumFields(inputs, denLine.sumOf))}
                             </TD>
                           </>
-                        ) : (
-                          <>
-                            <TD className={cn("pl-3", denLine.bold && "font-semibold")}>
-                              {denLine.label}
-                            </TD>
-                            <TD className="py-0.5 pr-1">
-                              <RatioInput
-                                value={inputs[denLine.field] as number | null}
-                                onChange={(v) => onFieldChange(denLine.field as Field, v)}
-                              />
-                            </TD>
-                          </>
-                        )
+                        ) : (() => {
+                          const isAutoKey  = AUTO_KEYS.has(denLine.field);
+                          const isOverride = overrides.has(denLine.field);
+                          return (
+                            <>
+                              <TD className={cn("pl-3", denLine.bold && "font-semibold")}>
+                                {denLine.label}
+                              </TD>
+                              <TD className="py-0.5 pr-1">
+                                <RatioInput
+                                  value={inputs[denLine.field] as number | null}
+                                  isAuto={isAutoKey}
+                                  isOverridden={isOverride}
+                                  sourceLabel={isAutoKey && !isOverride ? AUTO_SOURCE_LABEL_PY[denLine.field as string] : undefined}
+                                  onChange={(v) => onFieldChange(denLine.field as Field, v)}
+                                />
+                              </TD>
+                            </>
+                          );
+                        })()
                       ) : (
                         <><TD /><TD /></>
                       )}

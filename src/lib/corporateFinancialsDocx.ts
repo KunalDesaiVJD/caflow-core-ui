@@ -915,9 +915,17 @@ function buildNote1Section(entityName: string, cyYear: string): Paragraph[] {
 // ─── NOTE TABLE (generic breakup from stage5_notes) ──────────────────────────
 function noteTitleRow(colWidths: number[], noteNumber: string, title: string, keepNext = false): TableRow {
   const totalW = colWidths.reduce((s, w) => s + w, 0);
+  // 2026-06-18 fix (Issue 1 — excessive gap before Particulars row):
+  // The previous implementation set a 24pt minimum row height plus 5pt top
+  // and 5pt bottom internal padding. With the note title text only ~10pt
+  // tall, ~14pt of empty space accumulated INSIDE the title row, then the
+  // Particulars header row below contributed another 25pt min height. The
+  // visible gap between "Note N — Title" and "Particulars | CY | PY" was
+  // ~30pt. Halved the row min height + tightened margins so the title row
+  // hugs the text and the Particulars row sits flush below.
   return new TableRow({
     cantSplit: true,
-    height: { value: 480, rule: HeightRule.ATLEAST },
+    height: { value: 320, rule: HeightRule.ATLEAST },
     children: [
       new TableCell({
         columnSpan: colWidths.length,
@@ -925,7 +933,8 @@ function noteTitleRow(colWidths: number[], noteNumber: string, title: string, ke
         // Note heading uses a lighter grey (BG_NOTE_HDR) with black bold text.
         shading: { fill: BG_NOTE_HDR, type: ShadingType.CLEAR },
         borders: BDR_NONE,
-        margins: { top: 100, bottom: 100, left: 160, right: 100 },
+        margins: { top: 50, bottom: 50, left: 160, right: 100 },
+        verticalAlign: VerticalAlign.CENTER,
         children: [new Paragraph({
           spacing: { before: 0, after: 0 },
           ...(keepNext ? { keepNext: true, keepLines: true } : {}),
@@ -939,13 +948,20 @@ function noteTitleRow(colWidths: number[], noteNumber: string, title: string, ke
 }
 
 function noteHdr3(cyLabel: string, pyLabel: string, keepNext = false): TableRow {
+  // 2026-06-18 fix (Issue 1 + Issue 3 — gap + "subgroups not darker"):
+  //   • Row min height dropped 500 → 320 DXA so the column header sits
+  //     close to the Note title row above (Issue 1).
+  //   • Background shading removed (no BG_HDR fill) — the column header is
+  //     now WHITE with bold black text + a thin bottom rule for visual
+  //     separation. Matches the user's "subgroups should not be darker"
+  //     directive (Issue 3) without losing the header hierarchy.
   return new TableRow({
     tableHeader: true,
-    height: { value: 500, rule: HeightRule.ATLEAST },
+    height: { value: 320, rule: HeightRule.ATLEAST },
     children: [
-      cell({ text: "Particulars", w: NW_DESC, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, padL: 160, keepNext }),
-      cell({ text: `${cyLabel}\n${_exportSuffix}`, w: NW_CY, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120, keepNext }),
-      cell({ text: `${pyLabel}\n${_exportSuffix}`, w: NW_PY, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120, keepNext }),
+      cell({ text: "Particulars", w: NW_DESC, sz: SZ_SM, bold: true, color: BLACK, borders: BDR_SUB, padL: 160, keepNext }),
+      cell({ text: `${cyLabel}\n${_exportSuffix}`, w: NW_CY, sz: SZ_SM, bold: true, color: BLACK, borders: BDR_SUB, align: AlignmentType.RIGHT, padR: 120, keepNext }),
+      cell({ text: `${pyLabel}\n${_exportSuffix}`, w: NW_PY, sz: SZ_SM, bold: true, color: BLACK, borders: BDR_SUB, align: AlignmentType.RIGHT, padR: 120, keepNext }),
     ],
   });
 }
@@ -1638,30 +1654,41 @@ function buildShareCapitalNote(
   const pyLbl     = `FY ${pyYearNum - 1}-${String(pyYearNum).slice(-2)}`;
 
   // Header cell for grouped sub-table headers (rowSpan / colSpan aware).
+  // 2026-06-18 fix (Issue 2 — "No. of Shares" / "Amount" alignment):
+  //   default alignment switched to RIGHT so column headers align with the
+  //   right-aligned numeric data underneath them. Auditor reading the
+  //   Reconciliation / Promoters / 5% holders tables now sees the heading
+  //   directly above its column total.
+  // 2026-06-18 fix (Issue 3 — "subgroups should not be darker"):
+  //   the shading was BG_HDR (#F2F6F7 — light grey). Removed entirely so
+  //   the sub-table headers render on a WHITE background. Bold text + the
+  //   table's natural row borders preserve visual hierarchy.
   const hCell = (text: string, w: number, opts: { colSpan?: number; rowSpan?: number; align?: AlignmentType } = {}): TableCell =>
     new TableCell({
       ...(opts.colSpan ? { columnSpan: opts.colSpan } : {}),
       ...(opts.rowSpan ? { rowSpan: opts.rowSpan } : {}),
       width:   { size: w, type: WidthType.DXA },
-      shading: { fill: BG_HDR, type: ShadingType.CLEAR },
-      borders: BDR_NONE,
+      borders: { top: bNone, bottom: bThin, left: bNone, right: bNone },
       margins: { top: 40, bottom: 40, left: 60, right: 60 },
       verticalAlign: VerticalAlign.CENTER,
       children: [new Paragraph({
-        alignment: opts.align ?? AlignmentType.CENTER,
+        alignment: opts.align ?? AlignmentType.RIGHT,
         spacing:   { before: 0, after: 0 },
         children:  [new TextRun({ text, font: FONT, size: SZ_XS, bold: true, color: BLACK })],
       })],
     });
 
   // Full-width bold label row inside the main 3-col table.
+  // 2026-06-18 fix (Issue 3 — "subgroups should not be darker"): removed the
+  // BG_TOT shading. The sub-group labels ("(a) Authorised shares", "(b)
+  // Issued, subscribed and fully paid up shares") now render on WHITE with
+  // bold black text and a thin bottom rule (BDR_ROW) for hierarchy.
   const labelRow3 = (text: string): TableRow => new TableRow({
     cantSplit: true,
     children: [
       new TableCell({
         columnSpan: 3,
         width:   { size: TW, type: WidthType.DXA },
-        shading: { fill: BG_TOT, type: ShadingType.CLEAR },
         borders: BDR_ROW,
         margins: { top: 36, bottom: 36, left: 120, right: 80 },
         children: [new Paragraph({
@@ -2039,7 +2066,13 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
   const note1Paras = buildNote1Section(entityName, cyLabel);
 
   // Notes 2–N: from stage5_notes (sorted by note number ascending)
-  const spacer = () => new Paragraph({ spacing: { before: 720, after: 0 }, keepNext: true, children: [] });
+  // 2026-06-18 fix (Issue 4 — blank pages): the inter-note spacer used
+  // `before: 720` (36pt) — combined with keepNext:true, Word frequently
+  // pushed the next note onto a fresh page even when there was room on
+  // the current one, then left the bottom of the previous page blank.
+  // Dropped the gap to 200 DXA (10pt) and removed keepNext so notes flow
+  // continuously and the renderer can fill each page before breaking.
+  const spacer = () => new Paragraph({ spacing: { before: 200, after: 0 }, children: [] });
   // Issue 1 — each numbered note must START ON A NEW PAGE so it is never
   // rendered in continuation of the previous note (e.g. Note 2 — Share
   // Capital must not flow directly after Note 1 — Accounting Policies).
@@ -2162,7 +2195,14 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
   // ("Notes Profit & Loss A/c. for Accounting year YYYY - YYYY") introduces the
   // P&L notes at the transition point. On subsequent pages the section's own
   // running header takes over.
-  if (plNotes.length > 0) {
+  //
+  // 2026-06-18 fix (Issue 4 — blank pages): a section consisting of only an
+  // inline heading + an empty body left a near-blank page with just the
+  // running header. Guard on plNotesChildren.length so the section is added
+  // ONLY when there is actual P&L-note content to render. The earlier
+  // `plNotes.length > 0` check passed even when the underlying note rows
+  // resolved to empty arrays (e.g. revenue mapped but no breakup data).
+  if (plNotes.length > 0 && plNotesChildren.length > 0) {
     const inlinePlHeading = new Paragraph({
       alignment: AlignmentType.LEFT,
       spacing:   { before: 200, after: 100 },
