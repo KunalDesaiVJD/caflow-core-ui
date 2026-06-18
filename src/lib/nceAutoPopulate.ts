@@ -2796,7 +2796,21 @@ export async function nceAutoPopulate(
     // never double-counts the same ledger across two custom rows.
     if (finalCustomRows.length > 1) {
       const sourceBaseHeadOwners = new Map<string, string>(); // baseHead → owning row id
+      // Collect base heads from every AUTO row — both single-ledger autos
+      // (where the label IS the TB ledger name, no sources[]) and merged
+      // autos (sources[] carries each contributing TB ledger). Without
+      // including the label for single-ledger autos, the dedup misses the
+      // DBS REALTY case: "Fabrication Expense - URD" lives as a SINGLE
+      // auto row (no sources[]) and the manual "Fabrication Expense" row
+      // sits beside it — both with the same TB amount. Both rules below
+      // intentionally run only against AUTO rows so two manual rows with
+      // matching base heads (auditor-typed) don't get erroneously deduped.
       for (const cr of finalCustomRows) {
+        if (cr.source !== "auto") continue;
+        const labelBh = deriveBaseHead(cr.label || "").toLowerCase().trim();
+        if (labelBh && !sourceBaseHeadOwners.has(labelBh)) {
+          sourceBaseHeadOwners.set(labelBh, cr.id);
+        }
         for (const s of cr.sources ?? []) {
           const bh = deriveBaseHead(s.ledger || "").toLowerCase().trim();
           if (bh && !sourceBaseHeadOwners.has(bh)) {
