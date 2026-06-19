@@ -15,7 +15,7 @@
  *   engagementId — passed straight through to each sub-component.
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, type CSSProperties } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Wallet, FileText, Building2 } from "lucide-react";
 import { NCECapitalAccount } from "@/components/stage8/NCECapitalAccount";
@@ -320,12 +320,27 @@ export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteM
     }
   }, [navigateToNote, dynamicNoteMap]);
 
+  // In readOnly mode the on-screen Preview should mimic the DOCX export's
+  // per-page layout: each "page" is a NAVY-bordered A4-style frame, and the
+  // legacy NCENotesTab entity banner is suppressed (Note 1 already carries
+  // its own entity banner — having both would duplicate the title).
+  const showLegacyBanner = !readOnly && !!entityName;
+  const pageFrame: CSSProperties = {
+    border:       "1px solid #1F3864",
+    background:   "#fff",
+    padding:      "20px 28px",
+    fontFamily:   "Calibri, Arial, sans-serif",
+    pageBreakAfter: "always",
+  };
+
   return (
     <div className="space-y-3">
 
       {/* Entity-name banner (2026-05-30) — matches BS / P&L title block format
-          so the client name is presented identically on every preview page. */}
-      {entityName && (
+          so the client name is presented identically on every preview page.
+          Suppressed in readOnly mode because each "page" in the preview
+          carries its own banner inline (matching the DOCX export). */}
+      {showLegacyBanner && (
         <div className="overflow-hidden" style={{ fontFamily: "Calibri, Arial, sans-serif" }}>
           <div className="text-center py-1.5">
             <div className="font-bold uppercase tracking-wide text-[#1F3864]" style={{ fontSize: "14px" }}>
@@ -345,7 +360,7 @@ export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteM
       {/* Header — typography aligned with Stage 7's other section labels.
           Suppressed when the banner above is rendering, so we don't show two
           competing titles on the same page. */}
-      {!entityName && (
+      {!readOnly && !entityName && (
         <h2 className="text-base font-semibold tracking-tight text-foreground">
           Notes to Financial Statements
         </h2>
@@ -357,18 +372,25 @@ export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteM
           between the three sections without a huge scroll. */}
       {readOnly ? (
         <div className="space-y-6">
-          {/* Note 1 — Summary of Significant Accounting Policies. Rendered as a
-              standalone "page" before the structured notes so the preview
-              matches the DOCX export (Section A in nceFinancialsDocx.ts). */}
-          <Note1PreviewSection
-            entityName={entityName || ""}
-            cyYear={cyYear}
-            ntaData={ntaData}
-            sig={sig}
-          />
-          <NCECapitalAccount engagementId={engagementId} readOnly={readOnly} />
-          <NCEDetailedNotes engagementId={engagementId} dynamicNoteMap={dynamicNoteMap} onExpansionStateUpdate={onExpansionStateUpdate} readOnly={readOnly} initialExpandedRows={initialExpandedRows} />
-          <NCEPPESchedule engagementId={engagementId} readOnly={readOnly} />
+          {/* Page 1 — Note 1 (Summary of Significant Accounting Policies).
+              Bordered "page frame" matches the NAVY page borders the DOCX
+              draws around every page. */}
+          <div style={pageFrame}>
+            <Note1PreviewSection
+              entityName={entityName || ""}
+              cyYear={cyYear}
+              ntaData={ntaData}
+              sig={sig}
+            />
+          </div>
+          {/* Page 2+ — Structured notes (BS Capital Account, detailed notes,
+              PPE schedule). Wrapped in a single NAVY-bordered page frame so
+              it visually separates from the Note 1 page above. */}
+          <div style={pageFrame}>
+            <NCECapitalAccount engagementId={engagementId} readOnly={readOnly} />
+            <NCEDetailedNotes engagementId={engagementId} dynamicNoteMap={dynamicNoteMap} onExpansionStateUpdate={onExpansionStateUpdate} readOnly={readOnly} initialExpandedRows={initialExpandedRows} />
+            <NCEPPESchedule engagementId={engagementId} readOnly={readOnly} />
+          </div>
         </div>
       ) : (
         <Tabs value={activeSubTab} onValueChange={setActiveSubTab}>
