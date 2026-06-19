@@ -1927,7 +1927,9 @@ export async function nceAutoPopulate(
         // CY closings → pc_close_*/raw_close/pack_close/other_close
         for (const row of tb) {
           if (!isInventoryParent(row.parent_group)) continue;
-          const amt = ledgerAmt(row.closing_balance);
+          // BUG-009/113: route through the flag-gated sign choke-point (OFF=Math.abs;
+          // ON=head-signed so an abnormal Cr stock ledger nets instead of inflating).
+          const amt = noteAmt(row, "cogs");
           if (amt === 0) continue;
           if (ejectedSet.has(row.ledger_name)) continue;
           const key = closeKeyFor(classifyInv(row.ledger_name));
@@ -1946,7 +1948,8 @@ export async function nceAutoPopulate(
         for (const row of tb) {
           if (!isInventoryParent(row.parent_group)) continue;
           if (ejectedSet.has(row.ledger_name)) continue;
-          const openAmt = Math.abs(Number(row.opening_balance ?? 0));
+          // BUG-009/113: flag-gated sign for the opening too (OFF=Math.abs, ON=head-signed).
+          const openAmt = NCE_SIGNED_NOTE_AMOUNTS ? signedLedgerOpeningAmt(row, "cogs") : Math.abs(Number(row.opening_balance ?? 0));
           if (openAmt === 0) continue;
           const key = openKeyFor(classifyInv(row.ledger_name));
           newCy[key] = (newCy[key] ?? 0) + openAmt;
@@ -1968,7 +1971,8 @@ export async function nceAutoPopulate(
           if (newCy[openKey]) continue; // already filled from CY-TB opening
           const v = pyCogs[closeSrcKey];
           if (typeof v === "number" && Math.abs(v) > 0) {
-            newCy[openKey] = Math.abs(v);
+            // BUG-009/113: preserve the stored note sign when signing is ON.
+            newCy[openKey] = NCE_SIGNED_NOTE_AMOUNTS ? v : Math.abs(v);
           }
         }
 
@@ -2002,25 +2006,29 @@ export async function nceAutoPopulate(
               for (const row of (prevTb ?? []) as TBRow[]) {
                 if (!isInventoryParent((row as any).parent_group)) continue;
 
-                const closeAmt = ledgerAmt(row.closing_balance);   // = PY closing
-                const openAmt  = Math.abs(Number((row as any).opening_balance ?? 0)); // = FY-2 closing
+                // BUG-009/113: flag-gated sign for the PY-shell inventory walk (OFF=Math.abs).
+                const closeAmt = noteAmt(row, "cogs");   // = PY closing
+                const openAmt  = NCE_SIGNED_NOTE_AMOUNTS ? signedLedgerOpeningAmt(row as any, "cogs") : Math.abs(Number((row as any).opening_balance ?? 0)); // = FY-2 closing
                 const cls = classifyInv(row.ledger_name);
                 const openKey  = openKeyFor(cls);   // pc_open_*
                 const closeKey = closeKeyFor(cls);  // pc_close_*
 
                 // CY column: only set when not already filled from prior
                 // year's cogs note (pyCogs branch above).
-                if (closeAmt > 0 && !newCy[openKey]) {
+                // BUG-009/113: !== 0 (not > 0) so a signed (negative) abnormal stock nets.
+                // Byte-identical when the sign flag is OFF (Math.abs is never negative).
+                if (closeAmt !== 0 && !newCy[openKey]) {
                   newCy[openKey] = (newCy[openKey] ?? 0) + closeAmt;
                 }
 
                 // PY column — Opening row = FY-2 closing (= prior eng's
                 // opening_balance), PY Closing row = PY closing (= prior eng's
                 // closing_balance).
-                if (openAmt > 0) {
+                // BUG-009/113: !== 0 (not > 0) so signed negatives net; byte-identical when OFF.
+                if (openAmt !== 0) {
                   newPy[openKey] = (newPy[openKey] ?? 0) + openAmt;
                 }
-                if (closeAmt > 0) {
+                if (closeAmt !== 0) {
                   newPy[closeKey] = (newPy[closeKey] ?? 0) + closeAmt;
                 }
               }
