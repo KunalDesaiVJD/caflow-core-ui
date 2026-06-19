@@ -212,24 +212,24 @@ export async function exportClientCertificateDocx(
   const FONT = "Calibri";
   const children: (Paragraph | Table)[] = [];
 
+  // Tight one-page layout. Earlier revisions used empty spacer paragraphs +
+  // 480-DXA gaps before the signature; Word snapped each spacer to the line
+  // grid and pushed "(Signature & stamp)" onto a second page. Spacing now
+  // lives on the content paragraphs directly (no empty spacers) and the
+  // signature gaps are halved so the whole certificate fits on A4.
   children.push(letterheadBlock(data.clientName, data.clientAddress, FONT));
 
-  children.push(para({ before: 240 })); // spacer
+  children.push(para({ before: 200, text: `Date : ${fmtDate(data.letterDate)}`, font: FONT }));
 
-  // Date
-  children.push(para({ text: `Date : ${fmtDate(data.letterDate)}`, font: FONT }));
-
-  // To, / firm / FRN
-  children.push(para({ before: 200, text: "To,", font: FONT }));
+  children.push(para({ before: 160, text: "To,", font: FONT }));
   children.push(para({ text: data.firmName || "[AUDIT FIRM NAME]", font: FONT, bold: true }));
   if (data.firmAddress) children.push(para({ text: data.firmAddress, font: FONT }));
   if (data.firmFRN)     children.push(para({ text: `FRN: ${data.firmFRN}`, font: FONT }));
 
-  children.push(para({ before: 200, text: "Dear Sir,", font: FONT }));
+  children.push(para({ before: 160, text: "Dear Sir,", font: FONT }));
 
-  // Opening line
   children.push(para({
-    before: 200,
+    before: 120,
     runs: [
       { text: "In connection with the Tax Audits for the financial year " },
       { text: data.financialYear || "[FY]", bold: true },
@@ -238,9 +238,8 @@ export async function exportClientCertificateDocx(
     font: FONT,
   }));
 
-  // Fixed Point 1 — Cash on hand
-  children.push(para({ before: 160 }));
   children.push(para({
+    before: 160,
     runs: [
       { text: "1.  Cash on hand Rs. " },
       { text: fmtMoney(data.cashOnHand), bold: true },
@@ -249,9 +248,8 @@ export async function exportClientCertificateDocx(
     font: FONT,
   }));
 
-  // Fixed Point 2 — Closing stock
-  children.push(para({ before: 120 }));
   children.push(para({
+    before: 120,
     runs: [
       { text: "2.  Approxi. Value of the Closing stock is Rs. " },
       { text: fmtMoney(data.closingStock), bold: true },
@@ -262,18 +260,14 @@ export async function exportClientCertificateDocx(
     font: FONT,
   }));
 
-  // Dynamic points 3+
   (data.points || []).forEach((text, i) => {
-    children.push(para({ before: 120 }));
-    children.push(para({ text: `${i + 3}.  ${text}`, font: FONT }));
+    children.push(para({ before: 120, text: `${i + 3}.  ${text}`, font: FONT }));
   });
 
-  // Closing line
-  children.push(para({ before: 200, text: data.closingLine || "You are requested to note the same.", font: FONT }));
+  children.push(para({ before: 160, text: data.closingLine || "You are requested to note the same.", font: FONT }));
 
-  // Signature block
-  children.push(para({ before: 480, text: "Yours faithfully,", font: FONT, bold: true }));
-  children.push(para({ before: 480, text: "x_____________", font: FONT, bold: true }));
+  children.push(para({ before: 200, text: "Yours faithfully,", font: FONT, bold: true }));
+  children.push(para({ before: 240, text: "x_____________", font: FONT, bold: true }));
   children.push(para({ text: "(Signature & stamp)", font: FONT, bold: true }));
 
   const doc = new Document({
@@ -309,20 +303,19 @@ export async function exportManagementLetterDocx(
   const FONT = "Arial";
   const children: (Paragraph | Table)[] = [];
 
+  // Tight one-page layout. Same fix as the Client Certificate above: drop
+  // the empty spacer paragraphs (Word's grid snapping pushed them into
+  // full-line gaps) and halve the signature gaps so "(Signature & stamp)"
+  // stays on the first page.
   children.push(letterheadBlock(data.clientName, data.clientAddress, FONT));
 
-  children.push(para({ before: 240 })); // spacer
+  children.push(para({ before: 200, text: `Date : ${fmtDate(data.letterDate)}`, font: FONT }));
 
-  // Date
-  children.push(para({ text: `Date : ${fmtDate(data.letterDate)}`, font: FONT }));
-
-  // To, / firm / FRN
-  children.push(para({ before: 200, text: "To,", font: FONT }));
+  children.push(para({ before: 160, text: "To,", font: FONT }));
   children.push(para({ text: data.firmName || "[AUDIT FIRM NAME]", font: FONT, bold: true }));
   if (data.firmAddress) children.push(para({ text: data.firmAddress, font: FONT }));
   if (data.firmFRN)     children.push(para({ text: `FRN: ${data.firmFRN}`, font: FONT }));
 
-  // Subject
   children.push(para({
     before: 200,
     runs: [
@@ -332,26 +325,22 @@ export async function exportManagementLetterDocx(
     font: FONT,
   }));
 
-  // Dear Sir
   children.push(para({ before: 160, text: "Dear Sir,", font: FONT }));
 
-  // Body paragraph(s) — split on newlines so multi-paragraph bodies stay readable.
   const segments = (data.bodyPara || "").split(/\n{2,}/).map(s => s.trim()).filter(Boolean);
   if (segments.length === 0) {
     children.push(para({ before: 160, font: FONT, text: "" }));
   } else {
     segments.forEach((seg, i) => {
-      children.push(para({ before: i === 0 ? 200 : 160, text: seg, font: FONT }));
+      children.push(para({ before: i === 0 ? 160 : 120, text: seg, font: FONT }));
     });
   }
 
-  // Confirm line
-  children.push(para({ before: 200, text: data.confirmLine || "", font: FONT }));
+  children.push(para({ before: 160, text: data.confirmLine || "", font: FONT }));
 
-  // Signature block
-  children.push(para({ before: 360, text: "Thank You.", font: FONT, bold: true }));
-  children.push(para({ before: 200, text: "Yours faithfully,", font: FONT, bold: true }));
-  children.push(para({ before: 480, text: "x_____________", font: FONT, bold: true }));
+  children.push(para({ before: 200, text: "Thank You.", font: FONT, bold: true }));
+  children.push(para({ before: 120, text: "Yours faithfully,", font: FONT, bold: true }));
+  children.push(para({ before: 240, text: "x_____________", font: FONT, bold: true }));
   children.push(para({ text: "(Signature & stamp)", font: FONT, bold: true }));
 
   const doc = new Document({
