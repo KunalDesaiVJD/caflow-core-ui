@@ -265,6 +265,17 @@ export function SubSection({ title, children }: { title?: string; children: Reac
   );
 }
 
+// PD-4 (note side, per the product-owner ruling): the "Total — … (per BS/P&L)"
+// grand-total rows are COA-derived and must NOT be hand-edited (Rule 8). They are
+// detected by the firm's naming convention (label ends in "(per BS)"/"(per P&L)").
+// Statutory DISCLOSURE rows (ageing, MSME/Others split, share-capital reconciliation,
+// deferred-tax components, etc.) do NOT match and stay editable. Figure-neutral: the
+// BS/P&L face reads the breakup sum, not these headline totals (see sumNotesSubRowsCY),
+// so locking them only removes an inert override affordance. An explicit isLocked prop
+// always takes precedence. Set false to restore fully-editable totals.
+const FS_NOTE_TOTAL_READONLY = true;
+const isNoteTotalLabel = (label: string): boolean => /\(per (BS|P&L)\)\s*$/.test(label);
+
 export function EditableRow({
   label, indent = 0,
   cy, py, autoCY, autoPY,
@@ -272,6 +283,7 @@ export function EditableRow({
   onCommitCy, onCommitPy, onResetCy, onResetPy,
   bold,
   actionGutter = true,
+  isLocked,
 }: {
   label:           string;
   indent?:         number;
@@ -287,9 +299,11 @@ export function EditableRow({
   onResetPy?:      () => void;
   bold?:           boolean;
   actionGutter?:   boolean;
+  isLocked?:       boolean;
 }) {
   const cyCol = "col-span-3";
   const pyCol = actionGutter ? "col-span-2" : "col-span-3";
+  const locked = isLocked ?? (FS_NOTE_TOTAL_READONLY && isNoteTotalLabel(label));
   return (
     <div className={cn("grid grid-cols-12 gap-2 items-center py-0.5", bold && "font-semibold")}>
       <div className="col-span-6" style={{ paddingLeft: indent * 12 }}>{label}</div>
@@ -299,6 +313,7 @@ export function EditableRow({
           autoValue={autoCY ?? null}
           isAutoFilled={autoCY !== undefined && autoCY !== null}
           isOverridden={!!isOverriddenCy}
+          isLocked={locked}
           onCommit={(v) => onCommitCy(v == null ? null : Number(v))}
           onResetToAuto={onResetCy}
         />
@@ -309,6 +324,7 @@ export function EditableRow({
           autoValue={autoPY ?? null}
           isAutoFilled={autoPY !== undefined && autoPY !== null}
           isOverridden={!!isOverriddenPy}
+          isLocked={locked}
           onCommit={(v) => onCommitPy(v == null ? null : Number(v))}
           onResetToAuto={onResetPy}
         />
