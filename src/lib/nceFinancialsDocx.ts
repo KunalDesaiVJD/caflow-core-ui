@@ -1305,9 +1305,14 @@ function buildNote1Section(
   const NAVY_RULE_THIN = { style: BorderStyle.SINGLE, size: 4, color: NAVY, space: 2 };
 
   // Entity-name banner — 14pt bold NAVY, thick NAVY rules top + bottom.
+  // Tight spacing values so the three header banners sit close to each other
+  // (entity → subtitle → "Note 1 — …") in the compact, professional layout
+  // the auditor expects. Combined with verticalAlign:TOP on the section
+  // (see Sections array below — verticalAlign:BOTH was previously stretching
+  // these gaps to fill the page).
   const entityBanner = new Paragraph({
     alignment: AlignmentType.CENTER,
-    spacing:   { before: 200, after: 80 },
+    spacing:   { before: 80, after: 40 },
     border:    { top: NAVY_RULE, bottom: NAVY_RULE },
     keepNext:  true,
     keepLines: true,
@@ -1321,7 +1326,7 @@ function buildNote1Section(
   // beneath the entity banner with a single line of separation).
   const subtitleBanner = new Paragraph({
     alignment: AlignmentType.CENTER,
-    spacing:   { before: 0, after: 120 },
+    spacing:   { before: 0, after: 60 },
     border:    { bottom: NAVY_RULE_THIN },
     keepNext:  true,
     keepLines: true,
@@ -2773,16 +2778,17 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
       // notesPortraitProps margin is only needed for Sections B/C which carry
       // a real two-line running header.
       //
-      // verticalAlign: BOTH — same justified vertical fill the BS / P&L pages
-      // use so the signature block at the end of note1SectionChildren is
-      // pushed to the page bottom (Place / Date / "For <client>" /
-      // "(Signature of assessee)" on the left; "As per our Audit Report of
-      // even date" / firm / partner / membership on the right) instead of
-      // floating mid-page after the numbered notes.
+      // verticalAlign intentionally omitted (defaults to TOP). BS / P&L pages
+      // use BOTH because dense tables fill the page, so the justified vertical
+      // fill is invisible. Note 1 is short free-text (8 numbered policies);
+      // with BOTH, Word stretched every paragraph and the signature block to
+      // fill the page top-to-bottom, producing huge visual gaps between
+      // entity name / subtitle / heading / first policy, and another gap
+      // before the signature. Letting content flow from the top gives the
+      // tight, professional layout the auditor expects.
       {
         properties: {
           page: note1PortraitProps,
-          verticalAlign: VerticalAlignSection.BOTH,
           // grid.type "default" disables Word's per-paragraph line-grid
           // snapping. Without this, each section silently emits
           // <w:docGrid w:linePitch="360"/> (the docx-js default) and
