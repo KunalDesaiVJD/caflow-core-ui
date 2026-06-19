@@ -651,6 +651,41 @@ Deno.serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
     );
 
+    // ── Authorization (Phase 0 / C7) ─────────────────────────────────────
+    // The platform now enforces verify_jwt=true, but the project anon key is
+    // itself a valid JWT, so that alone does not stop an anonymous relay.
+    // We therefore (a) require either the service-role key or a real signed-in
+    // USER, and (b) restrict the phishing-capable params (direct_email /
+    // custom_html / custom_cc) to firm staff or the superadmin of the target
+    // firm. Typed notifications stay open to any signed-in user (e.g. client
+    // portal flows), preserving existing behaviour.
+    {
+      const authHeader = req.headers.get("Authorization") || "";
+      const bearer = authHeader.replace(/^Bearer\s+/i, "").trim();
+      const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+      const isServiceCall = bearer.length > 0 && bearer === serviceKey;
+
+      if (!isServiceCall) {
+        if (!bearer) return jsonResponse({ error: "Unauthorized" }, 401);
+        const { data: userData, error: authErr } = await adminClient.auth.getUser(bearer);
+        if (authErr || !userData?.user) return jsonResponse({ error: "Unauthorized" }, 401);
+
+        const usesSensitiveParams =
+          !!direct_email ||
+          !!(payload && (payload as Record<string, unknown>).custom_html) ||
+          (Array.isArray(custom_cc) && custom_cc.length > 0);
+
+        if (usesSensitiveParams) {
+          const { data: caller } = await adminClient
+            .from("users").select("firm_id, role").eq("id", userData.user.id).maybeSingle();
+          const isSuperadmin = caller?.role === "superadmin";
+          if (!isSuperadmin && caller?.firm_id !== firm_id) {
+            return jsonResponse({ error: "Forbidden: not authorized for this firm" }, 403);
+          }
+        }
+      }
+    }
+
     // Enrich payload with firm name for email branding
     const { data: firmData } = await adminClient
       .from("firms").select("name").eq("id", firm_id).single();
