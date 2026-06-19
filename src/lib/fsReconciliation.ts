@@ -60,6 +60,11 @@ export interface ReconRow {
   /** Worst-of-CY-and-PY classification of `delta` (note vs BS face).
    *  "manual" classifies "everything reconciles AND auditor added rows". */
   status:      ReconStatus | "manual";
+  /** PD-2 / BUG-087: true if the note actually contains a user-entered manual
+   *  customRow. When status === "manual" but this is false, the Note − COA gap
+   *  is an UNEXPLAINED engine divergence, not a legitimate audit addition.
+   *  Optional: undefined on the corporate path (not computed there yet). */
+  manualVerified?: boolean;
 }
 
 export interface ReconResult {
@@ -141,6 +146,12 @@ export function validateFSReconciliation(args: ValidateArgs): ReconResult {
     else if (manualPresent)      status = "manual";
     else                         status = "ok";
 
+    // PD-2 / BUG-087: a non-zero manualDelta is only a *legitimate* manual
+    // addition if the note actually carries a user-entered manual customRow.
+    // Manual rows are serialised under cy_data._custom_rows (see serialiseNoteData).
+    const customRowsCy = (noteRow as { cy_data?: { _custom_rows?: Array<{ source?: string }> } })?.cy_data?._custom_rows;
+    const manualVerified = Array.isArray(customRowsCy) && customRowsCy.some(r => r?.source === "manual");
+
     out.push({
       code, noteType, col,
       label: NCE_NOTE_LABEL[code] || noteType,
@@ -150,6 +161,7 @@ export function validateFSReconciliation(args: ValidateArgs): ReconResult {
       manualDelta: { cy: mdCy,  py: mdPy  },
       delta:       { cy: dCy,   py: dPy   },
       status,
+      manualVerified,
     });
   }
 

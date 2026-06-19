@@ -121,6 +121,10 @@ export default function FsHealthPanel({ nceNotesByType, corporateNotes, bsFaceCy
   const renderNormalPanel = () => {
     if (!result) return null;
   const manualCount = result.rows.filter(r => r.status === "manual").length;
+  // PD-2 / BUG-087: a "manual" row with no backing user-entered manual customRow
+  // is an UNEXPLAINED Note ≠ COA divergence (engine issue), not an audit addition.
+  const unverifiedManual = result.rows.filter(r => r.status === "manual" && r.manualVerified === false).length;
+  const verifiedManual   = manualCount - unverifiedManual;
   const tone =
     result.severeCount > 0 ? "severe"
   : result.minorCount  > 0 ? "minor"
@@ -174,11 +178,24 @@ export default function FsHealthPanel({ nceNotesByType, corporateNotes, bsFaceCy
           )}
           {tone === "ok" && manualCount > 0 && (
             <span>
-              FS Health: {okCount - manualCount}/{total} reconcile cleanly ·{" "}
-              <span className="text-amber-700">
-                {manualCount} with manual adjustment{manualCount === 1 ? "" : "s"}
-              </span>{" "}
-              (legitimate audit additions)
+              FS Health: {okCount - manualCount}/{total} reconcile cleanly
+              {verifiedManual > 0 && (
+                <>
+                  {" "}·{" "}
+                  <span className="text-amber-700">
+                    {verifiedManual} with manual adjustment{verifiedManual === 1 ? "" : "s"}
+                  </span>{" "}
+                  (audit additions)
+                </>
+              )}
+              {unverifiedManual > 0 && (
+                <>
+                  {" "}·{" "}
+                  <span className="text-red-700 font-semibold">
+                    {unverifiedManual} unexplained difference{unverifiedManual === 1 ? "" : "s"} (Note ≠ COA, no manual row) — investigate
+                  </span>
+                </>
+              )}
             </span>
           )}
           {tone === "minor" && (
@@ -244,8 +261,13 @@ export default function FsHealthPanel({ nceNotesByType, corporateNotes, bsFaceCy
                   <td className={`py-1 pr-2 text-center text-[10px] ${rowTone(r)}`}>
                     {r.status === "drift_severe" && <span>drift</span>}
                     {r.status === "drift_minor"  && <span>minor</span>}
-                    {r.status === "manual"       && (
-                      <span title="Auditor added manual rows on top of COA total — kept as legitimate audit adjustment.">
+                    {r.status === "manual" && r.manualVerified === false && (
+                      <span className="text-red-700 font-medium" title="Note total ≠ COA total but the note has NO user-entered manual row — an unexplained engine divergence to investigate, not an audit adjustment.">
+                        ⚠ unexplained
+                      </span>
+                    )}
+                    {r.status === "manual" && r.manualVerified !== false && (
+                      <span title="Auditor added manual rows on top of COA total — kept as a legitimate audit adjustment.">
                         manual adj.
                       </span>
                     )}
@@ -259,9 +281,11 @@ export default function FsHealthPanel({ nceNotesByType, corporateNotes, bsFaceCy
             <Info className="h-3 w-3 mt-0.5 shrink-0" />
             <span>
               <strong>COA</strong> = signed TB × current COA mapping (the source of truth).{" "}
-              <strong>Manual</strong> = Note − COA. Positive Manual values are
-              legitimate audit adjustments (e.g. provisions, SCN demand) the auditor
-              has added inside the Note; they should NOT be removed.{" "}
+              <strong>Manual</strong> = Note − COA. A Manual value backed by a
+              user-entered manual row is a legitimate audit adjustment (e.g.
+              provisions, SCN demand) and should NOT be removed; a Manual value with
+              NO manual row in the note is an <strong>unexplained</strong> Note ≠ COA
+              divergence (engine issue) to investigate.{" "}
               <strong>Note</strong> = the underlying note's grand total.{" "}
               <strong>Face</strong> = what the BS / P&amp;L stat card displays.{" "}
               Any drift between Note and Face is a code-path bug — Re-correct from

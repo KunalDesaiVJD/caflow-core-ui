@@ -57,3 +57,26 @@ describe("FsHealthPanel — Phase 5 BS-imbalance surfacing", () => {
     expect(container.firstChild).toBeNull();
   });
 });
+
+describe("FsHealthPanel — PD-2/BUG-087 manual-vs-drift labelling", () => {
+  const manualRow = (manualVerified: boolean) => ({
+    code: "NCE_TP", noteType: "trade_payables", label: "Trade Payables",
+    coaTotal: { cy: 100, py: 0 }, noteTotal: { cy: 5100, py: 0 },
+    bsFace: { cy: 5100, py: 0 }, manualDelta: { cy: 5000, py: 0 },
+    delta: { cy: 0, py: 0 }, status: "manual", manualVerified,
+  });
+
+  it("flags an unverified 'manual' row (no backing manual customRow) as an unexplained difference", () => {
+    const res = { rows: [manualRow(false)], allOk: true, severeCount: 0, minorCount: 0, computedAt: "2026-06-19" };
+    const { container } = render(<FsHealthPanel {...baseProps} precomputedResult={res as any} bsResidual={null} />);
+    expect(container.textContent).toMatch(/unexplained difference/i);
+    expect(container.textContent).not.toMatch(/audit additions/i);
+  });
+
+  it("keeps a verified 'manual' row labelled as an audit addition", () => {
+    const res = { rows: [manualRow(true)], allOk: true, severeCount: 0, minorCount: 0, computedAt: "2026-06-19" };
+    const { container } = render(<FsHealthPanel {...baseProps} precomputedResult={res as any} bsResidual={null} />);
+    expect(container.textContent).toMatch(/with manual adjustment/i);
+    expect(container.textContent).not.toMatch(/unexplained difference/i);
+  });
+});
