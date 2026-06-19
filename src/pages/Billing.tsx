@@ -4,6 +4,7 @@ import LedgerTabComponent from "@/components/billing/LedgerTab";
 import BillingDashboardTab from "@/components/billing/BillingDashboardTab";
 import EmailSettingsTab from "@/components/billing/EmailSettingsTab";
 import ReceivablesReportTab from "@/components/billing/ReceivablesReportTab";
+import BillingHealthPanel from "@/components/billing/BillingHealthPanel";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -261,6 +262,8 @@ const Billing = () => {
           </div>
         )}
       </div>
+
+      <BillingHealthPanel firmId={activeFirmId} />
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="flex-wrap">
