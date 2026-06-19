@@ -22,6 +22,230 @@ import { NCECapitalAccount } from "@/components/stage8/NCECapitalAccount";
 import { NCEDetailedNotes }  from "@/components/stage8/NCEDetailedNotes";
 import { NCEPPESchedule }    from "@/components/stage8/NCEPPESchedule";
 
+// ─── Note 1 preview — Summary of Significant Accounting Policies ──────────────
+// Mirrors the DOCX export's Note 1 page (src/lib/nceFinancialsDocx.ts →
+// buildNote1Section + defaultNceNote1Template) so the on-screen Preview matches
+// what the exported Word/PDF shows. Read-only; the editor surface lives in
+// stage7/NotesToAccounts.tsx.
+
+interface Nta1Sig {
+  firmName?:      string;
+  firmFRN?:       string;
+  partnerName?:   string;
+  membershipNo?:  string;
+  clientName?:    string;
+  place?:         string;
+  date?:          string;
+}
+
+interface Note1RowData {
+  id: string; label: string; title: string; selected: boolean; text: string;
+}
+
+function defaultNceNote1Template(auditYear: string): Note1RowData[] {
+  return [
+    { id: "note-1", label: "Note 1", title: "Balance Confirmation", selected: true,
+      text: "All debit and credit balances and accounts squared up during the year are subject to confirmation from respective parties." },
+    { id: "note-2", label: "Note 2", title: "Rearrangement of Figures", selected: true,
+      text: "The figures are rearranged/regrouped wherever considered necessary and rounded off to the nearest rupee." },
+    { id: "note-3", label: "Note 3", title: "Cash Balance & Closing Stock", selected: true,
+      text: `Cash balance on hand was Rs. [CASH_AMOUNT]/- and value of Closing Stock Rs. [CLOSING_STOCK]/- as at 31st March, ${auditYear} are taken as certified by proprietor.` },
+    { id: "note-4", label: "Note 4", title: "Current Assets Valuation", selected: true,
+      text: "In opinion of assessee, current assets, loans & advances are approximately of the value at which these are stated in the balance sheet." },
+    { id: "note-5", label: "Note 5", title: "Fixed Assets", selected: true,
+      text: "Fixed Assets are stated at Cost less depreciation as shown in Note- [FA_NOTE]. Details of rate and amount of Depreciation claimed has been stated in Note-[DEP_NOTE]." },
+    { id: "note-6", label: "Note 6", title: "Reliance on Vouchers", selected: true,
+      text: "Whenever the supporting proof for the entries made in the books of accounts are not available for the purpose of audit, we are relied on the vouchers prepared and authenticated by the partner." },
+    { id: "note-7", label: "Note 7", title: "Loans via Cheque/DD/ECS", selected: true,
+      text: "As informed by the partner, the amount of loan or deposits or specified sums taken or accepted or repaid by the assessee through a/c. payee cheque/demand draft or ECS only. However, it is not possible for us to verify the same as necessary evidence are not in possession of the assessee." },
+    { id: "note-8", label: "Note 8", title: "Notes form Part of Accounts", selected: true,
+      text: `Notes No. 1 to [LAST_NOTE] forms part of accounts for the year ended on 31st March, ${auditYear}.` },
+  ];
+}
+
+function fmtSigDate(d?: string): string {
+  if (!d) return "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : d;
+}
+
+function Note1PreviewSection({
+  entityName, cyYear, ntaData, sig,
+}: {
+  entityName: string;
+  cyYear?: string;
+  ntaData?: any | null;
+  sig?: Nta1Sig | null;
+}) {
+  const NAVY  = "#1F3864";
+  const FONT  = "Calibri, Arial, sans-serif";
+  const yearStr = String(cyYear || "").slice(-4) || "20XX";
+
+  const saved: any[] = Array.isArray(ntaData?.notes_json) ? ntaData.notes_json : [];
+  const template     = defaultNceNote1Template(yearStr);
+  const templateMap  = new Map(template.map(t => [t.id, t]));
+
+  const merged: Note1RowData[] = saved.length === 0
+    ? template
+    : saved.map((r: any) => {
+        const tmpl = templateMap.get(r.id);
+        if (tmpl) {
+          return {
+            ...tmpl,
+            selected: r.selected ?? tmpl.selected,
+            text:     r.text     ?? tmpl.text,
+            title:    r.title    ?? tmpl.title,
+          };
+        }
+        return {
+          id:       String(r.id ?? ""),
+          label:    String(r.label ?? r.title ?? ""),
+          title:    String(r.title ?? ""),
+          selected: r.selected ?? true,
+          text:     String(r.text  ?? ""),
+        };
+      });
+
+  const header           = (ntaData?.header_overrides || {}) as Record<string, any>;
+  const note1NewEntityOn = !!ntaData?.note1_new_entity_enabled
+                        && String(ntaData?.note1_new_entity_text || "").trim().length > 0;
+  const note1NewEntityTx = String(ntaData?.note1_new_entity_text || "").trim();
+  const note3Variant     = String(ntaData?.note3_variant || "none");
+  const note3VariantTxt  = String(header?.note3VariantText || ntaData?.note3_variant_text || "").trim();
+
+  const selectedNotes = merged.filter(n => n.selected !== false);
+  const lastNoteNum   = String(header.lastNoteOverride || selectedNotes.length);
+
+  const resolveTokens = (text: string): string =>
+    (text || "")
+      .replace(/\[CASH_AMOUNT\]/g,   String(header.cashAmount   || ""))
+      .replace(/\[CLOSING_STOCK\]/g, String(header.closingStock || ""))
+      .replace(/\[FA_NOTE\]/g,       String(header.faNoteNum    || ""))
+      .replace(/\[DEP_NOTE\]/g,      String(header.depNoteNum   || ""))
+      .replace(/\[LAST_NOTE\]/g,     lastNoteNum);
+
+  const displayEntity = (header.entityNameOverride || entityName || "").trim();
+  const assesseeName  = (sig?.clientName || displayEntity || "").trim();
+  const firmName      = sig?.firmName      || "_______________";
+  const firmFRN       = sig?.firmFRN       || "_______________";
+  const partnerName   = sig?.partnerName   || "_______________";
+  const partnerMembNo = sig?.membershipNo  || "_______________";
+  const placeText     = sig?.place         || "_______________";
+  const dateText      = fmtSigDate(sig?.date);
+
+  return (
+    <div style={{ fontFamily: FONT, color: "#000" }} className="space-y-3">
+      {/* Entity-name banner — 14pt bold NAVY, thick NAVY rules top + bottom */}
+      <div
+        style={{
+          textAlign:       "center",
+          fontSize:        14,
+          fontWeight:      700,
+          color:           NAVY,
+          textTransform:   "uppercase",
+          letterSpacing:   "0.04em",
+          padding:         "4px 0",
+          borderTop:       `2px solid ${NAVY}`,
+          borderBottom:    `2px solid ${NAVY}`,
+        }}
+      >
+        {displayEntity}
+      </div>
+
+      {/* Subtitle — 10pt bold NAVY, thin rule below */}
+      <div
+        style={{
+          textAlign:    "center",
+          fontSize:     10,
+          fontWeight:   700,
+          color:        NAVY,
+          paddingBottom:"3px",
+          borderBottom: `1px solid ${NAVY}`,
+          marginTop:    "2px",
+        }}
+      >
+        Notes forming part of the Financial Statements for the year ended, 31st March, {yearStr}
+      </div>
+
+      {/* "Note 1 — …" heading — left-aligned NAVY, thin rule below */}
+      <div
+        style={{
+          fontSize:     10,
+          fontWeight:   700,
+          color:        NAVY,
+          paddingBottom:"3px",
+          borderBottom: `1px solid ${NAVY}`,
+        }}
+      >
+        Note 1 — Summary of Significant accounting policies
+      </div>
+
+      {/* Numbered policies — 2-col table, no borders */}
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
+        <tbody>
+          {selectedNotes.map((n, i) => {
+            const num = i + 1;
+            let body = resolveTokens(n.text || "");
+            if (n.id === "note-1" && note1NewEntityOn) {
+              body += "\n\n" + resolveTokens(note1NewEntityTx);
+            }
+            if (n.id === "note-3" && note3Variant !== "none" && note3VariantTxt) {
+              body += "\n\n" + resolveTokens(note3VariantTxt);
+            }
+            const segments = body.split(/\n{2,}/).map(s => s.trim()).filter(Boolean);
+            return (
+              <tr key={n.id}>
+                <td
+                  style={{
+                    width:        "28px",
+                    verticalAlign:"top",
+                    textAlign:    "center",
+                    padding:      "4px 6px",
+                  }}
+                >
+                  {num}
+                </td>
+                <td style={{ verticalAlign: "top", padding: "4px 6px", lineHeight: 1.35 }}>
+                  {segments.length === 0
+                    ? <span>&nbsp;</span>
+                    : segments.map((seg, idx) => (
+                        <div key={idx} style={{ marginBottom: idx === segments.length - 1 ? 0 : 4 }}>
+                          {seg}
+                        </div>
+                      ))}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
+      {/* Signature block — assessee left / firm right */}
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10, marginTop: "10px" }}>
+        <tbody>
+          <tr>
+            <td style={{ verticalAlign: "top", width: "50%", padding: "0 6px" }}>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>For, {assesseeName}</div>
+              <div style={{ fontWeight: 700 }}>x__________________</div>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>Signature of assessee</div>
+              <div style={{ fontWeight: 700 }}>Place: {placeText}</div>
+              <div style={{ fontWeight: 700 }}>Date : {dateText}</div>
+            </td>
+            <td style={{ verticalAlign: "top", width: "50%", padding: "0 6px", textAlign: "right" }}>
+              <div style={{ fontWeight: 700 }}>For {firmName}</div>
+              <div style={{ fontWeight: 700 }}>Chartered Accountants</div>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>FRN: {firmFRN}</div>
+              <div style={{ fontWeight: 700 }}>{partnerName}</div>
+              <div style={{ fontWeight: 700 }}>Partner</div>
+              <div style={{ fontWeight: 700 }}>Membership No.: {partnerMembNo}</div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface Props {
@@ -46,11 +270,26 @@ interface Props {
    *  PatternBTable rows that were expanded in the editor will also be expanded
    *  in the preview instead of defaulting to collapsed. */
   initialExpandedRows?: Set<string>;
+  /** Stage 7 "Notes to Accounts" row from notes_to_accounts_data.
+   *  When provided in readOnly mode, the Note 1 (Summary of Significant
+   *  Accounting Policies) page is rendered at the top of the preview so the
+   *  on-screen view matches the DOCX export. */
+  ntaData?: any | null;
+  /** Signature block fields used by the Note 1 preview footer. */
+  sig?: {
+    firmName?:     string;
+    firmFRN?:      string;
+    partnerName?:  string;
+    membershipNo?: string;
+    clientName?:   string;
+    place?:        string;
+    date?:         string;
+  } | null;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteMap, onExpansionStateUpdate, readOnly = false, entityName, cyYear, initialExpandedRows }: Props) {
+export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteMap, onExpansionStateUpdate, readOnly = false, entityName, cyYear, initialExpandedRows, ntaData, sig }: Props) {
   const [activeSubTab, setActiveSubTab] = useState("capital_account");
 
   useEffect(() => {
@@ -118,6 +357,15 @@ export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteM
           between the three sections without a huge scroll. */}
       {readOnly ? (
         <div className="space-y-6">
+          {/* Note 1 — Summary of Significant Accounting Policies. Rendered as a
+              standalone "page" before the structured notes so the preview
+              matches the DOCX export (Section A in nceFinancialsDocx.ts). */}
+          <Note1PreviewSection
+            entityName={entityName || ""}
+            cyYear={cyYear}
+            ntaData={ntaData}
+            sig={sig}
+          />
           <NCECapitalAccount engagementId={engagementId} readOnly={readOnly} />
           <NCEDetailedNotes engagementId={engagementId} dynamicNoteMap={dynamicNoteMap} onExpansionStateUpdate={onExpansionStateUpdate} readOnly={readOnly} initialExpandedRows={initialExpandedRows} />
           <NCEPPESchedule engagementId={engagementId} readOnly={readOnly} />
