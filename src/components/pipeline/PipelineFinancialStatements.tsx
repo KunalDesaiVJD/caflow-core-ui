@@ -9401,6 +9401,16 @@ export default function PipelineFinancialStatements({
                   entityName={engagement?.clients?.name || ""}
                   cyYear={cyYear}
                   initialExpandedRows={nceExpandedRows}
+                  ntaData={notesToAccountsData ?? null}
+                  sig={{
+                    firmName:     sigFirmName,
+                    firmFRN:      sigFirmFRN,
+                    partnerName:  sigPartnerName,
+                    membershipNo: sigMembershipNo,
+                    clientName:   sigClientName,
+                    place:        sigPlace,
+                    date:         sigDate,
+                  }}
                 />
               </div>
             </div>
