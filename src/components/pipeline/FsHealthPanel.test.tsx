@@ -19,13 +19,18 @@ describe("FsHealthPanel — Phase 5 BS-imbalance surfacing", () => {
   it("renders the red imbalance row when bsResidual exceeds tolerance, alongside the normal panel", () => {
     render(<FsHealthPanel {...baseProps} bsResidual={{ cy: 5000, py: 0 }} />);
     expect(screen.getByText(/Balance Sheet does not balance/i)).toBeTruthy();
-    expect(screen.getByText(/5,000/)).toBeTruthy();
+    expect(screen.getAllByText(/5,000/).length).toBeGreaterThan(0);
     expect(screen.getByText(/FS Health:/i)).toBeTruthy(); // normal panel still renders
   });
 
   it("shows a CY · PY sub-line when both columns are off", () => {
     render(<FsHealthPanel {...baseProps} bsResidual={{ cy: 5000, py: 3000 }} />);
     expect(screen.getByText(/CY ₹5,000 · PY ₹3,000/)).toBeTruthy();
+  });
+
+  it("BUG-100: shows the CY · PY sub-line even when only ONE year is off", () => {
+    render(<FsHealthPanel {...baseProps} bsResidual={{ cy: 5000, py: 0 }} />);
+    expect(screen.getByText(/CY ₹5,000 · PY ₹0/)).toBeTruthy();
   });
 
   it("does NOT render the imbalance row when balanced (residual 0)", () => {

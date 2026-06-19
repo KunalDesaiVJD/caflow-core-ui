@@ -110,7 +110,9 @@ export default function FsHealthPanel({ nceNotesByType, corporateNotes, bsFaceCy
         <AlertCircle className="h-4 w-4 shrink-0" />
         <span>Balance Sheet does not balance by ₹{fmtINR(Math.max(Math.abs(cyImb), Math.abs(pyImb)))} — assets ≠ equity + liabilities</span>
       </div>
-      {Math.abs(cyImb) > TOL && Math.abs(pyImb) > TOL && (
+      {/* BUG-100: show the per-year breakdown when EITHER year is off (was && —
+          which hid the CY/PY split whenever only one year drifted). */}
+      {(Math.abs(cyImb) > TOL || Math.abs(pyImb) > TOL) && (
         <div className="mt-1 text-xs opacity-80">CY ₹{fmtINR(cyImb)} · PY ₹{fmtINR(pyImb)}</div>
       )}
     </div>
