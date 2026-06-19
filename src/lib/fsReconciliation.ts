@@ -28,6 +28,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { getNCENoteFaceTotal, NCE_CODE_TO_NOTE, NCE_NOTE_FS_MAP } from "@/lib/nceAutoPopulate";
 import { signedBalance, signedOpening } from "@/lib/fsSignConvention";
 import { buildCanonicalNceCode, buildNceLiabCodeSet } from "@/lib/nceNoteRegistry";
+import { FS_BLOCK_UNEXPLAINED_DRIFT } from "@/lib/nceFeatureFlags";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -98,6 +99,10 @@ interface ValidateArgs {
    *  reads 0). Pass the result of computeCOATotals here to enable the
    *  three-way breakdown. */
   coaTotals?:    Record<string, { cy: number; py: number }>;
+  /** PD-2 Phase-3 — when true, an unexplained Note≠COA gap (no manual row) is escalated to
+   *  drift so it blocks export. Defaults to the FS_BLOCK_UNEXPLAINED_DRIFT flag; overridable
+   *  for tests. */
+  blockUnexplained?: boolean;
 }
 
 export function validateFSReconciliation(args: ValidateArgs): ReconResult {
@@ -139,18 +144,28 @@ export function validateFSReconciliation(args: ValidateArgs): ReconResult {
     const dCy = Math.round((ntCy - faceCy) * 100) / 100;
     const dPy = Math.round((ntPy - facePy) * 100) / 100;
     const worst         = Math.max(Math.abs(dCy), Math.abs(dPy));
-    const manualPresent = Math.max(Math.abs(mdCy), Math.abs(mdPy)) > tolMinor;
-    let status: ReconStatus | "manual";
-    if (worst >= tolSevere)      status = "drift_severe";
-    else if (worst >= tolMinor)  status = "drift_minor";
-    else if (manualPresent)      status = "manual";
-    else                         status = "ok";
+    const manualMag     = Math.max(Math.abs(mdCy), Math.abs(mdPy));
+    const manualPresent = manualMag > tolMinor;
 
     // PD-2 / BUG-087: a non-zero manualDelta is only a *legitimate* manual
     // addition if the note actually carries a user-entered manual customRow.
     // Manual rows are serialised under cy_data._custom_rows (see serialiseNoteData).
     const customRowsCy = (noteRow as { cy_data?: { _custom_rows?: Array<{ source?: string }> } })?.cy_data?._custom_rows;
     const manualVerified = Array.isArray(customRowsCy) && customRowsCy.some(r => r?.source === "manual");
+    // PD-2 Phase-3 enforcement (FS_BLOCK_UNEXPLAINED_DRIFT, default OFF): an unexplained
+    // Note≠COA gap (no backing manual row) is engine divergence, not an audit addition —
+    // escalate it to drift so it COUNTS toward severeCount and blocks export. OFF leaves
+    // the status logic byte-identical (both new branches are skipped).
+    const blockUnexplained = args.blockUnexplained ?? FS_BLOCK_UNEXPLAINED_DRIFT;
+    const unexplained = manualPresent && !manualVerified;
+
+    let status: ReconStatus | "manual";
+    if (worst >= tolSevere)                                             status = "drift_severe";
+    else if (blockUnexplained && unexplained && manualMag >= tolSevere) status = "drift_severe";
+    else if (worst >= tolMinor)                                         status = "drift_minor";
+    else if (blockUnexplained && unexplained && manualMag >= tolMinor)  status = "drift_minor";
+    else if (manualPresent)                                             status = "manual";
+    else                                                                status = "ok";
 
     out.push({
       code, noteType, col,
@@ -234,6 +249,8 @@ interface ValidateCorporateArgs {
   coaTotals?:        Record<string, { cy: number; py: number }>;
   toleranceMinor?:   number;
   toleranceSevere?:  number;
+  /** PD-2 Phase-3 — see ValidateArgs.blockUnexplained. */
+  blockUnexplained?: boolean;
 }
 
 export function validateCorporateFSReconciliation(args: ValidateCorporateArgs): ReconResult {
@@ -269,12 +286,18 @@ export function validateCorporateFSReconciliation(args: ValidateCorporateArgs): 
     const dCy = Math.round((noteCy - faceCy) * 100) / 100;
     const dPy = Math.round((notePy - facePy) * 100) / 100;
     const worst         = Math.max(Math.abs(dCy), Math.abs(dPy));
-    const manualPresent = Math.max(Math.abs(mdCy), Math.abs(mdPy)) > tolMinor;
+    const manualMag     = Math.max(Math.abs(mdCy), Math.abs(mdPy));
+    const manualPresent = manualMag > tolMinor;
+    // PD-2 Phase-3 enforcement (FS_BLOCK_UNEXPLAINED_DRIFT, default OFF) — see NCE validator.
+    const blockUnexplained = args.blockUnexplained ?? FS_BLOCK_UNEXPLAINED_DRIFT;
+    const unexplained = manualPresent && !corpManualVerified;
     let status: ReconStatus | "manual";
-    if (worst >= tolSevere)      status = "drift_severe";
-    else if (worst >= tolMinor)  status = "drift_minor";
-    else if (manualPresent)      status = "manual";
-    else                         status = "ok";
+    if (worst >= tolSevere)                                             status = "drift_severe";
+    else if (blockUnexplained && unexplained && manualMag >= tolSevere) status = "drift_severe";
+    else if (worst >= tolMinor)                                         status = "drift_minor";
+    else if (blockUnexplained && unexplained && manualMag >= tolMinor)  status = "drift_minor";
+    else if (manualPresent)                                             status = "manual";
+    else                                                                status = "ok";
 
     out.push({
       code,

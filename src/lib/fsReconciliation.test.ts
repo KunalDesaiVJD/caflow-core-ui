@@ -35,6 +35,22 @@ describe("validateCorporateFSReconciliation — BUG-024/D2.8 COA anchor keying +
     expect(tp!.manualVerified).toBe(true);
   });
 
+  it("FS_BLOCK_UNEXPLAINED_DRIFT: an unexplained Note!=COA gap escalates to drift and blocks (PD-2 Phase-3)", () => {
+    const coaKey = CANONICAL_NCE_CODE["BS_CL_TP"] ?? "BS_CL_TP";
+    const notes = { bs_liab: { trade_payables: { breakup: [{ description: "X", amount_cy: 1000, amount_py: 0, source: "auto", linked_ledger: "L" }] } } } as any;
+    const args = { corporateNotes: notes, bsFaceCy: { BS_CL_TP: 1000 }, bsFacePy: {}, coaTotals: { [coaKey]: { cy: 600, py: 0 } } };
+    // OFF (default): a Note!=COA gap with no manual row is shown as "manual", does NOT block.
+    const off = validateCorporateFSReconciliation(args);
+    const offRow = off.rows.find((r) => r.code === "BS_CL_TP");
+    expect(offRow!.status).toBe("manual");
+    expect(off.severeCount).toBe(0);
+    // ON: the unexplained gap (>= Rs.100, no manual row) escalates to drift and counts to the block.
+    const on = validateCorporateFSReconciliation({ ...args, blockUnexplained: true });
+    const onRow = on.rows.find((r) => r.code === "BS_CL_TP");
+    expect(onRow!.status).toBe("drift_severe");
+    expect(on.severeCount).toBeGreaterThanOrEqual(1);
+  });
+
   it("does not crash and leaves manualVerified false when there is no manual breakup row", () => {
     const coaKey = CANONICAL_NCE_CODE["BS_CL_TP"] ?? "BS_CL_TP";
     const res = validateCorporateFSReconciliation({

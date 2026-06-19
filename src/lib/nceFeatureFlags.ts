@@ -72,3 +72,14 @@ export const FS_CORP_PY_FACE_FROM_NOTE = false;
  * only (no figure moves) → stays OFF until reviewed against real corporate engagements.
  */
 export const FS_CORP_EXPORT_GATE = false;
+
+/**
+ * PD-2 / D2.3 Phase-3 enforcement — block on unexplained Note≠COA divergence. When false
+ * (default), a Note total that differs from the COA anchor with NO backing manual row is shown
+ * as "⚠ unexplained" in the FS-Health panel but does NOT block export (report-only). When true,
+ * such an unexplained gap is escalated to drift (drift_severe ≥ ₹100) so it counts toward
+ * severeCount and blocks export — i.e. once the sign flip makes COA == Note, any residual
+ * divergence is treated as the real engine bug it is. Behaviour change only (no figure moves)
+ * → stays OFF until the sign/keying flags are validated, so it doesn't fire on the pre-fix gap.
+ */
+export const FS_BLOCK_UNEXPLAINED_DRIFT = false;
