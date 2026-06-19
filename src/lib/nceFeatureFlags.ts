@@ -51,3 +51,14 @@ export const NCE_RESYNC_DELETE_FIRST = false;
  * stays OFF until the real-data parity run in the credentialed environment.
  */
 export const FS_NO_CAPITAL_PLUG = false;
+
+/**
+ * PD-6 / D2.7 — Corporate PY Balance-Sheet face source. When false (default), the
+ * corporate BS PY column is sourced from the raw current-year OPENING balance
+ * (exportPy) in preference to the note's PY breakup — so the PY face can diverge
+ * from its own note table, and the same divergence ships into the Word BS (BUG-031).
+ * When true, the PY face reads the NOTE PY total (sumNotesSubRowsPY), matching the CY
+ * column and the note table. BS sections only; P&L is unaffected. Figure-MOVING →
+ * stays OFF until the real-data parity run in the credentialed environment.
+ */
+export const FS_CORP_PY_FACE_FROM_NOTE = false;

@@ -58,7 +58,7 @@ import {
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 import FsHealthPanel from "@/components/pipeline/FsHealthPanel";
 import { evaluateNotesStaleness } from "@/lib/notesStaleness";
-import { NCE_RESYNC_DELETE_FIRST, FS_NO_CAPITAL_PLUG } from "@/lib/nceFeatureFlags";
+import { NCE_RESYNC_DELETE_FIRST, FS_NO_CAPITAL_PLUG, FS_CORP_PY_FACE_FROM_NOTE } from "@/lib/nceFeatureFlags";
 import { validateFSReconciliation, logReconciliationDrift, NCE_LIAB_CODE_SET, computeCOATotals, validateOpeningVsPriorClose } from "@/lib/fsReconciliation";
 import { isTallyPLAccount, currentYearProfitAlreadyInReserves } from "@/lib/tallyDetection";
 
@@ -3658,7 +3658,10 @@ export default function PipelineFinancialStatements({
       // Fall back to the note sum / pyOf when there is NO opening balance — e.g. a
       // manual breakup note with no TB-mapped ledger (share capital keyed straight
       // into stage5_notes), so those clients keep showing their note figure.
-      if (section !== "pl") {
+      // PD-6 / D2.7 (FS_CORP_PY_FACE_FROM_NOTE): when ON, the corporate PY face reads
+      // the NOTE PY total (below) instead of the raw CY opening balance, so the face
+      // matches its own note table (and the Word BS PY too). OFF = legacy exportPy source.
+      if (!FS_CORP_PY_FACE_FROM_NOTE && section !== "pl") {
         const openingPy = exportPy[fsCode];
         if (openingPy !== undefined && Math.abs(openingPy) > 0.005) return openingPy;
       }
