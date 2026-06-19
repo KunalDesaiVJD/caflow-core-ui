@@ -52,4 +52,48 @@ describe("evaluateNotesStaleness", () => {
     const r = evaluateNotesStaleness({ latestTbSyncedAt: b, latestNotesUpdatedAt: a });
     expect(r.isStale).toBe(true);
   });
+
+  // BUG-041 / D2.4 — COA-mapping fingerprint awareness (pull-model reactivity).
+  it("flags stale via COA fingerprint mismatch even when timestamps say fresh", () => {
+    const r = evaluateNotesStaleness({
+      latestTbSyncedAt: T0, latestNotesUpdatedAt: LATER, // timestamps => fresh
+      liveCoaFingerprint: "abc", notesCoaFingerprint: "xyz", // but mapping changed
+    });
+    expect(r.verdict).toBe("stale_refreshable");
+    expect(r.isStale).toBe(true);
+    expect(r.reason).toBe("coa_change");
+  });
+
+  it("stays fresh when the COA fingerprint matches and TB is not newer", () => {
+    const r = evaluateNotesStaleness({
+      latestTbSyncedAt: T0, latestNotesUpdatedAt: LATER,
+      liveCoaFingerprint: "abc", notesCoaFingerprint: "abc",
+    });
+    expect(r.verdict).toBe("fresh");
+    expect(r.isStale).toBe(false);
+  });
+
+  it("a COA change on finalized notes is stale_locked, not auto-refreshable", () => {
+    const r = evaluateNotesStaleness({
+      latestTbSyncedAt: T0, latestNotesUpdatedAt: LATER, notesFinalized: true,
+      liveCoaFingerprint: "abc", notesCoaFingerprint: "xyz",
+    });
+    expect(r.verdict).toBe("stale_locked");
+    expect(r.reason).toBe("coa_change");
+  });
+
+  it("TB re-sync takes precedence over a COA change in the reason", () => {
+    const r = evaluateNotesStaleness({
+      latestTbSyncedAt: LATER, latestNotesUpdatedAt: T0, // TB newer
+      liveCoaFingerprint: "abc", notesCoaFingerprint: "xyz", // and COA changed
+    });
+    expect(r.isStale).toBe(true);
+    expect(r.reason).toBe("tb_resync");
+  });
+
+  it("is unchanged (legacy) when no fingerprints are supplied", () => {
+    const r = evaluateNotesStaleness({ latestTbSyncedAt: T0, latestNotesUpdatedAt: LATER });
+    expect(r.verdict).toBe("fresh");
+    expect(r.reason ?? null).toBe(null);
+  });
 });
