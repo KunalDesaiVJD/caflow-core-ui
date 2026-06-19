@@ -11,8 +11,9 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { Save, Loader2, FileSpreadsheet, Trash2, Plus } from "lucide-react";
+import { Save, Loader2, FileSpreadsheet, FileText, Trash2, Plus } from "lucide-react";
 import { exportClientCertificate } from "@/lib/nceLetterExport";
+import { exportClientCertificateDocx } from "@/lib/nceLetterDocxExport";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -289,37 +290,49 @@ export function NCEClientCertificate({ engagementId }: Props) {
     else       toast.success("Certificate saved");
   };
 
-  // ── Export Excel ──────────────────────────────────────────────────────────
+  // ── Export Excel / Word ───────────────────────────────────────────────────
+  // Excel and Word use the same payload — only the renderer differs.
+  const buildExportPayload = useCallback(() => ({
+    clientName,
+    clientAddress,
+    letterDate,
+    firmName,
+    firmAddress,
+    firmFRN,
+    financialYear,
+    cashOnHand,
+    closingStock,
+    closingStockDate,
+    points: points.map((p) => p.text),
+    closingLine,
+  }), [
+    clientName, clientAddress, letterDate, firmName, firmAddress, firmFRN,
+    financialYear, cashOnHand, closingStock, closingStockDate, points, closingLine,
+  ]);
+
   const handleExportExcel = useCallback(async () => {
     setExporting(true);
     try {
       const slug = `${clientName.replace(/\s+/g, "_").slice(0, 30)}_${financialYear.replace("/", "-")}`;
-      await exportClientCertificate(
-        {
-          clientName,
-          clientAddress,
-          letterDate,
-          firmName,
-          firmAddress,
-          firmFRN,
-          financialYear,
-          cashOnHand,
-          closingStock,
-          closingStockDate,
-          points: points.map((p) => p.text),
-          closingLine,
-        },
-        slug
-      );
+      await exportClientCertificate(buildExportPayload(), slug);
     } catch (e: any) {
       toast.error("Export failed: " + (e?.message || String(e)));
     } finally {
       setExporting(false);
     }
-  }, [
-    clientName, clientAddress, letterDate, firmName, firmAddress, firmFRN,
-    financialYear, cashOnHand, closingStock, closingStockDate, points, closingLine,
-  ]);
+  }, [clientName, financialYear, buildExportPayload]);
+
+  const handleExportWord = useCallback(async () => {
+    setExporting(true);
+    try {
+      const slug = `${clientName.replace(/\s+/g, "_").slice(0, 30)}_${financialYear.replace("/", "-")}`;
+      await exportClientCertificateDocx(buildExportPayload(), slug);
+    } catch (e: any) {
+      toast.error("Word export failed: " + (e?.message || String(e)));
+    } finally {
+      setExporting(false);
+    }
+  }, [clientName, financialYear, buildExportPayload]);
 
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -349,6 +362,16 @@ export function NCEClientCertificate({ engagementId }: Props) {
         >
           {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
           Export Excel
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={handleExportWord}
+          disabled={exporting}
+          className="gap-1.5"
+        >
+          {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
+          Export Word
         </Button>
         <span className="text-xs text-muted-foreground ml-1">
           Click any point text to edit. Hover a point to delete it.

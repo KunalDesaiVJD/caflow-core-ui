@@ -16,8 +16,9 @@ import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { Save, Loader2, FileSpreadsheet } from "lucide-react";
+import { Save, Loader2, FileSpreadsheet, FileText } from "lucide-react";
 import { exportManagementLetter, type MgmtLetterData } from "@/lib/nceLetterExport";
+import { exportManagementLetterDocx } from "@/lib/nceLetterDocxExport";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -225,29 +226,43 @@ export function NCEManagementLetter({ engagementId }: Props) {
     else       toast.success("Management letter saved");
   };
 
-  // ── Export Excel ──────────────────────────────────────────────────────────
-  const handleExportExcel = async () => {
+  // ── Export Excel / Word ───────────────────────────────────────────────────
+  const buildExportPayload = (): { slug: string; data: MgmtLetterData } => {
     const slug = clientName.replace(/\s+/g, "_").slice(0, 30)
                + "_" + financialYear.replace("/", "-");
-
     const resolvedBody = bodyPara.replace(/\[fyEnd\]/g, fyEnd);
-    const data: MgmtLetterData = {
-      clientName,
-      clientAddress,
-      letterDate,
-      firmName,
-      firmAddress,
-      firmFRN,
-      financialYear,
-      fyEnd,
-      bodyPara:    resolvedBody,
-      confirmLine,
+    return {
+      slug,
+      data: {
+        clientName,
+        clientAddress,
+        letterDate,
+        firmName,
+        firmAddress,
+        firmFRN,
+        financialYear,
+        fyEnd,
+        bodyPara:    resolvedBody,
+        confirmLine,
+      },
     };
+  };
 
+  const handleExportExcel = async () => {
+    const { slug, data } = buildExportPayload();
     try {
       await exportManagementLetter(data, slug);
     } catch (err: any) {
       toast.error("Export failed: " + err.message);
+    }
+  };
+
+  const handleExportWord = async () => {
+    const { slug, data } = buildExportPayload();
+    try {
+      await exportManagementLetterDocx(data, slug);
+    } catch (err: any) {
+      toast.error("Word export failed: " + err.message);
     }
   };
 
@@ -274,6 +289,9 @@ export function NCEManagementLetter({ engagementId }: Props) {
         </Button>
         <Button size="sm" variant="outline" onClick={handleExportExcel} className="gap-1.5">
           <FileSpreadsheet className="w-4 h-4" /> Export Excel
+        </Button>
+        <Button size="sm" variant="outline" onClick={handleExportWord} className="gap-1.5">
+          <FileText className="w-4 h-4" /> Export Word
         </Button>
       </div>
 

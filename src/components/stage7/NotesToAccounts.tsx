@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { getAuditYear } from "@/utils/entityUtils";
 import ExcelJS from "exceljs";
+import { exportNote1Docx } from "@/lib/nceLetterDocxExport";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -931,6 +932,47 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
     toast.success("Notes to Accounts exported to Excel");
   };
 
+  // ── Export Word ─────────────────────────────────────────────────────────
+  // Standalone Note 1 .docx — mirrors Section A of the FS Word export.
+  const handleExportWord = async () => {
+    try {
+      const fySlug   = (engagement?.financial_year ?? "FY").replace("/", "-");
+      const nameSlug = displayEntityName.replace(/\s+/g, "_").slice(0, 30);
+
+      // Build an ntaData-shaped object from local component state so the
+      // standalone Word file reflects unsaved edits (the user hasn't
+      // necessarily clicked "Save Draft" before exporting).
+      const ntaShim = {
+        notes_json: notes,
+        header_overrides: header,
+        note1_new_entity_enabled: note1NewEntity,
+        note1_new_entity_text:    note1NewEntityText,
+        note3_variant:            note3Variant,
+      };
+
+      await exportNote1Docx(
+        {
+          entityName: displayEntityName,
+          cyYear:     auditYear,
+          ntaData:    ntaShim,
+          sig: {
+            clientName:   sig.assesseeNameOverride || displayEntityName,
+            firmName,
+            firmFRN,
+            partnerName:  sig.partnerNameOverride || partnerAutoName || "[Partner Name]",
+            membershipNo: partnerMembership,
+            place:        sig.assesseePlace || assesseePlace,
+            date:         sig.assesseeDate || "",
+          },
+        },
+        `${nameSlug}_${fySlug}`,
+      );
+      toast.success("Notes to Accounts exported to Word");
+    } catch (e: any) {
+      toast.error("Word export failed: " + (e?.message || String(e)));
+    }
+  };
+
   // ── Per-note main content (special rendering by id, generic otherwise) ──
   const getMainContent = (note: NCENote): ReactNode => {
     switch (note.id) {
@@ -1156,6 +1198,9 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
           <Separator orientation="vertical" className="h-8" />
           <Button variant="outline" size="sm" onClick={handleExportExcel} className="gap-1">
             <FileDown className="w-4 h-4" /> Export Excel
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleExportWord} className="gap-1">
+            <FileText className="w-4 h-4" /> Export Word
           </Button>
           <Button variant="outline" size="sm" onClick={() => window.print()} className="gap-1">
             <Printer className="w-4 h-4" /> Print
