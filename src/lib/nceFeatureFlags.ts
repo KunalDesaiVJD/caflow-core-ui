@@ -40,3 +40,14 @@ export const CORP_SIGNED_NOTE_TOTALS = false;
  *     plus the preserved manual overlay.
  */
 export const NCE_RESYNC_DELETE_FIRST = false;
+
+/**
+ * PD-1 / D2.1 — NCE Balance-Sheet residual absorber. When false (default), any
+ * residual BS imbalance is plugged into Owners' Capital (NCE_CAP) so the face
+ * always balances — which HIDES a real imbalance and defeats the export gate
+ * (nceBsBalanced reads the post-plug total). When true, the plug is skipped: the
+ * true residual stands, so an unbalanced BS displays unbalanced AND blocks export,
+ * and the displayed Owners' Capital is the real note/COA value. Figure-MOVING →
+ * stays OFF until the real-data parity run in the credentialed environment.
+ */
+export const FS_NO_CAPITAL_PLUG = false;

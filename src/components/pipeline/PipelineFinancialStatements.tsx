@@ -58,7 +58,7 @@ import {
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 import FsHealthPanel from "@/components/pipeline/FsHealthPanel";
 import { evaluateNotesStaleness } from "@/lib/notesStaleness";
-import { NCE_RESYNC_DELETE_FIRST } from "@/lib/nceFeatureFlags";
+import { NCE_RESYNC_DELETE_FIRST, FS_NO_CAPITAL_PLUG } from "@/lib/nceFeatureFlags";
 import { validateFSReconciliation, logReconciliationDrift, NCE_LIAB_CODE_SET, computeCOATotals, validateOpeningVsPriorClose } from "@/lib/fsReconciliation";
 import { isTallyPLAccount, currentYearProfitAlreadyInReserves } from "@/lib/tallyDetection";
 
@@ -3463,7 +3463,9 @@ export default function PipelineFinancialStatements({
       const astSumPost = NCE_ASSET_IDS.reduce((s, id) => s + (merged[id] || 0), 0);
       const elSumPost  = NCE_LIAB_IDS.reduce((s, id) => s + (merged[id] || 0), 0);
       const residual = astSumPost + elSumPost; // sign: + = Assets exceed E+L
-      if (Math.abs(residual) > 2 && Math.abs(residual) < 1e9) {
+      // PD-1 / D2.1 (FS_NO_CAPITAL_PLUG): when ON, do NOT plug the imbalance into
+      // Capital — let the true residual stand so BS shows unbalanced and export blocks.
+      if (!FS_NO_CAPITAL_PLUG && Math.abs(residual) > 2 && Math.abs(residual) < 1e9) {
         // Bring NCE_CAP further down (more negative for CR-natural storage)
         // by the residual. This adds to the liability side, balancing BS.
         merged["NCE_CAP"] = (merged["NCE_CAP"] || 0) - residual;
@@ -4088,7 +4090,9 @@ export default function PipelineFinancialStatements({
       // an NCE code with a note, so the reconciliation validator ignores it.
       out["__NCE_BS_RESIDUAL__"] = Math.round((out["NCE_AST"] + out["NCE_EL"]) * 100) / 100;
       const residual = out["__NCE_BS_RESIDUAL__"]; // + = Assets exceed E+L
-      if (Math.abs(residual) > 2 && Math.abs(residual) < 1e9) {
+      // PD-1 / D2.1 (FS_NO_CAPITAL_PLUG): when ON, skip the Capital plug so the true
+      // residual stands (nceBsBalanced + export gate then reflect the real imbalance).
+      if (!FS_NO_CAPITAL_PLUG && Math.abs(residual) > 2 && Math.abs(residual) < 1e9) {
         out["NCE_CAP"] = (out["NCE_CAP"] || 0) - residual;
         out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
       }
@@ -4195,7 +4199,8 @@ export default function PipelineFinancialStatements({
       // Phase 5 — capture the TRUE PY imbalance before the absorber (see CY).
       out["__NCE_BS_RESIDUAL__"] = Math.round((out["NCE_AST"] + out["NCE_EL"]) * 100) / 100;
       const residualPy = out["__NCE_BS_RESIDUAL__"];
-      if (Math.abs(residualPy) > 2 && Math.abs(residualPy) < 1e9) {
+      // PD-1 / D2.1 (FS_NO_CAPITAL_PLUG): when ON, skip the PY Capital plug too.
+      if (!FS_NO_CAPITAL_PLUG && Math.abs(residualPy) > 2 && Math.abs(residualPy) < 1e9) {
         out["NCE_CAP"] = (out["NCE_CAP"] || 0) - residualPy;
         out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
       }
