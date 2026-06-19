@@ -717,8 +717,8 @@ function CorporateBalanceSheetView({
             // item
             const indentPx = (row.indent || 0) * 16;
             const fontSize = row.size === 10 ? "text-[12px]" : "text-[11px]";
-            const editableCY   = !!row.code && !!onCommitCY;
-            const editablePY   = !!row.code && !!onCommitPY && !pyLocked;
+            const editableCY   = !FS_FACE_FIGURES_READONLY && !!row.code && !!onCommitCY;
+            const editablePY   = !FS_FACE_FIGURES_READONLY && !!row.code && !!onCommitPY && !pyLocked;
             return (
               <tr key={idx} className="hover:bg-muted/10">
                 <td className={`py-0.5 px-3 ${fontSize}`} style={{ paddingLeft: 12 + indentPx }}>{row.label}</td>
@@ -994,8 +994,8 @@ function CorporatePLView({
             const indentPx = (row.indent || 0) * 16;
             const boldCls = row.bold ? "font-bold" : "";
             const isLockedCY = !!row.code && lockedCodes?.has(row.code);
-            const editableCY = !!row.code && !!onCommitCY && !isLockedCY;
-            const editablePY = !!row.code && !!onCommitPY && !pyLocked && !isLockedCY;
+            const editableCY = !FS_FACE_FIGURES_READONLY && !!row.code && !!onCommitCY && !isLockedCY;
+            const editablePY = !FS_FACE_FIGURES_READONLY && !!row.code && !!onCommitPY && !pyLocked && !isLockedCY;
             return (
               <tr key={idx} className="hover:bg-muted/10">
                 <td className={`text-center py-0.5 px-1 ${boldCls} text-[11px]`}>{row.roman || ""}</td>
@@ -1030,6 +1030,13 @@ const NCE_LIABILITY_CODES = new Set([
   "NCE_STB", "NCE_TP",  "NCE_OCL",  "NCE_STP",
 ]);
 const NCE_INCOME_CODES = new Set(["NCE_REV_OPS", "NCE_REV_OTH"]);
+
+// PD-4 / Rule 8 / §12 invariant #2: the FS faces are read-only — figures flow
+// from the notes; the only legitimate figure change is a tracked manual note row.
+// Figure-neutral: this only removes the inline edit affordance; displayed values
+// are unchanged, and any existing persisted override still renders. Set false to
+// restore the legacy editable-face behaviour.
+const FS_FACE_FIGURES_READONLY = true;
 
 function buildNCEBSRows(
   cy: Record<string, number>,
@@ -1280,8 +1287,8 @@ function NCEBalanceSheetView({
             );
             // item row — matches DOCX: 8pt Calibri, minimal padding
             const indentPx = (row.indent || 0) * 16;
-            const editableCY = !!row.code && !!onCommitCY;
-            const editablePY = !!row.code && !!onCommitPY && !pyLocked;
+            const editableCY = !FS_FACE_FIGURES_READONLY && !!row.code && !!onCommitCY;
+            const editablePY = !FS_FACE_FIGURES_READONLY && !!row.code && !!onCommitPY && !pyLocked;
             const isLiab = NCE_LIABILITY_CODES.has(row.code ?? "");
             return (
               <tr key={idx} className="hover:bg-muted/10 border-b border-gray-100">
@@ -1409,8 +1416,8 @@ function NCEPLView({
             );
             const indentPx = (row.indent || 0) * 16;
             const boldCls = row.bold ? "font-bold" : "";
-            const editableCY = !!row.code && !!onCommitCY;
-            const editablePY = !!row.code && !!onCommitPY && !pyLocked;
+            const editableCY = !FS_FACE_FIGURES_READONLY && !!row.code && !!onCommitCY;
+            const editablePY = !FS_FACE_FIGURES_READONLY && !!row.code && !!onCommitPY && !pyLocked;
             const isInc = NCE_INCOME_CODES.has(row.code ?? "");
             return (
               <tr key={idx} className="hover:bg-muted/10 border-b border-gray-100">
