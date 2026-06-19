@@ -254,9 +254,17 @@ export function validateCorporateFSReconciliation(args: ValidateCorporateArgs): 
     const noteCy = ntCy ?? 0;
     const notePy = ntPy ?? 0;
 
-    const coaTotal = args.coaTotals?.[code] ?? { cy: noteCy, py: notePy };
+    // BUG-024 / D2.8: computeCOATotals keys its output by the canonical NCE code
+    // (CANONICAL_NCE_CODE[mapped.code]); the corporate `code` (e.g. BS_CL_TP) must be
+    // folded the SAME way or the lookup misses and the COA anchor silently equals the
+    // note total (manualDelta ≡ 0 — the corporate three-way collapses to two-way).
+    const coaKey = CANONICAL_NCE_CODE[code] ?? code;
+    const coaTotal = args.coaTotals?.[coaKey] ?? { cy: noteCy, py: notePy };
     const mdCy = Math.round((noteCy - coaTotal.cy) * 100) / 100;
     const mdPy = Math.round((notePy - coaTotal.py) * 100) / 100;
+    // PD-2 (corporate): does this note carry a user-entered manual breakup row?
+    const corpBreakup = (args.corporateNotes as { [s: string]: { [k: string]: { breakup?: Array<{ source?: string }> } } } | null | undefined)?.[meta.section]?.[meta.key]?.breakup;
+    const corpManualVerified = Array.isArray(corpBreakup) && corpBreakup.some(r => r?.source === "manual");
 
     const dCy = Math.round((noteCy - faceCy) * 100) / 100;
     const dPy = Math.round((notePy - facePy) * 100) / 100;
@@ -278,6 +286,7 @@ export function validateCorporateFSReconciliation(args: ValidateCorporateArgs): 
       manualDelta: { cy: mdCy,  py: mdPy  },
       delta:       { cy: dCy,   py: dPy   },
       status,
+      manualVerified: corpManualVerified,
     });
   }
 
