@@ -3058,6 +3058,22 @@ export default function PipelineFinancialStatements({
         amounts[mapping.code] = (amounts[mapping.code] || 0) + acct.balance;
         amounts[plCode] = (amounts[plCode] || 0) + ((acct.opening_balance ?? 0) - acct.balance);
         hasInvMapping = true;
+      } else if (mapping.code === "PL_EXP_CII" || mapping.code === "NCE_CII") {
+        // ── Direct CII mapping (2026-06-18 fix): a ledger the auditor mapped
+        // straight to "Changes in Inventories of FG/WIP/SIT" represents an
+        // INVENTORY BALANCE, not a movement. Schedule III defines CII as
+        // (opening − closing), so contribute the opening-to-closing delta
+        // here instead of just the closing balance. Mirrors the dual-post
+        // path above for INV_* mappings — that path uses (opening − closing)
+        // for inventory ledgers mapped to INV_STOCK / INV_RM / etc.
+        //
+        // Prior bug (MICROCIRCUITS, June 2026): "Opening Stock" was mapped
+        // directly to PL_EXP_CII (the only "changes" line in the picker).
+        // The else-branch below would add `acct.balance` (closing only) so
+        // the P&L showed ₹67,06,470.80 instead of the correct delta
+        // ₹4,77,074.42. The mirror in fsDisplayData carries the same change.
+        amounts[mapping.code] = (amounts[mapping.code] || 0) + ((acct.opening_balance ?? 0) - acct.balance);
+        hasInvMapping = true;
       } else if (isTallyPLAccount(acct.account_name) && mapping.code.startsWith("BS_")) {
         // ── P&L A/c on Balance Sheet: use OPENING balance (prior retained earnings) ──
         // Current-year profit is auto-credited to BS_EQ_RS after computeTotal (below).
@@ -3515,6 +3531,18 @@ export default function PipelineFinancialStatements({
         exportCy[mapping.code] = (exportCy[mapping.code] || 0) + (acct.balance || 0);
         exportCy[plCode] = (exportCy[plCode] || 0) + (opening - (acct.balance || 0));
         // PY BS: opening balance routed via alias-aware mapping
+        if (opening && pyMapping) exportPy[pyMapping.code] = (exportPy[pyMapping.code] || 0) + opening;
+        hasInvMappingLocal = true;
+      } else if (mapping && (mapping.code === "PL_EXP_CII" || mapping.code === "NCE_CII")) {
+        // 2026-06-18 fix — mirror the computedAmounts loop above. A ledger
+        // mapped directly to "Changes in Inventories" represents an
+        // inventory BALANCE, so contribute (opening − closing) per
+        // Schedule III, not just closing. Without this, the export and
+        // on-screen P&L disagreed with the COA Mapping variance drill.
+        exportCy[mapping.code] = (exportCy[mapping.code] || 0) + (opening - (acct.balance || 0));
+        // PY BS: opening balance routed via alias-aware mapping (BS inventory
+        // line — the PY balance of this same ledger). Keeps the BS face PY
+        // column in sync with the CY closing → PY opening identity.
         if (opening && pyMapping) exportPy[pyMapping.code] = (exportPy[pyMapping.code] || 0) + opening;
         hasInvMappingLocal = true;
       } else {

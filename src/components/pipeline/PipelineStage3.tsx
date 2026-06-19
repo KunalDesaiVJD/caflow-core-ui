@@ -1767,6 +1767,19 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         amounts[mapping.code] = (amounts[mapping.code] || 0) + acct.balance;
         amounts[plCode] = (amounts[plCode] || 0) + ((acct.opening_balance ?? 0) - acct.balance);
         hasInvMapping = true;
+      } else if (mapping.code === "PL_EXP_CII" || mapping.code === "NCE_CII") {
+        // 2026-06-18 fix (MICROCIRCUITS, June 2026) — a ledger mapped
+        // directly to "Changes in Inventories" represents an INVENTORY
+        // BALANCE; Schedule III defines the CII as (opening − closing),
+        // so contribute the delta here instead of just the closing
+        // balance. Mirrors the dual-post path above for INV_* mappings
+        // and the matching loop in PipelineFinancialStatements.fsDisplayData.
+        // Without this, the COA-mapping variance drill and the on-screen
+        // P&L showed only the closing inventory (₹67,06,470.80 in the
+        // user-reported case) instead of the correct (opening − closing)
+        // delta (₹4,77,074.42).
+        amounts[mapping.code] = (amounts[mapping.code] || 0) + ((acct.opening_balance ?? 0) - acct.balance);
+        hasInvMapping = true;
       } else if (isTallyPLAccount(acct.account_name) && mapping.code.startsWith("BS_")) {
         // ── P&L A/c on Balance Sheet: use OPENING balance (prior retained earnings) ──
         // Tally's "Profit & Loss A/c" closing balance = opening + current-year profit.
