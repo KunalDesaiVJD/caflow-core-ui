@@ -3049,15 +3049,13 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
     });
   }, [scheduleSave]);
 
-  const handleChangeStaticLabel = useCallback((noteType: string, id: string, label: string) => {
-    setNoteData(prev => {
-      const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
-      const overrides = { ...(cur.labelOverrides ?? {}), [id]: label };
-      const next = { ...prev, [noteType]: { ...cur, labelOverrides: overrides } };
-      scheduleSave(next);
-      return next;
-    });
-  }, [scheduleSave]);
+  const handleChangeStaticLabel = useCallback((_noteType: string, _id: string, _label: string) => {
+    // BUG-060 / Rule 8: template (Schedule-III / NCE) note-row HEADINGS are LOCKED — only the
+    // caption of a ledger/group line (a custom row, via handleChangeLabel) is editable. This
+    // handler previously wrote a labelOverride for a STATIC row, which would rewrite a template
+    // heading; it is now a no-op (defence-in-depth; the static-label UI is already read-only).
+    // Existing overrides are untouched — this only prevents new static-heading edits.
+  }, []);
 
   const handleChangeSourceLabel = useCallback((noteType: string, rowId: string, ledger: string, newLabel: string) => {
     if (readOnly || notesFinalizedRef.current) return;
