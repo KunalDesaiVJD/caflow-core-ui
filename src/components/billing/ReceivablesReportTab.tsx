@@ -176,9 +176,12 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
         supabase.from("invoices")
           .select("client_id, invoice_date, total_amount")
           .eq("firm_id", selectedFirmId)
+          // Q3: only confirmed invoices + credit notes belong in receivables.
+          // Quotations / proformas are not real transactions.
+          .in("document_type", ["invoice", "credit_note"])
           .neq("status", "voided"),
         supabase.from("billing_receipts")
-          .select("client_id, receipt_date, amount_received, tds_amount")
+          .select("client_id, receipt_date, amount_received, tds_amount, gst_tds_amount")
           .eq("firm_id", selectedFirmId),
         // Opening balances for the selected firm only
         (supabase as any).from("client_billing_opening_balances")
@@ -234,7 +237,8 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
 
         for (const rec of receipts || []) {
           if (rec.client_id !== c.id) continue;
-          const amt = Number(rec.amount_received || 0) + Number(rec.tds_amount || 0);
+          // Q2: GST-TDS deducted by the client also settles the invoice.
+          const amt = Number(rec.amount_received || 0) + Number(rec.tds_amount || 0) + Number(rec.gst_tds_amount || 0);
           if (!amt) continue;
           if (rec.receipt_date && rec.receipt_date < fromDate) openingCr += amt;
           else if (rec.receipt_date && rec.receipt_date >= fromDate && rec.receipt_date <= toDate) credit += amt;
@@ -297,12 +301,14 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
           .select("id, invoice_no, invoice_date, total_amount, document_type")
           .eq("client_id", client.id)
           .eq("firm_id", selectedFirmId)
+          // Q3: exclude quotations / proformas from the ledger sheet.
+          .in("document_type", ["invoice", "credit_note"])
           .neq("status", "voided")
           .gte("invoice_date", fromDate)
           .lte("invoice_date", toDate)
           .order("invoice_date"),
         supabase.from("billing_receipts")
-          .select("id, receipt_date, amount_received, tds_amount, payment_mode, remarks")
+          .select("id, receipt_date, amount_received, tds_amount, gst_tds_amount, payment_mode, remarks")
           .eq("client_id", client.id)
           .eq("firm_id", selectedFirmId)
           .gte("receipt_date", fromDate)
@@ -359,7 +365,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       }
 
       for (const rec of recData || []) {
-        const amt = Number(rec.amount_received || 0) + Number(rec.tds_amount || 0);
+        const amt = Number(rec.amount_received || 0) + Number(rec.tds_amount || 0) + Number(rec.gst_tds_amount || 0);
         tmp.push({
           date:      rec.receipt_date,
           doc_no:    rec.id.slice(0, 8).toUpperCase(),

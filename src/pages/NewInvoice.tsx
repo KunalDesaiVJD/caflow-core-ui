@@ -863,8 +863,15 @@ const NewInvoice = () => {
         // ─────────────────────────────────────────────────────────────────────
       }
 
-      // Auto-insert/update ledger entry when finalizing
-      if (effectiveStatus === "finalized" && savedId && clientId && selectedFirmId) {
+      // Auto-insert/update ledger entry when finalizing.
+      // Q3: ONLY real invoices and credit notes post to the client ledger.
+      // Quotations / proformas are not confirmed transactions and must never
+      // appear in the ledger or outstanding balance.
+      if (
+        effectiveStatus === "finalized" &&
+        (docType === "invoice" || docType === "credit_note") &&
+        savedId && clientId && selectedFirmId
+      ) {
         const entryType = docType === "credit_note" ? "credit_note" : "invoice";
         const isCredit = docType === "credit_note";
         // Remove stale ledger row if invoice was edited and re-finalized

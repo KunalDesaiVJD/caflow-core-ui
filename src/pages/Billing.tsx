@@ -648,6 +648,34 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
 
   const handleDelete = async () => {
     if (!deleteId) return;
+    // Q5: a deleted invoice must not leave residual ledger rows behind.
+    // Guard first: if real payments (receipts) are linked to this invoice,
+    // deleting it would orphan that money — block and tell the user.
+    const { count: receiptCount } = await supabase
+      .from("billing_receipts")
+      .select("id", { count: "exact", head: true })
+      .eq("invoice_id", deleteId);
+    if (receiptCount && receiptCount > 0) {
+      toast({
+        title: "Cannot delete — payments exist",
+        description: `This document has ${receiptCount} receipt(s) recorded against it. Delete those receipts first, or void the document instead.`,
+        variant: "destructive",
+      });
+      setDeleteId(null);
+      return;
+    }
+    // Remove the document's own ledger entries, then the document itself, so it
+    // disappears from every client ledger, report and outstanding balance.
+    const { error: ledgerErr } = await supabase
+      .from("client_ledger_entries")
+      .delete()
+      .eq("document_id", deleteId)
+      .in("entry_type", ["invoice", "credit_note"]);
+    if (ledgerErr) {
+      toast({ title: "Error clearing ledger entries", description: ledgerErr.message, variant: "destructive" });
+      setDeleteId(null);
+      return;
+    }
     const { error } = await supabase.from("invoices").delete().eq("id", deleteId);
     if (error) {
       toast({ title: "Error deleting document", description: error.message, variant: "destructive" });

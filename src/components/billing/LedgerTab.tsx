@@ -178,6 +178,8 @@ async function buildLedgerEntries(
   let invQuery = supabase.from("invoices")
     .select("id, invoice_no, client_id, firm_id, invoice_date, total_amount, document_type, status, tds_section_code, tds_rate, tds_amount")
     .in("client_id", filters.clientIds)
+    // Q3: quotations / proformas are not ledger transactions.
+    .in("document_type", ["invoice", "credit_note"])
     .in("status", ["finalized", "sent", "overdue", "paid"])
     .gte("invoice_date", start).lte("invoice_date", end)
     .order("invoice_date", { ascending: true });
@@ -485,18 +487,33 @@ function ClientLedgerView({ defaultFirmId }: { defaultFirmId?: string }) {
     if (!obDraftDate) { toast({ title: "Balance date is required", variant: "destructive" }); return; }
     setObSaving(true);
     try {
+      const draftGstin = obDraftGstin && obDraftGstin !== "all" ? obDraftGstin : null;
       const payload = {
         firm_id: resolvedFirmId,
         client_id: clientId,
         balance_date: obDraftDate,
         amount: Number(obDraftAmount) || 0,
         narration: obDraftNarration.trim() || null,
-        gstin: obDraftGstin && obDraftGstin !== "all" ? obDraftGstin : null,
+        gstin: draftGstin,
         created_by: user?.id,
         updated_at: new Date().toISOString(),
       };
-      if (obId) {
-        await (supabase as any).from("client_billing_opening_balances").update(payload).eq("id", obId);
+      // Q4: opening balances are per (firm, client, GSTIN). Resolve the row for
+      // THIS GSTIN — never the stale id from the combined "all GSTINs" view —
+      // so saving a second state inserts a new row instead of overwriting.
+      let targetId: string | null = null;
+      {
+        let exQ = (supabase as any)
+          .from("client_billing_opening_balances")
+          .select("id")
+          .eq("client_id", clientId)
+          .eq("firm_id", resolvedFirmId);
+        exQ = draftGstin === null ? exQ.is("gstin", null) : exQ.eq("gstin", draftGstin);
+        const { data: exRow } = await exQ.maybeSingle();
+        targetId = exRow?.id ?? null;
+      }
+      if (targetId) {
+        await (supabase as any).from("client_billing_opening_balances").update(payload).eq("id", targetId);
       } else {
         await (supabase as any).from("client_billing_opening_balances").insert(payload);
       }
