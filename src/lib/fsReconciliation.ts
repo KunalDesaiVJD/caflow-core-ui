@@ -481,8 +481,12 @@ export async function logReconciliationDrift(
       changed_by:    userId,
     }));
     await (supabase as any).from("fs_reconciliation_log").insert(rows);
-  } catch {
+  } catch (e) {
     // Best-effort logging — never block FS rendering on a log failure.
+    // BUG-112: surface the failure (e.g. a missing fs_reconciliation_log table/column)
+    // so the severe-drift audit trail (Invariant 6) does not silently no-op.
+    // eslint-disable-next-line no-console
+    console.warn("[fs-reconciliation] failed to write fs_reconciliation_log:", e);
   }
 }
 

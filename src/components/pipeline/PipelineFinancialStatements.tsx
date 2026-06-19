@@ -4381,7 +4381,11 @@ export default function PipelineFinancialStatements({
     ? (!nceBsBalanced || hasSevereDrift || hasOpeningMismatch || hasPpeScheduleDrift)
     : (!corpBsBalanced || !corpBsBalancedPy || !faPyEntered || hasOpeningMismatch);
   const exportExcelBlockReasons: string[] = [];
-  if (!isNonCorporate) {
+  // BUG-094/108: branch was inverted vs the gate above (isNonCorporate ? NCE : corp).
+  // `if (!isNonCorporate)` pushed NCE reasons for corporate engagements (and vice-versa),
+  // so the blocked-export message was empty/wrong. Aligned to the gate. Figure-neutral:
+  // exportExcelBlocked is unchanged; only the displayed reason text is corrected.
+  if (isNonCorporate) {
     if (!nceBsBalanced)   exportExcelBlockReasons.push(`Balance Sheet out by ₹${Math.abs(nceBsDiff).toLocaleString("en-IN")}`);
     if (hasSevereDrift)   exportExcelBlockReasons.push(`${fsReconResult!.severeCount} note(s) have drift > ₹100 — fix in Notes tab first`);
   } else {

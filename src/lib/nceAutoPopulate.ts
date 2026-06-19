@@ -1261,7 +1261,9 @@ export async function nceAutoPopulate(
     // has a customRow whose label matches /member sales/i in other_cl.
     // The user provides browser console output; we identify the
     // overriding line; we remove this instrumentation.
-    const _msTraceOn = noteType === "other_cl";
+    // BUG-116: SIGN-TRACE diagnostic instrumentation disabled (was: noteType === "other_cl").
+    // Left inert (flag OFF) rather than ripped out, since _msLog is threaded through WP2-WP4.
+    const _msTraceOn = false;
     let _msId: string | null = null;
     if (_msTraceOn) {
       const ms = (prev.customRows || []).find(r => /member sales/i.test(r.label || ""));
