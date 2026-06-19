@@ -58,8 +58,8 @@ import {
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 import FsHealthPanel from "@/components/pipeline/FsHealthPanel";
 import { evaluateNotesStaleness } from "@/lib/notesStaleness";
-import { NCE_RESYNC_DELETE_FIRST, FS_NO_CAPITAL_PLUG, FS_CORP_PY_FACE_FROM_NOTE } from "@/lib/nceFeatureFlags";
-import { validateFSReconciliation, logReconciliationDrift, NCE_LIAB_CODE_SET, computeCOATotals, validateOpeningVsPriorClose } from "@/lib/fsReconciliation";
+import { NCE_RESYNC_DELETE_FIRST, FS_NO_CAPITAL_PLUG, FS_CORP_PY_FACE_FROM_NOTE, FS_CORP_EXPORT_GATE } from "@/lib/nceFeatureFlags";
+import { validateFSReconciliation, validateCorporateFSReconciliation, logReconciliationDrift, NCE_LIAB_CODE_SET, computeCOATotals, validateOpeningVsPriorClose } from "@/lib/fsReconciliation";
 import { isTallyPLAccount, currentYearProfitAlreadyInReserves } from "@/lib/tallyDetection";
 
 // ═══════════════════════════════════════
@@ -4337,6 +4337,21 @@ export default function PipelineFinancialStatements({
 
   const hasSevereDrift = (fsReconResult?.severeCount ?? 0) > 0;
 
+  // BUG-085/107/110 / D2.10 — corporate export currently never blocks on note-vs-COA/face
+  // drift (unlike NCE). Staged behind FS_CORP_EXPORT_GATE (default OFF): when ON, compute the
+  // corporate three-way validator and block Excel/Word export on severe drift. OFF = the memo
+  // returns null so corpHasSevereDrift is always false and every gate below is byte-identical.
+  const corpReconResult = useMemo(() => {
+    if (isNonCorporate || !FS_CORP_EXPORT_GATE) return null;
+    return validateCorporateFSReconciliation({
+      corporateNotes: stage5NotesData ?? null,
+      bsFaceCy: computedAmounts,
+      bsFacePy: computedAmountsPY,
+      coaTotals: coaTotalsByCode,
+    });
+  }, [isNonCorporate, stage5NotesData, computedAmounts, computedAmountsPY, coaTotalsByCode]);
+  const corpHasSevereDrift = (corpReconResult?.severeCount ?? 0) > 0;
+
   // ── PPE schedule ↔ book (TB) reconciliation (strict block) ──────────────
   // The PPE schedule now drives the BS PPE/Intangibles face. A schedule that
   // disagrees with the COA/TB book value would otherwise be silently absorbed
@@ -4394,7 +4409,7 @@ export default function PipelineFinancialStatements({
   // entities use BS-balance + severe-drift check.
   const exportExcelBlocked: boolean = isNonCorporate
     ? (!nceBsBalanced || hasSevereDrift || hasOpeningMismatch || hasPpeScheduleDrift)
-    : (!corpBsBalanced || !corpBsBalancedPy || !faPyEntered || hasOpeningMismatch);
+    : (!corpBsBalanced || !corpBsBalancedPy || !faPyEntered || hasOpeningMismatch || corpHasSevereDrift);
   const exportExcelBlockReasons: string[] = [];
   // BUG-094/108: branch was inverted vs the gate above (isNonCorporate ? NCE : corp).
   // `if (!isNonCorporate)` pushed NCE reasons for corporate engagements (and vice-versa),
@@ -4407,6 +4422,7 @@ export default function PipelineFinancialStatements({
     if (!corpBsBalanced)   exportExcelBlockReasons.push(`CY Balance Sheet out by ₹${Math.abs(bsDiff).toLocaleString("en-IN")}`);
     if (!corpBsBalancedPy) exportExcelBlockReasons.push(`PY Balance Sheet out by ₹${Math.abs(bsDiffPy).toLocaleString("en-IN")}`);
     if (!faPyEntered)      exportExcelBlockReasons.push("FA Note — Previous-Year totals not entered");
+    if (corpHasSevereDrift) exportExcelBlockReasons.push(`${corpReconResult!.severeCount} corporate note(s) have drift > ₹100 — fix in Notes tab first`);
   }
   // PPE schedule reconciliation reason — applies to NCE only (guard already
   // includes isNonCorporate). Pushed outside the if/else like the gate below.
@@ -7821,8 +7837,11 @@ export default function PipelineFinancialStatements({
             <Button
               variant="outline"
               size="sm"
-              className="gap-1"
-              title="Export Balance Sheet + P&L + Notes as a Big4-style Word document (.docx)"
+              className={cn("gap-1", corpHasSevereDrift && "opacity-60")}
+              title={corpHasSevereDrift
+                ? `Export Word blocked: ${corpReconResult!.severeCount} corporate note(s) have drift > ₹100. Fix in Notes tab first.`
+                : "Export Balance Sheet + P&L + Notes as a Big4-style Word document (.docx)"}
+              disabled={corpHasSevereDrift}
               onClick={() => setShowCorpFontDialog(true)}
             >
               <FileText size={14} /> Export Word

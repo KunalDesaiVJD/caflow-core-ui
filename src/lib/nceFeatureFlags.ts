@@ -62,3 +62,13 @@ export const FS_NO_CAPITAL_PLUG = false;
  * stays OFF until the real-data parity run in the credentialed environment.
  */
 export const FS_CORP_PY_FACE_FROM_NOTE = false;
+
+/**
+ * BUG-085/107/110 / D2.10 — Corporate export drift gate. When false (default), corporate
+ * Excel/Word export is NOT blocked by note-vs-COA / note-vs-face drift (only by BS balance,
+ * FA-PY and opening mismatch) — unlike NCE, which blocks on severe drift. When true, the
+ * corporate three-way validator (validateCorporateFSReconciliation) is computed and a severe
+ * drift (>₹100) blocks both corporate exports, matching NCE (Rule 5 parity). Behaviour change
+ * only (no figure moves) → stays OFF until reviewed against real corporate engagements.
+ */
+export const FS_CORP_EXPORT_GATE = false;
