@@ -41,6 +41,7 @@ import {
 import { buildInvoiceHtml, downloadPdfFromHtml } from "@/lib/invoicePdfGenerator";
 import { resolveFirmNameForDate } from "@/lib/firmName";
 import { BILLING_ATOMIC_NUMBERING } from "@/lib/billingFlags";
+import { isValidGstin } from "@/lib/gstinUtils";
 
 // ─── Export Invoice Currencies ───
 const EXPORT_CURRENCIES = [
@@ -364,7 +365,9 @@ const NewInvoice = () => {
 
   // Derived values
   const firmGstin = firm?.gstin || "";
-  const placeOfSupply = getPlaceOfSupply(firmGstin);
+  // H6: place of supply is the RECIPIENT's state (from the client GSTIN), not the
+  // firm's. Falls back to the firm's state for unregistered/B2C clients.
+  const placeOfSupply = getPlaceOfSupply(toGstin || firmGstin);
   const msmeNo = (firm?.settings as any)?.msme_no || "";
   const billingEmail = (firm?.settings as any)?.billing_email || firm?.email || "";
   const billingContact = (firm?.settings as any)?.billing_contact_no || firm?.phone || "";
@@ -1263,13 +1266,18 @@ const NewInvoice = () => {
               <div className="grid grid-cols-2 gap-2 mt-2">
                 <Input value={toName} onChange={e => setToName(e.target.value)} placeholder="Customer Name" disabled={isLocked} />
                 {/* Single-GSTIN clients: editable input as before; multi-GSTIN: readonly (controlled by picker above) */}
-                <Input
-                  value={toGstin}
-                  onChange={e => setToGstin(e.target.value)}
-                  placeholder="GSTIN"
-                  disabled={isLocked || clientGstins.length > 1}
-                  className={clientGstins.length > 1 ? "bg-muted/40" : ""}
-                />
+                <div>
+                  <Input
+                    value={toGstin}
+                    onChange={e => setToGstin(e.target.value)}
+                    placeholder="GSTIN"
+                    disabled={isLocked || clientGstins.length > 1}
+                    className={cn(clientGstins.length > 1 ? "bg-muted/40" : "", toGstin && !isValidGstin(toGstin) ? "border-destructive" : "")}
+                  />
+                  {toGstin && !isValidGstin(toGstin) && (
+                    <p className="text-[10px] text-destructive mt-0.5">Invalid GSTIN format</p>
+                  )}
+                </div>
                 <Input value={toAddress} onChange={e => setToAddress(e.target.value)} placeholder="Address" disabled={isLocked} className="col-span-2" />
               </div>
             )}

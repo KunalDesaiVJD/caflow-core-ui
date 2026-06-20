@@ -16,6 +16,23 @@ export function detectStateFromGstin(gstin: string): string {
   return GSTIN_STATE_CODES[gstin.substring(0, 2)] ?? "";
 }
 
+// GSTIN = 2-digit state code + 10-char PAN + entity digit + 'Z' + checksum char.
+const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+
+/** True when `gstin` is a structurally valid 15-char GSTIN with a real state code. */
+export function isValidGstin(gstin: string | null | undefined): boolean {
+  if (!gstin) return false;
+  const g = gstin.trim().toUpperCase();
+  return GSTIN_RE.test(g) && g.substring(0, 2) in GSTIN_STATE_CODES;
+}
+
+/** True when `pan` is a structurally valid 10-char PAN. */
+export function isValidPan(pan: string | null | undefined): boolean {
+  if (!pan) return false;
+  return PAN_RE.test(pan.trim().toUpperCase());
+}
+
 /**
  * Build the full list of {gstin, state} pairs for a client, merging
  * gstin_states (the saved map) with the raw gstin array (which may contain
