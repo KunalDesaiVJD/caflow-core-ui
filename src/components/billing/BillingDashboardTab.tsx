@@ -18,6 +18,8 @@ interface DashInvoice {
   firm_id: string | null;
   amount: number | null;
   total_amount: number | null;
+  amount_due: number | null;
+  payment_status: string | null;
   status: string | null;
   due_date: string | null;
   invoice_date: string | null;
@@ -58,15 +60,26 @@ export default function BillingDashboardTab({ firmId }: { firmId: string | null 
 
   useEffect(() => {
     (async () => {
-      let iq = supabase
-        .from("invoices")
-        .select("id,invoice_no,client_id,firm_id,amount,total_amount,status,due_date,invoice_date,paid_at,document_type")
-        .order("invoice_date", { ascending: false });
-      if (!isSuperadmin && resolvedFirmId) iq = iq.eq("firm_id", resolvedFirmId);
-      const { data: invData } = await iq;
+      setLoading(true);
+      // C9: page past PostgREST's 1000-row cap so headline totals are complete
+      // for large firms. M1: always firm-scope when a firm is selected — including
+      // a superadmin viewing one specific firm (previously skipped, mixing firms).
+      const cols = "id,invoice_no,client_id,firm_id,amount,total_amount,amount_due,payment_status,status,due_date,invoice_date,paid_at,document_type";
+      const allInv: DashInvoice[] = [];
+      const PAGE = 1000;
+      for (let from = 0; ; from += PAGE) {
+        let iq = supabase.from("invoices").select(cols)
+          .order("invoice_date", { ascending: false })
+          .range(from, from + PAGE - 1);
+        if (resolvedFirmId) iq = iq.eq("firm_id", resolvedFirmId);
+        const { data: page } = await iq;
+        if (!page || page.length === 0) break;
+        allInv.push(...(page as DashInvoice[]));
+        if (page.length < PAGE) break;
+      }
 
       let cq = supabase.from("clients").select("id,name").eq("is_draft", false).is("deleted_at", null).neq("is_active", false);
-      if (!isSuperadmin && resolvedFirmId) cq = (cq as any).eq("firm_id", resolvedFirmId);
+      if (resolvedFirmId) cq = (cq as any).eq("firm_id", resolvedFirmId);
       const { data: cData } = await cq;
 
       let tq = supabase.from("timesheets").select("user_id,hours,billable,is_billable").limit(500);
@@ -74,10 +87,10 @@ export default function BillingDashboardTab({ firmId }: { firmId: string | null 
       const { data: tsData } = await tq;
 
       let uq = supabase.from("users").select("id,name").eq("is_active", true);
-      if (!isSuperadmin && resolvedFirmId) uq = uq.eq("firm_id", resolvedFirmId);
+      if (resolvedFirmId) uq = uq.eq("firm_id", resolvedFirmId);
       const { data: uData } = await uq;
 
-      setInvoices((invData as DashInvoice[]) || []);
+      setInvoices(allInv);
       setClients((cData as ClientInfo[]) || []);
       setTimesheets(tsData || []);
       setUsers(uData || []);
@@ -93,14 +106,20 @@ export default function BillingDashboardTab({ firmId }: { firmId: string | null 
     () => invoices.filter(i => i.status === "paid").reduce((s, i) => s + (i.total_amount || i.amount || 0), 0),
     [invoices],
   );
+  // Outstanding / overdue use amount_due (net of receipts + TDS + GST-TDS) so
+  // partial payments are reflected, and count only real invoices (not
+  // quotations / credit notes). Fully-paid invoices have amount_due = 0.
+  const isOpenInvoice = (i: DashInvoice) =>
+    (i.document_type ?? "invoice") === "invoice" && !["voided","draft"].includes(i.status || "");
+  const dueOf = (i: DashInvoice) => i.amount_due ?? i.total_amount ?? i.amount ?? 0;
   const outstanding = useMemo(
-    () => invoices.filter(i => !["paid","voided","draft"].includes(i.status || "")).reduce((s, i) => s + (i.total_amount || i.amount || 0), 0),
+    () => invoices.filter(isOpenInvoice).reduce((s, i) => s + Math.max(0, dueOf(i)), 0),
     [invoices],
   );
   const overdue = useMemo(
     () => invoices.filter(i =>
-      !["paid","voided","draft"].includes(i.status || "") && i.due_date && new Date(i.due_date) < today,
-    ).reduce((s, i) => s + (i.total_amount || i.amount || 0), 0),
+      isOpenInvoice(i) && i.due_date && new Date(i.due_date) < today,
+    ).reduce((s, i) => s + Math.max(0, dueOf(i)), 0),
     [invoices],
   );
   const paidThisMonth = useMemo(
@@ -131,9 +150,10 @@ export default function BillingDashboardTab({ firmId }: { firmId: string | null 
 
   const aging = useMemo(() => {
     const buckets: Record<string, number> = { "0-30 Days": 0, "31-60 Days": 0, "61-90 Days": 0, "90+ Days": 0 };
-    invoices.filter(i => !["paid","voided","draft"].includes(i.status || "") && i.due_date).forEach(i => {
+    invoices.filter(i => isOpenInvoice(i) && i.due_date).forEach(i => {
       const days = differenceInDays(today, new Date(i.due_date!));
-      const amt = i.total_amount || i.amount || 0;
+      const amt = Math.max(0, dueOf(i));
+      if (amt <= 0) return;
       if (days <= 30) buckets["0-30 Days"] += amt;
       else if (days <= 60) buckets["31-60 Days"] += amt;
       else if (days <= 90) buckets["61-90 Days"] += amt;
