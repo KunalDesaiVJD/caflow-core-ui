@@ -214,14 +214,17 @@ function Note1PreviewSection({
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10, marginTop: "10px" }}>
         <tbody>
           <tr>
-            <td style={{ verticalAlign: "top", width: "50%", padding: "0 6px" }}>
+            {/* Outer side padding (left here, right on the firm cell)
+                bumped 6px → 64px so the assessee and firm blocks both
+                shift toward the centre, mirroring the Word export. */}
+            <td style={{ verticalAlign: "top", width: "50%", padding: "0 6px 0 64px" }}>
               <div style={{ fontWeight: 700, marginBottom: 8 }}>For, {assesseeName}</div>
               <div style={{ fontWeight: 700 }}>x__________________</div>
               <div style={{ fontWeight: 700, marginBottom: 8 }}>Signature of assessee</div>
               <div style={{ fontWeight: 700 }}>Place: {placeText}</div>
               <div style={{ fontWeight: 700 }}>Date : {dateText}</div>
             </td>
-            <td style={{ verticalAlign: "top", width: "50%", padding: "0 6px", textAlign: "right" }}>
+            <td style={{ verticalAlign: "top", width: "50%", padding: "0 64px 0 6px", textAlign: "right" }}>
               <div style={{ fontWeight: 700 }}>For {firmName}</div>
               <div style={{ fontWeight: 700 }}>Chartered Accountants</div>
               <div style={{ fontWeight: 700, marginBottom: 8 }}>FRN: {firmFRN}</div>

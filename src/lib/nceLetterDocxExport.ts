@@ -591,7 +591,9 @@ export async function exportNote1Docx(input: Note1DocxData, filenameSlug: string
         new TableCell({
           width:    { size: half, type: WidthType.DXA },
           borders:  NO_BDR_SIDES,
-          margins:  { top: 80, bottom: 80, left: 100, right: 100 },
+          // Outer side margins bumped 100 → 1000 DXA (~0.7") so the
+          // assessee and firm blocks both shift toward the centre.
+          margins:  { top: 80, bottom: 80, left: 1000, right: 100 },
           verticalAlign: VerticalAlign.TOP,
           children: [
             sigLineL(`For, ${assesseeName}`, true),
@@ -606,7 +608,7 @@ export async function exportNote1Docx(input: Note1DocxData, filenameSlug: string
         new TableCell({
           width:    { size: TW_NOTE1 - half, type: WidthType.DXA },
           borders:  NO_BDR_SIDES,
-          margins:  { top: 80, bottom: 80, left: 100, right: 100 },
+          margins:  { top: 80, bottom: 80, left: 100, right: 1000 },
           verticalAlign: VerticalAlign.TOP,
           children: [
             sigLineR(`For ${firmName}`, true),
