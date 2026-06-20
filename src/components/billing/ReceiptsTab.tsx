@@ -100,7 +100,7 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
   const [editingId, setEditingId] = useState<string | null>(null);
 
   // Receipt Form state
-  const [receiptType, setReceiptType] = useState<"against_invoice" | "on_account">("against_invoice");
+  const [receiptType, setReceiptType] = useState<"against_invoice" | "on_account" | "allocate">("against_invoice");
   const [formClientId, setFormClientId] = useState("");
   const [formInvoiceId, setFormInvoiceId] = useState("");
   const [receiptDate, setReceiptDate] = useState<Date | undefined>(new Date());
@@ -117,6 +117,8 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
   // Q1: the receipt's owning firm, selectable in the dialog (defaults to the
   // current firm context). Lets multi-firm users book a receipt to the right firm.
   const [formFirmId, setFormFirmId] = useState<string>("");
+  // Multi-invoice allocation: invoice_id -> amount (string) for "allocate" mode.
+  const [allocations, setAllocations] = useState<Record<string, string>>({});
 
   // Kasar state
   const [kasars, setKasars] = useState<KasarRow[]>([]);
@@ -204,7 +206,7 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
   }, [formClientId]);
 
   useEffect(() => {
-    if (!formClientId || receiptType !== "against_invoice") { setClientInvoices([]); return; }
+    if (!formClientId || (receiptType !== "against_invoice" && receiptType !== "allocate")) { setClientInvoices([]); return; }
     (async () => {
       let q = supabase.from("invoices").select("id, invoice_no, total_amount, due_date")
         .eq("client_id", formClientId)
@@ -236,6 +238,10 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
     const fys = new Set(receipts.map(r => r.receipt_date ? getFYFromDate(r.receipt_date) : "").filter(Boolean));
     return [...fys].sort().reverse();
   }, [receipts]);
+
+  // Multi-invoice allocation totals (must match the gross settlement).
+  const allocTotal = Object.values(allocations).reduce((s, v) => s + (Number(v) || 0), 0);
+  const settlementTotal = (Number(amountReceived) || 0) + (Number(tdsAmount) || 0) + (Number(gstTdsAmount) || 0);
 
   const filtered = useMemo(() => receipts.filter(r => {
     if (clientFilter !== "all" && r.client_id !== clientFilter) return false;
@@ -270,6 +276,7 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
     setFormClientGstins([]);
     setFormGstin("all");
     setFormFirmId(firmFilter !== "all" ? firmFilter : (firmId ?? ""));
+    setAllocations({});
   };
 
   const resetKasarForm = () => {
@@ -334,6 +341,59 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
     const fy = getFYFromDate(dateStr);
 
     try {
+      // Multi-invoice allocation: one on-account receipt split across invoices.
+      if (receiptType === "allocate") {
+        if (allocTotal <= 0 || Math.abs(allocTotal - settlementTotal) > 0.01) {
+          toast({ title: "Total allocated must equal the settlement (amount + TDS + GST-TDS)", variant: "destructive" });
+          return;
+        }
+        let newReceiptId: string | null = null;
+        if (BILLING_RPC_RECEIPT_POSTING) {
+          const { data, error } = await (supabase as any).rpc("post_receipt", {
+            p_firm_id: resolvedFirmId, p_client_id: formClientId, p_invoice_id: null,
+            p_receipt_type: "on_account", p_receipt_date: dateStr, p_amount: amt,
+            p_payment_mode: paymentMode, p_payment_reference: paymentReference || null,
+            p_tds: tds || 0, p_gst_tds: gstTds || 0,
+            p_tds_date: tds > 0 && tdsDate ? format(tdsDate, "yyyy-MM-dd") : null,
+            p_remarks: remarks || null, p_gstin: formGstin && formGstin !== "all" ? formGstin : null,
+            p_created_by: user?.id, p_financial_year: fy,
+          });
+          if (error) throw error;
+          newReceiptId = data as string;
+        } else {
+          const { data: nr, error: rErr } = await supabase.from("billing_receipts").insert({
+            firm_id: resolvedFirmId, client_id: formClientId, invoice_id: null,
+            receipt_type: "on_account", receipt_date: dateStr, amount_received: amt,
+            payment_mode: paymentMode.toLowerCase(), payment_reference: paymentReference || null,
+            tds_amount: tds || null, gst_tds_amount: gstTds || null,
+            tds_date: tds > 0 && tdsDate ? format(tdsDate, "yyyy-MM-dd") : null,
+            remarks: remarks || null, gstin: formGstin && formGstin !== "all" ? formGstin : null,
+            created_by: user?.id,
+          }).select("id").single();
+          if (rErr) throw rErr;
+          newReceiptId = nr.id;
+          await supabase.from("client_ledger_entries").insert({
+            firm_id: resolvedFirmId, client_id: formClientId, entry_date: dateStr, entry_type: "receipt",
+            document_id: newReceiptId, debit_amount: 0, credit_amount: amt,
+            narration: `Payment received — ${paymentMode}`, financial_year: fy,
+          });
+          if (tds > 0) await supabase.from("client_ledger_entries").insert({ firm_id: resolvedFirmId, client_id: formClientId, entry_date: dateStr, entry_type: "adjustment", document_id: newReceiptId, debit_amount: 0, credit_amount: tds, narration: "TDS deducted", financial_year: fy });
+          if (gstTds > 0) await supabase.from("client_ledger_entries").insert({ firm_id: resolvedFirmId, client_id: formClientId, entry_date: dateStr, entry_type: "adjustment", document_id: newReceiptId, debit_amount: 0, credit_amount: gstTds, narration: "GST TDS deducted", financial_year: fy });
+        }
+        const allocRows = clientInvoices
+          .filter((inv: any) => Number(allocations[inv.id]) > 0)
+          .map((inv: any) => ({ receipt_id: newReceiptId, invoice_id: inv.id, amount: Number(allocations[inv.id]) }));
+        if (allocRows.length > 0) {
+          const { error: aErr } = await (supabase as any).from("billing_receipt_allocations").insert(allocRows);
+          if (aErr) throw aErr;
+        }
+        toast({ title: `Receipt allocated across ${allocRows.length} invoice(s).` });
+        setDialogOpen(false);
+        resetForm();
+        fetchData();
+        return;
+      }
+
       if (editingId) {
         // UPDATE existing receipt
         const { error: uErr } = await supabase.from("billing_receipts").update({
@@ -799,6 +859,10 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
                   <RadioGroupItem value="on_account" id="rt-onaccount" />
                   <Label htmlFor="rt-onaccount" className="cursor-pointer">On Account</Label>
                 </div>
+                <div className="flex items-center gap-2">
+                  <RadioGroupItem value="allocate" id="rt-allocate" />
+                  <Label htmlFor="rt-allocate" className="cursor-pointer">Split across invoices</Label>
+                </div>
               </RadioGroup>
             </div>
 
@@ -858,6 +922,35 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+            )}
+
+            {receiptType === "allocate" && formClientId && (
+              <div className="space-y-1">
+                <Label>Allocate to invoices</Label>
+                {clientInvoices.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No outstanding invoices for this client.</p>
+                ) : (
+                  <div className="rounded-md border divide-y">
+                    {clientInvoices.map((inv: any) => (
+                      <div key={inv.id} className="flex items-center gap-2 px-2 py-1.5">
+                        <div className="flex-1 text-xs">
+                          {inv.invoice_no} — ₹{Number(inv.total_amount || 0).toLocaleString("en-IN")}
+                        </div>
+                        <Input type="number" className="w-28 h-8 text-xs" placeholder="0.00" min="0" step="0.01"
+                          value={allocations[inv.id] ?? ""}
+                          onChange={e => setAllocations(prev => ({ ...prev, [inv.id]: e.target.value }))} />
+                      </div>
+                    ))}
+                    <div className="flex items-center justify-between px-2 py-1.5 text-xs font-medium">
+                      <span>Allocated</span>
+                      <span className={cn(Math.abs(allocTotal - settlementTotal) > 0.005 && "text-destructive")}>
+                        ₹{allocTotal.toLocaleString("en-IN")} / ₹{settlementTotal.toLocaleString("en-IN")}
+                      </span>
+                    </div>
+                  </div>
+                )}
+                <p className="text-[11px] text-muted-foreground">Total allocated must equal the settlement (amount + TDS + GST-TDS).</p>
               </div>
             )}
 
