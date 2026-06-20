@@ -36,7 +36,7 @@ import { NotesMismatchPanel } from "@/components/stage7/NotesMismatchPanel";
 import {
   ArrowRight, AlertTriangle, Download, FileSpreadsheet,
   Pencil, Loader2, BarChart3, Droplets, Lock, Database, CheckCircle2,
-  BookOpen, TrendingUp, RefreshCw, FileText,
+  BookOpen, TrendingUp, RefreshCw, FileText, Eye,
 } from "lucide-react";
 import { NCE_FS_ITEMS } from "@/config/nceLineItems";
 import type { FSLineItem } from "@/config/nceLineItems";
@@ -2024,6 +2024,12 @@ export default function PipelineFinancialStatements({
   // Task 1 (doc6): preview popup shown immediately when user locks
   const [ncePreviewOpen,     setNcePreviewOpen]      = useState(false);
 
+  // Corporate Lock Preview — mirrors NCE Lock Preview for corporate entities.
+  // Locking opens a read-only popup showing BS → P&L → (CF) → Notes the way
+  // they'll appear in the DOCX export.
+  const [corpIsLocked,    setCorpIsLocked]    = useState(false);
+  const [corpPreviewOpen, setCorpPreviewOpen] = useState(false);
+
   // Bug 2 fix: restore nceIsLocked from localStorage when the engagement changes
   // so a page refresh does not silently unlock a locked preview.
   useEffect(() => {
@@ -2062,6 +2068,22 @@ export default function PipelineFinancialStatements({
       localStorage.setItem(`nce_expanded_${engagementId}`, JSON.stringify([...nceExpandedRows]));
     } catch { /* storage unavailable — ignore */ }
   }, [nceExpandedRows, nceIsLocked, engagementId]);
+
+  // Restore / persist corpIsLocked across page refreshes (mirrors nceIsLocked).
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(`corp_lock_${engagementId}`);
+      setCorpIsLocked(stored === "1");
+    } catch {
+      setCorpIsLocked(false);
+    }
+  }, [engagementId]);
+  useEffect(() => {
+    try {
+      if (corpIsLocked) localStorage.setItem(`corp_lock_${engagementId}`, "1");
+      else              localStorage.removeItem(`corp_lock_${engagementId}`);
+    } catch { /* storage unavailable — ignore */ }
+  }, [corpIsLocked, engagementId]);
 
   // Bug 1 fix: memoized handler so onExpansionStateUpdate keeps the same
   // reference across renders (only recreated when nceIsLocked changes).
@@ -7875,6 +7897,32 @@ export default function PipelineFinancialStatements({
               <FileText size={14} /> Export Word
             </Button>
           )}
+          {!isNonCorporate && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1"
+              title="Preview the draft financial statements as they'll appear in the export"
+              onClick={() => setCorpPreviewOpen(true)}
+            >
+              <Eye size={14} /> Preview
+            </Button>
+          )}
+          {!isNonCorporate && (
+            <Button
+              variant={corpIsLocked ? "default" : "outline"}
+              size="sm"
+              className={cn("gap-1", corpIsLocked && "bg-amber-500 hover:bg-amber-600 border-amber-500")}
+              title={corpIsLocked ? "Preview is locked. Click to unlock." : "Lock current state so subsequent edits don't change the export"}
+              onClick={() => {
+                const next = !corpIsLocked;
+                setCorpIsLocked(next);
+                if (next) setCorpPreviewOpen(true);
+              }}
+            >
+              {corpIsLocked ? "🔓 Unlock Preview" : "🔒 Lock Preview"}
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={saveFS} disabled={saving} className="gap-1">
             {saving ? <Loader2 size={14} className="animate-spin" /> : <FileSpreadsheet size={14} />}
             Save
@@ -9449,6 +9497,167 @@ export default function PipelineFinancialStatements({
                     place:        sigPlace,
                     date:         sigDate,
                   }}
+                />
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Corporate Lock Preview — mirrors NCE preview. Shows BS → P&L → CF →
+          Notes as a single scrollable A4-style paper view, matching the DOCX
+          export. */}
+      <Dialog open={corpPreviewOpen} onOpenChange={setCorpPreviewOpen}>
+        <DialogContent className="w-[78vw] max-w-[1200px] max-h-[88vh] p-0 flex flex-col gap-0 overflow-hidden">
+          <DialogHeader className="px-4 py-2.5 border-b flex-none bg-background/95 backdrop-blur-sm">
+            <div className="flex items-center justify-between">
+              <DialogTitle className="flex items-center gap-2 text-sm">
+                🔒 Draft Financial Statements — Preview
+              </DialogTitle>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="ghost" onClick={() => setCorpPreviewOpen(false)}>
+                  Close
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={corpHasSevereDrift}
+                  onClick={() => { setCorpPreviewOpen(false); setShowCorpFontDialog(true); }}
+                >
+                  <FileText size={13} className="mr-1" /> Export Word
+                </Button>
+              </div>
+            </div>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto bg-muted/30">
+            <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm border-b px-4 pt-2 pb-0">
+              <div className="flex gap-1 pb-2">
+                <Button size="sm" variant="ghost" className="text-xs h-7" onClick={() => document.getElementById("corp-preview-bs")?.scrollIntoView({ behavior: "smooth" })}>
+                  Balance Sheet
+                </Button>
+                <Button size="sm" variant="ghost" className="text-xs h-7" onClick={() => document.getElementById("corp-preview-pl")?.scrollIntoView({ behavior: "smooth" })}>
+                  Profit &amp; Loss
+                </Button>
+                {cfApplicable && (
+                  <Button size="sm" variant="ghost" className="text-xs h-7" onClick={() => document.getElementById("corp-preview-cf")?.scrollIntoView({ behavior: "smooth" })}>
+                    Cash Flow
+                  </Button>
+                )}
+                <Button size="sm" variant="ghost" className="text-xs h-7" onClick={() => document.getElementById("corp-preview-notes")?.scrollIntoView({ behavior: "smooth" })}>
+                  Notes
+                </Button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto py-6 px-4 space-y-8">
+              {/* Balance Sheet */}
+              <div id="corp-preview-bs" className="mx-auto bg-card shadow-md border border-border rounded-lg overflow-hidden"
+                   style={{ maxWidth: "794px", width: "100%", minHeight: "900px", padding: "28px 32px" }}>
+                {fsDisplayData.bs ? (
+                  <>
+                    <CorporateBalanceSheetView
+                      engagementId={engagementId}
+                      bs={fsDisplayData.bs}
+                      cyYear={cyYear}
+                      pyYear={pyYear}
+                      companyName={engagement?.clients?.name || "[Company Name]"}
+                      pyLocked={pyLocked}
+                    />
+                    <CorporateSignatureBlock
+                      firmName={sigFirmName}
+                      firmRegNo={sigFirmFRN}
+                      partnerName={sigPartnerName}
+                      partnerMemNo={sigMembershipNo}
+                      companyName={sigClientName || engagement?.clients?.name || ""}
+                      dir1Name={corpSigDirs.dir1Name}
+                      dir1Din={corpSigDirs.dir1Din}
+                      dir2Name={corpSigDirs.dir2Name}
+                      dir2Din={corpSigDirs.dir2Din}
+                      onChangeDir={updateCorpSigDir}
+                      place={sigPlace}
+                      onChangePlace={setSigPlace}
+                      date={sigDate}
+                      onChangeDate={setSigDate}
+                    />
+                  </>
+                ) : (
+                  <p className="text-xs text-muted-foreground italic">Balance Sheet data not available — trial balance not loaded.</p>
+                )}
+              </div>
+              {/* Profit & Loss */}
+              <div id="corp-preview-pl" className="mx-auto bg-card shadow-md border border-border rounded-lg overflow-hidden"
+                   style={{ maxWidth: "794px", width: "100%", minHeight: "900px", padding: "28px 32px" }}>
+                {fsDisplayData.pl ? (
+                  <>
+                    <CorporatePLView
+                      engagementId={engagementId}
+                      pl={fsDisplayData.pl}
+                      cyYear={cyYear}
+                      pyYear={pyYear}
+                      companyName={engagement?.clients?.name || "[Company Name]"}
+                      pyLocked={pyLocked}
+                      lockedCodes={undefined}
+                      notesData={stage5NotesData ?? null}
+                    />
+                    <CorporateSignatureBlock
+                      firmName={sigFirmName}
+                      firmRegNo={sigFirmFRN}
+                      partnerName={sigPartnerName}
+                      partnerMemNo={sigMembershipNo}
+                      companyName={sigClientName || engagement?.clients?.name || ""}
+                      dir1Name={corpSigDirs.dir1Name}
+                      dir1Din={corpSigDirs.dir1Din}
+                      dir2Name={corpSigDirs.dir2Name}
+                      dir2Din={corpSigDirs.dir2Din}
+                      onChangeDir={updateCorpSigDir}
+                      place={sigPlace}
+                      onChangePlace={setSigPlace}
+                      date={sigDate}
+                      onChangeDate={setSigDate}
+                    />
+                  </>
+                ) : (
+                  <p className="text-xs text-muted-foreground italic">P&amp;L data not available — trial balance not loaded.</p>
+                )}
+              </div>
+              {/* Cash Flow (corporate only, when applicable) */}
+              {cfApplicable && fsDisplayData.bs && fsDisplayData.pl && fsDisplayData.cfs && (
+                <div id="corp-preview-cf" className="mx-auto bg-card shadow-md border border-border rounded-lg overflow-hidden"
+                     style={{ maxWidth: "794px", width: "100%", minHeight: "900px", padding: "28px 32px" }}>
+                  <CorporateCFView
+                    bs={fsDisplayData.bs}
+                    pl={fsDisplayData.pl}
+                    cfs={fsDisplayData.cfs}
+                    cyYear={cyYear}
+                    pyYear={pyYear}
+                    companyName={engagement?.clients?.name || "[Company Name]"}
+                    overrides={cfsOverrides}
+                    onCommit={updateCfsOverride}
+                  />
+                  <CorporateSignatureBlock
+                    firmName={sigFirmName}
+                    firmRegNo={sigFirmFRN}
+                    partnerName={sigPartnerName}
+                    partnerMemNo={sigMembershipNo}
+                    companyName={sigClientName || engagement?.clients?.name || ""}
+                    dir1Name={corpSigDirs.dir1Name}
+                    dir1Din={corpSigDirs.dir1Din}
+                    dir2Name={corpSigDirs.dir2Name}
+                    dir2Din={corpSigDirs.dir2Din}
+                    onChangeDir={updateCorpSigDir}
+                    place={sigPlace}
+                    onChangePlace={setSigPlace}
+                    date={sigDate}
+                    onChangeDate={setSigDate}
+                  />
+                </div>
+              )}
+              {/* Notes to Accounts */}
+              <div id="corp-preview-notes" className="mx-auto bg-card shadow-md border border-border rounded-lg overflow-hidden"
+                   style={{ maxWidth: "794px", width: "100%", minHeight: "600px", padding: "28px 32px" }}>
+                <NotesTab
+                  engagementId={engagementId}
+                  cyYear={cyYear}
+                  pyYear={pyYear}
+                  companyName={engagement?.clients?.name || ""}
                 />
               </div>
             </div>

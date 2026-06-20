@@ -568,7 +568,7 @@ export async function exportNote1Docx(input: Note1DocxData, filenameSlug: string
     rows:         bodyRows,
   });
 
-  // ── Signature block (assessee left / firm right) ──
+  // ── Signature block ──
   const sigLineL = (text: string, bold = false): Paragraph => new Paragraph({
     alignment: AlignmentType.LEFT,
     spacing:   { before: 0, after: 40, line: 264, lineRule: "auto" as any },
@@ -588,13 +588,15 @@ export async function exportNote1Docx(input: Note1DocxData, filenameSlug: string
     rows: [new TableRow({
       cantSplit: true,
       children: [
-        // Left col — CA firm block (swapped 2026-06-20 per auditor)
+        // Left col — CA firm block. Left margin = body number-column
+        // width (NOTE_COL_NUM_W = 700) + body cell padding (100) so
+        // "For V J Desai & Co. LLP" starts in line with the policy
+        // body text above. BLACK text with colons in FRN / Membership
+        // No., per auditor revision 2026-06-20.
         new TableCell({
           width:    { size: half, type: WidthType.DXA },
           borders:  NO_BDR_SIDES,
-          // Outer side margins (1000 DXA on the outer edges) pull both
-          // stacks toward the centre.
-          margins:  { top: 80, bottom: 80, left: 1000, right: 100 },
+          margins:  { top: 80, bottom: 80, left: NOTE_COL_NUM_W + 100, right: 100 },
           verticalAlign: VerticalAlign.TOP,
           children: [
             sigLineL(`For ${firmName}`, true),
@@ -606,15 +608,16 @@ export async function exportNote1Docx(input: Note1DocxData, filenameSlug: string
             sigLineL(`Membership No.: ${partnerMembNo}`, true),
           ],
         }),
-        // Right col — Assessee block (swapped 2026-06-20 per auditor)
+        // Right col — Assessee block, right-aligned. Right margin =
+        // body cell's right padding (100) so the assessee block ends
+        // at the same right edge as the policy body text above.
         new TableCell({
           width:    { size: TW_NOTE1 - half, type: WidthType.DXA },
           borders:  NO_BDR_SIDES,
-          margins:  { top: 80, bottom: 80, left: 100, right: 1000 },
+          margins:  { top: 80, bottom: 80, left: 100, right: 100 },
           verticalAlign: VerticalAlign.TOP,
           children: [
             sigLineR(`For, ${assesseeName}`, true),
-            sigLineR(""),
             sigLineR("x__________________", true),
             sigLineR("Signature of assessee", true),
             sigLineR(""),
