@@ -483,7 +483,7 @@ function titleRows(
           children: [new Paragraph({
             alignment: AlignmentType.RIGHT,
             spacing:   { before: 0, after: 0 },
-            children: [new TextRun({ text: amountUnitsLabel(), font: FONT, size: SZ_SM, color: DK_GREY })],
+            children: [new TextRun({ text: amountUnitsLabel(), font: FONT, size: SZ_HDR, bold: true, color: BLACK })],
           })],
         }),
       ],
