@@ -2507,7 +2507,10 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   // "Notes to Profit & Loss A/c…") belong in the running page HEADER so Word
   // repeats them automatically at the top of every page. Two separate DOCX
   // sections are created (one BS, one PL) each with its own running header.
-  // Factory helper — entity banner paragraph + section-heading paragraph.
+  // Factory helper — entity banner + "Notes forming part of…" subtitle +
+  // section-heading paragraph. The three-line header mirrors the on-screen
+  // Preview's notes-page banner (NCECapitalAccount → header div) so the
+  // print export and the Lock Preview show the same banner stack.
   const makeNotesHeader = (sectionLine: string): Header =>
     new Header({
       children: [
@@ -2517,24 +2520,33 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
           // the page border (drawn at 24 pt from page edge via _pgBdr space:24)
           // so there is a visible gap between the border line and the text.
           spacing:   { before: 200, after: 20 },
-          border:    { bottom: { style: BorderStyle.SINGLE, size: 8, color: NAVY, space: 4 } },
           children:  [new TextRun({
             text: entityName.toUpperCase(),
             font: FONT, size: SZ_ENTITY, bold: true, color: NAVY,
           })],
         }),
         new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing:   { before: 0, after: 20 },
+          children:  [new TextRun({
+            text: `Notes forming part of the Financial Statements for the year ended, 31st March, ${cyYear}`,
+            font: FONT, size: SZ_HDR, bold: true, color: NAVY,
+          })],
+        }),
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
           // after: 40 DXA — minimal trailer; the reliable gap comes from the
           // body-level notesSectionTopSpacer paragraph in Sections B/C.
-          spacing:  { before: 80, after: 40 },
-          children: [new TextRun({ text: sectionLine, font: FONT, size: SZ_HDR, bold: true, underline: {} })],
+          spacing:   { before: 0, after: 40 },
+          border:    { bottom: { style: BorderStyle.SINGLE, size: 8, color: NAVY, space: 4 } },
+          children:  [new TextRun({ text: sectionLine, font: FONT, size: SZ_HDR, bold: true, color: NAVY })],
         }),
       ],
     });
-  const bsNotesRunningHdr = makeNotesHeader(`Notes to Balance Sheet as on 31.03.${String(cyYear)}`);
+  const bsNotesRunningHdr = makeNotesHeader(`Notes to Balance Sheet as at 31st March, ${cyYear}`);
   // Issue 2 — P&L is a period statement, so its notes heading reads "for the
   // accounting year YYYY-YYYY" (e.g. 2025-2026) rather than the point-in-time
-  // "as on 31.03.YYYY". The Balance Sheet heading above keeps "as on …".
+  // "as at 31st March, YYYY". The Balance Sheet heading above keeps "as at …".
   const plNotesRunningHdr = makeNotesHeader(`Notes to Profit & Loss A/c for the accounting year ${Number(cyYear) - 1}-${cyYear}`);
 
   // Phase 2 — PPE Schedule (landscape). Note 10 is now data-driven: it is
