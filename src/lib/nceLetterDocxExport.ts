@@ -588,36 +588,38 @@ export async function exportNote1Docx(input: Note1DocxData, filenameSlug: string
     rows: [new TableRow({
       cantSplit: true,
       children: [
+        // Left col — CA firm block (swapped 2026-06-20 per auditor)
         new TableCell({
           width:    { size: half, type: WidthType.DXA },
           borders:  NO_BDR_SIDES,
-          // Outer side margins bumped 100 → 1000 DXA (~0.7") so the
-          // assessee and firm blocks both shift toward the centre.
+          // Outer side margins (1000 DXA on the outer edges) pull both
+          // stacks toward the centre.
           margins:  { top: 80, bottom: 80, left: 1000, right: 100 },
           verticalAlign: VerticalAlign.TOP,
           children: [
-            sigLineL(`For, ${assesseeName}`, true),
+            sigLineL(`For ${firmName}`, true),
+            sigLineL("Chartered Accountants", true),
+            sigLineL(`FRN: ${firmFRN}`, true),
             sigLineL(""),
-            sigLineL("x__________________", true),
-            sigLineL("Signature of assessee", true),
-            sigLineL(""),
-            sigLineL(`Place: ${placeText}`, true),
-            sigLineL(`Date : ${dateText}`, true),
+            sigLineL(partnerName, true),
+            sigLineL("Partner", true),
+            sigLineL(`Membership No.: ${partnerMembNo}`, true),
           ],
         }),
+        // Right col — Assessee block (swapped 2026-06-20 per auditor)
         new TableCell({
           width:    { size: TW_NOTE1 - half, type: WidthType.DXA },
           borders:  NO_BDR_SIDES,
           margins:  { top: 80, bottom: 80, left: 100, right: 1000 },
           verticalAlign: VerticalAlign.TOP,
           children: [
-            sigLineR(`For ${firmName}`, true),
-            sigLineR("Chartered Accountants", true),
-            sigLineR(`FRN: ${firmFRN}`, true),
+            sigLineR(`For, ${assesseeName}`, true),
             sigLineR(""),
-            sigLineR(partnerName, true),
-            sigLineR("Partner", true),
-            sigLineR(`Membership No.: ${partnerMembNo}`, true),
+            sigLineR("x__________________", true),
+            sigLineR("Signature of assessee", true),
+            sigLineR(""),
+            sigLineR(`Place: ${placeText}`, true),
+            sigLineR(`Date : ${dateText}`, true),
           ],
         }),
       ],
