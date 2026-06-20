@@ -17,7 +17,10 @@
 // allocate_doc_number RPC (persistent counter), instead of the race-prone
 // MAX()+1 fetched at form load. Prevents concurrent duplicates and post-delete
 // number reuse (audit C8).
-export const BILLING_ATOMIC_NUMBERING = false;
+// ENABLED 2026-06-20 after parity verified (billing_doc_sequences seeded to
+// MAX(seq_number) per series; inv/2026-27=47 -> next 48). Revert to false +
+// redeploy if invoice creation shows any issue.
+export const BILLING_ATOMIC_NUMBERING = true;
 
 // Post receipts (+ TDS / GST-TDS ledger rows) through the transactional
 // post_receipt RPC so a receipt and its ledger entries can never be written
