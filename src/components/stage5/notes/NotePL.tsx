@@ -26,10 +26,13 @@ interface Props {
   onRemapLedger?:  (ledgerName: string, newCode: string) => void;
   /** Issue 4 (Aesha) — clears this ledger from coa_mapping (DB) and re-syncs. */
   onUnmapLedger?:  (ledgerName: string) => void;
+  /** Corporate Lock Preview parity with NCE: when true, individual NoteCards
+   *  hide themselves if both CY and PY totals are zero/blank. */
+  hideEmpty?:      boolean;
 }
 
 export default function NotePL({
-  engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl, onRemapLedger, onUnmapLedger,
+  engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl, onRemapLedger, onUnmapLedger, hideEmpty = false,
 }: Props) {
   // Bug 4 — Sign-convention bridge for P&L Notes display
   // ─────────────────────────────────────────────────────────────────────────
@@ -99,7 +102,7 @@ export default function NotePL({
     const totalPy = hasAnyBreakupPy ? sumPy : effectivePY(key);
 
     return (
-      <NoteCard collapseControl={collapseControl} noteNo={noteNo} title={title}>
+      <NoteCard collapseControl={collapseControl} noteNo={noteNo} title={title} hideWhenEmpty={hideEmpty} cyTotal={totalCy} pyTotal={totalPy}>
         <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
         <ListTable
           rows={rows}
@@ -135,7 +138,7 @@ export default function NotePL({
       {renderListNote(sn("other_income"), "Other Income", "other_income",
         "Interest / Forex gain / Misc income")}
 
-      <NoteCard collapseControl={collapseControl} noteNo={sn("cost_materials")} title="Cost of materials consumed">
+      <NoteCard collapseControl={collapseControl} noteNo={sn("cost_materials")} title="Cost of materials consumed" hideWhenEmpty={hideEmpty} cyTotal={cy("cost_materials")} pyTotal={py("cost_materials")}>
         <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
         <EditableRow
           label="Opening Stock"
@@ -181,7 +184,7 @@ export default function NotePL({
       {renderListNote(sn("purchases_stock"), "Purchase of stock-in-trade", "purchases_stock",
         "Purchase break-up")}
 
-      <NoteCard collapseControl={collapseControl} noteNo={sn("changes_inventory", "changes_inventories")} title="Changes in inventories of FG / WIP / SIT">
+      <NoteCard collapseControl={collapseControl} noteNo={sn("changes_inventory", "changes_inventories")} title="Changes in inventories of FG / WIP / SIT" hideWhenEmpty={hideEmpty} cyTotal={cy("changes_inventory")} pyTotal={py("changes_inventory")}>
         <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
         <div className="text-[10px] italic text-muted-foreground mt-1">Closing Stock</div>
         <EditableRow

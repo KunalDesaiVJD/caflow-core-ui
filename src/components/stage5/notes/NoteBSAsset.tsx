@@ -24,10 +24,13 @@ interface Props {
   onRemapLedger?:  (ledgerName: string, newCode: string) => void;
   /** Issue 4 (Aesha) — clears this ledger from coa_mapping (DB) and re-syncs. */
   onUnmapLedger?:  (ledgerName: string) => void;
+  /** Corporate Lock Preview parity with NCE: when true, individual NoteCards
+   *  hide themselves if both CY and PY totals are zero/blank. */
+  hideEmpty?:      boolean;
 }
 
 export default function NoteBSAsset({
-  engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl, onRemapLedger, onUnmapLedger,
+  engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl, onRemapLedger, onUnmapLedger, hideEmpty = false,
 }: Props) {
   const get = (path: string) => path.split(".").reduce<any>((c, k) => c?.[k], notes);
 
@@ -111,7 +114,7 @@ export default function NoteBSAsset({
   ) => {
     const effPY = effectivePY(key, breakupPath);
     return (
-      <NoteCard collapseControl={collapseControl} noteNo={noteNo} title={title}>
+      <NoteCard collapseControl={collapseControl} noteNo={noteNo} title={title} hideWhenEmpty={hideEmpty} cyTotal={cy(key)} pyTotal={effPY}>
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <ListTable
           rows={(get(breakupPath) ?? []) as ListRow[]}
@@ -139,7 +142,7 @@ export default function NoteBSAsset({
 
   return (
     <div className="space-y-4">
-      <NoteCard collapseControl={collapseControl} noteNo={sn("nc_investments")} title="Non-current investments">
+      <NoteCard collapseControl={collapseControl} noteNo={sn("nc_investments")} title="Non-current investments" hideWhenEmpty={hideEmpty} cyTotal={cy("nc_investments")} pyTotal={effectivePY("nc_investments")}>
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <div className="text-[10px] italic text-muted-foreground">(a) Investment property / (b) Equity Instruments / (c) Other investments</div>
         <ListTable
@@ -164,7 +167,7 @@ export default function NoteBSAsset({
         />
       </NoteCard>
 
-      <NoteCard collapseControl={collapseControl} noteNo={sn("deferred_tax_asset", "deferred_tax_assets")} title="Deferred tax assets (Net)">
+      <NoteCard collapseControl={collapseControl} noteNo={sn("deferred_tax_asset", "deferred_tax_assets")} title="Deferred tax assets (Net)" hideWhenEmpty={hideEmpty} cyTotal={cy("deferred_tax_asset")} pyTotal={py("deferred_tax_asset")}>
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <EditableRow
           label="Excess of depreciation in books over IT Act"
@@ -198,7 +201,7 @@ export default function NoteBSAsset({
       {renderSingleNote(sn("inventories"), "Inventories", "inventories",
         "bs_asset.inventories.breakup", "Raw materials / WIP / Finished goods / Stores & spares")}
 
-      <NoteCard collapseControl={collapseControl} noteNo={sn("trade_receivables")} title="Trade Receivables">
+      <NoteCard collapseControl={collapseControl} noteNo={sn("trade_receivables")} title="Trade Receivables" hideWhenEmpty={hideEmpty} cyTotal={cy("trade_receivables")} pyTotal={py("trade_receivables")}>
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <EditableRow
           label="Outstanding for a period exceeding 6 months"
