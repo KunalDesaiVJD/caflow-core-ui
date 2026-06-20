@@ -491,6 +491,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote,
             collapseControl={collapseAll}
             onRemapLedger={handleRemapLedger}
             onUnmapLedger={handleUnmapLedger}
+            hideEmpty={readOnly}
           />
         </TabsContent>
         <TabsContent value="bs_asset" className="mt-3">
@@ -501,6 +502,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote,
             collapseControl={collapseAll}
             onRemapLedger={handleRemapLedger}
             onUnmapLedger={handleUnmapLedger}
+            hideEmpty={readOnly}
           />
         </TabsContent>
         <TabsContent value="pl" className="mt-3">
@@ -511,6 +513,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote,
             collapseControl={collapseAll}
             onRemapLedger={handleRemapLedger}
             onUnmapLedger={handleUnmapLedger}
+            hideEmpty={readOnly}
           />
         </TabsContent>
         <TabsContent value="fa" className="mt-3">
