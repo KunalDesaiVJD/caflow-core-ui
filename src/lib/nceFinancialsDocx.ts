@@ -1277,7 +1277,9 @@ function buildNote1Section(
   // between numbered items is row-driven (cell margins + paragraph after)
   // instead of paragraph-driven (lineRule + grid snap), which removes the
   // residual whitespace problem the prior revisions kept hitting.
-  const headingYear = String(cyYear || "").slice(-4) || "20XX";
+  // headingYear formerly fed the removed subtitle banner — kept here as a
+  // no-op reference to document that cyYear no longer flows into Note 1.
+  void cyYear;
 
   const NOTE_COL_NUM_W = 700;             // narrow number column
   const NOTE_COL_TEXT_W = TW - NOTE_COL_NUM_W;
@@ -1322,19 +1324,10 @@ function buildNote1Section(
     })],
   });
 
-  // Subtitle banner — 10pt bold NAVY, thin rule below only (sits visually
-  // beneath the entity banner with a single line of separation).
-  const subtitleBanner = new Paragraph({
-    alignment: AlignmentType.CENTER,
-    spacing:   { before: 0, after: 60 },
-    border:    { bottom: NAVY_RULE_THIN },
-    keepNext:  true,
-    keepLines: true,
-    children: [new TextRun({
-      text: `Notes forming part of the Financial Statements for the year ended, 31st March, ${headingYear}`,
-      font: FONT, size: SZ_HDR, bold: true, color: NAVY,
-    })],
-  });
+  // Subtitle banner removed (2026-06-20) — auditor asked for a tighter
+  // header stack without the "Notes forming part of the Financial
+  // Statements for the year ended, …" line. The entity banner alone now
+  // sits above the "Note 1 — Summary…" heading.
 
   // Note 1 heading banner — left-aligned (matches the on-screen "Note 1 |
   // Summary of Significant accounting policies" row), thin rule below.
@@ -1525,7 +1518,6 @@ function buildNote1Section(
   // between Note 1 heading & note description").
   return [
     entityBanner,
-    subtitleBanner,
     note1HeadingBanner,
     bodyTable,
     preSigSpacer,

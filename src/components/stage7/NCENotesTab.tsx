@@ -152,20 +152,10 @@ function Note1PreviewSection({
         {displayEntity}
       </div>
 
-      {/* Subtitle — 10pt bold NAVY, thin rule below */}
-      <div
-        style={{
-          textAlign:    "center",
-          fontSize:     10,
-          fontWeight:   700,
-          color:        NAVY,
-          paddingBottom:"3px",
-          borderBottom: `1px solid ${NAVY}`,
-          marginTop:    "2px",
-        }}
-      >
-        Notes forming part of the Financial Statements for the year ended, 31st March, {yearStr}
-      </div>
+      {/* Subtitle banner removed (2026-06-20) — matches the Word export
+          which now drops "Notes forming part of the Financial Statements
+          for the year ended, …" so the entity banner sits directly above
+          the "Note 1 — Summary…" heading. */}
 
       {/* "Note 1 — …" heading — left-aligned NAVY, thin rule below */}
       <div
