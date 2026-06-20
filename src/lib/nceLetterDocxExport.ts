@@ -20,6 +20,8 @@ import {
   AlignmentType,
   BorderStyle,
   Document,
+  PageBorderDisplay,
+  PageBorderOffsetFrom,
   Packer,
   Paragraph,
   Table,
@@ -54,7 +56,10 @@ export interface Note1DocxData {
 const NAVY      = "1F3864";
 const BLACK     = "000000";
 
-// A4 portrait, 0.6" left/right, 0.55" top/bottom (matches FS export).
+// A4 portrait. Letters (Client Cert / Mgmt Letter) use a normal letter
+// margin set. Note 1 mirrors the FS export's Section A margins so the
+// standalone Note 1 docx looks identical to the Note 1 page inside the
+// full FS Word export (see nceFinancialsDocx.ts → note1PortraitProps).
 const A4_W      = 11906;
 const A4_H      = 16838;
 const MARG_L    = 864;
@@ -62,6 +67,30 @@ const MARG_R    = 864;
 const MARG_T    = 1080;
 const MARG_B    = 1080;
 const TW        = A4_W - MARG_L - MARG_R;
+
+// Note 1-specific margins — match nceFinancialsDocx.ts (MARG_T 720,
+// MARG_R 576, MARG_B_NOTES 1440, MARG_L 864) and TW_NOTE1 derived
+// from those so the body table is the same width as the FS-export
+// Note 1 page.
+const NOTE1_MARG_L = 864;
+const NOTE1_MARG_R = 576;
+const NOTE1_MARG_T = 720;
+const NOTE1_MARG_B = 1440;
+const TW_NOTE1     = A4_W - NOTE1_MARG_L - NOTE1_MARG_R;
+
+// NAVY page border (12 half-pt single rule, 24 twips from page edge) —
+// identical to nceFinancialsDocx.ts → _pgBdr so Note 1 sits inside the
+// same dark-blue frame the auditor sees on every FS-export page.
+const NOTE1_PAGE_BORDERS = {
+  pageBorders: {
+    display:    PageBorderDisplay.ALL_PAGES,
+    offsetFrom: PageBorderOffsetFrom.PAGE,
+  },
+  pageBorderTop:    { style: BorderStyle.SINGLE, size: 12, color: NAVY, space: 24 },
+  pageBorderBottom: { style: BorderStyle.SINGLE, size: 12, color: NAVY, space: 24 },
+  pageBorderLeft:   { style: BorderStyle.SINGLE, size: 12, color: NAVY, space: 24 },
+  pageBorderRight:  { style: BorderStyle.SINGLE, size: 12, color: NAVY, space: 24 },
+};
 
 // Font sizes in half-points (docx units).
 const SZ_ENTITY = 28; // 14pt
@@ -482,8 +511,10 @@ export async function exportNote1Docx(input: Note1DocxData, filenameSlug: string
   });
 
   // ── Numbered policies body (2-col borderless table) ──
+  // Width is derived from the Note 1-specific text-width (TW_NOTE1) so the
+  // standalone Note 1 page is laid out exactly like the FS export.
   const NOTE_COL_NUM_W  = 700;
-  const NOTE_COL_TEXT_W = TW - NOTE_COL_NUM_W;
+  const NOTE_COL_TEXT_W = TW_NOTE1 - NOTE_COL_NUM_W;
 
   const bodyParas = (body: string): Paragraph[] => {
     const segments = body.split(/\n{2,}/).map(s => s.trim()).filter(Boolean);
@@ -526,7 +557,7 @@ export async function exportNote1Docx(input: Note1DocxData, filenameSlug: string
   });
 
   const bodyTable = new Table({
-    width:        { size: TW, type: WidthType.DXA },
+    width:        { size: TW_NOTE1, type: WidthType.DXA },
     columnWidths: [NOTE_COL_NUM_W, NOTE_COL_TEXT_W],
     borders:      TABLE_NO_BDR as any,
     rows:         bodyRows,
@@ -544,10 +575,10 @@ export async function exportNote1Docx(input: Note1DocxData, filenameSlug: string
     children:  [new TextRun({ text, font: FONT, size: SZ_BODY, bold, color: BLACK })],
   });
 
-  const half = Math.floor(TW / 2);
+  const half = Math.floor(TW_NOTE1 / 2);
   const signatureTable = new Table({
-    width:        { size: TW, type: WidthType.DXA },
-    columnWidths: [half, TW - half],
+    width:        { size: TW_NOTE1, type: WidthType.DXA },
+    columnWidths: [half, TW_NOTE1 - half],
     borders:      TABLE_NO_BDR as any,
     rows: [new TableRow({
       cantSplit: true,
@@ -568,7 +599,7 @@ export async function exportNote1Docx(input: Note1DocxData, filenameSlug: string
           ],
         }),
         new TableCell({
-          width:    { size: TW - half, type: WidthType.DXA },
+          width:    { size: TW_NOTE1 - half, type: WidthType.DXA },
           borders:  NO_BDR_SIDES,
           margins:  { top: 80, bottom: 80, left: 100, right: 100 },
           verticalAlign: VerticalAlign.TOP,
@@ -600,8 +631,9 @@ export async function exportNote1Docx(input: Note1DocxData, filenameSlug: string
     sections: [{
       properties: {
         page: {
-          size:   { width: A4_W, height: A4_H, orientation: PageOrientation.PORTRAIT },
-          margin: { top: MARG_T, right: MARG_R, bottom: MARG_B, left: MARG_L },
+          size:    { width: A4_W, height: A4_H, orientation: PageOrientation.PORTRAIT },
+          margin:  { top: NOTE1_MARG_T, right: NOTE1_MARG_R, bottom: NOTE1_MARG_B, left: NOTE1_MARG_L },
+          borders: NOTE1_PAGE_BORDERS,
         },
       },
       children: [
