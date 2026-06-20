@@ -1470,7 +1470,11 @@ function buildNote1Section(
           new TableCell({
             width:   { size: half, type: WidthType.DXA },
             borders: noBorderAll,
-            margins: { top: 80, bottom: 80, left: 100, right: 100 },
+            // Outer side margins (left here, right on the firm cell) bumped
+            // 100 → 1000 DXA (~0.7") so the assessee block shifts right and
+            // the firm block shifts left, pulling both stacks toward the
+            // centre as the auditor requested.
+            margins: { top: 80, bottom: 80, left: 1000, right: 100 },
             verticalAlign: VerticalAlign.TOP,
             children: [
               sigLineL(`For, ${assesseeName}`, true),
@@ -1486,7 +1490,7 @@ function buildNote1Section(
           new TableCell({
             width:   { size: TW - half, type: WidthType.DXA },
             borders: noBorderAll,
-            margins: { top: 80, bottom: 80, left: 100, right: 100 },
+            margins: { top: 80, bottom: 80, left: 100, right: 1000 },
             verticalAlign: VerticalAlign.TOP,
             children: [
               sigLineR(`For ${firmName}`, true),
