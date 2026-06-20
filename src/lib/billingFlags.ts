@@ -25,4 +25,6 @@ export const BILLING_ATOMIC_NUMBERING = true;
 // Post receipts (+ TDS / GST-TDS ledger rows) through the transactional
 // post_receipt RPC so a receipt and its ledger entries can never be written
 // half-way (audit H1). OFF = existing multi-step client-side writes.
-export const BILLING_RPC_RECEIPT_POSTING = false;
+// ENABLED 2026-06-20 after parity-verified on prod. Also closes TDS-settled
+// invoices correctly (C4). Revert to false + redeploy if any receipt issue.
+export const BILLING_RPC_RECEIPT_POSTING = true;

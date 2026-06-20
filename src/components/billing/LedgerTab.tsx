@@ -71,9 +71,8 @@ async function buildLedgerEntries(
   const { start, end } = (filters.from && filters.to)
     ? { start: filters.from, end: filters.to }
     : fyToDateRange(filters.fy || getCurrentFY());
-  const entries: LedgerEntry[] = [];
 
-  // 1. First try client_ledger_entries
+  // Single source of truth: stored client_ledger_entries
   let leQuery = supabase.from("client_ledger_entries").select("*")
     .in("client_id", filters.clientIds)
     .gte("entry_date", start).lte("entry_date", end)
@@ -174,106 +173,13 @@ async function buildLedgerEntries(
     return dedupedEntries;
   }
 
-  // 2. Fallback: build from invoices + receipts directly
-  let invQuery = supabase.from("invoices")
-    .select("id, invoice_no, client_id, firm_id, invoice_date, total_amount, document_type, status, tds_section_code, tds_rate, tds_amount")
-    .in("client_id", filters.clientIds)
-    // Q3: quotations / proformas are not ledger transactions.
-    .in("document_type", ["invoice", "credit_note"])
-    .in("status", ["finalized", "sent", "overdue", "paid"])
-    .gte("invoice_date", start).lte("invoice_date", end)
-    .order("invoice_date", { ascending: true });
-  if (filters.firmIds.length > 0) invQuery = invQuery.in("firm_id", filters.firmIds);
-  const { data: invoices } = await invQuery;
-
-  // Bug A1 fix: deduplicate invoices from the DB before building entries.
-  // Same (client, firm, date, amount, type) = double-submit. Keep lower invoice_no.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const _invFallbackDedup = new Map<string, any>();
-  for (const inv of (invoices || [])) {
-    const k = `${inv.client_id}|${inv.firm_id ?? ""}|${inv.invoice_date}|${inv.total_amount}|${inv.document_type ?? ""}`;
-    const ex = _invFallbackDedup.get(k);
-    if (!ex) { _invFallbackDedup.set(k, inv); continue; }
-    // Keep the one with the lower invoice sequence number
-    const parseSeq = (no: string | null) => { const m = /^(\d+)\//.exec(no ?? ""); return m ? +m[1] : Infinity; };
-    if (parseSeq(inv.invoice_no) < parseSeq(ex.invoice_no)) _invFallbackDedup.set(k, inv);
-  }
-  Array.from(_invFallbackDedup.values()).forEach(inv => {
-    const isCredit = inv.document_type === "credit_note";
-    entries.push({
-      id: `inv-${inv.id}`,
-      entry_date: inv.invoice_date,
-      entry_type: isCredit ? "credit_note" : "invoice",
-      document_id: inv.id,
-      debit_amount: isCredit ? 0 : Number(inv.total_amount) || 0,
-      credit_amount: isCredit ? Number(inv.total_amount) || 0 : 0,
-      narration: isCredit ? `Credit note issued — ${inv.invoice_no}` : `Invoice raised — ${inv.invoice_no}`,
-      client_id: inv.client_id || "",
-      firm_id: inv.firm_id || undefined,
-    });
-    // TDS deductible entry — added once invoice TDS columns migration is applied
-    if (!isCredit && (inv as any).tds_amount && Number((inv as any).tds_amount) > 0) {
-      entries.push({
-        id: `itds-${inv.id}`,
-        entry_date: inv.invoice_date,
-        entry_type: "adjustment",
-        document_id: inv.id,
-        debit_amount: 0,
-        credit_amount: Number((inv as any).tds_amount),
-        narration: `TDS deductible u/s ${(inv as any).tds_section_code || ""} @ ${(inv as any).tds_rate || ""}%`,
-        client_id: inv.client_id || "",
-      });
-    }
-  });
-
-  let rcptQuery = supabase.from("billing_receipts")
-    .select("id, client_id, firm_id, receipt_date, amount_received, payment_mode, tds_amount, gst_tds_amount")
-    .in("client_id", filters.clientIds)
-    .gte("receipt_date", start).lte("receipt_date", end)
-    .order("receipt_date", { ascending: true });
-  if (filters.firmIds.length > 0) rcptQuery = rcptQuery.in("firm_id", filters.firmIds);
-  const { data: receipts } = await rcptQuery;
-
-  (receipts || []).forEach(r => {
-    entries.push({
-      id: `rct-${r.id}`,
-      entry_date: r.receipt_date,
-      entry_type: "receipt",
-      document_id: r.id,
-      debit_amount: 0,
-      credit_amount: Number(r.amount_received) || 0,
-      narration: `Payment received — ${r.payment_mode}`,
-      client_id: r.client_id,
-      firm_id: r.firm_id || undefined,
-    });
-    if (Number(r.tds_amount) > 0) {
-      entries.push({
-        id: `tds-${r.id}`,
-        entry_date: r.receipt_date,
-        entry_type: "adjustment",
-        document_id: r.id,
-        debit_amount: 0,
-        credit_amount: Number(r.tds_amount),
-        narration: "TDS deducted",
-        client_id: r.client_id,
-      });
-    }
-    if (Number(r.gst_tds_amount) > 0) {
-      entries.push({
-        id: `gsttds-${r.id}`,
-        entry_date: r.receipt_date,
-        entry_type: "adjustment",
-        document_id: r.id,
-        debit_amount: 0,
-        credit_amount: Number(r.gst_tds_amount),
-        narration: "GST TDS deducted",
-        client_id: r.client_id,
-      });
-    }
-  });
-
-  entries.sort((a, b) => a.entry_date.localeCompare(b.entry_date));
-  return entries;
+  // Fallback derive-engine RETIRED (cutover): the stored client_ledger_entries
+  // above are the single source of truth. Every invoice / receipt / kasar is
+  // posted to the ledger at write time (verified 0 missing rows across all
+  // invoices + receipts), so there is no longer a second engine to diverge from.
+  // If a client has no stored entries in range we return empty rather than
+  // re-deriving; the BillingHealth reconciliation panel surfaces any real gap.
+  return [];
 }
 
 async function loadLogoBase64(url: string): Promise<string | null> {
