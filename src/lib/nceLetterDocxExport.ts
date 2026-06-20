@@ -123,11 +123,15 @@ function fmtDate(iso: string): string {
   );
 }
 
+// Indian whole-rupee format with "/-" suffix — e.g. "29,39,17,000/-".
+// Used for every money figure in the Client Certificate and Management
+// Letter Word exports so the rupee values read like a hand-typed letter
+// instead of an accounting line item.
 function fmtMoney(s: string): string {
-  if (!s) return "_________";
+  if (!s) return "_________/-";
   const n = parseFloat(s);
-  if (!Number.isFinite(n)) return s;
-  return n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (!Number.isFinite(n)) return `${s}/-`;
+  return `${n.toLocaleString("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}/-`;
 }
 
 function para(opts: {
