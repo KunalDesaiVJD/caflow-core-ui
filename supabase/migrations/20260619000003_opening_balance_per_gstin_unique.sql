@@ -31,7 +31,7 @@ BEGIN
   WHERE rel.relname = 'client_billing_opening_balances'
     AND con.contype = 'u'
     AND (
-      SELECT array_agg(att.attname ORDER BY att.attname)
+      SELECT array_agg(att.attname::text ORDER BY att.attname::text)
       FROM unnest(con.conkey) AS k
       JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = k
     ) = ARRAY['client_id', 'firm_id']
