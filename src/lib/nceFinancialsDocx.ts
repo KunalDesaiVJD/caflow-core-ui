@@ -1441,18 +1441,18 @@ function buildNote1Section(
   const assesseePlace   = (sig.place          || "_______________");
   const assesseeDate    = fmtSigDate(sig.date);
 
-  // Helper — sig line with optional NAVY color for emphasis (matches the
-  // BS/PL buildSignatureTable convention where bold lines render in NAVY).
-  const sigLine = (text: string, opts: { bold?: boolean; navy?: boolean; spacingBefore?: number } = {}): Paragraph => new Paragraph({
+  const sigLineL = (text: string, bold = false): Paragraph => new Paragraph({
     alignment: AlignmentType.LEFT,
-    spacing:   { before: opts.spacingBefore ?? 0, after: 40, line: 264, lineRule: "auto" as any },
-    children:  [new TextRun({
-      text, font: FONT, size: SZ_NOTE1_BODY,
-      bold: opts.bold ?? false,
-      color: opts.navy ? NAVY : BLACK,
-    })],
+    spacing:   { before: 0, after: 40, line: 264, lineRule: "auto" as any },
+    children:  [new TextRun({ text, font: FONT, size: SZ_NOTE1_BODY, bold, color: BLACK })],
   });
-  const sigBlank = sigLine("");
+  const sigLineR = (text: string, bold = false): Paragraph => new Paragraph({
+    alignment: AlignmentType.RIGHT,
+    spacing:   { before: 0, after: 40, line: 264, lineRule: "auto" as any },
+    children:  [new TextRun({ text, font: FONT, size: SZ_NOTE1_BODY, bold, color: BLACK })],
+  });
+  const sigBlankL = sigLineL("");
+  const sigBlankR = sigLineR("");
 
   const half = Math.floor(TW / 2);
   const signatureTable = new Table({
@@ -1466,44 +1466,42 @@ function buildNote1Section(
       new TableRow({
         cantSplit: true,
         children: [
-          // Left col — CA firm block. Aligned with the BS/PL signature
-          // (buildSignatureTable): tight 80 DXA margins, left-aligned
-          // content, "For," and partner name in bold NAVY, FRN /
-          // Membership No. without a colon.
+          // Left col — CA firm block. Left margin = body number-column
+          // width (NOTE_COL_NUM_W = 700) + body cell padding (100) so
+          // "For V J Desai & Co. LLP" starts in line with the policy
+          // body text above (e.g. Note 8's "Notes No. 1 to 18 forms
+          // part of accounts…"). BLACK text with colons in FRN /
+          // Membership No., per auditor revision 2026-06-20.
           new TableCell({
             width:   { size: half, type: WidthType.DXA },
             borders: noBorderAll,
-            margins: { top: 80, bottom: 80, left: 80, right: 80 },
+            margins: { top: 80, bottom: 80, left: NOTE_COL_NUM_W + 100, right: 100 },
             verticalAlign: VerticalAlign.TOP,
             children: [
-              sigLine(`For, ${firmName}`,            { bold: true, navy: true }),
-              sigLine("Chartered Accountants",       { bold: true }),
-              sigLine(`FRN ${firmFRN}`,              { bold: true }),
-              sigBlank,
-              sigLine("__________________",          { bold: true }),
-              sigLine(partnerName,                   { bold: true, navy: true }),
-              sigLine("Partner",                     { bold: true }),
-              sigLine(`Membership No. ${partnerMembNo}`, { bold: true }),
+              sigLineL(`For ${firmName}`, true),
+              sigLineL("Chartered Accountants", true),
+              sigLineL(`FRN: ${firmFRN}`, true),
+              sigBlankL,
+              sigLineL(partnerName, true),
+              sigLineL("Partner", true),
+              sigLineL(`Membership No.: ${partnerMembNo}`, true),
             ],
           }),
-          // Right col — Assessee block. Content order mirrors the BS/PL
-          // signature (Place / Date → "For, <client>" → signature line
-          // → label) but the heavy 1440 DXA left margin used by BS/PL
-          // has been pulled in to 200 DXA so the assessee stack sits
-          // closer to the centre line of the page (per auditor revision
-          // 2026-06-20).
+          // Right col — Assessee block, right-aligned. Right margin =
+          // body cell's right padding (100) so the assessee block ends
+          // at the same right edge as the policy body text above.
           new TableCell({
             width:   { size: TW - half, type: WidthType.DXA },
             borders: noBorderAll,
-            margins: { top: 80, bottom: 80, left: 200, right: 80 },
+            margins: { top: 80, bottom: 80, left: 100, right: 100 },
             verticalAlign: VerticalAlign.TOP,
             children: [
-              sigLine(`Place: ${assesseePlace}`,     { bold: true }),
-              sigLine(`Date: ${assesseeDate}`,       { bold: true, spacingBefore: 240 }),
-              sigLine(`For, ${assesseeName}`,        { bold: true, navy: true, spacingBefore: 480 }),
-              sigBlank,
-              sigLine("__________________",          { bold: true }),
-              sigLine("Signature of assessee",       { bold: true }),
+              sigLineR(`For, ${assesseeName}`, true),
+              sigLineR("x__________________", true),
+              sigLineR("Signature of assessee", true),
+              sigBlankR,
+              sigLineR(`Place: ${assesseePlace}`, true),
+              sigLineR(`Date : ${assesseeDate}`, true),
             ],
           }),
         ],
