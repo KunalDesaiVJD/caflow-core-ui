@@ -568,21 +568,17 @@ export async function exportNote1Docx(input: Note1DocxData, filenameSlug: string
     rows:         bodyRows,
   });
 
-  // ── Signature block — aligned with BS/PL buildSignatureTable in
-  // nceFinancialsDocx.ts so the standalone Note 1 docx matches the FS
-  // export's BS/PL signature exactly: both cells left-aligned, right cell
-  // pushed right via a 1440 DXA (~1") left margin, Place/Date at the top
-  // of the right cell, bold lines in NAVY.
-  const sigLine = (text: string, opts: { bold?: boolean; navy?: boolean; spacingBefore?: number } = {}): Paragraph => new Paragraph({
+  // ── Signature block ──
+  const sigLineL = (text: string, bold = false): Paragraph => new Paragraph({
     alignment: AlignmentType.LEFT,
-    spacing:   { before: opts.spacingBefore ?? 0, after: 40, line: 264, lineRule: "auto" as any },
-    children:  [new TextRun({
-      text, font: FONT, size: SZ_BODY,
-      bold:  opts.bold ?? false,
-      color: opts.navy ? NAVY : BLACK,
-    })],
+    spacing:   { before: 0, after: 40, line: 264, lineRule: "auto" as any },
+    children:  [new TextRun({ text, font: FONT, size: SZ_BODY, bold, color: BLACK })],
   });
-  const sigBlank = sigLine("");
+  const sigLineR = (text: string, bold = false): Paragraph => new Paragraph({
+    alignment: AlignmentType.RIGHT,
+    spacing:   { before: 0, after: 40, line: 264, lineRule: "auto" as any },
+    children:  [new TextRun({ text, font: FONT, size: SZ_BODY, bold, color: BLACK })],
+  });
 
   const half = Math.floor(TW_NOTE1 / 2);
   const signatureTable = new Table({
@@ -592,39 +588,41 @@ export async function exportNote1Docx(input: Note1DocxData, filenameSlug: string
     rows: [new TableRow({
       cantSplit: true,
       children: [
-        // Left col — CA firm block.
+        // Left col — CA firm block. Left margin = body number-column
+        // width (NOTE_COL_NUM_W = 700) + body cell padding (100) so
+        // "For V J Desai & Co. LLP" starts in line with the policy
+        // body text above. BLACK text with colons in FRN / Membership
+        // No., per auditor revision 2026-06-20.
         new TableCell({
           width:    { size: half, type: WidthType.DXA },
           borders:  NO_BDR_SIDES,
-          margins:  { top: 80, bottom: 80, left: 80, right: 80 },
+          margins:  { top: 80, bottom: 80, left: NOTE_COL_NUM_W + 100, right: 100 },
           verticalAlign: VerticalAlign.TOP,
           children: [
-            sigLine(`For, ${firmName}`,                 { bold: true, navy: true }),
-            sigLine("Chartered Accountants",            { bold: true }),
-            sigLine(`FRN ${firmFRN}`,                   { bold: true }),
-            sigBlank,
-            sigLine("__________________",               { bold: true }),
-            sigLine(partnerName,                        { bold: true, navy: true }),
-            sigLine("Partner",                          { bold: true }),
-            sigLine(`Membership No. ${partnerMembNo}`,  { bold: true }),
+            sigLineL(`For ${firmName}`, true),
+            sigLineL("Chartered Accountants", true),
+            sigLineL(`FRN: ${firmFRN}`, true),
+            sigLineL(""),
+            sigLineL(partnerName, true),
+            sigLineL("Partner", true),
+            sigLineL(`Membership No.: ${partnerMembNo}`, true),
           ],
         }),
-        // Right col — Assessee block. BS/PL signature uses a 1440 DXA
-        // left margin to push this stack to the right; per auditor
-        // revision 2026-06-20 it has been pulled in to 200 DXA so the
-        // block sits closer to the centre line.
+        // Right col — Assessee block, right-aligned. Right margin =
+        // body cell's right padding (100) so the assessee block ends
+        // at the same right edge as the policy body text above.
         new TableCell({
           width:    { size: TW_NOTE1 - half, type: WidthType.DXA },
           borders:  NO_BDR_SIDES,
-          margins:  { top: 80, bottom: 80, left: 200, right: 80 },
+          margins:  { top: 80, bottom: 80, left: 100, right: 100 },
           verticalAlign: VerticalAlign.TOP,
           children: [
-            sigLine(`Place: ${placeText}`,              { bold: true }),
-            sigLine(`Date: ${dateText}`,                { bold: true, spacingBefore: 240 }),
-            sigLine(`For, ${assesseeName}`,             { bold: true, navy: true, spacingBefore: 480 }),
-            sigBlank,
-            sigLine("__________________",               { bold: true }),
-            sigLine("Signature of assessee",            { bold: true }),
+            sigLineR(`For, ${assesseeName}`, true),
+            sigLineR("x__________________", true),
+            sigLineR("Signature of assessee", true),
+            sigLineR(""),
+            sigLineR(`Place: ${placeText}`, true),
+            sigLineR(`Date : ${dateText}`, true),
           ],
         }),
       ],
