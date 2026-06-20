@@ -799,6 +799,7 @@ export default function NoteBSLiab({
           showSubtotal
           onRemapLedger={onRemapLedger}
           onUnmapLedger={onUnmapLedger}
+          engagementId={engagementId}
         />
         <EditableRow
           label="Total — Long-term borrowings (per BS)"
@@ -832,6 +833,7 @@ export default function NoteBSLiab({
           addLabel="Add row"
           onRemapLedger={onRemapLedger}
           onUnmapLedger={onUnmapLedger}
+          engagementId={engagementId}
         />
         <EditableRow
           label="Total — Deferred tax liabilities (per BS)"
@@ -856,6 +858,7 @@ export default function NoteBSLiab({
           addLabel="Add row"
           onRemapLedger={onRemapLedger}
           onUnmapLedger={onUnmapLedger}
+          engagementId={engagementId}
         />
         <EditableRow
           label="Total (per BS)"
@@ -880,6 +883,7 @@ export default function NoteBSLiab({
           addLabel="Add row"
           onRemapLedger={onRemapLedger}
           onUnmapLedger={onUnmapLedger}
+          engagementId={engagementId}
         />
         <EditableRow
           label="Total (per BS)"
@@ -905,6 +909,7 @@ export default function NoteBSLiab({
           showSubtotal
           onRemapLedger={onRemapLedger}
           onUnmapLedger={onUnmapLedger}
+          engagementId={engagementId}
         />
         <EditableRow
           label="Total — Short-term borrowings (per BS)"
@@ -978,6 +983,7 @@ export default function NoteBSLiab({
           addLabel="Add row"
           onRemapLedger={onRemapLedger}
           onUnmapLedger={onUnmapLedger}
+          engagementId={engagementId}
         />
         <EditableRow
           label="Total (per BS)"
@@ -1002,6 +1008,7 @@ export default function NoteBSLiab({
           addLabel="Add row"
           onRemapLedger={onRemapLedger}
           onUnmapLedger={onUnmapLedger}
+          engagementId={engagementId}
         />
         <EditableRow
           label="Total (per BS)"

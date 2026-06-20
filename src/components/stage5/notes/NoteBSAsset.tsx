@@ -123,6 +123,7 @@ export default function NoteBSAsset({
           addLabel="Add row"
           onRemapLedger={onRemapLedger}
           onUnmapLedger={onUnmapLedger}
+          engagementId={engagementId}
         />
         <EditableRow
           label={`Total — ${title} (per BS)`}
@@ -152,6 +153,7 @@ export default function NoteBSAsset({
           addLabel="Add investment"
           onRemapLedger={onRemapLedger}
           onUnmapLedger={onUnmapLedger}
+          engagementId={engagementId}
         />
         <EditableRow
           label="Total — Non-current investments (per BS)"
