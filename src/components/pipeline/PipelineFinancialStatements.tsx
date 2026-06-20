@@ -9305,7 +9305,7 @@ export default function PipelineFinancialStatements({
           <div className="space-y-3 py-2">
             <p className="text-sm text-muted-foreground">Select font for the Word document:</p>
             <div className="grid grid-cols-1 gap-2">
-              {(["Arial", "Calibri", "Times New Roman", "Garamond", "Georgia"] as const).map(f => (
+              {(["Arial", "Calibri", "Cambria", "Times New Roman", "Garamond", "Georgia"] as const).map(f => (
                 <label key={f} className="flex items-center gap-2 cursor-pointer rounded border px-3 py-2 hover:bg-muted/50" style={{ fontFamily: f }}>
                   <input
                     type="radio"
@@ -9464,7 +9464,7 @@ export default function PipelineFinancialStatements({
           <div className="space-y-3 py-2">
             <p className="text-sm text-muted-foreground">Select font for the Word document:</p>
             <div className="grid grid-cols-1 gap-2">
-              {(["Arial", "Calibri", "Times New Roman", "Garamond", "Georgia"] as const).map(f => (
+              {(["Arial", "Calibri", "Cambria", "Times New Roman", "Garamond", "Georgia"] as const).map(f => (
                 <label key={f} className="flex items-center gap-2 cursor-pointer rounded border px-3 py-2 hover:bg-muted/50" style={{ fontFamily: f }}>
                   <input
                     type="radio"
