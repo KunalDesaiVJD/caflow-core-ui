@@ -274,7 +274,7 @@ export default function NoteBSLiab({
       {/* ════════════════════════════════════════════════════════════════════
           NOTE 1 — SHARE CAPITAL
       ════════════════════════════════════════════════════════════════════ */}
-      <NoteCard collapseControl={collapseControl} noteNo={sn("share_capital")} title="Share capital" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("share_capital")} pyTotal={effectivePY("share_capital")}>
+      <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("share_capital")} title="Share capital" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("share_capital")} pyTotal={effectivePY("share_capital")}>
 
         {/* ── Main amounts table ──────────────────────────────────────────── */}
         <div className="overflow-x-auto">
@@ -665,7 +665,7 @@ export default function NoteBSLiab({
       {/* ════════════════════════════════════════════════════════════════════
           NOTE 2 — RESERVES AND SURPLUS
       ════════════════════════════════════════════════════════════════════ */}
-      <NoteCard collapseControl={collapseControl} noteNo={sn("reserves_surplus")} title="Reserves and surplus" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("reserves_surplus")} pyTotal={effectivePY("reserves_surplus")}>
+      <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("reserves_surplus")} title="Reserves and surplus" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("reserves_surplus")} pyTotal={effectivePY("reserves_surplus")}>
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
 
         {/* 1. General Reserve — auto from COA mapping */}
@@ -789,7 +789,7 @@ export default function NoteBSLiab({
           NOTES 3–10 (unchanged)
       ════════════════════════════════════════════════════════════════════ */}
 
-      <NoteCard collapseControl={collapseControl} noteNo={sn("lt_borrowings")} title="Long-term borrowings" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("lt_borrowings")} pyTotal={effectivePY("lt_borrowings")}>
+      <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("lt_borrowings")} title="Long-term borrowings" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("lt_borrowings")} pyTotal={effectivePY("lt_borrowings")}>
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
         <ListTable
           rows={(get("bs_liab.lt_borrowings.breakup") ?? []) as ListRow[]}
@@ -815,7 +815,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard collapseControl={collapseControl} noteNo={sn("deferred_tax_liab")} title="Deferred tax liabilities (Net)" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("deferred_tax_liab")} pyTotal={effectivePY("deferred_tax_liab")}>
+      <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("deferred_tax_liab")} title="Deferred tax liabilities (Net)" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("deferred_tax_liab")} pyTotal={effectivePY("deferred_tax_liab")}>
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
         <EditableRow
           label="Excess of depreciation claimed in IT Act over books"
@@ -849,7 +849,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard collapseControl={collapseControl} noteNo={sn("other_lt_liabilities", "other_lt_liab")} title="Other long-term liabilities" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("other_lt_liabilities")} pyTotal={effectivePY("other_lt_liabilities")}>
+      <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("other_lt_liabilities", "other_lt_liab")} title="Other long-term liabilities" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("other_lt_liabilities")} pyTotal={effectivePY("other_lt_liabilities")}>
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
         <ListTable
           rows={(get("bs_liab.other_lt_liabilities.breakup") ?? []) as ListRow[]}
@@ -874,7 +874,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard collapseControl={collapseControl} noteNo={sn("lt_provisions")} title="Long-term provisions" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("lt_provisions")} pyTotal={effectivePY("lt_provisions")}>
+      <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("lt_provisions")} title="Long-term provisions" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("lt_provisions")} pyTotal={effectivePY("lt_provisions")}>
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
         <ListTable
           rows={(get("bs_liab.lt_provisions.breakup") ?? []) as ListRow[]}
@@ -899,7 +899,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard collapseControl={collapseControl} noteNo={sn("st_borrowings")} title="Short-term borrowings" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("st_borrowings")} pyTotal={effectivePY("st_borrowings")}>
+      <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("st_borrowings")} title="Short-term borrowings" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("st_borrowings")} pyTotal={effectivePY("st_borrowings")}>
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
         <ListTable
           rows={(get("bs_liab.st_borrowings.breakup") ?? []) as ListRow[]}
@@ -925,7 +925,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard collapseControl={collapseControl} noteNo={sn("trade_payables")} title="Trade Payables" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("trade_payables")} pyTotal={effectivePY("trade_payables")}>
+      <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("trade_payables")} title="Trade Payables" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("trade_payables")} pyTotal={effectivePY("trade_payables")}>
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
         <EditableRow
           label="Total outstanding dues of Micro and Small Enterprises"
@@ -974,7 +974,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard collapseControl={collapseControl} noteNo={sn("other_curr_liab", "other_current_liab")} title="Other current liabilities" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("other_curr_liab")} pyTotal={effectivePY("other_curr_liab")}>
+      <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("other_curr_liab", "other_current_liab")} title="Other current liabilities" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("other_curr_liab")} pyTotal={effectivePY("other_curr_liab")}>
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
         <ListTable
           rows={(get("bs_liab.other_curr_liab.breakup") ?? []) as ListRow[]}
@@ -999,7 +999,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard collapseControl={collapseControl} noteNo={sn("st_provisions")} title="Short-term provisions" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("st_provisions")} pyTotal={effectivePY("st_provisions")}>
+      <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("st_provisions")} title="Short-term provisions" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("st_provisions")} pyTotal={effectivePY("st_provisions")}>
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
         <ListTable
           rows={(get("bs_liab.st_provisions.breakup") ?? []) as ListRow[]}

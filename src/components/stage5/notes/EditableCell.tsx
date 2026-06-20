@@ -218,7 +218,7 @@ export function EditableCell({
 
 export function NoteCard({
   noteNo, title, children, defaultCollapsed = false, collapseControl,
-  hideWhenEmpty = false, cyTotal, pyTotal, readOnly = false,
+  hideWhenEmpty = false, cyTotal, pyTotal, readOnly = false, engagementId,
 }: {
   noteNo: number | string | null;
   title: string;
@@ -233,15 +233,59 @@ export function NoteCard({
   cyTotal?: number;
   pyTotal?: number;
   /** Locked-preview mode — disables the header click handler, hides the
-   *  expand/collapse chevron and label, and always renders content. The
+   *  expand/collapse chevron and label. In readOnly the persisted collapse
+   *  state (from localStorage) decides whether to render content. The
    *  preview should read like the final DOCX, not an editable card. */
   readOnly?: boolean;
+  /** Corporate Lock Preview parity with NCE: persist this NoteCard's
+   *  collapsed state to localStorage so the preview popup reflects whatever
+   *  the auditor had collapsed in the editor. Uses noteNo (or title as
+   *  fallback) as the per-engagement key. */
+  engagementId?: string;
 }) {
-  const [collapsed, setCollapsed] = useState(defaultCollapsed);
+  // Build a stable storage key per (engagement, note). Falls back to title
+  // when noteNo isn't assigned yet (e.g. before dynamic registry resolution).
+  const noteKey = noteNo != null ? String(noteNo) : title;
+  const storageKey = engagementId ? `fs_corp_collapsed_notes_${engagementId}` : null;
+  const loadCollapsed = (): boolean => {
+    if (!storageKey || typeof window === "undefined") return defaultCollapsed;
+    try {
+      const raw = localStorage.getItem(storageKey);
+      const parsed = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(parsed)) return parsed.includes(noteKey);
+    } catch { /* storage unavailable — ignore */ }
+    return defaultCollapsed;
+  };
+  const [collapsed, setCollapsed] = useState<boolean>(loadCollapsed);
+
+  // Re-hydrate when the storageKey changes (engagement switch) or when the
+  // note's identity changes (note number registry resolved late).
+  useEffect(() => {
+    setCollapsed(loadCollapsed());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storageKey, noteKey]);
 
   useEffect(() => {
     if (collapseControl !== undefined) setCollapsed(collapseControl);
   }, [collapseControl]);
+
+  const toggleCollapsed = () => {
+    setCollapsed(prev => {
+      const next = !prev;
+      // Persist so the preview popup sees the same collapsed/expanded
+      // decision the auditor made in the editor.
+      if (storageKey && typeof window !== "undefined") {
+        try {
+          const raw = localStorage.getItem(storageKey);
+          const list: string[] = Array.isArray(JSON.parse(raw ?? "[]")) ? JSON.parse(raw ?? "[]") : [];
+          const set = new Set<string>(list);
+          if (next) set.add(noteKey); else set.delete(noteKey);
+          localStorage.setItem(storageKey, JSON.stringify([...set]));
+        } catch { /* storage unavailable — ignore */ }
+      }
+      return next;
+    });
+  };
 
   // Empty-note suppression — only when caller opts in and both totals collapse
   // to near-zero. Using <1 (rupees) instead of ===0 so floating-point drift
@@ -254,7 +298,9 @@ export function NoteCard({
     return null;
   }
 
-  // readOnly preview: force content open, no interactivity, no chevron.
+  // readOnly preview: no interactivity, no chevron, no expand/collapse label.
+  // But still honor the persisted collapsed state — if the auditor collapsed
+  // the note in the editor, the preview shows it collapsed (matches export).
   if (readOnly) {
     return (
       <section
@@ -266,7 +312,9 @@ export function NoteCard({
             {noteNo != null ? `Note ${noteNo} — ` : ""}{title}
           </h3>
         </header>
-        <div className="px-3 py-2 text-[11px] space-y-2">{children}</div>
+        {!collapsed && (
+          <div className="px-3 py-2 text-[11px] space-y-2">{children}</div>
+        )}
       </section>
     );
   }
@@ -278,7 +326,7 @@ export function NoteCard({
     >
       <header
         className="border-b bg-muted/30 px-3 py-1.5 flex items-center gap-1.5 cursor-pointer select-none hover:bg-muted/50 transition-colors"
-        onClick={() => setCollapsed((c) => !c)}
+        onClick={toggleCollapsed}
       >
         {collapsed
           ? <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
