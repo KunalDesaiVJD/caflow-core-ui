@@ -384,6 +384,43 @@ async function getGraphToken(): Promise<string> {
 
 // ── Microsoft Graph API — send email ────────────────────────────────
 
+// ── Email template engine ────────────────────────────────────────────────
+// Prefer a firm's ACTIVE saved email_templates row for this notification type,
+// substituting {{variables}}. Returns null (→ hardcoded buildEmailHTML) when no
+// active template exists, so behaviour is unchanged until a firm designs and
+// activates a template.
+async function renderFromTemplate(
+  firmId: string, type: string, payload: Record<string, any>,
+): Promise<{ subject: string; html: string } | null> {
+  try {
+    const admin = createClient(
+      Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+    const { data } = await admin.from("email_templates")
+      .select("subject, body_html")
+      .eq("firm_id", firmId).eq("type", type).eq("is_active", true)
+      .order("updated_at", { ascending: false }).limit(1).maybeSingle();
+    if (!data || !data.body_html) return null;
+    const fmtAmount = payload.amount != null && payload.amount !== ""
+      ? `₹${Number(payload.amount).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : "";
+    const vars: Record<string, string> = {
+      client_name:    payload.client_name || "Client",
+      firm_name:      payload.firm_name || "",
+      invoice_no:     payload.invoice_no || "",
+      amount:         fmtAmount,
+      due_date:       payload.due_date || "",
+      document_type:  payload.document_type || "",
+      custom_message: payload.custom_message || "",
+    };
+    const subst = (s: string) =>
+      (s || "").replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, k) => (k in vars ? vars[k] : ""));
+    return { subject: subst(data.subject), html: subst(data.body_html) };
+  } catch {
+    return null;
+  }
+}
+
 async function sendEmail(
   type: string,
   toEmail: string,
@@ -393,8 +430,17 @@ async function sendEmail(
 ): Promise<{ success: boolean; providerId?: string; error?: string }> {
   const fromEmail = Deno.env.get("SMTP_SENDER") || "accounts@vjdesai.com";
   const firmName  = payload.firm_name || "V J Desai & Co. LLP";
-  const subject   = customSubject || subjects[type] || `Notification from ${firmName}`;
-  const html      = buildEmailHTML(type, payload);
+  let subject     = customSubject || subjects[type] || `Notification from ${firmName}`;
+  let html        = buildEmailHTML(type, payload);
+
+  // Use the firm's active saved template when present (skip for custom_html relays).
+  if (payload.firm_id && !payload.custom_html) {
+    const tpl = await renderFromTemplate(payload.firm_id, type, payload);
+    if (tpl) {
+      html = tpl.html;
+      if (!customSubject && tpl.subject) subject = tpl.subject;
+    }
+  }
 
   try {
     const token = await getGraphToken();
@@ -564,7 +610,7 @@ async function sendToRecipient(
       const r = await sendEmail(
         type,
         toEmail,
-        { ...payload, client_name: payload.client_name || recipient.name },
+        { ...payload, firm_id, client_name: payload.client_name || recipient.name },
         customSubject || payload.custom_subject,
         ccEmails,
       );
