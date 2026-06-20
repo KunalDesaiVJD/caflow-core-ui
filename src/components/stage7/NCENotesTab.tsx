@@ -214,24 +214,30 @@ function Note1PreviewSection({
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10, marginTop: "10px" }}>
         <tbody>
           <tr>
-            {/* Layout matches the policy body table: firm block starts
-                in line with Note text (28px number-column + 6px cell
-                padding = 34px left padding), assessee block ends at the
-                same right edge as the policy text (6px right padding). */}
-            <td style={{ verticalAlign: "top", width: "50%", padding: "0 6px 0 34px" }}>
-              <div style={{ fontWeight: 700 }}>For {firmName}</div>
+            {/* Layout mirrors the BS/PL signature block in
+                src/lib/nceFinancialsDocx.ts → buildSignatureTable:
+                both cells left-aligned, right cell pushed right via a
+                large left padding (~96px = 1440 DXA × 96/1440), Place
+                /Date at the top of the right cell, bold "For," and
+                name lines in NAVY. */}
+            <td style={{ verticalAlign: "top", width: "50%", padding: "0 6px 0 6px" }}>
+              <div style={{ fontWeight: 700, color: NAVY }}>For, {firmName}</div>
               <div style={{ fontWeight: 700 }}>Chartered Accountants</div>
-              <div style={{ fontWeight: 700, marginBottom: 8 }}>FRN: {firmFRN}</div>
-              <div style={{ fontWeight: 700 }}>{partnerName}</div>
+              <div style={{ fontWeight: 700, marginBottom: 16 }}>FRN {firmFRN}</div>
+              <div style={{ fontWeight: 700 }}>__________________</div>
+              <div style={{ fontWeight: 700, color: NAVY }}>{partnerName}</div>
               <div style={{ fontWeight: 700 }}>Partner</div>
-              <div style={{ fontWeight: 700 }}>Membership No.: {partnerMembNo}</div>
+              <div style={{ fontWeight: 700 }}>Membership No. {partnerMembNo}</div>
             </td>
-            <td style={{ verticalAlign: "top", width: "50%", padding: "0 6px 0 6px", textAlign: "right" }}>
-              <div style={{ fontWeight: 700, marginBottom: 8 }}>For, {assesseeName}</div>
-              <div style={{ fontWeight: 700 }}>x__________________</div>
-              <div style={{ fontWeight: 700, marginBottom: 8 }}>Signature of assessee</div>
+            {/* Right cell padding-left pulled in 96px → 14px so the
+                assessee stack sits closer to the centre line (auditor
+                revision 2026-06-20). */}
+            <td style={{ verticalAlign: "top", width: "50%", padding: "0 6px 0 14px" }}>
               <div style={{ fontWeight: 700 }}>Place: {placeText}</div>
-              <div style={{ fontWeight: 700 }}>Date : {dateText}</div>
+              <div style={{ fontWeight: 700, marginTop: 12 }}>Date: {dateText}</div>
+              <div style={{ fontWeight: 700, color: NAVY, marginTop: 24 }}>For, {assesseeName}</div>
+              <div style={{ fontWeight: 700, marginTop: 16 }}>__________________</div>
+              <div style={{ fontWeight: 700 }}>Signature of assessee</div>
             </td>
           </tr>
         </tbody>
