@@ -887,7 +887,7 @@ const NewInvoice = () => {
       // Quotations / proformas are not confirmed transactions and must never
       // appear in the ledger or outstanding balance.
       if (
-        effectiveStatus === "finalized" &&
+        ["finalized", "sent", "overdue", "paid"].includes(effectiveStatus) &&
         (docType === "invoice" || docType === "credit_note") &&
         savedId && clientId && selectedFirmId
       ) {
@@ -991,7 +991,10 @@ const NewInvoice = () => {
     await downloadPdfFromHtml(fullHtml, filename, `Single invoice ${invoiceNo || "draft"}`);
   };
 
-  const isLocked = status === "sent" || status === "paid" || status === "voided" || status === "converted";
+  // Per firm preference: documents stay editable at ANY status (no locking).
+  // Editing re-syncs the ledger entry on save (see handleSave), and the Billing
+  // Health panel surfaces any resulting drift, so editability is safe.
+  const isLocked = false;
   const canConvert = isEdit && (docType === "quotation" || docType === "proforma") && status === "finalized";
 
   // Generate invoice HTML
@@ -1060,7 +1063,7 @@ const NewInvoice = () => {
           {!isLocked && (
             <>
               <Button variant="outline" size="sm" onClick={() => handleSave()} disabled={saving} className="gap-1">
-                <Save size={14} /> {saving ? "Saving..." : status === "finalized" ? "Save" : "Save Draft"}
+                <Save size={14} /> {saving ? "Saving..." : status === "draft" ? "Save Draft" : "Save"}
               </Button>
               <Button size="sm" onClick={() => setFinalizeOpen(true)} className="gap-1"><Lock size={14} /> Finalize</Button>
             </>
