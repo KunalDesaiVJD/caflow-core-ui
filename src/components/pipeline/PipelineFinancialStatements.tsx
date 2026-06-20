@@ -58,8 +58,8 @@ import {
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 import FsHealthPanel from "@/components/pipeline/FsHealthPanel";
 import { evaluateNotesStaleness } from "@/lib/notesStaleness";
-import { NCE_RESYNC_DELETE_FIRST } from "@/lib/nceFeatureFlags";
-import { validateFSReconciliation, logReconciliationDrift, NCE_LIAB_CODE_SET, computeCOATotals, validateOpeningVsPriorClose } from "@/lib/fsReconciliation";
+import { NCE_RESYNC_DELETE_FIRST, FS_NO_CAPITAL_PLUG, FS_CORP_PY_FACE_FROM_NOTE, FS_CORP_EXPORT_GATE } from "@/lib/nceFeatureFlags";
+import { validateFSReconciliation, validateCorporateFSReconciliation, logReconciliationDrift, NCE_LIAB_CODE_SET, computeCOATotals, validateOpeningVsPriorClose } from "@/lib/fsReconciliation";
 import { isTallyPLAccount, currentYearProfitAlreadyInReserves } from "@/lib/tallyDetection";
 
 // ═══════════════════════════════════════
@@ -717,8 +717,8 @@ function CorporateBalanceSheetView({
             // item
             const indentPx = (row.indent || 0) * 16;
             const fontSize = row.size === 10 ? "text-[12px]" : "text-[11px]";
-            const editableCY   = !!row.code && !!onCommitCY;
-            const editablePY   = !!row.code && !!onCommitPY && !pyLocked;
+            const editableCY   = !FS_FACE_FIGURES_READONLY && !!row.code && !!onCommitCY;
+            const editablePY   = !FS_FACE_FIGURES_READONLY && !!row.code && !!onCommitPY && !pyLocked;
             return (
               <tr key={idx} className="hover:bg-muted/10">
                 <td className={`py-0.5 px-3 ${fontSize}`} style={{ paddingLeft: 12 + indentPx }}>{row.label}</td>
@@ -994,8 +994,8 @@ function CorporatePLView({
             const indentPx = (row.indent || 0) * 16;
             const boldCls = row.bold ? "font-bold" : "";
             const isLockedCY = !!row.code && lockedCodes?.has(row.code);
-            const editableCY = !!row.code && !!onCommitCY && !isLockedCY;
-            const editablePY = !!row.code && !!onCommitPY && !pyLocked && !isLockedCY;
+            const editableCY = !FS_FACE_FIGURES_READONLY && !!row.code && !!onCommitCY && !isLockedCY;
+            const editablePY = !FS_FACE_FIGURES_READONLY && !!row.code && !!onCommitPY && !pyLocked && !isLockedCY;
             return (
               <tr key={idx} className="hover:bg-muted/10">
                 <td className={`text-center py-0.5 px-1 ${boldCls} text-[11px]`}>{row.roman || ""}</td>
@@ -1030,6 +1030,13 @@ const NCE_LIABILITY_CODES = new Set([
   "NCE_STB", "NCE_TP",  "NCE_OCL",  "NCE_STP",
 ]);
 const NCE_INCOME_CODES = new Set(["NCE_REV_OPS", "NCE_REV_OTH"]);
+
+// PD-4 / Rule 8 / §12 invariant #2: the FS faces are read-only — figures flow
+// from the notes; the only legitimate figure change is a tracked manual note row.
+// Figure-neutral: this only removes the inline edit affordance; displayed values
+// are unchanged, and any existing persisted override still renders. Set false to
+// restore the legacy editable-face behaviour.
+const FS_FACE_FIGURES_READONLY = true;
 
 function buildNCEBSRows(
   cy: Record<string, number>,
@@ -1280,8 +1287,8 @@ function NCEBalanceSheetView({
             );
             // item row — matches DOCX: 8pt Calibri, minimal padding
             const indentPx = (row.indent || 0) * 16;
-            const editableCY = !!row.code && !!onCommitCY;
-            const editablePY = !!row.code && !!onCommitPY && !pyLocked;
+            const editableCY = !FS_FACE_FIGURES_READONLY && !!row.code && !!onCommitCY;
+            const editablePY = !FS_FACE_FIGURES_READONLY && !!row.code && !!onCommitPY && !pyLocked;
             const isLiab = NCE_LIABILITY_CODES.has(row.code ?? "");
             return (
               <tr key={idx} className="hover:bg-muted/10 border-b border-gray-100">
@@ -1409,8 +1416,8 @@ function NCEPLView({
             );
             const indentPx = (row.indent || 0) * 16;
             const boldCls = row.bold ? "font-bold" : "";
-            const editableCY = !!row.code && !!onCommitCY;
-            const editablePY = !!row.code && !!onCommitPY && !pyLocked;
+            const editableCY = !FS_FACE_FIGURES_READONLY && !!row.code && !!onCommitCY;
+            const editablePY = !FS_FACE_FIGURES_READONLY && !!row.code && !!onCommitPY && !pyLocked;
             const isInc = NCE_INCOME_CODES.has(row.code ?? "");
             return (
               <tr key={idx} className="hover:bg-muted/10 border-b border-gray-100">
@@ -3058,6 +3065,22 @@ export default function PipelineFinancialStatements({
         amounts[mapping.code] = (amounts[mapping.code] || 0) + acct.balance;
         amounts[plCode] = (amounts[plCode] || 0) + ((acct.opening_balance ?? 0) - acct.balance);
         hasInvMapping = true;
+      } else if (mapping.code === "PL_EXP_CII" || mapping.code === "NCE_CII") {
+        // ── Direct CII mapping (2026-06-18 fix): a ledger the auditor mapped
+        // straight to "Changes in Inventories of FG/WIP/SIT" represents an
+        // INVENTORY BALANCE, not a movement. Schedule III defines CII as
+        // (opening − closing), so contribute the opening-to-closing delta
+        // here instead of just the closing balance. Mirrors the dual-post
+        // path above for INV_* mappings — that path uses (opening − closing)
+        // for inventory ledgers mapped to INV_STOCK / INV_RM / etc.
+        //
+        // Prior bug (MICROCIRCUITS, June 2026): "Opening Stock" was mapped
+        // directly to PL_EXP_CII (the only "changes" line in the picker).
+        // The else-branch below would add `acct.balance` (closing only) so
+        // the P&L showed ₹67,06,470.80 instead of the correct delta
+        // ₹4,77,074.42. The mirror in fsDisplayData carries the same change.
+        amounts[mapping.code] = (amounts[mapping.code] || 0) + ((acct.opening_balance ?? 0) - acct.balance);
+        hasInvMapping = true;
       } else if (isTallyPLAccount(acct.account_name) && mapping.code.startsWith("BS_")) {
         // ── P&L A/c on Balance Sheet: use OPENING balance (prior retained earnings) ──
         // Current-year profit is auto-credited to BS_EQ_RS after computeTotal (below).
@@ -3456,7 +3479,9 @@ export default function PipelineFinancialStatements({
       const astSumPost = NCE_ASSET_IDS.reduce((s, id) => s + (merged[id] || 0), 0);
       const elSumPost  = NCE_LIAB_IDS.reduce((s, id) => s + (merged[id] || 0), 0);
       const residual = astSumPost + elSumPost; // sign: + = Assets exceed E+L
-      if (Math.abs(residual) > 2 && Math.abs(residual) < 1e9) {
+      // PD-1 / D2.1 (FS_NO_CAPITAL_PLUG): when ON, do NOT plug the imbalance into
+      // Capital — let the true residual stand so BS shows unbalanced and export blocks.
+      if (!FS_NO_CAPITAL_PLUG && Math.abs(residual) > 2 && Math.abs(residual) < 1e9) {
         // Bring NCE_CAP further down (more negative for CR-natural storage)
         // by the residual. This adds to the liability side, balancing BS.
         merged["NCE_CAP"] = (merged["NCE_CAP"] || 0) - residual;
@@ -3515,6 +3540,18 @@ export default function PipelineFinancialStatements({
         exportCy[mapping.code] = (exportCy[mapping.code] || 0) + (acct.balance || 0);
         exportCy[plCode] = (exportCy[plCode] || 0) + (opening - (acct.balance || 0));
         // PY BS: opening balance routed via alias-aware mapping
+        if (opening && pyMapping) exportPy[pyMapping.code] = (exportPy[pyMapping.code] || 0) + opening;
+        hasInvMappingLocal = true;
+      } else if (mapping && (mapping.code === "PL_EXP_CII" || mapping.code === "NCE_CII")) {
+        // 2026-06-18 fix — mirror the computedAmounts loop above. A ledger
+        // mapped directly to "Changes in Inventories" represents an
+        // inventory BALANCE, so contribute (opening − closing) per
+        // Schedule III, not just closing. Without this, the export and
+        // on-screen P&L disagreed with the COA Mapping variance drill.
+        exportCy[mapping.code] = (exportCy[mapping.code] || 0) + (opening - (acct.balance || 0));
+        // PY BS: opening balance routed via alias-aware mapping (BS inventory
+        // line — the PY balance of this same ledger). Keeps the BS face PY
+        // column in sync with the CY closing → PY opening identity.
         if (opening && pyMapping) exportPy[pyMapping.code] = (exportPy[pyMapping.code] || 0) + opening;
         hasInvMappingLocal = true;
       } else {
@@ -3649,7 +3686,10 @@ export default function PipelineFinancialStatements({
       // Fall back to the note sum / pyOf when there is NO opening balance — e.g. a
       // manual breakup note with no TB-mapped ledger (share capital keyed straight
       // into stage5_notes), so those clients keep showing their note figure.
-      if (section !== "pl") {
+      // PD-6 / D2.7 (FS_CORP_PY_FACE_FROM_NOTE): when ON, the corporate PY face reads
+      // the NOTE PY total (below) instead of the raw CY opening balance, so the face
+      // matches its own note table (and the Word BS PY too). OFF = legacy exportPy source.
+      if (!FS_CORP_PY_FACE_FROM_NOTE && section !== "pl") {
         const openingPy = exportPy[fsCode];
         if (openingPy !== undefined && Math.abs(openingPy) > 0.005) return openingPy;
       }
@@ -4081,7 +4121,9 @@ export default function PipelineFinancialStatements({
       // an NCE code with a note, so the reconciliation validator ignores it.
       out["__NCE_BS_RESIDUAL__"] = Math.round((out["NCE_AST"] + out["NCE_EL"]) * 100) / 100;
       const residual = out["__NCE_BS_RESIDUAL__"]; // + = Assets exceed E+L
-      if (Math.abs(residual) > 2 && Math.abs(residual) < 1e9) {
+      // PD-1 / D2.1 (FS_NO_CAPITAL_PLUG): when ON, skip the Capital plug so the true
+      // residual stands (nceBsBalanced + export gate then reflect the real imbalance).
+      if (!FS_NO_CAPITAL_PLUG && Math.abs(residual) > 2 && Math.abs(residual) < 1e9) {
         out["NCE_CAP"] = (out["NCE_CAP"] || 0) - residual;
         out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
       }
@@ -4188,7 +4230,8 @@ export default function PipelineFinancialStatements({
       // Phase 5 — capture the TRUE PY imbalance before the absorber (see CY).
       out["__NCE_BS_RESIDUAL__"] = Math.round((out["NCE_AST"] + out["NCE_EL"]) * 100) / 100;
       const residualPy = out["__NCE_BS_RESIDUAL__"];
-      if (Math.abs(residualPy) > 2 && Math.abs(residualPy) < 1e9) {
+      // PD-1 / D2.1 (FS_NO_CAPITAL_PLUG): when ON, skip the PY Capital plug too.
+      if (!FS_NO_CAPITAL_PLUG && Math.abs(residualPy) > 2 && Math.abs(residualPy) < 1e9) {
         out["NCE_CAP"] = (out["NCE_CAP"] || 0) - residualPy;
         out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
       }
@@ -4322,6 +4365,21 @@ export default function PipelineFinancialStatements({
 
   const hasSevereDrift = (fsReconResult?.severeCount ?? 0) > 0;
 
+  // BUG-085/107/110 / D2.10 — corporate export currently never blocks on note-vs-COA/face
+  // drift (unlike NCE). Staged behind FS_CORP_EXPORT_GATE (default OFF): when ON, compute the
+  // corporate three-way validator and block Excel/Word export on severe drift. OFF = the memo
+  // returns null so corpHasSevereDrift is always false and every gate below is byte-identical.
+  const corpReconResult = useMemo(() => {
+    if (isNonCorporate || !FS_CORP_EXPORT_GATE) return null;
+    return validateCorporateFSReconciliation({
+      corporateNotes: stage5NotesData ?? null,
+      bsFaceCy: computedAmounts,
+      bsFacePy: computedAmountsPY,
+      coaTotals: coaTotalsByCode,
+    });
+  }, [isNonCorporate, stage5NotesData, computedAmounts, computedAmountsPY, coaTotalsByCode]);
+  const corpHasSevereDrift = (corpReconResult?.severeCount ?? 0) > 0;
+
   // ── PPE schedule ↔ book (TB) reconciliation (strict block) ──────────────
   // The PPE schedule now drives the BS PPE/Intangibles face. A schedule that
   // disagrees with the COA/TB book value would otherwise be silently absorbed
@@ -4379,15 +4437,20 @@ export default function PipelineFinancialStatements({
   // entities use BS-balance + severe-drift check.
   const exportExcelBlocked: boolean = isNonCorporate
     ? (!nceBsBalanced || hasSevereDrift || hasOpeningMismatch || hasPpeScheduleDrift)
-    : (!corpBsBalanced || !corpBsBalancedPy || !faPyEntered || hasOpeningMismatch);
+    : (!corpBsBalanced || !corpBsBalancedPy || !faPyEntered || hasOpeningMismatch || corpHasSevereDrift);
   const exportExcelBlockReasons: string[] = [];
-  if (!isNonCorporate) {
+  // BUG-094/108: branch was inverted vs the gate above (isNonCorporate ? NCE : corp).
+  // `if (!isNonCorporate)` pushed NCE reasons for corporate engagements (and vice-versa),
+  // so the blocked-export message was empty/wrong. Aligned to the gate. Figure-neutral:
+  // exportExcelBlocked is unchanged; only the displayed reason text is corrected.
+  if (isNonCorporate) {
     if (!nceBsBalanced)   exportExcelBlockReasons.push(`Balance Sheet out by ₹${Math.abs(nceBsDiff).toLocaleString("en-IN")}`);
     if (hasSevereDrift)   exportExcelBlockReasons.push(`${fsReconResult!.severeCount} note(s) have drift > ₹100 — fix in Notes tab first`);
   } else {
     if (!corpBsBalanced)   exportExcelBlockReasons.push(`CY Balance Sheet out by ₹${Math.abs(bsDiff).toLocaleString("en-IN")}`);
     if (!corpBsBalancedPy) exportExcelBlockReasons.push(`PY Balance Sheet out by ₹${Math.abs(bsDiffPy).toLocaleString("en-IN")}`);
     if (!faPyEntered)      exportExcelBlockReasons.push("FA Note — Previous-Year totals not entered");
+    if (corpHasSevereDrift) exportExcelBlockReasons.push(`${corpReconResult!.severeCount} corporate note(s) have drift > ₹100 — fix in Notes tab first`);
   }
   // PPE schedule reconciliation reason — applies to NCE only (guard already
   // includes isNonCorporate). Pushed outside the if/else like the gate below.
@@ -7802,8 +7865,11 @@ export default function PipelineFinancialStatements({
             <Button
               variant="outline"
               size="sm"
-              className="gap-1"
-              title="Export Balance Sheet + P&L + Notes as a Big4-style Word document (.docx)"
+              className={cn("gap-1", corpHasSevereDrift && "opacity-60")}
+              title={corpHasSevereDrift
+                ? `Export Word blocked: ${corpReconResult!.severeCount} corporate note(s) have drift > ₹100. Fix in Notes tab first.`
+                : "Export Balance Sheet + P&L + Notes as a Big4-style Word document (.docx)"}
+              disabled={corpHasSevereDrift}
               onClick={() => setShowCorpFontDialog(true)}
             >
               <FileText size={14} /> Export Word
@@ -9373,6 +9439,16 @@ export default function PipelineFinancialStatements({
                   entityName={engagement?.clients?.name || ""}
                   cyYear={cyYear}
                   initialExpandedRows={nceExpandedRows}
+                  ntaData={notesToAccountsData ?? null}
+                  sig={{
+                    firmName:     sigFirmName,
+                    firmFRN:      sigFirmFRN,
+                    partnerName:  sigPartnerName,
+                    membershipNo: sigMembershipNo,
+                    clientName:   sigClientName,
+                    place:        sigPlace,
+                    date:         sigDate,
+                  }}
                 />
               </div>
             </div>

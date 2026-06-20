@@ -40,3 +40,46 @@ export const CORP_SIGNED_NOTE_TOTALS = false;
  *     plus the preserved manual overlay.
  */
 export const NCE_RESYNC_DELETE_FIRST = false;
+
+/**
+ * PD-1 / D2.1 — NCE Balance-Sheet residual absorber. When false (default), any
+ * residual BS imbalance is plugged into Owners' Capital (NCE_CAP) so the face
+ * always balances — which HIDES a real imbalance and defeats the export gate
+ * (nceBsBalanced reads the post-plug total). When true, the plug is skipped: the
+ * true residual stands, so an unbalanced BS displays unbalanced AND blocks export,
+ * and the displayed Owners' Capital is the real note/COA value. Figure-MOVING →
+ * stays OFF until the real-data parity run in the credentialed environment.
+ */
+export const FS_NO_CAPITAL_PLUG = false;
+
+/**
+ * PD-6 / D2.7 — Corporate PY Balance-Sheet face source. When false (default), the
+ * corporate BS PY column is sourced from the raw current-year OPENING balance
+ * (exportPy) in preference to the note's PY breakup — so the PY face can diverge
+ * from its own note table, and the same divergence ships into the Word BS (BUG-031).
+ * When true, the PY face reads the NOTE PY total (sumNotesSubRowsPY), matching the CY
+ * column and the note table. BS sections only; P&L is unaffected. Figure-MOVING →
+ * stays OFF until the real-data parity run in the credentialed environment.
+ */
+export const FS_CORP_PY_FACE_FROM_NOTE = false;
+
+/**
+ * BUG-085/107/110 / D2.10 — Corporate export drift gate. When false (default), corporate
+ * Excel/Word export is NOT blocked by note-vs-COA / note-vs-face drift (only by BS balance,
+ * FA-PY and opening mismatch) — unlike NCE, which blocks on severe drift. When true, the
+ * corporate three-way validator (validateCorporateFSReconciliation) is computed and a severe
+ * drift (>₹100) blocks both corporate exports, matching NCE (Rule 5 parity). Behaviour change
+ * only (no figure moves) → stays OFF until reviewed against real corporate engagements.
+ */
+export const FS_CORP_EXPORT_GATE = false;
+
+/**
+ * PD-2 / D2.3 Phase-3 enforcement — block on unexplained Note≠COA divergence. When false
+ * (default), a Note total that differs from the COA anchor with NO backing manual row is shown
+ * as "⚠ unexplained" in the FS-Health panel but does NOT block export (report-only). When true,
+ * such an unexplained gap is escalated to drift (drift_severe ≥ ₹100) so it counts toward
+ * severeCount and blocks export — i.e. once the sign flip makes COA == Note, any residual
+ * divergence is treated as the real engine bug it is. Behaviour change only (no figure moves)
+ * → stays OFF until the sign/keying flags are validated, so it doesn't fire on the pre-fix gap.
+ */
+export const FS_BLOCK_UNEXPLAINED_DRIFT = false;

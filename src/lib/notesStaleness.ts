@@ -27,6 +27,12 @@ export interface NotesStalenessInput {
   latestNotesUpdatedAt: string | null | undefined;
   /** audit_engagements.notes_finalized — when true, notes are write-protected. */
   notesFinalized?: boolean | null;
+  /** BUG-041 / D2.4 — fingerprint of the CURRENT (live) coa_mapping. */
+  liveCoaFingerprint?: string | null;
+  /** BUG-041 / D2.4 — fingerprint of the coa_mapping captured WHEN the notes
+   *  snapshot was last built/saved. A mismatch means a ledger→note reassignment
+   *  happened since (which does NOT advance tally_trial_balance.synced_at). */
+  notesCoaFingerprint?: string | null;
 }
 
 export type NotesStalenessVerdict =
@@ -48,6 +54,9 @@ export interface NotesStalenessResult {
   canRefresh: boolean;
   latestTbSyncedAt: string | null;
   latestNotesUpdatedAt: string | null;
+  /** BUG-041 — what triggered staleness, so the banner can explain WHY:
+   *  a Tally re-sync vs a COA-mapping change. null when fresh/unknown. */
+  reason?: "tb_resync" | "coa_change" | null;
 }
 
 /** Parse an ISO timestamp to epoch ms, or null when absent/invalid. */
@@ -76,18 +85,31 @@ export function evaluateNotesStaleness(
     latestNotesUpdatedAt: input.latestNotesUpdatedAt ?? null,
   };
 
-  // Can't compare without both sides.
-  if (tb == null || notes == null) {
-    return { verdict: "unknown", isStale: false, canRefresh: false, ...base };
+  // BUG-041 / D2.4 — a COA-mapping change does NOT advance tally_trial_balance.synced_at,
+  // so a timestamp-only check is blind to a pure ledger→note reassignment. When the caller
+  // supplies the fingerprint captured when the notes were last built AND the live one, a
+  // mismatch means the snapshot no longer reflects the mapping → stale, even if timestamps
+  // say "fresh". When the fingerprints are absent, behaviour is unchanged (legacy).
+  const coaChanged = !!(
+    input.liveCoaFingerprint &&
+    input.notesCoaFingerprint &&
+    input.liveCoaFingerprint !== input.notesCoaFingerprint
+  );
+
+  const tbIsNewer = tb != null && notes != null && tb - notes > toleranceMs;
+
+  if (!tbIsNewer && !coaChanged) {
+    // Neither signal fires. Distinguish "no timestamps to compare" from "genuinely fresh".
+    if (tb == null || notes == null) {
+      return { verdict: "unknown", isStale: false, canRefresh: false, reason: null, ...base };
+    }
+    return { verdict: "fresh", isStale: false, canRefresh: false, reason: null, ...base };
   }
 
-  const tbIsNewer = tb - notes > toleranceMs;
-  if (!tbIsNewer) {
-    return { verdict: "fresh", isStale: false, canRefresh: false, ...base };
-  }
-
+  // Stale via TB re-sync and/or COA-mapping change. TB takes precedence in the message.
+  const reason: "tb_resync" | "coa_change" = tbIsNewer ? "tb_resync" : "coa_change";
   if (input.notesFinalized) {
-    return { verdict: "stale_locked", isStale: true, canRefresh: false, ...base };
+    return { verdict: "stale_locked", isStale: true, canRefresh: false, reason, ...base };
   }
-  return { verdict: "stale_refreshable", isStale: true, canRefresh: true, ...base };
+  return { verdict: "stale_refreshable", isStale: true, canRefresh: true, reason, ...base };
 }
