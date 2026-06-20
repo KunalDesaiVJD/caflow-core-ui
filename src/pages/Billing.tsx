@@ -5,6 +5,7 @@ import BillingDashboardTab from "@/components/billing/BillingDashboardTab";
 import EmailSettingsTab from "@/components/billing/EmailSettingsTab";
 import ReceivablesReportTab from "@/components/billing/ReceivablesReportTab";
 import BillingHealthPanel from "@/components/billing/BillingHealthPanel";
+import { usePermissions } from "@/hooks/usePermissions";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -295,7 +296,12 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
   const navigate = useNavigate();
   const { user } = useAuth();
   const { toast } = useToast();
+  const { can } = usePermissions();
   const isSuperadmin = user?.role === "superadmin";
+  // Phase 4 (C2/H8): mutating billing actions must respect the role matrix —
+  // view-only roles (manager / staff_article / client) must not delete or send.
+  const canDelete = isSuperadmin || can("Billing", "can_delete");
+  const canSend = isSuperadmin || can("Billing", "can_edit");
   const firmId = overrideFirmId ?? user?.firm_id;
 
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -550,6 +556,7 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
 
   const handleShareSend = async () => {
     if (!shareInvoice) return;
+    if (!canSend) { toast({ title: "Not allowed", description: "You don't have permission to send billing documents.", variant: "destructive" }); return; }
     setShareSending(true);
     try {
       // ── Generate PDF once — reused for both email attachment and WhatsApp download ──
@@ -651,6 +658,11 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
 
   const handleDelete = async () => {
     if (!deleteId) return;
+    if (!canDelete) {
+      toast({ title: "Not allowed", description: "You don't have permission to delete billing documents.", variant: "destructive" });
+      setDeleteId(null);
+      return;
+    }
     // Q5: a deleted invoice must not leave residual ledger rows behind.
     // Guard first: if real payments (receipts) are linked to this invoice,
     // deleting it would orphan that money — block and tell the user.
@@ -690,6 +702,7 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
   };
 
   const handleSend = async (inv: Invoice, sendToResponsible = false) => {
+    if (!canSend) { toast({ title: "Not allowed", description: "You don't have permission to send billing documents.", variant: "destructive" }); return; }
     const total = inv.total_amount || (inv.amount || 0) + (inv.gst_amount || 0);
     const notifType = sendToResponsible ? "internal_filing_reminder"
       : inv.document_type === "credit_note" ? "credit_note_issued"
@@ -755,6 +768,7 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
 
   // Bulk send handler
   const handleBulkSend = async () => {
+    if (!canSend) { toast({ title: "Not allowed", description: "You don't have permission to send billing documents.", variant: "destructive" }); return; }
     const selected = filtered.filter(inv => selectedIds.has(inv.id));
     if (selected.length === 0) return;
     setBulkSending(true);
@@ -1113,7 +1127,7 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-            {inv.effectiveStatus !== "paid" && inv.effectiveStatus !== "converted" && (
+            {canDelete && inv.effectiveStatus !== "paid" && inv.effectiveStatus !== "converted" && (
               <Button variant="ghost" size="icon" className="h-7 w-7" title="Delete" onClick={() => setDeleteId(inv.id)}>
                 <Trash2 size={14} className="text-destructive" />
               </Button>
