@@ -47,9 +47,17 @@ interface Props {
    *  the format used on Balance Sheet / Profit & Loss pages so the client
    *  name is presented identically everywhere in the report. Optional. */
   companyName?: string;
+  /**
+   * Corporate Lock Preview parity with NCE: when true, the toolbar's
+   * destructive controls (Re-sync, Print) are hidden, a lock banner is
+   * shown at the top, and the manual-edit affordances surfaced in this
+   * shell are suppressed. Sub-component inputs remain visually editable
+   * but the surrounding chrome makes the read-only intent clear.
+   */
+  readOnly?: boolean;
 }
 
-export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote, extraOverrideCount = 0, companyName }: Props) {
+export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote, extraOverrideCount = 0, companyName, readOnly = false }: Props) {
   const [notes,         setNotes]         = useState<Stage5Notes | null>(null);
   const [loading,       setLoading]       = useState(true);
   const [syncing,       setSyncing]       = useState(false);
@@ -395,18 +403,32 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote,
         </div>
       )}
 
+      {/* Lock-mode banner — shown when readOnly (Corporate Lock Preview / preview popup) */}
+      {readOnly && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 flex items-center gap-2">
+          <span className="text-amber-700 dark:text-amber-300 text-xs font-medium">
+            🔒 Preview Mode — Read Only
+          </span>
+          <span className="text-[11px] text-amber-700/80 dark:text-amber-400/80">
+            Re-sync and Print are disabled. Unlock the preview to make edits.
+          </span>
+        </div>
+      )}
+
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-2 px-1">
-        <Button
-          type="button" size="sm" variant="outline"
-          onClick={handleResync}
-          disabled={syncing}
-          className="h-7 text-xs gap-1"
-          title="Re-syncs notes from Trial Balance + COA mapping. Manually edited rows (in manual_edits[]) are preserved."
-        >
-          {syncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-          Re-sync from COA
-        </Button>
+        {!readOnly && (
+          <Button
+            type="button" size="sm" variant="outline"
+            onClick={handleResync}
+            disabled={syncing}
+            className="h-7 text-xs gap-1"
+            title="Re-syncs notes from Trial Balance + COA mapping. Manually edited rows (in manual_edits[]) are preserved."
+          >
+            {syncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+            Re-sync from COA
+          </Button>
+        )}
         <span className="text-[10px] text-muted-foreground">
           Last synced: <strong>{lastSync}</strong>
           {(notes.manual_edits.length + extraOverrideCount) > 0 && (
@@ -432,13 +454,15 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote,
           >
             <ChevronsDownUp className="w-3 h-3" /> Collapse All
           </Button>
-          <Button
-            type="button" size="sm" variant="outline"
-            onClick={handlePrint}
-            className="h-7 text-xs gap-1"
-          >
-            <Printer className="w-3 h-3" /> Print Notes
-          </Button>
+          {!readOnly && (
+            <Button
+              type="button" size="sm" variant="outline"
+              onClick={handlePrint}
+              className="h-7 text-xs gap-1"
+            >
+              <Printer className="w-3 h-3" /> Print Notes
+            </Button>
+          )}
         </div>
       </div>
 

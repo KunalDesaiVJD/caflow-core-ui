@@ -7961,6 +7961,31 @@ export default function PipelineFinancialStatements({
         </Alert>
       )}
 
+      {/* Corporate Lock Preview banner — visual indicator that the FS view is
+          locked for export. Matches NCE's lock-mode visual treatment so the
+          auditor always knows when their FS is review-frozen. */}
+      {!isNonCorporate && corpIsLocked && (
+        <div className="rounded-md border border-amber-400 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 flex items-center gap-2">
+          <Lock className="h-4 w-4 text-amber-600" />
+          <div className="flex-1">
+            <p className="text-xs font-semibold text-amber-800 dark:text-amber-300">
+              Preview Locked
+            </p>
+            <p className="text-[11px] text-amber-700 dark:text-amber-400">
+              Financial Statements are locked for export. Notes editing is disabled. Unlock to make changes.
+            </p>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-xs gap-1"
+            onClick={() => setCorpPreviewOpen(true)}
+          >
+            Re-open Preview
+          </Button>
+        </div>
+      )}
+
       {/* PY Data Source card — only shown when PY setup has NOT been configured yet.
           Once py_setup_completed is true (user picked py_shell/manual/none), this card
           is hidden so it doesn't duplicate the PY Shell navigation banner below. */}
@@ -8801,6 +8826,7 @@ export default function PipelineFinancialStatements({
                   + Object.values(noteOverrides).filter(v => v != null && Number.isFinite(v as number)).length
                 }
                 companyName={engagement?.clients?.name || ""}
+                readOnly={corpIsLocked}
               />
             </TabsContent>
           )}
@@ -9647,6 +9673,7 @@ export default function PipelineFinancialStatements({
                   cyYear={cyYear}
                   pyYear={pyYear}
                   companyName={engagement?.clients?.name || ""}
+                  readOnly={true}
                 />
               </div>
             </div>
