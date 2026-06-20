@@ -218,18 +218,37 @@ export function EditableCell({
 
 export function NoteCard({
   noteNo, title, children, defaultCollapsed = false, collapseControl,
+  hideWhenEmpty = false, cyTotal, pyTotal,
 }: {
   noteNo: number | string | null;
   title: string;
   children: React.ReactNode;
   defaultCollapsed?: boolean;
   collapseControl?: boolean;
+  /** Corporate Lock Preview parity with NCE: when true and both totals are
+   *  blank/zero, the entire NoteCard is skipped so the preview/locked view
+   *  drops empty notes (Long-term borrowings, Other long-term liabilities
+   *  etc.) instead of cluttering the layout. */
+  hideWhenEmpty?: boolean;
+  cyTotal?: number;
+  pyTotal?: number;
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
 
   useEffect(() => {
     if (collapseControl !== undefined) setCollapsed(collapseControl);
   }, [collapseControl]);
+
+  // Empty-note suppression — only when caller opts in and both totals collapse
+  // to near-zero. Using <1 (rupees) instead of ===0 so floating-point drift
+  // doesn't keep a "Rs. 0.000001" note visible.
+  if (
+    hideWhenEmpty
+    && Math.abs(Number(cyTotal ?? 0)) < 1
+    && Math.abs(Number(pyTotal ?? 0)) < 1
+  ) {
+    return null;
+  }
 
   return (
     <section
