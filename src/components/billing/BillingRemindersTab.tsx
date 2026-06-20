@@ -40,6 +40,7 @@ interface ReminderRule {
   filter_status: string | null;
   filter_groups: string[] | null;
   is_active: boolean;
+  auto_send: boolean;
   last_run_at: string | null;
   created_at: string;
 }
@@ -66,6 +67,7 @@ const emptyInvoiceRule = (): Partial<ReminderRule> => ({
   filter_status: "finalized",
   filter_groups: [],
   is_active: true,
+  auto_send: false,
 });
 
 const emptyLedgerRule = (): Partial<ReminderRule> => ({
@@ -289,6 +291,20 @@ function InvoiceRuleForm({
         />
         <Label>{state.is_active ? "Active" : "Inactive"}</Label>
       </div>
+
+      <div className="rounded-md border border-amber-200 bg-amber-50 p-3 space-y-1">
+        <div className="flex items-center gap-2">
+          <Switch
+            checked={state.auto_send ?? false}
+            onCheckedChange={v => onChange({ auto_send: v })}
+          />
+          <Label>Send automatically (daily)</Label>
+        </div>
+        <p className="text-[11px] text-amber-700">
+          When on, this rule emails matching clients automatically each day — no "Run Now" needed.
+          Paid invoices are always skipped, and no client is reminded twice within 2 days.
+        </p>
+      </div>
     </div>
   );
 }
@@ -460,6 +476,7 @@ export default function BillingRemindersTab({
         filter_status: editingRule.filter_status ?? null,
         filter_groups: editingRule.filter_groups ?? [],
         is_active: editingRule.is_active ?? true,
+        auto_send: editingRule.auto_send ?? false,
       };
       let error: any;
       if (editingRule.id) {
