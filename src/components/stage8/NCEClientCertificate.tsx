@@ -11,7 +11,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { Save, Loader2, FileSpreadsheet, FileText, Trash2, Plus } from "lucide-react";
+import { Save, Loader2, FileSpreadsheet, FileText, Trash2, Plus, ChevronUp, ChevronDown } from "lucide-react";
 import { exportClientCertificate } from "@/lib/nceLetterExport";
 import { exportClientCertificateDocx } from "@/lib/nceLetterDocxExport";
 import { WordFontPickerDialog, type ExportFont } from "@/components/shared/WordFontPickerDialog";
@@ -263,6 +263,20 @@ export function NCEClientCertificate({ engagementId }: Props) {
   const updatePoint = (id: string, text: string) =>
     setPoints((prev) => prev.map((p) => (p.id === id ? { ...p, text } : p)));
 
+  // Reorder helpers — same UX as Note 1 (Stage 7 → Notes to Accounts) so
+  // the auditor can shuffle points without dragging or retyping.
+  const movePoint = (id: string, dir: -1 | 1) =>
+    setPoints((prev) => {
+      const idx = prev.findIndex((p) => p.id === id);
+      const target = idx + dir;
+      if (idx < 0 || target < 0 || target >= prev.length) return prev;
+      const next = prev.slice();
+      [next[idx], next[target]] = [next[target], next[idx]];
+      return next;
+    });
+  const movePointUp   = (id: string) => movePoint(id, -1);
+  const movePointDown = (id: string) => movePoint(id, +1);
+
   // ── Save ──────────────────────────────────────────────────────────────────
   const handleSave = async () => {
     if (!financialYear) return;
@@ -467,29 +481,53 @@ export function NCEClientCertificate({ engagementId }: Props) {
 
           {/* ── Dynamic points (3, 4, 5, …) ── */}
           <div className="space-y-2">
-            {points.map((pt, i) => (
-              <div key={pt.id} className="flex items-start gap-2 group">
-                {/* Number */}
-                <span className="shrink-0 w-7 text-right font-serif pt-0.5">
-                  {i + 3}.
-                </span>
-                {/* Editable text */}
-                <div className="flex-1 min-w-0">
-                  <PointText
-                    value={pt.text}
-                    onChange={(text) => updatePoint(pt.id, text)}
-                  />
+            {points.map((pt, i) => {
+              const isFirst = i === 0;
+              const isLast  = i === points.length - 1;
+              return (
+                <div key={pt.id} className="flex items-start gap-2 group">
+                  {/* Number */}
+                  <span className="shrink-0 w-7 text-right font-serif pt-0.5">
+                    {i + 3}.
+                  </span>
+                  {/* Editable text */}
+                  <div className="flex-1 min-w-0">
+                    <PointText
+                      value={pt.text}
+                      onChange={(text) => updatePoint(pt.id, text)}
+                    />
+                  </div>
+                  {/* Reorder + Delete controls — appear on row hover. Same
+                      UX as the Note 1 (Stage 7 → Notes to Accounts) card so
+                      the auditor can shuffle points without dragging. */}
+                  <div className="flex items-center gap-0.5 shrink-0 mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={() => movePointUp(pt.id)}
+                      disabled={isFirst}
+                      title="Move up"
+                      className="p-1 rounded hover:bg-muted disabled:opacity-25 disabled:cursor-not-allowed text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      <ChevronUp className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => movePointDown(pt.id)}
+                      disabled={isLast}
+                      title="Move down"
+                      className="p-1 rounded hover:bg-muted disabled:opacity-25 disabled:cursor-not-allowed text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => deletePoint(pt.id)}
+                      title="Delete this point"
+                      className="p-1 rounded hover:bg-red-50 text-red-300 hover:text-red-600"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
-                {/* Delete button (visible on hover) */}
-                <button
-                  onClick={() => deletePoint(pt.id)}
-                  className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 mt-1 p-1 rounded hover:bg-red-50 text-red-300 hover:text-red-600"
-                  title="Delete this point"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            ))}
+              );
+            })}
 
             {/* Add point button */}
             <div className="flex items-center pl-9 pt-1">
