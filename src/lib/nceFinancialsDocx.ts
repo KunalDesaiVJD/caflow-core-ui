@@ -1487,21 +1487,22 @@ function buildNote1Section(
               sigLineL(`Membership No.: ${partnerMembNo}`, true),
             ],
           }),
-          // Right col — Assessee block, right-aligned. Right margin =
-          // body cell's right padding (100) so the assessee block ends
-          // at the same right edge as the policy body text above.
+          // Right col — Assessee block, LEFT-aligned (auditor's
+          // attached screenshot, 2026-06-20). Right cell starts at the
+          // half-width centre of the page; with sigLineL the content
+          // begins at that midpoint instead of hugging the right edge.
           new TableCell({
             width:   { size: TW - half, type: WidthType.DXA },
             borders: noBorderAll,
             margins: { top: 80, bottom: 80, left: 100, right: 100 },
             verticalAlign: VerticalAlign.TOP,
             children: [
-              sigLineR(`For, ${assesseeName}`, true),
-              sigLineR("x__________________", true),
-              sigLineR("Signature of assessee", true),
-              sigBlankR,
-              sigLineR(`Place: ${assesseePlace}`, true),
-              sigLineR(`Date : ${assesseeDate}`, true),
+              sigLineL(`For, ${assesseeName}`, true),
+              sigLineL("x__________________", true),
+              sigLineL("Signature of assessee", true),
+              sigBlankL,
+              sigLineL(`Place: ${assesseePlace}`, true),
+              sigLineL(`Date : ${assesseeDate}`, true),
             ],
           }),
         ],
