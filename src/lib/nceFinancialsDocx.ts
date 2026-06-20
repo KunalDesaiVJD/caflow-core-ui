@@ -963,9 +963,9 @@ function noteUnitsRow(colWidths: number[]): TableRow {
           spacing:   { before: 0, after: 0 },
           keepNext:  true, keepLines: true,
           children: [
-            new TextRun({ text: "In ", font: FONT,    size: SZ_SM, color: DK_GREY }),
-            new TextRun({ text: "₹",    font: "Arial", size: SZ_SM, color: DK_GREY }),
-            ...(after ? [new TextRun({ text: after, font: FONT, size: SZ_SM, color: DK_GREY })] : []),
+            new TextRun({ text: "In ", font: FONT,    size: SZ_HDR, bold: true, color: BLACK }),
+            new TextRun({ text: "₹",    font: "Arial", size: SZ_HDR, bold: true, color: BLACK }),
+            ...(after ? [new TextRun({ text: after, font: FONT, size: SZ_HDR, bold: true, color: BLACK })] : []),
           ],
         })],
       }),
@@ -1142,7 +1142,7 @@ function buildNotesTitleBlock(_entityName: string, cyYear: string): Paragraph[] 
       alignment: AlignmentType.RIGHT,
       spacing:   { before: 0, after: 60 },
       border:    { bottom: { style: BorderStyle.SINGLE, size: 8, color: NAVY, space: 4 } },
-      children: [new TextRun({ text: amountUnitsLabel(), font: FONT, size: SZ_SM, color: DK_GREY })],
+      children: [new TextRun({ text: amountUnitsLabel(), font: FONT, size: SZ_HDR, bold: true, color: BLACK })],
     }),
   ];
 }
