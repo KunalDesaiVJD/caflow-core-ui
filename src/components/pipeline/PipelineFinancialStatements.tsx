@@ -36,7 +36,7 @@ import { NotesMismatchPanel } from "@/components/stage7/NotesMismatchPanel";
 import {
   ArrowRight, AlertTriangle, Download, FileSpreadsheet,
   Pencil, Loader2, BarChart3, Droplets, Lock, Database, CheckCircle2,
-  BookOpen, TrendingUp, RefreshCw, FileText, Eye,
+  BookOpen, TrendingUp, RefreshCw, FileText,
 } from "lucide-react";
 import { NCE_FS_ITEMS } from "@/config/nceLineItems";
 import type { FSLineItem } from "@/config/nceLineItems";
@@ -2024,8 +2024,10 @@ export default function PipelineFinancialStatements({
   // Task 1 (doc6): preview popup shown immediately when user locks
   const [ncePreviewOpen,     setNcePreviewOpen]      = useState(false);
 
-  // Corporate Preview — opens a read-only popup showing BS → P&L → (CF) →
-  // Notes the way they'll appear in the DOCX export.
+  // Corporate Preview — mirrors NCE Lock Preview. A single "Lock Preview /
+  // Unlock Preview" button toggles a locked state and opens the popup on
+  // first lock. Lock state persists in localStorage.
+  const [corpIsLocked,    setCorpIsLocked]    = useState(false);
   const [corpPreviewOpen, setCorpPreviewOpen] = useState(false);
 
   // Bug 2 fix: restore nceIsLocked from localStorage when the engagement changes
@@ -2066,6 +2068,22 @@ export default function PipelineFinancialStatements({
       localStorage.setItem(`nce_expanded_${engagementId}`, JSON.stringify([...nceExpandedRows]));
     } catch { /* storage unavailable — ignore */ }
   }, [nceExpandedRows, nceIsLocked, engagementId]);
+
+  // Restore / persist corpIsLocked across page refreshes (mirrors nceIsLocked).
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(`corp_lock_${engagementId}`);
+      setCorpIsLocked(stored === "1");
+    } catch {
+      setCorpIsLocked(false);
+    }
+  }, [engagementId]);
+  useEffect(() => {
+    try {
+      if (corpIsLocked) localStorage.setItem(`corp_lock_${engagementId}`, "1");
+      else              localStorage.removeItem(`corp_lock_${engagementId}`);
+    } catch { /* storage unavailable — ignore */ }
+  }, [corpIsLocked, engagementId]);
 
   // Bug 1 fix: memoized handler so onExpansionStateUpdate keeps the same
   // reference across renders (only recreated when nceIsLocked changes).
@@ -7881,13 +7899,17 @@ export default function PipelineFinancialStatements({
           )}
           {!isNonCorporate && (
             <Button
-              variant="outline"
+              variant={corpIsLocked ? "default" : "outline"}
               size="sm"
-              className="gap-1"
-              title="Preview the draft financial statements as they'll appear in the export"
-              onClick={() => setCorpPreviewOpen(true)}
+              className={cn("gap-1", corpIsLocked && "bg-amber-500 hover:bg-amber-600 border-amber-500")}
+              title={corpIsLocked ? "Preview is locked — click to unlock." : "Lock current state for export and preview the draft financial statements"}
+              onClick={() => {
+                const next = !corpIsLocked;
+                setCorpIsLocked(next);
+                if (next) setCorpPreviewOpen(true);
+              }}
             >
-              <Eye size={14} /> Preview
+              {corpIsLocked ? "🔓 Unlock Preview" : "🔒 Lock Preview"}
             </Button>
           )}
           <Button variant="outline" size="sm" onClick={saveFS} disabled={saving} className="gap-1">
@@ -9471,14 +9493,15 @@ export default function PipelineFinancialStatements({
         </DialogContent>
       </Dialog>
 
-      {/* Corporate Preview — shows BS → P&L → CF → Notes as a single
-          scrollable A4-style paper view, matching the DOCX export. */}
+      {/* Corporate Lock Preview — mirrors NCE preview. Shows BS → P&L → CF →
+          Notes as a single scrollable A4-style paper view, matching the DOCX
+          export. */}
       <Dialog open={corpPreviewOpen} onOpenChange={setCorpPreviewOpen}>
         <DialogContent className="w-[78vw] max-w-[1200px] max-h-[88vh] p-0 flex flex-col gap-0 overflow-hidden">
           <DialogHeader className="px-4 py-2.5 border-b flex-none bg-background/95 backdrop-blur-sm">
             <div className="flex items-center justify-between">
               <DialogTitle className="flex items-center gap-2 text-sm">
-                Draft Financial Statements — Preview
+                🔒 Draft Financial Statements — Preview
               </DialogTitle>
               <div className="flex items-center gap-2">
                 <Button size="sm" variant="ghost" onClick={() => setCorpPreviewOpen(false)}>
