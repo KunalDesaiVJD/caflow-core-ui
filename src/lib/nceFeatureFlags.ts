@@ -50,7 +50,7 @@ export const NCE_RESYNC_DELETE_FIRST = false;
  * and the displayed Owners' Capital is the real note/COA value. Figure-MOVING →
  * stays OFF until the real-data parity run in the credentialed environment.
  */
-export const FS_NO_CAPITAL_PLUG = false;
+export const FS_NO_CAPITAL_PLUG = true;
 
 /**
  * PD-6 / D2.7 — Corporate PY Balance-Sheet face source. When false (default), the
