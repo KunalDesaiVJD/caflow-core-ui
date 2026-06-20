@@ -218,7 +218,7 @@ export function EditableCell({
 
 export function NoteCard({
   noteNo, title, children, defaultCollapsed = false, collapseControl,
-  hideWhenEmpty = false, cyTotal, pyTotal,
+  hideWhenEmpty = false, cyTotal, pyTotal, readOnly = false,
 }: {
   noteNo: number | string | null;
   title: string;
@@ -232,6 +232,10 @@ export function NoteCard({
   hideWhenEmpty?: boolean;
   cyTotal?: number;
   pyTotal?: number;
+  /** Locked-preview mode — disables the header click handler, hides the
+   *  expand/collapse chevron and label, and always renders content. The
+   *  preview should read like the final DOCX, not an editable card. */
+  readOnly?: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
 
@@ -248,6 +252,23 @@ export function NoteCard({
     && Math.abs(Number(pyTotal ?? 0)) < 1
   ) {
     return null;
+  }
+
+  // readOnly preview: force content open, no interactivity, no chevron.
+  if (readOnly) {
+    return (
+      <section
+        id={noteNo != null ? `note-${noteNo}` : undefined}
+        className="rounded-lg border bg-card mb-4"
+      >
+        <header className="border-b bg-muted/30 px-3 py-1.5 flex items-center gap-1.5 select-none">
+          <h3 className="text-xs font-semibold flex-1">
+            {noteNo != null ? `Note ${noteNo} — ` : ""}{title}
+          </h3>
+        </header>
+        <div className="px-3 py-2 text-[11px] space-y-2">{children}</div>
+      </section>
+    );
   }
 
   return (

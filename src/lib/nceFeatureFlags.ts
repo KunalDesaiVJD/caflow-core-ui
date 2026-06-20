@@ -20,7 +20,7 @@
  * correctly DEDUCT from the note total. When false, the legacy Math.abs
  * magnitude is used (the row is ADDED regardless of side).
  */
-export const NCE_SIGNED_NOTE_AMOUNTS = false;
+export const NCE_SIGNED_NOTE_AMOUNTS = true;
 
 /**
  * BUG 1 — SIGN (corporate). Same correction for the corporate Stage-5 note
@@ -39,7 +39,7 @@ export const CORP_SIGNED_NOTE_TOTALS = false;
  *     note rows are removed and the Notes total is a pure function of TB×COA
  *     plus the preserved manual overlay.
  */
-export const NCE_RESYNC_DELETE_FIRST = false;
+export const NCE_RESYNC_DELETE_FIRST = true;
 
 /**
  * PD-1 / D2.1 — NCE Balance-Sheet residual absorber. When false (default), any

@@ -2,6 +2,12 @@
 
 Everything that could be built and verified without database access is **done, on this branch, and in PR #6**. The steps below are the ones that require *your* review, your production-deploy decision, or your credentialed environment — they cannot be done from a checkout with no DB creds, and figure-moving changes must not ship without a parity run (§11).
 
+## UPDATE 2026-06-20 — two findings + a hard environment fact
+- **WHERE THIS CAN RUN (verified):** the `kvdes` machine (`C:/Users/kvdes/...`) has **no `.env.local` / `.env`** in any checkout, and `C:/Users/Admin/...` does **not exist** on it. The parity harness + every flag flip / re-populate / migration therefore **can only run on the credentialed (office) computer that holds `.env.local`.** No agent can do it from the `kvdes` machine.
+- **THE FLIP ALONE DOESN'T MOVE THE SCREEN (new):** the Stage-7 NCE face renders a **persisted snapshot** of note totals. `NCE_SIGNED_NOTE_AMOUNTS` gates only the engine's WRITE path, so after flipping it you **must re-populate** each engagement ("Refresh notes from TB", notes unlocked — or SQL re-write of `py_data`). Without that, the old figures stay on screen. See FLIP-RUNBOOK §2.3.
+- **B1 is a code edit, not a flag (new):** `PipelineFinancialStatements.tsx:3972` drops the 4th `pyCoaMap` arg to `computeCOATotals`, mis-stating the FS-Health/export-gate PY anchor (not the face). Apply during the credentialed run. See FLIP-RUNBOOK §4.3.
+- **MAHARSH INFRA ₹3,23,66,324 is fully explained:** two PY note lines (Long-term borrowings + ST loans), same sign root, both correct after `NCE_SIGNED_NOTE_AMOUNTS` + a re-populate. Stage-6 COA preview already balances (₹12,11,20,677.55) — the books are fine; only the Stage-7 face snapshot is stale. NOT unmapped ledgers (the 20 unmapped are all ₹0).
+
 ## The finish line, in order
 1. **Review PR #6** → https://github.com/KunalDesaiVJD/caflow-core-ui/pull/6 — click-test the auto **Vercel Preview** (faces read-only, note totals locked, disclosures still editable).
 2. **Merge PR #6** → deploys `main` to production. Only the **figure-neutral** changes go live; the **7 flags stay OFF**, so **no client figure changes**.
