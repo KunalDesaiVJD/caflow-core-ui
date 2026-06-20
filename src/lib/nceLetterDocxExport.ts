@@ -66,7 +66,7 @@ const TW        = A4_W - MARG_L - MARG_R;
 // Font sizes in half-points (docx units).
 const SZ_ENTITY = 28; // 14pt
 const SZ_HDR    = 20; // 10pt
-const SZ_BODY   = 22; // 11pt — letter body
+const SZ_BODY   = 20; // 10pt — letter body (Client Cert, Mgmt Letter, Note 1)
 
 const NO_BDR_SIDES = {
   top:    { style: BorderStyle.NONE, size: 0, color: "FFFFFF" },

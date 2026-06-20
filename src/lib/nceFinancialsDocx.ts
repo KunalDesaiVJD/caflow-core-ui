@@ -1374,20 +1374,24 @@ function buildNote1Section(
 
   // Multi-paragraph body: split on \n\n into segments, each rendered as its
   // own <w:p> inside the cell with a 60-DXA gap below for visual breathing.
+  // Note 1 body is set to SZ_HDR (10pt) instead of the BS/PL data-row
+  // SZ_BODY (9pt) so the policies read at the same size as the standalone
+  // Note 1 / Client Certificate / Management Letter Word exports.
+  const SZ_NOTE1_BODY = SZ_HDR;
   const bodyParas = (body: string): Paragraph[] => {
     const segments = body.split(/\n{2,}/).map(s => s.trim()).filter(s => s.length > 0);
     if (segments.length === 0) return [new Paragraph({ spacing: { before: 0, after: 0 }, children: [] })];
     return segments.map((seg, idx) => new Paragraph({
       alignment: AlignmentType.LEFT,
       spacing: { before: 0, after: idx === segments.length - 1 ? 0 : 80, line: 264, lineRule: "auto" as any },
-      children: [new TextRun({ text: seg, font: FONT, size: SZ_BODY, color: BLACK })],
+      children: [new TextRun({ text: seg, font: FONT, size: SZ_NOTE1_BODY, color: BLACK })],
     }));
   };
 
   const numberPara = (n: number): Paragraph => new Paragraph({
     alignment: AlignmentType.CENTER,
     spacing:   { before: 0, after: 0, line: 264, lineRule: "auto" as any },
-    children: [new TextRun({ text: String(n), font: FONT, size: SZ_BODY, color: BLACK })],
+    children: [new TextRun({ text: String(n), font: FONT, size: SZ_NOTE1_BODY, color: BLACK })],
   });
 
   const bodyRows: TableRow[] = selectedNotes.map((n, i) => {
@@ -1447,12 +1451,12 @@ function buildNote1Section(
   const sigLineL = (text: string, bold = false): Paragraph => new Paragraph({
     alignment: AlignmentType.LEFT,
     spacing:   { before: 0, after: 40, line: 264, lineRule: "auto" as any },
-    children:  [new TextRun({ text, font: FONT, size: SZ_BODY, bold, color: BLACK })],
+    children:  [new TextRun({ text, font: FONT, size: SZ_NOTE1_BODY, bold, color: BLACK })],
   });
   const sigLineR = (text: string, bold = false): Paragraph => new Paragraph({
     alignment: AlignmentType.RIGHT,
     spacing:   { before: 0, after: 40, line: 264, lineRule: "auto" as any },
-    children:  [new TextRun({ text, font: FONT, size: SZ_BODY, bold, color: BLACK })],
+    children:  [new TextRun({ text, font: FONT, size: SZ_NOTE1_BODY, bold, color: BLACK })],
   });
   const sigBlankL = sigLineL("");
   const sigBlankR = sigLineR("");
