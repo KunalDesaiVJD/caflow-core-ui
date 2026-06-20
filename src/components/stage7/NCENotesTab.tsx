@@ -167,7 +167,7 @@ function Note1PreviewSection({
           borderBottom: `1px solid ${NAVY}`,
         }}
       >
-        Note 1 — Summary of Significant accounting policies
+        Note 1 — NOTES FORMING PART OF ACCOUNTS FOR THE YEAR ENDED 31.03.{yearStr}
       </div>
 
       {/* Numbered policies — 2-col table, no borders */}

@@ -496,16 +496,15 @@ export async function exportNote1Docx(input: Note1DocxData, filenameSlug: string
       font: FONT, size: SZ_ENTITY, bold: true, color: NAVY,
     })],
   });
-  // Subtitle banner removed (2026-06-20) to match the FS export — auditor
-  // wants the entity banner to sit directly above the "Note 1 — Summary…"
-  // heading without the intermediate "Notes forming part of…" line.
-  void yearStr;
+  // Subtitle banner removed (2026-06-20) — the entity banner now sits
+  // directly above the "Note 1 — NOTES FORMING PART OF ACCOUNTS FOR THE
+  // YEAR ENDED dd.mm.yyyy" heading.
   const note1HeadingBanner = new Paragraph({
     alignment: AlignmentType.LEFT,
     spacing:   { before: 0, after: 60 },
     border:    { bottom: NAVY_RULE_THIN },
     children:  [new TextRun({
-      text: "Note 1 — Summary of Significant accounting policies",
+      text: `Note 1 — NOTES FORMING PART OF ACCOUNTS FOR THE YEAR ENDED 31.03.${yearStr}`,
       font: FONT, size: SZ_HDR, bold: true, color: NAVY,
     })],
   });
