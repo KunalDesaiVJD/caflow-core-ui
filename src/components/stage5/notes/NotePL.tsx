@@ -112,6 +112,7 @@ export default function NotePL({
           showSubtotal
           onRemapLedger={onRemapLedger}
           onUnmapLedger={onUnmapLedger}
+          engagementId={engagementId}
         />
         <EditableRow
           label={`Total — ${title} (per P&L)`}

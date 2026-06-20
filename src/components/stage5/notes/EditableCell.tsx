@@ -744,6 +744,7 @@ export function ListTable({
   showSubtotal = false,
   onRemapLedger,
   onUnmapLedger,
+  engagementId,
 }: {
   rows:             ListRow[];
   onChange:         (next: ListRow[]) => void;
@@ -754,10 +755,39 @@ export function ListTable({
   /** Issue 4 (Aesha) — also clears the ledger from coa_mapping in DB so it
    *  appears as Unmapped on the COA Mapping page and is removed from FS. */
   onUnmapLedger?:   (ledgerName: string) => void;
+  /** Corporate Lock Preview parity with NCE: when set, the per-group
+   *  collapse/expand state is persisted to localStorage under a single
+   *  engagement-scoped key. This is what lets the locked preview popup
+   *  inherit the editor's collapse decisions (collapsed "GST Receivable"
+   *  in the editor → collapsed in the popup → matches export). Group IDs
+   *  are unique across ListTables in a single engagement so one shared
+   *  key is sufficient. */
+  engagementId?:    string;
 }) {
   const [dragRow,          setDragRow]          = useState<number | null>(null);
   const [dragOverRow,      setDragOverRow]       = useState<number | null>(null);
-  const [collapsedGroups,  setCollapsedGroups]   = useState<Set<string>>(new Set());
+  const storageKey = engagementId ? `fs_corp_collapsed_groups_${engagementId}` : null;
+  const [collapsedGroups,  setCollapsedGroups]   = useState<Set<string>>(() => {
+    if (!storageKey || typeof window === "undefined") return new Set();
+    try {
+      const raw = localStorage.getItem(storageKey);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? new Set<string>(parsed) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
+  // Re-hydrate when the storageKey changes (e.g. switching engagements
+  // in the same browser tab). Without this, ListTables would freeze on
+  // the first engagement's collapse state.
+  useEffect(() => {
+    if (!storageKey || typeof window === "undefined") return;
+    try {
+      const raw = localStorage.getItem(storageKey);
+      const parsed = raw ? JSON.parse(raw) : [];
+      setCollapsedGroups(Array.isArray(parsed) ? new Set<string>(parsed) : new Set());
+    } catch { /* storage unavailable — ignore */ }
+  }, [storageKey]);
 
   // ── CRUD helpers ─────────────────────────────────────────────────────────
   const update = (i: number, patch: Partial<ListRow>) => {
@@ -953,6 +983,12 @@ export function ListTable({
     setCollapsedGroups(prev => {
       const next = new Set(prev);
       if (next.has(groupId)) next.delete(groupId); else next.add(groupId);
+      // Persist so the locked preview popup sees the same collapse state.
+      if (storageKey && typeof window !== "undefined") {
+        try {
+          localStorage.setItem(storageKey, JSON.stringify([...next]));
+        } catch { /* storage unavailable — ignore */ }
+      }
       return next;
     });
   };
