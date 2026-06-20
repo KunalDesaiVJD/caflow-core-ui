@@ -241,8 +241,9 @@ function letterheadBlock(entityName: string, entityAddress: string, font: string
 export async function exportClientCertificateDocx(
   data: ClientCertData,
   filenameSlug: string,
+  font: string = "Calibri",
 ): Promise<void> {
-  const FONT = "Calibri";
+  const FONT = font;
   const children: (Paragraph | Table)[] = [];
 
   // Tight one-page layout. Earlier revisions used empty spacer paragraphs +
@@ -332,8 +333,9 @@ export async function exportClientCertificateDocx(
 export async function exportManagementLetterDocx(
   data: MgmtLetterData,
   filenameSlug: string,
+  font: string = "Arial",
 ): Promise<void> {
-  const FONT = "Arial";
+  const FONT = font;
   const children: (Paragraph | Table)[] = [];
 
   // Tight one-page layout. Same fix as the Client Certificate above: drop

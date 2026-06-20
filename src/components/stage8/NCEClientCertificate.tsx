@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { Save, Loader2, FileSpreadsheet, FileText, Trash2, Plus } from "lucide-react";
 import { exportClientCertificate } from "@/lib/nceLetterExport";
 import { exportClientCertificateDocx } from "@/lib/nceLetterDocxExport";
+import { WordFontPickerDialog, type ExportFont } from "@/components/shared/WordFontPickerDialog";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -174,6 +175,9 @@ export function NCEClientCertificate({ engagementId }: Props) {
   const [loading,   setLoading]   = useState(true);
   const [saving,    setSaving]    = useState(false);
   const [exporting, setExporting] = useState(false);
+  // Word export font picker — Calibri matches the existing Excel template.
+  const [showWordFontDialog, setShowWordFontDialog] = useState(false);
+  const [wordExportFont,     setWordExportFont]     = useState<ExportFont>("Calibri");
 
   // Derived
   const financialYear = (eng?.financial_year as string) || "";
@@ -322,11 +326,18 @@ export function NCEClientCertificate({ engagementId }: Props) {
     }
   }, [clientName, financialYear, buildExportPayload]);
 
-  const handleExportWord = useCallback(async () => {
+  // "Export Word" toolbar button — opens the font picker; the picker's
+  // Confirm handler (runWordExport) runs the actual export with the
+  // chosen font.
+  const handleExportWord = useCallback(() => {
+    setShowWordFontDialog(true);
+  }, []);
+
+  const runWordExport = useCallback(async (font: ExportFont) => {
     setExporting(true);
     try {
       const slug = `${clientName.replace(/\s+/g, "_").slice(0, 30)}_${financialYear.replace("/", "-")}`;
-      await exportClientCertificateDocx(buildExportPayload(), slug);
+      await exportClientCertificateDocx(buildExportPayload(), slug, font);
     } catch (e: any) {
       toast.error("Word export failed: " + (e?.message || String(e)));
     } finally {
@@ -507,6 +518,18 @@ export function NCEClientCertificate({ engagementId }: Props) {
 
         </div>
       </div>
+
+      {/* Word-export font picker — mirrors the FS export's dialog so the
+          Client Certificate Word file can use the same six fonts. */}
+      <WordFontPickerDialog
+        open={showWordFontDialog}
+        onOpenChange={setShowWordFontDialog}
+        title="Export Client Certificate"
+        selected={wordExportFont}
+        onSelect={setWordExportFont}
+        onConfirm={(f) => { void runWordExport(f); }}
+        radioName="clientCertWordFont"
+      />
 
     </div>
   );
