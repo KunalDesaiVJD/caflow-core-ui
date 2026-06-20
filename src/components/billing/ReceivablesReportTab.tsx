@@ -31,6 +31,21 @@ import {
   ensurePdfUnicodeFont, formatPdfCurrency, setPdfUnicodeFont,
 } from "@/lib/jspdfUnicodeFont";
 
+// Fetch ALL rows for a query, paging past PostgREST's 1000-row default cap.
+// Used wherever a result set feeds a SUM, so totals never silently truncate.
+async function fetchAllRows<T = any>(makeQuery: () => any): Promise<T[]> {
+  const PAGE = 1000;
+  const out: T[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await makeQuery().range(from, from + PAGE - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    out.push(...(data as T[]));
+    if (data.length < PAGE) break;
+  }
+  return out;
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface Firm { id: string; name: string; logo_url?: string | null; }
@@ -166,32 +181,30 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
     if (!selectedFirmId) return;
     setLoading(true);
     try {
-      // Fetch all transaction data for this firm first (these are small result sets)
-      const [
-        { data: invoices, error: iErr },
-        { data: receipts, error: rErr },
-        { data: obRows,   error: oErr },
-        { data: kasars },
-      ] = await Promise.all([
-        supabase.from("invoices")
-          .select("client_id, invoice_date, total_amount")
-          .eq("firm_id", selectedFirmId)
-          .neq("status", "voided"),
-        supabase.from("billing_receipts")
-          .select("client_id, receipt_date, amount_received, tds_amount")
-          .eq("firm_id", selectedFirmId),
-        // Opening balances for the selected firm only
-        (supabase as any).from("client_billing_opening_balances")
-          .select("client_id, amount")
-          .eq("firm_id", selectedFirmId),
-        // Kasar / write-off entries
-        (supabase as any).from("billing_kasars")
-          .select("client_id, kasar_date, amount")
-          .eq("firm_id", selectedFirmId),
+      // C9: page past PostgREST's 1000-row cap so the debtors totals are
+      // complete for established firms (these feed SUMs — a truncated fetch
+      // silently under-reports receivables).
+      const [invoices, receipts, obRows, kasars] = await Promise.all([
+        fetchAllRows<{ client_id: string; invoice_date: string | null; total_amount: number | null }>(() =>
+          supabase.from("invoices")
+            .select("client_id, invoice_date, total_amount")
+            .eq("firm_id", selectedFirmId)
+            // Q3: only confirmed invoices + credit notes belong in receivables.
+            .in("document_type", ["invoice", "credit_note"])
+            .neq("status", "voided")),
+        fetchAllRows<any>(() =>
+          supabase.from("billing_receipts")
+            .select("client_id, receipt_date, amount_received, tds_amount, gst_tds_amount")
+            .eq("firm_id", selectedFirmId)),
+        fetchAllRows<any>(() =>
+          (supabase as any).from("client_billing_opening_balances")
+            .select("client_id, amount")
+            .eq("firm_id", selectedFirmId)),
+        fetchAllRows<any>(() =>
+          (supabase as any).from("billing_kasars")
+            .select("client_id, kasar_date, amount")
+            .eq("firm_id", selectedFirmId)),
       ]);
-
-      if (iErr) throw iErr;
-      if (rErr) throw rErr;
 
       // Collect distinct client IDs that have ANY activity for this firm
       // This avoids the 1000-row Supabase default limit on a full clients fetch
@@ -234,7 +247,8 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
 
         for (const rec of receipts || []) {
           if (rec.client_id !== c.id) continue;
-          const amt = Number(rec.amount_received || 0) + Number(rec.tds_amount || 0);
+          // Q2: GST-TDS deducted by the client also settles the invoice.
+          const amt = Number(rec.amount_received || 0) + Number(rec.tds_amount || 0) + Number(rec.gst_tds_amount || 0);
           if (!amt) continue;
           if (rec.receipt_date && rec.receipt_date < fromDate) openingCr += amt;
           else if (rec.receipt_date && rec.receipt_date >= fromDate && rec.receipt_date <= toDate) credit += amt;
@@ -297,12 +311,14 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
           .select("id, invoice_no, invoice_date, total_amount, document_type")
           .eq("client_id", client.id)
           .eq("firm_id", selectedFirmId)
+          // Q3: exclude quotations / proformas from the ledger sheet.
+          .in("document_type", ["invoice", "credit_note"])
           .neq("status", "voided")
           .gte("invoice_date", fromDate)
           .lte("invoice_date", toDate)
           .order("invoice_date"),
         supabase.from("billing_receipts")
-          .select("id, receipt_date, amount_received, tds_amount, payment_mode, remarks")
+          .select("id, receipt_date, amount_received, tds_amount, gst_tds_amount, payment_mode, remarks")
           .eq("client_id", client.id)
           .eq("firm_id", selectedFirmId)
           .gte("receipt_date", fromDate)
@@ -359,7 +375,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       }
 
       for (const rec of recData || []) {
-        const amt = Number(rec.amount_received || 0) + Number(rec.tds_amount || 0);
+        const amt = Number(rec.amount_received || 0) + Number(rec.tds_amount || 0) + Number(rec.gst_tds_amount || 0);
         tmp.push({
           date:      rec.receipt_date,
           doc_no:    rec.id.slice(0, 8).toUpperCase(),

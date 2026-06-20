@@ -40,6 +40,7 @@ import {
 } from "lucide-react";
 import { buildInvoiceHtml, downloadPdfFromHtml } from "@/lib/invoicePdfGenerator";
 import { resolveFirmNameForDate } from "@/lib/firmName";
+import { BILLING_ATOMIC_NUMBERING } from "@/lib/billingFlags";
 
 // ─── Export Invoice Currencies ───
 const EXPORT_CURRENCIES = [
@@ -770,8 +771,26 @@ const NewInvoice = () => {
       const series = getDocSeries(docType);
       const fy = getFYFromDate(invoiceDate);
 
+      // Phase 2 cutover (C8, flag-gated OFF): when enabled, allocate the
+      // sequence atomically AT SAVE so concurrent creates can't collide and a
+      // deleted number is never reused. OFF → the form-load number is used.
+      let finalSeq: number | null = docNoManual ? null : seqNumber;
+      let finalInvoiceNo = invoiceNo.trim();
+      if (BILLING_ATOMIC_NUMBERING && !docNoManual && !isEdit) {
+        const { data: allocated, error: allocErr } = await (supabase as any).rpc("allocate_doc_number", {
+          p_firm_id: selectedFirmId, p_series: series, p_financial_year: fy, p_invoice_date: invoiceDate,
+        });
+        if (allocErr) {
+          setSaving(false);
+          toast({ title: "Could not allocate document number", description: allocErr.message, variant: "destructive" });
+          return;
+        }
+        finalSeq = allocated as number;
+        finalInvoiceNo = formatDocNumber(allocated as number, series, fy);
+      }
+
       const payload: any = {
-        invoice_no: invoiceNo.trim(),
+        invoice_no: finalInvoiceNo,
         client_id: clientId,
         firm_id: selectedFirmId,
         invoice_date: invoiceDate,
@@ -794,7 +813,7 @@ const NewInvoice = () => {
         status: effectiveStatus,
         document_type: docType,
         document_series: series,
-        seq_number: docNoManual ? null : seqNumber,
+        seq_number: finalSeq,
         financial_year: fy,
         remarks_conditions: remarksConditions || null,
         base_turnover: baseTurnover ? Number(baseTurnover) : null,
@@ -863,8 +882,15 @@ const NewInvoice = () => {
         // ─────────────────────────────────────────────────────────────────────
       }
 
-      // Auto-insert/update ledger entry when finalizing
-      if (effectiveStatus === "finalized" && savedId && clientId && selectedFirmId) {
+      // Auto-insert/update ledger entry when finalizing.
+      // Q3: ONLY real invoices and credit notes post to the client ledger.
+      // Quotations / proformas are not confirmed transactions and must never
+      // appear in the ledger or outstanding balance.
+      if (
+        effectiveStatus === "finalized" &&
+        (docType === "invoice" || docType === "credit_note") &&
+        savedId && clientId && selectedFirmId
+      ) {
         const entryType = docType === "credit_note" ? "credit_note" : "invoice";
         const isCredit = docType === "credit_note";
         // Remove stale ledger row if invoice was edited and re-finalized
