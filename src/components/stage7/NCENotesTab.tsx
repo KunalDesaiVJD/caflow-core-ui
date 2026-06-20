@@ -214,11 +214,11 @@ function Note1PreviewSection({
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10, marginTop: "10px" }}>
         <tbody>
           <tr>
-            {/* Layout swapped 2026-06-20 — firm block now sits left,
-                assessee block right. Outer paddings (64px on the page-
-                edge side of each cell) still pull both stacks toward
-                the centre, matching the Word exports. */}
-            <td style={{ verticalAlign: "top", width: "50%", padding: "0 6px 0 64px" }}>
+            {/* Layout matches the policy body table: firm block starts
+                in line with Note text (28px number-column + 6px cell
+                padding = 34px left padding), assessee block ends at the
+                same right edge as the policy text (6px right padding). */}
+            <td style={{ verticalAlign: "top", width: "50%", padding: "0 6px 0 34px" }}>
               <div style={{ fontWeight: 700 }}>For {firmName}</div>
               <div style={{ fontWeight: 700 }}>Chartered Accountants</div>
               <div style={{ fontWeight: 700, marginBottom: 8 }}>FRN: {firmFRN}</div>
@@ -226,7 +226,7 @@ function Note1PreviewSection({
               <div style={{ fontWeight: 700 }}>Partner</div>
               <div style={{ fontWeight: 700 }}>Membership No.: {partnerMembNo}</div>
             </td>
-            <td style={{ verticalAlign: "top", width: "50%", padding: "0 64px 0 6px", textAlign: "right" }}>
+            <td style={{ verticalAlign: "top", width: "50%", padding: "0 6px 0 6px", textAlign: "right" }}>
               <div style={{ fontWeight: 700, marginBottom: 8 }}>For, {assesseeName}</div>
               <div style={{ fontWeight: 700 }}>x__________________</div>
               <div style={{ fontWeight: 700, marginBottom: 8 }}>Signature of assessee</div>

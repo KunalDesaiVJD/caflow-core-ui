@@ -1467,13 +1467,15 @@ function buildNote1Section(
         cantSplit: true,
         children: [
           // Left col — Assessee block
-          // Left col — CA firm block (swapped 2026-06-20 per auditor)
+          // Left col — CA firm block. Left margin matches the body
+          // number-column width (NOTE_COL_NUM_W = 700) + body cell
+          // padding (100) so "For V J Desai & Co. LLP" starts in line
+          // with the policy body text above (e.g. with Note 8's
+          // "Notes No. 1 to 18 forms part of accounts…").
           new TableCell({
             width:   { size: half, type: WidthType.DXA },
             borders: noBorderAll,
-            // Outer side margins (left here, right on the assessee cell)
-            // pull both stacks toward the centre.
-            margins: { top: 80, bottom: 80, left: 1000, right: 100 },
+            margins: { top: 80, bottom: 80, left: NOTE_COL_NUM_W + 100, right: 100 },
             verticalAlign: VerticalAlign.TOP,
             children: [
               sigLineL(`For ${firmName}`, true),
@@ -1485,11 +1487,13 @@ function buildNote1Section(
               sigLineL(`Membership No.: ${partnerMembNo}`, true),
             ],
           }),
-          // Right col — Assessee block (swapped 2026-06-20 per auditor)
+          // Right col — Assessee block. Right margin matches the body
+          // cell's right padding (100) so the assessee block ends at
+          // the same right edge as the policy body text above.
           new TableCell({
             width:   { size: TW - half, type: WidthType.DXA },
             borders: noBorderAll,
-            margins: { top: 80, bottom: 80, left: 100, right: 1000 },
+            margins: { top: 80, bottom: 80, left: 100, right: 100 },
             verticalAlign: VerticalAlign.TOP,
             children: [
               sigLineR(`For, ${assesseeName}`, true),
