@@ -114,7 +114,7 @@ export default function NoteBSAsset({
   ) => {
     const effPY = effectivePY(key, breakupPath);
     return (
-      <NoteCard collapseControl={collapseControl} noteNo={noteNo} title={title} hideWhenEmpty={hideEmpty} cyTotal={cy(key)} pyTotal={effPY}>
+      <NoteCard collapseControl={collapseControl} noteNo={noteNo} title={title} readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy(key)} pyTotal={effPY}>
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <ListTable
           rows={(get(breakupPath) ?? []) as ListRow[]}
@@ -142,7 +142,7 @@ export default function NoteBSAsset({
 
   return (
     <div className="space-y-4">
-      <NoteCard collapseControl={collapseControl} noteNo={sn("nc_investments")} title="Non-current investments" hideWhenEmpty={hideEmpty} cyTotal={cy("nc_investments")} pyTotal={effectivePY("nc_investments")}>
+      <NoteCard collapseControl={collapseControl} noteNo={sn("nc_investments")} title="Non-current investments" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("nc_investments")} pyTotal={effectivePY("nc_investments")}>
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <div className="text-[10px] italic text-muted-foreground">(a) Investment property / (b) Equity Instruments / (c) Other investments</div>
         <ListTable
@@ -167,7 +167,7 @@ export default function NoteBSAsset({
         />
       </NoteCard>
 
-      <NoteCard collapseControl={collapseControl} noteNo={sn("deferred_tax_asset", "deferred_tax_assets")} title="Deferred tax assets (Net)" hideWhenEmpty={hideEmpty} cyTotal={cy("deferred_tax_asset")} pyTotal={py("deferred_tax_asset")}>
+      <NoteCard collapseControl={collapseControl} noteNo={sn("deferred_tax_asset", "deferred_tax_assets")} title="Deferred tax assets (Net)" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("deferred_tax_asset")} pyTotal={py("deferred_tax_asset")}>
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <EditableRow
           label="Excess of depreciation in books over IT Act"
@@ -201,7 +201,7 @@ export default function NoteBSAsset({
       {renderSingleNote(sn("inventories"), "Inventories", "inventories",
         "bs_asset.inventories.breakup", "Raw materials / WIP / Finished goods / Stores & spares")}
 
-      <NoteCard collapseControl={collapseControl} noteNo={sn("trade_receivables")} title="Trade Receivables" hideWhenEmpty={hideEmpty} cyTotal={cy("trade_receivables")} pyTotal={py("trade_receivables")}>
+      <NoteCard collapseControl={collapseControl} noteNo={sn("trade_receivables")} title="Trade Receivables" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("trade_receivables")} pyTotal={py("trade_receivables")}>
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <EditableRow
           label="Outstanding for a period exceeding 6 months"

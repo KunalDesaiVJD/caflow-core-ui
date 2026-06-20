@@ -145,4 +145,34 @@
       font-size: 16px !important; /* prevents iOS zoom on focus */
     }
   }
+
+  /* Corporate Lock Preview — neutralize editable chrome inside the locked
+     notes view so the preview reads like the DOCX export, not the editor.
+     Mirrors NCE's preview rendering: no dashed cell borders, no hover
+     states on inputs, no add/remove row buttons. Pointer events are
+     disabled on interactive controls so the preview stays inert. */
+  .notes-readonly input,
+  .notes-readonly select,
+  .notes-readonly textarea {
+    border: none !important;
+    background: transparent !important;
+    cursor: default !important;
+    pointer-events: none;
+    box-shadow: none !important;
+    padding: 0 !important;
+  }
+  .notes-readonly input:hover,
+  .notes-readonly input:focus,
+  .notes-readonly select:hover,
+  .notes-readonly select:focus {
+    border: none !important;
+    box-shadow: none !important;
+    outline: none !important;
+  }
+  /* Hide all the editor-only action buttons inside readOnly notes:
+     "+ Add row", "+ Add Sub Group", "X reset to auto", row delete (Trash2),
+     remap/unmap menu triggers — they have no meaning in a print preview. */
+  .notes-readonly button {
+    display: none !important;
+  }
 }

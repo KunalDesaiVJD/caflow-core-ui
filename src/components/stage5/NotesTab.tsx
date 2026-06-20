@@ -12,7 +12,7 @@
  * every commit. Optimistic local state — failures show a toast.
  */
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, type CSSProperties } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Loader2, RefreshCw, Printer, FileText, Wallet, Building2, Coins, ChevronsUpDown, ChevronsDownUp } from "lucide-react";
@@ -56,6 +56,15 @@ interface Props {
    */
   readOnly?: boolean;
 }
+
+// Navy A4-style "page" frame used in readOnly preview mode (mirrors NCE).
+const pageFrame: CSSProperties = {
+  border:        "1px solid #1F3864",
+  background:    "#fff",
+  padding:       "20px 28px",
+  fontFamily:    "Calibri, Arial, sans-serif",
+  pageBreakAfter: "always",
+};
 
 export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote, extraOverrideCount = 0, companyName, readOnly = false }: Props) {
   const [notes,         setNotes]         = useState<Stage5Notes | null>(null);
@@ -403,21 +412,11 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote,
         </div>
       )}
 
-      {/* Lock-mode banner — shown when readOnly (Corporate Lock Preview / preview popup) */}
-      {readOnly && (
-        <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 flex items-center gap-2">
-          <span className="text-amber-700 dark:text-amber-300 text-xs font-medium">
-            🔒 Preview Mode — Read Only
-          </span>
-          <span className="text-[11px] text-amber-700/80 dark:text-amber-400/80">
-            Re-sync and Print are disabled. Unlock the preview to make edits.
-          </span>
-        </div>
-      )}
-
-      {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-2 px-1">
-        {!readOnly && (
+      {/* Toolbar — hidden entirely in readOnly preview mode (mirrors NCE).
+          Re-sync, Print, Expand/Collapse, last-sync stamp are all editor
+          chrome that don't belong in a print-ready preview. */}
+      {!readOnly && (
+        <div className="flex flex-wrap items-center gap-2 px-1">
           <Button
             type="button" size="sm" variant="outline"
             onClick={handleResync}
@@ -428,33 +427,31 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote,
             {syncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
             Re-sync from COA
           </Button>
-        )}
-        <span className="text-[10px] text-muted-foreground">
-          Last synced: <strong>{lastSync}</strong>
-          {(notes.manual_edits.length + extraOverrideCount) > 0 && (
-            <span className="ml-2 text-amber-600">
-              · {notes.manual_edits.length + extraOverrideCount} manual override(s)
-            </span>
-          )}
-        </span>
-        <div className="ml-auto flex items-center gap-1.5">
-          <Button
-            type="button" size="sm" variant="ghost"
-            onClick={() => setCollapseAll(false)}
-            className="h-7 text-xs gap-1"
-            title="Expand all notes"
-          >
-            <ChevronsUpDown className="w-3 h-3" /> Expand All
-          </Button>
-          <Button
-            type="button" size="sm" variant="ghost"
-            onClick={() => setCollapseAll(true)}
-            className="h-7 text-xs gap-1"
-            title="Collapse all notes"
-          >
-            <ChevronsDownUp className="w-3 h-3" /> Collapse All
-          </Button>
-          {!readOnly && (
+          <span className="text-[10px] text-muted-foreground">
+            Last synced: <strong>{lastSync}</strong>
+            {(notes.manual_edits.length + extraOverrideCount) > 0 && (
+              <span className="ml-2 text-amber-600">
+                · {notes.manual_edits.length + extraOverrideCount} manual override(s)
+              </span>
+            )}
+          </span>
+          <div className="ml-auto flex items-center gap-1.5">
+            <Button
+              type="button" size="sm" variant="ghost"
+              onClick={() => setCollapseAll(false)}
+              className="h-7 text-xs gap-1"
+              title="Expand all notes"
+            >
+              <ChevronsUpDown className="w-3 h-3" /> Expand All
+            </Button>
+            <Button
+              type="button" size="sm" variant="ghost"
+              onClick={() => setCollapseAll(true)}
+              className="h-7 text-xs gap-1"
+              title="Collapse all notes"
+            >
+              <ChevronsDownUp className="w-3 h-3" /> Collapse All
+            </Button>
             <Button
               type="button" size="sm" variant="outline"
               onClick={handlePrint}
@@ -462,71 +459,135 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote,
             >
               <Printer className="w-3 h-3" /> Print Notes
             </Button>
-          )}
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Sub-tabs */}
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)}>
-        <TabsList>
-          <TabsTrigger value="bs_liab"  className="gap-1 text-xs">
-            <Wallet size={13} /> Note BS-Liab
-          </TabsTrigger>
-          <TabsTrigger value="bs_asset" className="gap-1 text-xs">
-            <Building2 size={13} /> Note BS-Asset
-          </TabsTrigger>
-          <TabsTrigger value="pl"       className="gap-1 text-xs">
-            <FileText size={13} /> Note PL
-          </TabsTrigger>
-          <TabsTrigger value="fa"       className="gap-1 text-xs">
-            <Coins size={13} /> FA
-          </TabsTrigger>
-        </TabsList>
+      {/* In readOnly (Lock Preview / popup) mode: render all four sections
+          continuously inside navy A4-style page frames so the on-screen
+          preview matches the DOCX export — no sub-tabs, no collapse
+          interaction, no edit chrome. Mirrors NCE's preview rendering in
+          NCENotesTab. */}
+      {readOnly ? (
+        <div className="notes-readonly space-y-6">
+          <div style={pageFrame}>
+            <h3 className="text-[12px] font-bold uppercase tracking-wide text-[#1F3864] mb-2">
+              Notes — Balance Sheet (Liabilities)
+            </h3>
+            <NoteBSLiab
+              engagementId={engagementId}
+              notes={notes} cyYear={cyYear} pyYear={pyYear}
+              updatePath={updatePath} resetPath={resetPath} isOverridden={isOverridden}
+              collapseControl={false}
+              onRemapLedger={handleRemapLedger}
+              onUnmapLedger={handleUnmapLedger}
+              hideEmpty={true}
+            />
+          </div>
+          <div style={pageFrame}>
+            <h3 className="text-[12px] font-bold uppercase tracking-wide text-[#1F3864] mb-2">
+              Notes — Balance Sheet (Assets)
+            </h3>
+            <NoteBSAsset
+              engagementId={engagementId}
+              notes={notes} cyYear={cyYear} pyYear={pyYear}
+              updatePath={updatePath} resetPath={resetPath} isOverridden={isOverridden}
+              collapseControl={false}
+              onRemapLedger={handleRemapLedger}
+              onUnmapLedger={handleUnmapLedger}
+              hideEmpty={true}
+            />
+          </div>
+          <div style={pageFrame}>
+            <h3 className="text-[12px] font-bold uppercase tracking-wide text-[#1F3864] mb-2">
+              Notes — Profit &amp; Loss
+            </h3>
+            <NotePL
+              engagementId={engagementId}
+              notes={notes} cyYear={cyYear} pyYear={pyYear}
+              updatePath={updatePath} resetPath={resetPath} isOverridden={isOverridden}
+              collapseControl={false}
+              onRemapLedger={handleRemapLedger}
+              onUnmapLedger={handleUnmapLedger}
+              hideEmpty={true}
+            />
+          </div>
+          <div style={pageFrame}>
+            <h3 className="text-[12px] font-bold uppercase tracking-wide text-[#1F3864] mb-2">
+              Fixed Assets Schedule
+            </h3>
+            <FAGrid
+              engagementId={engagementId}
+              rows={notes.fa.rows}
+              pyRows={pyFaRows}
+              pyManual={notes.fa.py_manual ?? null}
+              onChangePyManual={(f, v) => updatePath(`fa.py_manual.${f}`, v)}
+              onChange={updateFaRows}
+            />
+          </div>
+        </div>
+      ) : (
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)}>
+          <TabsList>
+            <TabsTrigger value="bs_liab"  className="gap-1 text-xs">
+              <Wallet size={13} /> Note BS-Liab
+            </TabsTrigger>
+            <TabsTrigger value="bs_asset" className="gap-1 text-xs">
+              <Building2 size={13} /> Note BS-Asset
+            </TabsTrigger>
+            <TabsTrigger value="pl"       className="gap-1 text-xs">
+              <FileText size={13} /> Note PL
+            </TabsTrigger>
+            <TabsTrigger value="fa"       className="gap-1 text-xs">
+              <Coins size={13} /> FA
+            </TabsTrigger>
+          </TabsList>
 
-        <TabsContent value="bs_liab" className="mt-3">
-          <NoteBSLiab
-            engagementId={engagementId}
-            notes={notes} cyYear={cyYear} pyYear={pyYear}
-            updatePath={updatePath} resetPath={resetPath} isOverridden={isOverridden}
-            collapseControl={collapseAll}
-            onRemapLedger={handleRemapLedger}
-            onUnmapLedger={handleUnmapLedger}
-            hideEmpty={readOnly}
-          />
-        </TabsContent>
-        <TabsContent value="bs_asset" className="mt-3">
-          <NoteBSAsset
-            engagementId={engagementId}
-            notes={notes} cyYear={cyYear} pyYear={pyYear}
-            updatePath={updatePath} resetPath={resetPath} isOverridden={isOverridden}
-            collapseControl={collapseAll}
-            onRemapLedger={handleRemapLedger}
-            onUnmapLedger={handleUnmapLedger}
-            hideEmpty={readOnly}
-          />
-        </TabsContent>
-        <TabsContent value="pl" className="mt-3">
-          <NotePL
-            engagementId={engagementId}
-            notes={notes} cyYear={cyYear} pyYear={pyYear}
-            updatePath={updatePath} resetPath={resetPath} isOverridden={isOverridden}
-            collapseControl={collapseAll}
-            onRemapLedger={handleRemapLedger}
-            onUnmapLedger={handleUnmapLedger}
-            hideEmpty={readOnly}
-          />
-        </TabsContent>
-        <TabsContent value="fa" className="mt-3">
-          <FAGrid
-            engagementId={engagementId}
-            rows={notes.fa.rows}
-            pyRows={pyFaRows}
-            pyManual={notes.fa.py_manual ?? null}
-            onChangePyManual={(f, v) => updatePath(`fa.py_manual.${f}`, v)}
-            onChange={updateFaRows}
-          />
-        </TabsContent>
-      </Tabs>
+          <TabsContent value="bs_liab" className="mt-3">
+            <NoteBSLiab
+              engagementId={engagementId}
+              notes={notes} cyYear={cyYear} pyYear={pyYear}
+              updatePath={updatePath} resetPath={resetPath} isOverridden={isOverridden}
+              collapseControl={collapseAll}
+              onRemapLedger={handleRemapLedger}
+              onUnmapLedger={handleUnmapLedger}
+              hideEmpty={false}
+            />
+          </TabsContent>
+          <TabsContent value="bs_asset" className="mt-3">
+            <NoteBSAsset
+              engagementId={engagementId}
+              notes={notes} cyYear={cyYear} pyYear={pyYear}
+              updatePath={updatePath} resetPath={resetPath} isOverridden={isOverridden}
+              collapseControl={collapseAll}
+              onRemapLedger={handleRemapLedger}
+              onUnmapLedger={handleUnmapLedger}
+              hideEmpty={false}
+            />
+          </TabsContent>
+          <TabsContent value="pl" className="mt-3">
+            <NotePL
+              engagementId={engagementId}
+              notes={notes} cyYear={cyYear} pyYear={pyYear}
+              updatePath={updatePath} resetPath={resetPath} isOverridden={isOverridden}
+              collapseControl={collapseAll}
+              onRemapLedger={handleRemapLedger}
+              onUnmapLedger={handleUnmapLedger}
+              hideEmpty={false}
+            />
+          </TabsContent>
+          <TabsContent value="fa" className="mt-3">
+            <FAGrid
+              engagementId={engagementId}
+              rows={notes.fa.rows}
+              pyRows={pyFaRows}
+              pyManual={notes.fa.py_manual ?? null}
+              onChangePyManual={(f, v) => updatePath(`fa.py_manual.${f}`, v)}
+              onChange={updateFaRows}
+            />
+          </TabsContent>
+        </Tabs>
+      )}
     </div>
   );
 }
