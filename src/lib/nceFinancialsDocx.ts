@@ -1277,9 +1277,9 @@ function buildNote1Section(
   // between numbered items is row-driven (cell margins + paragraph after)
   // instead of paragraph-driven (lineRule + grid snap), which removes the
   // residual whitespace problem the prior revisions kept hitting.
-  // headingYear formerly fed the removed subtitle banner — kept here as a
-  // no-op reference to document that cyYear no longer flows into Note 1.
-  void cyYear;
+  // Heading year used in the "Note 1 — NOTES FORMING PART OF ACCOUNTS FOR
+  // THE YEAR ENDED 31.03.<yyyy>" heading.
+  const headingYear = String(cyYear || "").slice(-4) || "20XX";
 
   const NOTE_COL_NUM_W = 700;             // narrow number column
   const NOTE_COL_TEXT_W = TW - NOTE_COL_NUM_W;
@@ -1345,7 +1345,7 @@ function buildNote1Section(
         font: FONT, size: SZ_HDR, bold: true, color: NAVY,
       }),
       new TextRun({
-        text: "Summary of Significant accounting policies",
+        text: `NOTES FORMING PART OF ACCOUNTS FOR THE YEAR ENDED 31.03.${headingYear}`,
         font: FONT, size: SZ_HDR, bold: true, color: NAVY,
       }),
     ],
