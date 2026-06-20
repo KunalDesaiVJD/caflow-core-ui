@@ -467,15 +467,10 @@ export async function exportNote1Docx(input: Note1DocxData, filenameSlug: string
       font: FONT, size: SZ_ENTITY, bold: true, color: NAVY,
     })],
   });
-  const subtitleBanner = new Paragraph({
-    alignment: AlignmentType.CENTER,
-    spacing:   { before: 0, after: 60 },
-    border:    { bottom: NAVY_RULE_THIN },
-    children:  [new TextRun({
-      text: `Notes forming part of the Financial Statements for the year ended, 31st March, ${yearStr}`,
-      font: FONT, size: SZ_HDR, bold: true, color: NAVY,
-    })],
-  });
+  // Subtitle banner removed (2026-06-20) to match the FS export — auditor
+  // wants the entity banner to sit directly above the "Note 1 — Summary…"
+  // heading without the intermediate "Notes forming part of…" line.
+  void yearStr;
   const note1HeadingBanner = new Paragraph({
     alignment: AlignmentType.LEFT,
     spacing:   { before: 0, after: 60 },
@@ -611,7 +606,6 @@ export async function exportNote1Docx(input: Note1DocxData, filenameSlug: string
       },
       children: [
         entityBanner,
-        subtitleBanner,
         note1HeadingBanner,
         bodyTable,
         preSigSpacer,
