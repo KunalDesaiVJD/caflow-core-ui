@@ -27,6 +27,7 @@ import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { Plus, CalendarIcon, Receipt, Trash2, Pencil, Scissors } from "lucide-react";
 import { buildClientGstins } from "@/lib/gstinUtils";
+import { BILLING_RPC_RECEIPT_POSTING } from "@/lib/billingFlags";
 
 const PAYMENT_MODES = ["Cash", "Cheque", "NEFT", "UPI", "RTGS", "Other"];
 
@@ -403,6 +404,28 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
         }
 
         toast({ title: "Receipt updated. Ledger entries refreshed." });
+      } else if (BILLING_RPC_RECEIPT_POSTING) {
+        // Phase 2 cutover: atomic posting — receipt + ledger rows + invoice
+        // settlement in ONE transactional RPC (no partial-write window).
+        const { error: rpcErr } = await (supabase as any).rpc("post_receipt", {
+          p_firm_id: resolvedFirmId,
+          p_client_id: formClientId,
+          p_invoice_id: invoiceId || null,
+          p_receipt_type: receiptType,
+          p_receipt_date: dateStr,
+          p_amount: amt,
+          p_payment_mode: paymentMode,
+          p_payment_reference: paymentReference || null,
+          p_tds: tds || 0,
+          p_gst_tds: gstTds || 0,
+          p_tds_date: tds > 0 && tdsDate ? format(tdsDate, "yyyy-MM-dd") : null,
+          p_remarks: remarks || null,
+          p_gstin: formGstin && formGstin !== "all" ? formGstin : null,
+          p_created_by: user?.id,
+          p_financial_year: fy,
+        });
+        if (rpcErr) throw rpcErr;
+        toast({ title: "Receipt recorded (atomic). Client ledger updated." });
       } else {
         // INSERT new receipt
         const { data: newReceipt, error: rErr } = await supabase.from("billing_receipts").insert({
