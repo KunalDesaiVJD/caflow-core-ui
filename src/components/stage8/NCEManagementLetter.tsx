@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import { Save, Loader2, FileSpreadsheet, FileText } from "lucide-react";
 import { exportManagementLetter, type MgmtLetterData } from "@/lib/nceLetterExport";
 import { exportManagementLetterDocx } from "@/lib/nceLetterDocxExport";
+import { WordFontPickerDialog, type ExportFont } from "@/components/shared/WordFontPickerDialog";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -143,6 +144,9 @@ export function NCEManagementLetter({ engagementId }: Props) {
 
   const [loading, setLoading] = useState(true);
   const [saving,  setSaving]  = useState(false);
+  // Word export font picker — Arial matches the existing Excel template.
+  const [showWordFontDialog, setShowWordFontDialog] = useState(false);
+  const [wordExportFont,     setWordExportFont]     = useState<ExportFont>("Arial");
 
   // ── Derived auto-linked values ────────────────────────────────────────────
   const financialYear = (eng?.financial_year as string) || "";
@@ -257,10 +261,17 @@ export function NCEManagementLetter({ engagementId }: Props) {
     }
   };
 
-  const handleExportWord = async () => {
+  // "Export Word" toolbar button — opens the font picker; the picker's
+  // Confirm handler (runWordExport) runs the actual export with the
+  // chosen font.
+  const handleExportWord = () => {
+    setShowWordFontDialog(true);
+  };
+
+  const runWordExport = async (font: ExportFont) => {
     const { slug, data } = buildExportPayload();
     try {
-      await exportManagementLetterDocx(data, slug);
+      await exportManagementLetterDocx(data, slug, font);
     } catch (err: any) {
       toast.error("Word export failed: " + err.message);
     }
@@ -388,6 +399,18 @@ export function NCEManagementLetter({ engagementId }: Props) {
 
         </div>
       </div>
+
+      {/* Word-export font picker — mirrors the FS export's dialog so the
+          Management Letter Word file can use the same six fonts. */}
+      <WordFontPickerDialog
+        open={showWordFontDialog}
+        onOpenChange={setShowWordFontDialog}
+        title="Export Management Letter"
+        selected={wordExportFont}
+        onSelect={setWordExportFont}
+        onConfirm={(f) => { void runWordExport(f); }}
+        radioName="mgmtLetterWordFont"
+      />
 
     </div>
   );
