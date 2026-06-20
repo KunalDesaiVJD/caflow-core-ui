@@ -113,6 +113,9 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
   const [clientInvoices, setClientInvoices] = useState<any[]>([]);
   const [formClientGstins, setFormClientGstins] = useState<{ gstin: string; state: string }[]>([]);
   const [formGstin, setFormGstin] = useState<string>("all");
+  // Q1: the receipt's owning firm, selectable in the dialog (defaults to the
+  // current firm context). Lets multi-firm users book a receipt to the right firm.
+  const [formFirmId, setFormFirmId] = useState<string>("");
 
   // Kasar state
   const [kasars, setKasars] = useState<KasarRow[]>([]);
@@ -265,6 +268,7 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
     setClientInvoices([]);
     setFormClientGstins([]);
     setFormGstin("all");
+    setFormFirmId(firmFilter !== "all" ? firmFilter : (firmId ?? ""));
   };
 
   const resetKasarForm = () => {
@@ -293,6 +297,7 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
 
   const handleEdit = (r: ReceiptRow) => {
     setEditingId(r.id);
+    setFormFirmId(r.firm_id || "");
     setReceiptType(r.receipt_type as "against_invoice" | "on_account");
     setFormClientId(r.client_id);
     setFormInvoiceId(r.invoice_id || "");
@@ -312,9 +317,10 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
       toast({ title: "Please fill all mandatory fields", variant: "destructive" });
       return;
     }
-    const resolvedFirmId = await resolveFirmId();
+    // Q1: honour the firm chosen in the dialog; fall back to the resolved firm.
+    const resolvedFirmId = formFirmId || await resolveFirmId();
     if (!resolvedFirmId) {
-      toast({ title: "Unable to resolve firm. Please refresh and try again.", variant: "destructive" });
+      toast({ title: "Unable to resolve firm. Please select a firm and try again.", variant: "destructive" });
       return;
     }
 
@@ -772,6 +778,20 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
                 </div>
               </RadioGroup>
             </div>
+
+            {firms.length > 1 && (
+              <div className="space-y-1">
+                <Label>Firm *</Label>
+                <Select value={formFirmId} onValueChange={setFormFirmId}>
+                  <SelectTrigger><SelectValue placeholder="Select firm" /></SelectTrigger>
+                  <SelectContent>
+                    {firms.map(f => (
+                      <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             <div className="space-y-1">
               <Label>Client *</Label>

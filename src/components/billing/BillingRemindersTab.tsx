@@ -512,15 +512,19 @@ export default function BillingRemindersTab({
             ? [rule.filter_status]
             : ["finalized", "overdue"];
 
-        const { data: invoices, error: invErr } = await supabase
+        const { data: invoices, error: invErr } = await (supabase as any)
           .from("invoices")
-          .select("id, invoice_no, client_id, firm_id, total_amount, due_date, status")
+          .select("id, invoice_no, client_id, firm_id, total_amount, amount_due, payment_status, due_date, status")
           .eq("firm_id", resolvedFirmId)
+          .eq("document_type", "invoice")
           .in("status", statuses)
+          .neq("payment_status", "paid")
           .not("client_id", "is", null);
 
         if (invErr) throw invErr;
-        const list = invoices || [];
+        // Phase 5 (H2): never dun a client who has already paid. Only remind on
+        // invoices with a real outstanding balance, net of receipts + TDS + GST-TDS.
+        const list = (invoices || []).filter((i: any) => Number(i.amount_due ?? i.total_amount ?? 0) > 0);
         setRunProgress({ current: 0, total: list.length });
 
         if (list.length === 0) {
@@ -543,7 +547,7 @@ export default function BillingRemindersTab({
                 send_to_client: rule.send_to_client,
                 payload: {
                   invoice_no: inv.invoice_no,
-                  amount: inv.total_amount,
+                  amount: inv.amount_due ?? inv.total_amount,
                   due_date: inv.due_date,
                 },
               },
