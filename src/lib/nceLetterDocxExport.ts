@@ -608,21 +608,22 @@ export async function exportNote1Docx(input: Note1DocxData, filenameSlug: string
             sigLineL(`Membership No.: ${partnerMembNo}`, true),
           ],
         }),
-        // Right col — Assessee block, right-aligned. Right margin =
-        // body cell's right padding (100) so the assessee block ends
-        // at the same right edge as the policy body text above.
+        // Right col — Assessee block, LEFT-aligned (auditor's attached
+        // screenshot, 2026-06-20). Right cell starts at the half-width
+        // centre of the page; with sigLineL the content begins at that
+        // midpoint instead of hugging the right edge.
         new TableCell({
           width:    { size: TW_NOTE1 - half, type: WidthType.DXA },
           borders:  NO_BDR_SIDES,
           margins:  { top: 80, bottom: 80, left: 100, right: 100 },
           verticalAlign: VerticalAlign.TOP,
           children: [
-            sigLineR(`For, ${assesseeName}`, true),
-            sigLineR("x__________________", true),
-            sigLineR("Signature of assessee", true),
-            sigLineR(""),
-            sigLineR(`Place: ${placeText}`, true),
-            sigLineR(`Date : ${dateText}`, true),
+            sigLineL(`For, ${assesseeName}`, true),
+            sigLineL("x__________________", true),
+            sigLineL("Signature of assessee", true),
+            sigLineL(""),
+            sigLineL(`Place: ${placeText}`, true),
+            sigLineL(`Date : ${dateText}`, true),
           ],
         }),
       ],

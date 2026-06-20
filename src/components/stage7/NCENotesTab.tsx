@@ -227,7 +227,11 @@ function Note1PreviewSection({
               <div style={{ fontWeight: 700 }}>Partner</div>
               <div style={{ fontWeight: 700 }}>Membership No.: {partnerMembNo}</div>
             </td>
-            <td style={{ verticalAlign: "top", width: "50%", padding: "0 6px 0 6px", textAlign: "right" }}>
+            {/* Right cell — assessee block, LEFT-aligned (auditor's
+                attached screenshot, 2026-06-20). The 50% cell already
+                starts at the page midpoint; default left-alignment
+                puts the content there. */}
+            <td style={{ verticalAlign: "top", width: "50%", padding: "0 6px 0 6px" }}>
               <div style={{ fontWeight: 700 }}>For, {assesseeName}</div>
               <div style={{ fontWeight: 700 }}>x__________________</div>
               <div style={{ fontWeight: 700, marginBottom: 8 }}>Signature of assessee</div>
