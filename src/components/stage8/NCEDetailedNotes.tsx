@@ -46,7 +46,7 @@ import {
   nceAutoPopulate, deserialiseNoteData, serialiseNoteData, computeResyncDiff,
   collapseDuplicateCustomRows,
 } from "@/lib/nceAutoPopulate";
-import { NCE_RESYNC_DELETE_FIRST } from "@/lib/nceFeatureFlags";
+import { NCE_RESYNC_DELETE_FIRST, FS_NO_MANUAL_NOTE_ADD } from "@/lib/nceFeatureFlags";
 import { getDynamicNoteDisplay } from "@/lib/nceDynamicNoteNumbers";
 
 /** The note's grand total (CY & PY), via the single canonical aggregator — the
@@ -2922,6 +2922,13 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
     noteType: string,
     opts?: { section?: string; attachedTo?: string },
   ) => {
+    // PHASE 1 (FS_NO_MANUAL_NOTE_ADD) — manual additions in Notes to Accounts are
+    // disallowed. Reclassify a ledger in COA Mapping; post real adjustments in Tally
+    // (balanced) and re-sync. Disclosures (ageing/MSME/etc.) remain editable elsewhere.
+    if (FS_NO_MANUAL_NOTE_ADD) {
+      toast.error("Manual rows in Notes to Accounts are disabled. Reclassify the ledger in COA Mapping, or post the adjustment in Tally and re-sync.");
+      return;
+    }
     setNoteData(prev => {
       const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
       const id  = newCustomId();
