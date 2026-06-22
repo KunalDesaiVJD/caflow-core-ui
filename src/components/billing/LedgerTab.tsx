@@ -742,7 +742,7 @@ function ClientLedgerView({ defaultFirmId }: { defaultFirmId?: string }) {
       const safeClient = cName.replace(/[^a-zA-Z0-9]/g, "_");
       const allCC = [...emailCCList, ...(emailCCInput.trim() ? [emailCCInput.trim()] : [])].filter(e => e && e !== emailTo.trim());
 
-      await supabase.functions.invoke("send-notification", {
+      const { data, error } = await supabase.functions.invoke("send-notification", {
         body: {
           type: "ledger_statement",
           firm_id: firmId !== "all" ? firmId : undefined,
@@ -757,8 +757,20 @@ function ClientLedgerView({ defaultFirmId }: { defaultFirmId?: string }) {
           },
         },
       });
-      toast({ title: `Ledger emailed to ${emailTo.trim()}${allCC.length ? ` + ${allCC.length} CC` : ""}` });
-      setEmailOpen(false);
+      const emailStatus = (data as any)?.results?.direct?.email?.status;
+      let reason = "";
+      if (error) {
+        reason = error.message || "Send failed";
+        try { const ctx = await (error as any).context?.json?.(); if (ctx?.error) reason = ctx.error; } catch { /* ignore */ }
+      } else if (emailStatus && emailStatus !== "sent") {
+        reason = (data as any)?.results?.direct?.email?.error || "Delivery failed";
+      }
+      if (reason) {
+        toast({ title: "Failed to send email", description: reason, variant: "destructive" });
+      } else {
+        toast({ title: `Ledger emailed to ${emailTo.trim()}${allCC.length ? ` + ${allCC.length} CC` : ""}` });
+        setEmailOpen(false);
+      }
     } catch (err: any) {
       console.error("[ClientLedgerEmail]", err);
       toast({ title: "Failed to send email", description: err.message, variant: "destructive" });
@@ -1413,9 +1425,13 @@ function GroupLedgerView() {
       const toAddresses = emailTo.split(",").map(e => e.trim()).filter(Boolean);
       const ccAddresses = emailCC.split(",").map(e => e.trim()).filter(Boolean);
 
-      // Send to each To address (CC is included in the message text for now)
+      // REGRESSION FIX (H13): inspect the real result — never show success
+      // unconditionally. supabase-js does not throw on 403/500, so we must read
+      // both `error` and the per-recipient delivery status.
+      const sent: string[] = [];
+      const failed: { addr: string; reason: string }[] = [];
       for (const addr of toAddresses) {
-        await supabase.functions.invoke("send-notification", {
+        const { data, error } = await supabase.functions.invoke("send-notification", {
           body: {
             type: "ledger_statement",
             firm_id: firmId,
@@ -1430,10 +1446,28 @@ function GroupLedgerView() {
             },
           },
         });
+        const emailStatus = (data as any)?.results?.direct?.email?.status;
+        const emailErr = (data as any)?.results?.direct?.email?.error;
+        if (error) {
+          let reason = error.message || "Send failed";
+          try { const ctx = await (error as any).context?.json?.(); if (ctx?.error) reason = ctx.error; } catch { /* ignore */ }
+          failed.push({ addr, reason });
+        } else if (emailStatus && emailStatus !== "sent") {
+          failed.push({ addr, reason: emailErr || "Delivery failed" });
+        } else {
+          sent.push(addr);
+        }
       }
 
-      toast({ title: `Ledger emailed to ${toAddresses.join(", ")}` });
-      setEmailOpen(false);
+      if (failed.length === 0) {
+        toast({ title: `Ledger emailed to ${sent.join(", ")}` });
+        setEmailOpen(false);
+      } else if (sent.length === 0) {
+        toast({ title: "Failed to send email", description: failed.map(f => `${f.addr}: ${f.reason}`).join("; "), variant: "destructive" });
+      } else {
+        toast({ title: `Sent ${sent.length}, failed ${failed.length}`, description: failed.map(f => `${f.addr}: ${f.reason}`).join("; "), variant: "destructive" });
+        setEmailOpen(false);
+      }
     } catch (err: any) {
       console.error("[GroupLedgerEmail]", err);
       toast({ title: "Failed to send email", description: err.message, variant: "destructive" });
@@ -2124,8 +2158,10 @@ function FirmRevenueLedgerView() {
       const safeName = fName.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 40);
       const toAddresses = emailTo.split(",").map(e => e.trim()).filter(Boolean);
       const ccAddresses = emailCC.split(",").map(e => e.trim()).filter(Boolean);
+      const sent: string[] = [];
+      const failed: { addr: string; reason: string }[] = [];
       for (const addr of toAddresses) {
-        await supabase.functions.invoke("send-notification", {
+        const { data, error } = await supabase.functions.invoke("send-notification", {
           body: {
             type: "ledger_statement",
             firm_id: firmId,
@@ -2140,9 +2176,27 @@ function FirmRevenueLedgerView() {
             },
           },
         });
+        const emailStatus = (data as any)?.results?.direct?.email?.status;
+        const emailErr = (data as any)?.results?.direct?.email?.error;
+        if (error) {
+          let reason = error.message || "Send failed";
+          try { const ctx = await (error as any).context?.json?.(); if (ctx?.error) reason = ctx.error; } catch { /* ignore */ }
+          failed.push({ addr, reason });
+        } else if (emailStatus && emailStatus !== "sent") {
+          failed.push({ addr, reason: emailErr || "Delivery failed" });
+        } else {
+          sent.push(addr);
+        }
       }
-      toast({ title: `Ledger emailed to ${toAddresses.join(", ")}` });
-      setEmailOpen(false);
+      if (failed.length === 0) {
+        toast({ title: `Ledger emailed to ${sent.join(", ")}` });
+        setEmailOpen(false);
+      } else if (sent.length === 0) {
+        toast({ title: "Failed to send email", description: failed.map(f => `${f.addr}: ${f.reason}`).join("; "), variant: "destructive" });
+      } else {
+        toast({ title: `Sent ${sent.length}, failed ${failed.length}`, description: failed.map(f => `${f.addr}: ${f.reason}`).join("; "), variant: "destructive" });
+        setEmailOpen(false);
+      }
     } catch (err: any) {
       toast({ title: "Failed to send email", description: err.message, variant: "destructive" });
     }

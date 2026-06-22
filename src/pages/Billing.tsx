@@ -296,12 +296,18 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
   const navigate = useNavigate();
   const { user } = useAuth();
   const { toast } = useToast();
-  const { can } = usePermissions();
+  const { can, loading: permsLoading } = usePermissions();
   const isSuperadmin = user?.role === "superadmin";
-  // Phase 4 (C2/H8): mutating billing actions must respect the role matrix —
-  // view-only roles (manager / staff_article / client) must not delete or send.
-  const canDelete = isSuperadmin || can("Billing", "can_delete");
-  const canSend = isSuperadmin || can("Billing", "can_edit");
+  // Phase 4 (C2/H8): mutating billing actions respect the role matrix — view-only
+  // roles (manager / staff_article / client) must not delete or send.
+  // REGRESSION FIX: the gate must FAIL OPEN while auth/permissions are still
+  // hydrating (user.role can be null and can() returns false on an empty
+  // permissions map), otherwise it wrongly blocked firm_admins/partners. Known
+  // privileged roles are allowed immediately; the hard gate only applies once
+  // permissions have loaded — so restricted roles are still blocked.
+  const isPrivilegedRole = ["superadmin", "firm_admin", "partner_ca"].includes(user?.role || "");
+  const canDelete = isSuperadmin || isPrivilegedRole || (!permsLoading && can("Billing", "can_delete"));
+  const canSend = isSuperadmin || isPrivilegedRole || (!permsLoading && can("Billing", "can_edit"));
   const firmId = overrideFirmId ?? user?.firm_id;
 
   const [invoices, setInvoices] = useState<Invoice[]>([]);

@@ -725,7 +725,24 @@ Deno.serve(async (req) => {
           const { data: caller } = await adminClient
             .from("users").select("firm_id, role").eq("id", userData.user.id).maybeSingle();
           const isSuperadmin = caller?.role === "superadmin";
-          if (!isSuperadmin && caller?.firm_id !== firm_id) {
+          const isHomeFirm = caller?.firm_id === firm_id;
+          // REGRESSION FIX (multi-firm): also honour explicit cross-firm access
+          // grants (user_firm_access). The firm switcher lets a user pick any
+          // firm they have a grant for, so the guard must accept those too —
+          // otherwise emailing a ledger/invoice for K Desai / Dixita Desai from a
+          // V J Desai login was wrongly 403'd. Arbitrary cross-firm calls (no
+          // grant, not superadmin) are still blocked.
+          let hasGrant = false;
+          if (!isSuperadmin && !isHomeFirm && firm_id) {
+            const { data: grant } = await adminClient
+              .from("user_firm_access")
+              .select("firm_id")
+              .eq("user_id", userData.user.id)
+              .eq("firm_id", firm_id)
+              .maybeSingle();
+            hasGrant = !!grant;
+          }
+          if (!isSuperadmin && !isHomeFirm && !hasGrant) {
             return jsonResponse({ error: "Forbidden: not authorized for this firm" }, 403);
           }
         }
