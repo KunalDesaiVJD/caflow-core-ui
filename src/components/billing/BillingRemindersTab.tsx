@@ -562,7 +562,7 @@ export default function BillingRemindersTab({
         for (let i = 0; i < list.length; i++) {
           const inv = list[i];
           try {
-            await supabase.functions.invoke("send-notification", {
+            const { data, error } = await supabase.functions.invoke("send-notification", {
               body: {
                 type: rule.template_type ?? "payment_reminder",
                 firm_id: resolvedFirmId,
@@ -575,9 +575,16 @@ export default function BillingRemindersTab({
                 },
               },
             });
-            sent++;
-            // C4: stamp so this invoice isn't reminded again within the window.
-            await (supabase as any).from("invoices").update({ last_reminded_at: new Date().toISOString() }).eq("id", inv.id);
+            // Only count a real send — supabase-js does not throw on 403/500.
+            const results: any = (data as any)?.results || {};
+            const anySent = Object.values(results).some((r: any) => Object.values(r || {}).some((c: any) => c?.status === "sent"));
+            if (error || (Object.keys(results).length > 0 && !anySent)) {
+              failed++;
+            } else {
+              sent++;
+              // C4: stamp so this invoice isn't reminded again within the window.
+              await (supabase as any).from("invoices").update({ last_reminded_at: new Date().toISOString() }).eq("id", inv.id);
+            }
           } catch {
             failed++;
           }
@@ -620,7 +627,7 @@ export default function BillingRemindersTab({
         for (let i = 0; i < list.length; i++) {
           const client = list[i];
           try {
-            await supabase.functions.invoke("send-notification", {
+            const { data, error } = await supabase.functions.invoke("send-notification", {
               body: {
                 type: rule.template_type ?? "ledger_statement",
                 firm_id: resolvedFirmId,
@@ -629,7 +636,9 @@ export default function BillingRemindersTab({
                 payload: {},
               },
             });
-            sent++;
+            const results: any = (data as any)?.results || {};
+            const anySent = Object.values(results).some((r: any) => Object.values(r || {}).some((c: any) => c?.status === "sent"));
+            if (error || (Object.keys(results).length > 0 && !anySent)) failed++; else sent++;
           } catch {
             failed++;
           }

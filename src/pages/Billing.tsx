@@ -743,7 +743,7 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
     }
 
     try {
-      await supabase.functions.invoke("send-notification", {
+      const { data, error } = await supabase.functions.invoke("send-notification", {
         body: {
           type: notifType,
           firm_id: inv.firm_id,
@@ -759,8 +759,20 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
           },
         },
       });
-    } catch {
-      toast({ title: sendToResponsible ? "Notification could not be confirmed." : "Invoice marked as sent. Notification delivery could not be confirmed." });
+      // Inspect the real result — supabase-js does not throw on 403/500.
+      const channel: any = sendToResponsible ? (data as any)?.results?.responsible : (data as any)?.results?.client;
+      const anySent = channel ? Object.values(channel).some((c: any) => c?.status === "sent") : true;
+      if (error || !anySent) {
+        let reason = error?.message || (channel && Object.values(channel).map((c: any) => c?.error).find(Boolean)) || "Delivery failed";
+        try { const ctx = await (error as any)?.context?.json?.(); if (ctx?.error) reason = ctx.error; } catch { /* ignore */ }
+        toast({ title: "Failed to send", description: reason, variant: "destructive" });
+        fetchData();
+        return;
+      }
+    } catch (e: any) {
+      toast({ title: "Failed to send", description: e?.message || "Network error", variant: "destructive" });
+      fetchData();
+      return;
     }
 
     if (!sendToResponsible) {
@@ -789,6 +801,7 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
     }
 
     let sentCount = 0;
+    let failCount = 0;
     for (const inv of selected) {
       setBulkProgress(p => ({ ...p, current: p.current + 1 }));
       const total = inv.total_amount || (inv.amount || 0) + (inv.gst_amount || 0);
@@ -817,7 +830,7 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
       }
 
       try {
-        await supabase.functions.invoke("send-notification", {
+        const { data, error } = await supabase.functions.invoke("send-notification", {
           body: {
             type: notifType,
             firm_id: inv.firm_id,
@@ -832,11 +845,17 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
             },
           },
         });
-        sentCount++;
-      } catch { /* continue */ }
+        // Count a real send only — supabase-js does not throw on 403/500.
+        const results: any = (data as any)?.results || {};
+        const anySent = Object.values(results).some((r: any) => Object.values(r || {}).some((c: any) => c?.status === "sent"));
+        if (error || (Object.keys(results).length > 0 && !anySent)) failCount++; else sentCount++;
+      } catch { failCount++; }
     }
 
-    toast({ title: `Sent to ${sentCount} recipients` });
+    toast({
+      title: `Sent to ${sentCount} recipient${sentCount !== 1 ? "s" : ""}${failCount ? `, ${failCount} failed` : ""}`,
+      ...(failCount ? { variant: "destructive" as const } : {}),
+    });
     setBulkSending(false);
     setBulkSendOpen(false);
     setSelectedIds(new Set());
