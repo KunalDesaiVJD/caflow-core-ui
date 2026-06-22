@@ -4228,6 +4228,19 @@ export default function PipelineFinancialStatements({
       out["NCE_CAP"] = (out["NCE_CAP"] || 0) + out["BS_EQ_RS"];
       out["BS_EQ_RS"] = 0;
     }
+    // ── Phase 7 (FS_NO_MANUAL_NOTE_ADD, NCE-only) — anchor the PY face to COA ──
+    // PY mirror of the CY anchor. coaTotals.py is the PY-shell closing (= CY
+    // opening) for BS codes, and the PY-shell P&L closing where a shell exists.
+    // NCE_CII PY is NOT auto-derived (needs the pre-PY opening stock, not loaded)
+    // → keep the note value. Engagements with no PY shell keep 0 PY P&L (existing
+    // limit). The PY residual absorber below credits the PY result to Capital.
+    if (FS_NO_MANUAL_NOTE_ADD) {
+      const { face: coaFacePy } = computeNceCoaAnchoredFace(coaTotalsByCode, "py");
+      for (const code of Object.keys(coaFacePy)) {
+        if (code === "NCE_CII") continue;
+        out[code] = coaFacePy[code];
+      }
+    }
     // See CY comment: NCE_DEPR/NCE_INTG not zeroed — P&L needs them.
     // PY TOTAL: computed from note-overridden `out` (mirrors CY above).
     out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (out[id] || 0), 0);
@@ -4268,7 +4281,7 @@ export default function PipelineFinancialStatements({
     out["NCE_PROF_XI"]  = Math.round((out["NCE_PROF_IX"]  - (out["NCE_PART_REM"] || 0)) * 100) / 100;
     out["NCE_NET_PROF"] = Math.round((out["NCE_PROF_XI"]  - (out["NCE_TAX"]      || 0)) * 100) / 100;
     return out;
-  }, [isNonCorporate, mergedPY, computedAmountsPY, stage5NotesData, nceNotesByType, hasPyShellBS, pyShellBSAmounts]);
+  }, [isNonCorporate, mergedPY, computedAmountsPY, stage5NotesData, nceNotesByType, hasPyShellBS, pyShellBSAmounts, coaTotalsByCode]);
 
   // ─── NCE stats bar ───────────────────────────────────────────────────────────
   // Sum individual leaf codes so the stats bar is independent of computeTotal
