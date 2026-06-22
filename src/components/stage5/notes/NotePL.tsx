@@ -102,7 +102,7 @@ export default function NotePL({
     const totalPy = hasAnyBreakupPy ? sumPy : effectivePY(key);
 
     return (
-      <NoteCard collapseControl={collapseControl} noteNo={noteNo} title={title} readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={totalCy} pyTotal={totalPy}>
+      <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={noteNo} title={title} readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={totalCy} pyTotal={totalPy}>
         <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
         <ListTable
           rows={rows}
@@ -112,6 +112,7 @@ export default function NotePL({
           showSubtotal
           onRemapLedger={onRemapLedger}
           onUnmapLedger={onUnmapLedger}
+          engagementId={engagementId}
         />
         <EditableRow
           label={`Total — ${title} (per P&L)`}
@@ -138,7 +139,7 @@ export default function NotePL({
       {renderListNote(sn("other_income"), "Other Income", "other_income",
         "Interest / Forex gain / Misc income")}
 
-      <NoteCard collapseControl={collapseControl} noteNo={sn("cost_materials")} title="Cost of materials consumed" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("cost_materials")} pyTotal={py("cost_materials")}>
+      <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("cost_materials")} title="Cost of materials consumed" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("cost_materials")} pyTotal={py("cost_materials")}>
         <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
         <EditableRow
           label="Opening Stock"
@@ -184,7 +185,7 @@ export default function NotePL({
       {renderListNote(sn("purchases_stock"), "Purchase of stock-in-trade", "purchases_stock",
         "Purchase break-up")}
 
-      <NoteCard collapseControl={collapseControl} noteNo={sn("changes_inventory", "changes_inventories")} title="Changes in inventories of FG / WIP / SIT" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("changes_inventory")} pyTotal={py("changes_inventory")}>
+      <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("changes_inventory", "changes_inventories")} title="Changes in inventories of FG / WIP / SIT" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("changes_inventory")} pyTotal={py("changes_inventory")}>
         <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
         <div className="text-[10px] italic text-muted-foreground mt-1">Closing Stock</div>
         <EditableRow
@@ -267,7 +268,7 @@ export default function NotePL({
         "Other expense particulars")}
 
       {/* EPS — Note 30 per NOTE_REGISTRY; always visible for corporate entities */}
-      <NoteCard collapseControl={collapseControl} noteNo={sn("eps")} title="Earnings per share (EPS)" readOnly={hideEmpty}>
+      <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("eps")} title="Earnings per share (EPS)" readOnly={hideEmpty}>
         <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
         <EditableRow
           label="Net Profit After Tax (NPAT)"

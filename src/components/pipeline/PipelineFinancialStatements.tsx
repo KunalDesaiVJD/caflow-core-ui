@@ -7624,6 +7624,29 @@ export default function PipelineFinancialStatements({
         console.warn("[FS DOCX] Could not load stage7_ratios:", e);
       }
 
+      // Lock Preview parity with NCE — when the FS is locked, the export
+      // must reflect the same shape as the on-screen locked preview:
+      //   • hideBlankNoteRows: drop notes where both years are essentially zero
+      //   • collapsedNotes:    drop whole notes the auditor had collapsed
+      //   • collapsedGroups:   drop the member rows of collapsed sub-groups
+      // The two collapse sets come straight from the same localStorage bags
+      // that NoteCard / ListTable hydrate from, so editor ↔ preview ↔ export
+      // are always in sync.
+      let lockedCollapsedNotes: Set<string> | undefined;
+      let lockedCollapsedGroups: Set<string> | undefined;
+      if (corpIsLocked) {
+        try {
+          const rawN = localStorage.getItem(`fs_corp_collapsed_notes_${engagementId}`);
+          const parsedN = rawN ? JSON.parse(rawN) : [];
+          lockedCollapsedNotes = new Set<string>(Array.isArray(parsedN) ? parsedN : []);
+        } catch { /* storage unavailable — ignore */ }
+        try {
+          const rawG = localStorage.getItem(`fs_corp_collapsed_groups_${engagementId}`);
+          const parsedG = rawG ? JSON.parse(rawG) : [];
+          lockedCollapsedGroups = new Set<string>(Array.isArray(parsedG) ? parsedG : []);
+        } catch { /* storage unavailable — ignore */ }
+      }
+
       await generateCorporateFinancialsDocx({
         engagement,
         amounts:     corpDocxAmounts,
@@ -7645,8 +7668,14 @@ export default function PipelineFinancialStatements({
         stage5Notes: stage5NotesData ?? null,
         ratios: corpDocxRatios,
         font: corpExportFont,
-        expandSubGroups: corpExpandSubGroups,
+        // When locked, force "expand sub-groups" ON so the export can use
+        // the per-group collapsedGroups filter (NCE pattern). Unlocked
+        // exports keep the legacy global "expand sub-groups" toggle.
+        expandSubGroups: corpIsLocked ? true : corpExpandSubGroups,
         faPyRows: (priorFaRows as any) ?? null,
+        hideBlankNoteRows: corpIsLocked,
+        collapsedNotes:    lockedCollapsedNotes,
+        collapsedGroups:   lockedCollapsedGroups,
       });
       toast.success("Financial Statements exported as Word document");
     } catch (err: any) {

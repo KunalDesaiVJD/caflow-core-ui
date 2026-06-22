@@ -1389,6 +1389,7 @@ function extractNoteRows(
   fsCode: string,
   stage5Notes: any,
   expandSubGroups: boolean = false,
+  collapsedGroups: Set<string> = new Set(),
 ): NoteRow[] {
   const totCy = amounts[fsCode]?.cy ?? 0;
   const totPy = amounts[fsCode]?.py ?? 0;
@@ -1437,8 +1438,11 @@ function extractNoteRows(
           rows.push({ label, cy: gt.cy, py: gt.py, style: "subtotal" });
           // Issue 2 — COLLAPSED by default: show only the sub-group name +
           // total. Individual ledgers are emitted only when the export is run
-          // with "Expand sub-groups" turned on.
-          if (expandSubGroups) {
+          // with "Expand sub-groups" turned on AND this specific group was
+          // NOT individually collapsed in the editor at Lock Preview time
+          // (collapsedGroups carries the per-group ListTable state from
+          // localStorage so the export mirrors what the locked preview shows).
+          if (expandSubGroups && !collapsedGroups.has(r.id)) {
             // Emit members in their original relative order, indented
             for (const m of membersByGroup.get(r.id) ?? []) {
               const cyVal = n(m.amount_cy);
@@ -2024,6 +2028,19 @@ export interface CorpDocxParams {
   /** Prior-year engagement's FA rows — used to compute the FA "Total —
    *  Previous year" row exactly as the on-screen grid does (pyComputed). */
   faPyRows?: FARow[] | null;
+  /** Corporate Lock Preview parity with NCE: when true, notes whose CY and
+   *  PY totals both collapse to near-zero are skipped from the export. The
+   *  on-screen locked preview already hides them; this keeps the DOCX in
+   *  sync. Mirrors NCE's `hideBlankNoteRows`. */
+  hideBlankNoteRows?: boolean;
+  /** Corporate Lock Preview parity with NCE: keys (note numbers as strings)
+   *  of notes the auditor had collapsed in the editor at lock-time. These
+   *  notes are dropped from the export — the locked preview drops them too. */
+  collapsedNotes?: Set<string>;
+  /** Corporate Lock Preview parity with NCE: per-group ListTable IDs that
+   *  the auditor had collapsed at lock-time. Collapsed groups emit only the
+   *  group header + total in the export, suppressing member rows. */
+  collapsedGroups?: Set<string>;
 }
 
 export async function generateCorporateFinancialsDocx(params: CorpDocxParams): Promise<void> {
@@ -2084,6 +2101,13 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
   // Collect notes with their numbers + which statement they belong to.
   const pendingNotes: Array<{ noteNo: number; section: "bs" | "pl"; elements: (Table | Paragraph)[] }> = [];
 
+  // Corporate Lock Preview parity with NCE — pull the three preview-related
+  // filters out of params with sane defaults. `collapsedNotes` is keyed by
+  // noteNo (as String) which matches what NoteCard writes to localStorage.
+  const hideBlankNoteRows = params.hideBlankNoteRows ?? false;
+  const collapsedNotes    = params.collapsedNotes    ?? new Set<string>();
+  const collapsedGroups   = params.collapsedGroups   ?? new Set<string>();
+
   for (const meta of CORP_NOTE_META) {
     const noteNo = noteNumbers[meta.fsCode];
     if (!noteNo) continue;
@@ -2100,6 +2124,15 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
     const totCy = amounts[meta.fsCode]?.cy ?? 0;
     const totPy = amounts[meta.fsCode]?.py ?? 0;
 
+    // Lock Preview filter — drop notes the auditor had collapsed in the
+    // editor at lock-time. Mirrors the on-screen popup behaviour.
+    if (collapsedNotes.has(String(noteNo))) continue;
+
+    // Lock Preview filter — drop notes whose CY and PY totals are both
+    // essentially zero. Mirrors NCE's `hideBlankNoteRows` semantics so
+    // the locked export matches the locked preview's hideEmpty behaviour.
+    if (hideBlankNoteRows && Math.abs(totCy) < 1 && Math.abs(totPy) < 1) continue;
+
     // Issue 2(a) — Share Capital is a multi-table note (main amounts +
     // reconciliation of shares + shareholders >5% + promoters), so it gets a
     // dedicated builder rather than the single-table NoteRow path.
@@ -2109,7 +2142,7 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
       continue;
     }
 
-    const rows = extractNoteRows(meta.renderType, noteData, amounts, meta.fsCode, stage5Notes, expandSubGroups);
+    const rows = extractNoteRows(meta.renderType, noteData, amounts, meta.fsCode, stage5Notes, expandSubGroups, collapsedGroups);
     if (rows.length === 0) continue;
 
     // Issue 5 — every note's amount columns are headed "As on 31.03.YYYY"
