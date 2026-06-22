@@ -34,6 +34,9 @@ const GRAPH_CLIENT_ID     = Deno.env.get("GRAPH_CLIENT_ID");
 const GRAPH_CLIENT_SECRET = Deno.env.get("GRAPH_CLIENT_SECRET");
 const EMAIL_FROM          = "accounts@vjdesai.com";
 const FIRM_DISPLAY_NAME   = "V J Desai & Co. LLP";
+// Webhook integrity secret — when set, every inbound update must carry the
+// matching X-Telegram-Bot-Api-Secret-Token header (Telegram sets it for us).
+const WEBHOOK_SECRET      = Deno.env.get("TELEGRAM_WEBHOOK_SECRET") ?? "";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
@@ -42,47 +45,55 @@ const SYSTEM_PROMPT = `You are CAFlow Billing Agent, an AI assistant for \
 Indian CA firms. You help users query and manage billing data (invoices, \
 ledgers, clients, payments, receipts) via natural language.
 
-CAPABILITIES:
-- Search invoices by client name, doc number, date range, status
-- Fetch client ledgers with running balance
-- List all clients or search clients by name/PAN
-- Get outstanding/overdue invoices across all firms
-- Calculate totals, summaries, aging reports
-- Send invoice/ledger PDFs via Telegram (use send_pdf_to_telegram tool)
-- Email invoices/ledgers to clients with PDF attachments
-- Understand context — if user says 'above invoices', 'that client', \
-'same as before', use conversation history
+CAPABILITIES (every billing-module document):
+- Search/list any billing document — invoice, quotation, proforma invoice, credit note — by client, number, date, status, or type
+- Fetch client ledgers / account statements with running balance
+- List payment receipts (collections) and send a receipt voucher PDF
+- List clients or search by name/PAN; show full client details
+- Get outstanding/overdue invoices; totals, summaries, aging reports
+- Deliver ANY of these as a PDF right here in the chat (send_pdf_to_telegram)
+- Email an invoice and/or account statement to the client (send_email_with_attachments)
+- Understand context — 'above invoices', 'that client', 'same as before' → use conversation history
+
+DOCUMENT VOCABULARY (map the user's words to document_type):
+- "invoice" / "bill" / "tax invoice" → invoice
+- "quotation" / "quote" / "estimate" → quotation
+- "proforma" / "proforma invoice" / "PI" → proforma
+- "credit note" / "CN" → credit_note
+- "receipt" / "payment receipt" / "voucher" / "collection" → receipt (use document_type=receipt)
+- "ledger" / "khata" / "account statement" / "statement" / "hisaab" → ledger
 
 RULES:
-- All firms are treated as ONE unit (no firm filter)
-- Always use tools to fetch real data — never make up information
-- When user asks for PDF, USE the send_pdf_to_telegram tool
-  • If user says "ledger PDF" / "download ledger" without specifying type, ask:
+- Data is automatically limited to the firm(s) this user is authorized for — never claim to search "all firms".
+- Always use tools to fetch real data — never make up information.
+- When the user wants a PDF/file, USE send_pdf_to_telegram with the right document_type.
+  • For a specific type say "send me the quotation/proforma/credit note/receipt for X" → set document_type accordingly.
+  • If user says "ledger PDF" / "download ledger" without a type, ask:
     "Which ledger would you like?\n1️⃣ Client Ledger\n2️⃣ Group Ledger\n3️⃣ Firm Revenue Ledger\nReply 1, 2, or 3."
-    Then call send_pdf_to_telegram with ledger_type = client/group/firm_revenue accordingly
-- When user asks to EMAIL/MAIL: ALWAYS USE the send_email_with_attachments tool
-  • "mail ledger" / "send khata by email" / "account statement bhejo" → include_invoice=false, include_ledger=true
+    Then call send_pdf_to_telegram with ledger_type = client/group/firm_revenue.
+- When the user wants to EMAIL/MAIL, USE send_email_with_attachments (always delivered to the client's on-file email).
+  • "mail ledger" / "account statement bhejo" → include_invoice=false, include_ledger=true
   • "mail invoice" / "bill email karo" → include_invoice=true, include_ledger=false
   • "mail both" / "send everything" → both defaults true
-- Respond in friendly, concise format with emojis
-- Use Markdown formatting for lists and tables
-- If a client name is ambiguous, show top matches and ask user to clarify
-- NEVER say 'I did not understand' — always try to help`;
+- Respond in a friendly, concise format with emojis; use Markdown for lists/tables.
+- If a client name is ambiguous, show top matches and ask the user to clarify.
+- NEVER say 'I did not understand' — always try to help.`;
 
 // ─── Claude tool definitions (function calling) ───────────────────────────────
 const BILLING_TOOLS = [
   {
     name: "search_invoices",
-    description: "Search invoices by client name (partial match), doc number, date range, or status. Returns list of invoices.",
+    description: "Search billing documents by client name (partial match), doc number, date range, status, or document type. Returns a list with each row's document_type (invoice/quotation/proforma/credit_note). Use document_type to answer 'show me all quotations', 'list proformas', 'credit notes', etc.",
     input_schema: {
       type: "object",
       properties: {
-        client_name: { type: "string", description: "Partial client name" },
-        doc_no:      { type: "string", description: "Invoice/document number (partial match ok)" },
-        date_from:   { type: "string", description: "Start date YYYY-MM-DD" },
-        date_to:     { type: "string", description: "End date YYYY-MM-DD" },
-        status:      { type: "string", enum: ["draft", "finalized", "sent", "paid", "overdue"] },
-        limit:       { type: "number", description: "Max results (default 20)" },
+        client_name:   { type: "string", description: "Partial client name" },
+        doc_no:        { type: "string", description: "Invoice/document number (partial match ok)" },
+        date_from:     { type: "string", description: "Start date YYYY-MM-DD" },
+        date_to:       { type: "string", description: "End date YYYY-MM-DD" },
+        status:        { type: "string", enum: ["draft", "finalized", "sent", "paid", "overdue"] },
+        document_type: { type: "string", enum: ["invoice", "quotation", "proforma", "credit_note"], description: "Filter to a specific document type" },
+        limit:         { type: "number", description: "Max results (default 20)" },
       },
       required: [],
     },
@@ -140,23 +151,37 @@ const BILLING_TOOLS = [
     },
   },
   {
-    name: "send_pdf_to_telegram",
-    description: `Generate and send PDF files directly to the Telegram chat. Use when user asks for PDF.
-For ledger PDFs, ledger_type specifies which ledger to generate:
-  - "client"       → client account statement (requires client_name)
-  - "group"        → group/consolidated ledger across clients in a group (requires group_name or client_name)
-  - "firm_revenue" → firm-wide income/revenue summary for the FY
-If user says "download ledger" / "ledger PDF" without specifying type, ask: "Which ledger type?\\n1. Client Ledger\\n2. Group Ledger\\n3. Firm Revenue Ledger\\nReply 1, 2, or 3."`,
+    name: "get_receipts",
+    description: "List payment receipts (collections / payments received). Filter by client and/or date range. Use for 'payments received', 'receipts', 'collections', 'kitna mila' type queries. To send a receipt as a PDF, use send_pdf_to_telegram with document_type='receipt'.",
     input_schema: {
       type: "object",
       properties: {
-        document_type: { type: "string", enum: ["invoice", "ledger"], description: "Type of PDF to generate" },
-        ledger_type:   { type: "string", enum: ["client", "group", "firm_revenue"],
-                         description: "For ledger PDFs: client | group | firm_revenue" },
-        invoice_ids:   { type: "array",  items: { type: "string" }, description: "Specific invoice UUIDs to generate PDFs for" },
-        client_name:   { type: "string", description: "Client name — used when no invoice_ids provided" },
-        group_name:    { type: "string", description: "Group name for group ledger" },
-        doc_no:        { type: "string", description: "Invoice doc number (partial match ok)" },
+        client_name: { type: "string", description: "Filter to a specific client (optional)" },
+        date_from:   { type: "string", description: "Start date YYYY-MM-DD (optional)" },
+        date_to:     { type: "string", description: "End date YYYY-MM-DD (optional)" },
+        limit:       { type: "number", description: "Max results (default 20)" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "send_pdf_to_telegram",
+    description: `Generate and send a PDF document directly into the Telegram chat. Use whenever the user asks for a PDF / file / "bhejo" / "download".
+document_type selects what to generate:
+  - "invoice" / "quotation" / "proforma" / "credit_note" → that billing document (locate by doc_no, invoice_ids, or latest for client_name)
+  - "receipt" → a payment-receipt voucher (locate by client_name = latest receipt, or limit for more)
+  - "ledger" → an account statement; ledger_type = client | group | firm_revenue
+For ledgers: "client" (account statement, needs client_name), "group" (consolidated across a client group, needs group_name/client_name), "firm_revenue" (firm income summary for the FY). If the user just says "ledger PDF" without a type, ask which of the three they want.`,
+    input_schema: {
+      type: "object",
+      properties: {
+        document_type: { type: "string", enum: ["invoice", "quotation", "proforma", "credit_note", "receipt", "ledger"], description: "What kind of PDF to generate" },
+        ledger_type:   { type: "string", enum: ["client", "group", "firm_revenue"], description: "For document_type=ledger only" },
+        invoice_ids:   { type: "array",  items: { type: "string" }, description: "Specific document UUIDs (invoice family)" },
+        client_name:   { type: "string", description: "Client name — used when no invoice_ids provided, and for receipts" },
+        group_name:    { type: "string", description: "Group name for a group ledger" },
+        doc_no:        { type: "string", description: "Document number (partial match ok) for the invoice family" },
+        limit:         { type: "number", description: "For receipts: how many recent receipts to send (default 1, max 5)" },
         financial_year: { type: "string", description: "FY e.g. 2026-27 (optional, defaults to current FY)" },
       },
       required: ["document_type"],
@@ -169,15 +194,14 @@ USAGE RULES:
 - User says "mail ledger / send ledger / email khata / account statement bhejo" → set include_invoice=false, include_ledger=true
 - User says "mail invoice / send invoice / email bill" → set include_invoice=true, include_ledger=false
 - User says "mail everything / send both / invoice aur ledger" → use defaults (both true)
-- Always try to resolve client email from DB; use email_to only if user explicitly provides one`,
+- Email is ALWAYS sent to the client's on-file address (for security, an arbitrary recipient cannot be specified). If the user wants a personal copy, use send_pdf_to_telegram to deliver the PDF in the chat instead.`,
     input_schema: {
       type: "object",
       properties: {
-        client_name:     { type: "string",  description: "Client name to send email to" },
+        client_name:     { type: "string",  description: "Client name to send email to (delivered to the client's on-file email)" },
         invoice_doc_no:  { type: "string",  description: "Invoice doc number to attach (partial match ok). Only needed when include_invoice=true." },
         include_invoice: { type: "boolean", description: "Attach invoice PDF. Set false for ledger-only requests. Default true." },
         include_ledger:  { type: "boolean", description: "Attach current-FY ledger PDF. Set false for invoice-only requests. Default true." },
-        email_to:        { type: "string",  description: "Override recipient email address (optional — use only when user provides explicit email)" },
       },
       required: ["client_name"],
     },
@@ -256,6 +280,117 @@ async function tgApiCall(method: string, params: Record<string, unknown> = {}): 
 
 const WEBHOOK_URL = "https://hubyywmodekfdzhwiumb.supabase.co/functions/v1/telegram-bot";
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// ACCESS CONTROL — allowlist + per-firm scoping
+// CAFlow is multi-tenant: every data query MUST be scoped to the firms the
+// authorized Telegram user may access. Service-role bypasses RLS, so scoping
+// is enforced here in code. Unknown Telegram users are denied (fail-closed).
+// ═══════════════════════════════════════════════════════════════════════════════
+interface AuthContext {
+  telegramUserId: number;
+  chatId:         number;
+  appUserId:      string | null;
+  firmIds:        string[];     // firms this user may read; ignored when isSuperadmin
+  isSuperadmin:   boolean;      // bypasses the firm filter entirely
+}
+
+const NO_FIRM = "00000000-0000-0000-0000-000000000000";   // sentinel → matches nothing
+
+/** Resolve a Telegram user to an authorized CAFlow identity + accessible firms.
+ *  Returns null when the user is NOT on the allowlist or is deactivated. */
+async function resolveAuth(telegramUserId: number, chatId: number): Promise<AuthContext | null> {
+  let row: any = null;
+  try {
+    const { data } = await supabase
+      .from("telegram_authorized_users")
+      .select("id, firm_id, user_id, is_active")
+      .eq("telegram_user_id", telegramUserId)
+      .maybeSingle();
+    row = data ?? null;
+  } catch {
+    return null;                       // table missing / error → deny
+  }
+  if (!row || row.is_active === false) return null;
+
+  const firmIds = new Set<string>();
+  if (row.firm_id) firmIds.add(row.firm_id);
+  let isSuperadmin = false;
+
+  if (row.user_id) {
+    try {
+      const { data: u } = await supabase.from("users")
+        .select("role, firm_id").eq("id", row.user_id).maybeSingle();
+      if (u?.role === "superadmin") isSuperadmin = true;
+      if (u?.firm_id) firmIds.add(u.firm_id);
+    } catch { /* non-fatal */ }
+    try {
+      const { data: grants } = await supabase.from("user_firm_access")
+        .select("firm_id").eq("user_id", row.user_id).eq("can_view", true);
+      for (const g of grants ?? []) if (g.firm_id) firmIds.add(g.firm_id);
+    } catch { /* non-fatal */ }
+  }
+
+  // Best-effort activity stamp — never blocks the request.
+  supabase.from("telegram_authorized_users")
+    .update({ last_used_at: new Date().toISOString(), telegram_chat_id: chatId })
+    .eq("telegram_user_id", telegramUserId)
+    .then(() => {}, () => {});
+
+  return {
+    telegramUserId,
+    chatId,
+    appUserId:    row.user_id ?? null,
+    firmIds:      [...firmIds],
+    isSuperadmin,
+  };
+}
+
+/** Self-enrollment via "/start link_<token>". The admin generates the single-use,
+ *  1-hour token in the portal (telegram_link_tokens). Returns the new AuthContext. */
+async function enrollViaToken(
+  token: string, tgUserId: number, chatId: number,
+  username: string | null, firstName: string | null,
+): Promise<AuthContext | null> {
+  let tk: any = null;
+  try {
+    const { data } = await supabase.from("telegram_link_tokens")
+      .select("id, firm_id, user_id, used, expires_at")
+      .eq("token", token).maybeSingle();
+    tk = data ?? null;
+  } catch { return null; }
+  if (!tk || tk.used) return null;
+  if (tk.expires_at && new Date(tk.expires_at) < new Date()) return null;
+
+  await supabase.from("telegram_authorized_users").upsert({
+    telegram_user_id:    tgUserId,
+    telegram_chat_id:    chatId,
+    telegram_username:   username,
+    telegram_first_name: firstName,
+    firm_id:             tk.firm_id,
+    user_id:             tk.user_id,
+    is_active:           true,
+    linked_at:           new Date().toISOString(),
+  }, { onConflict: "telegram_user_id" });
+  await supabase.from("telegram_link_tokens").update({ used: true }).eq("id", tk.id);
+
+  return await resolveAuth(tgUserId, chatId);
+}
+
+/** Apply the per-firm filter to a Supabase query builder (no-op for superadmin).
+ *  A non-superadmin with zero firms matches NOTHING (fail-closed). */
+function scopeFirm<T>(query: T, auth: AuthContext): T {
+  if (auth.isSuperadmin) return query;
+  const ids = auth.firmIds.length ? auth.firmIds : [NO_FIRM];
+  // @ts-ignore — supabase-js query builder is chainable
+  return query.in("firm_id", ids);
+}
+
+/** Display a clients.gstin value (stored as text[] in this schema). */
+function fmtGstin(g: any): string | null {
+  if (Array.isArray(g)) { const v = g.filter(Boolean); return v.length ? v.join(", ") : null; }
+  return g ?? null;
+}
+
 // ─── Main Serve ───────────────────────────────────────────────────────────────
 Deno.serve(async (req: Request) => {
   // Health check + webhook status/setup
@@ -274,6 +409,9 @@ Deno.serve(async (req: Request) => {
         url: WEBHOOK_URL,
         allowed_updates: ["message", "callback_query"],
         drop_pending_updates: true,
+        // Telegram echoes this back in X-Telegram-Bot-Api-Secret-Token on every
+        // update, letting us reject forged webhook calls.
+        ...(WEBHOOK_SECRET ? { secret_token: WEBHOOK_SECRET } : {}),
       });
       return new Response(
         JSON.stringify({
@@ -300,6 +438,15 @@ Deno.serve(async (req: Request) => {
     );
   }
 
+  // ── Webhook integrity: reject forged updates (non-Telegram callers) ─────────
+  if (WEBHOOK_SECRET) {
+    const got = req.headers.get("x-telegram-bot-api-secret-token");
+    if (got !== WEBHOOK_SECRET) {
+      console.warn("[Bot] Rejected webhook: missing/invalid secret token");
+      return new Response("forbidden", { status: 401 });
+    }
+  }
+
   let body: any;
   try { body = await req.json(); }
   catch { return new Response("ok"); }
@@ -311,6 +458,8 @@ Deno.serve(async (req: Request) => {
   const userId   = message.from.id;
   const text     = message.text.trim();
   const updateId: number = body.update_id ?? 0;
+  const username:  string | null = message.from.username   ?? null;
+  const firstName: string | null = message.from.first_name ?? null;
 
   console.log(`[Bot] Message from ${message.from.first_name ?? "?"} (${userId}): ${text.slice(0, 80)}`);
 
@@ -342,17 +491,37 @@ Deno.serve(async (req: Request) => {
     } catch { /* non-fatal — proceed anyway */ }
   }
 
-  // ONLY /start bypasses Claude — simple welcome, nothing else
-  if (text === "/start") {
-    await sendTelegram(chatId,
-      "Welcome to CAFlow Billing Agent! Ask me anything about invoices, " +
-      "ledgers, clients, payments, or emails. I understand natural language."
-    );
+  // ── /start [link_<token>] — welcome + optional self-enrollment ─────────────
+  if (text === "/start" || text.startsWith("/start ")) {
+    const payload = text.slice(6).trim();                 // text after "/start"
+    if (payload.startsWith("link_")) {
+      const enrolled = await enrollViaToken(payload.slice(5), userId, chatId, username, firstName);
+      await sendTelegram(chatId, enrolled
+        ? "✅ Your account is now linked to CAFlow Billing.\n\nYou can ask me for any invoice, " +
+          "quotation, proforma, credit note, payment receipt, or ledger. Just type your request."
+        : "⛔ That access link is invalid or has expired. Please ask your CAFlow administrator for a new link.");
+      return new Response("ok");
+    }
+    const known = await resolveAuth(userId, chatId);
+    await sendTelegram(chatId, known
+      ? "👋 Welcome back to CAFlow Billing Agent! Ask me for any invoice, quotation, proforma, " +
+        "credit note, receipt, or ledger."
+      : "⛔ This bot is restricted to authorized CAFlow staff.\n\nPlease ask your administrator for a " +
+        "secure access link to get started.");
     return new Response("ok");
   }
 
-  // EVERYTHING ELSE → Claude API (no exceptions, no keyword shortcuts)
-  await handleWithClaude(chatId, userId, text);
+  // ── Authorization gate: only allow-listed Telegram users may proceed ───────
+  const auth = await resolveAuth(userId, chatId);
+  if (!auth) {
+    await sendTelegram(chatId,
+      "⛔ You are not authorized to use this bot.\n\nThis assistant is restricted to authorized CAFlow " +
+      "staff. If you should have access, ask your administrator for a secure access link.");
+    return new Response("ok");
+  }
+
+  // EVERYTHING ELSE → Claude API (firm-scoped to this user)
+  await handleWithClaude(chatId, userId, text, auth);
   return new Response("ok");
 });
 
@@ -401,7 +570,7 @@ async function claudeFetch(url: string, init: RequestInit, maxRetries = 3): Prom
 }
 
 // ─── handleWithClaude — full Claude tool-use loop ──────────────────────────────
-async function handleWithClaude(chatId: number, userId: number, userText: string): Promise<void> {
+async function handleWithClaude(chatId: number, userId: number, userText: string, auth: AuthContext): Promise<void> {
   if (!ANTHROPIC_API_KEY) {
     await sendMsg(chatId, "⚠️ AI service unavailable\\. Please try again later\\.");
     return;
@@ -460,7 +629,7 @@ async function handleWithClaude(chatId: number, userId: number, userText: string
         console.log(`[Bot] Tool call: ${tu.name}`, JSON.stringify(tu.input).slice(0, 200));
         let result: any;
         try {
-          result = await executeTool(tu.name, tu.input as Record<string, any>, chatId);
+          result = await executeTool(tu.name, tu.input as Record<string, any>, chatId, auth);
         } catch (e: unknown) {
           result = { error: e instanceof Error ? e.message : String(e) };
         }
@@ -1114,29 +1283,36 @@ async function executeTool(
   name: string,
   input: Record<string, any>,
   chatId: number,
+  auth: AuthContext,
 ): Promise<any> {
   switch (name) {
-    case "search_invoices":           return await searchInvoices(input);
-    case "get_ledger":                return await getLedger(input);
-    case "list_clients":              return await listClients(input);
-    case "get_outstanding_invoices":  return await getOutstanding(input);
-    case "get_billing_summary":       return await getSummary(input);
-    case "send_pdf_to_telegram":      return await sendPdfToTelegram(chatId, input);
-    case "send_email_with_attachments": return await sendEmailWithAttachments(chatId, input);
-    case "get_client_details":        return await getClientDetails(input);
+    case "search_invoices":           return await searchInvoices(input, auth);
+    case "get_ledger":                return await getLedger(input, auth);
+    case "list_clients":              return await listClients(input, auth);
+    case "get_outstanding_invoices":  return await getOutstanding(input, auth);
+    case "get_billing_summary":       return await getSummary(input, auth);
+    case "get_receipts":              return await getReceipts(input, auth);
+    case "send_pdf_to_telegram":      return await sendPdfToTelegram(chatId, input, auth);
+    case "send_email_with_attachments": return await sendEmailWithAttachments(chatId, input, auth);
+    case "get_client_details":        return await getClientDetails(input, auth);
     default:                          return { error: `Unknown tool: ${name}` };
   }
 }
 
 // ─── searchInvoices ───────────────────────────────────────────────────────────
-async function searchInvoices(input: Record<string, any>): Promise<any> {
+async function searchInvoices(input: Record<string, any>, auth: AuthContext): Promise<any> {
   let query = supabase
     .from("invoices")
     .select("id,invoice_no,client_id,to_name,document_type,status,invoice_date,due_date,paid_at,amount,gst_amount,total_amount,subject")
     .order("invoice_date", { ascending: false });
+  query = scopeFirm(query, auth);
+
+  // Optional document_type filter (invoice | quotation | proforma | credit_note)
+  if (input.document_type)
+    query = query.eq("document_type", input.document_type);
 
   if (input.client_name) {
-    const ids = await searchClientIds(input.client_name);
+    const ids = await searchClientIds(input.client_name, auth);
     if (ids.length) query = query.in("client_id", ids);
     else            query = query.ilike("to_name", `%${input.client_name}%`);
   }
@@ -1183,13 +1359,15 @@ async function searchInvoices(input: Record<string, any>): Promise<any> {
 }
 
 // ─── getLedger ────────────────────────────────────────────────────────────────
-async function getLedger(input: Record<string, any>): Promise<any> {
+async function getLedger(input: Record<string, any>, auth: AuthContext): Promise<any> {
   if (!input.client_name) return { error: "client_name is required" };
 
-  const { data: clients } = await supabase
+  let clientQ = supabase
     .from("clients").select("id,name,email")
     .ilike("name", `%${input.client_name}%`)
-    .eq("is_draft", false).is("deleted_at", null).limit(3);
+    .eq("is_draft", false).is("deleted_at", null);
+  clientQ = scopeFirm(clientQ, auth);
+  const { data: clients } = await clientQ.limit(3);
 
   if (!clients?.length) return { error: `Client '${input.client_name}' not found` };
 
@@ -1198,6 +1376,7 @@ async function getLedger(input: Record<string, any>): Promise<any> {
     .from("client_ledger_entries").select("*")
     .eq("client_id", client.id)
     .order("entry_date", { ascending: true });
+  ledgerQ = scopeFirm(ledgerQ, auth);
 
   if (input.date_from) ledgerQ = ledgerQ.gte("entry_date", input.date_from);
   if (input.date_to)   ledgerQ = ledgerQ.lte("entry_date", input.date_to);
@@ -1230,11 +1409,12 @@ async function getLedger(input: Record<string, any>): Promise<any> {
 }
 
 // ─── listClients ──────────────────────────────────────────────────────────────
-async function listClients(input: Record<string, any>): Promise<any> {
+async function listClients(input: Record<string, any>, auth: AuthContext): Promise<any> {
   let query = supabase
-    .from("clients").select("id,name,email,pan,gstin,phone")
+    .from("clients").select("id,name,email,pan,gstin,mobile")
     .eq("is_draft", false).is("deleted_at", null)
     .order("name", { ascending: true });
+  query = scopeFirm(query, auth);
 
   if (input.search)
     query = query.or(`name.ilike.%${input.search}%,pan.ilike.%${input.search}%`);
@@ -1245,13 +1425,13 @@ async function listClients(input: Record<string, any>): Promise<any> {
   return {
     count:   data?.length ?? 0,
     clients: (data ?? []).map(c => ({
-      id: c.id, name: c.name, email: c.email, pan: c.pan, gstin: c.gstin, phone: c.phone,
+      id: c.id, name: c.name, email: c.email, pan: c.pan, gstin: fmtGstin(c.gstin), phone: c.mobile,
     })),
   };
 }
 
 // ─── getOutstanding ───────────────────────────────────────────────────────────
-async function getOutstanding(input: Record<string, any>): Promise<any> {
+async function getOutstanding(input: Record<string, any>, auth: AuthContext): Promise<any> {
   const today    = new Date();
   const todayStr = today.toISOString().split("T")[0];
 
@@ -1260,6 +1440,7 @@ async function getOutstanding(input: Record<string, any>): Promise<any> {
     .select("id,invoice_no,client_id,to_name,invoice_date,due_date,status,amount,total_amount")
     .in("status", ["finalized", "sent"])
     .order("due_date", { ascending: true, nullsFirst: false });
+  query = scopeFirm(query, auth);
 
   // overdue_only → only invoices past their due date
   if (input.overdue_only)
@@ -1267,7 +1448,7 @@ async function getOutstanding(input: Record<string, any>): Promise<any> {
 
   // optional client filter
   if (input.client_name) {
-    const ids = await searchClientIds(input.client_name);
+    const ids = await searchClientIds(input.client_name, auth);
     if (ids.length) query = query.in("client_id", ids);
     else            query = query.ilike("to_name", `%${input.client_name}%`);
   }
@@ -1330,12 +1511,13 @@ function parsePeriod(period: string | undefined): { dateFrom: string | null; dat
   return { dateFrom: null, dateTo: null, label: period };
 }
 
-async function getSummary(input: Record<string, any>): Promise<any> {
+async function getSummary(input: Record<string, any>, auth: AuthContext): Promise<any> {
   const { dateFrom, dateTo, label } = parsePeriod(input.period);
 
   let query = supabase
     .from("invoices")
     .select("id,status,amount,total_amount,due_date,invoice_date,paid_at,document_type");
+  query = scopeFirm(query, auth);
   if (dateFrom) query = query.gte("invoice_date", dateFrom);
   if (dateTo)   query = query.lte("invoice_date", dateTo);
 
@@ -1369,8 +1551,9 @@ async function getSummary(input: Record<string, any>): Promise<any> {
 // Delivery strategy (Phase 4):
 //   Primary  → upload to Supabase Storage "documents" bucket → Telegram URL
 //   Fallback → multipart FormData bytes (works without a public bucket)
-async function sendPdfToTelegram(chatId: number, input: Record<string, any>): Promise<any> {
+async function sendPdfToTelegram(chatId: number, input: Record<string, any>, auth: AuthContext): Promise<any> {
   const docType: string = input.document_type ?? "invoice";
+  const INVOICE_FAMILY = ["invoice", "quotation", "proforma", "credit_note"];
 
   // ── Shared delivery helper ─────────────────────────────────────────────────
   async function deliverPdf(pdfBytes: Uint8Array, filename: string, caption: string): Promise<void> {
@@ -1438,22 +1621,26 @@ async function sendPdfToTelegram(chatId: number, input: Record<string, any>): Pr
     if (ledgerType === "client") {
       if (!input.client_name) return { error: "client_name is required for client ledger PDF" };
 
-      // Find client
-      const { data: clients } = await supabase.from("clients")
+      // Find client (firm-scoped)
+      let cQ = supabase.from("clients")
         .select("id,name").ilike("name", `%${input.client_name}%`)
-        .eq("is_draft", false).is("deleted_at", null).limit(1);
+        .eq("is_draft", false).is("deleted_at", null);
+      cQ = scopeFirm(cQ, auth);
+      const { data: clients } = await cQ.limit(1);
       if (!clients?.length)
         return { error: `Client '${input.client_name}' not found.` };
 
       const client = clients[0];
       // Fetch ALL ledger entries for the FY (not capped at 15)
-      const { data: allEntries } = await supabase
+      let leQ = supabase
         .from("client_ledger_entries")
         .select("*")
         .eq("client_id", client.id)
         .gte("entry_date", fyStart)
         .lte("entry_date", fyEnd)
         .order("entry_date", { ascending: true });
+      leQ = scopeFirm(leQ, auth);
+      const { data: allEntries } = await leQ;
 
       const entries = allEntries ?? [];
       const safeClient = client.name.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 30);
@@ -1484,22 +1671,27 @@ async function sendPdfToTelegram(chatId: number, input: Record<string, any>): Pr
         resolvedGroupName = groupRows[0].name;
         clientIds = Array.isArray(groupRows[0].client_ids) ? groupRows[0].client_ids : [];
       }
-      // Fallback: find clients whose name matches
+      // Fallback: find clients whose name matches (firm-scoped)
       if (!clientIds.length) {
-        const { data: matchedClients } = await supabase.from("clients")
+        let mcQ = supabase.from("clients")
           .select("id,name").ilike("name", `%${groupName}%`)
-          .eq("is_draft", false).is("deleted_at", null).limit(10);
+          .eq("is_draft", false).is("deleted_at", null);
+        mcQ = scopeFirm(mcQ, auth);
+        const { data: matchedClients } = await mcQ.limit(10);
         clientIds = (matchedClients ?? []).map((c: any) => c.id);
       }
       if (!clientIds.length) return { error: `No clients found for group '${groupName}'.` };
 
-      const { data: allEntries } = await supabase
+      // Ledger entries are firm-scoped so a cross-firm group cannot leak data.
+      let geQ = supabase
         .from("client_ledger_entries")
         .select("*")
         .in("client_id", clientIds)
         .gte("entry_date", fyStart)
         .lte("entry_date", fyEnd)
         .order("entry_date", { ascending: true });
+      geQ = scopeFirm(geQ, auth);
+      const { data: allEntries } = await geQ;
 
       const entries = allEntries ?? [];
       await sendTelegram(chatId, `⏳ Generating group ledger PDF for ${resolvedGroupName} (${clientIds.length} clients, ${entries.length} entries, FY ${fyLabel})…`);
@@ -1512,13 +1704,15 @@ async function sendPdfToTelegram(chatId: number, input: Record<string, any>): Pr
 
     // ── FIRM REVENUE LEDGER ─────────────────────────────────────────────────
     if (ledgerType === "firm_revenue") {
-      const { data: invoices } = await supabase
+      let frQ = supabase
         .from("invoices")
         .select("invoice_no,invoice_date,to_name,total_amount,gst_amount,amount,status")
         .neq("status", "draft")
         .gte("invoice_date", fyStart)
         .lte("invoice_date", fyEnd)
         .order("invoice_date", { ascending: true });
+      frQ = scopeFirm(frQ, auth);
+      const { data: invoices } = await frQ;
 
       const invList = invoices ?? [];
       // Build synthetic ledger entries from invoices
@@ -1543,29 +1737,74 @@ async function sendPdfToTelegram(chatId: number, input: Record<string, any>): Pr
     return { error: "Invalid ledger_type. Use: client | group | firm_revenue" };
   }
 
-  // ── Invoice PDF(s) ─────────────────────────────────────────────────────────
+  // ── Receipt PDF(s) ─────────────────────────────────────────────────────────
+  if (docType === "receipt") {
+    let recQ = supabase.from("billing_receipts").select("*")
+      .order("receipt_date", { ascending: false });
+    recQ = scopeFirm(recQ, auth);
+    if (input.client_name) {
+      const ids = await searchClientIds(input.client_name, auth);
+      if (!ids.length) return { error: `Client '${input.client_name}' not found.` };
+      recQ = recQ.in("client_id", ids);
+    }
+    const { data: receipts } = await recQ.limit(Math.min(input.limit ?? 1, 5));
+    if (!receipts?.length) return { error: "No payment receipts found matching the criteria." };
+
+    await sendTelegram(chatId, `⏳ Generating ${receipts.length} receipt PDF${receipts.length > 1 ? "s" : ""}…`);
+    const sentR: string[] = [];
+    for (const rec of receipts) {
+      let clientName = "Client";
+      if (rec.client_id) {
+        const { data: cl } = await supabase.from("clients").select("name").eq("id", rec.client_id).maybeSingle();
+        if (cl?.name) clientName = cl.name;
+      }
+      let invoiceNo: string | null = null;
+      if (rec.invoice_id) {
+        const { data: iv } = await supabase.from("invoices").select("invoice_no").eq("id", rec.invoice_id).maybeSingle();
+        invoiceNo = iv?.invoice_no ?? null;
+      }
+      const firm     = await fetchFirmById(rec.firm_id);
+      const pdfBytes = await generateReceiptPdf(rec, clientName, firm?.name ?? FIRM_DISPLAY_NAME, invoiceNo);
+      const caption  = `🧾 Receipt | ${clientName}\nRs.${fmtNum(rec.amount_received ?? 0)} • ${capitalize(rec.payment_mode ?? "")} • ${fmtDate(rec.receipt_date)}`;
+      await deliverPdf(pdfBytes, `Receipt_${clientName.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 24)}_${fmtDateDMY(rec.receipt_date).replace(/\//g, "-")}.pdf`, caption);
+      sentR.push(rec.id);
+    }
+    return { ok: true, document_type: "receipt", sent_receipts: sentR.length };
+  }
+
+  // ── Invoice-family PDF(s): invoice | quotation | proforma | credit_note ─────
   let invoices: any[] = [];
+  // When a specific non-invoice type is requested via client lookup, filter by it.
+  const familyType = INVOICE_FAMILY.includes(docType) ? docType : "invoice";
 
   if (input.invoice_ids?.length) {
-    const { data } = await supabase.from("invoices").select("*").in("id", input.invoice_ids);
+    let q = supabase.from("invoices").select("*").in("id", input.invoice_ids);
+    q = scopeFirm(q, auth);
+    const { data } = await q;
     invoices = data ?? [];
   } else if (input.doc_no) {
-    const { data } = await supabase.from("invoices").select("*")
-      .ilike("invoice_no", `%${input.doc_no}%`).limit(3);
+    let q = supabase.from("invoices").select("*").ilike("invoice_no", `%${input.doc_no}%`);
+    q = scopeFirm(q, auth);
+    const { data } = await q.limit(3);
     invoices = data ?? [];
   } else if (input.client_name) {
-    const ids = await searchClientIds(input.client_name);
+    const ids = await searchClientIds(input.client_name, auth);
     if (ids.length) {
-      const { data } = await supabase.from("invoices").select("*")
+      let q = supabase.from("invoices").select("*")
         .in("client_id", ids).neq("status", "draft")
+        .eq("document_type", familyType)
         .order("invoice_date", { ascending: false }).limit(3);
+      q = scopeFirm(q, auth);
+      const { data } = await q;
       invoices = data ?? [];
     }
   }
 
-  if (!invoices.length) return { error: "No invoices found matching the criteria." };
+  if (!invoices.length) return { error: "No matching documents found." };
 
-  await sendTelegram(chatId, `⏳ Generating ${invoices.length} invoice PDF${invoices.length > 1 ? "s" : ""}…`);
+  const labelOf = (dt: string) =>
+    ({ invoice: "Invoice", quotation: "Quotation", proforma: "Proforma Invoice", credit_note: "Credit Note" } as Record<string, string>)[dt] ?? "Invoice";
+  await sendTelegram(chatId, `⏳ Generating ${invoices.length} ${labelOf(familyType)} PDF${invoices.length > 1 ? "s" : ""}…`);
 
   const sent: string[] = [];
   for (const inv of invoices) {
@@ -1576,35 +1815,39 @@ async function sendPdfToTelegram(chatId: number, input: Record<string, any>): Pr
       if (cl?.name) clientName = cl.name;
     }
 
+    const lbl       = labelOf(inv.document_type ?? "invoice");
     const firmName  = inv.from_firm_name ?? FIRM_DISPLAY_NAME;
     const invFirm   = await fetchFirmForInvoice(inv);
     const pdfBytes  = await generateInvoicePdf(inv, firmName, clientName, invFirm ?? undefined);
-    const safeNo    = (inv.invoice_no ?? "invoice").replace(/\//g, "-");
-    const caption  = `📄 Invoice ${inv.invoice_no ?? ""} | ${clientName}\n` +
+    const safeNo    = (inv.invoice_no ?? "doc").replace(/\//g, "-");
+    const caption  = `📄 ${lbl} ${inv.invoice_no ?? ""} | ${clientName}\n` +
                      `Rs.${fmtNum(inv.total_amount ?? inv.amount ?? 0)} | ${capitalize(inv.status ?? "draft")} | ${fmtDate(inv.invoice_date)}`;
 
-    await deliverPdf(pdfBytes, `Invoice_${safeNo}.pdf`, caption);
+    await deliverPdf(pdfBytes, `${lbl.replace(/\s+/g, "")}_${safeNo}.pdf`, caption);
     sent.push(inv.invoice_no ?? inv.id);
   }
 
-  return { ok: true, document_type: "invoice", sent_invoices: sent };
+  return { ok: true, document_type: familyType, sent_invoices: sent };
 }
 
 // ─── sendEmailWithAttachments ─────────────────────────────────────────────────
-async function sendEmailWithAttachments(chatId: number, input: Record<string, any>): Promise<any> {
+async function sendEmailWithAttachments(chatId: number, input: Record<string, any>, auth: AuthContext): Promise<any> {
   if (!input.client_name) return { error: "client_name is required" };
 
-  // ── 1. Resolve client ──────────────────────────────────────────────────────
-  const { data: clients } = await supabase.from("clients").select("id,name,email")
-    .ilike("name", `%${input.client_name}%`).limit(1);
+  // ── 1. Resolve client (firm-scoped) ─────────────────────────────────────────
+  let cQ = supabase.from("clients").select("id,name,email").ilike("name", `%${input.client_name}%`);
+  cQ = scopeFirm(cQ, auth);
+  const { data: clients } = await cQ.limit(1);
   if (!clients?.length)
     return { error: `Client '${input.client_name}' not found. Please check the name and try again.` };
-  if (!clients[0].email && !input.email_to)
-    return { error: `No email address on file for '${clients[0].name}'. Please update client details in the portal, or specify an email address.` };
+  // SECURITY: email is ALWAYS sent to the client's on-file address. A chat-supplied
+  // destination is NOT honored — this closes the arbitrary-recipient exfiltration path.
+  if (!clients[0].email)
+    return { error: `No email address on file for '${clients[0].name}'. Please add it in the CAFlow portal first. (For a personal copy, ask me to send the PDF here in the chat instead.)` };
 
   const clientId       = clients[0].id;
   const clientName     = clients[0].name ?? "Client";
-  const recipientEmail = input.email_to ?? clients[0].email;
+  const recipientEmail = clients[0].email;
 
   const includeInvoice = input.include_invoice !== false;  // default true
   const includeLedger  = input.include_ledger  !== false;  // default true
@@ -1612,12 +1855,12 @@ async function sendEmailWithAttachments(chatId: number, input: Record<string, an
   // ── 2. Resolve invoice (best-effort — skipped if not found) ───────────────
   let inv: any = null;
   if (includeInvoice) {
-    const invQ = supabase.from("invoices").select("*")
+    let invQ = supabase.from("invoices").select("*")
+      .eq("client_id", clientId)
       .neq("status", "draft").order("invoice_date", { ascending: false }).limit(1);
-    const { data: invData } = await (input.invoice_doc_no
-      ? invQ.ilike("invoice_no", `%${input.invoice_doc_no}%`)
-      : invQ.eq("client_id", clientId)
-    ).maybeSingle();
+    invQ = scopeFirm(invQ, auth);
+    if (input.invoice_doc_no) invQ = invQ.ilike("invoice_no", `%${input.invoice_doc_no}%`);
+    const { data: invData } = await invQ.maybeSingle();
     inv = invData ?? null;
     // Not fatal — if invoice not found we still send the ledger
     if (!inv) console.warn(`[Bot] sendEmail: no invoice found for '${clientName}' — skipping invoice attachment`);
@@ -1633,9 +1876,11 @@ async function sendEmailWithAttachments(chatId: number, input: Record<string, an
   // ── 3. Fetch ALL ledger entries (complete account statement) ───────────────
   let ledgerEntries: any[] = [];
   if (includeLedger) {
-    const { data: le } = await supabase.from("client_ledger_entries").select("*")
+    let leQ = supabase.from("client_ledger_entries").select("*")
       .eq("client_id", clientId)
       .order("entry_date", { ascending: true });
+    leQ = scopeFirm(leQ, auth);
+    const { data: le } = await leQ;
     ledgerEntries = le ?? [];
   }
 
@@ -1760,26 +2005,29 @@ async function sendEmailWithAttachments(chatId: number, input: Record<string, an
 }
 
 // ─── getClientDetails ─────────────────────────────────────────────────────────
-async function getClientDetails(input: Record<string, any>): Promise<any> {
+async function getClientDetails(input: Record<string, any>, auth: AuthContext): Promise<any> {
   if (!input.client_name) return { error: "client_name is required" };
 
-  const { data: clients } = await supabase
+  let cQ = supabase
     .from("clients")
-    .select("id,name,email,phone,pan,gstin,address,city,state,pincode,contact_person,notes,created_at")
+    .select("id,name,email,mobile,pan,gstin,address,registered_office,registered_state,contact_person,created_at")
     .ilike("name", `%${input.client_name}%`)
-    .eq("is_draft", false).is("deleted_at", null).limit(3);
+    .eq("is_draft", false).is("deleted_at", null);
+  cQ = scopeFirm(cQ, auth);
+  const { data: clients } = await cQ.limit(3);
 
   if (!clients?.length) return { error: `Client '${input.client_name}' not found` };
 
   const client = clients[0];
 
-  // Recent invoice summary for this client
-  const { data: invoices } = await supabase
+  // Recent invoice summary for this client (firm-scoped)
+  let invQ = supabase
     .from("invoices")
     .select("id,invoice_no,status,amount,total_amount,invoice_date,due_date,paid_at")
     .eq("client_id", client.id)
-    .order("invoice_date", { ascending: false })
-    .limit(5);
+    .order("invoice_date", { ascending: false });
+  invQ = scopeFirm(invQ, auth);
+  const { data: invoices } = await invQ.limit(5);
 
   const today       = new Date();
   const all         = invoices ?? [];
@@ -1791,12 +2039,11 @@ async function getClientDetails(input: Record<string, any>): Promise<any> {
     id:             client.id,
     name:           client.name,
     email:          client.email,
-    phone:          client.phone,
+    phone:          client.mobile,
     pan:            client.pan,
-    gstin:          client.gstin,
-    address:        [client.address, client.city, client.state, client.pincode].filter(Boolean).join(", "),
+    gstin:          fmtGstin(client.gstin),
+    address:        [client.address, client.registered_office, client.registered_state].filter(Boolean).join(", "),
     contact_person: client.contact_person,
-    notes:          client.notes,
     client_since:   client.created_at?.split("T")[0] ?? null,
     invoice_summary: {
       recent:            all.length,
@@ -1811,6 +2058,50 @@ async function getClientDetails(input: Record<string, any>): Promise<any> {
       })),
     },
     other_matches: clients.slice(1).map(c => ({ id: c.id, name: c.name })),
+  };
+}
+
+// ─── getReceipts ──────────────────────────────────────────────────────────────
+async function getReceipts(input: Record<string, any>, auth: AuthContext): Promise<any> {
+  let q = supabase
+    .from("billing_receipts")
+    .select("id,client_id,invoice_id,receipt_date,amount_received,payment_mode,payment_reference,receipt_type,tds_amount,gst_tds_amount")
+    .order("receipt_date", { ascending: false });
+  q = scopeFirm(q, auth);
+
+  if (input.client_name) {
+    const ids = await searchClientIds(input.client_name, auth);
+    if (!ids.length) return { error: `Client '${input.client_name}' not found` };
+    q = q.in("client_id", ids);
+  }
+  if (input.date_from) q = q.gte("receipt_date", input.date_from);
+  if (input.date_to)   q = q.lte("receipt_date", input.date_to);
+
+  const { data, error } = await q.limit(input.limit ?? 20);
+  if (error) return { error: error.message };
+
+  const rows = data ?? [];
+  const clientMap = await fetchClientNames(rows.map(r => r.client_id));
+  const invIds = [...new Set(rows.map(r => r.invoice_id).filter(Boolean))] as string[];
+  const invMap: Record<string, string> = {};
+  if (invIds.length) {
+    const { data: invs } = await supabase.from("invoices").select("id,invoice_no").in("id", invIds);
+    (invs ?? []).forEach(i => { invMap[i.id] = i.invoice_no ?? ""; });
+  }
+
+  return {
+    count:          rows.length,
+    total_received: rows.reduce((s, r) => s + (r.amount_received ?? 0), 0),
+    receipts: rows.map(r => ({
+      client_name:       clientMap[r.client_id ?? ""] ?? "Unknown",
+      receipt_date:      r.receipt_date,
+      amount_received:   r.amount_received ?? 0,
+      payment_mode:      r.payment_mode,
+      payment_reference: r.payment_reference,
+      receipt_type:      r.receipt_type,
+      tds_amount:        r.tds_amount ?? 0,
+      against_invoice:   r.invoice_id ? (invMap[r.invoice_id] ?? null) : null,
+    })),
   };
 }
 
@@ -2115,7 +2406,7 @@ async function sendTelegramDocumentBytes(
   form.append("caption", caption);
   form.append(
     "document",
-    new Blob([pdfBytes], { type: "application/pdf" }),
+    new Blob([pdfBytes as unknown as BlobPart], { type: "application/pdf" }),
     fileName,
   );
   const res = await fetch(
@@ -2143,13 +2434,16 @@ function uint8ToBase64(bytes: Uint8Array): string {
 }
 
 /** Fetch firm details for PDF generation */
-async function fetchFirmForInvoice(invoice: any): Promise<any> {
-  const firmId = invoice?.firm_id ?? null;
+const FIRM_SELECT = "id,name,gstin,pan,address,state,pincode,phone,email,icai_firm_reg_no";
+
+async function fetchFirmById(firmId: string | null): Promise<any> {
   if (!firmId) return null;
-  const { data } = await supabase.from("firms")
-    .select("id,name,gstin,pan,address,city,state,pincode,phone,email,registration_no")
-    .eq("id", firmId).maybeSingle();
+  const { data } = await supabase.from("firms").select(FIRM_SELECT).eq("id", firmId).maybeSingle();
   return data ?? null;
+}
+
+async function fetchFirmForInvoice(invoice: any): Promise<any> {
+  return await fetchFirmById(invoice?.firm_id ?? null);
 }
 
 /**
@@ -2626,6 +2920,58 @@ async function generateLedgerPdf(
   return pdfDoc.save();
 }
 
+// ─── Receipt voucher PDF ──────────────────────────────────────────────────────
+async function generateReceiptPdf(
+  rec: any, clientName: string, firmName: string, invoiceNo: string | null,
+): Promise<Uint8Array> {
+  const pdfDoc   = await PDFDocument.create();
+  const font     = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const W = 595, H = 842, M = 50;
+  const DARK = rgb(0.1, 0.22, 0.36);
+  const page = pdfDoc.addPage([W, H]);
+
+  // Header band
+  page.drawRectangle({ x: 0, y: H - 70, width: W, height: 70, color: DARK });
+  page.drawText(firmName.slice(0, 48), { x: M, y: H - 38, font: fontBold, size: 16, color: rgb(1, 1, 1) });
+  page.drawText("Chartered Accountants", { x: M, y: H - 56, font, size: 9, color: rgb(0.75, 0.82, 0.9) });
+  page.drawText("RECEIPT VOUCHER", { x: W - M - 150, y: H - 40, font: fontBold, size: 13, color: rgb(1, 1, 1) });
+
+  let y = H - 120;
+  const amt = Number(rec.amount_received ?? 0);
+  const line = (label: string, value: string) => {
+    page.drawText(label, { x: M, y, font: fontBold, size: 10, color: DARK });
+    for (const ln of wrapText(value, 55)) { page.drawText(ln, { x: M + 165, y, font, size: 10 }); y -= 16; }
+    y -= 8;
+  };
+
+  line("Receipt Date:",    fmtDateDMY(rec.receipt_date));
+  line("Received From:",   clientName);
+  line("Amount Received:", `Rs. ${fmtAmt(amt)}`);
+  line("In Words:",        numToWords(amt));
+  line("Payment Mode:",    capitalize(String(rec.payment_mode ?? "—")));
+  if (rec.payment_reference)          line("Reference No.:",    String(rec.payment_reference));
+  if (invoiceNo)                      line("Against Invoice:",  invoiceNo);
+  if (Number(rec.tds_amount) > 0)     line("TDS Deducted:",     `Rs. ${fmtAmt(Number(rec.tds_amount))}`);
+  if (Number(rec.gst_tds_amount) > 0) line("GST TDS:",          `Rs. ${fmtAmt(Number(rec.gst_tds_amount))}`);
+  if (rec.remarks)                    line("Remarks:",          String(rec.remarks));
+
+  // Amount highlight
+  y -= 14;
+  page.drawRectangle({ x: M - 12, y: y - 12, width: 300, height: 38, color: rgb(0.92, 0.95, 1) });
+  page.drawText(`Total Received: Rs. ${fmtAmt(amt)}`, { x: M, y, font: fontBold, size: 13, color: DARK });
+
+  // Signature + footer
+  page.drawText(`For ${firmName.slice(0, 38)}`, { x: W - M - 210, y: 130, font, size: 9 });
+  page.drawText("Authorised Signatory",          { x: W - M - 210, y: 86, font: fontBold, size: 9 });
+  page.drawText("This is a computer-generated receipt and does not require a physical signature.",
+    { x: M, y: 50, font, size: 7, color: rgb(0.6, 0.6, 0.6) });
+  page.drawText("Generated by CAFlow Practice Management System",
+    { x: M, y: 38, font, size: 7, color: rgb(0.6, 0.6, 0.6) });
+
+  return pdfDoc.save();
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // EMAIL — Microsoft Graph API
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2818,14 +3164,15 @@ async function fetchClientNamesWithEmail(
   return map;
 }
 
-async function searchClientIds(name: string): Promise<string[]> {
-  const { data } = await supabase
+async function searchClientIds(name: string, auth: AuthContext): Promise<string[]> {
+  let q = supabase
     .from("clients")
     .select("id")
     .ilike("name", `%${name}%`)
     .eq("is_draft", false)
-    .is("deleted_at", null)
-    .limit(5);
+    .is("deleted_at", null);
+  q = scopeFirm(q, auth);
+  const { data } = await q.limit(5);
   return data?.map(c => c.id) ?? [];
 }
 
