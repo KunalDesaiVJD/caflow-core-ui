@@ -3974,6 +3974,37 @@ export default function PipelineFinancialStatements({
     [tallyTb, pyShellTb, coaMapping],
   );
 
+  // Phase 8 (CRIT-7, NCE-only) — count TB ledgers with a material closing balance
+  // that are NOT mapped to any FS code. computeCOATotals silently drops these, and
+  // the residual absorber then hides the gap inside Owners' Capital — so the BS
+  // can read "balanced" while it is materially wrong (the 3 mapping-incomplete
+  // engagements: AMADIUS / SWENI / SWASTIK 24-25). Surfaced here so the export
+  // gate can block until the auditor completes COA Mapping. Replicates
+  // computeCOATotals' lookup (exact → trim → case-insensitive).
+  const nceUnmappedNonZero = useMemo(() => {
+    if (!isNonCorporate) return { count: 0, net: 0 };
+    const mapping = (coaMapping ?? {}) as Record<string, any>;
+    const ci: Record<string, any> = {};
+    for (const [k, v] of Object.entries(mapping)) {
+      if (!v?.code) continue;
+      const kk = String(k).trim().toLowerCase();
+      if (!(kk in ci)) ci[kk] = v;
+    }
+    const lookup = (nm: string) => !nm ? undefined : (mapping[nm] ?? mapping[nm.trim()] ?? ci[String(nm).trim().toLowerCase()]);
+    const seen = new Map<string, any>();
+    for (const r of (tallyTb ?? [])) { const nm = String(r.ledger_name ?? ""); if (nm) seen.set(nm, r); }
+    let count = 0, net = 0;
+    for (const r of seen.values()) {
+      const nm = String(r.ledger_name ?? "");
+      if (lookup(nm)?.code) continue;
+      const v = Number(r.closing_balance) || 0;
+      const dr = !String(r.balance_type || "").toUpperCase().startsWith("CR");
+      const sv = dr ? Math.abs(v) : -Math.abs(v);
+      if (Math.abs(sv) > 100) { count++; net += sv; }
+    }
+    return { count, net: Math.round(net) };
+  }, [isNonCorporate, tallyTb, coaMapping]);
+
   /** Apply the NCE note grand total to an FS code, respecting storage sign
    *  convention: CR-natural codes (liabilities, equity, income) are stored
    *  negative so the display layer's negL()/negI() can flip them positive. */
@@ -4423,8 +4454,15 @@ export default function PipelineFinancialStatements({
 
   // Final Export Excel gate: corporate must satisfy ALL three; non-corporate
   // entities use BS-balance + severe-drift check.
+  // Phase 8 — when the COA-anchor cure is ON (FS_NO_MANUAL_NOTE_ADD), the BS face
+  // is sourced from books-COA, so (a) an unmapped non-zero ledger is the real
+  // remaining failure mode and MUST block (else the absorber hides it in Capital),
+  // and (b) the PPE-schedule-vs-books drift is now a disclosure mismatch (the face
+  // already uses books PPE), so it no longer blocks the BS export. When the cure
+  // is OFF, behaviour is byte-identical to before.
   const exportExcelBlocked: boolean = isNonCorporate
-    ? (!nceBsBalanced || hasSevereDrift || hasOpeningMismatch || hasPpeScheduleDrift)
+    ? (!nceBsBalanced || hasSevereDrift || hasOpeningMismatch
+        || (FS_NO_MANUAL_NOTE_ADD ? nceUnmappedNonZero.count > 0 : hasPpeScheduleDrift))
     : (!corpBsBalanced || !corpBsBalancedPy || !faPyEntered || hasOpeningMismatch || corpHasSevereDrift);
   const exportExcelBlockReasons: string[] = [];
   // BUG-094/108: branch was inverted vs the gate above (isNonCorporate ? NCE : corp).
@@ -4434,6 +4472,8 @@ export default function PipelineFinancialStatements({
   if (isNonCorporate) {
     if (!nceBsBalanced)   exportExcelBlockReasons.push(`Balance Sheet out by ₹${Math.abs(nceBsDiff).toLocaleString("en-IN")}`);
     if (hasSevereDrift)   exportExcelBlockReasons.push(`${fsReconResult!.severeCount} note(s) have drift > ₹100 — fix in Notes tab first`);
+    if (FS_NO_MANUAL_NOTE_ADD && nceUnmappedNonZero.count > 0)
+      exportExcelBlockReasons.push(`${nceUnmappedNonZero.count} TB ledger(s) (net ₹${Math.abs(nceUnmappedNonZero.net).toLocaleString("en-IN")}) are not mapped to any FS code — complete COA Mapping; the Balance Sheet cannot be trusted until they are mapped`);
   } else {
     if (!corpBsBalanced)   exportExcelBlockReasons.push(`CY Balance Sheet out by ₹${Math.abs(bsDiff).toLocaleString("en-IN")}`);
     if (!corpBsBalancedPy) exportExcelBlockReasons.push(`PY Balance Sheet out by ₹${Math.abs(bsDiffPy).toLocaleString("en-IN")}`);
@@ -4442,7 +4482,9 @@ export default function PipelineFinancialStatements({
   }
   // PPE schedule reconciliation reason — applies to NCE only (guard already
   // includes isNonCorporate). Pushed outside the if/else like the gate below.
-  if (hasPpeScheduleDrift) {
+  // Under the COA-anchor cure the BS face uses books PPE, so schedule-vs-books is
+  // a disclosure mismatch, not a BS block (it no longer gates exportExcelBlocked).
+  if (hasPpeScheduleDrift && !FS_NO_MANUAL_NOTE_ADD) {
     exportExcelBlockReasons.push(
       `PPE schedule closing (₹${Math.abs(ppeScheduleClosing).toLocaleString("en-IN")}) does not match the books (₹${Math.abs(ppeBookClosing).toLocaleString("en-IN")}) — reconcile the PPE Schedule to the ledger`,
     );
