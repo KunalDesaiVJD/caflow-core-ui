@@ -58,8 +58,9 @@ import {
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 import FsHealthPanel from "@/components/pipeline/FsHealthPanel";
 import { evaluateNotesStaleness } from "@/lib/notesStaleness";
-import { NCE_RESYNC_DELETE_FIRST, FS_NO_CAPITAL_PLUG, FS_CORP_PY_FACE_FROM_NOTE, FS_CORP_EXPORT_GATE } from "@/lib/nceFeatureFlags";
+import { NCE_RESYNC_DELETE_FIRST, FS_NO_CAPITAL_PLUG, FS_CORP_PY_FACE_FROM_NOTE, FS_CORP_EXPORT_GATE, FS_NO_MANUAL_NOTE_ADD } from "@/lib/nceFeatureFlags";
 import { validateFSReconciliation, validateCorporateFSReconciliation, logReconciliationDrift, NCE_LIAB_CODE_SET, computeCOATotals, validateOpeningVsPriorClose } from "@/lib/fsReconciliation";
+import { computeNceCoaAnchoredFace } from "@/lib/nceFaceAnchor";
 import { isTallyPLAccount, currentYearProfitAlreadyInReserves } from "@/lib/tallyDetection";
 
 // ═══════════════════════════════════════
@@ -4077,6 +4078,21 @@ export default function PipelineFinancialStatements({
       out["NCE_PPE"]  = Math.round(ppeClosingOf("tangible")   * 100) / 100;
       out["NCE_INTG"] = Math.round(ppeClosingOf("intangible") * 100) / 100;
     }
+    // ── Phase 2/3/5 (FS_NO_MANUAL_NOTE_ADD, NCE-only) — anchor the FACE to COA ──
+    // When the no-manual-additions policy is on, every NCE code's face is taken
+    // DIRECTLY from the sign-corrected COA anchor (computeNceCoaAnchoredFace),
+    // overriding the note/seed/schedule values set above. This makes Face = COA so
+    // a manual note addition, an LT/ST split that disagrees with the code, a
+    // contaminated seed, or an un-reconciled note can no longer move the face off
+    // COA. NCE_CII is derived from stock movement (it has no COA ledger), and PPE
+    // is sourced from books-COA (decision D). The residual absorber below then
+    // credits the leftover (= the current-year result not yet in Owners' Capital)
+    // to NCE_CAP — a legitimate profit transfer, since every other line now = COA.
+    // Verified 28/28 by anchor-verify against live data. Corporate is never touched.
+    if (FS_NO_MANUAL_NOTE_ADD) {
+      const { face: coaFace } = computeNceCoaAnchoredFace(coaTotalsByCode, "cy");
+      for (const code of Object.keys(coaFace)) out[code] = coaFace[code];
+    }
     out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (out[id] || 0), 0);
     out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
     // 2026-06-12 — CY BS residual absorber (mirror of the PY one in mergedPY).
@@ -4117,7 +4133,7 @@ export default function PipelineFinancialStatements({
     out["NCE_PROF_XI"]  = Math.round((out["NCE_PROF_IX"]  - (out["NCE_PART_REM"] || 0)) * 100) / 100;
     out["NCE_NET_PROF"] = Math.round((out["NCE_PROF_XI"]  - (out["NCE_TAX"]      || 0)) * 100) / 100;
     return out;
-  }, [isNonCorporate, computedAmounts, stage5NotesData, nceNotesByType, ncePpeData]);
+  }, [isNonCorporate, computedAmounts, stage5NotesData, nceNotesByType, ncePpeData, coaTotalsByCode]);
   // PERF: memoize ncePyAmounts — same pattern as nceCyAmounts above.
   const ncePyAmounts: Record<string, number> = useMemo(() => {
     if (!isNonCorporate) return mergedPY;
