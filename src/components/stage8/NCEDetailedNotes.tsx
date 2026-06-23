@@ -17,6 +17,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef, Fragment } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { supabase }    from "@/integrations/supabase/client";
+import { FS_NO_MANUAL_NOTE_ADD } from "@/lib/nceFeatureFlags";
 import { Button }      from "@/components/ui/button";
 import { Input }       from "@/components/ui/input";
 import { Badge }       from "@/components/ui/badge";
@@ -569,7 +570,9 @@ function CustomRowEditor({
   // `source` because moving a row sets source="manual" so it survives
   // Re-sync — but the amount is still TB-derived and must not be editable.
   // Hand-typed rows (+ Add row) have tbDerived undefined → editable.
-  const amountLocked = row.source === "auto" || row.tbDerived === true;
+  // NCE lock (FS_NO_MANUAL_NOTE_ADD): all figures come from COA mapping / Tally,
+  // so EVERY amount cell is read-only. Labels + within-note "Move to…" stay usable.
+  const amountLocked = FS_NO_MANUAL_NOTE_ADD || row.source === "auto" || row.tbDerived === true;
   return (
     <>
       <TableRow className={cn("hover:bg-blue-50/50", isChild ? "bg-blue-50/10 border-l-2 border-l-blue-200" : "bg-blue-50/30", isSelected && "ring-1 ring-inset ring-blue-400 bg-blue-100/40")}>
@@ -1302,7 +1305,7 @@ function PatternBTable({
                       ? <span className="text-xs tabular-nums text-right block pr-1" />
                       : hasAttachedB
                         ? <span className="text-xs tabular-nums text-right block pr-1">{aggCyB ? fmtNum(aggCyB) : "—"}</span>
-                        : <NumInput value={rawCy[row.id] ?? 0} onChange={v => onChangeCy(row.id, v)} disabled={row.naAll} />}
+                        : <NumInput value={rawCy[row.id] ?? 0} onChange={v => onChangeCy(row.id, v)} disabled={FS_NO_MANUAL_NOTE_ADD || row.naAll} />}
                   </TableCell>
                   <TableCell className="p-1">
                     {/* SHREE HARI FIX — see CY comment above.
@@ -1311,7 +1314,7 @@ function PatternBTable({
                       ? <span className="text-xs tabular-nums text-right block pr-1" />
                       : hasAttachedB
                         ? <span className="text-xs tabular-nums text-right block pr-1">{aggPyB ? fmtNum(aggPyB) : "—"}</span>
-                        : <NumInput value={rawPy[row.id] ?? 0} onChange={v => onChangePy(row.id, v)} disabled={row.naAll} />}
+                        : <NumInput value={rawPy[row.id] ?? 0} onChange={v => onChangePy(row.id, v)} disabled={FS_NO_MANUAL_NOTE_ADD || row.naAll} />}
                   </TableCell>
                   <TableCell className="p-1 text-center w-8">
                     <div className="flex items-center justify-end gap-1">
@@ -1856,28 +1859,28 @@ function PatternATable({
                       ? <span className="text-xs tabular-nums text-right block pr-1" />
                       : hasAttachedA
                         ? <span className="text-xs tabular-nums text-right block pr-1">{aggLtCy ? fmtNum(aggLtCy) : "—"}</span>
-                        : <NumInput value={rawCy[row.id + "_lt"] ?? 0} onChange={v => onChangeCy(row.id + "_lt", v)} disabled={row.naLT} />}
+                        : <NumInput value={rawCy[row.id + "_lt"] ?? 0} onChange={v => onChangeCy(row.id + "_lt", v)} disabled={FS_NO_MANUAL_NOTE_ADD || row.naLT} />}
                   </TableCell>
                   <TableCell className="p-1 border-r">
                     {(hideEmptySections && isOpenA && hasAttachedA) || hasLtSrcsA
                       ? <span className="text-xs tabular-nums text-right block pr-1" />
                       : hasAttachedA
                         ? <span className="text-xs tabular-nums text-right block pr-1">{aggLtPy ? fmtNum(aggLtPy) : "—"}</span>
-                        : <NumInput value={rawPy[row.id + "_lt"] ?? 0} onChange={v => onChangePy(row.id + "_lt", v)} disabled={row.naLT} />}
+                        : <NumInput value={rawPy[row.id + "_lt"] ?? 0} onChange={v => onChangePy(row.id + "_lt", v)} disabled={FS_NO_MANUAL_NOTE_ADD || row.naLT} />}
                   </TableCell>
                   <TableCell className="p-1">
                     {(hideEmptySections && isOpenA && hasAttachedA) || hasStSrcsA
                       ? <span className="text-xs tabular-nums text-right block pr-1" />
                       : hasAttachedA
                         ? <span className="text-xs tabular-nums text-right block pr-1">{aggStCy ? fmtNum(aggStCy) : "—"}</span>
-                        : <NumInput value={rawCy[row.id + "_st"] ?? 0} onChange={v => onChangeCy(row.id + "_st", v)} disabled={row.naST} />}
+                        : <NumInput value={rawCy[row.id + "_st"] ?? 0} onChange={v => onChangeCy(row.id + "_st", v)} disabled={FS_NO_MANUAL_NOTE_ADD || row.naST} />}
                   </TableCell>
                   <TableCell className="p-1">
                     {(hideEmptySections && isOpenA && hasAttachedA) || hasStSrcsA
                       ? <span className="text-xs tabular-nums text-right block pr-1" />
                       : hasAttachedA
                         ? <span className="text-xs tabular-nums text-right block pr-1">{aggStPy ? fmtNum(aggStPy) : "—"}</span>
-                        : <NumInput value={rawPy[row.id + "_st"] ?? 0} onChange={v => onChangePy(row.id + "_st", v)} disabled={row.naST} />}
+                        : <NumInput value={rawPy[row.id + "_st"] ?? 0} onChange={v => onChangePy(row.id + "_st", v)} disabled={FS_NO_MANUAL_NOTE_ADD || row.naST} />}
                   </TableCell>
                   <TableCell className="p-1 text-center w-8">
                     <div className="flex items-center justify-end gap-1">
@@ -2922,6 +2925,12 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
     noteType: string,
     opts?: { section?: string; attachedTo?: string },
   ) => {
+    // NCE lock: no manual additions — figures come from COA mapping / Tally.
+    // (Within-note "Move to…" re-grouping of existing COA rows stays allowed.)
+    if (FS_NO_MANUAL_NOTE_ADD) {
+      toast.error("Manual rows are disabled. Notes-to-Accounts figures come from COA mapping / Tally; reclassify in COA Mapping, or use “Move to…” to re-group existing rows within this note.");
+      return;
+    }
     setNoteData(prev => {
       const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
       const id  = newCustomId();
