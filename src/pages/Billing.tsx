@@ -306,15 +306,14 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
   // privileged roles are allowed immediately; the hard gate only applies once
   // permissions have loaded — so restricted roles are still blocked.
   const isPrivilegedRole = ["superadmin", "firm_admin", "partner_ca"].includes(user?.role || "");
-  // SENDING a billing document is a communication action — managers are allowed to send
-  // (email/share invoices, ledgers, etc.) even though they are view-only for editing.
-  // This is granted by ROLE here, independent of the role_permissions read: managers fall
-  // back to the hardcoded "view-only" defaults (DEFAULT_PERMISSIONS in usePermissions), so
-  // a DB permission grant alone does NOT reach them — the role check below does. Deleting
-  // stays on the stricter gate.
-  const canSendRole = isPrivilegedRole || user?.role === "manager";
-  const canDelete = isSuperadmin || isPrivilegedRole || (!permsLoading && can("Billing", "can_delete"));
-  const canSend = isSuperadmin || canSendRole || (!permsLoading && can("Billing", "can_edit"));
+  // Managers may SEND and DELETE/void billing documents. Granted by ROLE here, independent
+  // of the role_permissions read: managers fall back to the hardcoded "view-only" defaults
+  // (DEFAULT_PERMISSIONS in usePermissions), so a DB permission grant alone does NOT reach
+  // them — the role check below does. (Delete still has its own safety checks: blocked when
+  // receipts exist, clears the ledger on delete.)
+  const canBillingAct = isPrivilegedRole || user?.role === "manager";
+  const canDelete = isSuperadmin || canBillingAct || (!permsLoading && can("Billing", "can_delete"));
+  const canSend = isSuperadmin || canBillingAct || (!permsLoading && can("Billing", "can_edit"));
   const firmId = overrideFirmId ?? user?.firm_id;
 
   const [invoices, setInvoices] = useState<Invoice[]>([]);
