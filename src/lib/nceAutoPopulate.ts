@@ -479,7 +479,7 @@ function ledgerAmt(closingBalance: number): number {
  *  `balance_type === "DR" ? ... : ...`. */
 export { NOTE_NATURE } from "@/lib/fsSignConvention";
 import { signedBalance, signedOpening } from "@/lib/fsSignConvention";
-import { NCE_SIGNED_NOTE_AMOUNTS } from "@/lib/nceFeatureFlags";
+import { NCE_SIGNED_NOTE_AMOUNTS, FS_NO_MANUAL_NOTE_ADD } from "@/lib/nceFeatureFlags";
 
 /** Signed amount of a TB ledger when contributing to a note total — thin
  *  adapter that defers to the shared fsSignConvention module so every
@@ -1289,7 +1289,15 @@ export async function nceAutoPopulate(
     // De-duplicating by label+attachedTo+section (keep first) means a re-sync now
     // writes ONE clean row per ledger and totals stop multiplying.
     const _seenManual = new Set<string>();
-    let manualRows = prev.customRows.filter(r => {
+    // RC3 (FS_NO_MANUAL_NOTE_ADD, 2026-06-22) — firm policy: no manual note
+    // additions. When ON, DROP the entire hand-typed overlay so each note is
+    // rebuilt PURELY from the COA-mapped ledgers (auto rows). Every COA-backed
+    // amount comes back as an auto row (so the note total = COA), while hand-typed
+    // amounts that are NOT in COA (e.g. the DBS ₹3,30,000) simply don't return —
+    // the auditor re-homes those via COA Mapping / Tally. Statutory disclosures
+    // (ageing / MSME / share-capital / related-party) are stored separately and
+    // are NOT in this customRows total path, so they are untouched. NCE-only.
+    let manualRows = FS_NO_MANUAL_NOTE_ADD ? [] : prev.customRows.filter(r => {
       if (r.source !== "manual") return false;
       const key = `${(r.label || "").trim().toLowerCase()}|${r.attachedTo ?? ""}|${r.section ?? ""}`;
       if (!(r.label || "").trim()) return true;
