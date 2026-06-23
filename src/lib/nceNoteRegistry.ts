@@ -51,6 +51,32 @@ const NCE_EQUITY_CODES: { code: string; nature: FsNature }[] = [
 ];
 
 /**
+ * RC1 (2026-06-22) — DIRECT Dr-natural codes that own NO note. PPE / Intangibles
+ * come from the FA schedule; Depreciation, Partner Remuneration, the tax block
+ * and Exceptional / Extraordinary items are direct P&L leaves with no note table.
+ * They were ABSENT from NCE_NOTE_REGISTRY, so computeCOATotals (which passes a
+ * bare code to signedBalance when CODE_TO_NOTE_TYPE misses) defaulted them to
+ * "CR" and signed every Dr balance NEGATIVE — contaminating the COA anchor for
+ * PPE/depreciation/tax across ~20 engagements.
+ *
+ * Like NCE_EQUITY_CODES, these feed ONLY buildNceFsCodeNature (so resolveNature
+ * can find them via the FS_CODE_NATURE fallback). They are NEVER folded
+ * (buildCanonicalNceCode), never gain a phantom note (buildNoteFsMap), and never
+ * enter the liability set (buildNceLiabCodeSet) — they are Dr assets/expenses.
+ */
+const NCE_DIRECT_CODES: { code: string; nature: FsNature }[] = [
+  { code: "NCE_PPE",       nature: "DR" },
+  { code: "NCE_INTG",      nature: "DR" },
+  { code: "NCE_DEPR",      nature: "DR" },
+  { code: "NCE_PART_REM",  nature: "DR" },
+  { code: "NCE_CUR_TAX",   nature: "DR" },
+  { code: "NCE_PRIOR_TAX", nature: "DR" },
+  { code: "NCE_DEFER_TAX", nature: "DR" },
+  { code: "NCE_EXCEP",     nature: "DR" },
+  { code: "NCE_EXTORD",    nature: "DR" },
+];
+
+/**
  * The authoritative table. Each list's FIRST element is the canonical NCE_* code;
  * the rest are corporate / INV twins that a human or the AI mapper may select on
  * an NCE engagement (folded to the canonical code by buildCanonicalNceCode).
@@ -116,6 +142,7 @@ export function buildNceFsCodeNature(): Record<string, FsNature> {
     }
   }
   for (const e of NCE_EQUITY_CODES) out[e.code] = e.nature;
+  for (const e of NCE_DIRECT_CODES) out[e.code] = e.nature;  // RC1: note-less Dr codes
   return out;
 }
 
