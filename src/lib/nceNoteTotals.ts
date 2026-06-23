@@ -42,6 +42,10 @@ export interface NoteCustomRowLike {
   id:           string;
   attachedTo?:  string;
   section?:     string;
+  /** "manual" = survives re-sync (user "+ Add row"); "auto" = build-created. */
+  source?:      string;
+  /** true = amount comes from TB/COA (locked from edit) — NOT a hand-typed value. */
+  tbDerived?:   boolean;
   sources?: Array<{
     ledger?:     string;
     amountCy?:   number;

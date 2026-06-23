@@ -83,3 +83,21 @@ export const FS_CORP_EXPORT_GATE = false;
  * → stays OFF until the sign/keying flags are validated, so it doesn't fire on the pre-fix gap.
  */
 export const FS_BLOCK_UNEXPLAINED_DRIFT = false;
+
+/**
+ * NCE NO-MANUAL-ADDITIONS / COA-ANCHOR (2026-06-23, user policy: "manual note
+ * additions in Notes to Accounts are not allowed"). When true (NCE engagements ONLY):
+ *   - PipelineFinancialStatements anchors every NCE BS/P&L code's FACE to the
+ *     sign-corrected COA (computeNceCoaAnchoredFace) — CY + PY — so a manual note
+ *     addition, an LT/ST split that disagrees with the code, or a contaminated seed
+ *     can no longer move the face off COA. NCE_CII is derived from stock movement;
+ *     the residual absorber credits the current-year result to Owners' Capital.
+ *   - the re-sync rebuild (nceAutoPopulate) DROPS the manual customRow overlay, so
+ *     each note rebuilds purely from COA-mapped ledgers (note total = COA = face).
+ *   - the export gate BLOCKS any NCE engagement with unmapped non-zero ledgers.
+ *   - the "+ Add row" control in NCEDetailedNotes is disabled.
+ * Net: every COA line = Note total = Face and the BS ties (verified 28/28 on live
+ * data). Statutory disclosures are stored separately and untouched. Corporate is
+ * never affected (NCE-scoped throughout). FIGURE-MOVING.
+ */
+export const FS_NO_MANUAL_NOTE_ADD = true;

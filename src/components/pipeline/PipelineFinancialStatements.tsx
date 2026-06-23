@@ -58,8 +58,9 @@ import {
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 import FsHealthPanel from "@/components/pipeline/FsHealthPanel";
 import { evaluateNotesStaleness } from "@/lib/notesStaleness";
-import { NCE_RESYNC_DELETE_FIRST, FS_NO_CAPITAL_PLUG, FS_CORP_PY_FACE_FROM_NOTE, FS_CORP_EXPORT_GATE } from "@/lib/nceFeatureFlags";
+import { NCE_RESYNC_DELETE_FIRST, FS_NO_CAPITAL_PLUG, FS_CORP_PY_FACE_FROM_NOTE, FS_CORP_EXPORT_GATE, FS_NO_MANUAL_NOTE_ADD } from "@/lib/nceFeatureFlags";
 import { validateFSReconciliation, validateCorporateFSReconciliation, logReconciliationDrift, NCE_LIAB_CODE_SET, computeCOATotals, validateOpeningVsPriorClose } from "@/lib/fsReconciliation";
+import { computeNceCoaAnchoredFace } from "@/lib/nceFaceAnchor";
 import { isTallyPLAccount, currentYearProfitAlreadyInReserves } from "@/lib/tallyDetection";
 
 // ═══════════════════════════════════════
@@ -4023,6 +4024,37 @@ export default function PipelineFinancialStatements({
     [tallyTb, pyShellTb, coaMapping],
   );
 
+  // Phase 8 (CRIT-7, NCE-only) — count TB ledgers with a material closing balance
+  // that are NOT mapped to any FS code. computeCOATotals silently drops these, and
+  // the residual absorber then hides the gap inside Owners' Capital — so the BS
+  // can read "balanced" while it is materially wrong (the 3 mapping-incomplete
+  // engagements: AMADIUS / SWENI / SWASTIK 24-25). Surfaced here so the export
+  // gate can block until the auditor completes COA Mapping. Replicates
+  // computeCOATotals' lookup (exact → trim → case-insensitive).
+  const nceUnmappedNonZero = useMemo(() => {
+    if (!isNonCorporate) return { count: 0, net: 0 };
+    const mapping = (coaMapping ?? {}) as Record<string, any>;
+    const ci: Record<string, any> = {};
+    for (const [k, v] of Object.entries(mapping)) {
+      if (!v?.code) continue;
+      const kk = String(k).trim().toLowerCase();
+      if (!(kk in ci)) ci[kk] = v;
+    }
+    const lookup = (nm: string) => !nm ? undefined : (mapping[nm] ?? mapping[nm.trim()] ?? ci[String(nm).trim().toLowerCase()]);
+    const seen = new Map<string, any>();
+    for (const r of (tallyTb ?? [])) { const nm = String(r.ledger_name ?? ""); if (nm) seen.set(nm, r); }
+    let count = 0, net = 0;
+    for (const r of seen.values()) {
+      const nm = String(r.ledger_name ?? "");
+      if (lookup(nm)?.code) continue;
+      const v = Number(r.closing_balance) || 0;
+      const dr = !String(r.balance_type || "").toUpperCase().startsWith("CR");
+      const sv = dr ? Math.abs(v) : -Math.abs(v);
+      if (Math.abs(sv) > 100) { count++; net += sv; }
+    }
+    return { count, net: Math.round(net) };
+  }, [isNonCorporate, tallyTb, coaMapping]);
+
   /** Apply the NCE note grand total to an FS code, respecting storage sign
    *  convention: CR-natural codes (liabilities, equity, income) are stored
    *  negative so the display layer's negL()/negI() can flip them positive. */
@@ -4127,6 +4159,21 @@ export default function PipelineFinancialStatements({
       out["NCE_PPE"]  = Math.round(ppeClosingOf("tangible")   * 100) / 100;
       out["NCE_INTG"] = Math.round(ppeClosingOf("intangible") * 100) / 100;
     }
+    // ── Phase 2/3/5 (FS_NO_MANUAL_NOTE_ADD, NCE-only) — anchor the FACE to COA ──
+    // When the no-manual-additions policy is on, every NCE code's face is taken
+    // DIRECTLY from the sign-corrected COA anchor (computeNceCoaAnchoredFace),
+    // overriding the note/seed/schedule values set above. This makes Face = COA so
+    // a manual note addition, an LT/ST split that disagrees with the code, a
+    // contaminated seed, or an un-reconciled note can no longer move the face off
+    // COA. NCE_CII is derived from stock movement (it has no COA ledger), and PPE
+    // is sourced from books-COA (decision D). The residual absorber below then
+    // credits the leftover (= the current-year result not yet in Owners' Capital)
+    // to NCE_CAP — a legitimate profit transfer, since every other line now = COA.
+    // Verified 28/28 by anchor-verify against live data. Corporate is never touched.
+    if (FS_NO_MANUAL_NOTE_ADD) {
+      const { face: coaFace } = computeNceCoaAnchoredFace(coaTotalsByCode, "cy");
+      for (const code of Object.keys(coaFace)) out[code] = coaFace[code];
+    }
     out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (out[id] || 0), 0);
     out["NCE_EL"]  = NCE_LIAB_IDS.reduce((s, id) => s + (out[id] || 0), 0);
     // 2026-06-12 — CY BS residual absorber (mirror of the PY one in mergedPY).
@@ -4167,7 +4214,7 @@ export default function PipelineFinancialStatements({
     out["NCE_PROF_XI"]  = Math.round((out["NCE_PROF_IX"]  - (out["NCE_PART_REM"] || 0)) * 100) / 100;
     out["NCE_NET_PROF"] = Math.round((out["NCE_PROF_XI"]  - (out["NCE_TAX"]      || 0)) * 100) / 100;
     return out;
-  }, [isNonCorporate, computedAmounts, stage5NotesData, nceNotesByType, ncePpeData]);
+  }, [isNonCorporate, computedAmounts, stage5NotesData, nceNotesByType, ncePpeData, coaTotalsByCode]);
   // PERF: memoize ncePyAmounts — same pattern as nceCyAmounts above.
   const ncePyAmounts: Record<string, number> = useMemo(() => {
     if (!isNonCorporate) return mergedPY;
@@ -4231,6 +4278,19 @@ export default function PipelineFinancialStatements({
       out["NCE_CAP"] = (out["NCE_CAP"] || 0) + out["BS_EQ_RS"];
       out["BS_EQ_RS"] = 0;
     }
+    // ── Phase 7 (FS_NO_MANUAL_NOTE_ADD, NCE-only) — anchor the PY face to COA ──
+    // PY mirror of the CY anchor. coaTotals.py is the PY-shell closing (= CY
+    // opening) for BS codes, and the PY-shell P&L closing where a shell exists.
+    // NCE_CII PY is NOT auto-derived (needs the pre-PY opening stock, not loaded)
+    // → keep the note value. Engagements with no PY shell keep 0 PY P&L (existing
+    // limit). The PY residual absorber below credits the PY result to Capital.
+    if (FS_NO_MANUAL_NOTE_ADD) {
+      const { face: coaFacePy } = computeNceCoaAnchoredFace(coaTotalsByCode, "py");
+      for (const code of Object.keys(coaFacePy)) {
+        if (code === "NCE_CII") continue;
+        out[code] = coaFacePy[code];
+      }
+    }
     // See CY comment: NCE_DEPR/NCE_INTG not zeroed — P&L needs them.
     // PY TOTAL: computed from note-overridden `out` (mirrors CY above).
     out["NCE_AST"] = NCE_ASSET_IDS.reduce((s, id) => s + (out[id] || 0), 0);
@@ -4271,7 +4331,7 @@ export default function PipelineFinancialStatements({
     out["NCE_PROF_XI"]  = Math.round((out["NCE_PROF_IX"]  - (out["NCE_PART_REM"] || 0)) * 100) / 100;
     out["NCE_NET_PROF"] = Math.round((out["NCE_PROF_XI"]  - (out["NCE_TAX"]      || 0)) * 100) / 100;
     return out;
-  }, [isNonCorporate, mergedPY, computedAmountsPY, stage5NotesData, nceNotesByType, hasPyShellBS, pyShellBSAmounts]);
+  }, [isNonCorporate, mergedPY, computedAmountsPY, stage5NotesData, nceNotesByType, hasPyShellBS, pyShellBSAmounts, coaTotalsByCode]);
 
   // ─── NCE stats bar ───────────────────────────────────────────────────────────
   // Sum individual leaf codes so the stats bar is independent of computeTotal
@@ -4457,8 +4517,15 @@ export default function PipelineFinancialStatements({
 
   // Final Export Excel gate: corporate must satisfy ALL three; non-corporate
   // entities use BS-balance + severe-drift check.
+  // Phase 8 — when the COA-anchor cure is ON (FS_NO_MANUAL_NOTE_ADD), the BS face
+  // is sourced from books-COA, so (a) an unmapped non-zero ledger is the real
+  // remaining failure mode and MUST block (else the absorber hides it in Capital),
+  // and (b) the PPE-schedule-vs-books drift is now a disclosure mismatch (the face
+  // already uses books PPE), so it no longer blocks the BS export. When the cure
+  // is OFF, behaviour is byte-identical to before.
   const exportExcelBlocked: boolean = isNonCorporate
-    ? (!nceBsBalanced || hasSevereDrift || hasOpeningMismatch || hasPpeScheduleDrift)
+    ? (!nceBsBalanced || hasSevereDrift || hasOpeningMismatch
+        || (FS_NO_MANUAL_NOTE_ADD ? nceUnmappedNonZero.count > 0 : hasPpeScheduleDrift))
     : (!corpBsBalanced || !corpBsBalancedPy || !faPyEntered || hasOpeningMismatch || corpHasSevereDrift);
   const exportExcelBlockReasons: string[] = [];
   // BUG-094/108: branch was inverted vs the gate above (isNonCorporate ? NCE : corp).
@@ -4468,6 +4535,8 @@ export default function PipelineFinancialStatements({
   if (isNonCorporate) {
     if (!nceBsBalanced)   exportExcelBlockReasons.push(`Balance Sheet out by ₹${Math.abs(nceBsDiff).toLocaleString("en-IN")}`);
     if (hasSevereDrift)   exportExcelBlockReasons.push(`${fsReconResult!.severeCount} note(s) have drift > ₹100 — fix in Notes tab first`);
+    if (FS_NO_MANUAL_NOTE_ADD && nceUnmappedNonZero.count > 0)
+      exportExcelBlockReasons.push(`${nceUnmappedNonZero.count} TB ledger(s) (net ₹${Math.abs(nceUnmappedNonZero.net).toLocaleString("en-IN")}) are not mapped to any FS code — complete COA Mapping; the Balance Sheet cannot be trusted until they are mapped`);
   } else {
     if (!corpBsBalanced)   exportExcelBlockReasons.push(`CY Balance Sheet out by ₹${Math.abs(bsDiff).toLocaleString("en-IN")}`);
     if (!corpBsBalancedPy) exportExcelBlockReasons.push(`PY Balance Sheet out by ₹${Math.abs(bsDiffPy).toLocaleString("en-IN")}`);
@@ -4476,7 +4545,9 @@ export default function PipelineFinancialStatements({
   }
   // PPE schedule reconciliation reason — applies to NCE only (guard already
   // includes isNonCorporate). Pushed outside the if/else like the gate below.
-  if (hasPpeScheduleDrift) {
+  // Under the COA-anchor cure the BS face uses books PPE, so schedule-vs-books is
+  // a disclosure mismatch, not a BS block (it no longer gates exportExcelBlocked).
+  if (hasPpeScheduleDrift && !FS_NO_MANUAL_NOTE_ADD) {
     exportExcelBlockReasons.push(
       `PPE schedule closing (₹${Math.abs(ppeScheduleClosing).toLocaleString("en-IN")}) does not match the books (₹${Math.abs(ppeBookClosing).toLocaleString("en-IN")}) — reconcile the PPE Schedule to the ledger`,
     );

@@ -77,6 +77,21 @@ describe("nceNoteRegistry — durable invariants", () => {
     expect(liab.has("NCE_CAP")).toBe(true);
     expect(liab.has("NCE_PCAP")).toBe(true);
   });
+
+  it("RC1: the 9 note-less Dr codes are DR, never folded, never in the liab set", () => {
+    const NINE = ["NCE_PPE","NCE_INTG","NCE_DEPR","NCE_PART_REM","NCE_CUR_TAX","NCE_PRIOR_TAX","NCE_DEFER_TAX","NCE_EXCEP","NCE_EXTORD"];
+    const fsNat = buildNceFsCodeNature();
+    const canon = buildCanonicalNceCode();
+    const liab = buildNceLiabCodeSet();
+    const noteMap = buildNoteFsMap();
+    const notedCodes = new Set(Object.values(noteMap).flatMap(e => [...(e.all||[]), ...(e.lt||[]), ...(e.st||[])]));
+    for (const c of NINE) {
+      expect(fsNat[c]).toBe("DR");        // resolves via FS_CODE_NATURE -> Dr balance signs +
+      expect(canon[c]).toBeUndefined();   // never folded
+      expect(liab.has(c)).toBe(false);    // Dr asset/expense, not a liability
+      expect(notedCodes.has(c)).toBe(false); // owns no note (FA schedule / direct P&L leaf)
+    }
+  });
 });
 
 // ─── Import-cycle smoke test ──────────────────────────────────────────────────
