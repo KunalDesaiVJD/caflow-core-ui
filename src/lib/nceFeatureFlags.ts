@@ -83,3 +83,20 @@ export const FS_CORP_EXPORT_GATE = false;
  * → stays OFF until the sign/keying flags are validated, so it doesn't fire on the pre-fix gap.
  */
 export const FS_BLOCK_UNEXPLAINED_DRIFT = false;
+
+/**
+ * PHASE 1 (2026-06-21) — NO MANUAL NOTE ADDITIONS (user policy: "manual note addition
+ * directly in Notes to Accounts (FS) should not be allowed at all"). When true:
+ *   - getNCENoteFaceTotal STOPS summing `_custom_rows` (manually "+ Add row" entries)
+ *     into the note total, and strips their ids from the numeric maps — so the note
+ *     total = the COA-derived static rows ONLY (note total == COA, always).
+ *   - the "+ Add row" control in NCEDetailedNotes is hidden/disabled.
+ * Effect: the BS/PL face = COA by construction; the transfer double-count (an addition
+ * to one note without removing from the COA-mapped source, e.g. DHANANI OCA→STLA) and
+ * one-sided manual additions (e.g. DBS OCL +3,30,000) can no longer inflate a total.
+ * Reclassification → COA Mapping; real audit adjustments → Tally re-sync (balanced).
+ * Statutory DISCLOSURES (ageing / MSME / share-capital / related-party — not custom
+ * rows feeding the BS total) are untouched. FIGURE-MOVING on engagements that used
+ * manual additions → stays OFF until the credentialed parity run (§11).
+ */
+export const FS_NO_MANUAL_NOTE_ADD = false;

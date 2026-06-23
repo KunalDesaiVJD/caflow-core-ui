@@ -107,7 +107,19 @@ export const FS_CODE_NATURE: Record<string, "DR" | "CR"> = {
 function resolveNature(noteTypeOrNature: string): "DR" | "CR" {
   const up = String(noteTypeOrNature ?? "").toUpperCase();
   if (up === "DR" || up === "CR") return up;
-  return NOTE_NATURE[noteTypeOrNature] ?? "CR";
+  const byNote = NOTE_NATURE[noteTypeOrNature];
+  if (byNote) return byNote;
+  // RC1 (2026-06-22) — note-less NCE codes (NCE_PPE / NCE_INTG / NCE_DEPR /
+  // NCE_PART_REM / NCE_*_TAX / NCE_EXCEP / NCE_EXTORD) reach here as a bare code
+  // (computeCOATotals passes the code when CODE_TO_NOTE_TYPE has no note). Resolve
+  // them via FS_CODE_NATURE so a Dr balance signs POSITIVE instead of defaulting
+  // to "CR" (the contamination of the COA anchor). SCOPED to NCE_* so corporate
+  // sign resolution is byte-identical (no corporate changes this cycle).
+  if (noteTypeOrNature && noteTypeOrNature.startsWith("NCE_")) {
+    const byCode = FS_CODE_NATURE[noteTypeOrNature];
+    if (byCode) return byCode;
+  }
+  return "CR";
 }
 
 /** Strip "Dr"/"Cr" → "DR"/"CR" and tolerate any case + surrounding whitespace. */
