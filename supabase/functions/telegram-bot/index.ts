@@ -605,7 +605,7 @@ async function handleWithClaude(chatId: number, userId: number, userText: string
   };
 
   const makeBody = (msgs: typeof history) => JSON.stringify({
-    model:      "claude-sonnet-4-20250514",
+    model:      "claude-sonnet-4-6",
     max_tokens: 2000,
     system:     SYSTEM_PROMPT,
     tools:      BILLING_TOOLS,
@@ -2227,7 +2227,7 @@ async function callClaude(systemPrompt: string, userText: string, maxTokens = 30
       "content-type":      "application/json",
     },
     body: JSON.stringify({
-      model:      "claude-haiku-4-20250514",
+      model:      "claude-haiku-4-5",
       max_tokens: maxTokens,
       system:     systemPrompt,
       messages: [{
@@ -2256,7 +2256,7 @@ async function callClaudeRaw(systemPrompt: string, userText: string, maxTokens =
       "content-type":      "application/json",
     },
     body: JSON.stringify({
-      model:      "claude-haiku-4-20250514",
+      model:      "claude-haiku-4-5",
       max_tokens: maxTokens,
       system:     systemPrompt,
       messages: [{ role: "user", content: userText }],
