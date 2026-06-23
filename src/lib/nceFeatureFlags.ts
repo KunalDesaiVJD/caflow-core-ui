@@ -85,18 +85,19 @@ export const FS_CORP_EXPORT_GATE = false;
 export const FS_BLOCK_UNEXPLAINED_DRIFT = false;
 
 /**
- * PHASE 1 (2026-06-21) — NO MANUAL NOTE ADDITIONS (user policy: "manual note addition
- * directly in Notes to Accounts (FS) should not be allowed at all"). When true:
- *   - getNCENoteFaceTotal STOPS summing `_custom_rows` (manually "+ Add row" entries)
- *     into the note total, and strips their ids from the numeric maps — so the note
- *     total = the COA-derived static rows ONLY (note total == COA, always).
- *   - the "+ Add row" control in NCEDetailedNotes is hidden/disabled.
- * Effect: the BS/PL face = COA by construction; the transfer double-count (an addition
- * to one note without removing from the COA-mapped source, e.g. DHANANI OCA→STLA) and
- * one-sided manual additions (e.g. DBS OCL +3,30,000) can no longer inflate a total.
- * Reclassification → COA Mapping; real audit adjustments → Tally re-sync (balanced).
- * Statutory DISCLOSURES (ageing / MSME / share-capital / related-party — not custom
- * rows feeding the BS total) are untouched. FIGURE-MOVING on engagements that used
- * manual additions → stays OFF until the credentialed parity run (§11).
+ * NCE NO-MANUAL-ADDITIONS / COA-ANCHOR (2026-06-23, user policy: "manual note
+ * additions in Notes to Accounts are not allowed"). When true (NCE engagements ONLY):
+ *   - PipelineFinancialStatements anchors every NCE BS/P&L code's FACE to the
+ *     sign-corrected COA (computeNceCoaAnchoredFace) — CY + PY — so a manual note
+ *     addition, an LT/ST split that disagrees with the code, or a contaminated seed
+ *     can no longer move the face off COA. NCE_CII is derived from stock movement;
+ *     the residual absorber credits the current-year result to Owners' Capital.
+ *   - the re-sync rebuild (nceAutoPopulate) DROPS the manual customRow overlay, so
+ *     each note rebuilds purely from COA-mapped ledgers (note total = COA = face).
+ *   - the export gate BLOCKS any NCE engagement with unmapped non-zero ledgers.
+ *   - the "+ Add row" control in NCEDetailedNotes is disabled.
+ * Net: every COA line = Note total = Face and the BS ties (verified 28/28 on live
+ * data). Statutory disclosures are stored separately and untouched. Corporate is
+ * never affected (NCE-scoped throughout). FIGURE-MOVING.
  */
-export const FS_NO_MANUAL_NOTE_ADD = false;
+export const FS_NO_MANUAL_NOTE_ADD = true;
