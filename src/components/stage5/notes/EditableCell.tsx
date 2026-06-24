@@ -623,7 +623,7 @@ function ListRowActionsMenu({
 function ListRowWithSources({
   r, origIdx, isLinked, isManual, hasSources, descPlaceholder, update, remove,
   onUnmap, onSplitSources, subGroups, onMoveToGroup, onCreateGroup, onRemoveFromGroup,
-  handleDragStart, onRestoreLink,
+  handleDragStart, onRestoreLink, lockAmounts = false,
 }: {
   r: ListRow;
   origIdx: number;
@@ -644,6 +644,10 @@ function ListRowWithSources({
   handleDragStart?: (e: React.DragEvent, origIdx: number) => void;
   /** Issue-3: When manual row has an original linked_ledger, call this to re-link. */
   onRestoreLink?: () => void;
+  /** 2026-06-18 (GROWQ PVT LTD, Issue 2) — when true, both amount cells are
+   *  rendered read-only regardless of `source` / `linked_ledger`. Threaded
+   *  through from ListTable's `lockAmounts` prop. */
+  lockAmounts?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -1223,6 +1227,7 @@ export function ListTable({
                             ? () => update(mi, { source: "linked" })
                             : undefined
                         }
+                        lockAmounts={lockAmounts}
                       />
                     </div>
                   ))}
@@ -1265,6 +1270,7 @@ export function ListTable({
                   ? () => update(origIdx, { source: "linked" })
                   : undefined
               }
+              lockAmounts={lockAmounts}
             />
           </div>
         );
