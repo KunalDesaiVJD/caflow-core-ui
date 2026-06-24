@@ -1147,11 +1147,26 @@ export async function nceAutoPopulate(
       // held the real numbers and COA mapping clearly classified them.
       const shellEng = prevEngs.find(e => e.is_py_shell) ?? primaryPrev;
       if (shellEng?.id) {
-        const { data: pyTbRaw } = await supabase
-          .from("tally_trial_balance")
-          .select("ledger_name, closing_balance, balance_type, opening_balance, opening_type, parent_group")
-          .eq("engagement_id", shellEng.id);
-        pyTb = (pyTbRaw ?? []) as TBRow[];
+        // PAGINATE — PostgREST caps a single response at 1000 rows. The PY-shell
+        // TB for larger engagements exceeds that (e.g. UMIYA INDUSTRIES 1549,
+        // SHRI RAM PRODUCTS 1229, NIRALI 1087 rows). An un-paginated select
+        // silently truncated the PY TB at row 1000, so every downstream PY path
+        // (the per-note PY-fill loops below AND the COA PY anchor / reconcile)
+        // saw an incomplete prior-year TB and under-counted — the PY column then
+        // disagreed with the BS/P&L face (which paginates via computeCOATotals'
+        // own full-TB fetch). Mirrors the CY TB pagination at line ~1018.
+        const pyTbRows: any[] = [];
+        for (let from = 0; ; from += TB_PAGE) {
+          const { data, error } = await supabase
+            .from("tally_trial_balance")
+            .select("ledger_name, closing_balance, balance_type, opening_balance, opening_type, parent_group")
+            .eq("engagement_id", shellEng.id)
+            .range(from, from + TB_PAGE - 1);
+          if (error || !data || data.length === 0) break;
+          pyTbRows.push(...data);
+          if (data.length < TB_PAGE) break;
+        }
+        pyTb = pyTbRows as TBRow[];
         pyCoaMap =
           shellEng.coa_mapping && Object.keys(shellEng.coa_mapping).length > 0
             ? shellEng.coa_mapping
@@ -2007,11 +2022,27 @@ export async function nceAutoPopulate(
             const prevIds = ((prevEngList ?? []) as Array<{ id: string }>)
               .map(e => e.id);
             if (prevIds.length > 0) {
-              const { data: prevTb } = await supabase
-                .from("tally_trial_balance")
-                .select("ledger_name, closing_balance, balance_type, opening_balance, opening_type, parent_group, engagement_id")
-                .in("engagement_id", prevIds);
-              for (const row of (prevTb ?? []) as TBRow[]) {
+              // PAGINATE — PostgREST caps a single response at 1000 rows. This
+              // select spans MULTIPLE engagement_ids (regular prior + PY shell),
+              // so the combined row count exceeds 1000 even for mid-size clients
+              // (UMIYA/SHRI RAM/NIRALI prior TBs are >1000 rows). An un-paginated
+              // select silently truncated the prior TB here, dropping inventory
+              // rows past row 1000 and under-counting the cogs note's Opening/
+              // Closing Stock → breaking the cogs ↔ P&L tie. Deterministic
+              // .order() keeps page boundaries stable across requests.
+              const prevTb: TBRow[] = [];
+              for (let from = 0; ; from += TB_PAGE) {
+                const { data, error } = await supabase
+                  .from("tally_trial_balance")
+                  .select("ledger_name, closing_balance, balance_type, opening_balance, opening_type, parent_group, engagement_id")
+                  .in("engagement_id", prevIds)
+                  .order("ledger_name", { ascending: true })
+                  .range(from, from + TB_PAGE - 1);
+                if (error || !data || data.length === 0) break;
+                prevTb.push(...(data as TBRow[]));
+                if (data.length < TB_PAGE) break;
+              }
+              for (const row of prevTb) {
                 if (!isInventoryParent((row as any).parent_group)) continue;
 
                 // BUG-009/113: flag-gated sign for the PY-shell inventory walk (OFF=Math.abs).
@@ -3298,6 +3329,110 @@ export async function nceAutoPopulate(
       ejectedLedgers: prev.ejectedLedgers ?? [],
       ...(Object.keys(cleanedSources).length > 0 ? { cy_sources: cleanedSources } : {}),
     };
+  }
+
+  // ── 6. PY SAFETY-RECONCILE ("Cabinet 2 everywhere", 2026-06-24) ─────────────
+  //
+  // PROBLEM. The PY column of every NCE note was being built from TWO sources
+  // that disagree whenever a ledger was renamed / reclassified / closed since
+  // last year:
+  //   • Cabinet 1 — last year's FILED note totals (pyNotes / pyForCustomRow,
+  //                 a frozen snapshot of the prior stored FS), and
+  //   • Cabinet 2 — the LIVE recompute from the PY-shell trial balance, which
+  //                 is what the BS/P&L FACE, the COA total and the variance
+  //                 drill all read (computeCOATotals).
+  // When they disagree the Note PY total ≠ Face PY total → the "totals do not
+  // agree" drift warning. The static PY-fill loop also silently DROPS ledgers
+  // whose smartMatch returned no static row id (only borrowings had a catch-all),
+  // so notes came out LOWER than COA; Cabinet-1 over-bring made some come out
+  // HIGHER than COA. The user's decision: PY = Cabinet 2, everywhere.
+  //
+  // FIX. computeCOATotals(cyTb, pyShellTb, cyMap, pyShellMap) IS Cabinet 2 — the
+  // very number the BS/P&L face, the COA total and the variance drill all read.
+  // We call it directly (lazy dynamic import — see note below) so the COA PY
+  // target is BYTE-IDENTICAL to the face, with zero replication drift. For each
+  // NCE BS/P&L code we read the note's current PY total (getNCENoteFaceTotal —
+  // the same walk the face uses) and, if it differs from the COA PY for that code
+  // by > ₹1 (over OR under), we push a residual "Other (prior year)" custom row
+  // carrying the signed difference so the note PY ties EXACTLY to COA PY. The
+  // residual is sectionless and unattached, so computeNoteTotals folds it
+  // straight into the grand total; its value lives in py_data[id] (Pattern B) or
+  // py_data[id+"_lt"/"_st"] (Pattern A), exactly where getNCENoteFaceTotal /
+  // computeNoteTotals read it. CY is never touched (residual carries 0 CY). For
+  // Pattern A we reconcile each LT/ST code independently. This makes Note PY =
+  // Face PY = COA PY for every engagement, regardless of which underlying PY path
+  // under/over-shot.
+  //
+  // Why a LAZY import: fsReconciliation imports getNCENoteFaceTotal from THIS
+  // module AND runs module-eval-time IIFEs over NCE_NOTE_FS_MAP. A static/eager
+  // import of computeCOATotals therefore creates a load-order cycle that crashes
+  // those IIFEs (they see NCE_NOTE_FS_MAP === undefined). A dynamic import inside
+  // this async body resolves only after both modules have fully initialised, so
+  // it is safe — and gives us the authoritative function rather than a copy.
+  //
+  // NCE-only and gated behind the FS_NO_MANUAL_NOTE_ADD figure-lock cure flag —
+  // when OFF, behaviour is byte-identical to before (no reconcile runs).
+  if (FS_NO_MANUAL_NOTE_ADD && pyTb.length > 0) {
+    const { computeCOATotals } = await import("@/lib/fsReconciliation");
+    // Cabinet 2: the authoritative PY recompute from the PY-shell TB. Same args
+    // and precedence as the BS/P&L face and the harness verification target.
+    const coaTargets = computeCOATotals(tb, pyTb, coaMapping, pyCoaMap);
+
+    for (const [code, conf] of Object.entries(NCE_CODE_TO_NOTE)) {
+      // NCE_CII (closing inventory / change-in-inventory) has no COA ledger of
+      // its own — it is anchored from the stock note separately, so the COA PY
+      // target is meaningless for it. Leave it untouched (matches the harness,
+      // which also skips NCE_CII).
+      if (code === "NCE_CII") continue;
+
+      const note = out[conf.note];
+      if (!note) continue;
+
+      const targetPy = Math.round(((coaTargets[code]?.py) ?? 0) * 100) / 100;
+      const isPatternA = !!conf.col;
+
+      // Re-serialise on EACH code so a residual pushed for one column of a
+      // Pattern A note is seen when we reconcile the other column.
+      const { cy_data, py_data } = serialiseNoteData(note);
+      const noteRow = { cy_data, py_data, note_type: conf.note };
+      const currentPy = getNCENoteFaceTotal(
+        noteRow,
+        "py",
+        isPatternA ? "A" : "B",
+        conf.col,
+        conf.config || conf.note,
+      );
+
+      // getNCENoteFaceTotal returns null only when the note has no entries at
+      // all. If COA also has nothing for this code, there is nothing to tie.
+      const curPy = currentPy ?? 0;
+      const diff = Math.round((targetPy - curPy) * 100) / 100;
+      if (Math.abs(diff) <= 1) continue;
+
+      // Push the signed residual so the grand total moves by exactly `diff`.
+      // Sectionless + unattached ⇒ counted in the grand total by
+      // computeNoteTotals (extras = customRows with !section && !attachedTo).
+      const residualId = `py_recon_${code}`;
+      const residualRow: NCECustomRow = {
+        id:    residualId,
+        label: "Other (prior year)",
+        source: "auto",
+      };
+      // Avoid duplicating a residual if one already exists for this code
+      // (defensive — a fresh build won't have one, but a re-run might).
+      if (!note.customRows.some(r => r.id === residualId)) {
+        note.customRows.push(residualRow);
+      }
+      if (isPatternA) {
+        // Carry the difference on the column this code feeds; zero on the other.
+        const key = `${residualId}_${conf.col}`;
+        note.py[key] = diff;
+        note.cy[key] = 0;
+      } else {
+        note.py[residualId] = diff;
+        note.cy[residualId] = 0;
+      }
+    }
   }
 
   return out;

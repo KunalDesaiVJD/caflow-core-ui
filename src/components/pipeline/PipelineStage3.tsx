@@ -3745,7 +3745,16 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                     const amountPY = (item.code === "PL_PAT" && coaPLCalc != null)
                       ? coaPLCalc.patPY
                       : isItemPL
-                        ? (pyShellPLAmounts[item.code] || pyAmounts[item.code] || 0)
+                        // CABINET-2 (NCE, 2026-06-24): the P&L PY row must read the
+                        // PY-shell TB recompute ONLY — the SAME source the variance
+                        // drill and the BS/P&L face use. The pyAmounts fallback is
+                        // last year's FILED FS (Cabinet 1); it made the row disagree
+                        // with the drill ("figures inside ≠ outside"). For NCE we drop
+                        // it (no PY-shell ⇒ empty PY, consistent with the notes).
+                        // Corporate keeps its existing fallback (untouched).
+                        ? (isNonCorporate
+                            ? (pyShellPLAmounts[item.code] || 0)
+                            : (pyShellPLAmounts[item.code] || pyAmounts[item.code] || 0))
                         : (computedAmountsPY[item.code] || 0);
                     const delta    = amountCY - amountPY;
                     const pct      = Math.abs(amountPY) > 0.005
