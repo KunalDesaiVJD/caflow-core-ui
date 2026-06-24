@@ -1073,12 +1073,35 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         // recomputed on next save.
       }
 
+      // 2026-06-18 (GROWQ PVT LTD, Issue 1) — also drop the Note 1
+      // "Notes to Accounts" row + every NCE sub-table so re-mapping
+      // truly regenerates everything from scratch. Errors are surfaced
+      // as toasts but don't roll back — clearing is a one-way reset.
+      const cleanupTables = [
+        "notes_to_accounts_data",     // Note 1 (accounting policies)
+        "nce_capital_account",        // NCE Capital Account
+        "nce_ppe_schedule",           // NCE PPE schedule
+        "nce_financial_notes",        // NCE notes detail (BS + PL breakups)
+      ] as const;
+      for (const tbl of cleanupTables) {
+        const { error } = await supabase.from(tbl).delete().eq("engagement_id", engagementId);
+        if (error) {
+          // eslint-disable-next-line no-console
+          console.warn(`[clearAllMappings] ${tbl} delete failed:`, error.message);
+        }
+      }
+
       // Invalidate caches so anything looking at the old snapshot refreshes.
       queryClient.invalidateQueries({ queryKey: ["fs-rows", engagementId] });
       queryClient.invalidateQueries({ queryKey: ["audit-engagement-detail", engagementId] });
       queryClient.invalidateQueries({ queryKey: ["stage5-notes-fsdata", engagementId] });
+      queryClient.invalidateQueries({ queryKey: ["stage5-notes", engagementId] });
+      queryClient.invalidateQueries({ queryKey: ["notes-to-accounts", engagementId] });
+      queryClient.invalidateQueries({ queryKey: ["nce-capital", engagementId] });
+      queryClient.invalidateQueries({ queryKey: ["nce-ppe", engagementId] });
+      queryClient.invalidateQueries({ queryKey: ["nce-notes", engagementId] });
 
-      toast.success("All mappings cleared and financials reset to zero");
+      toast.success("All mappings, notes and financials cleared — re-map ledgers to regenerate fresh");
     } catch (e: any) {
       toast.error("Clear failed: " + e.message);
     }

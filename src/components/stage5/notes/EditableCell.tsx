@@ -708,7 +708,7 @@ function ListRowWithSources({
             value={r.amount_cy ?? 0}
             isAutoFilled={isLinked}
             isOverridden={isManual && (r.amount_cy ?? 0) !== 0}
-            isLocked={isLinked || !!r.linked_ledger}
+            isLocked={lockAmounts || isLinked || !!r.linked_ledger}
             onOverride={(amt, reason) => update(origIdx, { amount_cy: amt, override_reason: reason })}
             onCommit={(v) => update(origIdx, { amount_cy: v == null ? 0 : Number(v) })}
           />
@@ -718,7 +718,7 @@ function ListRowWithSources({
             value={r.amount_py ?? 0}
             isAutoFilled={isLinked}
             isOverridden={isManual && (r.amount_py ?? 0) !== 0}
-            isLocked={isLinked || !!r.linked_ledger}
+            isLocked={lockAmounts || isLinked || !!r.linked_ledger}
             onOverride={(amt, reason) => update(origIdx, { amount_py: amt, override_reason: reason })}
             onCommit={(v) => update(origIdx, { amount_py: v == null ? 0 : Number(v) })}
           />
@@ -793,6 +793,12 @@ export function ListTable({
   onRemapLedger,
   onUnmapLedger,
   engagementId,
+  // 2026-06-18 (GROWQ PVT LTD, Issue 2) — corporate Notes-to-Accounts must
+  // be read-only on amounts (ledger totals always flow TB → COA → Notes).
+  // ListTable is used exclusively by corporate notes (stage5 directory), so
+  // the default is `true`. Share Capital, Reserves and Surplus, and PPE /
+  // FA notes use bespoke editors (not ListTable) and remain editable.
+  lockAmounts = true,
 }: {
   rows:             ListRow[];
   onChange:         (next: ListRow[]) => void;
@@ -811,6 +817,14 @@ export function ListTable({
    *  are unique across ListTables in a single engagement so one shared
    *  key is sufficient. */
   engagementId?:    string;
+  /** 2026-06-18 (GROWQ PVT LTD, Issue 2) — when true every amount cell in the
+   *  table is read-only regardless of `source`. Used by the corporate Notes
+   *  editor to lock all notes EXCEPT Share Capital, Reserves and Surplus,
+   *  and PPE / Fixed Assets, where the auditor still needs to type the
+   *  paid-up / opening / additions / disposals values that have no TB
+   *  counterpart. Manual rows can still be added / deleted; only the
+   *  amount columns are locked. */
+  lockAmounts?:     boolean;
 }) {
   const [dragRow,          setDragRow]          = useState<number | null>(null);
   const [dragOverRow,      setDragOverRow]       = useState<number | null>(null);
