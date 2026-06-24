@@ -2367,6 +2367,26 @@ export default function PipelineFinancialStatements({
     enabled: !!pyShellId,
   });
 
+  // ─── PY-shell coa_mapping (2026-06-23) — FALLBACK mapping for FY-1-only
+  // (closed) ledgers in the PY column. Regroup-to-CY uses the CURRENT-year
+  // coa_mapping first; this PY-shell mapping catches ledgers that no longer
+  // exist in CY so they aren't dropped. Passed to computeCOATotals + used as a
+  // fallback in the PY-shell amount aggregations so every PY path is identical.
+  const { data: pyShellCoaMapping } = useQuery({
+    queryKey: ["py-shell-coa", pyShellId],
+    staleTime: FS_STALE_TIME,
+    queryFn: async (): Promise<Record<string, { code: string }>> => {
+      if (!pyShellId) return {};
+      const { data } = await (supabase.from as any)("audit_engagements")
+        .select("coa_mapping")
+        .eq("id", pyShellId)
+        .maybeSingle();
+      const m = (data?.coa_mapping ?? {}) as Record<string, { code: string }>;
+      return m && typeof m === "object" && !Array.isArray(m) ? m : {};
+    },
+    enabled: !!pyShellId,
+  });
+
   // ─── Firm data — used in the signature block on every BS / P&L / IAR ─────
   // The DISPLAYED firm must be the audit firm chosen in Stage 1 (engagement.
   // audit_firm_id), not the user's logged-in tenant firm (engagement.firm_id).
@@ -4020,8 +4040,8 @@ export default function PipelineFinancialStatements({
   // auditor manual adjustment (positive only); any drift between Note
   // Total and BS Face is a code-path bug to fix.
   const coaTotalsByCode = useMemo(
-    () => computeCOATotals(tallyTb ?? [], pyShellTb ?? [], coaMapping),
-    [tallyTb, pyShellTb, coaMapping],
+    () => computeCOATotals(tallyTb ?? [], pyShellTb ?? [], coaMapping, pyShellCoaMapping ?? {}),
+    [tallyTb, pyShellTb, coaMapping, pyShellCoaMapping],
   );
 
   // Phase 8 (CRIT-7, NCE-only) — count TB ledgers with a material closing balance
