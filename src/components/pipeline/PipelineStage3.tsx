@@ -2244,6 +2244,69 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     return pyShellLedgerNormalized[norm] ?? 0;
   }, [pyShellLedgerAmounts, pyShellLedgerNormalized]);
 
+  // ═══════ COA-MAPPING BS PY = PY-SHELL CLOSING (NCE, Cabinet-2, 2026-06-24) ═══════
+  // The COA-Mapping Balance-Sheet PY row otherwise reads computedAmountsPY (= CY
+  // opening-balance). When this year's opening ≠ last year's close (NIRALI cash/
+  // debtors, UMIYA stock), that row disagreed with the variance DRILL (and the
+  // notes/face) which read the PY-shell CLOSING — the "figures inside ≠ outside"
+  // report. This per-code total reproduces the drill EXACTLY (debit-positive axis):
+  // (1) CY ledgers contribute their PY-shell closing via lookupPyShellAmount; (2)
+  // PY-only (renamed/closed) ledgers contribute via PY-shell mapping / parent-group
+  // inheritance; (3) parents roll up like computedAmountsPY. Used for NCE BS rows
+  // ONLY when a PY-shell exists; corporate + no-PY-shell keep computedAmountsPY.
+  const pyShellClosingByCode = useMemo((): Record<string, number> => {
+    const out: Record<string, number> = {};
+    const pyRows = pyShellTbData?.tbRows as any[] | undefined;
+    if (!pyRows?.length) return out;
+    // (1) CY ledgers → their PY-shell closing (identical lookup to the drill)
+    const cySeen = new Set<string>();
+    for (const acct of tbAccounts) {
+      const nm = acct.account_name;
+      cySeen.add(String(nm).toLowerCase());
+      const m = resolveMapping(nm);
+      if (!m?.code) continue;
+      const py = lookupPyShellAmount(nm);
+      if (Math.abs(py) > 0.005) out[m.code] = (out[m.code] || 0) + py;
+    }
+    // (2) PY-only ledgers → PY-shell mapping → CY mapping → parent-group inheritance
+    const pyShellMapping = (pyShellTbData?.coaMapping as Record<string, any>) || {};
+    const pyShellLowerIdx: Record<string, { code: string }> = {};
+    for (const [k, v] of Object.entries(pyShellMapping)) if ((v as any)?.code) pyShellLowerIdx[k.toLowerCase().trim()] = v as any;
+    const groupToCode: Record<string, string> = {};
+    const gcc: Record<string, Record<string, number>> = {};
+    for (const acct of tbAccounts) {
+      const code = (coaMapping as Record<string, any>)[acct.account_name]?.code;
+      const grp = (acct.account_group || "").toLowerCase().trim();
+      if (!code || !grp) continue;
+      (gcc[grp] ||= {})[code] = (gcc[grp][code] || 0) + 1;
+    }
+    for (const [grp, cc] of Object.entries(gcc)) {
+      let best = "", bn = 0, tie = false;
+      for (const [c, n] of Object.entries(cc)) { if (n > bn) { best = c; bn = n; tie = false; } else if (n === bn && c !== best) tie = true; }
+      if (best && !tie) groupToCode[grp] = best;
+    }
+    for (const row of pyRows) {
+      const nm = String(row.ledger_name || "").trim();
+      if (!nm || cySeen.has(nm.toLowerCase())) continue;
+      const grp = String(row.parent_group || "").toLowerCase().trim();
+      const m = pyShellMapping[nm] || pyShellLowerIdx[nm.toLowerCase()] || (coaMapping as Record<string, any>)[nm] || (grp && groupToCode[grp] ? { code: groupToCode[grp] } : null);
+      if (!(m as any)?.code) continue;
+      const cb = Math.abs(Number(row.closing_balance ?? 0));
+      if (cb < 0.005) continue;
+      const code = (m as any).code;
+      out[code] = (out[code] || 0) + signedBalance(cb, row.balance_type, "DR");
+    }
+    // (3) roll parents up from children (mirror computedAmountsPY.computeTotal)
+    const rollUp = (item: FSLineItem): number => {
+      if (!item.children || item.children.length === 0) return out[item.code] || 0;
+      const t = item.children.reduce((s, c) => s + rollUp(c), 0);
+      out[item.code] = t;
+      return t;
+    };
+    for (const item of activeTree) rollUp(item);
+    return out;
+  }, [tbAccounts, pyShellTbData, coaMapping, activeTree, lookupPyShellAmount]);
+
   // ═══════ FS LEDGER SEARCH ═══════
   // When the user types in the right-panel search box, build a flat result list:
   // each entry = { ledger name, FS item code, FS item name, depth breadcrumb, confidence }
@@ -3778,7 +3841,11 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                         ? (isNonCorporate
                             ? (pyShellPLAmounts[item.code] || 0)
                             : (pyShellPLAmounts[item.code] || pyAmounts[item.code] || 0))
-                        : (computedAmountsPY[item.code] || 0);
+                        // BS PY: NCE with a PY-shell reads the PY-shell CLOSING (= the
+                        // drill); corporate + no-PY-shell keep CY-opening (computedAmountsPY).
+                        : (isNonCorporate && (pyShellTbData?.tbRows?.length ?? 0) > 0
+                            ? (pyShellClosingByCode[item.code] || 0)
+                            : (computedAmountsPY[item.code] || 0));
                     const delta    = amountCY - amountPY;
                     const pct      = Math.abs(amountPY) > 0.005
                       ? Math.round((delta / Math.abs(amountPY)) * 100)
