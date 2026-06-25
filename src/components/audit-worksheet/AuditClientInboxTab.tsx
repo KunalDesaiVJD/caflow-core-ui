@@ -20,7 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   MessageSquareWarning, Send, Loader2, Paperclip, Download, X,
   FileDown, ChevronDown, ChevronUp, CheckCircle2, Clock, Users, Mail,
-  AlertTriangle, Bell,
+  AlertTriangle, Bell, Search,
 } from "lucide-react";
 import { EmailComposeDialog, EmailComposePayload } from "@/components/email/EmailComposeDialog";
 import { ReminderRulesPanel } from "./ReminderRulesPanel";
@@ -472,6 +472,7 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
   const [loading,      setLoading]      = useState(true);
   const [exporting,    setExporting]    = useState(false);
   const [filter,       setFilter]       = useState<"all"|"open"|"replied"|"closed">("all");
+  const [search,       setSearch]       = useState("");
   const [emailPayload, setEmailPayload] = useState<EmailComposePayload | null>(null);
 
   // Phase 4A/4C: reminder + escalation engine
@@ -549,28 +550,23 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
       const { jsPDF } = await import("jspdf");
       const autoTable  = (await import("jspdf-autotable")).default;
 
-      // Fetch messages for every displayed query up-front
-      const allMessages: Record<string, Message[]> = {};
-      for (const q of displayed) {
-        const { data: msgs } = await (supabase as any)
-          .from("portal_query_messages")
-          .select("*")
-          .eq("query_id", q.id)
-          .order("created_at", { ascending: true });
-        allMessages[q.id] = (msgs as Message[]) || [];
-      }
+      // COMPACT MODE — one row per query in a single A4-landscape table.
+      // The full-thread per-query layout previously produced 28+ pages for
+      // 80-odd queries; nobody actually reads that. Skip the per-query
+      // message fetch (huge round-trip win too) and surface just the
+      // most recent client reply inline from q.client_reply when present.
 
       const filterLabel = filter === "all"     ? "All Queries"
                         : filter === "open"    ? "Open Queries"
                         : filter === "replied" ? "Replied Queries"
                         :                        "Closed Queries";
 
-      const doc = new jsPDF({ orientation: "portrait", format: "a4", unit: "mm" });
-      const pw  = doc.internal.pageSize.getWidth();   // 210
-      const ph  = doc.internal.pageSize.getHeight();  // 297
-      const ml  = 12;
-      const cw  = pw - ml * 2;   // 186 mm usable width
-      const HDR = 22;             // height of the running page header band
+      const doc = new jsPDF({ orientation: "landscape", format: "a4", unit: "mm" });
+      const pw  = doc.internal.pageSize.getWidth();   // 297
+      const ph  = doc.internal.pageSize.getHeight();  // 210
+      const ml  = 10;
+      const cw  = pw - ml * 2;
+      const HDR = 18;
 
       // ── Running page header (drawn on every page) ────────────────────
       const drawPageHeader = () => {
@@ -578,22 +574,19 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
         doc.rect(0, 0, pw, HDR, "F");
         doc.setTextColor(255, 255, 255);
         doc.setFont("helvetica", "bold");
-        doc.setFontSize(11);
-        doc.text(`Client Query Inbox  —  ${filterLabel}`, ml, 10);
+        doc.setFontSize(10);
+        doc.text(`Client Query Inbox  —  ${filterLabel}`, ml, 8);
         doc.setFont("helvetica", "normal");
-        doc.setFontSize(7.5);
+        doc.setFontSize(7);
         doc.text(
           `${data.clientName || ""}   ·   ${displayed.length} quer${displayed.length === 1 ? "y" : "ies"}`,
-          ml, 17,
+          ml, 14,
         );
         doc.text(
           new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }),
-          pw - ml, 17, { align: "right" },
+          pw - ml, 14, { align: "right" },
         );
       };
-
-      drawPageHeader();
-      let y = HDR + 5;
 
       // Status → band colour
       const statusRGB = (s: string): [number, number, number] => {
@@ -604,200 +597,97 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
         return [67, 56, 202];                                                    // indigo
       };
 
-      const ensureSpace = (h: number) => {
-        if (y + h > ph - ml) {
-          doc.addPage();
-          drawPageHeader();
-          y = HDR + 5;
-        }
-      };
+      // Build one row per query — Query column wraps, everything else is fixed
+      const body = displayed.map((q, qi) => {
+        const groupLedger = [q.group_name, q.ledger_name].filter(Boolean).join(" / ") || "—";
+        const refFy       = [q.ref_number, q.financial_year && `FY ${q.financial_year}`]
+                              .filter(Boolean).join("\n") || `#${qi + 1}`;
+        const queryText   = q.required_documents
+                              ? `${q.query_text}\nReq: ${q.required_documents}`
+                              : q.query_text;
+        const lastReply   = q.client_reply ? `Reply: ${q.client_reply}` : "";
+        const queryCell   = lastReply ? `${queryText}\n\n${lastReply}` : queryText;
+        return [
+          String(qi + 1),
+          q.status,
+          q.priority,
+          refFy,
+          groupLedger,
+          q.due_date || "—",
+          queryCell,
+        ];
+      });
 
-      for (let qi = 0; qi < displayed.length; qi++) {
-        const q    = displayed[qi];
-        const msgs = allMessages[q.id] || [];
+      // Column widths sum to cw (~277mm in A4 landscape with 10mm margins)
+      const COL_NUM = 8, COL_STATUS = 28, COL_PRI = 14, COL_REF = 26,
+            COL_GL  = 50, COL_DUE = 20;
+      const COL_QUERY = cw - (COL_NUM + COL_STATUS + COL_PRI + COL_REF + COL_GL + COL_DUE);
 
-        // Build render-message list
-        type RM = { isAuditor: boolean; sender: string; time: string; text: string };
-        const renderMsgs: RM[] = [];
-        if (q.client_reply && msgs.length === 0) {
-          renderMsgs.push({ isAuditor: false, sender: "Client", time: "", text: q.client_reply });
-        }
-        for (const msg of msgs) {
-          if (!msg.message && !msg.attachment_name) continue;
-          renderMsgs.push({
-            isAuditor: msg.sender_role === "auditor",
-            sender:    msg.sender_role === "auditor" ? (msg.sender_name || "Auditor") : "Client",
-            time:      fmtTime(msg.created_at),
-            text:      msg.message || `[Attachment: ${msg.attachment_name}]`,
-          });
-        }
-
-        // ── Status-coloured header band ──────────────────────────────────
-        ensureSpace(32);
-        const [sr, sg, sb] = statusRGB(q.status);
-        doc.setFillColor(sr, sg, sb);
-        doc.rect(ml, y, cw, 8, "F");
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(8.5);
-        doc.setTextColor(255, 255, 255);
-        doc.text(`Query ${qi + 1} of ${displayed.length}`, ml + 3, y + 5.5);
-        doc.text(q.status.toUpperCase(), pw - ml - 3, y + 5.5, { align: "right" });
-        y += 8;
-
-        // ── Meta row (ref / priority / FY / ledger / group) ──────────────
-        doc.setFillColor(242, 244, 255);
-        doc.rect(ml, y, cw, 9, "F");
-        doc.setFont("helvetica", "normal");
-        doc.setFontSize(7.5);
-        doc.setTextColor(30, 30, 70);
-        const metaParts = [
-          q.ref_number ? `Ref: ${q.ref_number}` : `#${qi + 1}`,
-          `Priority: ${q.priority}`,
-          q.financial_year ? `FY ${q.financial_year}` : "",
-          q.ledger_name    ? `Ledger: ${q.ledger_name}` : "",
-          q.group_name     ? `Group: ${q.group_name}` : "",
-        ].filter(Boolean);
-        const metaStr = metaParts.join("   |   ");
-        // Clip meta text so it doesn't overlap the due date
-        const dueLabelW = q.due_date ? 36 : 0;
-        const metaMaxW  = cw - 6 - dueLabelW;
-        const metaClipped = doc.splitTextToSize(metaStr, metaMaxW)[0] as string;
-        doc.text(metaClipped, ml + 3, y + 6);
-        if (q.due_date) {
-          doc.setFont("helvetica", "bold");
-          doc.setTextColor(sr, sg, sb);
-          doc.text(`Due: ${q.due_date}`, pw - ml - 3, y + 6, { align: "right" });
-        }
-        y += 10;
-
-        // ── Query text — autoTable so long/special-char text wraps reliably ────
-        autoTable(doc, {
-          startY:     y,
-          margin:     { left: ml, right: ml },
-          tableWidth: cw,
-          body:       [[q.query_text]],
-          showHead:   false,
-          styles: {
-            font:        "helvetica",
-            fontSize:    9,
-            textColor:   [15, 20, 40]    as [number, number, number],
-            fillColor:   [252, 252, 255] as [number, number, number],
-            cellPadding: { top: 5, right: 5, bottom: 5, left: 5 },
-            lineWidth:   0.3,
-            lineColor:   [210, 215, 240] as [number, number, number],
-            overflow:    "linebreak",
-          },
-          columnStyles: { 0: { cellWidth: cw, overflow: "linebreak" } },
-          didDrawPage: () => { drawPageHeader(); },
-        });
-        y = (doc as any).lastAutoTable.finalY + 3;
-
-        // Required documents note
-        if (q.required_documents) {
-          ensureSpace(9);
-          doc.setFont("helvetica", "italic");
-          doc.setFontSize(7.5);
-          doc.setTextColor(80, 85, 115);
-          doc.text(`Required documents:  ${q.required_documents}`, ml + 2, y + 4);
-          y += 9;
-        }
-
-        // ── Message thread via autoTable ─────────────────────────────────
-        if (renderMsgs.length > 0) {
-          ensureSpace(18);
-
-          // Section label
-          doc.setFont("helvetica", "bold");
-          doc.setFontSize(7.5);
-          doc.setTextColor(80, 85, 115);
-          doc.text("CONVERSATION THREAD", ml + 2, y + 4);
-          y += 7;
-
-          const msgBody = renderMsgs.map(m => [
-            m.isAuditor ? "AUDITOR" : "CLIENT",
-            m.sender,
-            m.time || "—",
-            m.text,
-          ]);
-
-          // Column widths: Role(18) + Name(30) + Time(28) + Message(rest=110)
-          const COL_ROLE = 18, COL_NAME = 30, COL_TIME = 28;
-          const COL_MSG  = cw - COL_ROLE - COL_NAME - COL_TIME;
-
-          autoTable(doc, {
-            startY: y,
-            margin: { left: ml, right: ml, top: HDR + 5 },
-            tableWidth: cw,
-            head: [["Role", "Sender", "Time", "Message"]],
-            body: msgBody,
-            headStyles: {
-              fillColor:   [44, 50, 82] as [number, number, number],
-              textColor:   [255, 255, 255] as [number, number, number],
-              fontSize:    7.5,
-              fontStyle:   "bold",
-              cellPadding: { top: 3, right: 4, bottom: 3, left: 4 },
-              halign:      "left",
-            },
-            columnStyles: {
-              0: { cellWidth: COL_ROLE, fontSize: 7,   fontStyle: "bold",   halign: "center" },
-              1: { cellWidth: COL_NAME, fontSize: 7.5, fontStyle: "normal"                   },
-              2: { cellWidth: COL_TIME, fontSize: 7,
-                   textColor: [110, 115, 140] as [number, number, number]                     },
-              3: { cellWidth: COL_MSG,  fontSize: 8.5, overflow: "linebreak"                 },
-            },
-            styles: {
-              cellPadding: { top: 3.5, right: 4, bottom: 3.5, left: 4 },
-              lineWidth:   0.15,
-              lineColor:   [205, 210, 228] as [number, number, number],
-              overflow:    "linebreak",
-              font:        "helvetica",
-            },
-            didParseCell: (hookData: any) => {
-              if (hookData.section !== "body") return;
-              const m = renderMsgs[hookData.row.index];
-              if (!m) return;
-              if (m.isAuditor) {
-                // Auditor row — light indigo tint
-                hookData.cell.styles.fillColor = [232, 238, 255] as [number, number, number];
-                if (hookData.column.index === 0)
-                  hookData.cell.styles.textColor = [67, 56, 202] as [number, number, number];
-              } else {
-                // Client row — light green tint
-                hookData.cell.styles.fillColor = [236, 253, 245] as [number, number, number];
-                if (hookData.column.index === 0)
-                  hookData.cell.styles.textColor = [21, 128, 61] as [number, number, number];
-              }
-            },
-            // Redraw the running page header on every page autoTable creates
-            didDrawPage: () => { drawPageHeader(); },
-          });
-
-          y = (doc as any).lastAutoTable.finalY + 6;
-        } else {
-          ensureSpace(10);
-          doc.setFont("helvetica", "italic");
-          doc.setFontSize(8);
-          doc.setTextColor(150, 155, 165);
-          doc.text("No messages recorded for this query.", ml + 3, y + 5);
-          y += 12;
-        }
-
-        // ── Separator between queries ─────────────────────────────────────
-        if (qi < displayed.length - 1) {
-          ensureSpace(14);
-          y += 3;
-          doc.setDrawColor(185, 192, 218);
-          doc.setLineWidth(0.5);
-          doc.line(ml, y, pw - ml, y);
-          doc.setLineWidth(0.2);
-          y += 10;
-        }
-      }
+      autoTable(doc, {
+        startY:     HDR + 3,
+        margin:     { left: ml, right: ml, top: HDR + 3 },
+        tableWidth: cw,
+        head: [["#", "Status", "Pri", "Ref / FY", "Group / Ledger", "Due", "Query / Last Reply"]],
+        body,
+        headStyles: {
+          fillColor:   [44, 50, 82] as [number, number, number],
+          textColor:   [255, 255, 255] as [number, number, number],
+          fontSize:    8,
+          fontStyle:   "bold",
+          cellPadding: { top: 2.5, right: 3, bottom: 2.5, left: 3 },
+          halign:      "left",
+        },
+        columnStyles: {
+          0: { cellWidth: COL_NUM,    fontSize: 7,   halign: "right",  textColor: [110, 115, 140] as [number, number, number] },
+          1: { cellWidth: COL_STATUS, fontSize: 7.5, fontStyle: "bold" },
+          2: { cellWidth: COL_PRI,    fontSize: 7.5, halign: "center" },
+          3: { cellWidth: COL_REF,    fontSize: 7,   textColor: [80, 85, 115] as [number, number, number] },
+          4: { cellWidth: COL_GL,     fontSize: 7.5 },
+          5: { cellWidth: COL_DUE,    fontSize: 7,   halign: "center" },
+          6: { cellWidth: COL_QUERY,  fontSize: 8,   overflow: "linebreak" },
+        },
+        styles: {
+          cellPadding: { top: 2, right: 3, bottom: 2, left: 3 },
+          lineWidth:   0.15,
+          lineColor:   [205, 210, 228] as [number, number, number],
+          overflow:    "linebreak",
+          font:        "helvetica",
+          valign:      "top",
+        },
+        alternateRowStyles: { fillColor: [248, 249, 253] as [number, number, number] },
+        didParseCell: (hookData: any) => {
+          if (hookData.section !== "body") return;
+          const q = displayed[hookData.row.index];
+          if (!q) return;
+          // Colour the Status cell by status
+          if (hookData.column.index === 1) {
+            const [r, g, b] = statusRGB(q.status);
+            hookData.cell.styles.fillColor = [r, g, b];
+            hookData.cell.styles.textColor = [255, 255, 255] as [number, number, number];
+          }
+          // Highlight Priority High in red
+          if (hookData.column.index === 2 && q.priority === "High") {
+            hookData.cell.styles.textColor = [185, 28, 28] as [number, number, number];
+            hookData.cell.styles.fontStyle = "bold";
+          }
+          // Highlight overdue due-dates
+          if (hookData.column.index === 5 && q.due_date) {
+            const due = new Date(q.due_date);
+            const today = new Date(); today.setHours(0, 0, 0, 0);
+            if (due < today && !["Clarified", "Closed"].includes(q.status)) {
+              hookData.cell.styles.textColor = [185, 28, 28] as [number, number, number];
+              hookData.cell.styles.fontStyle = "bold";
+            }
+          }
+        },
+        didDrawPage: () => { drawPageHeader(); },
+      });
 
       const safe  = (data.clientName || "Client").replace(/[^a-z0-9]/gi, "_");
       const stamp = new Date().toISOString().split("T")[0];
+      const pages = doc.getNumberOfPages();
       doc.save(`Queries_${filterLabel.replace(/ /g, "_")}_${safe}_${stamp}.pdf`);
-      toast.success(`Exported ${displayed.length} quer${displayed.length === 1 ? "y" : "ies"} as PDF`);
+      toast.success(`Exported ${displayed.length} quer${displayed.length === 1 ? "y" : "ies"} (${pages} page${pages === 1 ? "" : "s"})`);
     } catch (e: any) {
       toast.error(`Export failed: ${e.message}`);
     } finally {
@@ -806,7 +696,22 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
   };
 
   // Phase 3F: urgency-sorted displayed list
+  const searchLc = search.trim().toLowerCase();
+  const matchesSearch = (q: ClientQuery) => {
+    if (!searchLc) return true;
+    return (
+      (q.query_text         || "").toLowerCase().includes(searchLc) ||
+      (q.ref_number         || "").toLowerCase().includes(searchLc) ||
+      (q.ledger_name        || "").toLowerCase().includes(searchLc) ||
+      (q.group_name         || "").toLowerCase().includes(searchLc) ||
+      (q.required_documents || "").toLowerCase().includes(searchLc) ||
+      (q.status             || "").toLowerCase().includes(searchLc) ||
+      (q.priority           || "").toLowerCase().includes(searchLc) ||
+      (q.financial_year     || "").toLowerCase().includes(searchLc)
+    );
+  };
   const filtered = queries.filter(q => {
+    if (!matchesSearch(q)) return false;
     if (filter === "open")    return q.status === "Open" || q.status === "Client Acknowledged";
     if (filter === "replied") return q.status === "Reply Received";
     if (filter === "closed")  return q.status === "Clarified" || q.status === "Closed";
@@ -884,22 +789,48 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
         onEscalate={sendEscalation}
       />
 
-      {/* Filter tabs */}
+      {/* Filter tabs + Search */}
       {queries.length > 0 && (
-        <div className="flex gap-1 p-1 bg-muted rounded-lg w-fit text-xs">
-          {([
-            { key: "all",     label: `All (${queries.length})` },
-            { key: "open",    label: `Open (${queries.filter(q => ["Open","Client Acknowledged"].includes(q.status)).length})` },
-            { key: "replied", label: `Replied (${newReplies})` },
-            { key: "closed",  label: `Closed (${queries.filter(q => ["Clarified","Closed"].includes(q.status)).length})` },
-          ] as const).map(({ key, label }) => (
-            <button key={key} type="button" onClick={() => setFilter(key)}
-              className={cn("px-3 py-1 rounded-md font-medium transition-colors",
-                filter === key ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
-              )}>
-              {label}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex gap-1 p-1 bg-muted rounded-lg w-fit text-xs">
+            {([
+              { key: "all",     label: `All (${queries.length})` },
+              { key: "open",    label: `Open (${queries.filter(q => ["Open","Client Acknowledged"].includes(q.status)).length})` },
+              { key: "replied", label: `Replied (${newReplies})` },
+              { key: "closed",  label: `Closed (${queries.filter(q => ["Clarified","Closed"].includes(q.status)).length})` },
+            ] as const).map(({ key, label }) => (
+              <button key={key} type="button" onClick={() => setFilter(key)}
+                className={cn("px-3 py-1 rounded-md font-medium transition-colors",
+                  filter === key ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
+                )}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="relative flex-1 min-w-[220px] max-w-md">
+            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"/>
+            <Input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search query, ref, ledger, group, status…"
+              className="h-8 text-xs pl-7 pr-7"
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                title="Clear search"
+              >
+                <X size={12}/>
+              </button>
+            )}
+          </div>
+          {search && (
+            <span className="text-[11px] text-muted-foreground">
+              {displayed.length} of {filtered.length === displayed.length ? queries.length : filtered.length} match
+            </span>
+          )}
         </div>
       )}
 
