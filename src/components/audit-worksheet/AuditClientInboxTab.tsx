@@ -636,21 +636,32 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
         }
         if (threadLines.length) lines.push("", ...threadLines);
 
+        // "07 Jun 26" — 9 chars, no wrap in a narrow Due column
+        const dueStr = q.due_date
+          ? (() => {
+              const d = new Date(q.due_date);
+              return isNaN(d.getTime())
+                ? q.due_date
+                : d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "2-digit" });
+            })()
+          : "—";
+
         return [
           String(qi + 1),
           q.status,
           q.priority,
           refFy,
           groupLedger,
-          q.due_date || "—",
+          dueStr,
           lines.join("\n"),
         ];
       });
 
       // Column widths sum to cw (~277mm in A4 landscape with 10mm margins).
-      // # column widened to 12mm so triple-digit row numbers fit on one line.
+      // # widened to 12mm so triple-digit row numbers fit on one line; Due
+      // widened to 22mm so "07 Jun 26" never wraps.
       const COL_NUM = 12, COL_STATUS = 26, COL_PRI = 12, COL_REF = 24,
-            COL_GL  = 46, COL_DUE = 18;
+            COL_GL  = 44, COL_DUE = 22;
       const COL_QUERY = cw - (COL_NUM + COL_STATUS + COL_PRI + COL_REF + COL_GL + COL_DUE);
 
       autoTable(doc, {
@@ -684,6 +695,10 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
           font:        "helvetica",
           valign:      "top",
         },
+        // Keep each query together — never split a row across two pages
+        // (this is what produced the "Q: …Why this amount transferred to"
+        // cut at the bottom of the page).
+        rowPageBreak: "avoid",
         alternateRowStyles: { fillColor: [248, 249, 253] as [number, number, number] },
         didParseCell: (hookData: any) => {
           if (hookData.section !== "body") return;
