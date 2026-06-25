@@ -36,19 +36,27 @@ export function useTallyOptions(
 
   useEffect(() => {
     if (!tallyEngId) return;
-    (supabase as any)
-      .from("tally_trial_balance")
-      .select("ledger_name,parent_group")
-      .eq("engagement_id", tallyEngId)
-      .order("parent_group")
-      .order("ledger_name")
-      .then(({ data }: { data: { ledger_name: string; parent_group: string }[] | null }) => {
-        if (!data) return;
-        setRaw(data.map(r => ({
-          name:  cleanTallyName(r.ledger_name),
-          group: cleanTallyName(r.parent_group),
-        })));
-      });
+    // PAGINATE — PostgREST caps a single response at 1000 rows; the ledger/group
+    // option lists were incomplete for engagements with >1000 ledgers.
+    (async () => {
+      const rows: { ledger_name: string; parent_group: string }[] = [];
+      for (let from = 0; ; from += 1000) {
+        const { data } = await (supabase as any)
+          .from("tally_trial_balance")
+          .select("ledger_name,parent_group")
+          .eq("engagement_id", tallyEngId)
+          .order("parent_group")
+          .order("ledger_name")
+          .range(from, from + 999);
+        if (!data || !data.length) break;
+        rows.push(...data);
+        if (data.length < 1000) break;
+      }
+      setRaw(rows.map(r => ({
+        name:  cleanTallyName(r.ledger_name),
+        group: cleanTallyName(r.parent_group),
+      })));
+    })();
   }, [tallyEngId]);
 
   const groups = useMemo(

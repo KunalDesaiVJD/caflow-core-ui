@@ -107,18 +107,24 @@ const BankRecon = () => {
         .maybeSingle();
       const engagementId = (engRow as any)?.id ?? null;
 
-      // Bank ledger balances from Tally TB
-      let tbQuery = supabase
-        .from("tally_trial_balance")
-        .select("ledger_name, closing_balance, balance_type, debit_amount, credit_amount");
-      if (engagementId) {
-        tbQuery = tbQuery.eq("engagement_id", engagementId) as typeof tbQuery;
-      } else {
-        tbQuery = tbQuery.eq("client_id", clientId) as typeof tbQuery;
+      // Bank ledger balances from Tally TB — PAGINATE (PostgREST caps a single
+      // response at 1000 rows; the client_id fallback spans all FYs, so large
+      // ledger sets were truncated and bank ledgers past row 1000 were dropped).
+      const tbRows: any[] = [];
+      for (let from = 0; ; from += 1000) {
+        let tbQuery = supabase
+          .from("tally_trial_balance")
+          .select("ledger_name, closing_balance, balance_type, debit_amount, credit_amount");
+        tbQuery = (engagementId
+          ? tbQuery.eq("engagement_id", engagementId)
+          : tbQuery.eq("client_id", clientId)) as typeof tbQuery;
+        const { data, error } = await tbQuery.range(from, from + 999);
+        if (error || !data || !data.length) break;
+        tbRows.push(...data);
+        if (data.length < 1000) break;
       }
-      const { data: tbRows } = await tbQuery;
 
-      if (tbRows && tbRows.length > 0) {
+      if (tbRows.length > 0) {
         const bankEntries: LedgerEntry[] = tbRows
           .filter((row: any) => {
             const name = (row.ledger_name || "").toLowerCase();

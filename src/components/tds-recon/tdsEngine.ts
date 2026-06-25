@@ -293,15 +293,24 @@ export async function runAiMapper(params: {
 }): Promise<MapperResult> {
   const { client_id, financial_year, firm_id, force_rematch = false } = params;
 
-  // 1. Fetch Trial Balance ledgers
-  const { data: tbRows, error: tbErr } = await (supabase as any)
-    .from("tally_trial_balance")
-    .select("ledger_name,parent_group,debit_amount,credit_amount,closing_balance,balance_type")
-    .eq("client_id", client_id)
-    .eq("financial_year", financial_year);
-  if (tbErr) throw new Error(`TB fetch error: ${tbErr.message}`);
+  // 1. Fetch Trial Balance ledgers — PAGINATE (PostgREST caps a single response
+  // at 1000 rows; un-paginated, expense/creditor ledgers past row 1000 were
+  // excluded from TDS mapping).
+  const tbRows: any[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error: tbErr } = await (supabase as any)
+      .from("tally_trial_balance")
+      .select("ledger_name,parent_group,debit_amount,credit_amount,closing_balance,balance_type")
+      .eq("client_id", client_id)
+      .eq("financial_year", financial_year)
+      .range(from, from + 999);
+    if (tbErr) throw new Error(`TB fetch error: ${tbErr.message}`);
+    if (!data || !data.length) break;
+    tbRows.push(...data);
+    if (data.length < 1000) break;
+  }
 
-  const expenseLedgers = (tbRows || []).filter((l: any) => isExpenseGroup(l.parent_group));
+  const expenseLedgers = tbRows.filter((l: any) => isExpenseGroup(l.parent_group));
   if (expenseLedgers.length === 0) {
     return { mapped: 0, skipped: 0, confirmed: 0, pending: 0, needs_review: 0,
       message: "No expense/creditor ledgers found in Trial Balance" };
@@ -777,14 +786,22 @@ export async function runMissingScanner(params: {
 }): Promise<ScannerResult> {
   const { client_id, financial_year, firm_id, confidence_threshold = 40 } = params;
 
-  // 1. TB ledgers
-  const { data: tbRows, error: tbErr } = await (supabase as any)
-    .from("tally_trial_balance")
-    .select("ledger_name,parent_group,debit_amount,credit_amount,closing_balance,balance_type")
-    .eq("client_id", client_id).eq("financial_year", financial_year);
-  if (tbErr) throw new Error(`TB fetch error: ${tbErr.message}`);
+  // 1. TB ledgers — PAGINATE (PostgREST caps a single response at 1000 rows;
+  // un-paginated, missing-TDS flags were never raised for ledgers past row 1000).
+  const tbRows: any[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error: tbErr } = await (supabase as any)
+      .from("tally_trial_balance")
+      .select("ledger_name,parent_group,debit_amount,credit_amount,closing_balance,balance_type")
+      .eq("client_id", client_id).eq("financial_year", financial_year)
+      .range(from, from + 999);
+    if (tbErr) throw new Error(`TB fetch error: ${tbErr.message}`);
+    if (!data || !data.length) break;
+    tbRows.push(...data);
+    if (data.length < 1000) break;
+  }
 
-  const expenseLedgers = ((tbRows ?? []) as any[]).filter(l => isExpenseGroup(l.parent_group));
+  const expenseLedgers = (tbRows as any[]).filter(l => isExpenseGroup(l.parent_group));
   if (expenseLedgers.length === 0) {
     return { scanned: 0, excluded_mapped: 0, flagged: 0, estimated_total_tds: 0, message: "No expense/creditor ledgers found in Trial Balance." };
   }

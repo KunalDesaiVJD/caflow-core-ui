@@ -71,14 +71,25 @@ export default function ComparativeStatements() {
 
   async function loadData() {
     setLoading(true);
-    const [snapRes, mapRes, tallyRes] = await Promise.all([
+    const [snapRes, mapRes, tallyRows] = await Promise.all([
       supabase.from("trial_balance_snapshots").select("*").eq("client_id", clientId!).order("financial_year", { ascending: false }).limit(2),
       supabase.from("coa_mappings").select("*"),
-      supabase.from("tally_trial_balance").select("ledger_name,parent_group,closing_balance,balance_type").eq("client_id", clientId!),
+      // PAGINATE — PostgREST caps a single response at 1000 rows; an un-paginated
+      // TB select silently truncated large clients, under-counting comparatives.
+      (async () => {
+        const rows: any[] = [];
+        for (let from = 0; ; from += 1000) {
+          const { data, error } = await supabase.from("tally_trial_balance").select("ledger_name,parent_group,closing_balance,balance_type").eq("client_id", clientId!).range(from, from + 999);
+          if (error || !data || !data.length) break;
+          rows.push(...data);
+          if (data.length < 1000) break;
+        }
+        return rows;
+      })(),
     ]);
     setSnapshots(snapRes.data || []);
     setMappings(mapRes.data || []);
-    setTallyLedgers(tallyRes.data || []);
+    setTallyLedgers(tallyRows || []);
     setLoading(false);
   }
 

@@ -297,19 +297,31 @@ export function AnomalyFeedView({ tallyEngId, financialYear, clientId, onRaiseQu
     setLoading(true);
     setScanDone(false);
     try {
-      const [vRes, tbRes] = await Promise.all([
+      const [vRes, tbData] = await Promise.all([
         (supabase as any)
           .from("tally_vouchers")
           .select("id,voucher_date,voucher_type,voucher_number,party_ledger,amount,dr_cr,narration,line_items")
           .eq("engagement_id", tallyEngId)
           .limit(10000),
-        (supabase as any)
-          .from("tally_trial_balance")
-          .select("ledger_name,parent_group,closing_balance,balance_type")
-          .eq("engagement_id", tallyEngId),
+        // PAGINATE — PostgREST caps a single response at 1000 rows; an
+        // un-paginated TB select missed ledgers past row 1000 in the anomaly scan.
+        (async () => {
+          const rows: TBRow[] = [];
+          for (let from = 0; ; from += 1000) {
+            const { data, error } = await (supabase as any)
+              .from("tally_trial_balance")
+              .select("ledger_name,parent_group,closing_balance,balance_type")
+              .eq("engagement_id", tallyEngId)
+              .range(from, from + 999);
+            if (error || !data || !data.length) break;
+            rows.push(...(data as TBRow[]));
+            if (data.length < 1000) break;
+          }
+          return rows;
+        })(),
       ]);
 
-      const cleanedTb = ((tbRes.data as TBRow[]) ?? []).map(r => ({
+      const cleanedTb = ((tbData as TBRow[]) ?? []).map(r => ({
         ...r,
         ledger_name:  cleanTallyName(r.ledger_name),
         parent_group: cleanTallyName(r.parent_group),
