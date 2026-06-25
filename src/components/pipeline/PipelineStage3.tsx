@@ -1741,7 +1741,13 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       if (key.startsWith("__")) continue;           // skip meta keys (__patched)
       const code = (val as any)?.code;
       if (!code) continue;
-      if (liveNames.has(key.trim().toLowerCase())) continue;  // still mapped to a live ledger
+      // Normalise the mapping key through cleanTallyName (same cleaner applied to
+      // the live ledger names at load) before comparing. Tally exports sometimes
+      // garble names with control chars / HTML entities (e.g. "BHAVNA ROADWAYS&#13;&#10;");
+      // the live name is cleaned to "BHAVNA ROADWAYS" but the saved mapping key
+      // kept the garble — without this they never matched and the mapping was
+      // FALSELY flagged as orphaned even though the ledger is alive in the TB.
+      if (liveNames.has(cleanTallyName(key).toLowerCase())) continue;  // still mapped to a live ledger
       // Best rename candidate by Jaccard token overlap.
       const orphanTokens = tokensOf(key);
       let best: string | null = null;
