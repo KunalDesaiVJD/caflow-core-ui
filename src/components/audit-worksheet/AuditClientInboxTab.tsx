@@ -609,19 +609,16 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
         return [67, 56, 202];                                                    // indigo
       };
 
-      // Build one row per query — Query column wraps, everything else is fixed
+      // Build one row per query. FY and Due dropped — auditors said they
+      // weren't useful in the export. The Query column owns most of the
+      // page now so long ledger lines and threaded replies fit without
+      // hyphenation or character-level cutting.
       const body = displayed.map((q, qi) => {
         const groupLedger = [q.group_name, q.ledger_name].filter(Boolean).join(" / ") || "—";
-        const refFy       = [q.ref_number, q.financial_year && `FY ${q.financial_year}`]
-                              .filter(Boolean).join("\n") || `#${qi + 1}`;
 
-        // Query header line(s)
         const lines: string[] = [`Q: ${q.query_text}`];
         if (q.required_documents) lines.push(`Req: ${q.required_documents}`);
 
-        // Conversation thread — A (auditor) / C (client) prefixed lines.
-        // Falls back to q.client_reply when no portal_query_messages exist
-        // (legacy queries that pre-date the messages table).
         const msgs = allMessages[q.id] || [];
         const threadLines: string[] = [];
         if (msgs.length === 0 && q.client_reply) {
@@ -636,39 +633,28 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
         }
         if (threadLines.length) lines.push("", ...threadLines);
 
-        // "07 Jun 26" — 9 chars, no wrap in a narrow Due column
-        const dueStr = q.due_date
-          ? (() => {
-              const d = new Date(q.due_date);
-              return isNaN(d.getTime())
-                ? q.due_date
-                : d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "2-digit" });
-            })()
-          : "—";
-
         return [
           String(qi + 1),
           q.status,
           q.priority,
-          refFy,
+          q.ref_number || `#${qi + 1}`,
           groupLedger,
-          dueStr,
           lines.join("\n"),
         ];
       });
 
-      // Column widths sum to cw (~277mm in A4 landscape with 10mm margins).
-      // # widened to 12mm so triple-digit row numbers fit on one line; Due
-      // widened to 22mm so "07 Jun 26" never wraps.
-      const COL_NUM = 12, COL_STATUS = 26, COL_PRI = 12, COL_REF = 24,
-            COL_GL  = 44, COL_DUE = 22;
-      const COL_QUERY = cw - (COL_NUM + COL_STATUS + COL_PRI + COL_REF + COL_GL + COL_DUE);
+      // Six columns sum to cw (~277mm A4 landscape, 10mm margins).
+      // Generous Query width prevents long words / Rupee/special chars from
+      // forcing autoTable into character-level wrapping.
+      const COL_NUM = 10, COL_STATUS = 26, COL_PRI = 12, COL_REF = 24,
+            COL_GL  = 60;
+      const COL_QUERY = cw - (COL_NUM + COL_STATUS + COL_PRI + COL_REF + COL_GL);
 
       autoTable(doc, {
         startY:     HDR + 3,
         margin:     { left: ml, right: ml, top: HDR + 3 },
         tableWidth: cw,
-        head: [["#", "Status", "Pri", "Ref / FY", "Group / Ledger", "Due", "Query / Last Reply"]],
+        head: [["#", "Status", "Pri", "Ref", "Group / Ledger", "Query / Last Reply"]],
         body,
         headStyles: {
           fillColor:   [44, 50, 82] as [number, number, number],
@@ -684,8 +670,7 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
           2: { cellWidth: COL_PRI,    fontSize: 7.5, halign: "center" },
           3: { cellWidth: COL_REF,    fontSize: 7,   textColor: [80, 85, 115] as [number, number, number] },
           4: { cellWidth: COL_GL,     fontSize: 7.5 },
-          5: { cellWidth: COL_DUE,    fontSize: 7,   halign: "center" },
-          6: { cellWidth: COL_QUERY,  fontSize: 8,   overflow: "linebreak" },
+          5: { cellWidth: COL_QUERY,  fontSize: 8,   overflow: "linebreak" },
         },
         styles: {
           cellPadding: { top: 2, right: 3, bottom: 2, left: 3 },
@@ -714,15 +699,6 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
           if (hookData.column.index === 2 && q.priority === "High") {
             hookData.cell.styles.textColor = [185, 28, 28] as [number, number, number];
             hookData.cell.styles.fontStyle = "bold";
-          }
-          // Highlight overdue due-dates
-          if (hookData.column.index === 5 && q.due_date) {
-            const due = new Date(q.due_date);
-            const today = new Date(); today.setHours(0, 0, 0, 0);
-            if (due < today && !["Clarified", "Closed"].includes(q.status)) {
-              hookData.cell.styles.textColor = [185, 28, 28] as [number, number, number];
-              hookData.cell.styles.fontStyle = "bold";
-            }
           }
         },
         didDrawPage: () => { drawPageHeader(); },
