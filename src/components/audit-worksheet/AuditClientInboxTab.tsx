@@ -552,9 +552,21 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
 
       // COMPACT MODE — one row per query in a single A4-landscape table.
       // The full-thread per-query layout previously produced 28+ pages for
-      // 80-odd queries; nobody actually reads that. Skip the per-query
-      // message fetch (huge round-trip win too) and surface just the
-      // most recent client reply inline from q.client_reply when present.
+      // 80-odd queries; nobody actually reads that. We fetch the full
+      // message thread per query but render it as a compact inline
+      // "A: …  /  C: …" sequence inside the Query cell so both sides of
+      // the conversation are visible without ballooning the page count.
+
+      // Fetch messages per displayed query (small payload — usually 0-4 msgs)
+      const allMessages: Record<string, Message[]> = {};
+      await Promise.all(displayed.map(async (q) => {
+        const { data: msgs } = await (supabase as any)
+          .from("portal_query_messages")
+          .select("*")
+          .eq("query_id", q.id)
+          .order("created_at", { ascending: true });
+        allMessages[q.id] = (msgs as Message[]) || [];
+      }));
 
       const filterLabel = filter === "all"     ? "All Queries"
                         : filter === "open"    ? "Open Queries"
@@ -602,11 +614,28 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
         const groupLedger = [q.group_name, q.ledger_name].filter(Boolean).join(" / ") || "—";
         const refFy       = [q.ref_number, q.financial_year && `FY ${q.financial_year}`]
                               .filter(Boolean).join("\n") || `#${qi + 1}`;
-        const queryText   = q.required_documents
-                              ? `${q.query_text}\nReq: ${q.required_documents}`
-                              : q.query_text;
-        const lastReply   = q.client_reply ? `Reply: ${q.client_reply}` : "";
-        const queryCell   = lastReply ? `${queryText}\n\n${lastReply}` : queryText;
+
+        // Query header line(s)
+        const lines: string[] = [`Q: ${q.query_text}`];
+        if (q.required_documents) lines.push(`Req: ${q.required_documents}`);
+
+        // Conversation thread — A (auditor) / C (client) prefixed lines.
+        // Falls back to q.client_reply when no portal_query_messages exist
+        // (legacy queries that pre-date the messages table).
+        const msgs = allMessages[q.id] || [];
+        const threadLines: string[] = [];
+        if (msgs.length === 0 && q.client_reply) {
+          threadLines.push(`C: ${q.client_reply}`);
+        } else {
+          for (const m of msgs) {
+            const txt = m.message?.trim() || (m.attachment_name ? `[Attachment: ${m.attachment_name}]` : "");
+            if (!txt) continue;
+            const role = m.sender_role === "auditor" ? "A" : "C";
+            threadLines.push(`${role}: ${txt}`);
+          }
+        }
+        if (threadLines.length) lines.push("", ...threadLines);
+
         return [
           String(qi + 1),
           q.status,
@@ -614,13 +643,14 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
           refFy,
           groupLedger,
           q.due_date || "—",
-          queryCell,
+          lines.join("\n"),
         ];
       });
 
-      // Column widths sum to cw (~277mm in A4 landscape with 10mm margins)
-      const COL_NUM = 8, COL_STATUS = 28, COL_PRI = 14, COL_REF = 26,
-            COL_GL  = 50, COL_DUE = 20;
+      // Column widths sum to cw (~277mm in A4 landscape with 10mm margins).
+      // # column widened to 12mm so triple-digit row numbers fit on one line.
+      const COL_NUM = 12, COL_STATUS = 26, COL_PRI = 12, COL_REF = 24,
+            COL_GL  = 46, COL_DUE = 18;
       const COL_QUERY = cw - (COL_NUM + COL_STATUS + COL_PRI + COL_REF + COL_GL + COL_DUE);
 
       autoTable(doc, {
