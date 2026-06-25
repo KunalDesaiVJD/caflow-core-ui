@@ -609,26 +609,46 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
         return [67, 56, 202];                                                    // indigo
       };
 
-      // Build one row per query. FY and Due dropped — auditors said they
-      // weren't useful in the export. The Query column owns most of the
-      // page now so long ledger lines and threaded replies fit without
-      // hyphenation or character-level cutting.
-      const body = displayed.map((q, qi) => {
-        const groupLedger = [q.group_name, q.ledger_name].filter(Boolean).join(" / ") || "—";
+      // jsPDF's built-in helvetica can't measure characters outside WinAnsi
+      // (₹, curly quotes, ellipsis, NBSP, em-dashes …). When autoTable hits
+      // one inside an "overflow:linebreak" cell the wrap algorithm falls
+      // back to per-character breaks, which renders as the
+      // "Q : C l a r i f y …" letter-spacing the auditor reported.
+      // Normalise to plain ASCII before the text touches autoTable.
+      const sanitize = (s: string | null | undefined): string => {
+        if (!s) return "";
+        return s
+          .replace(/₹/g, "Rs.")     // ₹ Indian Rupee
+          .replace(/[‘’]/g, "'")  // ' '
+          .replace(/[“”]/g, '"')  // " "
+          .replace(/–|—/g, "-")   // – —
+          .replace(/…/g, "...")        // …
+          .replace(/ /g, " ")          // NBSP
+          .replace(/[^\x20-\x7E\n]/g, "");  // strip anything else non-ASCII
+      };
 
-        const lines: string[] = [`Q: ${q.query_text}`];
-        if (q.required_documents) lines.push(`Req: ${q.required_documents}`);
+      // Build one row per query. FY, Due and Ref dropped on auditor feedback
+      // — the row number is enough identification. Query column owns most
+      // of the page so long sentences and replies wrap word-by-word
+      // (never character-by-character) even on the densest queries.
+      const body = displayed.map((q, qi) => {
+        const groupLedger = sanitize(
+          [q.group_name, q.ledger_name].filter(Boolean).join(" / ") || "-",
+        );
+
+        const lines: string[] = [`Q: ${sanitize(q.query_text)}`];
+        if (q.required_documents) lines.push(`Req: ${sanitize(q.required_documents)}`);
 
         const msgs = allMessages[q.id] || [];
         const threadLines: string[] = [];
         if (msgs.length === 0 && q.client_reply) {
-          threadLines.push(`C: ${q.client_reply}`);
+          threadLines.push(`C: ${sanitize(q.client_reply)}`);
         } else {
           for (const m of msgs) {
-            const txt = m.message?.trim() || (m.attachment_name ? `[Attachment: ${m.attachment_name}]` : "");
-            if (!txt) continue;
+            const raw = m.message?.trim() || (m.attachment_name ? `[Attachment: ${m.attachment_name}]` : "");
+            if (!raw) continue;
             const role = m.sender_role === "auditor" ? "A" : "C";
-            threadLines.push(`${role}: ${txt}`);
+            threadLines.push(`${role}: ${sanitize(raw)}`);
           }
         }
         if (threadLines.length) lines.push("", ...threadLines);
@@ -637,24 +657,21 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
           String(qi + 1),
           q.status,
           q.priority,
-          q.ref_number || `#${qi + 1}`,
           groupLedger,
           lines.join("\n"),
         ];
       });
 
-      // Six columns sum to cw (~277mm A4 landscape, 10mm margins).
-      // Generous Query width prevents long words / Rupee/special chars from
-      // forcing autoTable into character-level wrapping.
-      const COL_NUM = 10, COL_STATUS = 26, COL_PRI = 12, COL_REF = 24,
-            COL_GL  = 60;
-      const COL_QUERY = cw - (COL_NUM + COL_STATUS + COL_PRI + COL_REF + COL_GL);
+      // Five columns sum to cw (~277mm A4 landscape, 10mm margins).
+      // Most of the page belongs to Query so word-level wrapping always wins.
+      const COL_NUM = 10, COL_STATUS = 26, COL_PRI = 12, COL_GL = 70;
+      const COL_QUERY = cw - (COL_NUM + COL_STATUS + COL_PRI + COL_GL);
 
       autoTable(doc, {
         startY:     HDR + 3,
         margin:     { left: ml, right: ml, top: HDR + 3 },
         tableWidth: cw,
-        head: [["#", "Status", "Pri", "Ref", "Group / Ledger", "Query / Last Reply"]],
+        head: [["#", "Status", "Pri", "Group / Ledger", "Query / Last Reply"]],
         body,
         headStyles: {
           fillColor:   [44, 50, 82] as [number, number, number],
@@ -668,9 +685,8 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
           0: { cellWidth: COL_NUM,    fontSize: 7,   halign: "right",  textColor: [110, 115, 140] as [number, number, number] },
           1: { cellWidth: COL_STATUS, fontSize: 7.5, fontStyle: "bold" },
           2: { cellWidth: COL_PRI,    fontSize: 7.5, halign: "center" },
-          3: { cellWidth: COL_REF,    fontSize: 7,   textColor: [80, 85, 115] as [number, number, number] },
-          4: { cellWidth: COL_GL,     fontSize: 7.5 },
-          5: { cellWidth: COL_QUERY,  fontSize: 8,   overflow: "linebreak" },
+          3: { cellWidth: COL_GL,     fontSize: 7.5 },
+          4: { cellWidth: COL_QUERY,  fontSize: 8,   overflow: "linebreak" },
         },
         styles: {
           cellPadding: { top: 2, right: 3, bottom: 2, left: 3 },
