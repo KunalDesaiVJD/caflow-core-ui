@@ -11,8 +11,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toast } from "sonner";
-import { Loader2, Plus, Save, Trash2 } from "lucide-react";
+import { Loader2, Plus, Save, Trash2, Lock, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { computeCOATotals } from "@/lib/fsReconciliation";
+import { FS_NCE_CONSTRAINED_NOTES } from "@/lib/nceFeatureFlags";
 
 // ─── Sub-ledger sort_order encoding ──────────────────────────────────────────
 // Parent rows use sort_order 1–11 (see ASSET_ROW_DEFS). User-added sub-ledgers
@@ -21,6 +23,7 @@ import { cn } from "@/lib/utils";
 // schema migration: a row is a sub-ledger iff sort_order >= 100.
 const SUB_BASE = 100;
 const isSubLedger = (so: number) => so >= SUB_BASE;
+const inr = (n: number) => Math.abs(Math.round(Number(n) || 0)).toLocaleString("en-IN");
 const parentOfSub = (so: number) => Math.floor(so / SUB_BASE);
 const nextSubSlot = (rows: { sort_order: number }[], parentSo: number): number => {
   const used = new Set(
@@ -200,6 +203,8 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
   const [loading, setLoading] = useState(true);
   const [saving,  setSaving]  = useState(false);
   const [eng,     setEng]     = useState<any>(null);
+  const [coa, setCoa] = useState({ ppe: { cy: 0, py: 0 }, intg: { cy: 0, py: 0 }, depr: { cy: 0, py: 0 } });
+  const [hasPyShell, setHasPyShell] = useState(false);
 
   // ── Derived year labels (from self-fetched engagement) ───────────────────
   const financialYear = (eng?.financial_year as string) || "";
@@ -262,6 +267,42 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
     return () => { cancelled = true; };
   }, [engagementId]);
 
+  // ── COA anchor load (constrained mode only) ───────────────────────────────
+  useEffect(() => {
+    if (!engagementId || !FS_NCE_CONSTRAINED_NOTES) return;
+    let cancelled = false;
+    (async () => {
+      const loadTB = async (id: string) => {
+        const out: any[] = [];
+        for (let f = 0; ; f += 1000) {
+          const { data } = await supabase.from("tally_trial_balance")
+            .select("ledger_name,closing_balance,balance_type,opening_balance,opening_type")
+            .eq("engagement_id", id).order("ledger_name").range(f, f + 999);
+          if (!data || !data.length) break; out.push(...data); if (data.length < 1000) break;
+        }
+        return out;
+      };
+      const { data: e } = await supabase.from("audit_engagements")
+        .select("client_id, coa_mapping, financial_year").eq("id", engagementId).maybeSingle();
+      if (cancelled || !e) return;
+      const cyMap = ((e as any).coa_mapping ?? {}) as any;
+      const cyTb = await loadTB(engagementId);
+      const p = String((e as any).financial_year ?? "").split("-");
+      const prevFy = p.length === 2 ? `${parseInt(p[0]) - 1}-${String(parseInt(p[0])).slice(-2)}` : "";
+      let pyTb: any[] = []; let pyMap: any = {};
+      if (prevFy && (e as any).client_id) {
+        const { data: shells } = await supabase.from("audit_engagements")
+          .select("id, coa_mapping").eq("client_id", (e as any).client_id).eq("financial_year", prevFy).eq("is_py_shell", true);
+        for (const s of (shells ?? []) as any[]) { const tb = await loadTB(s.id); if (tb.length) { pyTb = tb; pyMap = s.coa_mapping ?? {}; break; } }
+      }
+      if (cancelled) return;
+      const t = computeCOATotals(cyTb as any, pyTb as any, cyMap, pyMap);
+      setHasPyShell(pyTb.length > 0);
+      setCoa({ ppe: t["NCE_PPE"] ?? { cy: 0, py: 0 }, intg: t["NCE_INTG"] ?? { cy: 0, py: 0 }, depr: t["NCE_DEPR"] ?? { cy: 0, py: 0 } });
+    })();
+    return () => { cancelled = true; };
+  }, [engagementId]);
+
   // ── Update ──────────────────────────────────────────────────────────────
   const updateRow = (sort_order: number, field: keyof AssetRow, value: number | string) => {
     setRows(prev =>
@@ -315,6 +356,30 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
   const handleSave = async () => {
     setSaving(true);
     try {
+      // Constrained mode: route through the edge function, which re-derives COA
+      // server-side and rejects the save unless net block + depreciation tie
+      // (CY net = closing, PY net = opening; depreciation = NCE_DEPR).
+      if (FS_NCE_CONSTRAINED_NOTES) {
+        const cPayload = rows.map(r => ({
+          asset_category: r.asset_category, asset_name: r.asset_name,
+          coa_code: r.asset_category === "tangible" ? "NCE_PPE" : "NCE_INTG",
+          rate_pct: r.rate_pct, opening_balance: r.opening_balance,
+          additions_pre: r.additions_pre, additions_post: r.additions_post,
+          deletions: r.deletions, depreciation: calcDepreciation(r), sort_order: r.sort_order,
+        }));
+        const { data, error } = await supabase.functions.invoke("save-nce-constrained-note", {
+          body: { type: "ppe", engagement_id: engagementId, financial_year: financialYear, rows: cPayload },
+        });
+        if (error) throw new Error(error.message);
+        if ((data as any)?.error) {
+          const ms = (data as any)?.mismatches as string[] | undefined;
+          toast.error(ms?.length ? ms.join("  ·  ") : (data as any).error);
+          return;
+        }
+        toast.success("PPE schedule saved — ties to COA mapping.");
+        return;
+      }
+
       // Delete all existing rows for this engagement + FY
       const { error: delErr } = await supabase
         .from("nce_ppe_schedule")
@@ -348,6 +413,21 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
       setSaving(false);
     }
   };
+
+  // ── Constrained-mode tie status (difference to explain) ───────────────────
+  const cons = useMemo(() => {
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const sumCat = (cat: string, f: (r: AssetRow) => number) => r2(rows.filter(r => r.asset_category === cat).reduce((s, r) => s + f(r), 0));
+    const tanClose = sumCat("tangible", calcClosing), intClose = sumCat("intangible", calcClosing);
+    const tanOpen = sumCat("tangible", r => Number(r.opening_balance) || 0), intOpen = sumCat("intangible", r => Number(r.opening_balance) || 0);
+    const depTot = r2(rows.reduce((s, r) => s + calcDepreciation(r), 0));
+    const d = {
+      tanCy: r2(coa.ppe.cy - tanClose), intCy: r2(coa.intg.cy - intClose), dep: r2(coa.depr.cy - depTot),
+      tanPy: r2(coa.ppe.py - tanOpen), intPy: r2(coa.intg.py - intOpen),
+    };
+    const tied = Math.abs(d.tanCy) <= 1 && Math.abs(d.intCy) <= 1 && Math.abs(d.dep) <= 1 && (!hasPyShell || (Math.abs(d.tanPy) <= 1 && Math.abs(d.intPy) <= 1));
+    return { tanClose, intClose, depTot, d, tied };
+  }, [rows, coa, hasPyShell]);
 
   // ── Loading ─────────────────────────────────────────────────────────────
   if (loading) {
@@ -582,6 +662,36 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
           Note: Property, Plant and Equipment and Intangible Assets (owned assets)
         </p>
       </div>
+
+      {/* Constrained-mode COA anchor + difference to explain */}
+      {FS_NCE_CONSTRAINED_NOTES && (
+        <div className={cn("rounded-md border p-3 text-sm space-y-2",
+          cons.tied ? "border-emerald-300 bg-emerald-50/60 dark:bg-emerald-950/20" : "border-destructive/40 bg-destructive/5")}>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            <span className="inline-flex items-center gap-1.5 text-muted-foreground"><Lock className="h-3.5 w-3.5" /> Closing per COA mapping (locked):</span>
+            <span>Tangible net CY <span className="font-medium tabular-nums">₹{inr(coa.ppe.cy)}</span>{hasPyShell && <> · PY <span className="font-medium tabular-nums">₹{inr(coa.ppe.py)}</span></>}</span>
+            <span>Intangible net CY <span className="font-medium tabular-nums">₹{inr(coa.intg.cy)}</span>{hasPyShell && <> · PY <span className="font-medium tabular-nums">₹{inr(coa.intg.py)}</span></>}</span>
+            <span>Depreciation <span className="font-medium tabular-nums">₹{inr(coa.depr.cy)}</span></span>
+          </div>
+          {cons.tied ? (
+            <div className="inline-flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400 font-medium"><CheckCircle2 className="h-4 w-4" /> Schedule ties to COA mapping — ready to save.</div>
+          ) : (
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              {[
+                { l: "Tangible closing (net block)", v: cons.d.tanCy, show: true },
+                { l: "Intangible closing (net block)", v: cons.d.intCy, show: true },
+                { l: "Depreciation total", v: cons.d.dep, show: true },
+                { l: "Tangible opening (= last-year close)", v: cons.d.tanPy, show: hasPyShell },
+                { l: "Intangible opening (= last-year close)", v: cons.d.intPy, show: hasPyShell },
+              ].filter(x => x.show && Math.abs(x.v) > 1).map((x, i) => (
+                <span key={i} className="inline-flex items-center gap-1.5 text-destructive text-xs">
+                  <AlertTriangle className="h-3.5 w-3.5" /> {x.l}: difference ₹{inr(x.v)}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Top save — hidden in readOnly / preview mode */}
       {!readOnly && (
