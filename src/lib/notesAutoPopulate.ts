@@ -855,8 +855,40 @@ export function buildBreakup(
   //    DEFENSIVE: filter out null/undefined entries first — corrupt JSONB or
   //    sparse arrays from legacy partial-saves can otherwise crash the re-sync
   //    with "Cannot read properties of null (reading 'source')".
+  //
+  // 2026-06-23 (MICROCIRCUITS, GROWQ — duplicate ledger fix):
+  //    When the auditor renames a LINKED row (e.g. "HDFC Bank - OD -
+  //    50200114956511" → "HDFC Bank - OD - 6511") the ListTable flips
+  //    `source: linked → manual` but PRESERVES `linked_ledger`. Without
+  //    the dedup below, the next re-sync rebuilds a LINKED row from the
+  //    TB ledger AND keeps the renamed MANUAL row → two rows for the same
+  //    ledger, two amount lines, total inflated by 2×|ledger|.
+  //
+  //    Fix: drop any manual row whose `linked_ledger` matches a TB ledger
+  //    in the current `ledgers[]` list. Those rows represent a re-mapping
+  //    of an existing TB ledger that the fresh-build path is about to
+  //    re-create cleanly. Pure auditor rows (no `linked_ledger`) are
+  //    user-typed entries with no TB counterpart and are kept untouched.
+  const ledgerNamesLC = new Set(
+    ledgers.map(l => (l.account_name || "").trim().toLowerCase()).filter(Boolean),
+  );
+  const droppedDuplicates: BreakupRow[] = [];
   const manualRows: BreakupRow[] = (existing || [])
-    .filter((r): r is BreakupRow => r != null && r.source !== "linked");
+    .filter((r): r is BreakupRow => r != null && r.source !== "linked")
+    .filter(r => {
+      const ll = (r.linked_ledger || "").trim().toLowerCase();
+      if (!ll) return true;                       // no TB anchor → user-typed; keep
+      if (!ledgerNamesLC.has(ll)) return true;    // ledger no longer in TB → keep (history)
+      droppedDuplicates.push(r);
+      return false;                               // manual + ledger still in TB → drop, fresh LINKED row wins
+    });
+  if (droppedDuplicates.length > 0) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[buildBreakup] dropped ${droppedDuplicates.length} renamed manual row(s) whose TB ledger will be rebuilt as LINKED:`,
+      droppedDuplicates.map(r => `${r.linked_ledger}→${r.description}`).join(", "),
+    );
+  }
 
   // Issue 10 (today) — keep a fast lookup of every existing row by its
   // linked_ledger name so re-built "linked" rows can carry forward any
