@@ -3403,10 +3403,16 @@ export async function nceAutoPopulate(
   //
   // NCE-only and gated behind the FS_NO_MANUAL_NOTE_ADD figure-lock cure flag —
   // when OFF, behaviour is byte-identical to before (no reconcile runs).
-  if (FS_NO_MANUAL_NOTE_ADD && pyTb.length > 0) {
+  // 2026-06-30: ALSO run when there is NO PY-shell. computeCOATotals then sources
+  // PY from the CY-TB OPENING (signedOpening) — the SAME value the face anchor
+  // uses — so the reconcile ties note PY to COA PY for no-PY-shell engagements
+  // too. (KRISHNA INFRA trade payables: a creditor settled in-year has a CY
+  // opening but no CY closing, so the note's CY-closing-driven PY walk missed it
+  // → note PY was short of COA PY by that ledger's opening; the residual closes it.)
+  if (FS_NO_MANUAL_NOTE_ADD) {
     const { computeCOATotals } = await import("@/lib/fsReconciliation");
-    // Cabinet 2: the authoritative PY recompute from the PY-shell TB. Same args
-    // and precedence as the BS/P&L face and the harness verification target.
+    // Cabinet 2 (PY-shell) when present, else the CY-opening fallback — both are
+    // computeCOATotals' authoritative PY, matching the BS/P&L face + the harness.
     const coaTargets = computeCOATotals(tb, pyTb, coaMapping, pyCoaMap);
 
     for (const [code, conf] of Object.entries(NCE_CODE_TO_NOTE)) {
