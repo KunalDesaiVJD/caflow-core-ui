@@ -2141,6 +2141,38 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
             );
           }
 
+          // ── COA self-heal (FS_NO_MANUAL_NOTE_ADD) ──────────────────────────
+          // Under the cure the FACE is anchored to LIVE COA, but the note here was
+          // a write-protected persisted snapshot. So a ledger COA-mapped AFTER the
+          // note was last written left the note STALE/empty behind a correct face
+          // (Note != Face — e.g. Employee Benefits blank while COA + face = the
+          // mapped salary). Since under the cure a note is a pure function of
+          // TB + COA (manual additions don't survive the rebuild anyway), rebuild
+          // from CURRENT TB+COA on load and persist, so the note can never sit
+          // stale behind the face. This is exactly what "Refresh" did, made
+          // automatic. Finalized notes stay frozen (snapshot preserved).
+          if (FS_NO_MANUAL_NOTE_ADD && !notesFinalizedRef.current) {
+            try {
+              const healed = await nceAutoPopulate(engagementId, built);
+              if (cancelled) return;
+              setNoteData(healed);
+              const ht = Object.keys(healed);
+              if (ht.length > 0 && fy) {
+                const rows = ht.map(noteType => {
+                  const { cy_data, py_data } = serialiseNoteData(healed[noteType]);
+                  return { engagement_id: engagementId, financial_year: fy, note_type: noteType, cy_data, py_data };
+                });
+                await supabase
+                  .from("nce_financial_notes")
+                  .upsert(rows, { onConflict: "engagement_id,financial_year,note_type" });
+              }
+              return; // healed view shown + persisted; skip the stale-snapshot path
+            } catch (healErr) {
+              console.warn("[NCEDetailedNotes] COA self-heal rebuild failed; showing persisted", healErr);
+              // fall through to the persisted-snapshot display below
+            }
+          }
+
           if (!hasData) {
             // EMPTY ROWS: write-protected — do not overwrite. Show blank.
             if (!cancelled) setNoteData(built);
