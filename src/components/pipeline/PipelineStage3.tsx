@@ -1801,6 +1801,40 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     return out;
   }, [tbAccounts, coaMapping, coaMapCI]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── INVENTORY MAPPING GUARD (2026-06-29) ────────────────────────────────────
+  // Surfaces inventory data-quality problems at MAPPING time (instead of only as
+  // a downstream FS drift): a ledger sitting under the Tally "Stock-in-Hand"
+  // group that is NOT mapped to Inventory (NCE_STCK) — so its closing stock is
+  // silently absent from the BS and Changes-in-Inventory can't reconcile (e.g.
+  // BAPASITARAM's "Work In Progress" ₹9.09cr after a re-sync). Parent-group is the
+  // reliable Tally signal; name-only matching false-positives on liabilities like
+  // "Unbilled Revenue (WIP)", so we do NOT match on name. NCE only.
+  const STOCK_GROUP_RE = /stock[\s-]?in[\s-]?hand|inventor/i;
+  const unmappedStockLedgers = useMemo(() => {
+    if (!isNonCorporate) return [] as { name: string; group: string; amt: number; code: string | null }[];
+    const out: { name: string; group: string; amt: number; code: string | null }[] = [];
+    for (const a of tbAccounts) {
+      if (!STOCK_GROUP_RE.test(String(a.account_group || ""))) continue;
+      if (Math.abs(a.balance ?? 0) < 100) continue;
+      const m = resolveMapping(a.account_name);
+      if (!m?.code || m.code !== "NCE_STCK") out.push({ name: a.account_name, group: a.account_group, amt: a.balance ?? 0, code: m?.code ?? null });
+    }
+    return out;
+  }, [tbAccounts, coaMapping, coaMapCI, isNonCorporate]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Companion: last year carried stock but NO current-year stock is mapped at all
+  // (the ledger was renamed/removed, not just mis-mapped). Returns the PY amount.
+  const pyStockButNoCyStock = useMemo(() => {
+    if (!isNonCorporate || !(pyShellTbData?.tbRows?.length)) return 0;
+    let cyStock = 0;
+    for (const a of tbAccounts) { const m = resolveMapping(a.account_name); if (m?.code === "NCE_STCK") cyStock += Math.abs(a.balance ?? 0); }
+    if (cyStock > 1) return 0; // current-year stock exists → fine
+    const pyMap = (pyShellTbData?.coaMapping as Record<string, any>) || {};
+    let pyStock = 0;
+    for (const r of pyShellTbData.tbRows as any[]) { const m = pyMap[r.ledger_name] ?? resolveMapping(r.ledger_name); if (m?.code === "NCE_STCK") pyStock += Math.abs(Number(r.closing_balance ?? 0)); }
+    return pyStock > 100 ? pyStock : 0;
+  }, [tbAccounts, coaMapping, isNonCorporate, pyShellTbData]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Carry an orphan's mapping forward to the (renamed) live ledger, then drop
   // the orphan. Auditor-confirmed — never automatic.
   const carryMappingForward = useCallback(async (orphanName: string, targetName: string) => {
@@ -2907,6 +2941,42 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {isNonCorporate && (unmappedStockLedgers.length > 0 || pyStockButNoCyStock > 0) && (
+        <div className="rounded-md border border-rose-300 bg-rose-50 dark:bg-rose-950/20 p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-sm font-semibold text-rose-800 dark:text-rose-300">
+              Inventory check — stock may be missing from the financial statements
+            </span>
+          </div>
+          {unmappedStockLedgers.length > 0 && (
+            <>
+              <p className="text-xs text-rose-700 dark:text-rose-400 mb-2">
+                {unmappedStockLedgers.length} ledger(s) under the <span className="font-semibold">Stock-in-Hand</span> group are{" "}
+                <span className="font-semibold">not mapped to Inventory (Closing Stock)</span>. Their value is missing from the
+                Balance Sheet, and Changes in Inventory cannot reconcile. Map each to Inventory.
+              </p>
+              <div className="space-y-1.5">
+                {unmappedStockLedgers.map((s, i) => (
+                  <div key={i} className="flex items-center justify-between gap-2 text-xs bg-background/60 rounded px-2 py-1.5">
+                    <span className="truncate">
+                      <span className="font-medium">{s.name}</span>
+                      <span className="text-muted-foreground"> · [{s.group}] · ₹{Math.abs(Math.round(s.amt)).toLocaleString("en-IN")} · {s.code ? `currently mapped to ${s.code}` : "unmapped"}</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+          {pyStockButNoCyStock > 0 && (
+            <p className="text-xs text-rose-700 dark:text-rose-400 mt-2">
+              Last year carried <span className="font-semibold">₹{Math.abs(Math.round(pyStockButNoCyStock)).toLocaleString("en-IN")}</span> of
+              inventory, but <span className="font-semibold">no current-year stock ledger is mapped</span>. Confirm the stock was genuinely
+              sold off, or map the current-year stock ledger.
+            </p>
+          )}
         </div>
       )}
 
