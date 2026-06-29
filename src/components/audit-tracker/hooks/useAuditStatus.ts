@@ -632,8 +632,24 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
     const skippedFields: Record<string, any> = {};
     let lastError: any = null;
     for (let attempt = 0; attempt < 5; attempt++) {
-      const { error: err } = await supabase.from("audit_status").update(attemptPatch).eq("id", id);
-      if (!err) { lastError = null; break; }
+      // .select() so an RLS silent-deny (PostgREST returns { error: null,
+      // data: [] } when WITH CHECK / USING evaluates false) surfaces as a
+      // visible failure instead of a fake "Saved" toast that reverts on
+      // refresh. Previously this masked the firm_members_audit_status RLS
+      // bug for staff users (see migration 20260625130000).
+      const { data: updated, error: err } = await supabase
+        .from("audit_status")
+        .update(attemptPatch)
+        .eq("id", id)
+        .select();
+      if (!err) {
+        if (!updated || updated.length === 0) {
+          lastError = new Error("Update affected 0 rows — likely RLS policy block. Check Supabase logs.");
+          break;
+        }
+        lastError = null;
+        break;
+      }
       lastError = err;
       // PostgREST formats: "column \"foo\" of relation ..." or
       // "Could not find the 'foo' column of 'audit_status' in the schema cache".
