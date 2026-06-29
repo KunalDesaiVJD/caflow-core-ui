@@ -49,10 +49,11 @@ async function loadTB(engagementId: string) {
   return rows;
 }
 
-interface Props { engagementId: string; financialYear: string; readOnly?: boolean; }
+interface Props { engagementId: string; readOnly?: boolean; }
 
-export default function NCECapitalNote({ engagementId, financialYear, readOnly }: Props) {
+export default function NCECapitalNote({ engagementId, readOnly }: Props) {
   const [loading, setLoading] = useState(true);
+  const [financialYear, setFinancialYear] = useState("");
   const [saving, setSaving] = useState(false);
   const [finalized, setFinalized] = useState(false);
   const [hasPyShell, setHasPyShell] = useState(false);
@@ -64,11 +65,13 @@ export default function NCECapitalNote({ engagementId, financialYear, readOnly }
     setLoading(true);
     try {
       const { data: eng } = await supabase.from("audit_engagements")
-        .select("client_id, coa_mapping, notes_finalized").eq("id", engagementId).maybeSingle();
+        .select("client_id, coa_mapping, notes_finalized, financial_year").eq("id", engagementId).maybeSingle();
       setFinalized(!!(eng as any)?.notes_finalized);
+      const fy = String((eng as any)?.financial_year ?? "");
+      setFinancialYear(fy);
       const cyMap = ((eng as any)?.coa_mapping ?? {}) as Record<string, { code: string }>;
       const cyTb = await loadTB(engagementId);
-      const p = String(financialYear).split("-");
+      const p = String(fy).split("-");
       const prevFy = p.length === 2 ? `${parseInt(p[0]) - 1}-${String(parseInt(p[0])).slice(-2)}` : "";
       let pyTb: any[] = []; let pyMap: Record<string, { code: string }> = {};
       if (prevFy && (eng as any)?.client_id) {
@@ -85,7 +88,7 @@ export default function NCECapitalNote({ engagementId, financialYear, readOnly }
       setCoaCap({ cy: r2(coa.cy), py: r2(coa.py) });
 
       const { data: existing } = await supabase.from("nce_capital_note")
-        .select("*").eq("engagement_id", engagementId).eq("financial_year", financialYear).order("sort_order");
+        .select("*").eq("engagement_id", engagementId).eq("financial_year", fy).order("sort_order");
       const byPartner = new Map<string, PartnerRow>();
       for (const row of (existing ?? []) as any[]) {
         const pr = byPartner.get(row.partner_name) ?? { partner_name: row.partner_name, cy: { ...ZERO }, py: { ...ZERO } };
@@ -100,7 +103,7 @@ export default function NCECapitalNote({ engagementId, financialYear, readOnly }
     } finally {
       setLoading(false);
     }
-  }, [engagementId, financialYear]);
+  }, [engagementId]);
 
   useEffect(() => { if (FS_NCE_CONSTRAINED_NOTES) reload(); }, [reload]);
 

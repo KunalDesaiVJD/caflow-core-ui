@@ -21,6 +21,8 @@ import { Wallet, FileText, Building2 } from "lucide-react";
 import { NCECapitalAccount } from "@/components/stage8/NCECapitalAccount";
 import { NCEDetailedNotes }  from "@/components/stage8/NCEDetailedNotes";
 import { NCEPPESchedule }    from "@/components/stage8/NCEPPESchedule";
+import NCECapitalNote        from "@/components/stage8/NCECapitalNote";
+import { FS_NCE_CONSTRAINED_NOTES } from "@/lib/nceFeatureFlags";
 
 // ─── Note 1 preview — Summary of Significant Accounting Policies ──────────────
 // Mirrors the DOCX export's Note 1 page (src/lib/nceFinancialsDocx.ts →
@@ -386,6 +388,7 @@ export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteM
               PPE schedule). Wrapped in a single NAVY-bordered page frame so
               it visually separates from the Note 1 page above. */}
           <div style={pageFrame}>
+            {FS_NCE_CONSTRAINED_NOTES && <NCECapitalNote engagementId={engagementId} readOnly={readOnly} />}
             <NCECapitalAccount engagementId={engagementId} readOnly={readOnly} />
             <NCEDetailedNotes engagementId={engagementId} dynamicNoteMap={dynamicNoteMap} onExpansionStateUpdate={onExpansionStateUpdate} readOnly={readOnly} initialExpandedRows={initialExpandedRows} />
             <NCEPPESchedule engagementId={engagementId} readOnly={readOnly} />
@@ -406,6 +409,7 @@ export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteM
           </TabsList>
 
           <TabsContent value="capital_account" className="mt-3">
+            {FS_NCE_CONSTRAINED_NOTES && <NCECapitalNote engagementId={engagementId} readOnly={readOnly} />}
             <NCECapitalAccount engagementId={engagementId} readOnly={readOnly} />
           </TabsContent>
 
