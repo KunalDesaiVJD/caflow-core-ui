@@ -101,3 +101,35 @@ export const FS_BLOCK_UNEXPLAINED_DRIFT = false;
  * never affected (NCE-scoped throughout). FIGURE-MOVING.
  */
 export const FS_NO_MANUAL_NOTE_ADD = true;
+
+/**
+ * FS_NCE_CONSTRAINED_NOTES (2026-06-29, user policy: Capital & PPE must be
+ * MANUALLY editable, yet their CLOSING totals — and PPE depreciation — can NEVER
+ * deviate from COA mapping). When true (NCE engagements ONLY) it activates the
+ * constrained-edit Capital note (table `nce_capital_note`) and the constrained
+ * PPE schedule:
+ *   - the CLOSING total of each note is NOT a typed input; it is Σ(movements) +
+ *     a derived balancer = (COA total − Σ movements), so `Σ closing ≡ COA` by
+ *     construction, for CY and PY independently — there is no set of manual
+ *     inputs that makes it untrue;
+ *   - PPE depreciation is pinned to NCE_DEPR (the P&L face value); the schedule
+ *     only DISTRIBUTES it across asset classes (a depreciation balancer forces
+ *     `Σ class depreciation ≡ NCE_DEPR`);
+ *   - the SECURITY DEFINER save RPCs (`save_nce_capital_note` /
+ *     `save_nce_ppe_schedule`) re-derive COA server-side and reject any save
+ *     where `|Σ − COA| > ₹1` (the only DB-side tie enforcement in the codebase);
+ *   - validateFSReconciliation emits recon rows for NCE_CAP/NCE_PPE/NCE_INTG/
+ *     NCE_DEPR, so a coding regression that broke the tie surfaces as
+ *     drift_severe and blocks export (a regression tripwire);
+ *   - the FS_NO_MANUAL_NOTE_ADD lockdown gets a NARROW carve-out for the
+ *     `capital` + `ppe` note types only — every other note stays read-only.
+ * The FACE stays COA-anchored (computeNceCoaAnchoredFace) regardless, so the
+ * note is a constrained disclosure layer over the same COA number the face
+ * already uses and is structurally incapable of moving a face figure. When
+ * false (default), behaviour is byte-identical to today. FS_NO_CAPITAL_PLUG is
+ * unaffected (stays OFF; the note ties to the PRE-plug COA value, so the plug
+ * and a tied Capital note coexist cleanly). Flip ON only after the TS↔SQL COA
+ * parity test is green AND a real-data parity run shows 0 drift across NCE.
+ * Corporate is never affected (NCE-scoped throughout). FIGURE-MOVING when ON.
+ */
+export const FS_NCE_CONSTRAINED_NOTES = false;
