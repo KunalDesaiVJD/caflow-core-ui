@@ -2862,20 +2862,50 @@ export default function PipelineFinancialStatements({
 
   // PY Changes in Inventories: computed from PY Shell TB for INV_* mapped ledgers.
   // Returns null when no PY Shell TB is available (fall back to prior engagement).
+  //
+  // BUG P4 (handoff 2026-06-29): originally iterated CY `tbAccounts` and looked
+  // up `pyShellTbMap.get(acct.account_name)` — exact name match only. If an
+  // inventory ledger was renamed between FY-1 and CY (or letter-case changed),
+  // the PY value silently dropped and PY Changes-in-Inventory under-counted.
+  // Now iterates PY-shell TB rows directly and identifies inventory ledgers via
+  // multi-source mapping: CY mapping (exact + case-insensitive) THEN PY-shell
+  // mapping (exact + case-insensitive). Mirrors the NCE working sibling at
+  // pyShellPLAmounts (~:2933) and nceAutoPopulate.ts isInventoryRow (~:1950).
   const pyInvCII = useMemo((): number | null => {
-    if (!pyShellTbMap.size) return null;
+    if (!pyShellTb?.length) return null;
+    // Case-insensitive overlays for both mappings.
+    const cyMappingLower: Record<string, { code: string }> = {};
+    for (const [k, v] of Object.entries(coaMapping || {})) {
+      if (v?.code) cyMappingLower[k.toLowerCase().trim()] = v;
+    }
+    const pyMappingLower: Record<string, { code: string }> = {};
+    for (const [k, v] of Object.entries(pyShellCoaMapping || {})) {
+      if (v?.code) pyMappingLower[k.toLowerCase().trim()] = v;
+    }
+    const resolveCode = (rawName: string): string | undefined => {
+      const name = rawName.trim();
+      const lower = name.toLowerCase();
+      return (
+        (coaMapping as any)[name]?.code
+        ?? cyMappingLower[lower]?.code
+        ?? (pyShellCoaMapping as any)?.[name]?.code
+        ?? pyMappingLower[lower]?.code
+      );
+    };
     let hasInv = false;
     let total = 0;
-    for (const acct of tbAccounts) {
-      const mapping = coaMapping[acct.account_name];
-      if (!mapping || !INV_CODES.has(mapping.code)) continue;
+    for (const row of pyShellTb) {
+      const name = String(row.ledger_name || "").trim();
+      if (!name) continue;
+      const code = resolveCode(name);
+      if (!code || !INV_CODES.has(code)) continue;
       hasInv = true;
-      const pyRow = pyShellTbMap.get(acct.account_name);
-      if (!pyRow) continue;
-      total += pyRow.opening - pyRow.closing;
+      const opening = fsSignedOpening(row.opening_balance, row.opening_type, "DR");
+      const closing = fsSignedBalance(row.closing_balance, row.balance_type, "DR");
+      total += opening - closing;
     }
     return hasInv ? total : null;
-  }, [pyShellTbMap, tbAccounts, coaMapping]);
+  }, [pyShellTb, coaMapping, pyShellCoaMapping]);
 
   // Inventory mismatch: CY opening_balance ≠ PY Shell closing_balance per ledger.
   // Surfaced as a warning banner when any discrepancy > ₹1 exists.
@@ -4044,15 +4074,21 @@ export default function PipelineFinancialStatements({
     [tallyTb, pyShellTb, coaMapping, pyShellCoaMapping],
   );
 
-  // Phase 8 (CRIT-7, NCE-only) — count TB ledgers with a material closing balance
-  // that are NOT mapped to any FS code. computeCOATotals silently drops these, and
-  // the residual absorber then hides the gap inside Owners' Capital — so the BS
-  // can read "balanced" while it is materially wrong (the 3 mapping-incomplete
-  // engagements: AMADIUS / SWENI / SWASTIK 24-25). Surfaced here so the export
-  // gate can block until the auditor completes COA Mapping. Replicates
-  // computeCOATotals' lookup (exact → trim → case-insensitive).
-  const nceUnmappedNonZero = useMemo(() => {
-    if (!isNonCorporate) return { count: 0, net: 0 };
+  // Phase 8 (CRIT-7) — count TB ledgers with a material closing balance in
+  // EITHER CY or PY that are NOT mapped to any FS code. computeCOATotals
+  // silently drops these, and the residual absorber then hides the gap
+  // inside Owners' Capital / Reserves — so the BS can read "balanced" while
+  // it is materially wrong. Surfaced here so the export gate can block until
+  // the auditor completes COA Mapping. Replicates computeCOATotals' lookup
+  // (exact → trim → case-insensitive).
+  //
+  // BUG P2 (handoff 2026-06-29): originally hard-gated NCE-only (`if
+  // (!isNonCorporate) return …`), so the corporate export was never blocked
+  // on an unmapped material ledger. Now entity-agnostic, used by both the
+  // NCE and Corporate Excel/Word gates below. Also unions PY-shell TB so a
+  // ledger that exists ONLY in the prior year (CY=0, PY material) blocks
+  // export — previously only CY closing was checked.
+  const unmappedNonZero = useMemo(() => {
     const mapping = (coaMapping ?? {}) as Record<string, any>;
     const ci: Record<string, any> = {};
     for (const [k, v] of Object.entries(mapping)) {
@@ -4060,20 +4096,48 @@ export default function PipelineFinancialStatements({
       const kk = String(k).trim().toLowerCase();
       if (!(kk in ci)) ci[kk] = v;
     }
-    const lookup = (nm: string) => !nm ? undefined : (mapping[nm] ?? mapping[nm.trim()] ?? ci[String(nm).trim().toLowerCase()]);
-    const seen = new Map<string, any>();
-    for (const r of (tallyTb ?? [])) { const nm = String(r.ledger_name ?? ""); if (nm) seen.set(nm, r); }
-    let count = 0, net = 0;
-    for (const r of seen.values()) {
+    const lookup = (nm: string) =>
+      !nm ? undefined : (mapping[nm] ?? mapping[nm.trim()] ?? ci[String(nm).trim().toLowerCase()]);
+    // Aggregate CY + PY closing per ledger name so a row that exists in only
+    // one year still surfaces. Sign convention matches computeCOATotals.
+    type Agg = { cy: number; py: number; cyDr: boolean; pyDr: boolean };
+    const seen = new Map<string, Agg>();
+    const upsert = (nm: string): Agg => {
+      let cur = seen.get(nm);
+      if (!cur) {
+        cur = { cy: 0, py: 0, cyDr: true, pyDr: true };
+        seen.set(nm, cur);
+      }
+      return cur;
+    };
+    for (const r of (tallyTb ?? [])) {
       const nm = String(r.ledger_name ?? "");
+      if (!nm) continue;
+      const a = upsert(nm);
+      a.cy = Number(r.closing_balance) || 0;
+      a.cyDr = !String(r.balance_type || "").toUpperCase().startsWith("CR");
+    }
+    for (const r of (pyShellTb ?? [])) {
+      const nm = String(r.ledger_name ?? "");
+      if (!nm) continue;
+      const a = upsert(nm);
+      a.py = Number(r.closing_balance) || 0;
+      a.pyDr = !String(r.balance_type || "").toUpperCase().startsWith("CR");
+    }
+    let count = 0, net = 0;
+    for (const [nm, v] of seen.entries()) {
       if (lookup(nm)?.code) continue;
-      const v = Number(r.closing_balance) || 0;
-      const dr = !String(r.balance_type || "").toUpperCase().startsWith("CR");
-      const sv = dr ? Math.abs(v) : -Math.abs(v);
-      if (Math.abs(sv) > 100) { count++; net += sv; }
+      const svCy = v.cyDr ? Math.abs(v.cy) : -Math.abs(v.cy);
+      const svPy = v.pyDr ? Math.abs(v.py) : -Math.abs(v.py);
+      // Materiality threshold: ₹100 in either year is enough to block.
+      // Zero-in-both-years ledgers are silently ignored (P2 requirement).
+      if (Math.abs(svCy) > 100 || Math.abs(svPy) > 100) {
+        count++;
+        net += svCy; // Net is CY-signed for the message; PY can be inspected at Mapping
+      }
     }
     return { count, net: Math.round(net) };
-  }, [isNonCorporate, tallyTb, coaMapping]);
+  }, [tallyTb, pyShellTb, coaMapping]);
 
   /** Apply the NCE note grand total to an FS code, respecting storage sign
    *  convention: CR-natural codes (liabilities, equity, income) are stored
@@ -4545,8 +4609,9 @@ export default function PipelineFinancialStatements({
   // is OFF, behaviour is byte-identical to before.
   const exportExcelBlocked: boolean = isNonCorporate
     ? (!nceBsBalanced || hasSevereDrift || hasOpeningMismatch
-        || (FS_NO_MANUAL_NOTE_ADD ? nceUnmappedNonZero.count > 0 : hasPpeScheduleDrift))
-    : (!corpBsBalanced || !corpBsBalancedPy || !faPyEntered || hasOpeningMismatch || corpHasSevereDrift);
+        || (FS_NO_MANUAL_NOTE_ADD ? unmappedNonZero.count > 0 : hasPpeScheduleDrift))
+    : (!corpBsBalanced || !corpBsBalancedPy || !faPyEntered || hasOpeningMismatch
+        || corpHasSevereDrift || unmappedNonZero.count > 0);
   const exportExcelBlockReasons: string[] = [];
   // BUG-094/108: branch was inverted vs the gate above (isNonCorporate ? NCE : corp).
   // `if (!isNonCorporate)` pushed NCE reasons for corporate engagements (and vice-versa),
@@ -4555,13 +4620,19 @@ export default function PipelineFinancialStatements({
   if (isNonCorporate) {
     if (!nceBsBalanced)   exportExcelBlockReasons.push(`Balance Sheet out by ₹${Math.abs(nceBsDiff).toLocaleString("en-IN")}`);
     if (hasSevereDrift)   exportExcelBlockReasons.push(`${fsReconResult!.severeCount} note(s) have drift > ₹100 — fix in Notes tab first`);
-    if (FS_NO_MANUAL_NOTE_ADD && nceUnmappedNonZero.count > 0)
-      exportExcelBlockReasons.push(`${nceUnmappedNonZero.count} TB ledger(s) (net ₹${Math.abs(nceUnmappedNonZero.net).toLocaleString("en-IN")}) are not mapped to any FS code — complete COA Mapping; the Balance Sheet cannot be trusted until they are mapped`);
+    if (FS_NO_MANUAL_NOTE_ADD && unmappedNonZero.count > 0)
+      exportExcelBlockReasons.push(`${unmappedNonZero.count} TB ledger(s) (net ₹${Math.abs(unmappedNonZero.net).toLocaleString("en-IN")}) are not mapped to any FS code — complete COA Mapping; the Balance Sheet cannot be trusted until they are mapped`);
   } else {
     if (!corpBsBalanced)   exportExcelBlockReasons.push(`CY Balance Sheet out by ₹${Math.abs(bsDiff).toLocaleString("en-IN")}`);
     if (!corpBsBalancedPy) exportExcelBlockReasons.push(`PY Balance Sheet out by ₹${Math.abs(bsDiffPy).toLocaleString("en-IN")}`);
     if (!faPyEntered)      exportExcelBlockReasons.push("FA Note — Previous-Year totals not entered");
     if (corpHasSevereDrift) exportExcelBlockReasons.push(`${corpReconResult!.severeCount} corporate note(s) have drift > ₹100 — fix in Notes tab first`);
+    // BUG P2 (handoff 2026-06-29): corp gate previously had no unmapped term,
+    // so a material TB ledger left unmapped silently fell into the BS residual
+    // absorber and the export proceeded. Now blocks on any unmapped ledger
+    // with CY OR PY closing > ₹100 (zero-value ledgers do not block).
+    if (unmappedNonZero.count > 0)
+      exportExcelBlockReasons.push(`${unmappedNonZero.count} TB ledger(s) (net ₹${Math.abs(unmappedNonZero.net).toLocaleString("en-IN")}) are not mapped to any FS code — complete COA Mapping; the Balance Sheet cannot be trusted until they are mapped`);
   }
   // PPE schedule reconciliation reason — applies to NCE only (guard already
   // includes isNonCorporate). Pushed outside the if/else like the gate below.
@@ -7602,6 +7673,30 @@ export default function PipelineFinancialStatements({
         toast.error("Financial statements not yet loaded. Please wait and try again.");
         return;
       }
+      // BUG P1 (handoff 2026-06-29): Corporate Word export must mirror the
+      // Excel gate on opening-vs-prior-close so a renamed/edited opening
+      // balance can't ship a wrong .docx. corpHasSevereDrift is already
+      // enforced by the button's disabled state; hasOpeningMismatch was
+      // missing — guard the handler too in case the user reaches it via
+      // the font-picker dialog after a state change.
+      if (hasOpeningMismatch) {
+        toast.error(
+          `Export Word blocked: ${openingReconResult.mismatches.length} ledger(s) where CY opening ≠ PY-shell closing. Fix the opening balance in Tally first.`,
+        );
+        return;
+      }
+      if (corpHasSevereDrift) {
+        toast.error(
+          `Export Word blocked: ${corpReconResult!.severeCount} corporate note(s) have drift > ₹100. Fix in the Notes tab first.`,
+        );
+        return;
+      }
+      if (unmappedNonZero.count > 0) {
+        toast.error(
+          `Export Word blocked: ${unmappedNonZero.count} TB ledger(s) (net ₹${Math.abs(unmappedNonZero.net).toLocaleString("en-IN")}) are unmapped with material CY or PY balances. Complete COA Mapping first.`,
+        );
+        return;
+      }
       const { bs: memoBsD, pl: memoPLD } = fsDisplayData;
       if (!memoBsD || !memoPLD) {
         toast.error("Financial statements data not available.");
@@ -8007,11 +8102,15 @@ export default function PipelineFinancialStatements({
             <Button
               variant="outline"
               size="sm"
-              className={cn("gap-1", corpHasSevereDrift && "opacity-60")}
+              className={cn("gap-1", (corpHasSevereDrift || hasOpeningMismatch || unmappedNonZero.count > 0) && "opacity-60")}
               title={corpHasSevereDrift
                 ? `Export Word blocked: ${corpReconResult!.severeCount} corporate note(s) have drift > ₹100. Fix in Notes tab first.`
+                : hasOpeningMismatch
+                ? `Export Word blocked: ${openingReconResult.mismatches.length} ledger(s) where CY opening ≠ PY-shell closing. Fix the opening balance in Tally (see banner above).`
+                : unmappedNonZero.count > 0
+                ? `Export Word blocked: ${unmappedNonZero.count} TB ledger(s) (net ₹${Math.abs(unmappedNonZero.net).toLocaleString("en-IN")}) are unmapped with material CY or PY balances. Complete COA Mapping first.`
                 : "Export Balance Sheet + P&L + Notes as a Big4-style Word document (.docx)"}
-              disabled={corpHasSevereDrift}
+              disabled={corpHasSevereDrift || hasOpeningMismatch || unmappedNonZero.count > 0}
               onClick={() => setShowCorpFontDialog(true)}
             >
               <FileText size={14} /> Export Word

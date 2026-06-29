@@ -159,16 +159,30 @@ export function CashFlowNotesTab({ engagementId, engagement }: Props) {
     setAutoFilling(true);
     try {
       // Read cash/bank ledgers from tally_trial_balance (snapshot path removed)
-      const { data: rows, error } = await supabase
-        .from('tally_trial_balance')
-        .select('ledger_name, opening_balance, opening_type, closing_balance, balance_type')
-        .eq('engagement_id', engagementId);
-      if (error) throw error;
+      // BUG P6 (handoff 2026-06-29): PostgREST caps a single response at 1000
+      // rows. An un-paginated select silently truncated the TB for engagements
+      // with >1000 ledgers, dropping cash/bank ledgers past row 1000 and under-
+      // counting the cash flow opening/closing. Paginate with .order() so page
+      // boundaries are stable across requests.
+      const PAGE = 1000;
+      const rows: any[] = [];
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await supabase
+          .from('tally_trial_balance')
+          .select('ledger_name, opening_balance, opening_type, closing_balance, balance_type')
+          .eq('engagement_id', engagementId)
+          .order('ledger_name', { ascending: true })
+          .range(from, from + PAGE - 1);
+        if (error) throw error;
+        const page = (data ?? []) as any[];
+        rows.push(...page);
+        if (page.length < PAGE) break;
+      }
 
       let openingSum = 0;
       let closingSum = 0;
       let matched = 0;
-      for (const r of (rows || []) as any[]) {
+      for (const r of rows) {
         const name = String(r.ledger_name || '').toLowerCase();
         if (/\b(cash|bank)\b/.test(name)) {
           const openSign = String(r.opening_type || "Dr").toUpperCase() === "CR" ? -1 : 1;

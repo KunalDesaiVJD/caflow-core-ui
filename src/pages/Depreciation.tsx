@@ -356,30 +356,52 @@ enabled: !!clientId && !!fy,
 const { data: tbLedgers } = useQuery({
 queryKey: ['dep-tb-ledgers', engagement?.id],
 queryFn: async () => {
+  // BUG P6 (handoff 2026-06-29): PostgREST caps a single response at 1000
+  // rows. Unpaginated FA-ledger selects silently truncated past row 1000 →
+  // PPE Tagging missed fixed-asset ledgers on engagements with >1000
+  // qualifying rows. Both branches below now page via .range() with a
+  // deterministic .order() so page boundaries are stable.
+  const PAGE = 1000;
   // ── Primary: trial_balance_snapshots ──────────────────────────────────
-  const { data: snapData } = await supabase
-    .from('trial_balance_snapshots')
-    .select('id, ledger_name, primary_group, account_type, closing_balance, hierarchy_level')
-    .eq('engagement_id', engagement!.id)
-    .or(
-      'primary_group.ilike.%Fixed Asset%,' +
-      'primary_group.ilike.%Tangible%,' +
-      'primary_group.ilike.%Intangible%,' +
-      'account_type.eq.Fixed Assets'
-    )
-    .order('primary_group')
-    .order('ledger_name');
-  if (snapData && snapData.length > 0) return snapData as any[];
+  const snapData: any[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from('trial_balance_snapshots')
+      .select('id, ledger_name, primary_group, account_type, closing_balance, hierarchy_level')
+      .eq('engagement_id', engagement!.id)
+      .or(
+        'primary_group.ilike.%Fixed Asset%,' +
+        'primary_group.ilike.%Tangible%,' +
+        'primary_group.ilike.%Intangible%,' +
+        'account_type.eq.Fixed Assets'
+      )
+      .order('primary_group')
+      .order('ledger_name')
+      .range(from, from + PAGE - 1);
+    if (error) break;
+    const page = (data ?? []) as any[];
+    snapData.push(...page);
+    if (page.length < PAGE) break;
+  }
+  if (snapData.length > 0) return snapData;
 
   // ── Fallback: tally_trial_balance (desktop / node sync) ──────────────
-  const { data: ttbData } = await supabase
-    .from('tally_trial_balance')
-    .select('id, ledger_name, parent_group, closing_balance, balance_type')
-    .eq('engagement_id', engagement!.id)
-    .ilike('parent_group', '%Fixed Asset%')
-    .order('ledger_name');
+  const ttbData: any[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from('tally_trial_balance')
+      .select('id, ledger_name, parent_group, closing_balance, balance_type')
+      .eq('engagement_id', engagement!.id)
+      .ilike('parent_group', '%Fixed Asset%')
+      .order('ledger_name')
+      .range(from, from + PAGE - 1);
+    if (error) break;
+    const page = (data ?? []) as any[];
+    ttbData.push(...page);
+    if (page.length < PAGE) break;
+  }
   // Normalise to the same shape the PPE Tagging UI expects
-  return ((ttbData || []) as any[]).map((r: any) => ({
+  return ttbData.map((r: any) => ({
     id:              r.id,
     ledger_name:     r.ledger_name,
     primary_group:   r.parent_group,

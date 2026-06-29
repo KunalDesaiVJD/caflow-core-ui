@@ -1804,36 +1804,52 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   // ── INVENTORY MAPPING GUARD (2026-06-29) ────────────────────────────────────
   // Surfaces inventory data-quality problems at MAPPING time (instead of only as
   // a downstream FS drift): a ledger sitting under the Tally "Stock-in-Hand"
-  // group that is NOT mapped to Inventory (NCE_STCK) — so its closing stock is
+  // group that is NOT mapped to an Inventory FS code — so its closing stock is
   // silently absent from the BS and Changes-in-Inventory can't reconcile (e.g.
   // BAPASITARAM's "Work In Progress" ₹9.09cr after a re-sync). Parent-group is the
   // reliable Tally signal; name-only matching false-positives on liabilities like
-  // "Unbilled Revenue (WIP)", so we do NOT match on name. NCE only.
+  // "Unbilled Revenue (WIP)", so we do NOT match on name.
+  //
+  // BUG P5 (handoff 2026-06-29): originally hard-gated `!isNonCorporate` so the
+  // Corporate Mapping page had no inventory standing check. Now entity-agnostic
+  // and keys on the shared INV_CODES_SET (covers BOTH the Corporate Schedule III
+  // codes INV_STOCK/INV_RM/INV_WIP/INV_FG/INV_STT AND the NCE NCE_STCK code), so
+  // a Pvt Ltd / Ltd carrying closing stock now gets the same mapping-time guard
+  // a Partnership/LLP does.
   const STOCK_GROUP_RE = /stock[\s-]?in[\s-]?hand|inventor/i;
   const unmappedStockLedgers = useMemo(() => {
-    if (!isNonCorporate) return [] as { name: string; group: string; amt: number; code: string | null }[];
     const out: { name: string; group: string; amt: number; code: string | null }[] = [];
     for (const a of tbAccounts) {
       if (!STOCK_GROUP_RE.test(String(a.account_group || ""))) continue;
       if (Math.abs(a.balance ?? 0) < 100) continue;
       const m = resolveMapping(a.account_name);
-      if (!m?.code || m.code !== "NCE_STCK") out.push({ name: a.account_name, group: a.account_group, amt: a.balance ?? 0, code: m?.code ?? null });
+      if (!m?.code || !INV_CODES_SET.has(m.code)) {
+        out.push({ name: a.account_name, group: a.account_group, amt: a.balance ?? 0, code: m?.code ?? null });
+      }
     }
     return out;
-  }, [tbAccounts, coaMapping, coaMapCI, isNonCorporate]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tbAccounts, coaMapping, coaMapCI]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Companion: last year carried stock but NO current-year stock is mapped at all
   // (the ledger was renamed/removed, not just mis-mapped). Returns the PY amount.
+  // BUG P5: also dropped its `!isNonCorporate` gate and generalized from NCE_STCK
+  // to INV_CODES_SET so the check fires for Corporate engagements too.
   const pyStockButNoCyStock = useMemo(() => {
-    if (!isNonCorporate || !(pyShellTbData?.tbRows?.length)) return 0;
+    if (!(pyShellTbData?.tbRows?.length)) return 0;
     let cyStock = 0;
-    for (const a of tbAccounts) { const m = resolveMapping(a.account_name); if (m?.code === "NCE_STCK") cyStock += Math.abs(a.balance ?? 0); }
+    for (const a of tbAccounts) {
+      const m = resolveMapping(a.account_name);
+      if (m?.code && INV_CODES_SET.has(m.code)) cyStock += Math.abs(a.balance ?? 0);
+    }
     if (cyStock > 1) return 0; // current-year stock exists → fine
     const pyMap = (pyShellTbData?.coaMapping as Record<string, any>) || {};
     let pyStock = 0;
-    for (const r of pyShellTbData.tbRows as any[]) { const m = pyMap[r.ledger_name] ?? resolveMapping(r.ledger_name); if (m?.code === "NCE_STCK") pyStock += Math.abs(Number(r.closing_balance ?? 0)); }
+    for (const r of pyShellTbData.tbRows as any[]) {
+      const m = pyMap[r.ledger_name] ?? resolveMapping(r.ledger_name);
+      if (m?.code && INV_CODES_SET.has(m.code)) pyStock += Math.abs(Number(r.closing_balance ?? 0));
+    }
     return pyStock > 100 ? pyStock : 0;
-  }, [tbAccounts, coaMapping, isNonCorporate, pyShellTbData]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tbAccounts, coaMapping, pyShellTbData]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Carry an orphan's mapping forward to the (renamed) live ledger, then drop
   // the orphan. Auditor-confirmed — never automatic.
@@ -2944,7 +2960,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         </div>
       )}
 
-      {isNonCorporate && (unmappedStockLedgers.length > 0 || pyStockButNoCyStock > 0) && (
+      {(unmappedStockLedgers.length > 0 || pyStockButNoCyStock > 0) && (
         <div className="rounded-md border border-rose-300 bg-rose-50 dark:bg-rose-950/20 p-3">
           <div className="flex items-center gap-2 mb-2">
             <span className="text-sm font-semibold text-rose-800 dark:text-rose-300">
