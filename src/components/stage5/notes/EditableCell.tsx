@@ -448,6 +448,7 @@ function ListRowActionsMenu({
   onMoveToGroup,
   onCreateGroup,
   onRestoreLink,
+  deleteDisabledReason,
 }: {
   onDelete: () => void;
   onRemoveFromGroup?: () => void;
@@ -463,6 +464,12 @@ function ListRowActionsMenu({
   onCreateGroup?: (groupName: string) => void;
   /** When set, the row is MANUAL but was previously LINKED — shows "Restore Link" option. */
   onRestoreLink?: () => void;
+  /** 2026-06-23 (MICROCIRCUITS — non-zero-balance delete guard): when set,
+   *  the Delete row button is rendered disabled with this string as the
+   *  validation message. Used to block deletion of any breakup row whose
+   *  CY or PY amount is non-zero (Auto OR Manual) — deleting amount-bearing
+   *  rows leaves the BS/PL face out of sync with the COA mapping. */
+  deleteDisabledReason?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [groupMenuOpen, setGroupMenuOpen] = useState(false);
@@ -607,13 +614,31 @@ function ListRowActionsMenu({
           </button>
         )}
 
-        <button
-          type="button"
-          className="w-full text-left px-2 py-1 rounded text-xs hover:bg-red-50 text-destructive flex items-center gap-1.5 transition-colors"
-          onClick={() => { onDelete(); setOpen(false); }}
-        >
-          <Trash2 size={11} className="shrink-0" /> Delete row
-        </button>
+        {/* 2026-06-23 (MICROCIRCUITS — non-zero-balance delete guard):
+            Delete is disabled when the row carries any CY or PY amount.
+            The validation reason is shown in a tooltip (title attribute)
+            and visually as a muted, non-interactive entry. Auditor must
+            first zero / unmap the ledger in Stage 6 COA Mapping before
+            deletion — preserves Notes ↔ FS ↔ COA reconciliation. */}
+        {deleteDisabledReason ? (
+          <div
+            role="button"
+            aria-disabled="true"
+            tabIndex={-1}
+            title={deleteDisabledReason}
+            className="w-full text-left px-2 py-1 rounded text-xs text-muted-foreground/60 flex items-center gap-1.5 cursor-not-allowed select-none"
+          >
+            <Trash2 size={11} className="shrink-0" /> Delete row
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="w-full text-left px-2 py-1 rounded text-xs hover:bg-red-50 text-destructive flex items-center gap-1.5 transition-colors"
+            onClick={() => { onDelete(); setOpen(false); }}
+          >
+            <Trash2 size={11} className="shrink-0" /> Delete row
+          </button>
+        )}
       </PopoverContent>
     </Popover>
   );
@@ -738,6 +763,16 @@ function ListRowWithSources({
             onMoveToGroup={onMoveToGroup}
             onCreateGroup={onCreateGroup}
             onRestoreLink={onRestoreLink}
+            deleteDisabledReason={
+              // 2026-06-23 (MICROCIRCUITS — delete guard): block deletion
+              // when the row carries any CY or PY amount, regardless of
+              // Auto/Manual source. Deleting amount-bearing rows leaves
+              // the BS/PL face out of sync with COA mapping; auditor must
+              // zero the amount (or unmap in Stage 6 COA) first.
+              (Math.abs(Number(r.amount_cy ?? 0)) > 0.005 || Math.abs(Number(r.amount_py ?? 0)) > 0.005)
+                ? "Cannot delete — row has a non-zero balance. Set both CY and PY amounts to zero (or unmap the ledger in Stage 6 COA Mapping) before deleting, otherwise the Notes and the BS/PL face would drift from the COA mapping."
+                : undefined
+            }
           />
         </div>
       </div>
@@ -1184,6 +1219,16 @@ export function ListTable({
                   {/* Issue-2: Group headers do NOT get "Move to Sub Group" option */}
                   <ListRowActionsMenu
                     onDelete={() => removeGroupWithUngroup(origIdx)}
+                    deleteDisabledReason={
+                      // 2026-06-23 (MICROCIRCUITS — delete guard) — same
+                      // rule for sub-group headers: if the aggregated
+                      // group total (CY or PY) is non-zero, deletion is
+                      // blocked. Members under the group carry amounts;
+                      // removing the header would orphan them.
+                      (Math.abs(Number(groupAmts.cy ?? 0)) > 0.005 || Math.abs(Number(groupAmts.py ?? 0)) > 0.005)
+                        ? "Cannot delete — this sub-group has a non-zero balance from its member rows. Zero or unmap each member ledger first."
+                        : undefined
+                    }
                   />
                 </div>
               </div>
