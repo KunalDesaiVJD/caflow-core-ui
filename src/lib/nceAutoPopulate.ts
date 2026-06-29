@@ -3427,56 +3427,48 @@ export async function nceAutoPopulate(
 
       const targetPy = Math.round(((coaTargets[code]?.py) ?? 0) * 100) / 100;
       const isPatternA = !!conf.col;
+      const residualId = `py_recon_${code}`;
+      const resKey = isPatternA ? `${residualId}_${conf.col}` : residualId;
+
+      // IDEMPOTENCE (2026-06-30): STRIP any prior residual for this code BEFORE
+      // measuring, so curPy is the pure ledger/COA base — NOT a base already
+      // topped up by this same residual from an earlier rebuild. Without this, a
+      // re-run sees its own residual inside curPy, computes diff=0, then zeroes
+      // the residual (note.py[resKey]=0), flipping the note back off-COA on
+      // alternate rebuilds (the KRISHNA INFRA trade-payables churn). Now every
+      // rebuild reproduces the SAME residual → byte-stable, no re-heal flicker.
+      note.customRows = note.customRows.filter(r => r.id !== residualId);
+      delete (note.py as any)[resKey];
+      delete (note.cy as any)[resKey];
 
       // Re-serialise on EACH code so a residual pushed for one column of a
       // Pattern A note is seen when we reconcile the other column.
       const { cy_data, py_data } = serialiseNoteData(note);
       const noteRow = { cy_data, py_data, note_type: conf.note };
-      const currentPy = getNCENoteFaceTotal(
+      const curPy = getNCENoteFaceTotal(
         noteRow,
         "py",
         isPatternA ? "A" : "B",
         conf.col,
         conf.config || conf.note,
-      );
-
-      // getNCENoteFaceTotal returns null only when the note has no entries at
-      // all. If COA also has nothing for this code, there is nothing to tie.
-      const curPy = currentPy ?? 0;
+      ) ?? 0;
       const diff = Math.round((targetPy - curPy) * 100) / 100;
       if (Math.abs(diff) <= 1) continue;
 
       // Push the signed residual so the grand total moves by exactly `diff`.
-      // Sectionless + unattached ⇒ counted in the grand total by
-      // computeNoteTotals (extras = customRows with !section && !attachedTo).
-      const residualId = `py_recon_${code}`;
+      // Sectionless + unattached ⇒ counted in the grand total by computeNoteTotals.
       const residualRow: NCECustomRow = {
         id:    residualId,
         label: "Other (prior year)",
         source: "auto",
-        // MULTI-SECTION FIX (2026-06-29): the cogs note has TWO sub-sections —
-        // cogs_a (materials/purchases) and cogs_c (Changes in Inventory). A
-        // sectionless residual is an "extra" counted in BOTH sub-section totals, so
-        // the NCE_COGS (materials) residual leaked into the NCE_CII (inventory-
-        // change) subtotal — inflating e.g. NIRALI's PY Changes-in-Inventory by the
-        // residual (−₹87.95L). Nest the cogs residual under a cogs_a row (raw_purch)
-        // so it reconciles materials WITHOUT polluting the inventory-change line.
+        // cogs has TWO sub-sections (cogs_a materials / cogs_c CII); a sectionless
+        // residual leaks into BOTH, so nest the cogs residual under a cogs_a row
+        // (raw_purch) to reconcile materials without polluting the CII line.
         ...(conf.note === "cogs" ? { attachedTo: "raw_purch" } : {}),
       };
-      // Avoid duplicating a residual if one already exists for this code
-      // (defensive — a fresh build won't have one, but a re-run might).
-      if (!note.customRows.some(r => r.id === residualId)) {
-        note.customRows.push(residualRow);
-      }
-      if (isPatternA) {
-        // Carry the difference on the column this code feeds; zero on the other.
-        const key = `${residualId}_${conf.col}`;
-        note.py[key] = diff;
-        note.cy[key] = 0;
-      } else {
-        note.py[residualId] = diff;
-        note.cy[residualId] = 0;
-      }
+      note.customRows.push(residualRow);
+      note.py[resKey] = diff;
+      note.cy[resKey] = 0;
     }
   }
 
