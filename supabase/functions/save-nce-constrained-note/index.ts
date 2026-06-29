@@ -179,19 +179,18 @@ Deno.serve(async (req) => {
     const coaINT = coaTotal('NCE_INTG', 'DR', cyTb, pyTb, cyMap, pyMap);
     const coaDEP = coaTotal('NCE_DEPR', 'DR', cyTb, pyTb, cyMap, pyMap);
     const netCy = (x: any) => num(x.opening_balance) + num(x.additions_pre) + num(x.additions_post) - num(x.deletions) - num(x.depreciation);
-    const netPy = (x: any) => num(x.opening_py) + num(x.additions_py) - num(x.deletions_py) - num(x.depreciation_py);
     const sumBy = (code: string, f: (x: any) => number) => r2(rows.filter((x: any) => x.coa_code === code).reduce((s: number, x: any) => s + f(x), 0));
-    const ppeCy = sumBy('NCE_PPE', netCy), ppePy = sumBy('NCE_PPE', netPy);
-    const intCy = sumBy('NCE_INTG', netCy), intPy = sumBy('NCE_INTG', netPy);
+    // CY net block = closing; PY net block = THIS year's opening (= last year's close,
+    // = COA NCE_PPE.py). No separate PY schedule columns needed.
+    const ppeCy = sumBy('NCE_PPE', netCy), ppePy = sumBy('NCE_PPE', (x) => num(x.opening_balance));
+    const intCy = sumBy('NCE_INTG', netCy), intPy = sumBy('NCE_INTG', (x) => num(x.opening_balance));
     const depCy = r2(rows.reduce((s: number, x: any) => s + num(x.depreciation), 0));
-    const depPy = r2(rows.reduce((s: number, x: any) => s + num(x.depreciation_py), 0));
     if (!within(ppeCy, coaPPE.cy)) mismatches.push(`NCE_PPE_CY_MISMATCH: tangible CY net ₹${ppeCy} must equal COA ₹${coaPPE.cy}`);
     if (!within(intCy, coaINT.cy)) mismatches.push(`NCE_INTG_CY_MISMATCH: intangible CY net ₹${intCy} must equal COA ₹${coaINT.cy}`);
-    if (!within(depCy, coaDEP.cy)) mismatches.push(`NCE_DEPR_CY_MISMATCH: depreciation CY ₹${depCy} must equal COA ₹${coaDEP.cy}`);
+    if (!within(depCy, coaDEP.cy)) mismatches.push(`NCE_DEPR_MISMATCH: depreciation ₹${depCy} must equal COA ₹${coaDEP.cy}`);
     if (pyTb.length) {
-      if (!within(ppePy, coaPPE.py)) mismatches.push(`NCE_PPE_PY_MISMATCH: tangible PY net ₹${ppePy} must equal COA ₹${coaPPE.py}`);
-      if (!within(intPy, coaINT.py)) mismatches.push(`NCE_INTG_PY_MISMATCH: intangible PY net ₹${intPy} must equal COA ₹${coaINT.py}`);
-      if (!within(depPy, coaDEP.py)) mismatches.push(`NCE_DEPR_PY_MISMATCH: depreciation PY ₹${depPy} must equal COA ₹${coaDEP.py}`);
+      if (!within(ppePy, coaPPE.py)) mismatches.push(`NCE_PPE_PY_MISMATCH: tangible opening ₹${ppePy} must equal last-year close (COA) ₹${coaPPE.py}`);
+      if (!within(intPy, coaINT.py)) mismatches.push(`NCE_INTG_PY_MISMATCH: intangible opening ₹${intPy} must equal last-year close (COA) ₹${coaINT.py}`);
     }
     if (mismatches.length) return json({ error: 'NCE_SAVE_TIE_FAILED', mismatches }, 422);
 
@@ -204,7 +203,7 @@ Deno.serve(async (req) => {
       total: r2(num(x.opening_balance) + num(x.additions_pre) + num(x.additions_post)),
       closing_balance: r2(netCy(x)),
       opening_py: num(x.opening_py), additions_py: num(x.additions_py), deletions_py: num(x.deletions_py),
-      depreciation_py: num(x.depreciation_py), closing_py: r2(netPy(x)),
+      depreciation_py: num(x.depreciation_py), closing_py: 0,
       is_balancing_class: !!x.is_balancing_class,
       coa_anchor_net: x.coa_code === 'NCE_INTG' ? coaINT.cy : coaPPE.cy, coa_anchor_depr: coaDEP.cy,
       is_stale: false, sort_order: num(x.sort_order),
