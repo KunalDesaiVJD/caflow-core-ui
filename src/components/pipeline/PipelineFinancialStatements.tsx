@@ -57,8 +57,9 @@ import {
 } from "@/lib/nceAutoPopulate";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 import FsHealthPanel from "@/components/pipeline/FsHealthPanel";
+import FsStatusChip from "@/components/pipeline/FsStatusChip";
 import { evaluateNotesStaleness } from "@/lib/notesStaleness";
-import { NCE_RESYNC_DELETE_FIRST, FS_NO_CAPITAL_PLUG, FS_CORP_PY_FACE_FROM_NOTE, FS_CORP_EXPORT_GATE, FS_NO_MANUAL_NOTE_ADD } from "@/lib/nceFeatureFlags";
+import { NCE_RESYNC_DELETE_FIRST, FS_NO_CAPITAL_PLUG, FS_CORP_PY_FACE_FROM_NOTE, FS_CORP_EXPORT_GATE, FS_NO_MANUAL_NOTE_ADD, FS_NCE_CONSTRAINED_NOTES } from "@/lib/nceFeatureFlags";
 import { validateFSReconciliation, validateCorporateFSReconciliation, logReconciliationDrift, NCE_LIAB_CODE_SET, computeCOATotals, validateOpeningVsPriorClose } from "@/lib/fsReconciliation";
 import { computeNceCoaAnchoredFace } from "@/lib/nceFaceAnchor";
 import { isTallyPLAccount, currentYearProfitAlreadyInReserves } from "@/lib/tallyDetection";
@@ -7985,6 +7986,9 @@ export default function PipelineFinancialStatements({
         <div className="flex items-center gap-2">
           {/* Task 5 (doc6): unit toggle hidden for NCE — actual values only */}
           {!isNonCorporate && <FsUnitsToggle />}
+          {FS_NCE_CONSTRAINED_NOTES && isNonCorporate && (
+            <FsStatusChip blocked={exportExcelBlocked} reasons={exportExcelBlockReasons} />
+          )}
           <Button
             variant="outline"
             size="sm"
