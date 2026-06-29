@@ -1929,6 +1929,29 @@ export async function nceAutoPopulate(
           const lower = (pg || "").toLowerCase();
           return INVENTORY_PG_TOKENS.some(t => lower.includes(t));
         };
+        // C4 FIX (2026-06-29): an explicitly inventory-mapped ledger (NCE_STCK /
+        // BS_CA_INV / INV_*) parented under a NON-inventory group (e.g. a
+        // "Finished Goods" ledger filed under "Current Assets") was dropped by the
+        // parent-group gate -> missing from the Changes-in-Inventory note and
+        // inconsistent with the Balance Sheet (computeCOATotals in
+        // fsReconciliation.ts is mapping-driven and already counts every NCE_STCK/
+        // INV_*/BS_CA_INV ledger regardless of parent_group). Resolve the CY code
+        // (PY-shell fallback) with the same raw ledger_name key the rest of this
+        // file uses. NCE_CII is DELIBERATELY EXCLUDED -- it is the P&L dual-post
+        // Changes-in-Inventory code (nceNoteRegistry.ts ~188) and must not be
+        // folded into the opening/closing stock walks. A stock-NAME fallback is
+        // intentionally NOT added: an unmapped stock-named ledger is not on the BS
+        // inventory line either, so including it would CREATE a cogs<->BS gap, not
+        // fix one (verified on live data: name-only candidates were all purchases/
+        // liabilities/expenses, zero genuine inventory).
+        const INVENTORY_FS_CODES = new Set([
+          "NCE_STCK", "BS_CA_INV", "INV_RM", "INV_WIP", "INV_FG", "INV_STT", "INV_STOCK",
+        ]);
+        const isInventoryRow = (row: { ledger_name: string; parent_group?: string | null }): boolean => {
+          if (isInventoryParent(row.parent_group)) return true;
+          const code = (coaMapping[row.ledger_name] ?? pyCoaMap[row.ledger_name])?.code;
+          return !!code && INVENTORY_FS_CODES.has(code);
+        };
         const classifyInv = (name: string): "wip"|"fg"|"raw"|"pack"|"other"|"trade" => {
           const lower = (name || "").toLowerCase();
           if (/\b(wip|work[-\s]?in[-\s]?progress)\b/.test(lower))     return "wip";
@@ -1949,7 +1972,7 @@ export async function nceAutoPopulate(
 
         // CY closings → pc_close_*/raw_close/pack_close/other_close
         for (const row of tb) {
-          if (!isInventoryParent(row.parent_group)) continue;
+          if (!isInventoryRow(row)) continue;
           // BUG-009/113: route through the flag-gated sign choke-point (OFF=Math.abs;
           // ON=head-signed so an abnormal Cr stock ledger nets instead of inflating).
           const amt = noteAmt(row, "cogs");
@@ -1969,7 +1992,7 @@ export async function nceAutoPopulate(
         // opening_balance into the matching pc_open_*/raw_open/etc. row.
         // openAmt uses Math.abs because Stock-in-Hand carries a Dr balance.
         for (const row of tb) {
-          if (!isInventoryParent(row.parent_group)) continue;
+          if (!isInventoryRow(row)) continue;
           if (ejectedSet.has(row.ledger_name)) continue;
           // BUG-009/113: flag-gated sign for the opening too (OFF=Math.abs, ON=head-signed).
           const openAmt = NCE_SIGNED_NOTE_AMOUNTS ? signedLedgerOpeningAmt(row, "cogs") : Math.abs(Number(row.opening_balance ?? 0));
@@ -2051,7 +2074,7 @@ export async function nceAutoPopulate(
                 if (data.length < TB_PAGE) break;
               }
               for (const row of prevTb) {
-                if (!isInventoryParent((row as any).parent_group)) continue;
+                if (!isInventoryRow(row as any)) continue;
 
                 // BUG-009/113: flag-gated sign for the PY-shell inventory walk (OFF=Math.abs).
                 const closeAmt = noteAmt(row, "cogs");   // = PY closing
