@@ -4610,7 +4610,11 @@ export default function PipelineFinancialStatements({
   // is OFF, behaviour is byte-identical to before.
   const exportExcelBlocked: boolean = isNonCorporate
     ? (!nceBsBalanced || hasSevereDrift || hasOpeningMismatch
-        || (FS_NO_MANUAL_NOTE_ADD ? unmappedNonZero.count > 0 : hasPpeScheduleDrift))
+        || (FS_NO_MANUAL_NOTE_ADD ? unmappedNonZero.count > 0 : hasPpeScheduleDrift)
+        // Phase-5 backstop: under the constrained-notes flag the PPE schedule
+        // disclosure must tie to books even with the cure ON (catches a saved
+        // schedule that went stale after a re-sync).
+        || (FS_NCE_CONSTRAINED_NOTES && hasPpeScheduleDrift))
     : (!corpBsBalanced || !corpBsBalancedPy || !faPyEntered || hasOpeningMismatch
         || corpHasSevereDrift || unmappedNonZero.count > 0);
   const exportExcelBlockReasons: string[] = [];
@@ -4639,7 +4643,7 @@ export default function PipelineFinancialStatements({
   // includes isNonCorporate). Pushed outside the if/else like the gate below.
   // Under the COA-anchor cure the BS face uses books PPE, so schedule-vs-books is
   // a disclosure mismatch, not a BS block (it no longer gates exportExcelBlocked).
-  if (hasPpeScheduleDrift && !FS_NO_MANUAL_NOTE_ADD) {
+  if (hasPpeScheduleDrift && (!FS_NO_MANUAL_NOTE_ADD || FS_NCE_CONSTRAINED_NOTES)) {
     exportExcelBlockReasons.push(
       `PPE schedule closing (₹${Math.abs(ppeScheduleClosing).toLocaleString("en-IN")}) does not match the books (₹${Math.abs(ppeBookClosing).toLocaleString("en-IN")}) — reconcile the PPE Schedule to the ledger`,
     );
