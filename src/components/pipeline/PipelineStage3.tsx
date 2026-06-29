@@ -1741,7 +1741,13 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       if (key.startsWith("__")) continue;           // skip meta keys (__patched)
       const code = (val as any)?.code;
       if (!code) continue;
-      if (liveNames.has(key.trim().toLowerCase())) continue;  // still mapped to a live ledger
+      // Normalise the mapping key through cleanTallyName (same cleaner applied to
+      // the live ledger names at load) before comparing. Tally exports sometimes
+      // garble names with control chars / HTML entities (e.g. "BHAVNA ROADWAYS&#13;&#10;");
+      // the live name is cleaned to "BHAVNA ROADWAYS" but the saved mapping key
+      // kept the garble — without this they never matched and the mapping was
+      // FALSELY flagged as orphaned even though the ledger is alive in the TB.
+      if (liveNames.has(cleanTallyName(key).toLowerCase())) continue;  // still mapped to a live ledger
       // Best rename candidate by Jaccard token overlap.
       const orphanTokens = tokensOf(key);
       let best: string | null = null;
@@ -1754,6 +1760,43 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         if (score > bestScore) { bestScore = score; best = cand.name; }
       }
       out.push({ name: key, code, suggestion: bestScore >= 0.5 ? best : null });
+    }
+    return out;
+  }, [tbAccounts, coaMapping, coaMapCI]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── DUPLICATE-LEDGER GUARD (2026-06-25) ─────────────────────────────────────
+  // Catches the silent double-count risk: two LIVE ledgers mapped to the SAME
+  // head that look like the same party. Tuned tight against false positives —
+  // Indian TBs are full of legitimately-similar ledgers (GST-rate splits, TDS
+  // sections, identical flat prices), so name-similarity / same-amount ALONE is
+  // far too noisy. We flag only:
+  //   (a) IDENTICAL name after cleanTallyName (different raw spelling that the
+  //       engine's raw-name dedup would miss → genuine double-count), OR
+  //   (b) one cleaned name fully CONTAINS the other AND both carry the same
+  //       NON-ZERO amount (the "ABC Traders" → "ABC Traders & Co" / individual
+  //       vs HUF rename-leftover shape). Substring + equal amount excludes the
+  //       rate-variant / different-party / CGST=SGST coincidences.
+  // Warning only — the auditor verifies and unmaps the duplicate; we never
+  // auto-unmap (which of the pair is the keeper is a human judgement).
+  const potentialDuplicates = useMemo(() => {
+    const norm = (s: string) => cleanTallyName(s).toLowerCase().replace(/[^a-z0-9]/g, "");
+    const byCode: Record<string, { name: string; amt: number; n: string }[]> = {};
+    for (const a of tbAccounts) {
+      const m = resolveMapping(a.account_name);
+      if (!m?.code) continue;
+      const n = norm(a.account_name);
+      if (!n) continue;
+      (byCode[m.code] ||= []).push({ name: a.account_name, amt: a.balance ?? 0, n });
+    }
+    const out: { a: string; b: string; code: string; amt: number; reason: string }[] = [];
+    for (const [code, list] of Object.entries(byCode)) {
+      for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+        const x = list[i], y = list[j];
+        if (x.n === y.n) { out.push({ a: x.name, b: y.name, code, amt: x.amt, reason: "identical name" }); continue; }
+        const contained = x.n.length !== y.n.length && (x.n.includes(y.n) || y.n.includes(x.n));
+        if (contained && Math.abs(x.amt) > 0.5 && Math.abs(x.amt - y.amt) < 0.5)
+          out.push({ a: x.name, b: y.name, code, amt: x.amt, reason: "one name contains the other · same amount" });
+      }
     }
     return out;
   }, [tbAccounts, coaMapping, coaMapCI]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -2834,6 +2877,33 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                     Clear
                   </Button>
                 </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {potentialDuplicates.length > 0 && (
+        <div className="rounded-md border border-orange-300 bg-orange-50 dark:bg-orange-950/20 p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-sm font-semibold text-orange-800 dark:text-orange-300">
+              {potentialDuplicates.length} possible duplicate ledger(s) — check for double-counting
+            </span>
+          </div>
+          <p className="text-xs text-orange-700 dark:text-orange-400 mb-2">
+            These pairs are mapped to the same head and look like the same party (e.g. an old
+            name left behind after a Tally rename, or an individual vs HUF account). If they ARE
+            the same, the amount is being counted twice — verify, and unmap the duplicate.
+          </p>
+          <div className="space-y-1.5">
+            {potentialDuplicates.map((d, i) => (
+              <div key={i} className="flex items-center justify-between gap-2 text-xs bg-background/60 rounded px-2 py-1.5">
+                <span className="truncate">
+                  <span className="font-medium">{d.a}</span>
+                  <span className="text-muted-foreground"> ↔ </span>
+                  <span className="font-medium">{d.b}</span>
+                  <span className="text-muted-foreground"> → {d.code} · ₹{Math.abs(Math.round(d.amt)).toLocaleString("en-IN")} · {d.reason}</span>
+                </span>
               </div>
             ))}
           </div>
