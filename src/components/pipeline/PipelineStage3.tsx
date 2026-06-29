@@ -2,6 +2,8 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { nceAutoPopulate, serialiseNoteData } from "@/lib/nceAutoPopulate";
+import { FS_NO_MANUAL_NOTE_ADD } from "@/lib/nceFeatureFlags";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -795,6 +797,39 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     // Persist silently — no toast (it's automatic)
     supabase.from("audit_engagements").update({ coa_mapping: patch } as any).eq("id", engagementId);
   }, [tbAccounts, coaMapping, activeLeafItems, engagementId]);
+
+  // ── Auto-refresh NCE notes on EVERY COA-mapping change ───────────────────
+  // The notes (nce_financial_notes) are a pure function of TB + COA under the
+  // cure, but they are PERSISTED — so a ledger mapped here used to leave the
+  // saved note stale/empty behind the (live, COA-anchored) face until someone
+  // re-opened the notes screen. Every mapping write in this component funnels
+  // through setCoaMapping, so this single debounced effect rebuilds + persists
+  // the notes the moment mapping changes — no human action, no Refresh click.
+  // Mirrors the on-load self-heal in NCEDetailedNotes. NCE-only, cure-gated;
+  // skips cleared/empty maps and finalized engagements; debounced so bulk/AI/
+  // propagation write bursts collapse into one rebuild.
+  useEffect(() => {
+    if (!FS_NO_MANUAL_NOTE_ADD || !isNonCorporate || !engagementId) return;
+    if ((engagement as any)?.notes_finalized) return;
+    const fy = (engagement as any)?.financial_year;
+    if (!fy) return;
+    if (!coaMapping || !Object.keys(coaMapping).length) return; // skip cleared/empty map (clearAllMappings / resetAndRemap)
+    const t = setTimeout(async () => {
+      try {
+        const populated = await nceAutoPopulate(engagementId, {});
+        const rows = Object.keys(populated).map(noteType => {
+          const { cy_data, py_data } = serialiseNoteData(populated[noteType]);
+          return { engagement_id: engagementId, financial_year: fy, note_type: noteType, cy_data, py_data };
+        });
+        if (rows.length) {
+          await supabase.from("nce_financial_notes")
+            .upsert(rows, { onConflict: "engagement_id,financial_year,note_type" });
+          queryClient.invalidateQueries({ queryKey: ["nce-financial-notes", engagementId] });
+        }
+      } catch (e) { console.warn("[Stage3] auto note-refresh failed", e); }
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [coaMapping, engagementId, isNonCorporate, queryClient]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load PY amounts
   useEffect(() => {
