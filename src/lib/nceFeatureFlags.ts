@@ -132,4 +132,4 @@ export const FS_NO_MANUAL_NOTE_ADD = true;
  * parity test is green AND a real-data parity run shows 0 drift across NCE.
  * Corporate is never affected (NCE-scoped throughout). FIGURE-MOVING when ON.
  */
-export const FS_NCE_CONSTRAINED_NOTES = false;
+export const FS_NCE_CONSTRAINED_NOTES = true;  // ACTIVATED 2026-06-29 (parity 27/0; edge fn deployed; migration applied). Revert to false to roll back.
