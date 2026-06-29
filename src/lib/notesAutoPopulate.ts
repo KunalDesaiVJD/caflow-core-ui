@@ -1518,89 +1518,74 @@ export async function autoPopulateNotes(
     }
   }
 
-  // ── P3 RECONCILE: Cabinet-1 (note headline) ≡ Cabinet-2 (COA PY target) ────
-  // BUG P3 (handoff 2026-06-29). The corporate note PY headline was sourced
-  // from the prior year's FILED stored note (Cabinet-1) and the breakup PY was
-  // built from the PY-shell TB via the CY mapping (Cabinet-2). On any engagement
-  // with a renamed / reclassified / closed ledger between FY-1 and CY, those
-  // two sources disagreed silently — note total ≠ BS face PY ≠ Ledger Explorer
-  // PY. This pass mirrors the NCE engine's "Cabinet 2 everywhere" reconcile
-  // (nceAutoPopulate.ts ~3365-3475): we compute the authoritative Cabinet-2
-  // target via the SAME computeCOATotals function that the BS / P&L face and
-  // the COA variance drill all read, then for every note row whose headline
-  // disagrees with the target we (a) anchor the headline to the target and
-  // (b) push a signed residual "Other (prior year — reconciliation)" breakup
-  // row so the per-ledger detail still adds to the same number.
+  // ── P3 RECONCILE: corp note headline (Cabinet-1) ≡ breakup PY sum (Cabinet-2) ─
   //
-  // Only runs when a PY-shell TB exists — without one, Cabinet-2 collapses to
-  // signed openings (BS-only, zero P&L) which is worse than keeping Cabinet-1.
-  // respectManualEdits() runs after this pass, so any auditor-touched headline
-  // continues to win as before. Lazy import to avoid a load-order cycle:
-  // fsReconciliation transitively imports back from this module.
+  // BUG P3 (handoff 2026-06-29). The corporate note PY headline was sourced
+  // from the prior year's FILED stored note (Cabinet-1, pyNotes[s][r].cy) and
+  // the breakup PY was built from the PY-shell TB via the CY mapping
+  // (Cabinet-2). On any engagement with a renamed / reclassified / closed
+  // ledger between FY-1 and CY, the two sources disagreed silently — note
+  // total ≠ BS face PY ≠ Ledger Explorer PY.
+  //
+  // BUG P3-followup (2026-06-29 PM, KWIKTEAM SUPPORT SERVICES PVT LTD). The
+  // first cut delegated Cabinet-2 to fsReconciliation.computeCOATotals — the
+  // NCE engine does the same — but computeCOATotals only falls back to signed
+  // OPENING balances when pyTb is FULLY empty (hasPyTb gate). On any corp
+  // engagement whose PY-shell TB is non-empty but doesn't cover a particular
+  // BS code's ledgers (the common case for trade payables / other CL / loans
+  // & advances), the per-code PY target collapsed to 0 while the breakup
+  // (which uses buildBreakup's resolvePY → CY opening_balance fallback for the
+  // SAME ledgers) was correctly populated. Pushing residual = target − breakup
+  // therefore inserted a NEGATIVE row equal to MINUS the entire breakup PY,
+  // zeroing out the PY total. The user observed this as an auto-populated
+  // "Other (prior year — reconciliation)" row carrying the reversal of the
+  // PY column on Notes 6 / 7 / 10 etc.
+  //
+  // ROOT-CAUSE FIX. For corporate, the breakup IS Cabinet-2 — it already
+  // unions the PY-shell closing (when a ledger is in pyTB) with the CY
+  // opening_balance fallback (= prior-year closing by accounting identity for
+  // BS codes). So we (a) anchor the headline to the breakup PY sum, never to
+  // computeCOATotals, and (b) push NO residual row — the breakup is already
+  // per-ledger consistent with the headline by construction.
+  //
+  // Self-healing: any stale "Other (prior year — reconciliation)" rows left by
+  // the previous (buggy) version of this pass are stripped before the breakup
+  // sum is computed, so engagements re-generating their notes converge to the
+  // correct state without manual cleanup.
+  //
+  // Runs only when a PY-shell TB exists (without one the breakup PY collapses
+  // to CY openings which still equal prior-year closings, but the reconcile is
+  // a no-op since Cabinet-1 is also derived from CY openings). respectManualEdits()
+  // runs after this pass so auditor-edited headlines continue to win.
   if (pyTB.length > 0) {
-    try {
-      const fsRecon = await import("@/lib/fsReconciliation");
-      const computeCOATotals = fsRecon.computeCOATotals;
-      const canonicalCode    = fsRecon.CANONICAL_NCE_CODE ?? {};
-      // pyCoaMap fallback to CY mapping (matches computeCOATotals signature).
-      const coaTargets = computeCOATotals(tb, pyTB, mapping, (pyCoaMap ?? mapping) as any);
-      const lookupTarget = (code: string): number => {
-        // Try direct, then canonical fold (corp BS_CL_STB → NCE_STB etc.).
-        const direct = coaTargets[code]?.py;
-        if (typeof direct === "number" && Number.isFinite(direct)) return direct;
-        const canon = canonicalCode[code];
-        if (canon && typeof coaTargets[canon]?.py === "number") return coaTargets[canon].py;
-        return 0;
-      };
-      for (const section of ["bs_liab", "bs_asset", "pl"] as const) {
-        const rows = NOTE_ROW_REGISTRY[section];
-        for (const [rowKey, spec] of Object.entries(rows)) {
-          // Skip rows with no FS codes to anchor against (e.g. extras rows).
-          if (!spec.fsCodes || spec.fsCodes.length === 0) continue;
-          // Skip the cogs / inventory PL_EXP_CII row — Changes-in-Inventory is
-          // anchored by the inventory dual-post (see PipelineFinancialStatements),
-          // not by a TB ledger of its own. Mirrors the NCE_CII skip at
-          // nceAutoPopulate.ts:3417.
-          if (spec.fsCodes.includes("PL_EXP_CII")) continue;
-          const firstFsCode = spec.fsCodes[0] || "";
-          const isPLIncome = section === "pl" && /^PL_(REV|OI)/.test(firstFsCode);
-          const sectionSign: 1 | -1 = (section === "bs_liab" || isPLIncome) ? -1 : 1;
-          // Cabinet-2 target = signed sum of coaTargets[code].py across the row's codes.
-          let targetRaw = 0;
-          for (const code of spec.fsCodes) targetRaw += lookupTarget(code);
-          const target = Math.round(sectionSign * targetRaw * 100) / 100;
-          const note   = out[section][rowKey];
-          if (!note) continue;
-          const headlinePy = Number(note.py) || 0;
-          const headlineDiff = Math.round((target - headlinePy) * 100) / 100;
-          if (Math.abs(headlineDiff) <= 1) continue;
-          // (a) Anchor headline to Cabinet-2.
-          note.py = target;
-          // (b) Bridge the breakup so its PY sum equals the new headline. Strip
-          //     any prior residual we may have written on a previous run before
-          //     measuring the gap (idempotent re-runs).
-          const RECON_DESC = "Other (prior year — reconciliation)";
-          const arr = Array.isArray(note.breakup) ? (note.breakup as BreakupRow[]) : [];
-          const filtered = arr.filter((r: any) => r?.description !== RECON_DESC);
-          const breakupPy = filtered.reduce((s, r) => s + (Number(r?.amount_py) || 0), 0);
-          const breakupDiff = Math.round((target - breakupPy) * 100) / 100;
-          if (Math.abs(breakupDiff) > 1) {
-            filtered.push({
-              description: RECON_DESC,
-              amount_cy:   0,
-              amount_py:   breakupDiff,
-              source:      "manual", // synthetic; survives buildBreakup's linked-only filter on re-run
-            } as BreakupRow);
-          }
-          note.breakup = filtered;
+    const RECON_DESCS = new Set<string>([
+      "Other (prior year — reconciliation)",
+      "Other (prior year - reconciliation)", // ASCII-dash variant, defensive
+    ]);
+    for (const section of ["bs_liab", "bs_asset", "pl"] as const) {
+      const rows = NOTE_ROW_REGISTRY[section];
+      for (const [rowKey, spec] of Object.entries(rows)) {
+        if (!spec.fsCodes || spec.fsCodes.length === 0) continue;
+        // Skip Changes-in-Inventory — anchored separately by the inventory dual-post
+        // (see PipelineFinancialStatements.tsx). Mirrors nceAutoPopulate.ts:3417.
+        if (spec.fsCodes.includes("PL_EXP_CII")) continue;
+        const note = out[section][rowKey];
+        if (!note) continue;
+        // Self-heal: strip any residual rows left by the prior buggy version.
+        const arr = Array.isArray(note.breakup) ? (note.breakup as BreakupRow[]) : [];
+        const cleaned = arr.filter((r: any) => !RECON_DESCS.has(String(r?.description ?? "")));
+        if (cleaned.length !== arr.length) note.breakup = cleaned;
+        // Sync headline to breakup sum when the breakup has rows. (If the breakup
+        // is empty — e.g. a code with no mapped ledgers — leave Cabinet-1 alone
+        // rather than zeroing out a stored prior-year value.)
+        if (cleaned.length === 0) continue;
+        const breakupPy = cleaned.reduce((s, r) => s + (Number(r?.amount_py) || 0), 0);
+        const breakupPyRounded = Math.round(breakupPy * 100) / 100;
+        const headlinePy = Number(note.py) || 0;
+        if (Math.abs(breakupPyRounded - headlinePy) > 1) {
+          note.py = breakupPyRounded;
         }
       }
-    } catch (e) {
-      // Reconcile is a SAFETY pass — failure must not break note generation.
-      // Cabinet-1/Cabinet-2 disagreement is then surfaced by FsHealthPanel
-      // exactly as it was before this fix.
-      // eslint-disable-next-line no-console
-      console.warn("[autoPopulateNotes] P3 PY reconcile skipped:", e);
     }
   }
 
