@@ -3417,6 +3417,14 @@ export async function nceAutoPopulate(
         id:    residualId,
         label: "Other (prior year)",
         source: "auto",
+        // MULTI-SECTION FIX (2026-06-29): the cogs note has TWO sub-sections —
+        // cogs_a (materials/purchases) and cogs_c (Changes in Inventory). A
+        // sectionless residual is an "extra" counted in BOTH sub-section totals, so
+        // the NCE_COGS (materials) residual leaked into the NCE_CII (inventory-
+        // change) subtotal — inflating e.g. NIRALI's PY Changes-in-Inventory by the
+        // residual (−₹87.95L). Nest the cogs residual under a cogs_a row (raw_purch)
+        // so it reconciles materials WITHOUT polluting the inventory-change line.
+        ...(conf.note === "cogs" ? { attachedTo: "raw_purch" } : {}),
       };
       // Avoid duplicating a residual if one already exists for this code
       // (defensive — a fresh build won't have one, but a re-run might).
