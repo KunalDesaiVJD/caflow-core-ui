@@ -2019,8 +2019,16 @@ export async function nceAutoPopulate(
               .select("id, is_py_shell")
               .eq("client_id", clientId)
               .eq("financial_year", prevFy);
-            const prevIds = ((prevEngList ?? []) as Array<{ id: string }>)
-              .map(e => e.id);
+            // C1 FIX (2026-06-29): use ONE authoritative prior engagement, NOT the
+            // union of every FY-1 engagement_id. The PY writes below (newPy[openKey]
+            // += … / newPy[closeKey] += …) are UNCONDITIONAL (unlike the CY column's
+            // `!newCy[openKey]` guard), so a stock ledger present under BOTH a regular
+            // prior engagement AND a PY shell for the same FY-1 was added TWICE →
+            // doubled prior-year Changes-in-Inventory. Prefer the PY-shell (the synced
+            // FY-1 trial balance); fall back to the regular prior engagement.
+            const prevEngsRaw = (prevEngList ?? []) as Array<{ id: string; is_py_shell?: boolean }>;
+            const invPrevId = (prevEngsRaw.find(e => e.is_py_shell) ?? prevEngsRaw.find(e => !e.is_py_shell) ?? prevEngsRaw[0])?.id;
+            const prevIds = invPrevId ? [invPrevId] : [];
             if (prevIds.length > 0) {
               // PAGINATE — PostgREST caps a single response at 1000 rows. This
               // select spans MULTIPLE engagement_ids (regular prior + PY shell),
