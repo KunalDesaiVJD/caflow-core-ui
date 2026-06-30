@@ -11,7 +11,7 @@
  * `run-scrutiny` function and PipelineStage4 use — NOT the `tally_*` tables.
  */
 
-import type { ScrutinyRule, TBRow, VoucherRow, ScrutinyFinding, DetectionLogic } from "./detectionEngine";
+import type { ScrutinyRule, TBRow, VoucherRow, ScrutinyFinding, DetectionLogic } from "./detectionEngine.ts";
 
 const n = (v: unknown): number => {
   const x = typeof v === "number" ? v : Number(v);
