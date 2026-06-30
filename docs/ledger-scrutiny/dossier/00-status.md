@@ -29,6 +29,7 @@ _Last updated: 2026-06-30_
 | 0.1 — Prove baseline builds | ✅ **PASS** — `npm install` clean; `npm run build` ✓ in ~37s; **0 TS errors** (chunk-size warnings only) |
 | 0.1b — Scaffold `docs/ledger-scrutiny/` | ✅ done (HANDOFF, START_HERE, 12-canonical-decisions, this file) |
 | 0.1c — Map the existing system | ✅ done → see **[01-existing-system-map.md](01-existing-system-map.md)** |
+| A — Rules catalogue + check-kinds (no DB) | ✅ done → **[rules/00-master-index.md](../rules/00-master-index.md)** (119 rules) + **[rules/01-check-kinds.md](../rules/01-check-kinds.md)** (83 check kinds, tiered A/B/C for the interpreter) |
 | 0.2 — Pick dev DB | ⏳ **pending (Senior CA) — now the real gate** for any testable build step |
 | 0.3 — Apply migrations | 🔄 reframed — v1 scrutiny schema already in git; author only the gap migrations (findings reconcile + security) and apply to **dev** |
 | 0.4 — Fix security holes | ✅ **located & confirmed live** — `20260421040000_tally_tables_rls_and_insert.sql` (`USING(true)` + `GRANT … TO anon`) + edge-fn IDOR; ready to author the fix |
