@@ -191,6 +191,13 @@ const render = (
   for (const [k, v] of Object.entries(vars)) {
     out = out.replace(new RegExp(`\\{${k}\\}`, "g"), v == null ? "" : String(v));
   }
+  // strip any placeholders the handler didn't fill (e.g. absence checks have no amount/date),
+  // then drop a rupee sign left dangling (not followed by a number) and tidy whitespace/punctuation.
+  out = out
+    .replace(/[^\w\s]?\s*\{[a-zA-Z_]+\}/g, "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([.,;])/g, "$1")
+    .trim();
   return out;
 };
 

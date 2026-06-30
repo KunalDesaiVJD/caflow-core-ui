@@ -316,6 +316,12 @@ describe("runDetection coverage", () => {
     const found = run(r, { tb: [tb({ ledger_name: "Suspense A/c", closing_balance: 1200, balance_type: "Dr" })] });
     expect(found[0].flag_message).toBe('Suspense "Suspense A/c" has ₹1,200.');
   });
+
+  it("strips an unfilled placeholder and its dangling currency mark (absence checks)", () => {
+    const r = rule({ rule_id: "PAY-001", category: "PAY", detection_level: "account", audit_query_template: "Salary ₹{amount} without PF. EPF mandatory above ₹15,000.", detection_logic: { check: "missing_deduction", deduction: "PF" } });
+    const found = run(r, { tb: [tb({ ledger_name: "Salaries", closing_balance: 500000, balance_type: "Dr" })] });
+    expect(found[0].flag_message).toBe("Salary without PF. EPF mandatory above ₹15,000.");
+  });
 });
 
 // ---- Tier B handlers ------------------------------------------------------

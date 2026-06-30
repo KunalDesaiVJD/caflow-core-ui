@@ -32,13 +32,13 @@ _Last updated: 2026-06-30_
 | A — Rules catalogue + check-kinds (no DB) | ✅ done → **[rules/00-master-index.md](../rules/00-master-index.md)** (119 rules) + **[rules/01-check-kinds.md](../rules/01-check-kinds.md)** (83 check kinds, tiered A/B/C for the interpreter) |
 | C-engine — Tier A+B interpreter (no DB) | ✅ done → `src/lib/scrutiny/detectionEngine.ts`: **28 handlers covering 50 of 119 rules** (20 Tier A deterministic + 8 Tier B computable: absence/PY/capital checks) + `detectionEngine.test.ts` (**41 passing vitest tests**). Pure/dependency-free; runner reports remaining Tier B (ratios/ageing/adequacy) + Tier C as advisory until a dev DB. `npm run build` ✓, engine `tsc --strict` ✓ |
 | D-adapters — DB↔engine adapters (no DB) | ✅ done → `src/lib/scrutiny/adapters.ts`: maps `trial_balance_snapshots` (`normalised_data`→TB, `raw_data`→vouchers) + `scrutiny_rules`→rules + engine finding→`scrutiny_findings` row. **7 tests incl. a full pure DB→engine→DB pipeline** (48 total). **Correction:** the scrutiny data source is `trial_balance_snapshots`, **not** `tally_*` (that's what `run-scrutiny`/PipelineStage4 read). |
-| E-wiring — `run-scrutiny-v2` edge fn | 🟡 **authored, NOT deployed** (no dev DB) → `supabase/functions/run-scrutiny-v2/index.ts`. Reuses the tested engine+adapters via `_shared/` (byte-sync enforced by `sharedSync.test.ts`); reads `trial_balance_snapshots`(+PY) & active `scrutiny_rules`, writes existing `scrutiny_findings` shape. NEW fn → zero risk to live `run-scrutiny`. Includes the **0.4 firm-ownership IDOR gate**. AI narration deferred (Phase 2). Deploy+test = Ticket 1.1 once a DB exists. |
+| E-wiring — `run-scrutiny-v2` edge fn | ✅ **DEPLOYED to dev + Ticket 1.1 PASSED** → `supabase/functions/run-scrutiny-v2/index.ts`. Reuses tested engine+adapters via `_shared/` (byte-sync enforced). NEW fn → zero risk to live `run-scrutiny`. Includes the **0.4 firm-ownership IDOR gate**. AI narration deferred (Phase 2). |
 | G2 — findings schema reconcile | 🟡 **authored, NOT applied** → `supabase/migrations/20260630120000_scrutiny_findings_reconcile.sql` + design note **[02-findings-schema.md](02-findings-schema.md)**. Additive only (codify table + add engagement_id/firm_id/audit-trail/richer cols, all nullable). RLS deliberately untouched (→ 0.4). Apply to DEV only. |
 | F-ui — v2 flag wiring (frontend) | ✅ done → `src/lib/scrutiny/flags.ts` (`scrutinyRunFunction()`, default **OFF**) + `AuditScrutiny` "Run Scrutiny" routes to `run-scrutiny-v2` when `VITE_SCRUTINY_V2=true` or localStorage `scrutiny_v2='true'`. 3 tests; `npm run build` ✓ (compiles the live page). Functional test needs v2 deployed. |
-| 0.2 — Pick dev DB | ⏳ **pending — local Supabase blocked (no Docker/WSL); chose author-only-now.** Real gate for: deploying/testing `run-scrutiny-v2` (flip the flag on), applying the G2 migration, and the 0.4 RLS hardening |
+| 0.2 — Pick dev DB | ✅ **DONE** — created a **free** dev project `caflow-scrutiny-dev` (ref `xjdrwupvyacxfxlkbrlr`) in a **new free org** `pvsosbackkpefxftmyfn`. Never touches prod `hubyywmodekfdzhwiumb` or GST `gcquafqxbykxkbexcdpy`. CLI = `supabase` devDep. Minimal dev schema + 119 rules seeded via `db query` (see Known issues re: UTF-8 seeding). |
 | 0.3 — Apply migrations | 🔄 reframed — v1 scrutiny schema already in git; author only the gap migrations (findings reconcile + security) and apply to **dev** |
 | 0.4 — Fix security holes | ✅ **located & confirmed live** — `20260421040000_tally_tables_rls_and_insert.sql` (`USING(true)` + `GRANT … TO anon`) + edge-fn IDOR; ready to author the fix |
-| 1.1 — Engine | 🔄 reframed — `run-scrutiny` exists but runs 9 hardcoded checks; build a `detection_logic` interpreter for the 119 rules |
+| **1.1 — Deploy + smoke-test the engine** | ✅ **PASS** — `run-scrutiny-v2` invoked on the dev DB for one client: **HTTP 200, 16 findings** (9 HIGH / 7 MED), coverage **50/119 handled** + 69 advisory, no error, clean rupee/placeholder rendering. The 119-rule interpreter runs end-to-end against real Supabase. |
 
 ## CORRECTION (2026-06-30) — most of it was NOT missing
 
@@ -63,4 +63,10 @@ UI target, the `src/components/scrutiny-v2/` scaffold, and `VERIFIED-FINDINGS.md
   `Initialising login role...` sits above `export type Json =`. This makes `tsc` fail on line 1,
   so the repo has **no working `tsc` typecheck**; only `vite build` (esbuild, lenient) gates builds.
   The file is **protected** (regenerate via Supabase CLI only) — flagged for the partner; not fixed
-  here. A one-line deletion would restore `tsc` as a usable gate.
+  here. A one-line deletion would restore `tsc` as a usable gate. **(Confirmed 2026-06-30:** that
+  `Initialising login role...` text is a Supabase-CLI stderr line — it got captured into `types.ts`
+  during a type-gen run.)
+- **Dev-seeding must read migrations as UTF-8.** When seeding the dev DB from a migration file via
+  PowerShell, use `[System.IO.File]::ReadAllText(path, UTF8)` (or `Get-Content -Encoding UTF8`) —
+  the default `Get-Content` decodes as ANSI and mangles `₹` (U+20B9) into `â‚¹`. This only affected
+  the dev seed (re-seeded correctly); production rules apply via the real migration as UTF-8.
