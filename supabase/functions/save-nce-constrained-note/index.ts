@@ -3,8 +3,12 @@
 // nce_capital_note (and, once the PPE UI switches, nce_ppe_schedule).
 //
 // Guarantees (server-side, cannot be bypassed from the browser):
-//   1. caller role ∈ {partner, admin, superadmin, manager}    (restricted access)
-//   2. caller's firm owns the engagement                       (firm scope)
+//   1. caller is a member of a firm                            (authenticated)
+//   2. caller's firm owns the engagement                       (firm scope — the
+//      real access gate, matching every other FS edit in the app: COA mapping,
+//      notes and capital all allow any firm member via RLS. An earlier role
+//      allow-list over-restricted constrained saves and 403'd legitimate firm
+//      members such as role "client", so it was removed 2026-06-30.)
 //   3. engagement is NOT notes_finalized                       (lock honoured)
 //   4. Σ(submitted closing) == COA total, per code, per year   (the tie)
 //      — COA re-derived here from the TB + mapping with the SAME signedBalance
@@ -21,7 +25,6 @@ const cors = {
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
 
-const ALLOWED_ROLES = ['partner', 'admin', 'superadmin', 'manager'];
 const TOL = 1;               // ₹1, matches tolMinor in fsReconciliation.ts
 const TB_PAGE = 1000;
 
@@ -115,8 +118,13 @@ Deno.serve(async (req) => {
     const { data: au } = await asUser.auth.getUser();
     const uid = au?.user?.id;
     if (!uid) return json({ error: 'NCE_SAVE_UNAUTHENTICATED' }, 401);
+    // Authorization = firm membership. The user must exist and belong to a firm;
+    // the firm-scope check below (eng.firm_id === u.firm_id) is the real gate, so
+    // ANY member of the engagement's firm may save — consistent with how COA
+    // mapping / notes / capital are edited everywhere else in the app. (No role
+    // allow-list: it locked out legitimate firm members like role "client".)
     const { data: u } = await svc.from('users').select('role, firm_id').eq('id', uid).maybeSingle();
-    if (!u || !ALLOWED_ROLES.includes(String(u.role))) return json({ error: 'NCE_SAVE_FORBIDDEN: insufficient role' }, 403);
+    if (!u || !u.firm_id) return json({ error: 'NCE_SAVE_FORBIDDEN: not a firm member' }, 403);
 
     const body = await req.json();
     const type = String(body?.type ?? '');

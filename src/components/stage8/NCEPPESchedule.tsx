@@ -390,7 +390,20 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
         const { data, error } = await supabase.functions.invoke("save-nce-constrained-note", {
           body: { type: "ppe", engagement_id: engagementId, financial_year: financialYear, rows: cPayload },
         });
-        if (error) throw new Error(error.message);
+        if (error) {
+          // A non-2xx response surfaces here as the opaque "Edge Function returned
+          // a non-2xx status code". The real reason (tie mismatches, forbidden,
+          // finalized, …) is in the response body on error.context — read it so
+          // the auditor sees WHY instead of a generic message.
+          let detail = error.message;
+          try {
+            const body = await (error as any).context?.json?.();
+            if (body?.mismatches?.length) detail = body.mismatches.join("  ·  ");
+            else if (body?.error) detail = `${body.error}${body.detail ? ": " + body.detail : ""}`;
+          } catch { /* keep the generic message */ }
+          toast.error(detail);
+          return;
+        }
         if ((data as any)?.error) {
           const ms = (data as any)?.mismatches as string[] | undefined;
           toast.error(ms?.length ? ms.join("  ·  ") : (data as any).error);
