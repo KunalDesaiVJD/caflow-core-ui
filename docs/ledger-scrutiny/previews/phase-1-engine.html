@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CAFlow Scrutiny Engine — Phase 1 Preview</title>
+<style>
+  :root{
+    --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --bg:#f8fafc;
+    --brand:#0e7490; --brandsoft:#ecfeff; --good:#16a34a; --warn:#d97706; --advis:#7c3aed;
+    --a:#0e7490; --b:#0891b2; --c:#94a3b8;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 24px 64px}
+  header{display:flex;align-items:center;gap:16px;border-bottom:2px solid var(--line);padding-bottom:18px;margin-bottom:8px}
+  .cg{width:46px;height:46px;border-radius:10px;background:var(--brand);color:#fff;display:grid;place-items:center;font-weight:800;letter-spacing:.5px}
+  h1{font-size:22px;margin:0}
+  .sub{color:var(--muted);font-size:13px;margin-top:2px}
+  .pill{display:inline-block;font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;border:1px solid var(--line);background:#fff;color:var(--muted)}
+  h2{font-size:15px;text-transform:uppercase;letter-spacing:.6px;color:var(--brand);margin:34px 0 12px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:12px 0}
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  .kpi{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 16px;text-align:center}
+  .kpi .n{font-size:26px;font-weight:800;color:var(--brand)}
+  .kpi .l{font-size:12px;color:var(--muted)}
+  table{border-collapse:collapse;width:100%;font-size:13.5px}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.4px}
+  .flow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:13px}
+  .node{background:var(--brandsoft);border:1px solid #a5f3fc;color:#155e75;border-radius:8px;padding:8px 12px;font-weight:600}
+  .arrow{color:var(--muted);font-weight:800}
+  .bar{height:14px;border-radius:7px;background:#eef2f7;overflow:hidden;display:flex}
+  .bar i{display:block;height:100%}
+  .lg{display:flex;gap:18px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);margin-top:8px}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+  .tag{font-size:11px;font-weight:700;padding:1px 7px;border-radius:6px}
+  .t-ok{background:#dcfce7;color:#166534}.t-auth{background:#fef3c7;color:#92400e}
+  ul.lean{margin:6px 0 0;padding-left:20px}ul.lean li{margin:4px 0}
+  code{background:#f1f5f9;border-radius:5px;padding:1px 5px;font-size:12.5px}
+  .note{font-size:12.5px;color:var(--muted)}
+  footer{margin-top:40px;border-top:1px solid var(--line);padding-top:14px;color:var(--muted);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="cg">CG</div>
+    <div>
+      <h1>CAFlow Scrutiny Engine — Phase 1 Preview</h1>
+      <div class="sub">Deterministic detection engine &middot; 2026-06-30 &middot;
+        <span class="pill">branch: claude/auto-2026-06-21-ledger-scrutiny &middot; never pushed to main</span></div>
+    </div>
+  </header>
+
+  <div class="card" style="border-left:4px solid var(--brand)">
+    <strong>In one line:</strong> the "missing" scrutiny module turned out to be a <em>revive</em>, not a
+    rebuild — a <strong>119-rule catalogue was already seeded in git</strong>. We built and unit-tested a
+    deterministic engine that now runs <strong>50 of the 119 rules</strong> automatically and flags the rest
+    as advisory (never silently passed). The DB wiring, schema, and UI switch are authored and ready to
+    deploy. <strong>Zero audit logic was invented.</strong>
+  </div>
+
+  <div class="grid">
+    <div class="kpi"><div class="n">119</div><div class="l">rules (17 cat &times; 7)</div></div>
+    <div class="kpi"><div class="n">50</div><div class="l">auto-detected now</div></div>
+    <div class="kpi"><div class="n">53</div><div class="l">tests passing</div></div>
+    <div class="kpi"><div class="n">0</div><div class="l">invented rules</div></div>
+  </div>
+
+  <h2>How it works</h2>
+  <div class="card">
+    <div class="flow">
+      <span class="node">trial_balance_snapshots<br>(+ prior year)</span><span class="arrow">+</span>
+      <span class="node">scrutiny_rules<br>(119 seeded)</span><span class="arrow">&rarr;</span>
+      <span class="node">adapters</span><span class="arrow">&rarr;</span>
+      <span class="node">detection_logic<br>interpreter</span><span class="arrow">&rarr;</span>
+      <span class="node">scrutiny_findings</span><span class="arrow">&rarr;</span>
+      <span class="node">maker-checker<br>query</span>
+    </div>
+    <p class="note" style="margin-bottom:0">Each rule carries a <code>detection_logic</code> spec (e.g.
+      <code>{"check":"single_txn","direction":"debit","threshold":20000}</code>). The interpreter dispatches
+      it to a handler, renders the rule's audit-query template, and writes a finding. A finding can be raised
+      as a client query, where a second person approves before it is sent.</p>
+  </div>
+
+  <h2>Coverage — 50 automated, 69 advisory</h2>
+  <div class="card">
+    <div class="bar">
+      <i style="width:31.1%;background:var(--a)"></i>
+      <i style="width:10.9%;background:var(--b)"></i>
+      <i style="width:58%;background:var(--c)"></i>
+    </div>
+    <div class="lg">
+      <span><span class="dot" style="background:var(--a)"></span>Tier A — deterministic now (20 checks / 37 rules)</span>
+      <span><span class="dot" style="background:var(--b)"></span>Tier B — computable now (8 checks / 13 rules)</span>
+      <span><span class="dot" style="background:var(--c)"></span>Advisory — needs facts/uploads (69 rules)</span>
+    </div>
+    <p class="note">Advisory rules (ageing, market-rate, ROC filings, physical verification, etc.) are
+      <strong>flagged for manual review, not skipped</strong> — they switch to automatic once the fact masters
+      / file uploads (later phases) land.</p>
+  </div>
+
+  <h2>Rule families (119)</h2>
+  <div class="card" style="padding-top:6px">
+    <table>
+      <tr><th>Code</th><th>Family</th><th>#</th><th>Code</th><th>Family</th><th>#</th></tr>
+      <tr><td>BKR</td><td>Bookkeeping</td><td>7</td><td>TDS</td><td>Tax Deducted at Source</td><td>7</td></tr>
+      <tr><td>CASH</td><td>Cash &middot; 269ST/40A(3)</td><td>7</td><td>RPT</td><td>Related Parties</td><td>7</td></tr>
+      <tr><td>SALES</td><td>Revenue</td><td>7</td><td>JE</td><td>Journal red flags</td><td>7</td></tr>
+      <tr><td>EXP</td><td>Expenses</td><td>7</td><td>RAT</td><td>Ratios</td><td>7</td></tr>
+      <tr><td>DEBT</td><td>Receivables</td><td>7</td><td>PAY</td><td>Payroll</td><td>7</td></tr>
+      <tr><td>CRED</td><td>Payables</td><td>7</td><td>CAP</td><td>Capital &amp; reserves</td><td>7</td></tr>
+      <tr><td>LOAN</td><td>Borrowings</td><td>7</td><td>PROV</td><td>Provisions</td><td>7</td></tr>
+      <tr><td>FA</td><td>Fixed assets</td><td>7</td><td>COMP</td><td>Companies-Act compliance</td><td>7</td></tr>
+      <tr><td>INV</td><td>Inventory</td><td>7</td><td colspan="3" class="note">Severity: 58 high &middot; 53 medium &middot; 8 low</td></tr>
+    </table>
+  </div>
+
+  <h2>Build status</h2>
+  <div class="card" style="padding-top:6px">
+    <table>
+      <tr><th>Component</th><th>State</th><th></th></tr>
+      <tr><td>119-rule catalogue + check-kind spec</td><td>docs</td><td><span class="tag t-ok">done</span></td></tr>
+      <tr><td>Detection engine (50/119), 53 tests</td><td><code>src/lib/scrutiny/</code></td><td><span class="tag t-ok">done &amp; tested</span></td></tr>
+      <tr><td>DB &harr; engine adapters</td><td><code>adapters.ts</code></td><td><span class="tag t-ok">done &amp; tested</span></td></tr>
+      <tr><td>run-scrutiny-v2 edge function (+ IDOR gate)</td><td><code>supabase/functions/</code></td><td><span class="tag t-auth">authored &middot; needs dev DB</span></td></tr>
+      <tr><td>findings schema reconcile (G2)</td><td>migration</td><td><span class="tag t-auth">authored &middot; needs dev DB</span></td></tr>
+      <tr><td>UI switch to v2 (default off)</td><td><code>AuditScrutiny</code></td><td><span class="tag t-ok">done</span> · <span class="tag t-auth">deploy to test</span></td></tr>
+    </table>
+  </div>
+
+  <h2>For the CA to review</h2>
+  <div class="card">
+    <ul class="lean">
+      <li><strong>Thresholds &amp; severities</strong> of the 119 rules — see <code>docs/ledger-scrutiny/rules/00-master-index.md</code>.</li>
+      <li><strong>Which checks are automated vs advisory</strong> (the A/B/C tiering) — <code>rules/01-check-kinds.md</code>. Confirm the borderline ones.</li>
+      <li><strong>Maker-checker placement</strong>: finding &rarr; <code>audit_client_queries</code>, second-person approval on the query. (decision #7)</li>
+      <li><strong>Next step</strong>: a cloud dev database to deploy &amp; run the engine on a real engagement (acceptance: non-zero findings, no error), then harden RLS and revive the full UI.</li>
+    </ul>
+  </div>
+
+  <footer>
+    CAFlow Scrutiny Engine &middot; Phase 1 (deterministic engine) &middot; isolated branch, no changes to
+    production. Detail: <code>docs/ledger-scrutiny/dossier/00-status.md</code>.
+  </footer>
+</div>
+</body>
+</html>
