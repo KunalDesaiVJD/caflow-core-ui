@@ -256,36 +256,25 @@ async function canvasToPdfBlob(canvas: HTMLCanvasElement, label: string) {
   const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4", compress: true });
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
-  const margin = 6;
+  const margin = 8;
   const printableWidth = pageWidth - margin * 2;
   const printableHeight = pageHeight - margin * 2;
   const imageHeight = (canvas.height * printableWidth) / canvas.width;
   const imageData = canvas.toDataURL("image/png", 1);
 
-  // Fit-to-single-page mode: an invoice that overflows by 1mm-40% used
-  // to produce an almost-empty page 2 (signature/terms block alone).
-  // Scale the whole image down proportionally so it lands on one page.
-  // Anything beyond 1.40x has too much content to legibly fit, so we
-  // fall through to the multi-page slicing logic.
-  const SINGLE_PAGE_MAX_RATIO = 1.40;
-  if (imageHeight > printableHeight && imageHeight <= printableHeight * SINGLE_PAGE_MAX_RATIO) {
-    const scale = printableHeight / imageHeight;
-    const scaledHeight = printableHeight;
-    const scaledWidth  = printableWidth * scale;
-    const xPos = (pageWidth - scaledWidth) / 2;   // centre horizontally
-    pdf.addImage(imageData, "PNG", xPos, margin, scaledWidth, scaledHeight, undefined, "FAST");
-    console.log(`[PDF] ${label}: fit-to-page scale=${scale.toFixed(3)}`);
-  } else {
-    let heightLeft = imageHeight;
-    let position = margin;
+  // Render at full 1:1 scale — preserves the original sizes of TAX INVOICE
+  // title, firm name, line-item table etc. Single-page invoices stay single
+  // page thanks to the HTML compaction (tighter section spacing, 42px
+  // signature). Genuinely long invoices paginate naturally.
+  let heightLeft = imageHeight;
+  let position = margin;
+  pdf.addImage(imageData, "PNG", margin, position, printableWidth, imageHeight, undefined, "FAST");
+  heightLeft -= printableHeight;
+  while (heightLeft > 0) {
+    position = margin - (imageHeight - heightLeft);
+    pdf.addPage();
     pdf.addImage(imageData, "PNG", margin, position, printableWidth, imageHeight, undefined, "FAST");
     heightLeft -= printableHeight;
-    while (heightLeft > 0) {
-      position = margin - (imageHeight - heightLeft);
-      pdf.addPage();
-      pdf.addImage(imageData, "PNG", margin, position, printableWidth, imageHeight, undefined, "FAST");
-      heightLeft -= printableHeight;
-    }
   }
 
   const blob = pdf.output("blob");
