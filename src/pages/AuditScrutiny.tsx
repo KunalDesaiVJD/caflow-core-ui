@@ -5,6 +5,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { useAuditTracker } from "@/hooks/useAuditTracker";
 import { useAuditContext } from "@/hooks/useAuditContext";
+import { scrutinyRunFunction } from "@/lib/scrutiny/flags";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -199,7 +200,7 @@ export default function AuditScrutiny() {
     setRunning(true);
     try {
       const { data: userData } = await supabase.from("users").select("firm_id").eq("id", user?.id).single();
-      const { error } = await supabase.functions.invoke("run-scrutiny", {
+      const { error } = await supabase.functions.invoke(scrutinyRunFunction(), {
         body: { client_id: clientId, financial_year: fy, firm_id: userData?.firm_id },
       });
       if (error) throw error;
