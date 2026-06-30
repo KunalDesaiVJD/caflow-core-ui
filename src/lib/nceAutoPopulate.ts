@@ -1312,8 +1312,21 @@ export async function nceAutoPopulate(
     // the auditor re-homes those via COA Mapping / Tally. Statutory disclosures
     // (ageing / MSME / share-capital / related-party) are stored separately and
     // are NOT in this customRows total path, so they are untouched. NCE-only.
-    let manualRows = FS_NO_MANUAL_NOTE_ADD ? [] : prev.customRows.filter(r => {
-      if (r.source !== "manual") return false;
+    // 2026-06-30 — REGROUPING PRESERVATION. Under FS_NO_MANUAL_NOTE_ADD we still
+    // drop hand-typed manual AMOUNT rows (the firm policy), but we KEEP rows the
+    // auditor re-grouped WITHIN this note ("Move to…" → userMoved + tbDerived).
+    // Such a row carries NO hand-typed figure — its amount is re-derived from the
+    // COA-mapped ledger downstream (isClaimedByManual + overlap-subtract), so the
+    // note total stays COA-tied; only the intra-note placement (attachedTo /
+    // section) is honoured. Without this the "Move to…" reverted on every reload
+    // because the self-heal rebuilt the note purely from COA heuristics. The
+    // stale-ledger purge + keepManualRowOnResync below still DROP any such row
+    // whose ledger has since been re-mapped to a code this note does not own
+    // (userMoved only protects an intra-note placement, never a cross-note one).
+    const _manualSource = FS_NO_MANUAL_NOTE_ADD
+      ? prev.customRows.filter(r => r.source === "manual" && r.userMoved === true && r.tbDerived === true)
+      : prev.customRows.filter(r => r.source === "manual");
+    let manualRows = _manualSource.filter(r => {
       const key = `${(r.label || "").trim().toLowerCase()}|${r.attachedTo ?? ""}|${r.section ?? ""}`;
       if (!(r.label || "").trim()) return true;
       if (_seenManual.has(key)) return false;
