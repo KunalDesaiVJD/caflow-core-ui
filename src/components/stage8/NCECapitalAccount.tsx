@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { computeCOATotals } from "@/lib/fsReconciliation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -8,8 +9,25 @@ import {
   TableHeader, TableRow,
 } from "@/components/ui/table";
 import { toast } from "sonner";
-import { AlertTriangle, Loader2, Save, Plus, Trash2 } from "lucide-react";
+import { AlertTriangle, Loader2, Save, Plus, Trash2, Lock, CheckCircle2, Wand2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+// Paginated TB fetch (Supabase caps at 1000 rows/range) — used to re-derive the
+// COA-mapped Owners' Capital (NCE_CAP) closing total that the breakup must tie to.
+const TB_PAGE = 1000;
+async function loadTB(engagementId: string) {
+  const rows: any[] = [];
+  for (let f = 0; ; f += TB_PAGE) {
+    const { data } = await supabase
+      .from("tally_trial_balance")
+      .select("ledger_name,closing_balance,balance_type,opening_balance,opening_type")
+      .eq("engagement_id", engagementId).order("ledger_name").range(f, f + TB_PAGE - 1);
+    if (!data || !data.length) break;
+    rows.push(...data);
+    if (data.length < TB_PAGE) break;
+  }
+  return rows;
+}
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -132,6 +150,10 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
   const [loading, setLoading] = useState(true);
   const [saving,  setSaving]  = useState(false);
   const [eng,     setEng]     = useState<any>(null);
+  // COA-lock (2026-06-30): the breakup Closing total is LOCKED to the COA-mapped
+  // Owners' Capital (NCE_CAP) closing, CY + PY. Save is blocked until it ties.
+  const [coaCap,     setCoaCap]     = useState<{ cy: number; py: number }>({ cy: 0, py: 0 });
+  const [hasPyShell, setHasPyShell] = useState(false);
   // Track partner_no values that existed in DB but have been removed in the
   // UI so `save()` can delete the stale rows.
   const [deletedPartnerNos,   setDeletedPartnerNos]   = useState<number[]>([]);
@@ -154,7 +176,7 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
       // 1. Fetch engagement — get FY, client name, firm, partner, coa_mapping
       const { data: engRow } = await supabase
         .from("audit_engagements")
-        .select("financial_year, coa_mapping, clients(name), firms(*), partner:users!partner_id(name)")
+        .select("financial_year, client_id, coa_mapping, clients(name), firms(*), partner:users!partner_id(name)")
         .eq("id", engagementId)
         .single();
       if (cancelled) return;
@@ -175,6 +197,33 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
 
       const activeFY = (engRow?.financial_year as string) || "";
       if (!activeFY) { setLoading(false); return; }
+
+      // 1b. COA-lock anchor — re-derive the COA-mapped Owners' Capital (NCE_CAP)
+      // closing for CY + PY exactly as the FS face does (computeCOATotals), so the
+      // partner breakup Closing total can be validated against it before save.
+      try {
+        const cyTb = await loadTB(engagementId);
+        const fyParts = String(activeFY).split("-");
+        const prevFy = fyParts.length === 2
+          ? `${parseInt(fyParts[0]) - 1}-${String(parseInt(fyParts[0])).slice(-2)}` : "";
+        let pyTb: any[] = []; let pyMap: Record<string, { code: string }> = {};
+        if (prevFy && (engRow as any)?.client_id) {
+          const { data: shells } = await supabase.from("audit_engagements")
+            .select("id, coa_mapping").eq("client_id", (engRow as any).client_id)
+            .eq("financial_year", prevFy).eq("is_py_shell", true);
+          for (const s of (shells ?? []) as any[]) {
+            const tb = await loadTB(s.id);
+            if (tb.length) { pyTb = tb; pyMap = (s.coa_mapping ?? {}) as any; break; }
+          }
+        }
+        const cap = computeCOATotals(cyTb as any, pyTb as any, coaMapping as any, pyMap)["NCE_CAP"] ?? { cy: 0, py: 0 };
+        if (!cancelled) {
+          setCoaCap({ cy: Math.round(cap.cy * 100) / 100, py: Math.round(cap.py * 100) / 100 });
+          setHasPyShell(pyTb.length > 0);
+        }
+      } catch (capErr) {
+        console.warn("[NCECapitalAccount] COA-lock anchor load failed", capErr);
+      }
 
       // 2. Fetch capital account rows
       const { data, error } = await supabase
@@ -259,6 +308,37 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
   const profitShareWarning =
     totals.pct > 0 && Math.abs(totals.pct - 100) > 0.01;
 
+  // ── COA-lock: breakup Closing total must tie to NCE_CAP COA closing ────────
+  const pyClosingTotal = useMemo(() =>
+    pyPartners.length > 0
+      ? pyPartners.reduce((s, p) => s + p.opening + p.introduced + p.remuneration + p.interest - p.withdrawals + p.profit_share, 0)
+      : calcPyClosing(pyRow),
+    [pyPartners, pyRow]);
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const diff = useMemo(() => ({
+    cy: r2(coaCap.cy - totals.closing),
+    py: r2(coaCap.py - pyClosingTotal),
+  }), [coaCap, totals.closing, pyClosingTotal]);
+  const cyTied = Math.abs(diff.cy) <= 1;
+  const pyTied = !hasPyShell || Math.abs(diff.py) <= 1;
+  const capTied = cyTied && pyTied;
+
+  // Absorb the residual into the LAST row's "Share of Profit/(Loss)" so the
+  // breakup ties to COA in one click (matches the auditor's manual approach).
+  const fillCy = () => {
+    if (!partners.length) return;
+    const last = partners.length - 1;
+    setPartnerField(last, "profit_share_cy", r2(partners[last].profit_share_cy + diff.cy));
+  };
+  const fillPy = () => {
+    if (pyPartners.length > 0) {
+      const last = pyPartners.length - 1;
+      setPyPartnerField(last, "profit_share", r2(pyPartners[last].profit_share + diff.py));
+    } else {
+      setPyField("profit_share", r2(pyRow.profit_share + diff.py));
+    }
+  };
+
   // ── Mutators ─────────────────────────────────────────────────────────────
   const setPartnerField = (
     idx: number,
@@ -319,6 +399,17 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
 
   // ── Save ─────────────────────────────────────────────────────────────────
   const save = async () => {
+    // COA-lock (2026-06-30): never persist a breakup whose Closing total deviates
+    // from the COA-mapped Owners' Capital (NCE_CAP). The auditor must tie it first
+    // (via "Fill to balance" or by adjusting amounts). This is the no-deviation
+    // guarantee the 2-way system requires.
+    if (!capTied) {
+      const parts: string[] = [];
+      if (!cyTied) parts.push(`CY off ₹${Math.abs(Math.round(diff.cy)).toLocaleString("en-IN")}`);
+      if (hasPyShell && !pyTied) parts.push(`PY off ₹${Math.abs(Math.round(diff.py)).toLocaleString("en-IN")}`);
+      toast.error(`Closing doesn't match COA mapping (${parts.join(", ")}). Use "Fill to balance" or adjust the breakup before saving.`);
+      return;
+    }
     // 2026-06-01 — Guard against silent data loss reported on MAHARSH INFRA
     // (Capital Account + PPE Schedule wiped to empty cells after a Re-sync
     // from COA on the Notes tab). The Re-sync path doesn't touch
@@ -547,6 +638,49 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
           Note: Owners Capital Account
         </p>
       </div>
+
+      {/* ── COA-lock anchor: Closing total is locked to NCE_CAP COA mapping ── */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+        <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+          <Lock className="h-3.5 w-3.5" /> Closing per COA mapping (locked):
+        </span>
+        <span>CY <span className="font-medium tabular-nums">{fmt(coaCap.cy)}</span></span>
+        {hasPyShell && <span>PY <span className="font-medium tabular-nums">{fmt(coaCap.py)}</span></span>}
+        <span className="ml-auto inline-flex items-center gap-3 text-xs">
+          <span className={cn("inline-flex items-center gap-1", cyTied ? "text-emerald-600 dark:text-emerald-400" : "text-destructive")}>
+            {cyTied ? <CheckCircle2 className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />} CY {cyTied ? "ties" : `off ${fmt(diff.cy)}`}
+          </span>
+          {hasPyShell && (
+            <span className={cn("inline-flex items-center gap-1", pyTied ? "text-emerald-600 dark:text-emerald-400" : "text-destructive")}>
+              {pyTied ? <CheckCircle2 className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />} PY {pyTied ? "ties" : `off ${fmt(diff.py)}`}
+            </span>
+          )}
+        </span>
+      </div>
+
+      {/* ── Difference-to-explain + one-click balance (edit mode only) ── */}
+      {!readOnly && !capTied && (
+        <Alert variant="destructive" className="py-2">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription className="text-xs flex flex-wrap items-center gap-x-4 gap-y-2">
+            <span>
+              Breakup Closing must equal COA mapping before this note can be saved.
+              {!cyTied && <> CY difference to explain: <strong>{fmt(diff.cy)}</strong>.</>}
+              {hasPyShell && !pyTied && <> PY difference: <strong>{fmt(diff.py)}</strong>.</>}
+            </span>
+            {!cyTied && (
+              <Button type="button" variant="outline" size="sm" onClick={fillCy} className="gap-1.5 h-7">
+                <Wand2 className="h-3.5 w-3.5" /> Fill CY {fmt(diff.cy)} to balance (share of profit)
+              </Button>
+            )}
+            {hasPyShell && !pyTied && (
+              <Button type="button" variant="outline" size="sm" onClick={fillPy} className="gap-1.5 h-7">
+                <Wand2 className="h-3.5 w-3.5" /> Fill PY {fmt(diff.py)} to balance
+              </Button>
+            )}
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* ── Profit-share warning (hidden in readOnly preview) ── */}
       {!readOnly && profitShareWarning && (
@@ -902,11 +1036,11 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
             Closing Balance = Opening + Introduced + Remuneration + Interest − Withdrawals + Profit Share
           </p>
         </div>
-        <Button onClick={save} disabled={saving} size="sm" className="gap-1.5">
+        <Button onClick={save} disabled={saving || !capTied} size="sm" className="gap-1.5">
           {saving
             ? <Loader2 size={13} className="animate-spin" />
             : <Save size={13} />}
-          Save Capital Account
+          {!capTied ? "Fix the difference to save" : "Save Capital Account"}
         </Button>
       </div>}
 
