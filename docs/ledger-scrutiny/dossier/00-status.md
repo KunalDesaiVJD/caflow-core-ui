@@ -27,44 +27,26 @@ _Last updated: 2026-06-30_
 | Ticket | State |
 |---|---|
 | 0.1 — Prove baseline builds | ✅ **PASS** — `npm install` clean; `npm run build` ✓ in ~37s; **0 TS errors** (chunk-size warnings only) |
-| 0.1b — Scaffold `docs/ledger-scrutiny/` | ✅ this commit (HANDOFF, START_HERE, 12-canonical-decisions, this file) |
-| 0.2 — Pick dev DB | ⏳ pending (Senior CA) |
-| 0.3 — Apply v2 migrations | 🚫 **BLOCKED** — migration files do not exist (must be rebuilt first) |
-| 0.4 — Fix security holes | 🚫 **BLOCKED** — references missing `dossier/09` + `dossier/12 (D4)` |
-| 1.1 — Deploy `scrutiny-run` | 🚫 **BLOCKED** — engine function does not exist (must be rebuilt first) |
+| 0.1b — Scaffold `docs/ledger-scrutiny/` | ✅ done (HANDOFF, START_HERE, 12-canonical-decisions, this file) |
+| 0.1c — Map the existing system | ✅ done → see **[01-existing-system-map.md](01-existing-system-map.md)** |
+| 0.2 — Pick dev DB | ⏳ **pending (Senior CA) — now the real gate** for any testable build step |
+| 0.3 — Apply migrations | 🔄 reframed — v1 scrutiny schema already in git; author only the gap migrations (findings reconcile + security) and apply to **dev** |
+| 0.4 — Fix security holes | ✅ **located & confirmed live** — `20260421040000_tally_tables_rls_and_insert.sql` (`USING(true)` + `GRANT … TO anon`) + edge-fn IDOR; ready to author the fix |
+| 1.1 — Engine | 🔄 reframed — `run-scrutiny` exists but runs 9 hardcoded checks; build a `detection_logic` interpreter for the 119 rules |
 
-## What is MISSING (must be reconstructed)
+## CORRECTION (2026-06-30) — most of it was NOT missing
 
-The original prepared material referenced by HANDOFF.md is **not present anywhere on this
-machine** — only `HANDOFF.md` and `START_HERE_developer.md` survived. Missing:
+The 6-agent sweep + direct verification overturned the "everything is missing" premise. Only the
+handoff's **v2 re-architecture** docs were lost. A working **v1 scrutiny stack is already in the
+repo**: the `scrutiny_rules` table with **119 seeded rules (populated `detection_logic`)**, the
+`run-scrutiny` / `export-scrutiny-xlsx` / `claude-gateway` edge functions, `PipelineStage4` (dead,
+schema drift), and the live `AuditScrutiny` dashboard. **Full map + the real gap list + the revised
+plan now live in [01-existing-system-map.md](01-existing-system-map.md).**
 
-| Artifact | Path the handoff assumes |
-|---|---|
-| Rule dossier — 12 decisions detail, **122 checks**, thresholds, recall register | `dossier/00..11`, `dossier/99`, `rules/00..17` |
-| v2 DB schema + seed + matcher SQL | `supabase/migrations/20260621000000_scrutiny_v2.sql` (+ `…0001_seed`, `…010000_matchers_fn`) |
-| Deterministic engine | `supabase/functions/scrutiny-run/index.ts` |
-| UI target prototype | `prototype/scrutiny-engine-prototype.html` |
-| React scaffold | `src/components/scrutiny-v2/` |
-| Verified-findings baseline | `prototype/VERIFIED-FINDINGS.md` |
+Net effect: this is a **revive-and-consolidate** job, not a greenfield rebuild — and **no external
+rule source is needed** (the 119 rules are in git), so the deferred "rule source" decision is
+**moot** for the core build. The `ledger-scrutiny` skill remains available only as optional later
+enrichment.
 
-## Reconstruction plan
-
-Order (each is its own ticket; one at a time; preview at each phase end):
-
-- **A. Rules master** — rebuild the check catalogue. **Rule-source decision deferred**
-  (options recorded below). Must **not** invent audit logic (Golden Rule #6).
-- **B. DB schema** — author the v2 tables/seed/matchers for a **dev** DB only (never prod).
-- **C. Engine** — author `scrutiny-run` to run the checks over `tally_vouchers` etc.
-- **D. UI** — wire a `scrutiny-v2` view behind a flag. **Inspect existing code first:** this
-  checkout already ships `AuditScrutiny`, `AuditPipeline`, and `PipelineStage4` (seen in the
-  build output) — reuse/replace per HANDOFF rather than greenfield.
-
-### Deferred decision — rule source for step A
-
-1. **Seed from the `ledger-scrutiny` skill** (anthropic-skills:ledger-scrutiny — 1,502 Indian-CA
-   rules, editable thresholds), mapped to the handoff's categories. _Most faithful, least invention._
-2. **Transcribe only HANDOFF §2/§8** — fewer than 122 checks; remainder stay TODO.
-3. _(chosen for now)_ **Scaffold only, pick later.**
-
-Also available and relevant: `anthropic-skills:tally-trial-balance-import`,
-`anthropic-skills:tds-ledger-analyser`.
+Still genuinely absent (cosmetic / non-blocking): the `prototype/scrutiny-engine-prototype.html`
+UI target, the `src/components/scrutiny-v2/` scaffold, and `VERIFIED-FINDINGS.md` baseline.
