@@ -256,27 +256,40 @@ async function canvasToPdfBlob(canvas: HTMLCanvasElement, label: string) {
   const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4", compress: true });
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
-  const margin = 8;
+  const margin = 6;
   const printableWidth = pageWidth - margin * 2;
   const printableHeight = pageHeight - margin * 2;
   const imageHeight = (canvas.height * printableWidth) / canvas.width;
   const imageData = canvas.toDataURL("image/png", 1);
 
-  let heightLeft = imageHeight;
-  let position = margin;
-
-  pdf.addImage(imageData, "PNG", margin, position, printableWidth, imageHeight, undefined, "FAST");
-  heightLeft -= printableHeight;
-
-  while (heightLeft > 0) {
-    position = margin - (imageHeight - heightLeft);
-    pdf.addPage();
+  // Fit-to-single-page mode: an invoice that overflows by 1mm-40% used
+  // to produce an almost-empty page 2 (signature/terms block alone).
+  // Scale the whole image down proportionally so it lands on one page.
+  // Anything beyond 1.40x has too much content to legibly fit, so we
+  // fall through to the multi-page slicing logic.
+  const SINGLE_PAGE_MAX_RATIO = 1.40;
+  if (imageHeight > printableHeight && imageHeight <= printableHeight * SINGLE_PAGE_MAX_RATIO) {
+    const scale = printableHeight / imageHeight;
+    const scaledHeight = printableHeight;
+    const scaledWidth  = printableWidth * scale;
+    const xPos = (pageWidth - scaledWidth) / 2;   // centre horizontally
+    pdf.addImage(imageData, "PNG", xPos, margin, scaledWidth, scaledHeight, undefined, "FAST");
+    console.log(`[PDF] ${label}: fit-to-page scale=${scale.toFixed(3)}`);
+  } else {
+    let heightLeft = imageHeight;
+    let position = margin;
     pdf.addImage(imageData, "PNG", margin, position, printableWidth, imageHeight, undefined, "FAST");
     heightLeft -= printableHeight;
+    while (heightLeft > 0) {
+      position = margin - (imageHeight - heightLeft);
+      pdf.addPage();
+      pdf.addImage(imageData, "PNG", margin, position, printableWidth, imageHeight, undefined, "FAST");
+      heightLeft -= printableHeight;
+    }
   }
 
   const blob = pdf.output("blob");
-  console.log(`[PDF] ${label}: blob size=${blob.size}`);
+  console.log(`[PDF] ${label}: pages=${pdf.getNumberOfPages()} blob=${blob.size}`);
 
   if (blob.size < 5000) {
     throw new Error(`[PDF] ${label}: generated PDF blob is suspiciously small (${blob.size} bytes)`);
@@ -570,25 +583,25 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
       <span style="white-space:pre-line;word-wrap:break-word;overflow-wrap:break-word">${remarksConditions}</span>
     </div>` : ""}
 
-    <div style="display:flex;justify-content:space-between;margin-top:16px">
-      <div style="border:1px solid #bbb;padding:10px;font-size:11px;min-width:300px">
-        <p style="font-weight:700;margin:0 0 4px;font-size:12px">Bank Details:</p>
-        ${bankDetails?.account_number || bankDetails?.account_no ? `<p style="margin:2px 0"><strong>Account No:</strong> ${bankDetails.account_number || bankDetails.account_no}</p>` : ""}
-        ${bankDetails?.ifsc ? `<p style="margin:2px 0"><strong>IFSC:</strong> ${bankDetails.ifsc}</p>` : ""}
-        ${bankDetails?.bank_name ? `<p style="margin:2px 0"><strong>Bank:</strong> ${bankDetails.bank_name}</p>` : ""}
-        ${bankDetails?.branch ? `<p style="margin:2px 0"><strong>Branch:</strong> ${bankDetails.branch}</p>` : ""}
+    <div style="display:flex;justify-content:space-between;margin-top:8px">
+      <div style="border:1px solid #bbb;padding:8px;font-size:11px;min-width:300px">
+        <p style="font-weight:700;margin:0 0 3px;font-size:12px">Bank Details:</p>
+        ${bankDetails?.account_number || bankDetails?.account_no ? `<p style="margin:1px 0"><strong>Account No:</strong> ${bankDetails.account_number || bankDetails.account_no}</p>` : ""}
+        ${bankDetails?.ifsc ? `<p style="margin:1px 0"><strong>IFSC:</strong> ${bankDetails.ifsc}</p>` : ""}
+        ${bankDetails?.bank_name ? `<p style="margin:1px 0"><strong>Bank:</strong> ${bankDetails.bank_name}</p>` : ""}
+        ${bankDetails?.branch ? `<p style="margin:1px 0"><strong>Branch:</strong> ${bankDetails.branch}</p>` : ""}
       </div>
-      <div style="text-align:right;padding-top:8px">
+      <div style="text-align:right;padding-top:4px">
         <p style="margin:0;font-size:12px;font-weight:600">For ${firmName.toUpperCase()}</p>
-        <div style="height:50px"></div>
-        <p style="margin:0;font-size:11px;border-top:1px solid #333;padding-top:4px">Authorised Signatory</p>
+        <div style="height:28px"></div>
+        <p style="margin:0;font-size:11px;border-top:1px solid #333;padding-top:3px">Authorised Signatory</p>
       </div>
     </div>
 
-    <div style="margin-top:16px;padding-top:8px;padding-bottom:10px;border-top:1px solid #ddd;font-size:10px;color:#555">
-      <p style="font-weight:700;margin:0 0 4px">Terms & Conditions:</p>
+    <div style="margin-top:8px;padding-top:6px;padding-bottom:6px;border-top:1px solid #ddd;font-size:10px;color:#555">
+      <p style="font-weight:700;margin:0 0 3px">Terms & Conditions:</p>
       <p style="margin:0;font-weight:700;letter-spacing:0.5px">PAYMENT TERMS: PAYMENT IS DUE WITHIN ${paymentDueDays} DAYS FROM THE INVOICE DATE</p>
-      ${firmMsme ? `<p style="margin:6px 0 0;font-weight:700;letter-spacing:0.5px">MSME No: ${firmMsme}</p>` : ""}
+      ${firmMsme ? `<p style="margin:4px 0 0;font-weight:700;letter-spacing:0.5px">MSME No: ${firmMsme}</p>` : ""}
     </div>
 
     </div>
