@@ -415,7 +415,7 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
     ? (inv.total_amount || Math.round(grandTotal * exRate))
     : (inv.total_amount || grandTotal);
 
-  const thGst = hasGst ? `<th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">GST %</th>` : "";
+  const thGst = hasGst ? `<th style="border:1px solid #bbb;padding:5px 6px;font-size:10px;vertical-align:middle">GST %</th>` : "";
 
   const identityMarkup = logoUrl
     ? `<img src="${logoUrl}" style="max-height:64px;max-width:200px;object-fit:contain;margin-bottom:0;display:block" crossorigin="anonymous" />`
@@ -423,31 +423,31 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
 
   const itemRows = items.map((item: any, i: number) => {
     const gstCol = hasGst
-      ? `<td style="border:1px solid #bbb;padding:6px 8px;text-align:center;vertical-align:middle;font-size:11px">${item.gst_percent || 0}%</td>`
+      ? `<td style="border:1px solid #bbb;padding:3px 6px;text-align:center;vertical-align:middle;font-size:11px">${item.gst_percent || 0}%</td>`
       : "";
     const itemTotal = hasGst ? (item.total || item.taxable_value || 0) : (item.taxable_value || item.rate || 0);
     return `<tr>
-      <td style="border:1px solid #bbb;padding:6px 8px;text-align:center;vertical-align:middle;font-size:11px">${i + 1}.</td>
+      <td style="border:1px solid #bbb;padding:3px 6px;text-align:center;vertical-align:middle;font-size:11px">${i + 1}.</td>
       <td style="border:1px solid #bbb;padding:0;vertical-align:middle;font-size:11px">
-        <div style="display:flex;flex-direction:column;align-items:flex-start;justify-content:center;min-height:38px;padding:8px;line-height:1.4">
+        <div style="display:flex;flex-direction:column;align-items:flex-start;justify-content:center;min-height:26px;padding:4px 6px;line-height:1.35">
           <div>${item.description || ""}</div>
           ${item.description_details ? `<div style="font-size:10px;color:#555;white-space:pre-line">${item.description_details}</div>` : ""}
         </div>
       </td>
-      <td style="border:1px solid #bbb;padding:6px 8px;text-align:center;vertical-align:middle;font-size:11px">${item.hsn_sac_code || ""}</td>
-      <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">${Number(item.quantity || 1).toFixed(2)}</td>
-      <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">${currSym}${fmtAmt(item.rate || 0)}</td>
-      <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">${currSym}${fmtAmt(item.taxable_value || 0)}</td>
+      <td style="border:1px solid #bbb;padding:3px 6px;text-align:center;vertical-align:middle;font-size:11px">${item.hsn_sac_code || ""}</td>
+      <td style="border:1px solid #bbb;padding:3px 6px;text-align:right;vertical-align:middle;font-size:11px">${Number(item.quantity || 1).toFixed(2)}</td>
+      <td style="border:1px solid #bbb;padding:3px 6px;text-align:right;vertical-align:middle;font-size:11px">${currSym}${fmtAmt(item.rate || 0)}</td>
+      <td style="border:1px solid #bbb;padding:3px 6px;text-align:right;vertical-align:middle;font-size:11px">${currSym}${fmtAmt(item.taxable_value || 0)}</td>
       ${gstCol}
-      <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px;font-weight:600">${currSym}${fmtAmt(itemTotal)}</td>
+      <td style="border:1px solid #bbb;padding:3px 6px;text-align:right;vertical-align:middle;font-size:11px;font-weight:600">${currSym}${fmtAmt(itemTotal)}</td>
     </tr>`;
   }).join("");
 
   const colSpan = hasGst ? 5 : 4;
   const totalRow = `<tr style="background:#f0f0f0;font-weight:700">
-    <td style="border:1px solid #bbb;padding:8px;vertical-align:middle" colspan="${colSpan}">Total</td>
+    <td style="border:1px solid #bbb;padding:5px 6px;vertical-align:middle" colspan="${colSpan}">Total</td>
     <td style="border:1px solid #bbb;padding:8px;text-align:right;vertical-align:middle;font-size:11px">${currSym}${fmtAmt(totalTaxable)}</td>
-    ${hasGst ? `<td style="border:1px solid #bbb;padding:8px;vertical-align:middle"></td>` : ""}
+    ${hasGst ? `<td style="border:1px solid #bbb;padding:5px 6px;vertical-align:middle"></td>` : ""}
     <td style="border:1px solid #bbb;padding:8px;text-align:right;vertical-align:middle;font-size:12px">${currSym}${fmtAmt(grandTotal)}</td>
   </tr>`;
 
@@ -532,7 +532,7 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
       </div>
     </div>
 
-    <div style="border:1px solid #bbb;margin-bottom:12px;padding:10px">
+    <div style="border:1px solid #bbb;margin-bottom:8px;padding:6px 9px">
       <p style="font-size:10px;font-weight:700;color:#666;text-transform:uppercase;margin:0 0 4px">Bill To</p>
       <p style="font-weight:600;margin:0;font-size:13px">${toName}</p>
       ${toAddress ? `<p style="margin:2px 0;font-size:11px">${toAddress}</p>` : ""}
@@ -543,14 +543,14 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
     <table>
       <thead>
         <tr style="background:#e2e8f0">
-          <th style="border:1px solid #bbb;padding:7px;font-size:10px;width:30px;vertical-align:middle">#</th>
-          <th style="border:1px solid #bbb;padding:7px;font-size:10px;text-align:left;vertical-align:middle">Item</th>
-          <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">HSN/SAC</th>
-          <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">Quantity</th>
-          <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">Rate / Item (${isExport ? currency : "\u20B9"})</th>
-          <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">Taxable Value (${isExport ? currency : "\u20B9"})</th>
+          <th style="border:1px solid #bbb;padding:5px 6px;font-size:10px;width:30px;vertical-align:middle">#</th>
+          <th style="border:1px solid #bbb;padding:5px 6px;font-size:10px;text-align:left;vertical-align:middle">Item</th>
+          <th style="border:1px solid #bbb;padding:5px 6px;font-size:10px;vertical-align:middle">HSN/SAC</th>
+          <th style="border:1px solid #bbb;padding:5px 6px;font-size:10px;vertical-align:middle">Quantity</th>
+          <th style="border:1px solid #bbb;padding:5px 6px;font-size:10px;vertical-align:middle">Rate / Item (${isExport ? currency : "\u20B9"})</th>
+          <th style="border:1px solid #bbb;padding:5px 6px;font-size:10px;vertical-align:middle">Taxable Value (${isExport ? currency : "\u20B9"})</th>
           ${thGst}
-          <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">Total (${isExport ? currency : "\u20B9"})</th>
+          <th style="border:1px solid #bbb;padding:5px 6px;font-size:10px;vertical-align:middle">Total (${isExport ? currency : "\u20B9"})</th>
         </tr>
       </thead>
       <tbody>
@@ -573,7 +573,7 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
     </div>` : ""}
 
     <div style="display:flex;justify-content:space-between;margin-top:8px">
-      <div style="border:1px solid #bbb;padding:8px;font-size:11px;min-width:300px">
+      <div style="border:1px solid #bbb;padding:6px 8px;font-size:11px;min-width:300px">
         <p style="font-weight:700;margin:0 0 3px;font-size:12px">Bank Details:</p>
         ${bankDetails?.account_number || bankDetails?.account_no ? `<p style="margin:1px 0"><strong>Account No:</strong> ${bankDetails.account_number || bankDetails.account_no}</p>` : ""}
         ${bankDetails?.ifsc ? `<p style="margin:1px 0"><strong>IFSC:</strong> ${bankDetails.ifsc}</p>` : ""}
