@@ -11,7 +11,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toast } from "sonner";
-import { Loader2, Plus, Save, Trash2, Lock, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { Loader2, Plus, Save, Trash2, Lock, AlertTriangle, CheckCircle2, Wand2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { computeCOATotals } from "@/lib/fsReconciliation";
 import { FS_NCE_CONSTRAINED_NOTES } from "@/lib/nceFeatureFlags";
@@ -123,10 +123,11 @@ function calcRowTotal(r: AssetRow): number {
  *
  *  depn = (opening + additions_pre - deletions) * rate% + additions_post * rate%/2
  *
- *  Previously this column was a manual input — auditors had to compute and
- *  type the figure by hand, prone to error. Now the input is read-only and
- *  the value is derived from rate %, opening balance, and the two
- *  date-bucketed addition columns. */
+ *  This is the rate-based AUTO-FILL default that updateRow() seeds into
+ *  r.depreciation whenever a base field (rate %, opening, additions, deletions)
+ *  changes. The Depreciation column itself is EDITABLE so the auditor can override
+ *  it to tie Σ depreciation to the booked NCE_DEPR (a rate formula can't hit that
+ *  exact figure to the rupee — the constrained save requires it). */
 function calcDepreciation(r: AssetRow): number {
   const rate = Number(r.rate_pct) || 0;
   if (rate <= 0) return 0;
@@ -142,9 +143,16 @@ function calcDepreciation(r: AssetRow): number {
   return Math.round(depn * 100) / 100;
 }
 
+/** Effective depreciation = the stored/entered figure (the column is now editable).
+ *  calcDepreciation() is only the rate-based AUTO-FILL suggestion that updateRow()
+ *  re-seeds into r.depreciation when a base field changes. The SAVED + COA-tied
+ *  value is r.depreciation, so the auditor can match Σ depreciation to the booked
+ *  NCE_DEPR — which a pure rate formula can never hit to the rupee (the root cause
+ *  of "PPE schedule won't save even though the net block ties"). */
+const effDep = (r: AssetRow): number => Math.round((Number(r.depreciation) || 0) * 100) / 100;
+
 function calcClosing(r: AssetRow): number {
-  const depn = calcDepreciation(r);
-  return Math.round((calcRowTotal(r) - depn) * 100) / 100;
+  return Math.round((calcRowTotal(r) - effDep(r)) * 100) / 100;
 }
 
 function fmtNum(v: number): string {
@@ -306,7 +314,19 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
   // ── Update ──────────────────────────────────────────────────────────────
   const updateRow = (sort_order: number, field: keyof AssetRow, value: number | string) => {
     setRows(prev =>
-      prev.map(r => (r.sort_order === sort_order ? { ...r, [field]: value } : r))
+      prev.map(r => {
+        if (r.sort_order !== sort_order) return r;
+        const next = { ...r, [field]: value };
+        // Auto-seed depreciation from the rate formula when a BASE field changes
+        // (so entering a Rate % still fills depreciation). A direct edit of the
+        // Depreciation column is left as a manual override so the auditor can tie
+        // the total to the booked NCE_DEPR.
+        if (field === "rate_pct" || field === "opening_balance" || field === "additions_pre"
+          || field === "additions_post" || field === "deletions") {
+          next.depreciation = calcDepreciation(next);
+        }
+        return next;
+      })
     );
   };
 
@@ -340,7 +360,7 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
       rows.reduce((s, r) => s + (Number(r[f]) || 0), 0);
     const totalTotal   = rows.reduce((s, r) => s + calcRowTotal(r), 0);
     const totalClosing = rows.reduce((s, r) => s + calcClosing(r),  0);
-    const totalDepn    = rows.reduce((s, r) => s + calcDepreciation(r), 0);
+    const totalDepn    = rows.reduce((s, r) => s + effDep(r), 0);
     return {
       opening:      sum("opening_balance"),
       addPre:       sum("additions_pre"),
@@ -365,7 +385,7 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
           coa_code: r.asset_category === "tangible" ? "NCE_PPE" : "NCE_INTG",
           rate_pct: r.rate_pct, opening_balance: r.opening_balance,
           additions_pre: r.additions_pre, additions_post: r.additions_post,
-          deletions: r.deletions, depreciation: calcDepreciation(r), sort_order: r.sort_order,
+          deletions: r.deletions, depreciation: effDep(r), sort_order: r.sort_order,
         }));
         const { data, error } = await supabase.functions.invoke("save-nce-constrained-note", {
           body: { type: "ppe", engagement_id: engagementId, financial_year: financialYear, rows: cPayload },
@@ -400,7 +420,7 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
         additions_post:  r.additions_post,
         deletions:       r.deletions,
         total:           calcRowTotal(r),
-        depreciation:    calcDepreciation(r),
+        depreciation:    effDep(r),
         closing_balance: calcClosing(r),
         sort_order:      r.sort_order,
       }));
@@ -420,7 +440,7 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
     const sumCat = (cat: string, f: (r: AssetRow) => number) => r2(rows.filter(r => r.asset_category === cat).reduce((s, r) => s + f(r), 0));
     const tanClose = sumCat("tangible", calcClosing), intClose = sumCat("intangible", calcClosing);
     const tanOpen = sumCat("tangible", r => Number(r.opening_balance) || 0), intOpen = sumCat("intangible", r => Number(r.opening_balance) || 0);
-    const depTot = r2(rows.reduce((s, r) => s + calcDepreciation(r), 0));
+    const depTot = r2(rows.reduce((s, r) => s + effDep(r), 0));
     const d = {
       tanCy: r2(coa.ppe.cy - tanClose), intCy: r2(coa.intg.cy - intClose), dep: r2(coa.depr.cy - depTot),
       tanPy: r2(coa.ppe.py - tanOpen), intPy: r2(coa.intg.py - intOpen),
@@ -428,6 +448,35 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
     const tied = Math.abs(d.tanCy) <= 1 && Math.abs(d.intCy) <= 1 && Math.abs(d.dep) <= 1 && (!hasPyShell || (Math.abs(d.tanPy) <= 1 && Math.abs(d.intPy) <= 1));
     return { tanClose, intClose, depTot, d, tied };
   }, [rows, coa, hasPyShell]);
+
+  // One-click reconcile: nudge each category's LAST row (the balancer) so every
+  // COA leg ties — Σ opening = COA PY net, Σ depreciation = booked NCE_DEPR, Σ
+  // closing (net block) = COA CY net. The legs are independent fields (opening /
+  // depreciation / additions), so closing falls out once the other two are set.
+  const autoBalanceToCoa = () => {
+    setRows(prev => {
+      const r2 = (n: number) => Math.round(n * 100) / 100;
+      const next = prev.map(r => ({ ...r }));
+      const sumOpen  = (list: AssetRow[]) => r2(list.reduce((s, r) => s + (Number(r.opening_balance) || 0), 0));
+      const sumClose = (list: AssetRow[]) => r2(list.reduce((s, r) => s + calcClosing(r), 0));
+      const balance = (cat: "tangible" | "intangible", net: { cy: number; py: number }, deprPlug: number | null) => {
+        const list = next.filter(r => r.asset_category === cat);
+        if (!list.length) return;
+        // balancer = highest sort_order row in the category (the "Others" class) —
+        // deterministic regardless of array order.
+        const b = list.reduce((a, c) => (c.sort_order > a.sort_order ? c : a), list[0]);
+        if (hasPyShell) b.opening_balance = r2((Number(b.opening_balance) || 0) + (net.py - sumOpen(list)));
+        if (deprPlug != null) {                                   // absorb the GLOBAL depreciation residual here
+          const allDep = r2(next.reduce((s, r) => s + effDep(r), 0));
+          b.depreciation = r2(effDep(b) + (deprPlug - allDep));
+        }
+        b.additions_pre = r2((Number(b.additions_pre) || 0) + (net.cy - sumClose(list)));  // ties closing last
+      };
+      balance("tangible", coa.ppe, coa.depr.cy);                  // tangible carries the depreciation plug
+      balance("intangible", coa.intg, null);
+      return next;
+    });
+  };
 
   // ── Loading ─────────────────────────────────────────────────────────────
   if (loading) {
@@ -453,11 +502,11 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
       : intangibleParents.length + rows.filter(r => r.asset_category === "intangible" && isSubLedger(r.sort_order)).length;
 
   const SaveBtn = () => (
-    <Button size="sm" onClick={handleSave} disabled={saving}>
+    <Button size="sm" onClick={handleSave} disabled={saving || (FS_NCE_CONSTRAINED_NOTES && !cons.tied)}>
       {saving
         ? <Loader2 className="animate-spin h-4 w-4 mr-1.5" />
         : <Save className="h-4 w-4 mr-1.5" />}
-      Save PPE Schedule
+      {FS_NCE_CONSTRAINED_NOTES && !cons.tied ? "Fix the difference to save" : "Save PPE Schedule"}
     </Button>
   );
 
@@ -571,7 +620,7 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
 
         {/* Col 8: Depreciation (auto-calculated from rate% + opening + additions) */}
         <TableCell className="p-1 border-r" style={{ minWidth: "88px" }}>
-          <NumInput value={calcDepreciation(row)} readOnly />
+          <NumInput value={row.depreciation} onChange={v => updateRow(row.sort_order, "depreciation", v)} />
         </TableCell>
 
         {/* Col 9: Closing Balance (read-only) */}
@@ -635,7 +684,7 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
           <NumInput value={rowTotal} readOnly />
         </TableCell>
         <TableCell className="p-1 border-r" style={{ minWidth: "88px" }}>
-          <NumInput value={calcDepreciation(row)} readOnly />
+          <NumInput value={row.depreciation} onChange={v => updateRow(row.sort_order, "depreciation", v)} />
         </TableCell>
         <TableCell className="p-1" style={{ minWidth: "88px" }}>
           <NumInput value={closing} readOnly />
@@ -676,18 +725,25 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
           {cons.tied ? (
             <div className="inline-flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400 font-medium"><CheckCircle2 className="h-4 w-4" /> Schedule ties to COA mapping — ready to save.</div>
           ) : (
-            <div className="flex flex-wrap gap-x-4 gap-y-1">
-              {[
-                { l: "Tangible closing (net block)", v: cons.d.tanCy, show: true },
-                { l: "Intangible closing (net block)", v: cons.d.intCy, show: true },
-                { l: "Depreciation total", v: cons.d.dep, show: true },
-                { l: "Tangible opening (= last-year close)", v: cons.d.tanPy, show: hasPyShell },
-                { l: "Intangible opening (= last-year close)", v: cons.d.intPy, show: hasPyShell },
-              ].filter(x => x.show && Math.abs(x.v) > 1).map((x, i) => (
-                <span key={i} className="inline-flex items-center gap-1.5 text-destructive text-xs">
-                  <AlertTriangle className="h-3.5 w-3.5" /> {x.l}: difference ₹{inr(x.v)}
-                </span>
-              ))}
+            <div className="space-y-2">
+              <div className="flex flex-wrap gap-x-4 gap-y-1">
+                {[
+                  { l: "Tangible closing (net block)", v: cons.d.tanCy, show: true },
+                  { l: "Intangible closing (net block)", v: cons.d.intCy, show: true },
+                  { l: "Depreciation total", v: cons.d.dep, show: true },
+                  { l: "Tangible opening (= last-year close)", v: cons.d.tanPy, show: hasPyShell },
+                  { l: "Intangible opening (= last-year close)", v: cons.d.intPy, show: hasPyShell },
+                ].filter(x => x.show && Math.abs(x.v) > 1).map((x, i) => (
+                  <span key={i} className="inline-flex items-center gap-1.5 text-destructive text-xs">
+                    <AlertTriangle className="h-3.5 w-3.5" /> {x.l}: difference ₹{inr(x.v)}
+                  </span>
+                ))}
+              </div>
+              {!readOnly && (
+                <Button variant="outline" size="sm" onClick={autoBalanceToCoa} className="gap-1.5">
+                  <Wand2 className="h-3.5 w-3.5" /> Auto-balance to COA mapping
+                </Button>
+              )}
             </div>
           )}
         </div>
