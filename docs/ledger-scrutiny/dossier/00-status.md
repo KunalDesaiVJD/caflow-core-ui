@@ -30,7 +30,7 @@ _Last updated: 2026-06-30_
 | 0.1b — Scaffold `docs/ledger-scrutiny/` | ✅ done (HANDOFF, START_HERE, 12-canonical-decisions, this file) |
 | 0.1c — Map the existing system | ✅ done → see **[01-existing-system-map.md](01-existing-system-map.md)** |
 | A — Rules catalogue + check-kinds (no DB) | ✅ done → **[rules/00-master-index.md](../rules/00-master-index.md)** (119 rules) + **[rules/01-check-kinds.md](../rules/01-check-kinds.md)** (83 check kinds, tiered A/B/C for the interpreter) |
-| C-engine — Tier A interpreter (no DB) | ✅ done → `src/lib/scrutiny/detectionEngine.ts` (20 handlers covering 37 rules) + `detectionEngine.test.ts` (**28 passing vitest tests**). Pure/dependency-free; runner reports Tier B/C as advisory; drops into `run-scrutiny` later. `npm run build` ✓, engine `tsc --strict` ✓ |
+| C-engine — Tier A+B interpreter (no DB) | ✅ done → `src/lib/scrutiny/detectionEngine.ts`: **28 handlers covering 50 of 119 rules** (20 Tier A deterministic + 8 Tier B computable: absence/PY/capital checks) + `detectionEngine.test.ts` (**41 passing vitest tests**). Pure/dependency-free; runner reports remaining Tier B (ratios/ageing/adequacy) + Tier C as advisory until a dev DB. `npm run build` ✓, engine `tsc --strict` ✓ |
 | 0.2 — Pick dev DB | ⏳ **pending (Senior CA) — now the real gate** for any testable build step |
 | 0.3 — Apply migrations | 🔄 reframed — v1 scrutiny schema already in git; author only the gap migrations (findings reconcile + security) and apply to **dev** |
 | 0.4 — Fix security holes | ✅ **located & confirmed live** — `20260421040000_tally_tables_rls_and_insert.sql` (`USING(true)` + `GRANT … TO anon`) + edge-fn IDOR; ready to author the fix |

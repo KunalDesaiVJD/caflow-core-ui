@@ -3,6 +3,7 @@ import {
   runDetection,
   TIER_A_HANDLERS,
   TIER_A_CHECK_KINDS,
+  TIER_B_CHECK_KINDS,
   type ScrutinyRule,
   type TBRow,
   type VoucherRow,
@@ -34,8 +35,8 @@ const vch = (p: Partial<VoucherRow> & { amount: number; voucher_date: string }):
 });
 
 const FY: ScrutinyContext = { financialYearStart: "2025-04-01", financialYearEnd: "2026-03-31", today: "2026-03-31" };
-const run = (r: ScrutinyRule, data: { tb?: TBRow[]; vouchers?: VoucherRow[] }, ctx: ScrutinyContext = FY) =>
-  runDetection([r], { tb: data.tb ?? [], vouchers: data.vouchers ?? [] }, ctx, { emitAdvisoryForUnhandled: false }).findings;
+const run = (r: ScrutinyRule, data: { tb?: TBRow[]; vouchers?: VoucherRow[]; tbPY?: TBRow[] }, ctx: ScrutinyContext = FY) =>
+  runDetection([r], { tb: data.tb ?? [], vouchers: data.vouchers ?? [], tbPY: data.tbPY }, ctx, { emitAdvisoryForUnhandled: false }).findings;
 
 // ---- account-grain handlers ----------------------------------------------
 
@@ -314,5 +315,102 @@ describe("runDetection coverage", () => {
     const r = rule({ rule_id: "BKR-002", category: "BKR", detection_level: "account", audit_query_template: 'Suspense "{account}" has ₹{amount}.', detection_logic: { check: "keyword_balance", keywords: ["suspense"], nonzero: true } });
     const found = run(r, { tb: [tb({ ledger_name: "Suspense A/c", closing_balance: 1200, balance_type: "Dr" })] });
     expect(found[0].flag_message).toBe('Suspense "Suspense A/c" has ₹1,200.');
+  });
+});
+
+// ---- Tier B handlers ------------------------------------------------------
+
+describe("missing_provision (absence)", () => {
+  it("flags when the provision ledger is absent, not when present", () => {
+    const r = rule({ rule_id: "PROV-006", category: "PROV", detection_level: "account", detection_logic: { check: "missing_provision", keywords: ["deferred tax"] } });
+    expect(run(r, { tb: [tb({ ledger_name: "Rent", closing_balance: 100, balance_type: "Dr" })] })).toHaveLength(1);
+    expect(run(r, { tb: [tb({ ledger_name: "Deferred Tax Liability", closing_balance: 5000, balance_type: "Cr" })] })).toHaveLength(0);
+  });
+});
+
+describe("provision_adequacy_keyword & missing_disclosure", () => {
+  it("flag when gratuity / contingent ledger absent, not when present", () => {
+    const grat = rule({ rule_id: "PAY-004", category: "PAY", detection_level: "account", detection_logic: { check: "provision_adequacy_keyword", keywords: ["gratuity"] } });
+    expect(run(grat, { tb: [tb({ ledger_name: "Salary", closing_balance: 1000, balance_type: "Dr" })] })).toHaveLength(1);
+    const cont = rule({ rule_id: "PROV-001", category: "PROV", detection_level: "account", detection_logic: { check: "missing_disclosure", keywords: ["contingent", "claim"] } });
+    expect(run(cont, { tb: [tb({ ledger_name: "Contingent Liability — Guarantee", closing_balance: 1, balance_type: "Cr" })] })).toHaveLength(0);
+  });
+});
+
+describe("missing_deduction (conditional absence)", () => {
+  const r = rule({ rule_id: "PAY-001", category: "PAY", detection_level: "voucher", detection_logic: { check: "missing_deduction", deduction: "PF" } });
+  it("flags salaries present with no PF ledger", () => {
+    expect(run(r, { tb: [tb({ ledger_name: "Salaries & Wages", closing_balance: 500000, balance_type: "Dr" })] })).toHaveLength(1);
+  });
+  it("does not flag when a PF ledger exists", () => {
+    expect(run(r, { tb: [tb({ ledger_name: "Salaries & Wages", closing_balance: 500000, balance_type: "Dr" }), tb({ ledger_name: "Provident Fund Payable", closing_balance: 20000, balance_type: "Cr" })] })).toHaveLength(0);
+  });
+  it("does not flag when there are no salaries at all", () => {
+    expect(run(r, { tb: [tb({ ledger_name: "Rent", closing_balance: 1000, balance_type: "Dr" })] })).toHaveLength(0);
+  });
+});
+
+describe("py_comparison", () => {
+  const r = rule({ rule_id: "EXP-002", category: "EXP", detection_level: "ratio", detection_logic: { check: "py_comparison", threshold_pct: 200 } });
+  it("flags a ledger that grew beyond 200% of prior year", () => {
+    const found = run(r, {
+      tb: [tb({ ledger_name: "Travelling Expenses", closing_balance: 300000, balance_type: "Dr" })],
+      tbPY: [tb({ ledger_name: "Travelling Expenses", closing_balance: 100000, balance_type: "Dr" })],
+    });
+    expect(found).toHaveLength(1);
+    expect(found[0].evidence?.ratio_pct).toBe(300);
+  });
+  it("does not flag a modest increase", () => {
+    const found = run(r, {
+      tb: [tb({ ledger_name: "Travelling Expenses", closing_balance: 120000, balance_type: "Dr" })],
+      tbPY: [tb({ ledger_name: "Travelling Expenses", closing_balance: 100000, balance_type: "Dr" })],
+    });
+    expect(found).toHaveLength(0);
+  });
+  it("emits an advisory when prior-year TB is missing", () => {
+    const found = run(r, { tb: [tb({ ledger_name: "Travelling Expenses", closing_balance: 300000, balance_type: "Dr" })] });
+    expect(found).toHaveLength(1);
+    expect(found[0].advisory).toBe(true);
+  });
+});
+
+describe("capital_change", () => {
+  const r = rule({ rule_id: "CAP-001", category: "CAP", detection_level: "account", detection_logic: { check: "capital_change" } });
+  it("flags a change in share capital vs prior year", () => {
+    const found = run(r, {
+      tb: [tb({ ledger_name: "Equity Share Capital", closing_balance: 5000000, balance_type: "Cr" })],
+      tbPY: [tb({ ledger_name: "Equity Share Capital", closing_balance: 1000000, balance_type: "Cr" })],
+    });
+    expect(found).toHaveLength(1);
+  });
+  it("does not flag when capital is unchanged", () => {
+    const found = run(r, {
+      tb: [tb({ ledger_name: "Equity Share Capital", closing_balance: 1000000, balance_type: "Cr" })],
+      tbPY: [tb({ ledger_name: "Equity Share Capital", closing_balance: 1000000, balance_type: "Cr" })],
+    });
+    expect(found).toHaveLength(0);
+  });
+});
+
+describe("capital_in_expense & cash_capital_payment", () => {
+  it("capital_in_expense flags a machinery purchase booked as expense", () => {
+    const r = rule({ rule_id: "FA-001", category: "FA", threshold_value: 100000, detection_logic: { check: "capital_in_expense", threshold: 100000 } });
+    const found = run(r, { vouchers: [vch({ amount: 150000, dr_cr: "Dr", voucher_date: "2025-07-01", ledger_name: "Repairs", narration: "New machinery purchased" })] });
+    expect(found).toHaveLength(1);
+  });
+  it("cash_capital_payment flags a cash payment for equipment", () => {
+    const r = rule({ rule_id: "CASH-004", category: "CASH", threshold_value: 10000, detection_logic: { check: "cash_capital_payment", threshold: 10000 } });
+    const found = run(r, { vouchers: [vch({ amount: 25000, dr_cr: "Dr", voucher_date: "2025-07-01", ledger_name: "Cash", narration: "Office equipment" })] });
+    expect(found).toHaveLength(1);
+  });
+});
+
+describe("default handlers include Tier B", () => {
+  it("exposes 8 Tier B kinds and runs them by default", () => {
+    expect(TIER_B_CHECK_KINDS).toHaveLength(8);
+    const r = rule({ rule_id: "PROV-003", category: "PROV", detection_level: "account", detection_logic: { check: "missing_provision", keywords: ["warranty"] } });
+    const res = runDetection([r], { tb: [tb({ ledger_name: "Sales", closing_balance: 1, balance_type: "Cr" })], vouchers: [] }, FY);
+    expect(res.coverage.rulesHandled).toBe(1);
+    expect(res.findings.some((f) => f.rule_id === "PROV-003" && !f.advisory)).toBe(true);
   });
 });

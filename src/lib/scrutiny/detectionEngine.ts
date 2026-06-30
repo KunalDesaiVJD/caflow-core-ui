@@ -69,6 +69,8 @@ export interface ScrutinyRule {
 export interface ScrutinyData {
   tb: TBRow[];
   vouchers: VoucherRow[];
+  /** prior-year trial balance (account grain) — enables py_comparison / capital_change */
+  tbPY?: TBRow[];
 }
 
 export interface ScrutinyContext {
@@ -632,6 +634,134 @@ const h_month_spike: CheckHandler = (rule, { vouchers }) => {
 };
 
 // ---------------------------------------------------------------------------
+// Tier B handlers — the subset computable from the seed's own detection_logic
+// (plus optional prior-year TB). The heavier ratio / ageing / adequacy checks
+// stay advisory (no handler) until classified financials / a dev DB exist.
+// ---------------------------------------------------------------------------
+
+const normName = (s: unknown): string =>
+  String(s ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+
+/** is any non-zero ledger matching the keywords present in the TB? */
+const anyLedger = (tb: TBRow[], keywords: unknown): boolean =>
+  tb.some((r) => kwMatch(`${r.ledger_name} ${r.parent_group ?? ""}`, keywords) && num(r.closing_balance) !== 0);
+
+const SALARY_KEYWORDS = ["salary", "salaries", "wages", "remuneration", "staff cost", "payroll"];
+const DEDUCTION_KEYWORDS: Record<string, string[]> = {
+  PF: ["provident fund", "pf payable", "epf", "p.f."],
+  ESI: ["esi", "employee state insurance", "esic"],
+};
+const CAPITAL_KEYWORDS = [
+  "machinery", "plant", "building", "furniture", "fixture", "vehicle",
+  "equipment", "computer", "land", "office equipment",
+];
+
+/** flag the whole engagement (no specific account) — used by absence checks. */
+const flagEngagement = (rule: ScrutinyRule, message: string, evidence?: Record<string, unknown>): ScrutinyFinding[] => [
+  finding(rule, { flag_message: message, evidence }),
+];
+
+/** Absence check: flag when an expected provision/disclosure ledger is NOT present. */
+const h_missing_provision: CheckHandler = (rule, { tb }) => {
+  const kws = rule.detection_logic.keywords ?? [];
+  if (anyLedger(tb, kws)) return [];
+  return flagEngagement(rule, render(rule.audit_query_template, {}), { keywords: kws, present: false });
+};
+
+// provision_adequacy_keyword & missing_disclosure share the absence pattern
+// (true adequacy is manual; we flag when the named ledger is absent).
+const h_provision_adequacy_keyword: CheckHandler = h_missing_provision;
+const h_missing_disclosure: CheckHandler = h_missing_provision;
+
+/** Conditional absence: salaries present but the statutory deduction ledger is missing. */
+const h_missing_deduction: CheckHandler = (rule, { tb }) => {
+  const ded = String(rule.detection_logic.deduction ?? "").toUpperCase();
+  const dedKws = DEDUCTION_KEYWORDS[ded] ?? [ded.toLowerCase()];
+  const hasSalary = anyLedger(tb, SALARY_KEYWORDS);
+  const hasDeduction = anyLedger(tb, dedKws);
+  if (!hasSalary || hasDeduction) return [];
+  return flagEngagement(rule, render(rule.audit_query_template, {}), {
+    deduction: ded, salary_present: true, deduction_present: false,
+  });
+};
+
+/** Year-on-year movement on a ledger above threshold_pct (needs prior-year TB). */
+const h_py_comparison: CheckHandler = (rule, { tb, tbPY }) => {
+  if (!tbPY || tbPY.length === 0) {
+    return [finding(rule, { advisory: true, flag_message: `${rule.rule_name}: prior-year balances unavailable — review manually.`, evidence: { reason: "no_py" } })];
+  }
+  const pct = num(rule.detection_logic.threshold_pct, 200);
+  const pyByName = new Map<string, number>();
+  for (const r of tbPY) pyByName.set(normName(r.ledger_name), Math.abs(num(r.closing_balance)));
+  const out: ScrutinyFinding[] = [];
+  for (const r of tb) {
+    const cy = Math.abs(num(r.closing_balance));
+    const py = pyByName.get(normName(r.ledger_name)) ?? 0;
+    if (py < 1000 || cy < 1000) continue; // skip immaterial
+    const ratioPct = (cy / py) * 100;
+    if (ratioPct >= pct) {
+      out.push(finding(rule, {
+        account: r.ledger_name,
+        amount: cy,
+        flag_message: render(rule.audit_query_template, { account: r.ledger_name, amount: fmtAmt(cy), pct: Math.round(ratioPct) }),
+        evidence: { cy, py, ratio_pct: Math.round(ratioPct), threshold_pct: pct },
+      }));
+    }
+  }
+  return out;
+};
+
+/** Share-capital balance changed vs prior year (needs prior-year TB). */
+const h_capital_change: CheckHandler = (rule, { tb, tbPY }) => {
+  const kws = ["share capital", "equity share", "preference share", "capital account"];
+  const sumCap = (rows: TBRow[]) =>
+    rows.filter((r) => kwMatch(`${r.ledger_name} ${r.parent_group ?? ""}`, kws)).reduce((s, r) => s + signedClosing(r), 0);
+  if (!tbPY || tbPY.length === 0) {
+    return [finding(rule, { advisory: true, flag_message: `${rule.rule_name}: prior-year capital unavailable — review manually.`, evidence: { reason: "no_py" } })];
+  }
+  const cy = sumCap(tb);
+  const py = sumCap(tbPY);
+  if (Math.abs(cy - py) <= 1) return [];
+  return [finding(rule, {
+    amount: cy - py,
+    flag_message: render(rule.audit_query_template, { amount: fmtAmt(Math.abs(cy - py)) }),
+    evidence: { cy_capital: cy, py_capital: py, change: cy - py },
+  })];
+};
+
+/** Capital-looking item booked as an expense (voucher grain, keyword heuristic). */
+const h_capital_in_expense: CheckHandler = (rule, { vouchers }) => {
+  const t = threshold(rule);
+  return vouchers
+    .filter((v) => sideOf(v.dr_cr) === "Dr")
+    .filter((v) => kwMatch(`${v.ledger_name ?? ""} ${v.narration ?? ""}`, CAPITAL_KEYWORDS))
+    .filter((v) => Math.abs(num(v.amount)) >= t)
+    .map((v) => finding(rule, {
+      account: v.ledger_name ?? v.party_ledger ?? null,
+      amount: num(v.amount),
+      date: v.voucher_date,
+      flag_message: render(rule.audit_query_template, { account: v.ledger_name ?? "", amount: fmtAmt(num(v.amount)) }),
+      evidence: { voucher_number: v.voucher_number, narration: v.narration },
+    }));
+};
+
+/** Cash payment for a capital-nature item (voucher grain, keyword heuristic). */
+const h_cash_capital_payment: CheckHandler = (rule, { vouchers }) => {
+  const t = threshold(rule);
+  return vouchers
+    .filter(isCashVoucher)
+    .filter((v) => kwMatch(`${v.party_ledger ?? ""} ${v.ledger_name ?? ""} ${v.narration ?? ""}`, CAPITAL_KEYWORDS))
+    .filter((v) => Math.abs(num(v.amount)) >= t)
+    .map((v) => finding(rule, {
+      account: v.party_ledger ?? v.ledger_name ?? null,
+      amount: num(v.amount),
+      date: v.voucher_date,
+      flag_message: render(rule.audit_query_template, { amount: fmtAmt(num(v.amount)), date: v.voucher_date }),
+      evidence: { voucher_number: v.voucher_number },
+    }));
+};
+
+// ---------------------------------------------------------------------------
 // Registry + runner
 // ---------------------------------------------------------------------------
 
@@ -660,6 +790,25 @@ export const TIER_A_HANDLERS: Record<string, CheckHandler> = {
 
 export const TIER_A_CHECK_KINDS = Object.keys(TIER_A_HANDLERS);
 
+export const TIER_B_HANDLERS: Record<string, CheckHandler> = {
+  missing_provision: h_missing_provision,
+  provision_adequacy_keyword: h_provision_adequacy_keyword,
+  missing_disclosure: h_missing_disclosure,
+  missing_deduction: h_missing_deduction,
+  py_comparison: h_py_comparison,
+  capital_change: h_capital_change,
+  capital_in_expense: h_capital_in_expense,
+  cash_capital_payment: h_cash_capital_payment,
+};
+
+export const TIER_B_CHECK_KINDS = Object.keys(TIER_B_HANDLERS);
+
+/** All implemented handlers (Tier A deterministic + Tier B computable subset). */
+export const DEFAULT_HANDLERS: Record<string, CheckHandler> = {
+  ...TIER_A_HANDLERS,
+  ...TIER_B_HANDLERS,
+};
+
 export interface RunOptions {
   handlers?: Record<string, CheckHandler>;
   /** emit an advisory finding for rules whose check kind has no handler (default true) */
@@ -678,7 +827,7 @@ export function runDetection(
   ctx: ScrutinyContext = {},
   opts: RunOptions = {},
 ): DetectionResult {
-  const handlers = opts.handlers ?? TIER_A_HANDLERS;
+  const handlers = opts.handlers ?? DEFAULT_HANDLERS;
   const emitAdvisory = opts.emitAdvisoryForUnhandled ?? true;
   const findings: ScrutinyFinding[] = [];
   const executed = new Set<string>();
