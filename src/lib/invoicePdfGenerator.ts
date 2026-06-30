@@ -349,6 +349,23 @@ export function downloadPdfBlob(blob: Blob, filename: string) {
   downloadBlob(blob, filename);
 }
 
+/**
+ * Builds the printable HTML for an invoice / quotation / proforma.
+ *
+ * FORMATTING IS LOCKED. Every padding, margin, font-size, header height,
+ * signature spacer and page margin in this template is a fixed literal.
+ * Nothing scales with line_items.length, totals, or any other dynamic
+ * value — when items are added or removed only the line-item table itself
+ * grows or shrinks; the rest of the layout (TAX INVOICE title, firm name,
+ * bill-to box, totals summary, bank/signature/terms block) renders at the
+ * same dimensions every time. Do NOT introduce conditional sizing based
+ * on item count or total amount — invoices are expected to look visually
+ * identical save for the number of table rows.
+ *
+ * The single exception is the title block's bottom margin (8px for export
+ * invoices vs 16px for domestic) which is a one-off design difference,
+ * not a content-driven adjustment.
+ */
 export function buildInvoiceHtml(inv: InvoiceRecord): string {
   const docType = inv.document_type || "invoice";
 
