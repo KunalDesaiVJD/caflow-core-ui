@@ -977,18 +977,22 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
         const firmSettings = sourceFirm ? (sourceFirm.settings as Record<string, any> | null) : null;
         const billingEmail = firmSettings?.billing_email || sourceFirm?.email || "";
         const billingContact = firmSettings?.billing_contact || sourceFirm?.phone || "";
+        const currentFirmName = sourceFirm?.display_name || sourceFirm?.name || "";
+        // Always-current overrides — match NewInvoice.tsx single-invoice
+        // rendering precedence: pass live firm data, fall back to stored
+        // snapshot only when the live value is empty. Previously this used
+        // stored-first/live-fallback which silently produced different
+        // PDFs for the same invoice depending on the export path.
         const invWithLogo = {
           ...inv,
-          // Override with current firm data to match single-invoice rendering
-          from_firm_name: inv.from_firm_name || sourceFirm?.display_name || sourceFirm?.name || "",
-          from_address: firmAddress || inv.from_address || "",
-          from_gstin: inv.from_gstin || sourceFirm?.gstin || "",
-          from_pan: inv.from_pan || sourceFirm?.pan || "",
-          // Fall back to the firm's current MSME no. so invoices created
-          // before from_msme was snapshotted still print the MSME line.
-          from_msme: inv.from_msme || firmSettings?.msme_no || "",
-          from_email: inv.from_email || billingEmail,
-          from_phone: inv.from_phone || billingContact,
+          from_firm_name: currentFirmName || inv.from_firm_name || "",
+          from_address:   firmAddress     || inv.from_address || "",
+          from_gstin:     sourceFirm?.gstin || inv.from_gstin || "",
+          from_pan:       sourceFirm?.pan   || inv.from_pan   || "",
+          from_msme:      firmSettings?.msme_no || inv.from_msme || "",
+          from_email:     billingEmail   || inv.from_email || "",
+          from_phone:     billingContact || inv.from_phone || "",
+          signatory_name: currentFirmName || (inv as any).signatory_name || "",
           logo_url: inv.firm_id ? (firmLogoMap[inv.firm_id] || null) : null,
           firm_settings: firmSettings,
         };

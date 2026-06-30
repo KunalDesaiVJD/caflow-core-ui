@@ -593,7 +593,7 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
       </div>
       <div style="text-align:right;padding-top:4px">
         <p style="margin:0;font-size:12px;font-weight:600">For ${firmName.toUpperCase()}</p>
-        <div style="height:28px"></div>
+        <div style="height:42px"></div>
         <p style="margin:0;font-size:11px;border-top:1px solid #333;padding-top:3px">Authorised Signatory</p>
       </div>
     </div>
