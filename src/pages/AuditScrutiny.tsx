@@ -19,6 +19,10 @@ import { AlertTriangle, CheckCircle2, Shield, ShieldAlert, ShieldQuestion, FileS
 import { TdsReconModule } from "@/components/tds-recon/TdsReconModule";
 import { SEVERITIES, STATUSES, type Finding, type RuleTemplate } from "@/lib/scrutiny/scrutinyUi";
 import ScrutinyTemplatesView from "@/components/scrutiny-v2/ScrutinyTemplatesView";
+import {
+  buildDraftQuery, canReviewQuery, SCRUTINY_QUERY_SOURCE,
+  QUERY_STATUS_OPEN, QUERY_STATUS_REJECTED,
+} from "@/lib/scrutiny/makerChecker";
 
 const CATEGORIES = ["All", "TDS", "GST", "Cash Payments", "Loans", "Prior Period", "Depreciation", "Deferred Tax", "Bank Recon", "Narration AI"];
 const FY_OPTIONS = ["2024-25", "2023-24", "2022-23", "2021-22"];
@@ -51,6 +55,9 @@ export default function AuditScrutiny() {
   // v2 templates-first view (behind the VITE_SCRUTINY_V2 flag)
   const v2 = scrutinyV2Enabled();
   const [rules, setRules] = useState<RuleTemplate[]>([]);
+  // Scrutiny-raised queries (maker-checker): finding_id -> { id, status }
+  const [scrutinyQueries, setScrutinyQueries] = useState<{ id: string; source_ref_id: string | null; status: string }[]>([]);
+  const [rejectTarget, setRejectTarget] = useState<{ finding: Finding; queryId: string } | null>(null);
 
   // Filters — default FY from engagement context
   const [fy, setFy] = useState(contextFY || "2024-25");
@@ -113,6 +120,31 @@ export default function AuditScrutiny() {
       .order("rule_id")
       .then(({ data }: any) => { if (Array.isArray(data)) setRules(data as RuleTemplate[]); });
   }, [v2]);
+
+  // Load this client/FY's scrutiny-raised queries (maker-checker state), v2 only
+  const fetchScrutinyQueries = async () => {
+    if (!v2 || !clientId) return;
+    const { data } = await (supabase.from as any)("audit_client_queries")
+      .select("id, source_ref_id, status")
+      .eq("client_id", clientId)
+      .eq("financial_year", fy)
+      .eq("source", SCRUTINY_QUERY_SOURCE);
+    if (Array.isArray(data)) setScrutinyQueries(data);
+  };
+  useEffect(() => { fetchScrutinyQueries(); }, [v2, clientId, fy]);
+
+  // finding_id -> its linked query { id, status } (via the finding's linked_query_id)
+  const queryByFinding = useMemo(() => {
+    const byId = new Map(scrutinyQueries.map(q => [q.id, q]));
+    const m: Record<string, { id: string; status: string }> = {};
+    for (const f of findings) {
+      if (f.linked_query_id && byId.has(f.linked_query_id)) {
+        const q = byId.get(f.linked_query_id)!;
+        m[f.id] = { id: q.id, status: q.status };
+      }
+    }
+    return m;
+  }, [findings, scrutinyQueries]);
 
   // Fetch assigned audit firm for this client + FY
   useEffect(() => {
@@ -196,6 +228,65 @@ export default function AuditScrutiny() {
     toast({ title: `Linked to Clause ${clause}` });
     setLinkClauseId(null);
     fetchFindings();
+  };
+
+  // ── Maker-checker (Ticket 1.3, Design A) ─────────────────────────────────
+  const refetchScrutiny = () => { fetchFindings(); fetchScrutinyQueries(); };
+
+  // MAKER: raise a finding into a DRAFT query (not yet client-visible/dispatchable)
+  const handleRaiseQuery = async (finding: Finding) => {
+    const { data: userData } = await supabase.from("users").select("firm_id").eq("id", user?.id).single();
+    const rule = rules.find(r => r.rule_id === finding.rule_id);
+    const draft = buildDraftQuery({
+      finding: { id: finding.id, rule_id: finding.rule_id, severity: finding.severity, flag_message: finding.flag_message },
+      ruleQueryTemplate: rule?.audit_query_template ?? null,
+      engagement_id: (auditCtx?.selectedEngagement as any)?.id ?? null,
+      client_id: clientId,
+      firm_id: userData?.firm_id ?? null,
+      financial_year: fy,
+    });
+    const { data, error } = await (supabase.from as any)("audit_client_queries").insert(draft).select("id").single();
+    if (error) { toast({ title: "Could not raise query", description: error.message, variant: "destructive" }); return; }
+    await (supabase.from as any)("scrutiny_findings")
+      .update({ status: "queried", linked_query_id: data.id, actioned_by: user?.id, actioned_at: new Date().toISOString() })
+      .eq("id", finding.id);
+    track("scrutiny_query_raised", { rule_id: finding.rule_id, severity: finding.severity });
+    toast({ title: "Draft query raised", description: "A second reviewer must approve it before it can be sent." });
+    refetchScrutiny();
+  };
+
+  // CHECKER: approve a DRAFT query (must differ from the maker) → Open (dispatchable)
+  const handleApproveQuery = async (finding: Finding, queryId: string) => {
+    if (!canReviewQuery(finding.actioned_by, user?.id)) {
+      toast({ title: "Maker-checker", description: "A different reviewer must approve this query.", variant: "destructive" });
+      return;
+    }
+    await (supabase.from as any)("audit_client_queries").update({ status: QUERY_STATUS_OPEN }).eq("id", queryId);
+    await (supabase.from as any)("scrutiny_findings")
+      .update({ reviewed_by: user?.id, reviewed_at: new Date().toISOString() })
+      .eq("id", finding.id);
+    track("scrutiny_query_approved", { rule_id: finding.rule_id });
+    toast({ title: "Query approved", description: "It can now be dispatched to the client." });
+    refetchScrutiny();
+  };
+
+  // CHECKER: reject a DRAFT query (must differ from the maker) → finding returns to the pool
+  const handleRejectQuery = async () => {
+    if (!rejectTarget) return;
+    const { finding, queryId } = rejectTarget;
+    if (!canReviewQuery(finding.actioned_by, user?.id)) {
+      toast({ title: "Maker-checker", description: "A different reviewer must reject this query.", variant: "destructive" });
+      setRejectTarget(null); setActionNote("");
+      return;
+    }
+    await (supabase.from as any)("audit_client_queries").update({ status: QUERY_STATUS_REJECTED }).eq("id", queryId);
+    await (supabase.from as any)("scrutiny_findings")
+      .update({ status: "open", linked_query_id: null, override_reason: actionNote || null, reviewed_by: user?.id, reviewed_at: new Date().toISOString() })
+      .eq("id", finding.id);
+    track("scrutiny_query_rejected", { rule_id: finding.rule_id });
+    toast({ title: "Query rejected", description: "The finding is back in the pool." });
+    setRejectTarget(null); setActionNote("");
+    refetchScrutiny();
   };
 
   const handleRunScrutiny = async () => {
@@ -322,10 +413,15 @@ export default function AuditScrutiny() {
           rules={rules}
           findings={findings}
           loading={loading}
+          queryByFinding={queryByFinding}
+          currentUserId={user?.id ?? null}
           onDetails={(f) => setDetailFinding(f)}
           onResolve={(id) => setResolveId(id)}
           onWaive={(id) => setWaiveId(id)}
           onLink={(id) => setLinkClauseId(id)}
+          onRaiseQuery={handleRaiseQuery}
+          onApproveQuery={handleApproveQuery}
+          onRejectQuery={(finding, queryId) => setRejectTarget({ finding, queryId })}
           severityBadge={severityBadge}
           statusBadge={statusBadge}
         />
@@ -477,6 +573,19 @@ export default function AuditScrutiny() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setWaiveId(null)}>Cancel</Button>
             <Button onClick={handleWaive} disabled={!actionNote.trim()}>Waive</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reject Query Dialog (maker-checker) */}
+      <Dialog open={!!rejectTarget} onOpenChange={() => { setRejectTarget(null); setActionNote(""); }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Reject Draft Query</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">The finding returns to the pool; the rejected draft is kept for the audit trail and never reaches the client.</p>
+          <Textarea placeholder="Reason for rejection (optional)" value={actionNote} onChange={e => setActionNote(e.target.value)} />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setRejectTarget(null); setActionNote(""); }}>Cancel</Button>
+            <Button variant="destructive" onClick={handleRejectQuery}>Reject</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

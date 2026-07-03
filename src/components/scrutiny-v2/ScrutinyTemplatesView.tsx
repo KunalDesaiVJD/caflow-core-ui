@@ -22,19 +22,26 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  ChevronDown, ChevronRight, ShieldCheck, ShieldAlert, ShieldQuestion, Info, X, CheckCircle2,
+  ChevronDown, ChevronRight, ShieldCheck, ShieldAlert, ShieldQuestion, Info, X, CheckCircle2, Send, Clock,
 } from "lucide-react";
 import { SEVERITIES, STATUSES, type Finding, type RuleTemplate } from "@/lib/scrutiny/scrutinyUi";
 import { groupByTemplate, groupByCategory, computeCoverage, type TemplateGroup } from "@/lib/scrutiny/coverage";
+import { findingQueryState, canReviewQuery } from "@/lib/scrutiny/makerChecker";
 
 interface Props {
   rules: RuleTemplate[];
   findings: Finding[];
   loading: boolean;
+  /** finding_id -> its linked query { id, status } (maker-checker) */
+  queryByFinding: Record<string, { id: string; status: string }>;
+  currentUserId: string | null;
   onDetails: (f: Finding) => void;
   onResolve: (id: string) => void;
   onWaive: (id: string) => void;
   onLink: (id: string) => void;
+  onRaiseQuery: (f: Finding) => void;
+  onApproveQuery: (f: Finding, queryId: string) => void;
+  onRejectQuery: (f: Finding, queryId: string) => void;
   severityBadge: (s: string | null) => ReactNode;
   statusBadge: (s: string | null) => ReactNode;
 }
@@ -47,25 +54,36 @@ function toggle(set: Set<string>, key: string): Set<string> {
 }
 
 export default function ScrutinyTemplatesView({
-  rules, findings, loading, onDetails, onResolve, onWaive, onLink, severityBadge, statusBadge,
+  rules, findings, loading, queryByFinding, currentUserId,
+  onDetails, onResolve, onWaive, onLink, onRaiseQuery, onApproveQuery, onRejectQuery,
+  severityBadge, statusBadge,
 }: Props) {
   const [catFilter, setCatFilter] = useState("All");
   const [sevFilter, setSevFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
+  const [mcFilter, setMcFilter] = useState(false); // "awaiting approval only"
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [showClean, setShowClean] = useState<Set<string>>(new Set());
+
+  const qState = (f: Finding) => findingQueryState(queryByFinding[f.id]?.status);
 
   const groups = useMemo(() => groupByTemplate(rules, findings), [rules, findings]);
   const coverage = useMemo(() => computeCoverage(groups), [groups]);
   const cats = useMemo(() => groupByCategory(groups), [groups]);
   const categoryOptions = useMemo(() => ["All", ...cats.map((c) => c.category)], [cats]);
 
-  const activeFindingFilter = sevFilter !== "All" || statusFilter !== "All";
+  const awaitingApproval = useMemo(
+    () => findings.filter((f) => qState(f) === "draft").length,
+    [findings, queryByFinding],
+  );
+
+  const activeFindingFilter = sevFilter !== "All" || statusFilter !== "All" || mcFilter;
   const matchFinding = (f: Finding) =>
     (sevFilter === "All" || (f.severity ?? "").toUpperCase() === sevFilter) &&
-    (statusFilter === "All" || (f.status ?? "").toLowerCase() === statusFilter.toLowerCase());
+    (statusFilter === "All" || (f.status ?? "").toLowerCase() === statusFilter.toLowerCase()) &&
+    (!mcFilter || qState(f) === "draft");
 
-  const clearFilters = () => { setCatFilter("All"); setSevFilter("All"); setStatusFilter("All"); };
+  const clearFilters = () => { setCatFilter("All"); setSevFilter("All"); setStatusFilter("All"); setMcFilter(false); };
 
   const visibleCats = cats.filter((c) => catFilter === "All" || c.category === catFilter);
 
@@ -77,25 +95,56 @@ export default function ScrutinyTemplatesView({
     return <Badge variant="outline" className="gap-1 text-muted-foreground"><ShieldQuestion size={12} />Advisory</Badge>;
   };
 
+  // Maker-checker cell: raise (maker) → draft → approve/reject (checker, must differ from maker)
+  const renderQueryCell = (f: Finding) => {
+    const st = qState(f);
+    const q = queryByFinding[f.id];
+    if (st === "none") {
+      return <Button size="sm" variant="outline" onClick={() => onRaiseQuery(f)}><Send size={12} className="mr-1" />Raise query</Button>;
+    }
+    if (st === "draft") {
+      const canReview = canReviewQuery(f.actioned_by, currentUserId);
+      return (
+        <div className="flex items-center gap-1 justify-end flex-wrap">
+          <Badge variant="outline" className="gap-1 text-amber-700 border-amber-300 bg-amber-500/10"><Clock size={11} />Draft</Badge>
+          {canReview && q ? (
+            <>
+              <Button size="sm" variant="ghost" className="text-green-600" onClick={() => onApproveQuery(f, q.id)}>Approve</Button>
+              <Button size="sm" variant="ghost" className="text-destructive" onClick={() => onRejectQuery(f, q.id)}>Reject</Button>
+            </>
+          ) : (
+            <span className="text-[11px] text-muted-foreground">needs another reviewer</span>
+          )}
+        </div>
+      );
+    }
+    if (st === "approved") {
+      return <Badge className="gap-1 bg-green-500/15 text-green-700 border-green-300"><CheckCircle2 size={11} />Query raised</Badge>;
+    }
+    return <Badge variant="outline" className="text-muted-foreground">Rejected</Badge>;
+  };
+
   const renderFindingsTable = (fs: Finding[]) => (
     <div className="rounded-md border bg-muted/20">
       <Table>
         <TableHeader>
           <TableRow>
             <TableHead>Flag Message</TableHead>
-            <TableHead className="w-24">Severity</TableHead>
-            <TableHead className="w-24">Status</TableHead>
-            <TableHead className="w-20">3CD</TableHead>
+            <TableHead className="w-20">Severity</TableHead>
+            <TableHead className="w-20">Status</TableHead>
+            <TableHead className="w-16">3CD</TableHead>
+            <TableHead className="w-56 text-right">Query (maker-checker)</TableHead>
             <TableHead className="text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {fs.map((f) => (
             <TableRow key={f.id}>
-              <TableCell className="max-w-[360px] truncate text-sm">{f.flag_message || "—"}</TableCell>
+              <TableCell className="max-w-[320px] truncate text-sm">{f.flag_message || "—"}</TableCell>
               <TableCell>{severityBadge(f.severity)}</TableCell>
               <TableCell>{statusBadge(f.status)}</TableCell>
               <TableCell className="text-xs">{f.clause_3cd || "—"}</TableCell>
+              <TableCell className="text-right">{renderQueryCell(f)}</TableCell>
               <TableCell className="text-right">
                 <div className="flex gap-1 justify-end flex-wrap">
                   <Button size="sm" variant="ghost" onClick={() => onDetails(f)}>Details</Button>
@@ -199,6 +248,16 @@ export default function ScrutinyTemplatesView({
             <SelectContent>{STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
           </Select>
         </div>
+        <Button
+          type="button"
+          variant={mcFilter ? "default" : "outline"}
+          size="sm"
+          onClick={() => setMcFilter((v) => !v)}
+          className="gap-1"
+          title="Show only findings whose draft query is awaiting a second reviewer"
+        >
+          <Clock className="h-3 w-3" /> Awaiting approval{awaitingApproval ? ` (${awaitingApproval})` : ""}
+        </Button>
         <Button variant="ghost" size="sm" onClick={clearFilters}><X className="h-3 w-3 mr-1" />Clear</Button>
       </div>
 

@@ -26,6 +26,7 @@ import {
   ChevronDown, ChevronUp, FileText, X, CheckCircle2, Building2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { CLIENT_HIDDEN_QUERY_STATUSES } from "@/lib/scrutiny/makerChecker";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -350,7 +351,9 @@ export default function PortalQueries() {
       .select("id,ref_number,query_text,status,priority,due_date,financial_year,required_documents,ledger_name,group_name,client_reply,firm_id,client_id")
       .eq("client_id", activeClient.id)
       .order("created_at", { ascending: false });
-    setQueries((data as AuditQuery[]) || []);
+    // Never surface unapproved / rejected scrutiny drafts to the client (maker-checker, decision #7)
+    const visible = ((data as AuditQuery[]) || []).filter(q => !CLIENT_HIDDEN_QUERY_STATUSES.includes(q.status));
+    setQueries(visible);
     setLoading(false);
   }, [activeClient]);
 

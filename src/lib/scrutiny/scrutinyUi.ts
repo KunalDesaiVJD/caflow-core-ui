@@ -17,6 +17,10 @@ export type Finding = {
   status: string | null;
   narration: string | null;
   financial_year: string | null;
+  /** maker who raised a query from this finding (maker-checker); dev-only column */
+  actioned_by?: string | null;
+  /** the audit_client_queries row this finding was raised into, if any */
+  linked_query_id?: string | null;
 };
 
 /** A row from the `scrutiny_rules` catalogue (the 119 templates). */
