@@ -26,6 +26,7 @@ import {
 import { SEVERITIES, STATUSES, type Finding, type RuleTemplate } from "@/lib/scrutiny/scrutinyUi";
 import { groupByTemplate, groupByCategory, computeCoverage, type TemplateGroup } from "@/lib/scrutiny/coverage";
 import { findingQueryState } from "@/lib/scrutiny/makerChecker";
+import { type NarrationClass } from "@/lib/scrutiny/aiNarration";
 import ScrutinyFindingsTable from "./ScrutinyFindingsTable";
 
 interface Props {
@@ -42,6 +43,8 @@ interface Props {
   onRaiseQuery: (f: Finding) => void;
   onApproveQuery: (f: Finding, queryId: string) => void;
   onRejectQuery: (f: Finding, queryId: string) => void;
+  narrationClasses?: Record<string, NarrationClass>;
+  onApplyClause?: (id: string, clause: string) => void;
   severityBadge: (s: string | null) => ReactNode;
   statusBadge: (s: string | null) => ReactNode;
 }
@@ -56,6 +59,7 @@ function toggle(set: Set<string>, key: string): Set<string> {
 export default function ScrutinyTemplatesView({
   rules, findings, loading, queryByFinding, currentUserId,
   onDetails, onResolve, onWaive, onLink, onRaiseQuery, onApproveQuery, onRejectQuery,
+  narrationClasses, onApplyClause,
   severityBadge, statusBadge,
 }: Props) {
   const [catFilter, setCatFilter] = useState("All");
@@ -138,6 +142,8 @@ export default function ScrutinyTemplatesView({
               onRaiseQuery={onRaiseQuery}
               onApproveQuery={onApproveQuery}
               onRejectQuery={onRejectQuery}
+              narrationClasses={narrationClasses}
+              onApplyClause={onApplyClause}
               severityBadge={severityBadge}
               statusBadge={statusBadge}
             />

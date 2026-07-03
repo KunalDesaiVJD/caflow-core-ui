@@ -26,6 +26,7 @@ import {
   QUERY_STATUS_OPEN, QUERY_STATUS_REJECTED,
 } from "@/lib/scrutiny/makerChecker";
 import { draftQueryWithAI } from "@/lib/scrutiny/aiQueryDraft";
+import { classifyFindingsWithAI, type NarrationClass } from "@/lib/scrutiny/aiNarration";
 
 const CATEGORIES = ["All", "TDS", "GST", "Cash Payments", "Loans", "Prior Period", "Depreciation", "Deferred Tax", "Bank Recon", "Narration AI"];
 const FY_OPTIONS = ["2024-25", "2023-24", "2022-23", "2021-22"];
@@ -62,6 +63,9 @@ export default function AuditScrutiny() {
   const [scrutinyQueries, setScrutinyQueries] = useState<{ id: string; source_ref_id: string | null; status: string }[]>([]);
   const [rejectTarget, setRejectTarget] = useState<{ finding: Finding; queryId: string } | null>(null);
   const [v2Tab, setV2Tab] = useState<"templates" | "ledger">("templates");
+  // AI narration classification (Ticket 2.2): finding_id -> suggested category / 3CD clause
+  const [narrationClasses, setNarrationClasses] = useState<Record<string, NarrationClass>>({});
+  const [classifying, setClassifying] = useState(false);
 
   // Filters — default FY from engagement context
   const [fy, setFy] = useState(contextFY || "2024-25");
@@ -234,6 +238,27 @@ export default function AuditScrutiny() {
     fetchFindings();
   };
 
+  // ── AI narration classification (Ticket 2.2) ─────────────────────────────
+  const handleClassifyNarrations = async () => {
+    setClassifying(true);
+    const map = await classifyFindingsWithAI(
+      (fn, opts) => (supabase.functions.invoke as any)(fn, opts),
+      findings,
+    );
+    setNarrationClasses(map);
+    const n = Object.keys(map).length;
+    toast(n > 0
+      ? { title: `AI classified ${n} finding${n !== 1 ? "s" : ""}`, description: "Suggested 3CD clauses added — apply from the 3CD column." }
+      : { title: "AI classification unavailable", description: "Gateway not reachable; deterministic checks are unaffected.", variant: "destructive" });
+    setClassifying(false);
+  };
+
+  const handleApplyClause = async (id: string, clause: string) => {
+    await supabase.from("scrutiny_findings").update({ clause_3cd: clause }).eq("id", id);
+    toast({ title: `Linked to Clause ${clause}` });
+    fetchFindings();
+  };
+
   // ── Maker-checker (Ticket 1.3, Design A) ─────────────────────────────────
   const refetchScrutiny = () => { fetchFindings(); fetchScrutinyQueries(); };
 
@@ -357,6 +382,8 @@ export default function AuditScrutiny() {
     onRaiseQuery: handleRaiseQuery,
     onApproveQuery: handleApproveQuery,
     onRejectQuery: (finding: Finding, queryId: string) => setRejectTarget({ finding, queryId }),
+    narrationClasses,
+    onApplyClause: handleApplyClause,
     severityBadge,
     statusBadge,
   };
@@ -413,6 +440,7 @@ export default function AuditScrutiny() {
             {running ? "Running..." : "Run Scrutiny"}
           </Button>
           <Button variant="outline" onClick={handleExport}><Download className="h-4 w-4 mr-2" />Export XLSX</Button>
+          {v2 && <Button variant="outline" onClick={handleClassifyNarrations} disabled={classifying}>{classifying ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}AI: Classify</Button>}
           <Button variant="outline" onClick={() => navigate(`/clients/${clientId}/audit/3cd`)}><FileText className="h-4 w-4 mr-2" />3CD Form</Button>
           <Button variant="outline" onClick={() => navigate(`/clients/${clientId}/audit/comparative`)}><BarChart3 className="h-4 w-4 mr-2" />Comparative</Button>
           </>)}

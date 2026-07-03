@@ -13,6 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Send, Clock, CheckCircle2 } from "lucide-react";
 import { type Finding } from "@/lib/scrutiny/scrutinyUi";
 import { findingQueryState, canReviewQuery } from "@/lib/scrutiny/makerChecker";
+import { type NarrationClass } from "@/lib/scrutiny/aiNarration";
 
 export interface ScrutinyFindingsTableProps {
   findings: Finding[];
@@ -25,6 +26,9 @@ export interface ScrutinyFindingsTableProps {
   onRaiseQuery: (f: Finding) => void;
   onApproveQuery: (f: Finding, queryId: string) => void;
   onRejectQuery: (f: Finding, queryId: string) => void;
+  /** AI-suggested 3CD clause / category per finding (Ticket 2.2); optional */
+  narrationClasses?: Record<string, NarrationClass>;
+  onApplyClause?: (id: string, clause: string) => void;
   severityBadge: (s: string | null) => ReactNode;
   statusBadge: (s: string | null) => ReactNode;
 }
@@ -32,6 +36,7 @@ export interface ScrutinyFindingsTableProps {
 export default function ScrutinyFindingsTable({
   findings, queryByFinding, currentUserId,
   onDetails, onResolve, onWaive, onLink, onRaiseQuery, onApproveQuery, onRejectQuery,
+  narrationClasses, onApplyClause,
   severityBadge, statusBadge,
 }: ScrutinyFindingsTableProps) {
   // Maker-checker cell: raise (maker) → draft → approve/reject (checker, must differ from maker)
@@ -82,7 +87,22 @@ export default function ScrutinyFindingsTable({
               <TableCell className="max-w-[320px] truncate text-sm">{f.flag_message || "—"}</TableCell>
               <TableCell>{severityBadge(f.severity)}</TableCell>
               <TableCell>{statusBadge(f.status)}</TableCell>
-              <TableCell className="text-xs">{f.clause_3cd || "—"}</TableCell>
+              <TableCell className="text-xs">
+                {f.clause_3cd
+                  ? f.clause_3cd
+                  : narrationClasses?.[f.id]?.suggested_3cd_clause?.trim()
+                    ? (
+                      <button
+                        type="button"
+                        className="text-[11px] text-primary underline decoration-dotted"
+                        title={`AI-suggested (${narrationClasses[f.id].category || "narration"})`}
+                        onClick={() => onApplyClause?.(f.id, narrationClasses[f.id].suggested_3cd_clause.trim())}
+                      >
+                        AI: {narrationClasses[f.id].suggested_3cd_clause.trim()}
+                      </button>
+                    )
+                    : "—"}
+              </TableCell>
               <TableCell className="text-right">{renderQueryCell(f)}</TableCell>
               <TableCell className="text-right">
                 <div className="flex gap-1 justify-end flex-wrap">

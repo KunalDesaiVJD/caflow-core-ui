@@ -17,6 +17,7 @@ import { ChevronDown, ChevronRight, BookOpen, ShieldQuestion } from "lucide-reac
 import { type Finding } from "@/lib/scrutiny/scrutinyUi";
 import { groupByLedger, ledgerConclusion } from "@/lib/scrutiny/workpaper";
 import { findingQueryState } from "@/lib/scrutiny/makerChecker";
+import { type NarrationClass } from "@/lib/scrutiny/aiNarration";
 import ScrutinyFindingsTable from "./ScrutinyFindingsTable";
 
 interface Props {
@@ -31,6 +32,8 @@ interface Props {
   onRaiseQuery: (f: Finding) => void;
   onApproveQuery: (f: Finding, queryId: string) => void;
   onRejectQuery: (f: Finding, queryId: string) => void;
+  narrationClasses?: Record<string, NarrationClass>;
+  onApplyClause?: (id: string, clause: string) => void;
   severityBadge: (s: string | null) => ReactNode;
   statusBadge: (s: string | null) => ReactNode;
 }
@@ -112,6 +115,8 @@ export default function ScrutinyWorkpaperView(props: Props) {
                   onRaiseQuery={props.onRaiseQuery}
                   onApproveQuery={props.onApproveQuery}
                   onRejectQuery={props.onRejectQuery}
+                  narrationClasses={props.narrationClasses}
+                  onApplyClause={props.onApplyClause}
                   severityBadge={props.severityBadge}
                   statusBadge={props.statusBadge}
                 />
