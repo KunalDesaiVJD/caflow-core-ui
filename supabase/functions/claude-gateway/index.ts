@@ -9,6 +9,16 @@ const corsHeaders = {
 
 const LIGHT_TYPES = new Set(["tds_section_identifier", "invoice_description", "spell_grammar_fix"]);
 
+// Judgment-heavy request types run on the top-tier model (canonical decision #12:
+// cheap model for bulk, top model only for judgment).
+const HEAVY_TYPES = new Set(["audit_report_drafter", "notice_response_drafter", "caro_answers"]);
+
+// Tiered Anthropic model map. Updated 2026-07: claude-sonnet-4-20250514 retired 2026-06-15,
+// so the old default 404'd and silently fell back to Gemini — replaced with current models.
+const MODEL_LIGHT = "claude-haiku-4-5";    // bulk / classification / section-id
+const MODEL_STANDARD = "claude-sonnet-5";  // default
+const MODEL_HEAVY = "claude-opus-4-8";     // judgment / formal drafting
+
 const SYSTEM_PROMPTS: Record<string, string> = {
   tds_section_identifier:
     "You are an Indian tax expert specializing in TDS under the Income Tax Act, 1961. Identify the correct TDS section for the given payment nature. Return JSON only, no markdown: {\"section\":\"194C\",\"rate\":2,\"threshold\":30000,\"flag_message\":\"Brief reason\"}. Common sections: 194C contractor 1-2%, 194J(b) professional 10%, 194J(a) technical 2%, 194I(b) rent building 10%, 194I(a) rent machinery 2%, 194H commission 2%, 194Q purchase goods 0.1%, 194A interest 10%, 194T partner payment 10%, 194IB rent by individual 5%.",
@@ -182,8 +192,10 @@ serve(async (req) => {
 
     // --- STEP 4: Select model ---
     const isLightRequest = LIGHT_TYPES.has(request_type);
-    const anthropicModel = isLightRequest ? "claude-haiku-4-5-20251001" : "claude-sonnet-4-20250514";
+    const isHeavyRequest = HEAVY_TYPES.has(request_type);
+    const anthropicModel = isLightRequest ? MODEL_LIGHT : isHeavyRequest ? MODEL_HEAVY : MODEL_STANDARD;
     const lovableModel = isLightRequest ? "google/gemini-2.5-flash-lite" : "google/gemini-3-flash-preview";
+    const maxTokens = isHeavyRequest ? 8192 : 4096; // judgment/drafting gets more room
     const useStream = wantStream === true;
 
     const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
@@ -203,7 +215,7 @@ serve(async (req) => {
         },
         body: JSON.stringify({
           model: anthropicModel,
-          max_tokens: 4096,
+          max_tokens: maxTokens,
           system: systemPrompt,
           messages: [{ role: "user", content: user_message }],
           stream: useStream,
