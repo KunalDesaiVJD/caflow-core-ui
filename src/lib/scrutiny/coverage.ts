@@ -143,3 +143,26 @@ export function computeCoverage(groups: TemplateGroup[]): Coverage {
     totalHits: groups.reduce((s, g) => s + g.hitCount, 0),
   };
 }
+
+export interface AdvisoryCategory {
+  category: string;
+  rules: RuleTemplate[];
+}
+
+/**
+ * The rules the engine does NOT auto-verify (Tier C / no handler), grouped by category —
+ * the "check these manually" list for the advisory coverage panel. Advisory only (decision #8).
+ */
+export function advisoryRulesByCategory(rules: RuleTemplate[]): AdvisoryCategory[] {
+  const byCat = new Map<string, RuleTemplate[]>();
+  for (const r of rules) {
+    if (isAutoChecked(r)) continue;
+    const cat = (r.category ?? "").trim() || "Uncategorised";
+    const arr = byCat.get(cat);
+    if (arr) arr.push(r);
+    else byCat.set(cat, [r]);
+  }
+  return [...byCat.entries()]
+    .map(([category, rs]) => ({ category, rules: rs }))
+    .sort((a, b) => b.rules.length - a.rules.length || a.category.localeCompare(b.category));
+}

@@ -19,14 +19,14 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  ChevronDown, ChevronRight, ShieldCheck, ShieldAlert, ShieldQuestion, Info, X, CheckCircle2, Send, Clock,
+  ChevronDown, ChevronRight, ShieldCheck, ShieldAlert, ShieldQuestion, Info, X, CheckCircle2, Clock,
 } from "lucide-react";
 import { SEVERITIES, STATUSES, type Finding, type RuleTemplate } from "@/lib/scrutiny/scrutinyUi";
 import { groupByTemplate, groupByCategory, computeCoverage, type TemplateGroup } from "@/lib/scrutiny/coverage";
-import { findingQueryState, canReviewQuery } from "@/lib/scrutiny/makerChecker";
+import { findingQueryState } from "@/lib/scrutiny/makerChecker";
+import ScrutinyFindingsTable from "./ScrutinyFindingsTable";
 
 interface Props {
   rules: RuleTemplate[];
@@ -95,75 +95,6 @@ export default function ScrutinyTemplatesView({
     return <Badge variant="outline" className="gap-1 text-muted-foreground"><ShieldQuestion size={12} />Advisory</Badge>;
   };
 
-  // Maker-checker cell: raise (maker) → draft → approve/reject (checker, must differ from maker)
-  const renderQueryCell = (f: Finding) => {
-    const st = qState(f);
-    const q = queryByFinding[f.id];
-    if (st === "none") {
-      return <Button size="sm" variant="outline" onClick={() => onRaiseQuery(f)}><Send size={12} className="mr-1" />Raise query</Button>;
-    }
-    if (st === "draft") {
-      const canReview = canReviewQuery(f.actioned_by, currentUserId);
-      return (
-        <div className="flex items-center gap-1 justify-end flex-wrap">
-          <Badge variant="outline" className="gap-1 text-amber-700 border-amber-300 bg-amber-500/10"><Clock size={11} />Draft</Badge>
-          {canReview && q ? (
-            <>
-              <Button size="sm" variant="ghost" className="text-green-600" onClick={() => onApproveQuery(f, q.id)}>Approve</Button>
-              <Button size="sm" variant="ghost" className="text-destructive" onClick={() => onRejectQuery(f, q.id)}>Reject</Button>
-            </>
-          ) : (
-            <span className="text-[11px] text-muted-foreground">needs another reviewer</span>
-          )}
-        </div>
-      );
-    }
-    if (st === "approved") {
-      return <Badge className="gap-1 bg-green-500/15 text-green-700 border-green-300"><CheckCircle2 size={11} />Query raised</Badge>;
-    }
-    return <Badge variant="outline" className="text-muted-foreground">Rejected</Badge>;
-  };
-
-  const renderFindingsTable = (fs: Finding[]) => (
-    <div className="rounded-md border bg-muted/20">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Flag Message</TableHead>
-            <TableHead className="w-20">Severity</TableHead>
-            <TableHead className="w-20">Status</TableHead>
-            <TableHead className="w-16">3CD</TableHead>
-            <TableHead className="w-56 text-right">Query (maker-checker)</TableHead>
-            <TableHead className="text-right">Actions</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {fs.map((f) => (
-            <TableRow key={f.id}>
-              <TableCell className="max-w-[320px] truncate text-sm">{f.flag_message || "—"}</TableCell>
-              <TableCell>{severityBadge(f.severity)}</TableCell>
-              <TableCell>{statusBadge(f.status)}</TableCell>
-              <TableCell className="text-xs">{f.clause_3cd || "—"}</TableCell>
-              <TableCell className="text-right">{renderQueryCell(f)}</TableCell>
-              <TableCell className="text-right">
-                <div className="flex gap-1 justify-end flex-wrap">
-                  <Button size="sm" variant="ghost" onClick={() => onDetails(f)}>Details</Button>
-                  {f.status?.toLowerCase() !== "resolved" && (
-                    <Button size="sm" variant="ghost" className="text-green-600" onClick={() => onResolve(f.id)}>Resolve</Button>
-                  )}
-                  {f.status?.toLowerCase() !== "waived" && (
-                    <Button size="sm" variant="ghost" className="text-amber-600" onClick={() => onWaive(f.id)}>Waive</Button>
-                  )}
-                  <Button size="sm" variant="ghost" onClick={() => onLink(f.id)}>Link 3CD</Button>
-                </div>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </div>
-  );
-
   const renderTemplateRow = (g: TemplateGroup) => {
     const rid = g.rule.rule_id;
     const shown = g.findings.filter(matchFinding);
@@ -194,7 +125,24 @@ export default function ScrutinyTemplatesView({
           )}
           <span className="shrink-0">{severityBadge(g.rule.severity)}</span>
         </button>
-        {isOpen && canExpand && <div className="px-3 pb-3">{renderFindingsTable(shown)}</div>}
+        {isOpen && canExpand && (
+          <div className="px-3 pb-3">
+            <ScrutinyFindingsTable
+              findings={shown}
+              queryByFinding={queryByFinding}
+              currentUserId={currentUserId}
+              onDetails={onDetails}
+              onResolve={onResolve}
+              onWaive={onWaive}
+              onLink={onLink}
+              onRaiseQuery={onRaiseQuery}
+              onApproveQuery={onApproveQuery}
+              onRejectQuery={onRejectQuery}
+              severityBadge={severityBadge}
+              statusBadge={statusBadge}
+            />
+          </div>
+        )}
       </div>
     );
   };

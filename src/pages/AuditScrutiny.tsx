@@ -19,6 +19,8 @@ import { AlertTriangle, CheckCircle2, Shield, ShieldAlert, ShieldQuestion, FileS
 import { TdsReconModule } from "@/components/tds-recon/TdsReconModule";
 import { SEVERITIES, STATUSES, type Finding, type RuleTemplate } from "@/lib/scrutiny/scrutinyUi";
 import ScrutinyTemplatesView from "@/components/scrutiny-v2/ScrutinyTemplatesView";
+import ScrutinyWorkpaperView from "@/components/scrutiny-v2/ScrutinyWorkpaperView";
+import ScrutinyCoveragePanel from "@/components/scrutiny-v2/ScrutinyCoveragePanel";
 import {
   buildDraftQuery, canReviewQuery, SCRUTINY_QUERY_SOURCE,
   QUERY_STATUS_OPEN, QUERY_STATUS_REJECTED,
@@ -58,6 +60,7 @@ export default function AuditScrutiny() {
   // Scrutiny-raised queries (maker-checker): finding_id -> { id, status }
   const [scrutinyQueries, setScrutinyQueries] = useState<{ id: string; source_ref_id: string | null; status: string }[]>([]);
   const [rejectTarget, setRejectTarget] = useState<{ finding: Finding; queryId: string } | null>(null);
+  const [v2Tab, setV2Tab] = useState<"templates" | "ledger">("templates");
 
   // Filters — default FY from engagement context
   const [fy, setFy] = useState(contextFY || "2024-25");
@@ -333,6 +336,23 @@ export default function AuditScrutiny() {
     return <Badge variant="destructive">Open</Badge>;
   };
 
+  // Shared props for the v2 findings views (templates + per-ledger workpaper)
+  const v2Shared = {
+    findings,
+    loading,
+    queryByFinding,
+    currentUserId: user?.id ?? null,
+    onDetails: (f: Finding) => setDetailFinding(f),
+    onResolve: (id: string) => setResolveId(id),
+    onWaive: (id: string) => setWaiveId(id),
+    onLink: (id: string) => setLinkClauseId(id),
+    onRaiseQuery: handleRaiseQuery,
+    onApproveQuery: handleApproveQuery,
+    onRejectQuery: (finding: Finding, queryId: string) => setRejectTarget({ finding, queryId }),
+    severityBadge,
+    statusBadge,
+  };
+
   // Empty state
   if (hasTB === false) {
     return (
@@ -407,24 +427,30 @@ export default function AuditScrutiny() {
         <Card className="border-green-400/30"><CardContent className="p-4 text-center"><p className="text-xs text-green-600">Resolved</p><p className="text-2xl font-bold text-green-600">{stats.resolved}</p></CardContent></Card>
       </div>
 
-      {/* v2 templates-first view (behind flag) */}
+      {/* v2 scrutiny views (behind flag): advisory coverage panel + Templates / By-Ledger */}
       {v2 && (
-        <ScrutinyTemplatesView
-          rules={rules}
-          findings={findings}
-          loading={loading}
-          queryByFinding={queryByFinding}
-          currentUserId={user?.id ?? null}
-          onDetails={(f) => setDetailFinding(f)}
-          onResolve={(id) => setResolveId(id)}
-          onWaive={(id) => setWaiveId(id)}
-          onLink={(id) => setLinkClauseId(id)}
-          onRaiseQuery={handleRaiseQuery}
-          onApproveQuery={handleApproveQuery}
-          onRejectQuery={(finding, queryId) => setRejectTarget({ finding, queryId })}
-          severityBadge={severityBadge}
-          statusBadge={statusBadge}
-        />
+        <div className="space-y-4">
+          <ScrutinyCoveragePanel rules={rules} />
+          <div className="inline-flex rounded-md border overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setV2Tab("templates")}
+              className={`px-3 py-1.5 text-xs font-medium border-r transition-colors ${v2Tab === "templates" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted/60"}`}
+            >
+              By Template
+            </button>
+            <button
+              type="button"
+              onClick={() => setV2Tab("ledger")}
+              className={`px-3 py-1.5 text-xs font-medium transition-colors ${v2Tab === "ledger" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted/60"}`}
+            >
+              By Ledger
+            </button>
+          </div>
+          {v2Tab === "templates"
+            ? <ScrutinyTemplatesView rules={rules} {...v2Shared} />
+            : <ScrutinyWorkpaperView {...v2Shared} />}
+        </div>
       )}
 
       {!v2 && (<>
