@@ -5,7 +5,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { useAuditTracker } from "@/hooks/useAuditTracker";
 import { useAuditContext } from "@/hooks/useAuditContext";
-import { scrutinyRunFunction } from "@/lib/scrutiny/flags";
+import { scrutinyRunFunction, scrutinyV2Enabled } from "@/lib/scrutiny/flags";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -17,10 +17,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AlertTriangle, CheckCircle2, Shield, ShieldAlert, ShieldQuestion, FileSpreadsheet, Play, Download, FileText, BarChart3, ChevronLeft, ChevronRight, X, Loader2, Calculator } from "lucide-react";
 import { TdsReconModule } from "@/components/tds-recon/TdsReconModule";
+import { SEVERITIES, STATUSES, type Finding, type RuleTemplate } from "@/lib/scrutiny/scrutinyUi";
+import ScrutinyTemplatesView from "@/components/scrutiny-v2/ScrutinyTemplatesView";
 
 const CATEGORIES = ["All", "TDS", "GST", "Cash Payments", "Loans", "Prior Period", "Depreciation", "Deferred Tax", "Bank Recon", "Narration AI"];
-const SEVERITIES = ["All", "HIGH", "MEDIUM", "LOW"];
-const STATUSES = ["All", "Open", "Resolved", "Waived"];
 const FY_OPTIONS = ["2024-25", "2023-24", "2022-23", "2021-22"];
 const PAGE_SIZE = 25;
 
@@ -30,18 +30,6 @@ const CLAUSES_3CD = [
   "21(a)", "21(b)", "21(c)", "21(d)", "22", "23", "24", "25", "26", "27(a)", "27(b)", "28", "29", "30(a)", "30(b)", "31",
   "32(a)", "32(b)", "33", "34(a)", "34(b)", "35", "36", "37", "38", "39", "40", "41",
 ];
-
-type Finding = {
-  id: string;
-  rule_id: string | null;
-  client_id: string | null;
-  severity: string | null;
-  clause_3cd: string | null;
-  flag_message: string | null;
-  status: string | null;
-  narration: string | null;
-  financial_year: string | null;
-};
 
 export default function AuditScrutiny() {
   const { clientId: routeClientId } = useParams<{ clientId: string }>();
@@ -59,6 +47,10 @@ export default function AuditScrutiny() {
   const [findings, setFindings] = useState<Finding[]>([]);
   const [loading, setLoading] = useState(true);
   const [hasTB, setHasTB] = useState<boolean | null>(null);
+
+  // v2 templates-first view (behind the VITE_SCRUTINY_V2 flag)
+  const v2 = scrutinyV2Enabled();
+  const [rules, setRules] = useState<RuleTemplate[]>([]);
 
   // Filters — default FY from engagement context
   const [fy, setFy] = useState(contextFY || "2024-25");
@@ -111,6 +103,16 @@ export default function AuditScrutiny() {
   };
 
   useEffect(() => { fetchFindings(); }, [clientId, fy]);
+
+  // Load the rule catalogue (the 119 templates) once, only for the v2 templates-first view
+  useEffect(() => {
+    if (!v2) return;
+    (supabase.from as any)("scrutiny_rules")
+      .select("rule_id, rule_name, category, detection_logic, threshold_value, threshold_type, severity, legal_reference, audit_query_template, is_active")
+      .eq("is_active", true)
+      .order("rule_id")
+      .then(({ data }: any) => { if (Array.isArray(data)) setRules(data as RuleTemplate[]); });
+  }, [v2]);
 
   // Fetch assigned audit firm for this client + FY
   useEffect(() => {
@@ -314,6 +316,22 @@ export default function AuditScrutiny() {
         <Card className="border-green-400/30"><CardContent className="p-4 text-center"><p className="text-xs text-green-600">Resolved</p><p className="text-2xl font-bold text-green-600">{stats.resolved}</p></CardContent></Card>
       </div>
 
+      {/* v2 templates-first view (behind flag) */}
+      {v2 && (
+        <ScrutinyTemplatesView
+          rules={rules}
+          findings={findings}
+          loading={loading}
+          onDetails={(f) => setDetailFinding(f)}
+          onResolve={(id) => setResolveId(id)}
+          onWaive={(id) => setWaiveId(id)}
+          onLink={(id) => setLinkClauseId(id)}
+          severityBadge={severityBadge}
+          statusBadge={statusBadge}
+        />
+      )}
+
+      {!v2 && (<>
       {/* Filters */}
       <div className="flex flex-wrap gap-3 items-end">
         <div className="space-y-1">
@@ -410,6 +428,7 @@ export default function AuditScrutiny() {
           </div>
         </>
       )}
+      </>)}
 
       {/* ── End Scrutiny Findings view ── */}
       </>)}
