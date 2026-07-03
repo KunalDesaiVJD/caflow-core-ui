@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CAFlow Scrutiny — Phase 1 Preview</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#fff; --ink:#1e2430; --muted:#6b7280; --line:#e5e7eb;
+    --primary:#2563eb; --amber:#b45309; --amber-bg:#fef3c7; --green:#15803d; --green-bg:#dcfce7;
+    --red:#b91c1c; --red-bg:#fee2e2; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:32px 20px 80px}
+  header.top{display:flex;align-items:center;gap:14px;margin-bottom:8px}
+  .logo{width:44px;height:44px;border-radius:9px;background:linear-gradient(135deg,#1e3a8a,#2563eb);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;letter-spacing:.5px}
+  h1{font-size:24px;margin:0}
+  .sub{color:var(--muted);font-size:14px;margin-top:2px}
+  .banner{margin:18px 0;padding:12px 14px;border:1px solid #fde68a;background:#fffbeb;border-radius:10px;font-size:13.5px;color:#7c5b12}
+  .safe{margin:10px 0 22px;padding:10px 14px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:10px;font-size:13px;color:#14532d}
+  h2{font-size:18px;margin:34px 0 12px;padding-bottom:6px;border-bottom:2px solid var(--line)}
+  h3{font-size:14px;margin:22px 0 8px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin:12px 0;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center}
+  .stat .n{font-size:26px;font-weight:700}
+  .stat .l{font-size:12px;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px}
+  code,.mono{font-family:var(--mono);font-size:12.5px}
+  .badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;border:1px solid transparent;white-space:nowrap}
+  .b-red{background:var(--red-bg);color:var(--red);border-color:#fecaca}
+  .b-amber{background:var(--amber-bg);color:var(--amber);border-color:#fde68a}
+  .b-green{background:var(--green-bg);color:var(--green);border-color:#bbf7d0}
+  .b-grey{background:#f1f5f9;color:#475569;border-color:#e2e8f0}
+  .b-out{background:#fff;color:#475569;border-color:#cbd5e1}
+  .mock{border:1px dashed #cbd5e1;border-radius:12px;padding:0;overflow:hidden;background:#fcfcfd}
+  .mock .cap{font-size:11.5px;color:var(--muted);background:#f8fafc;border-bottom:1px dashed #e2e8f0;padding:6px 12px}
+  .mock .body{padding:14px}
+  .row{display:flex;align-items:center;gap:10px;padding:9px 10px;border-top:1px solid var(--line)}
+  .row:first-child{border-top:0}
+  .row .rid{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+  .row .nm{flex:1;font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pill-tabs{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;font-size:12px}
+  .pill-tabs span{padding:6px 12px}
+  .pill-tabs .on{background:var(--primary);color:#fff}
+  .pill-tabs .off{color:var(--muted)}
+  .muted{color:var(--muted)}
+  .chk li{margin:6px 0}
+  ul{padding-left:20px}
+  .small{font-size:12.5px}
+  .kbd{font-family:var(--mono);background:#eef2ff;border:1px solid #c7d2fe;border-radius:5px;padding:1px 6px;font-size:12px}
+  .foot{margin-top:40px;color:var(--muted);font-size:12px;border-top:1px solid var(--line);padding-top:14px}
+  .flex{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .concl{font-size:11.5px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="logo">CG</div>
+    <div>
+      <h1>CAFlow Scrutiny Engine — Phase&nbsp;1 Preview</h1>
+      <div class="sub">Deterministic engine + templates UI · for Senior&nbsp;CA review · 2026‑07‑03</div>
+    </div>
+  </header>
+
+  <div class="banner">
+    <strong>These are illustrative mock-ups of the new screens, not live screenshots.</strong>
+    A data-backed walkthrough needs the app pointed at the dev project (<code>caflow-scrutiny-dev</code>)
+    with two logins (a maker and a checker). The layouts below faithfully reflect the components that
+    were built and unit-tested; use them to review the design and workflow.
+  </div>
+
+  <div class="safe">
+    🔒 <strong>Safety:</strong> all work is on branch <code>claude/auto-2026-06-21-ledger-scrutiny</code>
+    in the isolated worktree. Nothing was pushed to <code>main</code>. Everything new is behind the
+    <code>VITE_SCRUTINY_V2</code> flag — with the flag off, the existing Scrutiny screen and the client
+    portal are unchanged.
+  </div>
+
+  <h2>What Phase 1 delivered</h2>
+  <div class="card">
+    <table>
+      <tr><th style="width:130px">Ticket</th><th>Delivered</th></tr>
+      <tr><td><strong>1.1</strong> Engine smoke-test</td><td>The 119-rule <code>detection_logic</code> interpreter (<code>run-scrutiny-v2</code>) runs end-to-end on the dev DB — HTTP&nbsp;200, 16 findings for one client. <span class="muted">(was already done before this session; re-verified.)</span></td></tr>
+      <tr><td><strong>1.2</strong> Templates-first screen</td><td>The scrutiny screen, re-organised around the 119-rule catalogue: each rule tagged <span class="badge b-red">hits</span> <span class="badge b-green">clean</span> <span class="badge b-out">advisory</span>, grouped by category, drill into a rule to see its findings.</td></tr>
+      <tr><td><strong>1.3</strong> Findings → queries (maker-checker)</td><td>Raise a finding into a <strong>draft</strong> client query; a <strong>second</strong> reviewer approves it before it can be sent (decision&nbsp;#7). Drafts never reach the client portal.</td></tr>
+      <tr><td><strong>1.4</strong> Per-ledger workpaper + coverage</td><td>Review findings account-by-account with an auto-conclusion per ledger, plus an advisory coverage panel showing what the engine does and does not auto-verify.</td></tr>
+    </table>
+  </div>
+
+  <h2>The new screens</h2>
+
+  <h3>1 · Templates-first view (Ticket 1.2)</h3>
+  <div class="mock">
+    <div class="cap">Scrutiny&nbsp;Engine → <span class="pill-tabs"><span class="on">By Template</span><span class="off">By Ledger</span></span> · advisory coverage strip on top</div>
+    <div class="body">
+      <div class="grid" style="margin-bottom:12px">
+        <div class="stat"><div class="n">50<span class="muted" style="font-size:14px">/119</span></div><div class="l">Auto-checked</div></div>
+        <div class="stat"><div class="n">69</div><div class="l">Advisory (manual)</div></div>
+        <div class="stat"><div class="n" style="color:var(--amber)">7</div><div class="l">Templates w/ findings</div></div>
+        <div class="stat"><div class="n" style="color:var(--red)">16</div><div class="l">Total findings</div></div>
+      </div>
+      <div class="small muted" style="margin-bottom:10px">ℹ Coverage is advisory — it never blocks sign-off / UDIN. “Clean” = the check ran and found nothing; “Advisory” = review manually.</div>
+      <div style="font-size:12px;font-weight:700;letter-spacing:.4px;margin:6px 0">CASH &nbsp;<span class="badge b-grey">6 templates</span> <span class="badge b-red">9 findings</span> <span class="badge b-green">3 clean</span></div>
+      <div style="border:1px solid var(--line);border-radius:8px">
+        <div class="row"><span class="badge b-red">▸ 3 findings</span><span class="rid">CASH-002</span><span class="nm">Single cash payment &gt; ₹10,000 (40A(3))</span><span class="badge b-red">HIGH</span></div>
+        <div class="row"><span class="badge b-red">▸ 2 findings</span><span class="rid">CASH-007</span><span class="nm">Cash receipt ≥ ₹2,00,000 (269ST)</span><span class="badge b-red">HIGH</span></div>
+        <div class="row"><span class="badge b-green">✓ Clean</span><span class="rid">CASH-011</span><span class="nm">Round-sum cash withdrawals</span><span class="badge b-amber">MEDIUM</span></div>
+        <div class="row"><span class="muted small">▸ Show 3 clean checks (ran, nothing found)</span></div>
+      </div>
+    </div>
+  </div>
+
+  <h3>2 · Maker-checker on a finding (Ticket 1.3)</h3>
+  <div class="mock">
+    <div class="cap">Drill-down under a rule — the “Query (maker-checker)” column is the new bit</div>
+    <div class="body">
+      <table>
+        <tr><th>Flag message</th><th>Severity</th><th>Query (maker-checker)</th><th style="text-align:right">Actions</th></tr>
+        <tr>
+          <td>Cash payment ₹45,000 to Ramesh Transport on 12‑Aug‑2025</td>
+          <td><span class="badge b-red">HIGH</span></td>
+          <td><span class="flex"><span class="badge b-amber">⧗ Draft</span> <span class="muted small">Approve · Reject</span></span></td>
+          <td style="text-align:right" class="muted small">Details · Resolve · Waive · Link 3CD</td>
+        </tr>
+        <tr>
+          <td>Cash payment ₹38,500 to City Freight on 03‑Sep‑2025</td>
+          <td><span class="badge b-red">HIGH</span></td>
+          <td><span class="badge b-green">✓ Query raised</span></td>
+          <td style="text-align:right" class="muted small">Details · Resolve · Waive · Link 3CD</td>
+        </tr>
+        <tr>
+          <td>Cash payment ₹22,000 to petty vendor</td>
+          <td><span class="badge b-amber">MEDIUM</span></td>
+          <td><span class="badge b-out">＋ Raise query</span></td>
+          <td style="text-align:right" class="muted small">Details · Resolve · Waive · Link 3CD</td>
+        </tr>
+      </table>
+      <div class="small muted" style="margin-top:10px">The reviewer who <em>raised</em> a draft sees “needs another reviewer” instead of Approve/Reject — a different person must approve before the query can be dispatched. A rejected draft returns the finding to the pool and is never shown to the client.</div>
+    </div>
+  </div>
+
+  <h3>3 · Per-ledger workpaper (Ticket 1.4)</h3>
+  <div class="mock">
+    <div class="cap">Scrutiny&nbsp;Engine → <span class="pill-tabs"><span class="off">By Template</span><span class="on">By Ledger</span></span></div>
+    <div class="body">
+      <div class="small muted" style="margin-bottom:10px">📖 4 ledgers with exceptions · 16 findings — reviewed account-by-account.</div>
+      <div style="border:1px solid var(--line);border-radius:8px">
+        <div class="row">
+          <span>▾</span>
+          <span class="nm" style="white-space:normal">
+            <strong>Cash-in-Hand</strong>
+            <span class="concl" style="display:block">9 exceptions noted (5 high, 3 medium, 1 low) — review and raise queries as needed.</span>
+          </span>
+          <span class="flex"><span class="badge b-red">5 H</span><span class="badge b-amber">3 M</span><span class="badge b-grey">1 L</span><span class="badge b-out">2 draft</span><span class="badge b-green">1 raised</span></span>
+        </div>
+        <div class="row">
+          <span>▸</span>
+          <span class="nm" style="white-space:normal"><strong>Sundry Creditors</strong>
+            <span class="concl" style="display:block">4 exceptions noted (2 high, 2 medium) — review and raise queries as needed.</span></span>
+          <span class="flex"><span class="badge b-red">2 H</span><span class="badge b-amber">2 M</span></span>
+        </div>
+        <div class="row">
+          <span>▸</span>
+          <span class="nm" style="white-space:normal"><strong>Unsecured Loans</strong>
+            <span class="concl" style="display:block">2 exceptions noted (1 high, 1 medium) — review and raise queries as needed.</span></span>
+          <span class="flex"><span class="badge b-red">1 H</span><span class="badge b-amber">1 M</span></span>
+        </div>
+      </div>
+      <div class="small muted" style="margin-top:10px">Expanding a ledger shows the same findings table (with the maker-checker column) as the templates view — one shared component, so behaviour is identical.</div>
+    </div>
+  </div>
+
+  <h3>4 · Advisory coverage panel (Ticket 1.4)</h3>
+  <div class="mock">
+    <div class="cap">Collapsible panel above both views</div>
+    <div class="body">
+      <div style="font-size:13.5px;font-weight:600">ℹ Coverage &amp; method <span class="muted" style="font-weight:400">— 50/119 auto-verified · 69 need manual review · advisory, never blocks sign-off</span></div>
+      <div class="small muted" style="margin:8px 0">The deterministic engine auto-verifies 50 of 119 rules. The rules below are not auto-verified (Tier-C / judgment checks) and should be reviewed manually.</div>
+      <div class="flex" style="gap:6px"><span class="badge b-out">GST · 14</span><span class="badge b-out">RATIOS · 11</span><span class="badge b-out">RELATED-PARTY · 8</span><span class="badge b-out">DEPRECIATION · 6</span><span class="badge b-out">…</span></div>
+    </div>
+  </div>
+
+  <h2>Acceptance — all green</h2>
+  <div class="grid">
+    <div class="stat"><div class="n" style="color:var(--green)">✓</div><div class="l"><code>npm run build</code> · 0 TS errors</div></div>
+    <div class="stat"><div class="n">74</div><div class="l">scrutiny unit tests passing</div></div>
+    <div class="stat"><div class="n">4</div><div class="l">tickets committed (branch only)</div></div>
+    <div class="stat"><div class="n">0</div><div class="l">pushes to main</div></div>
+  </div>
+  <div class="card small">
+    <strong>Commits (branch <code>claude/auto-2026-06-21-ledger-scrutiny</code>):</strong>
+    <ul class="mono" style="margin:8px 0">
+      <li>cf55b40e — feat(scrutiny-v2): templates-first screen (1.2)</li>
+      <li>8ca6cb27 — feat(scrutiny-v2): findings → queries with maker-checker (1.3)</li>
+      <li>69bb7e7f — feat(scrutiny-v2): per-ledger workpaper + coverage panel (1.4)</li>
+    </ul>
+    New pure, unit-tested helpers: <code>coverage.ts</code>, <code>makerChecker.ts</code>, <code>workpaper.ts</code> (+ <code>scrutinyUi.ts</code> shared types). New UI under <code>src/components/scrutiny-v2/</code>.
+  </div>
+
+  <h2>What the CA should review</h2>
+  <div class="card">
+    <ul class="chk">
+      <li><strong>Templates-first framing</strong> — is “hits / clean / advisory” per rule the right way to show coverage of work performed?</li>
+      <li><strong>Maker-checker</strong> — draft query → a <em>different</em> person approves before it can be sent. Confirm the two-person rule and that drafts must never reach the client (they don’t).</li>
+      <li><strong>Per-ledger workpaper</strong> — is the auto-conclusion wording acceptable, and do you want it <em>editable &amp; saved</em> (needs a small DB change) vs the current read-only auto text?</li>
+      <li><strong>Advisory coverage</strong> — confirm coverage stays advisory and never blocks sign-off / UDIN (decision #8).</li>
+    </ul>
+  </div>
+
+  <h2>Decisions still open for you</h2>
+  <div class="card small">
+    <ul>
+      <li><strong>Self-describing query rows</strong> — add <code>created_by / approved_by / approved_at</code> on <code>audit_client_queries</code> (a dev migration) so the Query Tracker shows approver without joining the finding. Left out to keep Phase 1 migration-free.</li>
+      <li><strong>Persisted per-ledger conclusions</strong> — store an editable conclusion/remark per ledger (needs an <code>audit_engagements</code> column).</li>
+      <li><strong>COA-family grouping &amp; TB balances</strong> in the workpaper — deferred (the live TB source needs clarifying).</li>
+      <li><strong>Prod apply</strong> of the dev-only migrations (findings-reconcile, tally RLS) — partner’s call, not done here.</li>
+      <li><strong>Unrelated pre-existing red test</strong> — <code>noteAmt.test.ts</code> expects the FS flag <code>NCE_SIGNED_NOTE_AMOUNTS=false</code> but it’s <code>true</code>. FS/protected area, left untouched — a Senior call to revert the flag or update the test.</li>
+    </ul>
+  </div>
+
+  <h2>Try it live (on the dev env)</h2>
+  <div class="card small">
+    In the browser console on the dev-pointed app: <span class="kbd">localStorage.setItem('scrutiny_v2','true')</span>, reload, open <strong>Scrutiny&nbsp;Engine</strong>. Toggle it off with
+    <span class="kbd">localStorage.removeItem('scrutiny_v2')</span> to see the unchanged v1 screen. A full maker→checker walkthrough needs two logins in the same firm.
+  </div>
+
+  <div class="foot">
+    CAFlow Scrutiny Engine · Phase 1 (deterministic engine + templates UI) · generated for the Senior CA while the partner is away.
+    Next: Phase 2 — AI narration &amp; TDS-section identification (senior-owned). Nothing proceeds until you’ve reviewed this.
+  </div>
+
+</div>
+</body>
+</html>
