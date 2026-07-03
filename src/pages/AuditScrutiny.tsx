@@ -25,6 +25,7 @@ import {
   buildDraftQuery, canReviewQuery, SCRUTINY_QUERY_SOURCE,
   QUERY_STATUS_OPEN, QUERY_STATUS_REJECTED,
 } from "@/lib/scrutiny/makerChecker";
+import { draftQueryWithAI } from "@/lib/scrutiny/aiQueryDraft";
 
 const CATEGORIES = ["All", "TDS", "GST", "Cash Payments", "Loans", "Prior Period", "Depreciation", "Deferred Tax", "Bank Recon", "Narration AI"];
 const FY_OPTIONS = ["2024-25", "2023-24", "2022-23", "2021-22"];
@@ -240,9 +241,16 @@ export default function AuditScrutiny() {
   const handleRaiseQuery = async (finding: Finding) => {
     const { data: userData } = await supabase.from("users").select("firm_id").eq("id", user?.id).single();
     const rule = rules.find(r => r.rule_id === finding.rule_id);
+    // Phase 2: AI-draft the query text; on any failure this returns null and we fall back
+    // to the deterministic rule template, so the flow works whether or not the gateway is live.
+    const aiText = await draftQueryWithAI(
+      (fn, opts) => (supabase.functions.invoke as any)(fn, opts),
+      finding,
+      rule,
+    );
     const draft = buildDraftQuery({
       finding: { id: finding.id, rule_id: finding.rule_id, severity: finding.severity, flag_message: finding.flag_message },
-      ruleQueryTemplate: rule?.audit_query_template ?? null,
+      ruleQueryTemplate: aiText ?? rule?.audit_query_template ?? null,
       engagement_id: (auditCtx?.selectedEngagement as any)?.id ?? null,
       client_id: clientId,
       firm_id: userData?.firm_id ?? null,
