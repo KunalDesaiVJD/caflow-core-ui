@@ -27,6 +27,7 @@ import {
 } from "@/lib/scrutiny/makerChecker";
 import { draftQueryWithAI } from "@/lib/scrutiny/aiQueryDraft";
 import { classifyFindingsWithAI, type NarrationClass } from "@/lib/scrutiny/aiNarration";
+import { identifyTdsSectionWithAI, type TdsSection } from "@/lib/scrutiny/aiTdsSection";
 
 const CATEGORIES = ["All", "TDS", "GST", "Cash Payments", "Loans", "Prior Period", "Depreciation", "Deferred Tax", "Bank Recon", "Narration AI"];
 const FY_OPTIONS = ["2024-25", "2023-24", "2022-23", "2021-22"];
@@ -66,6 +67,9 @@ export default function AuditScrutiny() {
   // AI narration classification (Ticket 2.2): finding_id -> suggested category / 3CD clause
   const [narrationClasses, setNarrationClasses] = useState<Record<string, NarrationClass>>({});
   const [classifying, setClassifying] = useState(false);
+  // AI TDS-section identification (Ticket 2.3) — per finding, shown in the detail sheet
+  const [tdsSection, setTdsSection] = useState<TdsSection | null>(null);
+  const [tdsLoading, setTdsLoading] = useState(false);
 
   // Filters — default FY from engagement context
   const [fy, setFy] = useState(contextFY || "2024-25");
@@ -257,6 +261,21 @@ export default function AuditScrutiny() {
     await supabase.from("scrutiny_findings").update({ clause_3cd: clause }).eq("id", id);
     toast({ title: `Linked to Clause ${clause}` });
     fetchFindings();
+  };
+
+  // ── AI TDS-section identification (Ticket 2.3) ───────────────────────────
+  useEffect(() => { setTdsSection(null); }, [detailFinding]);
+  const handleIdentifyTds = async () => {
+    if (!detailFinding) return;
+    setTdsLoading(true);
+    const rule = rules.find(r => r.rule_id === detailFinding.rule_id);
+    const res = await identifyTdsSectionWithAI(
+      (fn, opts) => (supabase.functions.invoke as any)(fn, opts),
+      detailFinding, rule,
+    );
+    setTdsSection(res);
+    if (!res) toast({ title: "TDS section not determined", description: "Gateway unavailable or no clear section.", variant: "destructive" });
+    setTdsLoading(false);
   };
 
   // ── Maker-checker (Ticket 1.3, Design A) ─────────────────────────────────
@@ -609,6 +628,22 @@ export default function AuditScrutiny() {
               <div>
                 <span className="font-medium text-muted-foreground">Narration:</span>
                 <p className="mt-1 whitespace-pre-wrap">{detailFinding.narration || "—"}</p>
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-muted-foreground">TDS section (AI):</span>
+                  <Button size="sm" variant="outline" onClick={handleIdentifyTds} disabled={tdsLoading}>
+                    {tdsLoading ? "Identifying…" : "Identify"}
+                  </Button>
+                </div>
+                {tdsSection && (
+                  <p className="mt-1">
+                    <span className="font-mono">{tdsSection.section}</span>
+                    {tdsSection.rate != null && <span> · {tdsSection.rate}%</span>}
+                    {tdsSection.threshold != null && <span> · threshold ₹{tdsSection.threshold.toLocaleString("en-IN")}</span>}
+                    {tdsSection.flag_message && <span className="block text-xs text-muted-foreground mt-0.5">{tdsSection.flag_message}</span>}
+                  </p>
+                )}
               </div>
             </div>
           )}
