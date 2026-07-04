@@ -777,7 +777,24 @@ const NewInvoice = () => {
       // Phase 2 cutover (C8, flag-gated OFF): when enabled, allocate the
       // sequence atomically AT SAVE so concurrent creates can't collide and a
       // deleted number is never reused. OFF → the form-load number is used.
-      let finalSeq: number | null = docNoManual ? null : seqNumber;
+      //
+      // 2026-06-25 (V J Desai & Co. LLP — numbering out-of-order fix):
+      //   the previous logic wrote `finalSeq = null` whenever the auditor
+      //   had manually edited the invoice number. The row then persisted
+      //   with seq_number IS NULL, breaking every downstream numbering
+      //   consumer (get_next_invoice_seq / list ORDER BY seq_number DESC
+      //   / Documents-list sort within same date). Parse a seq out of the
+      //   invoice_no string as a fallback so seq_number is never NULL
+      //   for a numbered doc — even on manual overrides.
+      const parseSeqFromInvoiceNo = (s: string): number | null => {
+        const m = /^\s*(\d+)/.exec(s || "");
+        if (!m) return null;
+        const n = Number(m[1]);
+        return Number.isFinite(n) && n > 0 ? n : null;
+      };
+      let finalSeq: number | null = docNoManual
+        ? (parseSeqFromInvoiceNo(invoiceNo) ?? seqNumber)
+        : seqNumber;
       let finalInvoiceNo = invoiceNo.trim();
       if (BILLING_ATOMIC_NUMBERING && !docNoManual && !isEdit) {
         const { data: allocated, error: allocErr } = await (supabase as any).rpc("allocate_doc_number", {
