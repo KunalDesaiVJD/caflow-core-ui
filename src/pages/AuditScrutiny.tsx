@@ -24,6 +24,7 @@ import ScrutinyWorkpaperView from "@/components/scrutiny-v2/ScrutinyWorkpaperVie
 import ScrutinyCoveragePanel from "@/components/scrutiny-v2/ScrutinyCoveragePanel";
 import ScrutinyFactsPanel from "@/components/scrutiny-v2/ScrutinyFactsPanel";
 import ScrutinyForensicsPanel from "@/components/scrutiny-v2/ScrutinyForensicsPanel";
+import ScrutinyConnectorsPanel from "@/components/scrutiny-v2/ScrutinyConnectorsPanel";
 import {
   buildDraftQuery, canReviewQuery, SCRUTINY_QUERY_SOURCE,
   QUERY_STATUS_OPEN, QUERY_STATUS_REJECTED,
@@ -71,7 +72,7 @@ export default function AuditScrutiny() {
   // Scrutiny-raised queries (maker-checker): finding_id -> { id, status }
   const [scrutinyQueries, setScrutinyQueries] = useState<{ id: string; source_ref_id: string | null; status: string }[]>([]);
   const [rejectTarget, setRejectTarget] = useState<{ finding: Finding; queryId: string } | null>(null);
-  const [v2Tab, setV2Tab] = useState<"templates" | "ledger" | "facts" | "forensics">("templates");
+  const [v2Tab, setV2Tab] = useState<"templates" | "ledger" | "facts" | "forensics" | "connectors">("templates");
   // AI narration classification (Ticket 2.2): finding_id -> suggested category / 3CD clause
   const [narrationClasses, setNarrationClasses] = useState<Record<string, NarrationClass>>({});
   const [classifying, setClassifying] = useState(false);
@@ -642,18 +643,27 @@ export default function AuditScrutiny() {
             <button
               type="button"
               onClick={() => setV2Tab("forensics")}
-              className={`px-3 py-1.5 text-xs font-medium transition-colors ${v2Tab === "forensics" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted/60"}`}
+              className={`px-3 py-1.5 text-xs font-medium border-r transition-colors ${v2Tab === "forensics" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted/60"}`}
             >
               Forensics
+            </button>
+            <button
+              type="button"
+              onClick={() => setV2Tab("connectors")}
+              className={`px-3 py-1.5 text-xs font-medium transition-colors ${v2Tab === "connectors" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted/60"}`}
+            >
+              Connectors
             </button>
           </div>
           {v2Tab === "facts"
             ? <ScrutinyFactsPanel clientId={clientId} financialYear={fy} userId={user?.id ?? null} />
             : v2Tab === "forensics"
               ? <ScrutinyForensicsPanel clientId={clientId} financialYear={fy} />
-              : v2Tab === "templates"
-                ? <ScrutinyTemplatesView rules={rules} {...v2Shared} />
-                : <ScrutinyWorkpaperView {...v2Shared} />}
+              : v2Tab === "connectors"
+                ? <ScrutinyConnectorsPanel clientId={clientId} financialYear={fy} />
+                : v2Tab === "templates"
+                  ? <ScrutinyTemplatesView rules={rules} {...v2Shared} />
+                  : <ScrutinyWorkpaperView {...v2Shared} />}
         </div>
       )}
 
