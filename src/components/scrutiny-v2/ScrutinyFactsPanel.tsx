@@ -14,11 +14,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Info, CheckCircle2, AlertTriangle, X, Plus } from "lucide-react";
+import { Info, CheckCircle2, AlertTriangle, X, Plus, History } from "lucide-react";
 import {
   FACT_CATALOGUE, factGateStatus, groupFactsByCategory,
   type CapturedFacts, type FactDef,
 } from "@/lib/scrutiny/facts";
+import { rolloverPlan, priorFyOf, type FactStoreRow } from "@/lib/scrutiny/rollover";
 
 interface Props {
   clientId: string;
@@ -41,6 +42,11 @@ export default function ScrutinyFactsPanel({ clientId, financialYear, userId }: 
   const [certs, setCerts] = useState<Record<string, string>>({});
   const [newParty, setNewParty] = useState("");
   const [storeReady, setStoreReady] = useState(true);
+  // Ticket 8.3 — year-on-year rollover
+  const [priorRows, setPriorRows] = useState<FactStoreRow[]>([]);
+  const [priorFy, setPriorFy] = useState<string | null>(null);
+  const [rolledOver, setRolledOver] = useState(false);
+  const [rolloverDismissed, setRolloverDismissed] = useState(false);
 
   // ── store I/O (graceful) ─────────────────────────────────────────────────
   const fetchFacts = async () => {
@@ -64,6 +70,23 @@ export default function ScrutinyFactsPanel({ clientId, financialYear, userId }: 
     } catch { setStoreReady(false); }
   };
   useEffect(() => { fetchFacts(); /* eslint-disable-next-line */ }, [clientId, financialYear]);
+
+  // Ticket 8.3 — load the immediately-preceding year's facts for carry-forward
+  const fetchPriorFacts = async () => {
+    setRolledOver(false); setRolloverDismissed(false); setPriorRows([]); setPriorFy(null);
+    if (!clientId) return;
+    try {
+      const { data } = await (supabase.from as any)("scrutiny_facts")
+        .select("fact_type, fact_key, fact_value, financial_year")
+        .eq("client_id", clientId)
+        .neq("financial_year", financialYear);
+      const rows = (data ?? []) as (FactStoreRow & { financial_year: string })[];
+      const py = priorFyOf([...new Set(rows.map((r) => r.financial_year))], financialYear);
+      setPriorFy(py);
+      setPriorRows(py ? rows.filter((r) => r.financial_year === py) : []);
+    } catch { /* graceful — no rollover offered */ }
+  };
+  useEffect(() => { fetchPriorFacts(); /* eslint-disable-next-line */ }, [clientId, financialYear]);
 
   const upsertFact = async (fact_type: string, fact_key: string, fact_value: string | null) => {
     try {
@@ -113,6 +136,29 @@ export default function ScrutinyFactsPanel({ clientId, financialYear, userId }: 
   const gate = useMemo(() => factGateStatus(FACT_CATALOGUE, captured), [captured]);
   const groups = useMemo(() => groupFactsByCategory(FACT_CATALOGUE), []);
 
+  // Ticket 8.3 — carry-forward plan (standing facts + RP nominations not yet set this year)
+  const plan = useMemo(() => {
+    const current: FactStoreRow[] = [
+      ...Object.entries(captured).map(([fact_key, fact_value]) => ({ fact_type: "general", fact_key, fact_value })),
+      ...relatedParties.map((name) => ({ fact_type: "related_party", fact_key: name, fact_value: "nominated" })),
+    ];
+    return rolloverPlan(priorRows, current);
+  }, [priorRows, captured, relatedParties]);
+  const showRollover = storeReady && !!priorFy && !rolledOver && !rolloverDismissed && plan.toApply.length > 0;
+
+  const applyRollover = async () => {
+    const addGeneral: Record<string, string> = {};
+    const addParties: string[] = [];
+    for (const it of plan.toApply) {
+      await upsertFact(it.fact_type, it.fact_key, it.fact_value);
+      if (it.fact_type === "general") addGeneral[it.fact_key] = it.fact_value ?? "";
+      else if (it.fact_type === "related_party") addParties.push(it.fact_key);
+    }
+    if (Object.keys(addGeneral).length) setCaptured((c) => ({ ...c, ...addGeneral }));
+    if (addParties.length) setRelatedParties((p) => [...p, ...addParties.filter((n) => !p.includes(n))]);
+    setRolledOver(true);
+  };
+
   const renderControl = (f: FactDef) => {
     const v = captured[f.key] ?? "";
     if (f.type === "boolean") {
@@ -152,6 +198,29 @@ export default function ScrutinyFactsPanel({ clientId, financialYear, userId }: 
 
   return (
     <div className="space-y-5">
+      {/* Year-on-year rollover (Ticket 8.3) */}
+      {showRollover && (
+        <div className="rounded-md border border-primary/30 bg-primary/5 px-4 py-3">
+          <div className="flex items-start gap-2">
+            <History size={16} className="mt-0.5 shrink-0 text-primary" />
+            <div className="flex-1">
+              <p className="text-sm text-foreground">
+                Carry forward <strong>{plan.toApply.length}</strong> standing fact{plan.toApply.length !== 1 ? "s" : ""} from <strong>{priorFy}</strong>
+                {plan.alreadySet > 0 && <span className="text-muted-foreground"> ({plan.alreadySet} already set this year)</span>}.
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {plan.toApply.map((i) => (i.fact_type === "related_party" ? i.fact_key : (FACT_CATALOGUE.find((f) => f.key === i.fact_key)?.label ?? i.fact_key))).join(" · ")}
+              </p>
+              <p className="text-[10px] text-muted-foreground mt-1">Only standing entity attributes carry — every per-year assertion (cash/inventory verified, GST reconciled, MRL, UDIN…) must be re-answered. Re-confirm carried facts.</p>
+            </div>
+            <div className="flex gap-2 shrink-0">
+              <Button size="sm" onClick={applyRollover}>Carry forward</Button>
+              <Button size="sm" variant="ghost" onClick={() => setRolloverDismissed(true)}>Dismiss</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Gate-4 advisory summary */}
       <Card>
         <CardContent className="p-4 space-y-2">
