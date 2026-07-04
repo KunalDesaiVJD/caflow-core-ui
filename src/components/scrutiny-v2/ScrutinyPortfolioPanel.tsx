@@ -20,10 +20,18 @@ import { TrendingUp, TrendingDown, Minus, Info, Building2 } from "lucide-react";
 import { type Finding, type RuleTemplate } from "@/lib/scrutiny/scrutinyUi";
 import { rulePrecision, precisionSummary, type PrecisionVerdict } from "@/lib/scrutiny/precision";
 import { portfolioSummary, portfolioTotals, type EngagementSummary } from "@/lib/scrutiny/portfolio";
+import { benchmark, type BenchLevel } from "@/lib/scrutiny/benchmark";
 
 interface Props {
   rules: RuleTemplate[];
+  clientId: string;
 }
+
+const LEVEL: Record<BenchLevel, { label: string; cls: string }> = {
+  above: { label: "Above norm", cls: "bg-destructive/15 text-destructive border-destructive/40" },
+  typical: { label: "Typical", cls: "bg-muted text-muted-foreground border-muted-foreground/30" },
+  below: { label: "Below norm", cls: "bg-green-500/15 text-green-700 border-green-300" },
+};
 
 const VERDICT: Record<PrecisionVerdict, { label: string; cls: string; icon: ReactNode }> = {
   promote: { label: "Promote", cls: "bg-green-500/15 text-green-700 border-green-300", icon: <TrendingUp size={11} /> },
@@ -32,7 +40,7 @@ const VERDICT: Record<PrecisionVerdict, { label: string; cls: string; icon: Reac
   insufficient: { label: "Low data", cls: "bg-muted text-muted-foreground border-muted-foreground/30", icon: <Minus size={11} /> },
 };
 
-export default function ScrutinyPortfolioPanel({ rules }: Props) {
+export default function ScrutinyPortfolioPanel({ rules, clientId }: Props) {
   const { user } = useAuth();
   const rulesById = useMemo(() => Object.fromEntries(rules.map((r) => [r.rule_id, r])), [rules]);
 
@@ -70,6 +78,8 @@ export default function ScrutinyPortfolioPanel({ rules }: Props) {
   const totals = useMemo(() => portfolioTotals(engagements), [engagements]);
   const precisionRows = useMemo(() => rulePrecision(pFindings), [pFindings]);
   const pSummary = useMemo(() => precisionSummary(precisionRows), [precisionRows]);
+  const currentName = useMemo(() => engagements.find((e) => e.clientId === clientId)?.clientName ?? "This client", [engagements, clientId]);
+  const bench = useMemo(() => benchmark({ findings: pFindings, clientId, peerEngagements: totals.withFindings }), [pFindings, clientId, totals]);
 
   return (
     <div className="space-y-6">
@@ -125,6 +135,43 @@ export default function ScrutinyPortfolioPanel({ rules }: Props) {
           </>
         )}
       </div>
+
+      {/* Benchmarking (Ticket 7.3) */}
+      {!loading && reachable && user?.firm_id && (
+        <div>
+          <div className="flex items-center gap-2 mb-2"><TrendingUp size={16} className="text-muted-foreground" /><h3 className="text-sm font-semibold text-foreground">Benchmarking — {currentName} vs portfolio</h3></div>
+          {totals.withFindings < 2 ? (
+            <p className="text-xs text-muted-foreground">Not enough engagements with findings to benchmark against yet.</p>
+          ) : bench.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No findings to benchmark.</p>
+          ) : (
+            <div className="rounded-md border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Category</TableHead>
+                    <TableHead className="w-24 text-right">This client</TableHead>
+                    <TableHead className="w-28 text-right">Portfolio avg</TableHead>
+                    <TableHead className="w-16 text-right">×</TableHead>
+                    <TableHead className="w-28">vs norm</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {bench.map((r) => (
+                    <TableRow key={r.category}>
+                      <TableCell className="font-mono text-xs">{r.category}</TableCell>
+                      <TableCell className="text-right text-sm">{r.clientCount}</TableCell>
+                      <TableCell className="text-right text-xs text-muted-foreground">{r.portfolioAvg.toFixed(1)}</TableCell>
+                      <TableCell className="text-right text-xs">{r.ratio == null ? "—" : `${r.ratio.toFixed(1)}×`}</TableCell>
+                      <TableCell><Badge className={LEVEL[r.level].cls + " text-xs"}>{LEVEL[r.level].label}</Badge></TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Rule precision & learning — portfolio-wide (Ticket 7.1) */}
       <div>
