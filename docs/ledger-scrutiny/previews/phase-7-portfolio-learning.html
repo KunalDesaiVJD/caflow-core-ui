@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CAFlow Scrutiny — Phase 7 Preview</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#fff; --ink:#1e2430; --muted:#6b7280; --line:#e5e7eb;
+    --primary:#2563eb; --amber:#b45309; --amber-bg:#fffbeb; --green:#15803d; --green-bg:#dcfce7;
+    --red:#b91c1c; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:32px 20px 80px}
+  header.top{display:flex;align-items:center;gap:14px;margin-bottom:8px}
+  .logo{width:44px;height:44px;border-radius:9px;background:linear-gradient(135deg,#155e75,#0891b2);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;letter-spacing:.5px}
+  h1{font-size:24px;margin:0}
+  .sub{color:var(--muted);font-size:14px;margin-top:2px}
+  .banner{margin:18px 0;padding:12px 14px;border:1px solid #fde68a;background:var(--amber-bg);border-radius:10px;font-size:13.5px;color:#7c5b12}
+  .safe{margin:10px 0 22px;padding:10px 14px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:10px;font-size:13px;color:#14532d}
+  h2{font-size:18px;margin:34px 0 12px;padding-bottom:6px;border-bottom:2px solid var(--line)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin:12px 0;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;text-align:center}
+  .stat .n{font-size:22px;font-weight:700}
+  .stat .l{font-size:11px;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px}
+  code,.mono{font-family:var(--mono);font-size:12.5px}
+  .badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;border:1px solid transparent;white-space:nowrap}
+  .b-red{background:#fee2e2;color:var(--red);border-color:#fecaca}
+  .b-amber{background:#fef3c7;color:var(--amber);border-color:#fde68a}
+  .b-green{background:var(--green-bg);color:var(--green);border-color:#bbf7d0}
+  .b-out{background:#fff;color:#475569;border-color:#cbd5e1}
+  .mock{border:1px dashed #cbd5e1;border-radius:12px;overflow:hidden;background:#fcfcfd}
+  .mock .cap{font-size:11.5px;color:var(--muted);background:#f8fafc;border-bottom:1px dashed #e2e8f0;padding:6px 12px}
+  .mock .body{padding:14px}
+  .muted{color:var(--muted)} ul{padding-left:20px} .chk li{margin:6px 0}
+  .foot{margin-top:40px;color:var(--muted);font-size:12px;border-top:1px solid var(--line);padding-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="logo">CG</div>
+    <div>
+      <h1>CAFlow Scrutiny Engine — Phase&nbsp;7 Preview</h1>
+      <div class="sub">Portfolio + learning — cross-engagement view · rule precision · benchmarking · 2026‑07‑04</div>
+    </div>
+  </header>
+
+  <div class="banner">
+    <strong>Illustrative mock-ups, not live screenshots.</strong> Phase 7 is <strong>deterministic</strong> — no AI, no keys, no migration.
+    It reads scrutiny findings across the firm's clients (RLS-scoped) and aggregates them. Gated behind <code>VITE_SCRUTINY_V2</code>.
+  </div>
+
+  <div class="safe">
+    🔒 <strong>Safety:</strong> branch <code>claude/auto-2026-06-21-ledger-scrutiny</code>; nothing pushed to <code>main</code>.
+    Rule demote/promote is <strong>advisory only</strong> — actually changing a rule is a logged partner action (decision #11), not applied here.
+  </div>
+
+  <h2>What Phase 7 delivered</h2>
+  <div class="card">
+    <table>
+      <tr><th style="width:150px">Ticket</th><th>Delivered</th></tr>
+      <tr><td><strong>7.1</strong> Rule precision</td><td>How each rule's findings were dispositioned (queried/resolved/waived) → a <strong>promote/demote suggestion</strong> (advisory).</td></tr>
+      <tr><td><strong>7.2</strong> Cross-engagement</td><td>Scrutiny rolled up across <strong>the firm's clients</strong> — a portfolio risk table; precision is now portfolio-wide.</td></tr>
+      <tr><td><strong>7.3</strong> Benchmarking</td><td>The current client's finding profile vs the <strong>portfolio average</strong> — spot the outliers.</td></tr>
+    </table>
+    <div class="muted" style="font-size:11px;margin-top:6px">All in a new "Portfolio" tab.</div>
+  </div>
+
+  <h2>7.2 · Portfolio — all engagements</h2>
+  <div class="mock">
+    <div class="cap">Portfolio tab</div>
+    <div class="body">
+      <div class="grid" style="margin-bottom:12px">
+        <div class="stat"><div class="n">24</div><div class="l">Clients</div></div>
+        <div class="stat"><div class="n">11</div><div class="l">With findings</div></div>
+        <div class="stat"><div class="n">142</div><div class="l">Findings</div></div>
+        <div class="stat"><div class="n" style="color:var(--red)">38</div><div class="l">High risk</div></div>
+        <div class="stat"><div class="n" style="color:var(--green)">17</div><div class="l">Queries raised</div></div>
+      </div>
+      <table><tr><th>Client</th><th style="text-align:right">Findings</th><th style="text-align:right">H</th><th style="text-align:right">Queried</th><th style="text-align:right">Waived</th><th style="text-align:right">Risk</th></tr>
+        <tr><td>Alpha Pvt Ltd</td><td style="text-align:right">28</td><td style="text-align:right;color:var(--red)">9</td><td style="text-align:right;color:var(--green)">4</td><td style="text-align:right" class="muted">3</td><td style="text-align:right;font-weight:600">61</td></tr>
+        <tr><td>Beta LLP</td><td style="text-align:right">19</td><td style="text-align:right;color:var(--red)">6</td><td style="text-align:right;color:var(--green)">5</td><td style="text-align:right" class="muted">2</td><td style="text-align:right;font-weight:600">44</td></tr>
+        <tr><td>Gamma &amp; Co</td><td style="text-align:right">7</td><td style="text-align:right;color:var(--red)">1</td><td style="text-align:right;color:var(--green)">2</td><td style="text-align:right" class="muted">1</td><td style="text-align:right;font-weight:600">14</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <h2>7.3 · Benchmarking — this client vs portfolio</h2>
+  <div class="mock">
+    <div class="body">
+      <table><tr><th>Category</th><th style="text-align:right">This client</th><th style="text-align:right">Portfolio avg</th><th style="text-align:right">×</th><th>vs norm</th></tr>
+        <tr><td class="mono">CASH</td><td style="text-align:right">9</td><td style="text-align:right" class="muted">4.0</td><td style="text-align:right">2.3×</td><td><span class="badge b-red">Above norm</span></td></tr>
+        <tr><td class="mono">GST</td><td style="text-align:right">4</td><td style="text-align:right" class="muted">3.8</td><td style="text-align:right">1.1×</td><td><span class="badge b-out">Typical</span></td></tr>
+        <tr><td class="mono">TDS</td><td style="text-align:right">1</td><td style="text-align:right" class="muted">2.6</td><td style="text-align:right">0.4×</td><td><span class="badge b-green">Below norm</span></td></tr>
+      </table>
+      <div class="muted" style="font-size:11px;margin-top:4px">"Above norm" = this client has more of that finding type than the typical engagement — worth a closer look.</div>
+    </div>
+  </div>
+
+  <h2>7.1 · Rule precision &amp; learning (portfolio-wide)</h2>
+  <div class="mock">
+    <div class="body">
+      <div style="margin-bottom:8px"><span class="badge b-red">▾ 2 demote</span> <span class="badge b-green">▴ 5 promote</span> <span class="badge b-amber">4 monitor</span> <span class="muted" style="font-size:11px">of 24 rules</span></div>
+      <table><tr><th>Rule</th><th style="text-align:right">Total</th><th style="text-align:right">Queried</th><th style="text-align:right">Waived</th><th style="text-align:right">Precision</th><th>Suggestion</th></tr>
+        <tr><td><span class="mono">GEN-014</span> Round-sum journal</td><td style="text-align:right">14</td><td style="text-align:right;color:var(--green)">2</td><td style="text-align:right;color:var(--red)">11</td><td style="text-align:right">15%</td><td><span class="badge b-red">▾ Demote</span></td></tr>
+        <tr><td><span class="mono">CASH-002</span> Cash &gt; 40A(3)</td><td style="text-align:right">18</td><td style="text-align:right;color:var(--green)">15</td><td style="text-align:right;color:var(--red)">1</td><td style="text-align:right">94%</td><td><span class="badge b-green">▴ Promote</span></td></tr>
+      </table>
+      <div class="muted" style="font-size:11px;margin-top:4px">Advisory — precision = (queried + resolved) ÷ actioned. Demoting/promoting a rule is a logged partner action (decision #11), not applied here.</div>
+    </div>
+  </div>
+
+  <h2>Acceptance — all green</h2>
+  <div class="grid">
+    <div class="stat"><div class="n" style="color:var(--green)">✓</div><div class="l"><code>npm run build</code> · 0 TS errors</div></div>
+    <div class="stat"><div class="n">165</div><div class="l">scrutiny unit tests</div></div>
+    <div class="stat"><div class="n">3</div><div class="l">tickets (branch only)</div></div>
+    <div class="stat"><div class="n">0</div><div class="l">pushes to main</div></div>
+  </div>
+  <div class="card mono" style="font-size:12px">
+    4c0bcf4c — 7.1 rule precision + demote/promote suggestions<br>
+    194faf7f — 7.2 cross-engagement portfolio view<br>
+    65605c8c — 7.3 benchmarking (client vs portfolio)
+  </div>
+
+  <h2>No deploy needed</h2>
+  <div class="card"><ul class="chk">
+    <li>Phase 7 is <strong>deterministic</strong> — no gateway, keys or migration. It populates once the v2 flag is on and the firm's clients have scrutiny findings.</li>
+    <li>Cross-engagement reads are firm-scoped by RLS; it flags the 1,000-finding fetch cap for very large portfolios.</li>
+  </ul></div>
+
+  <h2>What the CA should review</h2>
+  <div class="card"><ul class="chk">
+    <li><strong>Precision bands</strong> — promote ≥ 80% / demote ≤ 30% precision, min 5 actioned — right thresholds?</li>
+    <li><strong>Benchmark bands</strong> — "above norm" ≥ 1.5× / "below norm" ≤ 0.5× the portfolio average — right sensitivity?</li>
+    <li><strong>Should demote/promote ever auto-apply?</strong> Today it's advisory only (partner action, logged). Do you want a partner-gated "apply" that disables a rule?</li>
+  </ul></div>
+
+  <div class="foot">
+    CAFlow Scrutiny Engine · Phase 7 (portfolio + learning) · deterministic, no deploy required.
+    Phases 0–7 core complete. Remaining (senior-owned): Phase 8 — workflow &amp; operationalisation (client-portal query loop, notifications/SLA, year-on-year rollover, evidence pack, review queue, partner MIS).
+  </div>
+
+</div>
+</body>
+</html>
