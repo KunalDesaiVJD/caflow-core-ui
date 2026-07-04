@@ -33,6 +33,7 @@ import { identifyTdsSectionWithAI, type TdsSection } from "@/lib/scrutiny/aiTdsS
 import { matchExclusions, buildExclusionSet, type PriorWaived } from "@/lib/scrutiny/exclusionLearning";
 import { FACT_CATALOGUE, factGateStatus } from "@/lib/scrutiny/facts";
 import { investigateWithAI } from "@/lib/scrutiny/aiInvestigator";
+import { suggestedPrompts } from "@/lib/scrutiny/investigatorPrompts";
 import { computeCoverage, groupByTemplate } from "@/lib/scrutiny/coverage";
 
 const CATEGORIES = ["All", "TDS", "GST", "Cash Payments", "Loans", "Prior Period", "Depreciation", "Deferred Tax", "Bank Recon", "Narration AI"];
@@ -207,6 +208,14 @@ export default function AuditScrutiny() {
   // Gate-4 advisory completeness (Ticket 3.4) — never blocks anything
   const factGate = useMemo(() => factGateStatus(FACT_CATALOGUE, capturedFacts), [capturedFacts]);
 
+  // Context-aware quick prompts for the investigator (Ticket 4.2)
+  const investigatorPrompts = useMemo(() => suggestedPrompts({
+    findingCount: findings.length,
+    hasTds: findings.some((f) => (f.rule_id ?? "").toUpperCase().startsWith("TDS")),
+    missingFactsCount: factGate.missing.length,
+    recurringCount: Object.keys(priorExclusions).length,
+  }), [findings, factGate, priorExclusions]);
+
   // Fetch assigned audit firm for this client + FY
   useEffect(() => {
     if (!clientId) return;
@@ -313,14 +322,16 @@ export default function AuditScrutiny() {
   };
 
   // ── NL investigator (Ticket 4.1) — read-only, grounded, graceful ─────────
-  const handleInvestigate = async () => {
-    if (!investigatorQ.trim()) return;
+  const handleInvestigate = async (q?: string) => {
+    const question = (q ?? investigatorQ).trim();
+    if (!question) return;
+    if (q) setInvestigatorQ(q);
     setInvestigating(true);
     setInvestigatorAnswer(null);
     const cov = computeCoverage(groupByTemplate(rules, findings));
     const ans = await investigateWithAI(
       (fn, opts) => (supabase.functions.invoke as any)(fn, opts),
-      investigatorQ,
+      question,
       {
         findings,
         financialYear: fy,
@@ -572,9 +583,23 @@ export default function AuditScrutiny() {
                   placeholder="Ask the AI auditor… e.g. 'Which ledgers carry the highest-risk findings and need queries?'"
                   className="h-9"
                 />
-                <Button onClick={handleInvestigate} disabled={investigating || !investigatorQ.trim()}>
+                <Button onClick={() => handleInvestigate()} disabled={investigating || !investigatorQ.trim()}>
                   {investigating ? <Loader2 className="h-4 w-4 animate-spin" /> : "Ask"}
                 </Button>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {investigatorPrompts.map((p) => (
+                  <button
+                    key={p.label}
+                    type="button"
+                    onClick={() => handleInvestigate(p.question)}
+                    disabled={investigating}
+                    className="text-[11px] px-2 py-1 rounded-full border text-muted-foreground hover:bg-muted/60 disabled:opacity-50"
+                    title={p.question}
+                  >
+                    {p.label}
+                  </button>
+                ))}
               </div>
               {investigatorAnswer && (
                 <div className="text-sm whitespace-pre-wrap rounded-md border bg-muted/30 p-3">{investigatorAnswer}</div>
