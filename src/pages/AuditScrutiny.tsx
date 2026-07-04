@@ -14,8 +14,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AlertTriangle, CheckCircle2, Shield, ShieldAlert, ShieldQuestion, FileSpreadsheet, Play, Download, FileText, BarChart3, ChevronLeft, ChevronRight, X, Loader2, Calculator } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Shield, ShieldAlert, ShieldQuestion, FileSpreadsheet, Play, Download, FileText, BarChart3, ChevronLeft, ChevronRight, X, Loader2, Calculator, Sparkles } from "lucide-react";
 import { TdsReconModule } from "@/components/tds-recon/TdsReconModule";
 import { SEVERITIES, STATUSES, type Finding, type RuleTemplate } from "@/lib/scrutiny/scrutinyUi";
 import ScrutinyTemplatesView from "@/components/scrutiny-v2/ScrutinyTemplatesView";
@@ -31,6 +32,8 @@ import { classifyFindingsWithAI, type NarrationClass } from "@/lib/scrutiny/aiNa
 import { identifyTdsSectionWithAI, type TdsSection } from "@/lib/scrutiny/aiTdsSection";
 import { matchExclusions, buildExclusionSet, type PriorWaived } from "@/lib/scrutiny/exclusionLearning";
 import { FACT_CATALOGUE, factGateStatus } from "@/lib/scrutiny/facts";
+import { investigateWithAI } from "@/lib/scrutiny/aiInvestigator";
+import { computeCoverage, groupByTemplate } from "@/lib/scrutiny/coverage";
 
 const CATEGORIES = ["All", "TDS", "GST", "Cash Payments", "Loans", "Prior Period", "Depreciation", "Deferred Tax", "Bank Recon", "Narration AI"];
 const FY_OPTIONS = ["2024-25", "2023-24", "2022-23", "2021-22"];
@@ -77,6 +80,10 @@ export default function AuditScrutiny() {
   const [priorWaived, setPriorWaived] = useState<PriorWaived[]>([]);
   // Gate-4 fact-gating (Ticket 3.4): captured general facts for the advisory banner
   const [capturedFacts, setCapturedFacts] = useState<Record<string, string>>({});
+  // NL investigator (Ticket 4.1)
+  const [investigatorQ, setInvestigatorQ] = useState("");
+  const [investigatorAnswer, setInvestigatorAnswer] = useState<string | null>(null);
+  const [investigating, setInvestigating] = useState(false);
 
   // Filters — default FY from engagement context
   const [fy, setFy] = useState(contextFY || "2024-25");
@@ -305,6 +312,31 @@ export default function AuditScrutiny() {
     fetchFindings();
   };
 
+  // ── NL investigator (Ticket 4.1) — read-only, grounded, graceful ─────────
+  const handleInvestigate = async () => {
+    if (!investigatorQ.trim()) return;
+    setInvestigating(true);
+    setInvestigatorAnswer(null);
+    const cov = computeCoverage(groupByTemplate(rules, findings));
+    const ans = await investigateWithAI(
+      (fn, opts) => (supabase.functions.invoke as any)(fn, opts),
+      investigatorQ,
+      {
+        findings,
+        financialYear: fy,
+        coverage: { auto: cov.auto, advisory: cov.advisory, total: cov.total },
+        facts: {
+          captured: factGate.captured, total: factGate.total,
+          requiredCaptured: factGate.requiredCaptured, requiredTotal: factGate.requiredTotal,
+          missing: factGate.missing.map((f) => f.label),
+        },
+        recurringCount: Object.keys(priorExclusions).length,
+      },
+    );
+    setInvestigatorAnswer(ans ?? "The AI investigator is unavailable (the gateway isn't deployed yet). Your findings and views are unaffected.");
+    setInvestigating(false);
+  };
+
   // ── AI TDS-section identification (Ticket 2.3) ───────────────────────────
   useEffect(() => { setTdsSection(null); }, [detailFinding]);
   const handleIdentifyTds = async () => {
@@ -528,6 +560,28 @@ export default function AuditScrutiny() {
       {/* v2 scrutiny views (behind flag): advisory coverage panel + Templates / By-Ledger */}
       {v2 && (
         <div className="space-y-4">
+          {/* NL investigator command bar (Ticket 4.1) — read-only, grounded */}
+          <Card>
+            <CardContent className="p-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-primary shrink-0" />
+                <Input
+                  value={investigatorQ}
+                  onChange={(e) => setInvestigatorQ(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") handleInvestigate(); }}
+                  placeholder="Ask the AI auditor… e.g. 'Which ledgers carry the highest-risk findings and need queries?'"
+                  className="h-9"
+                />
+                <Button onClick={handleInvestigate} disabled={investigating || !investigatorQ.trim()}>
+                  {investigating ? <Loader2 className="h-4 w-4 animate-spin" /> : "Ask"}
+                </Button>
+              </div>
+              {investigatorAnswer && (
+                <div className="text-sm whitespace-pre-wrap rounded-md border bg-muted/30 p-3">{investigatorAnswer}</div>
+              )}
+            </CardContent>
+          </Card>
+
           {/* Gate-4 fact-gating advisory (Ticket 3.4) — never blocks sign-off / UDIN */}
           {v2Tab !== "facts" && factGate.missing.length > 0 && (
             <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-800 flex items-center gap-2 flex-wrap">
