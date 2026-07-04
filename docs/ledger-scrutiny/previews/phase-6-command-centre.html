@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CAFlow Scrutiny — Phase 6 Preview</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#fff; --ink:#1e2430; --muted:#6b7280; --line:#e5e7eb;
+    --primary:#2563eb; --amber:#b45309; --amber-bg:#fffbeb; --green:#15803d; --green-bg:#dcfce7;
+    --red:#b91c1c; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:32px 20px 80px}
+  header.top{display:flex;align-items:center;gap:14px;margin-bottom:8px}
+  .logo{width:44px;height:44px;border-radius:9px;background:linear-gradient(135deg,#1e3a8a,#2563eb);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;letter-spacing:.5px}
+  h1{font-size:24px;margin:0}
+  .sub{color:var(--muted);font-size:14px;margin-top:2px}
+  .banner{margin:18px 0;padding:12px 14px;border:1px solid #fde68a;background:var(--amber-bg);border-radius:10px;font-size:13.5px;color:#7c5b12}
+  .safe{margin:10px 0 22px;padding:10px 14px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:10px;font-size:13px;color:#14532d}
+  h2{font-size:18px;margin:34px 0 12px;padding-bottom:6px;border-bottom:2px solid var(--line)}
+  h3{font-size:14px;margin:22px 0 8px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin:12px 0;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;text-align:center}
+  .stat .n{font-size:22px;font-weight:700}
+  .stat .l{font-size:11px;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px}
+  code,.mono{font-family:var(--mono);font-size:12.5px}
+  .badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;border:1px solid transparent;white-space:nowrap}
+  .b-primary{background:#eff6ff;color:var(--primary);border-color:#bfdbfe}
+  .b-amber{background:#fef3c7;color:var(--amber);border-color:#fde68a}
+  .b-out{background:#fff;color:#475569;border-color:#cbd5e1}
+  .mock{border:1px dashed #cbd5e1;border-radius:12px;overflow:hidden;background:#fcfcfd}
+  .mock .cap{font-size:11.5px;color:var(--muted);background:#f8fafc;border-bottom:1px dashed #e2e8f0;padding:6px 12px}
+  .mock .body{padding:14px}
+  .muted{color:var(--muted)} ul{padding-left:20px} .chk li{margin:6px 0}
+  pre{background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:12px;font-size:11.5px;white-space:pre-wrap;overflow:auto;max-height:240px}
+  .foot{margin-top:40px;color:var(--muted);font-size:12px;border-top:1px solid var(--line);padding-top:14px}
+  .pill-tabs{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;font-size:11px;flex-wrap:wrap}
+  .pill-tabs span{padding:5px 9px}
+  .pill-tabs .on{background:var(--primary);color:#fff}
+  .pill-tabs .off2{color:var(--muted)}
+  svg text{font-family:inherit}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="logo">CG</div>
+    <div>
+      <h1>CAFlow Scrutiny Engine — Phase&nbsp;6 Preview</h1>
+      <div class="sub">Ultra command centre — Overview + risk radar · 3CD clause-fill · workpaper &amp; query letter · 2026‑07‑04</div>
+    </div>
+  </header>
+
+  <div class="banner">
+    <strong>Illustrative mock-ups, not live screenshots.</strong> All of Phase 6 is <strong>deterministic</strong> — no AI, no keys, no migration.
+    It assembles the data already loaded on the scrutiny screen. Gated behind <code>VITE_SCRUTINY_V2</code>.
+  </div>
+
+  <div class="safe">
+    🔒 <strong>Safety:</strong> branch <code>claude/auto-2026-06-21-ledger-scrutiny</code>; nothing pushed to <code>main</code>.
+    The 3CD clause-fill is <strong>read-only</strong> — it never writes the live Form 3CD (§8).
+  </div>
+
+  <h2>What Phase 6 delivered</h2>
+  <div class="card">
+    <table>
+      <tr><th style="width:150px">Ticket</th><th>Delivered</th></tr>
+      <tr><td><strong>6.1</strong> Overview</td><td>A command-centre landing tab: headline <strong>KPIs</strong>, a <strong>risk radar</strong> by category, and an <strong>attention feed</strong> (what needs action).</td></tr>
+      <tr><td><strong>6.2</strong> 3CD clause-fill</td><td>Findings mapped to the §8 clause set (21(a)/(b)/(d), 22, 31(a)/(b)/(ba), 34) — <strong>read-only</strong> export.</td></tr>
+      <tr><td><strong>6.3</strong> Deliverables</td><td>Auto-drafted <strong>working-paper</strong> summary and <strong>client query letter</strong>, downloadable.</td></tr>
+    </table>
+    <div style="margin-top:10px" class="pill-tabs"><span class="on">Overview</span><span class="off2">By Template</span><span class="off2">By Ledger</span><span class="off2">Facts</span><span class="off2">Forensics</span><span class="off2">Connectors</span><span class="on">Deliverables</span></div>
+    <div class="muted" style="font-size:11px;margin-top:4px">Overview is now the default landing tab; Deliverables is new.</div>
+  </div>
+
+  <h2>6.1 · Command-centre Overview</h2>
+  <div class="mock">
+    <div class="cap">Scrutiny Engine → Overview (default)</div>
+    <div class="body">
+      <div class="grid" style="margin-bottom:14px">
+        <div class="stat"><div class="n">16</div><div class="l">Findings</div></div>
+        <div class="stat"><div class="n" style="color:var(--red)">9</div><div class="l">High risk</div></div>
+        <div class="stat"><div class="n">50<span style="font-size:13px;color:var(--muted)">/119</span></div><div class="l">Auto-checked</div></div>
+        <div class="stat"><div class="n" style="color:var(--amber)">2</div><div class="l">Drafts awaiting</div></div>
+        <div class="stat"><div class="n" style="color:var(--green)">1</div><div class="l">Queries raised</div></div>
+        <div class="stat"><div class="n">7<span style="font-size:13px;color:var(--muted)">/11</span></div><div class="l">Required facts</div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div class="card" style="margin:0">
+          <div style="font-size:12px;font-weight:600;margin-bottom:6px">Risk radar by category</div>
+          <svg viewBox="0 0 200 200" style="width:100%;max-width:200px;display:block;margin:0 auto">
+            <circle cx="100" cy="100" r="80" fill="none" stroke="#e5e7eb"/>
+            <circle cx="100" cy="100" r="53" fill="none" stroke="#eef1f5"/>
+            <circle cx="100" cy="100" r="27" fill="none" stroke="#eef1f5"/>
+            <line x1="100" y1="100" x2="100" y2="20" stroke="#e5e7eb"/>
+            <line x1="100" y1="100" x2="176" y2="125" stroke="#e5e7eb"/>
+            <line x1="100" y1="100" x2="147" y2="177" stroke="#e5e7eb"/>
+            <line x1="100" y1="100" x2="53" y2="177" stroke="#e5e7eb"/>
+            <line x1="100" y1="100" x2="24" y2="125" stroke="#e5e7eb"/>
+            <polygon points="100,32 168,120 130,168 68,158 44,120" fill="rgba(37,99,235,.25)" stroke="#2563eb" stroke-width="1.5"/>
+            <text x="100" y="16" font-size="8" fill="#6b7280" text-anchor="middle">CASH</text>
+            <text x="180" y="126" font-size="8" fill="#6b7280">TDS</text>
+            <text x="150" y="188" font-size="8" fill="#6b7280">LOAN</text>
+            <text x="50" y="188" font-size="8" fill="#6b7280" text-anchor="end">GST</text>
+            <text x="20" y="126" font-size="8" fill="#6b7280" text-anchor="end">MSME</text>
+          </svg>
+          <div class="muted" style="font-size:10px;text-align:center">score = high×5 + medium×2 + low×1</div>
+        </div>
+        <div class="card" style="margin:0">
+          <div style="font-size:12px;font-weight:600;margin-bottom:6px">Attention feed</div>
+          <ul style="font-size:12.5px;list-style:none;padding:0;margin:0">
+            <li style="margin:6px 0">🛡 9 high-risk findings to review</li>
+            <li style="margin:6px 0">⧗ 2 draft queries awaiting a second reviewer</li>
+            <li style="margin:6px 0">↺ 1 finding recurring from a prior-year waiver</li>
+            <li style="margin:6px 0">☑ Missing judgment fact: Bank balances confirmed (BRS)</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2>6.2 · Form 3CD — clause mapping (read-only)</h2>
+  <div class="mock">
+    <div class="cap">Deliverables tab · <span class="badge b-out">Copy export</span></div>
+    <div class="body">
+      <div style="border:1px solid #fde68a;background:var(--amber-bg);border-radius:8px;padding:8px;font-size:11.5px;color:#7c5b12;margin-bottom:10px">Read-only, advisory. Maps findings to 3CD clauses for review — does <strong>not</strong> write into the live Form 3CD.</div>
+      <div class="card" style="margin:6px 0"><span class="badge b-primary mono">Clause 21(d)</span> Cash payments inadmissible u/s 40A(3) <span class="badge b-out" style="margin-left:6px">3</span><div class="muted" style="font-size:11px;margin-top:4px">• Cash payment ₹45,000 to Ramesh Transport &nbsp; • Cash payment ₹38,500 to City Freight …</div></div>
+      <div class="card" style="margin:6px 0"><span class="badge b-primary mono">Clause 34</span> TDS / TCS compliance <span class="badge b-out" style="margin-left:6px">4</span></div>
+      <div class="card" style="margin:6px 0"><span class="badge b-primary mono">Clause 31(a)</span> Loans / deposits accepted (s.269SS) <span class="badge b-out" style="margin-left:6px">1</span></div>
+    </div>
+  </div>
+
+  <h2>6.3 · Auto-drafted deliverables</h2>
+  <div class="mock">
+    <div class="cap">Working-paper summary · <span class="badge b-out">⤓ Download</span></div>
+    <div class="body">
+<pre>LEDGER SCRUTINY — WORKING PAPER (FY 2024-25)
+
+1. Scope &amp; coverage
+   50 of 119 checks auto-verified by the engine; the remainder are advisory…
+
+2. Findings summary
+   16 findings — 9 high, 5 medium, 2 low.
+   • CASH: 9 (5H / 3M / 1L)
+   • TDS: 4 (2H / 2M / 0L)
+
+3. Client queries
+   2 findings raised as client queries (maker-checker)…
+
+5. Conclusion
+   16 exceptions noted; 9 high-risk require attention…
+   Coverage is advisory and never blocks sign-off / UDIN (decision #8).</pre>
+    </div>
+  </div>
+  <div class="mock" style="margin-top:12px">
+    <div class="cap">Client query letter · <span class="badge b-out">⤓ Download</span></div>
+    <div class="body">
+<pre>Subject: Audit queries — FY 2024-25
+
+Dear Sir/Madam,
+
+In the course of our scrutiny of the books of account, we request your
+explanation and supporting documents in respect of the following:
+
+1. Cash payment of ₹45,000 to Ramesh Transport on 12-Aug-2025…  [CASH-002]
+2. TDS not deducted on freight u/s 194C…  [TDS-194C]
+
+Yours faithfully,
+For the Auditors</pre>
+    </div>
+  </div>
+
+  <h2>Acceptance — all green</h2>
+  <div class="grid">
+    <div class="stat"><div class="n" style="color:var(--green)">✓</div><div class="l"><code>npm run build</code> · 0 TS errors</div></div>
+    <div class="stat"><div class="n">153</div><div class="l">scrutiny unit tests</div></div>
+    <div class="stat"><div class="n">3</div><div class="l">tickets (branch only)</div></div>
+    <div class="stat"><div class="n">0</div><div class="l">pushes to main</div></div>
+  </div>
+  <div class="card mono" style="font-size:12px">
+    d1926ea2 — 6.1 command-centre Overview (KPIs + risk radar + attention feed)<br>
+    822068f8 — 6.2 3CD clause-fill (read-only)<br>
+    a4175aff — 6.3 auto-drafted deliverables (workpaper + query letter)
+  </div>
+
+  <h2>No deploy needed</h2>
+  <div class="card"><ul class="chk">
+    <li>Phase 6 is <strong>deterministic</strong> — it assembles data already on the screen. Works with the v2 flag on; no gateway, keys or migration.</li>
+    <li>3CD clause-fill is read-only; deliverables download as <code>.txt</code> from the browser.</li>
+  </ul></div>
+
+  <h2>What the CA should review</h2>
+  <div class="card"><ul class="chk">
+    <li><strong>Risk score weighting</strong> — high×5 / medium×2 / low×1 — right emphasis for the radar?</li>
+    <li><strong>3CD inference</strong> — the keyword→clause mapping (e.g. 40A(3)→21(d), 269ST→31(ba)). Any clauses to add?</li>
+    <li><strong>Deliverable wording</strong> — the working-paper and query-letter templates — do they match your firm's format? (These are plain-text drafts; richer DOCX/PDF export is a later enhancement.)</li>
+  </ul></div>
+
+  <div class="foot">
+    CAFlow Scrutiny Engine · Phase 6 (ultra command centre + deliverables) · deterministic, no deploy required.
+    Phases 0–6 core complete. Remaining (senior-owned): Phases 7–8 — portfolio/learning + workflow/operationalisation.
+  </div>
+
+</div>
+</body>
+</html>
