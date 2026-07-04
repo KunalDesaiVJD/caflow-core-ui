@@ -27,6 +27,7 @@ import ScrutinyForensicsPanel from "@/components/scrutiny-v2/ScrutinyForensicsPa
 import ScrutinyConnectorsPanel from "@/components/scrutiny-v2/ScrutinyConnectorsPanel";
 import ScrutinyOverviewPanel from "@/components/scrutiny-v2/ScrutinyOverviewPanel";
 import ScrutinyDeliverablesPanel from "@/components/scrutiny-v2/ScrutinyDeliverablesPanel";
+import ScrutinyPortfolioPanel from "@/components/scrutiny-v2/ScrutinyPortfolioPanel";
 import {
   buildDraftQuery, canReviewQuery, SCRUTINY_QUERY_SOURCE,
   QUERY_STATUS_OPEN, QUERY_STATUS_REJECTED,
@@ -74,7 +75,7 @@ export default function AuditScrutiny() {
   // Scrutiny-raised queries (maker-checker): finding_id -> { id, status }
   const [scrutinyQueries, setScrutinyQueries] = useState<{ id: string; source_ref_id: string | null; status: string }[]>([]);
   const [rejectTarget, setRejectTarget] = useState<{ finding: Finding; queryId: string } | null>(null);
-  const [v2Tab, setV2Tab] = useState<"overview" | "templates" | "ledger" | "facts" | "forensics" | "connectors" | "deliverables">("overview");
+  const [v2Tab, setV2Tab] = useState<"overview" | "templates" | "ledger" | "facts" | "forensics" | "connectors" | "deliverables" | "portfolio">("overview");
   // AI narration classification (Ticket 2.2): finding_id -> suggested category / 3CD clause
   const [narrationClasses, setNarrationClasses] = useState<Record<string, NarrationClass>>({});
   const [classifying, setClassifying] = useState(false);
@@ -666,9 +667,16 @@ export default function AuditScrutiny() {
             <button
               type="button"
               onClick={() => setV2Tab("deliverables")}
-              className={`px-3 py-1.5 text-xs font-medium transition-colors ${v2Tab === "deliverables" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted/60"}`}
+              className={`px-3 py-1.5 text-xs font-medium border-r transition-colors ${v2Tab === "deliverables" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted/60"}`}
             >
               Deliverables
+            </button>
+            <button
+              type="button"
+              onClick={() => setV2Tab("portfolio")}
+              className={`px-3 py-1.5 text-xs font-medium transition-colors ${v2Tab === "portfolio" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted/60"}`}
+            >
+              Portfolio
             </button>
           </div>
           {v2Tab === "overview"
@@ -681,6 +689,8 @@ export default function AuditScrutiny() {
                 ? <ScrutinyConnectorsPanel clientId={clientId} financialYear={fy} />
                 : v2Tab === "deliverables"
                 ? <ScrutinyDeliverablesPanel findings={findings} rules={rules} financialYear={fy} factGate={factGate} />
+                : v2Tab === "portfolio"
+                ? <ScrutinyPortfolioPanel findings={findings} rules={rules} />
                 : v2Tab === "templates"
                   ? <ScrutinyTemplatesView rules={rules} {...v2Shared} />
                   : <ScrutinyWorkpaperView {...v2Shared} />}
