@@ -14,6 +14,7 @@ import { FileText, Copy, Check, Info, Download } from "lucide-react";
 import { type Finding, type RuleTemplate } from "@/lib/scrutiny/scrutinyUi";
 import { clauseFill, clause3cdExportText, type ClauseContext } from "@/lib/scrutiny/clause3cd";
 import { workpaperText, queryLetterText } from "@/lib/scrutiny/deliverables";
+import { evidencePackText } from "@/lib/scrutiny/evidencePack";
 import { computeCoverage, groupByTemplate } from "@/lib/scrutiny/coverage";
 import { type FactGate } from "@/lib/scrutiny/facts";
 
@@ -60,6 +61,17 @@ export default function ScrutinyDeliverablesPanel({ findings, rules, financialYe
     [raised, financialYear],
   );
 
+  // Ticket 8.1 — evidence pack / NFRA export (one comprehensive document)
+  const evidence = useMemo(() => evidencePackText({
+    financialYear, findings,
+    coverageAuto: coverage.auto, coverageTotal: coverage.total,
+    requiredCaptured: factGate.requiredCaptured, requiredTotal: factGate.requiredTotal,
+    missingFacts: factGate.missing.map((m) => m.label),
+    relatedParties: [], // RP names are captured in the Facts & Judgment tab
+    raisedCount: raised.length,
+    clauseGroups: result.groups.map((g) => ({ code: g.code, label: g.label, count: g.count })),
+  }), [financialYear, findings, coverage, factGate, raised, result]);
+
   const download = (name: string, text: string) => {
     try {
       const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
@@ -71,6 +83,18 @@ export default function ScrutinyDeliverablesPanel({ findings, rules, financialYe
 
   return (
     <div className="space-y-5">
+      {/* Evidence pack / NFRA export (Ticket 8.1) */}
+      <div>
+        <div className="flex items-center gap-2 flex-wrap mb-2">
+          <FileText size={16} className="text-muted-foreground" />
+          <h3 className="text-sm font-semibold text-foreground">Evidence pack (peer review / NFRA)</h3>
+          <Badge variant="secondary" className="text-xs">{coverage.auto}/{coverage.total} covered · {findings.length} finding{findings.length !== 1 ? "s" : ""}</Badge>
+          <Button size="sm" variant="outline" onClick={() => download(`scrutiny-evidence-pack-${financialYear}.txt`, evidence)} className="ml-auto"><Download className="h-4 w-4 mr-1" />Download</Button>
+        </div>
+        <p className="text-xs text-muted-foreground mb-2">One document combining coverage, findings, judgment facts, the 3CD mapping, queries raised and the conclusion — for the review file. Advisory evidence; never blocks sign-off.</p>
+        <pre className="rounded-md border bg-muted/20 p-3 text-xs whitespace-pre-wrap max-h-72 overflow-auto">{evidence}</pre>
+      </div>
+
       {/* 3CD clause-fill (Ticket 6.2) */}
       <div>
         <div className="flex items-center gap-2 flex-wrap mb-2">
