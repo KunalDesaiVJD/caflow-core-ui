@@ -8,20 +8,23 @@
 import { useMemo, type ReactNode } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { AlertTriangle, ShieldAlert, Clock, RotateCcw, ClipboardCheck, Activity, Timer } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { AlertTriangle, ShieldAlert, Clock, RotateCcw, ClipboardCheck, Activity, Timer, MailCheck, CheckCircle2 } from "lucide-react";
 import { type Finding, type RuleTemplate } from "@/lib/scrutiny/scrutinyUi";
 import { computeCoverage, groupByTemplate } from "@/lib/scrutiny/coverage";
 import { findingQueryState } from "@/lib/scrutiny/makerChecker";
 import { type FactGate } from "@/lib/scrutiny/facts";
 import { riskByCategory, radarGeometry, attentionFeed, type AttentionKind } from "@/lib/scrutiny/commandCenter";
 import { slaNudges, type SlaItem, type SlaLevel } from "@/lib/scrutiny/slaNudges";
+import { queryLoopState } from "@/lib/scrutiny/queryLoop";
 
 interface Props {
   findings: Finding[];
   rules: RuleTemplate[];
-  queryByFinding: Record<string, { id: string; status: string; created_at?: string | null }>;
+  queryByFinding: Record<string, { id: string; status: string; created_at?: string | null; client_reply?: string | null }>;
   factGate: FactGate;
   priorExclusionCount: number;
+  onCloseFromReply?: (findingId: string, queryId: string) => void;
 }
 
 const SLA_BADGE: Record<SlaLevel, string> = {
@@ -36,7 +39,7 @@ const FEED_ICON: Record<AttentionKind, ReactNode> = {
   missing_fact: <ClipboardCheck size={14} className="text-amber-600" />,
 };
 
-export default function ScrutinyOverviewPanel({ findings, rules, queryByFinding, factGate, priorExclusionCount }: Props) {
+export default function ScrutinyOverviewPanel({ findings, rules, queryByFinding, factGate, priorExclusionCount, onCloseFromReply }: Props) {
   const coverage = useMemo(() => computeCoverage(groupByTemplate(rules, findings)), [rules, findings]);
   const { draftCount, approvedCount } = useMemo(() => {
     let draftCount = 0, approvedCount = 0;
@@ -71,6 +74,18 @@ export default function ScrutinyOverviewPanel({ findings, rules, queryByFinding,
       }
     }
     return slaNudges(items, Date.now());
+  }, [findings, queryByFinding]);
+
+  // Ticket 8.6 — client-portal loop: findings whose query the client has answered
+  const responses = useMemo(() => {
+    const out: { finding: Finding; queryId: string; reply: string | null; autoClose: boolean }[] = [];
+    for (const f of findings) {
+      const q = queryByFinding[f.id];
+      if (!q) continue;
+      const st = queryLoopState({ queryStatus: q.status, clientReply: q.client_reply, findingStatus: f.status });
+      if (st.state === "responded") out.push({ finding: f, queryId: q.id, reply: q.client_reply ?? null, autoClose: st.autoClose });
+    }
+    return out;
   }, [findings, queryByFinding]);
 
   const high = findings.filter((f) => (f.severity ?? "").toUpperCase() === "HIGH").length;
@@ -167,6 +182,42 @@ export default function ScrutinyOverviewPanel({ findings, rules, queryByFinding,
           <p className="text-[10px] text-muted-foreground mt-2">Advisory — nudges never block sign-off / UDIN. Defaults: review drafts in 2d, chase clients at 7d, raise high findings within 3d.</p>
         </CardContent>
       </Card>
+
+      {/* Client responses — portal loop (Ticket 8.6) */}
+      {responses.length > 0 && (
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <MailCheck size={16} className="text-muted-foreground" />
+              <h3 className="text-sm font-semibold text-foreground">Client responses</h3>
+              <Badge variant="secondary" className="text-xs">{responses.length} replied</Badge>
+            </div>
+            <ul className="space-y-2">
+              {responses.map(({ finding, queryId, reply, autoClose }) => (
+                <li key={finding.id} className="rounded-md border p-2.5">
+                  <div className="flex items-start gap-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-mono text-muted-foreground">{finding.rule_id}</p>
+                      <p className="text-sm text-foreground truncate">{finding.flag_message ?? finding.narration ?? finding.rule_id}</p>
+                      {reply && <p className="text-xs text-muted-foreground mt-1 bg-muted/40 rounded px-2 py-1"><span className="font-medium text-foreground">Client:</span> {reply}</p>}
+                    </div>
+                    <div className="shrink-0">
+                      {autoClose ? (
+                        <Button size="sm" variant="outline" onClick={() => onCloseFromReply?.(finding.id, queryId)} className="gap-1">
+                          <CheckCircle2 size={14} />Resolve
+                        </Button>
+                      ) : (
+                        <Badge className="bg-green-500/15 text-green-700 border-green-300 text-xs">Closed</Badge>
+                      )}
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <p className="text-[10px] text-muted-foreground mt-2">The client answered these queries in the portal. Review the reply, then resolve — this marks the query <em>Clarified</em>. Advisory; you stay in control of closing.</p>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
