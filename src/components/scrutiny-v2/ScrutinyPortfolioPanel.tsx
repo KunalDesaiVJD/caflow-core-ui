@@ -16,11 +16,13 @@ import { supabase } from "@/integrations/supabase/client";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { TrendingUp, TrendingDown, Minus, Info, Building2 } from "lucide-react";
+import { TrendingUp, TrendingDown, Minus, Info, Building2, ListChecks } from "lucide-react";
 import { type Finding, type RuleTemplate } from "@/lib/scrutiny/scrutinyUi";
 import { rulePrecision, precisionSummary, type PrecisionVerdict } from "@/lib/scrutiny/precision";
 import { portfolioSummary, portfolioTotals, type EngagementSummary } from "@/lib/scrutiny/portfolio";
 import { benchmark, type BenchLevel } from "@/lib/scrutiny/benchmark";
+import { reviewQueue, LANE_LABEL, type QueueInputFinding, type QueueLane } from "@/lib/scrutiny/reviewQueue";
+import { SCRUTINY_QUERY_SOURCE } from "@/lib/scrutiny/makerChecker";
 
 interface Props {
   rules: RuleTemplate[];
@@ -31,6 +33,13 @@ const LEVEL: Record<BenchLevel, { label: string; cls: string }> = {
   above: { label: "Above norm", cls: "bg-destructive/15 text-destructive border-destructive/40" },
   typical: { label: "Typical", cls: "bg-muted text-muted-foreground border-muted-foreground/30" },
   below: { label: "Below norm", cls: "bg-green-500/15 text-green-700 border-green-300" },
+};
+
+const LANE_CLS: Record<QueueLane, string> = {
+  to_review: "bg-amber-500/15 text-amber-700 border-amber-300",
+  to_raise: "bg-destructive/15 text-destructive border-destructive/40",
+  awaiting_client: "bg-blue-500/15 text-blue-700 border-blue-300",
+  to_dispose: "bg-muted text-muted-foreground border-muted-foreground/30",
 };
 
 const VERDICT: Record<PrecisionVerdict, { label: string; cls: string; icon: ReactNode }> = {
@@ -46,6 +55,7 @@ export default function ScrutinyPortfolioPanel({ rules, clientId }: Props) {
 
   const [engagements, setEngagements] = useState<EngagementSummary[]>([]);
   const [pFindings, setPFindings] = useState<Finding[]>([]);
+  const [queueRows, setQueueRows] = useState<QueueInputFinding[]>([]);
   const [loading, setLoading] = useState(true);
   const [capped, setCapped] = useState(false);
   const [reachable, setReachable] = useState(true);
@@ -59,15 +69,27 @@ export default function ScrutinyPortfolioPanel({ rules, clientId }: Props) {
         const { data: clients, error } = await (supabase.from as any)("clients").select("id, name").eq("firm_id", user.firm_id);
         if (error || !clients) { if (!cancelled) { setReachable(false); setLoading(false); } return; }
         const ids = (clients as { id: string }[]).map((c) => c.id);
-        let rows: { client_id: string | null; rule_id: string | null; severity: string | null; status: string | null }[] = [];
+        let rows: { id?: string; client_id: string | null; rule_id: string | null; severity: string | null; status: string | null; actioned_by?: string | null; linked_query_id?: string | null }[] = [];
+        let qStatus = new Map<string, string>();
         if (ids.length) {
-          const { data } = await (supabase.from as any)("scrutiny_findings").select("client_id, rule_id, severity, status").in("client_id", ids).limit(1000);
+          const { data } = await (supabase.from as any)("scrutiny_findings").select("id, client_id, rule_id, severity, status, actioned_by, linked_query_id").in("client_id", ids).limit(1000);
           rows = data ?? [];
           if (rows.length === 1000) setCapped(true);
+          const { data: qData } = await (supabase.from as any)("audit_client_queries").select("id, status").in("client_id", ids).eq("source", SCRUTINY_QUERY_SOURCE).limit(2000);
+          qStatus = new Map(((qData ?? []) as { id: string; status: string }[]).map((q) => [q.id, q.status]));
         }
         if (cancelled) return;
         setEngagements(portfolioSummary(clients as { id: string; name: string }[], rows));
         setPFindings(rows as Finding[]);
+        setQueueRows(rows.map((r) => ({
+          id: r.id ?? "",
+          client_id: r.client_id,
+          rule_id: r.rule_id,
+          severity: r.severity,
+          status: r.status,
+          actioned_by: r.actioned_by ?? null,
+          queryStatus: r.linked_query_id ? qStatus.get(r.linked_query_id) ?? null : null,
+        })));
         setReachable(true);
       } catch { if (!cancelled) setReachable(false); }
       if (!cancelled) setLoading(false);
@@ -80,6 +102,8 @@ export default function ScrutinyPortfolioPanel({ rules, clientId }: Props) {
   const pSummary = useMemo(() => precisionSummary(precisionRows), [precisionRows]);
   const currentName = useMemo(() => engagements.find((e) => e.clientId === clientId)?.clientName ?? "This client", [engagements, clientId]);
   const bench = useMemo(() => benchmark({ findings: pFindings, clientId, peerEngagements: totals.withFindings }), [pFindings, clientId, totals]);
+  const nameById = useMemo(() => Object.fromEntries(engagements.map((e) => [e.clientId, e.clientName])), [engagements]);
+  const queue = useMemo(() => reviewQueue(queueRows), [queueRows]);
 
   return (
     <div className="space-y-6">
@@ -135,6 +159,50 @@ export default function ScrutinyPortfolioPanel({ rules, clientId }: Props) {
           </>
         )}
       </div>
+
+      {/* Review & assignment queue (Ticket 8.4) */}
+      {!loading && reachable && user?.firm_id && (
+        <div>
+          <div className="flex items-center gap-2 mb-2"><ListChecks size={16} className="text-muted-foreground" /><h3 className="text-sm font-semibold text-foreground">Review &amp; assignment queue</h3><Badge variant="secondary" className="text-xs">{queue.total} open</Badge></div>
+          <div className="flex flex-wrap gap-2 mb-3">
+            {queue.lanes.map((l) => (
+              <Badge key={l.lane} className={LANE_CLS[l.lane] + " text-xs"}>{l.label}: {l.count}</Badge>
+            ))}
+          </div>
+          {queue.makers.length > 0 && (
+            <p className="text-xs text-muted-foreground mb-2">Awaiting a checker — by maker: {queue.makers.map((m) => `${m.maker.slice(0, 8)}… (${m.awaitingReview})`).join(" · ")}</p>
+          )}
+          {queue.total === 0 ? (
+            <p className="text-xs text-muted-foreground">Queue is clear — no open findings need action across the portfolio.</p>
+          ) : (
+            <div className="rounded-md border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-40">Lane</TableHead>
+                    <TableHead>Client</TableHead>
+                    <TableHead className="w-28">Rule</TableHead>
+                    <TableHead className="w-20">Severity</TableHead>
+                    <TableHead className="w-28">Blocked on</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {queue.items.slice(0, 100).map((i) => (
+                    <TableRow key={i.id}>
+                      <TableCell><Badge className={LANE_CLS[i.lane] + " text-xs"}>{LANE_LABEL[i.lane]}</Badge></TableCell>
+                      <TableCell className="text-sm truncate max-w-[200px]">{nameById[i.clientId ?? ""] ?? i.clientId ?? "—"}</TableCell>
+                      <TableCell className="font-mono text-xs text-muted-foreground">{i.ruleId ?? "—"}</TableCell>
+                      <TableCell className="text-xs">{i.severity ?? "—"}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{i.blockedOn ?? "auditor"}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              {queue.items.length > 100 && <p className="text-[11px] text-muted-foreground px-3 py-1.5">Showing the first 100 of {queue.items.length} open items.</p>}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Benchmarking (Ticket 7.3) */}
       {!loading && reachable && user?.firm_id && (
