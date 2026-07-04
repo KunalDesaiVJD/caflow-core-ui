@@ -73,7 +73,7 @@ export default function AuditScrutiny() {
   const v2 = scrutinyV2Enabled();
   const [rules, setRules] = useState<RuleTemplate[]>([]);
   // Scrutiny-raised queries (maker-checker): finding_id -> { id, status }
-  const [scrutinyQueries, setScrutinyQueries] = useState<{ id: string; source_ref_id: string | null; status: string }[]>([]);
+  const [scrutinyQueries, setScrutinyQueries] = useState<{ id: string; source_ref_id: string | null; status: string; created_at?: string | null }[]>([]);
   const [rejectTarget, setRejectTarget] = useState<{ finding: Finding; queryId: string } | null>(null);
   const [v2Tab, setV2Tab] = useState<"overview" | "templates" | "ledger" | "facts" | "forensics" | "connectors" | "deliverables" | "portfolio">("overview");
   // AI narration classification (Ticket 2.2): finding_id -> suggested category / 3CD clause
@@ -157,7 +157,7 @@ export default function AuditScrutiny() {
   const fetchScrutinyQueries = async () => {
     if (!v2 || !clientId) return;
     const { data } = await (supabase.from as any)("audit_client_queries")
-      .select("id, source_ref_id, status")
+      .select("id, source_ref_id, status, created_at")
       .eq("client_id", clientId)
       .eq("financial_year", fy)
       .eq("source", SCRUTINY_QUERY_SOURCE);
@@ -194,11 +194,11 @@ export default function AuditScrutiny() {
   // finding_id -> its linked query { id, status } (via the finding's linked_query_id)
   const queryByFinding = useMemo(() => {
     const byId = new Map(scrutinyQueries.map(q => [q.id, q]));
-    const m: Record<string, { id: string; status: string }> = {};
+    const m: Record<string, { id: string; status: string; created_at?: string | null }> = {};
     for (const f of findings) {
       if (f.linked_query_id && byId.has(f.linked_query_id)) {
         const q = byId.get(f.linked_query_id)!;
-        m[f.id] = { id: q.id, status: q.status };
+        m[f.id] = { id: q.id, status: q.status, created_at: q.created_at ?? null };
       }
     }
     return m;

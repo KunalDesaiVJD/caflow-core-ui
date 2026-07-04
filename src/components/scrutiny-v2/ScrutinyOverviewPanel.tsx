@@ -8,20 +8,26 @@
 import { useMemo, type ReactNode } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { AlertTriangle, ShieldAlert, Clock, RotateCcw, ClipboardCheck, Activity } from "lucide-react";
+import { AlertTriangle, ShieldAlert, Clock, RotateCcw, ClipboardCheck, Activity, Timer } from "lucide-react";
 import { type Finding, type RuleTemplate } from "@/lib/scrutiny/scrutinyUi";
 import { computeCoverage, groupByTemplate } from "@/lib/scrutiny/coverage";
 import { findingQueryState } from "@/lib/scrutiny/makerChecker";
 import { type FactGate } from "@/lib/scrutiny/facts";
 import { riskByCategory, radarGeometry, attentionFeed, type AttentionKind } from "@/lib/scrutiny/commandCenter";
+import { slaNudges, type SlaItem, type SlaLevel } from "@/lib/scrutiny/slaNudges";
 
 interface Props {
   findings: Finding[];
   rules: RuleTemplate[];
-  queryByFinding: Record<string, { id: string; status: string }>;
+  queryByFinding: Record<string, { id: string; status: string; created_at?: string | null }>;
   factGate: FactGate;
   priorExclusionCount: number;
 }
+
+const SLA_BADGE: Record<SlaLevel, string> = {
+  escalate: "bg-destructive/10 text-destructive border-destructive/30",
+  overdue: "bg-amber-100 text-amber-800 border-amber-300",
+};
 
 const FEED_ICON: Record<AttentionKind, ReactNode> = {
   high_finding: <ShieldAlert size={14} className="text-destructive" />,
@@ -49,6 +55,23 @@ export default function ScrutinyOverviewPanel({ findings, rules, queryByFinding,
     () => attentionFeed({ findings, draftCount, recurringCount: priorExclusionCount, missingFacts: factGate.missing.map((m) => m.label) }),
     [findings, draftCount, priorExclusionCount, factGate],
   );
+
+  // Ticket 8.2 — SLA nudges: age draft reviews, client follow-ups and unraised high findings
+  const nudges = useMemo(() => {
+    const items: SlaItem[] = [];
+    for (const f of findings) {
+      const label = f.rule_id ?? f.id;
+      const q = queryByFinding[f.id];
+      if (q) {
+        const st = findingQueryState(q.status);
+        if (st === "draft") items.push({ id: q.id, kind: "draft_review", label, clientId: f.client_id, since: q.created_at ?? null });
+        else if (st === "approved") items.push({ id: q.id, kind: "client_response", label, clientId: f.client_id, since: q.created_at ?? null });
+      } else if ((f.severity ?? "").toUpperCase() === "HIGH") {
+        items.push({ id: f.id, kind: "high_unraised", label, clientId: f.client_id, since: (f as { created_at?: string | null }).created_at ?? null });
+      }
+    }
+    return slaNudges(items, Date.now());
+  }, [findings, queryByFinding]);
 
   const high = findings.filter((f) => (f.severity ?? "").toUpperCase() === "HIGH").length;
 
@@ -120,6 +143,30 @@ export default function ScrutinyOverviewPanel({ findings, rules, queryByFinding,
           </CardContent>
         </Card>
       </div>
+
+      {/* SLA & follow-ups (Ticket 8.2) */}
+      <Card>
+        <CardContent className="p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <Timer size={16} className="text-muted-foreground" />
+            <h3 className="text-sm font-semibold text-foreground">SLA &amp; follow-ups</h3>
+            {nudges.length > 0 && <Badge variant="secondary" className="text-xs">{nudges.length} overdue</Badge>}
+          </div>
+          {nudges.length === 0 ? (
+            <p className="text-xs text-muted-foreground py-4 text-center">Nothing overdue — drafts, client queries and high findings are all within SLA.</p>
+          ) : (
+            <ul className="space-y-1.5">
+              {nudges.map((n) => (
+                <li key={`${n.kind}-${n.id}`} className="flex items-start gap-2 text-sm">
+                  <Badge variant="outline" className={`text-[10px] shrink-0 ${SLA_BADGE[n.level]}`}>{n.level === "escalate" ? "Escalate" : "Overdue"} · {n.ageDays}d</Badge>
+                  <span className="text-foreground">{n.message}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="text-[10px] text-muted-foreground mt-2">Advisory — nudges never block sign-off / UDIN. Defaults: review drafts in 2d, chase clients at 7d, raise high findings within 3d.</p>
+        </CardContent>
+      </Card>
     </div>
   );
 }
