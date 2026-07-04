@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CAFlow Scrutiny — Phase 8 Preview</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#fff; --ink:#1e2430; --muted:#6b7280; --line:#e5e7eb;
+    --primary:#2563eb; --amber:#b45309; --amber-bg:#fffbeb; --green:#15803d; --green-bg:#dcfce7;
+    --red:#b91c1c; --blue:#1d4ed8; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:32px 20px 80px}
+  header.top{display:flex;align-items:center;gap:14px;margin-bottom:8px}
+  .logo{width:44px;height:44px;border-radius:9px;background:linear-gradient(135deg,#155e75,#0891b2);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;letter-spacing:.5px}
+  h1{font-size:24px;margin:0}
+  .sub{color:var(--muted);font-size:14px;margin-top:2px}
+  .banner{margin:18px 0;padding:12px 14px;border:1px solid #fde68a;background:var(--amber-bg);border-radius:10px;font-size:13.5px;color:#7c5b12}
+  .safe{margin:10px 0 22px;padding:10px 14px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:10px;font-size:13px;color:#14532d}
+  h2{font-size:18px;margin:34px 0 12px;padding-bottom:6px;border-bottom:2px solid var(--line)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin:12px 0;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;text-align:center}
+  .stat .n{font-size:22px;font-weight:700}
+  .stat .l{font-size:11px;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px}
+  code,.mono{font-family:var(--mono);font-size:12.5px}
+  .badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;border:1px solid transparent;white-space:nowrap}
+  .b-red{background:#fee2e2;color:var(--red);border-color:#fecaca}
+  .b-amber{background:#fef3c7;color:var(--amber);border-color:#fde68a}
+  .b-green{background:var(--green-bg);color:var(--green);border-color:#bbf7d0}
+  .b-blue{background:#dbeafe;color:var(--blue);border-color:#bfdbfe}
+  .b-out{background:#fff;color:#475569;border-color:#cbd5e1}
+  .mock{border:1px dashed #cbd5e1;border-radius:12px;overflow:hidden;background:#fcfcfd;margin:12px 0}
+  .mock .cap{font-size:11.5px;color:var(--muted);background:#f8fafc;border-bottom:1px dashed #e2e8f0;padding:6px 12px}
+  .mock .body{padding:14px}
+  .pre{white-space:pre-wrap;font-family:var(--mono);font-size:12px;background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:12px;color:#334155}
+  .muted{color:var(--muted)} ul{padding-left:20px} .chk li{margin:6px 0}
+  .foot{margin-top:40px;color:var(--muted);font-size:12px;border-top:1px solid var(--line);padding-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="logo">CG</div>
+    <div>
+      <h1>CAFlow Scrutiny Engine — Phase&nbsp;8 Preview</h1>
+      <div class="sub">Workflow &amp; operationalisation — evidence pack · SLA nudges · rollover · review queue · partner MIS · portal loop · 2026‑07‑04</div>
+    </div>
+  </header>
+
+  <div class="banner">
+    <strong>Illustrative mock-ups, not live screenshots.</strong> Phase 8 is <strong>deterministic</strong> — no AI, no keys, no migration.
+    It operationalises the engine: turns findings into working-paper evidence, follow-up nudges, a firm worklist and a client feedback loop. Gated behind <code>VITE_SCRUTINY_V2</code>.
+  </div>
+
+  <div class="safe">
+    🔒 <strong>Safety:</strong> branch <code>claude/auto-2026-06-21-ledger-scrutiny</code>; nothing pushed to <code>main</code>.
+    Everything here is <strong>advisory</strong> — nudges, evidence and MIS never block sign-off / UDIN (decision #8); the auditor still confirms every close.
+  </div>
+
+  <h2>What Phase 8 delivered</h2>
+  <div class="card">
+    <table>
+      <tr><th style="width:150px">Ticket</th><th>Delivered</th></tr>
+      <tr><td><strong>8.1</strong> Evidence pack</td><td>One downloadable working-paper document (coverage · findings · judgment facts · 3CD mapping · queries · conclusion) for peer review / NFRA.</td></tr>
+      <tr><td><strong>8.2</strong> SLA nudges</td><td>Ages draft reviews, client follow-ups and unraised high findings into an <strong>overdue / escalate</strong> list.</td></tr>
+      <tr><td><strong>8.3</strong> Year-on-year rollover</td><td>Carries forward <strong>standing</strong> facts + related-party nominations from last year; per-year assertions are re-answered.</td></tr>
+      <tr><td><strong>8.4</strong> Review &amp; assignment queue</td><td>Firm worklist — every open finding placed in one maker-checker lane; drafts rolled up per maker.</td></tr>
+      <tr><td><strong>8.5</strong> Partner MIS</td><td>Firm-level dashboard — engagement completion, disposition rate, query throughput, risk concentration.</td></tr>
+      <tr><td><strong>8.6</strong> Client-portal loop</td><td>Client replies in the portal surface back on the finding with a <strong>one-click resolve</strong> (marks the query Clarified).</td></tr>
+    </table>
+    <div class="muted" style="font-size:11px;margin-top:6px">Surfaced in the Overview, Deliverables, Facts and Portfolio tabs.</div>
+  </div>
+
+  <h2>8.1 · Evidence pack (peer review / NFRA)</h2>
+  <div class="mock">
+    <div class="cap">Deliverables tab → Download (.txt)</div>
+    <div class="body">
+      <div class="pre">CAFLOW LEDGER SCRUTINY — EVIDENCE PACK (FY 2024-25)
+
+1. COVERAGE
+   50 of 119 checks auto-verified; 69 advisory (manual review). Coverage never blocks sign-off / UDIN.
+2. FINDINGS
+   16 findings — 9 high, 5 medium, 2 low.
+   • CASH: 6 (4H / 2M / 0L)   • GST: 4 (2H / 1M / 1L)   • TDS: 3 (2H / 1M / 0L)
+3. JUDGMENT FACTS
+   18 of 22 required judgment facts captured.
+4. FORM 3CD MAPPING (read-only — does not write the live Form 3CD)
+   • Clause 21(d) — Amounts inadmissible: 3     • Clause 34 — TDS compliance: 2
+5. CLIENT QUERIES
+   7 findings raised as client queries (maker-checker).
+6. CONCLUSION
+   16 exceptions noted; 9 high-risk require attention. Advisory checks flagged for manual review.</div>
+    </div>
+  </div>
+
+  <h2>8.2 · SLA &amp; follow-ups</h2>
+  <div class="mock">
+    <div class="cap">Overview tab</div>
+    <div class="body">
+      <ul style="list-style:none;padding:0;margin:0">
+        <li style="margin:6px 0"><span class="badge b-red">Escalate · 20d</span> &nbsp;Query "GST reco" sent 20d ago, no client response — follow up.</li>
+        <li style="margin:6px 0"><span class="badge b-amber">Overdue · 3d</span> &nbsp;Draft query "CASH-002" awaiting a checker for 3d — approve or reject.</li>
+        <li style="margin:6px 0"><span class="badge b-amber">Overdue · 4d</span> &nbsp;High finding "TDS-014" open 4d, not yet raised as a client query.</li>
+      </ul>
+      <div class="muted" style="font-size:11px;margin-top:6px">Defaults: review drafts in 2d, chase clients at 7d, raise high findings within 3d — all configurable.</div>
+    </div>
+  </div>
+
+  <h2>8.3 · Year-on-year rollover</h2>
+  <div class="mock">
+    <div class="cap">Facts &amp; Judgment tab</div>
+    <div class="body">
+      <div class="card" style="border-color:#bfdbfe;background:#eff6ff;margin:0">
+        <strong>Carry forward 4 standing facts from 2023-24</strong> <span class="muted">(1 already set this year)</span>
+        <div class="muted" style="font-size:12px;margin:4px 0">Are there any related parties? · Is the client MSME-registered? · Acme Pvt Ltd · Beta LLP</div>
+        <div style="margin-top:6px"><span class="badge b-blue">Carry forward</span> <span class="badge b-out">Dismiss</span></div>
+        <div class="muted" style="font-size:11px;margin-top:6px">Only standing entity attributes carry — every per-year assertion (cash/inventory verified, GST reconciled, MRL, UDIN…) must be re-answered.</div>
+      </div>
+    </div>
+  </div>
+
+  <h2>8.4 · Review &amp; assignment queue</h2>
+  <div class="mock">
+    <div class="cap">Portfolio tab</div>
+    <div class="body">
+      <div style="margin-bottom:8px">
+        <span class="badge b-amber">Awaiting checker: 5</span>
+        <span class="badge b-red">To raise as query: 12</span>
+        <span class="badge b-blue">Awaiting client: 7</span>
+        <span class="badge b-out">To dispose (low): 9</span>
+      </div>
+      <div class="muted" style="font-size:11px;margin-bottom:6px">Awaiting a checker — by maker: 3f9c1a2b… (3) · 7d20e4c1… (2)</div>
+      <table><tr><th>Lane</th><th>Client</th><th>Rule</th><th>Severity</th><th>Blocked on</th></tr>
+        <tr><td><span class="badge b-amber">Awaiting checker</span></td><td>Alpha Pvt Ltd</td><td class="mono">CASH-002</td><td>HIGH</td><td class="muted">checker</td></tr>
+        <tr><td><span class="badge b-red">To raise as query</span></td><td>Beta LLP</td><td class="mono">TDS-014</td><td>HIGH</td><td class="muted">auditor</td></tr>
+        <tr><td><span class="badge b-blue">Awaiting client</span></td><td>Gamma &amp; Co</td><td class="mono">GST-007</td><td>MEDIUM</td><td class="muted">client</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <h2>8.5 · Partner MIS — firm scrutiny book</h2>
+  <div class="mock">
+    <div class="cap">Portfolio tab (top)</div>
+    <div class="body">
+      <div class="grid">
+        <div class="stat"><div class="n">24</div><div class="l">Engagements<br>11 active · 13 clean</div></div>
+        <div class="stat"><div class="n" style="color:var(--red)">8</div><div class="l">Open high<br>engagements</div></div>
+        <div class="stat"><div class="n">64%</div><div class="l">Disposed<br>51 still open</div></div>
+        <div class="stat"><div class="n">142</div><div class="l">Findings<br>12.9/engagement</div></div>
+        <div class="stat"><div class="n" style="color:var(--amber)">5</div><div class="l">Awaiting checker</div></div>
+        <div class="stat"><div class="n" style="color:var(--blue)">7</div><div class="l">Awaiting client</div></div>
+      </div>
+      <div class="muted" style="font-size:11px;margin-top:6px">Risk concentration: CASH (48) · GST (33) · TDS (21)</div>
+    </div>
+  </div>
+
+  <h2>8.6 · Client responses — portal loop</h2>
+  <div class="mock">
+    <div class="cap">Overview tab</div>
+    <div class="body">
+      <div class="card" style="margin:0 0 8px">
+        <div class="mono" style="font-size:11px;color:var(--muted)">CASH-002</div>
+        <div>Cash payment ₹58,000 &gt; ₹10,000 limit (s.40A(3))</div>
+        <div class="muted" style="font-size:12px;background:#f8fafc;border-radius:6px;padding:4px 8px;margin-top:4px"><strong style="color:var(--ink)">Client:</strong> Split across two bills, each under the limit — invoices attached.</div>
+        <div style="margin-top:6px"><span class="badge b-green">✓ Resolve</span> <span class="muted" style="font-size:11px">→ marks the query <em>Clarified</em></span></div>
+      </div>
+      <div class="muted" style="font-size:11px">The client answered in the portal (status → Reply Received). The auditor reviews the reply, then resolves — you stay in control of closing.</div>
+    </div>
+  </div>
+
+  <h2>Acceptance — all green</h2>
+  <div class="grid">
+    <div class="stat"><div class="n" style="color:var(--green)">✓</div><div class="l"><code>npm run build</code> · 0 TS errors</div></div>
+    <div class="stat"><div class="n">213</div><div class="l">scrutiny unit tests</div></div>
+    <div class="stat"><div class="n">6</div><div class="l">tickets (branch only)</div></div>
+    <div class="stat"><div class="n">0</div><div class="l">pushes to main</div></div>
+  </div>
+  <div class="card mono" style="font-size:12px">
+    acae8ffd — 8.1 evidence pack / NFRA export<br>
+    d1cabd63 — 8.2 SLA nudges / alerts<br>
+    e6dd7ff4 — 8.3 year-on-year rollover<br>
+    09dd0775 — 8.4 review &amp; assignment queue<br>
+    421d0122 — 8.5 partner MIS<br>
+    21311f58 — 8.6 client-portal query loop close
+  </div>
+
+  <h2>No deploy needed</h2>
+  <div class="card"><ul class="chk">
+    <li>Phase 8 is <strong>deterministic</strong> — no gateway, keys or migration. It populates once the v2 flag is on.</li>
+    <li>The portal reply path (client answers → <em>Reply Received</em> + <code>client_reply</code>) was already live; 8.6 only adds the auditor-side close.</li>
+    <li>Firm-wide reads (queue, MIS) are RLS-scoped and flag their fetch caps (1,000 findings · 2,000 queries).</li>
+  </ul></div>
+
+  <h2>What the CA should review</h2>
+  <div class="card"><ul class="chk">
+    <li><strong>SLA thresholds</strong> — 2/5d draft review, 7/14d client chase, 3/7d unraised high — right for your practice?</li>
+    <li><strong>Rollover scope</strong> — only rp_exist, MSME status/Udyam, MSME-vendor tagging, director loans + RP names carry. Anything else standing enough to carry?</li>
+    <li><strong>Queue lanes</strong> — is "low + no query → dispose" the right catch-all, or should low findings also prompt a query?</li>
+    <li><strong>Auto-close</strong> — today the client reply <em>suggests</em> a resolve (one click, auditor confirms). Do you ever want it fully automatic?</li>
+  </ul></div>
+
+  <div class="foot">
+    CAFlow Scrutiny Engine · Phase 8 (workflow &amp; operationalisation) · deterministic, no deploy required.
+    Phases 0–8 complete on the branch. Standing dev-only deploy steps remain (deploy <code>claude-gateway</code>; apply <code>scrutiny_facts</code> migration) for the AI-assisted Phase 2–4 features.
+  </div>
+
+</div>
+</body>
+</html>
