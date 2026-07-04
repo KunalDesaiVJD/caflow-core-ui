@@ -25,6 +25,7 @@ import ScrutinyCoveragePanel from "@/components/scrutiny-v2/ScrutinyCoveragePane
 import ScrutinyFactsPanel from "@/components/scrutiny-v2/ScrutinyFactsPanel";
 import ScrutinyForensicsPanel from "@/components/scrutiny-v2/ScrutinyForensicsPanel";
 import ScrutinyConnectorsPanel from "@/components/scrutiny-v2/ScrutinyConnectorsPanel";
+import ScrutinyOverviewPanel from "@/components/scrutiny-v2/ScrutinyOverviewPanel";
 import {
   buildDraftQuery, canReviewQuery, SCRUTINY_QUERY_SOURCE,
   QUERY_STATUS_OPEN, QUERY_STATUS_REJECTED,
@@ -72,7 +73,7 @@ export default function AuditScrutiny() {
   // Scrutiny-raised queries (maker-checker): finding_id -> { id, status }
   const [scrutinyQueries, setScrutinyQueries] = useState<{ id: string; source_ref_id: string | null; status: string }[]>([]);
   const [rejectTarget, setRejectTarget] = useState<{ finding: Finding; queryId: string } | null>(null);
-  const [v2Tab, setV2Tab] = useState<"templates" | "ledger" | "facts" | "forensics" | "connectors">("templates");
+  const [v2Tab, setV2Tab] = useState<"overview" | "templates" | "ledger" | "facts" | "forensics" | "connectors">("overview");
   // AI narration classification (Ticket 2.2): finding_id -> suggested category / 3CD clause
   const [narrationClasses, setNarrationClasses] = useState<Record<string, NarrationClass>>({});
   const [classifying, setClassifying] = useState(false);
@@ -621,6 +622,13 @@ export default function AuditScrutiny() {
           <div className="inline-flex rounded-md border overflow-hidden">
             <button
               type="button"
+              onClick={() => setV2Tab("overview")}
+              className={`px-3 py-1.5 text-xs font-medium border-r transition-colors ${v2Tab === "overview" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted/60"}`}
+            >
+              Overview
+            </button>
+            <button
+              type="button"
               onClick={() => setV2Tab("templates")}
               className={`px-3 py-1.5 text-xs font-medium border-r transition-colors ${v2Tab === "templates" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted/60"}`}
             >
@@ -655,7 +663,9 @@ export default function AuditScrutiny() {
               Connectors
             </button>
           </div>
-          {v2Tab === "facts"
+          {v2Tab === "overview"
+            ? <ScrutinyOverviewPanel findings={findings} rules={rules} queryByFinding={queryByFinding} factGate={factGate} priorExclusionCount={Object.keys(priorExclusions).length} />
+            : v2Tab === "facts"
             ? <ScrutinyFactsPanel clientId={clientId} financialYear={fy} userId={user?.id ?? null} />
             : v2Tab === "forensics"
               ? <ScrutinyForensicsPanel clientId={clientId} financialYear={fy} />
