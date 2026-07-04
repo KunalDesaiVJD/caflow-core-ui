@@ -45,6 +45,7 @@ interface Props {
   onRejectQuery: (f: Finding, queryId: string) => void;
   narrationClasses?: Record<string, NarrationClass>;
   onApplyClause?: (id: string, clause: string) => void;
+  priorExclusions?: Record<string, boolean>;
   severityBadge: (s: string | null) => ReactNode;
   statusBadge: (s: string | null) => ReactNode;
 }
@@ -59,7 +60,7 @@ function toggle(set: Set<string>, key: string): Set<string> {
 export default function ScrutinyTemplatesView({
   rules, findings, loading, queryByFinding, currentUserId,
   onDetails, onResolve, onWaive, onLink, onRaiseQuery, onApproveQuery, onRejectQuery,
-  narrationClasses, onApplyClause,
+  narrationClasses, onApplyClause, priorExclusions,
   severityBadge, statusBadge,
 }: Props) {
   const [catFilter, setCatFilter] = useState("All");
@@ -144,6 +145,7 @@ export default function ScrutinyTemplatesView({
               onRejectQuery={onRejectQuery}
               narrationClasses={narrationClasses}
               onApplyClause={onApplyClause}
+              priorExclusions={priorExclusions}
               severityBadge={severityBadge}
               statusBadge={statusBadge}
             />

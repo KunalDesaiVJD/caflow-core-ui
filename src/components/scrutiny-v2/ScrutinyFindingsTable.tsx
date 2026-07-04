@@ -29,6 +29,8 @@ export interface ScrutinyFindingsTableProps {
   /** AI-suggested 3CD clause / category per finding (Ticket 2.2); optional */
   narrationClasses?: Record<string, NarrationClass>;
   onApplyClause?: (id: string, clause: string) => void;
+  /** finding_id -> true when it recurs from a prior-period waiver (Ticket 2.5); optional */
+  priorExclusions?: Record<string, boolean>;
   severityBadge: (s: string | null) => ReactNode;
   statusBadge: (s: string | null) => ReactNode;
 }
@@ -36,7 +38,7 @@ export interface ScrutinyFindingsTableProps {
 export default function ScrutinyFindingsTable({
   findings, queryByFinding, currentUserId,
   onDetails, onResolve, onWaive, onLink, onRaiseQuery, onApproveQuery, onRejectQuery,
-  narrationClasses, onApplyClause,
+  narrationClasses, onApplyClause, priorExclusions,
   severityBadge, statusBadge,
 }: ScrutinyFindingsTableProps) {
   // Maker-checker cell: raise (maker) → draft → approve/reject (checker, must differ from maker)
@@ -84,7 +86,16 @@ export default function ScrutinyFindingsTable({
         <TableBody>
           {findings.map((f) => (
             <TableRow key={f.id}>
-              <TableCell className="max-w-[320px] truncate text-sm">{f.flag_message || "—"}</TableCell>
+              <TableCell className="max-w-[320px] text-sm">
+                <div className="flex items-center gap-1.5">
+                  <span className="truncate">{f.flag_message || "—"}</span>
+                  {priorExclusions?.[f.id] && (
+                    <Badge variant="outline" className="shrink-0 gap-1 text-[10px] text-muted-foreground" title="Matches a finding waived in a prior period">
+                      <Clock size={10} />Seen before
+                    </Badge>
+                  )}
+                </div>
+              </TableCell>
               <TableCell>{severityBadge(f.severity)}</TableCell>
               <TableCell>{statusBadge(f.status)}</TableCell>
               <TableCell className="text-xs">

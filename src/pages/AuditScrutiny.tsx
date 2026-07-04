@@ -28,6 +28,7 @@ import {
 import { draftQueryWithAI } from "@/lib/scrutiny/aiQueryDraft";
 import { classifyFindingsWithAI, type NarrationClass } from "@/lib/scrutiny/aiNarration";
 import { identifyTdsSectionWithAI, type TdsSection } from "@/lib/scrutiny/aiTdsSection";
+import { matchExclusions, buildExclusionSet, type PriorWaived } from "@/lib/scrutiny/exclusionLearning";
 
 const CATEGORIES = ["All", "TDS", "GST", "Cash Payments", "Loans", "Prior Period", "Depreciation", "Deferred Tax", "Bank Recon", "Narration AI"];
 const FY_OPTIONS = ["2024-25", "2023-24", "2022-23", "2021-22"];
@@ -70,6 +71,8 @@ export default function AuditScrutiny() {
   // AI TDS-section identification (Ticket 2.3) — per finding, shown in the detail sheet
   const [tdsSection, setTdsSection] = useState<TdsSection | null>(null);
   const [tdsLoading, setTdsLoading] = useState(false);
+  // Exclusion learning (Ticket 2.5): prior-period waivers for this client
+  const [priorWaived, setPriorWaived] = useState<PriorWaived[]>([]);
 
   // Filters — default FY from engagement context
   const [fy, setFy] = useState(contextFY || "2024-25");
@@ -145,6 +148,16 @@ export default function AuditScrutiny() {
   };
   useEffect(() => { fetchScrutinyQueries(); }, [v2, clientId, fy]);
 
+  // Prior-period waivers for this client (all FYs) — exclusion learning source
+  useEffect(() => {
+    if (!v2 || !clientId) return;
+    (supabase.from as any)("scrutiny_findings")
+      .select("rule_id, narration, financial_year")
+      .eq("client_id", clientId)
+      .eq("status", "waived")
+      .then(({ data }: any) => { if (Array.isArray(data)) setPriorWaived(data); });
+  }, [v2, clientId]);
+
   // finding_id -> its linked query { id, status } (via the finding's linked_query_id)
   const queryByFinding = useMemo(() => {
     const byId = new Map(scrutinyQueries.map(q => [q.id, q]));
@@ -157,6 +170,12 @@ export default function AuditScrutiny() {
     }
     return m;
   }, [findings, scrutinyQueries]);
+
+  // finding_id -> true when it recurs from a prior-period waiver (exclusion learning)
+  const priorExclusions = useMemo(
+    () => matchExclusions(findings, buildExclusionSet(priorWaived, fy)),
+    [findings, priorWaived, fy],
+  );
 
   // Fetch assigned audit firm for this client + FY
   useEffect(() => {
@@ -403,6 +422,7 @@ export default function AuditScrutiny() {
     onRejectQuery: (finding: Finding, queryId: string) => setRejectTarget({ finding, queryId }),
     narrationClasses,
     onApplyClause: handleApplyClause,
+    priorExclusions,
     severityBadge,
     statusBadge,
   };

@@ -34,6 +34,7 @@ interface Props {
   onRejectQuery: (f: Finding, queryId: string) => void;
   narrationClasses?: Record<string, NarrationClass>;
   onApplyClause?: (id: string, clause: string) => void;
+  priorExclusions?: Record<string, boolean>;
   severityBadge: (s: string | null) => ReactNode;
   statusBadge: (s: string | null) => ReactNode;
 }
@@ -117,6 +118,7 @@ export default function ScrutinyWorkpaperView(props: Props) {
                   onRejectQuery={props.onRejectQuery}
                   narrationClasses={props.narrationClasses}
                   onApplyClause={props.onApplyClause}
+                  priorExclusions={props.priorExclusions}
                   severityBadge={props.severityBadge}
                   statusBadge={props.statusBadge}
                 />
