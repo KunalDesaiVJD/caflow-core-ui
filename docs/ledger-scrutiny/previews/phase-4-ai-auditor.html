@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CAFlow Scrutiny — Phase 4 Preview</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#fff; --ink:#1e2430; --muted:#6b7280; --line:#e5e7eb;
+    --primary:#2563eb; --amber:#b45309; --amber-bg:#fffbeb; --green:#15803d; --green-bg:#dcfce7;
+    --red:#b91c1c; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:32px 20px 80px}
+  header.top{display:flex;align-items:center;gap:14px;margin-bottom:8px}
+  .logo{width:44px;height:44px;border-radius:9px;background:linear-gradient(135deg,#0e7490,#06b6d4);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;letter-spacing:.5px}
+  h1{font-size:24px;margin:0}
+  .sub{color:var(--muted);font-size:14px;margin-top:2px}
+  .banner{margin:18px 0;padding:12px 14px;border:1px solid #fde68a;background:var(--amber-bg);border-radius:10px;font-size:13.5px;color:#7c5b12}
+  .safe{margin:10px 0 22px;padding:10px 14px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:10px;font-size:13px;color:#14532d}
+  h2{font-size:18px;margin:34px 0 12px;padding-bottom:6px;border-bottom:2px solid var(--line)}
+  h3{font-size:14px;margin:22px 0 8px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin:12px 0;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center}
+  .stat .n{font-size:26px;font-weight:700}
+  .stat .l{font-size:12px;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px}
+  code,.mono{font-family:var(--mono);font-size:12.5px}
+  .mock{border:1px dashed #cbd5e1;border-radius:12px;overflow:hidden;background:#fcfcfd}
+  .mock .cap{font-size:11.5px;color:var(--muted);background:#f8fafc;border-bottom:1px dashed #e2e8f0;padding:6px 12px}
+  .mock .body{padding:14px}
+  .bar{display:flex;gap:8px;align-items:center}
+  .input{flex:1;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;color:var(--muted);background:#fff}
+  .btn{background:var(--primary);color:#fff;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600}
+  .chip{display:inline-block;font-size:11px;border:1px solid var(--line);border-radius:999px;padding:3px 10px;color:var(--muted);margin:6px 4px 0 0}
+  .answer{margin-top:10px;border:1px solid var(--line);background:#f8fafc;border-radius:8px;padding:12px;font-size:13px;white-space:pre-wrap}
+  .muted{color:var(--muted)} ul{padding-left:20px} .chk li{margin:6px 0}
+  .kbd{font-family:var(--mono);background:#eef2ff;border:1px solid #c7d2fe;border-radius:5px;padding:1px 6px;font-size:12px}
+  .foot{margin-top:40px;color:var(--muted);font-size:12px;border-top:1px solid var(--line);padding-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="logo">CG</div>
+    <div>
+      <h1>CAFlow Scrutiny Engine — Phase&nbsp;4 Preview</h1>
+      <div class="sub">Agentic AI auditor — NL command bar + context-aware quick prompts · 2026‑07‑04</div>
+    </div>
+  </header>
+
+  <div class="banner">
+    <strong>Illustrative mock-up, not a live screenshot.</strong> The AI investigator calls the
+    <code>claude-gateway</code> edge function and is gated behind <code>VITE_SCRUTINY_V2</code>. Until the gateway is
+    deployed to the dev project with an <code>ANTHROPIC_API_KEY</code>, the command bar shows a graceful
+    "investigator unavailable" note — the rest of the screen is unaffected.
+  </div>
+
+  <div class="safe">
+    🔒 <strong>Safety:</strong> branch <code>claude/auto-2026-06-21-ledger-scrutiny</code>; nothing pushed to <code>main</code>.
+    The investigator is <strong>read-only by construction</strong> — the AI reasons only over a small snapshot the page
+    sends it; it has <strong>no database access and cannot write anything</strong>.
+  </div>
+
+  <h2>What Phase 4 delivered</h2>
+  <div class="card">
+    <table>
+      <tr><th style="width:150px">Ticket</th><th>Delivered</th></tr>
+      <tr><td><strong>4.1</strong> NL command bar</td><td>Ask the audit in plain English; the AI answers over a <strong>read-only snapshot</strong> of the current findings, coverage, judgment facts and prior-year recurrences.</td></tr>
+      <tr><td><strong>4.2</strong> Quick prompts</td><td><strong>Context-aware</strong> one-click starter questions — only the relevant ones appear (e.g. a TDS prompt only when there are TDS findings).</td></tr>
+    </table>
+  </div>
+
+  <h2>The "Ask the AI auditor" bar</h2>
+  <div class="mock">
+    <div class="cap">Top of the Scrutiny Engine (Templates / Ledger / Facts)</div>
+    <div class="body">
+      <div class="bar">
+        <span>✨</span>
+        <span class="input">Which ledgers carry the highest-risk findings and need queries?</span>
+        <span class="btn">Ask</span>
+      </div>
+      <div>
+        <span class="chip">Top risks</span>
+        <span class="chip">Ledgers to query</span>
+        <span class="chip">TDS exposure</span>
+        <span class="chip">Missing facts</span>
+        <span class="chip">Recurring items</span>
+        <span class="chip">Partner summary</span>
+      </div>
+      <div class="answer">Cash-in-Hand has the most exposure — 5 high-risk findings (40A(3) cash payments and a 269ST receipt). Raise queries there first. Sundry Creditors has 2 high / 2 medium (MSME 45-day dues). Note: "Bank balances confirmed (BRS)" is still a missing required judgment fact — confirm before sign-off.
+
+(Grounded only in the current snapshot; no figures are invented.)</div>
+      <div class="muted" style="font-size:12px;margin-top:8px">The chips shown adapt to the data — "TDS exposure" only appears when there are TDS findings, "Missing facts" only when required facts are outstanding, "Recurring items" only when prior-year waivers recur.</div>
+    </div>
+  </div>
+
+  <h2>Acceptance — all green</h2>
+  <div class="grid">
+    <div class="stat"><div class="n" style="color:var(--green)">✓</div><div class="l"><code>npm run build</code> · 0 TS errors</div></div>
+    <div class="stat"><div class="n">120</div><div class="l">scrutiny unit tests passing</div></div>
+    <div class="stat"><div class="n">2</div><div class="l">tickets committed (branch only)</div></div>
+    <div class="stat"><div class="n">0</div><div class="l">pushes to main</div></div>
+  </div>
+  <div class="card mono" style="font-size:12px">
+    5067ed11 — 4.1 NL command bar + grounded read-only investigator<br>
+    ad7f8c5f — 4.2 context-aware investigator quick prompts
+  </div>
+
+  <h2>⚙️ Deploy (dev only)</h2>
+  <div class="card">
+    <ul class="chk">
+      <li>Same one step as Phase 2: <span class="kbd">npx supabase functions deploy claude-gateway</span> with <code>ANTHROPIC_API_KEY</code> on the dev project → the investigator answers for real. Never prod.</li>
+      <li>No migration, no new keys for Phase 4.</li>
+    </ul>
+  </div>
+
+  <h2>Deferred — for your decision</h2>
+  <div class="card">
+    <p style="font-size:13.5px;margin:0 0 8px">
+      The handoff's Phase 4 also mentions a <strong>multi-step agentic investigator</strong> — where the AI runs several
+      read-only look-ups in sequence to drill down. I built the <strong>grounded single-round</strong> version (4.1) first
+      because it's simpler, safer, and — for this data size — nearly as useful.
+    </p>
+    <p style="font-size:13.5px;margin:0" class="muted">
+      <strong>My recommendation:</strong> keep the multi-step loop deferred. It adds real complexity and more AI calls
+      (the gateway caps 20 calls/hour/user), for marginal benefit over the current snapshot approach on a book this size.
+      If you want it, I'll scope it in detail first — say the word.
+    </p>
+  </div>
+
+  <h2>What the CA should review</h2>
+  <div class="card">
+    <ul class="chk">
+      <li><strong>Answer quality/tone</strong> — once deployed, does the investigator answer usefully and stay grounded (no invented numbers)?</li>
+      <li><strong>Quick prompts</strong> — are these the right starter questions? Any to add/remove?</li>
+      <li><strong>Multi-step loop</strong> — defer (my recommendation) or build it next?</li>
+    </ul>
+  </div>
+
+  <div class="foot">
+    CAFlow Scrutiny Engine · Phase 4 (agentic AI auditor — command bar + quick prompts) · authored on the branch; deploy the gateway to dev to activate.
+    Phases 0–4 core complete. Remaining backlog (senior-owned): Phase 5 forensics + connectors · Phase 6 ultra command centre · Phases 7–8 portfolio/workflow.
+  </div>
+
+</div>
+</body>
+</html>
