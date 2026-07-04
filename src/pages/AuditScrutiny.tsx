@@ -680,7 +680,7 @@ export default function AuditScrutiny() {
               : v2Tab === "connectors"
                 ? <ScrutinyConnectorsPanel clientId={clientId} financialYear={fy} />
                 : v2Tab === "deliverables"
-                ? <ScrutinyDeliverablesPanel findings={findings} rules={rules} />
+                ? <ScrutinyDeliverablesPanel findings={findings} rules={rules} financialYear={fy} factGate={factGate} />
                 : v2Tab === "templates"
                   ? <ScrutinyTemplatesView rules={rules} {...v2Shared} />
                   : <ScrutinyWorkpaperView {...v2Shared} />}

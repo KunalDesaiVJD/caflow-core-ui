@@ -10,16 +10,21 @@ import { useMemo, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { FileText, Copy, Check, Info } from "lucide-react";
+import { FileText, Copy, Check, Info, Download } from "lucide-react";
 import { type Finding, type RuleTemplate } from "@/lib/scrutiny/scrutinyUi";
 import { clauseFill, clause3cdExportText, type ClauseContext } from "@/lib/scrutiny/clause3cd";
+import { workpaperText, queryLetterText } from "@/lib/scrutiny/deliverables";
+import { computeCoverage, groupByTemplate } from "@/lib/scrutiny/coverage";
+import { type FactGate } from "@/lib/scrutiny/facts";
 
 interface Props {
   findings: Finding[];
   rules: RuleTemplate[];
+  financialYear: string;
+  factGate: FactGate;
 }
 
-export default function ScrutinyDeliverablesPanel({ findings, rules }: Props) {
+export default function ScrutinyDeliverablesPanel({ findings, rules, financialYear, factGate }: Props) {
   const [copied, setCopied] = useState(false);
 
   const rulesById = useMemo(() => Object.fromEntries(rules.map((r) => [r.rule_id, r])), [rules]);
@@ -40,6 +45,28 @@ export default function ScrutinyDeliverablesPanel({ findings, rules }: Props) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch { /* clipboard unavailable — silently ignore */ }
+  };
+
+  // Ticket 6.3 — auto-drafted deliverables
+  const coverage = useMemo(() => computeCoverage(groupByTemplate(rules, findings)), [rules, findings]);
+  const raised = useMemo(() => findings.filter((f) => f.linked_query_id), [findings]);
+  const workpaper = useMemo(() => workpaperText({
+    financialYear, totalRules: coverage.total, autoChecked: coverage.auto, findings,
+    requiredCaptured: factGate.requiredCaptured, requiredTotal: factGate.requiredTotal,
+    missingFacts: factGate.missing.map((m) => m.label), raisedCount: raised.length,
+  }), [financialYear, coverage, findings, factGate, raised]);
+  const letter = useMemo(
+    () => queryLetterText(raised.map((f) => ({ label: f.rule_id ?? "", text: f.flag_message ?? "" })), financialYear),
+    [raised, financialYear],
+  );
+
+  const download = (name: string, text: string) => {
+    try {
+      const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
+      const a = document.createElement("a");
+      a.href = url; a.download = name; a.click();
+      URL.revokeObjectURL(url);
+    } catch { /* download unavailable */ }
   };
 
   return (
@@ -81,6 +108,27 @@ export default function ScrutinyDeliverablesPanel({ findings, rules }: Props) {
             ))}
           </div>
         )}
+      </div>
+
+      {/* Working-paper summary (Ticket 6.3) */}
+      <div>
+        <div className="flex items-center gap-2 mb-2">
+          <FileText size={16} className="text-muted-foreground" />
+          <h3 className="text-sm font-semibold text-foreground">Working-paper summary</h3>
+          <Button size="sm" variant="outline" onClick={() => download(`scrutiny-workpaper-${financialYear}.txt`, workpaper)} className="ml-auto"><Download className="h-4 w-4 mr-1" />Download</Button>
+        </div>
+        <pre className="rounded-md border bg-muted/20 p-3 text-xs whitespace-pre-wrap max-h-72 overflow-auto">{workpaper}</pre>
+      </div>
+
+      {/* Client query letter (Ticket 6.3) */}
+      <div>
+        <div className="flex items-center gap-2 mb-2">
+          <FileText size={16} className="text-muted-foreground" />
+          <h3 className="text-sm font-semibold text-foreground">Client query letter</h3>
+          <Badge variant="secondary" className="text-xs">{raised.length} quer{raised.length !== 1 ? "ies" : "y"}</Badge>
+          <Button size="sm" variant="outline" onClick={() => download(`client-queries-${financialYear}.txt`, letter)} className="ml-auto"><Download className="h-4 w-4 mr-1" />Download</Button>
+        </div>
+        <pre className="rounded-md border bg-muted/20 p-3 text-xs whitespace-pre-wrap max-h-72 overflow-auto">{letter}</pre>
       </div>
     </div>
   );
