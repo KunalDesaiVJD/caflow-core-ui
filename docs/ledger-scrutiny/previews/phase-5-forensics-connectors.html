@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CAFlow Scrutiny — Phase 5 Preview</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#fff; --ink:#1e2430; --muted:#6b7280; --line:#e5e7eb;
+    --primary:#2563eb; --amber:#b45309; --amber-bg:#fffbeb; --green:#15803d; --green-bg:#dcfce7;
+    --red:#b91c1c; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:32px 20px 80px}
+  header.top{display:flex;align-items:center;gap:14px;margin-bottom:8px}
+  .logo{width:44px;height:44px;border-radius:9px;background:linear-gradient(135deg,#9a3412,#f97316);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;letter-spacing:.5px}
+  h1{font-size:24px;margin:0}
+  .sub{color:var(--muted);font-size:14px;margin-top:2px}
+  .banner{margin:18px 0;padding:12px 14px;border:1px solid #fde68a;background:var(--amber-bg);border-radius:10px;font-size:13.5px;color:#7c5b12}
+  .safe{margin:10px 0 22px;padding:10px 14px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:10px;font-size:13px;color:#14532d}
+  h2{font-size:18px;margin:34px 0 12px;padding-bottom:6px;border-bottom:2px solid var(--line)}
+  h3{font-size:14px;margin:22px 0 8px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin:12px 0;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center}
+  .stat .n{font-size:26px;font-weight:700}
+  .stat .l{font-size:12px;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px}
+  code,.mono{font-family:var(--mono);font-size:12.5px}
+  .badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;border:1px solid transparent;white-space:nowrap}
+  .b-red{background:#fee2e2;color:var(--red);border-color:#fecaca}
+  .b-amber{background:#fef3c7;color:var(--amber);border-color:#fde68a}
+  .b-green{background:var(--green-bg);color:var(--green);border-color:#bbf7d0}
+  .b-out{background:#fff;color:#475569;border-color:#cbd5e1}
+  .mock{border:1px dashed #cbd5e1;border-radius:12px;overflow:hidden;background:#fcfcfd}
+  .mock .cap{font-size:11.5px;color:var(--muted);background:#f8fafc;border-bottom:1px dashed #e2e8f0;padding:6px 12px}
+  .mock .body{padding:14px}
+  .bench{display:flex;align-items:center;gap:8px;font-size:11px;padding:2px 0}
+  .bar{flex:1;height:10px;background:#eef1f5;border-radius:4px;position:relative}
+  .bar .obs{position:absolute;inset-y:0;left:0;height:10px;background:#93c5fd;border-radius:4px}
+  .bar .exp{position:absolute;top:-1px;width:2px;height:12px;background:#334155}
+  .muted{color:var(--muted)} ul{padding-left:20px} .chk li{margin:6px 0}
+  .kbd{font-family:var(--mono);background:#eef2ff;border:1px solid #c7d2fe;border-radius:5px;padding:1px 6px;font-size:12px}
+  .foot{margin-top:40px;color:var(--muted);font-size:12px;border-top:1px solid var(--line);padding-top:14px}
+  .pill-tabs{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;font-size:11px;flex-wrap:wrap}
+  .pill-tabs span{padding:5px 9px}
+  .pill-tabs .on{background:var(--primary);color:#fff}
+  .pill-tabs .off2{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="logo">CG</div>
+    <div>
+      <h1>CAFlow Scrutiny Engine — Phase&nbsp;5 Preview</h1>
+      <div class="sub">Forensics + connectors — Benford · duplicates · money-flow · GST-2B/26AS/bank reconcile · 2026‑07‑04</div>
+    </div>
+  </header>
+
+  <div class="banner">
+    <strong>Illustrative mock-ups, not live screenshots.</strong> All of Phase 5 is <strong>deterministic</strong> — no AI, no API keys.
+    Forensics/money-flow read the voucher snapshot; connectors reconcile a file you upload <strong>in your browser</strong> (nothing stored).
+    Gated behind <code>VITE_SCRUTINY_V2</code>.
+  </div>
+
+  <div class="safe">
+    🔒 <strong>Safety:</strong> branch <code>claude/auto-2026-06-21-ledger-scrutiny</code>; nothing pushed to <code>main</code>.
+    No migration, no persistence — the connectors run entirely in-session. Everything is advisory.
+  </div>
+
+  <h2>What Phase 5 delivered</h2>
+  <div class="card">
+    <table>
+      <tr><th style="width:150px">Ticket</th><th>Delivered</th></tr>
+      <tr><td><strong>5.1</strong> Forensics</td><td><strong>Benford's Law</strong> (first-digit distribution + Nigrini MAD verdict) and <strong>duplicate-payment</strong> detection (same amount + date + party).</td></tr>
+      <tr><td><strong>5.2</strong> Money-flow</td><td><strong>Top counterparties</strong> by value with Dr/Cr split and net (the readable core of a money-flow graph).</td></tr>
+      <tr><td><strong>5.3</strong> Connectors</td><td>Upload <strong>GST-2B / 26AS / bank</strong> (CSV/Excel) → reconcile against the books → matched / in-file-not-booked / in-books-not-in-file.</td></tr>
+    </table>
+    <div style="margin-top:10px" class="pill-tabs"><span class="off2">By Template</span><span class="off2">By Ledger</span><span class="off2">Facts</span><span class="on">Forensics</span><span class="on">Connectors</span></div>
+    <div class="muted" style="font-size:11px;margin-top:4px">Two new v2 sub-tabs.</div>
+  </div>
+
+  <h2>5.1 · Benford's Law + duplicates</h2>
+  <div class="mock">
+    <div class="cap">Forensics tab</div>
+    <div class="body">
+      <div style="margin-bottom:10px"><strong style="font-size:13px">First-digit distribution</strong> &nbsp;<span class="badge b-amber">Marginal — review</span> <span class="muted" style="font-size:11px">4,120 amounts · MAD 0.0131</span></div>
+      <div class="bench"><span class="mono" style="width:10px">1</span><span class="bar"><span class="obs" style="width:82%"></span><span class="exp" style="left:100%"></span></span><span style="width:40px;text-align:right">32.4%</span></div>
+      <div class="bench"><span class="mono" style="width:10px">2</span><span class="bar"><span class="obs" style="width:52%"></span><span class="exp" style="left:58%"></span></span><span style="width:40px;text-align:right">15.9%</span></div>
+      <div class="bench"><span class="mono" style="width:10px">3</span><span class="bar"><span class="obs" style="width:38%"></span><span class="exp" style="left:41%"></span></span><span style="width:40px;text-align:right">12.1%</span></div>
+      <div class="muted" style="font-size:11px">bar = observed · line = expected · large deviations flagged in red</div>
+      <div style="margin-top:14px"><strong style="font-size:13px">Possible duplicate payments</strong> <span class="badge b-red">3 groups</span></div>
+      <table style="margin-top:6px"><tr><th>Party</th><th>Date</th><th style="text-align:right">Amount</th><th style="text-align:right">Repeats</th></tr>
+        <tr><td>Ramesh Transport</td><td>2024-08-12</td><td style="text-align:right">₹45,000</td><td style="text-align:right"><span class="badge b-red">×2</span></td></tr>
+        <tr><td>City Freight</td><td>2024-09-03</td><td style="text-align:right">₹38,500</td><td style="text-align:right"><span class="badge b-red">×2</span></td></tr>
+      </table>
+    </div>
+  </div>
+
+  <h2>5.2 · Money flow — top counterparties</h2>
+  <div class="mock">
+    <div class="body">
+      <table><tr><th>Counterparty</th><th style="text-align:right">Txns</th><th style="text-align:right">Total</th><th style="text-align:right">Dr</th><th style="text-align:right">Cr</th><th style="text-align:right">Net</th></tr>
+        <tr><td>ABC Traders</td><td style="text-align:right">42</td><td style="text-align:right">₹18,40,000</td><td style="text-align:right" class="muted">₹12,00,000</td><td style="text-align:right" class="muted">₹6,40,000</td><td style="text-align:right;color:var(--red)">−₹5,60,000</td></tr>
+        <tr><td>XYZ Sales</td><td style="text-align:right">31</td><td style="text-align:right">₹9,10,000</td><td style="text-align:right" class="muted">₹80,000</td><td style="text-align:right" class="muted">₹8,30,000</td><td style="text-align:right;color:var(--green)">+₹7,50,000</td></tr>
+      </table>
+      <div class="muted" style="font-size:11px;margin-top:4px">Net = Cr − Dr (positive leans to receipts). Full ledger↔party edge list is computed; graph viz deferred.</div>
+    </div>
+  </div>
+
+  <h2>5.3 · Manual-upload reconciliation</h2>
+  <div class="mock">
+    <div class="cap">Connectors tab</div>
+    <div class="body">
+      <div class="pill-tabs" style="margin-bottom:8px"><span class="off2">GST-2B</span><span class="off2">Form 26AS</span><span class="on">Bank statement</span></div>
+      <span class="badge b-out">⤒ Choose file</span> <span class="muted" style="font-size:11px">hdfc-may2024.csv</span>
+      <div class="grid" style="margin-top:12px">
+        <div class="stat"><div class="n" style="color:var(--green)">128</div><div class="l">Matched · ₹42,10,000</div></div>
+        <div class="stat"><div class="n" style="color:var(--amber)">6</div><div class="l">In file, not booked</div></div>
+        <div class="stat"><div class="n">4</div><div class="l">In books, not in file</div></div>
+      </div>
+      <div class="muted" style="font-size:11px;margin-top:8px">v1 matches by amount (a first-pass check). GSTIN/TAN/date-tight matching is a refinement.</div>
+    </div>
+  </div>
+
+  <h2>Acceptance — all green</h2>
+  <div class="grid">
+    <div class="stat"><div class="n" style="color:var(--green)">✓</div><div class="l"><code>npm run build</code> · 0 TS errors</div></div>
+    <div class="stat"><div class="n">138</div><div class="l">scrutiny unit tests passing</div></div>
+    <div class="stat"><div class="n">3</div><div class="l">tickets committed (branch only)</div></div>
+    <div class="stat"><div class="n">0</div><div class="l">pushes to main</div></div>
+  </div>
+  <div class="card mono" style="font-size:12px">
+    89f9df37 — 5.1 forensics (Benford + duplicates)<br>
+    80182e14 — 5.2 money-flow summary<br>
+    f404c5b6 — 5.3 manual-upload connectors (GST-2B/26AS/bank)
+  </div>
+
+  <h2>No deploy needed</h2>
+  <div class="card">
+    <ul class="chk">
+      <li>Phase 5 is <strong>deterministic</strong> — no gateway, no API keys, no migration. It works as soon as the v2 flag is on and a client has a trial-balance snapshot.</li>
+      <li>Connectors process the uploaded file <strong>in the browser only</strong>; nothing is saved.</li>
+    </ul>
+  </div>
+
+  <h2>What the CA should review</h2>
+  <div class="card">
+    <ul class="chk">
+      <li><strong>Benford verdict bands</strong> — the Nigrini MAD thresholds (close / acceptable / marginal / nonconforming) and the 50-amount "insufficient" floor.</li>
+      <li><strong>Duplicate rule</strong> — is "same amount + date + party" the right signal, or too strict/loose?</li>
+      <li><strong>Reconciliation matching</strong> — amount-only is the v1 first pass. Which connectors should get tighter keys (GSTIN for 2B, TAN for 26AS, amount+date for bank)? Do you want uploads <strong>persisted</strong> (needs a store/migration)?</li>
+    </ul>
+  </div>
+
+  <div class="foot">
+    CAFlow Scrutiny Engine · Phase 5 (forensics + connectors) · deterministic, in-session; no deploy required.
+    Phases 0–5 core complete. Remaining (senior-owned): Phase 6 ultra command centre + deliverables · Phases 7–8 portfolio/learning + workflow.
+  </div>
+
+</div>
+</body>
+</html>
