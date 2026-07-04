@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CAFlow Scrutiny — Phase 2 Preview</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#fff; --ink:#1e2430; --muted:#6b7280; --line:#e5e7eb;
+    --primary:#2563eb; --amber:#b45309; --green:#15803d; --green-bg:#dcfce7;
+    --red:#b91c1c; --red-bg:#fee2e2; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:32px 20px 80px}
+  header.top{display:flex;align-items:center;gap:14px;margin-bottom:8px}
+  .logo{width:44px;height:44px;border-radius:9px;background:linear-gradient(135deg,#4c1d95,#7c3aed);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;letter-spacing:.5px}
+  h1{font-size:24px;margin:0}
+  .sub{color:var(--muted);font-size:14px;margin-top:2px}
+  .banner{margin:18px 0;padding:12px 14px;border:1px solid #fde68a;background:#fffbeb;border-radius:10px;font-size:13.5px;color:#7c5b12}
+  .safe{margin:10px 0 22px;padding:10px 14px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:10px;font-size:13px;color:#14532d}
+  h2{font-size:18px;margin:34px 0 12px;padding-bottom:6px;border-bottom:2px solid var(--line)}
+  h3{font-size:14px;margin:22px 0 8px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin:12px 0;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center}
+  .stat .n{font-size:26px;font-weight:700}
+  .stat .l{font-size:12px;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px}
+  code,.mono{font-family:var(--mono);font-size:12.5px}
+  .badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;border:1px solid transparent;white-space:nowrap}
+  .b-red{background:var(--red-bg);color:var(--red);border-color:#fecaca}
+  .b-amber{background:#fef3c7;color:var(--amber);border-color:#fde68a}
+  .b-green{background:var(--green-bg);color:var(--green);border-color:#bbf7d0}
+  .b-out{background:#fff;color:#475569;border-color:#cbd5e1}
+  .b-violet{background:#f5f3ff;color:#6d28d9;border-color:#ddd6fe}
+  .mock{border:1px dashed #cbd5e1;border-radius:12px;overflow:hidden;background:#fcfcfd}
+  .mock .cap{font-size:11.5px;color:var(--muted);background:#f8fafc;border-bottom:1px dashed #e2e8f0;padding:6px 12px}
+  .mock .body{padding:14px}
+  .row{display:flex;align-items:center;gap:10px;padding:9px 10px;border-top:1px solid var(--line)}
+  .row:first-child{border-top:0}
+  .muted{color:var(--muted)}
+  ul{padding-left:20px} .chk li{margin:6px 0}
+  .kbd{font-family:var(--mono);background:#eef2ff;border:1px solid #c7d2fe;border-radius:5px;padding:1px 6px;font-size:12px}
+  .foot{margin-top:40px;color:var(--muted);font-size:12px;border-top:1px solid var(--line);padding-top:14px}
+  .link{color:var(--primary);text-decoration:underline;text-decoration-style:dotted;cursor:default}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="logo">CG</div>
+    <div>
+      <h1>CAFlow Scrutiny Engine — Phase&nbsp;2 Preview</h1>
+      <div class="sub">AI gateway · narration &amp; TDS-section · query drafting · exclusion learning · 2026‑07‑04</div>
+    </div>
+  </header>
+
+  <div class="banner">
+    <strong>Illustrative mock-ups, not live screenshots.</strong> Every AI feature below calls the
+    <code>claude-gateway</code> edge function and is <strong>gated behind <code>VITE_SCRUTINY_V2</code></strong>.
+    All of it is built to <strong>degrade gracefully</strong>: until the gateway is deployed to the dev
+    project with an <code>ANTHROPIC_API_KEY</code>, each feature silently falls back to the deterministic
+    Phase-1 behaviour — nothing breaks.
+  </div>
+
+  <div class="safe">
+    🔒 <strong>Safety:</strong> all work on branch <code>claude/auto-2026-06-21-ledger-scrutiny</code>; nothing pushed to
+    <code>main</code>. The gateway change is <strong>authored, not deployed</strong> — deploy to <em>dev only</em>.
+  </div>
+
+  <h2>What Phase 2 delivered</h2>
+  <div class="card">
+    <table>
+      <tr><th style="width:150px">Ticket</th><th>Delivered</th></tr>
+      <tr><td><strong>2.1</strong> Gateway model map</td><td>Fixed a live bug: the non-light path used <code>claude-sonnet-4-20250514</code>, <strong>retired 2026-06-15</strong> — it was 404-ing and silently falling back to Gemini. Replaced with a tiered map: <span class="badge b-green">Haiku 4.5</span> bulk / <span class="badge b-out">Sonnet 5</span> standard / <span class="badge b-violet">Opus 4.8</span> judgment (decision #12).</td></tr>
+      <tr><td><strong>2.2</strong> AI narration classification</td><td>Classifies findings (category / risk / <strong>suggested 3CD clause</strong>) via the gateway; one-click apply.</td></tr>
+      <tr><td><strong>2.3</strong> AI TDS-section ID</td><td>Identifies the TDS <strong>section · rate · threshold</strong> for a finding, in the detail sheet.</td></tr>
+      <tr><td><strong>2.4</strong> AI query drafting</td><td>The maker-checker "Raise query" now drafts the client query with <strong>Opus</strong>; falls back to the template.</td></tr>
+      <tr><td><strong>2.5</strong> Exclusion learning</td><td>Flags findings that <strong>recur from a prior-year waiver</strong> ("Seen before") so known-benign items dismiss fast.</td></tr>
+    </table>
+  </div>
+
+  <h2>The AI surfaces</h2>
+
+  <h3>2.2 · AI narration → one-click 3CD clause</h3>
+  <div class="mock">
+    <div class="cap">Header gains an "AI: Classify" button → the 3CD column shows an applicable clause</div>
+    <div class="body">
+      <table>
+        <tr><th>Flag message</th><th>Severity</th><th>3CD</th></tr>
+        <tr><td>Prior-period expense booked in current year</td><td><span class="badge b-red">HIGH</span></td><td><span class="link">AI: 22</span></td></tr>
+        <tr><td>Cash payment ₹45,000 to a contractor</td><td><span class="badge b-red">HIGH</span></td><td><span class="link">AI: 21(a)</span></td></tr>
+        <tr><td>Round-sum journal at year-end</td><td><span class="badge b-amber">MEDIUM</span></td><td>—</td></tr>
+      </table>
+      <div class="muted" style="font-size:12px;margin-top:8px">Click "AI: 22" to link the finding to clause 22. Falls back to a plain "—" (and the manual Link-3CD dialog) when the gateway is offline.</div>
+    </div>
+  </div>
+
+  <h3>2.3 · TDS section in the finding detail sheet</h3>
+  <div class="mock">
+    <div class="cap">Finding → Details → "TDS section (AI)"</div>
+    <div class="body">
+      <div style="font-size:13px"><span class="muted">TDS section (AI):</span> <span class="badge b-out">Identify</span></div>
+      <div style="font-size:13px;margin-top:8px"><span class="mono">194C</span> · 2% · threshold ₹30,000
+        <span class="muted" style="display:block;font-size:12px">Payment to a contractor for freight — TDS u/s 194C applies.</span></div>
+    </div>
+  </div>
+
+  <h3>2.4 · Opus-drafted client query (maker-checker)</h3>
+  <div class="mock">
+    <div class="cap">"Raise query" on a finding → the draft query text is AI-written</div>
+    <div class="body">
+      <div class="row" style="border:0;padding:0">
+        <span class="badge b-amber">⧗ Draft</span>
+        <span style="font-size:13px">"We note a cash payment of ₹45,000 to Ramesh Transport on 12-Aug-2025. As payments exceeding ₹35,000 to a transporter attract s.40A(3), kindly explain the mode of payment and share the supporting vouchers."</span>
+      </div>
+      <div class="muted" style="font-size:12px;margin-top:8px">A second reviewer still approves before it can be sent (Phase-1 gate). If the gateway is offline, the draft uses the deterministic rule template instead — the flow is unchanged.</div>
+    </div>
+  </div>
+
+  <h3>2.5 · "Seen before" (exclusion learning)</h3>
+  <div class="mock">
+    <div class="cap">A finding that the auditor waived in a prior year, recurring this year</div>
+    <div class="body">
+      <div class="row" style="border:0;padding:0">
+        <span style="font-size:13px">Interest-free advance to director</span>
+        <span class="badge b-out">⧗ Seen before</span>
+      </div>
+      <div class="muted" style="font-size:12px;margin-top:8px">Learned purely from your own <code>waived</code> findings in other years (same rule + ledger) — no AI, no new tables. Semantic matching via Voyage embeddings is a later upgrade.</div>
+    </div>
+  </div>
+
+  <h2>Acceptance — all green</h2>
+  <div class="grid">
+    <div class="stat"><div class="n" style="color:var(--green)">✓</div><div class="l"><code>npm run build</code> · 0 TS errors</div></div>
+    <div class="stat"><div class="n">102</div><div class="l">scrutiny unit tests passing</div></div>
+    <div class="stat"><div class="n">5</div><div class="l">tickets committed (branch only)</div></div>
+    <div class="stat"><div class="n">0</div><div class="l">pushes to main</div></div>
+  </div>
+  <div class="card mono" style="font-size:12px">
+    c8e321f1 — 2.1 gateway model map + top-tier<br>
+    3b9cc17b — 2.4 AI query drafting (maker-checker)<br>
+    d0536fa7 — 2.2 AI narration classification + 3CD suggestions<br>
+    96a22964 — 2.3 AI TDS-section identification<br>
+    395f012a — 2.5 exclusion learning
+  </div>
+
+  <h2>⚙️ Deploy checklist (one step activates 2.1–2.4)</h2>
+  <div class="card">
+    <ul class="chk">
+      <li>On the <strong>dev</strong> project only (never prod): set <code>ANTHROPIC_API_KEY</code> in the edge-function secrets.</li>
+      <li>Deploy: <span class="kbd">npx supabase functions deploy claude-gateway</span> (linked to <code>caflow-scrutiny-dev</code>).</li>
+      <li>That single deploy turns on the modernised model map (2.1) <em>and</em> the AI drafting / classification / TDS-section features (2.2–2.4). Until then they degrade gracefully.</li>
+      <li>2.5 needs nothing — it's deterministic and works today.</li>
+    </ul>
+  </div>
+
+  <h2>What the CA should review</h2>
+  <div class="card">
+    <ul class="chk">
+      <li><strong>Model tiers</strong> — Haiku (bulk) / Sonnet 5 (standard) / Opus 4.8 (judgment) — right split for cost vs quality (decision #12)?</li>
+      <li><strong>Query-drafting prompt</strong> — is the tone/content of the Opus-drafted client query appropriate for your firm?</li>
+      <li><strong>3CD suggestions</strong> — do you want AI-suggested clauses one-click-applied, or always manually confirmed?</li>
+      <li><strong>Exclusion learning</strong> — is "same rule + same ledger, prior-year waiver" the right recurrence signal, or should it be looser/tighter?</li>
+    </ul>
+  </div>
+
+  <div class="foot">
+    CAFlow Scrutiny Engine · Phase 2 (AI gateway + narration/section/drafting/exclusion) · authored on the branch, deploy to dev pending.
+    Next: Phase 3 — Knowledge &amp; Judgment layer (human facts, related-party nomination, MSME/cert capture, fact-gating).
+  </div>
+
+</div>
+</body>
+</html>
