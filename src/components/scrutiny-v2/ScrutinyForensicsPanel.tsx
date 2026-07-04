@@ -11,9 +11,10 @@ import { supabase } from "@/integrations/supabase/client";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Info, BarChart3, Copy } from "lucide-react";
+import { Info, BarChart3, Copy, Network } from "lucide-react";
 import { vouchersFromSnapshot } from "@/lib/scrutiny/adapters";
 import { benfordAnalysis, findDuplicates, type BenfordVerdict } from "@/lib/scrutiny/forensics";
+import { moneyFlowSummary } from "@/lib/scrutiny/moneyFlow";
 import type { VoucherRow } from "@/lib/scrutiny/detectionEngine";
 
 interface Props {
@@ -61,6 +62,7 @@ export default function ScrutinyForensicsPanel({ clientId, financialYear }: Prop
   const amounts = useMemo(() => vouchers.map((v) => v.amount ?? 0).filter((n) => Number.isFinite(n)), [vouchers]);
   const benford = useMemo(() => benfordAnalysis(amounts), [amounts]);
   const duplicates = useMemo(() => findDuplicates(vouchers, 1), [vouchers]);
+  const flow = useMemo(() => moneyFlowSummary(vouchers, { minAmount: 1, topN: 15 }), [vouchers]);
   const maxBar = useMemo(() => Math.max(30.1, ...benford.digits.map((d) => d.observedPct)), [benford]);
 
   if (loading) {
@@ -142,6 +144,48 @@ export default function ScrutinyForensicsPanel({ clientId, financialYear }: Prop
             </Table>
             {duplicates.length > 50 && <div className="px-3 py-2 text-xs text-muted-foreground">Showing top 50 of {duplicates.length} groups.</div>}
           </div>
+        )}
+      </div>
+
+      {/* Money flow (Ticket 5.2) */}
+      <div>
+        <div className="flex items-center gap-2 flex-wrap mb-2">
+          <Network size={16} className="text-muted-foreground" />
+          <h3 className="text-sm font-semibold text-foreground">Money flow — top counterparties</h3>
+          <span className="text-xs text-muted-foreground">{flow.parties} parties · {inr(flow.totalValue)} transacted</span>
+        </div>
+        {flow.topParties.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No party-level flows in the voucher data.</p>
+        ) : (
+          <>
+            <div className="rounded-md border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Counterparty</TableHead>
+                    <TableHead className="w-16 text-right">Txns</TableHead>
+                    <TableHead className="w-28 text-right">Total</TableHead>
+                    <TableHead className="w-24 text-right">Dr</TableHead>
+                    <TableHead className="w-24 text-right">Cr</TableHead>
+                    <TableHead className="w-28 text-right">Net</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {flow.topParties.map((p) => (
+                    <TableRow key={p.party}>
+                      <TableCell className="text-sm truncate max-w-[240px]">{p.party}</TableCell>
+                      <TableCell className="text-right text-xs">{p.count}</TableCell>
+                      <TableCell className="text-right text-sm">{inr(p.total)}</TableCell>
+                      <TableCell className="text-right text-xs text-muted-foreground">{inr(p.drTotal)}</TableCell>
+                      <TableCell className="text-right text-xs text-muted-foreground">{inr(p.crTotal)}</TableCell>
+                      <TableCell className={`text-right text-xs ${p.net < 0 ? "text-destructive" : "text-green-700"}`}>{p.net < 0 ? "−" : "+"}{inr(Math.abs(p.net))}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+            <p className="text-[10px] text-muted-foreground mt-1">Net = Cr − Dr on the row-level leg (positive leans to receipts, negative to payments). The full ledger↔party edge list is available in the data; graph visualisation is a later enhancement.</p>
+          </>
         )}
       </div>
     </div>
