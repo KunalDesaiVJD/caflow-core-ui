@@ -16,12 +16,13 @@ import { supabase } from "@/integrations/supabase/client";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { TrendingUp, TrendingDown, Minus, Info, Building2, ListChecks } from "lucide-react";
+import { TrendingUp, TrendingDown, Minus, Info, Building2, ListChecks, Gauge } from "lucide-react";
 import { type Finding, type RuleTemplate } from "@/lib/scrutiny/scrutinyUi";
 import { rulePrecision, precisionSummary, type PrecisionVerdict } from "@/lib/scrutiny/precision";
 import { portfolioSummary, portfolioTotals, type EngagementSummary } from "@/lib/scrutiny/portfolio";
 import { benchmark, type BenchLevel } from "@/lib/scrutiny/benchmark";
 import { reviewQueue, LANE_LABEL, type QueueInputFinding, type QueueLane } from "@/lib/scrutiny/reviewQueue";
+import { partnerMis } from "@/lib/scrutiny/partnerMis";
 import { SCRUTINY_QUERY_SOURCE } from "@/lib/scrutiny/makerChecker";
 
 interface Props {
@@ -104,9 +105,28 @@ export default function ScrutinyPortfolioPanel({ rules, clientId }: Props) {
   const bench = useMemo(() => benchmark({ findings: pFindings, clientId, peerEngagements: totals.withFindings }), [pFindings, clientId, totals]);
   const nameById = useMemo(() => Object.fromEntries(engagements.map((e) => [e.clientId, e.clientName])), [engagements]);
   const queue = useMemo(() => reviewQueue(queueRows), [queueRows]);
+  const mis = useMemo(() => partnerMis(queueRows, totals.clients), [queueRows, totals.clients]);
 
   return (
     <div className="space-y-6">
+      {/* Partner MIS (Ticket 8.5) */}
+      {!loading && reachable && user?.firm_id && (
+        <div>
+          <div className="flex items-center gap-2 mb-2"><Gauge size={16} className="text-muted-foreground" /><h3 className="text-sm font-semibold text-foreground">Partner MIS — firm scrutiny book</h3></div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            <div className="rounded-md border p-3 text-center"><p className="text-xs text-muted-foreground">Engagements</p><p className="text-xl font-bold">{mis.engagements.total}</p><p className="text-[10px] text-muted-foreground">{mis.engagements.withFindings} active · {mis.engagements.clean} clean</p></div>
+            <div className="rounded-md border border-destructive/30 p-3 text-center"><p className="text-xs text-destructive">Open high</p><p className="text-xl font-bold text-destructive">{mis.engagements.withOpenHigh}</p><p className="text-[10px] text-muted-foreground">engagements</p></div>
+            <div className="rounded-md border p-3 text-center"><p className="text-xs text-muted-foreground">Disposed</p><p className="text-xl font-bold">{Math.round(mis.disposition.rate * 100)}%</p><p className="text-[10px] text-muted-foreground">{mis.disposition.open} still open</p></div>
+            <div className="rounded-md border p-3 text-center"><p className="text-xs text-muted-foreground">Findings</p><p className="text-xl font-bold">{mis.findings.total}</p><p className="text-[10px] text-muted-foreground">{mis.avgFindingsPerEngagement.toFixed(1)}/engagement</p></div>
+            <div className="rounded-md border border-amber-400/30 p-3 text-center"><p className="text-xs text-amber-700">Awaiting checker</p><p className="text-xl font-bold text-amber-700">{mis.queries.drafts}</p><p className="text-[10px] text-muted-foreground">draft queries</p></div>
+            <div className="rounded-md border border-blue-400/30 p-3 text-center"><p className="text-xs text-blue-700">Awaiting client</p><p className="text-xl font-bold text-blue-700">{mis.queries.awaitingClient}</p><p className="text-[10px] text-muted-foreground">queries sent</p></div>
+          </div>
+          {mis.topCategories.length > 0 && (
+            <p className="text-xs text-muted-foreground mt-2">Risk concentration: {mis.topCategories.map((c) => `${c.category} (${c.total})`).join(" · ")}</p>
+          )}
+        </div>
+      )}
+
       {/* Cross-engagement (Ticket 7.2) */}
       <div>
         <div className="flex items-center gap-2 mb-2"><Building2 size={16} className="text-muted-foreground" /><h3 className="text-sm font-semibold text-foreground">Portfolio — all engagements</h3></div>
