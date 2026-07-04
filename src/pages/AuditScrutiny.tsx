@@ -30,6 +30,7 @@ import { draftQueryWithAI } from "@/lib/scrutiny/aiQueryDraft";
 import { classifyFindingsWithAI, type NarrationClass } from "@/lib/scrutiny/aiNarration";
 import { identifyTdsSectionWithAI, type TdsSection } from "@/lib/scrutiny/aiTdsSection";
 import { matchExclusions, buildExclusionSet, type PriorWaived } from "@/lib/scrutiny/exclusionLearning";
+import { FACT_CATALOGUE, factGateStatus } from "@/lib/scrutiny/facts";
 
 const CATEGORIES = ["All", "TDS", "GST", "Cash Payments", "Loans", "Prior Period", "Depreciation", "Deferred Tax", "Bank Recon", "Narration AI"];
 const FY_OPTIONS = ["2024-25", "2023-24", "2022-23", "2021-22"];
@@ -74,6 +75,8 @@ export default function AuditScrutiny() {
   const [tdsLoading, setTdsLoading] = useState(false);
   // Exclusion learning (Ticket 2.5): prior-period waivers for this client
   const [priorWaived, setPriorWaived] = useState<PriorWaived[]>([]);
+  // Gate-4 fact-gating (Ticket 3.4): captured general facts for the advisory banner
+  const [capturedFacts, setCapturedFacts] = useState<Record<string, string>>({});
 
   // Filters — default FY from engagement context
   const [fy, setFy] = useState(contextFY || "2024-25");
@@ -159,6 +162,22 @@ export default function AuditScrutiny() {
       .then(({ data }: any) => { if (Array.isArray(data)) setPriorWaived(data); });
   }, [v2, clientId]);
 
+  // Captured judgment facts for the Gate-4 advisory banner (Ticket 3.4)
+  const fetchCapturedFacts = async () => {
+    if (!v2 || !clientId) return;
+    try {
+      const { data } = await (supabase.from as any)("scrutiny_facts")
+        .select("fact_key, fact_value")
+        .eq("client_id", clientId).eq("financial_year", fy).eq("fact_type", "general");
+      const m: Record<string, string> = {};
+      for (const r of (data ?? [])) if (r?.fact_value != null) m[r.fact_key] = String(r.fact_value);
+      setCapturedFacts(m);
+    } catch { /* graceful — store may not be deployed */ }
+  };
+  useEffect(() => { fetchCapturedFacts(); }, [v2, clientId, fy]);
+  // Refresh the banner after the auditor edits facts and leaves the Facts tab
+  useEffect(() => { if (v2Tab !== "facts") fetchCapturedFacts(); }, [v2Tab]);
+
   // finding_id -> its linked query { id, status } (via the finding's linked_query_id)
   const queryByFinding = useMemo(() => {
     const byId = new Map(scrutinyQueries.map(q => [q.id, q]));
@@ -177,6 +196,9 @@ export default function AuditScrutiny() {
     () => matchExclusions(findings, buildExclusionSet(priorWaived, fy)),
     [findings, priorWaived, fy],
   );
+
+  // Gate-4 advisory completeness (Ticket 3.4) — never blocks anything
+  const factGate = useMemo(() => factGateStatus(FACT_CATALOGUE, capturedFacts), [capturedFacts]);
 
   // Fetch assigned audit firm for this client + FY
   useEffect(() => {
@@ -506,6 +528,14 @@ export default function AuditScrutiny() {
       {/* v2 scrutiny views (behind flag): advisory coverage panel + Templates / By-Ledger */}
       {v2 && (
         <div className="space-y-4">
+          {/* Gate-4 fact-gating advisory (Ticket 3.4) — never blocks sign-off / UDIN */}
+          {v2Tab !== "facts" && factGate.missing.length > 0 && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-800 flex items-center gap-2 flex-wrap">
+              <AlertTriangle size={14} className="shrink-0" />
+              <span>{factGate.missing.length} of {factGate.requiredTotal} required judgment facts not captured — advisory, does not block sign-off / UDIN.</span>
+              <button type="button" className="underline font-medium" onClick={() => setV2Tab("facts")}>Go to Facts &amp; Judgment</button>
+            </div>
+          )}
           <ScrutinyCoveragePanel rules={rules} />
           <div className="inline-flex rounded-md border overflow-hidden">
             <button
