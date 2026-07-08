@@ -4,8 +4,8 @@ import type { Database } from './types';
 
 // Preview override: VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY point the build at an alternate
 // (e.g. isolated dev) Supabase project; production values remain the default when unset.
-const SUPABASE_URL = (import.meta.env.VITE_SUPABASE_URL as string) || "https://hubyywmodekfdzhwiumb.supabase.co";
-const SUPABASE_PUBLISHABLE_KEY = (import.meta.env.VITE_SUPABASE_ANON_KEY as string) || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh1Ynl5d21vZGVrZmR6aHdpdW1iIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI3ODkyNzgsImV4cCI6MjA4ODM2NTI3OH0.M6UQcpMLCCFja9TdeJpxawUvKhso38BmMGFJi6lLbrc";
+const SUPABASE_URL = "https://xjdrwupvyacxfxlkbrlr.supabase.co"; // PREVIEW: isolated dev sandbox (do NOT merge to main)
+const SUPABASE_PUBLISHABLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhqZHJ3dXB2eWFjeGZ4bGticmxyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI4MTI5NzcsImV4cCI6MjA5ODM4ODk3N30.3mt5uhFqN-3eqZv4J89pQ2QXjg0t9438HqP3gaA_AoQ"; // PREVIEW: dev anon (public); do NOT merge to main
 
 // Import the supabase client like this:
 // import { supabase } from "@/integrations/supabase/client";
