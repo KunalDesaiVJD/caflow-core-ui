@@ -1542,23 +1542,17 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                     const matchOk = Math.abs(challanDeducteeTds - allocatable) <= 1;
                     return (
                       <Card className="bg-muted/30">
-                        <CardContent className="p-3 space-y-2">
-                          {/* Row 1: BSR / Serial / Date / Bank / Section */}
-                          <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
-                            <span><strong>BSR Code:</strong> <span className="font-mono">{selectedChallan.bsr_code || "—"}</span></span>
-                            <span><strong>Challan Number:</strong> <span className="font-mono">{selectedChallan.challan_serial_no || "—"}</span></span>
+                        <CardContent className="px-3 py-1.5">
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                            <span><strong>BSR:</strong> <span className="font-mono">{selectedChallan.bsr_code || "—"}</span></span>
+                            <span><strong>Challan No:</strong> <span className="font-mono">{selectedChallan.challan_serial_no || "—"}</span></span>
                             <span><strong>Date:</strong> {selectedChallan.deposit_date ? format(new Date(selectedChallan.deposit_date), "dd/MM/yyyy") : "—"}</span>
                             <span><strong>Bank:</strong> {selectedChallan.bank_name || "—"}</span>
                             <span><strong>Section:</strong> {selectedChallan.section_code || "—"}</span>
                             {selectedChallan.minor_head_of_challan && (
                               <span><strong>Minor Head:</strong> {selectedChallan.minor_head_of_challan}</span>
                             )}
-                            {isFilingLocked && (
-                              <Badge variant="secondary" className="text-[9px] gap-1 ml-auto"><Lock size={8} /> Filed — Read Only</Badge>
-                            )}
-                          </div>
-                          {/* Row 2: Amount breakdown */}
-                          <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs border-t border-border/40 pt-2">
+                            <span className="text-border">|</span>
                             <span>TDS: <strong>₹{(selectedChallan.total_tax_deposited || 0).toLocaleString("en-IN")}</strong></span>
                             {(selectedChallan.surcharge_deposited || 0) > 0 && (
                               <span>Surcharge: <strong>₹{(selectedChallan.surcharge_deposited || 0).toLocaleString("en-IN")}</strong></span>
@@ -1573,28 +1567,29 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                               <span>Others: <strong>₹{(selectedChallan.others_deposited || 0).toLocaleString("en-IN")}</strong></span>
                             )}
                             {(selectedChallan.late_fees_234e || 0) > 0 && (
-                              <span className="text-amber-700">Late Fees 234E: <strong>₹{(selectedChallan.late_fees_234e || 0).toLocaleString("en-IN")}</strong></span>
+                              <span className="text-amber-700">Late Fees: <strong>₹{(selectedChallan.late_fees_234e || 0).toLocaleString("en-IN")}</strong></span>
                             )}
                             <span className="font-semibold">Total Paid: ₹{(selectedChallan.total_challan_amount || 0).toLocaleString("en-IN")}</span>
                             {(selectedChallan.late_fees_234e || 0) > 0 && (
-                              <span className="text-muted-foreground">Allocatable (excl. late fees): ₹{allocatable.toLocaleString("en-IN")}</span>
+                              <span className="text-muted-foreground">Allocatable: ₹{allocatable.toLocaleString("en-IN")}</span>
                             )}
-                          </div>
-                          {/* Row 3: Applied / Balance */}
-                          <div className="flex flex-wrap gap-4 items-center text-xs border-t border-border/40 pt-2">
+                            <span className="text-border">|</span>
                             <span className="text-muted-foreground">Deductees: <strong>{deductees.length + prevEntries.length}</strong></span>
-                            <div className="flex-1" />
                             <span className={cn("font-semibold",
                               matchOk ? "text-emerald-600"
                                 : challanDeducteeTds < allocatable ? "text-amber-600"
                                 : "text-destructive")}>
                               Applied: ₹{challanDeducteeTds.toLocaleString("en-IN")} / ₹{allocatable.toLocaleString("en-IN")}
                               {matchOk
-                                ? <CheckCircle2 size={14} className="inline ml-1" />
-                                : <AlertTriangle size={14} className="inline ml-1" />}
+                                ? <CheckCircle2 size={12} className="inline ml-1" />
+                                : <AlertTriangle size={12} className="inline ml-1" />}
                             </span>
                             {selectedChallanBalance <= 0 && (
-                              <Badge className="text-[10px] bg-emerald-100 text-emerald-700">Fully Utilised</Badge>
+                              <Badge className="text-[9px] bg-emerald-100 text-emerald-700">Fully Utilised</Badge>
+                            )}
+                            <div className="flex-1" />
+                            {isFilingLocked && (
+                              <Badge variant="secondary" className="text-[9px] gap-1"><Lock size={8} /> Filed — Read Only</Badge>
                             )}
                           </div>
                         </CardContent>
