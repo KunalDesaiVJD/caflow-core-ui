@@ -20,12 +20,20 @@ import {
 } from "@/components/ui/sheet";
 import { Plus, Upload, Copy, Pencil, Trash2, Search, FileUp, AlertCircle } from "lucide-react";
 
-const AY_OPTIONS = Array.from({ length: 8 }, (_, i) => {
+const TAX_YEAR_OPTIONS = Array.from({ length: 8 }, (_, i) => {
   const s = 2023 + i;
   return `${s}-${String(s + 1).slice(2)}`;
 });
 
 const FORM_TYPES = ["24Q", "26Q", "27Q", "27EQ"] as const;
+
+// Assessment Year = Tax Year (financial_year) + 1, per Indian tax convention.
+// The DB still has an assessment_year column/unique-constraint member; this
+// keeps it internally consistent without exposing the concept in the UI.
+const taxYearToAssessmentYear = (taxYear: string): string => {
+  const start = parseInt(taxYear.split("-")[0], 10) + 1;
+  return `${start}-${String(start + 1).slice(2)}`;
+};
 
 interface RateRecord {
   id: string;
@@ -49,7 +57,7 @@ interface RateRecord {
   firm_id: string | null;
 }
 
-// Default seed data for AY 2026-27
+// Default seed data for Tax Year 2025-26
 const SEED_DATA: Omit<RateRecord, "id" | "firm_id" | "created_at">[] = [
   // 26Q
   { assessment_year: "2026-27", financial_year: "2025-26", form_type: "26Q", section_code: "192A", nature_of_payment: "Premature PF Withdrawal", threshold_individual: 50000, threshold_company: 50000, rate_individual: 10, rate_company: 10, rate_no_pan: 20, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: null, section_description: null },
@@ -116,7 +124,11 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
   const { toast } = useToast();
   const [rates, setRates] = useState<RateRecord[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedAY, setSelectedAY] = useState("2026-27");
+  // "Tax Year" here means financial_year (the year TDS is deducted/deposited) —
+  // the DB also carries a legacy assessment_year column (= tax year + 1, per
+  // Indian tax convention) kept in sync automatically for internal consistency,
+  // but it's no longer surfaced in the UI.
+  const [selectedTaxYear, setSelectedTaxYear] = useState("2026-27");
   const [selectedForm, setSelectedForm] = useState<string>("26Q");
   const [search, setSearch] = useState("");
   const [formOpen, setFormOpen] = useState(false);
@@ -134,14 +146,14 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
     setLoading(true);
     const firmId = await resolveFirmId();
     let q = supabase.from("tds_rate_master").select("*")
-      .eq("assessment_year", selectedAY)
+      .eq("financial_year", selectedTaxYear)
       .eq("form_type", selectedForm)
       .order("section_code");
     if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
     const { data } = await q;
     setRates((data as any[]) || []);
     setLoading(false);
-  }, [selectedAY, selectedForm, resolveFirmId, isSuperadmin]);
+  }, [selectedTaxYear, selectedForm, resolveFirmId, isSuperadmin]);
 
   useEffect(() => { fetchRates(); }, [fetchRates]);
 
@@ -181,21 +193,20 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
     const toInsert = SEED_DATA.map(d => ({ ...d, firm_id: firmId }));
     const { error } = await supabase.from("tds_rate_master").upsert(toInsert as any[], { onConflict: "assessment_year,form_type,section_code,firm_id" });
     if (error) toast({ title: "Error seeding", description: error.message, variant: "destructive" });
-    else { toast({ title: "Rate master seeded for AY 2026-27", description: "Legacy 194C-A / 194C-S merged into 194C." }); fetchRates(); }
+    else { toast({ title: "Rate master seeded for Tax Year 2025-26", description: "Legacy 194C-A / 194C-S merged into 194C." }); fetchRates(); }
   };
 
   const importFromPrevYear = async () => {
     const firmId = await resolveFirmId();
     if (!firmId) { toast({ title: "No firm ID", variant: "destructive" }); return; }
-    const prevAYStart = parseInt(selectedAY.split("-")[0]) - 1;
-    const prevAY = `${prevAYStart}-${String(prevAYStart + 1).slice(2)}`;
-    const newFY = `${parseInt(selectedAY.split("-")[0]) - 1}-${selectedAY.split("-")[0].slice(2)}`;
+    const prevTaxYearStart = parseInt(selectedTaxYear.split("-")[0], 10) - 1;
+    const prevTaxYear = `${prevTaxYearStart}-${String(prevTaxYearStart + 1).slice(2)}`;
 
     // Import ALL form types, not just the currently selected one
     let totalImported = 0;
     for (const formType of FORM_TYPES) {
       let q = supabase.from("tds_rate_master").select("*")
-        .eq("assessment_year", prevAY)
+        .eq("financial_year", prevTaxYear)
         .eq("form_type", formType)
         .eq("firm_id", firmId);
       const { data: prevRates } = await q;
@@ -203,8 +214,8 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
       const toInsert = prevRates.map((r: any) => ({
         ...r,
         id: undefined,
-        assessment_year: selectedAY,
-        financial_year: newFY,
+        financial_year: selectedTaxYear,
+        assessment_year: taxYearToAssessmentYear(selectedTaxYear),
         firm_id: firmId,
         created_at: undefined,
       }));
@@ -213,10 +224,10 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
       totalImported += toInsert.length;
     }
     if (totalImported === 0) {
-      toast({ title: `No rates found for AY ${prevAY} for this firm`, variant: "destructive" });
+      toast({ title: `No rates found for Tax Year ${prevTaxYear} for this firm`, variant: "destructive" });
       return;
     }
-    toast({ title: `Imported ${totalImported} rates from AY ${prevAY} (all form types)` });
+    toast({ title: `Imported ${totalImported} rates from Tax Year ${prevTaxYear} (all form types)` });
     fetchRates();
   };
 
@@ -246,10 +257,8 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
     if (!formData.section_code) { toast({ title: "Section code required", variant: "destructive" }); return; }
     setSaving(true);
     const firmId = await resolveFirmId();
-    const fyStart = parseInt(selectedAY.split("-")[0]) - 1;
-    const fy = `${fyStart}-${selectedAY.split("-")[0].slice(2)}`;
     const payload = {
-      assessment_year: selectedAY, financial_year: fy, form_type: selectedForm, firm_id: firmId,
+      assessment_year: taxYearToAssessmentYear(selectedTaxYear), financial_year: selectedTaxYear, form_type: selectedForm, firm_id: firmId,
       section_code: formData.section_code, nature_of_payment: formData.nature_of_payment || null,
       threshold_individual: parseFloat(formData.threshold_individual) || 0,
       threshold_company: parseFloat(formData.threshold_company) || 0,
@@ -290,17 +299,20 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
       rows = data as any[];
     }
     if (!rows.length) { toast({ title: "No data found", variant: "destructive" }); return; }
-    const toInsert = rows.map((r: any) => ({
-      assessment_year: r.assessment_year, financial_year: r.financial_year, form_type: r.form_type,
-      section_code: r.section_code, nature_of_payment: r.nature_of_payment,
-      threshold_individual: parseFloat(r.threshold_individual) || 0,
-      threshold_company: parseFloat(r.threshold_company) || 0,
-      rate_individual: parseFloat(r.rate_individual) || null,
-      rate_company: parseFloat(r.rate_company) || null,
-      rate_no_pan: parseFloat(r.rate_no_pan) || null,
-      effective_from: r.effective_from || null,
-      firm_id: firmId, is_active: true, surcharge_applicable: false, cess_applicable: false,
-    }));
+    const toInsert = rows.map((r: any) => {
+      const financial_year = r.financial_year || r.tax_year;
+      return {
+        financial_year, assessment_year: r.assessment_year || taxYearToAssessmentYear(financial_year), form_type: r.form_type,
+        section_code: r.section_code, nature_of_payment: r.nature_of_payment,
+        threshold_individual: parseFloat(r.threshold_individual) || 0,
+        threshold_company: parseFloat(r.threshold_company) || 0,
+        rate_individual: parseFloat(r.rate_individual) || null,
+        rate_company: parseFloat(r.rate_company) || null,
+        rate_no_pan: parseFloat(r.rate_no_pan) || null,
+        effective_from: r.effective_from || null,
+        firm_id: firmId, is_active: true, surcharge_applicable: false, cess_applicable: false,
+      };
+    });
     const { error } = await supabase.from("tds_rate_master").upsert(toInsert as any[], { onConflict: "assessment_year,form_type,section_code,firm_id" });
     if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
     else { toast({ title: `${toInsert.length} rates imported` }); setUploadOpen(false); fetchRates(); }
@@ -418,10 +430,10 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
         <TabsContent value="rates" className="space-y-4 mt-4">
       <div className="flex flex-wrap items-end gap-3">
         <div className="space-y-1">
-          <Label className="text-xs">Assessment Year</Label>
-          <Select value={selectedAY} onValueChange={setSelectedAY}>
+          <Label className="text-xs">Tax Year</Label>
+          <Select value={selectedTaxYear} onValueChange={setSelectedTaxYear}>
             <SelectTrigger className="w-[130px]"><SelectValue /></SelectTrigger>
-            <SelectContent>{AY_OPTIONS.map(ay => <SelectItem key={ay} value={ay}>{ay}</SelectItem>)}</SelectContent>
+            <SelectContent>{TAX_YEAR_OPTIONS.map(ty => <SelectItem key={ty} value={ty}>{ty}</SelectItem>)}</SelectContent>
           </Select>
         </div>
         <Tabs value={selectedForm} onValueChange={setSelectedForm} className="ml-2">
@@ -586,7 +598,7 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
             Upload a JSON or CSV file with new year TDS rules to activate new rates.
           </p>
           <p className="text-xs text-muted-foreground">
-            Required columns: assessment_year, financial_year, form_type, section_code, nature_of_payment, threshold_individual, threshold_company, rate_individual, rate_company, rate_no_pan, effective_from
+            Required columns: financial_year (Tax Year, e.g. "2026-27"), form_type, section_code, nature_of_payment, threshold_individual, threshold_company, rate_individual, rate_company, rate_no_pan, effective_from. assessment_year is optional — auto-computed from financial_year if omitted.
           </p>
           <div className="mt-3">
             <Input type="file" accept=".json,.csv" onChange={e => {
