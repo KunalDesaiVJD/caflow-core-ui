@@ -1584,8 +1584,8 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                               <TableHead className="w-8 text-xs">#</TableHead>
                               {selForm === "24Q" ? (
                                 <>
-                                  <TableHead className="text-xs min-w-[140px]">Employee Name</TableHead>
-                                  <TableHead className="text-xs min-w-[100px]">PAN</TableHead>
+                                  <TableHead className="text-xs min-w-[220px]">Employee Name</TableHead>
+                                  <TableHead className="text-xs min-w-[130px]">PAN</TableHead>
                                   <TableHead className="text-xs">Designation</TableHead>
                                   <TableHead className="text-xs text-right">Gross</TableHead>
                                   <TableHead className="text-xs text-right">Std Ded</TableHead>
@@ -1595,8 +1595,8 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                 </>
                               ) : selForm === "27EQ" ? (
                                 <>
-                                  <TableHead className="text-xs min-w-[140px]">Collectee</TableHead>
-                                  <TableHead className="text-xs min-w-[100px]">PAN</TableHead>
+                                  <TableHead className="text-xs min-w-[220px]">Collectee</TableHead>
+                                  <TableHead className="text-xs min-w-[130px]">PAN</TableHead>
                                   <TableHead className="text-xs">Type</TableHead>
                                   <TableHead className="text-xs min-w-[140px]">Section</TableHead>
                                   <TableHead className="text-xs text-right">Amount</TableHead>
@@ -1608,8 +1608,8 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                 </>
                               ) : (
                                 <>
-                                  <TableHead className="text-xs min-w-[140px]">Name</TableHead>
-                                  <TableHead className="text-xs min-w-[100px]">PAN</TableHead>
+                                  <TableHead className="text-xs min-w-[220px]">Name</TableHead>
+                                  <TableHead className="text-xs min-w-[130px]">PAN</TableHead>
                                   <TableHead className="text-xs">Type</TableHead>
                                   <TableHead className="text-xs min-w-[140px]">Section</TableHead>
                                   <TableHead className="text-xs text-right">Amount</TableHead>
@@ -1656,8 +1656,8 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                   </TableCell>
                                   {selForm === "24Q" ? (
                                     <>
-                                      <TableCell><Input className="h-7 text-xs bg-muted cursor-not-allowed" disabled defaultValue={d.deductee_name} /></TableCell>
-                                      <TableCell><Input className="h-7 text-xs font-mono bg-muted cursor-not-allowed" disabled defaultValue={d.deductee_pan || ""} /></TableCell>
+                                      <TableCell><Input className="h-7 text-xs bg-muted cursor-not-allowed" disabled title={d.deductee_name} defaultValue={d.deductee_name} /></TableCell>
+                                      <TableCell><Input className="h-7 text-xs font-mono bg-muted cursor-not-allowed" disabled title={d.deductee_pan || ""} defaultValue={d.deductee_pan || ""} /></TableCell>
                                       <TableCell><Input className="h-7 text-xs w-20 bg-muted cursor-not-allowed" disabled defaultValue={d.designation || ""} /></TableCell>
                                       <TableCell className="text-right text-xs">{(d.gross_salary || 0).toLocaleString("en-IN")}</TableCell>
                                       <TableCell className="text-right text-xs">{(d.standard_deduction_allowed || 0).toLocaleString("en-IN")}</TableCell>
@@ -1667,8 +1667,8 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                     </>
                                   ) : (
                                     <>
-                                      <TableCell><Input className="h-7 text-xs bg-muted cursor-not-allowed" disabled defaultValue={d.deductee_name} /></TableCell>
-                                      <TableCell><Input className="h-7 text-xs font-mono w-24 bg-muted cursor-not-allowed" disabled defaultValue={d.deductee_pan || ""} /></TableCell>
+                                      <TableCell><Input className="h-7 text-xs bg-muted cursor-not-allowed" disabled title={d.deductee_name} defaultValue={d.deductee_name} /></TableCell>
+                                      <TableCell><Input className="h-7 text-xs font-mono bg-muted cursor-not-allowed" disabled title={d.deductee_pan || ""} defaultValue={d.deductee_pan || ""} /></TableCell>
                                       <TableCell><span className="text-xs px-1 text-muted-foreground">{d.deductee_type || "—"}</span></TableCell>
                                       <TableCell><Input className="h-7 text-xs w-[160px] bg-muted cursor-not-allowed" disabled defaultValue={d.section_code} /></TableCell>
                                       <TableCell className="text-right text-xs">{(d.amount_paid_credited || 0).toLocaleString("en-IN")}</TableCell>
@@ -1703,6 +1703,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                     <>
                                       <TableCell>
                                         <Input className={cn("h-7 text-xs", locked && "bg-muted cursor-not-allowed opacity-75")} disabled={locked}
+                                          title={d.deductee_name}
                                           defaultValue={d.deductee_name}
                                           onBlur={e => { if (!locked && e.target.value !== d.deductee_name) updateDeducteeField(d.id, "deductee_name", e.target.value); }}
                                           onKeyDown={e => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); if (!locked) addDeducteeRow(); } }} />
@@ -1713,6 +1714,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                             <TooltipTrigger asChild>
                                               <Input className={cn("h-7 text-xs font-mono", locked && "bg-muted cursor-not-allowed opacity-75", d.pan_not_available && "border-destructive text-destructive")}
                                                 disabled={locked}
+                                                title={d.deductee_pan || ""}
                                                 defaultValue={d.deductee_pan || ""}
                                                 onBlur={e => { if (!locked) updateDeducteeField(d.id, "deductee_pan", e.target.value || null); }} />
                                             </TooltipTrigger>
@@ -1735,6 +1737,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                     <>
                                       <TableCell>
                                         <Input className={cn("h-7 text-xs", locked && "bg-muted cursor-not-allowed opacity-75")} disabled={locked}
+                                          title={d.deductee_name}
                                           defaultValue={d.deductee_name}
                                           onBlur={e => { if (!locked && e.target.value !== d.deductee_name) updateDeducteeField(d.id, "deductee_name", e.target.value); }}
                                           onKeyDown={e => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); if (!locked) addDeducteeRow(); } }} />
@@ -1743,8 +1746,9 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                         <TooltipProvider>
                                           <Tooltip>
                                             <TooltipTrigger asChild>
-                                              <Input className={cn("h-7 text-xs font-mono w-24", locked && "bg-muted cursor-not-allowed opacity-75", d.pan_not_available && "border-destructive text-destructive")}
+                                              <Input className={cn("h-7 text-xs font-mono", locked && "bg-muted cursor-not-allowed opacity-75", d.pan_not_available && "border-destructive text-destructive")}
                                                 disabled={locked}
+                                                title={d.deductee_pan || ""}
                                                 defaultValue={d.deductee_pan || ""}
                                                 onBlur={e => { if (!locked) updateDeducteeField(d.id, "deductee_pan", e.target.value || null); }} />
                                             </TooltipTrigger>
