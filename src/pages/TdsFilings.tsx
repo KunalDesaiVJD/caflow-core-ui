@@ -169,7 +169,10 @@ const TdsFilings = () => {
       </div>
 
       <div className="flex-1 overflow-y-auto p-6">
-        <div className="max-w-[1400px] mx-auto">
+        {/* Workspace (Data Entry / Validate & Finalise) uses the full browser
+            width — its grid benefits from every extra pixel. Other sections
+            (dashboard cards, reports, etc.) stay capped for readability. */}
+        <div className={activeSection === "workspace" ? "w-full" : "max-w-[1400px] mx-auto"}>
           {activeSection === "dashboard" && (
             <TdsDashboard
               clients={clients} users={users} isSuperadmin={isSuperadmin}
