@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
@@ -974,6 +974,47 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     return { totalChallans, totalDeductees, totalPayment, totalTds, totalInterest, totalLateFees };
   }, [challans, deductees]);
 
+  // Excel-style AutoFit for the Name/PAN columns — width follows the widest
+  // value currently on screen instead of a fixed guess, so short names don't
+  // waste space and long ones aren't clipped. Measured against hidden spans
+  // (nameMeasureRef/panMeasureRef below), with font copied live from a real
+  // [data-autofit] Input rather than guessed via Tailwind classes — the shared
+  // Input component's base "md:text-sm" (14px) outranks our own "text-xs"
+  // (12px) in the CSS cascade at desktop widths, so assuming text-xs silently
+  // under-measures every value.
+  const nameMeasureRef = useRef<HTMLSpanElement>(null);
+  const panMeasureRef = useRef<HTMLSpanElement>(null);
+  const [nameColWidth, setNameColWidth] = useState(220);
+  const [panColWidth, setPanColWidth] = useState(120);
+
+  useLayoutEffect(() => {
+    const nameEl = nameMeasureRef.current;
+    const panEl = panMeasureRef.current;
+    if (!nameEl || !panEl) return;
+    const sampleNameInput = document.querySelector('[data-autofit="name"]');
+    const samplePanInput = document.querySelector('[data-autofit="pan"]');
+    if (sampleNameInput) nameEl.style.font = getComputedStyle(sampleNameInput).font;
+    if (samplePanInput) panEl.style.font = getComputedStyle(samplePanInput).font;
+    const rows = [...prevEntries, ...deductees];
+    const nameHeaderLabel = selForm === "24Q" ? "Employee Name" : selForm === "27EQ" ? "Collectee" : "Name";
+    // TableCell padding (16px × 2) + Input's own padding (12px × 2) + border (1px × 2) + slack
+    const CELL_PADDING = 70;
+
+    let maxName = 0;
+    for (const text of [nameHeaderLabel, ...rows.map(d => d.deductee_name || "")]) {
+      nameEl.textContent = text;
+      maxName = Math.max(maxName, nameEl.getBoundingClientRect().width);
+    }
+    let maxPan = 0;
+    for (const text of ["PAN", ...rows.map(d => d.deductee_pan || "")]) {
+      panEl.textContent = text;
+      maxPan = Math.max(maxPan, panEl.getBoundingClientRect().width);
+    }
+
+    setNameColWidth(Math.max(120, Math.min(560, Math.ceil(maxName) + CELL_PADDING)));
+    setPanColWidth(Math.max(90, Math.min(200, Math.ceil(maxPan) + CELL_PADDING)));
+  }, [deductees, prevEntries, selForm]);
+
   const autoMatchChallans = () => {
     if (isFilingLocked) return;
     const challanTotMap = new Map<string, number>();
@@ -1574,6 +1615,11 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                     );
                   })()}
 
+                  {/* Hidden measuring spans for Excel-style column AutoFit — same font
+                      classes as the real Name/PAN Inputs, positioned off-screen */}
+                  <span ref={nameMeasureRef} className="text-xs fixed -left-[9999px] top-0 whitespace-pre" aria-hidden="true" />
+                  <span ref={panMeasureRef} className="text-xs font-mono fixed -left-[9999px] top-0 whitespace-pre" aria-hidden="true" />
+
                   {/* Deductee Table */}
                   <Card>
                     <CardContent className="p-0">
@@ -1584,8 +1630,8 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                               <TableHead className="w-8 text-xs">#</TableHead>
                               {selForm === "24Q" ? (
                                 <>
-                                  <TableHead className="text-xs min-w-[500px]">Employee Name</TableHead>
-                                  <TableHead className="text-xs min-w-[170px]">PAN</TableHead>
+                                  <TableHead className="text-xs" style={{ width: nameColWidth, minWidth: nameColWidth }}>Employee Name</TableHead>
+                                  <TableHead className="text-xs" style={{ width: panColWidth, minWidth: panColWidth }}>PAN</TableHead>
                                   <TableHead className="text-xs">Designation</TableHead>
                                   <TableHead className="text-xs text-right">Gross</TableHead>
                                   <TableHead className="text-xs text-right">Std Ded</TableHead>
@@ -1595,8 +1641,8 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                 </>
                               ) : selForm === "27EQ" ? (
                                 <>
-                                  <TableHead className="text-xs min-w-[500px]">Collectee</TableHead>
-                                  <TableHead className="text-xs min-w-[170px]">PAN</TableHead>
+                                  <TableHead className="text-xs" style={{ width: nameColWidth, minWidth: nameColWidth }}>Collectee</TableHead>
+                                  <TableHead className="text-xs" style={{ width: panColWidth, minWidth: panColWidth }}>PAN</TableHead>
                                   <TableHead className="text-xs">Type</TableHead>
                                   <TableHead className="text-xs min-w-[140px]">Section</TableHead>
                                   <TableHead className="text-xs text-right">Amount</TableHead>
@@ -1608,8 +1654,8 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                 </>
                               ) : (
                                 <>
-                                  <TableHead className="text-xs min-w-[500px]">Name</TableHead>
-                                  <TableHead className="text-xs min-w-[170px]">PAN</TableHead>
+                                  <TableHead className="text-xs" style={{ width: nameColWidth, minWidth: nameColWidth }}>Name</TableHead>
+                                  <TableHead className="text-xs" style={{ width: panColWidth, minWidth: panColWidth }}>PAN</TableHead>
                                   <TableHead className="text-xs">Type</TableHead>
                                   <TableHead className="text-xs min-w-[140px]">Section</TableHead>
                                   <TableHead className="text-xs text-right">Amount</TableHead>
@@ -1704,6 +1750,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                       <TableCell>
                                         <Input className={cn("h-7 text-xs", locked && "bg-muted cursor-not-allowed opacity-75")} disabled={locked}
                                           title={d.deductee_name}
+                                          data-autofit="name"
                                           defaultValue={d.deductee_name}
                                           onBlur={e => { if (!locked && e.target.value !== d.deductee_name) updateDeducteeField(d.id, "deductee_name", e.target.value); }}
                                           onKeyDown={e => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); if (!locked) addDeducteeRow(); } }} />
@@ -1715,6 +1762,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                               <Input className={cn("h-7 text-xs font-mono", locked && "bg-muted cursor-not-allowed opacity-75", d.pan_not_available && "border-destructive text-destructive")}
                                                 disabled={locked}
                                                 title={d.deductee_pan || ""}
+                                                data-autofit="pan"
                                                 defaultValue={d.deductee_pan || ""}
                                                 onBlur={e => { if (!locked) updateDeducteeField(d.id, "deductee_pan", e.target.value || null); }} />
                                             </TooltipTrigger>
@@ -1738,6 +1786,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                       <TableCell>
                                         <Input className={cn("h-7 text-xs", locked && "bg-muted cursor-not-allowed opacity-75")} disabled={locked}
                                           title={d.deductee_name}
+                                          data-autofit="name"
                                           defaultValue={d.deductee_name}
                                           onBlur={e => { if (!locked && e.target.value !== d.deductee_name) updateDeducteeField(d.id, "deductee_name", e.target.value); }}
                                           onKeyDown={e => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); if (!locked) addDeducteeRow(); } }} />
@@ -1749,6 +1798,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                               <Input className={cn("h-7 text-xs font-mono", locked && "bg-muted cursor-not-allowed opacity-75", d.pan_not_available && "border-destructive text-destructive")}
                                                 disabled={locked}
                                                 title={d.deductee_pan || ""}
+                                                data-autofit="pan"
                                                 defaultValue={d.deductee_pan || ""}
                                                 onBlur={e => { if (!locked) updateDeducteeField(d.id, "deductee_pan", e.target.value || null); }} />
                                             </TooltipTrigger>
