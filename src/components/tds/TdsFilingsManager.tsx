@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
@@ -25,7 +25,7 @@ import {
 import { format, differenceInDays } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
-  Download, ArrowRight, RefreshCw, Copy, Clock, AlertTriangle, ExternalLink, Info, Settings, Database, Trash2,
+  Download, ArrowRight, RefreshCw, Copy, Clock, AlertTriangle, ExternalLink, Info, Settings, Trash2,
 } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
@@ -141,11 +141,6 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   const [copyQuarter, setCopyQuarter] = useState("Q1");
   const [copyFy, setCopyFy] = useState(DEFAULT_FY);
   const [copying, setCopying] = useState(false);
-
-  // Migration
-  const [migrationOpen, setMigrationOpen] = useState(false);
-  const [migrating, setMigrating] = useState(false);
-  const [migrationResult, setMigrationResult] = useState<{ challans: number; deductees: number; entries: number } | null>(null);
 
   // History drawer
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -340,6 +335,46 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       return true;
     });
   }, [filings, formFilter, statusFilter, deletedClients]);
+
+  // Excel-style AutoFit for the TAN and Status columns — width follows the
+  // widest value actually on screen (TAN) or the widest possible option
+  // (Status, a fixed enum) rather than a fixed guess. Font is copied live from
+  // a real rendered [data-autofit] element rather than assumed via Tailwind
+  // classes, since a shared component's base classes can silently outrank a
+  // plain "text-xs" in the CSS cascade (see TdsDataEntry's Name/PAN autofit).
+  const tanMeasureRef = useRef<HTMLSpanElement>(null);
+  const statusMeasureRef = useRef<HTMLSpanElement>(null);
+  const [tanColWidth, setTanColWidth] = useState(110);
+  const [statusColWidth, setStatusColWidth] = useState(180);
+
+  useLayoutEffect(() => {
+    const tanEl = tanMeasureRef.current;
+    const statusEl = statusMeasureRef.current;
+    if (!tanEl || !statusEl) return;
+
+    const sampleTan = document.querySelector('[data-autofit="tan"]');
+    const sampleStatus = document.querySelector('[data-autofit="status"]');
+    if (sampleTan) tanEl.style.font = getComputedStyle(sampleTan).font;
+    if (sampleStatus) statusEl.style.font = getComputedStyle(sampleStatus).font;
+
+    const TAN_PADDING = 34; // cell padding + a little breathing room (plain span, no input chrome)
+    let maxTan = 0;
+    for (const text of ["TAN", ...filtered.map(f => clients.find(c => c.id === f.client_id)?.tan_number || f.tan || "")]) {
+      tanEl.textContent = text;
+      maxTan = Math.max(maxTan, tanEl.getBoundingClientRect().width);
+    }
+    setTanColWidth(Math.max(90, Math.min(220, Math.ceil(maxTan) + TAN_PADDING)));
+
+    // SelectTrigger padding (12px × 2) + border (1px × 2) + chevron icon (16px)
+    // + gap before the chevron + a little breathing room
+    const STATUS_PADDING = 34 + 16 + 8;
+    let maxStatus = 0;
+    for (const text of FILING_STATUSES) {
+      statusEl.textContent = text;
+      maxStatus = Math.max(maxStatus, statusEl.getBoundingClientRect().width);
+    }
+    setStatusColWidth(Math.ceil(maxStatus) + STATUS_PADDING);
+  }, [filtered, clients]);
 
   // Check if a filing belongs to a deleted client (for archived styling)
   const isArchivedFiling = (f: TdsFiling): boolean => {
@@ -572,56 +607,6 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     else { toast({ title: `Filing copied to ${copyQuarter} ${copyFy}` }); setCopyDialogOpen(false); fetchFilings(); }
   };
 
-  // Migration logic
-  const runMigration = async () => {
-    setMigrating(true);
-    setMigrationResult(null);
-    try {
-      const firmId = await resolveFirmId();
-      let q = supabase.from("tds_entries").select("*").eq("migrated", false).limit(1000);
-      if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
-      const { data: entries, error: fetchErr } = await q;
-      if (fetchErr) throw fetchErr;
-      if (!entries || entries.length === 0) {
-        toast({ title: "No unmigrated entries found" });
-        setMigrating(false);
-        return;
-      }
-      const challanGroups = new Map<string, any[]>();
-      for (const e of entries) {
-        const key = `${e.client_id}|${e.form_type}|${e.challan_bsr_code || ""}|${e.challan_serial_no || ""}|${e.challan_date || ""}`;
-        if (!challanGroups.has(key)) challanGroups.set(key, []);
-        challanGroups.get(key)!.push(e);
-      }
-      let challanCount = 0, deducteeCount = 0;
-      for (const [, group] of challanGroups) {
-        const first = group[0];
-        const { data: existingFilings } = await supabase.from("tds_filings").select("id").eq("client_id", first.client_id).eq("financial_year", first.financial_year || "2025-26").limit(1);
-        let filingId: string;
-        if (existingFilings && existingFilings.length > 0) { filingId = existingFilings[0].id; }
-        else {
-          const { data: newFiling, error: fErr } = await supabase.from("tds_filings").insert({ client_id: first.client_id, firm_id: first.firm_id || firmId, financial_year: first.financial_year || "2025-26", quarter: "Q1", tds_forms: [first.form_type || "26Q"], work_status: "Data Received", tan: first.tan || null, last_updated_by: user?.id, last_updated_at: new Date().toISOString() } as any).select("id").single();
-          if (fErr) continue;
-          filingId = newFiling.id;
-        }
-        const totalChallanAmount = first.challan_amount || group.reduce((s: number, e: any) => s + (e.tds_amount || 0), 0);
-        const { data: challan, error: cErr } = await supabase.from("tds_challans").insert({ filing_id: filingId, client_id: first.client_id, firm_id: first.firm_id || firmId, form_type: first.form_type || "26Q", financial_year: first.financial_year || "2025-26", quarter: "Q1", bsr_code: first.challan_bsr_code || null, challan_serial_no: first.challan_serial_no || null, deposit_date: first.challan_date || null, total_challan_amount: totalChallanAmount, total_tax_deposited: totalChallanAmount } as any).select("id").single();
-        if (cErr) continue;
-        challanCount++;
-        for (const e of group) {
-          await supabase.from("tds_deductees").insert({ challan_id: challan.id, filing_id: filingId, client_id: e.client_id, firm_id: e.firm_id || firmId, form_type: e.form_type || "26Q", financial_year: e.financial_year || "2025-26", quarter: "Q1", deductee_name: e.party_name || "", deductee_pan: e.deductee_pan || e.pan || null, section_code: e.section_code || e.section || "", amount_paid_credited: e.amount || null, date_of_payment: e.date || null, rate_of_tds: e.tds_rate || null, tds_amount: e.tds_amount || null, total_tax_deducted: e.tds_amount || null, pan_not_available: false } as any);
-          deducteeCount++;
-          await supabase.from("tds_entries").update({ migrated: true, migrated_at: new Date().toISOString() } as any).eq("id", e.id);
-        }
-      }
-      setMigrationResult({ challans: challanCount, deductees: deducteeCount, entries: entries.length });
-      toast({ title: `Migration complete: ${entries.length} entries → ${challanCount} challans + ${deducteeCount} deductees` });
-    } catch (err: any) {
-      toast({ title: "Migration error", description: err.message, variant: "destructive" });
-    }
-    setMigrating(false);
-  };
-
   const toggleSelect = (id: string) => {
     setSelectedIds(prev => {
       const next = new Set(prev);
@@ -787,9 +772,6 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
             <DropdownMenuItem onClick={exportFilings} className="gap-2">
               <Download size={14} /> Export Filings
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setMigrationOpen(true)} className="gap-2">
-              <Database size={14} /> Migrate Legacy Data
-            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -815,6 +797,11 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
         </div>
       )}
 
+      {/* Hidden measuring spans for Excel-style column AutoFit (TAN/Status) —
+          same font as the real rendered elements, positioned off-screen */}
+      <span ref={tanMeasureRef} className="text-xs font-mono fixed -left-[9999px] top-0 whitespace-pre" aria-hidden="true" />
+      <span ref={statusMeasureRef} className="text-xs fixed -left-[9999px] top-0 whitespace-pre" aria-hidden="true" />
+
       {/* Main Table */}
       <Card>
         <CardContent className="p-0">
@@ -829,11 +816,11 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                     />
                   </TableHead>
                   <TableHead className="min-w-[150px] sticky left-0 bg-background z-10">Client</TableHead>
-                  <TableHead>TAN</TableHead>
+                  <TableHead style={{ width: tanColWidth, minWidth: tanColWidth }}>TAN</TableHead>
                   <TableHead>Form</TableHead>
                   <TableHead>Quarter</TableHead>
                   <TableHead>FY</TableHead>
-                  <TableHead className="min-w-[180px]">Status</TableHead>
+                  <TableHead style={{ width: statusColWidth, minWidth: statusColWidth }}>Status</TableHead>
                   <TableHead>Due Date</TableHead>
                   <TableHead>Filing Date</TableHead>
                   <TableHead>Ack No</TableHead>
@@ -871,7 +858,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                       </TableCell>
                       <TableCell>
                         {clientTan ? (
-                          <span className="font-mono text-xs">{clientTan}</span>
+                          <span className="font-mono text-xs" data-autofit="tan">{clientTan}</span>
                         ) : (
                           <Badge variant="destructive" className="text-xs gap-1 cursor-pointer">
                             <AlertTriangle size={10} /> TAN Missing
@@ -886,8 +873,8 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                           <Badge className={cn("text-xs", FILING_STATUS_COLORS[f.work_status] || "bg-muted")}>{f.work_status}</Badge>
                         ) : (
                           <Select value={f.work_status} onValueChange={v => handleStatusChange(f, v)}>
-                            <SelectTrigger className="h-7 text-xs w-[180px]">
-                              <Badge className={cn("text-xs", FILING_STATUS_COLORS[f.work_status] || "bg-muted")}>{f.work_status}</Badge>
+                            <SelectTrigger className="h-7 text-xs" style={{ width: statusColWidth }}>
+                              <Badge data-autofit="status" className={cn("text-xs", FILING_STATUS_COLORS[f.work_status] || "bg-muted")}>{f.work_status}</Badge>
                             </SelectTrigger>
                             <SelectContent>
                               {FILING_STATUSES.map(s => (
@@ -1110,25 +1097,6 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
         </DialogContent>
       </Dialog>
 
-      {/* Migration Dialog */}
-      <Dialog open={migrationOpen} onOpenChange={setMigrationOpen}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>Migrate Legacy TDS Data</DialogTitle></DialogHeader>
-          <div className="space-y-3">
-            <p className="text-sm text-muted-foreground">Migrates from <code className="bg-muted px-1 rounded">tds_entries</code> into <code className="bg-muted px-1 rounded">tds_challans</code> + <code className="bg-muted px-1 rounded">tds_deductees</code>.</p>
-            {migrationResult && (
-              <div className="p-3 bg-emerald-50 dark:bg-emerald-950/30 rounded-lg border border-emerald-200 dark:border-emerald-800">
-                <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">Migration Complete</p>
-                <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-1">{migrationResult.entries} entries → {migrationResult.challans} challans + {migrationResult.deductees} deductees</p>
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setMigrationOpen(false)}>Close</Button>
-            <Button onClick={runMigration} disabled={migrating}>{migrating ? "Migrating..." : "Run Migration"}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
