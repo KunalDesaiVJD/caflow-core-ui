@@ -1318,9 +1318,9 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
             </div>
           )}
 
-          <div className="grid grid-cols-1 lg:grid-cols-[30%_1fr] gap-4">
-            {/* LEFT PANEL — Challan Cards */}
-            <div className="space-y-3">
+          <div className="space-y-3">
+            {/* Challan strip — horizontal, single row (was a 30%-width vertical sidebar) */}
+            <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-semibold text-foreground">Challans</h3>
                 {/* Issue 2: Hide Add Challan when filed */}
@@ -1333,206 +1333,183 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
 
               {/* Carry-forward challans (Issue 7H: show origin quarter/FY) */}
               {carryForwardChallans.length > 0 && (
-                <>
+                <div className="space-y-1">
                   <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Carried Forward</p>
-                  {carryForwardChallans.map(cf => {
-                    const bd = getChallanBreakdownAll(cf.challan.id);
-                    const avail = Math.max(0, (cf.challan.total_challan_amount || 0) - bd.applied);
-                    const isFullyUtilized = avail <= 0.5;
-                    // Has any deductee from the currently-viewed quarter been
-                    // attached to this carry-forward challan?
-                    const hasCurrentQUsage = (allChallanDeductees[cf.challan.id] || [])
-                      .some(d => d.quarter === selQuarter && d.financial_year === selFy);
-                    // Four visual states so user can spot each at a glance:
-                    //   1. Untouched + has balance           → warm tan (default)
-                    //   2. Partially used in current Q       → amber (new — still has balance here)
-                    //   3. Fully consumed via current Q      → blue  (exhausted by this quarter)
-                    //   4. Fully consumed only by prior Qs   → slate (old news)
-                    let cardTone = "bg-accent/30 border-accent";
-                    if (hasCurrentQUsage && !isFullyUtilized) {
-                      cardTone = "bg-amber-50 border-amber-300";          // partial
-                    } else if (hasCurrentQUsage && isFullyUtilized) {
-                      cardTone = "bg-blue-50 border-blue-300";            // fully consumed this Q
-                    } else if (isFullyUtilized) {
-                      cardTone = "bg-slate-100 border-slate-300 opacity-90"; // historically fully used
-                    }
+                  <div className="flex gap-2 overflow-x-auto pb-1">
+                    {carryForwardChallans.map(cf => {
+                      const bd = getChallanBreakdownAll(cf.challan.id);
+                      const avail = Math.max(0, (cf.challan.total_challan_amount || 0) - bd.applied);
+                      const isFullyUtilized = avail <= 0.5;
+                      // Has any deductee from the currently-viewed quarter been
+                      // attached to this carry-forward challan?
+                      const hasCurrentQUsage = (allChallanDeductees[cf.challan.id] || [])
+                        .some(d => d.quarter === selQuarter && d.financial_year === selFy);
+                      // Four visual states so user can spot each at a glance:
+                      //   1. Untouched + has balance           → warm tan (default)
+                      //   2. Partially used in current Q       → amber (new — still has balance here)
+                      //   3. Fully consumed via current Q      → blue  (exhausted by this quarter)
+                      //   4. Fully consumed only by prior Qs   → slate (old news)
+                      let cardTone = "bg-accent/30 border-accent";
+                      if (hasCurrentQUsage && !isFullyUtilized) {
+                        cardTone = "bg-amber-50 border-amber-300";          // partial
+                      } else if (hasCurrentQUsage && isFullyUtilized) {
+                        cardTone = "bg-blue-50 border-blue-300";            // fully consumed this Q
+                      } else if (isFullyUtilized) {
+                        cardTone = "bg-slate-100 border-slate-300 opacity-90"; // historically fully used
+                      }
+                      return (
+                        <TooltipProvider key={`cf-${cf.challan.id}`}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Card
+                                className={cn(
+                                  "cursor-pointer transition-all hover:shadow-sm flex-shrink-0 w-60",
+                                  cardTone,
+                                  selectedChallan?.id === cf.challan.id ? "border-primary ring-1 ring-primary/30" : "",
+                                )}
+                                onClick={() => selectChallan(cf.challan)}>
+                                <CardContent className="p-2.5 space-y-1">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <CreditCard size={12} className="text-accent-foreground shrink-0" />
+                                    <span className="text-xs font-semibold font-mono">{cf.challan.bsr_code || "No BSR"}</span>
+                                    <Badge variant="secondary" className="text-[9px]">From {cf.fromQuarter} {cf.fromFy}</Badge>
+                                  </div>
+                                  <div className="flex items-center justify-between text-[10px]">
+                                    <span className="text-muted-foreground">Available</span>
+                                    <span className={cn("font-semibold", avail > 0.5 ? "text-emerald-600" : "text-slate-500")}>₹{avail.toLocaleString("en-IN")}</span>
+                                  </div>
+                                  {(hasCurrentQUsage || isFullyUtilized) && (
+                                    <div className="flex flex-wrap gap-1">
+                                      {hasCurrentQUsage && !isFullyUtilized && (
+                                        <Badge className="text-[8px] bg-amber-500 text-white border-0 px-1">Partial {selQuarter}</Badge>
+                                      )}
+                                      {hasCurrentQUsage && isFullyUtilized && (
+                                        <Badge className="text-[8px] bg-blue-600 text-white border-0 px-1">Used {selQuarter}</Badge>
+                                      )}
+                                      {isFullyUtilized && (
+                                        <Badge className="text-[8px] bg-emerald-600 text-white border-0 px-1">Fully Utilised</Badge>
+                                      )}
+                                    </div>
+                                  )}
+                                </CardContent>
+                              </Card>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              Carried from {cf.fromQuarter} FY {cf.fromFy}
+                              {cf.challan.challan_serial_no ? ` · Challan No: ${cf.challan.challan_serial_no}` : ""}
+                              {" · "}Original: ₹{(cf.challan.total_challan_amount || 0).toLocaleString("en-IN")}
+                              {" · "}Used (all quarters): ₹{bd.applied.toLocaleString("en-IN")}
+                              {(cf.challan.late_fees_234e || 0) > 0 && (
+                                <> · Late Fees 234E: ₹{(cf.challan.late_fees_234e || 0).toLocaleString("en-IN")} (Used ₹{(cf.challan.late_fees_used || 0).toLocaleString("en-IN")})</>
+                              )}
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {challans.length === 0 && carryForwardChallans.length === 0 ? (
+                <Card className="border-dashed">
+                  <CardContent className="py-6 text-center text-muted-foreground text-sm">
+                    {isFilingLocked ? "Filed — no challans can be added." : "No challans yet. Add your first challan."}
+                  </CardContent>
+                </Card>
+              ) : challans.length > 0 && (
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  {challans.map(c => {
+                    const bd = getChallanBreakdownAll(c.id);
+                    // Issue 4: Late fees excluded from allocatable amount (they are a separate govt levy)
+                    const allocatable = (c.total_challan_amount || 0) - (c.late_fees_234e || 0);
+                    const unconsumed = allocatable - bd.applied;
+                    const lateFeeBalance = (c.late_fees_234e || 0) - (c.late_fees_used || 0);
                     return (
-                      <TooltipProvider key={`cf-${cf.challan.id}`}>
+                      <TooltipProvider key={c.id}>
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Card
-                              className={cn(
-                                "cursor-pointer transition-all hover:shadow-sm",
-                                cardTone,
-                                selectedChallan?.id === cf.challan.id ? "border-primary ring-1 ring-primary/30" : "",
-                              )}
-                              onClick={() => selectChallan(cf.challan)}>
-                              <CardContent className="p-3">
-                                <div className="flex items-center gap-2 mb-1 flex-wrap">
-                                  <CreditCard size={14} className="text-accent-foreground" />
-                                  <span className="text-xs font-semibold font-mono">{cf.challan.bsr_code || "No BSR"}</span>
-                                  {cf.challan.challan_serial_no && (
-                                    <Badge variant="outline" className="text-[9px] font-mono bg-white">
-                                      Challan No: {cf.challan.challan_serial_no}
-                                    </Badge>
-                                  )}
-                                  <Badge variant="secondary" className="text-[9px]">From {cf.fromQuarter} {cf.fromFy}</Badge>
-                                  {hasCurrentQUsage && !isFullyUtilized && (
-                                    <Badge className="text-[9px] bg-amber-500 text-white border-0">
-                                      Partially Used in {selQuarter}
-                                    </Badge>
-                                  )}
-                                  {hasCurrentQUsage && isFullyUtilized && (
-                                    <Badge className="text-[9px] bg-blue-600 text-white border-0">
-                                      Used in {selQuarter}
-                                    </Badge>
-                                  )}
-                                  {isFullyUtilized && (
-                                    <Badge className="text-[9px] bg-emerald-600 text-white border-0">
-                                      Fully Utilised
-                                    </Badge>
+                              className={cn("cursor-pointer transition-all hover:shadow-sm flex-shrink-0 w-60",
+                                selectedChallan?.id === c.id ? "border-primary ring-1 ring-primary/30" : "",
+                                isFilingLocked ? "bg-muted/50" : "")}
+                              onClick={() => selectChallan(c)}>
+                              <CardContent className="p-2.5 space-y-1">
+                                <div className="flex items-start justify-between gap-1">
+                                  <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                                    <CreditCard size={12} className="text-primary shrink-0" />
+                                    <span className="text-xs font-semibold font-mono truncate">{c.bsr_code || "No BSR"}</span>
+                                    {c.section_code && <Badge variant="outline" className="text-[9px] px-1">{c.section_code}</Badge>}
+                                  </div>
+                                  {/* Issue 2: Hide Edit/Delete when filed */}
+                                  {!isFilingLocked && (
+                                    <div className="flex gap-0.5 shrink-0">
+                                      <Button variant="ghost" size="icon" className="h-5 w-5" onClick={e => { e.stopPropagation(); openEditChallan(c); }}>
+                                        <Pencil size={10} />
+                                      </Button>
+                                      <Button variant="ghost" size="icon" className="h-5 w-5" onClick={e => { e.stopPropagation(); deleteChallan(c.id); }}>
+                                        <Trash2 size={10} className="text-destructive" />
+                                      </Button>
+                                    </div>
                                   )}
                                 </div>
-                                <div className="grid grid-cols-3 gap-1 text-[10px]">
-                                  <div><span className="text-muted-foreground">Original:</span> <span className="font-medium">₹{(cf.challan.total_challan_amount || 0).toLocaleString("en-IN")}</span></div>
-                                  <div><span className="text-muted-foreground">Used (all Q):</span> <span className="font-medium">₹{bd.applied.toLocaleString("en-IN")}</span></div>
-                                  <div><span className="text-muted-foreground">Available:</span> <span className={cn("font-semibold", avail > 0.5 ? "text-emerald-600" : "text-slate-500")}>₹{avail.toLocaleString("en-IN")}</span></div>
+                                <p className="text-[10px] text-muted-foreground truncate">
+                                  {c.deposit_date ? format(new Date(c.deposit_date), "dd MMM yyyy") : "No date"}
+                                  {c.challan_serial_no && ` • No: ${c.challan_serial_no}`}
+                                </p>
+                                <div className={cn("flex items-center justify-between text-[10px] font-semibold",
+                                  Math.abs(unconsumed) <= 1 ? "text-emerald-600" : unconsumed > 0 ? "text-amber-600" : "text-destructive")}>
+                                  <span>{Math.abs(unconsumed) <= 1 ? "Fully Utilised" : unconsumed > 0 ? "Unconsumed" : "Over-applied"}</span>
+                                  <span>₹{bd.applied.toLocaleString("en-IN")}/₹{(c.total_challan_amount || 0).toLocaleString("en-IN")}</span>
                                 </div>
-                                {/* Issue 6: Late Fees tracking on carry-forward */}
-                                {(cf.challan.late_fees_234e || 0) > 0 && (
-                                  <div className="text-[10px] mt-1 pt-1 border-t border-border/30">
-                                    <span className="text-muted-foreground">Late Fees 234E: </span>
-                                    <span className="font-medium">₹{(cf.challan.late_fees_234e || 0).toLocaleString("en-IN")}</span>
-                                    <span className="text-muted-foreground ml-2">Used: </span>
-                                    <span>₹{(cf.challan.late_fees_used || 0).toLocaleString("en-IN")}</span>
+                                <div className="w-full h-1.5 rounded-full bg-muted overflow-hidden">
+                                  <div className={cn("h-full rounded-full transition-all", getBalanceColor(c))}
+                                    style={{ width: c.total_challan_amount > 0 ? `${Math.min(100, (bd.applied / c.total_challan_amount) * 100)}%` : "0%" }} />
+                                </div>
+                                {isFilingLocked && (
+                                  <Badge variant="secondary" className="text-[9px] gap-1"><Lock size={8} /> Filed</Badge>
+                                )}
+                                {/* Issue 6: Late Fees 234E tracking — kept inline since it's an editable field, not just display */}
+                                {(c.late_fees_234e || 0) > 0 && (
+                                  <div className="flex items-center justify-between gap-1 text-[9px] pt-1 border-t border-border/30">
+                                    <span className="text-muted-foreground">LF ₹{(c.late_fees_234e || 0).toLocaleString("en-IN")} used</span>
+                                    {isFilingLocked ? (
+                                      <span>₹{(c.late_fees_used || 0).toLocaleString("en-IN")}</span>
+                                    ) : (
+                                      <Input
+                                        type="number"
+                                        className="h-5 w-16 text-[9px] text-right px-1"
+                                        defaultValue={c.late_fees_used || ""}
+                                        onClick={e => e.stopPropagation()}
+                                        onBlur={async e => {
+                                          const val = Math.min(parseFloat(e.target.value) || 0, c.late_fees_234e || 0);
+                                          await supabase.from("tds_challans").update({ late_fees_used: val } as any).eq("id", c.id);
+                                          if (filing) await refreshChallansAndCF(filing.id);
+                                        }}
+                                      />
+                                    )}
                                   </div>
                                 )}
                               </CardContent>
                             </Card>
                           </TooltipTrigger>
                           <TooltipContent>
-                            Carried from {cf.fromQuarter} FY {cf.fromFy}
-                            {cf.challan.challan_serial_no ? ` · Challan No: ${cf.challan.challan_serial_no}` : ""}
-                            {" · "}Original: ₹{(cf.challan.total_challan_amount || 0).toLocaleString("en-IN")}
-                            {" · "}Used (all quarters): ₹{bd.applied.toLocaleString("en-IN")}
+                            <div>Tax (TDS): ₹{bd.tds.toLocaleString("en-IN")}</div>
+                            {bd.interest > 0 && <div>Interest: ₹{bd.interest.toLocaleString("en-IN")}</div>}
+                            {bd.surcharge > 0 && <div>Surcharge: ₹{bd.surcharge.toLocaleString("en-IN")}</div>}
+                            {bd.lateFees > 0 && <div>Late Fees 234E: ₹{bd.lateFees.toLocaleString("en-IN")} (Balance ₹{lateFeeBalance.toLocaleString("en-IN")})</div>}
+                            <div>Applied Total: ₹{bd.applied.toLocaleString("en-IN")}</div>
+                            <div>Challan Total: ₹{(c.total_challan_amount || 0).toLocaleString("en-IN")}</div>
                           </TooltipContent>
                         </Tooltip>
                       </TooltipProvider>
                     );
                   })}
-                  <div className="border-t border-dashed my-1" />
-                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Current Quarter Challans</p>
-                </>
+                </div>
               )}
-
-              {challans.length === 0 && carryForwardChallans.length === 0 ? (
-                <Card className="border-dashed">
-                  <CardContent className="py-8 text-center text-muted-foreground text-sm">
-                    {isFilingLocked ? "Filed — no challans can be added." : "No challans yet. Add your first challan."}
-                  </CardContent>
-                </Card>
-              ) : challans.map(c => {
-                const bd = getChallanBreakdownAll(c.id);
-                // Issue 4: Late fees excluded from allocatable amount (they are a separate govt levy)
-                const allocatable = (c.total_challan_amount || 0) - (c.late_fees_234e || 0);
-                const unconsumed = allocatable - bd.applied;
-                const lateFeeBalance = (c.late_fees_234e || 0) - (c.late_fees_used || 0);
-                return (
-                  <Card key={c.id}
-                    className={cn("cursor-pointer transition-all hover:shadow-sm",
-                      selectedChallan?.id === c.id ? "border-primary ring-1 ring-primary/30" : "",
-                      isFilingLocked ? "bg-muted/50" : "")}
-                    onClick={() => selectChallan(c)}>
-                    <CardContent className="p-3">
-                      <div className="flex items-start justify-between">
-                        <div className="space-y-1 flex-1">
-                          <div className="flex items-center gap-2">
-                            <CreditCard size={14} className="text-primary" />
-                            <span className="text-xs font-semibold font-mono">{c.bsr_code || "No BSR"}</span>
-                            {c.section_code && <Badge variant="outline" className="text-[10px]">{c.section_code}</Badge>}
-                            {/* Issue 2: Filed badge on challan card */}
-                            {isFilingLocked && <Badge variant="secondary" className="text-[9px] gap-1"><Lock size={8} /> Filed — View Only</Badge>}
-                          </div>
-                          <p className="text-xs text-muted-foreground">
-                            {c.deposit_date ? format(new Date(c.deposit_date), "dd MMM yyyy") : "No date"}
-                            {c.challan_serial_no && ` • Challan No: ${c.challan_serial_no}`}
-                          </p>
-                          <div className="text-[10px] space-y-0.5 mt-1 border-t pt-1 border-border/50">
-                            <div className="flex justify-between"><span className="text-muted-foreground">Tax (TDS)</span><span>₹{bd.tds.toLocaleString("en-IN")}</span></div>
-                            {bd.interest > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Interest</span><span>₹{bd.interest.toLocaleString("en-IN")}</span></div>}
-                            {bd.surcharge > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Surcharge</span><span>₹{bd.surcharge.toLocaleString("en-IN")}</span></div>}
-                            {bd.lateFees > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Late Fees 234E</span><span>₹{bd.lateFees.toLocaleString("en-IN")}</span></div>}
-                            <div className="flex justify-between font-medium border-t border-border/30 pt-0.5">
-                              <span>Applied Total</span><span>₹{bd.applied.toLocaleString("en-IN")}</span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span className="text-muted-foreground">Challan Total</span>
-                              <span className="font-semibold">₹{(c.total_challan_amount || 0).toLocaleString("en-IN")}</span>
-                            </div>
-                            <div className={cn("flex justify-between font-semibold",
-                              Math.abs(unconsumed) <= 1 ? "text-emerald-600" : unconsumed > 0 ? "text-amber-600" : "text-destructive")}>
-                              <span>{Math.abs(unconsumed) <= 1 ? "Fully Utilised" : unconsumed > 0 ? "Unconsumed" : "Over-applied"}</span>
-                              {Math.abs(unconsumed) > 1 && <span>₹{Math.abs(unconsumed).toLocaleString("en-IN")}</span>}
-                            </div>
-                          </div>
-
-                          {/* Issue 6: Late Fees 234E tracking */}
-                          {(c.late_fees_234e || 0) > 0 && (
-                            <div className="text-[10px] mt-1 pt-1 border-t border-border/30 space-y-0.5">
-                              <div className="flex justify-between text-muted-foreground">
-                                <span>Late Fees 234E Total</span><span>₹{(c.late_fees_234e || 0).toLocaleString("en-IN")}</span>
-                              </div>
-                              <div className="flex justify-between items-center">
-                                <span className="text-muted-foreground">Late Fees Used</span>
-                                {isFilingLocked ? (
-                                  <span>₹{(c.late_fees_used || 0).toLocaleString("en-IN")}</span>
-                                ) : (
-                                  <Input
-                                    type="number"
-                                    className="h-5 w-20 text-[10px] text-right px-1"
-                                    defaultValue={c.late_fees_used || ""}
-                                    onClick={e => e.stopPropagation()}
-                                    onBlur={async e => {
-                                      const val = Math.min(parseFloat(e.target.value) || 0, c.late_fees_234e || 0);
-                                      await supabase.from("tds_challans").update({ late_fees_used: val } as any).eq("id", c.id);
-                                      if (filing) await refreshChallansAndCF(filing.id);
-                                    }}
-                                  />
-                                )}
-                              </div>
-                              <div className={cn("flex justify-between font-semibold", lateFeeBalance < 0 ? "text-destructive" : lateFeeBalance === 0 ? "text-emerald-600" : "text-amber-600")}>
-                                <span>Late Fees Balance</span><span>₹{lateFeeBalance.toLocaleString("en-IN")}</span>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Balance bar */}
-                          <div className="w-full h-1.5 rounded-full bg-muted mt-1 overflow-hidden">
-                            <div className={cn("h-full rounded-full transition-all", getBalanceColor(c))}
-                              style={{ width: c.total_challan_amount > 0 ? `${Math.min(100, (bd.applied / c.total_challan_amount) * 100)}%` : "0%" }} />
-                          </div>
-
-                        </div>
-
-                        {/* Issue 2: Hide Edit/Delete when filed */}
-                        {!isFilingLocked && (
-                          <div className="flex gap-1 ml-2">
-                            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={e => { e.stopPropagation(); openEditChallan(c); }}>
-                              <Pencil size={12} />
-                            </Button>
-                            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={e => { e.stopPropagation(); deleteChallan(c.id); }}>
-                              <Trash2 size={12} className="text-destructive" />
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })}
             </div>
 
-            {/* RIGHT PANEL — Deductee Table */}
+            {/* Challan detail + Deductee Table — now full width, no longer squeezed by the left sidebar */}
             <div className="space-y-3">
               {selectedChallan ? (
                 <>
