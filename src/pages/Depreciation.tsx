@@ -66,19 +66,33 @@ if (dis < 0)      errs.push('Disposals cannot be negative.');
 if (dis > gb+add) errs.push('Disposals cannot exceed total gross block.');
 if (add > 0 && !a.addition_date)  errs.push('Addition date required when additions > 0.');
 if (dis > 0 && !a.disposal_date)  errs.push('Disposal date required when disposals > 0.');
+  // 2026-06-25 (V J Desai — timezone bug): the previous FY-boundary checks
+  // compared `new Date(isoStr)` (parsed as UTC midnight) against
+  // `new Date(fyY+1, 2, 31)` (constructed in LOCAL time). In IST (UTC+5:30)
+  // the ISO parse is 5:30 h AHEAD of the local Mar-31 midnight, so the
+  // very last day of the FY read as "beyond" the FY and legitimate 31-Mar
+  // additions were rejected. Fix: compare YYYY-MM-DD strings directly —
+  // lexicographic ordering matches calendar ordering for zero-padded ISO
+  // dates and is timezone-agnostic. Works for every user regardless of
+  // browser/OS timezone (west of UTC would have hit the mirror-image bug
+  // on the FIRST day of the FY).
+  const fyBoundsIso = (fyStr: string): { start: string; end: string } | null => {
+    const m = /^(\d{4})-(\d{2,4})$/.exec(fyStr || '');
+    if (!m) return null;
+    const startY = parseInt(m[1], 10);
+    return { start: `${startY}-04-01`, end: `${startY + 1}-03-31` };
+  };
   if (fy && a.addition_date) {
-const fyY = parseInt(fy.split('-')[0]);
-const d = new Date(a.addition_date);
-if (d < new Date(fyY,3,1) || d > new Date(fyY+1,2,31))
-  errs.push(`Addition date ${a.addition_date} is outside FY ${fy}.`);
-}
+    const b = fyBoundsIso(fy);
+    if (b && (a.addition_date < b.start || a.addition_date > b.end)) {
+      errs.push(`Addition date ${a.addition_date} is outside FY ${fy}.`);
+    }
+  }
   // FIX GEN-4: Block adding an asset whose purchase date falls in a
   // future financial year relative to the currently selected FY.
   if (fy && a.date_of_purchase) {
-    const fyY = parseInt(fy.split('-')[0]);
-    const fyLastDay = new Date(fyY + 1, 2, 31); // Mar 31 of FY end year
-    const purchDate = new Date(a.date_of_purchase);
-    if (purchDate > fyLastDay) {
+    const b = fyBoundsIso(fy);
+    if (b && a.date_of_purchase > b.end) {
       errs.push(
         `Date of Purchase (${a.date_of_purchase}) is beyond FY ${fy}. ` +
         `You cannot add a future-year asset to this financial year.`
