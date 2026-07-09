@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   FileText, LayoutDashboard, PenLine,
@@ -33,7 +32,6 @@ const TdsFilings = () => {
   const { user } = useAuth();
   
   const [activeSection, setActiveSection] = useState<NavKey>("dashboard");
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   // CP-02: sub-tab inside TDS Workspace
   const [workspaceTab, setWorkspaceTab] = useState<"data-entry" | "validate">("data-entry");
   // Increment to force TdsDashboard to re-fetch when returning from workspace
@@ -150,27 +148,24 @@ const TdsFilings = () => {
   }, [fetchClients]);
 
   return (
-    <div className="flex h-[calc(100vh-4rem)] overflow-hidden">
-      <div className={cn("border-r bg-muted/30 flex flex-col shrink-0 transition-all duration-200", sidebarCollapsed ? "w-14" : "w-48")}>
-        <div className="p-3 border-b flex items-center justify-between">
-          {!sidebarCollapsed && <span className="text-sm font-semibold text-foreground">TDS Module</span>}
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setSidebarCollapsed(!sidebarCollapsed)}>
-            <FileText size={14} />
-          </Button>
+    <div className="flex flex-col h-[calc(100vh-4rem)] overflow-hidden">
+      <div className="border-b bg-muted/30 shrink-0">
+        <div className="flex items-center gap-4 px-4 overflow-x-auto">
+          <span className="text-sm font-semibold text-foreground shrink-0 py-2.5">TDS Module</span>
+          <nav className="flex items-center gap-1 shrink-0">
+            {NAV_ITEMS.map(item => (
+              <button key={item.key} onClick={() => {
+                if (item.key === "dashboard") setDashRefreshKey(k => k + 1);
+                setActiveSection(item.key);
+              }}
+                className={cn("flex items-center gap-1.5 px-3 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap",
+                  activeSection === item.key ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground")}>
+                <item.icon size={14} className="shrink-0" />
+                <span>{item.label}</span>
+              </button>
+            ))}
+          </nav>
         </div>
-        <nav className="flex-1 py-2 space-y-0.5 px-2">
-          {NAV_ITEMS.map(item => (
-            <button key={item.key} onClick={() => {
-              if (item.key === "dashboard") setDashRefreshKey(k => k + 1);
-              setActiveSection(item.key);
-            }}
-              className={cn("w-full flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm transition-colors",
-                activeSection === item.key ? "bg-primary text-primary-foreground font-medium" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
-              <item.icon size={16} className="shrink-0" />
-              {!sidebarCollapsed && <span>{item.label}</span>}
-            </button>
-          ))}
-        </nav>
       </div>
 
       <div className="flex-1 overflow-y-auto p-6">
