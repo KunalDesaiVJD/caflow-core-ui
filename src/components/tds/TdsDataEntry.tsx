@@ -1584,8 +1584,8 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                               <TableHead className="w-8 text-xs">#</TableHead>
                               {selForm === "24Q" ? (
                                 <>
-                                  <TableHead className="text-xs min-w-[220px]">Employee Name</TableHead>
-                                  <TableHead className="text-xs min-w-[130px]">PAN</TableHead>
+                                  <TableHead className="text-xs min-w-[500px]">Employee Name</TableHead>
+                                  <TableHead className="text-xs min-w-[170px]">PAN</TableHead>
                                   <TableHead className="text-xs">Designation</TableHead>
                                   <TableHead className="text-xs text-right">Gross</TableHead>
                                   <TableHead className="text-xs text-right">Std Ded</TableHead>
@@ -1595,8 +1595,8 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                 </>
                               ) : selForm === "27EQ" ? (
                                 <>
-                                  <TableHead className="text-xs min-w-[220px]">Collectee</TableHead>
-                                  <TableHead className="text-xs min-w-[130px]">PAN</TableHead>
+                                  <TableHead className="text-xs min-w-[500px]">Collectee</TableHead>
+                                  <TableHead className="text-xs min-w-[170px]">PAN</TableHead>
                                   <TableHead className="text-xs">Type</TableHead>
                                   <TableHead className="text-xs min-w-[140px]">Section</TableHead>
                                   <TableHead className="text-xs text-right">Amount</TableHead>
@@ -1608,8 +1608,8 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                 </>
                               ) : (
                                 <>
-                                  <TableHead className="text-xs min-w-[220px]">Name</TableHead>
-                                  <TableHead className="text-xs min-w-[130px]">PAN</TableHead>
+                                  <TableHead className="text-xs min-w-[500px]">Name</TableHead>
+                                  <TableHead className="text-xs min-w-[170px]">PAN</TableHead>
                                   <TableHead className="text-xs">Type</TableHead>
                                   <TableHead className="text-xs min-w-[140px]">Section</TableHead>
                                   <TableHead className="text-xs text-right">Amount</TableHead>
