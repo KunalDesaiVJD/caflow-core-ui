@@ -529,6 +529,7 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
                   emptyText="No matching section."
                   className="w-full"
                   onCreateNew={(query) => openAdd(query)}
+                  createNewLabel="Add new section"
                 />
               </div>
               {selectedSection && (
