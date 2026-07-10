@@ -63,6 +63,27 @@ export function isQuarterInTdsRange(
   return true;
 }
 
+// Is this client currently within the TDS module at all, for the given
+// FY+quarter? TDS Compliance (Start/End Quarter, set via Edit Client →
+// Service Specific → TDS Compliance) is the single source of truth — a
+// client with no Start Quarter configured has no real TDS Compliance row
+// and must be excluded from every dashboard card and count, not just
+// range-restricted quarters. This intentionally fails CLOSED (unlike the
+// old per-file "no config = show everywhere" default), since a legacy
+// client matched only via a TAN/name fallback (no real client_services row)
+// is not actually TDS-compliance-configured.
+export function isClientTdsEligible(
+  startFy: string | null | undefined,
+  startQuarter: string | null | undefined,
+  fy: string,
+  quarter: string,
+  endFy?: string | null,
+  endQuarter?: string | null,
+): boolean {
+  if (!startFy) return false;
+  return isQuarterInTdsRange(fy, quarter, startFy, startQuarter || "Q1", endFy, endQuarter);
+}
+
 // Client Bifurcation — is this client currently configured (in TDS Compliance
 // → TDS Forms Applicable) for the given form? Unlike the quarter-range check
 // above, this is deliberately "fail closed": a client with no configured

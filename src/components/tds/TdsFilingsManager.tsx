@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { getDefaultTdsQuarter, isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
+import { getDefaultTdsQuarter, isClientTdsEligible, clientHasTdsForm } from "@/lib/tdsQuarter";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -436,13 +436,10 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       }
 
       // TDS Compliance Start/End Quarter — single source of truth for which
-      // FY/quarter a client should appear under. A client with no configured
-      // start (matched only via a fallback path) is never range-restricted.
-      if (client?.tds_start_fy && !isQuarterInTdsRange(
-        f.financial_year, f.quarter,
-        client.tds_start_fy, client.tds_start_quarter || "Q1",
-        client.tds_end_fy, client.tds_end_quarter,
-      )) return false;
+      // FY/quarter a client should appear under. A client with no TDS
+      // Compliance configured at all (matched only via a fallback path) is
+      // excluded entirely, not just range-restricted.
+      if (!isClientTdsEligible(client?.tds_start_fy, client?.tds_start_quarter, f.financial_year, f.quarter, client?.tds_end_fy, client?.tds_end_quarter)) return false;
 
       return true;
     });

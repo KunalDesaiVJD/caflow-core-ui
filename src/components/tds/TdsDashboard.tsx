@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { TdsFilingsManager, type KpiStatusGroup, type FilingsPreset } from "@/components/tds/TdsFilingsManager";
-import { getDefaultTdsQuarter, isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
+import { getDefaultTdsQuarter, isClientTdsEligible, clientHasTdsForm } from "@/lib/tdsQuarter";
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -74,15 +74,11 @@ const TERMINAL_STATUSES = new Set([
 ]);
 
 // TDS Compliance Start/End Quarter — single source of truth for whether a
-// client should appear for a given FY+quarter. No configured start (matched
-// only via a fallback path) means never range-restricted.
+// client should appear for a given FY+quarter. A client with no TDS
+// Compliance configured at all (matched only via a legacy TAN/name
+// fallback) is excluded from every dashboard card.
 function clientInTdsRange(client: ClientOption | undefined, fy: string, quarter: string): boolean {
-  if (!client?.tds_start_fy) return true;
-  return isQuarterInTdsRange(
-    fy, quarter,
-    client.tds_start_fy, client.tds_start_quarter || "Q1",
-    client.tds_end_fy, client.tds_end_quarter,
-  );
+  return isClientTdsEligible(client?.tds_start_fy, client?.tds_start_quarter, fy, quarter, client?.tds_end_fy, client?.tds_end_quarter);
 }
 
 // Client bifurcation by form — TDS Forms Applicable is the single source of

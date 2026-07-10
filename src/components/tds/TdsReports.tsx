@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import { exportToExcel } from "@/lib/exportUtils";
 import { generateGeniusExport } from "@/lib/genius-export";
-import { isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
+import { isClientTdsEligible, clientHasTdsForm } from "@/lib/tdsQuarter";
 
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null;
@@ -75,16 +75,12 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
   };
 
   // TDS Compliance Start/End Quarter — single source of truth for whether a
-  // filing row belongs in any report. No configured start (fallback-matched
-  // client) is never range-restricted.
+  // filing row belongs in any report. A client with no TDS Compliance
+  // configured at all (fallback-matched, no real client_services row) is
+  // excluded from every report.
   const inTdsRange = (f: { client_id: string; financial_year: string; quarter: string }) => {
     const client = clients.find(c => c.id === f.client_id);
-    if (!client?.tds_start_fy) return true;
-    return isQuarterInTdsRange(
-      f.financial_year, f.quarter,
-      client.tds_start_fy, client.tds_start_quarter || "Q1",
-      client.tds_end_fy, client.tds_end_quarter,
-    );
+    return isClientTdsEligible(client?.tds_start_fy, client?.tds_start_quarter, f.financial_year, f.quarter, client?.tds_end_fy, client?.tds_end_quarter);
   };
 
   const fetchReportData = async () => {

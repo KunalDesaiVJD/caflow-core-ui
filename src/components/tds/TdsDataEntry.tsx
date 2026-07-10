@@ -301,10 +301,20 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     setLoading(true);
     setFilingLoaded(false);
 
-    // TDS Compliance Start/End Quarter — refuse to load or auto-create a
-    // filing for a (FY, quarter) outside the client's configured period.
+    // TDS Compliance is the single source of truth for module membership —
+    // refuse to load or auto-create a filing for a client with no TDS
+    // Compliance configured at all, or for a (FY, quarter) outside their
+    // configured period.
     const selectedClient = clients.find(c => c.id === selClient);
-    if (selectedClient?.tds_start_fy && !isQuarterInTdsRange(
+    if (!selectedClient?.tds_start_fy) {
+      setFiling(null); setChallans([]); setDeductees([]); setPrevEntries([]);
+      setSelectedChallan(null); setCarryForwardChallans([]);
+      setFilingLoaded(true);
+      setLoading(false);
+      toast({ title: "TDS Compliance not configured", description: "This client has no TDS Compliance / Start Quarter set in Edit Client → Service Specific.", variant: "destructive" });
+      return;
+    }
+    if (!isQuarterInTdsRange(
       selFy, selQuarter,
       selectedClient.tds_start_fy, selectedClient.tds_start_quarter || "Q1",
       selectedClient.tds_end_fy, selectedClient.tds_end_quarter,

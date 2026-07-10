@@ -99,10 +99,15 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
   const runValidation = async () => {
     if (!selClient) { toast({ title: "Select a client", variant: "destructive" }); return; }
 
-    // TDS Compliance Start/End Quarter — block validation for a (FY, quarter)
-    // outside the client's configured period.
+    // TDS Compliance is the single source of truth for module membership —
+    // block validation for a client with no TDS Compliance configured at
+    // all, or for a (FY, quarter) outside their configured period.
     const selectedClient = clients.find(c => c.id === selClient);
-    if (selectedClient?.tds_start_fy && !isQuarterInTdsRange(
+    if (!selectedClient?.tds_start_fy) {
+      toast({ title: "TDS Compliance not configured", description: "This client has no TDS Compliance / Start Quarter set in Edit Client → Service Specific.", variant: "destructive" });
+      return;
+    }
+    if (!isQuarterInTdsRange(
       selFy, selQuarter,
       selectedClient.tds_start_fy, selectedClient.tds_start_quarter || "Q1",
       selectedClient.tds_end_fy, selectedClient.tds_end_quarter,
