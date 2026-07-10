@@ -129,10 +129,17 @@ function formatDateDDMMYYYY(dateStr: string | null): string {
 }
 
 // Classification to tab mapping
-type FilingSubTab = "audited" | "non_audited" | "partner_in_audited_firm";
+type FilingSubTab = "audited" | "non_audited" | "partner_in_audited_firm" | "non_itr";
+
+// 2026-06-25 (V J Desai request) — sentinel value used on virtual rows for
+// clients whose Income Tax Returns service toggle is OFF. Lets the sub-tab
+// router pull them into the "Non-ITR" bucket without conflicting with any
+// real Audit / Non-Audit / Partner-in-Audited-Firm classification.
+const NON_ITR_SENTINEL = "__non_itr__";
 
 function getClientSubTab(classification: string | undefined): FilingSubTab {
   const cls = (classification || "").toLowerCase();
+  if (cls === NON_ITR_SENTINEL) return "non_itr";
   if (cls === "audit") return "audited";
   if (cls === "partner in audited firm" || cls === "partner_in_audited_firm") return "partner_in_audited_firm";
   return "non_audited";
@@ -431,9 +438,14 @@ const ItReturns = () => {
       const { data: cData } = await cQ;
       const itrEnabledIdSet = new Set(itrClientIds);
       const cDataFiltered = (cData || []).filter(c => itrEnabledIdSet.has(c.id));
+      // 2026-06-25 (V J Desai — Non-ITR sub-tab): keep the complement so we
+      // can surface clients whose ITR service is OFF in a dedicated tab.
+      // The auditor uses it to audit their own service configuration —
+      // "which clients still need ITR turned on?".
+      const cDataNonItr = (cData || []).filter(c => !itrEnabledIdSet.has(c.id));
       const clientMap = new Map(cDataFiltered.map(c => [c.id, c]));
       const allClientIds = cDataFiltered.map(c => c.id);
-      if (allClientIds.length === 0 && !itrClientIds.length) return [];
+      if (allClientIds.length === 0 && cDataNonItr.length === 0) return [];
 
       // ROOT-CAUSE FIX (V J Desai 703 clients showing every status as
        // "Data Pending" even after save): the previous .in("client_id",
@@ -563,6 +575,41 @@ const ItReturns = () => {
           client_pan: client.pan || "",
           entity_type: client.entity_type || "",
           client_classification: resolveClassification(client.id),
+          work_group_name: workGroupDisplay,
+          group_name: workGroupDisplay,
+          client_email: (client as any).email || "",
+          client_mobile: (client as any).mobile || "",
+          client_responsible_name: (client as any).responsible_person?.name || "",
+          client_responsible_person_id: (client as any).responsible_person_id || null,
+        });
+      }
+
+      // 2026-06-25 (V J Desai) — append virtual rows for the Non-ITR bucket.
+      // No itr_profile join, no filing status: the tab exists purely so the
+      // auditor can see which clients still need the ITR service turned on.
+      for (const client of cDataNonItr) {
+        const workGroupDisplay = (client as any).work_group_type || "";
+        enriched.push({
+          id: `non_itr_${client.id}_${selectedFY}`,
+          client_id: client.id,
+          firm_id: firmId,
+          financial_year: selectedFY,
+          itr_form: null,
+          filing_status: null,
+          itr_work_group_id: null,
+          assigned_to: null,
+          date_data_received: null,
+          date_filed: null,
+          acknowledgment_no: null,
+          assessment_year: selectedAY,
+          checked_by: null,
+          prepared_by: null,
+          remarks: null,
+          upload_by: null,
+          client_name: client.name || "Unknown",
+          client_pan: client.pan || "",
+          entity_type: client.entity_type || "",
+          client_classification: NON_ITR_SENTINEL,
           work_group_name: workGroupDisplay,
           group_name: workGroupDisplay,
           client_email: (client as any).email || "",
@@ -1008,7 +1055,7 @@ function FilingTab({
 
   // Sub-tab counts
   const subTabCounts = useMemo(() => {
-    const counts = { audited: 0, non_audited: 0, partner_in_audited_firm: 0 };
+    const counts = { audited: 0, non_audited: 0, partner_in_audited_firm: 0, non_itr: 0 };
     for (const p of allProfiles) {
       const tab = getClientSubTab((p as ItrProfile).client_classification);
       counts[tab]++;
@@ -1231,9 +1278,12 @@ function FilingTab({
           <TabsTrigger value="audited">Audited ({subTabCounts.audited})</TabsTrigger>
           <TabsTrigger value="non_audited">Non-Audited ({subTabCounts.non_audited})</TabsTrigger>
           <TabsTrigger value="partner_in_audited_firm">Partner in Audited Firm ({subTabCounts.partner_in_audited_firm})</TabsTrigger>
+          <TabsTrigger value="non_itr" title="Clients whose Income Tax Returns service is turned OFF">
+            Non-ITR ({subTabCounts.non_itr})
+          </TabsTrigger>
         </TabsList>
 
-        {(["audited", "non_audited", "partner_in_audited_firm"] as FilingSubTab[]).map(tab => (
+        {(["audited", "non_audited", "partner_in_audited_firm", "non_itr"] as FilingSubTab[]).map(tab => (
           <TabsContent key={tab} value={tab}>
             {isLoading ? (
               <div className="space-y-2">{[1, 2, 3].map(i => <Skeleton key={i} className="h-12 w-full" />)}</div>
