@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { getDefaultTdsQuarter, isQuarterInTdsRange } from "@/lib/tdsQuarter";
+import { getDefaultTdsQuarter, isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -316,6 +316,17 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       const rangeLabel = `${selectedClient.tds_start_quarter} ${selectedClient.tds_start_fy}` +
         (selectedClient.tds_end_fy ? ` to ${selectedClient.tds_end_quarter} ${selectedClient.tds_end_fy}` : " onward (no end date)");
       toast({ title: "Outside TDS compliance period", description: `This client's TDS compliance period is ${rangeLabel}.`, variant: "destructive" });
+      return;
+    }
+
+    // TDS Forms Applicable — refuse to load or auto-create a filing for a
+    // form the client isn't currently configured for.
+    if (!clientHasTdsForm(selectedClient?.tds_forms_applicable, selForm)) {
+      setFiling(null); setChallans([]); setDeductees([]); setPrevEntries([]);
+      setSelectedChallan(null); setCarryForwardChallans([]);
+      setFilingLoaded(true);
+      setLoading(false);
+      toast({ title: "Form not applicable", description: `This client is not configured for ${selForm} under TDS Compliance.`, variant: "destructive" });
       return;
     }
 
@@ -1256,12 +1267,12 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                   />
                 </div>
                 {clients
-                  .filter(c => !c.tds_forms_applicable || c.tds_forms_applicable.length === 0 || c.tds_forms_applicable.includes(selForm))
+                  .filter(c => clientHasTdsForm(c.tds_forms_applicable, selForm))
                   .filter(c => !clientSearch || (c.name || "").toLowerCase().includes(clientSearch.toLowerCase()))
                   .map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)
                 }
                 {clients
-                  .filter(c => !c.tds_forms_applicable || c.tds_forms_applicable.length === 0 || c.tds_forms_applicable.includes(selForm))
+                  .filter(c => clientHasTdsForm(c.tds_forms_applicable, selForm))
                   .filter(c => !clientSearch || (c.name || "").toLowerCase().includes(clientSearch.toLowerCase())).length === 0 && (
                   <div className="py-4 text-center text-xs text-muted-foreground">No clients found</div>
                 )}

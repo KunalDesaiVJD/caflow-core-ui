@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { TdsFilingsManager, type KpiStatusGroup, type FilingsPreset } from "@/components/tds/TdsFilingsManager";
-import { getDefaultTdsQuarter, isQuarterInTdsRange } from "@/lib/tdsQuarter";
+import { getDefaultTdsQuarter, isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -82,11 +82,13 @@ function clientInTdsRange(client: ClientOption | undefined, fy: string, quarter:
   );
 }
 
-// Client bifurcation by form — a client with no configured forms (fallback
-// match, no proper client_services row) is never form-restricted.
+// Client bifurcation by form — TDS Forms Applicable is the single source of
+// truth. A client with no configured forms at all (fallback match, no real
+// client_services row) never counts toward a SPECIFIC form — only "All Forms"
+// still shows them, so legacy/unconfigured clients don't vanish from the
+// module entirely.
 function clientHasForm(client: ClientOption | undefined, form: string): boolean {
-  if (!client?.tds_forms_applicable || client.tds_forms_applicable.length === 0) return true;
-  return client.tds_forms_applicable.includes(form);
+  return clientHasTdsForm(client?.tds_forms_applicable, form);
 }
 
 export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNavigate, refreshKey }: Props) {
@@ -165,7 +167,11 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
   const filteredFilings = useMemo(() => {
     let f = filings.filter(fl => !deletedClientIds.has(fl.client_id));
     if (formTab !== "all") {
-      f = f.filter(fl => fl.tds_forms?.includes(formTab));
+      // Row must literally be about this form AND the client must currently
+      // be configured for it — a stale filing row for a form the client is
+      // no longer assigned to (e.g. left over from before this feature)
+      // must not surface under that form's tab.
+      f = f.filter(fl => fl.tds_forms?.includes(formTab) && clientHasForm(clients.find(c => c.id === fl.client_id), formTab));
     }
     if (quarterFilter !== "all") {
       f = f.filter(fl => fl.quarter === quarterFilter);

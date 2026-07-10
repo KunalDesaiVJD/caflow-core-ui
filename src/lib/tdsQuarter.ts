@@ -62,3 +62,16 @@ export function isQuarterInTdsRange(
   }
   return true;
 }
+
+// Client Bifurcation — is this client currently configured (in TDS Compliance
+// → TDS Forms Applicable) for the given form? Unlike the quarter-range check
+// above, this is deliberately "fail closed": a client with no configured
+// forms at all (tds_forms_applicable null/empty — typically one matched into
+// the TDS module only via a legacy TAN/name fallback, never actually
+// configured) does NOT count toward any specific form. It still shows up
+// under an "All Forms" view — callers should skip this check entirely when
+// the active form filter is "all".
+export function clientHasTdsForm(formsApplicable: string[] | null | undefined, form: string): boolean {
+  if (!formsApplicable || formsApplicable.length === 0) return false;
+  return formsApplicable.includes(form);
+}

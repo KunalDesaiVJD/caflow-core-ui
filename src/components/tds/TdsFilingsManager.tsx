@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { getDefaultTdsQuarter, isQuarterInTdsRange } from "@/lib/tdsQuarter";
+import { getDefaultTdsQuarter, isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -393,7 +393,15 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   const filtered = useMemo(() => {
     const today = new Date();
     return filings.filter(f => {
-      if (formFilter !== "all" && !(f.tds_forms || []).includes(formFilter)) return false;
+      const client = clients.find(c => c.id === f.client_id);
+      if (formFilter !== "all") {
+        // Row must literally be about this form AND the client must
+        // currently be configured for it (TDS Forms Applicable is the
+        // single source of truth — a stale row for a de-configured form
+        // must not surface under that form's filter).
+        if (!(f.tds_forms || []).includes(formFilter)) return false;
+        if (!clientHasTdsForm(client?.tds_forms_applicable, formFilter)) return false;
+      }
       if (statusFilter !== "all" && f.work_status !== statusFilter) return false;
 
       // KPI-card-driven aggregate status group — these don't map to a single
@@ -423,7 +431,6 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       // TDS Compliance Start/End Quarter — single source of truth for which
       // FY/quarter a client should appear under. A client with no configured
       // start (matched only via a fallback path) is never range-restricted.
-      const client = clients.find(c => c.id === f.client_id);
       if (client?.tds_start_fy && !isQuarterInTdsRange(
         f.financial_year, f.quarter,
         client.tds_start_fy, client.tds_start_quarter || "Q1",
@@ -840,7 +847,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
             <SelectContent>
               <SelectItem value="all">All Clients</SelectItem>
               {clients
-                .filter(c => formFilter === "all" || !c.tds_forms_applicable || c.tds_forms_applicable.length === 0 || c.tds_forms_applicable.includes(formFilter))
+                .filter(c => formFilter === "all" || clientHasTdsForm(c.tds_forms_applicable, formFilter))
                 .map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
             </SelectContent>
           </Select>
