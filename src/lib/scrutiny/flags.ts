@@ -1,26 +1,27 @@
 /**
- * Feature flag for the rebuilt scrutiny engine (`run-scrutiny-v2`).
+ * Scrutiny engine selector (`run-scrutiny-v2`).
  *
- * OFF by default — current behaviour (`run-scrutiny`) is unchanged unless explicitly enabled via:
- *   - build-time:  VITE_SCRUTINY_V2=true
- *   - per-browser: localStorage 'scrutiny_v2' = 'true'
+ * v2 is now the DEFAULT (graduated 2026-07-10 after production verification). v2 reads the live
+ * Tally Sync tables the firm actually uses (tally_trial_balance / tally_vouchers); the legacy v1
+ * (`run-scrutiny`) only read file-import snapshots and therefore FAILS for Tally-synced clients.
  *
- * No flag infrastructure exists in this repo, so this mirrors the existing
- * import.meta.env.VITE_* + localStorage patterns used elsewhere.
+ * Opt back to the legacy v1 explicitly via:
+ *   - build-time:  VITE_SCRUTINY_V2=false
+ *   - per-browser: localStorage 'scrutiny_v2' = 'false'
  */
 
 export function scrutinyV2Enabled(): boolean {
   try {
-    if ((import.meta as { env?: Record<string, unknown> }).env?.VITE_SCRUTINY_V2 === "true") return true;
+    if ((import.meta as { env?: Record<string, unknown> }).env?.VITE_SCRUTINY_V2 === "false") return false;
   } catch {
     /* import.meta.env unavailable */
   }
   try {
-    if (typeof localStorage !== "undefined" && localStorage.getItem("scrutiny_v2") === "true") return true;
+    if (typeof localStorage !== "undefined" && localStorage.getItem("scrutiny_v2") === "false") return false;
   } catch {
     /* localStorage unavailable (headless/SSR) */
   }
-  return false;
+  return true;
 }
 
 /** Which edge function a scrutiny run should invoke, per the flag. */
