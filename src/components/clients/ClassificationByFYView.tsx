@@ -141,6 +141,14 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
       // Query clients as the primary table and use client_fy_classifications!inner
       // as an embedded filter. This avoids PostgREST embedded-resource filter
       // issues with { head: true } counts that can cause incorrect 0 results.
+      // 2026-06-25 (V J Desai — sub-filter All 361 ≠ tab Unclassified 366):
+      // Previously each bucket count required is_draft=false, but the total
+      // pool (and classedIds set) includes api_import drafts too. That
+      // asymmetry double-counted classified drafts: they didn't add to
+      // Σ4 but WERE subtracted from Unclassified via classedIds → 5 rows
+      // permanently unaccounted for. Removing the is_draft filter here so
+      // buckets mirror the base pool exactly (drafts count in their real
+      // classification, not in Unclassified).
       const realTabs = CLASSIFICATION_TABS.filter(t => t.key !== "Unclassified");
       const countResults = await Promise.all(
         realTabs.map(async (tab) => {
@@ -149,8 +157,8 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
             .select("id, client_fy_classifications!inner(id)", { count: "exact", head: true })
             .eq("client_fy_classifications.financial_year", selectedFY)
             .eq("client_fy_classifications.classification", tab.key)
-            .eq("is_draft", false)
-            .is("deleted_at", null);
+            .is("deleted_at", null)
+            .or("is_draft.eq.false,and(is_draft.eq.true,source.eq.api_import)");
           if (!showAllFirms && firmId) {
             cq = cq.eq("firm_id", firmId);
             cq = cq.eq("client_fy_classifications.firm_id", firmId);
@@ -240,13 +248,17 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
           }));
         setRows(mapped);
       } else {
+        // Symmetric with the bucket-count query above — include api_import
+        // drafts so a client classified as e.g. "Non-Audit" while still a
+        // draft is visible in that tab (was invisible before, causing the
+        // "count says 5 more than the list" mismatch).
         let dataQ = (supabase as any)
           .from("clients")
-          .select("id, name, entity_type, pan, client_fy_classifications!inner(classification, financial_year)")
+          .select("id, name, entity_type, pan, is_draft, client_fy_classifications!inner(classification, financial_year)")
           .eq("client_fy_classifications.financial_year", selectedFY)
           .eq("client_fy_classifications.classification", activeTab)
-          .eq("is_draft", false)
           .is("deleted_at", null)
+          .or("is_draft.eq.false,and(is_draft.eq.true,source.eq.api_import)")
           .order("name", { ascending: true })
           .range(0, 49999);
         if (!showAllFirms && firmId) {
@@ -266,6 +278,7 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
               entity_type: r.entity_type ?? null,
               pan:         r.pan ?? null,
               classification: activeTab,
+              is_draft:    !!r.is_draft,
             }))
             .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
           setRows(mapped);
