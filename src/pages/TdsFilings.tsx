@@ -4,7 +4,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, PenLine,
-  ShieldCheck, BarChart3, Settings, ClipboardList, Combine,
+  ShieldCheck, BarChart3, Settings, ClipboardList, Combine, RefreshCw,
 } from "lucide-react";
 import { TdsRateMaster } from "@/components/tds/TdsRateMaster";
 import { TdsDashboard } from "@/components/tds/TdsDashboard";
@@ -45,6 +45,7 @@ const TdsFilings = () => {
   const [workspaceTab, setWorkspaceTab] = useState<"data-entry" | "validate">("data-entry");
   // Increment to force TdsDashboard to re-fetch when returning from workspace
   const [dashRefreshKey, setDashRefreshKey] = useState(0);
+  const [syncing, setSyncing] = useState(false);
 
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [users, setUsers] = useState<UserOption[]>([]);
@@ -206,6 +207,17 @@ const TdsFilings = () => {
               </button>
             ))}
           </nav>
+          <div className="flex-1" />
+          {/* Manual re-sync escape hatch — the module already updates live via
+              Realtime, but this lets the user force a fresh read on demand. */}
+          <button
+            onClick={() => { setSyncing(true); refreshTdsModule(); window.setTimeout(() => setSyncing(false), 800); }}
+            title="Re-sync from the latest TDS Compliance settings"
+            className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground shrink-0"
+          >
+            <RefreshCw size={13} className={cn("shrink-0", syncing && "animate-spin")} />
+            <span>{syncing ? "Syncing…" : "Sync"}</span>
+          </button>
         </div>
       </div>
 
