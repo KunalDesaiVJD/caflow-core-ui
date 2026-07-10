@@ -101,6 +101,11 @@ interface Props {
   // External filter preset (e.g. from a Dashboard KPI card click) that
   // overrides the current FY/Quarter/Client/Form/Status selection.
   preset?: FilingsPreset | null;
+  // Fired after any write that changes work_status (status change, inline
+  // edit, bulk action, copy) — lets a host embedding this component (e.g.
+  // the Dashboard's KPI cards) refetch its own separately-fetched data
+  // instead of going stale until a full page reload.
+  onFilingsChanged?: () => void;
 }
 
 const CURRENT_FY_START = new Date().getMonth() >= 3 ? new Date().getFullYear() : new Date().getFullYear() - 1;
@@ -149,7 +154,7 @@ const getDueDateColor = (fy: string, quarter: string, status: string) => {
   return "text-emerald-600";
 };
 
-export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId, onNavigateDataEntry, hideHeader, preset }: Props) {
+export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId, onNavigateDataEntry, hideHeader, preset, onFilingsChanged }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
   const [filings, setFilings] = useState<TdsFiling[]>([]);
@@ -628,6 +633,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
         await logAuditEntry(filing.id, "FILING_DATE_CLEARED", filing.date_of_filing, null, "Status reverted from Filed");
       }
       fetchFilings();
+      onFilingsChanged?.();
     }
   };
 
@@ -638,7 +644,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       last_updated_at: new Date().toISOString(),
     }).eq("id", filing.id);
     if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
-    else fetchFilings();
+    else { fetchFilings(); onFilingsChanged?.(); }
   };
 
   const openCopyDialog = (f: TdsFiling) => {
@@ -666,7 +672,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     } as any);
     setCopying(false);
     if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
-    else { toast({ title: `Filing copied to ${copyQuarter} ${copyFy}` }); setCopyDialogOpen(false); fetchFilings(); }
+    else { toast({ title: `Filing copied to ${copyQuarter} ${copyFy}` }); setCopyDialogOpen(false); fetchFilings(); onFilingsChanged?.(); }
   };
 
   const toggleSelect = (id: string) => {
@@ -703,6 +709,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     setSelectedIds(new Set());
     setBulkAction("");
     fetchFilings();
+    onFilingsChanged?.();
   };
 
   // History drawer

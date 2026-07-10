@@ -309,6 +309,7 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
             onNavigateDataEntry={() => onNavigate?.("data-entry")}
             hideHeader
             preset={kpiPreset}
+            onFilingsChanged={fetchAll}
           />
         </CardContent>
       </Card>
