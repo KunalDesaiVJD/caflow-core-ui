@@ -36,6 +36,7 @@ import {
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null; deleted_at?: string | null;
   tds_start_fy?: string; tds_start_quarter?: string; tds_end_fy?: string; tds_end_quarter?: string;
+  tds_forms_applicable?: string[];
 }
 interface UserOption { id: string; name: string | null; }
 
@@ -838,7 +839,9 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
             <SelectTrigger className="w-[200px]"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Clients</SelectItem>
-              {clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              {clients
+                .filter(c => formFilter === "all" || !c.tds_forms_applicable || c.tds_forms_applicable.length === 0 || c.tds_forms_applicable.includes(formFilter))
+                .map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
             </SelectContent>
           </Select>
         </div>

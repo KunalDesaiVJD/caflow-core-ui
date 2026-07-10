@@ -28,6 +28,7 @@ import { isQuarterInTdsRange } from "@/lib/tdsQuarter";
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null;
   tds_start_fy?: string; tds_start_quarter?: string; tds_end_fy?: string; tds_end_quarter?: string;
+  tds_forms_applicable?: string[];
 }
 
 interface Props {
@@ -862,7 +863,13 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
             <SelectTrigger className="w-[220px]"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Clients</SelectItem>
-              {clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              {clients
+                .filter(c => {
+                  // Form-scoped only for report types with a visible Form selector.
+                  if (selectedReport !== "genius-export" && selectedReport !== "cross-quarter") return true;
+                  return !c.tds_forms_applicable || c.tds_forms_applicable.length === 0 || c.tds_forms_applicable.includes(selForm);
+                })
+                .map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
             </SelectContent>
           </Select>
         </div>

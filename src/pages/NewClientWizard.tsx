@@ -422,6 +422,7 @@ const NewClientWizard = () => {
           tds_start_quarter: svc.tds_effective_from_q || undefined,
           tds_end_fy: svc.tds_end_fy || undefined,
           tds_end_quarter: svc.tds_end_quarter || undefined,
+          tds_forms: svc.tds_forms_applicable && svc.tds_forms_applicable.length > 0 ? svc.tds_forms_applicable : undefined,
         };
       }
 
@@ -665,6 +666,9 @@ const NewClientWizard = () => {
     // TDS Compliance Start/End Quarter — only TDS service configs carry tds_start_fy
     for (const cfg of Object.values(serviceBilling.activeServices)) {
       if (!cfg.tds_start_fy) continue;
+      if (!cfg.tds_forms || cfg.tds_forms.length === 0) {
+        errors.services = "TDS Compliance: select at least one TDS form.";
+      }
       const hasEndFy = !!cfg.tds_end_fy;
       const hasEndQ = !!cfg.tds_end_quarter;
       if (hasEndFy !== hasEndQ) {
@@ -807,6 +811,7 @@ const NewClientWizard = () => {
             tds_effective_from_q: cfg.tds_start_quarter || null,
             tds_end_fy: cfg.tds_end_fy || null,
             tds_end_quarter: cfg.tds_end_quarter || null,
+            tds_forms_applicable: cfg.tds_forms && cfg.tds_forms.length > 0 ? cfg.tds_forms : null,
           } : {}),
         }));
         const { error: svcError } = await supabase.from("client_services").upsert(rows as any, {
