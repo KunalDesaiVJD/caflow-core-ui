@@ -219,27 +219,15 @@ export default function NoteBSAsset({
         const setTrSection = (ledger: string, section: string) => {
           updatePath(`bs_asset.trade_receivables.ledger_section.${ledger}`, section);
         };
-        const sumOfSection = (secKey: string, field: "amount_cy" | "amount_py"): number =>
-          trBreakup.reduce((s, r) => {
-            const name = ((r.linked_ledger || r.description) ?? "").trim();
-            const resolved = getTrSection(name) ?? "other";
-            if (resolved !== secKey) return s;
-            const n = Number(r?.[field] ?? 0);
-            return s + (Number.isFinite(n) ? n : 0);
-          }, 0);
-        const gt6mCy  = sumOfSection("gt6m",  "amount_cy");
-        const gt6mPy  = sumOfSection("gt6m",  "amount_py");
-        const otherCy = sumOfSection("other", "amount_cy");
-        const otherPy = sumOfSection("other", "amount_py");
         return (
           <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("trade_receivables")} title="Trade Receivables" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("trade_receivables")} pyTotal={py("trade_receivables")}>
             <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
 
             <div className="text-[10px] italic text-muted-foreground mt-1">
-              Ledger bifurcation (per COA mapping) — use the three-dots menu to move a customer between &gt;6 months and Other.
+              Expand a row to see the ledgers grouped under it. Use the three-dots menu to move a customer between &gt;6 months and Other.
             </div>
+            {/* Section rows ARE the sub-totals — no duplicate rows below. */}
             <SectionedLedgerBreakup
-              basePath="bs_asset.trade_receivables"
               rows={trBreakup}
               sections={[
                 { key: "gt6m",  label: "Outstanding for a period exceeding 6 months" },
@@ -247,25 +235,8 @@ export default function NoteBSAsset({
               ]}
               getSection={getTrSection}
               setSection={setTrSection}
-              cyLabel={`As at 31-Mar-${cyYear}`}
-              pyLabel={`As at 31-Mar-${pyYear}`}
             />
 
-            {/* Auto-computed sub-totals — locked from manual entry. */}
-            <EditableRow
-              label="Outstanding for a period exceeding 6 months"
-              cy={gt6mCy} py={gt6mPy}
-              autoCY={gt6mCy} autoPY={gt6mPy}
-              onCommitCy={() => {}} onCommitPy={() => {}}
-              isLocked
-            />
-            <EditableRow
-              label="Other receivables"
-              cy={otherCy} py={otherPy}
-              autoCY={otherCy} autoPY={otherPy}
-              onCommitCy={() => {}} onCommitPy={() => {}}
-              isLocked
-            />
             <EditableRow
               label="Total — Trade Receivables (per BS)"
               cy={cy("trade_receivables")} py={py("trade_receivables")}

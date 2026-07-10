@@ -947,27 +947,16 @@ export default function NoteBSLiab({
         const setTpSection = (ledger: string, section: string) => {
           updatePath(`bs_liab.trade_payables.ledger_section.${ledger}`, section);
         };
-        const sumOfSection = (secKey: string, field: "amount_cy" | "amount_py"): number =>
-          tpBreakup.reduce((s, r) => {
-            const name = ((r.linked_ledger || r.description) ?? "").trim();
-            const resolved = getTpSection(name) ?? "others";
-            if (resolved !== secKey) return s;
-            const n = Number(r?.[field] ?? 0);
-            return s + (Number.isFinite(n) ? n : 0);
-          }, 0);
-        const msmeCy   = sumOfSection("msme",   "amount_cy");
-        const msmePy   = sumOfSection("msme",   "amount_py");
-        const othersCy = sumOfSection("others", "amount_cy");
-        const othersPy = sumOfSection("others", "amount_py");
         return (
           <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("trade_payables")} title="Trade Payables" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("trade_payables")} pyTotal={effectivePY("trade_payables")}>
             <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
 
             <div className="text-[10px] italic text-muted-foreground mt-1">
-              Ledger bifurcation (per COA mapping) — use the three-dots menu to move a vendor between MSME and Others.
+              Expand a row to see the ledgers grouped under it. Use the three-dots menu to move a vendor between MSME and Others.
             </div>
+            {/* Section rows ARE the MSME + Others sub-totals — no duplicate rows below
+                (post-review 2026-06-25). Amounts locked; grand total row stays. */}
             <SectionedLedgerBreakup
-              basePath="bs_liab.trade_payables"
               rows={tpBreakup}
               sections={[
                 { key: "msme",   label: "Total outstanding dues of Micro and Small Enterprises" },
@@ -975,25 +964,8 @@ export default function NoteBSLiab({
               ]}
               getSection={getTpSection}
               setSection={setTpSection}
-              cyLabel={cyDateLbl}
-              pyLabel={pyDateLbl}
             />
 
-            {/* Auto-computed MSME + Others sub-totals — locked from manual entry. */}
-            <EditableRow
-              label="Total outstanding dues of Micro and Small Enterprises"
-              cy={msmeCy} py={msmePy}
-              autoCY={msmeCy} autoPY={msmePy}
-              onCommitCy={() => {}} onCommitPy={() => {}}
-              isLocked
-            />
-            <EditableRow
-              label="Total outstanding dues of others"
-              cy={othersCy} py={othersPy}
-              autoCY={othersCy} autoPY={othersPy}
-              onCommitCy={() => {}} onCommitPy={() => {}}
-              isLocked
-            />
             <EditableRow
               label="Total — Trade Payables (per BS)"
               cy={cy("trade_payables")} py={py("trade_payables")}
