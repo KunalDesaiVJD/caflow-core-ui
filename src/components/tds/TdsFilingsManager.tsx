@@ -68,6 +68,9 @@ interface Props {
   isSuperadmin: boolean;
   resolveFirmId: () => Promise<string | null>;
   onNavigateDataEntry?: (filingId?: string) => void;
+  // When embedded elsewhere (e.g. the Dashboard's Client Filing Summary card),
+  // the host already provides its own title — suppress this component's own.
+  hideHeader?: boolean;
 }
 
 const CURRENT_FY_START = new Date().getMonth() >= 3 ? new Date().getFullYear() : new Date().getFullYear() - 1;
@@ -116,7 +119,7 @@ const getDueDateColor = (fy: string, quarter: string, status: string) => {
   return "text-emerald-600";
 };
 
-export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId, onNavigateDataEntry }: Props) {
+export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId, onNavigateDataEntry, hideHeader }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
   const [filings, setFilings] = useState<TdsFiling[]>([]);
@@ -701,13 +704,15 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
 
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="text-xl font-bold text-foreground">Filings Management</h2>
-        <p className="text-sm text-muted-foreground flex items-center gap-1.5">
-          <Info size={14} />
-          Filings are created automatically when TDS service is activated in Client Module.
-        </p>
-      </div>
+      {!hideHeader && (
+        <div>
+          <h2 className="text-xl font-bold text-foreground">Filings Management</h2>
+          <p className="text-sm text-muted-foreground flex items-center gap-1.5">
+            <Info size={14} />
+            Filings are created automatically when TDS service is activated in Client Module.
+          </p>
+        </div>
+      )}
 
       {/* Filter Bar */}
       <div className="flex flex-wrap gap-3 items-end">

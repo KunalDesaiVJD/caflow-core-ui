@@ -1,17 +1,14 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { TdsFilingsManager } from "@/components/tds/TdsFilingsManager";
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { format } from "date-fns";
@@ -77,25 +74,6 @@ function getSmartDefaultQuarter(): { fy: string; quarter: string } {
   const nextFyStart = fyStart + 1;
   return { fy: `${nextFyStart}-${String(nextFyStart + 1).slice(2)}`, quarter: "Q1" };
 }
-
-// Status abbreviations for matrix badges
-const STATUS_ABBREV: Record<string, string> = {
-  "Not Started": "NS", "Data Entry in Progress": "DR", "Entries Completed": "DR",
-  "Upload Pending": "UP", "Return Validated": "QS", "Return Prepared": "QS",
-  "Query Raised": "QS", "Submitted": "FL", "Filed": "FL", "Accepted": "PC",
-  "Processed": "PC", "Not Applicable": "NA", "NIL": "NIL",
-};
-
-const STATUS_BADGE_COLORS: Record<string, string> = {
-  NS: "bg-muted text-muted-foreground",
-  DR: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
-  UP: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300",
-  QS: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
-  FL: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
-  PC: "bg-emerald-200 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200",
-  NA: "bg-muted text-muted-foreground line-through",
-  NIL: "bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-300",
-};
 
 const TERMINAL_STATUSES = new Set([
   "Filed", "Submitted", "Processed", "Accepted", "Not Applicable", "NIL",
@@ -186,52 +164,6 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
     };
   }, [filteredFilings]);
 
-  // ═══ Client FY Filing Summary ═══
-  // Shows per-client, per-quarter data entry status for the selected FY
-  const clientFySummary = useMemo(() => {
-    const fyFilings = filings.filter(f => {
-      if (deletedClientIds.has(f.client_id)) return false;
-      if (f.financial_year !== fyFilter) return false;
-      if (clientFilter !== "all" && f.client_id !== clientFilter) return false;
-      return true;
-    });
-    const byClient: Record<string, {
-      clientName: string;
-      byQuarter: Record<string, TdsFiling[]>;
-      lastUpdated: string | null;
-    }> = {};
-    for (const f of fyFilings) {
-      if (!byClient[f.client_id]) {
-        const client = clients.find(c => c.id === f.client_id);
-        byClient[f.client_id] = {
-          clientName: client?.name || "Unknown",
-          byQuarter: {},
-          lastUpdated: null,
-        };
-      }
-      if (!byClient[f.client_id].byQuarter[f.quarter]) {
-        byClient[f.client_id].byQuarter[f.quarter] = [];
-      }
-      byClient[f.client_id].byQuarter[f.quarter].push(f);
-      const ts = f.last_updated_at || f.created_at;
-      if (ts && (!byClient[f.client_id].lastUpdated || ts > byClient[f.client_id].lastUpdated!)) {
-        byClient[f.client_id].lastUpdated = ts;
-      }
-    }
-    return Object.entries(byClient)
-      .map(([clientId, data]) => ({
-        clientId,
-        clientName: data.clientName,
-        byQuarter: data.byQuarter,
-        quartersWithData: Object.keys(data.byQuarter).length,
-        quartersComplete: Object.values(data.byQuarter).filter(qf =>
-          qf.some(f => TERMINAL_STATUSES.has(f.work_status))
-        ).length,
-        lastUpdated: data.lastUpdated,
-      }))
-      .sort((a, b) => a.clientName.localeCompare(b.clientName));
-  }, [filings, fyFilter, clientFilter, deletedClientIds, clients]);
-
   // Checklist print
   const generateChecklist = () => {
     const forms = formTab === "all" ? ALL_FORMS : [formTab];
@@ -278,20 +210,6 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
     { label: "Not Applicable", value: stats.na, icon: Ban, color: "text-muted-foreground", bg: "bg-muted" },
     { label: "NIL Returns", value: stats.nil, icon: MinusCircle, color: "text-teal-600", bg: "bg-teal-50 dark:bg-teal-950/30" },
   ];
-
-  // Quarter status badge for the summary table
-  const getQStatusBadge = (qFilings: TdsFiling[] | undefined) => {
-    if (!qFilings || qFilings.length === 0) return <span className="text-[10px] text-muted-foreground">—</span>;
-    // Pick the "best" status if multiple forms
-    const statuses = qFilings.map(f => STATUS_ABBREV[f.work_status] || "NS");
-    const priority = ["PC", "FL", "QS", "UP", "DR", "NIL", "NA", "NS"];
-    const best = priority.find(p => statuses.includes(p)) || "NS";
-    return (
-      <Badge className={cn("text-[9px] px-1.5 py-0 font-mono", STATUS_BADGE_COLORS[best])}>
-        {best}
-      </Badge>
-    );
-  };
 
   return (
     <div className="space-y-5">
@@ -371,79 +289,23 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
         ))}
       </div>
 
-      {/* ═══ ROW 4: Client FY Filing Summary ═══ */}
+      {/* ═══ ROW 4: Client Filing Summary — the full Filings Management interface, embedded ═══ */}
       <Card>
-        <CardHeader className="py-2.5 px-4 flex flex-row items-start justify-between">
-          <div>
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              <TrendingUp size={14} className="text-blue-600" />
-              FY {fyFilter} — Client Filing Summary
-            </CardTitle>
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              Quarter-wise data coverage for every client in the selected financial year
-            </p>
-          </div>
-          <Badge variant="outline" className="text-[10px] shrink-0 mt-0.5">
-            {clientFySummary.length} client{clientFySummary.length !== 1 ? "s" : ""}
-          </Badge>
+        <CardHeader className="py-2.5 px-4">
+          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <TrendingUp size={14} className="text-blue-600" />
+            FY {fyFilter} — Client Filing Summary
+          </CardTitle>
         </CardHeader>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="text-[10px] sticky left-0 bg-background z-10 min-w-[160px]">Client</TableHead>
-                  {QUARTER_OPTIONS.map(q => (
-                    <TableHead key={q} className="text-[10px] text-center">{q}</TableHead>
-                  ))}
-                  <TableHead className="text-[10px] text-center">Coverage</TableHead>
-                  <TableHead className="text-[10px]">Last Updated</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {clientFySummary.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={7} className="text-center text-muted-foreground text-sm py-8">
-                      No filing data found for FY {fyFilter}
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  clientFySummary.map(row => {
-                    const coveragePct = Math.round((row.quartersWithData / 4) * 100);
-                    const allDone = row.quartersComplete === row.quartersWithData && row.quartersWithData > 0;
-                    return (
-                      <TableRow key={row.clientId}>
-                        <TableCell className="font-medium text-sm sticky left-0 bg-background z-10 max-w-[180px]">
-                          <span className="truncate block">{row.clientName}</span>
-                        </TableCell>
-                        {QUARTER_OPTIONS.map(q => (
-                          <TableCell key={q} className="text-center">
-                            {getQStatusBadge(row.byQuarter[q])}
-                          </TableCell>
-                        ))}
-                        <TableCell className="text-center">
-                          <div className="flex flex-col items-center gap-1">
-                            <div className="w-16 bg-muted rounded-full h-1.5">
-                              <div
-                                className={cn("h-1.5 rounded-full transition-all", allDone ? "bg-emerald-500" : coveragePct > 0 ? "bg-blue-500" : "bg-muted-foreground/30")}
-                                style={{ width: `${coveragePct}%` }}
-                              />
-                            </div>
-                            <span className="text-[9px] text-muted-foreground">
-                              {row.quartersWithData}/4 qtrs
-                            </span>
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-[10px] text-muted-foreground whitespace-nowrap">
-                          {row.lastUpdated ? format(new Date(row.lastUpdated), "dd MMM yy, hh:mm a") : "—"}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })
-                )}
-              </TableBody>
-            </Table>
-          </div>
+        <CardContent>
+          <TdsFilingsManager
+            clients={clients}
+            users={users}
+            isSuperadmin={isSuperadmin}
+            resolveFirmId={resolveFirmId}
+            onNavigateDataEntry={() => onNavigate?.("data-entry")}
+            hideHeader
+          />
         </CardContent>
       </Card>
     </div>
