@@ -581,6 +581,11 @@ export default function AuditStatusRow({
       "hover:bg-muted/10 transition-colors",
       isNew && "bg-amber-50 ring-1 ring-amber-200 ring-inset",
       row.isPlanning && "bg-slate-50/70",
+      // 2026-06-25 (V J Desai request): scanned=Yes marks the final stage
+      // — highlight the whole row in green so completed audits pop at a
+      // glance. Ring gives an inset border matching the amber "new-row"
+      // style so the visual language stays consistent.
+      row.scanned === "Yes" && "bg-emerald-50 ring-1 ring-emerald-200 ring-inset",
     )}>
 
       {/* 1 · Sr No */}

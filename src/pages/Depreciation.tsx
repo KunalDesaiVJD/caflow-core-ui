@@ -8,6 +8,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
@@ -19,7 +21,7 @@ import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { Calculator, Lock, LockOpen, Plus, Trash2, ArrowRight, AlertTriangle,
 CheckCircle2, Settings, Info, Loader2, Pencil, X, FileText, Download,
-Tag, Link2, RefreshCw, ArrowUpDown } from 'lucide-react';
+Tag, Link2, RefreshCw, ArrowUpDown, Check, ChevronsUpDown } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -51,6 +53,78 @@ const fmt = (v: number | null | undefined) =>
 v == null || isNaN(v as number) ? '—'
 : new Intl.NumberFormat('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}).format(v);
 const fmtPct = (v: number | null | undefined) => v == null ? '—' : `${Number(v).toFixed(2)}%`;
+
+// 2026-06-25 (V J Desai request): searchable Category picker used inside
+// Add Asset / Edit Asset / Bulk Add. The Schedule II master has ~60+
+// entries; a plain <Select> forces the auditor to scroll every time.
+// Popover + Command give a search box that filters on category name,
+// method, or life-years so "aqua" lands directly on AQUAGUARD.
+function CategoryPicker({
+  cats, value, onChange, disabled, className,
+}: {
+  cats: any[];
+  value: string;
+  onChange: (id: string) => void;
+  disabled?: boolean;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const selected = (cats || []).find((c: any) => c.id === value);
+  const catLabel = (c: any) =>
+    `${c.name} — ${c.depreciation_method === 'N/A'
+      ? 'Not Applicable (Infinite Life)'
+      : `${c.depreciation_method || 'WDV'} ${fmtPct(c.depreciation_method === 'SLM' ? c.slm_rate : c.wdv_rate)} (${c.useful_life_years}yr)`}`;
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild disabled={disabled}>
+        <Button
+          type='button'
+          variant='outline'
+          role='combobox'
+          aria-expanded={open}
+          className={cn('w-full justify-between font-normal h-10', className)}
+        >
+          <span className='truncate'>
+            {selected ? catLabel(selected) : 'Select category'}
+          </span>
+          <ChevronsUpDown className='ml-2 h-4 w-4 shrink-0 opacity-50' />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className='w-[--radix-popover-trigger-width] p-0' align='start'>
+        <Command shouldFilter={false}>
+          <CommandInput
+            placeholder='Search category, method, life…'
+            value={search}
+            onValueChange={setSearch}
+          />
+          <CommandList>
+            <CommandEmpty>No matching category.</CommandEmpty>
+            <CommandGroup>
+              {(cats || [])
+                .filter((c: any) => {
+                  const q = search.trim().toLowerCase();
+                  if (!q) return true;
+                  const hay = `${c.name} ${c.depreciation_method || ''} ${c.useful_life_years || ''}`.toLowerCase();
+                  return hay.includes(q);
+                })
+                .map((c: any) => (
+                  <CommandItem
+                    key={c.id}
+                    value={c.id}
+                    onSelect={(v) => { onChange(v); setOpen(false); setSearch(''); }}
+                  >
+                    <Check className={cn('mr-2 h-4 w-4', value === c.id ? 'opacity-100' : 'opacity-0')} />
+                    <span className='truncate'>{catLabel(c)}</span>
+                  </CommandItem>
+                ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 function validateAsset(a: any, fy: string): string[] {
 const errs: string[] = [];
@@ -2458,18 +2532,11 @@ return (
       <div><Label>Asset Name *</Label><Input value={na.asset_name} onChange={e=>setNa(p=>({...p,asset_name:e.target.value}))}/></div>
       <div>
         <Label>Category *</Label>
-        <Select value={na.category_id} onValueChange={v=>setNa(p=>({...p,category_id:v}))}>
-          <SelectTrigger><SelectValue placeholder='Select category'/></SelectTrigger>
-          <SelectContent>
-            {(cats||[]).map((c:any)=>(
-              <SelectItem key={c.id} value={c.id}>
-                {c.name} — {c.depreciation_method==='N/A'
-                  ? 'Not Applicable (Infinite Life)'
-                  : `${c.depreciation_method||'WDV'} ${fmtPct(c.depreciation_method==='SLM'?c.slm_rate:c.wdv_rate)} (${c.useful_life_years}yr)`}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <CategoryPicker
+          cats={cats || []}
+          value={na.category_id}
+          onChange={v => setNa(p => ({ ...p, category_id: v }))}
+        />
         {selCat&&(
           <div className={cn('mt-2 px-3 py-2 rounded text-xs flex items-center gap-3',
             selCat.depreciation_method==='N/A'
@@ -2545,14 +2612,11 @@ return (
         <div><Label>Asset Name *</Label><Input value={editAsset.asset_name} onChange={e=>setEditAsset((p:any)=>({...p,asset_name:e.target.value}))}/></div>
         <div>
           <Label>Category *</Label>
-          <Select value={editAsset.category_id} onValueChange={v=>setEditAsset((p:any)=>({...p,category_id:v}))}>
-            <SelectTrigger><SelectValue placeholder='Select category'/></SelectTrigger>
-            <SelectContent>
-              {(cats||[]).map((c:any)=>(
-                <SelectItem key={c.id} value={c.id}>{c.name} — {c.depreciation_method||'WDV'} ({c.useful_life_years}yr)</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <CategoryPicker
+            cats={cats || []}
+            value={editAsset.category_id}
+            onChange={v => setEditAsset((p: any) => ({ ...p, category_id: v }))}
+          />
         </div>
         <div className='grid grid-cols-2 gap-3'>
           <div><Label>Date of Purchase *</Label><Input type='date' value={editAsset.date_of_purchase} onChange={e=>setEditAsset((p:any)=>({...p,date_of_purchase:e.target.value}))}/></div>
@@ -2628,17 +2692,12 @@ return (
                     placeholder='Asset name' />
                 </TableCell>
                 <TableCell>
-                  <Select value={row.category_id} onValueChange={v => setBulkRows(rows => rows.map((r,i) =>
-                      i===idx ? {...r, category_id: v} : r))}>
-                    <SelectTrigger className='h-8 text-xs'>
-                      <SelectValue placeholder='Category'/>
-                    </SelectTrigger>
-                    <SelectContent>
-                      {(cats||[]).map((c:any) => (
-                        <SelectItem key={c.id} value={c.id}>{c.name} — {c.depreciation_method||'WDV'} {fmtPct(c.depreciation_method==='SLM'?c.slm_rate:c.wdv_rate)} ({c.useful_life_years}yr)</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <CategoryPicker
+                    cats={cats || []}
+                    value={row.category_id}
+                    onChange={v => setBulkRows(rows => rows.map((r, i) => (i === idx ? { ...r, category_id: v } : r)))}
+                    className='h-8 text-xs'
+                  />
                 </TableCell>
                 <TableCell>
                   <Input className='h-8 text-xs' type='date' value={row.date_of_purchase}
