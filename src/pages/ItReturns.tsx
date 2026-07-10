@@ -374,35 +374,28 @@ const ItReturns = () => {
       const auditSet = new Set(auditClientIds);
 
       // ── Step 1: Fetch audit-classified clients from client_fy_classifications ──
-      // 2026-06-25 (V J Desai bug — "Audited 128" vs Clients "Audit 47"):
-      // Previously this used `selectedAY` (e.g. "2026-27") as the value in
-      // `.in("financial_year", ...)`. That accidentally matched FY 2026-27
-      // rows (the ongoing FY, 130 audits) instead of FY 2025-26 (the FY
-      // whose ITRs are actually being filed, 48 audits). Now that the
-      // selector is FY-native, we filter directly on selectedFY.
-      //
-      // We still include getCurrentFY() as a fallback because the Client
-      // Wizard stamps classification.financial_year = "current FY at
-      // creation time" — a client set up in Apr 2026 gets FY 2026-27 even
-      // if they're being filed under FY 2025-26.
-      const currentFY = getCurrentFY();
-      const fysToCheck = [...new Set([selectedFY, currentFY])];
-
+      // 2026-06-25 (V J Desai bug — "Audited 129" vs Clients "Audit 87"):
+      // Previous code included getCurrentFY() as a fallback FY, intended to
+      // rescue clients whose wizard-stored classification.financial_year was
+      // the ongoing FY (e.g. 2026-27) rather than the year being filed. In
+      // practice this over-counted by 42 — clients who had a 2026-27 row but
+      // no 2025-26 row silently inherited their 2026-27 classification into
+      // the FY 2025-26 tab. Now that the auditor manages classifications
+      // per-FY explicitly (Clients → Classification by FY), the fallback
+      // is wrong more often than right. Query strictly on selectedFY.
       let clsQ = (supabase as any)
         .from("client_fy_classifications")
         .select("client_id, classification, financial_year")
-        .in("financial_year", fysToCheck);
+        .eq("financial_year", selectedFY);
       if (!isSuperadmin && firmId) clsQ = clsQ.eq("firm_id", firmId);
       const { data: fyClassData } = await clsQ;
 
-      // Build classMap: for each client keep the entry whose FY matches
-      // selectedFY if available, otherwise fall back to the currentFY entry.
+      // Build classMap: one entry per client, straight from the selectedFY row.
       const classMapRaw = new Map<string, { cls: string; fy: string }>();
       for (const row of (fyClassData || [])) {
         if (!row.client_id) continue;
         const existing = classMapRaw.get(row.client_id);
-        // Prefer selectedFY row over currentFY row
-        if (!existing || (row.financial_year === selectedFY && existing.fy !== selectedFY)) {
+        if (!existing) {
           classMapRaw.set(row.client_id, { cls: row.classification, fy: row.financial_year });
         }
       }
