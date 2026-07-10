@@ -167,6 +167,33 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
         const engFY = (r as any).audit_engagements?.financial_year;
         return r.financial_year === selectedFY || engFY === selectedFY;
       });
+
+      // 2026-06-25 (V J Desai — Krishna Infra bug part 2): the earlier
+      // LEFT-JOIN filter only catches rows whose engagement_id was set at
+      // the time. But when the engagements page hard-deletes an engagement,
+      // the corresponding audit_status row often has engagement_id=null
+      // (either because the row pre-dated the FK, or because a prior
+      // migration nulled it). Result: dangling audit_status rows survive
+      // even after every engagement for (client_id, FY) is gone.
+      //
+      // Fix: hide any audit_status row for the selected FY whose client
+      // has ZERO active engagements for that FY. Standalone manual rows
+      // (client_id=null) stay visible. This also retroactively hides the
+      // 2 other client rows the auditor deleted.
+      const engagementClientIds = statusRows.length
+        ? await (async () => {
+            let engQ = (supabase as any)
+              .from("audit_engagements")
+              .select("client_id")
+              .eq("financial_year", selectedFY)
+              .neq("status", "archived")
+              .or("is_py_shell.is.null,is_py_shell.eq.false");
+            if (!isSuperadmin) engQ = engQ.eq("firm_id", firmId);
+            const { data } = await engQ;
+            return new Set(((data as any[]) || []).map(e => e.client_id).filter(Boolean));
+          })()
+        : new Set<string>();
+      statusRows = statusRows.filter(r => !r.client_id || engagementClientIds.has(r.client_id));
     }
 
     // Dedup real status rows: if the same client has multiple rows for this FY,

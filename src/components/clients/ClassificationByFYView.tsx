@@ -75,6 +75,9 @@ interface ClassifiedClient {
    *  row so a search that spans all buckets can render the correct badge
    *  and route the user to the right tab if they click through. */
   classification: ClassificationKey;
+  /** True for api_import draft rows — used by the Unclassified tab's
+   *  Draft/Active sub-filter so the auditor can triage incomplete setups. */
+  is_draft?: boolean;
 }
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -99,6 +102,11 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
   const [totalClientsCount, setTotalClientsCount] = useState<number>(0);
   const [searchRows, setSearchRows]     = useState<ClassifiedClient[]>([]);
   const [loading, setLoading]           = useState(false);
+  // 2026-06-25 — Unclassified sub-filter: All / Active / Draft.
+  // Only visible inside the Unclassified tab. Lets the auditor separate
+  // api_import drafts (setup incomplete) from finalised clients that
+  // simply haven't been classified for this FY yet.
+  const [unclFilter, setUnclFilter] = useState<"all" | "active" | "draft">("all");
 
   // 2026-06-25 — normalized search query, memoised at hook boundary so the
   // fetchData dependency array can react to it (search-across-buckets fires
@@ -171,10 +179,18 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
         // Fetch clients that have NO classification row for this FY. We do
         // this by fetching classified client_ids then excluding them —
         // avoids a NOT EXISTS subquery through PostgREST.
+        // 2026-06-25 (V J Desai — sub-filter total 876 ≠ tab count 962):
+        // PostgREST caps every response at 1000 rows by default. With 1091
+        // clients matching the (Final + api_import drafts) filter, ~91 rows
+        // were silently truncated — after subtracting classified IDs the
+        // Unclassified list came out ~86 short. Fix: explicit .range()
+        // pagination on BOTH queries so we always get the full set, even
+        // as the firm grows past 1k clients.
         let classedQ = (supabase as any)
           .from("client_fy_classifications")
           .select("client_id")
-          .eq("financial_year", selectedFY);
+          .eq("financial_year", selectedFY)
+          .range(0, 49999);
         if (!showAllFirms && firmId) classedQ = classedQ.eq("firm_id", firmId);
         const { data: classedRows } = await classedQ;
         const classedIds = new Set(((classedRows ?? []) as any[]).map(r => r.client_id));
@@ -182,12 +198,15 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
         // Match totalQ semantics: include api_import drafts too. The
         // Unclassified bucket is now the mirror of "clients not yet
         // classified for this FY", not "completed clients only".
+        // is_draft is selected so the tab's sub-filter can partition
+        // rows into Active vs Draft below.
         let unclQ = (supabase as any)
           .from("clients")
-          .select("id, name, entity_type, pan")
+          .select("id, name, entity_type, pan, is_draft")
           .is("deleted_at", null)
           .or("is_draft.eq.false,and(is_draft.eq.true,source.eq.api_import)")
-          .order("name", { ascending: true });
+          .order("name", { ascending: true })
+          .range(0, 49999);
         if (!showAllFirms && firmId) unclQ = unclQ.eq("firm_id", firmId);
         const { data: allRows } = await unclQ;
         const mapped: ClassifiedClient[] = ((allRows ?? []) as any[])
@@ -198,6 +217,7 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
             entity_type: r.entity_type ?? null,
             pan:         r.pan ?? null,
             classification: "Unclassified" as ClassificationKey,
+            is_draft:    !!r.is_draft,
           }));
         setRows(mapped);
       } else {
@@ -208,7 +228,8 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
           .eq("client_fy_classifications.classification", activeTab)
           .eq("is_draft", false)
           .is("deleted_at", null)
-          .order("name", { ascending: true });
+          .order("name", { ascending: true })
+          .range(0, 49999);
         if (!showAllFirms && firmId) {
           dataQ = dataQ.eq("firm_id", firmId);
           dataQ = dataQ.eq("client_fy_classifications.firm_id", firmId);
@@ -238,13 +259,16 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
       // Bucket badges are inferred client-side so the auditor sees ALL
       // matches at once — no more "Amber Gum missing from Audit tab" bug.
       if (q) {
+        // Search across ALL clients (drafts too) so an api_import draft
+        // like AMBER DYE CHEM surfaces even before its setup is completed.
         let sq = (supabase as any)
           .from("clients")
-          .select("id, name, entity_type, pan, client_fy_classifications!left(classification, financial_year, firm_id)")
-          .eq("is_draft", false)
+          .select("id, name, entity_type, pan, is_draft, source, client_fy_classifications!left(classification, financial_year, firm_id)")
           .is("deleted_at", null)
+          .or("is_draft.eq.false,and(is_draft.eq.true,source.eq.api_import)")
           .or(`name.ilike.%${q}%,pan.ilike.%${q}%`)
-          .order("name", { ascending: true });
+          .order("name", { ascending: true })
+          .range(0, 49999);
         if (!showAllFirms && firmId) sq = sq.eq("firm_id", firmId);
         const { data: sRows } = await sq;
         const mappedSearch: ClassifiedClient[] = ((sRows ?? []) as any[]).map(r => {
@@ -257,6 +281,7 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
             entity_type: r.entity_type ?? null,
             pan:         r.pan ?? null,
             classification: (fyc?.classification as ClassificationKey) ?? "Unclassified",
+            is_draft:    !!r.is_draft,
           };
         });
         setSearchRows(mappedSearch);
@@ -277,9 +302,19 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
   // bucket rather than filtering the active tab's rows only. Each row
   // carries its own `classification` so a badge tells the auditor which
   // tab it belongs to.
-  const displayRows = q
-    ? searchRows
-    : rows;
+  // Inside the Unclassified tab, further split by is_draft when the sub-
+  // filter isn't "All". Search mode ignores the sub-filter (already spans
+  // all buckets — narrowing again would be confusing).
+  const baseRows = q ? searchRows : rows;
+  const displayRows = (!q && activeTab === "Unclassified" && unclFilter !== "all")
+    ? baseRows.filter(r =>
+        unclFilter === "draft" ? !!r.is_draft : !r.is_draft
+      )
+    : baseRows;
+
+  // Sub-filter counts for the Unclassified tab chips.
+  const unclDraftCount  = activeTab === "Unclassified" ? rows.filter(r => r.is_draft).length  : 0;
+  const unclActiveCount = activeTab === "Unclassified" ? rows.filter(r => !r.is_draft).length : 0;
 
   return (
     <div className="space-y-4">
@@ -340,6 +375,33 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
 
         {CLASSIFICATION_TABS.map(tab => (
           <TabsContent key={tab.key} value={tab.key} className="mt-4">
+            {/* Unclassified sub-filter — Active / Draft split, only in the Unclassified tab. */}
+            {tab.key === "Unclassified" && !q && !loading && (unclActiveCount + unclDraftCount) > 0 && (
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-xs text-muted-foreground">Show:</span>
+                {([
+                  { key: "all",    label: "All",    n: unclActiveCount + unclDraftCount },
+                  { key: "active", label: "Active", n: unclActiveCount },
+                  { key: "draft",  label: "Draft",  n: unclDraftCount  },
+                ] as const).map(f => (
+                  <Button
+                    key={f.key}
+                    size="sm"
+                    variant={unclFilter === f.key ? "default" : "outline"}
+                    className="h-7 text-xs gap-1.5 px-2.5"
+                    onClick={() => setUnclFilter(f.key)}
+                  >
+                    {f.label}
+                    <Badge
+                      variant={unclFilter === f.key ? "secondary" : "outline"}
+                      className="text-[10px] h-4 min-w-[1.25rem] px-1 rounded-full"
+                    >
+                      {f.n}
+                    </Badge>
+                  </Button>
+                ))}
+              </div>
+            )}
             {loading ? (
               <div className="py-10 text-center text-sm text-muted-foreground animate-pulse">
                 Loading {tab.label} clients for FY {selectedFY}…
@@ -388,7 +450,20 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
                         onClick={() => navigate(`/clients/${row.client_id}`)}
                       >
                         <TableCell className="text-xs text-muted-foreground">{idx + 1}</TableCell>
-                        <TableCell className="font-medium text-sm">{row.name || "Unnamed"}</TableCell>
+                        <TableCell className="font-medium text-sm">
+                          <span className="inline-flex items-center gap-1.5">
+                            {row.name || "Unnamed"}
+                            {row.is_draft && (
+                              <Badge
+                                variant="outline"
+                                className="text-[9px] h-4 px-1 border-amber-400 text-amber-700 dark:text-amber-300"
+                                title="Client setup incomplete — imported from API"
+                              >
+                                Draft
+                              </Badge>
+                            )}
+                          </span>
+                        </TableCell>
                         <TableCell className="text-xs font-mono text-muted-foreground">
                           {row.pan || "—"}
                         </TableCell>
