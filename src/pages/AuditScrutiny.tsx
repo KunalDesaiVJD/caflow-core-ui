@@ -42,7 +42,7 @@ import { suggestedPrompts } from "@/lib/scrutiny/investigatorPrompts";
 import { computeCoverage, groupByTemplate } from "@/lib/scrutiny/coverage";
 
 const CATEGORIES = ["All", "TDS", "GST", "Cash Payments", "Loans", "Prior Period", "Depreciation", "Deferred Tax", "Bank Recon", "Narration AI"];
-const FY_OPTIONS = ["2024-25", "2023-24", "2022-23", "2021-22"];
+const FY_OPTIONS = ["2026-27", "2025-26", "2024-25", "2023-24", "2022-23", "2021-22"];
 const PAGE_SIZE = 25;
 
 const CLAUSES_3CD = [
@@ -92,7 +92,7 @@ export default function AuditScrutiny() {
   const [investigating, setInvestigating] = useState(false);
 
   // Filters — default FY from engagement context
-  const [fy, setFy] = useState(contextFY || "2024-25");
+  const [fy, setFy] = useState(contextFY || "2025-26");
 
   // Sync FY when engagement context changes
   useEffect(() => {
@@ -131,13 +131,23 @@ export default function AuditScrutiny() {
   const fetchFindings = async () => {
     if (!clientId) return;
     setLoading(true);
-    const { data, error } = await supabase
-      .from("scrutiny_findings")
-      .select("*")
-      .eq("client_id", clientId)
-      .eq("financial_year", fy)
-      .order("severity", { ascending: true });
-    if (!error && data) setFindings(data as Finding[]);
+    // PostgREST caps a single select at 1000 rows; page through so ALL findings are shown
+    // (a large engagement can produce >1000 — the severity cards must reflect the true total).
+    const PAGE = 1000;
+    const all: Finding[] = [];
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase
+        .from("scrutiny_findings")
+        .select("*")
+        .eq("client_id", clientId)
+        .eq("financial_year", fy)
+        .order("severity", { ascending: true })
+        .range(from, from + PAGE - 1);
+      if (error || !data || data.length === 0) break;
+      all.push(...(data as Finding[]));
+      if (data.length < PAGE) break;
+    }
+    setFindings(all);
     setLoading(false);
   };
 

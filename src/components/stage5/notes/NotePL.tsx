@@ -13,6 +13,11 @@ import {
 } from "./EditableCell";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 import { useDynamicNoteRegistry } from "@/lib/noteNumberRegistry";
+import { MoreVertical, Check as CheckIcon } from "lucide-react";
+import {
+  DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuLabel,
+  DropdownMenuItem, DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 
 interface Props {
   notes:           Stage5Notes;
@@ -62,73 +67,133 @@ export default function NotePL({
     return breakup.reduce((s, r) => s + Math.abs(Number(r?.amount_py ?? 0)), 0);
   };
 
-  // 2026-06-25 (V J Desai — MILL POWER Changes-in-Inventory bug):
-  // COA mapping correctly bifurcates inventory ledgers into INV_FG / INV_WIP /
-  // INV_STT (rendered as `attachedTo` static heads "finished" / "wip" /
-  // "stock_trade" inside the inventories breakup). But NotePL's six sub-cells
-  // and the "Changes in inventories (per P&L)" total were never wired to that
-  // breakup — they just defaulted to 0, so the note stayed blank even though
-  // PL_EXP_CII in COA carried the total.
-  //
-  // Fix: derive defaults from the inventories breakup. Auditor overrides
-  // are honoured (stored cell wins), but when nothing has been typed the
-  // note shows the correct auto-populated bifurcation. Opening balances
-  // this year = Closing balances last year (Schedule III convention).
-  const invBreakup = (get("bs_asset.inventories.breakup") ?? []) as ListRow[];
-  const sumBy = (headId: string, field: "amount_cy" | "amount_py"): number =>
-    invBreakup
-      .filter(r => (r as any)?.attachedTo === headId)
-      .reduce((s, r) => s + Math.abs(Number(r?.[field] ?? 0)), 0);
-
-  // Closing balances by category
-  const fgCloseCyAuto  = sumBy("finished",    "amount_cy");
-  const fgClosePyAuto  = sumBy("finished",    "amount_py");
-  const wipCloseCyAuto = sumBy("wip",         "amount_cy");
-  const wipClosePyAuto = sumBy("wip",         "amount_py");
-  const sitCloseCyAuto = sumBy("stock_trade", "amount_cy");
-  const sitClosePyAuto = sumBy("stock_trade", "amount_py");
-
-  // Opening this year = Closing last year; opening last year has no PPY data
-  // and stays 0 unless the auditor keys it in.
-  const fgOpenCyAuto   = fgClosePyAuto;
-  const wipOpenCyAuto  = wipClosePyAuto;
-  const sitOpenCyAuto  = sitClosePyAuto;
-  const fgOpenPyAuto   = 0;
-  const wipOpenPyAuto  = 0;
-  const sitOpenPyAuto  = 0;
-
-  // Helper: return the auditor's stored override (if typed) otherwise the
-  // auto-derived value. `?? autoValue` handles null / undefined but also the
-  // very first render when the JSONB path hasn't been touched.
-  const cellOr = (path: string, autoValue: number): number => {
-    const raw = get(path);
-    if (raw === null || raw === undefined || raw === "") return autoValue;
-    const n = Number(raw);
-    return Number.isFinite(n) ? n : autoValue;
+  // 2026-06-25 (V J Desai — MILL POWER Changes-in-Inventory):
+  // Sub-cells now come from autoPopulateNotes' dedicated writer, which
+  // reads INV_FG / INV_WIP / INV_STT / INV_STOCK / NCE_STCK / BS_CA_INV
+  // codes off the COA mapping and stamps 12 sub-cells + preserves any
+  // stored bucket_map override. NotePL's job here is:
+  //   1. Read those raw sub-cells straight from JSONB.
+  //   2. Apply an optional bucket_map so the auditor can move (say) the
+  //      WIP amount into the Finished Goods display row without editing
+  //      the COA mapping. `bucket_map: { wip: "fg" }` means "everything
+  //      auto-populated under WIP should show under FG instead".
+  //   3. Auto-compute the "Changes in inventories (per P&L)" total from
+  //      the resulting display buckets. Amount cells are LOCKED (read-only)
+  //      — the only way to change values is to fix the COA mapping.
+  const num = (path: string): number => {
+    const v = get(path);
+    if (v === null || v === undefined || v === "") return 0;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
   };
 
-  // Live-computed Changes in inventories total. Falls back to the stored
-  // PL_EXP_CII figure (cy("changes_inventory")) if the auto sub-cells are
-  // still blank — keeps the historical behaviour when the inventories
-  // breakup hasn't been populated yet.
-  const ciCyComputed = (cellOr("pl.changes_inventory.fg_close_cy",  fgCloseCyAuto)
-                     +  cellOr("pl.changes_inventory.wip_close_cy", wipCloseCyAuto)
-                     +  cellOr("pl.changes_inventory.sit_close_cy", sitCloseCyAuto))
-                    - (cellOr("pl.changes_inventory.fg_open_cy",    fgOpenCyAuto)
-                     +  cellOr("pl.changes_inventory.wip_open_cy",  wipOpenCyAuto)
-                     +  cellOr("pl.changes_inventory.sit_open_cy",  sitOpenCyAuto));
-  const ciPyComputed = (cellOr("pl.changes_inventory.fg_close_py",  fgClosePyAuto)
-                     +  cellOr("pl.changes_inventory.wip_close_py", wipClosePyAuto)
-                     +  cellOr("pl.changes_inventory.sit_close_py", sitClosePyAuto))
-                    - (cellOr("pl.changes_inventory.fg_open_py",    fgOpenPyAuto)
-                     +  cellOr("pl.changes_inventory.wip_open_py",  wipOpenPyAuto)
-                     +  cellOr("pl.changes_inventory.sit_open_py",  sitOpenPyAuto));
-  // Prefer the live sum when any sub-cell has a value; otherwise fall back
-  // to the stored PL_EXP_CII to preserve prior behaviour on empty engagements.
-  const hasAnyInvSubCell = fgCloseCyAuto + wipCloseCyAuto + sitCloseCyAuto
-                         + fgClosePyAuto + wipClosePyAuto + sitClosePyAuto > 0;
-  const ciTotalCy = hasAnyInvSubCell ? ciCyComputed : cy("changes_inventory");
-  const ciTotalPy = hasAnyInvSubCell ? ciPyComputed : py("changes_inventory");
+  // Source buckets straight from JSONB (populated by notesAutoPopulate).
+  const src = {
+    fg_close_cy:  num("pl.changes_inventory.fg_close_cy"),
+    wip_close_cy: num("pl.changes_inventory.wip_close_cy"),
+    sit_close_cy: num("pl.changes_inventory.sit_close_cy"),
+    fg_close_py:  num("pl.changes_inventory.fg_close_py"),
+    wip_close_py: num("pl.changes_inventory.wip_close_py"),
+    sit_close_py: num("pl.changes_inventory.sit_close_py"),
+    fg_open_cy:   num("pl.changes_inventory.fg_open_cy"),
+    wip_open_cy:  num("pl.changes_inventory.wip_open_cy"),
+    sit_open_cy:  num("pl.changes_inventory.sit_open_cy"),
+    fg_open_py:   num("pl.changes_inventory.fg_open_py"),
+    wip_open_py:  num("pl.changes_inventory.wip_open_py"),
+    sit_open_py:  num("pl.changes_inventory.sit_open_py"),
+  };
+
+  // bucket_map: which display bucket does each source bucket land in?
+  // Default is identity. Example {"wip":"fg"} → WIP totals show under FG.
+  type Bucket = "fg" | "wip" | "sit";
+  const bucketMap: Record<Bucket, Bucket> = {
+    fg:  (get("pl.changes_inventory.bucket_map.fg")  as Bucket) ?? "fg",
+    wip: (get("pl.changes_inventory.bucket_map.wip") as Bucket) ?? "wip",
+    sit: (get("pl.changes_inventory.bucket_map.sit") as Bucket) ?? "sit",
+  };
+  // Reverse: display bucket → set of source buckets feeding it.
+  const feedersOf = (display: Bucket): Bucket[] =>
+    (["fg", "wip", "sit"] as Bucket[]).filter(s => bucketMap[s] === display);
+
+  const disp = (field: keyof typeof src, display: Bucket): number => {
+    const kind = field.replace(/^[a-z]+_/, ""); // "close_cy" | "open_cy" | ...
+    return feedersOf(display).reduce((sum, s) => sum + (src[`${s}_${kind}` as keyof typeof src] as number), 0);
+  };
+
+  // Six display values that get shown in the sub-rows.
+  const dispFgCloseCy  = disp("fg_close_cy",  "fg");
+  const dispWipCloseCy = disp("wip_close_cy", "wip");
+  const dispSitCloseCy = disp("sit_close_cy", "sit");
+  const dispFgClosePy  = disp("fg_close_py",  "fg");
+  const dispWipClosePy = disp("wip_close_py", "wip");
+  const dispSitClosePy = disp("sit_close_py", "sit");
+  const dispFgOpenCy   = disp("fg_open_cy",   "fg");
+  const dispWipOpenCy  = disp("wip_open_cy",  "wip");
+  const dispSitOpenCy  = disp("sit_open_cy",  "sit");
+  const dispFgOpenPy   = disp("fg_open_py",   "fg");
+  const dispWipOpenPy  = disp("wip_open_py",  "wip");
+  const dispSitOpenPy  = disp("sit_open_py",  "sit");
+
+  // "Changes in inventories (per P&L)" total = (Opening) − (Closing).
+  // Positive = inventory decreased = expense.
+  const ciTotalCy = (dispFgOpenCy + dispWipOpenCy + dispSitOpenCy)
+                  - (dispFgCloseCy + dispWipCloseCy + dispSitCloseCy);
+  const ciTotalPy = (dispFgOpenPy + dispWipOpenPy + dispSitOpenPy)
+                  - (dispFgClosePy + dispWipClosePy + dispSitClosePy);
+
+  // Bucket-reassignment handler used by the "Move to..." dropdown next to
+  // each sub-row. Writes to `pl.changes_inventory.bucket_map.<source>` so
+  // Re-sync doesn't wipe the choice (it survives via priorCI spread merge
+  // in autoPopulateNotes).
+  const setBucketMap = (source: Bucket, dest: Bucket): void => {
+    updatePath(`pl.changes_inventory.bucket_map.${source}`, dest);
+  };
+
+  // 2026-06-25 (V J Desai request v2): three-dots (⋮) menu instead of a
+  // <select>. Only shown when the source bucket actually has non-zero data —
+  // avoids clutter on empty rows. Uses the same shadcn DropdownMenu pattern
+  // as ListRowActionsMenu, so the look is consistent with the rest of the
+  // Notes editor.
+  const bucketLabel = { fg: "Finished Goods", wip: "Work-in-progress", sit: "Stock-in-trade" } as const;
+  const renderMoveDropdown = (source: Bucket) => {
+    const hasData =
+      Math.abs(src[`${source}_close_cy` as keyof typeof src] as number) > 0.005 ||
+      Math.abs(src[`${source}_close_py` as keyof typeof src] as number) > 0.005;
+    if (!hasData) return null;
+    const current = bucketMap[source];
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            title="Reassign amount to a different sub-row"
+            className="ml-1 h-6 w-6 inline-flex items-center justify-center rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <MoreVertical className="h-3.5 w-3.5" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuLabel className="text-[10px] text-muted-foreground">
+            Show amount under
+          </DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          {(["fg", "wip", "sit"] as Bucket[]).map(b => (
+            <DropdownMenuItem
+              key={b}
+              onSelect={() => setBucketMap(source, b)}
+              className="text-xs gap-2"
+            >
+              <CheckIcon className={`h-3.5 w-3.5 ${current === b ? "opacity-100" : "opacity-0"}`} />
+              {bucketLabel[b]}
+              {b === source && (
+                <span className="ml-auto text-[10px] text-muted-foreground">(default)</span>
+              )}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  };
 
   // Smart note: only show a note number when at least one year has data.
   const { getNoteNo: dn } = useDynamicNoteRegistry(engagementId);
@@ -255,90 +320,83 @@ export default function NotePL({
 
       <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("changes_inventory", "changes_inventories")} title="Changes in inventories of FG / WIP / SIT" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={ciTotalCy} pyTotal={ciTotalPy}>
         <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
-        <div className="text-[10px] italic text-muted-foreground mt-1">Closing Stock</div>
-        <EditableRow
-          label="Finished Goods" indent={1}
-          cy={cellOr("pl.changes_inventory.fg_close_cy", fgCloseCyAuto)}
-          py={cellOr("pl.changes_inventory.fg_close_py", fgClosePyAuto)}
-          autoCY={fgCloseCyAuto} autoPY={fgClosePyAuto}
-          onCommitCy={(v) => updatePath("pl.changes_inventory.fg_close_cy", v)}
-          onCommitPy={(v) => updatePath("pl.changes_inventory.fg_close_py", v)}
-          onResetCy={() => resetPath("pl.changes_inventory.fg_close_cy")}
-          onResetPy={() => resetPath("pl.changes_inventory.fg_close_py")}
-          isOverriddenCy={isOverridden("pl.changes_inventory.fg_close_cy")}
-          isOverriddenPy={isOverridden("pl.changes_inventory.fg_close_py")}
-        />
-        <EditableRow
-          label="Work-in-progress" indent={1}
-          cy={cellOr("pl.changes_inventory.wip_close_cy", wipCloseCyAuto)}
-          py={cellOr("pl.changes_inventory.wip_close_py", wipClosePyAuto)}
-          autoCY={wipCloseCyAuto} autoPY={wipClosePyAuto}
-          onCommitCy={(v) => updatePath("pl.changes_inventory.wip_close_cy", v)}
-          onCommitPy={(v) => updatePath("pl.changes_inventory.wip_close_py", v)}
-          onResetCy={() => resetPath("pl.changes_inventory.wip_close_cy")}
-          onResetPy={() => resetPath("pl.changes_inventory.wip_close_py")}
-          isOverriddenCy={isOverridden("pl.changes_inventory.wip_close_cy")}
-          isOverriddenPy={isOverridden("pl.changes_inventory.wip_close_py")}
-        />
-        <EditableRow
-          label="Stock-in-trade" indent={1}
-          cy={cellOr("pl.changes_inventory.sit_close_cy", sitCloseCyAuto)}
-          py={cellOr("pl.changes_inventory.sit_close_py", sitClosePyAuto)}
-          autoCY={sitCloseCyAuto} autoPY={sitClosePyAuto}
-          onCommitCy={(v) => updatePath("pl.changes_inventory.sit_close_cy", v)}
-          onCommitPy={(v) => updatePath("pl.changes_inventory.sit_close_py", v)}
-          onResetCy={() => resetPath("pl.changes_inventory.sit_close_cy")}
-          onResetPy={() => resetPath("pl.changes_inventory.sit_close_py")}
-          isOverriddenCy={isOverridden("pl.changes_inventory.sit_close_cy")}
-          isOverriddenPy={isOverridden("pl.changes_inventory.sit_close_py")}
-        />
+        <div className="text-[10px] italic text-muted-foreground mt-1 flex items-center gap-1">
+          <span>Closing Stock</span>
+          <span className="text-muted-foreground/70">— amounts flow from COA mapping; use “Move to…” to reassign</span>
+        </div>
+        {/* Closing Stock rows — locked, auto-populated from INV_FG / INV_WIP /
+            INV_STT / INV_STOCK / NCE_STCK / BS_CA_INV codes via notesAutoPopulate.
+            The Move-to dropdown lets the auditor redirect an entire source
+            bucket to a different display sub-row when the underlying ledger
+            doesn't have the right sub-code in COA. */}
+        <div className="flex items-center">
+          <div className="flex-1">
+            <EditableRow
+              label="Finished Goods" indent={1}
+              cy={dispFgCloseCy} py={dispFgClosePy}
+              autoCY={dispFgCloseCy} autoPY={dispFgClosePy}
+              onCommitCy={() => {}} onCommitPy={() => {}}
+              isLocked
+            />
+          </div>
+          {renderMoveDropdown("fg")}
+        </div>
+        <div className="flex items-center">
+          <div className="flex-1">
+            <EditableRow
+              label="Work-in-progress" indent={1}
+              cy={dispWipCloseCy} py={dispWipClosePy}
+              autoCY={dispWipCloseCy} autoPY={dispWipClosePy}
+              onCommitCy={() => {}} onCommitPy={() => {}}
+              isLocked
+            />
+          </div>
+          {renderMoveDropdown("wip")}
+        </div>
+        <div className="flex items-center">
+          <div className="flex-1">
+            <EditableRow
+              label="Stock-in-trade" indent={1}
+              cy={dispSitCloseCy} py={dispSitClosePy}
+              autoCY={dispSitCloseCy} autoPY={dispSitClosePy}
+              onCommitCy={() => {}} onCommitPy={() => {}}
+              isLocked
+            />
+          </div>
+          {renderMoveDropdown("sit")}
+        </div>
         <div className="text-[10px] italic text-muted-foreground mt-2">Less: Opening Stock</div>
+        {/* Opening = closing of prior period, honouring the same bucket_map. */}
         <EditableRow
           label="Finished Goods" indent={1}
-          cy={cellOr("pl.changes_inventory.fg_open_cy", fgOpenCyAuto)}
-          py={cellOr("pl.changes_inventory.fg_open_py", fgOpenPyAuto)}
-          autoCY={fgOpenCyAuto} autoPY={fgOpenPyAuto}
-          onCommitCy={(v) => updatePath("pl.changes_inventory.fg_open_cy", v)}
-          onCommitPy={(v) => updatePath("pl.changes_inventory.fg_open_py", v)}
-          onResetCy={() => resetPath("pl.changes_inventory.fg_open_cy")}
-          onResetPy={() => resetPath("pl.changes_inventory.fg_open_py")}
-          isOverriddenCy={isOverridden("pl.changes_inventory.fg_open_cy")}
-          isOverriddenPy={isOverridden("pl.changes_inventory.fg_open_py")}
+          cy={dispFgOpenCy} py={dispFgOpenPy}
+          autoCY={dispFgOpenCy} autoPY={dispFgOpenPy}
+          onCommitCy={() => {}} onCommitPy={() => {}}
+          isLocked
         />
         <EditableRow
           label="Work-in-progress" indent={1}
-          cy={cellOr("pl.changes_inventory.wip_open_cy", wipOpenCyAuto)}
-          py={cellOr("pl.changes_inventory.wip_open_py", wipOpenPyAuto)}
-          autoCY={wipOpenCyAuto} autoPY={wipOpenPyAuto}
-          onCommitCy={(v) => updatePath("pl.changes_inventory.wip_open_cy", v)}
-          onCommitPy={(v) => updatePath("pl.changes_inventory.wip_open_py", v)}
-          onResetCy={() => resetPath("pl.changes_inventory.wip_open_cy")}
-          onResetPy={() => resetPath("pl.changes_inventory.wip_open_py")}
-          isOverriddenCy={isOverridden("pl.changes_inventory.wip_open_cy")}
-          isOverriddenPy={isOverridden("pl.changes_inventory.wip_open_py")}
+          cy={dispWipOpenCy} py={dispWipOpenPy}
+          autoCY={dispWipOpenCy} autoPY={dispWipOpenPy}
+          onCommitCy={() => {}} onCommitPy={() => {}}
+          isLocked
         />
         <EditableRow
           label="Stock-in-trade" indent={1}
-          cy={cellOr("pl.changes_inventory.sit_open_cy", sitOpenCyAuto)}
-          py={cellOr("pl.changes_inventory.sit_open_py", sitOpenPyAuto)}
-          autoCY={sitOpenCyAuto} autoPY={sitOpenPyAuto}
-          onCommitCy={(v) => updatePath("pl.changes_inventory.sit_open_cy", v)}
-          onCommitPy={(v) => updatePath("pl.changes_inventory.sit_open_py", v)}
-          onResetCy={() => resetPath("pl.changes_inventory.sit_open_cy")}
-          onResetPy={() => resetPath("pl.changes_inventory.sit_open_py")}
-          isOverriddenCy={isOverridden("pl.changes_inventory.sit_open_cy")}
-          isOverriddenPy={isOverridden("pl.changes_inventory.sit_open_py")}
+          cy={dispSitOpenCy} py={dispSitOpenPy}
+          autoCY={dispSitOpenCy} autoPY={dispSitOpenPy}
+          onCommitCy={() => {}} onCommitPy={() => {}}
+          isLocked
         />
+        {/* Total row is auto-computed from the six display sub-cells — never
+            editable. Consistent with the "amounts flow from COA" rule the
+            user asked for; auditor changes the COA mapping to change values. */}
         <EditableRow
           label="Changes in inventories (per P&L)"
           cy={ciTotalCy} py={ciTotalPy}
           autoCY={ciTotalCy} autoPY={ciTotalPy}
-          isOverriddenCy={isOverridden("pl.changes_inventory.cy")}
-          isOverriddenPy={isOverridden("pl.changes_inventory.py")}
-          onCommitCy={(v) => updatePath("pl.changes_inventory.cy", v)}
-          onCommitPy={(v) => updatePath("pl.changes_inventory.py", v)}
-          onResetCy={() => resetPath("pl.changes_inventory.cy")}
-          onResetPy={() => resetPath("pl.changes_inventory.py")}
+          onCommitCy={() => {}} onCommitPy={() => {}}
+          isLocked
           bold
         />
       </NoteCard>

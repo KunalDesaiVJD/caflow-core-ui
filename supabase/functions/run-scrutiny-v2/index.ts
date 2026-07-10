@@ -35,6 +35,21 @@ serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
     );
 
+    // PostgREST caps a single select at 1000 rows; large engagements (RAY WINGS: 3.2k vouchers)
+    // must be paged or the engine analyses only a partial dataset. Reads ALL rows for a table.
+    const fetchAllByEngagement = async (table: string, engId: string): Promise<unknown[]> => {
+      const PAGE = 1000;
+      const out: unknown[] = [];
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await supabase.from(table).select("*").eq("engagement_id", engId).range(from, from + PAGE - 1);
+        if (error) { console.error(`${table} page@${from} error:`, error.message); break; }
+        if (!data || data.length === 0) break;
+        out.push(...data);
+        if (data.length < PAGE) break;
+      }
+      return out;
+    };
+
     const { data: { user }, error: authErr } = await supabase.auth.getUser(token);
     if (authErr || !user) return json({ error: "Unauthorized" }, 401);
 
@@ -82,17 +97,11 @@ serve(async (req) => {
     let source: "tally_sync" | "snapshot" | null = null;
 
     if (engId) {
-      const { data: tallyTB } = await supabase
-        .from("tally_trial_balance")
-        .select("*")
-        .eq("engagement_id", engId);
-      if (Array.isArray(tallyTB) && tallyTB.length > 0) {
-        const { data: tallyVch } = await supabase
-          .from("tally_vouchers")
-          .select("*")
-          .eq("engagement_id", engId);
+      const tallyTB = await fetchAllByEngagement("tally_trial_balance", engId);
+      if (tallyTB.length > 0) {
+        const tallyVch = await fetchAllByEngagement("tally_vouchers", engId);
         tbCur = tbFromTallyTB(tallyTB as never[]);
-        vouchersCur = vouchersFromSnapshot((tallyVch ?? []) as never[]);
+        vouchersCur = vouchersFromSnapshot(tallyVch as never[]);
         source = "tally_sync";
       }
     }
@@ -126,11 +135,8 @@ serve(async (req) => {
         .eq("financial_year", prevYear)
         .maybeSingle();
       if (prevEng?.id) {
-        const { data: tallyPY } = await supabase
-          .from("tally_trial_balance")
-          .select("*")
-          .eq("engagement_id", prevEng.id);
-        if (Array.isArray(tallyPY) && tallyPY.length > 0) tbPY = tbFromTallyTB(tallyPY as never[]);
+        const tallyPY = await fetchAllByEngagement("tally_trial_balance", prevEng.id);
+        if (tallyPY.length > 0) tbPY = tbFromTallyTB(tallyPY as never[]);
       }
       if (!tbPY) {
         const { data: prev } = await supabase
@@ -167,7 +173,15 @@ serve(async (req) => {
     );
 
     // ── Persist findings (existing scrutiny_findings shape) ──
-    const rows = result.findings.map((f) => findingToRow(f, { client_id, financial_year }));
+    // Stamp firm_id (the RLS scope — findings are firm-scoped) + engagement_id so the app can
+    // read them back and key them per engagement. Resolve firm from the client, not the caller.
+    const { data: clientRow } = await supabase.from("clients").select("firm_id").eq("id", client_id).single();
+    const findingFirmId = clientRow?.firm_id ?? firm_id ?? null;
+    const rows = result.findings.map((f) => ({
+      ...findingToRow(f, { client_id, financial_year }),
+      firm_id: findingFirmId,
+      engagement_id: engId,
+    }));
     if (rows.length > 0) {
       const CHUNK = 100;
       for (let i = 0; i < rows.length; i += CHUNK) {
