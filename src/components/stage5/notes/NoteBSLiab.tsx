@@ -24,6 +24,7 @@ import { useDynamicNoteRegistry } from "@/lib/noteNumberRegistry";
 import { CORP_SIGNED_NOTE_TOTALS } from "@/lib/nceFeatureFlags";
 import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SectionedLedgerBreakup } from "./SectionedLedgerBreakup";
 
 // ── Row types (Share Capital sub-tables) ─────────────────────────────────────
 interface ShareholderRow {
@@ -925,54 +926,69 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("trade_payables")} title="Trade Payables" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("trade_payables")} pyTotal={effectivePY("trade_payables")}>
-        <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
-        <EditableRow
-          label="Total outstanding dues of Micro and Small Enterprises"
-          cy={Number(get("bs_liab.trade_payables.msme_cy") ?? 0)}
-          py={Number(get("bs_liab.trade_payables.msme_py") ?? 0)}
-          isOverriddenCy={isOverridden("bs_liab.trade_payables.msme_cy")}
-          isOverriddenPy={isOverridden("bs_liab.trade_payables.msme_py")}
-          onCommitCy={(v) => updatePath("bs_liab.trade_payables.msme_cy", v)}
-          onCommitPy={(v) => updatePath("bs_liab.trade_payables.msme_py", v)}
-        />
-        <EditableRow
-          label="Total outstanding dues of others"
-          cy={Number(get("bs_liab.trade_payables.others_cy") ?? cy("trade_payables"))}
-          py={Number(get("bs_liab.trade_payables.others_py") ?? py("trade_payables"))}
-          autoCY={cy("trade_payables")} autoPY={py("trade_payables")}
-          isOverriddenCy={isOverridden("bs_liab.trade_payables.others_cy")}
-          isOverriddenPy={isOverridden("bs_liab.trade_payables.others_py")}
-          onCommitCy={(v) => updatePath("bs_liab.trade_payables.others_cy", v)}
-          onCommitPy={(v) => updatePath("bs_liab.trade_payables.others_py", v)}
-          onResetCy={() => resetPath("bs_liab.trade_payables.others_cy")}
-          onResetPy={() => resetPath("bs_liab.trade_payables.others_py")}
-        />
-        <EditableRow
-          label="Total — Trade Payables (per BS)"
-          cy={cy("trade_payables")} py={py("trade_payables")}
-          autoCY={cy("trade_payables")} autoPY={py("trade_payables")}
-          isOverriddenCy={isOverridden("bs_liab.trade_payables.cy")}
-          isOverriddenPy={isOverridden("bs_liab.trade_payables.py")}
-          onCommitCy={(v) => updatePath("bs_liab.trade_payables.cy", v)}
-          onCommitPy={(v) => updatePath("bs_liab.trade_payables.py", v)}
-          onResetCy={() => resetPath("bs_liab.trade_payables.cy")}
-          onResetPy={() => resetPath("bs_liab.trade_payables.py")}
-          bold
-        />
+      {(() => {
+        // 2026-06-25 (V J Desai — Trade Payables MSME / Others bifurcation):
+        // The auto-populate layer already builds a per-ledger breakup at
+        // bs_liab.trade_payables.breakup with { linked_ledger, amount_cy,
+        // amount_py }. We now surface every ledger inside the note with a
+        // three-dots menu to reclassify between MSME and Others. Sub-totals
+        // are computed live from ledger sections; grand total stays anchored
+        // to cy("trade_payables") (COA-derived) so BS ↔ note invariance holds.
+        //
+        // Per-ledger section persists at
+        //   bs_liab.trade_payables.ledger_section.<ledger>: "msme" | "others"
+        // Default is "others" (matches Schedule III convention when the
+        // auditor hasn't yet flagged MSME vendors).
+        const tpBreakup = (get("bs_liab.trade_payables.breakup") ?? []) as ListRow[];
+        const getTpSection = (ledger: string): string | undefined => {
+          const raw = get(`bs_liab.trade_payables.ledger_section.${ledger}`);
+          return typeof raw === "string" && raw ? raw : undefined;
+        };
+        const setTpSection = (ledger: string, section: string) => {
+          updatePath(`bs_liab.trade_payables.ledger_section.${ledger}`, section);
+        };
+        return (
+          <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("trade_payables")} title="Trade Payables" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("trade_payables")} pyTotal={effectivePY("trade_payables")}>
+            <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
 
-        <div className="text-[10px] italic text-muted-foreground mt-3">Notes (free text)</div>
-        <EditableCell
-          type="text"
-          value={get("bs_liab.trade_payables.note_1") ?? "1. There are no Unbilled and Not due trade payables."}
-          onCommit={(v) => updatePath("bs_liab.trade_payables.note_1", String(v ?? ""))}
-        />
-        <EditableCell
-          type="text"
-          value={get("bs_liab.trade_payables.note_2") ?? "2. As declared and certified by the management."}
-          onCommit={(v) => updatePath("bs_liab.trade_payables.note_2", String(v ?? ""))}
-        />
-      </NoteCard>
+            <div className="text-[10px] italic text-muted-foreground mt-1">
+              Expand a row to see the ledgers grouped under it. Use the three-dots menu to move a vendor between MSME and Others.
+            </div>
+            {/* Section rows ARE the MSME + Others sub-totals — no duplicate rows below
+                (post-review 2026-06-25). Amounts locked; grand total row stays. */}
+            <SectionedLedgerBreakup
+              rows={tpBreakup}
+              sections={[
+                { key: "msme",   label: "Total outstanding dues of Micro and Small Enterprises" },
+                { key: "others", label: "Total outstanding dues of others" },
+              ]}
+              getSection={getTpSection}
+              setSection={setTpSection}
+            />
+
+            <EditableRow
+              label="Total — Trade Payables (per BS)"
+              cy={cy("trade_payables")} py={py("trade_payables")}
+              autoCY={cy("trade_payables")} autoPY={py("trade_payables")}
+              onCommitCy={() => {}} onCommitPy={() => {}}
+              isLocked
+              bold
+            />
+
+            <div className="text-[10px] italic text-muted-foreground mt-3">Notes (free text)</div>
+            <EditableCell
+              type="text"
+              value={get("bs_liab.trade_payables.note_1") ?? "1. There are no Unbilled and Not due trade payables."}
+              onCommit={(v) => updatePath("bs_liab.trade_payables.note_1", String(v ?? ""))}
+            />
+            <EditableCell
+              type="text"
+              value={get("bs_liab.trade_payables.note_2") ?? "2. As declared and certified by the management."}
+              onCommit={(v) => updatePath("bs_liab.trade_payables.note_2", String(v ?? ""))}
+            />
+          </NoteCard>
+        );
+      })()}
 
       <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("other_curr_liab", "other_current_liab")} title="Other current liabilities" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("other_curr_liab")} pyTotal={effectivePY("other_curr_liab")}>
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />

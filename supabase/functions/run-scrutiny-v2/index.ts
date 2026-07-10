@@ -67,14 +67,6 @@ serve(async (req) => {
       }
     }
 
-    // ── Clean previous open findings (same contract as v1) ──
-    await supabase
-      .from("scrutiny_findings")
-      .delete()
-      .eq("client_id", client_id)
-      .eq("financial_year", financial_year)
-      .eq("status", "open");
-
     // ── Resolve the engagement ──
     // Tally Sync (the Team Package — the SAME integration main uses) writes tally_trial_balance /
     // tally_vouchers keyed by engagement_id, NOT client_id. The frontend passes the selected
@@ -182,6 +174,11 @@ serve(async (req) => {
       firm_id: findingFirmId,
       engagement_id: engId,
     }));
+    // Delete previous OPEN findings only NOW — after reads + detection have succeeded and the new
+    // rows are ready. A run that fails or times out before this point leaves existing findings
+    // intact (previously the delete ran first, so any failed run wiped the findings).
+    await supabase.from("scrutiny_findings").delete()
+      .eq("client_id", client_id).eq("financial_year", financial_year).eq("status", "open");
     if (rows.length > 0) {
       const CHUNK = 100;
       for (let i = 0; i < rows.length; i += CHUNK) {

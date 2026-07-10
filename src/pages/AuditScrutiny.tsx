@@ -456,22 +456,61 @@ export default function AuditScrutiny() {
   };
 
   const handleRunScrutiny = async () => {
+    if (!clientId) return;
     setRunning(true);
+    toast({ title: "Running scrutiny…", description: "Large engagements can take up to a minute." });
     try {
       const { data: userData } = await supabase.from("users").select("firm_id").eq("id", user?.id).single();
-      const { error } = await supabase.functions.invoke(scrutinyRunFunction(), {
-        body: {
-          client_id: clientId,
-          financial_year: fy,
-          firm_id: userData?.firm_id,
-          engagement_id: (auditCtx?.selectedEngagement as any)?.id ?? null,
-        },
-      });
-      if (error) throw error;
-      toast({ title: "Scrutiny complete", description: "Findings have been updated." });
-      fetchFindings();
+      // Baseline = newest existing finding (server created_at). Lets us detect the fresh batch even
+      // when a large engagement (~1 min) exceeds the client-side invoke timeout while the edge
+      // function is still running server-side — so we never show a false "failed".
+      const { data: baseRow } = await supabase
+        .from("scrutiny_findings")
+        .select("created_at")
+        .eq("client_id", clientId).eq("financial_year", fy)
+        .order("created_at", { ascending: false }).limit(1);
+      const baseline = (baseRow?.[0] as { created_at?: string } | undefined)?.created_at ?? "1970-01-01T00:00:00Z";
+
+      let invokeOk = false;
+      let invokeErr: { message?: string } | null = null;
+      const invokePromise = supabase.functions
+        .invoke(scrutinyRunFunction(), {
+          body: {
+            client_id: clientId,
+            financial_year: fy,
+            firm_id: userData?.firm_id,
+            engagement_id: (auditCtx?.selectedEngagement as any)?.id ?? null,
+          },
+        })
+        .then(({ error }) => { if (error) invokeErr = error; else invokeOk = true; })
+        .catch((e) => { invokeErr = e; });
+
+      const freshFound = async () => {
+        const { data } = await supabase
+          .from("scrutiny_findings").select("id")
+          .eq("client_id", clientId).eq("financial_year", fy)
+          .gt("created_at", baseline).limit(1);
+        return !!(data && data.length);
+      };
+
+      // Poll up to 3 min. On a fast/clean run the invoke resolves first; on a large run the invoke
+      // may error (client timeout) while the function keeps running — so on error we keep polling.
+      const deadline = Date.now() + 180000;
+      let done = false;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 3000));
+        if (await freshFound()) { done = true; break; }
+        if (invokeOk) { done = true; break; }
+      }
+      await invokePromise.catch(() => {});
+      await fetchFindings();
+      if (done || invokeOk) {
+        toast({ title: "Scrutiny complete", description: "Findings have been updated." });
+      } else {
+        toast({ title: "Scrutiny failed", description: invokeErr?.message ?? "Edge Function error", variant: "destructive" });
+      }
     } catch (err: any) {
-      toast({ title: "Scrutiny failed", description: err.message, variant: "destructive" });
+      toast({ title: "Scrutiny failed", description: err?.message ?? "Error", variant: "destructive" });
     } finally {
       setRunning(false);
     }
@@ -549,7 +588,7 @@ export default function AuditScrutiny() {
           <p className="text-sm text-muted-foreground">
             AI-powered audit findings for FY {fy}
             {auditFirmName && <span className="ml-2 text-foreground font-medium">· Audit Firm: {auditFirmName}</span>}
-            {!auditFirmName && <span className="ml-2 text-amber-600">· No audit firm assigned for this FY</span>}
+            {/* "No audit firm assigned" advisory removed — it only checked client_auditor_assignments for the FY and was a false warning. */}
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
