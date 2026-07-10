@@ -427,12 +427,20 @@ const ItReturns = () => {
       //       historical work if the toggle was later disabled).
       // Any client outside both sets — like ACS ENGITECH with the ITR
       // toggle off — is now hidden as the auditor expects.
+      // 2026-06-25 (V J Desai — 712 vs Clients Final 720 reconciliation):
+      //   parent's "Final 720" chip lives inside the "Clients via API"
+      //   tab and counts every api_import client with is_draft=false and
+      //   deleted_at IS NULL — INCLUDING is_active=false ones. It does NOT
+      //   include manual clients. To make IT Returns' Total match 720:
+      //     (a) restrict base pool to source='api_import' (drops 5 manual)
+      //     (b) drop the .neq(is_active,false) filter (recovers 13 inactive)
+      //   Result: 725 − 5 = 720, matching the Clients page chip exactly.
       let cQ = supabase
         .from("clients")
         .select("id, name, pan, entity_type, email, mobile, responsible_person_id, work_group_type, responsible_person:users!clients_responsible_person_id_fkey(id, name)")
         .eq("is_draft", false)
         .is("deleted_at", null)
-        .neq("is_active", false)
+        .eq("source", "api_import")
         .order("name");
       if (!isSuperadmin && firmId) cQ = cQ.eq("firm_id", firmId);
       const { data: cData } = await cQ;
