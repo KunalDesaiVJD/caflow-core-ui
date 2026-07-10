@@ -21,6 +21,9 @@ interface ClientOption {
   // row) and should not be range-restricted.
   tds_start_fy?: string; tds_start_quarter?: string;
   tds_end_fy?: string; tds_end_quarter?: string;
+  // Forms this client is required to file (26Q/24Q/27Q/27EQ). Undefined
+  // means no configured range either — never form-restricted either.
+  tds_forms_applicable?: string[];
 }
 interface UserOption { id: string; name: string | null; }
 
@@ -69,7 +72,7 @@ const TdsFilings = () => {
     // even though the client-detail "Service Activation" screen shows TDS
     // active. The fallback restores those clients.
     const [svcResp, catResp, clientsResp] = await Promise.all([
-      supabase.from("client_services").select("client_id, service_category_id, is_active, tds_effective_from_fy, tds_effective_from_q, tds_end_fy, tds_end_quarter").eq("is_active", true),
+      supabase.from("client_services").select("client_id, service_category_id, is_active, tds_effective_from_fy, tds_effective_from_q, tds_end_fy, tds_end_quarter, tds_forms_applicable").eq("is_active", true),
       supabase.from("service_categories").select("id, linked_module, name, category_code"),
       supabase.from("clients").select("id, name, pan, tan_number").eq("is_draft", false).is("deleted_at", null).order("name"),
     ]);
@@ -90,6 +93,7 @@ const TdsFilings = () => {
       client_id: string; service_category_id: string; is_active: boolean;
       tds_effective_from_fy: string | null; tds_effective_from_q: string | null;
       tds_end_fy: string | null; tds_end_quarter: string | null;
+      tds_forms_applicable: string[] | null;
     }>;
     const clientsWithStrictTds = new Set(
       activeSvc.filter(s => tdsStrictCatIds.has(s.service_category_id)).map(s => s.client_id),
@@ -97,8 +101,8 @@ const TdsFilings = () => {
     const clientsWithNameMatchTds = new Set(
       activeSvc.filter(s => tdsNameCatIds.has(s.service_category_id)).map(s => s.client_id),
     );
-    // Compliance period per client, from the strict TDS client_services row.
-    const rangeByClient = new Map<string, { tds_start_fy?: string; tds_start_quarter?: string; tds_end_fy?: string; tds_end_quarter?: string }>();
+    // Compliance period + applicable forms per client, from the strict TDS client_services row.
+    const rangeByClient = new Map<string, { tds_start_fy?: string; tds_start_quarter?: string; tds_end_fy?: string; tds_end_quarter?: string; tds_forms_applicable?: string[] }>();
     for (const s of activeSvc) {
       if (!tdsStrictCatIds.has(s.service_category_id)) continue;
       rangeByClient.set(s.client_id, {
@@ -106,6 +110,7 @@ const TdsFilings = () => {
         tds_start_quarter: s.tds_effective_from_q || undefined,
         tds_end_fy: s.tds_end_fy || undefined,
         tds_end_quarter: s.tds_end_quarter || undefined,
+        tds_forms_applicable: s.tds_forms_applicable && s.tds_forms_applicable.length > 0 ? s.tds_forms_applicable : undefined,
       });
     }
 

@@ -32,6 +32,8 @@ export interface ServiceConfig {
   /** TDS Compliance only — optional inclusive end; blank = active indefinitely. */
   tds_end_fy?: string;
   tds_end_quarter?: string;
+  /** TDS Compliance only — one or more forms the client is required to file. */
+  tds_forms?: string[];
 }
 
 export interface PackageConfig {
@@ -81,6 +83,7 @@ export interface CrossStepWarning {
 
 /* ───── TDS Start/End Quarter helpers ───── */
 const QUARTERS = ["Q1", "Q2", "Q3", "Q4"];
+const TDS_FORMS = ["26Q", "24Q", "27Q", "27EQ"];
 
 function getTdsFyOptions(): string[] {
   const now = new Date();
@@ -190,7 +193,7 @@ export const StepServiceBilling = ({
         billing_amount: 0,
         invoice_gen_type: "reminder",
         ...(cat.linked_module === "tds"
-          ? { tds_start_fy: DEFAULT_TDS_START_FY, tds_start_quarter: DEFAULT_TDS_START_QUARTER }
+          ? { tds_start_fy: DEFAULT_TDS_START_FY, tds_start_quarter: DEFAULT_TDS_START_QUARTER, tds_forms: ["26Q"] }
           : {}),
       };
     }
@@ -203,13 +206,37 @@ export const StepServiceBilling = ({
     set("activeServices", { ...data.activeServices, [id]: { ...curr, ...patch } });
   };
 
+  const toggleTdsForm = (catId: string, cfg: ServiceConfig, form: string) => {
+    const current = cfg.tds_forms || [];
+    const next = current.includes(form) ? current.filter(f => f !== form) : [...current, form];
+    updateServiceConfig(catId, { tds_forms: next });
+  };
+
   const fyOptions = getTdsFyOptions();
 
-  /* Start Quarter (mandatory) / End Quarter (optional) — TDS Compliance only */
+  /* TDS Forms Applicable (mandatory, multi-select) + Start/End Quarter — TDS Compliance only */
   const renderTdsRangeFields = (catId: string, cfg: ServiceConfig) => {
     const rangeError = tdsRangeError(cfg);
+    const selectedForms = cfg.tds_forms || [];
     return (
-      <div className="pt-3 border-t border-border space-y-2">
+      <div className="pt-3 border-t border-border space-y-3">
+        <div className="space-y-1.5">
+          <Label className="text-xs">TDS Forms Applicable <span className="text-destructive">*</span></Label>
+          <div className="flex flex-wrap gap-3">
+            {TDS_FORMS.map((form) => (
+              <label key={form} className="flex items-center gap-1.5 text-xs cursor-pointer">
+                <Checkbox
+                  checked={selectedForms.includes(form)}
+                  onCheckedChange={() => toggleTdsForm(catId, cfg, form)}
+                />
+                {form}
+              </label>
+            ))}
+          </div>
+          {selectedForms.length === 0 && (
+            <p className="text-xs text-destructive">Select at least one TDS form.</p>
+          )}
+        </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div className="space-y-1">
             <Label className="text-xs">Start Quarter — FY <span className="text-destructive">*</span></Label>

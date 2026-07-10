@@ -29,6 +29,7 @@ import { exportToExcel } from "@/lib/exportUtils";
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null;
   tds_start_fy?: string; tds_start_quarter?: string; tds_end_fy?: string; tds_end_quarter?: string;
+  tds_forms_applicable?: string[];
 }
 
 interface Props {
@@ -474,7 +475,11 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
           <Label className="text-xs">Client</Label>
           <Select value={selClient} onValueChange={setSelClient}>
             <SelectTrigger className="w-[220px]"><SelectValue placeholder="Select client" /></SelectTrigger>
-            <SelectContent>{clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+            <SelectContent>
+              {clients
+                .filter(c => !c.tds_forms_applicable || c.tds_forms_applicable.length === 0 || c.tds_forms_applicable.includes(selForm))
+                .map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
           </Select>
         </div>
         <div className="space-y-1">

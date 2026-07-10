@@ -39,6 +39,7 @@ import { importGeniusXls } from "@/lib/genius-import";
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null;
   tds_start_fy?: string; tds_start_quarter?: string; tds_end_fy?: string; tds_end_quarter?: string;
+  tds_forms_applicable?: string[];
 }
 interface UserOption { id: string; name: string | null; }
 
@@ -1255,10 +1256,13 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                   />
                 </div>
                 {clients
+                  .filter(c => !c.tds_forms_applicable || c.tds_forms_applicable.length === 0 || c.tds_forms_applicable.includes(selForm))
                   .filter(c => !clientSearch || (c.name || "").toLowerCase().includes(clientSearch.toLowerCase()))
                   .map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)
                 }
-                {clients.filter(c => !clientSearch || (c.name || "").toLowerCase().includes(clientSearch.toLowerCase())).length === 0 && (
+                {clients
+                  .filter(c => !c.tds_forms_applicable || c.tds_forms_applicable.length === 0 || c.tds_forms_applicable.includes(selForm))
+                  .filter(c => !clientSearch || (c.name || "").toLowerCase().includes(clientSearch.toLowerCase())).length === 0 && (
                   <div className="py-4 text-center text-xs text-muted-foreground">No clients found</div>
                 )}
               </SelectContent>

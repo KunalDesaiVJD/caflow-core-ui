@@ -23,6 +23,7 @@ import { useToast } from "@/hooks/use-toast";
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null;
   tds_start_fy?: string; tds_start_quarter?: string; tds_end_fy?: string; tds_end_quarter?: string;
+  tds_forms_applicable?: string[];
 }
 interface UserOption { id: string; name: string | null; }
 
@@ -79,6 +80,13 @@ function clientInTdsRange(client: ClientOption | undefined, fy: string, quarter:
     client.tds_start_fy, client.tds_start_quarter || "Q1",
     client.tds_end_fy, client.tds_end_quarter,
   );
+}
+
+// Client bifurcation by form — a client with no configured forms (fallback
+// match, no proper client_services row) is never form-restricted.
+function clientHasForm(client: ClientOption | undefined, form: string): boolean {
+  if (!client?.tds_forms_applicable || client.tds_forms_applicable.length === 0) return true;
+  return client.tds_forms_applicable.includes(form);
 }
 
 export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNavigate, refreshKey }: Props) {
@@ -138,6 +146,19 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
   // Re-fetch when refreshKey changes (e.g. user returns from TDS Workspace to Dashboard)
   useEffect(() => { fetchAll(); }, [fetchAll, refreshKey]);
 
+  // Dynamic form tabs — only show a form's tab when at least one client is
+  // actually assigned it (Multi-Form Selection / Client Bifurcation).
+  const visibleForms = useMemo(
+    () => ALL_FORMS.filter(f => clients.some(c => clientHasForm(c, f))),
+    [clients],
+  );
+
+  // Reset back to "All Forms" if the selected tab's form is no longer visible
+  // (e.g. the last client assigned to it was reconfigured away from it).
+  useEffect(() => {
+    if (formTab !== "all" && !visibleForms.includes(formTab)) setFormTab("all");
+  }, [formTab, visibleForms]);
+
   const today = new Date();
 
   // Apply form tab filter — exclude deleted clients
@@ -182,11 +203,20 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
 
   // Checklist print
   const generateChecklist = () => {
-    const forms = formTab === "all" ? ALL_FORMS : [formTab];
     const quarters = QUARTER_OPTIONS;
-    // Only clients with at least one in-range quarter this FY appear at all.
-    const eligibleClients = clients.filter(client => quarters.some(q => clientInTdsRange(client, fyFilter, q)));
+    // Only clients with at least one in-range quarter this FY, AND assigned
+    // the selected form (Client Bifurcation), appear at all.
+    const eligibleClients = clients.filter(client =>
+      quarters.some(q => clientInTdsRange(client, fyFilter, q)) &&
+      (formTab === "all" || clientHasForm(client, formTab)),
+    );
     const rows = eligibleClients.map(client => {
+      // Each client's own assigned forms — never the global form list — so a
+      // client not assigned 27EQ doesn't show a "27EQ: —" phantom row.
+      const clientForms = client.tds_forms_applicable && client.tds_forms_applicable.length > 0
+        ? client.tds_forms_applicable
+        : ALL_FORMS;
+      const forms = formTab === "all" ? clientForms : clientForms.filter(f => f === formTab);
       const clientFilings = filings.filter(f => f.client_id === client.id && f.financial_year === fyFilter);
       const qCells = quarters.map(q => {
         if (!clientInTdsRange(client, fyFilter, q)) {
@@ -254,7 +284,7 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
         <Tabs value={formTab} onValueChange={setFormTab}>
           <TabsList>
             <TabsTrigger value="all">All Forms</TabsTrigger>
-            {ALL_FORMS.map(f => <TabsTrigger key={f} value={f}>{f}</TabsTrigger>)}
+            {visibleForms.map(f => <TabsTrigger key={f} value={f}>{f}</TabsTrigger>)}
           </TabsList>
         </Tabs>
 
@@ -292,6 +322,7 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
                 </div>
                 <SelectItem value="all">All Clients</SelectItem>
                 {clients
+                  .filter(c => formTab === "all" || clientHasForm(c, formTab))
                   .filter(c => !clientFilterSearch || (c.name || "").toLowerCase().includes(clientFilterSearch.toLowerCase()))
                   .map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
               </SelectContent>
