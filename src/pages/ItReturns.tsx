@@ -408,10 +408,18 @@ const ItReturns = () => {
       const auditClassifiedClientIds = Array.from(classMapRaw.keys());
 
       // ── Step 2: Build combined pool ──────────────────────────────────────────
-      // Fetch ALL active clients in the firm — the IT Returns module should
-      // show every client by default, since most CA-firm clients need ITR
-      // filing.  Service-category / audit-engagement / classification data
-      // is still used only for resolving the Audited / Non-Audited tab.
+      // 2026-06-25 (V J Desai — ACS ENGITECH bug): previous behaviour
+      // fetched every active client and ignored the auditor's service
+      // selection ("show every client by default"). That overrode the
+      // Service & Billing → Income Tax Returns toggle: clients with ITR
+      // OFF still appeared in the tracker. Now the visible pool is the
+      // union of:
+      //   (a) clients with ITR service turned on (client_services with
+      //       ITR category, OR a package containing an ITR category), and
+      //   (b) clients who already have an itr_profile row (never drop
+      //       historical work if the toggle was later disabled).
+      // Any client outside both sets — like ACS ENGITECH with the ITR
+      // toggle off — is now hidden as the auditor expects.
       let cQ = supabase
         .from("clients")
         .select("id, name, pan, entity_type, email, mobile, responsible_person_id, work_group_type, responsible_person:users!clients_responsible_person_id_fkey(id, name)")
@@ -421,9 +429,11 @@ const ItReturns = () => {
         .order("name");
       if (!isSuperadmin && firmId) cQ = cQ.eq("firm_id", firmId);
       const { data: cData } = await cQ;
-      const clientMap = new Map((cData || []).map(c => [c.id, c]));
-      const allClientIds = (cData || []).map(c => c.id);
-      if (allClientIds.length === 0) return [];
+      const itrEnabledIdSet = new Set(itrClientIds);
+      const cDataFiltered = (cData || []).filter(c => itrEnabledIdSet.has(c.id));
+      const clientMap = new Map(cDataFiltered.map(c => [c.id, c]));
+      const allClientIds = cDataFiltered.map(c => c.id);
+      if (allClientIds.length === 0 && !itrClientIds.length) return [];
 
       // ROOT-CAUSE FIX (V J Desai 703 clients showing every status as
        // "Data Pending" even after save): the previous .in("client_id",
@@ -529,7 +539,7 @@ const ItReturns = () => {
         });
       }
 
-      for (const client of (cData || [])) {
+      for (const client of cDataFiltered) {
         if (existingClientIds.has(client.id)) continue;
         const workGroupDisplay = (client as any).work_group_type || "";
         enriched.push({
