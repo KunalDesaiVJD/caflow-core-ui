@@ -179,36 +179,55 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
         // Fetch clients that have NO classification row for this FY. We do
         // this by fetching classified client_ids then excluding them —
         // avoids a NOT EXISTS subquery through PostgREST.
-        // 2026-06-25 (V J Desai — sub-filter total 876 ≠ tab count 962):
-        // PostgREST caps every response at 1000 rows by default. With 1091
-        // clients matching the (Final + api_import drafts) filter, ~91 rows
-        // were silently truncated — after subtracting classified IDs the
-        // Unclassified list came out ~86 short. Fix: explicit .range()
-        // pagination on BOTH queries so we always get the full set, even
-        // as the firm grows past 1k clients.
-        let classedQ = (supabase as any)
-          .from("client_fy_classifications")
-          .select("client_id")
-          .eq("financial_year", selectedFY)
-          .range(0, 49999);
-        if (!showAllFirms && firmId) classedQ = classedQ.eq("firm_id", firmId);
-        const { data: classedRows } = await classedQ;
-        const classedIds = new Set(((classedRows ?? []) as any[]).map(r => r.client_id));
+        // 2026-06-25 (V J Desai — sub-filter total 876 ≠ tab count 957):
+        // Supabase enforces a server-side max-rows cap (typically 1000)
+        // that overrides even .range(0, 49999). With 1091 matching clients,
+        // ~91 rows were silently truncated — after subtracting classified
+        // IDs the Unclassified list came out ~80 short. Fix: paginate in
+        // 1000-row chunks via .range(from, to) until a partial page tells
+        // us we've reached the end. Works regardless of the server cap.
+        const PAGE = 1000;
+        const fetchAllPages = async (builder: (from: number, to: number) => any) => {
+          const out: any[] = [];
+          for (let from = 0; ; from += PAGE) {
+            const q = builder(from, from + PAGE - 1);
+            const { data, error } = await q;
+            if (error) { console.error("[ClassificationByFYView] paged fetch:", error); break; }
+            const batch = (data as any[]) || [];
+            out.push(...batch);
+            if (batch.length < PAGE) break;
+            if (from > 200_000) break; // safety valve
+          }
+          return out;
+        };
+
+        const classedRows = await fetchAllPages((from, to) => {
+          let cq = (supabase as any)
+            .from("client_fy_classifications")
+            .select("client_id")
+            .eq("financial_year", selectedFY)
+            .range(from, to);
+          if (!showAllFirms && firmId) cq = cq.eq("firm_id", firmId);
+          return cq;
+        });
+        const classedIds = new Set(classedRows.map(r => r.client_id));
 
         // Match totalQ semantics: include api_import drafts too. The
         // Unclassified bucket is now the mirror of "clients not yet
         // classified for this FY", not "completed clients only".
         // is_draft is selected so the tab's sub-filter can partition
         // rows into Active vs Draft below.
-        let unclQ = (supabase as any)
-          .from("clients")
-          .select("id, name, entity_type, pan, is_draft")
-          .is("deleted_at", null)
-          .or("is_draft.eq.false,and(is_draft.eq.true,source.eq.api_import)")
-          .order("name", { ascending: true })
-          .range(0, 49999);
-        if (!showAllFirms && firmId) unclQ = unclQ.eq("firm_id", firmId);
-        const { data: allRows } = await unclQ;
+        const allRows = await fetchAllPages((from, to) => {
+          let uq = (supabase as any)
+            .from("clients")
+            .select("id, name, entity_type, pan, is_draft")
+            .is("deleted_at", null)
+            .or("is_draft.eq.false,and(is_draft.eq.true,source.eq.api_import)")
+            .order("name", { ascending: true })
+            .range(from, to);
+          if (!showAllFirms && firmId) uq = uq.eq("firm_id", firmId);
+          return uq;
+        });
         const mapped: ClassifiedClient[] = ((allRows ?? []) as any[])
           .filter(r => !classedIds.has(r.id))
           .map(r => ({
