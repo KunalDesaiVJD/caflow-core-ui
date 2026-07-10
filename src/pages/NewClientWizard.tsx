@@ -35,6 +35,7 @@ import {
   emptyPackageConfig,
 } from "@/components/client-wizard/StepServiceBilling";
 import { StepAuditSetup, type AuditSetupData, defaultAuditSetup } from "@/components/client-wizard/StepAuditSetup";
+import { getQuarterPeriodNumber } from "@/lib/tdsQuarter";
 
 /* ───── Step definitions ───── */
 const ALL_STEPS = [
@@ -400,6 +401,10 @@ const NewClientWizard = () => {
           reminder_date: svc.reminder_date ?? 1,
           billing_amount: svc.billing_amount ?? 0,
           invoice_gen_type: (svc.invoice_gen_type === "auto" ? "auto" : "reminder") as "auto" | "reminder",
+          tds_start_fy: svc.tds_effective_from_fy || undefined,
+          tds_start_quarter: svc.tds_effective_from_q || undefined,
+          tds_end_fy: svc.tds_end_fy || undefined,
+          tds_end_quarter: svc.tds_end_quarter || undefined,
         };
       }
 
@@ -612,6 +617,22 @@ const NewClientWizard = () => {
       if (w.type === "tds") errors.tds = w.message;
       if (w.type === "itr") errors.itr = w.message;
     }
+
+    // TDS Compliance Start/End Quarter — only TDS service configs carry tds_start_fy
+    for (const cfg of Object.values(serviceBilling.activeServices)) {
+      if (!cfg.tds_start_fy) continue;
+      const hasEndFy = !!cfg.tds_end_fy;
+      const hasEndQ = !!cfg.tds_end_quarter;
+      if (hasEndFy !== hasEndQ) {
+        errors.services = "TDS Compliance: select both Financial Year and Quarter for End Quarter, or leave both blank.";
+      } else if (hasEndFy && hasEndQ && cfg.tds_start_quarter) {
+        const startPeriod = getQuarterPeriodNumber(cfg.tds_start_fy, cfg.tds_start_quarter);
+        const endPeriod = getQuarterPeriodNumber(cfg.tds_end_fy!, cfg.tds_end_quarter!);
+        if (endPeriod < startPeriod) {
+          errors.services = "TDS Compliance: End Quarter cannot be earlier than Start Quarter.";
+        }
+      }
+    }
     setServiceErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -737,6 +758,12 @@ const NewClientWizard = () => {
           reminder_date: cfg.reminder_date,
           invoice_gen_type: cfg.invoice_gen_type,
           billing_mode: serviceBilling.billingMode,
+          ...(cfg.tds_start_fy ? {
+            tds_effective_from_fy: cfg.tds_start_fy,
+            tds_effective_from_q: cfg.tds_start_quarter || null,
+            tds_end_fy: cfg.tds_end_fy || null,
+            tds_end_quarter: cfg.tds_end_quarter || null,
+          } : {}),
         }));
         const { error: svcError } = await supabase.from("client_services").upsert(rows as any, {
           onConflict: "client_id,service_category_id",

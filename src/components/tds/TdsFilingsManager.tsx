@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { getDefaultTdsQuarter } from "@/lib/tdsQuarter";
+import { getDefaultTdsQuarter, isQuarterInTdsRange } from "@/lib/tdsQuarter";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -33,7 +33,10 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-interface ClientOption { id: string; name: string | null; pan: string | null; tan_number?: string | null; deleted_at?: string | null; }
+interface ClientOption {
+  id: string; name: string | null; pan: string | null; tan_number?: string | null; deleted_at?: string | null;
+  tds_start_fy?: string; tds_start_quarter?: string; tds_end_fy?: string; tds_end_quarter?: string;
+}
 interface UserOption { id: string; name: string | null; }
 
 interface TdsFiling {
@@ -246,7 +249,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     // 2. Get active TDS client-services for this firm
     let csQ = (supabase as any)
       .from("client_services")
-      .select("client_id, tds_forms_applicable, tds_effective_from_fy, tds_effective_from_q")
+      .select("client_id, tds_forms_applicable, tds_effective_from_fy, tds_effective_from_q, tds_end_fy, tds_end_quarter")
       .in("service_category_id", catIds)
       .eq("is_active", true);
     if (!isSuperadmin && firmId) csQ = csQ.eq("firm_id", firmId);
@@ -288,6 +291,16 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       } else {
         // Service starts after this FY → nothing to create
         continue;
+      }
+
+      // Clip against the optional End Quarter — never backfill filing rows
+      // for a quarter beyond the client's configured compliance window.
+      const endFY = cs.tds_end_fy || null;
+      const endQ = cs.tds_end_quarter || null;
+      if (endFY && endFY < selectedFY) continue; // range already ended before this FY
+      if (endFY && endQ && endFY === selectedFY) {
+        const endIdx = allQuarters.indexOf(endQ);
+        quarters = endIdx >= 0 ? quarters.filter(q => allQuarters.indexOf(q) <= endIdx) : quarters;
       }
 
       for (const form of forms) {
@@ -405,9 +418,20 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
           return false;
         }
       }
+
+      // TDS Compliance Start/End Quarter — single source of truth for which
+      // FY/quarter a client should appear under. A client with no configured
+      // start (matched only via a fallback path) is never range-restricted.
+      const client = clients.find(c => c.id === f.client_id);
+      if (client?.tds_start_fy && !isQuarterInTdsRange(
+        f.financial_year, f.quarter,
+        client.tds_start_fy, client.tds_start_quarter || "Q1",
+        client.tds_end_fy, client.tds_end_quarter,
+      )) return false;
+
       return true;
     });
-  }, [filings, formFilter, statusFilter, statusGroup, deletedClients]);
+  }, [filings, formFilter, statusFilter, statusGroup, deletedClients, clients]);
 
   // Excel-style AutoFit for the TAN and Status columns — width follows the
   // widest value actually on screen (TAN) or the widest possible option
