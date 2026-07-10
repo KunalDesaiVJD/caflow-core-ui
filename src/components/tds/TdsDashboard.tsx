@@ -85,6 +85,13 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
   // KPI card click → filters the embedded Client Filing Summary table below
   const [kpiPreset, setKpiPreset] = useState<FilingsPreset | null>(null);
   const filingSummaryRef = useRef<HTMLDivElement>(null);
+  const [isFilingSummaryMaximized, setIsFilingSummaryMaximized] = useState(false);
+  // Lock page scroll behind the fullscreen overlay — purely cosmetic, no
+  // component unmounts, so filters/sorting/unsaved edits are unaffected.
+  useEffect(() => {
+    document.body.style.overflow = isFilingSummaryMaximized ? "hidden" : "";
+    return () => { document.body.style.overflow = ""; };
+  }, [isFilingSummaryMaximized]);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -293,7 +300,10 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
       </div>
 
       {/* ═══ ROW 4: Client Filing Summary — the full Filings Management interface, embedded ═══ */}
-      <Card ref={filingSummaryRef}>
+      <Card
+        ref={filingSummaryRef}
+        className={cn(isFilingSummaryMaximized && "fixed inset-0 z-50 m-0 rounded-none border-0 overflow-y-auto")}
+      >
         <CardHeader className="py-2.5 px-4">
           <CardTitle className="text-sm font-semibold flex items-center gap-2">
             <TrendingUp size={14} className="text-blue-600" />
@@ -310,6 +320,8 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
             hideHeader
             preset={kpiPreset}
             onFilingsChanged={fetchAll}
+            isMaximized={isFilingSummaryMaximized}
+            onToggleMaximize={() => setIsFilingSummaryMaximized(v => !v)}
           />
         </CardContent>
       </Card>

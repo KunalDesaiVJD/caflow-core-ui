@@ -27,6 +27,7 @@ import { format, differenceInDays } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
   Download, ArrowRight, RefreshCw, Copy, Clock, AlertTriangle, ExternalLink, Info, Settings, Trash2, X,
+  Maximize2, Minimize2,
 } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
@@ -106,6 +107,11 @@ interface Props {
   // the Dashboard's KPI cards) refetch its own separately-fetched data
   // instead of going stale until a full page reload.
   onFilingsChanged?: () => void;
+  // Maximize/minimize toggle — the host (e.g. Dashboard) owns the expanded
+  // state and the CSS that actually grows the wrapping container; this
+  // component only renders the toggle button and reflects the icon/label.
+  isMaximized?: boolean;
+  onToggleMaximize?: () => void;
 }
 
 const CURRENT_FY_START = new Date().getMonth() >= 3 ? new Date().getFullYear() : new Date().getFullYear() - 1;
@@ -154,7 +160,7 @@ const getDueDateColor = (fy: string, quarter: string, status: string) => {
   return "text-emerald-600";
 };
 
-export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId, onNavigateDataEntry, hideHeader, preset, onFilingsChanged }: Props) {
+export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId, onNavigateDataEntry, hideHeader, preset, onFilingsChanged, isMaximized, onToggleMaximize }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
   const [filings, setFilings] = useState<TdsFiling[]>([]);
@@ -833,6 +839,16 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
           </Select>
         </div>
         <div className="flex-1" />
+        {onToggleMaximize && (
+          <Button
+            variant="outline" size="sm" className="gap-1"
+            onClick={onToggleMaximize}
+            title={isMaximized ? "Restore" : "Maximize"}
+          >
+            {isMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            {isMaximized ? "Minimize" : "Maximize"}
+          </Button>
+        )}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="sm" className="gap-1">
