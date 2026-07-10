@@ -17,6 +17,7 @@ import {
   Tooltip, TooltipContent, TooltipTrigger, TooltipProvider,
 } from "@/components/ui/tooltip";
 import { AlertTriangle, Info } from "lucide-react";
+import { DEFAULT_TDS_START_FY, DEFAULT_TDS_START_QUARTER, getQuarterPeriodNumber } from "@/lib/tdsQuarter";
 
 /* ───── Types ───── */
 
@@ -25,6 +26,12 @@ export interface ServiceConfig {
   reminder_date: number;
   billing_amount: number;
   invoice_gen_type: "auto" | "reminder";
+  /** TDS Compliance only — mandatory start of the compliance period. */
+  tds_start_fy?: string;
+  tds_start_quarter?: string;
+  /** TDS Compliance only — optional inclusive end; blank = active indefinitely. */
+  tds_end_fy?: string;
+  tds_end_quarter?: string;
 }
 
 export interface PackageConfig {
@@ -70,6 +77,31 @@ interface ServiceCategory {
 export interface CrossStepWarning {
   type: "gst" | "tds" | "itr";
   message: string;
+}
+
+/* ───── TDS Start/End Quarter helpers ───── */
+const QUARTERS = ["Q1", "Q2", "Q3", "Q4"];
+
+function getTdsFyOptions(): string[] {
+  const now = new Date();
+  const fyStart = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  return Array.from({ length: 8 }, (_, i) => {
+    const y = fyStart - 2 + i;
+    return `${y}-${String(y + 1).slice(-2)}`;
+  });
+}
+
+// True when an End Quarter is invalid: partially filled, or earlier than Start.
+function tdsRangeError(cfg: ServiceConfig): string | null {
+  const hasEndFy = !!cfg.tds_end_fy;
+  const hasEndQ = !!cfg.tds_end_quarter;
+  if (hasEndFy !== hasEndQ) return "Select both Financial Year and Quarter for End Quarter, or leave both blank.";
+  if (hasEndFy && hasEndQ && cfg.tds_start_fy && cfg.tds_start_quarter) {
+    const startPeriod = getQuarterPeriodNumber(cfg.tds_start_fy, cfg.tds_start_quarter);
+    const endPeriod = getQuarterPeriodNumber(cfg.tds_end_fy!, cfg.tds_end_quarter!);
+    if (endPeriod < startPeriod) return "End Quarter cannot be earlier than Start Quarter.";
+  }
+  return null;
 }
 
 /* ───── Props ───── */
@@ -157,6 +189,9 @@ export const StepServiceBilling = ({
         reminder_date: 1,
         billing_amount: 0,
         invoice_gen_type: "reminder",
+        ...(cat.linked_module === "tds"
+          ? { tds_start_fy: DEFAULT_TDS_START_FY, tds_start_quarter: DEFAULT_TDS_START_QUARTER }
+          : {}),
       };
     }
     set("activeServices", next);
@@ -166,6 +201,84 @@ export const StepServiceBilling = ({
     const curr = data.activeServices[id];
     if (!curr) return;
     set("activeServices", { ...data.activeServices, [id]: { ...curr, ...patch } });
+  };
+
+  const fyOptions = getTdsFyOptions();
+
+  /* Start Quarter (mandatory) / End Quarter (optional) — TDS Compliance only */
+  const renderTdsRangeFields = (catId: string, cfg: ServiceConfig) => {
+    const rangeError = tdsRangeError(cfg);
+    return (
+      <div className="pt-3 border-t border-border space-y-2">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="space-y-1">
+            <Label className="text-xs">Start Quarter — FY <span className="text-destructive">*</span></Label>
+            <Select
+              value={cfg.tds_start_fy || ""}
+              onValueChange={(v) => updateServiceConfig(catId, { tds_start_fy: v })}
+            >
+              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select FY" /></SelectTrigger>
+              <SelectContent>
+                {fyOptions.map((fy) => <SelectItem key={fy} value={fy}>{fy}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Start Quarter <span className="text-destructive">*</span></Label>
+            <Select
+              value={cfg.tds_start_quarter || ""}
+              onValueChange={(v) => updateServiceConfig(catId, { tds_start_quarter: v })}
+            >
+              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Quarter" /></SelectTrigger>
+              <SelectContent>
+                {QUARTERS.map((q) => <SelectItem key={q} value={q}>{q}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">End Quarter — FY</Label>
+            <Select
+              value={cfg.tds_end_fy || ""}
+              onValueChange={(v) => updateServiceConfig(catId, { tds_end_fy: v })}
+            >
+              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Indefinite" /></SelectTrigger>
+              <SelectContent>
+                {fyOptions.map((fy) => <SelectItem key={fy} value={fy}>{fy}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">End Quarter</Label>
+            <div className="flex gap-1">
+              <Select
+                value={cfg.tds_end_quarter || ""}
+                onValueChange={(v) => updateServiceConfig(catId, { tds_end_quarter: v })}
+              >
+                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Indefinite" /></SelectTrigger>
+                <SelectContent>
+                  {QUARTERS.map((q) => <SelectItem key={q} value={q}>{q}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              {(cfg.tds_end_fy || cfg.tds_end_quarter) && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 px-2 text-xs shrink-0"
+                  onClick={() => updateServiceConfig(catId, { tds_end_fy: undefined, tds_end_quarter: undefined })}
+                >
+                  Clear
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          End Quarter is optional — leave blank to keep TDS compliance active indefinitely.
+        </p>
+        {rangeError && <p className="text-xs text-destructive">{rangeError}</p>}
+      </div>
+    );
   };
 
   /* ── Package helpers ── */
@@ -348,6 +461,8 @@ export const StepServiceBilling = ({
                     </div>
                   </div>
                 )}
+
+                {isActive && cfg && cat.linked_module === "tds" && renderTdsRangeFields(cat.id, cfg)}
               </div>
             );
           })}
@@ -524,6 +639,8 @@ export const StepServiceBilling = ({
                         </div>
                       </div>
                     )}
+
+                    {isActive && cfg && cat.linked_module === "tds" && renderTdsRangeFields(cat.id, cfg)}
                   </div>
                 );
               })}

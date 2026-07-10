@@ -13,7 +13,15 @@ import { TdsValidateFinalise } from "@/components/tds/TdsValidateFinalise";
 import { TdsReports } from "@/components/tds/TdsReports";
 import { TdsAuditLog } from "@/components/tds/TdsAuditLog";
 
-interface ClientOption { id: string; name: string | null; pan: string | null; tan_number?: string | null; }
+interface ClientOption {
+  id: string; name: string | null; pan: string | null; tan_number?: string | null;
+  // TDS Compliance period — single source of truth for which FY/quarter this
+  // client should appear under across the whole TDS module. Undefined start
+  // means the client matched only via a fallback path (no proper client_services
+  // row) and should not be range-restricted.
+  tds_start_fy?: string; tds_start_quarter?: string;
+  tds_end_fy?: string; tds_end_quarter?: string;
+}
 interface UserOption { id: string; name: string | null; }
 
 const NAV_ITEMS = [
@@ -61,7 +69,7 @@ const TdsFilings = () => {
     // even though the client-detail "Service Activation" screen shows TDS
     // active. The fallback restores those clients.
     const [svcResp, catResp, clientsResp] = await Promise.all([
-      supabase.from("client_services").select("client_id, service_category_id, is_active").eq("is_active", true),
+      supabase.from("client_services").select("client_id, service_category_id, is_active, tds_effective_from_fy, tds_effective_from_q, tds_end_fy, tds_end_quarter").eq("is_active", true),
       supabase.from("service_categories").select("id, linked_module, name, category_code"),
       supabase.from("clients").select("id, name, pan, tan_number").eq("is_draft", false).is("deleted_at", null).order("name"),
     ]);
@@ -78,13 +86,28 @@ const TdsFilings = () => {
         .map(c => c.id),
     );
 
-    const activeSvc = (svcResp.data || []) as Array<{ client_id: string; service_category_id: string; is_active: boolean }>;
+    const activeSvc = (svcResp.data || []) as Array<{
+      client_id: string; service_category_id: string; is_active: boolean;
+      tds_effective_from_fy: string | null; tds_effective_from_q: string | null;
+      tds_end_fy: string | null; tds_end_quarter: string | null;
+    }>;
     const clientsWithStrictTds = new Set(
       activeSvc.filter(s => tdsStrictCatIds.has(s.service_category_id)).map(s => s.client_id),
     );
     const clientsWithNameMatchTds = new Set(
       activeSvc.filter(s => tdsNameCatIds.has(s.service_category_id)).map(s => s.client_id),
     );
+    // Compliance period per client, from the strict TDS client_services row.
+    const rangeByClient = new Map<string, { tds_start_fy?: string; tds_start_quarter?: string; tds_end_fy?: string; tds_end_quarter?: string }>();
+    for (const s of activeSvc) {
+      if (!tdsStrictCatIds.has(s.service_category_id)) continue;
+      rangeByClient.set(s.client_id, {
+        tds_start_fy: s.tds_effective_from_fy || undefined,
+        tds_start_quarter: s.tds_effective_from_q || undefined,
+        tds_end_fy: s.tds_end_fy || undefined,
+        tds_end_quarter: s.tds_end_quarter || undefined,
+      });
+    }
 
     const allClients = (clientsResp.data || []) as ClientOption[];
     const eligible = allClients.filter(c => {
@@ -99,7 +122,7 @@ const TdsFilings = () => {
       //    query path above missed it (e.g., RLS, stale cache, etc.).
       if ((c.tan_number || "").trim()) return true;
       return false;
-    });
+    }).map(c => ({ ...c, ...rangeByClient.get(c.id) }));
 
     // Self-heal hint: log clients that matched only via a fallback path so
     // the developer can see which service_category rows need linked_module

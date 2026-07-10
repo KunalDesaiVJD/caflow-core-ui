@@ -26,3 +26,39 @@ export function getDefaultTdsQuarter(): { fy: string; quarter: string } {
 
   return { fy: `${fyStart}-${String(fyStart + 1).slice(2)}`, quarter };
 }
+
+// Default Start Quarter for existing/newly-activated TDS clients that haven't
+// picked one yet — Q1 of FY 2025-26, per the migration backfill baseline.
+export const DEFAULT_TDS_START_FY = "2025-26";
+export const DEFAULT_TDS_START_QUARTER = "Q1";
+
+const QUARTER_ORDER = ["Q1", "Q2", "Q3", "Q4"];
+
+// Monotonically increasing period number for an FY+quarter pair, so ranges
+// across FY boundaries can be compared with plain <=/>=. FY string is
+// "YYYY-YY" (e.g. "2026-27"); only the starting year is used.
+export function getQuarterPeriodNumber(fy: string, quarter: string): number {
+  const fyStart = parseInt(fy.slice(0, 4), 10);
+  const qIndex = QUARTER_ORDER.indexOf(quarter);
+  return fyStart * 4 + (qIndex >= 0 ? qIndex : 0);
+}
+
+// True if (fy, quarter) falls within [startFy, startQuarter] .. [endFy, endQuarter],
+// inclusive on both ends. A blank end (null/undefined/"") means "active indefinitely".
+export function isQuarterInTdsRange(
+  fy: string,
+  quarter: string,
+  startFy: string,
+  startQuarter: string,
+  endFy?: string | null,
+  endQuarter?: string | null,
+): boolean {
+  const period = getQuarterPeriodNumber(fy, quarter);
+  const startPeriod = getQuarterPeriodNumber(startFy, startQuarter);
+  if (period < startPeriod) return false;
+  if (endFy && endQuarter) {
+    const endPeriod = getQuarterPeriodNumber(endFy, endQuarter);
+    if (period > endPeriod) return false;
+  }
+  return true;
+}

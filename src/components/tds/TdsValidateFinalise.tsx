@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { getDefaultTdsQuarter } from "@/lib/tdsQuarter";
+import { getDefaultTdsQuarter, isQuarterInTdsRange } from "@/lib/tdsQuarter";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,7 +26,10 @@ import {
 } from "lucide-react";
 import { exportToExcel } from "@/lib/exportUtils";
 
-interface ClientOption { id: string; name: string | null; pan: string | null; tan_number?: string | null; }
+interface ClientOption {
+  id: string; name: string | null; pan: string | null; tan_number?: string | null;
+  tds_start_fy?: string; tds_start_quarter?: string; tds_end_fy?: string; tds_end_quarter?: string;
+}
 
 interface Props {
   clients: ClientOption[];
@@ -94,6 +97,21 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
 
   const runValidation = async () => {
     if (!selClient) { toast({ title: "Select a client", variant: "destructive" }); return; }
+
+    // TDS Compliance Start/End Quarter — block validation for a (FY, quarter)
+    // outside the client's configured period.
+    const selectedClient = clients.find(c => c.id === selClient);
+    if (selectedClient?.tds_start_fy && !isQuarterInTdsRange(
+      selFy, selQuarter,
+      selectedClient.tds_start_fy, selectedClient.tds_start_quarter || "Q1",
+      selectedClient.tds_end_fy, selectedClient.tds_end_quarter,
+    )) {
+      const rangeLabel = `${selectedClient.tds_start_quarter} ${selectedClient.tds_start_fy}` +
+        (selectedClient.tds_end_fy ? ` to ${selectedClient.tds_end_quarter} ${selectedClient.tds_end_fy}` : " onward (no end date)");
+      toast({ title: "Outside TDS compliance period", description: `This client's TDS compliance period is ${rangeLabel}.`, variant: "destructive" });
+      return;
+    }
+
     setLoading(true);
     setValidated(false);
     setResults([]);

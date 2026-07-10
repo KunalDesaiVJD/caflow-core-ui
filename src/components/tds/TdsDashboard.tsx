@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { TdsFilingsManager, type KpiStatusGroup, type FilingsPreset } from "@/components/tds/TdsFilingsManager";
-import { getDefaultTdsQuarter } from "@/lib/tdsQuarter";
+import { getDefaultTdsQuarter, isQuarterInTdsRange } from "@/lib/tdsQuarter";
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -20,7 +20,10 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
-interface ClientOption { id: string; name: string | null; pan: string | null; tan_number?: string | null; }
+interface ClientOption {
+  id: string; name: string | null; pan: string | null; tan_number?: string | null;
+  tds_start_fy?: string; tds_start_quarter?: string; tds_end_fy?: string; tds_end_quarter?: string;
+}
 interface UserOption { id: string; name: string | null; }
 
 interface TdsFiling {
@@ -65,6 +68,18 @@ function getDueDate(fy: string, quarter: string, formType?: string): Date {
 const TERMINAL_STATUSES = new Set([
   "Filed", "Submitted", "Processed", "Accepted", "Not Applicable", "NIL",
 ]);
+
+// TDS Compliance Start/End Quarter — single source of truth for whether a
+// client should appear for a given FY+quarter. No configured start (matched
+// only via a fallback path) means never range-restricted.
+function clientInTdsRange(client: ClientOption | undefined, fy: string, quarter: string): boolean {
+  if (!client?.tds_start_fy) return true;
+  return isQuarterInTdsRange(
+    fy, quarter,
+    client.tds_start_fy, client.tds_start_quarter || "Q1",
+    client.tds_end_fy, client.tds_end_quarter,
+  );
+}
 
 export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNavigate, refreshKey }: Props) {
   const { toast } = useToast();
@@ -134,8 +149,11 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
     if (quarterFilter !== "all") {
       f = f.filter(fl => fl.quarter === quarterFilter);
     }
+    // TDS Compliance Start/End Quarter — drop filings outside the client's
+    // configured compliance period for their own (financial_year, quarter).
+    f = f.filter(fl => clientInTdsRange(clients.find(c => c.id === fl.client_id), fl.financial_year, fl.quarter));
     return f;
-  }, [filings, formTab, quarterFilter, deletedClientIds]);
+  }, [filings, formTab, quarterFilter, deletedClientIds, clients]);
 
   // ═══ KPI Stats ═══
   const stats = useMemo(() => {
@@ -166,9 +184,14 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
   const generateChecklist = () => {
     const forms = formTab === "all" ? ALL_FORMS : [formTab];
     const quarters = QUARTER_OPTIONS;
-    const rows = clients.map(client => {
+    // Only clients with at least one in-range quarter this FY appear at all.
+    const eligibleClients = clients.filter(client => quarters.some(q => clientInTdsRange(client, fyFilter, q)));
+    const rows = eligibleClients.map(client => {
       const clientFilings = filings.filter(f => f.client_id === client.id && f.financial_year === fyFilter);
       const qCells = quarters.map(q => {
+        if (!clientInTdsRange(client, fyFilter, q)) {
+          return `<td style="border:1px solid #ccc;padding:6px;font-size:11px;color:#999">Out of period</td>`;
+        }
         const qf = clientFilings.filter(f => f.quarter === q);
         const formStatuses = forms.map(form => {
           const found = qf.find(f => f.tds_forms?.includes(form));

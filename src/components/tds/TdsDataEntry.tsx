@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { getDefaultTdsQuarter } from "@/lib/tdsQuarter";
+import { getDefaultTdsQuarter, isQuarterInTdsRange } from "@/lib/tdsQuarter";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -36,7 +36,10 @@ import { generateGeniusExport } from "@/lib/genius-export";
 import { importGeniusXls } from "@/lib/genius-import";
 
 // ─── Types ───
-interface ClientOption { id: string; name: string | null; pan: string | null; tan_number?: string | null; }
+interface ClientOption {
+  id: string; name: string | null; pan: string | null; tan_number?: string | null;
+  tds_start_fy?: string; tds_start_quarter?: string; tds_end_fy?: string; tds_end_quarter?: string;
+}
 interface UserOption { id: string; name: string | null; }
 
 interface TdsFiling {
@@ -296,6 +299,25 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     if (!selClient) { toast({ title: "Select a client", variant: "destructive" }); return; }
     setLoading(true);
     setFilingLoaded(false);
+
+    // TDS Compliance Start/End Quarter — refuse to load or auto-create a
+    // filing for a (FY, quarter) outside the client's configured period.
+    const selectedClient = clients.find(c => c.id === selClient);
+    if (selectedClient?.tds_start_fy && !isQuarterInTdsRange(
+      selFy, selQuarter,
+      selectedClient.tds_start_fy, selectedClient.tds_start_quarter || "Q1",
+      selectedClient.tds_end_fy, selectedClient.tds_end_quarter,
+    )) {
+      setFiling(null); setChallans([]); setDeductees([]); setPrevEntries([]);
+      setSelectedChallan(null); setCarryForwardChallans([]);
+      setFilingLoaded(true);
+      setLoading(false);
+      const rangeLabel = `${selectedClient.tds_start_quarter} ${selectedClient.tds_start_fy}` +
+        (selectedClient.tds_end_fy ? ` to ${selectedClient.tds_end_quarter} ${selectedClient.tds_end_fy}` : " onward (no end date)");
+      toast({ title: "Outside TDS compliance period", description: `This client's TDS compliance period is ${rangeLabel}.`, variant: "destructive" });
+      return;
+    }
+
     try {
       const { data } = await supabase.from("tds_filings").select("*")
         .eq("client_id", selClient).eq("financial_year", selFy).eq("quarter", selQuarter).limit(10);
@@ -356,7 +378,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     }
     setFilingLoaded(true);
     setLoading(false);
-  }, [selClient, selFy, selQuarter, selForm]);
+  }, [selClient, selFy, selQuarter, selForm, clients]);
 
   const resetFiling = () => {
     setFiling(null); setChallans([]); setDeductees([]); setPrevEntries([]);
