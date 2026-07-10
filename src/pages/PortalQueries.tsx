@@ -26,6 +26,7 @@ import {
   ChevronDown, ChevronUp, FileText, X, CheckCircle2, Building2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { CLIENT_HIDDEN_QUERY_STATUSES, SCRUTINY_QUERY_SOURCE } from "@/lib/scrutiny/makerChecker";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -43,6 +44,7 @@ interface AuditQuery {
   client_reply:        string | null;
   firm_id:             string | null;
   client_id:           string;
+  source:              string | null;
 }
 
 interface Message {
@@ -347,10 +349,16 @@ export default function PortalQueries() {
     setLoading(true);
     const { data } = await (supabase as any)
       .from("audit_client_queries")
-      .select("id,ref_number,query_text,status,priority,due_date,financial_year,required_documents,ledger_name,group_name,client_reply,firm_id,client_id")
+      .select("id,ref_number,query_text,status,priority,due_date,financial_year,required_documents,ledger_name,group_name,client_reply,firm_id,client_id,source")
       .eq("client_id", activeClient.id)
       .order("created_at", { ascending: false });
-    setQueries((data as AuditQuery[]) || []);
+    // Never surface unapproved / rejected scrutiny drafts to the client (maker-checker, decision #7).
+    // Scoped to scrutiny-sourced queries ONLY — a non-scrutiny query is never hidden, even if it
+    // uses the same status value.
+    const visible = ((data as AuditQuery[]) || []).filter(
+      q => !(q.source === SCRUTINY_QUERY_SOURCE && CLIENT_HIDDEN_QUERY_STATUSES.includes(q.status)),
+    );
+    setQueries(visible);
     setLoading(false);
   }, [activeClient]);
 
