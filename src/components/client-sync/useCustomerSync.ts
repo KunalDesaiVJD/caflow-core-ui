@@ -533,9 +533,44 @@ export function useCustomerSync() {
               }
             } else {
               // ── UPDATE existing client (all API fields, never touches customer_id / is_draft / source) ─
+              // 2026-06-25 (V J Desai — SHREEJIKRUPA BUILDCON lost 2 of 3
+              // GSTINs bug): the eOffice/Genius API only returns the primary
+              // GSTIN. Overwriting clients.gstin with that single value
+              // destroyed any additional GSTINs the auditor had manually
+              // added (the JSONB gstin_addresses/gstin_states maps were
+              // left intact but the primary array was truncated to 1).
+              // Fix: read the current gstin array + gstin_addresses/states
+              // maps, merge in the API GSTIN if new, and update with the
+              // MERGED array so manual additions survive a sync.
+              const { data: existing } = await supabase
+                .from("clients")
+                .select("gstin, gstin_addresses, gstin_states")
+                .eq("customer_id", customer_id)
+                .is("deleted_at", null)
+                .maybeSingle();
+
+              const existingArr: string[] = Array.isArray(existing?.gstin)
+                ? (existing!.gstin as string[]).filter(Boolean)
+                : [];
+              // Also recover any GSTINs stored only in the address/state maps
+              // (SHREEJIKRUPA's case — extras were there but never in the array).
+              const addrKeys = existing?.gstin_addresses && typeof existing.gstin_addresses === "object" && !Array.isArray(existing.gstin_addresses)
+                ? Object.keys(existing.gstin_addresses as Record<string, string>)
+                : [];
+              const stateKeys = existing?.gstin_states && typeof existing.gstin_states === "object" && !Array.isArray(existing.gstin_states)
+                ? Object.keys(existing.gstin_states as Record<string, string>)
+                : [];
+              const apiGstin = payload.gstin?.[0];
+              const merged = Array.from(new Set(
+                [...existingArr, ...addrKeys, ...stateKeys, apiGstin]
+                  .filter((g): g is string => !!g && !!g.trim())
+                  .map(g => g.trim().toUpperCase())
+              ));
+              const mergedPayload = { ...payload, gstin: merged.length > 0 ? merged : payload.gstin };
+
               const { error } = await supabase
                 .from("clients")
-                .update({ ...payload, is_active: isActiveRecord(r) } as any)
+                .update({ ...mergedPayload, is_active: isActiveRecord(r) } as any)
                 .eq("customer_id", customer_id)
                 .is("deleted_at", null);
 
