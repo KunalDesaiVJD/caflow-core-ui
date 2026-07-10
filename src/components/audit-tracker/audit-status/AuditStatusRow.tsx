@@ -762,8 +762,11 @@ export default function AuditStatusRow({
           : <span>{row.audit_report_checked_by || "—"}</span>}
       </TCell>
 
-      {/* 7 · Audit Status */}
-      <TCell className="min-w-[130px]">
+      {/* 7 · Audit Status — widened per V J Desai request so full labels
+          like "QUERIES GIVEN TO CLIENT" and "VERIFICATION PENDING" fit
+          without ellipsis. whitespace-nowrap on the badge keeps it on
+          a single line so the auditor can read the status at a glance. */}
+      <TCell className="min-w-[210px]">
         {editing ? (
           <div className="space-y-1">
             <ESelect value={draft.audit_status} onChange={v => set("audit_status", v)} options={AUDIT_STATUS_OPTIONS} />
@@ -777,7 +780,7 @@ export default function AuditStatusRow({
           </div>
         ) : row.audit_status ? (
           <div className="space-y-0.5">
-            <Badge className={cn("text-[10px]", statusColor)}>{row.audit_status}</Badge>
+            <Badge className={cn("text-[10px] whitespace-nowrap", statusColor)}>{row.audit_status}</Badge>
             {row.audit_status === "OTHERS (SPECIFY)" && row.audit_status_other && (
               <p className="text-[10px] text-muted-foreground truncate">{row.audit_status_other}</p>
             )}
