@@ -91,14 +91,23 @@ function CategoryPicker({
           <ChevronsUpDown className='ml-2 h-4 w-4 shrink-0 opacity-50' />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className='w-[--radix-popover-trigger-width] p-0' align='start'>
+      {/* 2026-06-25 (V J Desai) — clamping the popover to trigger width
+          truncated labels inside Bulk Add's ~220 px cell. Give the popup
+          a solid min-width (460 px) so category name + method + life
+          stay readable in every dialog, and allow multi-line wrapping
+          instead of ellipsis so long entries stay legible. */}
+      <PopoverContent
+        className='p-0'
+        align='start'
+        style={{ width: 'max(var(--radix-popover-trigger-width), 460px)' }}
+      >
         <Command shouldFilter={false}>
           <CommandInput
             placeholder='Search category, method, life…'
             value={search}
             onValueChange={setSearch}
           />
-          <CommandList>
+          <CommandList className='max-h-80'>
             <CommandEmpty>No matching category.</CommandEmpty>
             <CommandGroup>
               {(cats || [])
@@ -114,8 +123,8 @@ function CategoryPicker({
                     value={c.id}
                     onSelect={(v) => { onChange(v); setOpen(false); setSearch(''); }}
                   >
-                    <Check className={cn('mr-2 h-4 w-4', value === c.id ? 'opacity-100' : 'opacity-0')} />
-                    <span className='truncate'>{catLabel(c)}</span>
+                    <Check className={cn('mr-2 h-4 w-4 flex-shrink-0', value === c.id ? 'opacity-100' : 'opacity-0')} />
+                    <span className='whitespace-normal leading-tight'>{catLabel(c)}</span>
                   </CommandItem>
                 ))}
             </CommandGroup>

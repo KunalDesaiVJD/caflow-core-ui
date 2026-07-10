@@ -6,7 +6,8 @@
 import { Input }  from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Search, RefreshCw, Save, X } from "lucide-react";
+import { Search, RefreshCw, Save, X, CheckCircle2, Clock } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 // ─── Exported constant ────────────────────────────────────────────────────────
 
@@ -29,6 +30,11 @@ interface Props {
   onSearch:       (v: string) => void;
   statusFilter:   string;
   onStatus:       (v: string) => void;
+  /** All | Completed (scanned=Yes) | Pending (scanned=No/blank) */
+  scanFilter?:    "all" | "completed" | "pending";
+  onScanFilter?:  (v: "all" | "completed" | "pending") => void;
+  completedCount?: number;
+  pendingCount?:   number;
   onRefresh:      () => void;
   onSaveAll:      () => void;
   saveAllBusy:    boolean;
@@ -42,6 +48,8 @@ interface Props {
 export default function AuditStatusFilters({
   search, onSearch,
   statusFilter, onStatus,
+  scanFilter = "all", onScanFilter,
+  completedCount = 0, pendingCount = 0,
   onRefresh,
   onSaveAll, saveAllBusy,
   hasColFilters, onClearFilters,
@@ -72,6 +80,59 @@ export default function AuditStatusFilters({
           ))}
         </SelectContent>
       </Select>
+
+      {/* 2026-06-25 (V J Desai request): Completed / Pending scan chips.
+          Completed = SCANNED "Yes" (audit fully closed). Pending = "No"
+          or blank (still open). Segmented control keeps All visible so
+          the auditor can flip back to the full grid in one click. */}
+      {onScanFilter && (
+        <div className="inline-flex rounded-md border border-border overflow-hidden h-8">
+          <button
+            type="button"
+            className={cn(
+              "px-2.5 text-xs font-medium transition-colors border-r border-border",
+              scanFilter === "all" ? "bg-foreground text-background" : "bg-background text-muted-foreground hover:bg-muted",
+            )}
+            onClick={() => onScanFilter("all")}
+          >
+            All
+          </button>
+          <button
+            type="button"
+            className={cn(
+              "px-2.5 text-xs font-medium gap-1 inline-flex items-center transition-colors border-r border-border",
+              scanFilter === "completed"
+                ? "bg-green-500 text-white"
+                : "bg-background text-green-700 hover:bg-green-50",
+            )}
+            onClick={() => onScanFilter("completed")}
+            title="Rows where SCANNED is Yes"
+          >
+            <CheckCircle2 size={12} /> Completed
+            <span className={cn(
+              "ml-1 px-1 rounded text-[10px]",
+              scanFilter === "completed" ? "bg-white/25" : "bg-green-100 text-green-800",
+            )}>{completedCount}</span>
+          </button>
+          <button
+            type="button"
+            className={cn(
+              "px-2.5 text-xs font-medium gap-1 inline-flex items-center transition-colors",
+              scanFilter === "pending"
+                ? "bg-amber-500 text-white"
+                : "bg-background text-amber-700 hover:bg-amber-50",
+            )}
+            onClick={() => onScanFilter("pending")}
+            title="Rows where SCANNED is No or blank"
+          >
+            <Clock size={12} /> Pending
+            <span className={cn(
+              "ml-1 px-1 rounded text-[10px]",
+              scanFilter === "pending" ? "bg-white/25" : "bg-amber-100 text-amber-800",
+            )}>{pendingCount}</span>
+          </button>
+        </div>
+      )}
 
       {/* Refresh */}
       <Button size="sm" variant="outline" className="h-8 w-8 p-0" onClick={onRefresh} title="Refresh">

@@ -581,11 +581,14 @@ export default function AuditStatusRow({
       "hover:bg-muted/10 transition-colors",
       isNew && "bg-amber-50 ring-1 ring-amber-200 ring-inset",
       row.isPlanning && "bg-slate-50/70",
-      // 2026-06-25 (V J Desai request): scanned=Yes marks the final stage
-      // — highlight the whole row in green so completed audits pop at a
-      // glance. Ring gives an inset border matching the amber "new-row"
-      // style so the visual language stays consistent.
-      row.scanned === "Yes" && "bg-emerald-50 ring-1 ring-emerald-200 ring-inset",
+      // 2026-06-25 (V J Desai request v2): scanned=Yes marks the final
+      // stage — highlight the whole row in a saturated Excel-style green.
+      // The earlier bg-emerald-50 was too subtle to scan across 100+ rows.
+      // Using bg-green-200 (~ the "Good" cell style from Excel) plus a
+      // 4-px emerald left border for extra "these are done" punch.
+      // Cells override sticky bg (party name / Sr No) so the highlight
+      // covers the whole row edge to edge.
+      row.scanned === "Yes" && "bg-green-200 hover:bg-green-200 [&>td]:!bg-green-200 border-l-4 border-emerald-600",
     )}>
 
       {/* 1 · Sr No */}
