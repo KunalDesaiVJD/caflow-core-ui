@@ -392,6 +392,7 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
             onFilingsChanged={fetchAll}
             isMaximized={isFilingSummaryMaximized}
             onToggleMaximize={() => setIsFilingSummaryMaximized(v => !v)}
+            refreshKey={refreshKey}
           />
         </CardContent>
       </Card>

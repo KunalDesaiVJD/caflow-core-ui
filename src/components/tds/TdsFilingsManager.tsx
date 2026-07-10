@@ -167,7 +167,7 @@ const getDueDateColor = (fy: string, quarter: string, status: string) => {
   return "text-emerald-600";
 };
 
-export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId, onNavigateDataEntry, hideHeader, preset, onFilingsChanged, isMaximized, onToggleMaximize }: Props) {
+export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId, onNavigateDataEntry, hideHeader, preset, onFilingsChanged, isMaximized, onToggleMaximize, refreshKey }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
   const [filings, setFilings] = useState<TdsFiling[]>([]);
@@ -268,7 +268,9 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     await fetchAckFiles(allFilings.map(f => f.id));
   }, [isSuperadmin, resolveFirmId, fyFilter, quarterFilter, clientFilter]);
 
-  useEffect(() => { fetchFilings(); }, [fetchFilings]);
+  // Re-fetch on mount, on filter change, and whenever the host bumps
+  // refreshKey (e.g. a Realtime TDS-config change) so the summary stays live.
+  useEffect(() => { fetchFilings(); }, [fetchFilings, refreshKey]);
 
   const filtered = useMemo(() => {
     const today = new Date();
