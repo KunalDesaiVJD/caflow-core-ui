@@ -349,7 +349,14 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       tan:             r.tan,
     }));
 
-    await supabase.from("tds_filings").insert(insertPayload as any);
+    // Upsert with ignoreDuplicates so a concurrent call racing this same
+    // backfill (e.g. two mounted screens both syncing at once) can't create
+    // duplicate rows — the tds_filings_unique_period_form index absorbs the
+    // conflict instead of failing the whole batch.
+    await supabase.from("tds_filings").upsert(insertPayload as any, {
+      onConflict: "client_id,financial_year,quarter,tds_forms",
+      ignoreDuplicates: true,
+    });
   }, [isSuperadmin, resolveFirmId]);
 
   const fetchFilings = useCallback(async () => {

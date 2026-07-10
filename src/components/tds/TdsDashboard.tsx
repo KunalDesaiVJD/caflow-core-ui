@@ -16,9 +16,12 @@ import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
   Users, Clock, AlertTriangle, CheckCircle2, FileCheck, Ban, MinusCircle,
-  Printer, TrendingUp,
+  Printer, TrendingUp, Info,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import {
+  Tooltip, TooltipContent, TooltipTrigger, TooltipProvider,
+} from "@/components/ui/tooltip";
 
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null;
@@ -258,9 +261,12 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
     );
   }
 
-  const kpiCards: { label: string; value: number; icon: typeof Users; color: string; bg: string; statusGroup: KpiStatusGroup }[] = [
+  const kpiCards: { label: string; value: number; icon: typeof Users; color: string; bg: string; statusGroup: KpiStatusGroup; tooltip?: string }[] = [
     { label: "Active TDS Clients", value: stats.activeClients, icon: Users, color: "text-blue-600", bg: "bg-blue-50 dark:bg-blue-950/30", statusGroup: "all" },
-    { label: "Returns Due", value: stats.returnsDue, icon: Clock, color: "text-amber-600", bg: "bg-amber-50 dark:bg-amber-950/30", statusGroup: "returns-due" },
+    {
+      label: "Returns Due", value: stats.returnsDue, icon: Clock, color: "text-amber-600", bg: "bg-amber-50 dark:bg-amber-950/30", statusGroup: "returns-due",
+      tooltip: "Counts pending returns, not clients. A client may have multiple pending returns (different TANs/forms), so this count can exceed Active TDS Clients.",
+    },
     { label: "Overdue", value: stats.overdue, icon: AlertTriangle, color: "text-destructive", bg: "bg-red-50 dark:bg-red-950/30", statusGroup: "overdue" },
     { label: "Filed / Submitted", value: stats.filed, icon: CheckCircle2, color: "text-emerald-600", bg: "bg-emerald-50 dark:bg-emerald-950/30", statusGroup: "filed" },
     { label: "Processed / Accepted", value: stats.processed, icon: FileCheck, color: "text-emerald-700", bg: "bg-emerald-100 dark:bg-emerald-900/40", statusGroup: "processed" },
@@ -352,6 +358,16 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
               <div className="flex items-center gap-1.5 mb-1">
                 <kpi.icon size={14} className={kpi.color} />
                 <p className="text-[10px] text-muted-foreground font-medium leading-tight">{kpi.label}</p>
+                {kpi.tooltip && (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info size={11} className="text-muted-foreground" onClick={e => e.stopPropagation()} />
+                      </TooltipTrigger>
+                      <TooltipContent className="max-w-[220px] text-xs">{kpi.tooltip}</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                )}
               </div>
               <p className={cn("text-xl font-bold", kpi.color)}>{kpi.value}</p>
             </CardContent>

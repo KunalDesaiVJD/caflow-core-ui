@@ -358,7 +358,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
         if (tdsActive) {
           const { data: clientRow } = await supabase
             .from("clients").select("tan_number").eq("id", selClient).maybeSingle();
-          const { data: newFiling } = await (supabase.from("tds_filings").insert({
+          const { data: insertedFiling, error: insertError } = await (supabase.from("tds_filings").insert({
             client_id:      selClient,
             firm_id:        firmId,
             financial_year: selFy,
@@ -367,6 +367,19 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
             work_status:    "Not Started",
             tan:            (clientRow as any)?.tan_number || null,
           }).select().single() as any);
+
+          // A concurrent call (e.g. two tabs, or the bulk sync in
+          // TdsFilingsManager) may have created this exact row a moment
+          // earlier — the unique index rejects our insert, not a real
+          // failure. Re-fetch instead of showing an empty state.
+          let newFiling = insertedFiling;
+          if (!newFiling && insertError) {
+            const { data: existing } = await supabase.from("tds_filings").select("*")
+              .eq("client_id", selClient).eq("financial_year", selFy).eq("quarter", selQuarter)
+              .contains("tds_forms", [selForm]).maybeSingle();
+            newFiling = existing;
+          }
+
           if (newFiling) {
             setFiling(newFiling as TdsFiling);
             await fetchChallans((newFiling as TdsFiling).id);
