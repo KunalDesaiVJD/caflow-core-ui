@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { TdsFilingsManager, type KpiStatusGroup, type FilingsPreset } from "@/components/tds/TdsFilingsManager";
-import { getDefaultTdsQuarter, isClientTdsEligible, clientHasTdsForm } from "@/lib/tdsQuarter";
+import { getDefaultTdsQuarter, isClientTdsEligible, clientHasTdsForm, isFilingTdsCompliant } from "@/lib/tdsQuarter";
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -165,19 +165,17 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
   // Apply form tab filter — exclude deleted clients
   const filteredFilings = useMemo(() => {
     let f = filings.filter(fl => !deletedClientIds.has(fl.client_id));
+    // TDS Compliance is the single source of truth — applied UNCONDITIONALLY,
+    // not only when a specific form tab is picked. A stale row for a form the
+    // client is no longer configured for (or outside their Start/End Quarter
+    // range) must never surface, including under "All Forms".
+    f = f.filter(fl => isFilingTdsCompliant(fl, clients.find(c => c.id === fl.client_id)));
     if (formTab !== "all") {
-      // Row must literally be about this form AND the client must currently
-      // be configured for it — a stale filing row for a form the client is
-      // no longer assigned to (e.g. left over from before this feature)
-      // must not surface under that form's tab.
-      f = f.filter(fl => fl.tds_forms?.includes(formTab) && clientHasForm(clients.find(c => c.id === fl.client_id), formTab));
+      f = f.filter(fl => fl.tds_forms?.includes(formTab));
     }
     if (quarterFilter !== "all") {
       f = f.filter(fl => fl.quarter === quarterFilter);
     }
-    // TDS Compliance Start/End Quarter — drop filings outside the client's
-    // configured compliance period for their own (financial_year, quarter).
-    f = f.filter(fl => clientInTdsRange(clients.find(c => c.id === fl.client_id), fl.financial_year, fl.quarter));
     return f;
   }, [filings, formTab, quarterFilter, deletedClientIds, clients]);
 
