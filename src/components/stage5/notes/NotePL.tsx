@@ -13,6 +13,11 @@ import {
 } from "./EditableCell";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 import { useDynamicNoteRegistry } from "@/lib/noteNumberRegistry";
+import { MoreVertical, Check as CheckIcon } from "lucide-react";
+import {
+  DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuLabel,
+  DropdownMenuItem, DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 
 interface Props {
   notes:           Stage5Notes;
@@ -144,8 +149,11 @@ export default function NotePL({
     updatePath(`pl.changes_inventory.bucket_map.${source}`, dest);
   };
 
-  // Render helper for the "Move to..." control. Only shown when the source
-  // bucket actually has non-zero data (otherwise the control is noise).
+  // 2026-06-25 (V J Desai request v2): three-dots (⋮) menu instead of a
+  // <select>. Only shown when the source bucket actually has non-zero data —
+  // avoids clutter on empty rows. Uses the same shadcn DropdownMenu pattern
+  // as ListRowActionsMenu, so the look is consistent with the rest of the
+  // Notes editor.
   const bucketLabel = { fg: "Finished Goods", wip: "Work-in-progress", sit: "Stock-in-trade" } as const;
   const renderMoveDropdown = (source: Bucket) => {
     const hasData =
@@ -153,19 +161,37 @@ export default function NotePL({
       Math.abs(src[`${source}_close_py` as keyof typeof src] as number) > 0.005;
     if (!hasData) return null;
     const current = bucketMap[source];
-    const others = (["fg", "wip", "sit"] as Bucket[]).filter(b => b !== source);
     return (
-      <select
-        value={current}
-        onChange={e => setBucketMap(source, e.target.value as Bucket)}
-        title={`Reassign the amount currently populated in ${bucketLabel[source]} to a different sub-row`}
-        className="ml-2 text-[10px] border border-border rounded px-1 py-0.5 bg-background hover:bg-muted cursor-pointer"
-      >
-        <option value={source}>Show under {bucketLabel[source]}</option>
-        {others.map(o => (
-          <option key={o} value={o}>Move to {bucketLabel[o]}</option>
-        ))}
-      </select>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            title="Reassign amount to a different sub-row"
+            className="ml-1 h-6 w-6 inline-flex items-center justify-center rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <MoreVertical className="h-3.5 w-3.5" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuLabel className="text-[10px] text-muted-foreground">
+            Show amount under
+          </DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          {(["fg", "wip", "sit"] as Bucket[]).map(b => (
+            <DropdownMenuItem
+              key={b}
+              onSelect={() => setBucketMap(source, b)}
+              className="text-xs gap-2"
+            >
+              <CheckIcon className={`h-3.5 w-3.5 ${current === b ? "opacity-100" : "opacity-0"}`} />
+              {bucketLabel[b]}
+              {b === source && (
+                <span className="ml-auto text-[10px] text-muted-foreground">(default)</span>
+              )}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
     );
   };
 
