@@ -44,11 +44,17 @@ const FY_OPTIONS = generateFYOptions();
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+// 2026-06-25 (V J Desai bug — bucket sum ≠ 1086 total + search misses matches
+// in other buckets): added an "Unclassified" bucket so the 5 counts always
+// sum to the visible total. Every client not classified for the selected FY
+// lands here — no more silent gap. The classification tab is also inferred
+// on each row so a cross-bucket search can render the correct badge.
 const CLASSIFICATION_TABS = [
   { key: "Audit",                    label: "Audit",                   icon: ShieldCheck,  color: "text-indigo-600" },
   { key: "Non-Audit",                label: "Non-Audit",               icon: ShieldOff,    color: "text-slate-500"  },
   { key: "Partner in Audited Firm",  label: "Partner in Audited Firm", icon: Users,        color: "text-amber-600"  },
   { key: "Not Applicable",           label: "Not Applicable",          icon: AlertCircle,  color: "text-muted-foreground" },
+  { key: "Unclassified",             label: "Unclassified",            icon: AlertCircle,  color: "text-rose-500"   },
 ] as const;
 
 type ClassificationKey = typeof CLASSIFICATION_TABS[number]["key"];
@@ -58,6 +64,10 @@ interface ClassifiedClient {
   name: string | null;
   entity_type: string | null;
   pan: string | null;
+  /** Which bucket this client lives in for the selected FY. Set on every
+   *  row so a search that spans all buckets can render the correct badge
+   *  and route the user to the right tab if they click through. */
+  classification: ClassificationKey;
 }
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -77,9 +87,16 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
   const [activeTab, setActiveTab]       = useState<ClassificationKey>("Audit");
   const [rows, setRows]                 = useState<ClassifiedClient[]>([]);
   const [counts, setCounts]             = useState<Record<ClassificationKey, number>>({
-    "Audit": 0, "Non-Audit": 0, "Partner in Audited Firm": 0, "Not Applicable": 0,
+    "Audit": 0, "Non-Audit": 0, "Partner in Audited Firm": 0, "Not Applicable": 0, "Unclassified": 0,
   });
+  const [totalClientsCount, setTotalClientsCount] = useState<number>(0);
+  const [searchRows, setSearchRows]     = useState<ClassifiedClient[]>([]);
   const [loading, setLoading]           = useState(false);
+
+  // 2026-06-25 — normalized search query, memoised at hook boundary so the
+  // fetchData dependency array can react to it (search-across-buckets fires
+  // only when q is non-empty).
+  const q = (search ?? "").trim().toLowerCase();
 
   const fetchData = useCallback(async () => {
     // Need either a firm scope or explicit all-firms flag from superadmin
@@ -87,13 +104,27 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
     setLoading(true);
 
     try {
-      // ── Counts for all 4 tabs ─────────────────────────────────────────────
+      // ── Total All Clients (denominator for Unclassified) ─────────────────
+      // Same firm scope + is_draft/deleted filters as the tab buckets so the
+      // 5 counts add up to this number exactly. Without this the "1086 total
+      // vs bucket-sum 714" gap (V J Desai bug) would persist silently.
+      let totalQ = (supabase as any)
+        .from("clients")
+        .select("id", { count: "exact", head: true })
+        .eq("is_draft", false)
+        .is("deleted_at", null);
+      if (!showAllFirms && firmId) totalQ = totalQ.eq("firm_id", firmId);
+      const { count: totalCount } = await totalQ;
+      setTotalClientsCount(totalCount ?? 0);
+
+      // ── Counts for the 4 real buckets ─────────────────────────────────────
       // Query clients as the primary table and use client_fy_classifications!inner
       // as an embedded filter. This avoids PostgREST embedded-resource filter
       // issues with { head: true } counts that can cause incorrect 0 results.
+      const realTabs = CLASSIFICATION_TABS.filter(t => t.key !== "Unclassified");
       const countResults = await Promise.all(
-        CLASSIFICATION_TABS.map(async (tab) => {
-          let q = (supabase as any)
+        realTabs.map(async (tab) => {
+          let cq = (supabase as any)
             .from("clients")
             .select("id, client_fy_classifications!inner(id)", { count: "exact", head: true })
             .eq("client_fy_classifications.financial_year", selectedFY)
@@ -101,65 +132,138 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
             .eq("is_draft", false)
             .is("deleted_at", null);
           if (!showAllFirms && firmId) {
-            q = q.eq("firm_id", firmId);
-            q = q.eq("client_fy_classifications.firm_id", firmId);
+            cq = cq.eq("firm_id", firmId);
+            cq = cq.eq("client_fy_classifications.firm_id", firmId);
           }
-          const { count } = await q;
+          const { count } = await cq;
           return { key: tab.key, count: count ?? 0 };
         })
       );
 
       const newCounts: Record<ClassificationKey, number> = {
-        "Audit": 0, "Non-Audit": 0, "Partner in Audited Firm": 0, "Not Applicable": 0,
+        "Audit": 0, "Non-Audit": 0, "Partner in Audited Firm": 0, "Not Applicable": 0, "Unclassified": 0,
       };
-      countResults.forEach(r => { newCounts[r.key as ClassificationKey] = r.count; });
+      let bucketSum = 0;
+      countResults.forEach(r => {
+        newCounts[r.key as ClassificationKey] = r.count;
+        bucketSum += r.count;
+      });
+      // ── Unclassified = Total All Clients − Σ(classified buckets) ────────
+      // Anything the auditor hasn't classified for this FY lands here so
+      // the bucket totals ALWAYS sum to the visible All Clients count.
+      newCounts["Unclassified"] = Math.max(0, (totalCount ?? 0) - bucketSum);
       setCounts(newCounts);
 
-      // ── Data rows for the active tab — clients primary, classification inner join ─
-      let dataQ = (supabase as any)
-        .from("clients")
-        .select("id, name, entity_type, pan, client_fy_classifications!inner(classification, financial_year)")
-        .eq("client_fy_classifications.financial_year", selectedFY)
-        .eq("client_fy_classifications.classification", activeTab)
-        .eq("is_draft", false)
-        .is("deleted_at", null)
-        .order("name", { ascending: true });
-      if (!showAllFirms && firmId) {
-        dataQ = dataQ.eq("firm_id", firmId);
-        dataQ = dataQ.eq("client_fy_classifications.firm_id", firmId);
-      }
+      // ── Data rows for the ACTIVE tab ────────────────────────────────────
+      if (activeTab === "Unclassified") {
+        // Fetch clients that have NO classification row for this FY. We do
+        // this by fetching classified client_ids then excluding them —
+        // avoids a NOT EXISTS subquery through PostgREST.
+        let classedQ = (supabase as any)
+          .from("client_fy_classifications")
+          .select("client_id")
+          .eq("financial_year", selectedFY);
+        if (!showAllFirms && firmId) classedQ = classedQ.eq("firm_id", firmId);
+        const { data: classedRows } = await classedQ;
+        const classedIds = new Set(((classedRows ?? []) as any[]).map(r => r.client_id));
 
-      const { data: fycRows, error: fycErr } = await dataQ;
-
-      if (fycErr) {
-        console.error("[ClassificationByFYView] classifications fetch:", fycErr);
-        setRows([]);
-      } else {
-        const mapped = ((fycRows ?? []) as any[])
+        let unclQ = (supabase as any)
+          .from("clients")
+          .select("id, name, entity_type, pan")
+          .eq("is_draft", false)
+          .is("deleted_at", null)
+          .order("name", { ascending: true });
+        if (!showAllFirms && firmId) unclQ = unclQ.eq("firm_id", firmId);
+        const { data: allRows } = await unclQ;
+        const mapped: ClassifiedClient[] = ((allRows ?? []) as any[])
+          .filter(r => !classedIds.has(r.id))
           .map(r => ({
             client_id:   r.id,
             name:        r.name ?? null,
             entity_type: r.entity_type ?? null,
             pan:         r.pan ?? null,
-          }))
-          .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
+            classification: "Unclassified" as ClassificationKey,
+          }));
         setRows(mapped);
+      } else {
+        let dataQ = (supabase as any)
+          .from("clients")
+          .select("id, name, entity_type, pan, client_fy_classifications!inner(classification, financial_year)")
+          .eq("client_fy_classifications.financial_year", selectedFY)
+          .eq("client_fy_classifications.classification", activeTab)
+          .eq("is_draft", false)
+          .is("deleted_at", null)
+          .order("name", { ascending: true });
+        if (!showAllFirms && firmId) {
+          dataQ = dataQ.eq("firm_id", firmId);
+          dataQ = dataQ.eq("client_fy_classifications.firm_id", firmId);
+        }
+        const { data: fycRows, error: fycErr } = await dataQ;
+
+        if (fycErr) {
+          console.error("[ClassificationByFYView] classifications fetch:", fycErr);
+          setRows([]);
+        } else {
+          const mapped: ClassifiedClient[] = ((fycRows ?? []) as any[])
+            .map(r => ({
+              client_id:   r.id,
+              name:        r.name ?? null,
+              entity_type: r.entity_type ?? null,
+              pan:         r.pan ?? null,
+              classification: activeTab,
+            }))
+            .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
+          setRows(mapped);
+        }
+      }
+
+      // ── Cross-bucket search (when a query is present) ───────────────────
+      // Fetch every client (with joined classification if any) that matches
+      // the name/PAN substring, regardless of which bucket they live in.
+      // Bucket badges are inferred client-side so the auditor sees ALL
+      // matches at once — no more "Amber Gum missing from Audit tab" bug.
+      if (q) {
+        let sq = (supabase as any)
+          .from("clients")
+          .select("id, name, entity_type, pan, client_fy_classifications!left(classification, financial_year, firm_id)")
+          .eq("is_draft", false)
+          .is("deleted_at", null)
+          .or(`name.ilike.%${q}%,pan.ilike.%${q}%`)
+          .order("name", { ascending: true });
+        if (!showAllFirms && firmId) sq = sq.eq("firm_id", firmId);
+        const { data: sRows } = await sq;
+        const mappedSearch: ClassifiedClient[] = ((sRows ?? []) as any[]).map(r => {
+          const fyc = (r.client_fy_classifications ?? []).find((c: any) =>
+            c.financial_year === selectedFY && (showAllFirms || !firmId || c.firm_id === firmId)
+          );
+          return {
+            client_id:   r.id,
+            name:        r.name ?? null,
+            entity_type: r.entity_type ?? null,
+            pan:         r.pan ?? null,
+            classification: (fyc?.classification as ClassificationKey) ?? "Unclassified",
+          };
+        });
+        setSearchRows(mappedSearch);
+      } else {
+        setSearchRows([]);
       }
     } finally {
       setLoading(false);
     }
-  }, [selectedFY, activeTab, firmId, showAllFirms]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedFY, activeTab, firmId, showAllFirms, q]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
   // ─── Render ─────────────────────────────────────────────────────────────────
 
-  const q = search?.trim().toLowerCase() ?? "";
+  // 2026-06-25 (V J Desai — search misses matches in other buckets):
+  // when the user is searching, show the union of matches across every
+  // bucket rather than filtering the active tab's rows only. Each row
+  // carries its own `classification` so a badge tells the auditor which
+  // tab it belongs to.
   const displayRows = q
-    ? rows.filter(r =>
-        (r.name ?? "").toLowerCase().includes(q) ||
-        (r.pan ?? "").toLowerCase().includes(q)
-      )
+    ? searchRows
     : rows;
 
   return (
@@ -230,7 +334,7 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
                 <tab.icon className={`h-10 w-10 mx-auto opacity-30 ${tab.color}`} />
                 <p className="text-sm text-muted-foreground">
                   {q
-                    ? <>No <strong>{tab.label}</strong> clients match "<strong>{search}</strong>".</>
+                    ? <>No clients match "<strong>{search}</strong>" in FY {selectedFY}.</>
                     : <>No <strong>{tab.label}</strong> clients classified for FY {selectedFY}.</>
                   }
                 </p>
@@ -242,6 +346,11 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
               </div>
             ) : (
               <div className="rounded-md border border-border overflow-auto">
+                {q && (
+                  <div className="px-3 py-2 bg-muted/30 border-b border-border text-xs text-muted-foreground">
+                    Showing <strong className="text-foreground">{displayRows.length}</strong> match{displayRows.length === 1 ? "" : "es"} for "<strong className="text-foreground">{search}</strong>" across all classifications.
+                  </div>
+                )}
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -249,11 +358,15 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
                       <TableHead className="text-xs">Client Name</TableHead>
                       <TableHead className="text-xs">PAN</TableHead>
                       <TableHead className="text-xs">Entity Type</TableHead>
+                      {q && <TableHead className="text-xs">Classification</TableHead>}
                       <TableHead className="text-xs w-20 text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {displayRows.map((row, idx) => (
+                    {displayRows.map((row, idx) => {
+                      const rowTab = CLASSIFICATION_TABS.find(t => t.key === row.classification);
+                      const RowIcon = rowTab?.icon ?? AlertCircle;
+                      return (
                       <TableRow
                         key={row.client_id}
                         className="cursor-pointer hover:bg-muted/50"
@@ -269,6 +382,14 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
                             <Badge variant="outline" className="text-[10px]">{row.entity_type}</Badge>
                           )}
                         </TableCell>
+                        {q && (
+                          <TableCell>
+                            <Badge variant="outline" className={`text-[10px] gap-1 ${rowTab?.color ?? ""}`}>
+                              <RowIcon className="h-3 w-3" />
+                              {row.classification}
+                            </Badge>
+                          </TableCell>
+                        )}
                         <TableCell>
                           <div className="flex gap-1 justify-end">
                             <Button
@@ -294,7 +415,8 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
                           </div>
                         </TableCell>
                       </TableRow>
-                    ))}
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </div>
