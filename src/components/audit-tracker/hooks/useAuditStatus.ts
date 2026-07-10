@@ -126,13 +126,24 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
 
     setUseLs(false);
 
-    // Flatten nested engagement fields
-    let statusRows: StatusEntry[] = ((rawData as any[]) || []).map(r => ({
-      ...r,
-      // audit_engagements column is audit_type (not engagement_type)
-      engagement_type: (r.audit_engagements as any)?.audit_type ?? null,
-      financial_year:  r.financial_year ?? (r.audit_engagements as any)?.financial_year ?? null,
-    }));
+    // 2026-06-25 (V J Desai — Krishna Infra bug): engagements are HARD-
+    // deleted from audit_engagements (AuditIntelligence.tsx L501: DELETE …
+    // WHERE id = eid), but the audit_status row's engagement_id column is
+    // not FK-cascaded, so a dangling reference stays behind and the row
+    // keeps rendering in the tracker grid. The LEFT JOIN returns
+    // audit_engagements=null in that case — that's our signal. If a row
+    // was TIED to an engagement (engagement_id set) and the join returned
+    // null, the engagement is gone → drop the row from the grid.
+    // Rows with engagement_id=null are unaffected (standalone manual rows).
+    const rawRows = (rawData as any[]) || [];
+    let statusRows: StatusEntry[] = rawRows
+      .filter(r => !(r.engagement_id && !r.audit_engagements))
+      .map(r => ({
+        ...r,
+        // audit_engagements column is audit_type (not engagement_type)
+        engagement_type: (r.audit_engagements as any)?.audit_type ?? null,
+        financial_year:  r.financial_year ?? (r.audit_engagements as any)?.financial_year ?? null,
+      }));
 
     // Filter out audit_status rows whose client has been archived (deleted_at set)
     if (statusRows.length) {
