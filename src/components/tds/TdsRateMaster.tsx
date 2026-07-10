@@ -173,15 +173,21 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
   // enriched with the §393 payment code / new-section / table Sl.No / old
   // section / description so it's searchable by any of those tokens.
   const sectionSelectOptions = useMemo(() => {
-    const opts = rates.map(r => {
+    // Superadmin queries span all firms, so the same section_code can appear
+    // more than once (once per firm) — dedupe to keep option values unique.
+    const seen = new Set<string>();
+    const opts: { value: string; label: string }[] = [];
+    for (const r of rates) {
+      if (seen.has(r.section_code)) continue;
+      seen.add(r.section_code);
       const info = resolveSection393(r.section_code);
       const parts: string[] = [];
       if (info?.paymentCode) parts.push(info.paymentCode);
       if (info) parts.push(`§${info.newSection}`);
       if (info?.tableRef) parts.push(`[${info.tableRef}]`);
       const prefix = parts.length ? `${parts.join(" · ")} · ` : "";
-      return { value: r.section_code, label: `${prefix}${r.section_code} — ${r.nature_of_payment || ""}` };
-    });
+      opts.push({ value: r.section_code, label: `${prefix}${r.section_code} — ${r.nature_of_payment || ""}` });
+    }
     return [{ value: "", label: "All sections" }, ...opts];
   }, [rates]);
 
@@ -301,7 +307,16 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
     if (editingRate) {
       const { error } = await supabase.from("tds_rate_master").update(payload as any).eq("id", editingRate.id);
       if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
-      else { toast({ title: "Rate updated" }); setFormOpen(false); fetchRates(); }
+      else {
+        toast({ title: "Rate updated" });
+        // Follow the §393 dropdown filter to the row's new code so an edit
+        // that renames the selected section doesn't strand the filter on a
+        // now-nonexistent code (which would blank the grid).
+        if (selectedSection === editingRate.section_code && formData.section_code !== editingRate.section_code) {
+          setSelectedSection(formData.section_code);
+        }
+        setFormOpen(false); fetchRates();
+      }
     } else {
       const { error } = await supabase.from("tds_rate_master").insert(payload as any);
       if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
@@ -311,9 +326,17 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
   };
 
   const handleDelete = async (id: string) => {
+    const target = rates.find(r => r.id === id);
     const { error } = await supabase.from("tds_rate_master").delete().eq("id", id);
     if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
-    else { toast({ title: "Deleted" }); fetchRates(); }
+    else {
+      toast({ title: "Deleted" });
+      // If the deleted row was the §393 dropdown's active filter, clear it —
+      // otherwise the grid would filter to a code that no longer exists and
+      // misleadingly show "No rates found" despite other sections remaining.
+      if (target && target.section_code === selectedSection) setSelectedSection("");
+      fetchRates();
+    }
   };
 
   const handleUpload = async (file: File) => {
