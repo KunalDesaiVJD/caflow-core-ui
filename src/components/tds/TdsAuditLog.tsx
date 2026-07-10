@@ -15,8 +15,13 @@ import {
 } from "@/components/ui/table";
 import { format } from "date-fns";
 import { Download } from "lucide-react";
+import { isFilingTdsCompliant } from "@/lib/tdsQuarter";
 
-interface ClientOption { id: string; name: string | null; }
+interface ClientOption {
+  id: string; name: string | null;
+  tds_start_fy?: string; tds_start_quarter?: string; tds_end_fy?: string; tds_end_quarter?: string;
+  tds_forms_applicable?: string[];
+}
 interface UserOption { id: string; name: string | null; }
 
 interface AuditEntry {
@@ -82,10 +87,14 @@ export function TdsAuditLog({ clients, users, isSuperadmin, resolveFirmId }: Pro
 
   const filteredEntries = entries.filter(e => {
     const filing = e.filing_id ? filingMap[e.filing_id] : null;
-    // TDS Compliance is the single source of truth for the module — an
-    // entry whose filing's client no longer has TDS Compliance configured
-    // (or was never a real TDS client) doesn't belong in this log.
-    if (filing && !clients.some(c => c.id === filing.client_id)) return false;
+    // TDS Compliance is the single source of truth — an entry whose filing is
+    // for a de-configured form, an out-of-range quarter, or a client with no
+    // TDS Compliance must not appear or be counted here. Same per-row gate as
+    // every other TDS screen (applied unconditionally).
+    if (filing) {
+      const client = clients.find(c => c.id === filing.client_id);
+      if (!client || !isFilingTdsCompliant(filing, client)) return false;
+    }
     if (clientFilter !== "all") {
       if (!filing || filing.client_id !== clientFilter) return false;
     }

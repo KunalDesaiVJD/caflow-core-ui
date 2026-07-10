@@ -214,13 +214,17 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
       (formTab === "all" || clientHasForm(client, formTab)),
     );
     const rows = eligibleClients.map(client => {
-      // Each client's own assigned forms — never the global form list — so a
-      // client not assigned 27EQ doesn't show a "27EQ: —" phantom row.
+      // ONLY the client's configured TDS Forms Applicable — never a global
+      // fallback. A client with no configured forms prints no statuses, so
+      // the checklist matches TDS Compliance exactly (fail-closed, same as
+      // isFilingTdsCompliant).
       const clientForms = client.tds_forms_applicable && client.tds_forms_applicable.length > 0
         ? client.tds_forms_applicable
-        : ALL_FORMS;
+        : [];
       const forms = formTab === "all" ? clientForms : clientForms.filter(f => f === formTab);
-      const clientFilings = filings.filter(f => f.client_id === client.id && f.financial_year === fyFilter);
+      // Only compliant rows feed the checklist cells (form in config AND in range).
+      const clientFilings = filings.filter(f =>
+        f.client_id === client.id && f.financial_year === fyFilter && isFilingTdsCompliant(f, client));
       const qCells = quarters.map(q => {
         if (!clientInTdsRange(client, fyFilter, q)) {
           return `<td style="border:1px solid #ccc;padding:6px;font-size:11px;color:#999">Out of period</td>`;
