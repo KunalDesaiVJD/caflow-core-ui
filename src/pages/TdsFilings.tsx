@@ -151,7 +151,6 @@ const TdsFilings = () => {
     <div className="flex flex-col h-[calc(100vh-4rem)] overflow-hidden">
       <div className="border-b bg-muted/30 shrink-0">
         <div className="flex items-center gap-4 px-4 overflow-x-auto">
-          <span className="text-sm font-semibold text-foreground shrink-0 py-2.5">TDS Module</span>
           <nav className="flex items-center gap-1 shrink-0">
             {NAV_ITEMS.map(item => (
               <button key={item.key} onClick={() => {
