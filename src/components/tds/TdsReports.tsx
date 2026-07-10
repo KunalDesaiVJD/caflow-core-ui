@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import { exportToExcel } from "@/lib/exportUtils";
 import { generateGeniusExport } from "@/lib/genius-export";
-import { isClientTdsEligible, clientHasTdsForm } from "@/lib/tdsQuarter";
+import { clientHasTdsForm, isFilingTdsCompliant } from "@/lib/tdsQuarter";
 
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null;
@@ -74,13 +74,14 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
     setSelQuarters(prev => prev.includes(q) ? prev.filter(x => x !== q) : [...prev, q]);
   };
 
-  // TDS Compliance Start/End Quarter — single source of truth for whether a
-  // filing row belongs in any report. A client with no TDS Compliance
-  // configured at all (fallback-matched, no real client_services row) is
-  // excluded from every report.
-  const inTdsRange = (f: { client_id: string; financial_year: string; quarter: string }) => {
+  // TDS Compliance is the single source of truth for whether a filing row
+  // belongs in any report — applied UNCONDITIONALLY (every report type, not
+  // only genius-export/cross-quarter's form selector). A stale row for a
+  // form the client is no longer configured for, or outside their
+  // Start/End Quarter range, must never surface in any report.
+  const isCompliant = (f: { client_id: string; financial_year: string; quarter: string; tds_forms?: string[] | null }) => {
     const client = clients.find(c => c.id === f.client_id);
-    return isClientTdsEligible(client?.tds_start_fy, client?.tds_start_quarter, f.financial_year, f.quarter, client?.tds_end_fy, client?.tds_end_quarter);
+    return isFilingTdsCompliant(f as any, client);
   };
 
   const fetchReportData = async () => {
@@ -94,7 +95,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
       if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
       if (selClient !== "all") q = q.eq("client_id", selClient);
       const { data } = await q;
-      setReportData((data || []).filter(inTdsRange));
+      setReportData((data || []).filter(isCompliant));
     } else if (selectedReport === "challan-register" || selectedReport === "deductee-wise" || selectedReport === "section-summary" || selectedReport === "annual-summary" || selectedReport === "non-filer" || selectedReport === "lower-cert" || selectedReport === "cross-quarter" || selectedReport === "genius-export") {
       // Get filings first
       let fq = supabase.from("tds_filings").select("id, client_id, financial_year, quarter, tds_forms, tan, work_status")
@@ -102,7 +103,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
       if (!isSuperadmin && firmId) fq = fq.eq("firm_id", firmId);
       if (selClient !== "all") fq = fq.eq("client_id", selClient);
       const { data: rawFilings } = await fq;
-      const filings = (rawFilings || []).filter(inTdsRange);
+      const filings = (rawFilings || []).filter(isCompliant);
       const filingIds = filings.map((f: any) => f.id);
 
       if (filingIds.length === 0) { setReportData([]); setLoading(false); return; }
