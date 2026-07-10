@@ -22,11 +22,18 @@ import { Eye, Pencil, RefreshCw, ShieldCheck, ShieldOff, Users, AlertCircle } fr
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+// 2026-06-25 — Audit tools care about the LAST COMPLETED FY (the one
+// whose books are now under audit), not the FY currently in progress.
+// In Jul 2026 the auditor is working on FY 2025-26; the ongoing FY
+// (2026-27) is irrelevant until next Apr. So the default is the FY that
+// ended most recently: April onwards ⇒ y-1 start; Jan–Mar ⇒ y-2 start
+// (the FY ends in March of year y, so up to that boundary the previous
+// FY is still ongoing).
 function getCurrentFY(): string {
   const today = new Date();
   const y = today.getFullYear();
   const m = today.getMonth(); // 0 = Jan
-  const start = m >= 3 ? y : y - 1;
+  const start = m >= 3 ? y - 1 : y - 2;
   return `${start}-${String(start + 1).slice(2)}`;
 }
 
@@ -105,14 +112,19 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
 
     try {
       // ── Total All Clients (denominator for Unclassified) ─────────────────
-      // Same firm scope + is_draft/deleted filters as the tab buckets so the
-      // 5 counts add up to this number exactly. Without this the "1086 total
-      // vs bucket-sum 714" gap (V J Desai bug) would persist silently.
+      // MUST match the parent Clients page's "All Clients" count exactly,
+      // otherwise the 5 tab counts won't sum to it. The parent counts:
+      //   (a) is_draft=false                          — completed clients
+      //   (b) is_draft=true AND source='api_import'   — API-imported drafts
+      //   both with deleted_at IS NULL.
+      // Earlier fix only counted (a) → Unclassified was under-counted by
+      // the api_import drafts (V J Desai FY 2025-26 saw 720 vs 1086 = 366
+      // clients silently missing). This OR now mirrors parent semantics.
       let totalQ = (supabase as any)
         .from("clients")
         .select("id", { count: "exact", head: true })
-        .eq("is_draft", false)
-        .is("deleted_at", null);
+        .is("deleted_at", null)
+        .or("is_draft.eq.false,and(is_draft.eq.true,source.eq.api_import)");
       if (!showAllFirms && firmId) totalQ = totalQ.eq("firm_id", firmId);
       const { count: totalCount } = await totalQ;
       setTotalClientsCount(totalCount ?? 0);
@@ -167,11 +179,14 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
         const { data: classedRows } = await classedQ;
         const classedIds = new Set(((classedRows ?? []) as any[]).map(r => r.client_id));
 
+        // Match totalQ semantics: include api_import drafts too. The
+        // Unclassified bucket is now the mirror of "clients not yet
+        // classified for this FY", not "completed clients only".
         let unclQ = (supabase as any)
           .from("clients")
           .select("id, name, entity_type, pan")
-          .eq("is_draft", false)
           .is("deleted_at", null)
+          .or("is_draft.eq.false,and(is_draft.eq.true,source.eq.api_import)")
           .order("name", { ascending: true });
         if (!showAllFirms && firmId) unclQ = unclQ.eq("firm_id", firmId);
         const { data: allRows } = await unclQ;
