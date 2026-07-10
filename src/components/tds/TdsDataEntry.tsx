@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { getDefaultTdsQuarter } from "@/lib/tdsQuarter";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -95,8 +96,6 @@ interface Props {
 }
 
 // ─── Constants ───
-const CURRENT_FY_START = new Date().getMonth() >= 3 ? new Date().getFullYear() : new Date().getFullYear() - 1;
-const DEFAULT_FY = `${CURRENT_FY_START}-${String(CURRENT_FY_START + 1).slice(2)}`;
 const FY_OPTIONS = Array.from({ length: 7 }, (_, i) => { const s = 2020 + i; return `${s}-${String(s + 1).slice(2)}`; });
 const QUARTER_OPTIONS = ["Q1", "Q2", "Q3", "Q4"];
 const TDS_FORMS = ["24Q", "26Q", "27Q", "27EQ"];
@@ -118,14 +117,6 @@ const REASON_CODES = [
   { code: "Y", label: "Y — Any other reason" },
   { code: "Z", label: "Z — Higher rate u/s 206AA (PAN not available)" },
 ];
-
-const getCurrentQuarter = (): string => {
-  const m = new Date().getMonth();
-  if (m >= 3 && m <= 5) return "Q1";
-  if (m >= 6 && m <= 8) return "Q2";
-  if (m >= 9 && m <= 11) return "Q3";
-  return "Q4";
-};
 
 const NEW_REGIME_SLABS = [
   { from: 0, to: 400000, rate: 0 },
@@ -260,8 +251,9 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
 
   const [selClient, setSelClient] = useState("");
   const [clientSearch, setClientSearch] = useState("");
-  const [selFy, setSelFy] = useState(DEFAULT_FY);
-  const [selQuarter, setSelQuarter] = useState(getCurrentQuarter());
+  const defaultTdsQuarter = useMemo(() => getDefaultTdsQuarter(), []);
+  const [selFy, setSelFy] = useState(defaultTdsQuarter.fy);
+  const [selQuarter, setSelQuarter] = useState(defaultTdsQuarter.quarter);
   const [selForm, setSelForm] = useState("26Q");
   const [filingLoaded, setFilingLoaded] = useState(false);
 

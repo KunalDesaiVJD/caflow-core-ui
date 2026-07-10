@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { TdsFilingsManager, type KpiStatusGroup, type FilingsPreset } from "@/components/tds/TdsFilingsManager";
+import { getDefaultTdsQuarter } from "@/lib/tdsQuarter";
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -61,27 +62,13 @@ function getDueDate(fy: string, quarter: string, formType?: string): Date {
   return new Date(year, d.month, d.day);
 }
 
-function getSmartDefaultQuarter(): { fy: string; quarter: string } {
-  const today = new Date();
-  const fyStart = today.getMonth() >= 3 ? today.getFullYear() : today.getFullYear() - 1;
-  const fy = `${fyStart}-${String(fyStart + 1).slice(2)}`;
-  // Check each quarter's TDS due date
-  for (const q of QUARTER_OPTIONS) {
-    const due = getDueDate(fy, q);
-    if (today <= due) return { fy, quarter: q };
-  }
-  // Past all due dates — default to next FY Q1
-  const nextFyStart = fyStart + 1;
-  return { fy: `${nextFyStart}-${String(nextFyStart + 1).slice(2)}`, quarter: "Q1" };
-}
-
 const TERMINAL_STATUSES = new Set([
   "Filed", "Submitted", "Processed", "Accepted", "Not Applicable", "NIL",
 ]);
 
 export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNavigate, refreshKey }: Props) {
   const { toast } = useToast();
-  const smartDefault = useMemo(() => getSmartDefaultQuarter(), []);
+  const smartDefault = useMemo(() => getDefaultTdsQuarter(), []);
 
   const [filings, setFilings] = useState<TdsFiling[]>([]);
   const [loading, setLoading] = useState(true);

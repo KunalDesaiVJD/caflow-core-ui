@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { getDefaultTdsQuarter } from "@/lib/tdsQuarter";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -44,8 +45,6 @@ interface ValidationItem {
   reviewed?: boolean;
 }
 
-const CURRENT_FY_START = new Date().getMonth() >= 3 ? new Date().getFullYear() : new Date().getFullYear() - 1;
-const DEFAULT_FY = `${CURRENT_FY_START}-${String(CURRENT_FY_START + 1).slice(2)}`;
 const FY_OPTIONS = Array.from({ length: 7 }, (_, i) => { const s = 2020 + i; return `${s}-${String(s + 1).slice(2)}`; });
 const QUARTER_OPTIONS = ["Q1", "Q2", "Q3", "Q4"];
 const TDS_FORMS = ["24Q", "26Q", "27Q", "27EQ"];
@@ -67,8 +66,9 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
   const { toast } = useToast();
 
   const [selClient, setSelClient] = useState("");
-  const [selFy, setSelFy] = useState(DEFAULT_FY);
-  const [selQuarter, setSelQuarter] = useState("Q1");
+  const defaultTdsQuarter = useMemo(() => getDefaultTdsQuarter(), []);
+  const [selFy, setSelFy] = useState(defaultTdsQuarter.fy);
+  const [selQuarter, setSelQuarter] = useState(defaultTdsQuarter.quarter);
   const [selForm, setSelForm] = useState("26Q");
 
   const [loading, setLoading] = useState(false);
