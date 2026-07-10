@@ -112,6 +112,10 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
 
   // ── Quick-filter bar ───────────────────────────────────────────────────────
   const [statusFilter, setStatusFilter] = useState("all");
+  // 2026-06-25 (V J Desai) — Completed / Pending chip.
+  // "Completed" = scanned Yes (audit fully signed off).
+  // "Pending"   = scanned "No" OR blank.
+  const [scanFilter, setScanFilter] = useState<"all" | "completed" | "pending">("all");
 
   // ── Per-column filters ─────────────────────────────────────────────────────
   const [colFilters,    setColFilters]    = useState<Record<string, string>>({});
@@ -170,7 +174,7 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
   }
 
   // Reset page when filters change
-  useEffect(() => setPage(1), [search, statusFilter, colFilters]);
+  useEffect(() => setPage(1), [search, statusFilter, scanFilter, colFilters]);
 
   // ── Filtering + sorting ───────────────────────────────────────────────────
   const filtered = useMemo(() => {
@@ -189,6 +193,16 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
 
     // Quick-filter bar: Audit Status
     if (statusFilter !== "all") result = result.filter(r => r.audit_status === statusFilter);
+
+    // Completed / Pending scan chip
+    if (scanFilter === "completed") {
+      result = result.filter(r => (r.scanned || "").trim().toLowerCase() === "yes");
+    } else if (scanFilter === "pending") {
+      result = result.filter(r => {
+        const v = (r.scanned || "").trim().toLowerCase();
+        return v !== "yes"; // "no" OR blank
+      });
+    }
 
     // Per-column filters
     Object.entries(colFilters).forEach(([id, val]) => {
@@ -215,7 +229,28 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
     }
 
     return result;
-  }, [rows, search, statusFilter, colFilters, sortField, sortDir, clientIdFilter]);
+  }, [rows, search, statusFilter, scanFilter, colFilters, sortField, sortDir, clientIdFilter]);
+
+  // Counts for the scan chips — reflect the CURRENT scope (search + other
+  // filters applied) so the auditor sees "of the 87 clients I'm looking at,
+  // 12 are done and 75 remain" rather than a firm-wide total that ignores
+  // the visible slice. Excludes the scanFilter itself so switching between
+  // Completed / Pending doesn't zero the opposite chip.
+  const scanChipCounts = useMemo(() => {
+    let base = rows;
+    if (clientIdFilter) base = base.filter(r => r.client_id === clientIdFilter);
+    if (search) {
+      const q = search.toLowerCase();
+      base = base.filter(r => Object.values(r).some(v => v && typeof v === "string" && v.toLowerCase().includes(q)));
+    }
+    if (statusFilter !== "all") base = base.filter(r => r.audit_status === statusFilter);
+    let completed = 0, pending = 0;
+    for (const r of base) {
+      if ((r.scanned || "").trim().toLowerCase() === "yes") completed++;
+      else pending++;
+    }
+    return { completed, pending };
+  }, [rows, search, statusFilter, clientIdFilter]);
 
   // ── Pagination slice ──────────────────────────────────────────────────────
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -278,6 +313,9 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
       <AuditStatusFilters
         search={searchRaw}          onSearch={v => { setSearchRaw(v); setPage(1); }}
         statusFilter={statusFilter} onStatus={v => { setStatusFilter(v); setPage(1); }}
+        scanFilter={scanFilter}     onScanFilter={v => { setScanFilter(v); setPage(1); }}
+        completedCount={scanChipCounts.completed}
+        pendingCount={scanChipCounts.pending}
         onRefresh={reload}
         onSaveAll={handleSaveAll}
         saveAllBusy={saveAllBusy}

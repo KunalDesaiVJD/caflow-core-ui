@@ -581,6 +581,14 @@ export default function AuditStatusRow({
       "hover:bg-muted/10 transition-colors",
       isNew && "bg-amber-50 ring-1 ring-amber-200 ring-inset",
       row.isPlanning && "bg-slate-50/70",
+      // 2026-06-25 (V J Desai request v2): scanned=Yes marks the final
+      // stage — highlight the whole row in a saturated Excel-style green.
+      // The earlier bg-emerald-50 was too subtle to scan across 100+ rows.
+      // Using bg-green-200 (~ the "Good" cell style from Excel) plus a
+      // 4-px emerald left border for extra "these are done" punch.
+      // Cells override sticky bg (party name / Sr No) so the highlight
+      // covers the whole row edge to edge.
+      row.scanned === "Yes" && "bg-green-200 hover:bg-green-200 [&>td]:!bg-green-200 border-l-4 border-emerald-600",
     )}>
 
       {/* 1 · Sr No */}
@@ -754,8 +762,11 @@ export default function AuditStatusRow({
           : <span>{row.audit_report_checked_by || "—"}</span>}
       </TCell>
 
-      {/* 7 · Audit Status */}
-      <TCell className="min-w-[130px]">
+      {/* 7 · Audit Status — widened per V J Desai request so full labels
+          like "QUERIES GIVEN TO CLIENT" and "VERIFICATION PENDING" fit
+          without ellipsis. whitespace-nowrap on the badge keeps it on
+          a single line so the auditor can read the status at a glance. */}
+      <TCell className="min-w-[210px]">
         {editing ? (
           <div className="space-y-1">
             <ESelect value={draft.audit_status} onChange={v => set("audit_status", v)} options={AUDIT_STATUS_OPTIONS} />
@@ -769,7 +780,7 @@ export default function AuditStatusRow({
           </div>
         ) : row.audit_status ? (
           <div className="space-y-0.5">
-            <Badge className={cn("text-[10px]", statusColor)}>{row.audit_status}</Badge>
+            <Badge className={cn("text-[10px] whitespace-nowrap", statusColor)}>{row.audit_status}</Badge>
             {row.audit_status === "OTHERS (SPECIFY)" && row.audit_status_other && (
               <p className="text-[10px] text-muted-foreground truncate">{row.audit_status_other}</p>
             )}
