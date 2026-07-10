@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import { exportToExcel } from "@/lib/exportUtils";
 import { generateGeniusExport } from "@/lib/genius-export";
-import { isQuarterInTdsRange } from "@/lib/tdsQuarter";
+import { isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
 
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null;
@@ -142,7 +142,10 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
     if (!reportData[0]) return;
     const { filings, challans, deductees } = reportData[0];
 
-    const filing = filings.find((f: any) => (f.tds_forms || []).includes(selForm) && selQuarters.includes(f.quarter));
+    const filing = filings.find((f: any) =>
+      (f.tds_forms || []).includes(selForm) && selQuarters.includes(f.quarter) &&
+      clientHasTdsForm(clients.find(c => c.id === f.client_id)?.tds_forms_applicable, selForm)
+    );
     if (!filing) { toast({ title: "No filing found for selected form/quarter", variant: "destructive" }); return; }
 
     const client = clients.find(c => c.id === filing.client_id);
@@ -566,7 +569,10 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
   const renderGeniusExport = () => {
     if (!reportData[0]) return <p className="text-muted-foreground">No data. Select a client first.</p>;
     const { filings, challans, deductees } = reportData[0];
-    const filing = filings.find((f: any) => (f.tds_forms || []).includes(selForm) && selQuarters.includes(f.quarter));
+    const filing = filings.find((f: any) =>
+      (f.tds_forms || []).includes(selForm) && selQuarters.includes(f.quarter) &&
+      clientHasTdsForm(clients.find(c => c.id === f.client_id)?.tds_forms_applicable, selForm)
+    );
     const client = filing ? clients.find(c => c.id === filing.client_id) : null;
     const fChallans = filing ? challans.filter((c: any) => c.filing_id === filing.id) : [];
     const cIds = new Set(fChallans.map((c: any) => c.id));
@@ -867,7 +873,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
                 .filter(c => {
                   // Form-scoped only for report types with a visible Form selector.
                   if (selectedReport !== "genius-export" && selectedReport !== "cross-quarter") return true;
-                  return !c.tds_forms_applicable || c.tds_forms_applicable.length === 0 || c.tds_forms_applicable.includes(selForm);
+                  return clientHasTdsForm(c.tds_forms_applicable, selForm);
                 })
                 .map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
             </SelectContent>

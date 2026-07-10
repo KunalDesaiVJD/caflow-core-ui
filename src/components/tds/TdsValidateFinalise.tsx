@@ -113,6 +113,13 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
       return;
     }
 
+    // TDS Forms Applicable — block validation for a form the client isn't
+    // currently configured for.
+    if (!clientHasTdsForm(selectedClient?.tds_forms_applicable, selForm)) {
+      toast({ title: "Form not applicable", description: `This client is not configured for ${selForm} under TDS Compliance.`, variant: "destructive" });
+      return;
+    }
+
     setLoading(true);
     setValidated(false);
     setResults([]);
@@ -477,7 +484,7 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
             <SelectTrigger className="w-[220px]"><SelectValue placeholder="Select client" /></SelectTrigger>
             <SelectContent>
               {clients
-                .filter(c => !c.tds_forms_applicable || c.tds_forms_applicable.length === 0 || c.tds_forms_applicable.includes(selForm))
+                .filter(c => clientHasTdsForm(c.tds_forms_applicable, selForm))
                 .map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
             </SelectContent>
           </Select>
