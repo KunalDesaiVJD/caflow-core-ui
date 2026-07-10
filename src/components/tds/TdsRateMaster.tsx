@@ -266,10 +266,10 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
     fetchRates();
   };
 
-  const openAdd = () => {
+  const openAdd = (prefillSectionCode?: string) => {
     setEditingRate(null);
     setFormData({
-      section_code: "", nature_of_payment: "", threshold_individual: "",
+      section_code: prefillSectionCode || "", nature_of_payment: "", threshold_individual: "",
       threshold_company: "", rate_individual: "", rate_company: "", rate_no_pan: "20",
       surcharge_applicable: false, cess_applicable: false, effective_from: "2025-04-01", notes: "",
     });
@@ -320,7 +320,13 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
     } else {
       const { error } = await supabase.from("tds_rate_master").insert(payload as any);
       if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
-      else { toast({ title: "Rate added" }); setFormOpen(false); fetchRates(); }
+      else {
+        toast({ title: "Rate added" });
+        // Filter straight to the just-added section so the user gets
+        // immediate visual confirmation of what they created.
+        if (is2025Regime) setSelectedSection(payload.section_code);
+        setFormOpen(false); fetchRates();
+      }
     }
     setSaving(false);
   };
@@ -500,7 +506,7 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
       </div>
 
       <div className="flex gap-2">
-        <Button size="sm" className="gap-1" onClick={openAdd}><Plus size={14} /> Add Section</Button>
+        <Button size="sm" className="gap-1" onClick={() => openAdd()}><Plus size={14} /> Add Section</Button>
         <Button size="sm" variant="outline" className="gap-1" onClick={importFromPrevYear}><Copy size={14} /> Import from Previous Year</Button>
         <Button size="sm" variant="outline" className="gap-1" onClick={() => setUploadOpen(true)}><Upload size={14} /> Upload New Year Rules</Button>
       </div>
@@ -522,6 +528,7 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
                   searchPlaceholder="Type a code, 194J, 393, rent, contractor…"
                   emptyText="No matching section."
                   className="w-full"
+                  onCreateNew={(query) => openAdd(query)}
                 />
               </div>
               {selectedSection && (

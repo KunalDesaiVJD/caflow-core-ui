@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Check, ChevronsUpDown } from "lucide-react";
+import { Check, ChevronsUpDown, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
@@ -19,6 +19,13 @@ interface SearchableSelectProps {
   emptyText?: string;
   className?: string;
   disabled?: boolean;
+  /**
+   * When provided, a "create new" action appears whenever the search query
+   * has no matching option, passing the raw typed query through.
+   */
+  onCreateNew?: (query: string) => void;
+  /** Defaults to `Add "<query>"`. */
+  createNewLabel?: string;
 }
 
 export function SearchableSelect({
@@ -30,12 +37,15 @@ export function SearchableSelect({
   emptyText = "No results found.",
   className,
   disabled,
+  onCreateNew,
+  createNewLabel,
 }: SearchableSelectProps) {
   const [open, setOpen] = React.useState(false);
+  const [query, setQuery] = React.useState("");
   const selected = options.find((o) => o.value === value);
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setQuery(""); }}>
       <PopoverTrigger asChild>
         <Button
           variant="outline"
@@ -50,9 +60,20 @@ export function SearchableSelect({
       </PopoverTrigger>
       <PopoverContent className="p-0" style={{ width: "var(--radix-popover-trigger-width)" }}>
         <Command>
-          <CommandInput placeholder={searchPlaceholder} />
+          <CommandInput placeholder={searchPlaceholder} value={query} onValueChange={setQuery} />
           <CommandList>
-            <CommandEmpty>{emptyText}</CommandEmpty>
+            <CommandEmpty>
+              {onCreateNew && query.trim() ? (
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-primary hover:bg-accent"
+                  onClick={() => { onCreateNew(query.trim()); setOpen(false); }}
+                >
+                  <Plus className="h-4 w-4 shrink-0" />
+                  {createNewLabel || `Add "${query.trim()}"`}
+                </button>
+              ) : emptyText}
+            </CommandEmpty>
             <CommandGroup>
               {options.map((opt) => (
                 <CommandItem
