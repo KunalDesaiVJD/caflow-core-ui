@@ -1518,6 +1518,88 @@ export async function autoPopulateNotes(
     }
   }
 
+  // ── 2026-06-25 (V J Desai — Note 27 blank sub-cells) ────────────────────
+  // Changes in Inventory sub-cells (FG / WIP / SIT × opening / closing) were
+  // never populated because the generic loop above only writes the parent
+  // aggregate (cy from PL_EXP_CII, breakup from all mapped ledgers). Six
+  // dedicated cells at pl.changes_inventory.{fg,wip,sit}_{open,close}_{cy,py}
+  // stayed at 0 → the note showed only the total, never the Schedule III
+  // bifurcation the auditor needs.
+  //
+  // Fix: read the inventory ledgers by their SUB-code (INV_FG / INV_WIP /
+  // INV_STT / INV_STOCK), sum CY closing (= current TB balance) and PY
+  // closing (= prior TB balance, with CY opening_balance as fallback), and
+  // emit the six sub-cells + the total.
+  //
+  // Convention:
+  //   • CY closing = INV_x sum from CY TB balance
+  //   • PY closing = INV_x sum from PY TB balance (fallback: CY opening)
+  //   • CY opening = PY closing (Schedule III identity)
+  //   • PY opening = 0 (PPY unavailable — auditor can override)
+  //   • Total: (closing sum) − (opening sum) — matches PL_EXP_CII sign
+  //
+  // Runs unconditionally; auditor overrides survive because manual_edits are
+  // reapplied by respectManualEdits() at the end of autoPopulateNotes.
+  {
+    const invCodeMap = {
+      fg:  ["INV_FG"],
+      wip: ["INV_WIP"],
+      sit: ["INV_STT", "INV_STOCK"],  // Stock-in-trade + generic aggregated stock
+    };
+    const closingCy = (codes: string[]): number => sumLedgersByFsCodes(tb, mapping, codes);
+    // PY closing: prefer PY TB balance; if PY TB is empty, fall back to CY
+    // opening_balance of the same ledgers (accounting identity: CY opening
+    // balance = PY closing balance for BS accounts).
+    const closingPy = (codes: string[]): number => {
+      if (pyTB && pyTB.length > 0) return sumLedgersByFsCodes(pyTB, mapping, codes);
+      const codeSet = new Set(codes);
+      let total = 0;
+      for (const acct of tb) {
+        const code = mapping[acct.account_name]?.code;
+        if (code && codeSet.has(code)) total += acct.opening_balance ?? 0;
+      }
+      return Math.round(total * 100) / 100;
+    };
+
+    const fg_close_cy  = closingCy(invCodeMap.fg);
+    const wip_close_cy = closingCy(invCodeMap.wip);
+    const sit_close_cy = closingCy(invCodeMap.sit);
+    const fg_close_py  = closingPy(invCodeMap.fg);
+    const wip_close_py = closingPy(invCodeMap.wip);
+    const sit_close_py = closingPy(invCodeMap.sit);
+
+    const closingSumCy = fg_close_cy  + wip_close_cy  + sit_close_cy;
+    const closingSumPy = fg_close_py  + wip_close_py  + sit_close_py;
+    const openingSumCy = closingSumPy;  // identity: opening this year = closing last year
+    // Changes in Inventory (per P&L) = Opening − Closing (increase in inventory
+    // reduces expense; decrease raises it). Matches PL_EXP_CII TB sign.
+    const ci_cy = openingSumCy - closingSumCy;
+    const ci_py = 0            - closingSumPy;
+
+    // Preserve any existing values that don't overlap our six sub-cells or
+    // parent .cy / .py — namely a persisted breakup array or manual PPY
+    // opening figures the auditor may have typed in.
+    const priorCI = (out.pl.changes_inventory as any) ?? {};
+    (out.pl as any).changes_inventory = {
+      ...priorCI,
+      cy: Math.round(ci_cy * 100) / 100,
+      py: Math.round(ci_py * 100) / 100,
+      fg_close_cy:  Math.round(fg_close_cy  * 100) / 100,
+      wip_close_cy: Math.round(wip_close_cy * 100) / 100,
+      sit_close_cy: Math.round(sit_close_cy * 100) / 100,
+      fg_close_py:  Math.round(fg_close_py  * 100) / 100,
+      wip_close_py: Math.round(wip_close_py * 100) / 100,
+      sit_close_py: Math.round(sit_close_py * 100) / 100,
+      fg_open_cy:   Math.round(fg_close_py  * 100) / 100,
+      wip_open_cy:  Math.round(wip_close_py * 100) / 100,
+      sit_open_cy:  Math.round(sit_close_py * 100) / 100,
+      // PY opening stays as previously stored (auditor keys PPY if needed).
+      fg_open_py:   priorCI.fg_open_py  ?? 0,
+      wip_open_py:  priorCI.wip_open_py ?? 0,
+      sit_open_py:  priorCI.sit_open_py ?? 0,
+    };
+  }
+
   // ── P3 RECONCILE: corp note headline (Cabinet-1) ≡ breakup PY sum (Cabinet-2) ─
   //
   // BUG P3 (handoff 2026-06-29). The corporate note PY headline was sourced
