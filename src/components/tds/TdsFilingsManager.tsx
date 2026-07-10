@@ -116,6 +116,9 @@ interface Props {
   // component only renders the toggle button and reflects the icon/label.
   isMaximized?: boolean;
   onToggleMaximize?: () => void;
+  // Bumped by the host on any external TDS change (e.g. Realtime event when a
+  // client's TDS Compliance is edited) to force a live re-fetch of filings.
+  refreshKey?: number;
 }
 
 const CURRENT_FY_START = new Date().getMonth() >= 3 ? new Date().getFullYear() : new Date().getFullYear() - 1;

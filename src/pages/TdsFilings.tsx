@@ -152,17 +152,42 @@ const TdsFilings = () => {
 
   useEffect(() => { fetchClients(); fetchUsers(); }, [fetchClients, fetchUsers]);
 
-  // Re-fetch when the tab becomes visible again (user switches away to
-  // activate TDS on a client, then comes back — dropdown should update).
+  // Pull the latest TDS Compliance config + filing rows and force every child
+  // screen (Dashboard KPIs, Client Filing Summary, etc.) to re-read.
+  const refreshTdsModule = useCallback(() => {
+    fetchClients();
+    setDashRefreshKey(k => k + 1);
+  }, [fetchClients]);
+
+  // ── Real-time sync ──────────────────────────────────────────────────────
+  // TDS Compliance (client_services) is the single source of truth; a DB
+  // trigger keeps tds_filings in lock-step. Subscribe to changes on BOTH so
+  // the whole TDS module updates the instant a client's compliance changes —
+  // from this tab, another tab, or another user — with no navigation or
+  // manual refresh. RLS scopes each firm to its own rows.
   useEffect(() => {
-    const onVisible = () => { if (!document.hidden) fetchClients(); };
+    const channel = supabase
+      .channel("tds-module-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "client_services" }, refreshTdsModule)
+      .on("postgres_changes", { event: "*", schema: "public", table: "tds_filings" }, refreshTdsModule)
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [refreshTdsModule]);
+
+  // Fallback for environments without Realtime (or a dropped socket): refetch
+  // when the tab regains focus/visibility, and on bfcache restore (back/fwd).
+  useEffect(() => {
+    const onVisible = () => { if (!document.hidden) refreshTdsModule(); };
+    const onPageShow = () => refreshTdsModule();
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("focus", onVisible);
+    window.addEventListener("pageshow", onPageShow);
     return () => {
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("focus", onVisible);
+      window.removeEventListener("pageshow", onPageShow);
     };
-  }, [fetchClients]);
+  }, [refreshTdsModule]);
 
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)] overflow-hidden">
