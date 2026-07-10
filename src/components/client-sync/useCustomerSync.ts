@@ -533,15 +533,23 @@ export function useCustomerSync() {
               }
             } else {
               // ── UPDATE existing client (all API fields, never touches customer_id / is_draft / source) ─
-              // 2026-06-25 (V J Desai — SHREEJIKRUPA BUILDCON lost 2 of 3
-              // GSTINs bug): the eOffice/Genius API only returns the primary
-              // GSTIN. Overwriting clients.gstin with that single value
-              // destroyed any additional GSTINs the auditor had manually
-              // added (the JSONB gstin_addresses/gstin_states maps were
-              // left intact but the primary array was truncated to 1).
-              // Fix: read the current gstin array + gstin_addresses/states
-              // maps, merge in the API GSTIN if new, and update with the
-              // MERGED array so manual additions survive a sync.
+              // 2026-06-25 (V J Desai rule — multi-GSTIN clients are locked
+              // against sync GSTIN overwrites):
+              //   The eOffice/Genius API returns only ONE primary GSTIN. If the
+              //   auditor has manually configured a client with MORE THAN ONE
+              //   GSTIN (multi-state registrations), overwriting clients.gstin
+              //   with the single API value would silently destroy the extras
+              //   (SHREEJIKRUPA BUILDCON bug).
+              //
+              //   Rule per user:
+              //     • Multi-GSTIN client (existing gstin array has >= 2 entries,
+              //       OR JSONB address/state maps reveal >= 2 keys)
+              //         → DO NOT touch gstin / gstin_addresses / gstin_states.
+              //           Every OTHER basic detail (name, PAN, email, address,
+              //           mobile, tan_number, entity_type, is_active) still
+              //           updates from the API as usual.
+              //     • Single-GSTIN or zero-GSTIN client
+              //         → Update the gstin field as before (payload wins).
               const { data: existing } = await supabase
                 .from("clients")
                 .select("gstin, gstin_addresses, gstin_states")
@@ -552,25 +560,32 @@ export function useCustomerSync() {
               const existingArr: string[] = Array.isArray(existing?.gstin)
                 ? (existing!.gstin as string[]).filter(Boolean)
                 : [];
-              // Also recover any GSTINs stored only in the address/state maps
-              // (SHREEJIKRUPA's case — extras were there but never in the array).
               const addrKeys = existing?.gstin_addresses && typeof existing.gstin_addresses === "object" && !Array.isArray(existing.gstin_addresses)
                 ? Object.keys(existing.gstin_addresses as Record<string, string>)
                 : [];
               const stateKeys = existing?.gstin_states && typeof existing.gstin_states === "object" && !Array.isArray(existing.gstin_states)
                 ? Object.keys(existing.gstin_states as Record<string, string>)
                 : [];
-              const apiGstin = payload.gstin?.[0];
-              const merged = Array.from(new Set(
-                [...existingArr, ...addrKeys, ...stateKeys, apiGstin]
-                  .filter((g): g is string => !!g && !!g.trim())
+              const knownGstinCount = new Set(
+                [...existingArr, ...addrKeys, ...stateKeys]
+                  .filter(g => !!g && !!g.trim())
                   .map(g => g.trim().toUpperCase())
-              ));
-              const mergedPayload = { ...payload, gstin: merged.length > 0 ? merged : payload.gstin };
+              ).size;
+
+              let updatePayload: any;
+              if (knownGstinCount >= 2) {
+                // Multi-GSTIN client — strip every GSTIN-related field from
+                // the payload so the sync leaves them untouched.
+                const { gstin: _drop, ...rest } = payload;
+                updatePayload = { ...rest, is_active: isActiveRecord(r) };
+              } else {
+                // Single / zero GSTIN — regular sync path.
+                updatePayload = { ...payload, is_active: isActiveRecord(r) };
+              }
 
               const { error } = await supabase
                 .from("clients")
-                .update({ ...mergedPayload, is_active: isActiveRecord(r) } as any)
+                .update(updatePayload)
                 .eq("customer_id", customer_id)
                 .is("deleted_at", null);
 
