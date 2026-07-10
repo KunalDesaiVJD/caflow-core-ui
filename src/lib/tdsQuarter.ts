@@ -96,3 +96,50 @@ export function clientHasTdsForm(formsApplicable: string[] | null | undefined, f
   if (!formsApplicable || formsApplicable.length === 0) return false;
   return formsApplicable.includes(form);
 }
+
+/** Minimal shape of a tds_filings row needed to check TDS Compliance membership. */
+export interface TdsFilingLike {
+  client_id: string;
+  financial_year: string;
+  quarter: string;
+  tds_forms: string[] | null;
+}
+
+/** Minimal shape of a client's TDS Compliance config needed to check membership. */
+export interface TdsClientConfigLike {
+  id?: string;
+  tds_start_fy?: string | null;
+  tds_start_quarter?: string | null;
+  tds_end_fy?: string | null;
+  tds_end_quarter?: string | null;
+  tds_forms_applicable?: string[] | null;
+}
+
+// THE single source of truth for whether a tds_filings row belongs anywhere
+// in the TDS module — Dashboard, Filing Summary, Reports, Checklist,
+// everywhere. A row only qualifies when its client currently has TDS
+// Compliance configured, the row's (FY, quarter) falls in that client's
+// configured Start/End Quarter range, AND at least one of the row's own
+// tds_forms is still one of the client's current TDS Forms Applicable.
+//
+// This must be applied UNCONDITIONALLY — not only when a user has picked a
+// specific form tab/filter. A stale row left over from before a client's
+// forms were reconfigured (e.g. a 27EQ row for a client now configured for
+// 26Q only) must never surface, including under "All Forms"/"All" views.
+// The currently-selected form tab is a SEPARATE, additional narrowing layered
+// on top of this check, never a substitute for it.
+export function isFilingTdsCompliant(
+  filing: TdsFilingLike,
+  client: TdsClientConfigLike | undefined,
+): boolean {
+  if (!client?.tds_start_fy) return false;
+  if (!isQuarterInTdsRange(
+    filing.financial_year, filing.quarter,
+    client.tds_start_fy, client.tds_start_quarter || "Q1",
+    client.tds_end_fy, client.tds_end_quarter,
+  )) return false;
+  const configuredForms = client.tds_forms_applicable;
+  if (!configuredForms || configuredForms.length === 0) return false;
+  const rowForms = filing.tds_forms || [];
+  return rowForms.some(f => configuredForms.includes(f));
+}

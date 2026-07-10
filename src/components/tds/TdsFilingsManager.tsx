@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { getDefaultTdsQuarter, isClientTdsEligible, clientHasTdsForm } from "@/lib/tdsQuarter";
+import { getDefaultTdsQuarter, clientHasTdsForm, isFilingTdsCompliant } from "@/lib/tdsQuarter";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -401,14 +401,15 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     const today = new Date();
     return filings.filter(f => {
       const client = clients.find(c => c.id === f.client_id);
-      if (formFilter !== "all") {
-        // Row must literally be about this form AND the client must
-        // currently be configured for it (TDS Forms Applicable is the
-        // single source of truth — a stale row for a de-configured form
-        // must not surface under that form's filter).
-        if (!(f.tds_forms || []).includes(formFilter)) return false;
-        if (!clientHasTdsForm(client?.tds_forms_applicable, formFilter)) return false;
-      }
+
+      // TDS Compliance is the single source of truth — applied
+      // UNCONDITIONALLY, not only when a specific form filter is picked. A
+      // stale row for a form the client is no longer configured for (or
+      // outside their Start/End Quarter range) must never surface, including
+      // under "All" form / "All" FY / "All" quarter.
+      if (!isFilingTdsCompliant(f, client)) return false;
+
+      if (formFilter !== "all" && !(f.tds_forms || []).includes(formFilter)) return false;
       if (statusFilter !== "all" && f.work_status !== statusFilter) return false;
 
       // KPI-card-driven aggregate status group — these don't map to a single
@@ -434,12 +435,6 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
           return false;
         }
       }
-
-      // TDS Compliance Start/End Quarter — single source of truth for which
-      // FY/quarter a client should appear under. A client with no TDS
-      // Compliance configured at all (matched only via a fallback path) is
-      // excluded entirely, not just range-restricted.
-      if (!isClientTdsEligible(client?.tds_start_fy, client?.tds_start_quarter, f.financial_year, f.quarter, client?.tds_end_fy, client?.tds_end_quarter)) return false;
 
       return true;
     });
