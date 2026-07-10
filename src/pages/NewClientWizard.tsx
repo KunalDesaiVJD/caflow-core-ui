@@ -27,6 +27,7 @@ import { ArrowLeft, Save } from "lucide-react";
 import confetti from "canvas-confetti";
 import { StepBasicInfo, type BasicInfoData } from "@/components/client-wizard/StepBasicInfo";
 import { StepAdvancedInfo, type AdvancedInfoData, defaultAdvancedInfo } from "@/components/client-wizard/StepAdvancedInfo";
+import { getClassificationForFY } from "@/utils/classificationUtils";
 import {
   StepServiceBilling,
   type ServiceBillingData,
@@ -330,18 +331,34 @@ const NewClientWizard = () => {
         tan_number: client.tan_number || "",
       });
 
-      // Remember the DB-saved classification for the warning modal
-      setSavedClassification(fyClass?.classification || "");
-
       // FY priority: URL param → row's FY → app default.  When the URL pins
       // an FY that has no row yet, we still want the form to land on that FY
       // so the next Save creates the per-FY row.
       const initialFY = urlFY || fyClass?.financial_year || defaultAdvancedInfo.financial_year;
 
+      // 2026-06-25 (V J Desai — AMBER GUM carry-forward): if no per-FY
+      // classification row exists for the initial FY, inherit from the
+      // history / earlier snapshots via getClassificationForFY. Prevents
+      // the "Select classification" placeholder appearing on FYs that
+      // should carry the previous year's value.
+      let initialClassification = fyClass?.classification || "";
+      if (!initialClassification && initialFY && clientId) {
+        try {
+          const inherited = await getClassificationForFY(clientId, initialFY);
+          // Use the inherited value unless the helper's default kicked in
+          // for a client that has never been classified anywhere.
+          if (inherited) initialClassification = inherited;
+        } catch { /* fall through to blank */ }
+      }
+      if (!mounted) return;
+
+      // Remember the DB-saved classification for the warning modal
+      setSavedClassification(initialClassification);
+
       setAdvancedInfo({
         ...defaultAdvancedInfo,
         financial_year: initialFY,
-        classification: fyClass?.classification || "",
+        classification: initialClassification,
         audit_firm_id: fyClass?.audit_firm_id || "",
         responsible_person_id: client.responsible_person_id || "",
         contact_person: client.contact_person || "",
@@ -501,8 +518,35 @@ const NewClientWizard = () => {
       const fyClass = (fyClassRes.data as any) ?? null;
       const fyAudit = (fyAuditRes.data as any) ?? null;
 
+      // 2026-06-25 (V J Desai — AMBER GUM bug: FY 2026-27 asked to
+      // classify again despite 2025-26 being Audit): if no direct row
+      // exists for the selected FY, carry-forward the classification
+      // that was last in effect. getClassificationForFY walks the
+      // history table + earlier per-FY snapshots + clients.classification
+      // in the correct precedence, so 2026-27 inherits 2025-26's "Audit"
+      // instead of resetting to blank. Any user change from here still
+      // fires the change-warning modal because savedClassification also
+      // reflects the inherited value (so a REAL change is detected).
+      let effectiveClassification = fyClass?.classification || "";
+      if (!effectiveClassification) {
+        try {
+          effectiveClassification = await getClassificationForFY(clientId, fy);
+          // getClassificationForFY defaults to "Non-Audit" when nothing is
+          // in effect — treat that as "no inherited value" for freshly-
+          // created clients that have never been classified.
+          if (effectiveClassification === "Non-Audit" && !fyClass) {
+            // still surface the inherited "Non-Audit" — carry-forward
+            // means the user shouldn't have to re-pick a value that was
+            // already valid in the previous FY.
+          }
+        } catch {
+          effectiveClassification = "";
+        }
+      }
+      if (cancelled) return;
+
       // Snapshot used by the classification-change-warning modal.
-      setSavedClassification(fyClass?.classification || "");
+      setSavedClassification(effectiveClassification);
 
       // Patch only the FY-bound fields — leave Legal Reg / DSC / Work Group alone
       // because those live on the clients row (FY-agnostic) and the user may
@@ -510,8 +554,8 @@ const NewClientWizard = () => {
       setAdvancedInfo(prev => ({
         ...prev,
         financial_year: fy,
-        classification: fyClass?.classification || "",
-        audit_firm_id:  fyClass?.audit_firm_id  || "",
+        classification: effectiveClassification,
+        audit_firm_id:  fyClass?.audit_firm_id  || prev.audit_firm_id || "",
       }));
 
       setAuditSetup({
