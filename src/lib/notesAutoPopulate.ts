@@ -1569,9 +1569,28 @@ export async function autoPopulateNotes(
     const wip_close_py = closingPy(invCodeMap.wip);
     const sit_close_py = closingPy(invCodeMap.sit);
 
-    // Preserve every existing key (cy, py, breakup, manual PPY openings) and
-    // OVERLAY only the six auto-derived sub-cells + the three CY-opening
-    // shortcuts. .cy and .py stay wherever the main loop / PL_EXP_CII put them.
+    // 2026-06-25 (V J Desai — PY opening was blank): opening for the PY
+    // column comes from the PY TB's opening_balance (i.e. start-of-PY =
+    // end-of-PPY). When PY TB is missing we can't reach PPY, so leave 0.
+    const openingPy = (codes: string[]): number => {
+      if (!pyTB || pyTB.length === 0) return 0;
+      const codeSet = new Set(codes);
+      let total = 0;
+      for (const acct of pyTB) {
+        const code = mapping[acct.account_name]?.code;
+        if (code && codeSet.has(code)) total += acct.opening_balance ?? 0;
+      }
+      return Math.round(total * 100) / 100;
+    };
+    const fg_open_py_auto  = openingPy(invCodeMap.fg);
+    const wip_open_py_auto = openingPy(invCodeMap.wip);
+    const sit_open_py_auto = openingPy(invCodeMap.sit);
+
+    // Preserve every existing key (bucket_map, breakup, .cy override) and
+    // OVERLAY the twelve auto-derived sub-cells. .cy / .py are left alone
+    // so the main loop's PL_EXP_CII total remains the source of truth for
+    // the FS face; the render layer computes a live sub-cell sum for the
+    // "Changes in inventories (per P&L)" row itself.
     const priorCI = (out.pl.changes_inventory as any) ?? {};
     (out.pl as any).changes_inventory = {
       ...priorCI,
@@ -1584,9 +1603,9 @@ export async function autoPopulateNotes(
       fg_open_cy:   Math.round(fg_close_py  * 100) / 100,
       wip_open_cy:  Math.round(wip_close_py * 100) / 100,
       sit_open_cy:  Math.round(sit_close_py * 100) / 100,
-      fg_open_py:   priorCI.fg_open_py  ?? 0,
-      wip_open_py:  priorCI.wip_open_py ?? 0,
-      sit_open_py:  priorCI.sit_open_py ?? 0,
+      fg_open_py:   Math.round(fg_open_py_auto  * 100) / 100,
+      wip_open_py:  Math.round(wip_open_py_auto * 100) / 100,
+      sit_open_py:  Math.round(sit_open_py_auto * 100) / 100,
     };
   }
 
