@@ -540,6 +540,55 @@ export default function AuditPipeline() {
     enabled: !!selectedEngId,
   });
 
+  // ─── FY-scoped "Audit" classification set (New Engagement dropdown filter) ─
+  // 2026-06-25 (V J Desai request): once the auditor picks an FY in the New
+  // Engagement dialog, only clients whose FY-specific classification is
+  // "Audit" should appear in the client dropdown. Prevents accidentally
+  // creating an engagement for a Non-Audit / Partner-in-Audited-Firm /
+  // Unclassified client, and forces the Advanced Info step to be
+  // completed before the pipeline can begin. When FY is empty, we return
+  // an empty set → the dropdown shows nothing until the FY is picked.
+  const { data: fyAuditClientIds = new Set<string>() } = useQuery({
+    queryKey: ["fy-audit-classified-clients", user?.firm_id, form1A.financial_year],
+    queryFn: async () => {
+      const fy = form1A.financial_year;
+      if (!fy) return new Set<string>();
+      const firmId = user?.firm_id ?? "";
+      // Paginate — one FY's classifications on a large firm can still
+      // exceed PostgREST's 1000-row cap.
+      const PAGE = 1000;
+      const out: string[] = [];
+      for (let from = 0; ; from += PAGE) {
+        let q = (supabase as any)
+          .from("client_fy_classifications")
+          .select("client_id")
+          .eq("financial_year", fy)
+          .eq("classification", "Audit")
+          .range(from, from + PAGE - 1);
+        if (firmId) q = q.eq("firm_id", firmId);
+        const { data, error } = await q;
+        if (error || !data || data.length === 0) break;
+        out.push(...(data as any[]).map(r => r.client_id).filter(Boolean));
+        if (data.length < PAGE) break;
+      }
+      return new Set(out);
+    },
+    enabled: !!user?.id,
+  });
+
+  // Clear a stale client selection when the FY changes to one where the
+  // previously-chosen client isn't Audit-classified — avoids submitting
+  // an invalid combination and getting a "not classified as Audit" error.
+  useEffect(() => {
+    if (!form1A.client_id) return;
+    if (!form1A.financial_year) return;
+    if (fyAuditClientIds.size === 0) return;
+    if (!fyAuditClientIds.has(form1A.client_id)) {
+      setForm1A(f => ({ ...f, client_id: "" }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form1A.financial_year, fyAuditClientIds]);
+
   // ─── Prior-year engagement existence check (Block PY guidance) ─────────
   // Runs whenever the selected client + FY changes so the guidance card
   // can show a live "✓ Found / ✗ Not found" status without user action.
@@ -1871,8 +1920,19 @@ export default function AuditPipeline() {
                     />
                     <CommandList>
                       <CommandEmpty>No client found.</CommandEmpty>
+                      {!form1A.financial_year && (
+                        <div className="px-3 py-4 text-xs text-muted-foreground text-center">
+                          Pick a Financial Year first — the client list is scoped to Audit-classified clients for the chosen FY.
+                        </div>
+                      )}
                       <CommandGroup>
                         {(eligibleClients || [])
+                          // 2026-06-25 — restrict to clients whose FY-specific
+                          // classification is "Audit" (V J Desai request).
+                          // Without an FY, show nothing (banner above nudges).
+                          .filter(c =>
+                            !!form1A.financial_year && fyAuditClientIds.has(c.id)
+                          )
                           .filter(c =>
                             !clientSearch.trim() ||
                             c.name.toLowerCase().includes(clientSearch.toLowerCase()) ||
