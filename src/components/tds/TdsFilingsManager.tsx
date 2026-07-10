@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { getDefaultTdsQuarter } from "@/lib/tdsQuarter";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -157,8 +158,9 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   // Map of filing_id → TdsAckFile (populated after each fetch)
   const [ackFiles, setAckFiles] = useState<Map<string, TdsAckFile>>(new Map());
   const [loading, setLoading] = useState(true);
-  const [fyFilter, setFyFilter] = useState(DEFAULT_FY);
-  const [quarterFilter, setQuarterFilter] = useState("all");
+  const defaultTdsQuarter = useMemo(() => getDefaultTdsQuarter(), []);
+  const [fyFilter, setFyFilter] = useState(defaultTdsQuarter.fy);
+  const [quarterFilter, setQuarterFilter] = useState(defaultTdsQuarter.quarter);
   const [clientFilter, setClientFilter] = useState("all");
   const [formFilter, setFormFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
