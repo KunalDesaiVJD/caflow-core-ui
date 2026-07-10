@@ -49,7 +49,15 @@ import { format, differenceInDays, isBefore, addDays, parse } from "date-fns";
 const ITR_FORMS = ["ITR-1", "ITR-2", "ITR-3", "ITR-4", "ITR-5", "ITR-6", "ITR-7"];
 const FILING_STATUSES = ["Data Pending", "Data Received", "In Progress", "Ready for Review", "Pending Approval from Client", "Filed", "Verified", "Sent to CPC"];
 const ASSESSMENT_YEARS = ["2026-27", "2025-26", "2024-25", "2023-24", "2022-23"];
-const DEFAULT_AY = "2026-27";
+
+// 2026-06-25 — Switched the UI selector from AY to FY (V J Desai request).
+// The DB still keys itr_profiles by assessment_year, so we derive AY from
+// the selected FY at query/insert time. Classification lookups now use the
+// FY directly instead of accidentally passing the AY into a FY column —
+// that was the root cause of "Audited 128" showing for AY 2026-27 (which
+// matched FY 2026-27 classifications instead of FY 2025-26).
+const FINANCIAL_YEARS = ["2025-26", "2024-25", "2023-24", "2022-23", "2021-22"];
+const DEFAULT_FY = "2025-26";
 
 const STATUS_COLORS: Record<string, string> = {
   "Data Pending": "bg-blue-500/15 text-blue-600",
@@ -138,6 +146,14 @@ function ayToFy(ay: string): string {
   return `${fyStart}-${fyEnd}`;
 }
 
+/** Convert Financial Year (e.g. "2025-26") → Assessment Year (e.g. "2026-27") */
+function fyToAy(fy: string): string {
+  const [start] = fy.split("-");
+  const ayStart = String(Number(start) + 1);
+  const ayEnd = String(Number(start) + 2).slice(-2);
+  return `${ayStart}-${ayEnd}`;
+}
+
 /** Returns the current financial year in "YYYY-YY" format (e.g. "2026-27" in April 2026) */
 function getCurrentFY(): string {
   const today = new Date();
@@ -189,7 +205,12 @@ const ItReturns = () => {
   const firmId = user?.firm_id;
 
   const [activeTab, setActiveTab] = useState("filing");
-  const [selectedAY, setSelectedAY] = useState(DEFAULT_AY);
+  // 2026-06-25 — Selector state is now keyed on the FY the auditor is
+  // filing for, not the AY. Derived AY (via fyToAy) is used ONLY when
+  // reading/writing the DB's assessment_year column so historic data
+  // stays intact.
+  const [selectedFY, setSelectedFY] = useState(DEFAULT_FY);
+  const selectedAY = fyToAy(selectedFY);
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
   const [filterForm, setFilterForm] = useState("");
@@ -348,17 +369,24 @@ const ItReturns = () => {
 
   // ─── Fetch profiles with enrichment ───
   const { data: profiles = [], isLoading } = useQuery({
-    queryKey: ["itr_profiles", firmId, selectedAY, itrClientIds, auditClientIds],
+    queryKey: ["itr_profiles", firmId, selectedFY, itrClientIds, auditClientIds],
     queryFn: async () => {
       const auditSet = new Set(auditClientIds);
 
       // ── Step 1: Fetch audit-classified clients from client_fy_classifications ──
-      // The wizard stores financial_year = getCurrentFY() at the time of creation.
-      // Clients set up after the FY rollover (e.g. after 1 Apr 2026) get "2026-27"
-      // even though we're looking at AY "2025-26".  We must include BOTH the
-      // selected AY and the current FY so those recently-added clients are visible.
+      // 2026-06-25 (V J Desai bug — "Audited 128" vs Clients "Audit 47"):
+      // Previously this used `selectedAY` (e.g. "2026-27") as the value in
+      // `.in("financial_year", ...)`. That accidentally matched FY 2026-27
+      // rows (the ongoing FY, 130 audits) instead of FY 2025-26 (the FY
+      // whose ITRs are actually being filed, 48 audits). Now that the
+      // selector is FY-native, we filter directly on selectedFY.
+      //
+      // We still include getCurrentFY() as a fallback because the Client
+      // Wizard stamps classification.financial_year = "current FY at
+      // creation time" — a client set up in Apr 2026 gets FY 2026-27 even
+      // if they're being filed under FY 2025-26.
       const currentFY = getCurrentFY();
-      const fysToCheck = [...new Set([selectedAY, currentFY])];
+      const fysToCheck = [...new Set([selectedFY, currentFY])];
 
       let clsQ = (supabase as any)
         .from("client_fy_classifications")
@@ -367,14 +395,14 @@ const ItReturns = () => {
       if (!isSuperadmin && firmId) clsQ = clsQ.eq("firm_id", firmId);
       const { data: fyClassData } = await clsQ;
 
-      // Build classMap: for each client keep the entry whose FY matches selectedAY
-      // if available, otherwise fall back to the currentFY entry.
+      // Build classMap: for each client keep the entry whose FY matches
+      // selectedFY if available, otherwise fall back to the currentFY entry.
       const classMapRaw = new Map<string, { cls: string; fy: string }>();
       for (const row of (fyClassData || [])) {
         if (!row.client_id) continue;
         const existing = classMapRaw.get(row.client_id);
-        // Prefer selectedAY row over currentFY row
-        if (!existing || (row.financial_year === selectedAY && existing.fy !== selectedAY)) {
+        // Prefer selectedFY row over currentFY row
+        if (!existing || (row.financial_year === selectedFY && existing.fy !== selectedFY)) {
           classMapRaw.set(row.client_id, { cls: row.classification, fy: row.financial_year });
         }
       }
@@ -445,8 +473,8 @@ const ItReturns = () => {
       // Use the shared util which consults client_classification_history first
       // (so past FYs aren't retroactively reclassified), then falls back to
       // client_fy_classifications, then to the live client.classification.
-      // The FY of interest is the one that corresponds to the selected AY.
-      const targetFY = ayToFy(selectedAY);
+      // Now that the selector is FY-native we can pass it in directly.
+      const targetFY = selectedFY;
       const fyAwareClsMap = await getClassificationsForFY(allClientIds, targetFY);
 
       // Classification logic (in priority order):
@@ -512,10 +540,10 @@ const ItReturns = () => {
         if (existingClientIds.has(client.id)) continue;
         const workGroupDisplay = (client as any).work_group_type || "";
         enriched.push({
-          id: `virtual_${client.id}_${selectedAY}`,
+          id: `virtual_${client.id}_${selectedFY}`,
           client_id: client.id,
           firm_id: firmId,
-          financial_year: ayToFy(selectedAY),
+          financial_year: selectedFY,
           itr_form: null,
           filing_status: "Data Pending",
           itr_work_group_id: null,
@@ -843,12 +871,16 @@ const ItReturns = () => {
               Not Filed: {filedCounts.notFiled}
             </Badge>
           </div>
-          <Select value={selectedAY} onValueChange={setSelectedAY}>
-            <SelectTrigger className="w-[140px]">
+          <Select value={selectedFY} onValueChange={setSelectedFY}>
+            <SelectTrigger className="w-[160px]" title="Financial Year whose ITRs are being filed">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {ASSESSMENT_YEARS.map(ay => <SelectItem key={ay} value={ay}>AY {ay}</SelectItem>)}
+              {FINANCIAL_YEARS.map(fy => (
+                <SelectItem key={fy} value={fy}>
+                  FY {fy} (AY {fyToAy(fy)})
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>
