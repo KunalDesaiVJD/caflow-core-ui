@@ -119,11 +119,6 @@ function getFYOptions(): string[] {
 
 const QUARTERS = ["Q1", "Q2", "Q3", "Q4"];
 
-function quartersFromQ(startQ: string): string[] {
-  const idx = QUARTERS.indexOf(startQ);
-  return idx >= 0 ? QUARTERS.slice(idx) : QUARTERS;
-}
-
 const ClientDetail = () => {
   const { clientId } = useParams<{ clientId: string }>();
   const navigate = useNavigate();
@@ -639,29 +634,18 @@ const ClientDetail = () => {
         } as any);
       }
 
-      // Auto-create tds_filings records
-      const qList = quartersFromQ(tdsActivateQ);
-      const filingRecords: any[] = [];
-      for (const form of tdsActivateForms) {
-        for (const q of qList) {
-          filingRecords.push({
-            client_id: clientId,
-            firm_id: client.firm_id,
-            financial_year: tdsActivateFY,
-            quarter: q,
-            tds_forms: [form],
-            work_status: 'Not Started',
-            tan: (client as any).tan_number || null,
-          });
-        }
-      }
-
-      if (filingRecords.length > 0) {
-        await supabase.from("tds_filings").insert(filingRecords as any);
-      }
+      // tds_filings rows are created automatically by the DB trigger on
+      // client_services (migration 20260710180000) the moment we write the
+      // config above — across the full configured range, for every selected
+      // form. We no longer insert them here (that would collide with the
+      // trigger's rows and roll back). Report the actual synced count.
+      const { count: filingCount } = await supabase
+        .from("tds_filings")
+        .select("id", { count: "exact", head: true })
+        .eq("client_id", clientId!);
 
       toast({
-        title: `TDS activated. ${filingRecords.length} filing record(s) created.`,
+        title: `TDS activated. ${filingCount ?? 0} filing record(s) in sync.`,
       });
 
       if (!(client as any).tan_number) {
