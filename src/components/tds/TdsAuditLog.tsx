@@ -81,8 +81,12 @@ export function TdsAuditLog({ clients, users, isSuperadmin, resolveFirmId }: Pro
   useEffect(() => { fetchEntries(); }, [fetchEntries]);
 
   const filteredEntries = entries.filter(e => {
+    const filing = e.filing_id ? filingMap[e.filing_id] : null;
+    // TDS Compliance is the single source of truth for the module — an
+    // entry whose filing's client no longer has TDS Compliance configured
+    // (or was never a real TDS client) doesn't belong in this log.
+    if (filing && !clients.some(c => c.id === filing.client_id)) return false;
     if (clientFilter !== "all") {
-      const filing = e.filing_id ? filingMap[e.filing_id] : null;
       if (!filing || filing.client_id !== clientFilter) return false;
     }
     return true;
