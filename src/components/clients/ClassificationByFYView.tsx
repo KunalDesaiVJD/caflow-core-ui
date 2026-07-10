@@ -179,10 +179,18 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
         // Fetch clients that have NO classification row for this FY. We do
         // this by fetching classified client_ids then excluding them —
         // avoids a NOT EXISTS subquery through PostgREST.
+        // 2026-06-25 (V J Desai — sub-filter total 876 ≠ tab count 962):
+        // PostgREST caps every response at 1000 rows by default. With 1091
+        // clients matching the (Final + api_import drafts) filter, ~91 rows
+        // were silently truncated — after subtracting classified IDs the
+        // Unclassified list came out ~86 short. Fix: explicit .range()
+        // pagination on BOTH queries so we always get the full set, even
+        // as the firm grows past 1k clients.
         let classedQ = (supabase as any)
           .from("client_fy_classifications")
           .select("client_id")
-          .eq("financial_year", selectedFY);
+          .eq("financial_year", selectedFY)
+          .range(0, 49999);
         if (!showAllFirms && firmId) classedQ = classedQ.eq("firm_id", firmId);
         const { data: classedRows } = await classedQ;
         const classedIds = new Set(((classedRows ?? []) as any[]).map(r => r.client_id));
@@ -197,7 +205,8 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
           .select("id, name, entity_type, pan, is_draft")
           .is("deleted_at", null)
           .or("is_draft.eq.false,and(is_draft.eq.true,source.eq.api_import)")
-          .order("name", { ascending: true });
+          .order("name", { ascending: true })
+          .range(0, 49999);
         if (!showAllFirms && firmId) unclQ = unclQ.eq("firm_id", firmId);
         const { data: allRows } = await unclQ;
         const mapped: ClassifiedClient[] = ((allRows ?? []) as any[])
@@ -219,7 +228,8 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
           .eq("client_fy_classifications.classification", activeTab)
           .eq("is_draft", false)
           .is("deleted_at", null)
-          .order("name", { ascending: true });
+          .order("name", { ascending: true })
+          .range(0, 49999);
         if (!showAllFirms && firmId) {
           dataQ = dataQ.eq("firm_id", firmId);
           dataQ = dataQ.eq("client_fy_classifications.firm_id", firmId);
@@ -257,7 +267,8 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit, search }
           .is("deleted_at", null)
           .or("is_draft.eq.false,and(is_draft.eq.true,source.eq.api_import)")
           .or(`name.ilike.%${q}%,pan.ilike.%${q}%`)
-          .order("name", { ascending: true });
+          .order("name", { ascending: true })
+          .range(0, 49999);
         if (!showAllFirms && firmId) sq = sq.eq("firm_id", firmId);
         const { data: sRows } = await sq;
         const mappedSearch: ClassifiedClient[] = ((sRows ?? []) as any[]).map(r => {
