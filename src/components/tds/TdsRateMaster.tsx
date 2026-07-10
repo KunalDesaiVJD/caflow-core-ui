@@ -18,7 +18,9 @@ import {
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter,
 } from "@/components/ui/sheet";
-import { Plus, Upload, Copy, Pencil, Trash2, Search, FileUp, AlertCircle } from "lucide-react";
+import { Plus, Upload, Copy, Pencil, Trash2, Search, FileUp, AlertCircle, Info } from "lucide-react";
+import { SearchableSelect } from "@/components/ui/searchable-select";
+import { resolveSection393, isItAct2025Regime, SECTION_393_DISCLAIMER } from "@/lib/section393";
 
 const TAX_YEAR_OPTIONS = Array.from({ length: 8 }, (_, i) => {
   const s = 2023 + i;
@@ -131,6 +133,8 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
   const [selectedTaxYear, setSelectedTaxYear] = useState("2026-27");
   const [selectedForm, setSelectedForm] = useState<string>("26Q");
   const [search, setSearch] = useState("");
+  // §393 searchable-dropdown selection (Tax Year 2026-27+ only). "" = show all.
+  const [selectedSection, setSelectedSection] = useState("");
   const [formOpen, setFormOpen] = useState(false);
   const [editingRate, setEditingRate] = useState<RateRecord | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -157,11 +161,36 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
 
   useEffect(() => { fetchRates(); }, [fetchRates]);
 
+  // Section 393 (Income-tax Act, 2025) applies from Tax Year 2026-27 onward.
+  // Earlier years keep the plain section cards untouched.
+  const is2025Regime = isItAct2025Regime(selectedTaxYear);
+
+  // The set of sections differs per form/year — clear any dropdown selection
+  // when the user switches so a now-absent section isn't left "selected".
+  useEffect(() => { setSelectedSection(""); }, [selectedForm, selectedTaxYear]);
+
+  // Genius-style searchable Section dropdown options — one per rate row,
+  // enriched with the §393 payment code / new-section / table Sl.No / old
+  // section / description so it's searchable by any of those tokens.
+  const sectionSelectOptions = useMemo(() => {
+    const opts = rates.map(r => {
+      const info = resolveSection393(r.section_code);
+      const parts: string[] = [];
+      if (info?.paymentCode) parts.push(info.paymentCode);
+      if (info) parts.push(`§${info.newSection}`);
+      if (info?.tableRef) parts.push(`[${info.tableRef}]`);
+      const prefix = parts.length ? `${parts.join(" · ")} · ` : "";
+      return { value: r.section_code, label: `${prefix}${r.section_code} — ${r.nature_of_payment || ""}` };
+    });
+    return [{ value: "", label: "All sections" }, ...opts];
+  }, [rates]);
+
   const filtered = useMemo(() => rates.filter(r => {
+    if (selectedSection && r.section_code !== selectedSection) return false;
     if (!search) return true;
     const s = search.toLowerCase();
     return r.section_code.toLowerCase().includes(s) || (r.nature_of_payment || "").toLowerCase().includes(s);
-  }), [rates, search]);
+  }), [rates, search, selectedSection]);
 
   const seedRates = async () => {
     const firmId = await resolveFirmId();
@@ -453,6 +482,35 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
         <Button size="sm" variant="outline" className="gap-1" onClick={() => setUploadOpen(true)}><Upload size={14} /> Upload New Year Rules</Button>
       </div>
 
+      {is2025Regime && (
+        <Card className="border-blue-200 dark:border-blue-900 bg-blue-50/40 dark:bg-blue-950/20">
+          <CardContent className="p-3 space-y-2.5">
+            <div className="flex items-start gap-2">
+              <Info size={14} className="text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
+              <p className="text-[11px] text-muted-foreground leading-relaxed">{SECTION_393_DISCLAIMER}</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="w-full sm:max-w-2xl">
+                <SearchableSelect
+                  options={sectionSelectOptions}
+                  value={selectedSection}
+                  onValueChange={setSelectedSection}
+                  placeholder="Select a section — search by payment code, old section (194C…), 393, or description"
+                  searchPlaceholder="Type a code, 194J, 393, rent, contractor…"
+                  emptyText="No matching section."
+                  className="w-full"
+                />
+              </div>
+              {selectedSection && (
+                <Button size="sm" variant="ghost" className="text-xs h-8" onClick={() => setSelectedSection("")}>
+                  Clear
+                </Button>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {loading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {Array.from({ length: 6 }).map((_, i) => (
@@ -473,7 +531,9 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
         </CardContent></Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {filtered.map(r => (
+          {filtered.map(r => {
+            const info = is2025Regime ? resolveSection393(r.section_code) : null;
+            return (
             <Card key={r.id} className="border border-border hover:shadow-md transition-shadow">
               <CardContent className="p-4">
                 <div className="flex items-start justify-between mb-2">
@@ -481,6 +541,14 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
                     <Badge variant="outline" className="font-mono text-xs font-bold px-2 py-0.5 border-primary/40 text-primary">
                       {r.section_code}
                     </Badge>
+                    {info && (
+                      <>
+                        <span className="text-muted-foreground text-xs">→</span>
+                        <Badge className="font-mono text-[10px] px-1.5 py-0 bg-blue-100 text-blue-700 border border-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-900">
+                          §{info.newSection}
+                        </Badge>
+                      </>
+                    )}
                     {r.effective_from && r.effective_from >= "2025-04-01" && (
                       <Badge className="text-[10px] px-1.5 py-0 bg-emerald-100 text-emerald-700 border border-emerald-200">
                         IT Act 2025
@@ -493,7 +561,26 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
                   </div>
                 </div>
 
-                <p className="text-sm font-medium text-foreground mb-3 leading-snug">{r.nature_of_payment || "—"}</p>
+                <p className="text-sm font-medium text-foreground mb-2 leading-snug">{r.nature_of_payment || "—"}</p>
+
+                {info && (
+                  <div className="flex items-center gap-x-2 gap-y-1 flex-wrap mb-3 text-[10px] text-muted-foreground">
+                    <span className="font-medium">Sec {info.newSection} · {info.categoryLabel}</span>
+                    {info.paymentCode && (
+                      <Badge
+                        variant="outline"
+                        className="font-mono text-[10px] px-1.5 py-0 border-amber-300 text-amber-700 dark:border-amber-800 dark:text-amber-300"
+                        title="Indicative filing-utility payment code — verify against your TDS return utility before filing."
+                      >
+                        Code {info.paymentCode}
+                      </Badge>
+                    )}
+                    {info.tableRef && <span className="font-mono">{info.tableRef}</span>}
+                    {info.codeStatus === "indicative" && (
+                      <span className="uppercase tracking-wide text-[9px] text-amber-600 dark:text-amber-400">indicative</span>
+                    )}
+                  </div>
+                )}
 
                 <div className="grid grid-cols-3 gap-2 mb-3">
                   <div className="bg-muted/50 rounded-md px-2 py-1.5 text-center">
@@ -523,7 +610,8 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
                 )}
               </CardContent>
             </Card>
-          ))}
+            );
+          })}
         </div>
       )}
 
