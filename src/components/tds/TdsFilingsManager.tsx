@@ -25,7 +25,7 @@ import {
 import { format, differenceInDays } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
-  Download, ArrowRight, RefreshCw, Copy, Clock, AlertTriangle, ExternalLink, Info, Settings, Trash2,
+  Download, ArrowRight, RefreshCw, Copy, Clock, AlertTriangle, ExternalLink, Info, Settings, Trash2, X,
 } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
@@ -62,6 +62,32 @@ interface TdsAckFile {
   created_at: string | null;
 }
 
+// Aggregate status groups driven by Dashboard KPI card clicks — these don't
+// map to a single FILING_STATUSES value (e.g. "Returns Due" means "anything
+// not yet terminal", "Overdue" adds a due-date check), so they're applied as
+// an extra filter dimension alongside the exact-match statusFilter dropdown.
+export type KpiStatusGroup = "all" | "returns-due" | "overdue" | "filed" | "processed" | "not-applicable" | "nil";
+
+const KPI_STATUS_GROUP_LABELS: Record<Exclude<KpiStatusGroup, "all">, string> = {
+  "returns-due": "Returns Due",
+  overdue: "Overdue",
+  filed: "Filed / Submitted",
+  processed: "Processed / Accepted",
+  "not-applicable": "Not Applicable",
+  nil: "NIL Returns",
+};
+
+export interface FilingsPreset {
+  fy: string;
+  quarter: string;
+  client: string;
+  form: string;
+  statusGroup: KpiStatusGroup;
+  // Bumped on every click so re-selecting the same card re-applies the
+  // preset even if the user changed filters manually in between.
+  nonce: number;
+}
+
 interface Props {
   clients: ClientOption[];
   users: UserOption[];
@@ -71,6 +97,9 @@ interface Props {
   // When embedded elsewhere (e.g. the Dashboard's Client Filing Summary card),
   // the host already provides its own title — suppress this component's own.
   hideHeader?: boolean;
+  // External filter preset (e.g. from a Dashboard KPI card click) that
+  // overrides the current FY/Quarter/Client/Form/Status selection.
+  preset?: FilingsPreset | null;
 }
 
 const CURRENT_FY_START = new Date().getMonth() >= 3 ? new Date().getFullYear() : new Date().getFullYear() - 1;
@@ -119,7 +148,7 @@ const getDueDateColor = (fy: string, quarter: string, status: string) => {
   return "text-emerald-600";
 };
 
-export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId, onNavigateDataEntry, hideHeader }: Props) {
+export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId, onNavigateDataEntry, hideHeader, preset }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
   const [filings, setFilings] = useState<TdsFiling[]>([]);
@@ -133,6 +162,20 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   const [clientFilter, setClientFilter] = useState("all");
   const [formFilter, setFormFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [statusGroup, setStatusGroup] = useState<KpiStatusGroup>("all");
+
+  // Apply an external preset (Dashboard KPI card click) — keyed on `nonce` so
+  // re-clicking the same card re-applies it even with no value change.
+  useEffect(() => {
+    if (!preset) return;
+    setFyFilter(preset.fy);
+    setQuarterFilter(preset.quarter);
+    setClientFilter(preset.client);
+    setFormFilter(preset.form);
+    setStatusFilter("all");
+    setStatusGroup(preset.statusGroup);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preset?.nonce]);
 
   // Bulk actions
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -321,9 +364,23 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   useEffect(() => { fetchFilings(); }, [fetchFilings]);
 
   const filtered = useMemo(() => {
+    const today = new Date();
     return filings.filter(f => {
       if (formFilter !== "all" && !(f.tds_forms || []).includes(formFilter)) return false;
       if (statusFilter !== "all" && f.work_status !== statusFilter) return false;
+
+      // KPI-card-driven aggregate status group — these don't map to a single
+      // FILING_STATUSES value, so they're checked independently of statusFilter.
+      const isTerminal = ["Filed", "Submitted", "Processed", "Accepted", "Not Applicable", "NIL"].includes(f.work_status);
+      if (statusGroup === "returns-due" && isTerminal) return false;
+      if (statusGroup === "overdue") {
+        if (isTerminal) return false;
+        if (!(getDueDate(f.financial_year, f.quarter) < today)) return false;
+      }
+      if (statusGroup === "filed" && !["Filed", "Submitted"].includes(f.work_status)) return false;
+      if (statusGroup === "processed" && !["Processed", "Accepted"].includes(f.work_status)) return false;
+      if (statusGroup === "not-applicable" && f.work_status !== "Not Applicable") return false;
+      if (statusGroup === "nil" && f.work_status !== "NIL") return false;
 
       // Deleted client filtering
       const deletedInfo = deletedClients.get(f.client_id);
@@ -337,7 +394,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       }
       return true;
     });
-  }, [filings, formFilter, statusFilter, deletedClients]);
+  }, [filings, formFilter, statusFilter, statusGroup, deletedClients]);
 
   // Excel-style AutoFit for the TAN and Status columns — width follows the
   // widest value actually on screen (TAN) or the widest possible option
@@ -780,6 +837,19 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+
+      {/* KPI-card-driven filter indicator — the Status dropdown above stays on
+          "All Status" for these, since they're aggregate groups it can't express */}
+      {statusGroup !== "all" && (
+        <div className="flex items-center gap-2">
+          <Badge variant="secondary" className="gap-1.5 text-xs font-normal">
+            Filtered: {KPI_STATUS_GROUP_LABELS[statusGroup]}
+            <button onClick={() => setStatusGroup("all")} className="ml-0.5 hover:text-foreground" aria-label="Clear filter">
+              <X size={12} />
+            </button>
+          </Badge>
+        </div>
+      )}
 
       {/* Bulk Actions */}
       {selectedIds.size > 0 && (

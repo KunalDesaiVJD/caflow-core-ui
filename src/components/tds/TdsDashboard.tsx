@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { TdsFilingsManager } from "@/components/tds/TdsFilingsManager";
+import { TdsFilingsManager, type KpiStatusGroup, type FilingsPreset } from "@/components/tds/TdsFilingsManager";
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -94,6 +94,10 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
   const [clientFilterSearch, setClientFilterSearch] = useState("");
 
   const [deletedClientIds, setDeletedClientIds] = useState<Set<string>>(new Set());
+
+  // KPI card click → filters the embedded Client Filing Summary table below
+  const [kpiPreset, setKpiPreset] = useState<FilingsPreset | null>(null);
+  const filingSummaryRef = useRef<HTMLDivElement>(null);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -201,15 +205,20 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
     );
   }
 
-  const kpiCards = [
-    { label: "Active TDS Clients", value: stats.activeClients, icon: Users, color: "text-blue-600", bg: "bg-blue-50 dark:bg-blue-950/30" },
-    { label: "Returns Due", value: stats.returnsDue, icon: Clock, color: "text-amber-600", bg: "bg-amber-50 dark:bg-amber-950/30" },
-    { label: "Overdue", value: stats.overdue, icon: AlertTriangle, color: "text-destructive", bg: "bg-red-50 dark:bg-red-950/30" },
-    { label: "Filed / Submitted", value: stats.filed, icon: CheckCircle2, color: "text-emerald-600", bg: "bg-emerald-50 dark:bg-emerald-950/30" },
-    { label: "Processed / Accepted", value: stats.processed, icon: FileCheck, color: "text-emerald-700", bg: "bg-emerald-100 dark:bg-emerald-900/40" },
-    { label: "Not Applicable", value: stats.na, icon: Ban, color: "text-muted-foreground", bg: "bg-muted" },
-    { label: "NIL Returns", value: stats.nil, icon: MinusCircle, color: "text-teal-600", bg: "bg-teal-50 dark:bg-teal-950/30" },
+  const kpiCards: { label: string; value: number; icon: typeof Users; color: string; bg: string; statusGroup: KpiStatusGroup }[] = [
+    { label: "Active TDS Clients", value: stats.activeClients, icon: Users, color: "text-blue-600", bg: "bg-blue-50 dark:bg-blue-950/30", statusGroup: "all" },
+    { label: "Returns Due", value: stats.returnsDue, icon: Clock, color: "text-amber-600", bg: "bg-amber-50 dark:bg-amber-950/30", statusGroup: "returns-due" },
+    { label: "Overdue", value: stats.overdue, icon: AlertTriangle, color: "text-destructive", bg: "bg-red-50 dark:bg-red-950/30", statusGroup: "overdue" },
+    { label: "Filed / Submitted", value: stats.filed, icon: CheckCircle2, color: "text-emerald-600", bg: "bg-emerald-50 dark:bg-emerald-950/30", statusGroup: "filed" },
+    { label: "Processed / Accepted", value: stats.processed, icon: FileCheck, color: "text-emerald-700", bg: "bg-emerald-100 dark:bg-emerald-900/40", statusGroup: "processed" },
+    { label: "Not Applicable", value: stats.na, icon: Ban, color: "text-muted-foreground", bg: "bg-muted", statusGroup: "not-applicable" },
+    { label: "NIL Returns", value: stats.nil, icon: MinusCircle, color: "text-teal-600", bg: "bg-teal-50 dark:bg-teal-950/30", statusGroup: "nil" },
   ];
+
+  const applyKpiFilter = (statusGroup: KpiStatusGroup) => {
+    setKpiPreset({ fy: fyFilter, quarter: quarterFilter, client: clientFilter, form: formTab, statusGroup, nonce: Date.now() });
+    filingSummaryRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   return (
     <div className="space-y-5">
@@ -274,10 +283,17 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
         </div>
       </div>
 
-      {/* ═══ ROW 2: 7 KPI Cards ═══ */}
+      {/* ═══ ROW 2: 7 KPI Cards — click filters the Client Filing Summary table below ═══ */}
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
         {kpiCards.map(kpi => (
-          <Card key={kpi.label} className={cn("border", kpi.bg)}>
+          <Card
+            key={kpi.label}
+            className={cn("border cursor-pointer transition-shadow hover:shadow-md", kpi.bg)}
+            onClick={() => applyKpiFilter(kpi.statusGroup)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); applyKpiFilter(kpi.statusGroup); } }}
+          >
             <CardContent className="p-3">
               <div className="flex items-center gap-1.5 mb-1">
                 <kpi.icon size={14} className={kpi.color} />
@@ -290,7 +306,7 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
       </div>
 
       {/* ═══ ROW 4: Client Filing Summary — the full Filings Management interface, embedded ═══ */}
-      <Card>
+      <Card ref={filingSummaryRef}>
         <CardHeader className="py-2.5 px-4">
           <CardTitle className="text-sm font-semibold flex items-center gap-2">
             <TrendingUp size={14} className="text-blue-600" />
@@ -305,6 +321,7 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
             resolveFirmId={resolveFirmId}
             onNavigateDataEntry={() => onNavigate?.("data-entry")}
             hideHeader
+            preset={kpiPreset}
           />
         </CardContent>
       </Card>
