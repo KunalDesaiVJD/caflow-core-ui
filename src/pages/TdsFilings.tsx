@@ -3,12 +3,11 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 import {
-  FileText, LayoutDashboard, PenLine,
+  LayoutDashboard, PenLine,
   ShieldCheck, BarChart3, Settings, ClipboardList, Combine,
 } from "lucide-react";
 import { TdsRateMaster } from "@/components/tds/TdsRateMaster";
 import { TdsDashboard } from "@/components/tds/TdsDashboard";
-import { TdsFilingsManager } from "@/components/tds/TdsFilingsManager";
 import { TdsDataEntry } from "@/components/tds/TdsDataEntry";
 import { TdsValidateFinalise } from "@/components/tds/TdsValidateFinalise";
 import { TdsReports } from "@/components/tds/TdsReports";
@@ -19,7 +18,6 @@ interface UserOption { id: string; name: string | null; }
 
 const NAV_ITEMS = [
   { key: "dashboard",  label: "Dashboard",     icon: LayoutDashboard },
-  { key: "filings",    label: "Filings",        icon: FileText },
   { key: "workspace",  label: "TDS Workspace",  icon: Combine },
   { key: "reports",    label: "Reports",        icon: BarChart3 },
   { key: "rate-master",label: "Rate Master",    icon: Settings },
@@ -36,7 +34,6 @@ const TdsFilings = () => {
   const [workspaceTab, setWorkspaceTab] = useState<"data-entry" | "validate">("data-entry");
   // Increment to force TdsDashboard to re-fetch when returning from workspace
   const [dashRefreshKey, setDashRefreshKey] = useState(0);
-  /* DEPRECATED - migration moved to Filings section Options dropdown */
 
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [users, setUsers] = useState<UserOption[]>([]);
@@ -181,14 +178,6 @@ const TdsFilings = () => {
               }}
             />
           )}
-          {activeSection === "filings" && (
-            <TdsFilingsManager
-              clients={clients} users={users} isSuperadmin={isSuperadmin}
-              resolveFirmId={resolveFirmId}
-              onNavigateDataEntry={() => { setWorkspaceTab("data-entry"); setActiveSection("workspace"); }}
-            />
-          )}
-
           {/* ── CP-02: TDS Workspace — Data Entry + Validate & Finalise in tabs ── */}
           {activeSection === "workspace" && (
             <div>
