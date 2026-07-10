@@ -1287,6 +1287,46 @@ function FilingTab({
           <TabsContent key={tab} value={tab}>
             {isLoading ? (
               <div className="space-y-2">{[1, 2, 3].map(i => <Skeleton key={i} className="h-12 w-full" />)}</div>
+            ) : tab === "non_itr" ? (
+              // 2026-06-25 — Non-ITR sub-tab: no filing workflow, just a
+              // list of clients whose ITR service is OFF so the auditor can
+              // spot who still needs the toggle flipped on. Constitution
+              // and Work Group help with triage.
+              <div className="border rounded-lg overflow-auto">
+                <Table>
+                  <TableHeader className="sticky top-0 z-10 bg-background">
+                    <TableRow>
+                      <TableHead className="min-w-[220px]">Client Name</TableHead>
+                      <TableHead className="min-w-[100px]">PAN</TableHead>
+                      <TableHead className="min-w-[120px]">Constitution</TableHead>
+                      <TableHead className="min-w-[160px]">Work Group</TableHead>
+                      <TableHead className="min-w-[160px]">Responsible</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {subTabProfiles.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-center text-sm text-muted-foreground py-8">
+                          Every client has the ITR service enabled — nothing to show here.
+                        </TableCell>
+                      </TableRow>
+                    ) : pagedProfiles.map((p: ItrProfile) => (
+                      <TableRow
+                        key={p.id}
+                        className="cursor-pointer hover:bg-muted/50"
+                        onClick={() => navigate(`/clients/edit/${p.client_id}?tab=service-billing`)}
+                        title="Open Service & Billing to enable ITR for this client"
+                      >
+                        <TableCell className="font-medium text-primary">{p.client_name || "Unnamed"}</TableCell>
+                        <TableCell className="text-xs font-mono text-muted-foreground">{p.client_pan || "—"}</TableCell>
+                        <TableCell>{p.entity_type || "—"}</TableCell>
+                        <TableCell>{p.group_name || p.work_group_name || "—"}</TableCell>
+                        <TableCell>{p.client_responsible_name || "—"}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             ) : (
               <div className="border rounded-lg overflow-auto">
                 <Table>
