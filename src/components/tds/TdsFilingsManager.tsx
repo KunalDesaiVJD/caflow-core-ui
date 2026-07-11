@@ -241,7 +241,8 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     setLoading(true);
     const firmId = await resolveFirmId();
 
-    let q = supabase.from("tds_filings").select("*").order("created_at", { ascending: false }).limit(500);
+    // High limit so the filing list is never silently truncated (default cap 1000).
+    let q = supabase.from("tds_filings").select("*").order("created_at", { ascending: false }).limit(20000);
     if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
     if (fyFilter !== "all") q = q.eq("financial_year", fyFilter);
     if (quarterFilter !== "all") q = q.eq("quarter", quarterFilter);

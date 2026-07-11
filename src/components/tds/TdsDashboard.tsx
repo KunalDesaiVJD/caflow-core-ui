@@ -121,8 +121,9 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
     setLoading(true);
     const firmId = await resolveFirmId();
 
-    // Filings
-    let q = supabase.from("tds_filings").select("*").order("created_at", { ascending: false }).limit(500);
+    // Filings — high limit so counts/rows are never silently truncated as
+    // filing volume grows (default PostgREST cap is 1000).
+    let q = supabase.from("tds_filings").select("*").order("created_at", { ascending: false }).limit(20000);
     if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
     if (fyFilter !== "all") q = q.eq("financial_year", fyFilter);
     if (clientFilter !== "all") q = q.eq("client_id", clientFilter);

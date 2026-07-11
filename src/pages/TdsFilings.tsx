@@ -70,40 +70,37 @@ const TdsFilings = () => {
     // NOT TDS-compliance-configured and must not appear or be counted. Those
     // fallback matches are still detected below purely to log a self-heal
     // hint for admins to fix the underlying service_category configuration.
-    const [svcResp, catResp, clientsResp] = await Promise.all([
-      supabase.from("client_services").select("client_id, service_category_id, is_active, tds_effective_from_fy, tds_effective_from_q, tds_end_fy, tds_end_quarter, tds_forms_applicable").eq("is_active", true),
-      supabase.from("service_categories").select("id, linked_module, name, category_code"),
-      supabase.from("clients").select("id, name, pan, tan_number").eq("is_draft", false).is("deleted_at", null).order("name"),
-    ]);
+    // 1. Resolve TDS-linked service categories (small table).
+    const { data: catData } = await supabase
+      .from("service_categories")
+      .select("id, linked_module")
+      .eq("linked_module", "tds");
+    const tdsCatIds = (catData || []).map((c: any) => c.id);
+    if (tdsCatIds.length === 0) { setClients([]); return; }
 
-    const allCategories = (catResp.data || []) as Array<{ id: string; linked_module: string | null; name: string | null; category_code: string | null }>;
-    const tdsStrictCatIds = new Set(allCategories.filter(c => c.linked_module === "tds").map(c => c.id));
-    const tdsNameCatIds = new Set(
-      allCategories
-        .filter(c => {
-          const n = (c.name || "").toLowerCase();
-          const cc = (c.category_code || "").toLowerCase();
-          return n.includes("tds") || cc === "tds";
-        })
-        .map(c => c.id),
-    );
+    // 2. Fetch ONLY the TDS client_services rows (filtered by category).
+    //    CRITICAL: never fetch all active client_services — a firm can have
+    //    >1000 of them and PostgREST's default 1000-row cap would silently
+    //    drop rows, making clients whose TDS service fell off the end vanish
+    //    from the entire module (this was the "not synchronized" bug). Scoping
+    //    to TDS categories keeps the result to only the TDS-configured clients.
+    const { data: svcData } = await supabase
+      .from("client_services")
+      .select("client_id, service_category_id, tds_effective_from_fy, tds_effective_from_q, tds_end_fy, tds_end_quarter, tds_forms_applicable")
+      .eq("is_active", true)
+      .in("service_category_id", tdsCatIds)
+      .limit(20000);
 
-    const activeSvc = (svcResp.data || []) as Array<{
-      client_id: string; service_category_id: string; is_active: boolean;
+    const activeSvc = (svcData || []) as Array<{
+      client_id: string;
       tds_effective_from_fy: string | null; tds_effective_from_q: string | null;
       tds_end_fy: string | null; tds_end_quarter: string | null;
       tds_forms_applicable: string[] | null;
     }>;
-    const clientsWithStrictTds = new Set(
-      activeSvc.filter(s => tdsStrictCatIds.has(s.service_category_id)).map(s => s.client_id),
-    );
-    const clientsWithNameMatchTds = new Set(
-      activeSvc.filter(s => tdsNameCatIds.has(s.service_category_id)).map(s => s.client_id),
-    );
-    // Compliance period + applicable forms per client, from the strict TDS client_services row.
+
+    // Compliance period + applicable forms per client (single source of truth).
     const rangeByClient = new Map<string, { tds_start_fy?: string; tds_start_quarter?: string; tds_end_fy?: string; tds_end_quarter?: string; tds_forms_applicable?: string[] }>();
     for (const s of activeSvc) {
-      if (!tdsStrictCatIds.has(s.service_category_id)) continue;
       rangeByClient.set(s.client_id, {
         tds_start_fy: s.tds_effective_from_fy || undefined,
         tds_start_quarter: s.tds_effective_from_q || undefined,
@@ -113,32 +110,22 @@ const TdsFilings = () => {
       });
     }
 
-    const allClients = (clientsResp.data || []) as ClientOption[];
-    // Strict-only: a real, active client_services row with linked_module = "tds".
-    const eligible = allClients
-      .filter(c => clientsWithStrictTds.has(c.id))
-      .map(c => ({ ...c, ...rangeByClient.get(c.id) }));
+    const tdsClientIds = [...rangeByClient.keys()];
+    if (tdsClientIds.length === 0) { setClients([]); return; }
 
-    // Self-heal hint: clients that WOULD have matched only via the old name/TAN
-    // fallback — not included above, but logged so admins can find and fix
-    // their service_category.linked_module in Service Masters.
-    const fallbackOnly = allClients.filter(c => {
-      if (clientsWithStrictTds.has(c.id)) return false;
-      if (clientsWithNameMatchTds.has(c.id)) return true;
-      return false;
-    });
-    if (fallbackOnly.length > 0) {
-      console.warn(
-        `[TDS] ${fallbackOnly.length} client(s) have a TDS-like service category ` +
-        `but no linked_module = 'tds' row, so they're excluded from the TDS module. ` +
-        `Fix their service_category.linked_module in Service Masters to 'tds':`,
-        fallbackOnly.map(c => c.name).filter(Boolean),
-      );
-    }
-    console.log(
-      `[TDS] Client list: ${eligible.length} eligible (TDS Compliance configured) | ` +
-      `${fallbackOnly.length} excluded (misconfigured category, needs fixing)`
-    );
+    // 3. Fetch only those TDS clients (by id → no truncation), live only.
+    const { data: clientsData } = await supabase
+      .from("clients")
+      .select("id, name, pan, tan_number")
+      .in("id", tdsClientIds)
+      .eq("is_draft", false)
+      .is("deleted_at", null)
+      .order("name")
+      .limit(20000);
+
+    const eligible = ((clientsData || []) as ClientOption[]).map(c => ({ ...c, ...rangeByClient.get(c.id) }));
+
+    console.log(`[TDS] Client list: ${eligible.length} eligible (TDS Compliance configured, of ${tdsClientIds.length} TDS service rows)`);
 
     setClients(eligible);
   }, [resolveFirmId]);
