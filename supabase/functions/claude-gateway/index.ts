@@ -186,10 +186,15 @@ serve(async (req) => {
 
     // --- STEP 4: Select model ---
     const isLightRequest = LIGHT_TYPES.has(request_type);
-    // AI Scrutiny (isolated): route only the judgment-heavy scrutiny request types to the current
-    // top model; all other request types keep Main's existing model selection unchanged.
+    // AI Scrutiny: the judgment-heavy scrutiny request types MUST use a model the firm's
+    // ANTHROPIC_API_KEY can actually serve. A previous version pinned these to "claude-opus-4-8",
+    // which the production key cannot access — Anthropic then returns HTTP 400 (a non-auth error),
+    // and STEP 5 hard-failed with "AI service error" instead of falling back to Gemini, breaking
+    // the AI Auditor for EVERY client. We use the same proven model as the rest of the app
+    // (claude-sonnet-4-20250514, which every other AI feature uses successfully in prod). The
+    // STEP 5 fallback below makes any future model change degrade gracefully rather than break.
     const isScrutinyHeavy = request_type === "scrutiny_investigator" || request_type === "scrutiny_query_drafter";
-    const anthropicModel = isLightRequest ? "claude-haiku-4-5-20251001" : isScrutinyHeavy ? "claude-opus-4-8" : "claude-sonnet-4-20250514";
+    const anthropicModel = isLightRequest ? "claude-haiku-4-5-20251001" : isScrutinyHeavy ? "claude-sonnet-4-20250514" : "claude-sonnet-4-20250514";
     const lovableModel = isLightRequest ? "google/gemini-2.5-flash-lite" : "google/gemini-3-flash-preview";
     const useStream = wantStream === true;
 
@@ -224,8 +229,14 @@ serve(async (req) => {
         const errText = await anthropicResponse.text();
         console.error("Anthropic error:", anthropicResponse.status, errText);
 
-        const isAuthError = anthropicResponse.status === 401 || anthropicResponse.status === 403;
-        if (!isAuthError || !LOVABLE_API_KEY) {
+        // Degrade gracefully. For ANY Anthropic failure — auth (401/403), model-not-available
+        // (400/404), rate limit (429), or 5xx — fall through to the Lovable/Gemini fallback when
+        // it is configured, instead of hard-failing. Only surface an error to the client when
+        // there is NO fallback provider. (Previously only 401/403 fell back, so a model the firm's
+        // key could not serve hard-failed the whole request with "AI service error" — this is
+        // exactly what broke the AI Auditor and would break any client on any inaccessible model.)
+        if (!LOVABLE_API_KEY) {
+          const isAuthError = anthropicResponse.status === 401 || anthropicResponse.status === 403;
           const message = isAuthError
             ? "AI provider authentication failed. Please update ANTHROPIC_API_KEY."
             : "AI service error";
@@ -235,6 +246,7 @@ serve(async (req) => {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
         }
+        // else: leave aiResponse null so STEP 6 falls back to Lovable/Gemini.
       }
     }
 
