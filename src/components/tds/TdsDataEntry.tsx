@@ -112,6 +112,17 @@ const PAN_4TH_CHAR_MAP: Record<string, string> = {
 const isValidPan = (pan: string): boolean => /^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan.toUpperCase());
 const isIndividualRateType = (type: string | null): boolean => type === "Individual" || type === "HUF";
 
+// Challan utilisation status — ZERO tolerance on over-application. Applied
+// strictly exceeding the allocatable challan amount by ANY amount (even
+// ₹0.01) is over-applied. Compared in paise (Math.round(x*100)) so genuine
+// ₹0.01 excesses are caught while floating-point noise is not. Matches the
+// canonical logic in TdsReports.
+const challanAppliedPaise = (n: number) => Math.round((n || 0) * 100);
+const isChallanOverApplied = (applied: number, allocatable: number): boolean =>
+  challanAppliedPaise(applied) > challanAppliedPaise(allocatable);
+const isChallanFullyUtilised = (applied: number, allocatable: number): boolean =>
+  challanAppliedPaise(applied) === challanAppliedPaise(allocatable);
+
 const REASON_CODES = [
   { code: "A", label: "A — Below threshold (no deduction required)" },
   { code: "B", label: "B — Lower rate certificate u/s 197" },
@@ -1116,10 +1127,10 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
 
   const getBalanceColor = (challan: Challan) => {
     const bd = getChallanBreakdownAll(challan.id);
-    const unconsumed = (challan.total_challan_amount || 0) - bd.applied;
-    if (Math.abs(unconsumed) <= 1) return "bg-emerald-500";
-    if (unconsumed > 0) return "bg-amber-500";
-    return "bg-destructive";
+    const total = challan.total_challan_amount || 0;
+    if (isChallanOverApplied(bd.applied, total)) return "bg-destructive";  // any excess
+    if (isChallanFullyUtilised(bd.applied, total)) return "bg-emerald-500";
+    return "bg-amber-500";
   };
 
   const client = clients.find(c => c.id === selClient);
@@ -1516,7 +1527,6 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                     const bd = getChallanBreakdownAll(c.id);
                     // Issue 4: Late fees excluded from allocatable amount (they are a separate govt levy)
                     const allocatable = (c.total_challan_amount || 0) - (c.late_fees_234e || 0);
-                    const unconsumed = allocatable - bd.applied;
                     const lateFeeBalance = (c.late_fees_234e || 0) - (c.late_fees_used || 0);
                     return (
                       <TooltipProvider key={c.id}>
@@ -1551,8 +1561,8 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                   {c.challan_serial_no && ` • No: ${c.challan_serial_no}`}
                                 </p>
                                 <div className={cn("flex items-center justify-between text-[10px] font-semibold",
-                                  Math.abs(unconsumed) <= 1 ? "text-emerald-600" : unconsumed > 0 ? "text-amber-600" : "text-destructive")}>
-                                  <span>{Math.abs(unconsumed) <= 1 ? "Fully Utilised" : unconsumed > 0 ? "Unconsumed" : "Over-applied"}</span>
+                                  isChallanOverApplied(bd.applied, allocatable) ? "text-destructive" : isChallanFullyUtilised(bd.applied, allocatable) ? "text-emerald-600" : "text-amber-600")}>
+                                  <span>{isChallanOverApplied(bd.applied, allocatable) ? "Over-applied" : isChallanFullyUtilised(bd.applied, allocatable) ? "Fully Utilised" : "Unconsumed"}</span>
                                   <span>₹{bd.applied.toLocaleString("en-IN")}/₹{(c.total_challan_amount || 0).toLocaleString("en-IN")}</span>
                                 </div>
                                 <div className="w-full h-1.5 rounded-full bg-muted overflow-hidden">
@@ -1609,7 +1619,8 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                   {/* Issue 1 FIX: Full Challan Details — always visible (read-only when filed) */}
                   {(() => {
                     const allocatable = (selectedChallan.total_challan_amount || 0) - (selectedChallan.late_fees_234e || 0);
-                    const matchOk = Math.abs(challanDeducteeTds - allocatable) <= 1;
+                    const matchOk = isChallanFullyUtilised(challanDeducteeTds, allocatable);
+                    const overApplied = isChallanOverApplied(challanDeducteeTds, allocatable);
                     return (
                       <Card className="bg-muted/30">
                         <CardContent className="px-3 py-1.5">
@@ -1654,7 +1665,9 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                 ? <CheckCircle2 size={12} className="inline ml-1" />
                                 : <AlertTriangle size={12} className="inline ml-1" />}
                             </span>
-                            {selectedChallanBalance <= 0 && (
+                            {overApplied ? (
+                              <Badge className="text-[9px] bg-red-100 text-red-700">Over-applied</Badge>
+                            ) : matchOk && (
                               <Badge className="text-[9px] bg-emerald-100 text-emerald-700">Fully Utilised</Badge>
                             )}
                             <div className="flex-1" />
