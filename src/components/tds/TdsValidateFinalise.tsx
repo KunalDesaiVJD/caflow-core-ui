@@ -1,15 +1,13 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { getDefaultTdsQuarter, isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -21,10 +19,11 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import {
-  ShieldCheck, AlertTriangle, XCircle, Info, CheckCircle2,
-  Download, ExternalLink, Play,
+  ShieldCheck, AlertTriangle, CheckCircle2, Upload, Play, FileSpreadsheet,
+  ChevronDown, ChevronRight, RotateCcw, Loader2, Users, FileWarning, Info,
 } from "lucide-react";
-import { exportToExcel } from "@/lib/exportUtils";
+import * as XLSX from "xlsx";
+import Papa from "papaparse";
 
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null;
@@ -39,446 +38,251 @@ interface Props {
   onNavigateDataEntry?: (filingId: string) => void;
 }
 
-interface ValidationItem {
-  code: string;
-  severity: "error" | "warning" | "info";
-  description: string;
-  affectedEntity: string;
-  entityId?: string;
-  challanId?: string;
-  reviewed?: boolean;
+interface FieldDiff {
+  field: string;
+  office: unknown;
+  imported: unknown;
+  matched: boolean;
+  difference?: string;
+}
+interface ReconResult {
+  id: string;
+  office_deductee_id: string | null;
+  imported_row_id: string | null;
+  record_label: string | null;
+  match_status: "matched" | "mismatched" | "office_only" | "imported_only";
+  mismatch_fields: string[] | null;
+  field_diffs: FieldDiff[] | null;
+  overridden: boolean;
 }
 
 const FY_OPTIONS = Array.from({ length: 7 }, (_, i) => { const s = 2020 + i; return `${s}-${String(s + 1).slice(2)}`; });
 const QUARTER_OPTIONS = ["Q1", "Q2", "Q3", "Q4"];
 const TDS_FORMS = ["24Q", "26Q", "27Q", "27EQ"];
-const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 
-const getQuarterDates = (fy: string, quarter: string) => {
-  const fyStart = parseInt(fy.split("-")[0]);
-  const ranges: Record<string, { start: Date; end: Date }> = {
-    Q1: { start: new Date(fyStart, 3, 1), end: new Date(fyStart, 5, 30) },
-    Q2: { start: new Date(fyStart, 6, 1), end: new Date(fyStart, 8, 30) },
-    Q3: { start: new Date(fyStart, 9, 1), end: new Date(fyStart, 11, 31) },
-    Q4: { start: new Date(fyStart + 1, 0, 1), end: new Date(fyStart + 1, 2, 31) },
-  };
-  return ranges[quarter] || ranges.Q1;
+const FIELD_LABELS: Record<string, string> = {
+  pan: "PAN", name: "Name", date: "Date", amount: "Amount",
+  section: "Section", rate: "Rate %", challan: "Challan", tds: "TDS Amount",
 };
+
+const fmtVal = (v: unknown): string => {
+  if (v === null || v === undefined || v === "") return "—";
+  return String(v);
+};
+
+/** Invoke an edge function and surface the function's own JSON error message. */
+async function invokeFn(name: string, body: unknown): Promise<any> {
+  const { data, error } = await supabase.functions.invoke(name, { body });
+  if (error) {
+    let msg = error.message;
+    try {
+      const ctx = (error as any).context;
+      const j = ctx && typeof ctx.json === "function" ? await ctx.json() : null;
+      if (j?.error) msg = j.error;
+    } catch { /* keep default */ }
+    throw new Error(msg);
+  }
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
 
 export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNavigateDataEntry }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
 
   const [selClient, setSelClient] = useState("");
-  const defaultTdsQuarter = useMemo(() => getDefaultTdsQuarter(), []);
-  const [selFy, setSelFy] = useState(defaultTdsQuarter.fy);
-  const [selQuarter, setSelQuarter] = useState(defaultTdsQuarter.quarter);
+  const smartDefault = useMemo(() => getDefaultTdsQuarter(), []);
+  const [selFy, setSelFy] = useState(smartDefault.fy);
+  const [selQuarter, setSelQuarter] = useState(smartDefault.quarter);
   const [selForm, setSelForm] = useState("26Q");
 
-  const [loading, setLoading] = useState(false);
-  const [validated, setValidated] = useState(false);
-  const [results, setResults] = useState<ValidationItem[]>([]);
-  const [reviewedCodes, setReviewedCodes] = useState<Set<string>>(new Set());
-
+  const [resolving, setResolving] = useState(false);
   const [filing, setFiling] = useState<any>(null);
-  const [challans, setChallans] = useState<any[]>([]);
-  const [deductees, setDeductees] = useState<any[]>([]);
-  const [rateMaster, setRateMaster] = useState<any[]>([]);
+  const [officeCount, setOfficeCount] = useState({ deductees: 0, challans: 0 });
+  const [batch, setBatch] = useState<any>(null);
+  const [results, setResults] = useState<ReconResult[] | null>(null);
 
-  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [comparing, setComparing] = useState(false);
   const [finalising, setFinalising] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const errors = useMemo(() => results.filter(r => r.severity === "error"), [results]);
-  const warnings = useMemo(() => results.filter(r => r.severity === "warning"), [results]);
-  const infos = useMemo(() => results.filter(r => r.severity === "info"), [results]);
+  // TDS Compliance is the single source of truth for module membership. Returns
+  // a human message when the selected combination is outside the client's config.
+  const complianceError = useCallback((): string | null => {
+    const c = clients.find(x => x.id === selClient);
+    if (!c) return null;
+    if (!c.tds_start_fy) {
+      return "This client has no TDS Compliance / Start Quarter set in Edit Client → Service Specific.";
+    }
+    if (!isQuarterInTdsRange(selFy, selQuarter, c.tds_start_fy, c.tds_start_quarter || "Q1", c.tds_end_fy, c.tds_end_quarter)) {
+      const label = `${c.tds_start_quarter} ${c.tds_start_fy}` +
+        (c.tds_end_fy ? ` to ${c.tds_end_quarter} ${c.tds_end_fy}` : " onward");
+      return `Outside this client's TDS compliance period (${label}).`;
+    }
+    if (!clientHasTdsForm(c.tds_forms_applicable, selForm)) {
+      return `This client is not configured for ${selForm} under TDS Compliance.`;
+    }
+    return null;
+  }, [clients, selClient, selFy, selQuarter, selForm]);
 
-  const totalDeductees = deductees.length;
-  const totalChallans = challans.length;
-  const totalTds = useMemo(() => deductees.reduce((s, d) => s + (d.total_tax_deducted || d.tds_amount || 0), 0), [deductees]);
-
-  const runValidation = async () => {
-    if (!selClient) { toast({ title: "Select a client", variant: "destructive" }); return; }
-
-    // TDS Compliance is the single source of truth for module membership —
-    // block validation for a client with no TDS Compliance configured at
-    // all, or for a (FY, quarter) outside their configured period.
-    const selectedClient = clients.find(c => c.id === selClient);
-    if (!selectedClient?.tds_start_fy) {
-      toast({ title: "TDS Compliance not configured", description: "This client has no TDS Compliance / Start Quarter set in Edit Client → Service Specific.", variant: "destructive" });
+  // Resolve the filing for the selected combination + hydrate any existing
+  // import batch / comparison results (durable — survives refresh).
+  const loadAll = useCallback(async () => {
+    if (!selClient || complianceError()) {
+      setFiling(null); setBatch(null); setResults(null);
+      setOfficeCount({ deductees: 0, challans: 0 });
       return;
     }
-    if (!isQuarterInTdsRange(
-      selFy, selQuarter,
-      selectedClient.tds_start_fy, selectedClient.tds_start_quarter || "Q1",
-      selectedClient.tds_end_fy, selectedClient.tds_end_quarter,
-    )) {
-      const rangeLabel = `${selectedClient.tds_start_quarter} ${selectedClient.tds_start_fy}` +
-        (selectedClient.tds_end_fy ? ` to ${selectedClient.tds_end_quarter} ${selectedClient.tds_end_fy}` : " onward (no end date)");
-      toast({ title: "Outside TDS compliance period", description: `This client's TDS compliance period is ${rangeLabel}.`, variant: "destructive" });
-      return;
-    }
-
-    // TDS Forms Applicable — block validation for a form the client isn't
-    // currently configured for.
-    if (!clientHasTdsForm(selectedClient?.tds_forms_applicable, selForm)) {
-      toast({ title: "Form not applicable", description: `This client is not configured for ${selForm} under TDS Compliance.`, variant: "destructive" });
-      return;
-    }
-
-    setLoading(true);
-    setValidated(false);
-    setResults([]);
-    setReviewedCodes(new Set());
-
-    // Fetch filing
-    const { data: filingData } = await supabase.from("tds_filings").select("*")
+    setResolving(true);
+    const { data: fData } = await supabase.from("tds_filings").select("*")
       .eq("client_id", selClient).eq("financial_year", selFy).eq("quarter", selQuarter).limit(10);
-    const match = (filingData || []).find((f: any) => (f.tds_forms || []).includes(selForm));
-    
-    if (!match) {
-      toast({ title: "No filing found for this combination", variant: "destructive" });
-      setLoading(false);
-      return;
-    }
+    const match = (fData || []).find((f: any) => (f.tds_forms || []).includes(selForm)) || null;
     setFiling(match);
-
-    // Fetch challans & deductees
-    const { data: challanData } = await supabase.from("tds_challans").select("*").eq("filing_id", match.id);
-    const cList = challanData || [];
-    setChallans(cList);
-
-    const challanIds = cList.map((c: any) => c.id);
-    let dList: any[] = [];
-    if (challanIds.length > 0) {
-      const { data: deducteeData } = await supabase.from("tds_deductees").select("*").in("challan_id", challanIds);
-      dList = deducteeData || [];
-    }
-    setDeductees(dList);
-
-    // Fetch rate master
-    const { data: rates } = await supabase.from("tds_rate_master").select("*").eq("form_type", selForm).eq("is_active", true);
-    setRateMaster(rates || []);
-
-    // Run validation rules
-    const items: ValidationItem[] = [];
-    const qDates = getQuarterDates(selFy, selQuarter);
-    const today = new Date();
-
-  // E006: No challans entered
-    if (cList.length === 0) {
-    items.push({ code: "E006", severity: "error", description: "No challans entered for this filing", affectedEntity: "Filing" });
+    if (!match) {
+      setBatch(null); setResults(null); setOfficeCount({ deductees: 0, challans: 0 });
+      setResolving(false); return;
     }
 
-    // E009: TAN missing
-    if (!match.tan) {
-      items.push({ code: "E009", severity: "error", description: "TAN of deductor not present in filing record", affectedEntity: "Filing" });
+    // Office Data counts
+    const { data: ch } = await supabase.from("tds_challans").select("id").eq("filing_id", match.id);
+    const chIds = (ch || []).map((c: any) => c.id);
+    let dedCount = 0;
+    if (chIds.length) {
+      const { count } = await supabase.from("tds_deductees").select("id", { count: "exact", head: true }).in("challan_id", chIds);
+      dedCount = count || 0;
     }
+    setOfficeCount({ deductees: dedCount, challans: chIds.length });
 
-    // Challan-level checks
-    for (const c of cList) {
-      // E002: BSR code format
-      if (c.bsr_code && !/^\d{7}$/.test(c.bsr_code)) {
-        items.push({ code: "E002", severity: "error", description: `BSR Code "${c.bsr_code}" is not 7 digits`, affectedEntity: `Challan #${c.challan_serial_no || '?'}`, challanId: c.id });
-      }
-      // E003: Challan number format
-      if (c.challan_serial_no && !/^\d{5}$/.test(c.challan_serial_no)) {
-        items.push({ code: "E003", severity: "error", description: `Challan Number "${c.challan_serial_no}" is not 5 digits`, affectedEntity: `Challan #${c.challan_serial_no || '?'}`, challanId: c.id });
-      }
-      // E004: Future deposit date
-      if (c.deposit_date && new Date(c.deposit_date) > today) {
-        items.push({ code: "E004", severity: "error", description: "Date of deposit is in the future", affectedEntity: `Challan #${c.challan_serial_no || '?'}`, challanId: c.id });
-      }
-      // E005: Before quarter start
-      if (c.deposit_date && new Date(c.deposit_date) < qDates.start) {
-        items.push({ code: "E005", severity: "error", description: "Date of deposit is before start of quarter", affectedEntity: `Challan #${c.challan_serial_no || '?'}`, challanId: c.id });
-      }
-      // E014: Deductee TDS != challan amount (>Rs.5)
-      const challanDeductees = dList.filter((d: any) => d.challan_id === c.id);
-      const sumDeducteeTds = challanDeductees.reduce((s: number, d: any) => s + (d.total_tax_deducted || d.tds_amount || 0), 0);
-      if (Math.abs(sumDeducteeTds - (c.total_tax_deposited || 0)) > 5) {
-        items.push({ code: "E014", severity: "error", description: `Total deductee TDS (₹${sumDeducteeTds.toFixed(0)}) doesn't match challan tax (₹${(c.total_tax_deposited || 0).toFixed(0)})`, affectedEntity: `Challan #${c.challan_serial_no || '?'}`, challanId: c.id });
-      }
+    // Latest import batch
+    const { data: b } = await supabase.from("tds_import_batches").select("*")
+      .eq("filing_id", match.id).order("imported_at", { ascending: false }).limit(1).maybeSingle();
+    setBatch(b || null);
 
-      // E016: Challans exist but TDS=0
-      if ((c.total_tax_deposited || 0) === 0 && sumDeducteeTds > 0) {
-        items.push({ code: "E016", severity: "error", description: "Challans exist but TDS deposited is zero while deductees have TDS > 0", affectedEntity: `Challan #${c.challan_serial_no || '?'}`, challanId: c.id });
-      }
+    // Existing comparison results
+    const { data: res } = await supabase.from("tds_recon_results").select("*").eq("filing_id", match.id);
+    setResults(res && res.length ? (res as ReconResult[]) : null);
+    setResolving(false);
+  }, [selClient, selFy, selQuarter, selForm, complianceError]);
 
-      // W005: Late deposit (>7 days after month end)
-      if (c.deposit_date) {
-        const depDate = new Date(c.deposit_date);
-        const monthEnd = new Date(depDate.getFullYear(), depDate.getMonth(), 0);
-        const diffDays = Math.floor((depDate.getTime() - monthEnd.getTime()) / (1000 * 60 * 60 * 24));
-        if (diffDays > 7) {
-          items.push({ code: "W005", severity: "warning", description: "Challan deposit date is more than 7 days after month-end (late deposit)", affectedEntity: `Challan #${c.challan_serial_no || '?'}`, challanId: c.id });
-        }
-      }
+  useEffect(() => { loadAll(); }, [loadAll]);
 
-      // W010: Interest on late deposit
-      // Only flag if deposit is late and interest is 0
-      const qEndPlus15 = new Date(qDates.end);
-      qEndPlus15.setDate(qEndPlus15.getDate() + 15);
-      if (c.deposit_date && new Date(c.deposit_date) > qEndPlus15 && (c.interest_deposited || 0) === 0) {
-        items.push({ code: "W010", severity: "warning", description: "Interest on late deposit not included in challan", affectedEntity: `Challan #${c.challan_serial_no || '?'}`, challanId: c.id });
+  // ── File → { file_type, rows | pdf_base64 } ──────────────────────────────────
+  const readFile = (file: File): Promise<{ file_type: string; rows?: any[]; pdf_base64?: string }> =>
+    new Promise((resolve, reject) => {
+      const name = file.name.toLowerCase();
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error("Could not read the file"));
+      if (name.endsWith(".pdf")) {
+        reader.onload = () => resolve({ file_type: "pdf", pdf_base64: String(reader.result).split(",")[1] || "" });
+        reader.readAsDataURL(file);
+      } else if (name.endsWith(".csv")) {
+        reader.onload = () => {
+          const parsed = Papa.parse(String(reader.result), { header: true, skipEmptyLines: true });
+          resolve({ file_type: "csv", rows: (parsed.data as any[]) || [] });
+        };
+        reader.readAsText(file);
+      } else {
+        reader.onload = () => {
+          const wb = XLSX.read(reader.result, { type: "array" });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          resolve({ file_type: "xlsx", rows: XLSX.utils.sheet_to_json(ws, { defval: null }) as any[] });
+        };
+        reader.readAsArrayBuffer(file);
       }
+    });
+
+  const handleImport = async (file: File) => {
+    if (!filing) return;
+    setImporting(true);
+    try {
+      const parsed = await readFile(file);
+      const data = await invokeFn("tds-recon-import", {
+        filing_id: filing.id, form_type: selForm, file_name: file.name, ...parsed,
+      });
+      // A fresh import invalidates any prior comparison for this filing.
+      await supabase.from("tds_recon_results").delete().eq("filing_id", filing.id);
+      setResults(null);
+      toast({ title: `Imported ${data.row_count} client record(s)`, description: file.name });
+      await loadAll();
+    } catch (e: any) {
+      toast({ title: "Import failed", description: e.message, variant: "destructive" });
     }
-
-    // Deductee-level checks
-    const panCount: Record<string, number> = {};
-    const noPanCount = { total: 0 };
-
-    for (const d of dList) {
-      const dName = d.deductee_name || "Unnamed";
-      const challan = cList.find((c: any) => c.id === d.challan_id);
-
-      // E001: PAN format
-      if (d.deductee_pan && !d.pan_not_available) {
-        if (!PAN_REGEX.test(d.deductee_pan.toUpperCase())) {
-          items.push({ code: "E001", severity: "error", description: `PAN "${d.deductee_pan}" has invalid format`, affectedEntity: dName, entityId: d.id, challanId: d.challan_id });
-        }
-      }
-
-      // E007: Deductee TDS > challan amount (>Rs.5)
-      if (challan && (d.total_tax_deducted || d.tds_amount || 0) > (challan.total_challan_amount || 0) + 5) {
-        items.push({ code: "E007", severity: "error", description: "TDS amount in deductee exceeds challan amount", affectedEntity: dName, entityId: d.id, challanId: d.challan_id });
-      }
-
-      // E008: Section code missing
-      if (!d.section_code) {
-        items.push({ code: "E008", severity: "error", description: "Section code missing", affectedEntity: dName, entityId: d.id, challanId: d.challan_id });
-      }
-
-      // E013: Payment date after deduction date
-      if (d.date_of_payment && d.date_of_deduction && new Date(d.date_of_payment) > new Date(d.date_of_deduction)) {
-        items.push({ code: "E013", severity: "error", description: "Payment date is after deduction date", affectedEntity: dName, entityId: d.id, challanId: d.challan_id });
-      }
-
-      // E012: Amount=0 but TDS>0
-      if ((d.amount_paid_credited || 0) === 0 && (d.total_tax_deducted || d.tds_amount || 0) > 0) {
-        items.push({ code: "E012", severity: "error", description: "Amount paid/credited is zero but TDS amount is non-zero", affectedEntity: dName, entityId: d.id, challanId: d.challan_id });
-      }
-
-      // E010: Deductee name blank
-      if (!d.deductee_name?.trim()) {
-        items.push({ code: "E010", severity: "error", description: "Deductee name is blank", affectedEntity: "Unnamed deductee", entityId: d.id, challanId: d.challan_id });
-      }
-
-      // E011: PAN=PANNOTAVBL no reason code
-      if (d.deductee_pan?.toUpperCase().startsWith("PANNOTAVBL") && !d.reason_for_lower_or_nil_deduction) {
-        items.push({ code: "E011", severity: "error", description: "PAN marked as not available but no reason code provided", affectedEntity: dName, entityId: d.id, challanId: d.challan_id });
-      }
-
-      // E017: Section invalid for this form type
-      if (d.section_code) {
-        const validSections = (rates || []).map((r: any) => r.section_code);
-        if (validSections.length > 0 && !validSections.includes(d.section_code)) {
-          items.push({ code: "E017", severity: "error", description: `Section "${d.section_code}" is not valid for form ${selForm}`, affectedEntity: dName, entityId: d.id, challanId: d.challan_id });
-        }
-      }
-
-      // W001: PANNOTAVBL
-      if (d.pan_not_available || d.deductee_pan?.toUpperCase().startsWith("PANNOTAVBL")) {
-        noPanCount.total++;
-        items.push({ code: "W001", severity: "warning", description: "PAN not available — ensure reason code is correct", affectedEntity: dName, entityId: d.id, challanId: d.challan_id });
-      }
-
-      // W002: Rate deviation
-      if (d.section_code && d.rate_of_tds !== null) {
-        const rateMatch = (rates || []).find((r: any) => r.section_code === d.section_code);
-        if (rateMatch) {
-          const stdRate = rateMatch.rate_individual || 0;
-          if (Math.abs((d.rate_of_tds || 0) - stdRate) > 0.5) {
-            items.push({ code: "W002", severity: "warning", description: `TDS rate ${d.rate_of_tds}% deviates from standard ${stdRate}%`, affectedEntity: dName, entityId: d.id, challanId: d.challan_id });
-          }
-        }
-      }
-
-      // Track duplicates
-      const dupKey = `${d.deductee_pan}_${d.section_code}`;
-      panCount[dupKey] = (panCount[dupKey] || 0) + 1;
-
-      // W004: Payment date in previous quarter
-      if (d.date_of_payment) {
-        const payDate = new Date(d.date_of_payment);
-        if (payDate < qDates.start) {
-          items.push({ code: "W004", severity: "warning", description: "Payment date is in previous quarter", affectedEntity: dName, entityId: d.id, challanId: d.challan_id });
-        }
-      }
-
-      // W007: Lower deduction cert but higher rate
-      if (d.lower_deduction_certificate_no && d.rate_of_tds !== null) {
-        // Just flag as info that cert is present
-        const rateMatch = (rates || []).find((r: any) => r.section_code === d.section_code);
-        if (rateMatch && (d.rate_of_tds || 0) > (rateMatch.rate_individual || 0)) {
-          items.push({ code: "W007", severity: "warning", description: "Lower deduction certificate present but rate is higher than standard", affectedEntity: dName, entityId: d.id, challanId: d.challan_id });
-        }
-      }
-
-      // W008: Reason A but above threshold
-      if (d.reason_for_lower_or_nil_deduction === "A") {
-        const rateMatch = (rates || []).find((r: any) => r.section_code === d.section_code);
-        if (rateMatch && (d.amount_paid_credited || 0) > (rateMatch.threshold_individual || 0) && (rateMatch.threshold_individual || 0) > 0) {
-          items.push({ code: "W008", severity: "warning", description: "Reason code A (no deduction) but payment exceeds threshold", affectedEntity: dName, entityId: d.id, challanId: d.challan_id });
-        }
-      }
-
-      // W009: Cess not computed
-      if ((d.total_tax_deducted || d.tds_amount || 0) > 0 && (d.cess_amount || 0) === 0) {
-        items.push({ code: "W009", severity: "warning", description: "Cess not computed (should be 4% of tax + surcharge)", affectedEntity: dName, entityId: d.id, challanId: d.challan_id });
-      }
-
-      // I001: Below threshold but deducted
-      if (d.section_code) {
-        const rateMatch = (rates || []).find((r: any) => r.section_code === d.section_code);
-        if (rateMatch && (rateMatch.threshold_individual || 0) > 0 && (d.amount_paid_credited || 0) < (rateMatch.threshold_individual || 0) && (d.total_tax_deducted || d.tds_amount || 0) > 0) {
-          items.push({ code: "I001", severity: "info", description: "Payment below threshold but TDS has been deducted", affectedEntity: dName, entityId: d.id, challanId: d.challan_id });
-        }
-      }
-
-      // I002: 194Q applicability
-      if (d.section_code === "194Q" && (d.amount_paid_credited || 0) > 5000000) {
-        items.push({ code: "I002", severity: "info", description: "Section 194Q applicable (purchase > ₹50L) — consider TDS vs TCS", affectedEntity: dName, entityId: d.id, challanId: d.challan_id });
-      }
-
-      // I003: Senior citizen 194A
-      if (d.section_code === "194A" || d.section_code === "194A-SC") {
-        items.push({ code: "I003", severity: "info", description: "Check if senior citizen — higher threshold of ₹50,000 may apply", affectedEntity: dName, entityId: d.id, challanId: d.challan_id });
-      }
-    }
-
-    // W003: Duplicate deductees
-    for (const [key, count] of Object.entries(panCount)) {
-      if (count > 1 && key !== "undefined_undefined" && key !== "null_null") {
-        const [pan, sec] = key.split("_");
-        items.push({ code: "W003", severity: "warning", description: `Deductee PAN ${pan} appears ${count} times with section ${sec} (possible duplicate)`, affectedEntity: `PAN: ${pan}` });
-      }
-    }
-
-    // W006: No-PAN >30%
-    if (dList.length > 0 && (noPanCount.total / dList.length) > 0.3) {
-      items.push({ code: "W006", severity: "warning", description: `No PAN deductees exceed 30% of total (${noPanCount.total}/${dList.length}) — TDSCPC may query`, affectedEntity: "Filing" });
-    }
-
-    // E015: Duplicate Challan Number (globally unique; BSR can repeat but Challan Number cannot)
-    const challanNumSet = new Set<string>();
-    for (const c of cList) {
-      if (c.challan_serial_no) {
-        if (challanNumSet.has(c.challan_serial_no)) {
-          items.push({ code: "E015", severity: "error", description: `Duplicate Challan Number "${c.challan_serial_no}" — each Challan Number must be unique`, affectedEntity: `Challan #${c.challan_serial_no}`, challanId: c.id });
-        }
-        challanNumSet.add(c.challan_serial_no);
-      }
-    }
-
-    setResults(items);
-    setValidated(true);
-    setLoading(false);
+    setImporting(false);
   };
 
-  const toggleReviewed = (code: string, idx: number) => {
-    const key = `${code}_${idx}`;
-    setReviewedCodes(prev => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key); else next.add(key);
-      return next;
-    });
+  const handleCompare = async () => {
+    if (!filing || !batch) return;
+    setComparing(true);
+    try {
+      const data = await invokeFn("tds-recon-compare", { filing_id: filing.id, batch_id: batch.id });
+      const { data: res } = await supabase.from("tds_recon_results").select("*").eq("filing_id", filing.id);
+      setResults((res as ReconResult[]) || []);
+      const s = data.summary || {};
+      toast({ title: "Comparison complete", description: `${s.matched ?? 0} matched · ${s.pending ?? 0} pending` });
+    } catch (e: any) {
+      toast({ title: "Comparison failed", description: e.message, variant: "destructive" });
+    }
+    setComparing(false);
+  };
+
+  const handleOverride = async (r: ReconResult, on: boolean) => {
+    const { error } = await supabase.from("tds_recon_results").update({
+      overridden: on,
+      overridden_by: on ? user?.id : null,
+      overridden_at: on ? new Date().toISOString() : null,
+    }).eq("id", r.id);
+    if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
+    setResults(prev => prev ? prev.map(x => x.id === r.id ? { ...x, overridden: on } : x) : prev);
   };
 
   const handleFinalise = async () => {
     if (!filing) return;
     setFinalising(true);
     const { error } = await supabase.from("tds_filings").update({
-      work_status: "Filed",
-      last_updated_by: user?.id,
-      last_updated_at: new Date().toISOString(),
+      work_status: "Filed", last_updated_by: user?.id, last_updated_at: new Date().toISOString(),
     }).eq("id", filing.id);
-    if (error) {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
-    } else {
-      toast({ title: "Return marked as Filed" });
-      setFiling({ ...filing, work_status: "Filed" });
-    }
+    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
+    else { toast({ title: "Return marked as Filed" }); setFiling({ ...filing, work_status: "Filed" }); }
     setFinalising(false);
     setConfirmOpen(false);
   };
 
-  const exportErrors = () => {
-    const rows = results.map((r, i) => ({
-      "Code": r.code,
-      "Severity": r.severity.toUpperCase(),
-      "Description": r.description,
-      "Affected Entity": r.affectedEntity,
-      "Reviewed": reviewedCodes.has(`${r.code}_${i}`) ? "Yes" : "No",
-    }));
-    exportToExcel([{ sheetName: "Validation Results", rows }], `TDS_Validation_${selClient}_${selFy}_${selQuarter}_${selForm}.xlsx`);
-  };
+  const summary = useMemo(() => {
+    const rs = results || [];
+    return {
+      total: rs.length,
+      matched: rs.filter(r => r.match_status === "matched").length,
+      mismatched: rs.filter(r => r.match_status !== "matched").length,
+      overridden: rs.filter(r => r.overridden).length,
+      pending: rs.filter(r => r.match_status !== "matched" && !r.overridden).length,
+    };
+  }, [results]);
 
-  const renderResultsTable = (items: ValidationItem[], severityLabel: string) => (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead className="w-[80px]">Code</TableHead>
-          <TableHead className="w-[80px]">Severity</TableHead>
-          <TableHead>Description</TableHead>
-          <TableHead className="w-[180px]">Affected</TableHead>
-          {severityLabel !== "error" && <TableHead className="w-[100px]">Reviewed</TableHead>}
-          <TableHead className="w-[80px]">Action</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {items.length === 0 ? (
-          <TableRow>
-            <TableCell colSpan={6} className="text-center text-muted-foreground py-6">
-              No {severityLabel}s found ✓
-            </TableCell>
-          </TableRow>
-        ) : items.map((item, idx) => {
-          const globalIdx = results.indexOf(item);
-          const isReviewed = reviewedCodes.has(`${item.code}_${globalIdx}`);
-          return (
-            <TableRow key={`${item.code}-${idx}`} className={cn(isReviewed && "opacity-50")}>
-              <TableCell><Badge variant="outline" className="font-mono text-xs">{item.code}</Badge></TableCell>
-              <TableCell>
-                <Badge className={cn("text-xs",
-                  item.severity === "error" ? "bg-destructive text-destructive-foreground" :
-                  item.severity === "warning" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" :
-                  "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"
-                )}>
-                  {item.severity === "error" ? <XCircle size={10} className="mr-1" /> :
-                   item.severity === "warning" ? <AlertTriangle size={10} className="mr-1" /> :
-                   <Info size={10} className="mr-1" />}
-                  {item.severity}
-                </Badge>
-              </TableCell>
-              <TableCell className="text-sm">{item.description}</TableCell>
-              <TableCell className="text-sm font-medium">{item.affectedEntity}</TableCell>
-              {severityLabel !== "error" && (
-                <TableCell>
-                  <Switch
-                    checked={isReviewed}
-                    onCheckedChange={() => toggleReviewed(item.code, globalIdx)}
-                  />
-                </TableCell>
-              )}
-              <TableCell>
-                {item.challanId && onNavigateDataEntry && (
-                  <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => onNavigateDataEntry(filing?.id)}>
-                    <ExternalLink size={12} /> Fix
-                  </Button>
-                )}
-              </TableCell>
-            </TableRow>
-          );
-        })}
-      </TableBody>
-    </Table>
-  );
+  const canFile = (results?.length ?? 0) > 0 && summary.pending === 0;
+  const isFiled = filing?.work_status === "Filed";
+  const cErr = selClient ? complianceError() : null;
+
+  const toggleExpand = (id: string) => setExpanded(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  const statusBadge = (r: ReconResult) => {
+    if (r.match_status === "matched") return <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 gap-1"><CheckCircle2 size={11} /> Matched</Badge>;
+    if (r.match_status === "office_only") return <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">Only in Office</Badge>;
+    if (r.match_status === "imported_only") return <Badge className="bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">Only in Imported</Badge>;
+    return <Badge className="bg-destructive/10 text-destructive gap-1"><AlertTriangle size={11} /> Mismatched</Badge>;
+  };
 
   return (
     <div className="space-y-4">
       <div>
-        <h2 className="text-xl font-bold text-foreground">Validate & Finalise</h2>
-        <p className="text-sm text-muted-foreground">Run validation checks and finalise returns for filing</p>
+        <h2 className="text-xl font-bold text-foreground">Validate &amp; Finalise</h2>
+        <p className="text-sm text-muted-foreground">Compare Office Data against the client's imported file, then finalise for filing</p>
       </div>
 
       {/* Filter Bar */}
@@ -515,94 +319,230 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
             <SelectContent>{TDS_FORMS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
           </Select>
         </div>
-        <Button size="lg" className="gap-2 font-semibold" onClick={runValidation} disabled={loading || !selClient}>
-          <Play size={16} /> {loading ? "Validating..." : "Run Validation"}
-        </Button>
       </div>
 
-      {loading && (
-        <div className="space-y-3">
-          <Skeleton className="h-16 w-full" />
-          <Skeleton className="h-64 w-full" />
+      {cErr && (
+        <div className="flex items-center gap-2 p-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 text-sm text-amber-700 dark:text-amber-300">
+          <FileWarning size={16} /> {cErr}
         </div>
       )}
 
-      {validated && !loading && (
+      {resolving && <Skeleton className="h-24 w-full" />}
+
+      {!resolving && selClient && !cErr && !filing && (
+        <div className="flex items-center gap-2 p-4 rounded-lg border bg-muted/30 text-sm text-muted-foreground">
+          <Info size={16} /> No filing found for {selForm} {selQuarter} {selFy}. Complete Data Entry for this return first.
+        </div>
+      )}
+
+      {!resolving && filing && (
         <>
-          {/* Summary Bar */}
-          <div className="flex gap-4 items-center p-4 rounded-lg border bg-card">
-            <div className="flex items-center gap-2">
-              <XCircle size={18} className="text-destructive" />
-              <span className="text-sm font-medium">Errors: </span>
-              <Badge variant={errors.length > 0 ? "destructive" : "outline"} className="font-bold">{errors.length}</Badge>
-            </div>
-            <div className="flex items-center gap-2">
-              <AlertTriangle size={18} className="text-amber-600" />
-              <span className="text-sm font-medium">Warnings: </span>
-              <Badge className={cn("font-bold", warnings.length > 0 ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" : "")} variant={warnings.length === 0 ? "outline" : "default"}>{warnings.length}</Badge>
-            </div>
-            <div className="flex items-center gap-2">
-              <Info size={18} className="text-blue-600" />
-              <span className="text-sm font-medium">Info: </span>
-              <Badge variant="outline" className="font-bold">{infos.length}</Badge>
-            </div>
-            <div className="flex-1" />
-            <Button variant="outline" size="sm" className="gap-1" onClick={exportErrors}>
-              <Download size={14} /> Export List
-            </Button>
-          </div>
-
-          {/* Tabbed Results */}
-          <Tabs defaultValue="errors">
-            <TabsList>
-              <TabsTrigger value="errors" className="gap-1">
-                <XCircle size={14} /> Errors ({errors.length})
-              </TabsTrigger>
-              <TabsTrigger value="warnings" className="gap-1">
-                <AlertTriangle size={14} /> Warnings ({warnings.length})
-              </TabsTrigger>
-              <TabsTrigger value="info" className="gap-1">
-                <Info size={14} /> Info ({infos.length})
-              </TabsTrigger>
-            </TabsList>
-            <TabsContent value="errors">
-              <Card><CardContent className="p-0 overflow-x-auto">{renderResultsTable(errors, "error")}</CardContent></Card>
-            </TabsContent>
-            <TabsContent value="warnings">
-              <Card><CardContent className="p-0 overflow-x-auto">{renderResultsTable(warnings, "warning")}</CardContent></Card>
-            </TabsContent>
-            <TabsContent value="info">
-              <Card><CardContent className="p-0 overflow-x-auto">{renderResultsTable(infos, "info")}</CardContent></Card>
-            </TabsContent>
-          </Tabs>
-
-          {/* Finalise Section */}
-          {errors.length === 0 && (
-            <Card className="border-emerald-200 dark:border-emerald-800">
-              <CardContent className="p-6">
-                <div className="flex items-center gap-3 mb-4">
-                  <CheckCircle2 size={24} className="text-emerald-600" />
-                  <div>
-                    <p className="font-semibold text-foreground">No errors found — ready to finalise</p>
-                    <p className="text-sm text-muted-foreground">
-                      {warnings.length > 0 ? `${warnings.length} warning(s) found. Review them before finalising.` : "All validations passed."}
-                    </p>
-                  </div>
+          {/* Two datasets */}
+          <div className="grid gap-3 md:grid-cols-2">
+            {/* Dataset 1 — Office */}
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Users size={16} className="text-foreground" />
+                  <p className="font-semibold text-sm">Office Data <span className="text-muted-foreground font-normal">(entered by staff)</span></p>
                 </div>
-
-                {filing?.work_status === "Filed" ? (
-                  <div className="p-4 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
-                    <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">
-                      ✓ Return marked as Filed. Generate Genius XLS Export from the Reports section.
-                    </p>
-                  </div>
-                ) : (
-                  <Button size="lg" className="gap-2" onClick={() => setConfirmOpen(true)}>
-                    <ShieldCheck size={16} /> Mark Return as Ready to File
-                  </Button>
+                <div className="flex gap-6 text-sm">
+                  <div><span className="text-2xl font-bold">{officeCount.deductees}</span> <span className="text-muted-foreground">deductees</span></div>
+                  <div><span className="text-2xl font-bold">{officeCount.challans}</span> <span className="text-muted-foreground">challans</span></div>
+                </div>
+                {officeCount.deductees === 0 && (
+                  <p className="text-xs text-amber-600 mt-2">No office deductees yet — enter data in the Data Entry tab first.</p>
                 )}
               </CardContent>
             </Card>
+
+            {/* Dataset 2 — Imported */}
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <FileSpreadsheet size={16} className="text-foreground" />
+                    <p className="font-semibold text-sm">Imported Client Data</p>
+                  </div>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".xlsx,.xls,.csv,.pdf"
+                    className="hidden"
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImport(f); e.currentTarget.value = ""; }}
+                  />
+                  <Button size="sm" variant={batch ? "outline" : "default"} className="gap-1"
+                    disabled={importing || isFiled}
+                    onClick={() => fileInputRef.current?.click()}>
+                    {importing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+                    {batch ? "Re-import" : "Import"}
+                  </Button>
+                </div>
+                {batch ? (
+                  <div className="text-sm">
+                    <span className="text-2xl font-bold">{batch.row_count}</span> <span className="text-muted-foreground">records</span>
+                    <p className="text-xs text-muted-foreground mt-1 truncate">
+                      {batch.file_name} · {(batch.file_type || "").toUpperCase()}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">Import the client's Excel, CSV or PDF file to compare against Office Data.</p>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Run comparison */}
+          <div className="flex items-center gap-3">
+            <Button size="lg" className="gap-2 font-semibold" onClick={handleCompare}
+              disabled={comparing || !batch || isFiled}>
+              {comparing ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
+              {comparing ? "Comparing…" : "Run Validation"}
+            </Button>
+            {!batch && <span className="text-xs text-muted-foreground">Import a client file to enable comparison.</span>}
+          </div>
+
+          {/* Results */}
+          {results && (
+            <>
+              {/* Override summary */}
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                {[
+                  { label: "Total", value: summary.total, cls: "" },
+                  { label: "Matched", value: summary.matched, cls: "text-emerald-600" },
+                  { label: "Mismatched", value: summary.mismatched, cls: "text-destructive" },
+                  { label: "Overridden", value: summary.overridden, cls: "text-blue-600" },
+                  { label: "Pending", value: summary.pending, cls: summary.pending > 0 ? "text-amber-600" : "text-emerald-600" },
+                ].map(s => (
+                  <Card key={s.label}><CardContent className="p-3 text-center">
+                    <p className={cn("text-2xl font-bold", s.cls)}>{s.value}</p>
+                    <p className="text-xs text-muted-foreground">{s.label}</p>
+                  </CardContent></Card>
+                ))}
+              </div>
+
+              <Card><CardContent className="p-0 overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-[36px]" />
+                      <TableHead>Record</TableHead>
+                      <TableHead className="w-[160px]">Status</TableHead>
+                      <TableHead className="w-[140px] text-right">Action</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {results.length === 0 ? (
+                      <TableRow><TableCell colSpan={4} className="text-center text-muted-foreground py-8">No records compared</TableCell></TableRow>
+                    ) : [...results].sort((a, b) => {
+                      // Pending mismatches first, then overridden, then matched.
+                      const rank = (r: ReconResult) => r.match_status === "matched" ? 2 : r.overridden ? 1 : 0;
+                      return rank(a) - rank(b);
+                    }).map(r => {
+                      const isOpen = expanded.has(r.id);
+                      const diffs = r.field_diffs || [];
+                      const isMismatch = r.match_status !== "matched";
+                      return (
+                        <Fragment key={r.id}>
+                          <TableRow className={cn(r.overridden && "opacity-70")}>
+                            <TableCell className="align-top">
+                              {diffs.length > 0 && (
+                                <button onClick={() => toggleExpand(r.id)} className="text-muted-foreground hover:text-foreground">
+                                  {isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                                </button>
+                              )}
+                            </TableCell>
+                            <TableCell className="font-medium text-sm">
+                              {r.record_label || "—"}
+                              {r.overridden && <Badge variant="outline" className="ml-2 text-[10px] text-blue-600 border-blue-300">Overridden</Badge>}
+                            </TableCell>
+                            <TableCell>{statusBadge(r)}</TableCell>
+                            <TableCell className="text-right">
+                              {isMismatch && !isFiled && (
+                                r.overridden ? (
+                                  <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => handleOverride(r, false)}>
+                                    <RotateCcw size={12} /> Undo
+                                  </Button>
+                                ) : (
+                                  <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => handleOverride(r, true)}>
+                                    <ShieldCheck size={12} /> Override
+                                  </Button>
+                                )
+                              )}
+                            </TableCell>
+                          </TableRow>
+                          {isOpen && diffs.length > 0 && (
+                            <TableRow>
+                              <TableCell />
+                              <TableCell colSpan={3} className="bg-muted/30">
+                                <div className="overflow-x-auto py-1">
+                                  <table className="w-full text-xs">
+                                    <thead>
+                                      <tr className="text-muted-foreground">
+                                        <th className="text-left font-medium py-1 pr-4">Field</th>
+                                        <th className="text-left font-medium py-1 pr-4">Office Value</th>
+                                        <th className="text-left font-medium py-1 pr-4">Imported Value</th>
+                                        <th className="text-left font-medium py-1">Difference</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {diffs.map((d, i) => (
+                                        <tr key={i} className={cn("border-t border-border/50", d.matched === false && "bg-destructive/5")}>
+                                          <td className="py-1 pr-4 font-medium">{FIELD_LABELS[d.field] || d.field}</td>
+                                          <td className="py-1 pr-4">{fmtVal(d.office)}</td>
+                                          <td className="py-1 pr-4">{fmtVal(d.imported)}</td>
+                                          <td className={cn("py-1", d.matched === false ? "text-destructive" : "text-emerald-600")}>
+                                            {d.matched === false ? (d.difference || "Differs") : "✓"}
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </Fragment>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </CardContent></Card>
+
+              {/* Finalise */}
+              <Card className={cn(canFile ? "border-emerald-200 dark:border-emerald-800" : "border-amber-200 dark:border-amber-800")}>
+                <CardContent className="p-6">
+                  {isFiled ? (
+                    <div className="p-4 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
+                      <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">
+                        ✓ Return marked as Filed. Generate Genius XLS Export from the Reports section.
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-3 mb-4">
+                        {canFile
+                          ? <CheckCircle2 size={24} className="text-emerald-600" />
+                          : <AlertTriangle size={24} className="text-amber-600" />}
+                        <div>
+                          <p className="font-semibold text-foreground">
+                            {canFile ? "All records reconciled — ready to file" : `${summary.pending} record(s) still pending`}
+                          </p>
+                          <p className="text-sm text-muted-foreground">
+                            {canFile
+                              ? "Every record is matched or overridden."
+                              : "Match or override every mismatch (Pending must reach 0) to enable filing."}
+                          </p>
+                        </div>
+                      </div>
+                      <Button size="lg" className="gap-2" disabled={!canFile} onClick={() => setConfirmOpen(true)}>
+                        <ShieldCheck size={16} /> Mark Return as Ready to File
+                      </Button>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+            </>
           )}
         </>
       )}
@@ -616,26 +556,26 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
           <div className="space-y-3 py-4">
             <div className="grid grid-cols-3 gap-4">
               <div className="text-center p-3 rounded-lg bg-muted">
-                <p className="text-2xl font-bold text-foreground">{totalDeductees}</p>
-                <p className="text-xs text-muted-foreground">Deductees</p>
+                <p className="text-2xl font-bold text-foreground">{summary.matched}</p>
+                <p className="text-xs text-muted-foreground">Matched</p>
               </div>
               <div className="text-center p-3 rounded-lg bg-muted">
-                <p className="text-2xl font-bold text-foreground">{totalChallans}</p>
-                <p className="text-xs text-muted-foreground">Challans</p>
+                <p className="text-2xl font-bold text-foreground">{summary.overridden}</p>
+                <p className="text-xs text-muted-foreground">Overridden</p>
               </div>
               <div className="text-center p-3 rounded-lg bg-muted">
-                <p className="text-2xl font-bold text-foreground">₹{totalTds.toLocaleString("en-IN")}</p>
-                <p className="text-xs text-muted-foreground">Total TDS</p>
+                <p className="text-2xl font-bold text-foreground">{summary.total}</p>
+                <p className="text-xs text-muted-foreground">Total</p>
               </div>
             </div>
             <p className="text-sm text-muted-foreground">
-              This will update the filing status to "Return Prepared". Are you sure you want to proceed?
+              This will mark the return as <strong>Filed</strong> and enable the Genius XLS Export in Reports. Proceed?
             </p>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmOpen(false)}>Cancel</Button>
             <Button onClick={handleFinalise} disabled={finalising}>
-              {finalising ? "Finalising..." : "Confirm & Finalise"}
+              {finalising ? "Finalising…" : "Confirm & Mark Filed"}
             </Button>
           </DialogFooter>
         </DialogContent>
