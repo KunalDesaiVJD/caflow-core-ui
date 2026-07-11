@@ -76,13 +76,16 @@ interface TdsAckFile {
 
 // Aggregate status groups driven by Dashboard KPI card clicks — these don't
 // map to a single FILING_STATUSES value (e.g. "Returns Due" means "anything
-// not yet terminal", "Overdue" adds a due-date check), so they're applied as
-// a dismissible filter layered on top of the row's exact work_status.
-export type KpiStatusGroup = "all" | "returns-due" | "overdue" | "filed" | "processed" | "nil";
+// not yet terminal"), so they're applied as a dismissible filter layered on
+// top of the row's exact work_status. "reviewed" is the one exception that
+// DOES map 1:1 to a single FILING_STATUSES value ("Reviewed"), kept as its
+// own group (rather than just relying on the exact-status Select) so a
+// Dashboard KPI card can drive it the same way as the other aggregate cards.
+export type KpiStatusGroup = "all" | "returns-due" | "reviewed" | "filed" | "processed" | "nil";
 
 const KPI_STATUS_GROUP_LABELS: Record<Exclude<KpiStatusGroup, "all">, string> = {
   "returns-due": "Returns Due",
-  overdue: "Overdue",
+  reviewed: "Reviewed",
   filed: "Filed / Submitted",
   processed: "Processed / Accepted",
   nil: "NIL Returns",
@@ -138,6 +141,7 @@ const FILING_STATUSES = [
   "Data Received",
   "Under Process",
   "Queries Sent to Client",
+  "Reviewed",
   "Filed",
   "Processed",
 ] as const;
@@ -148,6 +152,7 @@ const FILING_STATUS_COLORS: Record<string, string> = {
   "Data Received": "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
   "Under Process": "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300",
   "Queries Sent to Client": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
+  "Reviewed": "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300",
   "Filed": "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
   "Processed": "bg-emerald-200 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200",
 };
@@ -261,7 +266,6 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   useEffect(() => { fetchFilings(); }, [fetchFilings, refreshKey]);
 
   const filtered = useMemo(() => {
-    const today = new Date();
     return filings.filter(f => {
       const client = clients.find(c => c.id === f.client_id);
 
@@ -279,10 +283,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       // work_status.
       const isTerminal = ["Filed", "Submitted", "Processed", "Accepted", "NIL"].includes(f.work_status);
       if (statusGroup === "returns-due" && isTerminal) return false;
-      if (statusGroup === "overdue") {
-        if (isTerminal) return false;
-        if (!(getDueDate(f.financial_year, f.quarter) < today)) return false;
-      }
+      if (statusGroup === "reviewed" && f.work_status !== "Reviewed") return false;
       if (statusGroup === "filed" && !["Filed", "Submitted"].includes(f.work_status)) return false;
       if (statusGroup === "processed" && !["Processed", "Accepted"].includes(f.work_status)) return false;
       if (statusGroup === "nil" && f.work_status !== "NIL") return false;

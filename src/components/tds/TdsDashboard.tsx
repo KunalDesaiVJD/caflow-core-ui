@@ -53,22 +53,6 @@ const FY_OPTIONS = Array.from({ length: 7 }, (_, i) => { const s = 2020 + i; ret
 const QUARTER_OPTIONS = ["Q1", "Q2", "Q3", "Q4"];
 const ALL_FORMS = ["26Q", "24Q", "27Q", "27EQ"];
 
-// Due dates: TDS forms -> 31st; TCS (27EQ) -> 15th
-const TDS_DUE_DATES: Record<string, Record<string, { month: number; day: number }>> = {
-  TDS: { Q1: { month: 6, day: 31 }, Q2: { month: 9, day: 31 }, Q3: { month: 0, day: 31 }, Q4: { month: 4, day: 31 } },
-  TCS: { Q1: { month: 6, day: 15 }, Q2: { month: 9, day: 15 }, Q3: { month: 0, day: 15 }, Q4: { month: 4, day: 15 } },
-};
-
-function getDueDate(fy: string, quarter: string, formType?: string): Date {
-  const fyStart = parseInt(fy.split("-")[0]);
-  const isTCS = formType === "27EQ";
-  const schedule = isTCS ? TDS_DUE_DATES.TCS : TDS_DUE_DATES.TDS;
-  const d = schedule[quarter];
-  if (!d) return new Date();
-  const year = quarter === "Q3" || quarter === "Q4" ? fyStart + 1 : fyStart;
-  return new Date(year, d.month, d.day);
-}
-
 const TERMINAL_STATUSES = new Set([
   "Filed", "Submitted", "Processed", "Accepted", "NIL",
 ]);
@@ -161,8 +145,6 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
     if (formTab !== "all" && !visibleForms.includes(formTab)) setFormTab("all");
   }, [formTab, visibleForms]);
 
-  const today = new Date();
-
   // Apply form tab filter — exclude deleted clients
   const filteredFilings = useMemo(() => {
     let f = filings.filter(fl => !deletedClientIds.has(fl.client_id));
@@ -184,19 +166,14 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
   const stats = useMemo(() => {
     const activeClientIds = new Set(filteredFilings.map(f => f.client_id));
     const notTerminal = filteredFilings.filter(f => !TERMINAL_STATUSES.has(f.work_status));
-    const overdue = filteredFilings.filter(f => {
-      if (TERMINAL_STATUSES.has(f.work_status)) return false;
-      const form = f.tds_forms?.[0];
-      const due = getDueDate(f.financial_year, f.quarter, form);
-      return due < today;
-    });
+    const reviewed = filteredFilings.filter(f => f.work_status === "Reviewed");
     const filed = filteredFilings.filter(f => ["Filed", "Submitted"].includes(f.work_status));
     const processed = filteredFilings.filter(f => ["Processed", "Accepted"].includes(f.work_status));
     const nil = filteredFilings.filter(f => f.work_status === "NIL");
     return {
       activeClients: activeClientIds.size,
       returnsDue: notTerminal.length,
-      overdue: overdue.length,
+      reviewed: reviewed.length,
       filed: filed.length,
       processed: processed.length,
       nil: nil.length,
@@ -264,7 +241,7 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
       label: "Returns Due", value: stats.returnsDue, icon: Clock, color: "text-amber-600", bg: "bg-amber-50 dark:bg-amber-950/30", statusGroup: "returns-due",
       tooltip: "Counts pending returns, not clients. A client may have multiple pending returns (different TANs/forms), so this count can exceed Active TDS Clients.",
     },
-    { label: "Overdue", value: stats.overdue, icon: AlertTriangle, color: "text-destructive", bg: "bg-red-50 dark:bg-red-950/30", statusGroup: "overdue" },
+    { label: "Reviewed", value: stats.reviewed, icon: CheckCheck, color: "text-violet-600", bg: "bg-violet-50 dark:bg-violet-950/30", statusGroup: "reviewed" },
     { label: "Filed / Submitted", value: stats.filed, icon: CheckCircle2, color: "text-emerald-600", bg: "bg-emerald-50 dark:bg-emerald-950/30", statusGroup: "filed" },
     { label: "Processed / Accepted", value: stats.processed, icon: FileCheck, color: "text-emerald-700", bg: "bg-emerald-100 dark:bg-emerald-900/40", statusGroup: "processed" },
     { label: "NIL Returns", value: stats.nil, icon: MinusCircle, color: "text-teal-600", bg: "bg-teal-50 dark:bg-teal-950/30", statusGroup: "nil" },
