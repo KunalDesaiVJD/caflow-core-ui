@@ -106,6 +106,33 @@ function pickString(row: Record<string, unknown>, headers: string[]): string {
   return "";
 }
 
+// Amount token: optional ₹/Rs/INR prefix, Indian or plain grouping, optional 2-dp.
+const AMOUNT_TOKEN = /(?:₹|rs\.?|inr)?\s*(\d{1,3}(?:[, ]\d{2,3})+(?:\.\d{1,2})?|\d+\.\d{1,2}|\d{3,})/gi;
+
+/**
+ * Free text (extracted from a PDF or Word statement) -> reconciliation entries.
+ * A statement line's amount is the largest money-like token on the line; the rest of the line is
+ * the label. First-pass by amount, consistent with the CSV/Excel path (matches by amount).
+ */
+export function entriesFromText(text: string, mode: ReconMode = "amount"): ReconEntry[] {
+  const out: ReconEntry[] = [];
+  for (const line of String(text ?? "").split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || !/[a-z]/i.test(t)) continue; // skip lines with no descriptive text (page numbers etc.)
+    let best = 0;
+    let m: RegExpExecArray | null;
+    AMOUNT_TOKEN.lastIndex = 0;
+    while ((m = AMOUNT_TOKEN.exec(line)) !== null) {
+      const n = Number(m[1].replace(/[, ]/g, ""));
+      if (Number.isFinite(n) && Math.abs(n) > best) best = Math.abs(n);
+    }
+    if (best < 100) continue; // first-pass floor: ignore tiny counters / ids / years-as-plain-4-digits handled below
+    const label = t.replace(AMOUNT_TOKEN, "").replace(/\s{2,}/g, " ").trim().slice(0, 120) || "row";
+    out.push({ key: keyFor(best, "", mode), amount: best, label });
+  }
+  return out;
+}
+
 /** Parsed file rows -> reconciliation entries (best-effort column detection). */
 export function entriesFromRows(rows: Record<string, unknown>[], mode: ReconMode = "amount"): ReconEntry[] {
   const out: ReconEntry[] = [];

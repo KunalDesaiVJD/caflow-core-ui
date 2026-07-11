@@ -16,7 +16,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AlertTriangle, CheckCircle2, Shield, ShieldAlert, ShieldQuestion, FileSpreadsheet, Play, Download, FileText, BarChart3, ChevronLeft, ChevronRight, X, Loader2, Calculator, Sparkles } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Shield, ShieldAlert, ShieldQuestion, FileSpreadsheet, Play, Download, FileText, FileCode, BarChart3, ChevronLeft, ChevronRight, X, Loader2, Calculator, Sparkles } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import MarkdownView from "@/components/scrutiny-v2/MarkdownView";
+import { exportDeliverable } from "@/lib/scrutiny/deliverableExport";
 import { TdsReconModule } from "@/components/tds-recon/TdsReconModule";
 import { SEVERITIES, STATUSES, type Finding, type RuleTemplate } from "@/lib/scrutiny/scrutinyUi";
 import ScrutinyTemplatesView from "@/components/scrutiny-v2/ScrutinyTemplatesView";
@@ -28,6 +31,7 @@ import ScrutinyConnectorsPanel from "@/components/scrutiny-v2/ScrutinyConnectors
 import ScrutinyOverviewPanel from "@/components/scrutiny-v2/ScrutinyOverviewPanel";
 import ScrutinyDeliverablesPanel from "@/components/scrutiny-v2/ScrutinyDeliverablesPanel";
 import ScrutinyPortfolioPanel from "@/components/scrutiny-v2/ScrutinyPortfolioPanel";
+import ScrutinyRuleMasterPanel from "@/components/scrutiny-v2/ScrutinyRuleMasterPanel";
 import {
   buildDraftQuery, canReviewQuery, SCRUTINY_QUERY_SOURCE,
   QUERY_STATUS_OPEN, QUERY_STATUS_REJECTED,
@@ -75,7 +79,8 @@ export default function AuditScrutiny() {
   // Scrutiny-raised queries (maker-checker): finding_id -> { id, status }
   const [scrutinyQueries, setScrutinyQueries] = useState<{ id: string; source_ref_id: string | null; status: string; created_at?: string | null; client_reply?: string | null }[]>([]);
   const [rejectTarget, setRejectTarget] = useState<{ finding: Finding; queryId: string } | null>(null);
-  const [v2Tab, setV2Tab] = useState<"overview" | "templates" | "ledger" | "facts" | "forensics" | "connectors" | "deliverables" | "portfolio">("overview");
+  const [v2Tab, setV2Tab] = useState<"overview" | "templates" | "ledger" | "facts" | "forensics" | "connectors" | "deliverables" | "portfolio" | "rulemaster">("overview");
+  const isSuperAdmin = user?.role === "superadmin";
   // AI narration classification (Ticket 2.2): finding_id -> suggested category / 3CD clause
   const [narrationClasses, setNarrationClasses] = useState<Record<string, NarrationClass>>({});
   const [classifying, setClassifying] = useState(false);
@@ -89,6 +94,7 @@ export default function AuditScrutiny() {
   // NL investigator (Ticket 4.1)
   const [investigatorQ, setInvestigatorQ] = useState("");
   const [investigatorAnswer, setInvestigatorAnswer] = useState<string | null>(null);
+  const [investigatorTitle, setInvestigatorTitle] = useState("AI Auditor answer");
   const [investigating, setInvestigating] = useState(false);
 
   // Filters — default FY from engagement context
@@ -351,6 +357,7 @@ export default function AuditScrutiny() {
   const handleInvestigate = async (q?: string) => {
     const question = (q ?? investigatorQ).trim();
     if (!question) return;
+    setInvestigatorTitle(question.length > 70 ? `${question.slice(0, 67)}…` : question);
     if (q) setInvestigatorQ(q);
     setInvestigating(true);
     setInvestigatorAnswer(null);
@@ -672,7 +679,24 @@ export default function AuditScrutiny() {
                 ))}
               </div>
               {investigatorAnswer && (
-                <div className="text-sm whitespace-pre-wrap rounded-md border bg-muted/30 p-3">{investigatorAnswer}</div>
+                <div className="rounded-md border bg-muted/30 p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">AI Auditor answer</span>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button size="sm" variant="outline" className="h-7"><Download className="h-3.5 w-3.5 mr-1" />Download</Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => exportDeliverable("docx", investigatorAnswer, investigatorTitle)}><FileText className="h-3.5 w-3.5 mr-2" />Word (.docx)</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => exportDeliverable("pdf", investigatorAnswer, investigatorTitle)}><FileText className="h-3.5 w-3.5 mr-2" />PDF</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => exportDeliverable("xlsx", investigatorAnswer, investigatorTitle)}><FileSpreadsheet className="h-3.5 w-3.5 mr-2" />Excel (.xlsx)</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => exportDeliverable("csv", investigatorAnswer, investigatorTitle)}><FileSpreadsheet className="h-3.5 w-3.5 mr-2" />CSV</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => exportDeliverable("md", investigatorAnswer, investigatorTitle)}><FileCode className="h-3.5 w-3.5 mr-2" />Markdown</DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                  <MarkdownView md={investigatorAnswer} />
+                </div>
               )}
             </CardContent>
           </Card>
@@ -743,6 +767,15 @@ export default function AuditScrutiny() {
             >
               Portfolio
             </button>
+            {isSuperAdmin && (
+              <button
+                type="button"
+                onClick={() => setV2Tab("rulemaster")}
+                className={`px-3 py-1.5 text-xs font-medium border-l transition-colors ${v2Tab === "rulemaster" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted/60"}`}
+              >
+                Rule Master
+              </button>
+            )}
           </div>
           {v2Tab === "overview"
             ? <ScrutinyOverviewPanel findings={findings} rules={rules} queryByFinding={queryByFinding} factGate={factGate} priorExclusionCount={Object.keys(priorExclusions).length} onCloseFromReply={handleCloseFromReply} />
@@ -756,6 +789,8 @@ export default function AuditScrutiny() {
                 ? <ScrutinyDeliverablesPanel findings={findings} rules={rules} financialYear={fy} factGate={factGate} />
                 : v2Tab === "portfolio"
                 ? <ScrutinyPortfolioPanel rules={rules} clientId={clientId} />
+                : v2Tab === "rulemaster" && isSuperAdmin
+                ? <ScrutinyRuleMasterPanel />
                 : v2Tab === "templates"
                   ? <ScrutinyTemplatesView rules={rules} {...v2Shared} />
                   : <ScrutinyWorkpaperView {...v2Shared} />}

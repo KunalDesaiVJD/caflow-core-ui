@@ -16,7 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Upload, Info, Loader2 } from "lucide-react";
 import { vouchersFromSnapshot } from "@/lib/scrutiny/adapters";
-import { reconcile, entriesFromVouchers, entriesFromRows, type ReconResult } from "@/lib/scrutiny/reconcile";
+import { reconcile, entriesFromVouchers, entriesFromRows, entriesFromText, type ReconResult, type ReconEntry } from "@/lib/scrutiny/reconcile";
 import type { VoucherRow } from "@/lib/scrutiny/detectionEngine";
 
 interface Props {
@@ -50,6 +50,43 @@ async function parseFile(file: File): Promise<Record<string, unknown>[]> {
   return XLSX.utils.sheet_to_json(ws, { defval: "" }) as Record<string, unknown>[];
 }
 
+// PDF text extraction (pdfjs). Reconstructs lines from text-item Y positions so amounts keep their
+// row context. pdfjs (heavy) is dynamically imported so it only loads when a PDF is actually opened.
+async function extractPdfText(file: File): Promise<string> {
+  const pdfjs = await import("pdfjs-dist") as unknown as {
+    GlobalWorkerOptions: { workerSrc: string };
+    getDocument: (src: { data: ArrayBuffer }) => { promise: Promise<{ numPages: number; getPage: (n: number) => Promise<{ getTextContent: () => Promise<{ items: { str?: string; transform?: number[] }[] }> }> }> };
+  };
+  try {
+    const workerUrl = (await import("pdfjs-dist/build/pdf.worker.min.mjs?url")).default as string;
+    pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+  } catch { /* worker url resolution is best-effort */ }
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjs.getDocument({ data: buf }).promise;
+  let text = "";
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const content = await page.getTextContent();
+    let lastY: number | null = null;
+    for (const it of content.items) {
+      const y = it.transform?.[5];
+      if (lastY !== null && typeof y === "number" && Math.abs(y - lastY) > 2) text += "\n";
+      text += (it.str ?? "") + " ";
+      if (typeof y === "number") lastY = y;
+    }
+    text += "\n";
+  }
+  return text;
+}
+
+// Word (.docx) text extraction (mammoth, dynamically imported).
+async function extractDocxText(file: File): Promise<string> {
+  const mammoth = await import("mammoth") as unknown as { extractRawText: (o: { arrayBuffer: ArrayBuffer }) => Promise<{ value: string }> };
+  const buf = await file.arrayBuffer();
+  const res = await mammoth.extractRawText({ arrayBuffer: buf });
+  return res.value ?? "";
+}
+
 export default function ScrutinyConnectorsPanel({ clientId, financialYear }: Props) {
   const [vouchers, setVouchers] = useState<VoucherRow[]>([]);
   const [connector, setConnector] = useState("bank");
@@ -79,10 +116,21 @@ export default function ScrutinyConnectorsPanel({ clientId, financialYear }: Pro
     if (!file) return;
     setParsing(true); setError(null); setResult(null); setFileName(file.name);
     try {
-      const rows = await parseFile(file);
-      const external = entriesFromRows(rows, "amount");
+      const ext = file.name.split(".").pop()?.toLowerCase();
+      let external: ReconEntry[];
+      if (ext === "pdf") {
+        external = entriesFromText(await extractPdfText(file), "amount");
+      } else if (ext === "docx" || ext === "doc") {
+        external = entriesFromText(await extractDocxText(file), "amount");
+      } else {
+        external = entriesFromRows(await parseFile(file), "amount");
+      }
       if (external.length === 0) {
-        setError("Could not find an amount column. Expected a header like Amount / Invoice Value / Taxable Value / Amount Credited.");
+        setError(
+          ext === "pdf" || ext === "docx" || ext === "doc"
+            ? "No amounts could be read from this document. If it is a scanned/image PDF, export a text, CSV or Excel version instead."
+            : "Could not find an amount column. Expected a header like Amount / Invoice Value / Taxable Value / Amount Credited."
+        );
       } else {
         setResult(reconcile(external, entriesFromVouchers(vouchers, "amount")));
       }
@@ -119,7 +167,7 @@ export default function ScrutinyConnectorsPanel({ clientId, financialYear }: Pro
   return (
     <div className="space-y-5">
       <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Info size={12} /> Upload a GST-2B, 26AS or bank export (CSV/Excel) to reconcile against the books. Processed in your browser only — nothing is stored. v1 matches by amount (a first-pass check).
+        <Info size={12} /> Upload a GST-2B, 26AS or bank export (CSV, Excel, PDF or Word) to reconcile against the books. Processed in your browser only — nothing is stored. v1 matches by amount (a first-pass check); PDF/Word are read as text.
       </p>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -135,7 +183,7 @@ export default function ScrutinyConnectorsPanel({ clientId, financialYear }: Pro
             </button>
           ))}
         </div>
-        <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls,.txt" className="hidden" onChange={(e) => onFile(e.target.files?.[0] ?? null)} />
+        <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls,.txt,.pdf,.docx,.doc" className="hidden" onChange={(e) => onFile(e.target.files?.[0] ?? null)} />
         <Button variant="outline" onClick={() => fileRef.current?.click()} disabled={parsing}>
           {parsing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Upload className="h-4 w-4 mr-2" />}
           Choose file
