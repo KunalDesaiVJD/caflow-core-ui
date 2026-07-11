@@ -63,44 +63,56 @@ function extractJson(text: string): any {
   return null;
 }
 
-// Provider-agnostic LLM call. Prefers OpenRouter when OPENROUTER_API_KEY is set,
-// otherwise falls back to the firm's already-configured ANTHROPIC_API_KEY so the
-// feature works with no extra setup. Returns the text content + a `truncated`
-// flag (output hit the token cap).
-async function callAI(opts: { system: string; userText: string; maxTokens: number }):
-  Promise<{ ok: boolean; status: number; errText: string; content: string; truncated: boolean }> {
-  const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY");
-  const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
+type AIResult = { ok: boolean; status: number; errText: string; content: string; truncated: boolean };
 
-  if (OPENROUTER_API_KEY) {
-    const model = Deno.env.get("OPENROUTER_MODEL") || "google/gemini-2.5-flash";
-    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+// Graceful multi-provider LLM call (text). Tries each CONFIGURED provider in
+// order and FALLS THROUGH on failure — so Anthropic "credit balance too low"
+// (400) transparently drops to the Lovable AI gateway. Order: OpenRouter →
+// Lovable (the app's provisioned Gemini gateway) → Anthropic. extractJson
+// downstream tolerates ```json fences, so we skip response_format for portability.
+async function callAI(opts: { system: string; userText: string; maxTokens: number }): Promise<AIResult> {
+  const openAICompat = async (url: string, key: string, model: string, extra: Record<string, string>): Promise<AIResult> => {
+    const res = await fetch(url, {
       method: "POST",
-      headers: { Authorization: `Bearer ${OPENROUTER_API_KEY}`, "Content-Type": "application/json", "HTTP-Referer": "https://caflow.app", "X-Title": "CAFlow TDS Recon" },
-      body: JSON.stringify({
-        model, temperature: 0, max_tokens: opts.maxTokens, response_format: { type: "json_object" },
-        messages: [{ role: "system", content: opts.system }, { role: "user", content: opts.userText }],
-      }),
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...extra },
+      body: JSON.stringify({ model, temperature: 0, max_tokens: opts.maxTokens, messages: [{ role: "system", content: opts.system }, { role: "user", content: opts.userText }] }),
     });
     if (!res.ok) return { ok: false, status: res.status, errText: await res.text(), content: "", truncated: false };
     const j = await res.json();
     return { ok: true, status: 200, errText: "", content: j?.choices?.[0]?.message?.content ?? "", truncated: j?.choices?.[0]?.finish_reason === "length" };
-  }
+  };
 
-  if (ANTHROPIC_API_KEY) {
+  const anthropic = async (key: string): Promise<AIResult> => {
     const model = Deno.env.get("ANTHROPIC_MODEL") || "claude-sonnet-4-20250514";
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
-      headers: { "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
       body: JSON.stringify({ model, max_tokens: opts.maxTokens, system: opts.system, messages: [{ role: "user", content: [{ type: "text", text: opts.userText }] }] }),
     });
     if (!res.ok) return { ok: false, status: res.status, errText: await res.text(), content: "", truncated: false };
     const j = await res.json();
     const text = Array.isArray(j?.content) ? j.content.filter((b: any) => b?.type === "text").map((b: any) => b.text).join("") : "";
     return { ok: true, status: 200, errText: "", content: text, truncated: j?.stop_reason === "max_tokens" };
-  }
+  };
 
-  return { ok: false, status: 503, errText: "No AI provider configured. Set OPENROUTER_API_KEY or ANTHROPIC_API_KEY in Supabase secrets.", content: "", truncated: false };
+  const OPENROUTER = Deno.env.get("OPENROUTER_API_KEY");
+  const LOVABLE = Deno.env.get("LOVABLE_API_KEY");
+  const ANTHROPIC = Deno.env.get("ANTHROPIC_API_KEY");
+  let last: AIResult = { ok: false, status: 503, errText: "No AI provider configured. Set OPENROUTER_API_KEY, LOVABLE_API_KEY or ANTHROPIC_API_KEY.", content: "", truncated: false };
+
+  if (OPENROUTER) {
+    const r = await openAICompat("https://openrouter.ai/api/v1/chat/completions", OPENROUTER, Deno.env.get("OPENROUTER_MODEL") || "google/gemini-2.5-flash", { "HTTP-Referer": "https://caflow.app", "X-Title": "CAFlow TDS Recon" });
+    if (r.ok) return r; last = r; console.error("callAI: OpenRouter failed", r.status, r.errText.slice(0, 160));
+  }
+  if (LOVABLE) {
+    const r = await openAICompat("https://ai.gateway.lovable.dev/v1/chat/completions", LOVABLE, Deno.env.get("LOVABLE_MODEL") || "google/gemini-2.5-flash", {});
+    if (r.ok) return r; last = r; console.error("callAI: Lovable failed", r.status, r.errText.slice(0, 160));
+  }
+  if (ANTHROPIC) {
+    const r = await anthropic(ANTHROPIC);
+    if (r.ok) return r; last = r; console.error("callAI: Anthropic failed", r.status, r.errText.slice(0, 160));
+  }
+  return last;
 }
 
 serve(async (req) => {
@@ -120,8 +132,8 @@ serve(async (req) => {
     const { data: { user }, error: authErr } = await supabase.auth.getUser(token);
     if (authErr || !user) return json({ error: "Unauthorized" }, 401);
 
-    if (!Deno.env.get("OPENROUTER_API_KEY") && !Deno.env.get("ANTHROPIC_API_KEY")) {
-      return json({ error: "No AI provider configured. Set OPENROUTER_API_KEY or ANTHROPIC_API_KEY in Supabase secrets." }, 503);
+    if (!Deno.env.get("OPENROUTER_API_KEY") && !Deno.env.get("LOVABLE_API_KEY") && !Deno.env.get("ANTHROPIC_API_KEY")) {
+      return json({ error: "No AI provider configured. Set OPENROUTER_API_KEY, LOVABLE_API_KEY or ANTHROPIC_API_KEY in Supabase secrets." }, 503);
     }
 
     const { filing_id, batch_id: batchIdIn } = (await req.json()) ?? {};
