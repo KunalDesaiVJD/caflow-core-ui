@@ -15,6 +15,9 @@ verify_jwt = true
 [functions.claude-gateway]
 verify_jwt = false
 
+[functions.scrutiny-investigator]
+verify_jwt = false
+
 [functions.run-scrutiny]
 verify_jwt = false
 

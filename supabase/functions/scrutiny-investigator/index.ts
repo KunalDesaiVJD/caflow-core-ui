@@ -59,23 +59,33 @@ serve(async (req) => {
     }
 
     // PostgREST caps a select at 1000 rows — page through so large engagements are complete.
-    const fetchAll = async (table: string, limit = 25000): Promise<Record<string, unknown>[]> => {
+    const pageFetch = async (
+      table: string,
+      // deno-lint-ignore no-explicit-any
+      filter: (q: any) => any,
+      limit = 25000,
+    ): Promise<Record<string, unknown>[]> => {
       const PAGE = 1000;
       const out: Record<string, unknown>[] = [];
       for (let from = 0; from < limit; from += PAGE) {
-        // Always scope to the ownership-verified client_id (prevents cross-firm reads via a spoofed
-        // engagement_id). Prefer engagement_id — the reliable key the sync writes under, robust to
-        // financial_year string differences; fall back to financial_year only when no engagement.
-        let q = supabase.from(table).select("*").eq("client_id", client_id);
-        if (engagement_id) q = q.eq("engagement_id", engagement_id);
-        else q = q.eq("financial_year", financial_year);
-        const { data, error } = await q.range(from, from + PAGE - 1);
+        const { data, error } = await filter(supabase.from(table).select("*")).range(from, from + PAGE - 1);
         if (error) { console.error(`${table} page@${from}:`, error.message); break; }
         if (!data || data.length === 0) break;
         out.push(...(data as Record<string, unknown>[]));
         if (data.length < PAGE) break;
       }
       return out;
+    };
+
+    // Load a tally_* table robustly: try client_id + engagement_id (precise), and if the caller's
+    // engagement is stale / missing / mismatched, fall back to client_id + financial_year. Always
+    // scoped to the ownership-verified client_id (prevents cross-firm reads via a spoofed engagement).
+    const fetchAll = async (table: string): Promise<Record<string, unknown>[]> => {
+      if (engagement_id) {
+        const byEng = await pageFetch(table, (q) => q.eq("client_id", client_id).eq("engagement_id", engagement_id));
+        if (byEng.length > 0) return byEng;
+      }
+      return await pageFetch(table, (q) => q.eq("client_id", client_id).eq("financial_year", financial_year));
     };
 
     // ── Trial balance (ledger grain) — Tally Sync first, snapshot fallback ──

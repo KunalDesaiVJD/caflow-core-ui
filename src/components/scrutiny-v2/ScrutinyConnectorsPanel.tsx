@@ -136,22 +136,28 @@ export default function ScrutinyConnectorsPanel({ clientId, financialYear, engag
     }
   };
 
-  // Page through a firm-scoped tally_* table by client_id + financial_year (RLS-scoped to the caller).
-  const fetchAllByClientYear = async (table: string): Promise<Record<string, unknown>[]> => {
+  // Page through a firm-scoped tally_* table with a given filter (RLS-scoped to the caller).
+  const pageFetch = async (table: string, filter: (q: any) => any): Promise<Record<string, unknown>[]> => {
     const PAGE = 1000;
     const out: Record<string, unknown>[] = [];
     for (let from = 0; from < 30000; from += PAGE) {
-      // Prefer engagement_id (the key Tally Sync writes under — robust to financial_year string
-      // differences); fall back to financial_year. Always scoped to client_id (and firm-scoped by RLS).
-      let q = (supabase.from as any)(table).select("*").eq("client_id", clientId);
-      if (engagementId) q = q.eq("engagement_id", engagementId);
-      else q = q.eq("financial_year", financialYear);
-      const { data, error: err } = await q.range(from, from + PAGE - 1);
+      const { data, error: err } = await filter((supabase.from as any)(table).select("*")).range(from, from + PAGE - 1);
       if (err || !data || data.length === 0) break;
       out.push(...(data as Record<string, unknown>[]));
       if (data.length < PAGE) break;
     }
     return out;
+  };
+
+  // Load a tally_* table robustly: try client_id + engagement_id (the key Tally Sync writes under),
+  // and if the selected engagement is stale / missing / mismatched, fall back to client_id +
+  // financial_year. Always scoped to client_id (and firm-scoped by RLS).
+  const fetchAllByClientYear = async (table: string): Promise<Record<string, unknown>[]> => {
+    if (engagementId) {
+      const byEng = await pageFetch(table, (q) => q.eq("client_id", clientId).eq("engagement_id", engagementId));
+      if (byEng.length > 0) return byEng;
+    }
+    return await pageFetch(table, (q) => q.eq("client_id", clientId).eq("financial_year", financialYear));
   };
 
   // Lazily load the book side once (on first upload). Tally Sync first, snapshot fallback.
