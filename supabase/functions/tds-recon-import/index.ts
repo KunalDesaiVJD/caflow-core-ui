@@ -103,31 +103,57 @@ function coerceRow(r: any): CanonicalRow {
   };
 }
 
-// Single OpenRouter chat call. Returns the text content AND finish_reason so the
-// caller can detect truncation ("length") instead of silently dropping rows when
-// the model's output budget is exceeded.
-async function callOpenRouter(
-  apiKey: string, model: string, messages: any[], plugins: any[], maxTokens: number,
-): Promise<{ ok: boolean; status: number; errText: string; content: string; finishReason: string | null }> {
-  const orBody: any = { model, messages, temperature: 0, max_tokens: maxTokens, response_format: { type: "json_object" } };
-  if (plugins.length) orBody.plugins = plugins;
-  const res = await fetch(OPENROUTER_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": "https://caflow.app",
-      "X-Title": "CAFlow TDS Recon Import",
-    },
-    body: JSON.stringify(orBody),
-  });
-  if (!res.ok) return { ok: false, status: res.status, errText: await res.text(), content: "", finishReason: null };
-  const j = await res.json();
-  return {
-    ok: true, status: res.status, errText: "",
-    content: j?.choices?.[0]?.message?.content ?? "",
-    finishReason: j?.choices?.[0]?.finish_reason ?? null,
-  };
+// Provider-agnostic LLM call. Prefers OpenRouter when OPENROUTER_API_KEY is set,
+// otherwise falls back to the firm's already-configured ANTHROPIC_API_KEY so the
+// feature works with no extra setup. Both providers read PDFs natively. Returns
+// the text content + a `truncated` flag (output hit the token cap) so the caller
+// can report the real cause instead of silently dropping rows.
+async function callAI(opts: {
+  system: string; userText: string; maxTokens: number;
+  pdf?: { base64: string; filename: string };
+}): Promise<{ ok: boolean; status: number; errText: string; content: string; truncated: boolean }> {
+  const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY");
+  const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
+
+  if (OPENROUTER_API_KEY) {
+    const model = Deno.env.get("OPENROUTER_MODEL") || "google/gemini-2.5-flash";
+    const pdfEngine = Deno.env.get("OPENROUTER_PDF_ENGINE") || "pdf-text"; // "mistral-ocr" for scanned PDFs
+    const userContent: any = opts.pdf
+      ? [{ type: "text", text: opts.userText }, { type: "file", file: { filename: opts.pdf.filename, file_data: `data:application/pdf;base64,${opts.pdf.base64}` } }]
+      : opts.userText;
+    const body: any = {
+      model, temperature: 0, max_tokens: opts.maxTokens,
+      response_format: { type: "json_object" },
+      messages: [{ role: "system", content: opts.system }, { role: "user", content: userContent }],
+    };
+    if (opts.pdf) body.plugins = [{ id: "file-parser", pdf: { engine: pdfEngine } }];
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${OPENROUTER_API_KEY}`, "Content-Type": "application/json", "HTTP-Referer": "https://caflow.app", "X-Title": "CAFlow TDS Recon" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return { ok: false, status: res.status, errText: await res.text(), content: "", truncated: false };
+    const j = await res.json();
+    return { ok: true, status: 200, errText: "", content: j?.choices?.[0]?.message?.content ?? "", truncated: j?.choices?.[0]?.finish_reason === "length" };
+  }
+
+  if (ANTHROPIC_API_KEY) {
+    const model = Deno.env.get("ANTHROPIC_MODEL") || "claude-sonnet-4-20250514";
+    const userContent: any = opts.pdf
+      ? [{ type: "text", text: opts.userText }, { type: "document", source: { type: "base64", media_type: "application/pdf", data: opts.pdf.base64 } }]
+      : [{ type: "text", text: opts.userText }];
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({ model, max_tokens: opts.maxTokens, system: opts.system, messages: [{ role: "user", content: userContent }] }),
+    });
+    if (!res.ok) return { ok: false, status: res.status, errText: await res.text(), content: "", truncated: false };
+    const j = await res.json();
+    const text = Array.isArray(j?.content) ? j.content.filter((b: any) => b?.type === "text").map((b: any) => b.text).join("") : "";
+    return { ok: true, status: 200, errText: "", content: text, truncated: j?.stop_reason === "max_tokens" };
+  }
+
+  return { ok: false, status: 503, errText: "No AI provider configured. Set OPENROUTER_API_KEY or ANTHROPIC_API_KEY in Supabase secrets.", content: "", truncated: false };
 }
 
 serve(async (req) => {
@@ -148,12 +174,9 @@ serve(async (req) => {
     const { data: { user }, error: authErr } = await supabase.auth.getUser(token);
     if (authErr || !user) return json({ error: "Unauthorized" }, 401);
 
-    const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY");
-    if (!OPENROUTER_API_KEY) {
-      return json({ error: "OPENROUTER_API_KEY is not configured. Run: npx supabase secrets set OPENROUTER_API_KEY=<key>" }, 503);
+    if (!Deno.env.get("OPENROUTER_API_KEY") && !Deno.env.get("ANTHROPIC_API_KEY")) {
+      return json({ error: "No AI provider configured. Set OPENROUTER_API_KEY or ANTHROPIC_API_KEY in Supabase secrets." }, 503);
     }
-    const model = Deno.env.get("OPENROUTER_MODEL") || "google/gemini-2.5-flash";
-    const pdfEngine = Deno.env.get("OPENROUTER_PDF_ENGINE") || "pdf-text"; // set to "mistral-ocr" for scanned PDFs
 
     const body = await req.json();
     const { filing_id, form_type, file_name, file_type, rows, pdf_base64 } = body ?? {};
@@ -180,28 +203,23 @@ serve(async (req) => {
     const collected: CanonicalRow[] = [];
 
     const httpErr = (status: number, errText: string) => {
-      console.error("OpenRouter import error:", status, errText);
-      const msg = status === 401 ? "OpenRouter authentication failed — check OPENROUTER_API_KEY."
-        : status === 402 ? "OpenRouter payment required — add credits to your account."
-        : status === 429 ? "OpenRouter rate limit — try again shortly."
+      console.error("AI import error:", status, errText);
+      const msg = status === 401 ? "AI provider authentication failed — check the configured API key."
+        : status === 402 ? "AI provider payment required — add credits."
+        : status === 429 ? "AI provider rate limit — try again shortly."
         : `AI import failed (${status})`;
       return json({ error: msg }, status >= 500 ? 502 : status);
     };
 
     if (file_type === "pdf") {
-      const messages = [
-        { role: "system", content: CANONICAL_INSTRUCTION },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: `Extract every deductee line item from this ${resolvedForm} TDS statement PDF into the canonical rows.` },
-            { type: "file", file: { filename: file_name || "client.pdf", file_data: `data:application/pdf;base64,${pdf_base64}` } },
-          ],
-        },
-      ];
-      const r = await callOpenRouter(OPENROUTER_API_KEY, model, messages, [{ id: "file-parser", pdf: { engine: pdfEngine } }], IMPORT_MAX_TOKENS);
+      const r = await callAI({
+        system: CANONICAL_INSTRUCTION,
+        userText: `Extract every deductee line item from this ${resolvedForm} TDS statement PDF into the canonical rows.`,
+        pdf: { base64: pdf_base64, filename: file_name || "client.pdf" },
+        maxTokens: IMPORT_MAX_TOKENS,
+      });
       if (!r.ok) return httpErr(r.status, r.errText);
-      if (r.finishReason === "length") {
+      if (r.truncated) {
         return json({ error: "This PDF has more rows than can be read in one pass. Split it into smaller PDFs, or import the data as Excel/CSV." }, 422);
       }
       const parsed = extractJson(typeof r.content === "string" ? r.content : JSON.stringify(r.content));
@@ -213,13 +231,13 @@ serve(async (req) => {
       const allRows = (rows as any[]).slice(0, 5000);
       for (let i = 0; i < allRows.length; i += BATCH) {
         const batch = allRows.slice(i, i + BATCH);
-        const messages = [
-          { role: "system", content: CANONICAL_INSTRUCTION },
-          { role: "user", content: `Client ${resolvedForm} file rows ${i + 1}-${i + batch.length} (JSON):\n${JSON.stringify(batch)}` },
-        ];
-        const r = await callOpenRouter(OPENROUTER_API_KEY, model, messages, [], IMPORT_MAX_TOKENS);
+        const r = await callAI({
+          system: CANONICAL_INSTRUCTION,
+          userText: `Client ${resolvedForm} file rows ${i + 1}-${i + batch.length} (JSON):\n${JSON.stringify(batch)}`,
+          maxTokens: IMPORT_MAX_TOKENS,
+        });
         if (!r.ok) return httpErr(r.status, r.errText);
-        if (r.finishReason === "length") {
+        if (r.truncated) {
           return json({ error: "A batch of client rows exceeded the model output limit. Try a smaller file." }, 422);
         }
         const parsed = extractJson(typeof r.content === "string" ? r.content : JSON.stringify(r.content));
