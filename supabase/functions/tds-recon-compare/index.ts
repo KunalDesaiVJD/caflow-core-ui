@@ -50,7 +50,7 @@ Field match rules:
 - section: equal after trimming words (e.g. "194Q - Purchase" == "194Q").
 - challan: BSR and challan number both equal (ignore blanks on both sides).
 status = "matched" only if every compared field matches; otherwise "mismatched".
-Always include one fields[] entry per compared field with the actual office/imported values (as strings). Never invent records.`;
+For "mismatched", "office_only" and "imported_only": include one fields[] entry per compared field with the actual office/imported values (as strings) and matched true/false. For "matched": return an empty fields array [] (values are equal by definition — this keeps the response compact). Never invent records.`;
 
 function extractJson(text: string): any {
   if (!text) return null;
@@ -173,7 +173,7 @@ serve(async (req) => {
         "X-Title": "CAFlow TDS Recon Compare",
       },
       body: JSON.stringify({
-        model, temperature: 0, max_tokens: 16000,
+        model, temperature: 0, max_tokens: 32000,
         response_format: { type: "json_object" },
         messages: [
           { role: "system", content: COMPARE_INSTRUCTION },
@@ -193,18 +193,27 @@ serve(async (req) => {
     }
 
     const aiJson = await aiRes.json();
+    const finishReason = aiJson?.choices?.[0]?.finish_reason ?? null;
     const content = aiJson?.choices?.[0]?.message?.content ?? "";
     const parsed = extractJson(typeof content === "string" ? content : JSON.stringify(content));
     const llmResults: any[] = Array.isArray(parsed?.results) ? parsed.results : [];
-    if (llmResults.length === 0) return json({ error: "The comparison returned no results. Try again." }, 502);
+    if (llmResults.length === 0) {
+      // A truncated response (hit the output cap) can't be parsed — surface the
+      // real cause instead of a misleading "no results".
+      if (finishReason === "length") {
+        return json({ error: "Too many records to compare in a single pass. Reduce the records for this filing or contact support." }, 413);
+      }
+      return json({ error: "The comparison returned no results. Try again." }, 502);
+    }
 
     // Preserve prior overrides (keyed by office+imported pairing) across re-runs.
     const { data: prior } = await supabase
       .from("tds_recon_results")
-      .select("office_deductee_id, imported_row_id, overridden, overridden_by, overridden_at, override_note")
+      .select("id, office_deductee_id, imported_row_id, overridden, overridden_by, overridden_at, override_note")
       .eq("filing_id", filing_id);
     const priorMap = new Map<string, any>();
     for (const p of prior ?? []) priorMap.set(`${p.office_deductee_id ?? ""}|${p.imported_row_id ?? ""}`, p);
+    const priorIds = (prior ?? []).map((p: any) => p.id);
 
     const validStatus = new Set(["matched", "mismatched", "office_only", "imported_only"]);
     const newRows = llmResults.map((r: any) => {
@@ -229,10 +238,16 @@ serve(async (req) => {
       };
     });
 
-    // Replace results for this filing (idempotent re-run).
-    await supabase.from("tds_recon_results").delete().eq("filing_id", filing_id);
+    // Replace results with a safe ordering: INSERT the new rows first, then delete
+    // the superseded ones by id. If the insert fails, the prior rows (and their
+    // manual override decisions) stay intact — no data-loss window. A failed
+    // cleanup delete only leaves recoverable duplicates, healed on the next run.
     const { error: insErr } = await supabase.from("tds_recon_results").insert(newRows);
     if (insErr) return json({ error: `Result insert failed: ${insErr.message}` }, 500);
+    if (priorIds.length) {
+      const { error: delErr } = await supabase.from("tds_recon_results").delete().in("id", priorIds);
+      if (delErr) console.error("tds-recon-compare: stale result cleanup failed (recoverable):", delErr.message);
+    }
 
     const summary = {
       total: newRows.length,

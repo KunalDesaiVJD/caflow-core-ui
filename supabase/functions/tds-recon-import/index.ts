@@ -103,6 +103,33 @@ function coerceRow(r: any): CanonicalRow {
   };
 }
 
+// Single OpenRouter chat call. Returns the text content AND finish_reason so the
+// caller can detect truncation ("length") instead of silently dropping rows when
+// the model's output budget is exceeded.
+async function callOpenRouter(
+  apiKey: string, model: string, messages: any[], plugins: any[], maxTokens: number,
+): Promise<{ ok: boolean; status: number; errText: string; content: string; finishReason: string | null }> {
+  const orBody: any = { model, messages, temperature: 0, max_tokens: maxTokens, response_format: { type: "json_object" } };
+  if (plugins.length) orBody.plugins = plugins;
+  const res = await fetch(OPENROUTER_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "https://caflow.app",
+      "X-Title": "CAFlow TDS Recon Import",
+    },
+    body: JSON.stringify(orBody),
+  });
+  if (!res.ok) return { ok: false, status: res.status, errText: await res.text(), content: "", finishReason: null };
+  const j = await res.json();
+  return {
+    ok: true, status: res.status, errText: "",
+    content: j?.choices?.[0]?.message?.content ?? "",
+    finishReason: j?.choices?.[0]?.finish_reason ?? null,
+  };
+}
+
 serve(async (req) => {
   const corsHeaders = corsFor(req);
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -145,11 +172,24 @@ serve(async (req) => {
 
     const resolvedForm = form_type || (Array.isArray(filing.tds_forms) ? filing.tds_forms[0] : null) || "26Q";
 
-    // ── Build the LLM request ──────────────────────────────────────────────────
-    let messages: any[];
-    const plugins: any[] = [];
+    // ── Normalise via the LLM ───────────────────────────────────────────────────
+    // Excel/CSV: normalise in row batches so a large client file never overruns
+    // the model's output budget (which would truncate the JSON and silently drop
+    // deductees). PDF: single pass with a large budget + explicit truncation check.
+    const IMPORT_MAX_TOKENS = 32000;
+    const collected: CanonicalRow[] = [];
+
+    const httpErr = (status: number, errText: string) => {
+      console.error("OpenRouter import error:", status, errText);
+      const msg = status === 401 ? "OpenRouter authentication failed — check OPENROUTER_API_KEY."
+        : status === 402 ? "OpenRouter payment required — add credits to your account."
+        : status === 429 ? "OpenRouter rate limit — try again shortly."
+        : `AI import failed (${status})`;
+      return json({ error: msg }, status >= 500 ? 502 : status);
+    };
+
     if (file_type === "pdf") {
-      messages = [
+      const messages = [
         { role: "system", content: CANONICAL_INSTRUCTION },
         {
           role: "user",
@@ -159,49 +199,37 @@ serve(async (req) => {
           ],
         },
       ];
-      plugins.push({ id: "file-parser", pdf: { engine: pdfEngine } });
+      const r = await callOpenRouter(OPENROUTER_API_KEY, model, messages, [{ id: "file-parser", pdf: { engine: pdfEngine } }], IMPORT_MAX_TOKENS);
+      if (!r.ok) return httpErr(r.status, r.errText);
+      if (r.finishReason === "length") {
+        return json({ error: "This PDF has more rows than can be read in one pass. Split it into smaller PDFs, or import the data as Excel/CSV." }, 422);
+      }
+      const parsed = extractJson(typeof r.content === "string" ? r.content : JSON.stringify(r.content));
+      const raw: any[] = Array.isArray(parsed?.rows) ? parsed.rows : Array.isArray(parsed) ? parsed : [];
+      collected.push(...raw.map(coerceRow));
     } else {
-      // Cap payload to keep within context; typical quarterly files are small.
-      const capped = (rows as any[]).slice(0, 2000);
-      messages = [
-        { role: "system", content: CANONICAL_INSTRUCTION },
-        { role: "user", content: `Client ${resolvedForm} file rows (JSON):\n${JSON.stringify(capped)}` },
-      ];
+      // Excel/CSV — chunked so each call's JSON output stays well within budget.
+      const BATCH = 100;
+      const allRows = (rows as any[]).slice(0, 5000);
+      for (let i = 0; i < allRows.length; i += BATCH) {
+        const batch = allRows.slice(i, i + BATCH);
+        const messages = [
+          { role: "system", content: CANONICAL_INSTRUCTION },
+          { role: "user", content: `Client ${resolvedForm} file rows ${i + 1}-${i + batch.length} (JSON):\n${JSON.stringify(batch)}` },
+        ];
+        const r = await callOpenRouter(OPENROUTER_API_KEY, model, messages, [], IMPORT_MAX_TOKENS);
+        if (!r.ok) return httpErr(r.status, r.errText);
+        if (r.finishReason === "length") {
+          return json({ error: "A batch of client rows exceeded the model output limit. Try a smaller file." }, 422);
+        }
+        const parsed = extractJson(typeof r.content === "string" ? r.content : JSON.stringify(r.content));
+        const raw: any[] = Array.isArray(parsed?.rows) ? parsed.rows : Array.isArray(parsed) ? parsed : [];
+        collected.push(...raw.map(coerceRow));
+      }
     }
 
-    const orBody: any = { model, messages, temperature: 0, max_tokens: 8000 };
-    if (plugins.length) orBody.plugins = plugins;
-    // Nudge JSON-only for models that support it (ignored by others).
-    orBody.response_format = { type: "json_object" };
-
-    const aiRes = await fetch(OPENROUTER_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://caflow.app",
-        "X-Title": "CAFlow TDS Recon Import",
-      },
-      body: JSON.stringify(orBody),
-    });
-
-    if (!aiRes.ok) {
-      const errText = await aiRes.text();
-      console.error("OpenRouter import error:", aiRes.status, errText);
-      const msg = aiRes.status === 401 ? "OpenRouter authentication failed — check OPENROUTER_API_KEY."
-        : aiRes.status === 402 ? "OpenRouter payment required — add credits to your account."
-        : aiRes.status === 429 ? "OpenRouter rate limit — try again shortly."
-        : `AI import failed (${aiRes.status})`;
-      return json({ error: msg }, aiRes.status >= 500 ? 502 : aiRes.status);
-    }
-
-    const aiJson = await aiRes.json();
-    const content = aiJson?.choices?.[0]?.message?.content ?? "";
-    const parsed = extractJson(typeof content === "string" ? content : JSON.stringify(content));
-    const rawRows: any[] = Array.isArray(parsed?.rows) ? parsed.rows : Array.isArray(parsed) ? parsed : [];
-    const canonical = rawRows.map(coerceRow)
-      // drop wholly-empty rows the model may echo
-      .filter(r => r.deductee_name || r.pan || r.amount_paid != null || r.tds_amount != null);
+    // drop wholly-empty rows the model may echo
+    const canonical = collected.filter(r => r.deductee_name || r.pan || r.amount_paid != null || r.tds_amount != null);
 
     if (canonical.length === 0) {
       return json({ error: "No deductee rows could be read from the file. Check the file has recognisable columns/section." }, 422);
