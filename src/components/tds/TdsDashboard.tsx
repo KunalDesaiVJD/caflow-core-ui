@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
-  Users, Clock, AlertTriangle, CheckCircle2, FileCheck, Ban, MinusCircle,
+  Users, Clock, AlertTriangle, CheckCircle2, FileCheck, MinusCircle,
   Printer, TrendingUp, Info,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
@@ -70,7 +70,7 @@ function getDueDate(fy: string, quarter: string, formType?: string): Date {
 }
 
 const TERMINAL_STATUSES = new Set([
-  "Filed", "Submitted", "Processed", "Accepted", "Not Applicable", "NIL",
+  "Filed", "Submitted", "Processed", "Accepted", "NIL",
 ]);
 
 // TDS Compliance Start/End Quarter — single source of truth for whether a
@@ -192,7 +192,6 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
     });
     const filed = filteredFilings.filter(f => ["Filed", "Submitted"].includes(f.work_status));
     const processed = filteredFilings.filter(f => ["Processed", "Accepted"].includes(f.work_status));
-    const na = filteredFilings.filter(f => f.work_status === "Not Applicable");
     const nil = filteredFilings.filter(f => f.work_status === "NIL");
     return {
       activeClients: activeClientIds.size,
@@ -200,7 +199,6 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
       overdue: overdue.length,
       filed: filed.length,
       processed: processed.length,
-      na: na.length,
       nil: nil.length,
     };
   }, [filteredFilings]);
@@ -254,7 +252,7 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
     return (
       <div className="space-y-4">
         <Skeleton className="h-10 w-full" />
-        <div className="grid grid-cols-7 gap-3">{Array.from({ length: 7 }).map((_, i) => <Skeleton key={i} className="h-20" />)}</div>
+        <div className="grid grid-cols-6 gap-3">{Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-20" />)}</div>
         <Skeleton className="h-64 w-full" />
       </div>
     );
@@ -269,7 +267,6 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
     { label: "Overdue", value: stats.overdue, icon: AlertTriangle, color: "text-destructive", bg: "bg-red-50 dark:bg-red-950/30", statusGroup: "overdue" },
     { label: "Filed / Submitted", value: stats.filed, icon: CheckCircle2, color: "text-emerald-600", bg: "bg-emerald-50 dark:bg-emerald-950/30", statusGroup: "filed" },
     { label: "Processed / Accepted", value: stats.processed, icon: FileCheck, color: "text-emerald-700", bg: "bg-emerald-100 dark:bg-emerald-900/40", statusGroup: "processed" },
-    { label: "Not Applicable", value: stats.na, icon: Ban, color: "text-muted-foreground", bg: "bg-muted", statusGroup: "not-applicable" },
     { label: "NIL Returns", value: stats.nil, icon: MinusCircle, color: "text-teal-600", bg: "bg-teal-50 dark:bg-teal-950/30", statusGroup: "nil" },
   ];
 
@@ -343,7 +340,7 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
       </div>
 
       {/* ═══ ROW 2: 7 KPI Cards — click filters the Client Filing Summary table below ═══ */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {kpiCards.map(kpi => (
           <Card
             key={kpi.label}

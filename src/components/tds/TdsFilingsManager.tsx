@@ -72,14 +72,13 @@ interface TdsAckFile {
 // map to a single FILING_STATUSES value (e.g. "Returns Due" means "anything
 // not yet terminal", "Overdue" adds a due-date check), so they're applied as
 // an extra filter dimension alongside the exact-match statusFilter dropdown.
-export type KpiStatusGroup = "all" | "returns-due" | "overdue" | "filed" | "processed" | "not-applicable" | "nil";
+export type KpiStatusGroup = "all" | "returns-due" | "overdue" | "filed" | "processed" | "nil";
 
 const KPI_STATUS_GROUP_LABELS: Record<Exclude<KpiStatusGroup, "all">, string> = {
   "returns-due": "Returns Due",
   overdue: "Overdue",
   filed: "Filed / Submitted",
   processed: "Processed / Accepted",
-  "not-applicable": "Not Applicable",
   nil: "NIL Returns",
 };
 
@@ -129,7 +128,6 @@ const TDS_FORMS = ["24Q", "26Q", "27Q", "27EQ"];
 
 const FILING_STATUSES = [
   "Not Started",
-  "Not Applicable",
   "NIL",
   "Data Received",
   "Under Process",
@@ -140,7 +138,6 @@ const FILING_STATUSES = [
 
 const FILING_STATUS_COLORS: Record<string, string> = {
   "Not Started": "bg-muted text-muted-foreground",
-  "Not Applicable": "bg-muted/60 text-muted-foreground line-through",
   "NIL": "bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-300",
   "Data Received": "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
   "Under Process": "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300",
@@ -159,7 +156,7 @@ const getDueDate = (fy: string, quarter: string): Date => {
 };
 
 const getDueDateColor = (fy: string, quarter: string, status: string) => {
-  if (["Filed", "Processed", "Not Applicable", "NIL"].includes(status)) return "text-emerald-600";
+  if (["Filed", "Processed", "NIL"].includes(status)) return "text-emerald-600";
   const due = getDueDate(fy, quarter);
   const days = differenceInDays(due, new Date());
   if (days < 0) return "text-destructive font-bold";
@@ -290,7 +287,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
 
       // KPI-card-driven aggregate status group — these don't map to a single
       // FILING_STATUSES value, so they're checked independently of statusFilter.
-      const isTerminal = ["Filed", "Submitted", "Processed", "Accepted", "Not Applicable", "NIL"].includes(f.work_status);
+      const isTerminal = ["Filed", "Submitted", "Processed", "Accepted", "NIL"].includes(f.work_status);
       if (statusGroup === "returns-due" && isTerminal) return false;
       if (statusGroup === "overdue") {
         if (isTerminal) return false;
@@ -298,7 +295,6 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       }
       if (statusGroup === "filed" && !["Filed", "Submitted"].includes(f.work_status)) return false;
       if (statusGroup === "processed" && !["Processed", "Accepted"].includes(f.work_status)) return false;
-      if (statusGroup === "not-applicable" && f.work_status !== "Not Applicable") return false;
       if (statusGroup === "nil" && f.work_status !== "NIL") return false;
 
       // Deleted client filtering
@@ -850,10 +846,9 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                 ) : filtered.map(f => {
                   const client = clients.find(c => c.id === f.client_id);
                   const clientTan = client?.tan_number || f.tan;
-                  const isNA = f.work_status === "Not Applicable";
                   const archived = isArchivedFiling(f);
                   return (
-                    <TableRow key={f.id} className={cn(isNA && "bg-muted/30", archived && "bg-muted/40 opacity-70")}>
+                    <TableRow key={f.id} className={cn(archived && "bg-muted/40 opacity-70")}>
                       <TableCell>
                         <Checkbox
                           checked={selectedIds.has(f.id)}
@@ -888,7 +883,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                             <SelectContent>
                               {FILING_STATUSES.map(s => (
                                 <SelectItem key={s} value={s}>
-                                  <span className={cn(s === "Not Applicable" && "line-through")}>{s}</span>
+                                  <span>{s}</span>
                                 </SelectItem>
                               ))}
                             </SelectContent>
