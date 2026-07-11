@@ -1,9 +1,13 @@
 /**
- * Manual-upload connectors panel (Phase 5, Ticket 5.3 — v2 behind the flag).
+ * Manual-upload connectors panel (v2 behind the flag).
  *
- * Upload a GST-2B / 26AS / bank export (CSV or Excel); we parse it, turn its rows and the book
- * vouchers into reconciliation entries, and show matched / only-in-file / only-in-books.
- * In-session only (no persistence, no migration). Reads book vouchers gracefully.
+ * Upload a GST-2B / 26AS / bank export (CSV, Excel, PDF or Word); we parse it and reconcile it
+ * against the client's books. ROOT-CAUSE FIX: the book side now comes from the LIVE Tally Sync
+ * tables (tally_vouchers + tally_trial_balance, keyed by client_id + financial_year — the same data
+ * the scrutiny engine uses), falling back to a trial_balance_snapshots import. Previously it read
+ * ONLY the snapshot, so Tally-synced clients had an empty book side and everything showed as
+ * unmatched. The last reconciliation is persisted per client/FY/connector in localStorage, so it
+ * survives tab switches and page refreshes instead of disappearing.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -14,14 +18,21 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Upload, Info, Loader2 } from "lucide-react";
-import { vouchersFromSnapshot } from "@/lib/scrutiny/adapters";
-import { reconcile, entriesFromVouchers, entriesFromRows, entriesFromText, type ReconResult, type ReconEntry } from "@/lib/scrutiny/reconcile";
-import type { VoucherRow } from "@/lib/scrutiny/detectionEngine";
+import { Upload, Info, Loader2, Database } from "lucide-react";
+import { tbFromTallyTB, tbFromSnapshot, vouchersFromSnapshot } from "@/lib/scrutiny/adapters";
+import { reconcile, entriesFromVouchers, entriesFromTB, entriesFromRows, entriesFromText, type ReconResult, type ReconEntry } from "@/lib/scrutiny/reconcile";
 
 interface Props {
   clientId: string;
   financialYear: string;
+  engagementId?: string | null;
+}
+
+interface BookData {
+  entries: ReconEntry[];
+  source: "tally_sync" | "snapshot" | "none";
+  vouchers: number;
+  ledgers: number;
 }
 
 const CONNECTORS = [
@@ -87,30 +98,84 @@ async function extractDocxText(file: File): Promise<string> {
   return res.value ?? "";
 }
 
-export default function ScrutinyConnectorsPanel({ clientId, financialYear }: Props) {
-  const [vouchers, setVouchers] = useState<VoucherRow[]>([]);
+export default function ScrutinyConnectorsPanel({ clientId, financialYear, engagementId }: Props) {
   const [connector, setConnector] = useState("bank");
   const [fileName, setFileName] = useState("");
   const [result, setResult] = useState<ReconResult | null>(null);
+  const [savedSource, setSavedSource] = useState<BookData["source"] | null>(null);
   const [parsing, setParsing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [book, setBook] = useState<BookData | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
+  const storageKey = (c: string) => `caflow_scrutiny_conn_${clientId}_${financialYear}_${c}`;
+
+  // Restore the last reconciliation for this client/FY/connector (survives tab switch + refresh).
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (!clientId) return;
-      try {
-        const { data, error: err } = await (supabase.from as any)("trial_balance_snapshots")
-          .select("raw_data")
-          .eq("client_id", clientId).eq("financial_year", financialYear).single();
-        if (cancelled) return;
-        if (!err && data && Array.isArray(data.raw_data)) setVouchers(vouchersFromSnapshot(data.raw_data as never[]));
-        else setVouchers([]);
-      } catch { if (!cancelled) setVouchers([]); }
-    })();
-    return () => { cancelled = true; };
-  }, [clientId, financialYear]);
+    setError(null);
+    try {
+      const raw = localStorage.getItem(storageKey(connector));
+      if (raw) {
+        const saved = JSON.parse(raw) as { fileName?: string; result?: ReconResult; source?: BookData["source"] };
+        setResult(saved.result ?? null);
+        setFileName(saved.fileName ?? "");
+        setSavedSource(saved.source ?? null);
+        return;
+      }
+    } catch { /* ignore corrupt storage */ }
+    setResult(null);
+    setFileName("");
+    setSavedSource(null);
+  }, [connector, clientId, financialYear]);
+
+  const persist = (c: string, payload: { fileName: string; result: ReconResult; source: BookData["source"] }) => {
+    try {
+      localStorage.setItem(storageKey(c), JSON.stringify(payload));
+    } catch {
+      /* quota exceeded — result still shows in-session, just not persisted */
+    }
+  };
+
+  // Page through a firm-scoped tally_* table by client_id + financial_year (RLS-scoped to the caller).
+  const fetchAllByClientYear = async (table: string): Promise<Record<string, unknown>[]> => {
+    const PAGE = 1000;
+    const out: Record<string, unknown>[] = [];
+    for (let from = 0; from < 30000; from += PAGE) {
+      let q = (supabase.from as any)(table).select("*").eq("client_id", clientId).eq("financial_year", financialYear);
+      if (engagementId) q = q.eq("engagement_id", engagementId);
+      const { data, error: err } = await q.range(from, from + PAGE - 1);
+      if (err || !data || data.length === 0) break;
+      out.push(...(data as Record<string, unknown>[]));
+      if (data.length < PAGE) break;
+    }
+    return out;
+  };
+
+  // Lazily load the book side once (on first upload). Tally Sync first, snapshot fallback.
+  const loadBook = async (): Promise<BookData> => {
+    if (book) return book;
+    let loaded: BookData = { entries: [], source: "none", vouchers: 0, ledgers: 0 };
+    try {
+      const ttb = await fetchAllByClientYear("tally_trial_balance");
+      if (ttb.length > 0) {
+        const tv = await fetchAllByClientYear("tally_vouchers");
+        const vEntries = entriesFromVouchers(vouchersFromSnapshot(tv as never[]));
+        const tbEntries = entriesFromTB(tbFromTallyTB(ttb as never[]));
+        loaded = { entries: [...vEntries, ...tbEntries], source: "tally_sync", vouchers: tv.length, ledgers: ttb.length };
+      } else {
+        const { data } = await (supabase.from as any)("trial_balance_snapshots")
+          .select("raw_data, normalised_data")
+          .eq("client_id", clientId).eq("financial_year", financialYear).maybeSingle();
+        if (data) {
+          const vEntries = Array.isArray(data.raw_data) ? entriesFromVouchers(vouchersFromSnapshot(data.raw_data as never[])) : [];
+          const tbEntries = Array.isArray(data.normalised_data) ? entriesFromTB(tbFromSnapshot(data.normalised_data as never[])) : [];
+          loaded = { entries: [...vEntries, ...tbEntries], source: "snapshot", vouchers: vEntries.length, ledgers: tbEntries.length };
+        }
+      }
+    } catch { /* leave as none */ }
+    setBook(loaded);
+    return loaded;
+  };
 
   const onFile = async (file: File | null) => {
     if (!file) return;
@@ -132,7 +197,11 @@ export default function ScrutinyConnectorsPanel({ clientId, financialYear }: Pro
             : "Could not find an amount column. Expected a header like Amount / Invoice Value / Taxable Value / Amount Credited."
         );
       } else {
-        setResult(reconcile(external, entriesFromVouchers(vouchers, "amount")));
+        const b = await loadBook();
+        const res = reconcile(external, b.entries);
+        setResult(res);
+        setSavedSource(b.source);
+        persist(connector, { fileName: file.name, result: res, source: b.source });
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not parse the file.");
@@ -164,10 +233,12 @@ export default function ScrutinyConnectorsPanel({ clientId, financialYear }: Pro
     </div>
   );
 
+  const effectiveSource = book?.source ?? savedSource;
+
   return (
     <div className="space-y-5">
       <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Info size={12} /> Upload a GST-2B, 26AS or bank export (CSV, Excel, PDF or Word) to reconcile against the books. Processed in your browser only — nothing is stored. v1 matches by amount (a first-pass check); PDF/Word are read as text.
+        <Info size={12} /> Upload a GST-2B, 26AS or bank export (CSV, Excel, PDF or Word) to reconcile against the books. The book side is read from live <strong>Tally Sync</strong> (vouchers + ledger balances), falling back to an imported trial balance. Processed in your browser only — nothing is stored server-side; the last result is remembered on this device. PDF/Word are read as text; v1 matches by amount (a first-pass check).
       </p>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -176,7 +247,7 @@ export default function ScrutinyConnectorsPanel({ clientId, financialYear }: Pro
             <button
               key={c.id}
               type="button"
-              onClick={() => { setConnector(c.id); setResult(null); setFileName(""); setError(null); }}
+              onClick={() => setConnector(c.id)}
               className={`px-3 py-1.5 text-xs font-medium transition-colors ${i < CONNECTORS.length - 1 ? "border-r" : ""} ${connector === c.id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted/60"}`}
             >
               {c.label}
@@ -186,14 +257,21 @@ export default function ScrutinyConnectorsPanel({ clientId, financialYear }: Pro
         <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls,.txt,.pdf,.docx,.doc" className="hidden" onChange={(e) => onFile(e.target.files?.[0] ?? null)} />
         <Button variant="outline" onClick={() => fileRef.current?.click()} disabled={parsing}>
           {parsing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Upload className="h-4 w-4 mr-2" />}
-          Choose file
+          {parsing ? "Reconciling…" : "Choose file"}
         </Button>
         {fileName && <span className="text-xs text-muted-foreground truncate max-w-[240px]">{fileName}</span>}
       </div>
 
-      {vouchers.length === 0 && (
+      {effectiveSource && effectiveSource !== "none" && (
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Database size={12} /> Book side: <strong className="text-foreground">{effectiveSource === "tally_sync" ? "Tally Sync" : "Trial-balance snapshot"}</strong>
+          {book && effectiveSource === "tally_sync" && <span>· {book.vouchers.toLocaleString("en-IN")} vouchers · {book.ledgers.toLocaleString("en-IN")} ledgers</span>}
+        </p>
+      )}
+
+      {effectiveSource === "none" && (
         <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-2.5 text-xs text-amber-800 flex items-start gap-2">
-          <Info size={14} className="mt-0.5 shrink-0" /><span>No book voucher data found for this client/year — reconciliation needs a trial-balance snapshot. The uploaded file will show as entirely unmatched.</span>
+          <Info size={14} className="mt-0.5 shrink-0" /><span>No book data found for this client/year — neither Tally Sync nor a trial-balance snapshot. Run Tally Sync first; until then the uploaded file will show as entirely unmatched.</span>
         </div>
       )}
 

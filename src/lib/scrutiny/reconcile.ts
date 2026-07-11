@@ -10,7 +10,7 @@
  * Pure + dependency-free → unit-testable without a DB or a file.
  */
 
-import type { VoucherRow } from "./detectionEngine";
+import type { VoucherRow, TBRow } from "./detectionEngine";
 
 export interface ReconEntry {
   key: string; // match key
@@ -60,6 +60,21 @@ export function reconcile(external: ReconEntry[], book: ReconEntry[]): ReconResu
     bookTotal: sum(book),
     matchedTotal: matched.reduce((s, m) => s + m.external.amount, 0),
   };
+}
+
+/** Book trial-balance ledgers -> reconciliation entries (ledger closing balances as book amounts). */
+export function entriesFromTB(tb: TBRow[], mode: ReconMode = "amount"): ReconEntry[] {
+  const out: ReconEntry[] = [];
+  for (const r of tb) {
+    const amount = Math.abs(r.closing_balance ?? 0);
+    if (amount === 0) continue;
+    out.push({
+      key: keyFor(amount, "", mode),
+      amount,
+      label: [String(r.ledger_name ?? "").trim(), (r.parent_group ?? "").toString().trim()].filter(Boolean).join(" · ") || "ledger",
+    });
+  }
+  return out;
 }
 
 /** Book vouchers -> reconciliation entries. */

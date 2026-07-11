@@ -73,14 +73,51 @@ export function parseInvestigatorResponse(data: unknown): string | null {
   return null;
 }
 
-/** Ask the investigator. Returns the answer, or null on ANY failure (empty question, gateway down, bad JSON). Never throws. */
+/** Identifiers the Tally-Sync-aware investigator needs to fetch live financial data. */
+export interface InvestigatorIds {
+  clientId: string;
+  financialYear: string;
+  engagementId: string | null;
+}
+
+/**
+ * Ask the investigator. Prefers `scrutiny-investigator`, which enriches the context with LIVE Tally
+ * Sync financials (ledger balances, TB, party balances, voucher stats) and delegates the LLM call to
+ * claude-gateway — so questions about amounts are answered from real data, not "missing from snapshot".
+ * Falls back to calling claude-gateway directly (finding rollups only) if that function is unavailable.
+ * Returns the answer, or null on ANY failure (empty question, both paths down, bad JSON). Never throws.
+ */
 export async function investigateWithAI(
   invoke: EdgeInvoker,
   question: string,
   inp: InvestigatorInputs,
+  ids?: InvestigatorIds,
 ): Promise<string | null> {
+  if (!question.trim()) return null;
+
+  // Preferred path: Tally-Sync-aware, financial-context-enriched investigator.
+  if (ids?.clientId) {
+    try {
+      const { data, error } = await invoke("scrutiny-investigator", {
+        body: {
+          question,
+          client_id: ids.clientId,
+          financial_year: ids.financialYear,
+          engagement_id: ids.engagementId,
+          base_context: buildInvestigatorContext(inp),
+        },
+      });
+      if (!error) {
+        const ans = parseInvestigatorResponse(data);
+        if (ans) return ans;
+      }
+    } catch {
+      /* fall through to the direct gateway path */
+    }
+  }
+
+  // Fallback: claude-gateway directly (finding rollups only, no live financials).
   try {
-    if (!question.trim()) return null;
     const { data, error } = await invoke("claude-gateway", {
       body: { request_type: SCRUTINY_INVESTIGATOR, user_message: buildInvestigatorRequest(question, inp) },
     });

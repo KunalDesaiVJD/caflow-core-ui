@@ -376,6 +376,7 @@ export default function AuditScrutiny() {
         },
         recurringCount: Object.keys(priorExclusions).length,
       },
+      { clientId, financialYear: fy, engagementId: (auditCtx?.selectedEngagement as any)?.id ?? null },
     );
     setInvestigatorAnswer(ans ?? "The AI investigator is unavailable (the gateway isn't deployed yet). Your findings and views are unaffected.");
     setInvestigating(false);
@@ -784,7 +785,7 @@ export default function AuditScrutiny() {
             : v2Tab === "forensics"
               ? <ScrutinyForensicsPanel clientId={clientId} financialYear={fy} />
               : v2Tab === "connectors"
-                ? <ScrutinyConnectorsPanel clientId={clientId} financialYear={fy} />
+                ? <ScrutinyConnectorsPanel clientId={clientId} financialYear={fy} engagementId={(auditCtx?.selectedEngagement as any)?.id ?? null} />
                 : v2Tab === "deliverables"
                 ? <ScrutinyDeliverablesPanel findings={findings} rules={rules} financialYear={fy} factGate={factGate} />
                 : v2Tab === "portfolio"
