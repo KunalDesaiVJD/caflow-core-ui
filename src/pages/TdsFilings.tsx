@@ -171,7 +171,11 @@ const TdsFilings = () => {
       .channel("tds-module-realtime")
       .on("postgres_changes", { event: "*", schema: "public", table: "client_services" }, refreshTdsModule)
       .on("postgres_changes", { event: "*", schema: "public", table: "tds_filings" }, refreshTdsModule)
-      .subscribe();
+      .subscribe((status) => {
+        // On (re)connect, pull once so any change that happened while the
+        // socket was down is picked up immediately.
+        if (status === "SUBSCRIBED") refreshTdsModule();
+      });
     return () => { supabase.removeChannel(channel); };
   }, [refreshTdsModule]);
 
@@ -188,6 +192,18 @@ const TdsFilings = () => {
       window.removeEventListener("focus", onVisible);
       window.removeEventListener("pageshow", onPageShow);
     };
+  }, [refreshTdsModule]);
+
+  // Guaranteed-eventual sync: even where WebSockets/Realtime are blocked (some
+  // corporate networks/proxies) AND the user never switches tabs, poll every
+  // 45s while the tab is visible so the module can never stay stale relative
+  // to the TDS Compliance config. Paused when the tab is hidden to avoid waste.
+  useEffect(() => {
+    const POLL_MS = 45000;
+    const id = window.setInterval(() => {
+      if (!document.hidden) refreshTdsModule();
+    }, POLL_MS);
+    return () => window.clearInterval(id);
   }, [refreshTdsModule]);
 
   return (
