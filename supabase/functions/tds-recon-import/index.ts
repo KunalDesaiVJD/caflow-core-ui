@@ -144,7 +144,10 @@ async function callAI(opts: {
       : [{ type: "text", text: opts.userText }];
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
-      headers: { "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      headers: {
+        "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json",
+        ...(opts.pdf ? { "anthropic-beta": "pdfs-2024-09-25" } : {}),
+      },
       body: JSON.stringify({ model, max_tokens: opts.maxTokens, system: opts.system, messages: [{ role: "user", content: userContent }] }),
     });
     if (!res.ok) return { ok: false, status: res.status, errText: await res.text(), content: "", truncated: false };
@@ -199,15 +202,23 @@ serve(async (req) => {
     // Excel/CSV: normalise in row batches so a large client file never overruns
     // the model's output budget (which would truncate the JSON and silently drop
     // deductees). PDF: single pass with a large budget + explicit truncation check.
-    const IMPORT_MAX_TOKENS = 32000;
+    // 8000 stays under every Claude model's output ceiling (some tiers cap at
+    // 8192), so the AI provider never 400s on max_tokens. Import is batched, so a
+    // small per-call budget is plenty.
+    const IMPORT_MAX_TOKENS = 8000;
     const collected: CanonicalRow[] = [];
 
     const httpErr = (status: number, errText: string) => {
       console.error("AI import error:", status, errText);
+      // Surface the provider's real reason (trimmed) instead of a bare code, so
+      // an unsupported/invalid file gives an actionable message.
+      let detail = "";
+      try { const j = JSON.parse(errText); detail = j?.error?.message || j?.error || j?.message || ""; } catch { detail = errText; }
+      detail = String(detail || "").slice(0, 240);
       const msg = status === 401 ? "AI provider authentication failed — check the configured API key."
         : status === 402 ? "AI provider payment required — add credits."
         : status === 429 ? "AI provider rate limit — try again shortly."
-        : `AI import failed (${status})`;
+        : `AI import failed (${status})${detail ? `: ${detail}` : ""}`;
       return json({ error: msg }, status >= 500 ? 502 : status);
     };
 
@@ -226,8 +237,9 @@ serve(async (req) => {
       const raw: any[] = Array.isArray(parsed?.rows) ? parsed.rows : Array.isArray(parsed) ? parsed : [];
       collected.push(...raw.map(coerceRow));
     } else {
-      // Excel/CSV — chunked so each call's JSON output stays well within budget.
-      const BATCH = 100;
+      // Excel/CSV — chunked small so each call's JSON output stays well within
+      // the 8000-token budget (≈50 canonical rows ≈ 3-4k output tokens).
+      const BATCH = 50;
       const allRows = (rows as any[]).slice(0, 5000);
       for (let i = 0; i < allRows.length; i += BATCH) {
         const batch = allRows.slice(i, i + BATCH);

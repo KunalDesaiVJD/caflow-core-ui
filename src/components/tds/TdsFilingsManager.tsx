@@ -40,7 +40,7 @@ interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null; deleted_at?: string | null;
   tds_start_fy?: string; tds_start_quarter?: string; tds_end_fy?: string; tds_end_quarter?: string;
   tds_forms_applicable?: string[];
-  // Identity fields shown in the Client Name hover card (TAN/PAN/Contact/Mobile/Email) —
+  // Identity fields shown in the Client Name hover card (TAN/PAN/Contact/Mobile) —
   // sourced from the same `clients` prop already loaded by the host, no extra fetch.
   contact_person?: string | null; mobile?: string | null; email?: string | null;
 }
@@ -817,10 +817,6 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                               <div className="flex gap-2">
                                 <span className="text-muted-foreground w-28 shrink-0">Mobile</span>
                                 <span>{client?.mobile || "—"}</span>
-                              </div>
-                              <div className="flex gap-2">
-                                <span className="text-muted-foreground w-28 shrink-0">Email</span>
-                                <span className="truncate">{client?.email || "—"}</span>
                               </div>
                             </div>
                           </HoverCardContent>

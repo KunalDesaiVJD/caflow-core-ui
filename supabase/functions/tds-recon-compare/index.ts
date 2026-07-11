@@ -205,16 +205,19 @@ serve(async (req) => {
     const ai = await callAI({
       system: COMPARE_INSTRUCTION,
       userText: `OFFICE (${officePayload.length}):\n${JSON.stringify(officePayload)}\n\nIMPORTED (${importedPayload.length}):\n${JSON.stringify(importedPayload)}`,
-      maxTokens: 32000,
+      maxTokens: 8000,
     });
 
     if (!ai.ok) {
       console.error("AI compare error:", ai.status, ai.errText);
+      let detail = "";
+      try { const j = JSON.parse(ai.errText); detail = j?.error?.message || j?.error || j?.message || ""; } catch { detail = ai.errText; }
+      detail = String(detail || "").slice(0, 240);
       const msg = ai.status === 401 ? "AI provider authentication failed — check the configured API key."
         : ai.status === 402 ? "AI provider payment required — add credits."
         : ai.status === 429 ? "AI provider rate limit — try again shortly."
         : ai.status === 503 ? ai.errText
-        : `AI compare failed (${ai.status})`;
+        : `AI compare failed (${ai.status})${detail ? `: ${detail}` : ""}`;
       return json({ error: msg }, ai.status >= 500 ? 502 : ai.status);
     }
 

@@ -73,3 +73,6 @@ verify_jwt = false
 
 [functions.tds-recon-compare]
 verify_jwt = false
+
+[functions.tds-ai-diag]
+verify_jwt = false
