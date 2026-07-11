@@ -21,15 +21,12 @@ import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter,
 } from "@/components/ui/sheet";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
-} from "@/components/ui/dialog";
-import {
   HoverCard, HoverCardContent, HoverCardTrigger,
 } from "@/components/ui/hover-card";
 import { format, differenceInDays } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
-  Download, ArrowRight, RefreshCw, Copy, Clock, AlertTriangle, ExternalLink, Info, Settings, Trash2, X,
+  Download, ArrowRight, RefreshCw, Clock, AlertTriangle, ExternalLink, Info, Settings, Trash2, X,
   Maximize2, Minimize2,
 } from "lucide-react";
 import {
@@ -135,11 +132,6 @@ interface Props {
   refreshKey?: number;
 }
 
-const CURRENT_FY_START = new Date().getMonth() >= 3 ? new Date().getFullYear() : new Date().getFullYear() - 1;
-const DEFAULT_FY = `${CURRENT_FY_START}-${String(CURRENT_FY_START + 1).slice(2)}`;
-const FY_OPTIONS = Array.from({ length: 7 }, (_, i) => { const s = 2020 + i; return `${s}-${String(s + 1).slice(2)}`; });
-const QUARTER_OPTIONS = ["Q1", "Q2", "Q3", "Q4"];
-
 const FILING_STATUSES = [
   "Not Started",
   "NIL",
@@ -202,13 +194,6 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   // Bulk actions
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkAction, setBulkAction] = useState("");
-
-  // Copy filing dialog
-  const [copyDialogOpen, setCopyDialogOpen] = useState(false);
-  const [copySource, setCopySource] = useState<TdsFiling | null>(null);
-  const [copyQuarter, setCopyQuarter] = useState("Q1");
-  const [copyFy, setCopyFy] = useState(DEFAULT_FY);
-  const [copying, setCopying] = useState(false);
 
   // History drawer
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -548,34 +533,6 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     else { fetchFilings(); onFilingsChanged?.(); }
   };
 
-  const openCopyDialog = (f: TdsFiling) => {
-    setCopySource(f);
-    const nextQ = f.quarter === "Q1" ? "Q2" : f.quarter === "Q2" ? "Q3" : f.quarter === "Q3" ? "Q4" : "Q1";
-    const nextFy = f.quarter === "Q4" ? (() => { const s = parseInt(f.financial_year.split("-")[0]) + 1; return `${s}-${String(s + 1).slice(2)}`; })() : f.financial_year;
-    setCopyQuarter(nextQ);
-    setCopyFy(nextFy);
-    setCopyDialogOpen(true);
-  };
-
-  const confirmCopyFiling = async () => {
-    if (!copySource) return;
-    setCopying(true);
-    const { error } = await supabase.from("tds_filings").insert({
-      client_id: copySource.client_id,
-      firm_id: copySource.firm_id,
-      financial_year: copyFy,
-      quarter: copyQuarter,
-      tds_forms: copySource.tds_forms,
-      work_status: "Not Started",
-      tan: copySource.tan,
-      last_updated_by: user?.id,
-      last_updated_at: new Date().toISOString(),
-    } as any);
-    setCopying(false);
-    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
-    else { toast({ title: `Filing copied to ${copyQuarter} ${copyFy}` }); setCopyDialogOpen(false); fetchFilings(); onFilingsChanged?.(); }
-  };
-
   const toggleSelect = (id: string) => {
     setSelectedIds(prev => {
       const next = new Set(prev);
@@ -763,7 +720,6 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                   </TableHead>
                   <TableHead className="min-w-[150px] sticky left-0 bg-background z-10">Client</TableHead>
                   <TableHead style={{ width: statusColWidth, minWidth: statusColWidth }}>Status</TableHead>
-                  <TableHead>Due Date</TableHead>
                   <TableHead>Filing Date</TableHead>
                   <TableHead>Ack No</TableHead>
                   <TableHead>Prepared By</TableHead>
@@ -845,9 +801,9 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                             </SelectContent>
                           </Select>
                         )}
-                      </TableCell>
-                      <TableCell className={getDueDateColor(f.financial_year, f.quarter, f.work_status)}>
-                        {format(getDueDate(f.financial_year, f.quarter), "dd/MM/yyyy")}
+                        <div className={cn("text-[10px] mt-1", getDueDateColor(f.financial_year, f.quarter, f.work_status))}>
+                          Due: {format(getDueDate(f.financial_year, f.quarter), "dd/MM/yyyy")}
+                        </div>
                       </TableCell>
                       <TableCell>
                         {/* Filing Date is fully system-managed — auto-set to today when
@@ -958,9 +914,6 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                           <Button variant="ghost" size="icon" className="h-7 w-7" title="History" onClick={() => openHistory(f)}>
                             <Clock size={14} />
                           </Button>
-                          <Button variant="ghost" size="icon" className="h-7 w-7" title="Copy Filing" onClick={() => openCopyDialog(f)}>
-                            <Copy size={14} />
-                          </Button>
                           <Button variant="ghost" size="icon" className="h-7 w-7" title="Go to Data Entry" onClick={() => onNavigateDataEntry?.(f.id)}>
                             <ArrowRight size={14} />
                           </Button>
@@ -1032,44 +985,6 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
           </div>
         </SheetContent>
       </Sheet>
-
-      {/* Copy Filing Dialog */}
-      <Dialog open={copyDialogOpen} onOpenChange={setCopyDialogOpen}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Copy Filing</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              Copy <strong>{clients.find(c => c.id === copySource?.client_id)?.name}</strong> — {copySource?.tds_forms?.join(", ")} to a new quarter. Only deductor details are copied; no challan/deductee data.
-            </p>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label className="text-xs">Quarter</Label>
-                <Select value={copyQuarter} onValueChange={setCopyQuarter}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {QUARTER_OPTIONS.map(q => <SelectItem key={q} value={q}>{q}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs">FY</Label>
-                <Select value={copyFy} onValueChange={setCopyFy}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {FY_OPTIONS.map(fy => <SelectItem key={fy} value={fy}>{fy}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setCopyDialogOpen(false)}>Cancel</Button>
-            <Button onClick={confirmCopyFiling} disabled={copying}>{copying ? "Copying..." : "Confirm"}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
     </div>
   );
