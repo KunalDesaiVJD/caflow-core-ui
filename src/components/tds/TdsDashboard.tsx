@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
-  Users, Clock, AlertTriangle, CheckCircle2, FileCheck, MinusCircle,
+  Users, Clock, CheckCheck, CheckCircle2, FileCheck, MinusCircle,
   Printer, TrendingUp, Info,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
