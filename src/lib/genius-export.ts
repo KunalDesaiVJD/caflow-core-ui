@@ -63,15 +63,28 @@
  * because that's a limitation of SheetJS's BIFF8 writer regardless of how
  * the surrounding container is assembled. Those names back Excel's own
  * dropdown-list UI convenience on the blank template for a human filling it
- * in by hand — since this export only ever writes plain cell values, never
- * touching that UI, this is expected to be low-risk, but is called out here
- * for visibility if further issues trace back to it.
+ * in by hand — the decompiled Genius macro (see below) never references any
+ * of them by name, only ever reading/writing sheet cells directly, so this
+ * is confirmed low-risk rather than merely assumed to be.
  *
- * Template sheet names (internal → Genius import expected):
- *   DeductorDetails / EmployerDetails / CollectorDetails  → Deductor/Employer/Collector Details
- *   ChallanDetails                                        → Challan Details
- *   Annex-I_DeducteeDetails                              → Deductee Details
- *   Annex-I_PartyDetails                                 → Party Details
+ * Sheet names are intentionally left EXACTLY as the template has them —
+ * DeductorDetails, ChallanDetails, Annex-I_DeducteeDetails, etc., no spaces.
+ * An earlier version of this file renamed them to space-separated display
+ * names ("Deductor Details" etc.), on the assumption Genius's import
+ * required that (a prior developer's note claimed "Genius importer looks
+ * for exact names with spaces"). That assumption was never actually
+ * verified and turned out to be backwards. With "Trust access to the VBA
+ * project object model" enabled and Excel's VBProject object model, Module1
+ * was extracted and decompiled directly (it's MS-OVBA-compressed; decoded
+ * with a from-spec implementation of the documented decompression
+ * algorithm, verified correct by producing clean, coherent VBA source).
+ * Its VerifyData/VerifyDeductor/VerifyChallan/VerifyDeductee routines — the
+ * actual logic wired to the sheet's own "Validate Data" ActiveX button —
+ * reference sheets exclusively via Sheets("DeductorDetails"),
+ * Sheets("ChallanDetails"), Sheets("Annex-I_DeducteeDetails"): zero
+ * occurrences of any spaced variant anywhere in the source. Renaming the
+ * sheets was silently breaking Genius's own lookups against its own
+ * template — this file no longer renames anything.
  */
 
 import * as XLSX from "xlsx";
@@ -300,30 +313,6 @@ const findSheetName = (wb: XLSX.WorkBook, ...candidateNames: string[]): string |
     if (match) return match;
   }
   return null;
-};
-
-/**
- * Rename a sheet's DISPLAY name only — CodeName (what VBA actually binds to,
- * e.g. "Sheet1") lives in wb.Workbook.Sheets[i].CodeName and is left
- * untouched, exactly as renaming a tab in Excel itself would behave.
- */
-const renameSheetDisplayName = (wb: XLSX.WorkBook, oldName: string, newName: string): void => {
-  if (oldName === newName) return;
-  const idx = wb.SheetNames.indexOf(oldName);
-  if (idx === -1) return;
-  wb.SheetNames[idx] = newName;
-  wb.Sheets[newName] = wb.Sheets[oldName];
-  delete wb.Sheets[oldName];
-  if (wb.Workbook?.Sheets?.[idx]) {
-    wb.Workbook.Sheets[idx].name = newName;
-  }
-  // Keep any Print_Area (or other) defined-name Ref in sync with the rename
-  // so it doesn't dangle pointing at a tab name that no longer exists.
-  wb.Workbook?.Names?.forEach(n => {
-    if (n.Ref?.startsWith(`${oldName}!`)) {
-      n.Ref = `${newName}!${n.Ref.slice(oldName.length + 1)}`;
-    }
-  });
 };
 
 // ─── Main export function ─────────────────────────────────────────────────────
@@ -693,33 +682,23 @@ export async function generateGeniusExport(
   }
 
   console.log("[GeniusExport] Deductee rows written:", deducteeRowsWritten);
+  console.log("[GeniusExport] Sheet names (unchanged from template):", wb.SheetNames);
 
   // ═════════════════════════════════════════════════════════════════════════
-  // SECTION 4: Rename worksheets to Genius-expected names
-  // Genius importer looks for exact display names with spaces. CodeName
-  // (what VBA actually binds to) is untouched by renameSheetDisplayName.
-  // Template has names without spaces (ChallanDetails, DeductorDetails, etc.)
-  // ═════════════════════════════════════════════════════════════════════════
-  const sheetRenameMap: Record<string, string> = {
-    "DeductorDetails":        "Deductor Details",
-    "EmployerDetails":        "Employer Details",
-    "CollectorDetails":       "Collector Details",
-    "ChallanDetails":         "Challan Details",
-    "Annex-I_DeducteeDetails":"Deductee Details",
-    "Annex-I_PartyDetails":   "Party Details",
-  };
-
-  Object.entries(sheetRenameMap).forEach(([oldName, newName]) => {
-    if (wb.SheetNames.includes(oldName)) {
-      console.log(`[GeniusExport] Renaming sheet: "${oldName}" → "${newName}"`);
-      renameSheetDisplayName(wb, oldName, newName);
-    }
-  });
-
-  console.log("[GeniusExport] Final sheet names:", wb.SheetNames);
-
-  // ═════════════════════════════════════════════════════════════════════════
-  // SECTION 5: Splice the edited data into the BASE container and save
+  // SECTION 4: Splice the edited data into the BASE container and save
+  //
+  // NOTE: sheets are deliberately left named exactly as the template has them
+  // (DeductorDetails, ChallanDetails, Annex-I_DeducteeDetails, etc. — no
+  // spaces). An earlier version of this file renamed them to space-separated
+  // display names ("Deductor Details" etc.), on the assumption Genius's
+  // import required that. Decompiling the actual Genius VBA (Module1's
+  // VerifyData/VerifyDeductor/VerifyChallan/VerifyDeductee, the routines
+  // wired to the sheet's own "Validate Data" button) proved the opposite:
+  // every single sheet lookup in Genius's own macro uses the ORIGINAL
+  // un-spaced names — Sheets("DeductorDetails"), Sheets("ChallanDetails"),
+  // Sheets("Annex-I_DeducteeDetails") — with zero occurrences of the spaced
+  // variants anywhere in the source. Renaming the sheets was silently
+  // breaking Genius's own lookups against its own template.
   //
   // CRITICAL: Genius TDS software imports ONLY via legacy .xls (BIFF8) format.
   // Its VBA macros use Workbooks.Open which cannot read OOXML (.xlsx). Giving
