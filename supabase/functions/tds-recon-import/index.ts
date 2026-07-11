@@ -22,10 +22,17 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
-const corsHeaders = {
+// Reflect the browser's requested headers on the preflight. Newer supabase-js
+// (v2.98+) attaches x-supabase-client-* headers to every functions.invoke call;
+// a STATIC allow-list that omits them fails the CORS preflight and the browser
+// reports "Failed to send a request to the Edge Function" before our code runs.
+const corsFor = (req: Request) => ({
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+  "Access-Control-Allow-Headers":
+    req.headers.get("access-control-request-headers") ??
+    "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+});
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
@@ -97,6 +104,7 @@ function coerceRow(r: any): CanonicalRow {
 }
 
 serve(async (req) => {
+  const corsHeaders = corsFor(req);
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   const json = (body: unknown, status = 200) =>
