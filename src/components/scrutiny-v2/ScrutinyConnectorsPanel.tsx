@@ -149,12 +149,22 @@ export default function ScrutinyConnectorsPanel({ clientId, financialYear, engag
     return out;
   };
 
-  // Load a tally_* table robustly: try client_id + engagement_id (the key Tally Sync writes under),
-  // and if the selected engagement is stale / missing / mismatched, fall back to client_id +
-  // financial_year. Always scoped to client_id (and firm-scoped by RLS).
-  const fetchAllByClientYear = async (table: string): Promise<Record<string, unknown>[]> => {
+  // Resolve a trusted engagement id owned by this client (verified against audit_engagements). We then
+  // read tally rows by engagement_id ALONE — the only reliable key when a sync left client_id NULL.
+  const resolveEngId = async (): Promise<string | null> => {
     if (engagementId) {
-      const byEng = await pageFetch(table, (q) => q.eq("client_id", clientId).eq("engagement_id", engagementId));
+      const { data } = await (supabase.from as any)("audit_engagements").select("id").eq("id", engagementId).eq("client_id", clientId).maybeSingle();
+      if (data?.id) return data.id as string;
+    }
+    const { data } = await (supabase.from as any)("audit_engagements").select("id").eq("client_id", clientId).eq("financial_year", financialYear).maybeSingle();
+    return (data?.id as string) ?? null;
+  };
+
+  // Load a tally_* table: by the trusted engagement (handles NULL-client_id rows), falling back to
+  // client_id + financial_year. Firm-scoped by RLS either way.
+  const fetchTally = async (table: string, engId: string | null): Promise<Record<string, unknown>[]> => {
+    if (engId) {
+      const byEng = await pageFetch(table, (q) => q.eq("engagement_id", engId));
       if (byEng.length > 0) return byEng;
     }
     return await pageFetch(table, (q) => q.eq("client_id", clientId).eq("financial_year", financialYear));
@@ -165,9 +175,10 @@ export default function ScrutinyConnectorsPanel({ clientId, financialYear, engag
     if (book) return book;
     let loaded: BookData = { entries: [], source: "none", vouchers: 0, ledgers: 0 };
     try {
-      const ttb = await fetchAllByClientYear("tally_trial_balance");
+      const engId = await resolveEngId();
+      const ttb = await fetchTally("tally_trial_balance", engId);
       if (ttb.length > 0) {
-        const tv = await fetchAllByClientYear("tally_vouchers");
+        const tv = await fetchTally("tally_vouchers", engId);
         const vEntries = entriesFromVouchers(vouchersFromSnapshot(tv as never[]));
         const tbEntries = entriesFromTB(tbFromTallyTB(ttb as never[]));
         loaded = { entries: [...vEntries, ...tbEntries], source: "tally_sync", vouchers: tv.length, ledgers: ttb.length };

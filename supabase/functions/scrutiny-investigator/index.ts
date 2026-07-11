@@ -77,12 +77,26 @@ serve(async (req) => {
       return out;
     };
 
-    // Load a tally_* table robustly: try client_id + engagement_id (precise), and if the caller's
-    // engagement is stale / missing / mismatched, fall back to client_id + financial_year. Always
-    // scoped to the ownership-verified client_id (prevents cross-firm reads via a spoofed engagement).
+    // Resolve a TRUSTED engagement id that belongs to this (ownership-verified) client. We fetch tally
+    // rows by engagement_id ALONE — the only reliable key when a sync left the rows' client_id /
+    // firm_id / financial_year NULL (it happens; a migration backfills + a trigger prevents it, but the
+    // reader stays resilient). Verifying the engagement belongs to client_id keeps it secure: the
+    // caller already passed the firm-ownership check on client_id, so a spoofed engagement can't leak.
+    let trustedEngId: string | null = null;
+    if (engagement_id) {
+      const { data: eng } = await supabase.from("audit_engagements").select("id").eq("id", engagement_id).eq("client_id", client_id).maybeSingle();
+      if (eng?.id) trustedEngId = eng.id as string;
+    }
+    if (!trustedEngId) {
+      const { data: eng } = await supabase.from("audit_engagements").select("id").eq("client_id", client_id).eq("financial_year", financial_year).maybeSingle();
+      if (eng?.id) trustedEngId = eng.id as string;
+    }
+
+    // Load a tally_* table: by the trusted engagement (handles NULL client_id/FY rows), falling back
+    // to client_id + financial_year for rows that carry client_id but no matching engagement.
     const fetchAll = async (table: string): Promise<Record<string, unknown>[]> => {
-      if (engagement_id) {
-        const byEng = await pageFetch(table, (q) => q.eq("client_id", client_id).eq("engagement_id", engagement_id));
+      if (trustedEngId) {
+        const byEng = await pageFetch(table, (q) => q.eq("engagement_id", trustedEngId));
         if (byEng.length > 0) return byEng;
       }
       return await pageFetch(table, (q) => q.eq("client_id", client_id).eq("financial_year", financial_year));
