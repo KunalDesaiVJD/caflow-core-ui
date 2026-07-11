@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { getDefaultTdsQuarter, clientHasTdsForm, isFilingTdsCompliant } from "@/lib/tdsQuarter";
+import { isFilingTdsCompliant } from "@/lib/tdsQuarter";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -23,6 +23,9 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  HoverCard, HoverCardContent, HoverCardTrigger,
+} from "@/components/ui/hover-card";
 import { format, differenceInDays } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
@@ -37,6 +40,9 @@ interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null; deleted_at?: string | null;
   tds_start_fy?: string; tds_start_quarter?: string; tds_end_fy?: string; tds_end_quarter?: string;
   tds_forms_applicable?: string[];
+  // Identity fields shown in the Client Name hover card (TAN/PAN/Contact/Mobile/Email) —
+  // sourced from the same `clients` prop already loaded by the host, no extra fetch.
+  contact_person?: string | null; mobile?: string | null; email?: string | null;
 }
 interface UserOption { id: string; name: string | null; }
 
@@ -45,6 +51,9 @@ interface TdsFiling {
   quarter: string; tds_forms: string[] | null; work_status: string;
   date_of_filing: string | null; acknowledgment_number: string | null;
   prn_no: string | null; tan: string | null; assigned_staff: string | null;
+  // Prepared By / Checked By — existing tds_filings columns (FK → users.id,
+  // ON DELETE SET NULL), previously unused by any UI in this codebase.
+  preparer_id: string | null; checker_id: string | null;
   last_updated_by: string | null; last_updated_at: string | null;
   remarks: string | null; created_at: string | null;
   ack_file_url?: string | null;
@@ -71,7 +80,7 @@ interface TdsAckFile {
 // Aggregate status groups driven by Dashboard KPI card clicks — these don't
 // map to a single FILING_STATUSES value (e.g. "Returns Due" means "anything
 // not yet terminal", "Overdue" adds a due-date check), so they're applied as
-// an extra filter dimension alongside the exact-match statusFilter dropdown.
+// a dismissible filter layered on top of the row's exact work_status.
 export type KpiStatusGroup = "all" | "returns-due" | "overdue" | "filed" | "processed" | "nil";
 
 const KPI_STATUS_GROUP_LABELS: Record<Exclude<KpiStatusGroup, "all">, string> = {
@@ -83,13 +92,10 @@ const KPI_STATUS_GROUP_LABELS: Record<Exclude<KpiStatusGroup, "all">, string> = 
 };
 
 export interface FilingsPreset {
-  fy: string;
-  quarter: string;
-  client: string;
-  form: string;
   statusGroup: KpiStatusGroup;
   // Bumped on every click so re-selecting the same card re-applies the
-  // preset even if the user changed filters manually in between.
+  // preset even if the user cleared the status-group filter manually in
+  // between.
   nonce: number;
 }
 
@@ -102,8 +108,17 @@ interface Props {
   // When embedded elsewhere (e.g. the Dashboard's Client Filing Summary card),
   // the host already provides its own title — suppress this component's own.
   hideHeader?: boolean;
-  // External filter preset (e.g. from a Dashboard KPI card click) that
-  // overrides the current FY/Quarter/Client/Form/Status selection.
+  // FY/Quarter/Client/Form filters — owned entirely by the host (the
+  // Dashboard's top-level filter bar is the single source of truth) and
+  // passed down here as plain reactive props. This component no longer
+  // renders its own copies of these controls, so there is exactly one place
+  // to change a filter and the summary table re-renders automatically.
+  fyFilter: string;
+  quarterFilter: string;
+  clientFilter: string;
+  formFilter: string;
+  // External status-group preset (e.g. from a Dashboard KPI card click) that
+  // overrides the current aggregate status-group selection.
   preset?: FilingsPreset | null;
   // Fired after any write that changes work_status (status change, inline
   // edit, bulk action, copy) — lets a host embedding this component (e.g.
@@ -124,7 +139,6 @@ const CURRENT_FY_START = new Date().getMonth() >= 3 ? new Date().getFullYear() :
 const DEFAULT_FY = `${CURRENT_FY_START}-${String(CURRENT_FY_START + 1).slice(2)}`;
 const FY_OPTIONS = Array.from({ length: 7 }, (_, i) => { const s = 2020 + i; return `${s}-${String(s + 1).slice(2)}`; });
 const QUARTER_OPTIONS = ["Q1", "Q2", "Q3", "Q4"];
-const TDS_FORMS = ["24Q", "26Q", "27Q", "27EQ"];
 
 const FILING_STATUSES = [
   "Not Started",
@@ -164,7 +178,7 @@ const getDueDateColor = (fy: string, quarter: string, status: string) => {
   return "text-emerald-600";
 };
 
-export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId, onNavigateDataEntry, hideHeader, preset, onFilingsChanged, isMaximized, onToggleMaximize, refreshKey }: Props) {
+export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId, onNavigateDataEntry, hideHeader, fyFilter, quarterFilter, clientFilter, formFilter, preset, onFilingsChanged, isMaximized, onToggleMaximize, refreshKey }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
   const [filings, setFilings] = useState<TdsFiling[]>([]);
@@ -173,23 +187,14 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   // Map of filing_id → TdsAckFile (populated after each fetch)
   const [ackFiles, setAckFiles] = useState<Map<string, TdsAckFile>>(new Map());
   const [loading, setLoading] = useState(true);
-  const defaultTdsQuarter = useMemo(() => getDefaultTdsQuarter(), []);
-  const [fyFilter, setFyFilter] = useState(defaultTdsQuarter.fy);
-  const [quarterFilter, setQuarterFilter] = useState(defaultTdsQuarter.quarter);
-  const [clientFilter, setClientFilter] = useState("all");
-  const [formFilter, setFormFilter] = useState("all");
-  const [statusFilter, setStatusFilter] = useState("all");
   const [statusGroup, setStatusGroup] = useState<KpiStatusGroup>("all");
 
-  // Apply an external preset (Dashboard KPI card click) — keyed on `nonce` so
-  // re-clicking the same card re-applies it even with no value change.
+  // Apply an external status-group preset (Dashboard KPI card click) — keyed
+  // on `nonce` so re-clicking the same card re-applies it even with no value
+  // change. FY/Quarter/Client/Form come from props now, so there's nothing
+  // else for a preset to override.
   useEffect(() => {
     if (!preset) return;
-    setFyFilter(preset.fy);
-    setQuarterFilter(preset.quarter);
-    setClientFilter(preset.client);
-    setFormFilter(preset.form);
-    setStatusFilter("all");
     setStatusGroup(preset.statusGroup);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preset?.nonce]);
@@ -283,10 +288,10 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       if (!isFilingTdsCompliant(f, client)) return false;
 
       if (formFilter !== "all" && !(f.tds_forms || []).includes(formFilter)) return false;
-      if (statusFilter !== "all" && f.work_status !== statusFilter) return false;
 
       // KPI-card-driven aggregate status group — these don't map to a single
-      // FILING_STATUSES value, so they're checked independently of statusFilter.
+      // FILING_STATUSES value, so they're checked independently of the exact
+      // work_status.
       const isTerminal = ["Filed", "Submitted", "Processed", "Accepted", "NIL"].includes(f.work_status);
       if (statusGroup === "returns-due" && isTerminal) return false;
       if (statusGroup === "overdue") {
@@ -310,36 +315,23 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
 
       return true;
     });
-  }, [filings, formFilter, statusFilter, statusGroup, deletedClients, clients]);
+  }, [filings, formFilter, statusGroup, deletedClients, clients]);
 
-  // Excel-style AutoFit for the TAN and Status columns — width follows the
-  // widest value actually on screen (TAN) or the widest possible option
-  // (Status, a fixed enum) rather than a fixed guess. Font is copied live from
-  // a real rendered [data-autofit] element rather than assumed via Tailwind
-  // classes, since a shared component's base classes can silently outrank a
-  // plain "text-xs" in the CSS cascade (see TdsDataEntry's Name/PAN autofit).
-  const tanMeasureRef = useRef<HTMLSpanElement>(null);
+  // Excel-style AutoFit for the Status column — width follows the widest
+  // possible option (a fixed enum) rather than a fixed guess. Font is copied
+  // live from a real rendered [data-autofit] element rather than assumed via
+  // Tailwind classes, since a shared component's base classes can silently
+  // outrank a plain "text-xs" in the CSS cascade (see TdsDataEntry's Name/PAN
+  // autofit).
   const statusMeasureRef = useRef<HTMLSpanElement>(null);
-  const [tanColWidth, setTanColWidth] = useState(110);
   const [statusColWidth, setStatusColWidth] = useState(180);
 
   useLayoutEffect(() => {
-    const tanEl = tanMeasureRef.current;
     const statusEl = statusMeasureRef.current;
-    if (!tanEl || !statusEl) return;
+    if (!statusEl) return;
 
-    const sampleTan = document.querySelector('[data-autofit="tan"]');
     const sampleStatus = document.querySelector('[data-autofit="status"]');
-    if (sampleTan) tanEl.style.font = getComputedStyle(sampleTan).font;
     if (sampleStatus) statusEl.style.font = getComputedStyle(sampleStatus).font;
-
-    const TAN_PADDING = 34; // cell padding + a little breathing room (plain span, no input chrome)
-    let maxTan = 0;
-    for (const text of ["TAN", ...filtered.map(f => clients.find(c => c.id === f.client_id)?.tan_number || f.tan || "")]) {
-      tanEl.textContent = text;
-      maxTan = Math.max(maxTan, tanEl.getBoundingClientRect().width);
-    }
-    setTanColWidth(Math.max(90, Math.min(220, Math.ceil(maxTan) + TAN_PADDING)));
 
     // SelectTrigger padding (12px × 2) + border (1px × 2) + chevron icon (16px)
     // + gap before the chevron + a little breathing room
@@ -350,7 +342,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       maxStatus = Math.max(maxStatus, statusEl.getBoundingClientRect().width);
     }
     setStatusColWidth(Math.ceil(maxStatus) + STATUS_PADDING);
-  }, [filtered, clients]);
+  }, [filtered]);
 
   // Check if a filing belongs to a deleted client (for archived styling)
   const isArchivedFiling = (f: TdsFiling): boolean => {
@@ -689,60 +681,10 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
         </div>
       )}
 
-      {/* Filter Bar */}
+      {/* View controls — FY/Quarter/Client/Form filters now live exclusively
+          in the Dashboard's top-level header and flow down as props, so
+          there is a single source of truth and no duplicate filter UI here. */}
       <div className="flex flex-wrap gap-3 items-end">
-        <div className="space-y-1">
-          <Label className="text-xs">FY</Label>
-          <Select value={fyFilter} onValueChange={setFyFilter}>
-            <SelectTrigger className="w-[120px]"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All FY</SelectItem>
-              {FY_OPTIONS.map(fy => <SelectItem key={fy} value={fy}>{fy}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Quarter</Label>
-          <Select value={quarterFilter} onValueChange={setQuarterFilter}>
-            <SelectTrigger className="w-[100px]"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All</SelectItem>
-              {QUARTER_OPTIONS.map(q => <SelectItem key={q} value={q}>{q}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Client</Label>
-          <Select value={clientFilter} onValueChange={setClientFilter}>
-            <SelectTrigger className="w-[200px]"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Clients</SelectItem>
-              {clients
-                .filter(c => formFilter === "all" || clientHasTdsForm(c.tds_forms_applicable, formFilter))
-                .map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Form</Label>
-          <Select value={formFilter} onValueChange={setFormFilter}>
-            <SelectTrigger className="w-[100px]"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All</SelectItem>
-              {TDS_FORMS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Status</Label>
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="w-[180px]"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Status</SelectItem>
-              {FILING_STATUSES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
         <div className="flex-1" />
         {onToggleMaximize && (
           <Button
@@ -768,8 +710,8 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
         </DropdownMenu>
       </div>
 
-      {/* KPI-card-driven filter indicator — the Status dropdown above stays on
-          "All Status" for these, since they're aggregate groups it can't express */}
+      {/* KPI-card-driven filter indicator — an aggregate status group applied
+          on top of the per-row work_status shown in the Status column. */}
       {statusGroup !== "all" && (
         <div className="flex items-center gap-2">
           <Badge variant="secondary" className="gap-1.5 text-xs font-normal">
@@ -802,9 +744,8 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
         </div>
       )}
 
-      {/* Hidden measuring spans for Excel-style column AutoFit (TAN/Status) —
-          same font as the real rendered elements, positioned off-screen */}
-      <span ref={tanMeasureRef} className="text-xs font-mono fixed -left-[9999px] top-0 whitespace-pre" aria-hidden="true" />
+      {/* Hidden measuring span for Excel-style column AutoFit (Status) — same
+          font as the real rendered element, positioned off-screen */}
       <span ref={statusMeasureRef} className="text-xs fixed -left-[9999px] top-0 whitespace-pre" aria-hidden="true" />
 
       {/* Main Table */}
@@ -821,25 +762,21 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                     />
                   </TableHead>
                   <TableHead className="min-w-[150px] sticky left-0 bg-background z-10">Client</TableHead>
-                  <TableHead style={{ width: tanColWidth, minWidth: tanColWidth }}>TAN</TableHead>
-                  <TableHead>Form</TableHead>
-                  <TableHead>Quarter</TableHead>
-                  <TableHead>FY</TableHead>
                   <TableHead style={{ width: statusColWidth, minWidth: statusColWidth }}>Status</TableHead>
                   <TableHead>Due Date</TableHead>
                   <TableHead>Filing Date</TableHead>
                   <TableHead>Ack No</TableHead>
-                  <TableHead>PRN No</TableHead>
-                  <TableHead>Remarks</TableHead>
+                  <TableHead>Prepared By</TableHead>
+                  <TableHead>Checked By</TableHead>
                   <TableHead className="w-[100px]">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loading ? Array.from({ length: 5 }).map((_, i) => (
-                  <TableRow key={i}>{Array.from({ length: 13 }).map((_, j) => <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>)}</TableRow>
+                  <TableRow key={i}>{Array.from({ length: 9 }).map((_, j) => <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>)}</TableRow>
                 )) : filtered.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={13} className="text-center text-muted-foreground py-8">
+                    <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
                       No filings found. Filings are created when TDS service is activated for a client.
                     </TableCell>
                   </TableRow>
@@ -857,21 +794,44 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                         />
                       </TableCell>
                       <TableCell className="font-medium sticky left-0 bg-background">
-                        <span className={cn(archived && "line-through text-muted-foreground")}>{client?.name || deletedClients.get(f.client_id)?.name || "—"}</span>
-                        {archived && <Badge variant="outline" className="ml-1.5 text-[10px] px-1 py-0">Archived</Badge>}
-                      </TableCell>
-                      <TableCell>
-                        {clientTan ? (
-                          <span className="font-mono text-xs" data-autofit="tan">{clientTan}</span>
-                        ) : (
-                          <Badge variant="destructive" className="text-xs gap-1 cursor-pointer">
-                            <AlertTriangle size={10} /> TAN Missing
+                        <HoverCard openDelay={200} closeDelay={100}>
+                          <HoverCardTrigger asChild>
+                            <span className={cn("cursor-default hover:underline decoration-dotted underline-offset-4", archived && "line-through text-muted-foreground")}>
+                              {client?.name || deletedClients.get(f.client_id)?.name || "—"}
+                            </span>
+                          </HoverCardTrigger>
+                          <HoverCardContent side="right" className="w-80 p-3">
+                            <div className="space-y-1.5 text-sm">
+                              <div className="flex gap-2">
+                                <span className="text-muted-foreground w-28 shrink-0">TAN</span>
+                                <span className="font-mono">{clientTan || "—"}</span>
+                              </div>
+                              <div className="flex gap-2">
+                                <span className="text-muted-foreground w-28 shrink-0">PAN</span>
+                                <span className="font-mono">{client?.pan || "—"}</span>
+                              </div>
+                              <div className="flex gap-2">
+                                <span className="text-muted-foreground w-28 shrink-0">Contact Person</span>
+                                <span>{client?.contact_person || "—"}</span>
+                              </div>
+                              <div className="flex gap-2">
+                                <span className="text-muted-foreground w-28 shrink-0">Mobile</span>
+                                <span>{client?.mobile || "—"}</span>
+                              </div>
+                              <div className="flex gap-2">
+                                <span className="text-muted-foreground w-28 shrink-0">Email</span>
+                                <span className="truncate">{client?.email || "—"}</span>
+                              </div>
+                            </div>
+                          </HoverCardContent>
+                        </HoverCard>
+                        {!clientTan && !archived && (
+                          <Badge variant="destructive" className="ml-1.5 text-[10px] gap-1 px-1 py-0 align-middle">
+                            <AlertTriangle size={9} /> TAN Missing
                           </Badge>
                         )}
+                        {archived && <Badge variant="outline" className="ml-1.5 text-[10px] px-1 py-0">Archived</Badge>}
                       </TableCell>
-                      <TableCell><Badge variant="outline" className="text-xs">{f.tds_forms?.join(", ")}</Badge></TableCell>
-                      <TableCell>{f.quarter}</TableCell>
-                      <TableCell>{f.financial_year}</TableCell>
                       <TableCell>
                         {archived ? (
                           <Badge className={cn("text-xs", FILING_STATUS_COLORS[f.work_status] || "bg-muted")}>{f.work_status}</Badge>
@@ -974,14 +934,28 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                         })()}
                       </TableCell>
                       <TableCell>
-                        <Input className="h-7 w-24 text-xs" defaultValue={f.prn_no || ""}
-                          onBlur={e => { if (e.target.value !== (f.prn_no || "")) handleInlineUpdate(f, "prn_no", e.target.value || null); }}
-                        />
+                        <Select
+                          value={f.preparer_id || "none"}
+                          onValueChange={v => handleInlineUpdate(f, "preparer_id", v === "none" ? null : v)}
+                        >
+                          <SelectTrigger className="h-7 w-36 text-xs"><SelectValue placeholder="Unassigned" /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">— Unassigned —</SelectItem>
+                            {users.map(u => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
                       </TableCell>
                       <TableCell>
-                        <Input className="h-7 w-28 text-xs" defaultValue={f.remarks || ""}
-                          onBlur={e => { if (e.target.value !== (f.remarks || "")) handleInlineUpdate(f, "remarks", e.target.value || null); }}
-                        />
+                        <Select
+                          value={f.checker_id || "none"}
+                          onValueChange={v => handleInlineUpdate(f, "checker_id", v === "none" ? null : v)}
+                        >
+                          <SelectTrigger className="h-7 w-36 text-xs"><SelectValue placeholder="Unassigned" /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">— Unassigned —</SelectItem>
+                            {users.map(u => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
                       </TableCell>
                       <TableCell>
                         <div className="flex gap-0.5">
