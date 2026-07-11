@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { getDefaultTdsQuarter, isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
 import { useAuth } from "@/hooks/useAuth";
@@ -20,7 +20,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   ShieldCheck, AlertTriangle, CheckCircle2, Upload, Play, FileSpreadsheet,
-  ChevronDown, ChevronRight, RotateCcw, Loader2, Users, FileWarning, Info,
+  RotateCcw, Loader2, Users, FileWarning, Info,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import Papa from "papaparse";
@@ -70,6 +70,29 @@ const fmtVal = (v: unknown): string => {
   return String(v);
 };
 
+/** All 7 compared fields, in the fixed column order used by the flat results table. */
+const DIFF_FIELDS = ["name", "pan", "date", "amount", "tds", "interest", "section"] as const;
+
+/**
+ * One compact cell for a single field's Office-vs-Imported comparison — no
+ * expand/collapse; every row shows every field's values directly, so the
+ * whole table is scannable at a glance for 100+ entries without clicking
+ * into each one.
+ */
+function DiffCell({ diffs, field }: { diffs: FieldDiff[]; field: string }) {
+  const d = diffs.find(x => x.field === field);
+  if (!d) return <span className="text-muted-foreground text-xs">—</span>;
+  if (d.matched !== false) {
+    return <span className="text-xs">{fmtVal(d.office ?? d.imported)}</span>;
+  }
+  return (
+    <div className="text-xs leading-tight">
+      <div className="text-foreground">{fmtVal(d.office)}</div>
+      <div className="text-destructive">{fmtVal(d.imported)}</div>
+    </div>
+  );
+}
+
 /** Invoke an edge function and surface the function's own JSON error message. */
 async function invokeFn(name: string, body: unknown): Promise<any> {
   const { data, error } = await supabase.functions.invoke(name, { body });
@@ -106,7 +129,6 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
   const [comparing, setComparing] = useState(false);
   const [finalising, setFinalising] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // TDS Compliance is the single source of truth for module membership. Returns
@@ -268,12 +290,6 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
   const isFiled = filing?.work_status === "Filed";
   const cErr = selClient ? complianceError() : null;
 
-  const toggleExpand = (id: string) => setExpanded(prev => {
-    const next = new Set(prev);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    return next;
-  });
-
   const statusBadge = (r: ReconResult) => {
     if (r.match_status === "matched") return <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 gap-1"><CheckCircle2 size={11} /> Matched</Badge>;
     if (r.match_status === "office_only") return <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">Only in Office</Badge>;
@@ -424,88 +440,59 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
                 ))}
               </div>
 
+              {/* Flat, entry-wise table — every one of the (up to 100+) compared
+                  records is its own row with every field visible directly, no
+                  expand/collapse. Where Office and Imported disagree on a
+                  field, both values are shown stacked (black = Office,
+                  red = Imported) right in the cell. */}
+              <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground px-1">
+                <span className="inline-block w-2 h-2 rounded-full bg-foreground/70" /> Office value
+                <span className="inline-block w-2 h-2 rounded-full bg-destructive ml-3" /> Imported value (shown only when it differs from Office)
+              </div>
               <Card><CardContent className="p-0 overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="w-[36px]" />
-                      <TableHead>Record</TableHead>
-                      <TableHead className="w-[160px]">Status</TableHead>
-                      <TableHead className="w-[140px] text-right">Action</TableHead>
+                      <TableHead className="min-w-[160px] sticky left-0 bg-background z-10">Record</TableHead>
+                      {DIFF_FIELDS.map(f => <TableHead key={f} className="min-w-[110px]">{FIELD_LABELS[f]}</TableHead>)}
+                      <TableHead className="w-[140px]">Status</TableHead>
+                      <TableHead className="w-[120px] text-right">Action</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {results.length === 0 ? (
-                      <TableRow><TableCell colSpan={4} className="text-center text-muted-foreground py-8">No records compared</TableCell></TableRow>
+                      <TableRow><TableCell colSpan={DIFF_FIELDS.length + 3} className="text-center text-muted-foreground py-8">No records compared</TableCell></TableRow>
                     ) : [...results].sort((a, b) => {
                       // Pending mismatches first, then overridden, then matched.
                       const rank = (r: ReconResult) => r.match_status === "matched" ? 2 : r.overridden ? 1 : 0;
                       return rank(a) - rank(b);
                     }).map(r => {
-                      const isOpen = expanded.has(r.id);
                       const diffs = r.field_diffs || [];
                       const isMismatch = r.match_status !== "matched";
                       return (
-                        <Fragment key={r.id}>
-                          <TableRow className={cn(r.overridden && "opacity-70")}>
-                            <TableCell className="align-top">
-                              {diffs.length > 0 && (
-                                <button onClick={() => toggleExpand(r.id)} className="text-muted-foreground hover:text-foreground">
-                                  {isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                                </button>
-                              )}
-                            </TableCell>
-                            <TableCell className="font-medium text-sm">
-                              {r.record_label || "—"}
-                              {r.overridden && <Badge variant="outline" className="ml-2 text-[10px] text-blue-600 border-blue-300">Overridden</Badge>}
-                            </TableCell>
-                            <TableCell>{statusBadge(r)}</TableCell>
-                            <TableCell className="text-right">
-                              {isMismatch && !isFiled && (
-                                r.overridden ? (
-                                  <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => handleOverride(r, false)}>
-                                    <RotateCcw size={12} /> Undo
-                                  </Button>
-                                ) : (
-                                  <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => handleOverride(r, true)}>
-                                    <ShieldCheck size={12} /> Override
-                                  </Button>
-                                )
-                              )}
-                            </TableCell>
-                          </TableRow>
-                          {isOpen && diffs.length > 0 && (
-                            <TableRow>
-                              <TableCell />
-                              <TableCell colSpan={3} className="bg-muted/30">
-                                <div className="overflow-x-auto py-1">
-                                  <table className="w-full text-xs">
-                                    <thead>
-                                      <tr className="text-muted-foreground">
-                                        <th className="text-left font-medium py-1 pr-4">Field</th>
-                                        <th className="text-left font-medium py-1 pr-4">Office Value</th>
-                                        <th className="text-left font-medium py-1 pr-4">Imported Value</th>
-                                        <th className="text-left font-medium py-1">Difference</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {diffs.map((d, i) => (
-                                        <tr key={i} className={cn("border-t border-border/50", d.matched === false && "bg-destructive/5")}>
-                                          <td className="py-1 pr-4 font-medium">{FIELD_LABELS[d.field] || d.field}</td>
-                                          <td className="py-1 pr-4">{fmtVal(d.office)}</td>
-                                          <td className="py-1 pr-4">{fmtVal(d.imported)}</td>
-                                          <td className={cn("py-1", d.matched === false ? "text-destructive" : "text-emerald-600")}>
-                                            {d.matched === false ? (d.difference || "Differs") : "✓"}
-                                          </td>
-                                        </tr>
-                                      ))}
-                                    </tbody>
-                                  </table>
-                                </div>
-                              </TableCell>
-                            </TableRow>
-                          )}
-                        </Fragment>
+                        <TableRow key={r.id} className={cn(r.overridden && "opacity-70")}>
+                          <TableCell className="font-medium text-sm sticky left-0 bg-background">
+                            {r.record_label || "—"}
+                            {r.overridden && <Badge variant="outline" className="ml-2 text-[10px] text-blue-600 border-blue-300">Overridden</Badge>}
+                          </TableCell>
+                          {DIFF_FIELDS.map(f => (
+                            <TableCell key={f}><DiffCell diffs={diffs} field={f} /></TableCell>
+                          ))}
+                          <TableCell>{statusBadge(r)}</TableCell>
+                          <TableCell className="text-right">
+                            {isMismatch && !isFiled && (
+                              r.overridden ? (
+                                <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => handleOverride(r, false)}>
+                                  <RotateCcw size={12} /> Undo
+                                </Button>
+                              ) : (
+                                <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => handleOverride(r, true)}>
+                                  <ShieldCheck size={12} /> Override
+                                </Button>
+                              )
+                            )}
+                          </TableCell>
+                        </TableRow>
                       );
                     })}
                   </TableBody>

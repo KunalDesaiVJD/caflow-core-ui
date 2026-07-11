@@ -35,8 +35,24 @@ and IMPORTED (from the client's file). Pair each office record with the imported
 deductee/transaction, then compare fields. Return STRICT JSON only (no prose, no fences):
 {"results":[{"office":"o0"|null,"imported":"i0"|null,"record_label":"<party name>","status":"matched"|"mismatched"|"office_only"|"imported_only","fields":[{"field":"pan","office":"...","imported":"...","matched":true|false,"difference":"<short note or empty>"}]}]}
 
+EXHAUSTIVENESS — this is a hard requirement, not a suggestion: every single "ref"
+(o0, o1, o2, ... and i0, i1, i2, ...) given to you in OFFICE and IMPORTED below
+MUST appear in exactly one result object, as either "office" or "imported" (or
+both, if paired together). Never skip, drop, silently merge, or deduplicate
+records — even when multiple records share the same deductee name/PAN (a party
+with 5 separate transactions in the quarter must produce 5 separate result
+objects, one per transaction, never one combined/summed object). If you are
+unsure which imported record a specific office record corresponds to among
+several similar candidates, still output BOTH as their own entries — pair the
+most plausible match and leave any leftover candidates as their own
+office_only/imported_only entries — rather than omitting any of them. The
+number of result objects must be enough that every input ref is accounted for.
+
 Pairing:
 - Pair primarily by PAN; if PAN missing/differs, pair by deductee name similarity + amount.
+- When a party has MULTIPLE transactions on both sides, pair them 1:1 by closest match on
+  date + amount (not just name/PAN) — do not let one imported record "absorb" or represent
+  several office records for the same party, and vice versa.
 - An office record with no imported counterpart => status "office_only" (office:o#, imported:null).
 - An imported record with no office counterpart => status "imported_only" (office:null, imported:i#).
 
@@ -204,6 +220,8 @@ serve(async (req) => {
         date_payment: r.date_of_payment ?? null,
       };
     });
+    const oPayloadByHandle = new Map(officePayload.map(p => [p.ref, p]));
+    const iPayloadByHandle = new Map(importedPayload.map(p => [p.ref, p]));
 
     // ── LLM compare ────────────────────────────────────────────────────────────
     const ai = await callAI({
@@ -268,6 +286,64 @@ serve(async (req) => {
         override_note: keepOverride ? carry.override_note : null,
       };
     });
+
+    // ── Exhaustiveness safety net ───────────────────────────────────────────────
+    // The prompt REQUIRES every o#/i# handle to appear somewhere in the response,
+    // but an LLM can still drop or silently merge one (especially with many
+    // near-duplicate same-party transactions). Rather than trust that entirely,
+    // verify it in code: any handle the model was given but never referenced in
+    // ANY result gets a synthesised office_only/imported_only row of its own, so
+    // "all N entries validated individually" is a guarantee, not a hope.
+    const coveredHandles = new Set<string>();
+    for (const r of llmResults) {
+      if (r?.office) coveredHandles.add(String(r.office));
+      if (r?.imported) coveredHandles.add(String(r.imported));
+    }
+    const FIELD_ORDER = ["name", "pan", "date", "amount", "tds", "interest", "section"] as const;
+    const singleSidedDiffs = (p: { name: unknown; pan: unknown; section: unknown; amount: unknown; tds: unknown; interest: unknown; date_payment: unknown }, side: "office" | "imported") => {
+      const values: Record<(typeof FIELD_ORDER)[number], unknown> = {
+        name: p.name, pan: p.pan, date: p.date_payment, amount: p.amount, tds: p.tds, interest: p.interest, section: p.section,
+      };
+      return FIELD_ORDER.map(field => ({
+        field,
+        office: side === "office" ? values[field] : null,
+        imported: side === "imported" ? values[field] : null,
+        matched: false,
+        difference: "Not returned by AI comparison — auto-flagged so no record is silently dropped.",
+      }));
+    };
+    let recovered = 0;
+    for (const [handle, deducteeId] of oHandle) {
+      if (coveredHandles.has(handle)) continue;
+      const p = oPayloadByHandle.get(handle);
+      recovered++;
+      newRows.push({
+        filing_id, batch_id: batchId, firm_id: filing.firm_id,
+        office_deductee_id: deducteeId, imported_row_id: null,
+        record_label: p?.name ? String(p.name).slice(0, 200) : null,
+        match_status: "office_only",
+        mismatch_fields: FIELD_ORDER.slice(),
+        field_diffs: p ? singleSidedDiffs(p, "office") : [],
+        overridden: false, overridden_by: null, overridden_at: null, override_note: null,
+      });
+    }
+    for (const [handle, rowId] of iHandle) {
+      if (coveredHandles.has(handle)) continue;
+      const p = iPayloadByHandle.get(handle);
+      recovered++;
+      newRows.push({
+        filing_id, batch_id: batchId, firm_id: filing.firm_id,
+        office_deductee_id: null, imported_row_id: rowId,
+        record_label: p?.name ? String(p.name).slice(0, 200) : null,
+        match_status: "imported_only",
+        mismatch_fields: FIELD_ORDER.slice(),
+        field_diffs: p ? singleSidedDiffs(p, "imported") : [],
+        overridden: false, overridden_by: null, overridden_at: null, override_note: null,
+      });
+    }
+    if (recovered > 0) {
+      console.warn(`tds-recon-compare: AI response omitted ${recovered} record(s) — auto-recovered as unpaired rows so every input record still gets validated.`);
+    }
 
     // Replace results with a safe ordering: INSERT the new rows first, then delete
     // the superseded ones by id. If the insert fails, the prior rows (and their

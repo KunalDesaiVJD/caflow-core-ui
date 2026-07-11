@@ -51,21 +51,110 @@ interface CanonicalRow {
 }
 
 const CANONICAL_INSTRUCTION = `You normalise a client's TDS statement into canonical rows.
+Client files use WILDLY different column headers, capitalisation, spacing,
+abbreviations, wording and column order — you must identify each field by its
+MEANING, not by matching exact header text. Use the header's wording, its
+position relative to other recognised columns, AND the data pattern in that
+column (e.g. a column of values like "AJKPM0355R" is a PAN regardless of what
+its header says; a column of dd/mm/yyyy-style values is a date even under an
+unfamiliar header) to decide what each column represents. A file will rarely
+use the exact synonym wording below verbatim — that's expected; match by
+meaning, don't require an exact string match.
+
 Return STRICT JSON only: {"rows":[{...}]} — no prose, no markdown fences.
-Each row object MUST have exactly these keys (use null when a value is absent):
-  deductee_name   : string  — the party/deductee the payment was made to
-  pan             : string  — 10-char PAN, uppercase, or null
-  section_code    : string  — TDS section e.g. "194C","194J","194Q" (strip any prefix words)
-  amount_paid     : number  — amount paid/credited (plain number, no commas/₹)
-  tds_amount      : number  — TDS deducted (plain number)
-  interest        : number  — interest amount (plain number), or null if absent
-  rate            : number  — TDS rate % (plain number, e.g. 0.1, 1, 10)
-  date_of_payment : string  — keep the original date text as printed
-  date_of_deduction : string
-  challan_bsr     : string  — 7-digit BSR/receipt number of the challan, or null
-  challan_no      : string  — challan serial number, or null
+Each row object MUST have exactly these keys (use null when a value is genuinely absent):
+  deductee_name   : string — the party/deductee/payee the payment was made to.
+      Common headers: Deductee Name, Party Name, Vendor Name, Customer Name,
+      Beneficiary Name, Payee Name, Name, Party, Vendor.
+  pan             : string — 10-char PAN, uppercase, or null.
+      Common headers: PAN, PAN No., PAN Number, Permanent Account Number,
+      Deductee PAN, Party PAN. Data pattern: 5 letters + 4 digits + 1 letter.
+  section_code    : string — TDS section e.g. "194C","194J","194Q" (strip any prefix words).
+      Common headers: Section, TDS Section, Section Code, Nature of Payment,
+      Payment Section, U/S.
+  amount_paid     : number — amount paid/credited (plain number, no commas/₹).
+      Common headers: Amount, Payment Amount, Gross Amount, Invoice Amount,
+      Taxable Amount, Credit Amount, Amount Paid/Credited.
+  tds_amount      : number — TDS deducted (plain number).
+      Common headers: TDS, TDS Amount, Tax Deducted, Deducted Tax, Tax Amount.
+  interest        : number — interest amount (plain number), or null if absent.
+      Common headers: Interest, Interest Amount, Late Interest, Int.
+  rate            : number — TDS rate % (plain number, e.g. 0.1, 1, 10)
+  date_of_payment : string — keep the original date text exactly as printed, do
+      not reformat it. Common headers: Date of Credit, Date of Payment, Payment
+      Date, Credit Date, Voucher Date, Transaction Date, Deduction Date, Date,
+      Value Date, Entry Date. IMPORTANT: if the file only has ONE date-like
+      column (most client files do), use it here — do not leave this null just
+      because the header doesn't literally contain the word "payment".
+  date_of_deduction : string — same matching rules as date_of_payment. If the
+      file has a SEPARATE, distinctly-labelled deduction date column, use that;
+      otherwise reuse the same single date column used for date_of_payment.
+  challan_bsr     : string — 7-digit BSR/receipt number of the challan, or null
+  challan_no      : string — challan serial number, or null
+
 Rules: never invent rows or values; one object per deductee line item; ignore
-totals/header/footer lines; convert Indian-format numbers ("12,34,567.00") to plain numbers.`;
+totals/header/footer/subtotal lines; convert Indian-format numbers
+("12,34,567.00") to plain numbers.`;
+
+// ── Deterministic header pre-mapper (Excel/CSV only) ────────────────────────
+// A synonym-based pass over the RAW column headers, run BEFORE the LLM call.
+// This is not a replacement for the LLM's semantic matching — it's a
+// reliability floor: common, expected header names (the ones a client's file
+// overwhelmingly likely uses) get identified with certainty and handed to the
+// model as an explicit hint, so date/name/PAN/etc. detection doesn't depend
+// entirely on the model noticing them unprompted. The model can still
+// disregard a hint if the actual data in that column contradicts it.
+const HEADER_SYNONYMS: Record<keyof CanonicalRow, string[]> = {
+  deductee_name: ["deducteename", "partyname", "vendorname", "customername", "beneficiaryname", "payeename", "name", "party", "vendor", "deductee"],
+  pan: ["pan", "panno", "pannumber", "permanentaccountnumber", "deducteepan", "partypan"],
+  section_code: ["section", "tdssection", "sectioncode", "natureofpayment", "paymentsection", "us", "u/s"],
+  amount_paid: ["amount", "paymentamount", "grossamount", "invoiceamount", "taxableamount", "creditamount", "amountpaidcredited", "amountpaid"],
+  tds_amount: ["tds", "tdsamount", "taxdeducted", "deductedtax", "taxamount", "tdsdeducted"],
+  interest: ["interest", "interestamount", "lateinterest", "int"],
+  rate: ["rate", "tdsrate", "rateoftds"],
+  date_of_payment: ["dateofcredit", "dateofpayment", "paymentdate", "creditdate", "voucherdate", "transactiondate", "deductiondate", "date", "valuedate", "entrydate"],
+  date_of_deduction: ["dateofdeduction", "deductiondate", "tdsdeductiondate"],
+  challan_bsr: ["bsr", "bsrcode", "challanbsr"],
+  challan_no: ["challanno", "challannumber", "challanserialno"],
+};
+
+/** lowercase, strip everything but letters/digits, so "Date of Credit" and "date_of_credit " and "DATE-OF-CREDIT" all normalise identically. */
+const normaliseHeader = (h: string): string => h.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+/**
+ * Best-effort deterministic header→field mapping. Each source column is
+ * assigned to at most one canonical field, and each canonical field gets at
+ * most one source column (first/best match wins — CanonicalRow's own key
+ * order acts as the tie-break priority, so e.g. date_of_payment is resolved
+ * before the more specific date_of_deduction only claims a distinct column).
+ */
+function guessColumnMapping(sampleRows: Record<string, unknown>[]): Partial<Record<keyof CanonicalRow, string>> {
+  const headers = new Set<string>();
+  for (const row of sampleRows.slice(0, 5)) {
+    if (row && typeof row === "object") for (const k of Object.keys(row)) headers.add(k);
+  }
+  const mapping: Partial<Record<keyof CanonicalRow, string>> = {};
+  const claimed = new Set<string>();
+  for (const field of Object.keys(HEADER_SYNONYMS) as (keyof CanonicalRow)[]) {
+    const synonyms = HEADER_SYNONYMS[field];
+    let best: string | null = null;
+    for (const header of headers) {
+      if (claimed.has(header)) continue;
+      const norm = normaliseHeader(header);
+      if (synonyms.includes(norm)) { best = header; break; } // exact normalised match
+    }
+    if (!best) {
+      // Fallback: substring match (e.g. header "TDS Amount (Rs.)" contains "tdsamount").
+      for (const header of headers) {
+        if (claimed.has(header)) continue;
+        const norm = normaliseHeader(header);
+        if (synonyms.some(s => norm.includes(s) || s.includes(norm))) { best = header; break; }
+      }
+    }
+    if (best) { mapping[field] = best; claimed.add(best); }
+  }
+  return mapping;
+}
 
 function extractJson(text: string): any {
   if (!text) return null;
@@ -255,11 +344,23 @@ serve(async (req) => {
       // the 8000-token budget (≈50 canonical rows ≈ 3-4k output tokens).
       const BATCH = 50;
       const allRows = (rows as any[]).slice(0, 5000);
+
+      // Deterministic header pass (see guessColumnMapping) — computed ONCE
+      // against the whole file's headers, then handed to every batch as a
+      // hint. Falls back gracefully (empty mapping → no hint line) if the
+      // headers don't match any known synonym at all, in which case the
+      // model relies purely on the strengthened system prompt + data pattern.
+      const mapping = guessColumnMapping(allRows);
+      const mappingEntries = Object.entries(mapping);
+      const mappingHint = mappingEntries.length
+        ? `\n\nAutomatic header analysis detected these likely column mappings — use them unless the actual data in that column clearly contradicts it: ${mappingEntries.map(([field, header]) => `${field} ← "${header}"`).join("; ")}.`
+        : "";
+
       for (let i = 0; i < allRows.length; i += BATCH) {
         const batch = allRows.slice(i, i + BATCH);
         const r = await callAI({
           system: CANONICAL_INSTRUCTION,
-          userText: `Client ${resolvedForm} file rows ${i + 1}-${i + batch.length} (JSON):\n${JSON.stringify(batch)}`,
+          userText: `Client ${resolvedForm} file rows ${i + 1}-${i + batch.length} (JSON):\n${JSON.stringify(batch)}${mappingHint}`,
           maxTokens: IMPORT_MAX_TOKENS,
         });
         if (!r.ok) return httpErr(r.status, r.errText);
