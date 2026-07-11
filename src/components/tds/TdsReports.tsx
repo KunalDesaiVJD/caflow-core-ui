@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import { exportToExcel } from "@/lib/exportUtils";
 import { generateGeniusExport } from "@/lib/genius-export";
-import { clientHasTdsForm, isFilingTdsCompliant } from "@/lib/tdsQuarter";
+import { clientHasTdsForm, isFilingTdsCompliant, getDefaultTdsQuarter } from "@/lib/tdsQuarter";
 
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null;
@@ -37,8 +37,6 @@ interface Props {
   resolveFirmId: () => Promise<string | null>;
 }
 
-const CURRENT_FY_START = new Date().getMonth() >= 3 ? new Date().getFullYear() : new Date().getFullYear() - 1;
-const DEFAULT_FY = `${CURRENT_FY_START}-${String(CURRENT_FY_START + 1).slice(2)}`;
 const FY_OPTIONS = Array.from({ length: 7 }, (_, i) => { const s = 2020 + i; return `${s}-${String(s + 1).slice(2)}`; });
 const QUARTER_OPTIONS = ["Q1", "Q2", "Q3", "Q4"];
 const TDS_FORMS = ["24Q", "26Q", "27Q", "27EQ"];
@@ -62,10 +60,15 @@ const REPORT_CARDS: { key: ReportType; label: string; desc: string; icon: any; c
 
 export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
   const { toast } = useToast();
+  // Reports seed from the SAME active quarter/FY the rest of the TDS module uses
+  // (Dashboard / Workspace / Validate all default from getDefaultTdsQuarter()).
+  // Only that single quarter is pre-selected by default — never all four. Users
+  // can still toggle additional quarters via the chips below.
+  const smartDefault = useMemo(() => getDefaultTdsQuarter(), []);
   const [selectedReport, setSelectedReport] = useState<ReportType>(null);
   const [selClient, setSelClient] = useState("all");
-  const [selFy, setSelFy] = useState(DEFAULT_FY);
-  const [selQuarters, setSelQuarters] = useState<string[]>(["Q1", "Q2", "Q3", "Q4"]);
+  const [selFy, setSelFy] = useState(smartDefault.fy);
+  const [selQuarters, setSelQuarters] = useState<string[]>([smartDefault.quarter]);
   const [selForm, setSelForm] = useState("26Q");
   const [loading, setLoading] = useState(false);
   const [reportData, setReportData] = useState<any[]>([]);
