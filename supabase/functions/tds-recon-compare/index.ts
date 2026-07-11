@@ -40,16 +40,15 @@ Pairing:
 - An office record with no imported counterpart => status "office_only" (office:o#, imported:null).
 - An imported record with no office counterpart => status "imported_only" (office:null, imported:i#).
 
-Compare these fields for every pair: pan, name, date (payment), amount (amount paid), section, rate, challan, tds (tds amount).
+Compare EXACTLY these seven fields for every pair, and NO others: name, pan, date (payment), amount (amount paid), tds (tds amount), interest, section.
 Field match rules:
-- pan: case-insensitive exact.
 - name: same legal entity ignoring case/punctuation/extra spaces and equivalents (PVT=PRIVATE, LTD=LIMITED, &=AND).
+- pan: case-insensitive exact.
 - date: same calendar date regardless of format (dd/mm/yyyy vs dd-Mon-yy etc.).
-- amount / tds: equal if within ₹1.
-- rate: equal if within 0.01.
+- amount / tds / interest: equal if within ₹1 (treat a missing/blank/null value as 0).
 - section: equal after trimming words (e.g. "194Q - Purchase" == "194Q").
-- challan: BSR and challan number both equal (ignore blanks on both sides).
-status = "matched" only if every compared field matches; otherwise "mismatched".
+Do NOT compare rate, challan, or any field other than the seven listed.
+status = "matched" only if every one of the seven compared fields matches; otherwise "mismatched".
 For "mismatched", "office_only" and "imported_only": include one fields[] entry per compared field with the actual office/imported values (as strings) and matched true/false. For "matched": return an empty fields array [] (values are equal by definition — this keeps the response compact). Never invent records.`;
 
 function extractJson(text: string): any {
@@ -163,7 +162,7 @@ serve(async (req) => {
     if (challanIds.length) {
       const { data: ded } = await supabase
         .from("tds_deductees")
-        .select("id, deductee_name, deductee_pan, section_code, amount_paid_credited, total_tax_deducted, tds_amount, rate_of_tds, date_of_payment, date_of_deduction, challan_id")
+        .select("id, deductee_name, deductee_pan, section_code, amount_paid_credited, total_tax_deducted, tds_amount, interest_amount, date_of_payment, challan_id")
         .in("challan_id", challanIds);
       office = ded ?? [];
     }
@@ -181,7 +180,6 @@ serve(async (req) => {
     const iHandle = new Map<string, string>();  // i# -> imported row id
     const officePayload = office.map((d: any, idx: number) => {
       const h = `o${idx}`; oHandle.set(h, d.id);
-      const ch = challanById.get(d.challan_id);
       return {
         ref: h,
         name: d.deductee_name ?? null,
@@ -189,11 +187,8 @@ serve(async (req) => {
         section: d.section_code ?? null,
         amount: d.amount_paid_credited ?? null,
         tds: d.total_tax_deducted ?? d.tds_amount ?? null,
-        rate: d.rate_of_tds ?? null,
+        interest: d.interest_amount ?? null,
         date_payment: d.date_of_payment ?? null,
-        date_deduction: d.date_of_deduction ?? null,
-        challan_bsr: ch?.bsr_code ?? null,
-        challan_no: ch?.challan_serial_no ?? null,
       };
     });
     const importedPayload = (imported ?? []).map((r: any, idx: number) => {
@@ -205,11 +200,8 @@ serve(async (req) => {
         section: r.section_code ?? null,
         amount: r.amount_paid ?? null,
         tds: r.tds_amount ?? null,
-        rate: r.rate ?? null,
+        interest: r.interest ?? null,
         date_payment: r.date_of_payment ?? null,
-        date_deduction: r.date_of_deduction ?? null,
-        challan_bsr: r.challan_bsr ?? null,
-        challan_no: r.challan_no ?? null,
       };
     });
 
