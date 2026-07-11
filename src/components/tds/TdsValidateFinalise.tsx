@@ -186,9 +186,12 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
         reader.readAsText(file);
       } else {
         reader.onload = () => {
-          const wb = XLSX.read(reader.result, { type: "array" });
+          // cellDates + raw:false emit date cells as their printed text (e.g.
+          // "01/04/2025") rather than Excel serial numbers (45748) — otherwise
+          // every dated row would falsely mismatch during comparison.
+          const wb = XLSX.read(reader.result, { type: "array", cellDates: true });
           const ws = wb.Sheets[wb.SheetNames[0]];
-          resolve({ file_type: "xlsx", rows: XLSX.utils.sheet_to_json(ws, { defval: null }) as any[] });
+          resolve({ file_type: "xlsx", rows: XLSX.utils.sheet_to_json(ws, { defval: null, raw: false }) as any[] });
         };
         reader.readAsArrayBuffer(file);
       }
