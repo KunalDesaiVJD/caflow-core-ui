@@ -141,8 +141,11 @@ export default function ScrutinyConnectorsPanel({ clientId, financialYear, engag
     const PAGE = 1000;
     const out: Record<string, unknown>[] = [];
     for (let from = 0; from < 30000; from += PAGE) {
-      let q = (supabase.from as any)(table).select("*").eq("client_id", clientId).eq("financial_year", financialYear);
+      // Prefer engagement_id (the key Tally Sync writes under — robust to financial_year string
+      // differences); fall back to financial_year. Always scoped to client_id (and firm-scoped by RLS).
+      let q = (supabase.from as any)(table).select("*").eq("client_id", clientId);
       if (engagementId) q = q.eq("engagement_id", engagementId);
+      else q = q.eq("financial_year", financialYear);
       const { data, error: err } = await q.range(from, from + PAGE - 1);
       if (err || !data || data.length === 0) break;
       out.push(...(data as Record<string, unknown>[]));

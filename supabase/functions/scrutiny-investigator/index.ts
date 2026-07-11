@@ -63,8 +63,12 @@ serve(async (req) => {
       const PAGE = 1000;
       const out: Record<string, unknown>[] = [];
       for (let from = 0; from < limit; from += PAGE) {
-        let q = supabase.from(table).select("*").eq("client_id", client_id).eq("financial_year", financial_year);
+        // Always scope to the ownership-verified client_id (prevents cross-firm reads via a spoofed
+        // engagement_id). Prefer engagement_id — the reliable key the sync writes under, robust to
+        // financial_year string differences; fall back to financial_year only when no engagement.
+        let q = supabase.from(table).select("*").eq("client_id", client_id);
         if (engagement_id) q = q.eq("engagement_id", engagement_id);
+        else q = q.eq("financial_year", financial_year);
         const { data, error } = await q.range(from, from + PAGE - 1);
         if (error) { console.error(`${table} page@${from}:`, error.message); break; }
         if (!data || data.length === 0) break;
