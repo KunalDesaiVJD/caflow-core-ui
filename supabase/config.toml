@@ -62,3 +62,11 @@ verify_jwt = true
 
 [functions.tds-demand-calculator]
 verify_jwt = true
+
+# Browser-invoked; each function validates the caller's JWT itself via
+# supabase.auth.getUser(token) (same pattern as claude-gateway).
+[functions.tds-recon-import]
+verify_jwt = false
+
+[functions.tds-recon-compare]
+verify_jwt = false
