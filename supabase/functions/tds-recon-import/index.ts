@@ -42,6 +42,7 @@ interface CanonicalRow {
   section_code: string | null;
   amount_paid: number | null;
   tds_amount: number | null;
+  interest: number | null;
   rate: number | null;
   date_of_payment: string | null;
   date_of_deduction: string | null;
@@ -57,6 +58,7 @@ Each row object MUST have exactly these keys (use null when a value is absent):
   section_code    : string  — TDS section e.g. "194C","194J","194Q" (strip any prefix words)
   amount_paid     : number  — amount paid/credited (plain number, no commas/₹)
   tds_amount      : number  — TDS deducted (plain number)
+  interest        : number  — interest amount (plain number), or null if absent
   rate            : number  — TDS rate % (plain number, e.g. 0.1, 1, 10)
   date_of_payment : string  — keep the original date text as printed
   date_of_deduction : string
@@ -95,6 +97,7 @@ function coerceRow(r: any): CanonicalRow {
     section_code: r?.section_code != null ? String(r.section_code).trim() : null,
     amount_paid: toNum(r?.amount_paid),
     tds_amount: toNum(r?.tds_amount),
+    interest: toNum(r?.interest),
     rate: toNum(r?.rate),
     date_of_payment: r?.date_of_payment != null ? String(r.date_of_payment).trim() : null,
     date_of_deduction: r?.date_of_deduction != null ? String(r.date_of_deduction).trim() : null,
@@ -292,7 +295,7 @@ serve(async (req) => {
     const rowRecords = canonical.map((r, i) => ({
       batch_id: batch.id, filing_id, firm_id: filing.firm_id, row_index: i,
       deductee_name: r.deductee_name, pan: r.pan, section_code: r.section_code,
-      amount_paid: r.amount_paid, tds_amount: r.tds_amount, rate: r.rate,
+      amount_paid: r.amount_paid, tds_amount: r.tds_amount, interest: r.interest, rate: r.rate,
       date_of_payment: r.date_of_payment, date_of_deduction: r.date_of_deduction,
       challan_bsr: r.challan_bsr, challan_no: r.challan_no, raw: r,
     }));

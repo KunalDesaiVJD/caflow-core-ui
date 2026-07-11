@@ -61,8 +61,8 @@ const QUARTER_OPTIONS = ["Q1", "Q2", "Q3", "Q4"];
 const TDS_FORMS = ["24Q", "26Q", "27Q", "27EQ"];
 
 const FIELD_LABELS: Record<string, string> = {
-  pan: "PAN", name: "Name", date: "Date", amount: "Amount",
-  section: "Section", rate: "Rate %", challan: "Challan", tds: "TDS Amount",
+  name: "Name", pan: "PAN", date: "Date", amount: "Amount",
+  tds: "TDS", interest: "Interest", section: "Section",
 };
 
 const fmtVal = (v: unknown): string => {
