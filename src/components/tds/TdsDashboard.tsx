@@ -271,7 +271,7 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
   ];
 
   const applyKpiFilter = (statusGroup: KpiStatusGroup) => {
-    setKpiPreset({ fy: fyFilter, quarter: quarterFilter, client: clientFilter, form: formTab, statusGroup, nonce: Date.now() });
+    setKpiPreset({ statusGroup, nonce: Date.now() });
     filingSummaryRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
@@ -390,6 +390,10 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
             resolveFirmId={resolveFirmId}
             onNavigateDataEntry={() => onNavigate?.("data-entry")}
             hideHeader
+            fyFilter={fyFilter}
+            quarterFilter={quarterFilter}
+            clientFilter={clientFilter}
+            formFilter={formTab}
             preset={kpiPreset}
             onFilingsChanged={fetchAll}
             isMaximized={isFilingSummaryMaximized}

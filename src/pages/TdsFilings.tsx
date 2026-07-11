@@ -15,6 +15,9 @@ import { TdsAuditLog } from "@/components/tds/TdsAuditLog";
 
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null;
+  // Identity fields shown in the Client Filing Summary's Client Name hover
+  // card (TAN/PAN/Contact/Mobile/Email).
+  contact_person?: string | null; mobile?: string | null; email?: string | null;
   // TDS Compliance period — single source of truth for which FY/quarter this
   // client should appear under across the whole TDS module. Undefined start
   // means the client matched only via a fallback path (no proper client_services
@@ -116,7 +119,7 @@ const TdsFilings = () => {
     // 3. Fetch only those TDS clients (by id → no truncation), live only.
     const { data: clientsData } = await supabase
       .from("clients")
-      .select("id, name, pan, tan_number")
+      .select("id, name, pan, tan_number, contact_person, mobile, email")
       .in("id", tdsClientIds)
       .eq("is_draft", false)
       .is("deleted_at", null)

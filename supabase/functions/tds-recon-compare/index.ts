@@ -63,6 +63,46 @@ function extractJson(text: string): any {
   return null;
 }
 
+// Provider-agnostic LLM call. Prefers OpenRouter when OPENROUTER_API_KEY is set,
+// otherwise falls back to the firm's already-configured ANTHROPIC_API_KEY so the
+// feature works with no extra setup. Returns the text content + a `truncated`
+// flag (output hit the token cap).
+async function callAI(opts: { system: string; userText: string; maxTokens: number }):
+  Promise<{ ok: boolean; status: number; errText: string; content: string; truncated: boolean }> {
+  const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY");
+  const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
+
+  if (OPENROUTER_API_KEY) {
+    const model = Deno.env.get("OPENROUTER_MODEL") || "google/gemini-2.5-flash";
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${OPENROUTER_API_KEY}`, "Content-Type": "application/json", "HTTP-Referer": "https://caflow.app", "X-Title": "CAFlow TDS Recon" },
+      body: JSON.stringify({
+        model, temperature: 0, max_tokens: opts.maxTokens, response_format: { type: "json_object" },
+        messages: [{ role: "system", content: opts.system }, { role: "user", content: opts.userText }],
+      }),
+    });
+    if (!res.ok) return { ok: false, status: res.status, errText: await res.text(), content: "", truncated: false };
+    const j = await res.json();
+    return { ok: true, status: 200, errText: "", content: j?.choices?.[0]?.message?.content ?? "", truncated: j?.choices?.[0]?.finish_reason === "length" };
+  }
+
+  if (ANTHROPIC_API_KEY) {
+    const model = Deno.env.get("ANTHROPIC_MODEL") || "claude-sonnet-4-20250514";
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({ model, max_tokens: opts.maxTokens, system: opts.system, messages: [{ role: "user", content: [{ type: "text", text: opts.userText }] }] }),
+    });
+    if (!res.ok) return { ok: false, status: res.status, errText: await res.text(), content: "", truncated: false };
+    const j = await res.json();
+    const text = Array.isArray(j?.content) ? j.content.filter((b: any) => b?.type === "text").map((b: any) => b.text).join("") : "";
+    return { ok: true, status: 200, errText: "", content: text, truncated: j?.stop_reason === "max_tokens" };
+  }
+
+  return { ok: false, status: 503, errText: "No AI provider configured. Set OPENROUTER_API_KEY or ANTHROPIC_API_KEY in Supabase secrets.", content: "", truncated: false };
+}
+
 serve(async (req) => {
   const corsHeaders = corsFor(req);
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -80,11 +120,9 @@ serve(async (req) => {
     const { data: { user }, error: authErr } = await supabase.auth.getUser(token);
     if (authErr || !user) return json({ error: "Unauthorized" }, 401);
 
-    const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY");
-    if (!OPENROUTER_API_KEY) {
-      return json({ error: "OPENROUTER_API_KEY is not configured. Run: npx supabase secrets set OPENROUTER_API_KEY=<key>" }, 503);
+    if (!Deno.env.get("OPENROUTER_API_KEY") && !Deno.env.get("ANTHROPIC_API_KEY")) {
+      return json({ error: "No AI provider configured. Set OPENROUTER_API_KEY or ANTHROPIC_API_KEY in Supabase secrets." }, 503);
     }
-    const model = Deno.env.get("OPENROUTER_MODEL") || "google/gemini-2.5-flash";
 
     const { filing_id, batch_id: batchIdIn } = (await req.json()) ?? {};
     if (!filing_id) return json({ error: "filing_id is required" }, 400);
@@ -164,38 +202,24 @@ serve(async (req) => {
     });
 
     // ── LLM compare ────────────────────────────────────────────────────────────
-    const aiRes = await fetch(OPENROUTER_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://caflow.app",
-        "X-Title": "CAFlow TDS Recon Compare",
-      },
-      body: JSON.stringify({
-        model, temperature: 0, max_tokens: 32000,
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: COMPARE_INSTRUCTION },
-          { role: "user", content: `OFFICE (${officePayload.length}):\n${JSON.stringify(officePayload)}\n\nIMPORTED (${importedPayload.length}):\n${JSON.stringify(importedPayload)}` },
-        ],
-      }),
+    const ai = await callAI({
+      system: COMPARE_INSTRUCTION,
+      userText: `OFFICE (${officePayload.length}):\n${JSON.stringify(officePayload)}\n\nIMPORTED (${importedPayload.length}):\n${JSON.stringify(importedPayload)}`,
+      maxTokens: 32000,
     });
 
-    if (!aiRes.ok) {
-      const errText = await aiRes.text();
-      console.error("OpenRouter compare error:", aiRes.status, errText);
-      const msg = aiRes.status === 401 ? "OpenRouter authentication failed — check OPENROUTER_API_KEY."
-        : aiRes.status === 402 ? "OpenRouter payment required — add credits."
-        : aiRes.status === 429 ? "OpenRouter rate limit — try again shortly."
-        : `AI compare failed (${aiRes.status})`;
-      return json({ error: msg }, aiRes.status >= 500 ? 502 : aiRes.status);
+    if (!ai.ok) {
+      console.error("AI compare error:", ai.status, ai.errText);
+      const msg = ai.status === 401 ? "AI provider authentication failed — check the configured API key."
+        : ai.status === 402 ? "AI provider payment required — add credits."
+        : ai.status === 429 ? "AI provider rate limit — try again shortly."
+        : ai.status === 503 ? ai.errText
+        : `AI compare failed (${ai.status})`;
+      return json({ error: msg }, ai.status >= 500 ? 502 : ai.status);
     }
 
-    const aiJson = await aiRes.json();
-    const finishReason = aiJson?.choices?.[0]?.finish_reason ?? null;
-    const content = aiJson?.choices?.[0]?.message?.content ?? "";
-    const parsed = extractJson(typeof content === "string" ? content : JSON.stringify(content));
+    const finishReason = ai.truncated ? "length" : null;
+    const parsed = extractJson(typeof ai.content === "string" ? ai.content : JSON.stringify(ai.content));
     const llmResults: any[] = Array.isArray(parsed?.results) ? parsed.results : [];
     if (llmResults.length === 0) {
       // A truncated response (hit the output cap) can't be parsed — surface the
