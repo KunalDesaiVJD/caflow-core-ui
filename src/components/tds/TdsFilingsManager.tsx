@@ -48,8 +48,13 @@ interface TdsFiling {
   quarter: string; tds_forms: string[] | null; work_status: string;
   date_of_filing: string | null; acknowledgment_number: string | null;
   prn_no: string | null; tan: string | null; assigned_staff: string | null;
-  // Prepared By / Checked By — existing tds_filings columns (FK → users.id,
-  // ON DELETE SET NULL), previously unused by any UI in this codebase.
+  // Prepared By / Filed By — existing tds_filings columns (FK → users.id,
+  // ON DELETE SET NULL). Read-only audit trail, auto-set by handleStatusChange
+  // (preparer_id when status moves Under Process -> Reviewed, checker_id —
+  // displayed as "Filed By" — when status moves to Filed); never manually
+  // selected. checker_id keeps its original DB column name for continuity
+  // (no schema change) even though its UI meaning is now "who filed", not
+  // "who checked".
   preparer_id: string | null; checker_id: string | null;
   last_updated_by: string | null; last_updated_at: string | null;
   remarks: string | null; created_at: string | null;
@@ -508,6 +513,18 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       updatePayload.date_of_filing = null;
     }
 
+    // Prepared By / Filed By are a read-only audit trail — no manual picker,
+    // set automatically to the logged-in user on the specific transition
+    // that "completes" each role. Never cleared on reversion (the record of
+    // who did it historically stays even if the status later moves again).
+    const actingUserName = user?.name || user?.email || "Unknown";
+    if (oldStatus === "Under Process" && newStatus === "Reviewed") {
+      updatePayload.preparer_id = user?.id ?? null;
+    }
+    if (newStatus === "Filed") {
+      updatePayload.checker_id = user?.id ?? null;
+    }
+
     const { error } = await supabase.from("tds_filings").update(updatePayload).eq("id", filing.id);
 
     if (error) {
@@ -518,6 +535,12 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
         await logAuditEntry(filing.id, "FILING_DATE_SET", null, updatePayload.date_of_filing, "Auto-set on filing");
       } else if (updatePayload.date_of_filing === null) {
         await logAuditEntry(filing.id, "FILING_DATE_CLEARED", filing.date_of_filing, null, "Status reverted from Filed");
+      }
+      if ("preparer_id" in updatePayload) {
+        await logAuditEntry(filing.id, "PREPARED_BY_SET", null, actingUserName, "Auto-set: status moved to Reviewed");
+      }
+      if ("checker_id" in updatePayload) {
+        await logAuditEntry(filing.id, "FILED_BY_SET", null, actingUserName, "Auto-set: status moved to Filed");
       }
       fetchFilings();
       onFilingsChanged?.();
@@ -724,7 +747,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                   <TableHead>Filing Date</TableHead>
                   <TableHead>Ack No</TableHead>
                   <TableHead>Prepared By</TableHead>
-                  <TableHead>Checked By</TableHead>
+                  <TableHead>Filed By</TableHead>
                   <TableHead className="w-[100px]">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -887,28 +910,18 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                         })()}
                       </TableCell>
                       <TableCell>
-                        <Select
-                          value={f.preparer_id || "none"}
-                          onValueChange={v => handleInlineUpdate(f, "preparer_id", v === "none" ? null : v)}
-                        >
-                          <SelectTrigger className="h-7 w-36 text-xs"><SelectValue placeholder="Unassigned" /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="none">— Unassigned —</SelectItem>
-                            {users.map(u => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}
-                          </SelectContent>
-                        </Select>
+                        {/* Read-only — auto-set by handleStatusChange when status moves
+                            Under Process -> Reviewed. No manual picker. */}
+                        <span className={cn("text-xs", !f.preparer_id && "text-muted-foreground")} title="Auto-set when status moves to Reviewed">
+                          {users.find(u => u.id === f.preparer_id)?.name || "—"}
+                        </span>
                       </TableCell>
                       <TableCell>
-                        <Select
-                          value={f.checker_id || "none"}
-                          onValueChange={v => handleInlineUpdate(f, "checker_id", v === "none" ? null : v)}
-                        >
-                          <SelectTrigger className="h-7 w-36 text-xs"><SelectValue placeholder="Unassigned" /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="none">— Unassigned —</SelectItem>
-                            {users.map(u => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}
-                          </SelectContent>
-                        </Select>
+                        {/* Read-only — auto-set by handleStatusChange when status moves
+                            to Filed. No manual picker. */}
+                        <span className={cn("text-xs", !f.checker_id && "text-muted-foreground")} title="Auto-set when status moves to Filed">
+                          {users.find(u => u.id === f.checker_id)?.name || "—"}
+                        </span>
                       </TableCell>
                       <TableCell>
                         <div className="flex gap-0.5">
