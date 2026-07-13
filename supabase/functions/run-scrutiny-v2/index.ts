@@ -198,27 +198,78 @@ serve(async (req) => {
       firm_id: findingFirmId,
       engagement_id: engId,
     }));
-    // Delete previous OPEN findings only NOW — after reads + detection have succeeded and the new
-    // rows are ready. A run that fails or times out before this point leaves existing findings
-    // intact (previously the delete ran first, so any failed run wiped the findings).
-    await supabase.from("scrutiny_findings").delete()
-      .eq("client_id", client_id).eq("financial_year", financial_year).eq("status", "open");
-    if (rows.length > 0) {
-      const CHUNK = 100;
-      for (let i = 0; i < rows.length; i += CHUNK) {
-        const { error: insertErr } = await supabase.from("scrutiny_findings").insert(rows.slice(i, i + CHUNK));
-        if (insertErr) console.error("Insert findings error:", insertErr);
+
+    // ── TDS routing (Phase 2) ──
+    // The scrutiny engine has NO section/rate table, so TDS obligations (short / missing deduction)
+    // are delegated to the dedicated tds-missing-scanner, which scores every expense/creditor ledger
+    // against the 194C/194J/194I/194H/194A section+rate+threshold tables straight off the TB (no
+    // human mapping needed). We mirror its flags into scrutiny_findings so TDS defaults surface in
+    // the same unified list. Best-effort: a scanner failure never blocks the deterministic run.
+    const fmtINR = (v: unknown) => (v == null ? "?" : `₹${Number(v).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`);
+    let tdsRows: Record<string, unknown>[] = [];
+    if (findingFirmId) {
+      try {
+        const scanRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/tds-missing-scanner`, {
+          method: "POST",
+          headers: {
+            Authorization: req.headers.get("Authorization") ?? `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
+            apikey: Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ client_id, financial_year, firm_id: findingFirmId }),
+        });
+        if (scanRes.ok) {
+          const scan = await scanRes.json();
+          const flags = Array.isArray(scan?.flags) ? scan.flags : [];
+          tdsRows = flags.slice(0, 200).map((f: Record<string, unknown>) => ({
+            client_id,
+            financial_year,
+            status: "open",
+            rule_id: `TDS-SCAN-${f.section_code ?? "NA"}`,
+            category: "TDS",
+            severity: "HIGH",
+            flag_message: `Possible TDS default u/s ${f.section_code ?? "?"} on ${f.tb_ledger_name ?? "ledger"} (${f.nature_of_payment ?? "payment"}): book amount ${fmtINR(f.book_amount)}, expected TDS ~${fmtINR(f.expected_tds)} but no TDS filing entry found — verify the deduction / section applied.`,
+            account_name: (f.tb_ledger_name ?? null) as string | null,
+            amount: (f.expected_tds ?? null) as number | null,
+            detection_level: "account",
+            clause_3cd: null,
+            narration: (f.tb_ledger_name ?? null) as string | null,
+            firm_id: findingFirmId,
+            engagement_id: engId,
+          }));
+        } else {
+          console.error("tds-missing-scanner returned", scanRes.status);
+        }
+      } catch (tdsErr) {
+        console.error("tds-missing-scanner routing error:", tdsErr);
       }
     }
 
+    // Delete previous OPEN findings only NOW — after reads + detection + TDS routing have succeeded.
+    // A run that fails or times out before this point leaves existing findings intact.
+    await supabase.from("scrutiny_findings").delete()
+      .eq("client_id", client_id).eq("financial_year", financial_year).eq("status", "open");
+    // Insert deterministic + TDS rows in SEPARATE batches — their column sets differ, and PostgREST
+    // requires a uniform key set per bulk insert.
+    const insertChunked = async (batch: Record<string, unknown>[]) => {
+      const CHUNK = 100;
+      for (let i = 0; i < batch.length; i += CHUNK) {
+        const { error: insertErr } = await supabase.from("scrutiny_findings").insert(batch.slice(i, i + CHUNK));
+        if (insertErr) console.error("Insert findings error:", insertErr);
+      }
+    };
+    if (rows.length > 0) await insertChunked(rows);
+    if (tdsRows.length > 0) await insertChunked(tdsRows);
+
+    const allRows = [...rows, ...tdsRows];
     const counts = { HIGH: 0, MEDIUM: 0, LOW: 0 };
-    for (const r of rows) {
-      const s = r.severity.toUpperCase();
+    for (const r of allRows) {
+      const s = String(r.severity).toUpperCase();
       if (s === "HIGH") counts.HIGH++;
       else if (s === "MEDIUM") counts.MEDIUM++;
       else counts.LOW++;
     }
-    const total = rows.length;
+    const total = allRows.length;
 
     // ── Completion notification (best-effort, same as v1) ──
     try {
@@ -255,6 +306,7 @@ serve(async (req) => {
     return json({
       findings_created: counts,
       total,
+      tds_flagged: tdsRows.length,         // TDS obligations routed in from tds-missing-scanner (Phase 2)
       source,                              // "tally_sync" | "snapshot" — which data path fed the engine
       input: { ledgers: tbCur.length, vouchers: vouchersCur.length, priorYearLedgers: tbPY?.length ?? 0 },
       coverage: result.coverage,           // rulesHandled / executedKinds / unhandled
