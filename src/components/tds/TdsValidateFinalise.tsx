@@ -20,7 +20,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   ShieldCheck, AlertTriangle, CheckCircle2, Upload, Play, FileSpreadsheet,
-  RotateCcw, Loader2, Users, FileWarning, Info, Check, X,
+  RotateCcw, Loader2, Users, FileWarning, Info, Check, X, Eye, HelpCircle,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import Papa from "papaparse";
@@ -51,7 +51,7 @@ interface ReconResult {
   office_deductee_id: string | null;
   imported_row_id: string | null;
   record_label: string | null;
-  match_status: "matched" | "mismatched" | "office_only" | "imported_only";
+  match_status: "matched" | "review" | "mismatched" | "office_only" | "imported_only";
   mismatch_fields: string[] | null;
   field_diffs: FieldDiff[] | null;
   overridden: boolean;
@@ -106,6 +106,24 @@ function DiffCell({ diffs, field }: { diffs: FieldDiff[]; field: string }) {
   );
 }
 
+/**
+ * One-line, human-readable reason a record is not a clean match — shown inline
+ * under the status badge and as the headline of the View Details dialog, so the
+ * user never sees a bare "Mismatched" without knowing WHICH field and WHY.
+ */
+function reasonFor(r: ReconResult): string {
+  if (r.match_status === "matched") return "All 7 fields match.";
+  if (r.match_status === "office_only") return "In Office Data only — no matching row in the imported client file.";
+  if (r.match_status === "imported_only") return "In the imported client file only — no matching Office Data record.";
+  const diffs = (r.field_diffs || []).filter(f => f.matched === false);
+  const labels = diffs.map(f => FIELD_LABELS[f.field] || f.field).join(", ") || "some fields";
+  const plural = diffs.length > 1;
+  if (r.match_status === "review") {
+    return `Key fields (PAN, Date, Amount, TDS) match — only ${labels} differ${plural ? "" : "s"}. Likely the same transaction; please confirm.`;
+  }
+  return `${labels} ${plural ? "differ" : "differs"}.`;
+}
+
 /** Invoke an edge function and surface the function's own JSON error message. */
 async function invokeFn(name: string, body: unknown): Promise<any> {
   const { data, error } = await supabase.functions.invoke(name, { body });
@@ -142,6 +160,7 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
   const [comparing, setComparing] = useState(false);
   const [finalising, setFinalising] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [detailRow, setDetailRow] = useState<ReconResult | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // TDS Compliance is the single source of truth for module membership. Returns
@@ -265,7 +284,7 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
       const { data: res } = await supabase.from("tds_recon_results").select("*").eq("filing_id", filing.id);
       setResults((res as ReconResult[]) || []);
       const s = data.summary || {};
-      toast({ title: "Comparison complete", description: `${s.matched ?? 0} matched · ${s.pending ?? 0} pending` });
+      toast({ title: "Validation complete", description: `${s.matched ?? 0} matched · ${s.review ?? 0} to review · ${s.mismatched ?? 0} mismatched` });
     } catch (e: any) {
       toast({ title: "Comparison failed", description: e.message, variant: "destructive" });
     }
@@ -299,7 +318,10 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     return {
       total: rs.length,
       matched: rs.filter(r => r.match_status === "matched").length,
-      mismatched: rs.filter(r => r.match_status !== "matched").length,
+      review: rs.filter(r => r.match_status === "review").length,
+      // Genuine mismatches + unpaired rows (office_only / imported_only), i.e.
+      // everything that is neither a clean match nor a soft "review".
+      mismatched: rs.filter(r => r.match_status !== "matched" && r.match_status !== "review").length,
       overridden: rs.filter(r => r.overridden).length,
       pending: rs.filter(r => r.match_status !== "matched" && !r.overridden).length,
     };
@@ -311,6 +333,7 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
 
   const statusBadge = (r: ReconResult) => {
     if (r.match_status === "matched") return <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 gap-1"><CheckCircle2 size={11} /> Matched</Badge>;
+    if (r.match_status === "review") return <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 gap-1"><HelpCircle size={11} /> Needs Review</Badge>;
     if (r.match_status === "office_only") return <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">Only in Office</Badge>;
     if (r.match_status === "imported_only") return <Badge className="bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">Only in Imported</Badge>;
     return <Badge className="bg-destructive/10 text-destructive gap-1"><AlertTriangle size={11} /> Mismatched</Badge>;
@@ -444,10 +467,11 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
           {results && (
             <>
               {/* Override summary */}
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
                 {[
                   { label: "Total", value: summary.total, cls: "" },
                   { label: "Matched", value: summary.matched, cls: "text-emerald-600" },
+                  { label: "Needs Review", value: summary.review, cls: summary.review > 0 ? "text-amber-600" : "" },
                   { label: "Mismatched", value: summary.mismatched, cls: "text-destructive" },
                   { label: "Overridden", value: summary.overridden, cls: "text-blue-600" },
                   { label: "Pending", value: summary.pending, cls: summary.pending > 0 ? "text-amber-600" : "text-emerald-600" },
@@ -499,19 +523,31 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
                           {DIFF_FIELDS.map(f => (
                             <TableCell key={f}><DiffCell diffs={diffs} field={f} /></TableCell>
                           ))}
-                          <TableCell>{statusBadge(r)}</TableCell>
-                          <TableCell className="text-right">
-                            {isMismatch && !isFiled && (
-                              r.overridden ? (
-                                <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => handleOverride(r, false)}>
-                                  <RotateCcw size={12} /> Undo
-                                </Button>
-                              ) : (
-                                <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => handleOverride(r, true)}>
-                                  <ShieldCheck size={12} /> Override
-                                </Button>
-                              )
+                          <TableCell>
+                            {statusBadge(r)}
+                            {isMismatch && (
+                              <p className="text-[11px] text-muted-foreground mt-1 leading-tight max-w-[180px]">{reasonFor(r)}</p>
                             )}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex items-center justify-end gap-1">
+                              {isMismatch && (
+                                <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => setDetailRow(r)}>
+                                  <Eye size={12} /> Details
+                                </Button>
+                              )}
+                              {isMismatch && !isFiled && (
+                                r.overridden ? (
+                                  <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => handleOverride(r, false)}>
+                                    <RotateCcw size={12} /> Undo
+                                  </Button>
+                                ) : (
+                                  <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => handleOverride(r, true)}>
+                                    <ShieldCheck size={12} /> Override
+                                  </Button>
+                                )
+                              )}
+                            </div>
                           </TableCell>
                         </TableRow>
                       );
@@ -557,6 +593,78 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
           )}
         </>
       )}
+
+      {/* Per-record comparison detail (Issue 4 — "View Details") */}
+      <Dialog open={!!detailRow} onOpenChange={(o) => !o && setDetailRow(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Info size={16} /> Record Comparison
+            </DialogTitle>
+          </DialogHeader>
+          {detailRow && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="font-semibold text-sm text-foreground">{detailRow.record_label || "—"}</p>
+                {statusBadge(detailRow)}
+              </div>
+              <div className={cn(
+                "text-sm rounded-md px-3 py-2 border",
+                detailRow.match_status === "review"
+                  ? "bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200"
+                  : "bg-destructive/5 border-destructive/20 text-destructive",
+              )}>
+                <span className="font-medium">Reason: </span>{reasonFor(detailRow)}
+              </div>
+              <div className="rounded-md border overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-[90px]">Field</TableHead>
+                      <TableHead>Office Data</TableHead>
+                      <TableHead>Imported</TableHead>
+                      <TableHead className="w-[70px] text-right">Result</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {DIFF_FIELDS.map(f => {
+                      const d = (detailRow.field_diffs || []).find(x => x.field === f);
+                      const ok = d ? d.matched !== false : true;
+                      return (
+                        <TableRow key={f} className={cn(!ok && "bg-destructive/5")}>
+                          <TableCell className="font-medium text-xs">{FIELD_LABELS[f]}</TableCell>
+                          <TableCell className="text-xs">{fmtVal(d?.office)}</TableCell>
+                          <TableCell className={cn("text-xs", !ok && "text-destructive")}>{fmtVal(d?.imported)}</TableCell>
+                          <TableCell className="text-right">
+                            {ok
+                              ? <span className="inline-flex items-center gap-1 text-emerald-600 text-xs"><Check size={12} /> Match</span>
+                              : <span className="inline-flex items-center gap-1 text-destructive text-xs"><X size={12} /> Mismatch</span>}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+              {(detailRow.field_diffs || []).some(d => d.matched === false && d.difference) && (
+                <div className="text-xs text-muted-foreground space-y-0.5">
+                  {(detailRow.field_diffs || []).filter(d => d.matched === false && d.difference).map(d => (
+                    <p key={d.field}><span className="font-medium text-foreground">{FIELD_LABELS[d.field] || d.field}:</span> {d.difference}</p>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          <DialogFooter>
+            {detailRow && !detailRow.overridden && detailRow.match_status !== "matched" && !isFiled && (
+              <Button variant="outline" className="gap-1" onClick={() => { handleOverride(detailRow, true); setDetailRow(null); }}>
+                <ShieldCheck size={14} /> Accept &amp; Override
+              </Button>
+            )}
+            <Button onClick={() => setDetailRow(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Confirmation Dialog */}
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
