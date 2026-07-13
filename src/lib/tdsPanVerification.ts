@@ -56,19 +56,38 @@ export const normalizeName = (v: string | null | undefined): string => {
 };
 
 /**
- * Do two names refer to the same party? Exact after normalisation, OR a high
- * token overlap (≥ 60%) so word-order/extra-token/minor differences don't create
- * false "Name Mismatch"es. A blank on either side is not compared (returns true).
+ * Do two names refer to the same party? Intelligent, not exact:
+ *  1. exact after normalisation; OR
+ *  2. every significant token of the SHORTER name appears (exact / prefix /
+ *     substring) in the LONGER name — tolerates fuller legal names, extra middle
+ *     names and short forms (e.g. "Rakesh Rupavatiya" ≡ "Rakeshkumar Kanjibhai
+ *     Rupavatiya"); OR
+ *  3. business context: an INDIVIDUAL PAN (4th char 'P') is typically a
+ *     proprietorship, whose recorded trade name legitimately differs from the
+ *     proprietor's PAN name — so a residual difference there is not reliable
+ *     evidence of a wrong PAN and is not flagged.
+ * A blank on either side is not compared (returns true).
  */
-export const namesMatch = (a: string | null | undefined, b: string | null | undefined): boolean => {
+export const namesMatch = (
+  a: string | null | undefined,
+  b: string | null | undefined,
+  pan?: string | null,
+): boolean => {
   const na = normalizeName(a), nb = normalizeName(b);
   if (!na || !nb) return true;              // nothing reliable to compare
   if (na === nb) return true;
-  const ta = new Set(na.split(" ").filter(Boolean));
-  const tb = new Set(nb.split(" ").filter(Boolean));
-  const inter = [...ta].filter(x => tb.has(x)).length;
-  const union = new Set([...ta, ...tb]).size;
-  return union > 0 && inter / union >= 0.6;
+  const ta = na.split(" ").filter(w => w.length >= 2);
+  const tb = nb.split(" ").filter(w => w.length >= 2);
+  if (!ta.length || !tb.length) return true;
+  const [short, long] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
+  let hit = 0;
+  for (const s of short) {
+    if (long.some(l => l === s || l.startsWith(s) || s.startsWith(l) || l.includes(s) || s.includes(l))) hit++;
+  }
+  if (hit / short.length >= 0.7) return true;
+  const p = normalizePan(pan);
+  if (p.length === 10 && p[3] === "P") return true; // individual/proprietor PAN
+  return false;
 };
 
 /** Plain-English reason a party is not a clean "PAN Verified". */
@@ -145,7 +164,7 @@ export function comparePanVerification(office: OfficeParty[], traces: TracesPanR
     const o = officeByPan.get(k);
     const status = classifyPanStatus(t.pan_status);
     const result: PanValidationResult =
-      status === "PAN Verified" && o && !namesMatch(o.name, t.verified_name || t.name)
+      status === "PAN Verified" && o && !namesMatch(o.name, t.verified_name || t.name, t.pan)
         ? "Name Mismatch"
         : status;
     rows.push({ office_deductee_id: o?.deductee_id ?? null, pan_row_id: t.row_id, party_name: o?.name || t.name, pan: t.pan ?? null, pan_status: t.pan_status ?? null, validation_result: result });
