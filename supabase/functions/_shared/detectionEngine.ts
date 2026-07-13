@@ -785,7 +785,9 @@ const h_cash_capital_payment: CheckHandler = (rule, { vouchers }) => {
 // with no bespoke handler. This is what the AI Rule Composer targets and what
 // lets previously-unhandled rules run. detection_logic shape:
 //   { check:"expr", grain?:"voucher"|"account"|"aggregate",
-//     scope?:{voucher_type?:string[], ledger_keywords?:string[], cash_only?:bool, side?:"Dr"|"Cr", nonzero?:bool},
+//     scope?:{voucher_type?:string[], ledger_keywords?:string[], parent_group_keywords?:string[] (alias group), cash_only?:bool, side?:"Dr"|"Cr", nonzero?:bool},
+//       - on the voucher grain, ledger_keywords also matches the party's resolved parent_group (from the TB),
+//         so family words like "creditor"/"debtor" work even though they live in the group label, not the ledger name.
 //     where?: Cond | Cond[] | {all?:Cond[], any?:Cond[]},
 //     aggregate?:{by:("party"|"ledger"|"day"|"month"|"year"|"amount"|"date"|"voucher_type")[], fn:"sum"|"count"|"max", field?:string, having:{op,value}},
 //     vs_prior_year?:{op?:string, pct:number}, message?:string }
@@ -861,14 +863,41 @@ const evalWhere = (where: unknown, resolve: (f: string) => unknown): boolean => 
   return applyOp(c.op, resolve(c.field), c.value);
 };
 
-const voucherInScope = (v: VoucherRow, scope: Record<string, unknown> | undefined): boolean => {
+/**
+ * party/ledger → parent_group resolver, memoized per TB array. Vouchers carry no parent_group, so
+ * this lets voucher-grain scope reach the account's FAMILY (RC1): a keyword like "creditor" can
+ * match a party ledger grouped under "Sundry Creditors" even though the word never appears in the
+ * party's own name — the exact reason a composed creditor rule previously matched zero vouchers.
+ */
+const _groupOfCache = new WeakMap<object, (ledger: string | null | undefined) => string>();
+const groupResolver = (tb: TBRow[]): ((ledger: string | null | undefined) => string) => {
+  const cached = _groupOfCache.get(tb);
+  if (cached) return cached;
+  const m = new Map<string, string>();
+  for (const r of tb) m.set(normName(r.ledger_name), r.parent_group ?? "");
+  const fn = (ledger: string | null | undefined) => m.get(normName(ledger ?? "")) ?? "";
+  _groupOfCache.set(tb, fn);
+  return fn;
+};
+
+const voucherInScope = (
+  v: VoucherRow,
+  scope: Record<string, unknown> | undefined,
+  groupOf: (ledger: string | null | undefined) => string = () => "",
+): boolean => {
   if (!scope) return true;
   if (scope.cash_only && !isCashVoucher(v)) return false;
   if (scope.side && sideOf(v.dr_cr) !== sideOf(scope.side)) return false;
   const vt = scope.voucher_type as unknown[] | undefined;
   if (Array.isArray(vt) && vt.length && !vt.some((t) => lc(v.voucher_type).includes(lc(t)))) return false;
+  // resolved parent_group of the voucher's party/ledger (RC1)
+  const grp = groupOf(v.party_ledger ?? v.ledger_name);
+  // explicit group scoping: scope.parent_group_keywords (alias: scope.group)
+  const grpKw = (scope.parent_group_keywords ?? scope.group) as unknown;
+  if (Array.isArray(grpKw) && grpKw.length && !kwMatch(grp, grpKw)) return false;
   const kw = scope.ledger_keywords;
-  if (Array.isArray(kw) && kw.length && !kwMatch(`${v.party_ledger ?? ""} ${v.ledger_name ?? ""} ${v.narration ?? ""}`, kw)) return false;
+  // ledger_keywords also matches the resolved parent_group so family words work on the voucher path (RC1)
+  if (Array.isArray(kw) && kw.length && !kwMatch(`${v.party_ledger ?? ""} ${v.ledger_name ?? ""} ${v.narration ?? ""} ${grp}`, kw)) return false;
   return true;
 };
 
@@ -931,8 +960,9 @@ const h_expr: CheckHandler = (rule, data, ctx) => {
       .map((r) => finding(rule, { account: r.ledger_name, amount: num(r.closing_balance), flag_message: render(tpl, { account: r.ledger_name, amount: fmtAmt(num(r.closing_balance)) }), evidence: { balance_type: r.balance_type, parent_group: r.parent_group } }));
   }
 
+  const groupOf = groupResolver(data.tb);
   const matched = data.vouchers
-    .filter((v) => voucherInScope(v, scope))
+    .filter((v) => voucherInScope(v, scope, groupOf))
     .filter((v) => evalWhere(where, (f) => voucherField(v, f, ctx)));
 
   if (grain === "aggregate" && dl.aggregate) {
