@@ -626,6 +626,44 @@ describe("ageing — outstanding balance with no recent activity", () => {
   });
 });
 
+describe("ratio — computed financial ratios over the TB", () => {
+  it("flags current ratio below 1 (raw ratio)", () => {
+    const r = rule({
+      rule_id: "RAT-003", category: "RAT", detection_level: "account",
+      detection_logic: { check: "ratio", numerator: { parent_group_keywords: ["current asset"] }, denominator: { parent_group_keywords: ["current liabilit"] }, op: "<", value: 1, as_pct: false, label: "Current ratio" },
+      audit_query_template: "Current ratio {ratio} is below 1",
+    });
+    const out = run(r, { tb: [
+      tb({ ledger_name: "Debtors", parent_group: "Current Assets", closing_balance: 80000, balance_type: "Dr" }),
+      tb({ ledger_name: "Creditors", parent_group: "Current Liabilities", closing_balance: 100000, balance_type: "Cr" }),
+    ] });
+    expect(out).toHaveLength(1);
+    expect(out[0].evidence?.ratio).toBe(0.8);
+  });
+
+  it("flags misc expenses over 2% of total expenses (percent)", () => {
+    const r = rule({
+      rule_id: "EXP-007", category: "EXP", detection_level: "account",
+      detection_logic: { check: "ratio", numerator: { ledger_keywords: ["miscellaneous"] }, denominator: { parent_group_keywords: ["expense"] }, op: ">", pct: 2, min_denominator: 1000 },
+      audit_query_template: "Misc expenses are {pct}% of total expenses",
+    });
+    const out = run(r, { tb: [
+      tb({ ledger_name: "Miscellaneous Expenses", parent_group: "Indirect Expenses", closing_balance: 5000, balance_type: "Dr" }),
+      tb({ ledger_name: "Salaries", parent_group: "Indirect Expenses", closing_balance: 90000, balance_type: "Dr" }),
+      tb({ ledger_name: "Rent", parent_group: "Indirect Expenses", closing_balance: 5000, balance_type: "Dr" }),
+    ] });
+    expect(out).toHaveLength(1);
+    expect(out[0].evidence?.ratio).toBe(5);
+  });
+
+  it("does not flag a healthy ratio and guards against a tiny/zero denominator", () => {
+    const healthy = rule({ rule_id: "RAT-003b", detection_level: "account", detection_logic: { check: "ratio", numerator: { parent_group_keywords: ["current asset"] }, denominator: { parent_group_keywords: ["current liabilit"] }, op: "<", value: 1, as_pct: false } });
+    expect(run(healthy, { tb: [tb({ ledger_name: "CA", parent_group: "Current Assets", closing_balance: 150000, balance_type: "Dr" }), tb({ ledger_name: "CL", parent_group: "Current Liabilities", closing_balance: 100000, balance_type: "Cr" })] })).toHaveLength(0);
+    const noBase = rule({ rule_id: "EXP-007b", detection_level: "account", detection_logic: { check: "ratio", numerator: { ledger_keywords: ["misc"] }, denominator: { parent_group_keywords: ["nonexistent"] }, op: ">", pct: 2 } });
+    expect(run(noBase, { tb: [tb({ ledger_name: "Misc", parent_group: "Indirect Expenses", closing_balance: 5000 })] })).toHaveLength(0);
+  });
+});
+
 describe("run ledger — completeness accounting (no rule silently dropped)", () => {
   it("reports executed / needs_data / skipped_no_handler per rule", () => {
     const rExec = rule({ rule_id: "CASH-X", category: "CASH", detection_logic: { check: "single_txn", threshold: 10000 } });
