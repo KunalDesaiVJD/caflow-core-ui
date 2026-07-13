@@ -18,7 +18,7 @@ import { Button }   from "@/components/ui/button";
 import { Input }    from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge }    from "@/components/ui/badge";
-import { Check, X, Trash2, Loader2, Clock, Users, Building2, User, CalendarDays, BadgeCheck } from "lucide-react";
+import { Check, X, Trash2, Loader2, Clock, Users, Building2, User, CalendarDays, BadgeCheck, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import type { StatusEntry, StatusPatch } from "../hooks/useAuditStatus";
@@ -424,6 +424,11 @@ function UserCombobox({ value, onChange, users, placeholder }: {
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
+// 2026-06-25 (V J Desai) — autosave save state, reported to Grid so the
+// filter bar can show a global "Saving 3 changes…" or "All changes saved"
+// pill. Idle = nothing in flight / never touched.
+export type SaveState = "idle" | "saving" | "saved" | "error";
+
 interface Props {
   row:                StatusEntry;
   srNo:               number;
@@ -434,13 +439,15 @@ interface Props {
   onSave:             (id: string, patch: StatusPatch) => Promise<void>;
   onDelete:           (id: string) => Promise<void>;
   onHistory?:         (id: string) => void;
-  /** isNew: row was just created in the grid and starts in edit mode */
+  /** isNew: row was just created in the grid and starts in edit mode.
+   *  New rows use explicit Add (commitSave) — autosave is disabled until
+   *  the row exists in the DB. */
   isNew?:             boolean;
   onAdd?:             (patch: StatusPatch) => Promise<void>;
   onCancelNew?:       () => void;
-  /** Save All registry — row registers its save fn when editing starts */
-  onRegisterSave?:   (id: string, fn: () => Promise<void>) => void;
-  onUnregisterSave?: (id: string) => void;
+  /** Autosave state reporter — Grid aggregates across all rows so the
+   *  filter bar can show one global pill. */
+  onSaveStateChange?: (id: string, state: SaveState) => void;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -449,29 +456,44 @@ export default function AuditStatusRow({
   row, srNo, clients, users, auditFirms, planEntries,
   onSave, onDelete, onHistory,
   isNew, onAdd, onCancelNew,
-  onRegisterSave, onUnregisterSave,
+  onSaveStateChange,
 }: Props) {
 
   // ── Edit state — rows are always editable (no pencil-click required) ─────────
   const [editing, setEditing] = useState(true);
   const [draft,   setDraft]   = useState<RowDraft>(buildDraft(row, clients));
   const [saving,  setSaving]  = useState(false);
+  // 2026-06-25 (V J Desai — autosave): per-cell save lifecycle.
+  //   idle    → no unsaved changes / never touched
+  //   saving  → PATCH in flight (dropdown blur-fire or text debounce elapsed)
+  //   saved   → PATCH landed <1500 ms ago; ticks back to idle after that
+  //   error   → PATCH failed; auto-retried once, still failed. Cell keeps
+  //             the auditor's typed value visible + red icon in Actions gutter
+  const [saveState, setSaveState] = useState<SaveState>("idle");
 
   // Auto-reset draft when a new row is first mounted
   useEffect(() => {
     if (isNew) { setDraft(buildDraft(row, clients)); }
   }, [isNew]); // eslint-disable-line
 
-  // Register every row (new AND existing) with the "Save All" registry using a
-  // stable wrapper that always calls the latest commitSave closure — this fixes
-  // the stale-closure bug where the registered fn captured an empty draft.
-  const commitSaveRef = useRef<() => Promise<void>>();
-  commitSaveRef.current = commitSave; // updated every render
-  useEffect(() => {
-    const stableSave = async () => { await commitSaveRef.current?.(); };
-    onRegisterSave?.(row.id, stableSave);
-    return () => onUnregisterSave?.(row.id);
-  }, [row.id]); // eslint-disable-line
+  // 2026-06-25 — Autosave plumbing.
+  // pendingPatch accumulates dirty fields between debounce ticks so a run
+  // of quick edits collapses into one PATCH (server-friendly + atomic).
+  // debounceTimer is the delay before the flush fires (500 ms for text /
+  // 0 ms for dropdowns/dates via a distinct call). savedIndicatorTimer
+  // fades the green tick back to idle so old rows don't stay green forever.
+  const pendingPatch        = useRef<Partial<StatusPatch>>({});
+  const debounceTimer       = useRef<ReturnType<typeof setTimeout>>();
+  const savedIndicatorTimer = useRef<ReturnType<typeof setTimeout>>();
+
+  useEffect(() => onSaveStateChange?.(row.id, saveState), [saveState, row.id, onSaveStateChange]);
+
+  // Clean up timers when the row unmounts (row deleted / grid re-rendered).
+  useEffect(() => () => {
+    if (debounceTimer.current)       clearTimeout(debounceTimer.current);
+    if (savedIndicatorTimer.current) clearTimeout(savedIndicatorTimer.current);
+    onSaveStateChange?.(row.id, "idle");
+  }, []); // eslint-disable-line
 
   // ── Firm options ─────────────────────────────────────────────────────────────
   const firmNames = useMemo(
@@ -491,15 +513,108 @@ export default function AuditStatusRow({
   // CP-07 BUG D: show for statutory/both engagement_type OR corporate entity
   const showUdinStatutoryView = isStatutoryOrBoth(row.engagement_type) || isCorporate(viewEntityType);
 
+  // ── Autosave core ────────────────────────────────────────────────────────────
+  // 2026-06-25 (V J Desai): replaced batch "Save All Changes" with autosave.
+  // Rules:
+  //   • Dropdowns / dates commit immediately (0 ms debounce) — auditors expect
+  //     a picked value to be sticky the instant they close the popover.
+  //   • Text inputs debounce 500 ms after the last keystroke so a typed UDIN
+  //     doesn't fire 20 PATCHes.
+  //   • Multiple field edits inside one debounce window collapse into a single
+  //     PATCH via pendingPatch — server-friendly and atomic.
+  //   • On failure the code auto-retries once. If that also fails, the row's
+  //     save-state stays "error" and the auditor's typed value is preserved;
+  //     the red icon on the Actions column exposes the failure. Retry survives
+  //     via re-queueing the failed fields into pendingPatch.
+
+  const TEXT_FIELDS: Set<keyof RowDraft> = new Set([
+    "party_name", "audit_employees",
+    "audit_report_prepared_by", "audit_report_checked_by",
+    "audit_status_other",
+    "firm", "partner",
+    "udin_tax_audit", "udin_statutory_audit",
+    "prepared_by", "checked_by", "uploaded_by",
+    "remarks",
+  ]);
+  // Draft-side field name → DB column name. Only fields that differ are
+  // listed; everything else is 1:1.
+  const FIELD_ALIAS: Partial<Record<keyof RowDraft, keyof StatusPatch>> = {
+    clientId: "client_id",
+    // entityType is derived from the client_id — never persisted directly.
+  };
+  const dbField = (f: keyof RowDraft): keyof StatusPatch =>
+    (FIELD_ALIAS[f] ?? (f as any)) as keyof StatusPatch;
+
+  // Normalise the draft value the way draftToPatch would — empty string → null,
+  // yes/no defaults, OTHER-scoped text. Keeps the autosave format identical to
+  // what the previous batch save wrote so downstream consumers don't drift.
+  function normalizeForDb(field: keyof RowDraft, val: string, currentDraft: RowDraft): any {
+    if (field === "physical_audit_conducted" || field === "accounting_data" || field === "scanned") {
+      return val || "No";
+    }
+    if (field === "audit_status_other") {
+      return currentDraft.audit_status === "OTHERS" ? (val || null) : null;
+    }
+    return val || null;
+  }
+
+  async function flushPending(retriesLeft = 1) {
+    if (Object.keys(pendingPatch.current).length === 0) return;
+    // Snapshot the patch and clear the pending buffer so subsequent keystrokes
+    // start a fresh accumulation while this PATCH is in flight.
+    const patch = { ...pendingPatch.current };
+    pendingPatch.current = {};
+    setSaveState("saving");
+    try {
+      await onSave(row.id, patch);
+      setSaveState("saved");
+      if (savedIndicatorTimer.current) clearTimeout(savedIndicatorTimer.current);
+      savedIndicatorTimer.current = setTimeout(() => setSaveState("idle"), 1500);
+    } catch (err) {
+      console.error("[Autosave] PATCH failed:", err);
+      // Re-queue the failed fields so a subsequent flush or manual retry
+      // includes them (never silently drop what the auditor typed).
+      pendingPatch.current = { ...patch, ...pendingPatch.current };
+      if (retriesLeft > 0) {
+        // Single transient retry after 800 ms — covers Supabase 429s and
+        // brief RLS cache warm-ups without spamming.
+        setTimeout(() => flushPending(retriesLeft - 1), 800);
+      } else {
+        setSaveState("error");
+      }
+    }
+  }
+
+  function scheduleFlush(delay: number) {
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    debounceTimer.current = setTimeout(() => flushPending(1), delay);
+  }
+
+  /** Queue an autosave for one or more fields on an existing row.
+   *  For new rows (`isNew`) this is a no-op — the auditor must click Add. */
+  function queueSave(patch: Partial<StatusPatch>, delay: number) {
+    if (isNew) return;
+    pendingPatch.current = { ...pendingPatch.current, ...patch };
+    scheduleFlush(delay);
+  }
+
   // ── Edit handlers ─────────────────────────────────────────────────────────────
 
+  /** set — update draft locally AND queue an autosave. Single entry point for
+   *  every cell so we never accidentally bypass the autosave.
+   *  Text fields: 500 ms debounce (accumulate keystrokes into one PATCH).
+   *  Dropdowns / dates: 0 ms debounce (fire on selection). */
   function set(field: keyof RowDraft, val: string) {
     setDraft(p => ({ ...p, [field]: val }));
+    if (field === "entityType") return;  // derived only, never persisted
+    const isText = TEXT_FIELDS.has(field);
+    queueSave({ [dbField(field)]: normalizeForDb(field, val, draft) } as any, isText ? 500 : 0);
   }
 
   function handleClientSelect(text: string, client: ClientOption | null) {
+    // Multi-field write — draft first, then a single combined autosave so the
+    // party_name / client_id / audit_employees fields all land in one PATCH.
     if (client) {
-      // Find matching plan entry to auto-fill employees
       const planEntry = planEntries.find(e => e.client_id === client.id);
       const empNames = planEntry?.employee_names?.join(", ") || "";
       setDraft(p => ({
@@ -509,34 +624,39 @@ export default function AuditStatusRow({
         entityType: client.entity_type,
         audit_employees: empNames || p.audit_employees,
       }));
+      queueSave({
+        party_name:      client.name,
+        client_id:       client.id,
+        audit_employees: empNames || draft.audit_employees || null,
+      } as any, 0);
     } else {
-      // Free-text entry
       setDraft(p => ({ ...p, party_name: text, clientId: "", entityType: null }));
+      queueSave({ party_name: text || null, client_id: null } as any, 500);
     }
   }
 
   function handleFirmChange(firmName: string) {
     setDraft(p => ({ ...p, firm: firmName, partner: "" }));
+    queueSave({ firm: firmName || null, partner: null } as any, 0);
   }
 
   function handleUdinField(field: "udin_tax_audit" | "udin_statutory_audit", val: string) {
+    const isRealUdin = !!val && val.trim().toUpperCase() !== "NA";
     setDraft(p => {
       const updates: Partial<RowDraft> = { [field]: val };
-      // Auto-fill UDIN date when first entering a REAL UDIN value. "NA" means
-      // no UDIN is applicable, so it must NOT trigger the date auto-fill.
-      const isRealUdin = !!val && val.trim().toUpperCase() !== "NA";
-      if (isRealUdin && !p.udin_date) {
-        updates.udin_date = todayISO();
-      }
+      if (isRealUdin && !p.udin_date) updates.udin_date = todayISO();
       return { ...p, ...updates };
     });
+    const patch: Partial<StatusPatch> = { [field]: val || null } as any;
+    if (isRealUdin && !draft.udin_date) patch.udin_date = todayISO();
+    queueSave(patch, 500);
   }
 
+  /** commitSave — used ONLY by the "Add new row" flow now. Existing rows
+   *  autosave per field, so this path never runs for them. */
   async function commitSave() {
     setSaving(true);
     const patch = draftToPatch(draft);
-    // Force the 3CA/3CB+3CD columns to "NA" when tax audit is not applicable,
-    // so the persisted value matches the locked "NA" shown in the grid.
     if (!taxAuditApplicable) {
       patch.prepared_by = "NA";
       patch.checked_by  = "NA";
@@ -548,8 +668,6 @@ export default function AuditStatusRow({
       await onSave(row.id, patch);
     }
     setSaving(false);
-    // For new rows the parent removes the row from the grid after onAdd resolves.
-    // For existing rows we stay in always-editable mode — no state change needed.
   }
 
   function cancelEdit() {
@@ -892,8 +1010,32 @@ export default function AuditStatusRow({
             </Button>
           </div>
         ) : (
-          /* Existing rows: History + Delete (always editable, no pencil needed) */
+          // Existing rows: autosave indicator + History + Delete (2026-06-25 —
+          // autosave). Indicator shows a spinner while a PATCH is in flight, a
+          // green tick for ~1.5 s after success, and a red alert icon
+          // (click-to-retry) if the retry-once path also failed. Idle rows
+          // show nothing so the gutter stays clean.
           <div className="flex items-center justify-center gap-0.5">
+            {saveState === "saving" && (
+              <span title="Saving…" className="inline-flex items-center justify-center h-6 w-6 text-blue-500">
+                <Loader2 size={12} className="animate-spin" />
+              </span>
+            )}
+            {saveState === "saved" && (
+              <span title="Saved" className="inline-flex items-center justify-center h-6 w-6 text-emerald-600">
+                <Check size={12} />
+              </span>
+            )}
+            {saveState === "error" && (
+              <button
+                type="button"
+                title="Save failed — click to retry"
+                onClick={() => flushPending(1)}
+                className="inline-flex items-center justify-center h-6 w-6 rounded text-red-600 hover:bg-red-50"
+              >
+                <AlertCircle size={12} />
+              </button>
+            )}
             <Button size="sm" variant="ghost"
               className="h-6 w-6 p-0 text-muted-foreground hover:text-indigo-600 hover:bg-indigo-50"
               onClick={() => onHistory?.(row.id)}

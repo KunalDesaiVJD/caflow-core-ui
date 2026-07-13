@@ -9,7 +9,7 @@
  *  - "Add New Audit" button → new blank row inserted at top in edit mode
  *  - Sticky header row + sticky Sr No / Party Name columns
  */
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge }    from "@/components/ui/badge";
 import { Button }   from "@/components/ui/button";
@@ -153,29 +153,42 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
   const [historyRowId, setHistoryRowId] = useState<string | null>(null);
   const historyRow = historyRowId ? rows.find(r => r.id === historyRowId) : null;
 
-  // ── Save All registry — rows register their save fn when editing ──────────
-  const saveRegistry = useRef<Map<string, () => Promise<void>>>(new Map());
-  const [saveAllBusy, setSaveAllBusy] = useState(false);
-
-  function registerSave(id: string, fn: () => Promise<void>) {
-    saveRegistry.current.set(id, fn);
-  }
-  function unregisterSave(id: string) {
-    saveRegistry.current.delete(id);
-  }
-
-  async function handleSaveAll() {
-    const fns = [...saveRegistry.current.values()];
-    if (fns.length === 0) { toast.info("No unsaved changes"); return; }
-    setSaveAllBusy(true);
-    try {
-      await Promise.all(fns.map(fn => fn()));
-      toast.success(`Saved ${fns.length} row${fns.length !== 1 ? "s" : ""}`);
-    } catch (e: any) {
-      toast.error("Save All failed: " + (e?.message || "unknown error"));
-    }
-    setSaveAllBusy(false);
-  }
+  // ── Autosave state aggregation (2026-06-25, V J Desai) ───────────────────
+  // Rows report their lifecycle here so the filter bar can show one global
+  // pill ("Saving 3 changes…" / "All changes saved" / "1 failed"). We store
+  // a Map (row id → state) rather than counters so a repeat "saving" for the
+  // same row doesn't double-count.
+  type RowSaveState = "idle" | "saving" | "saved" | "error";
+  const [rowSaveStates, setRowSaveStates] = useState<Map<string, RowSaveState>>(new Map());
+  const handleRowSaveStateChange = useCallback((id: string, state: RowSaveState) => {
+    setRowSaveStates(prev => {
+      const cur = prev.get(id);
+      if (cur === state) return prev;
+      const next = new Map(prev);
+      if (state === "idle") next.delete(id); else next.set(id, state);
+      return next;
+    });
+  }, []);
+  const savingCount = useMemo(
+    () => [...rowSaveStates.values()].filter(s => s === "saving").length,
+    [rowSaveStates],
+  );
+  const errorCount = useMemo(
+    () => [...rowSaveStates.values()].filter(s => s === "error").length,
+    [rowSaveStates],
+  );
+  // A rolling "just saved" flag so the pill reads "All changes saved" for a
+  // beat after the last save finishes, before fading back to idle. Reset on
+  // any new saving-in-flight.
+  const [savedRecently, setSavedRecently] = useState(false);
+  const savedTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => {
+    if (savingCount > 0 || errorCount > 0) { setSavedRecently(false); return; }
+    // Everything just settled — flag as saved for 2 s.
+    setSavedRecently(true);
+    if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+    savedTimerRef.current = setTimeout(() => setSavedRecently(false), 2000);
+  }, [savingCount, errorCount]);
 
   // Reset page when filters change
   useEffect(() => setPage(1), [search, statusFilter, scanFilter, colFilters, pageSize]);
@@ -313,7 +326,7 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
   return (
     <div className="space-y-3 w-full min-w-0">
 
-      {/* Filter toolbar (search + status filter + refresh + clear filters + Save All) */}
+      {/* Filter toolbar (search + status filter + refresh + clear filters + autosave pill) */}
       <AuditStatusFilters
         search={searchRaw}          onSearch={v => { setSearchRaw(v); setPage(1); }}
         statusFilter={statusFilter} onStatus={v => { setStatusFilter(v); setPage(1); }}
@@ -321,8 +334,9 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
         completedCount={scanChipCounts.completed}
         pendingCount={scanChipCounts.pending}
         onRefresh={reload}
-        onSaveAll={handleSaveAll}
-        saveAllBusy={saveAllBusy}
+        savingCount={savingCount}
+        errorCount={errorCount}
+        savedRecently={savedRecently}
         hasColFilters={hasColFilters}
         onClearFilters={clearColFilters}
       />
@@ -497,8 +511,7 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
                     onSave={updateRow}
                     onDelete={removeRow}
                     onHistory={id => setHistoryRowId(id)}
-                    onRegisterSave={registerSave}
-                    onUnregisterSave={unregisterSave}
+                    onSaveStateChange={handleRowSaveStateChange}
                   />
                 ))
               )}

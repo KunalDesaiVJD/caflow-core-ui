@@ -6,7 +6,7 @@
 import { Input }  from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Search, RefreshCw, Save, X, CheckCircle2, Clock } from "lucide-react";
+import { Search, RefreshCw, X, CheckCircle2, Clock, Loader2, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // ─── Exported constant ────────────────────────────────────────────────────────
@@ -36,8 +36,12 @@ interface Props {
   completedCount?: number;
   pendingCount?:   number;
   onRefresh:      () => void;
-  onSaveAll:      () => void;
-  saveAllBusy:    boolean;
+  /** 2026-06-25 (V J Desai) — autosave status pill replaces the "Save All
+   *  Changes" button. Grid aggregates row-level save states and passes
+   *  the totals here so the auditor sees a single, live indicator. */
+  savingCount?:   number;
+  errorCount?:    number;
+  savedRecently?: boolean;
   /** When true, shows 'Clear Column Filters' button */
   hasColFilters?: boolean;
   onClearFilters?: () => void;
@@ -51,7 +55,7 @@ export default function AuditStatusFilters({
   scanFilter = "all", onScanFilter,
   completedCount = 0, pendingCount = 0,
   onRefresh,
-  onSaveAll, saveAllBusy,
+  savingCount = 0, errorCount = 0, savedRecently = false,
   hasColFilters, onClearFilters,
 }: Props) {
   return (
@@ -150,17 +154,43 @@ export default function AuditStatusFilters({
         </Button>
       )}
 
-      {/* Save All Changes — pushed right */}
-      <div className="ml-auto">
-        <Button
-          size="sm"
-          className="gap-1.5 h-8 text-xs bg-emerald-600 hover:bg-emerald-700"
-          onClick={onSaveAll}
-          disabled={saveAllBusy}
-        >
-          <Save size={13} />
-          {saveAllBusy ? "Saving…" : "Save All Changes"}
-        </Button>
+      {/* Autosave status pill — replaces the old Save All button. Three
+          steady states + a rolling "All saved" chip:
+            • saving ≥ 1 → blue spinner + "Saving N change(s)…"
+            • error ≥ 1  → red icon + "N failed" (click to retry via row)
+            • savedRecently → green tick + "All changes saved"
+            • otherwise → nothing (quiet gutter)
+          Nothing to click — retries happen per-row via the red icon in the
+          Actions column, so the pill is purely informational.
+      */}
+      <div className="ml-auto flex items-center h-8">
+        {savingCount > 0 && (
+          <span
+            className="inline-flex items-center gap-1.5 h-8 px-3 text-xs font-medium rounded-full bg-blue-50 text-blue-700 border border-blue-200"
+            title="Autosave in flight"
+          >
+            <Loader2 size={13} className="animate-spin" />
+            Saving {savingCount} change{savingCount === 1 ? "" : "s"}…
+          </span>
+        )}
+        {savingCount === 0 && errorCount > 0 && (
+          <span
+            className="inline-flex items-center gap-1.5 h-8 px-3 text-xs font-medium rounded-full bg-red-50 text-red-700 border border-red-200"
+            title="Click the red icon on the affected row to retry"
+          >
+            <AlertCircle size={13} />
+            {errorCount} save{errorCount === 1 ? "" : "s"} failed
+          </span>
+        )}
+        {savingCount === 0 && errorCount === 0 && savedRecently && (
+          <span
+            className="inline-flex items-center gap-1.5 h-8 px-3 text-xs font-medium rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200"
+            title="Every edit has been persisted"
+          >
+            <CheckCircle2 size={13} />
+            All changes saved
+          </span>
+        )}
       </div>
     </div>
   );
