@@ -202,8 +202,17 @@ function comparePair(o: Rec, i: Rec, aliases: Alias[]): { fields: FieldDiff[]; s
     fields.push(fieldDiff(f, ov, iv, ok, `${f === "tds" ? "TDS" : f[0].toUpperCase() + f.slice(1)} differs by ₹${diff.toLocaleString("en-IN")}: ${amt(ov).toLocaleString("en-IN")} vs ${amt(iv).toLocaleString("en-IN")}`));
   }
 
-  const secOk = sectionsMatch(o.section, i.section, aliases);
+  let secOk = sectionsMatch(o.section, i.section, aliases);
   const cs = canonicalSection(o.section, aliases), ci = canonicalSection(i.section, aliases);
+  // Office code is AUTHORITATIVE (staff-entered for filing) and this pair is
+  // already the same transaction (PAN+date+amount matched). If the sections
+  // differ only because the CLIENT value is an opaque notation that resolves to
+  // NO recognised TDS section (e.g. "393(1) 6(i) D(b)" — an internal/clause
+  // code), that's not a real discrepancy — accept it. A client value that DOES
+  // resolve to a DIFFERENT recognised section (e.g. Contract/194C vs office
+  // 194Q) stays a mismatch (and is double-checked by the AI adjudicator).
+  const importedRecognised = ci != null && SECTION_CODE_RE.test(ci);
+  if (!secOk && !importedRecognised) secOk = true;
   fields.push(fieldDiff("section", o.section, i.section, secOk,
     `Different section: ${show(o.section)}${cs && String(o.section).toUpperCase() !== cs ? ` (${cs})` : ""} vs ${show(i.section)}${ci && String(i.section).toUpperCase() !== ci ? ` (${ci})` : ""}`));
 
