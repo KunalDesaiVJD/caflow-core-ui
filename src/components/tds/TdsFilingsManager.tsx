@@ -513,16 +513,21 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       updatePayload.date_of_filing = null;
     }
 
-    // Prepared By / Filed By are a read-only audit trail — no manual picker,
-    // set automatically to the logged-in user on the specific transition
-    // that "completes" each role. Never cleared on reversion (the record of
-    // who did it historically stays even if the status later moves again).
+    // Prepared By / Filed By are a read-only audit trail that reflects ONLY the
+    // CURRENT status: Prepared By = who set the current "Reviewed" status; Filed
+    // By = who set the current "Filed" status. Set to the acting user on entering
+    // that status, and cleared to NULL on leaving it — so a name never lingers
+    // under an unrelated status. No manual picker.
     const actingUserName = user?.name || user?.email || "Unknown";
-    if (oldStatus === "Under Process" && newStatus === "Reviewed") {
+    if (newStatus === "Reviewed") {
       updatePayload.preparer_id = user?.id ?? null;
+    } else if (oldStatus === "Reviewed") {
+      updatePayload.preparer_id = null;
     }
     if (newStatus === "Filed") {
       updatePayload.checker_id = user?.id ?? null;
+    } else if (oldStatus === "Filed") {
+      updatePayload.checker_id = null;
     }
 
     const { error } = await supabase.from("tds_filings").update(updatePayload).eq("id", filing.id);
@@ -537,10 +542,12 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
         await logAuditEntry(filing.id, "FILING_DATE_CLEARED", filing.date_of_filing, null, "Status reverted from Filed");
       }
       if ("preparer_id" in updatePayload) {
-        await logAuditEntry(filing.id, "PREPARED_BY_SET", null, actingUserName, "Auto-set: status moved to Reviewed");
+        if (updatePayload.preparer_id) await logAuditEntry(filing.id, "PREPARED_BY_SET", null, actingUserName, "Auto-set: status moved to Reviewed");
+        else await logAuditEntry(filing.id, "PREPARED_BY_CLEARED", null, null, "Status moved out of Reviewed");
       }
       if ("checker_id" in updatePayload) {
-        await logAuditEntry(filing.id, "FILED_BY_SET", null, actingUserName, "Auto-set: status moved to Filed");
+        if (updatePayload.checker_id) await logAuditEntry(filing.id, "FILED_BY_SET", null, actingUserName, "Auto-set: status moved to Filed");
+        else await logAuditEntry(filing.id, "FILED_BY_CLEARED", null, null, "Status moved out of Filed");
       }
       fetchFilings();
       onFilingsChanged?.();
@@ -575,15 +582,33 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     const ids = Array.from(selectedIds);
     if (bulkAction.startsWith("status:")) {
       const newStatus = bulkAction.replace("status:", "");
+      const actingUserName = user?.name || user?.email || "Unknown";
       for (const id of ids) {
         const filing = filings.find(f => f.id === id);
         if (filing) {
-          await supabase.from("tds_filings").update({
+          const payload: any = {
             work_status: newStatus,
             last_updated_by: user?.id,
             last_updated_at: new Date().toISOString(),
-          }).eq("id", id);
+          };
+          // Prepared By / Filed By reflect the CURRENT status here too (same
+          // rule as the per-row status change): set on entering Reviewed/Filed,
+          // clear on leaving.
+          if (newStatus === "Reviewed") payload.preparer_id = user?.id ?? null;
+          else if (filing.work_status === "Reviewed") payload.preparer_id = null;
+          if (newStatus === "Filed") payload.checker_id = user?.id ?? null;
+          else if (filing.work_status === "Filed") payload.checker_id = null;
+
+          await supabase.from("tds_filings").update(payload).eq("id", id);
           await logAuditEntry(id, "STATUS_CHANGE", filing.work_status, newStatus);
+          if ("preparer_id" in payload) {
+            if (payload.preparer_id) await logAuditEntry(id, "PREPARED_BY_SET", null, actingUserName, "Auto-set: status moved to Reviewed");
+            else await logAuditEntry(id, "PREPARED_BY_CLEARED", null, null, "Status moved out of Reviewed");
+          }
+          if ("checker_id" in payload) {
+            if (payload.checker_id) await logAuditEntry(id, "FILED_BY_SET", null, actingUserName, "Auto-set: status moved to Filed");
+            else await logAuditEntry(id, "FILED_BY_CLEARED", null, null, "Status moved out of Filed");
+          }
         }
       }
       toast({ title: `${ids.length} filings updated to ${newStatus}` });
