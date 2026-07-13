@@ -33,7 +33,19 @@ const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const COMPARE_INSTRUCTION = `You reconcile two datasets for one Indian TDS return: OFFICE (entered by our staff)
 and IMPORTED (from the client's file). Pair each office record with the imported record for the SAME
 deductee/transaction, then compare fields. Return STRICT JSON only (no prose, no fences):
-{"results":[{"office":"o0"|null,"imported":"i0"|null,"record_label":"<party name>","status":"matched"|"mismatched"|"office_only"|"imported_only","fields":[{"field":"pan","office":"...","imported":"...","matched":true|false,"difference":"<short note or empty>"}]}]}
+{"results":[{"office":"o0"|null,"imported":"i0"|null,"record_label":"<party name>","status":"matched"|"mismatched"|"office_only"|"imported_only","fields":[{"field":"pan","matched":true|false,"difference":"<required, short concrete reason, when matched:false>"}]}]}
+
+Note "fields" does NOT include "office"/"imported" values — we already have
+those ourselves; only send your matched judgement (+ reason when false) per
+field, which keeps your response small.
+For a PAIRED result (status "matched" or "mismatched", both office and
+imported set): "fields" MUST always contain exactly these 7 entries, in this
+order: name, pan, date, amount, tds, interest, section — even when every one
+of them matched. Never return an empty or partial fields array for a paired
+result; "matched" status is exactly "every one of these 7 entries has
+matched:true".
+For an UNPAIRED result ("office_only" or "imported_only", one side is null):
+return "fields":[] — there is nothing to compare against.
 
 EXHAUSTIVENESS — this is a hard requirement, not a suggestion: every single "ref"
 (o0, o1, o2, ... and i0, i1, i2, ...) given to you in OFFICE and IMPORTED below
@@ -98,7 +110,7 @@ Field match rules:
   literally rather than guessing.
 Do NOT compare rate, challan, or any field other than the seven listed.
 status = "matched" only if every one of the seven compared fields matches; otherwise "mismatched".
-For "mismatched", "office_only" and "imported_only": include one fields[] entry per compared field with the actual office/imported values (as strings) and matched true/false. For "matched": return an empty fields array [] (values are equal by definition — this keeps the response compact). For every field where matched=false, ALWAYS fill "difference" with a short concrete reason (e.g. "Office: Purchase, Imported: Contract — different nature of payment", "Office 2026-05-31 vs Imported 2026-06-04 — 4 days apart", "Office AACCP6899F vs Imported AACCX6899F — PAN differs") — this is shown directly to the user as the reason a field failed, so it must never be vague ("differs") or blank. Never invent records.`;
+For every field where matched=false, ALWAYS fill "difference" with a short concrete reason (e.g. "different nature of payment: Purchase vs Contract", "4 days apart", "PAN differs") — this is shown directly to the user as the reason a field failed, so it must never be vague ("differs") or blank. Never invent records.`;
 
 function extractJson(text: string): any {
   if (!text) return null;
@@ -161,6 +173,103 @@ async function callAI(opts: { system: string; userText: string; maxTokens: numbe
     if (r.ok) return r; last = r; console.error("callAI: Anthropic failed", r.status, r.errText.slice(0, 160));
   }
   return last;
+}
+
+// ── Field-level diffs built from CODE, not the LLM's echo ───────────────────
+// The LLM only judges matched:true/false (+ a short reason) per field now;
+// the actual displayed office/imported VALUES always come from the payloads
+// built from the DB below — no risk of the model mistyping a value while
+// echoing it back, and (combined with the instruction always requiring all 7
+// entries) this is what makes a genuinely matched row show real values with
+// green checks instead of an empty fields[] array. PAN/amount/tds/interest
+// additionally get a mechanical, unambiguous recomputation in code that
+// overrides the LLM if it disagrees — there's no judgement call needed for
+// "do these two numbers/strings match", so there's no reason to trust an
+// LLM's opinion over a direct comparison for those four fields.
+const FIELD_ORDER = ["name", "pan", "date", "amount", "tds", "interest", "section"] as const;
+type FieldKey = (typeof FIELD_ORDER)[number];
+type Payload = { name: unknown; pan: unknown; section: unknown; amount: unknown; tds: unknown; interest: unknown; date_payment: unknown };
+
+const fieldValue = (p: Payload | undefined, field: FieldKey): unknown =>
+  !p ? null : field === "date" ? p.date_payment : (p as any)[field];
+
+const normPan = (v: unknown): string | null => { const s = v == null ? "" : String(v).trim().toUpperCase(); return s || null; };
+const normAmount = (v: unknown): number | null => {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(String(v).replace(/[₹,\s]/g, ""));
+  return isFinite(n) ? n : null;
+};
+
+// Permissive date-format matcher: office dates are ALWAYS ISO (an HTML
+// <input type=date> in Data Entry), imported dates are free text in
+// whatever format the client's file used. Tries both dd/mm and mm/dd
+// interpretations of ambiguous numeric formats — used ONLY to CONFIRM a
+// match (flips false→true), never to force a mismatch, so an unparseable or
+// genuinely ambiguous format safely defers to the LLM's own judgement
+// instead of risking a wrong hand-rolled parse overriding a correct one.
+const MONTHS: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+const normYear = (y: string): number => { const n = parseInt(y, 10); return n < 100 ? (n < 70 ? 2000 + n : 1900 + n) : n; };
+const isoOf = (y: number, mo: number, d: number): string | null => (!y || mo < 1 || mo > 12 || d < 1 || d > 31) ? null : `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+function dateCandidates(raw: string): string[] {
+  const s = raw.trim();
+  const out: (string | null)[] = [];
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) out.push(isoOf(+m[1], +m[2], +m[3]));
+  m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  if (m) { const y = normYear(m[3]); out.push(isoOf(y, +m[2], +m[1]), isoOf(y, +m[1], +m[2])); } // dd/mm and mm/dd
+  m = s.match(/^(\d{1,2})[\s\-]([a-zA-Z]{3,9})[\s\-,]+(\d{2,4})$/);
+  if (m) { const mo = MONTHS[m[2].slice(0, 3).toLowerCase()]; if (mo) out.push(isoOf(normYear(m[3]), mo, +m[1])); }
+  m = s.match(/^([a-zA-Z]{3,9})\s+(\d{1,2}),?\s+(\d{2,4})$/);
+  if (m) { const mo = MONTHS[m[1].slice(0, 3).toLowerCase()]; if (mo) out.push(isoOf(normYear(m[3]), mo, +m[2])); }
+  return out.filter((v): v is string => !!v);
+}
+function datesLikelyMatch(office: unknown, imported: unknown): boolean {
+  if (office == null || imported == null) return false;
+  const officeIso = String(office).trim().match(/^\d{4}-\d{2}-\d{2}/)?.[0];
+  if (!officeIso) return false;
+  return dateCandidates(String(imported)).includes(officeIso);
+}
+
+/** Builds the full 7-field diff array for a PAIRED result (both office and
+ * imported present). Always returns all 7 entries regardless of what the LLM
+ * sent, so a fully-matched row still shows real values with checks. */
+function buildPairedFieldDiffs(llmFields: any[], officeP: Payload | undefined, importedP: Payload | undefined) {
+  const byField = new Map<string, any>();
+  for (const f of llmFields) if (f?.field) byField.set(String(f.field), f);
+
+  return FIELD_ORDER.map(field => {
+    const officeVal = fieldValue(officeP, field);
+    const importedVal = fieldValue(importedP, field);
+
+    if (field === "pan") {
+      const a = normPan(officeVal), b = normPan(importedVal);
+      const matched = a !== null && b !== null && a === b;
+      return { field, office: officeVal, imported: importedVal, matched, difference: matched ? "" : `Office ${a ?? "—"} vs Imported ${b ?? "—"} — PAN differs` };
+    }
+    if (field === "amount" || field === "tds" || field === "interest") {
+      const a = normAmount(officeVal) ?? 0, b = normAmount(importedVal) ?? 0;
+      const matched = Math.abs(a - b) <= 1;
+      return { field, office: officeVal, imported: importedVal, matched, difference: matched ? "" : `Office ${a} vs Imported ${b}` };
+    }
+
+    // name / date / section — no unambiguous mechanical check; trust the
+    // LLM's semantic judgement, with a permissive date-format confirmation
+    // pass and a literal-string fallback if the LLM omitted the field.
+    const llm = byField.get(field);
+    let matched: boolean;
+    let difference: string;
+    if (llm) {
+      matched = llm.matched !== false;
+      difference = matched ? "" : (llm.difference ? String(llm.difference) : "AI flagged this field as different.");
+      if (field === "date" && !matched && datesLikelyMatch(officeVal, importedVal)) { matched = true; difference = ""; }
+    } else {
+      const a = officeVal == null ? "" : String(officeVal).trim().toLowerCase();
+      const b = importedVal == null ? "" : String(importedVal).trim().toLowerCase();
+      matched = a !== "" && a === b;
+      difference = matched ? "" : "Not returned by AI comparison — compared literally as a fallback.";
+    }
+    return { field, office: officeVal, imported: importedVal, matched, difference };
+  });
 }
 
 serve(async (req) => {
@@ -301,9 +410,26 @@ serve(async (req) => {
     const newRows = llmResults.map((r: any) => {
       const officeId = r?.office ? oHandle.get(String(r.office)) ?? null : null;
       const importedId = r?.imported ? iHandle.get(String(r.imported)) ?? null : null;
-      const status = validStatus.has(r?.status) ? r.status : "mismatched";
-      const fields = Array.isArray(r?.fields) ? r.fields : [];
-      const mismatchFields = fields.filter((f: any) => f?.matched === false).map((f: any) => String(f.field));
+      const llmStatus = validStatus.has(r?.status) ? r.status : "mismatched";
+      const llmFields = Array.isArray(r?.fields) ? r.fields : [];
+
+      // Paired result: always build the FULL 7-field diff from code (values
+      // never come from the LLM's echo), and re-derive the overall status
+      // from the FINAL (code-corrected) per-field matches — the LLM's own
+      // "status" can otherwise drift out of sync with a field we mechanically
+      // overrode (e.g. it says "mismatched" but every field actually matches
+      // once PAN/amount are checked directly).
+      let fields: ReturnType<typeof buildPairedFieldDiffs>;
+      let status: string;
+      if (officeId && importedId) {
+        fields = buildPairedFieldDiffs(llmFields, oPayloadByHandle.get(String(r.office)), iPayloadByHandle.get(String(r.imported)));
+        status = fields.every(f => f.matched) ? "matched" : "mismatched";
+      } else {
+        fields = [];
+        status = llmStatus === "office_only" || llmStatus === "imported_only" ? llmStatus : (officeId ? "office_only" : "imported_only");
+      }
+
+      const mismatchFields = fields.filter(f => f.matched === false).map(f => f.field);
       const carry = priorMap.get(`${officeId ?? ""}|${importedId ?? ""}`);
       const keepOverride = !!carry?.overridden;
       return {
@@ -332,7 +458,6 @@ serve(async (req) => {
       if (r?.office) coveredHandles.add(String(r.office));
       if (r?.imported) coveredHandles.add(String(r.imported));
     }
-    const FIELD_ORDER = ["name", "pan", "date", "amount", "tds", "interest", "section"] as const;
     const singleSidedDiffs = (p: { name: unknown; pan: unknown; section: unknown; amount: unknown; tds: unknown; interest: unknown; date_payment: unknown }, side: "office" | "imported") => {
       const values: Record<(typeof FIELD_ORDER)[number], unknown> = {
         name: p.name, pan: p.pan, date: p.date_payment, amount: p.amount, tds: p.tds, interest: p.interest, section: p.section,
