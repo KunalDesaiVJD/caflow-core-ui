@@ -48,20 +48,40 @@ most plausible match and leave any leftover candidates as their own
 office_only/imported_only entries — rather than omitting any of them. The
 number of result objects must be enough that every input ref is accounted for.
 
-Pairing:
-- Pair primarily by PAN; if PAN missing/differs, pair by deductee name similarity + amount.
-- When a party has MULTIPLE transactions on both sides, pair them 1:1 by closest match on
-  date + amount (not just name/PAN) — do not let one imported record "absorb" or represent
-  several office records for the same party, and vice versa.
-- An office record with no imported counterpart => status "office_only" (office:o#, imported:null).
+Pairing — PAN + Date + Amount is the PRIMARY KEY. Two records are the SAME
+transaction if these three agree (after normalising date/amount as described
+below), REGARDLESS of any difference in Name spelling or Section wording —
+never leave a record unpaired (office_only/imported_only) just because its
+Name or Section text looks different from its counterpart, when PAN+Date+
+Amount already identify it as the same transaction:
+- Step 1: group candidates by matching PAN (case-insensitive exact).
+- Step 2: within a PAN group, pair by closest normalised date, then closest
+  amount — this resolves multi-transaction parties (see below).
+- Step 3 (PAN missing on one/both sides): fall back to deductee name
+  similarity + date + amount together.
+- Once paired, compare the REMAINING fields (name, tds, interest, section)
+  and flag whichever of those individually differ — a field-level mismatch
+  never un-pairs a record that PAN+Date+Amount already identified as a match.
+- When a party has MULTIPLE transactions on both sides, pair them 1:1 within
+  that PAN group by closest date + amount — do not let one imported record
+  "absorb" or represent several office records for the same party, and vice versa.
+- An office record with no imported counterpart (no PAN+date+amount match found
+  even approximately) => status "office_only" (office:o#, imported:null).
 - An imported record with no office counterpart => status "imported_only" (office:null, imported:i#).
 
 Compare EXACTLY these seven fields for every pair, and NO others: name, pan, date (payment), amount (amount paid), tds (tds amount), interest, section.
 Field match rules:
-- name: same legal entity ignoring case/punctuation/extra spaces and equivalents (PVT=PRIVATE, LTD=LIMITED, &=AND).
+- name: same legal entity ignoring case/punctuation/extra/multiple spaces and
+  equivalents (PVT / PVT. LTD / P LTD = PRIVATE LIMITED, LTD = LIMITED, & =
+  AND) — e.g. "ADINATH PROCESSING INDUSTRIES PRIVATE LIMITED" and "Adinath
+  Processing Industries Pvt. Ltd." are the SAME name.
 - pan: case-insensitive exact.
-- date: same calendar date regardless of format (dd/mm/yyyy vs dd-Mon-yy etc.).
-- amount / tds / interest: equal if within ₹1 (treat a missing/blank/null value as 0).
+- date: same calendar date regardless of format or field order — normalise
+  before comparing. "2026-05-31", "31/05/2026", "31-05-2026", "05/31/2026"
+  and "31 May 2026" are ALL the same date.
+- amount / tds / interest: equal if within ₹1 after normalising commas and
+  decimals — "5,558,172", "5558172" and "5558172.00" are the SAME amount
+  (treat a missing/blank/null value as 0).
 - section: equal after trimming words (e.g. "194Q - Purchase" == "194Q"). ALSO
   treat a section code and a plain-language nature-of-payment description as
   matching when they denote the SAME standard category — client files often
@@ -78,7 +98,7 @@ Field match rules:
   literally rather than guessing.
 Do NOT compare rate, challan, or any field other than the seven listed.
 status = "matched" only if every one of the seven compared fields matches; otherwise "mismatched".
-For "mismatched", "office_only" and "imported_only": include one fields[] entry per compared field with the actual office/imported values (as strings) and matched true/false. For "matched": return an empty fields array [] (values are equal by definition — this keeps the response compact). Never invent records.`;
+For "mismatched", "office_only" and "imported_only": include one fields[] entry per compared field with the actual office/imported values (as strings) and matched true/false. For "matched": return an empty fields array [] (values are equal by definition — this keeps the response compact). For every field where matched=false, ALWAYS fill "difference" with a short concrete reason (e.g. "Office: Purchase, Imported: Contract — different nature of payment", "Office 2026-05-31 vs Imported 2026-06-04 — 4 days apart", "Office AACCP6899F vs Imported AACCX6899F — PAN differs") — this is shown directly to the user as the reason a field failed, so it must never be vague ("differs") or blank. Never invent records.`;
 
 function extractJson(text: string): any {
   if (!text) return null;
