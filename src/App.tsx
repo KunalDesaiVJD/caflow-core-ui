@@ -20,7 +20,6 @@ import { AuthProvider, useAuth } from "./hooks/useAuth";
 // ─── Lazy-loaded pages ────────────────────────────────────────────────────────
 // Each page is split into its own JS chunk so the browser only downloads the
 // code that is actually needed for the current route.
-const DevTestTableWidths        = lazy(() => import("./pages/DevTestTableWidths"));
 const Index                    = lazy(() => import("./pages/Index"));
 const Clients                  = lazy(() => import("./pages/Clients"));
 // ImportTrialBalance removed — Tally Sync is the only TB source (Phase 2)
@@ -199,7 +198,6 @@ const App = () => (
             <PermissionsProvider>
             <Suspense fallback={<PageLoader />}>
             <Routes>
-            <Route path="/dev-test-table-widths" element={<DevTestTableWidths />} />
             <Route path="/login" element={<Login />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password" element={<ResetPassword />} />

@@ -391,6 +391,13 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   const statusMeasureRef = useRef<HTMLSpanElement>(null);
   const [statusColWidth, setStatusColWidth] = useState(180);
 
+  // Sum of every column's explicit width (checkbox 40 + Client 260 + Status
+  // (dynamic) + Filing Date 160 + Ack No 160 + Prepared By 112 + Filed By 112
+  // + Actions 100) — pins the <Table>'s own width so table-layout:fixed has
+  // an authoritative total to divide exactly among columns instead of an
+  // "auto" width that Chrome will silently shrink/stretch at some viewports.
+  const TABLE_FIXED_WIDTH = 40 + 260 + statusColWidth + 160 + 160 + 112 + 112 + 100;
+
   useLayoutEffect(() => {
     const statusEl = statusMeasureRef.current;
     if (!statusEl) return;
@@ -839,7 +846,16 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       <Card>
         <CardContent className="p-0">
           <div className="overflow-x-auto">
-            <Table>
+            {/* table-layout:fixed + an explicit column-count-matched width on every
+                column below — a plain browser auto table-layout gives any column
+                without a width an unpredictable, oversized share of the row (this
+                was the root cause of the dead gaps after Client/Ack No/Status were
+                fixed-width but Filing Date/Prepared By/Filed By were not). The
+                table's own width is pinned (not stretched to 100%) so the sum of
+                column widths is authoritative at every viewport — Client can
+                never re-balloon on wide screens or get squeezed on narrow ones;
+                the existing overflow-x-auto wrapper takes over below this width. */}
+            <Table style={{ tableLayout: "fixed", width: TABLE_FIXED_WIDTH, minWidth: TABLE_FIXED_WIDTH }}>
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-10">
@@ -850,19 +866,19 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                   </TableHead>
                   <TableHead className="w-[260px] sticky left-0 bg-background z-10">Client</TableHead>
                   <TableHead style={{ width: statusColWidth, minWidth: statusColWidth }}>Status</TableHead>
-                  <TableHead>Filing Date</TableHead>
+                  <TableHead className="w-40">Filing Date</TableHead>
                   <TableHead className="w-40">Ack No</TableHead>
-                  <TableHead>Prepared By</TableHead>
-                  <TableHead>Filed By</TableHead>
+                  <TableHead className="w-28">Prepared By</TableHead>
+                  <TableHead className="w-28">Filed By</TableHead>
                   <TableHead className="w-[100px]">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loading ? Array.from({ length: 5 }).map((_, i) => (
-                  <TableRow key={i}>{Array.from({ length: 9 }).map((_, j) => <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>)}</TableRow>
+                  <TableRow key={i}>{Array.from({ length: 8 }).map((_, j) => <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>)}</TableRow>
                 )) : searchFiltered.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
+                    <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
                       {searchBuffer.trim()
                         ? `No matches for "${searchBuffer.trim()}".`
                         : "No filings found. Filings are created when TDS service is activated for a client."}
