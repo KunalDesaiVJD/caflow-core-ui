@@ -213,12 +213,18 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
 
       const { data: prior } = await supabase.from("tds_pan_verification_results")
         .select("id, office_deductee_id, pan, overridden, override_reason, overridden_by, overridden_at").eq("filing_id", filing.id);
+      // Key overrides by PAN (results are one-per-PAN) rather than by
+      // office_deductee_id — the office query has no ORDER BY, so when several
+      // deductees share a PAN the chosen id can change between runs and a
+      // deductee-id key would silently drop the prior override. Fall back to the
+      // deductee id only for the rare PAN-less party.
+      const keyOf = (deducteeId: string | null, pan: string | null) => normalizePan(pan) || `d:${deducteeId ?? ""}`;
       const priorMap = new Map<string, any>();
-      for (const p of prior || []) priorMap.set(`${p.office_deductee_id ?? ""}|${normalizePan(p.pan)}`, p);
+      for (const p of prior || []) priorMap.set(keyOf(p.office_deductee_id, p.pan), p);
       const priorIds = (prior || []).map((p: any) => p.id);
 
       const newRows = compared.map(r => {
-        const carry = priorMap.get(`${r.office_deductee_id ?? ""}|${normalizePan(r.pan)}`);
+        const carry = priorMap.get(keyOf(r.office_deductee_id, r.pan));
         const keep = !!carry?.overridden;
         return {
           filing_id: filing.id, batch_id: batch.id, firm_id: firmId, quarter: selQuarter,

@@ -49,9 +49,15 @@ export function classifyPanStatus(
 ): "PAN Verified" | "PAN Status Blank" | "PAN Invalid" | "PAN Inactive" | "PAN Status Error" {
   const s = (status ?? "").trim().toLowerCase();
   if (!s) return "PAN Status Blank";
+  // Order matters: negative/qualified states are checked FIRST, so a decorated
+  // status ("Valid but Inoperative", "PAN is Valid and Operative") is classified
+  // by its strongest signal. "inactive" contains "active" and "inoperative"
+  // contains "operative", so those must win before the positive checks below.
   if (s.includes("invalid") || s.includes("not valid")) return "PAN Invalid";
   if (s.includes("inoperative") || s.includes("inactive")) return "PAN Inactive";
-  if (s === "valid" || s === "valid and operative" || s === "active") return "PAN Verified";
+  // Keyword (not exact) match so "Valid and Operative", "PAN is Valid", etc. are
+  // recognised as verified rather than falling through to "PAN Status Error".
+  if (s.includes("valid") || s.includes("operative") || s.includes("active")) return "PAN Verified";
   return "PAN Status Error";
 }
 

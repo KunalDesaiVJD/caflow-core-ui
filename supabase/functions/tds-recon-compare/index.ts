@@ -81,7 +81,14 @@ function dateCandidates(raw: unknown): string[] {
   let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
   if (m) out.push(isoOf(+m[1], +m[2], +m[3]));
   m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
-  if (m) { const y = normYear(m[3]); out.push(isoOf(y, +m[2], +m[1]), isoOf(y, +m[1], +m[2])); }
+  if (m) {
+    const y = normYear(m[3]);
+    // Indian TDS files are dd/mm/yyyy — take that reading, and ONLY fall back to
+    // mm/dd when dd/mm is impossible (e.g. "05/13/2026"). Emitting BOTH readings
+    // let two genuinely different dates (e.g. 05/06 vs 06/05) match falsely.
+    const ddmm = isoOf(y, +m[2], +m[1]);
+    if (ddmm) out.push(ddmm); else { const mmdd = isoOf(y, +m[1], +m[2]); if (mmdd) out.push(mmdd); }
+  }
   m = s.match(/^(\d{1,2})[\s\-]([a-zA-Z]{3,9})[\s\-,]+(\d{2,4})$/);
   if (m) { const mo = MONTHS[m[2].slice(0, 3).toLowerCase()]; if (mo) out.push(isoOf(normYear(m[3]), mo, +m[1])); }
   m = s.match(/^([a-zA-Z]{3,9})\s+(\d{1,2}),?\s+(\d{2,4})$/);
@@ -121,11 +128,18 @@ const SECTION_CODE_RE = /\b(19[2-9][A-Z]{0,2}|20[0-9][A-Z]{0,2})\b/;
 function canonicalSection(raw: unknown, aliases: Alias[]): string | null {
   if (raw == null || String(raw).trim() === "") return null;
   const s = String(raw).trim();
-  const code = s.toUpperCase().replace(/\s+/g, "").match(SECTION_CODE_RE);
+  const up = s.toUpperCase();
+  // Match the code regex on the SPACED string first (so "Section 194Q" keeps its
+  // word boundary before 194), then on a despaced copy (so a rare "194 Q" still
+  // resolves). Stripping spaces unconditionally destroyed the \b, making
+  // "SECTION 194Q" fail to extract a code.
+  const code = up.match(SECTION_CODE_RE) || up.replace(/\s+/g, "").match(SECTION_CODE_RE);
   if (code) return code[1].toUpperCase();
-  const norm = s.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
-  for (const a of aliases) if (norm.includes(a.pattern)) return a.code;
-  return s.toUpperCase().replace(/\s+/g, " ");
+  const norm = ` ${s.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim()} `;
+  // WHOLE-WORD match (not raw substring) so "current account interest" does not
+  // match the "rent" alias inside "cur[rent]" and wrongly resolve to 194I.
+  for (const a of aliases) if (norm.includes(` ${a.pattern} `)) return a.code;
+  return up.replace(/\s+/g, " ");
 }
 function sectionsMatch(a: unknown, b: unknown, aliases: Alias[]): boolean {
   const ca = canonicalSection(a, aliases), cb = canonicalSection(b, aliases);
@@ -254,6 +268,14 @@ serve(async (req) => {
       batchId = b?.id;
     }
     if (!batchId) return json({ error: "No imported client data found. Import a client file first." }, 409);
+
+    // A caller-supplied batch_id must belong to THIS filing — otherwise one could
+    // reconcile a filing against another (even same-firm) filing's imported rows.
+    const { data: batchRow } = await supabase
+      .from("tds_import_batches").select("id, filing_id").eq("id", batchId).maybeSingle();
+    if (!batchRow || batchRow.filing_id !== filing_id) {
+      return json({ error: "That import batch does not belong to this filing." }, 400);
+    }
 
     // ── Office Data: deductees for this filing (via its challans) ───────────────
     const { data: challans } = await supabase

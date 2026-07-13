@@ -129,6 +129,7 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
   const [showMatched, setShowMatched] = useState(false);
   const [runSignal, setRunSignal] = useState(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const loadSeq = useRef(0); // guards against out-of-order loadAll responses
 
   // Override dialog (mandatory reason + audit trail)
   const [ovOpen, setOvOpen] = useState(false);
@@ -158,6 +159,12 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
   // Resolve the filing for the selected combination + hydrate any existing
   // import batch / comparison results (durable — survives refresh).
   const loadAll = useCallback(async () => {
+    // Guard against out-of-order responses: a rapid client/quarter switch fires
+    // overlapping loadAll runs, and the LAST to resolve must not overwrite the
+    // current selection's data. Only the newest run may call setState.
+    const seq = ++loadSeq.current;
+    const stale = () => seq !== loadSeq.current;
+
     if (!selClient || complianceError()) {
       setFiling(null); setBatch(null); setResults(null);
       setOfficeCount({ deductees: 0, challans: 0 });
@@ -166,6 +173,7 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     setResolving(true);
     const { data: fData } = await supabase.from("tds_filings").select("*")
       .eq("client_id", selClient).eq("financial_year", selFy).eq("quarter", selQuarter).limit(10);
+    if (stale()) return;
     const match = (fData || []).find((f: any) => (f.tds_forms || []).includes(selForm)) || null;
     setFiling(match);
     if (!match) {
@@ -174,22 +182,27 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     }
 
     const { data: ch } = await supabase.from("tds_challans").select("id").eq("filing_id", match.id);
+    if (stale()) return;
     const chIds = (ch || []).map((c: any) => c.id);
     let dedCount = 0;
     if (chIds.length) {
       const { count } = await supabase.from("tds_deductees").select("id", { count: "exact", head: true }).in("challan_id", chIds);
+      if (stale()) return;
       dedCount = count || 0;
     }
     setOfficeCount({ deductees: dedCount, challans: chIds.length });
 
     const { data: b } = await supabase.from("tds_import_batches").select("*")
       .eq("filing_id", match.id).order("imported_at", { ascending: false }).limit(1).maybeSingle();
+    if (stale()) return;
     setBatch(b || null);
 
     const { data: res } = await supabase.from("tds_recon_results").select("*").eq("filing_id", match.id);
+    if (stale()) return;
     setResults(res && res.length ? (res as ReconResult[]) : null);
 
     const { data: us } = await supabase.from("users").select("id, name").limit(5000);
+    if (stale()) return;
     setUserMap(Object.fromEntries((us || []).map((u: any) => [u.id, u.name])));
     setResolving(false);
   }, [selClient, selFy, selQuarter, selForm, complianceError]);
@@ -300,13 +313,17 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
   const handleFinalise = async () => {
     if (!filing) return;
     setFinalising(true);
+    const actingName = userMap[user?.id ?? ""];
+    // Set checker_id ("Filed By") on entering Filed — same invariant the Filings
+    // Manager enforces, so a return filed from here still records who filed it.
     const { error } = await supabase.from("tds_filings").update({
-      work_status: "Filed", last_updated_by: user?.id, last_updated_at: new Date().toISOString(),
+      work_status: "Filed", checker_id: user?.id, last_updated_by: user?.id, last_updated_at: new Date().toISOString(),
     }).eq("id", filing.id);
     if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
     else {
-      await logReconAudit({ filingId: filing.id, firmId: filing.firm_id, userId: user?.id, userName: userMap[user?.id ?? ""], actionType: "RECON_FINALISED", newValue: "Filed", remark: "Marked Ready to File from Validate & Finalise" });
-      toast({ title: "Return marked as Filed" }); setFiling({ ...filing, work_status: "Filed" });
+      await logReconAudit({ filingId: filing.id, firmId: filing.firm_id, userId: user?.id, userName: actingName, actionType: "STATUS_CHANGE", oldValue: filing.work_status || null, newValue: "Filed", remark: "Marked Ready to File from Validate & Finalise" });
+      if (user?.id) await logReconAudit({ filingId: filing.id, firmId: filing.firm_id, userId: user.id, userName: actingName, actionType: "FILED_BY_SET", newValue: actingName || "—", remark: "Auto-set: status moved to Filed" });
+      toast({ title: "Return marked as Filed" }); setFiling({ ...filing, work_status: "Filed", checker_id: user?.id });
     }
     setFinalising(false);
     setConfirmOpen(false);
