@@ -201,6 +201,73 @@ function guessColumnMapping(sampleRows: Record<string, unknown>[]): Partial<Reco
   return mapping;
 }
 
+/** Reads+coerces one field directly from a raw source row via the header
+ * mapping, applying the same coercion rules coerceRow uses for the LLM's own
+ * output. Returns undefined when there's no confident column for this field
+ * or the cell is empty. */
+function readMappedField<F extends keyof CanonicalRow>(
+  row: Record<string, unknown>, mapping: Partial<Record<keyof CanonicalRow, string>>, field: F,
+): CanonicalRow[F] | undefined {
+  const header = mapping[field];
+  if (!header) return undefined;
+  const v = row[header];
+  if (v === null || v === undefined || v === "") return undefined;
+  if (field === "pan") return String(v).trim().toUpperCase() as CanonicalRow[F];
+  if (field === "amount_paid" || field === "tds_amount" || field === "interest" || field === "rate") {
+    const n = toNum(v);
+    return (n === null ? undefined : n) as CanonicalRow[F];
+  }
+  return String(v).trim() as CanonicalRow[F];
+}
+
+// Fields where a confident deterministic column match should OVERRIDE the
+// LLM's own extraction, not just hint it. section_code is deliberately
+// excluded — it needs the LLM's semantic judgement (preferring a
+// descriptive nature-of-payment column, translating meaning), never a raw
+// mechanical column read.
+const OVERRIDE_FIELDS: (keyof CanonicalRow)[] = ["pan", "deductee_name", "amount_paid", "tds_amount", "interest", "date_of_payment"];
+
+/** PAN+amount is used as the join key back to the LLM's own output, because
+ * both are independently reliable for the LLM to extract even from garbled
+ * headers, and together they disambiguate a party's multiple transactions
+ * (a bare PAN alone can't). Ambiguous keys (two source rows sharing the same
+ * PAN+amount) are dropped rather than risking a wrong override. */
+function keyFor(pan: unknown, amount: unknown): string | null {
+  if (pan == null || amount == null) return null;
+  const p = String(pan).trim().toUpperCase();
+  const a = Math.round(Number(amount));
+  if (!p || !isFinite(a)) return null;
+  return `${p}|${a}`;
+}
+
+/**
+ * Builds a PAN+amount → deterministically-read-fields map from the raw
+ * source rows. This is the reliability backstop for guessColumnMapping: a
+ * hint in the prompt is only ever a suggestion the model CAN ignore — and on
+ * a real client file with both a "Date of Credit" column (the deductee date
+ * we want) and a separate "Date of Payment" column (actually the challan
+ * deposit date), the model sometimes still picked the wrong one despite an
+ * explicit hint pointing at the right column. Applying the mapped value
+ * directly in code, keyed by PAN+amount, removes the model's discretion
+ * entirely for fields we can already read with certainty.
+ */
+function buildDeterministicOverrides(allRows: Record<string, unknown>[], mapping: Partial<Record<keyof CanonicalRow, string>>): Map<string, Partial<CanonicalRow>> {
+  const byKey = new Map<string, Partial<CanonicalRow>>();
+  const ambiguous = new Set<string>();
+  for (const row of allRows) {
+    const key = keyFor(readMappedField(row, mapping, "pan"), readMappedField(row, mapping, "amount_paid"));
+    if (!key || ambiguous.has(key)) continue;
+    if (byKey.has(key)) { byKey.delete(key); ambiguous.add(key); continue; }
+    const entry: Partial<CanonicalRow> = {};
+    for (const field of OVERRIDE_FIELDS) {
+      const v = readMappedField(row, mapping, field);
+      if (v !== undefined) (entry as any)[field] = v;
+    }
+    byKey.set(key, entry);
+  }
+  return byKey;
+}
+
 function extractJson(text: string): any {
   if (!text) return null;
   let s = text.trim();
@@ -401,6 +468,18 @@ serve(async (req) => {
         ? `\n\nAutomatic header analysis detected these likely column mappings — use them unless the actual data in that column clearly contradicts it: ${mappingEntries.map(([field, header]) => `${field} ← "${header}"`).join("; ")}.`
         : "";
 
+      // Reliability backstop: don't just HINT the model, directly override
+      // its output for fields we can read with certainty (see
+      // buildDeterministicOverrides) — verified against a real client file
+      // where the model still picked the wrong of two similar date columns
+      // despite an explicit hint pointing at the correct one.
+      const overridesByKey = buildDeterministicOverrides(allRows, mapping);
+      const applyOverride = (r: CanonicalRow): CanonicalRow => {
+        const key = keyFor(r.pan, r.amount_paid);
+        const det = key ? overridesByKey.get(key) : undefined;
+        return det ? { ...r, ...det } : r;
+      };
+
       for (let i = 0; i < allRows.length; i += BATCH) {
         const batch = allRows.slice(i, i + BATCH);
         const r = await callAI({
@@ -414,7 +493,7 @@ serve(async (req) => {
         }
         const parsed = extractJson(typeof r.content === "string" ? r.content : JSON.stringify(r.content));
         const raw: any[] = Array.isArray(parsed?.rows) ? parsed.rows : Array.isArray(parsed) ? parsed : [];
-        collected.push(...raw.map(coerceRow));
+        collected.push(...raw.map(coerceRow).map(applyOverride));
       }
     }
 
