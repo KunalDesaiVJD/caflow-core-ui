@@ -845,230 +845,230 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       {/* Main Table */}
       <Card>
         <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            {/* table-layout:fixed + an explicit column-count-matched width on every
-                column below — a plain browser auto table-layout gives any column
-                without a width an unpredictable, oversized share of the row (this
-                was the root cause of the dead gaps after Client/Ack No/Status were
-                fixed-width but Filing Date/Prepared By/Filed By were not). The
-                table's own width is pinned (not stretched to 100%) so the sum of
-                column widths is authoritative at every viewport — Client can
-                never re-balloon on wide screens or get squeezed on narrow ones;
-                the existing overflow-x-auto wrapper takes over below this width. */}
-            <Table style={{ tableLayout: "fixed", width: TABLE_FIXED_WIDTH, minWidth: TABLE_FIXED_WIDTH }}>
-              <TableHeader>
+          {/* table-layout:fixed + an explicit column-count-matched width on every
+              column below — a plain browser auto table-layout gives any column
+              without a width an unpredictable, oversized share of the row (this
+              was the root cause of the dead gaps after Client/Ack No/Status were
+              fixed-width but Filing Date/Prepared By/Filed By were not). The
+              table's own width is pinned (not stretched to 100%) so the sum of
+              column widths is authoritative at every viewport — Client can
+              never re-balloon on wide screens or get squeezed on narrow ones;
+              the shadcn Table primitive's own internal overflow-auto wrapper
+              (src/components/ui/table.tsx) takes over below this width — no
+              extra wrapper div is needed here. */}
+          <Table style={{ tableLayout: "fixed", width: TABLE_FIXED_WIDTH, minWidth: TABLE_FIXED_WIDTH }}>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-10">
+                  <Checkbox
+                    checked={searchFiltered.length > 0 && selectedIds.size === searchFiltered.length}
+                    onCheckedChange={toggleSelectAll}
+                  />
+                </TableHead>
+                <TableHead className="w-[260px] sticky left-0 bg-background z-10">Client</TableHead>
+                <TableHead style={{ width: statusColWidth, minWidth: statusColWidth }}>Status</TableHead>
+                <TableHead className="w-40">Filing Date</TableHead>
+                <TableHead className="w-40">Ack No</TableHead>
+                <TableHead className="w-28">Prepared By</TableHead>
+                <TableHead className="w-28">Filed By</TableHead>
+                <TableHead className="w-[100px]">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? Array.from({ length: 5 }).map((_, i) => (
+                <TableRow key={i}>{Array.from({ length: 8 }).map((_, j) => <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>)}</TableRow>
+              )) : searchFiltered.length === 0 ? (
                 <TableRow>
-                  <TableHead className="w-10">
-                    <Checkbox
-                      checked={searchFiltered.length > 0 && selectedIds.size === searchFiltered.length}
-                      onCheckedChange={toggleSelectAll}
-                    />
-                  </TableHead>
-                  <TableHead className="w-[260px] sticky left-0 bg-background z-10">Client</TableHead>
-                  <TableHead style={{ width: statusColWidth, minWidth: statusColWidth }}>Status</TableHead>
-                  <TableHead className="w-40">Filing Date</TableHead>
-                  <TableHead className="w-40">Ack No</TableHead>
-                  <TableHead className="w-28">Prepared By</TableHead>
-                  <TableHead className="w-28">Filed By</TableHead>
-                  <TableHead className="w-[100px]">Actions</TableHead>
+                  <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
+                    {searchBuffer.trim()
+                      ? `No matches for "${searchBuffer.trim()}".`
+                      : "No filings found. Filings are created when TDS service is activated for a client."}
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {loading ? Array.from({ length: 5 }).map((_, i) => (
-                  <TableRow key={i}>{Array.from({ length: 8 }).map((_, j) => <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>)}</TableRow>
-                )) : searchFiltered.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
-                      {searchBuffer.trim()
-                        ? `No matches for "${searchBuffer.trim()}".`
-                        : "No filings found. Filings are created when TDS service is activated for a client."}
+              ) : searchFiltered.map(f => {
+                const client = clients.find(c => c.id === f.client_id);
+                const clientTan = client?.tan_number || f.tan;
+                const archived = isArchivedFiling(f);
+                return (
+                  <TableRow key={f.id} className={cn(archived && "bg-muted/40 opacity-70")}>
+                    <TableCell>
+                      <Checkbox
+                        checked={selectedIds.has(f.id)}
+                        onCheckedChange={() => toggleSelect(f.id)}
+                        disabled={archived}
+                      />
+                    </TableCell>
+                    <TableCell className="font-medium sticky left-0 bg-background">
+                      <HoverCard openDelay={200} closeDelay={100}>
+                        <HoverCardTrigger asChild>
+                          <span className={cn("inline-block max-w-[260px] cursor-default hover:underline decoration-dotted underline-offset-4", archived && "line-through text-muted-foreground")}>
+                            {(() => {
+                              const displayName = client?.name || deletedClients.get(f.client_id)?.name || "—";
+                              const { main, parenthetical } = splitClientName(displayName);
+                              return parenthetical ? (
+                                <>
+                                  <span className="block">{main}</span>
+                                  <span className="block">{parenthetical}</span>
+                                </>
+                              ) : displayName;
+                            })()}
+                          </span>
+                        </HoverCardTrigger>
+                        <HoverCardContent side="right" className="w-80 p-3">
+                          <div className="space-y-1.5 text-sm">
+                            <div className="flex gap-2">
+                              <span className="text-muted-foreground w-28 shrink-0">TAN</span>
+                              <span className="font-mono">{clientTan || "—"}</span>
+                            </div>
+                            <div className="flex gap-2">
+                              <span className="text-muted-foreground w-28 shrink-0">PAN</span>
+                              <span className="font-mono">{client?.pan || "—"}</span>
+                            </div>
+                            <div className="flex gap-2">
+                              <span className="text-muted-foreground w-28 shrink-0">Contact Person</span>
+                              <span>{client?.contact_person || "—"}</span>
+                            </div>
+                            <div className="flex gap-2">
+                              <span className="text-muted-foreground w-28 shrink-0">Mobile</span>
+                              <span>{client?.mobile || "—"}</span>
+                            </div>
+                          </div>
+                        </HoverCardContent>
+                      </HoverCard>
+                      {!clientTan && !archived && (
+                        <Badge variant="destructive" className="ml-1.5 text-[10px] gap-1 px-1 py-0 align-middle">
+                          <AlertTriangle size={9} /> TAN Missing
+                        </Badge>
+                      )}
+                      {archived && <Badge variant="outline" className="ml-1.5 text-[10px] px-1 py-0">Archived</Badge>}
+                    </TableCell>
+                    <TableCell>
+                      {archived ? (
+                        <Badge className={cn("text-xs", FILING_STATUS_COLORS[f.work_status] || "bg-muted")}>{f.work_status}</Badge>
+                      ) : (
+                        <Select value={f.work_status} onValueChange={v => handleStatusChange(f, v)}>
+                          <SelectTrigger className="h-7 text-xs" style={{ width: statusColWidth }}>
+                            <Badge data-autofit="status" className={cn("text-xs", FILING_STATUS_COLORS[f.work_status] || "bg-muted")}>{f.work_status}</Badge>
+                          </SelectTrigger>
+                          <SelectContent>
+                            {FILING_STATUSES.map(s => (
+                              <SelectItem key={s} value={s}>
+                                <span>{s}</span>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {/* Filing Date is fully system-managed — auto-set to today when
+                          status becomes Filed, auto-cleared on reverting away from it.
+                          Never manually editable, so no onBlur/save handler here. */}
+                      <div className="relative group">
+                        <Input
+                          type="date"
+                          className="h-7 w-32 text-xs bg-muted cursor-not-allowed opacity-70"
+                          value={f.date_of_filing || ""}
+                          disabled
+                        />
+                        {f.date_of_filing && (
+                          <span className="absolute -top-5 left-0 hidden group-hover:block text-[10px] bg-foreground text-background px-1.5 py-0.5 rounded whitespace-nowrap z-20">
+                            🔒 Auto-set when status is Filed
+                          </span>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      {(() => {
+                        const isFiledLocked = f.work_status === "Filed" || f.work_status === "Processed";
+                        const ackFile = ackFiles.get(f.id);
+                        return (
+                          <div className="space-y-1">
+                            {/* Ack No — editable unless Filed */}
+                            <Input
+                              className={cn("h-7 w-32 text-xs", isFiledLocked && "bg-muted cursor-not-allowed opacity-70")}
+                              defaultValue={f.acknowledgment_number || ""}
+                              disabled={isFiledLocked}
+                              onBlur={e => { if (!isFiledLocked && e.target.value !== (f.acknowledgment_number || "")) handleInlineUpdate(f, "acknowledgment_number", e.target.value || null); }}
+                            />
+                            {/* ACK PDF attachment — documents bucket + tds_ack_files table */}
+                            <div className="flex items-center gap-1 flex-wrap">
+                              {ackFile ? (
+                                <>
+                                  <button
+                                    className="flex items-center gap-0.5 text-[9px] text-primary hover:underline"
+                                    onClick={() => viewAckFile(ackFile)}
+                                    title={`View: ${ackFile.file_name}`}
+                                  >
+                                    <ExternalLink size={9} /> View PDF
+                                  </button>
+                                  <button
+                                    className="flex items-center gap-0.5 text-[9px] text-primary hover:underline"
+                                    onClick={() => downloadAckFile(ackFile)}
+                                    title={`Download: ${ackFile.file_name}`}
+                                  >
+                                    <Download size={9} /> Download
+                                  </button>
+                                  <button
+                                    className="flex items-center gap-0.5 text-[9px] text-red-600 border border-red-600 rounded px-1 hover:bg-red-50"
+                                    onClick={() => deleteAckFile(f.id, ackFile)}
+                                    title="Delete PDF"
+                                  >
+                                    <Trash2 size={9} /> Delete PDF
+                                  </button>
+                                </>
+                              ) : (
+                                <label className={cn(
+                                  "text-[9px] text-muted-foreground hover:text-primary cursor-pointer",
+                                  ackUploading === f.id && "opacity-50 pointer-events-none"
+                                )}>
+                                  {ackUploading === f.id ? "Uploading…" : "📎 Attach ACK"}
+                                  <input
+                                    type="file"
+                                    accept="application/pdf"
+                                    className="hidden"
+                                    onChange={e => {
+                                      const fl = e.target.files?.[0];
+                                      if (fl) handleAttachAck(f, fl);
+                                      e.target.value = "";
+                                    }}
+                                  />
+                                </label>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </TableCell>
+                    <TableCell>
+                      {/* Read-only — auto-set by handleStatusChange when status moves
+                          Under Process -> Reviewed. No manual picker. */}
+                      <span className={cn("text-xs", !f.preparer_id && "text-muted-foreground")} title="Auto-set when status moves to Reviewed">
+                        {users.find(u => u.id === f.preparer_id)?.name || "—"}
+                      </span>
+                    </TableCell>
+                    <TableCell>
+                      {/* Read-only — auto-set by handleStatusChange when status moves
+                          to Filed. No manual picker. */}
+                      <span className={cn("text-xs", !f.checker_id && "text-muted-foreground")} title="Auto-set when status moves to Filed">
+                        {users.find(u => u.id === f.checker_id)?.name || "—"}
+                      </span>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex gap-0.5">
+                        <Button variant="ghost" size="icon" className="h-7 w-7" title="History" onClick={() => openHistory(f)}>
+                          <Clock size={14} />
+                        </Button>
+                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Go to Data Entry" onClick={() => onNavigateDataEntry?.(f.id)}>
+                          <ArrowRight size={14} />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
-                ) : searchFiltered.map(f => {
-                  const client = clients.find(c => c.id === f.client_id);
-                  const clientTan = client?.tan_number || f.tan;
-                  const archived = isArchivedFiling(f);
-                  return (
-                    <TableRow key={f.id} className={cn(archived && "bg-muted/40 opacity-70")}>
-                      <TableCell>
-                        <Checkbox
-                          checked={selectedIds.has(f.id)}
-                          onCheckedChange={() => toggleSelect(f.id)}
-                          disabled={archived}
-                        />
-                      </TableCell>
-                      <TableCell className="font-medium sticky left-0 bg-background">
-                        <HoverCard openDelay={200} closeDelay={100}>
-                          <HoverCardTrigger asChild>
-                            <span className={cn("inline-block max-w-[260px] cursor-default hover:underline decoration-dotted underline-offset-4", archived && "line-through text-muted-foreground")}>
-                              {(() => {
-                                const displayName = client?.name || deletedClients.get(f.client_id)?.name || "—";
-                                const { main, parenthetical } = splitClientName(displayName);
-                                return parenthetical ? (
-                                  <>
-                                    <span className="block">{main}</span>
-                                    <span className="block">{parenthetical}</span>
-                                  </>
-                                ) : displayName;
-                              })()}
-                            </span>
-                          </HoverCardTrigger>
-                          <HoverCardContent side="right" className="w-80 p-3">
-                            <div className="space-y-1.5 text-sm">
-                              <div className="flex gap-2">
-                                <span className="text-muted-foreground w-28 shrink-0">TAN</span>
-                                <span className="font-mono">{clientTan || "—"}</span>
-                              </div>
-                              <div className="flex gap-2">
-                                <span className="text-muted-foreground w-28 shrink-0">PAN</span>
-                                <span className="font-mono">{client?.pan || "—"}</span>
-                              </div>
-                              <div className="flex gap-2">
-                                <span className="text-muted-foreground w-28 shrink-0">Contact Person</span>
-                                <span>{client?.contact_person || "—"}</span>
-                              </div>
-                              <div className="flex gap-2">
-                                <span className="text-muted-foreground w-28 shrink-0">Mobile</span>
-                                <span>{client?.mobile || "—"}</span>
-                              </div>
-                            </div>
-                          </HoverCardContent>
-                        </HoverCard>
-                        {!clientTan && !archived && (
-                          <Badge variant="destructive" className="ml-1.5 text-[10px] gap-1 px-1 py-0 align-middle">
-                            <AlertTriangle size={9} /> TAN Missing
-                          </Badge>
-                        )}
-                        {archived && <Badge variant="outline" className="ml-1.5 text-[10px] px-1 py-0">Archived</Badge>}
-                      </TableCell>
-                      <TableCell>
-                        {archived ? (
-                          <Badge className={cn("text-xs", FILING_STATUS_COLORS[f.work_status] || "bg-muted")}>{f.work_status}</Badge>
-                        ) : (
-                          <Select value={f.work_status} onValueChange={v => handleStatusChange(f, v)}>
-                            <SelectTrigger className="h-7 text-xs" style={{ width: statusColWidth }}>
-                              <Badge data-autofit="status" className={cn("text-xs", FILING_STATUS_COLORS[f.work_status] || "bg-muted")}>{f.work_status}</Badge>
-                            </SelectTrigger>
-                            <SelectContent>
-                              {FILING_STATUSES.map(s => (
-                                <SelectItem key={s} value={s}>
-                                  <span>{s}</span>
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {/* Filing Date is fully system-managed — auto-set to today when
-                            status becomes Filed, auto-cleared on reverting away from it.
-                            Never manually editable, so no onBlur/save handler here. */}
-                        <div className="relative group">
-                          <Input
-                            type="date"
-                            className="h-7 w-32 text-xs bg-muted cursor-not-allowed opacity-70"
-                            value={f.date_of_filing || ""}
-                            disabled
-                          />
-                          {f.date_of_filing && (
-                            <span className="absolute -top-5 left-0 hidden group-hover:block text-[10px] bg-foreground text-background px-1.5 py-0.5 rounded whitespace-nowrap z-20">
-                              🔒 Auto-set when status is Filed
-                            </span>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        {(() => {
-                          const isFiledLocked = f.work_status === "Filed" || f.work_status === "Processed";
-                          const ackFile = ackFiles.get(f.id);
-                          return (
-                            <div className="space-y-1">
-                              {/* Ack No — editable unless Filed */}
-                              <Input
-                                className={cn("h-7 w-32 text-xs", isFiledLocked && "bg-muted cursor-not-allowed opacity-70")}
-                                defaultValue={f.acknowledgment_number || ""}
-                                disabled={isFiledLocked}
-                                onBlur={e => { if (!isFiledLocked && e.target.value !== (f.acknowledgment_number || "")) handleInlineUpdate(f, "acknowledgment_number", e.target.value || null); }}
-                              />
-                              {/* ACK PDF attachment — documents bucket + tds_ack_files table */}
-                              <div className="flex items-center gap-1 flex-wrap">
-                                {ackFile ? (
-                                  <>
-                                    <button
-                                      className="flex items-center gap-0.5 text-[9px] text-primary hover:underline"
-                                      onClick={() => viewAckFile(ackFile)}
-                                      title={`View: ${ackFile.file_name}`}
-                                    >
-                                      <ExternalLink size={9} /> View PDF
-                                    </button>
-                                    <button
-                                      className="flex items-center gap-0.5 text-[9px] text-primary hover:underline"
-                                      onClick={() => downloadAckFile(ackFile)}
-                                      title={`Download: ${ackFile.file_name}`}
-                                    >
-                                      <Download size={9} /> Download
-                                    </button>
-                                    <button
-                                      className="flex items-center gap-0.5 text-[9px] text-red-600 border border-red-600 rounded px-1 hover:bg-red-50"
-                                      onClick={() => deleteAckFile(f.id, ackFile)}
-                                      title="Delete PDF"
-                                    >
-                                      <Trash2 size={9} /> Delete PDF
-                                    </button>
-                                  </>
-                                ) : (
-                                  <label className={cn(
-                                    "text-[9px] text-muted-foreground hover:text-primary cursor-pointer",
-                                    ackUploading === f.id && "opacity-50 pointer-events-none"
-                                  )}>
-                                    {ackUploading === f.id ? "Uploading…" : "📎 Attach ACK"}
-                                    <input
-                                      type="file"
-                                      accept="application/pdf"
-                                      className="hidden"
-                                      onChange={e => {
-                                        const fl = e.target.files?.[0];
-                                        if (fl) handleAttachAck(f, fl);
-                                        e.target.value = "";
-                                      }}
-                                    />
-                                  </label>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })()}
-                      </TableCell>
-                      <TableCell>
-                        {/* Read-only — auto-set by handleStatusChange when status moves
-                            Under Process -> Reviewed. No manual picker. */}
-                        <span className={cn("text-xs", !f.preparer_id && "text-muted-foreground")} title="Auto-set when status moves to Reviewed">
-                          {users.find(u => u.id === f.preparer_id)?.name || "—"}
-                        </span>
-                      </TableCell>
-                      <TableCell>
-                        {/* Read-only — auto-set by handleStatusChange when status moves
-                            to Filed. No manual picker. */}
-                        <span className={cn("text-xs", !f.checker_id && "text-muted-foreground")} title="Auto-set when status moves to Filed">
-                          {users.find(u => u.id === f.checker_id)?.name || "—"}
-                        </span>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex gap-0.5">
-                          <Button variant="ghost" size="icon" className="h-7 w-7" title="History" onClick={() => openHistory(f)}>
-                            <Clock size={14} />
-                          </Button>
-                          <Button variant="ghost" size="icon" className="h-7 w-7" title="Go to Data Entry" onClick={() => onNavigateDataEntry?.(f.id)}>
-                            <ArrowRight size={14} />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </div>
+                );
+              })}
+            </TableBody>
+          </Table>
         </CardContent>
       </Card>
 

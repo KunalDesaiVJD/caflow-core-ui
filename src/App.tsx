@@ -55,6 +55,7 @@ const AdminAiSkills            = lazy(() => import("./pages/admin/AdminAiSkills"
 const AdminThemeStudio         = lazy(() => import("./pages/admin/AdminThemeStudio"));
 const AdminFirmAccess          = lazy(() => import("./pages/admin/AdminFirmAccess"));
 const Login                    = lazy(() => import("./pages/Login"));
+const DevTestTdsFilingsFix     = lazy(() => import("./pages/DevTestTdsFilingsFix")); // TEMP — removed before finishing
 const ForgotPassword           = lazy(() => import("./pages/ForgotPassword"));
 const ResetPassword            = lazy(() => import("./pages/ResetPassword"));
 const PortalHome               = lazy(() => import("./pages/PortalHome"));
@@ -199,6 +200,7 @@ const App = () => (
             <Suspense fallback={<PageLoader />}>
             <Routes>
             <Route path="/login" element={<Login />} />
+            <Route path="/dev-test-tds-filings-fix" element={<DevTestTdsFilingsFix />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password" element={<ResetPassword />} />
             <Route path="/settings/change-password" element={<ProtectedRoute><ChangePassword /></ProtectedRoute>} />
