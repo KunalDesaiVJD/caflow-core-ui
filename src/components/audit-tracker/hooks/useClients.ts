@@ -119,18 +119,39 @@ export function useClients(
         return;
       }
 
-      let q: any = supabase
-        .from("clients")
-        .select("id, name, entity_type")
-        .is("deleted_at", null)
-        .neq("is_active", false)
-        .eq("is_draft", false)
-        .in("id", clientIds)
-        .order("name");
-      if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
-      const { data, error } = await q;
-      if (error) console.error("[useClients] clients query error:", error);
-      const withFlags: ClientOption[] = ((data as any[]) || []).map(c => ({
+      // 2026-06-25 (V J Desai — Planning dialog only showed "Leave"):
+      // With 689 audit-scoped clients unioned across setup/engagements/
+      // classification, .in("id", clientIds) serialises to a ~27 KB URL
+      // (689 × ~40 char UUIDs). PostgREST + Supabase Edge drop the request
+      // silently at that length, so `data` came back empty and the
+      // Planning combobox had nothing to render. Chunk into ~300 IDs per
+      // request and merge — same pattern AuditPipeline / Depreciation
+      // already use for the same reason.
+      const ID_CHUNK = 300;
+      const merged: any[] = [];
+      for (let i = 0; i < clientIds.length; i += ID_CHUNK) {
+        const slice = clientIds.slice(i, i + ID_CHUNK);
+        let q: any = supabase
+          .from("clients")
+          .select("id, name, entity_type")
+          .is("deleted_at", null)
+          .neq("is_active", false)
+          .eq("is_draft", false)
+          .in("id", slice)
+          .order("name");
+        if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
+        const { data, error } = await q;
+        if (error) {
+          console.error("[useClients] clients query error (chunk", i, "):", error);
+          continue;
+        }
+        if (Array.isArray(data)) merged.push(...data);
+      }
+      // Global name sort — each chunk was locally ordered but the union
+      // needs a fresh sort so the combobox reads A→Z end-to-end.
+      merged.sort((a: any, b: any) => (a.name || "").localeCompare(b.name || ""));
+
+      const withFlags: ClientOption[] = merged.map((c: any) => ({
         id: c.id,
         name: c.name,
         entity_type: c.entity_type ?? null,
