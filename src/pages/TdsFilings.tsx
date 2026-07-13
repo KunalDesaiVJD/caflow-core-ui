@@ -4,7 +4,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, PenLine,
-  ShieldCheck, BarChart3, Settings, ClipboardList, Combine, RefreshCw,
+  ShieldCheck, BadgeCheck, BarChart3, Settings, ClipboardList, Combine, RefreshCw,
 } from "lucide-react";
 import { TdsRateMaster } from "@/components/tds/TdsRateMaster";
 import { TdsDashboard } from "@/components/tds/TdsDashboard";
