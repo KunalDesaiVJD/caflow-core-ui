@@ -25,7 +25,9 @@
  *             TALLY_COMPANY (optional override; else read from tally_firm_companies).
  */
 
-require('dotenv').config();
+// Load .env from the agent's own folder (tally-sync/.env), so it works no matter
+// what the current working directory is (Task Scheduler / VBS launch it elsewhere).
+require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 const axios = require('axios');
 const { createClient } = require('@supabase/supabase-js');
 const {
