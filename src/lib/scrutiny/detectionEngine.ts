@@ -1137,6 +1137,41 @@ const h_ageing: CheckHandler = (rule, data, ctx) => {
   return out;
 };
 
+/** sum of |closing_balance| over TB ledgers matching a scope (numerator/denominator population). */
+const sumScoped = (tb: TBRow[], scope: Record<string, unknown> | undefined): number =>
+  tb.filter((r) => accountInScope(r, scope)).reduce((s, r) => s + Math.abs(num(r.closing_balance)), 0);
+
+/**
+ * ratio — computes a single financial ratio numerator/denominator (each a summed TB scope) and
+ * flags if it breaches a threshold. Covers current ratio (as_pct:false, op:"<", value:1), expense
+ * share (as_pct:true default, op:">", pct:2), bank-charges/turnover, etc. One finding per rule.
+ * detection_logic: { check:"ratio", numerator:scope, denominator:scope, op, value|pct, as_pct?:bool,
+ *                    min_denominator?:number, label?:string, message? }.
+ */
+const h_ratio: CheckHandler = (rule, data) => {
+  const dl = rule.detection_logic as unknown as Record<string, unknown>;
+  const numScope = (dl.numerator ?? dl.scope) as Record<string, unknown> | undefined;
+  const denScope = (dl.denominator ?? dl.base) as Record<string, unknown> | undefined;
+  if (!numScope || !denScope) return [];
+  const numer = sumScoped(data.tb, numScope);
+  const denom = sumScoped(data.tb, denScope);
+  if (denom === 0 || denom < num(dl.min_denominator, 0)) return [];
+  const asPct = dl.as_pct !== false; // default: percent (most rules are "% of")
+  const ratio = asPct ? (numer / denom) * 100 : numer / denom;
+  const rounded = Math.round(ratio * 1000) / 1000;
+  const op = String(dl.op ?? ">");
+  const thr = num(dl.value ?? dl.pct ?? dl.threshold ?? rule.threshold_value);
+  if (!applyOp(op, ratio, thr)) return [];
+  const label = (dl.label as string | undefined) ?? rule.rule_name;
+  const tpl = (dl.message as string | undefined) ?? rule.audit_query_template;
+  return [finding(rule, {
+    account: label,
+    amount: numer,
+    flag_message: render(tpl, { account: label, amount: fmtAmt(numer), pct: rounded, ratio: rounded, value: thr }),
+    evidence: { numerator: numer, denominator: denom, ratio: rounded, as_pct: asPct, threshold: thr, op },
+  })];
+};
+
 // ---------------------------------------------------------------------------
 // Registry + runner
 // ---------------------------------------------------------------------------
@@ -1185,6 +1220,7 @@ export const GENERIC_HANDLERS: Record<string, CheckHandler> = {
   cotag: h_cotag,
   stream_gap: h_stream_gap,
   ageing: h_ageing,
+  ratio: h_ratio,
 };
 
 export const GENERIC_CHECK_KINDS = Object.keys(GENERIC_HANDLERS);
