@@ -121,53 +121,45 @@ export function classifyPanStatus(
 export const isPanException = (r: PanValidationResult): boolean => r !== "PAN Verified";
 
 /**
- * Deterministic Stage-2 comparison. Office parties are deduped by PAN (one
- * result per party); office parties with no PAN can't be verified and are
- * reported as missing from the PAN file. TRACES PANs absent from the office set
- * are reported as "Party Missing in Office Data" (strict single-quarter scope —
- * caller passes only the selected quarter's office parties).
+ * Stage-2 comparison. The records verified are the PANs in the TRACES bulk file —
+ * each is classified by its PAN status (Verified / Invalid / Inactive / Blank /
+ * Error), and when a matching office party exists, the office name is
+ * cross-checked against the TRACES name (Name Mismatch). Office parties whose PAN
+ * is NOT in the TRACES file are reported separately as "Party Missing in PAN
+ * Verification File" (they were not verified). Result: Total = TRACES PAN count
+ * (+ any unverified office parties), Verified = valid PANs — matching the intended
+ * workflow (e.g. 72 PANs → 72 verified when all are active and names agree).
  */
 export function comparePanVerification(office: OfficeParty[], traces: TracesPanRow[]): PanResultRow[] {
-  const tracesByPan = new Map<string, TracesPanRow>();
-  for (const t of traces) {
-    const k = normalizePan(t.pan);
-    if (k && !tracesByPan.has(k)) tracesByPan.set(k, t);
-  }
+  const officeByPan = new Map<string, OfficeParty>();
+  for (const o of office) { const k = normalizePan(o.pan); if (k && !officeByPan.has(k)) officeByPan.set(k, o); }
 
   const rows: PanResultRow[] = [];
-  const seenOfficePan = new Set<string>();
-
-  for (const o of office) {
-    const k = normalizePan(o.pan);
-    if (k) {
-      if (seenOfficePan.has(k)) continue; // one result per party (PAN)
-      seenOfficePan.add(k);
-      const t = tracesByPan.get(k);
-      if (!t) {
-        rows.push({ office_deductee_id: o.deductee_id, pan_row_id: null, party_name: o.name, pan: o.pan ?? null, pan_status: null, validation_result: "Party Missing in PAN Verification File" });
-      } else {
-        const status = classifyPanStatus(t.pan_status);
-        // Intelligent name check — only when the PAN itself is verified: compare
-        // the office name against the TRACES verified name (fall back to the
-        // submitted name), tolerant of formatting / word-order differences.
-        const result: PanValidationResult =
-          status === "PAN Verified" && !namesMatch(o.name, t.verified_name || t.name)
-            ? "Name Mismatch"
-            : status;
-        rows.push({ office_deductee_id: o.deductee_id, pan_row_id: t.row_id, party_name: o.name || t.name, pan: o.pan ?? null, pan_status: t.pan_status ?? null, validation_result: result });
-      }
-    } else {
-      // Office party with no PAN — nothing to verify against the TRACES file.
-      rows.push({ office_deductee_id: o.deductee_id, pan_row_id: null, party_name: o.name, pan: o.pan ?? null, pan_status: null, validation_result: "Party Missing in PAN Verification File" });
-    }
-  }
-
   const seenTraces = new Set<string>();
+
+  // 1. Every TRACES PAN → classify by status; name-check against the office party.
   for (const t of traces) {
     const k = normalizePan(t.pan);
-    if (!k || seenOfficePan.has(k) || seenTraces.has(k)) continue;
+    if (!k || seenTraces.has(k)) continue;
     seenTraces.add(k);
-    rows.push({ office_deductee_id: null, pan_row_id: t.row_id, party_name: t.name, pan: t.pan ?? null, pan_status: t.pan_status ?? null, validation_result: "Party Missing in Office Data" });
+    const o = officeByPan.get(k);
+    const status = classifyPanStatus(t.pan_status);
+    const result: PanValidationResult =
+      status === "PAN Verified" && o && !namesMatch(o.name, t.verified_name || t.name)
+        ? "Name Mismatch"
+        : status;
+    rows.push({ office_deductee_id: o?.deductee_id ?? null, pan_row_id: t.row_id, party_name: o?.name || t.name, pan: t.pan ?? null, pan_status: t.pan_status ?? null, validation_result: result });
+  }
+
+  // 2. Office parties whose PAN is not in the TRACES file → not verified.
+  const seenOffice = new Set<string>();
+  for (const o of office) {
+    const k = normalizePan(o.pan);
+    const key = k || `d:${o.deductee_id}`;
+    if (seenOffice.has(key)) continue;
+    seenOffice.add(key);
+    if (k && seenTraces.has(k)) continue; // already classified in the TRACES pass
+    rows.push({ office_deductee_id: o.deductee_id, pan_row_id: null, party_name: o.name, pan: o.pan ?? null, pan_status: null, validation_result: "Party Missing in PAN Verification File" });
   }
 
   return rows;
