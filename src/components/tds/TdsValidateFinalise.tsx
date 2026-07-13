@@ -113,16 +113,18 @@ function AnimatedNumber({ value }: { value: number }) {
     const from = prev.current, to = value;
     if (from === to) { setDisplay(to); return; }
     let raf = 0; let start = 0;
+    const finish = () => { setDisplay(to); prev.current = to; };
     const step = (ts: number) => {
       if (!start) start = ts;
       const t = Math.min(1, (ts - start) / 500);
-      const eased = 1 - Math.pow(1 - t, 3); // easeOutCubic
-      setDisplay(Math.round(from + (to - from) * eased));
-      if (t < 1) raf = requestAnimationFrame(step);
-      else { setDisplay(to); prev.current = to; }
+      setDisplay(Math.round(from + (to - from) * (1 - Math.pow(1 - t, 3)))); // easeOutCubic
+      if (t < 1) raf = requestAnimationFrame(step); else finish();
     };
     raf = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(raf);
+    // Safety: guarantee the final value lands even where rAF is throttled/paused
+    // (an inactive/background tab), so a counter is never stuck mid-animation.
+    const safety = setTimeout(finish, 700);
+    return () => { cancelAnimationFrame(raf); clearTimeout(safety); };
   }, [value]);
   return <>{display}</>;
 }
