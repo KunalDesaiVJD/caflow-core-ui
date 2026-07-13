@@ -169,7 +169,10 @@ serve(async (req) => {
     // read them back and key them per engagement. Resolve firm from the client, not the caller.
     const { data: clientRow } = await supabase.from("clients").select("firm_id").eq("id", client_id).single();
     const findingFirmId = clientRow?.firm_id ?? firm_id ?? null;
-    const rows = result.findings.map((f) => ({
+    // Persist only real exceptions. Advisory / needs-data / no-handler items are NOT written as
+    // findings — they are accounted for in the run ledger below (the completeness report), so the
+    // findings list stays clean while nothing is ever silently dropped.
+    const rows = result.findings.filter((f) => !f.advisory).map((f) => ({
       ...findingToRow(f, { client_id, financial_year }),
       firm_id: findingFirmId,
       engagement_id: engId,
@@ -214,12 +217,28 @@ serve(async (req) => {
       console.error("Notification error:", notifyErr);
     }
 
+    // ── Completeness accounting — the stringent "no rule left behind" control ──
+    // Every active rule gets a status; accountedFor MUST equal activeRules. Rules that cannot run
+    // (needs prior-year / no evaluator / error) are itemised in `ledger` with a reason — never
+    // silently skipped.
+    const led = result.ledger;
+    const completeness = {
+      activeRules: rules.length,
+      accountedFor: led.length,
+      executed: led.filter((l) => l.status === "executed").length,
+      needsData: led.filter((l) => l.status === "needs_data").length,
+      noHandler: led.filter((l) => l.status === "skipped_no_handler").length,
+      errored: led.filter((l) => l.status === "error").length,
+    };
+
     return json({
       findings_created: counts,
       total,
       source,                              // "tally_sync" | "snapshot" — which data path fed the engine
       input: { ledgers: tbCur.length, vouchers: vouchersCur.length, priorYearLedgers: tbPY?.length ?? 0 },
-      coverage: result.coverage, // rulesHandled / executedKinds / unhandled (advisory)
+      coverage: result.coverage,           // rulesHandled / executedKinds / unhandled
+      completeness,                        // summary — every active rule accounted for
+      ledger: led,                         // per-rule status (executed / needs_data / skipped_no_handler / error + reason)
     });
   } catch (e) {
     console.error("run-scrutiny-v2 error:", e);
