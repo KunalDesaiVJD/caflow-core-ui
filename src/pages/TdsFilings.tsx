@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
@@ -142,7 +142,17 @@ const TdsFilings = () => {
     setUsers((data as UserOption[]) || []);
   }, [isSuperadmin, resolveFirmId]);
 
-  useEffect(() => { fetchClients(); fetchUsers(); }, [fetchClients, fetchUsers]);
+  // The latest fetchers/refresher are held in refs so the effects below run
+  // ONCE on mount and never tear down + re-run when these callbacks change
+  // identity. Previously the effects listed the callbacks as dependencies; an
+  // unstable dep made fetchClients re-fire on every render — an infinite async
+  // re-fetch loop. It rendered fine on the light Dashboard but the constant
+  // re-renders froze the browser once the heavy Workspace mounted, tripping the
+  // "Something went wrong" error boundary.
+  const fetchClientsRef = useRef(fetchClients); fetchClientsRef.current = fetchClients;
+  const fetchUsersRef = useRef(fetchUsers); fetchUsersRef.current = fetchUsers;
+
+  useEffect(() => { fetchClientsRef.current(); fetchUsersRef.current(); }, []);
 
   // Pull the latest TDS Compliance config + filing rows and force every child
   // screen (Dashboard KPIs, Client Filing Summary, etc.) to re-read.
@@ -150,6 +160,7 @@ const TdsFilings = () => {
     fetchClients();
     setDashRefreshKey(k => k + 1);
   }, [fetchClients]);
+  const refreshRef = useRef(refreshTdsModule); refreshRef.current = refreshTdsModule;
 
   // ── Real-time sync ──────────────────────────────────────────────────────
   // TDS Compliance (client_services) is the single source of truth; a DB
@@ -160,21 +171,21 @@ const TdsFilings = () => {
   useEffect(() => {
     const channel = supabase
       .channel("tds-module-realtime")
-      .on("postgres_changes", { event: "*", schema: "public", table: "client_services" }, refreshTdsModule)
-      .on("postgres_changes", { event: "*", schema: "public", table: "tds_filings" }, refreshTdsModule)
+      .on("postgres_changes", { event: "*", schema: "public", table: "client_services" }, () => refreshRef.current())
+      .on("postgres_changes", { event: "*", schema: "public", table: "tds_filings" }, () => refreshRef.current())
       .subscribe((status) => {
         // On (re)connect, pull once so any change that happened while the
         // socket was down is picked up immediately.
-        if (status === "SUBSCRIBED") refreshTdsModule();
+        if (status === "SUBSCRIBED") refreshRef.current();
       });
     return () => { supabase.removeChannel(channel); };
-  }, [refreshTdsModule]);
+  }, []);
 
   // Fallback for environments without Realtime (or a dropped socket): refetch
   // when the tab regains focus/visibility, and on bfcache restore (back/fwd).
   useEffect(() => {
-    const onVisible = () => { if (!document.hidden) refreshTdsModule(); };
-    const onPageShow = () => refreshTdsModule();
+    const onVisible = () => { if (!document.hidden) refreshRef.current(); };
+    const onPageShow = () => refreshRef.current();
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("focus", onVisible);
     window.addEventListener("pageshow", onPageShow);
@@ -183,7 +194,7 @@ const TdsFilings = () => {
       window.removeEventListener("focus", onVisible);
       window.removeEventListener("pageshow", onPageShow);
     };
-  }, [refreshTdsModule]);
+  }, []);
 
   // Guaranteed-eventual sync: even where WebSockets/Realtime are blocked (some
   // corporate networks/proxies) AND the user never switches tabs, poll every
@@ -192,10 +203,10 @@ const TdsFilings = () => {
   useEffect(() => {
     const POLL_MS = 45000;
     const id = window.setInterval(() => {
-      if (!document.hidden) refreshTdsModule();
+      if (!document.hidden) refreshRef.current();
     }, POLL_MS);
     return () => window.clearInterval(id);
-  }, [refreshTdsModule]);
+  }, []);
 
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)] overflow-hidden">
