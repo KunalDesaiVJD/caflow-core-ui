@@ -10,6 +10,7 @@ import { TdsRateMaster } from "@/components/tds/TdsRateMaster";
 import { TdsDashboard } from "@/components/tds/TdsDashboard";
 import { TdsDataEntry } from "@/components/tds/TdsDataEntry";
 import { TdsValidateFinalise } from "@/components/tds/TdsValidateFinalise";
+import { TdsPanVerification } from "@/components/tds/TdsPanVerification";
 import { TdsReports } from "@/components/tds/TdsReports";
 import { TdsAuditLog } from "@/components/tds/TdsAuditLog";
 
@@ -45,7 +46,7 @@ const TdsFilings = () => {
   
   const [activeSection, setActiveSection] = useState<NavKey>("dashboard");
   // CP-02: sub-tab inside TDS Workspace
-  const [workspaceTab, setWorkspaceTab] = useState<"data-entry" | "validate">("data-entry");
+  const [workspaceTab, setWorkspaceTab] = useState<"data-entry" | "validate" | "pan-verify">("data-entry");
   // Increment to force TdsDashboard to re-fetch when returning from workspace
   const [dashRefreshKey, setDashRefreshKey] = useState(0);
   const [syncing, setSyncing] = useState(false);
@@ -272,6 +273,19 @@ const TdsFilings = () => {
                     <ShieldCheck size={14} /> Validate &amp; Finalise
                   </span>
                 </button>
+                <button
+                  onClick={() => setWorkspaceTab("pan-verify")}
+                  className={cn(
+                    "px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors",
+                    workspaceTab === "pan-verify"
+                      ? "border-primary text-primary"
+                      : "border-transparent text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <span className="flex items-center gap-2">
+                    <BadgeCheck size={14} /> PAN Verification
+                  </span>
+                </button>
               </div>
 
               {/* Tab content — rendered but hidden so state is preserved on switch */}
@@ -287,6 +301,9 @@ const TdsFilings = () => {
                   resolveFirmId={resolveFirmId}
                   onNavigateDataEntry={() => setWorkspaceTab("data-entry")}
                 />
+              </div>
+              <div className={workspaceTab === "pan-verify" ? "" : "hidden"}>
+                <TdsPanVerification clients={clients} resolveFirmId={resolveFirmId} />
               </div>
             </div>
           )}
