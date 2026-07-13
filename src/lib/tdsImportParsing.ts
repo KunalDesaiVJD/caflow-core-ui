@@ -92,3 +92,86 @@ export function gridToRows(grid: unknown[][]): Record<string, unknown>[] {
   }
   return rows;
 }
+
+// ── Robust multi-BLOCK / multi-SHEET extraction ─────────────────────────────
+// Many client working files aren't a single clean table. A common layout (seen
+// in real files) is ONE SHEET PER SECTION (named "194C", "94H"=194H, "194Q"…),
+// each sheet holding several month blocks — every block a repeated header row,
+// its data rows, and a "TOTAL 194C" summary row — with the section available
+// only from the SHEET NAME, never a column. gridToRows (single header, stop at a
+// gap) can't handle that. extractSheetRows below walks the whole grid, re-reads
+// the header at each block, and picks out data rows by the ONE unambiguous
+// signal every deductee line has and no total/month/label/junk row does: a PAN.
+
+const PAN_RE = /\b[A-Z]{5}[0-9]{4}[A-Z]\b/;
+
+/** "194C" → 194C · "94H" → 194H · "92B" → 192B · "194A " → 194A · else null. */
+export function sectionFromSheetName(name: string): string | null {
+  const s = (name || "").trim().toUpperCase();
+  let m = s.match(/\b(19[0-9][A-Z]{0,2}|20[0-9][A-Z]{0,2})\b/);
+  if (m) return m[1];
+  m = s.match(/^(9[0-9][A-Z]{0,2})$/); // leading 1 dropped: 94C → 194C, 92B → 192B
+  if (m) return "1" + m[1];
+  return null;
+}
+
+function buildHeaderNames(headerRow: unknown[]): string[] {
+  const seen = new Map<string, number>();
+  return headerRow.map((h, i) => {
+    let name = h == null ? "" : String(h).trim();
+    if (!name) name = `Column${i + 1}`;
+    const count = seen.get(name) ?? 0;
+    seen.set(name, count + 1);
+    return count ? `${name}_${count}` : name;
+  });
+}
+
+/**
+ * Extract every deductee data row from ONE sheet's grid, tolerating repeated
+ * header blocks, month labels, TOTAL/summary rows and junk. A row is data iff it
+ * contains a PAN, OR (a header has been seen and it has ≥4 non-empty cells and
+ * isn't a total/month label) — the PAN test alone already skips totals, month
+ * headings and notes. When `sectionHint` is given (the section from the sheet
+ * name) it's attached as a synthetic "Section" column so the section is captured
+ * even though the file has no section column.
+ */
+export function extractSheetRows(grid: unknown[][], sectionHint: string | null): Record<string, unknown>[] {
+  const rows: Record<string, unknown>[] = [];
+  let headers: string[] | null = null;
+  const MONTHS = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|q[1-4]|quarter)/i;
+  for (let r = 0; r < grid.length; r++) {
+    const row = grid[r] || [];
+    const nonEmpty = row.filter(c => c != null && String(c).trim() !== "");
+    if (nonEmpty.length === 0) continue;
+    if (headerScore(row) >= 3) { headers = buildHeaderNames(row); continue; }
+    const first = String(row[0] ?? "").toLowerCase().trim();
+    if (/\btotal\b/.test(first) || first.startsWith("total")) continue; // summary row
+    if (nonEmpty.length <= 2 && MONTHS.test(first)) continue;            // month/quarter label
+    const hasPan = row.some(c => c != null && PAN_RE.test(String(c).toUpperCase().replace(/\s+/g, "")));
+    if (!hasPan && !(headers && nonEmpty.length >= 4)) continue;         // not a data row
+    const obj: Record<string, unknown> = {};
+    if (headers) headers.forEach((h, i) => { obj[h] = row[i] ?? null; });
+    else row.forEach((c, i) => { obj[`Column${i + 1}`] = c ?? null; });
+    if (sectionHint) obj["Section"] = sectionHint;
+    rows.push(obj);
+  }
+  return rows;
+}
+
+/**
+ * Parse a whole workbook (all sheets). Sheets named after a TDS section are read
+ * first with that section attached; if none yield data (a file whose data lives
+ * in a plainly-named sheet like "Sheet1"/"Data"), every sheet is read by content
+ * as a fallback. `gridOf(sheetName)` returns that sheet's raw grid.
+ */
+export function extractWorkbookRows(sheetNames: string[], gridOf: (name: string) => unknown[][]): Record<string, unknown>[] {
+  const sectioned: Record<string, unknown>[] = [];
+  for (const sn of sheetNames) {
+    const sec = sectionFromSheetName(sn);
+    if (sec) sectioned.push(...extractSheetRows(gridOf(sn), sec));
+  }
+  if (sectioned.length) return sectioned;
+  const all: Record<string, unknown>[] = [];
+  for (const sn of sheetNames) all.push(...extractSheetRows(gridOf(sn), null));
+  return all;
+}

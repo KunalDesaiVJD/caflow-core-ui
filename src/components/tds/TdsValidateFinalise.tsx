@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import Papa from "papaparse";
-import { gridToRows } from "@/lib/tdsImportParsing";
+import { extractWorkbookRows, extractSheetRows } from "@/lib/tdsImportParsing";
 import { logReconAudit } from "@/lib/tdsReconAudit";
 import { TdsPanVerification } from "./TdsPanVerification";
 
@@ -254,16 +254,18 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
         reader.readAsDataURL(file);
       } else if (ext === "csv") {
         reader.onload = () => {
-          const parsed = Papa.parse(String(reader.result), { header: false, skipEmptyLines: true });
-          resolve({ file_type: "csv", rows: gridToRows((parsed.data as unknown[][]) || []) });
+          const parsed = Papa.parse(String(reader.result), { header: false, skipEmptyLines: false });
+          resolve({ file_type: "csv", rows: extractSheetRows((parsed.data as unknown[][]) || [], null) });
         };
         reader.readAsText(file);
       } else if (ext === "xlsx" || ext === "xls" || (!ext && file.type.includes("sheet"))) {
         reader.onload = () => {
+          // Read EVERY sheet — many client working files put one section per sheet
+          // (194C, 194Q, …) with the first sheet being a chart/junk sheet — and let
+          // extractWorkbookRows pull data rows from all month-blocks.
           const wb = XLSX.read(reader.result, { type: "array", cellDates: true });
-          const ws = wb.Sheets[wb.SheetNames[0]];
-          const grid = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: false }) as unknown[][];
-          resolve({ file_type: "xlsx", rows: gridToRows(grid) });
+          const gridOf = (sn: string) => XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, defval: null, raw: false }) as unknown[][];
+          resolve({ file_type: "xlsx", rows: extractWorkbookRows(wb.SheetNames, gridOf) });
         };
         reader.readAsArrayBuffer(file);
       } else if (ext === "json") {
