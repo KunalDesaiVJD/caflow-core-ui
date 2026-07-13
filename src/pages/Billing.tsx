@@ -3,6 +3,7 @@ import ReceiptsTabComponent from "@/components/billing/ReceiptsTab";
 import LedgerTabComponent from "@/components/billing/LedgerTab";
 import BillingDashboardTab from "@/components/billing/BillingDashboardTab";
 import EmailSettingsTab from "@/components/billing/EmailSettingsTab";
+import TallySyncTab from "@/components/billing/TallySyncTab";
 import ReceivablesReportTab from "@/components/billing/ReceivablesReportTab";
 import BillingHealthPanel from "@/components/billing/BillingHealthPanel";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -275,6 +276,7 @@ const Billing = () => {
           <TabsTrigger value="item-master" className="gap-2"><Settings2 size={14} /> Item Master</TabsTrigger>
           <TabsTrigger value="report" className="gap-2"><BarChart3 size={14} /> Report</TabsTrigger>
           <TabsTrigger value="email-settings" className="gap-2"><Mail size={14} /> Email Settings</TabsTrigger>
+          <TabsTrigger value="tally-sync" className="gap-2"><RefreshCw size={14} /> Tally Sync</TabsTrigger>
         </TabsList>
 
         <TabsContent value="dashboard"><BillingDashboardTab firmId={activeFirmId} /></TabsContent>
@@ -284,6 +286,7 @@ const Billing = () => {
         <TabsContent value="item-master"><ItemMasterTab /></TabsContent>
         <TabsContent value="report"><ReceivablesReportTab defaultFirmId={activeFirmId ?? undefined} /></TabsContent>
         <TabsContent value="email-settings"><EmailSettingsTab firmId={activeFirmId} userId={userId} /></TabsContent>
+        <TabsContent value="tally-sync"><TallySyncTab firmId={activeFirmId} /></TabsContent>
       </Tabs>
     </div>
   );
