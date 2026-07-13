@@ -230,6 +230,72 @@ function oneSided(r: Rec, side: "office" | "imported"): FieldDiff[] {
   }));
 }
 
+// ── AI section adjudication (the ONE genuinely fuzzy field) ──────────────────
+// PAN / date / amount / tds / interest / name are compared deterministically.
+// Section is the only field where a client file legitimately uses a different
+// NOTATION for the same nature of payment — a code (194C), a description
+// ("TDS - Contract"), or an opaque internal/legal-clause citation
+// ("393(1) 6(i) D(b)") that no string rule can equate. For pairs whose section
+// didn't match deterministically, the model judges equivalence — with the office
+// code treated as authoritative and the record already confirmed (by PAN+date+
+// amount) to be the SAME transaction. Graceful: a provider failure leaves the
+// deterministic result untouched.
+async function callAI(system: string, userText: string, maxTokens: number): Promise<string | null> {
+  const openAICompat = async (url: string, key: string, model: string, extra: Record<string, string>) => {
+    try {
+      const res = await fetch(url, {
+        method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...extra },
+        body: JSON.stringify({ model, temperature: 0, max_tokens: maxTokens, messages: [{ role: "system", content: system }, { role: "user", content: userText }] }),
+      });
+      if (!res.ok) { console.error("section AI provider failed", res.status, (await res.text()).slice(0, 150)); return null; }
+      const j = await res.json(); return j?.choices?.[0]?.message?.content ?? null;
+    } catch (e) { console.error("section AI provider error", String(e).slice(0, 120)); return null; }
+  };
+  const anthropic = async (key: string) => {
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST", headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+        body: JSON.stringify({ model: Deno.env.get("ANTHROPIC_MODEL") || "claude-sonnet-4-20250514", max_tokens: maxTokens, system, messages: [{ role: "user", content: [{ type: "text", text: userText }] }] }),
+      });
+      if (!res.ok) { console.error("section AI anthropic failed", res.status); return null; }
+      const j = await res.json(); return Array.isArray(j?.content) ? j.content.filter((b: any) => b?.type === "text").map((b: any) => b.text).join("") : null;
+    } catch (e) { console.error("section AI anthropic error", String(e).slice(0, 120)); return null; }
+  };
+  const OR = Deno.env.get("OPENROUTER_API_KEY"), LV = Deno.env.get("LOVABLE_API_KEY"), AN = Deno.env.get("ANTHROPIC_API_KEY");
+  if (OR) { const r = await openAICompat("https://openrouter.ai/api/v1/chat/completions", OR, Deno.env.get("OPENROUTER_MODEL") || "google/gemini-2.5-flash", { "HTTP-Referer": "https://caflow.app", "X-Title": "CAFlow TDS Recon" }); if (r) return r; }
+  if (LV) { const r = await openAICompat("https://ai.gateway.lovable.dev/v1/chat/completions", LV, Deno.env.get("LOVABLE_MODEL") || "google/gemini-2.5-flash", {}); if (r) return r; }
+  if (AN) { const r = await anthropic(AN); if (r) return r; }
+  return null;
+}
+function extractJson(text: string): any {
+  if (!text) return null;
+  let s = text.trim();
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i); if (fence) s = fence[1].trim();
+  try { return JSON.parse(s); } catch { /* fall through */ }
+  const a = s.indexOf("{"), b = s.lastIndexOf("}"); if (a >= 0 && b > a) { try { return JSON.parse(s.slice(a, b + 1)); } catch { /* ignore */ } }
+  return null;
+}
+const SECTION_ADJ_SYSTEM = `You reconcile Indian TDS "section / nature of payment" values between a firm's OFFICE record and a client's imported file.
+Each item has the OFFICE value (the firm's authoritative TDS section code, e.g. 194C, 194Q, 194J, 194I, 194H, 192, 194A) and the CLIENT value from the client's file. The two are ALREADY confirmed to be the SAME transaction (PAN, date and amount match).
+The CLIENT value may be: a section code; a plain-language nature ("TDS - Contract"/"Contractor"=194C, "TDS - Purchase"/"Purchase of goods"=194Q, "Professional/Technical Fees"=194J, "Rent"=194I, "Commission/Brokerage"=194H, "Salary"=192, "Interest"=194A); OR an opaque internal or legal-clause citation you may not be able to decode (e.g. "393(1) 6(i) D(b)", "393(1) 8(ii)").
+Decide for each whether the CLIENT value denotes the SAME nature of payment as the OFFICE code.
+Rules:
+- Map any plain-language nature to its code, then compare to the office code.
+- If the CLIENT value is an OPAQUE citation you cannot confidently decode, answer same=true — the office code is authoritative and the transaction already matches, so a code you cannot read is NOT evidence of a real discrepancy.
+- Answer same=false ONLY when the client value CLEARLY and CONFIDENTLY names a DIFFERENT standard nature of payment than the office code (e.g. office 194C "Contract" but client clearly says "Professional Fees"/194J).
+Return STRICT JSON only: {"results":[{"ref":"<ref>","same":true|false,"reason":"<short>"}]} — one object per item, no prose, no fences.`;
+
+async function adjudicateSections(items: { ref: string; office: string; imported: string }[]): Promise<Map<string, { same: boolean; reason: string }>> {
+  const out = new Map<string, { same: boolean; reason: string }>();
+  if (items.length === 0) return out;
+  const content = await callAI(SECTION_ADJ_SYSTEM, `Items:\n${JSON.stringify(items)}`, 4000);
+  if (!content) return out; // provider down → caller keeps the deterministic result
+  const parsed = extractJson(content);
+  const arr = Array.isArray(parsed?.results) ? parsed.results : [];
+  for (const r of arr) if (r?.ref != null) out.set(String(r.ref), { same: r.same === true, reason: r.reason ? String(r.reason) : "" });
+  return out;
+}
+
 serve(async (req) => {
   const corsHeaders = corsFor(req);
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -370,10 +436,40 @@ serve(async (req) => {
       };
     };
 
+    // Deterministic comparison for every pair first.
+    const paired = pairs.map(({ o, i }) => ({ o, i, ...comparePair(o, i, aliases) }));
+
+    // Then let the model adjudicate ONLY the section-field differences — the one
+    // field where a client file legitimately uses different notation (code vs
+    // description vs opaque citation) for the same nature of payment. Everything
+    // else stays deterministic. Office code is authoritative; a paired record is
+    // already the same transaction, so a section notation the model deems
+    // equivalent is not a real mismatch. A section that stays mismatched here is
+    // a genuine, confident different-nature call (the user can still override).
+    const secItems: { ref: string; office: string; imported: string }[] = [];
+    paired.forEach((p, idx) => {
+      const sf = p.fields.find(f => f.field === "section");
+      if (sf && !sf.matched) secItems.push({ ref: String(idx), office: String(sf.office ?? ""), imported: String(sf.imported ?? "") });
+    });
+    if (secItems.length) {
+      const verdicts = await adjudicateSections(secItems);
+      paired.forEach((p, idx) => {
+        const v = verdicts.get(String(idx));
+        if (!v || !v.same) return;
+        const sf = p.fields.find(f => f.field === "section");
+        if (sf && !sf.matched) {
+          sf.matched = true;
+          sf.difference = "";
+          const mism = p.fields.filter(f => !f.matched).map(f => f.field);
+          p.status = mism.length === 0 ? "matched" : "mismatched";
+          p.mismatchFields = mism;
+        }
+      });
+    }
+
     const newRows: any[] = [];
-    for (const { o, i } of pairs) {
-      const { fields, status } = comparePair(o, i, aliases);
-      newRows.push(rowFor(o.id, i.id, o.name ?? i.name, status, fields));
+    for (const p of paired) {
+      newRows.push(rowFor(p.o.id, p.i.id, p.o.name ?? p.i.name, p.status, p.fields));
     }
     for (let oi = 0; oi < oRecs.length; oi++) if (!oUsed[oi]) {
       const o = oRecs[oi];

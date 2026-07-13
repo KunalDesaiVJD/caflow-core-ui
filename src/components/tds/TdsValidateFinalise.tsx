@@ -21,7 +21,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   ShieldCheck, AlertTriangle, CheckCircle2, Upload, Play, FileSpreadsheet,
-  RotateCcw, Loader2, Users, FileWarning, Info, Check, X, ChevronDown, ChevronRight, BadgeCheck,
+  RotateCcw, Loader2, Users, FileWarning, Info, X, BadgeCheck,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import Papa from "papaparse";
@@ -126,7 +126,6 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
   const [comparing, setComparing] = useState(false);
   const [finalising, setFinalising] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [showMatched, setShowMatched] = useState(false);
   const [runSignal, setRunSignal] = useState(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const loadSeq = useRef(0); // guards against out-of-order loadAll responses
@@ -350,7 +349,6 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     const rs = (results || []).filter(r => r.match_status !== "matched");
     return rs.sort((a, b) => (a.overridden ? 1 : 0) - (b.overridden ? 1 : 0));
   }, [results]);
-  const matchedRows = useMemo(() => (results || []).filter(r => r.match_status === "matched"), [results]);
 
   const overrideBtn = (r: ReconResult) => (
     r.overridden ? (
@@ -502,11 +500,27 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
                 ))}
               </div>
 
-              {/* Every mismatch as its own comparison table (Field | Office | Imported | Result) */}
+              {/* Validation focuses on EXCEPTIONS only — fully-matched records are
+                  not listed (they're counted in the tiles above). When there is
+                  nothing to action, show a professional success summary. */}
               {attention.length === 0 ? (
-                <div className="flex items-center gap-2 p-4 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/20 text-sm text-emerald-700 dark:text-emerald-300">
-                  <CheckCircle2 size={16} /> Every record matched — no differences found.
-                </div>
+                <Card className="border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20">
+                  <CardContent className="p-6 space-y-3">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 size={22} className="text-emerald-600" />
+                      <p className="text-lg font-bold text-emerald-700 dark:text-emerald-300">Validation Completed Successfully</p>
+                    </div>
+                    <div className="text-sm text-foreground grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1 max-w-xl">
+                      <span className="text-muted-foreground">Total Records Processed</span><span className="font-semibold">{summary.total}</span>
+                      <span className="text-muted-foreground">Matched Records</span><span className="font-semibold text-emerald-600">{summary.matched}</span>
+                      <span className="text-muted-foreground">Mismatched Records</span><span className="font-semibold">{summary.mismatched}</span>
+                      <span className="text-muted-foreground">Overridden</span><span className="font-semibold">{summary.overridden}</span>
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      All data entries have been validated successfully. No discrepancies were found between the Office Data and the Imported Excel data.
+                    </p>
+                  </CardContent>
+                </Card>
               ) : attention.map(r => {
                 const diffs = r.field_diffs || [];
                 return (
@@ -530,18 +544,17 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
                             </TableRow>
                           </TableHeader>
                           <TableBody>
-                            {DIFF_FIELDS.map(f => {
+                            {/* Only the fields that DIFFER are shown — matching
+                                fields are hidden to keep the focus on the issue. */}
+                            {DIFF_FIELDS.filter(f => { const d = diffs.find(x => x.field === f); return d ? d.matched === false : false; }).map(f => {
                               const d = diffs.find(x => x.field === f);
-                              const ok = d ? d.matched !== false : true;
                               return (
-                                <TableRow key={f} className={cn(!ok && "bg-destructive/5")}>
+                                <TableRow key={f} className="bg-destructive/5">
                                   <TableCell className="font-medium text-xs">{FIELD_LABELS[f]}</TableCell>
                                   <TableCell className="text-xs">{fmtVal(d?.office)}</TableCell>
-                                  <TableCell className={cn("text-xs", !ok && "text-destructive font-medium")}>{fmtVal(d?.imported)}</TableCell>
+                                  <TableCell className="text-xs text-destructive font-medium">{fmtVal(d?.imported)}</TableCell>
                                   <TableCell className="text-right">
-                                    {ok
-                                      ? <span className="inline-flex items-center gap-1 text-emerald-600 text-xs"><Check size={12} /> Match</span>
-                                      : <span className="inline-flex items-center gap-1 text-destructive text-xs"><X size={12} /> Mismatch</span>}
+                                    <span className="inline-flex items-center gap-1 text-destructive text-xs"><X size={12} /> Mismatch</span>
                                   </TableCell>
                                 </TableRow>
                               );
@@ -559,45 +572,6 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
                   </Card>
                 );
               })}
-
-              {/* Matched — compact, collapsed by default */}
-              {matchedRows.length > 0 && (
-                <Card>
-                  <CardContent className="p-0">
-                    <button className="w-full flex items-center gap-2 px-4 py-2 text-sm font-medium hover:bg-muted/40"
-                      onClick={() => setShowMatched(v => !v)}>
-                      {showMatched ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-                      <CheckCircle2 size={14} className="text-emerald-600" />
-                      {matchedRows.length} matched record{matchedRows.length > 1 ? "s" : ""}
-                      <span className="text-xs text-muted-foreground font-normal">(all 7 fields agree)</span>
-                    </button>
-                    {showMatched && (
-                      <div className="overflow-x-auto border-t">
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead>Record</TableHead>
-                              {DIFF_FIELDS.map(f => <TableHead key={f} className="text-xs">{FIELD_LABELS[f]}</TableHead>)}
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {matchedRows.map(r => {
-                              const diffs = r.field_diffs || [];
-                              const val = (f: string) => { const d = diffs.find(x => x.field === f); return fmtVal(d?.office ?? d?.imported); };
-                              return (
-                                <TableRow key={r.id}>
-                                  <TableCell className="text-xs font-medium">{r.record_label || "—"}</TableCell>
-                                  {DIFF_FIELDS.map(f => <TableCell key={f} className="text-xs">{val(f)}</TableCell>)}
-                                </TableRow>
-                              );
-                            })}
-                          </TableBody>
-                        </Table>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              )}
             </div>
           )}
 
