@@ -391,12 +391,16 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   const statusMeasureRef = useRef<HTMLSpanElement>(null);
   const [statusColWidth, setStatusColWidth] = useState(180);
 
-  // Sum of every column's explicit width (checkbox 40 + Client 260 + Status
+  // Sum of every OTHER column's explicit width (checkbox 40 + Status
   // (dynamic) + Filing Date 160 + Ack No 160 + Prepared By 112 + Filed By 112
-  // + Actions 100) — pins the <Table>'s own width so table-layout:fixed has
-  // an authoritative total to divide exactly among columns instead of an
-  // "auto" width that Chrome will silently shrink/stretch at some viewports.
-  const TABLE_FIXED_WIDTH = 40 + 260 + statusColWidth + 160 + 160 + 112 + 112 + 100;
+  // + Actions 100) plus Client's own min-w-[260px] floor. This is now a
+  // MINIMUM width, not a pinned total: the <Table> itself stretches to 100%
+  // of its container, and Client — the only column left without an explicit
+  // width — deterministically absorbs all width beyond this sum per the
+  // table-layout:fixed algorithm. Below this minimum the shadcn Table's own
+  // overflow-auto wrapper kicks in with horizontal scroll instead of
+  // squeezing columns below what they need.
+  const TABLE_MIN_WIDTH = 40 + 260 + statusColWidth + 160 + 160 + 112 + 112 + 100;
 
   useLayoutEffect(() => {
     const statusEl = statusMeasureRef.current;
@@ -845,18 +849,22 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       {/* Main Table */}
       <Card>
         <CardContent className="p-0">
-          {/* table-layout:fixed + an explicit column-count-matched width on every
-              column below — a plain browser auto table-layout gives any column
-              without a width an unpredictable, oversized share of the row (this
-              was the root cause of the dead gaps after Client/Ack No/Status were
-              fixed-width but Filing Date/Prepared By/Filed By were not). The
-              table's own width is pinned (not stretched to 100%) so the sum of
-              column widths is authoritative at every viewport — Client can
-              never re-balloon on wide screens or get squeezed on narrow ones;
-              the shadcn Table primitive's own internal overflow-auto wrapper
-              (src/components/ui/table.tsx) takes over below this width — no
-              extra wrapper div is needed here. */}
-          <Table style={{ tableLayout: "fixed", width: TABLE_FIXED_WIDTH, minWidth: TABLE_FIXED_WIDTH }}>
+          {/* table-layout:fixed + an explicit width on every OTHER column below —
+              a plain browser auto table-layout gives any column without a width
+              an unpredictable, oversized share of the row (this was the root
+              cause of the dead gaps after Client/Ack No/Status were fixed-width
+              but Filing Date/Prepared By/Filed By were not). The <Table> itself
+              stretches to 100% of its container (not a pinned px sum) so it
+              always fills the available width, leaving no dead zone on wide
+              screens; per the table-layout:fixed algorithm, Client — the ONE
+              column left without an explicit width (only a min-w-[260px] floor)
+              — deterministically absorbs all remaining space, growing on wide
+              screens and shrinking to its floor on narrow ones, while every
+              other column stays at its explicit width. Below TABLE_MIN_WIDTH the
+              shadcn Table primitive's own internal overflow-auto wrapper
+              (src/components/ui/table.tsx) takes over — no extra wrapper div is
+              needed here. */}
+          <Table style={{ tableLayout: "fixed", width: "100%", minWidth: TABLE_MIN_WIDTH }}>
             <TableHeader>
               <TableRow>
                 <TableHead className="w-10">
@@ -865,7 +873,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                     onCheckedChange={toggleSelectAll}
                   />
                 </TableHead>
-                <TableHead className="w-[260px] sticky left-0 bg-background z-10">Client</TableHead>
+                <TableHead className="min-w-[260px] sticky left-0 bg-background z-10">Client</TableHead>
                 <TableHead style={{ width: statusColWidth, minWidth: statusColWidth }}>Status</TableHead>
                 <TableHead className="w-40">Filing Date</TableHead>
                 <TableHead className="w-40">Ack No</TableHead>
@@ -901,7 +909,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                     <TableCell className="font-medium sticky left-0 bg-background">
                       <HoverCard openDelay={200} closeDelay={100}>
                         <HoverCardTrigger asChild>
-                          <span className={cn("inline-block max-w-[260px] cursor-default hover:underline decoration-dotted underline-offset-4", archived && "line-through text-muted-foreground")}>
+                          <span className={cn("inline-block max-w-full cursor-default hover:underline decoration-dotted underline-offset-4", archived && "line-through text-muted-foreground")}>
                             {(() => {
                               const displayName = client?.name || deletedClients.get(f.client_id)?.name || "—";
                               const { main, parenthetical } = splitClientName(displayName);
