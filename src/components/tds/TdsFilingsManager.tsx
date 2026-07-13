@@ -190,6 +190,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   const [ackFiles, setAckFiles] = useState<Map<string, TdsAckFile>>(new Map());
   const [loading, setLoading] = useState(true);
   const [statusGroup, setStatusGroup] = useState<KpiStatusGroup>("all");
+  const [clientNameSearch, setClientNameSearch] = useState("");
 
   // Apply an external status-group preset (Dashboard KPI card click) — keyed
   // on `nonce` so re-clicking the same card re-applies it even with no value
@@ -307,6 +308,17 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       return true;
     });
   }, [filings, formFilter, statusGroup, deletedClients, clients]);
+
+  // Live client-name search — layered on top of the filters above, matches
+  // Client Name only (case-insensitive substring). Empty search = no-op.
+  const searchFiltered = useMemo(() => {
+    const q = clientNameSearch.trim().toLowerCase();
+    if (!q) return filtered;
+    return filtered.filter(f => {
+      const name = clients.find(c => c.id === f.client_id)?.name || deletedClients.get(f.client_id)?.name || "";
+      return name.toLowerCase().includes(q);
+    });
+  }, [filtered, clientNameSearch, clients, deletedClients]);
 
   // Excel-style AutoFit for the Status column — width follows the widest
   // possible option (a fixed enum) rather than a fixed guess. Font is copied
@@ -573,8 +585,8 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   };
 
   const toggleSelectAll = () => {
-    if (selectedIds.size === filtered.length) setSelectedIds(new Set());
-    else setSelectedIds(new Set(filtered.map(f => f.id)));
+    if (selectedIds.size === searchFiltered.length) setSelectedIds(new Set());
+    else setSelectedIds(new Set(searchFiltered.map(f => f.id)));
   };
 
   const handleBulkAction = async () => {
@@ -691,6 +703,15 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
           in the Dashboard's top-level header and flow down as props, so
           there is a single source of truth and no duplicate filter UI here. */}
       <div className="flex flex-wrap gap-3 items-end">
+        <div className="space-y-0.5">
+          <Label className="text-[10px]">Search Client</Label>
+          <Input
+            placeholder="Search client name…"
+            value={clientNameSearch}
+            onChange={e => setClientNameSearch(e.target.value)}
+            className="h-8 w-[220px] text-xs"
+          />
+        </div>
         <div className="flex-1" />
         {onToggleMaximize && (
           <Button
@@ -763,7 +784,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                 <TableRow>
                   <TableHead className="w-10">
                     <Checkbox
-                      checked={filtered.length > 0 && selectedIds.size === filtered.length}
+                      checked={searchFiltered.length > 0 && selectedIds.size === searchFiltered.length}
                       onCheckedChange={toggleSelectAll}
                     />
                   </TableHead>
@@ -779,13 +800,15 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
               <TableBody>
                 {loading ? Array.from({ length: 5 }).map((_, i) => (
                   <TableRow key={i}>{Array.from({ length: 9 }).map((_, j) => <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>)}</TableRow>
-                )) : filtered.length === 0 ? (
+                )) : searchFiltered.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
-                      No filings found. Filings are created when TDS service is activated for a client.
+                      {clientNameSearch.trim()
+                        ? `No clients match "${clientNameSearch.trim()}".`
+                        : "No filings found. Filings are created when TDS service is activated for a client."}
                     </TableCell>
                   </TableRow>
-                ) : filtered.map(f => {
+                ) : searchFiltered.map(f => {
                   const client = clients.find(c => c.id === f.client_id);
                   const clientTan = client?.tan_number || f.tan;
                   const archived = isArchivedFiling(f);
