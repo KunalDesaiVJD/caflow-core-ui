@@ -848,7 +848,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                       onCheckedChange={toggleSelectAll}
                     />
                   </TableHead>
-                  <TableHead className="w-[190px] sticky left-0 bg-background z-10">Client</TableHead>
+                  <TableHead className="w-[232px] sticky left-0 bg-background z-10">Client</TableHead>
                   <TableHead style={{ width: statusColWidth, minWidth: statusColWidth }}>Status</TableHead>
                   <TableHead>Filing Date</TableHead>
                   <TableHead className="w-40">Ack No</TableHead>
@@ -884,7 +884,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                       <TableCell className="font-medium sticky left-0 bg-background">
                         <HoverCard openDelay={200} closeDelay={100}>
                           <HoverCardTrigger asChild>
-                            <span className={cn("inline-block max-w-[190px] cursor-default hover:underline decoration-dotted underline-offset-4", archived && "line-through text-muted-foreground")}>
+                            <span className={cn("inline-block max-w-[232px] cursor-default hover:underline decoration-dotted underline-offset-4", archived && "line-through text-muted-foreground")}>
                               {(() => {
                                 const displayName = client?.name || deletedClients.get(f.client_id)?.name || "—";
                                 const { main, parenthetical } = splitClientName(displayName);

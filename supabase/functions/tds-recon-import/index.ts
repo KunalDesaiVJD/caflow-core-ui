@@ -220,12 +220,59 @@ function readMappedField<F extends keyof CanonicalRow>(
   return String(v).trim() as CanonicalRow[F];
 }
 
-// Fields where a confident deterministic column match should OVERRIDE the
-// LLM's own extraction, not just hint it. section_code is deliberately
-// excluded — it needs the LLM's semantic judgement (preferring a
-// descriptive nature-of-payment column, translating meaning), never a raw
-// mechanical column read.
-const OVERRIDE_FIELDS: (keyof CanonicalRow)[] = ["pan", "deductee_name", "amount_paid", "tds_amount", "interest", "date_of_payment"];
+// ── Deterministic section-column picker ─────────────────────────────────────
+// The single biggest source of false "Section Mismatch"es was the LLM
+// inconsistently choosing WHICH column is the TDS section when a client file has
+// several section-ish columns at once — a clean code column ("194J"), a
+// descriptive one ("TDS - Professional Fees"), AND a raw legal-clause column
+// ("393(1) 6(iii) D(b)"). Re-importing the very SAME file could yield "194J" one
+// day and "393(1)..." the next (observed in production: batch 1 captured
+// "194C/194J", a re-import of the identical file captured "393(1)..." garbage).
+// This resolves the section column deterministically FROM THE DATA: score every
+// column by how many of its values look like a genuine TDS section (a 192–206
+// statutory code, or a standard nature-of-payment word) and pick the best —
+// strongly preferring a column of actual codes, then descriptive text, and never
+// an unmappable clause-citation column. The result overrides the LLM's guess.
+const SEC_CODE_RE = /\b(19[2-9][A-Z]{0,2}|20[0-9][A-Z]{0,2})\b/;
+const SEC_KEYWORDS = ["contract", "professional", "technical", "rent", "commission", "brokerage", "salary", "interest", "purchase", "goods", "dividend", "royalty", "insurance", "transport", "advertis"];
+function classifySectionCell(v: unknown): "code" | "keyword" | "none" {
+  const s = v == null ? "" : String(v).trim();
+  if (!s) return "none";
+  if (SEC_CODE_RE.test(s.toUpperCase().replace(/\s+/g, ""))) return "code";
+  const low = s.toLowerCase();
+  return SEC_KEYWORDS.some(k => low.includes(k)) ? "keyword" : "none";
+}
+/** Best section column by data pattern, or null if no column reads as sections. */
+function pickSectionColumn(allRows: Record<string, unknown>[]): string | null {
+  const headers = new Set<string>();
+  for (const r of allRows) if (r && typeof r === "object") for (const k of Object.keys(r)) headers.add(k);
+  let best: { header: string; code: number; kw: number; frac: number } | null = null;
+  for (const h of headers) {
+    let nonEmpty = 0, code = 0, kw = 0;
+    for (const r of allRows) {
+      const s = r?.[h] == null ? "" : String(r[h]).trim();
+      if (!s) continue;
+      nonEmpty++;
+      const c = classifySectionCell(s);
+      if (c === "code") code++; else if (c === "keyword") kw++;
+    }
+    if (nonEmpty === 0) continue;
+    const frac = (code + kw) / nonEmpty;
+    if (frac < 0.5) continue; // at least half the column's values must read as sections
+    // Prefer most real CODES, then keyword hits, then coverage.
+    if (!best || code > best.code || (code === best.code && kw > best.kw) || (code === best.code && kw === best.kw && frac > best.frac)) {
+      best = { header: h, code, kw, frac };
+    }
+  }
+  return best ? best.header : null;
+}
+
+// Fields where a confident deterministic column match OVERRIDES the LLM's own
+// extraction, not just hints it. section_code is included via the value-based
+// pickSectionColumn (assigned into `mapping` before overrides are built) rather
+// than the header-name guess, because the RIGHT section column is identified far
+// more reliably by its data pattern than by its (often ambiguous) header text.
+const OVERRIDE_FIELDS: (keyof CanonicalRow)[] = ["pan", "deductee_name", "amount_paid", "tds_amount", "interest", "date_of_payment", "section_code"];
 
 /** PAN+amount is used as the join key back to the LLM's own output, because
  * both are independently reliable for the LLM to extract even from garbled
@@ -411,6 +458,15 @@ serve(async (req) => {
       .single();
     if (fErr || !filing) return json({ error: "Filing not found" }, 404);
 
+    // AUTHORIZE — the service-role client above bypasses RLS, so we MUST verify
+    // the authenticated caller actually belongs to this filing's firm (or is a
+    // superadmin). Without this, any authenticated user could pass another
+    // firm's filing_id and import into / read that firm's data (cross-firm IDOR).
+    const { data: caller } = await supabase.from("users").select("firm_id, role").eq("id", user.id).single();
+    if (!caller || (caller.firm_id !== filing.firm_id && caller.role !== "superadmin")) {
+      return json({ error: "You are not authorised for this filing." }, 403);
+    }
+
     const resolvedForm = form_type || (Array.isArray(filing.tds_forms) ? filing.tds_forms[0] : null) || "26Q";
 
     // ── Normalise via the LLM ───────────────────────────────────────────────────
@@ -463,6 +519,12 @@ serve(async (req) => {
       // headers don't match any known synonym at all, in which case the
       // model relies purely on the strengthened system prompt + data pattern.
       const mapping = guessColumnMapping(allRows);
+      // Resolve the section column by DATA, not header text (see
+      // pickSectionColumn) and let it override the header guess — this is what
+      // stops a re-import of the same file from flip-flopping between the clean
+      // code column and an unmappable "393(1)..." clause column.
+      const sectionCol = pickSectionColumn(allRows);
+      if (sectionCol) mapping.section_code = sectionCol;
       const mappingEntries = Object.entries(mapping);
       const mappingHint = mappingEntries.length
         ? `\n\nAutomatic header analysis detected these likely column mappings — use them unless the actual data in that column clearly contradicts it: ${mappingEntries.map(([field, header]) => `${field} ← "${header}"`).join("; ")}.`

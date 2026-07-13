@@ -7,7 +7,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -19,25 +18,34 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import {
-  ShieldCheck, CheckCircle2, Upload, Play, FileSpreadsheet, Loader2, Info, AlertTriangle,
+  ShieldCheck, CheckCircle2, Upload, FileSpreadsheet, Loader2, AlertTriangle,
 } from "lucide-react";
 import * as XLSX from "xlsx";
-import { getDefaultTdsQuarter, clientHasTdsForm } from "@/lib/tdsQuarter";
+import { logReconAudit } from "@/lib/tdsReconAudit";
 import {
   comparePanVerification, isPanException, normalizePan,
   PAN_OVERRIDE_REASONS, type OfficeParty, type TracesPanRow, type PanValidationResult,
 } from "@/lib/tdsPanVerification";
 
-interface ClientOption { id: string; name: string | null; tds_forms_applicable?: string[] }
-
+/**
+ * Stage 2 · PAN Verification — EMBEDDED inside Validate & Finalise.
+ *
+ * The parent (TdsValidateFinalise) owns the client/FY/quarter/form selection and
+ * the single "Run Validation" button; this component receives the resolved
+ * `filing` + selection as props and runs its own comparison whenever `runSignal`
+ * is bumped (if a TRACES file has been imported). Results are shown as a distinct
+ * section, kept entirely separate from the Stage-1 data reconciliation.
+ */
 interface Props {
-  clients: ClientOption[];
+  filing: any;                              // resolved tds_filings row (or null)
+  selClient: string;
+  selFy: string;
+  selQuarter: string;
+  selForm: string;
+  runSignal: number;                        // bump to trigger Stage-2 validation
   resolveFirmId: () => Promise<string | null>;
+  disabled?: boolean;                       // parent's compliance gate
 }
-
-const FY_OPTIONS = Array.from({ length: 7 }, (_, i) => { const s = 2020 + i; return `${s}-${String(s + 1).slice(2)}`; });
-const QUARTER_OPTIONS = ["Q1", "Q2", "Q3", "Q4"];
-const TDS_FORMS = ["24Q", "26Q", "27Q", "27EQ"];
 
 interface PanResult {
   id: string;
@@ -104,18 +112,10 @@ function parseTracesWorkbook(data: ArrayBuffer): Omit<TracesPanRow, "row_id">[] 
   return out;
 }
 
-export function TdsPanVerification({ clients, resolveFirmId }: Props) {
+export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selForm, runSignal, resolveFirmId, disabled }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
 
-  const smartDefault = useMemo(() => getDefaultTdsQuarter(), []);
-  const [selClient, setSelClient] = useState("");
-  const [selFy, setSelFy] = useState(smartDefault.fy);
-  const [selQuarter, setSelQuarter] = useState(smartDefault.quarter);
-  const [selForm, setSelForm] = useState("26Q");
-
-  const [resolving, setResolving] = useState(false);
-  const [filing, setFiling] = useState<any>(null);
   const [officeCount, setOfficeCount] = useState(0);
   const [batch, setBatch] = useState<any>(null);
   const [results, setResults] = useState<PanResult[] | null>(null);
@@ -131,20 +131,12 @@ export function TdsPanVerification({ clients, resolveFirmId }: Props) {
   const [ovOther, setOvOther] = useState("");
   const [savingOv, setSavingOv] = useState(false);
 
-  // Resolve the filing for the selected combination + hydrate batch/results.
-  const loadAll = useCallback(async () => {
-    if (!selClient || !selFy || !selQuarter || !selForm) {
-      setFiling(null); setBatch(null); setResults(null); setOfficeCount(0);
-      return;
-    }
-    setResolving(true);
-    const { data: fData } = await supabase.from("tds_filings").select("*")
-      .eq("client_id", selClient).eq("financial_year", selFy).eq("quarter", selQuarter).limit(10);
-    const match = (fData || []).find((f: any) => (f.tds_forms || []).includes(selForm)) || null;
-    setFiling(match);
-    if (!match) { setBatch(null); setResults(null); setOfficeCount(0); setResolving(false); return; }
+  const filingId = filing?.id ?? null;
 
-    const { data: ch } = await supabase.from("tds_challans").select("id").eq("filing_id", match.id);
+  // Load office count + latest TRACES batch + existing results for the parent's filing.
+  const loadAll = useCallback(async () => {
+    if (!filingId) { setBatch(null); setResults(null); setOfficeCount(0); return; }
+    const { data: ch } = await supabase.from("tds_challans").select("id").eq("filing_id", filingId);
     const chIds = (ch || []).map((c: any) => c.id);
     let dedCount = 0;
     if (chIds.length) {
@@ -154,17 +146,15 @@ export function TdsPanVerification({ clients, resolveFirmId }: Props) {
     setOfficeCount(dedCount);
 
     const { data: b } = await supabase.from("tds_pan_verification_batches").select("*")
-      .eq("filing_id", match.id).order("imported_at", { ascending: false }).limit(1).maybeSingle();
+      .eq("filing_id", filingId).order("imported_at", { ascending: false }).limit(1).maybeSingle();
     setBatch(b || null);
 
-    const { data: res } = await supabase.from("tds_pan_verification_results").select("*").eq("filing_id", match.id);
+    const { data: res } = await supabase.from("tds_pan_verification_results").select("*").eq("filing_id", filingId);
     setResults(res && res.length ? (res as PanResult[]) : null);
 
-    // Users for "Overridden By" display
     const { data: us } = await supabase.from("users").select("id, name").limit(5000);
     setUserMap(Object.fromEntries((us || []).map((u: any) => [u.id, u.name])));
-    setResolving(false);
-  }, [selClient, selFy, selQuarter, selForm]);
+  }, [filingId]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
@@ -198,17 +188,16 @@ export function TdsPanVerification({ clients, resolveFirmId }: Props) {
       toast({ title: `Imported ${rows.length} PAN record(s)`, description: file.name });
       await loadAll();
     } catch (e: any) {
-      toast({ title: "Import failed", description: e.message, variant: "destructive" });
+      toast({ title: "PAN file import failed", description: e.message, variant: "destructive" });
     }
     setImporting(false);
   };
 
-  const handleValidate = async () => {
+  const runValidation = useCallback(async () => {
     if (!filing || !batch) return;
     setValidating(true);
     try {
       const firmId = await resolveFirmId();
-      // Office parties (this quarter) via the filing's challans.
       const { data: ch } = await supabase.from("tds_challans").select("id").eq("filing_id", filing.id);
       const chIds = (ch || []).map((c: any) => c.id);
       let office: OfficeParty[] = [];
@@ -217,13 +206,11 @@ export function TdsPanVerification({ clients, resolveFirmId }: Props) {
           .select("id, deductee_pan, deductee_name").in("challan_id", chIds);
         office = (ded || []).map((d: any) => ({ deductee_id: d.id, pan: d.deductee_pan, name: d.deductee_name }));
       }
-      // TRACES rows for the latest batch.
       const { data: tr } = await supabase.from("tds_pan_verification_rows").select("id, pan, name, verified_name, pan_status").eq("batch_id", batch.id);
       const traces: TracesPanRow[] = (tr || []).map((t: any) => ({ row_id: t.id, pan: t.pan, name: t.name, verified_name: t.verified_name, pan_status: t.pan_status }));
 
       const compared = comparePanVerification(office, traces);
 
-      // Preserve prior overrides across re-runs (keyed by office deductee + PAN).
       const { data: prior } = await supabase.from("tds_pan_verification_results")
         .select("id, office_deductee_id, pan, overridden, override_reason, overridden_by, overridden_at").eq("filing_id", filing.id);
       const priorMap = new Map<string, any>();
@@ -245,7 +232,6 @@ export function TdsPanVerification({ clients, resolveFirmId }: Props) {
         };
       });
 
-      // Insert new first, then delete old — an insert failure never loses overrides.
       const { error: insErr } = await supabase.from("tds_pan_verification_results").insert(newRows);
       if (insErr) throw new Error(insErr.message);
       if (priorIds.length) await supabase.from("tds_pan_verification_results").delete().in("id", priorIds);
@@ -253,12 +239,21 @@ export function TdsPanVerification({ clients, resolveFirmId }: Props) {
       const { data: res } = await supabase.from("tds_pan_verification_results").select("*").eq("filing_id", filing.id);
       setResults((res as PanResult[]) || []);
       const verified = compared.filter(r => r.validation_result === "PAN Verified").length;
-      toast({ title: "PAN validation complete", description: `${verified} verified · ${compared.length - verified} exception(s)` });
+      toast({ title: "Stage 2 · PAN verification complete", description: `${verified} verified · ${compared.length - verified} exception(s)` });
     } catch (e: any) {
-      toast({ title: "Validation failed", description: e.message, variant: "destructive" });
+      toast({ title: "PAN verification failed", description: e.message, variant: "destructive" });
     }
     setValidating(false);
-  };
+  }, [filing, batch, resolveFirmId, selQuarter, toast]);
+
+  // Parent's single "Run Validation" bumps runSignal — run Stage 2 if a TRACES
+  // file has been imported (otherwise stay quiet; Stage 2 is optional).
+  const runRef = useRef(runValidation);
+  runRef.current = runValidation;
+  useEffect(() => {
+    if (runSignal > 0 && batch) runRef.current();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runSignal]);
 
   const openOverride = (r: PanResult) => { setOvTarget(r); setOvReason(""); setOvOther(""); setOvOpen(true); };
 
@@ -272,6 +267,12 @@ export function TdsPanVerification({ clients, resolveFirmId }: Props) {
     }).eq("id", ovTarget.id);
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); }
     else {
+      await logReconAudit({
+        filingId: filing?.id, firmId: filing?.firm_id, userId: user?.id, userName: userMap[user?.id ?? ""],
+        actionType: "PAN_OVERRIDE",
+        oldValue: `${ovTarget.party_name || ovTarget.pan} — ${ovTarget.validation_result}`,
+        newValue: "Overridden", remark: reason,
+      });
       setResults(prev => prev ? prev.map(x => x.id === ovTarget.id ? { ...x, overridden: true, override_reason: reason, overridden_by: user?.id ?? null, overridden_at: new Date().toISOString() } : x) : prev);
       toast({ title: "Override recorded" });
       setOvOpen(false);
@@ -284,6 +285,11 @@ export function TdsPanVerification({ clients, resolveFirmId }: Props) {
       overridden: false, override_reason: null, overridden_by: null, overridden_at: null,
     }).eq("id", r.id);
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
+    await logReconAudit({
+      filingId: filing?.id, firmId: filing?.firm_id, userId: user?.id, userName: userMap[user?.id ?? ""],
+      actionType: "PAN_OVERRIDE_UNDO",
+      oldValue: "Overridden", newValue: r.validation_result, remark: `Override removed for ${r.party_name || r.pan}`,
+    });
     setResults(prev => prev ? prev.map(x => x.id === r.id ? { ...x, overridden: false, override_reason: null, overridden_by: null, overridden_at: null } : x) : prev);
   };
 
@@ -307,7 +313,7 @@ export function TdsPanVerification({ clients, resolveFirmId }: Props) {
   }, [results]);
 
   const finalStatus = (r: PanResult) =>
-    r.overridden ? "Overridden" : !isPanException(r.validation_result) ? "Verified" : "Pending Review";
+    r.overridden ? "Overridden" : !isPanException(r.validation_result) ? "Verified" : "Pending";
 
   const sortedResults = results
     ? [...results].sort((a, b) => {
@@ -316,98 +322,36 @@ export function TdsPanVerification({ clients, resolveFirmId }: Props) {
       })
     : null;
 
-  const clientOptions = clients.filter(c => clientHasTdsForm(c.tds_forms_applicable, selForm));
+  if (!filing) return null;
 
   return (
     <div className="space-y-4">
-      <div>
-        <h3 className="text-base font-bold text-foreground">Stage 2 · PAN Verification</h3>
-        <p className="text-sm text-muted-foreground">Verify each party's PAN status against the TRACES Bulk PAN Verification file (quarter-wise)</p>
-      </div>
-
-      {/* Selectors */}
-      <div className="flex flex-wrap gap-3 items-end">
-        <div className="space-y-1">
-          <Label className="text-xs">Client</Label>
-          <Select value={selClient} onValueChange={setSelClient}>
-            <SelectTrigger className="w-[220px]"><SelectValue placeholder="Select client" /></SelectTrigger>
-            <SelectContent>{clientOptions.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
-          </Select>
+      {/* TRACES file */}
+      <Card><CardContent className="p-4">
+        <div className="flex items-center justify-between mb-2">
+          <p className="font-semibold text-sm flex items-center gap-2"><FileSpreadsheet size={15} /> TRACES Bulk PAN File <span className="text-muted-foreground font-normal">· {officeCount} office parties this quarter</span></p>
+          <input ref={fileInputRef} type="file" accept=".xls,.xlsx" className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImport(f); e.currentTarget.value = ""; }} />
+          <Button size="sm" variant={batch ? "outline" : "default"} className="gap-1" disabled={importing || disabled}
+            onClick={() => fileInputRef.current?.click()}>
+            {importing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+            {batch ? "Re-import" : "Import TRACES file"}
+          </Button>
         </div>
-        <div className="space-y-1">
-          <Label className="text-xs">FY</Label>
-          <Select value={selFy} onValueChange={setSelFy}>
-            <SelectTrigger className="w-[120px]"><SelectValue /></SelectTrigger>
-            <SelectContent>{FY_OPTIONS.map(fy => <SelectItem key={fy} value={fy}>{fy}</SelectItem>)}</SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Quarter</Label>
-          <Select value={selQuarter} onValueChange={setSelQuarter}>
-            <SelectTrigger className="w-[100px]"><SelectValue /></SelectTrigger>
-            <SelectContent>{QUARTER_OPTIONS.map(q => <SelectItem key={q} value={q}>{q}</SelectItem>)}</SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Form</Label>
-          <Select value={selForm} onValueChange={setSelForm}>
-            <SelectTrigger className="w-[100px]"><SelectValue /></SelectTrigger>
-            <SelectContent>{TDS_FORMS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
-          </Select>
-        </div>
-      </div>
-
-      {resolving && <Skeleton className="h-40 w-full" />}
-      {!resolving && !selClient && (
-        <div className="flex items-center gap-2 p-4 rounded-lg border bg-muted/30 text-sm text-muted-foreground"><Info size={16} /> Select a client to run PAN verification.</div>
-      )}
-      {!resolving && selClient && !filing && (
-        <div className="flex items-center gap-2 p-4 rounded-lg border bg-muted/30 text-sm text-muted-foreground"><Info size={16} /> No filing found for {selForm} {selQuarter} {selFy}. Complete Data Entry first.</div>
-      )}
-
-      {!resolving && filing && (<>
-      {/* Two datasets */}
-      <div className="grid gap-3 md:grid-cols-2">
-        <Card><CardContent className="p-4">
-          <p className="font-semibold text-sm mb-2">Office Parties <span className="text-muted-foreground font-normal">(this quarter)</span></p>
-          <div><span className="text-2xl font-bold">{officeCount}</span> <span className="text-muted-foreground text-sm">deductee entries</span></div>
-        </CardContent></Card>
-        <Card><CardContent className="p-4">
-          <div className="flex items-center justify-between mb-2">
-            <p className="font-semibold text-sm flex items-center gap-2"><FileSpreadsheet size={15} /> TRACES PAN File</p>
-            <input ref={fileInputRef} type="file" accept=".xls,.xlsx" className="hidden"
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImport(f); e.currentTarget.value = ""; }} />
-            <Button size="sm" variant={batch ? "outline" : "default"} className="gap-1" disabled={importing}
-              onClick={() => fileInputRef.current?.click()}>
-              {importing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
-              {batch ? "Re-import" : "Import"}
-            </Button>
-          </div>
-          {batch ? (
-            <div className="text-sm"><span className="text-2xl font-bold">{batch.row_count}</span> <span className="text-muted-foreground">PANs</span>
-              <p className="text-xs text-muted-foreground mt-1 truncate">{batch.file_name}</p></div>
-          ) : <p className="text-xs text-muted-foreground">Import the TRACES Bulk PAN Verification Excel (.xls / .xlsx).</p>}
-        </CardContent></Card>
-      </div>
-
-      <div className="flex items-center gap-3">
-        <Button size="lg" className="gap-2 font-semibold" onClick={handleValidate} disabled={validating || !batch}>
-          {validating ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
-          {validating ? "Validating…" : "Run PAN Validation"}
-        </Button>
-        {!batch && <span className="text-xs text-muted-foreground">Import the TRACES file to enable validation.</span>}
-      </div>
+        {batch ? (
+          <p className="text-sm"><span className="font-bold">{batch.row_count}</span> <span className="text-muted-foreground">PANs</span> <span className="text-xs text-muted-foreground">· {batch.file_name}</span>{validating && <span className="text-xs text-amber-600 ml-2"><Loader2 size={11} className="animate-spin inline" /> verifying…</span>}</p>
+        ) : <p className="text-xs text-muted-foreground">Import the TRACES Bulk PAN Verification Excel (.xls / .xlsx), then click <b>Run Validation</b> above. Stage 2 is optional.</p>}
+      </CardContent></Card>
 
       {results && (
         <>
-          {/* Override counters */}
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
             {[
               { label: "Total", value: summary.total, cls: "" },
               { label: "Verified", value: summary.verified, cls: "text-emerald-600" },
               { label: "Exceptions", value: summary.exceptions, cls: "text-destructive" },
               { label: "Overridden", value: summary.overridden, cls: "text-blue-600" },
-              { label: "Pending Review", value: summary.pending, cls: summary.pending > 0 ? "text-amber-600" : "text-emerald-600" },
+              { label: "Pending", value: summary.pending, cls: summary.pending > 0 ? "text-amber-600" : "text-emerald-600" },
             ].map(s => (
               <Card key={s.label}><CardContent className="p-3 text-center">
                 <p className={cn("text-2xl font-bold", s.cls)}>{s.value}</p>
@@ -416,7 +360,6 @@ export function TdsPanVerification({ clients, resolveFirmId }: Props) {
             ))}
           </div>
 
-          {/* Exception-type breakdown */}
           <div className="flex flex-wrap gap-2 text-xs">
             {[
               { label: "Missing in Office Data", value: summary.missingOffice },
@@ -461,12 +404,12 @@ export function TdsPanVerification({ clients, resolveFirmId }: Props) {
                       <TableCell>
                         {fs === "Verified" && <span className="text-xs text-emerald-600 flex items-center gap-1"><CheckCircle2 size={12} /> Verified</span>}
                         {fs === "Overridden" && <span className="text-xs text-blue-600" title={r.override_reason || ""}>Overridden{r.overridden_by && userMap[r.overridden_by] ? ` · ${userMap[r.overridden_by]}` : ""}</span>}
-                        {fs === "Pending Review" && <span className="text-xs text-amber-600 flex items-center gap-1"><AlertTriangle size={12} /> Pending Review</span>}
+                        {fs === "Pending" && <span className="text-xs text-amber-600 flex items-center gap-1"><AlertTriangle size={12} /> Pending</span>}
                       </TableCell>
                       <TableCell className="text-right">
                         {isExc && (r.overridden
                           ? <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => undoOverride(r)}>Undo</Button>
-                          : <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => openOverride(r)}><ShieldCheck size={12} /> Override</Button>)}
+                          : <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => openOverride(r)} disabled={disabled}><ShieldCheck size={12} /> Override</Button>)}
                       </TableCell>
                     </TableRow>
                   );
@@ -474,18 +417,8 @@ export function TdsPanVerification({ clients, resolveFirmId }: Props) {
               </TableBody>
             </Table>
           </CardContent></Card>
-
-          {/* Completion */}
-          <Card className={cn(summary.pending === 0 ? "border-emerald-200 dark:border-emerald-800" : "border-amber-200 dark:border-amber-800")}>
-            <CardContent className="p-4 flex items-center gap-3">
-              {summary.pending === 0
-                ? <><CheckCircle2 size={20} className="text-emerald-600" /><p className="text-sm font-semibold">PAN verification complete — all parties verified or overridden.</p></>
-                : <><AlertTriangle size={20} className="text-amber-600" /><p className="text-sm">{summary.pending} exception(s) pending — verify or override each to complete Stage 2.</p></>}
-            </CardContent>
-          </Card>
         </>
       )}
-      </>)}
 
       {/* Override dialog — mandatory reason */}
       <Dialog open={ovOpen} onOpenChange={setOvOpen}>

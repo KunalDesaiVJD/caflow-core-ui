@@ -7,6 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -20,11 +21,13 @@ import {
 import { cn } from "@/lib/utils";
 import {
   ShieldCheck, AlertTriangle, CheckCircle2, Upload, Play, FileSpreadsheet,
-  RotateCcw, Loader2, Users, FileWarning, Info, Check, X, Eye, HelpCircle,
+  RotateCcw, Loader2, Users, FileWarning, Info, Check, X, ChevronDown, ChevronRight, BadgeCheck,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import Papa from "papaparse";
 import { gridToRows } from "@/lib/tdsImportParsing";
+import { logReconAudit } from "@/lib/tdsReconAudit";
+import { TdsPanVerification } from "./TdsPanVerification";
 
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null;
@@ -51,10 +54,12 @@ interface ReconResult {
   office_deductee_id: string | null;
   imported_row_id: string | null;
   record_label: string | null;
-  match_status: "matched" | "review" | "mismatched" | "office_only" | "imported_only";
+  match_status: "matched" | "mismatched" | "office_only" | "imported_only";
   mismatch_fields: string[] | null;
   field_diffs: FieldDiff[] | null;
   overridden: boolean;
+  overridden_by?: string | null;
+  override_note?: string | null;
 }
 
 const FY_OPTIONS = Array.from({ length: 7 }, (_, i) => { const s = 2020 + i; return `${s}-${String(s + 1).slice(2)}`; });
@@ -71,57 +76,17 @@ const fmtVal = (v: unknown): string => {
   return String(v);
 };
 
-/** All 7 compared fields, in the fixed column order used by the flat results table. */
+/** All 7 compared fields, in fixed order. */
 const DIFF_FIELDS = ["name", "pan", "date", "amount", "tds", "interest", "section"] as const;
 
-/**
- * One compact cell for a single field's Office-vs-Imported comparison — no
- * expand/collapse; every row shows every field's values directly, so the
- * whole table is scannable at a glance for 100+ entries without clicking
- * into each one. A ✓/✗ marks each field individually (not just the row's
- * overall status) so it's clear at a glance WHICH field(s) actually caused a
- * row to be flagged, e.g. "PAN/Date/Amount all matched, only Section
- * differs" instead of a single opaque "Mismatched" badge. Hover a mismatched
- * field for the AI's short note on why (when it provided one).
- */
-function DiffCell({ diffs, field }: { diffs: FieldDiff[]; field: string }) {
-  const d = diffs.find(x => x.field === field);
-  if (!d) return <span className="text-muted-foreground text-xs">—</span>;
-  if (d.matched !== false) {
-    return (
-      <span className="text-xs inline-flex items-center gap-1">
-        <Check size={11} className="text-emerald-600 shrink-0" />
-        {fmtVal(d.office ?? d.imported)}
-      </span>
-    );
-  }
-  return (
-    <div className="text-xs leading-tight inline-flex items-start gap-1" title={d.difference || undefined}>
-      <X size={11} className="text-destructive shrink-0 mt-0.5" />
-      <div>
-        <div className="text-foreground">{fmtVal(d.office)}</div>
-        <div className="text-destructive">{fmtVal(d.imported)}</div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * One-line, human-readable reason a record is not a clean match — shown inline
- * under the status badge and as the headline of the View Details dialog, so the
- * user never sees a bare "Mismatched" without knowing WHICH field and WHY.
- */
+/** One-line reason a record is not a clean match, naming the exact field(s). */
 function reasonFor(r: ReconResult): string {
   if (r.match_status === "matched") return "All 7 fields match.";
   if (r.match_status === "office_only") return "In Office Data only — no matching row in the imported client file.";
   if (r.match_status === "imported_only") return "In the imported client file only — no matching Office Data record.";
   const diffs = (r.field_diffs || []).filter(f => f.matched === false);
   const labels = diffs.map(f => FIELD_LABELS[f.field] || f.field).join(", ") || "some fields";
-  const plural = diffs.length > 1;
-  if (r.match_status === "review") {
-    return `Key fields (PAN, Date, Amount, TDS) match — only ${labels} differ${plural ? "" : "s"}. Likely the same transaction; please confirm.`;
-  }
-  return `${labels} ${plural ? "differ" : "differs"}.`;
+  return `Mismatch — ${labels} ${diffs.length > 1 ? "differ" : "difference"}.`;
 }
 
 /** Invoke an edge function and surface the function's own JSON error message. */
@@ -155,13 +120,21 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
   const [officeCount, setOfficeCount] = useState({ deductees: 0, challans: 0 });
   const [batch, setBatch] = useState<any>(null);
   const [results, setResults] = useState<ReconResult[] | null>(null);
+  const [userMap, setUserMap] = useState<Record<string, string>>({});
 
   const [importing, setImporting] = useState(false);
   const [comparing, setComparing] = useState(false);
   const [finalising, setFinalising] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [detailRow, setDetailRow] = useState<ReconResult | null>(null);
+  const [showMatched, setShowMatched] = useState(false);
+  const [runSignal, setRunSignal] = useState(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Override dialog (mandatory reason + audit trail)
+  const [ovOpen, setOvOpen] = useState(false);
+  const [ovTarget, setOvTarget] = useState<ReconResult | null>(null);
+  const [ovReason, setOvReason] = useState("");
+  const [savingOv, setSavingOv] = useState(false);
 
   // TDS Compliance is the single source of truth for module membership. Returns
   // a human message when the selected combination is outside the client's config.
@@ -200,7 +173,6 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
       setResolving(false); return;
     }
 
-    // Office Data counts
     const { data: ch } = await supabase.from("tds_challans").select("id").eq("filing_id", match.id);
     const chIds = (ch || []).map((c: any) => c.id);
     let dedCount = 0;
@@ -210,14 +182,15 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     }
     setOfficeCount({ deductees: dedCount, challans: chIds.length });
 
-    // Latest import batch
     const { data: b } = await supabase.from("tds_import_batches").select("*")
       .eq("filing_id", match.id).order("imported_at", { ascending: false }).limit(1).maybeSingle();
     setBatch(b || null);
 
-    // Existing comparison results
     const { data: res } = await supabase.from("tds_recon_results").select("*").eq("filing_id", match.id);
     setResults(res && res.length ? (res as ReconResult[]) : null);
+
+    const { data: us } = await supabase.from("users").select("id, name").limit(5000);
+    setUserMap(Object.fromEntries((us || []).map((u: any) => [u.id, u.name])));
     setResolving(false);
   }, [selClient, selFy, selQuarter, selForm, complianceError]);
 
@@ -234,20 +207,12 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
         reader.readAsDataURL(file);
       } else if (name.endsWith(".csv")) {
         reader.onload = () => {
-          // header:false → raw grid, so gridToRows can find the REAL header
-          // row itself rather than assuming row 1 (see detectHeaderRow above).
           const parsed = Papa.parse(String(reader.result), { header: false, skipEmptyLines: true });
           resolve({ file_type: "csv", rows: gridToRows((parsed.data as unknown[][]) || []) });
         };
         reader.readAsText(file);
       } else {
         reader.onload = () => {
-          // cellDates + raw:false emit date cells as their printed text (e.g.
-          // "01/04/2025") rather than Excel serial numbers (45748) — otherwise
-          // every dated row would falsely mismatch during comparison.
-          // header:1 → raw grid (not row-1-is-header), so gridToRows can find
-          // the real header row (client files often prepend a title/TAN-PAN
-          // block before the actual columns).
           const wb = XLSX.read(reader.result, { type: "array", cellDates: true });
           const ws = wb.Sheets[wb.SheetNames[0]];
           const grid = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: false }) as unknown[][];
@@ -276,7 +241,10 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     setImporting(false);
   };
 
-  const handleCompare = async () => {
+  // Single "Run Validation" — runs Stage 1 (data reconciliation) here, then bumps
+  // runSignal so the embedded Stage 2 (PAN verification) runs too if a TRACES
+  // file was imported. The two result sets are shown separately, never merged.
+  const handleRunValidation = async () => {
     if (!filing || !batch) return;
     setComparing(true);
     try {
@@ -284,21 +252,49 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
       const { data: res } = await supabase.from("tds_recon_results").select("*").eq("filing_id", filing.id);
       setResults((res as ReconResult[]) || []);
       const s = data.summary || {};
-      toast({ title: "Validation complete", description: `${s.matched ?? 0} matched · ${s.review ?? 0} to review · ${s.mismatched ?? 0} mismatched` });
+      toast({ title: "Stage 1 · Data validation complete", description: `${s.matched ?? 0} matched · ${s.mismatched ?? 0} mismatched` });
     } catch (e: any) {
-      toast({ title: "Comparison failed", description: e.message, variant: "destructive" });
+      toast({ title: "Validation failed", description: e.message, variant: "destructive" });
     }
     setComparing(false);
+    setRunSignal(s => s + 1); // trigger Stage 2 (PAN verification) if a TRACES file is present
   };
 
-  const handleOverride = async (r: ReconResult, on: boolean) => {
+  const openOverride = (r: ReconResult) => { setOvTarget(r); setOvReason(""); setOvOpen(true); };
+
+  const saveOverride = async () => {
+    if (!ovTarget) return;
+    const reason = ovReason.trim();
+    if (!reason) { toast({ title: "Override reason is required", variant: "destructive" }); return; }
+    setSavingOv(true);
+    const now = new Date().toISOString();
     const { error } = await supabase.from("tds_recon_results").update({
-      overridden: on,
-      overridden_by: on ? user?.id : null,
-      overridden_at: on ? new Date().toISOString() : null,
+      overridden: true, overridden_by: user?.id, overridden_at: now, override_note: reason,
+    }).eq("id", ovTarget.id);
+    if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); setSavingOv(false); return; }
+    await logReconAudit({
+      filingId: filing?.id, firmId: filing?.firm_id, userId: user?.id, userName: userMap[user?.id ?? ""],
+      actionType: "RECON_OVERRIDE",
+      oldValue: `${ovTarget.record_label || "—"} — ${reasonFor(ovTarget)}`,
+      newValue: "Overridden", remark: reason,
+    });
+    setResults(prev => prev ? prev.map(x => x.id === ovTarget.id ? { ...x, overridden: true, override_note: reason, overridden_by: user?.id ?? null } : x) : prev);
+    toast({ title: "Override recorded" });
+    setOvOpen(false);
+    setSavingOv(false);
+  };
+
+  const undoOverride = async (r: ReconResult) => {
+    const { error } = await supabase.from("tds_recon_results").update({
+      overridden: false, overridden_by: null, overridden_at: null, override_note: null,
     }).eq("id", r.id);
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
-    setResults(prev => prev ? prev.map(x => x.id === r.id ? { ...x, overridden: on } : x) : prev);
+    await logReconAudit({
+      filingId: filing?.id, firmId: filing?.firm_id, userId: user?.id, userName: userMap[user?.id ?? ""],
+      actionType: "RECON_OVERRIDE_UNDO",
+      oldValue: "Overridden", newValue: r.match_status, remark: `Override removed for ${r.record_label || "—"}`,
+    });
+    setResults(prev => prev ? prev.map(x => x.id === r.id ? { ...x, overridden: false, override_note: null } : x) : prev);
   };
 
   const handleFinalise = async () => {
@@ -308,7 +304,10 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
       work_status: "Filed", last_updated_by: user?.id, last_updated_at: new Date().toISOString(),
     }).eq("id", filing.id);
     if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
-    else { toast({ title: "Return marked as Filed" }); setFiling({ ...filing, work_status: "Filed" }); }
+    else {
+      await logReconAudit({ filingId: filing.id, firmId: filing.firm_id, userId: user?.id, userName: userMap[user?.id ?? ""], actionType: "RECON_FINALISED", newValue: "Filed", remark: "Marked Ready to File from Validate & Finalise" });
+      toast({ title: "Return marked as Filed" }); setFiling({ ...filing, work_status: "Filed" });
+    }
     setFinalising(false);
     setConfirmOpen(false);
   };
@@ -318,10 +317,7 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     return {
       total: rs.length,
       matched: rs.filter(r => r.match_status === "matched").length,
-      review: rs.filter(r => r.match_status === "review").length,
-      // Genuine mismatches + unpaired rows (office_only / imported_only), i.e.
-      // everything that is neither a clean match nor a soft "review".
-      mismatched: rs.filter(r => r.match_status !== "matched" && r.match_status !== "review").length,
+      mismatched: rs.filter(r => r.match_status !== "matched").length,
       overridden: rs.filter(r => r.overridden).length,
       pending: rs.filter(r => r.match_status !== "matched" && !r.overridden).length,
     };
@@ -331,19 +327,31 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
   const isFiled = filing?.work_status === "Filed";
   const cErr = selClient ? complianceError() : null;
 
-  const statusBadge = (r: ReconResult) => {
-    if (r.match_status === "matched") return <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 gap-1"><CheckCircle2 size={11} /> Matched</Badge>;
-    if (r.match_status === "review") return <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 gap-1"><HelpCircle size={11} /> Needs Review</Badge>;
-    if (r.match_status === "office_only") return <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">Only in Office</Badge>;
-    if (r.match_status === "imported_only") return <Badge className="bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">Only in Imported</Badge>;
-    return <Badge className="bg-destructive/10 text-destructive gap-1"><AlertTriangle size={11} /> Mismatched</Badge>;
-  };
+  // Non-matched records (mismatched / office_only / imported_only) — each gets its
+  // own inline comparison table; pending first, then overridden.
+  const attention = useMemo(() => {
+    const rs = (results || []).filter(r => r.match_status !== "matched");
+    return rs.sort((a, b) => (a.overridden ? 1 : 0) - (b.overridden ? 1 : 0));
+  }, [results]);
+  const matchedRows = useMemo(() => (results || []).filter(r => r.match_status === "matched"), [results]);
+
+  const overrideBtn = (r: ReconResult) => (
+    r.overridden ? (
+      <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => undoOverride(r)}>
+        <RotateCcw size={12} /> Undo override
+      </Button>
+    ) : (
+      <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => openOverride(r)} disabled={isFiled}>
+        <ShieldCheck size={12} /> Override
+      </Button>
+    )
+  );
 
   return (
     <div className="space-y-4">
       <div>
         <h2 className="text-xl font-bold text-foreground">Validate &amp; Finalise</h2>
-        <p className="text-sm text-muted-foreground">Compare Office Data against the client's imported file, then finalise for filing</p>
+        <p className="text-sm text-muted-foreground">One <b>Run Validation</b> runs Stage&nbsp;1 (data reconciliation) and Stage&nbsp;2 (PAN verification), shown separately below.</p>
       </div>
 
       {/* Filter Bar */}
@@ -398,9 +406,8 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
 
       {!resolving && filing && (
         <>
-          {/* Two datasets */}
+          {/* Inputs */}
           <div className="grid gap-3 md:grid-cols-2">
-            {/* Dataset 1 — Office */}
             <Card>
               <CardContent className="p-4">
                 <div className="flex items-center gap-2 mb-2">
@@ -417,24 +424,17 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
               </CardContent>
             </Card>
 
-            {/* Dataset 2 — Imported */}
             <Card>
               <CardContent className="p-4">
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
                     <FileSpreadsheet size={16} className="text-foreground" />
-                    <p className="font-semibold text-sm">Imported Client Data</p>
+                    <p className="font-semibold text-sm">Imported Client Data <span className="text-muted-foreground font-normal">(Stage 1)</span></p>
                   </div>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".xlsx,.xls,.csv,.pdf"
-                    className="hidden"
-                    onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImport(f); e.currentTarget.value = ""; }}
-                  />
+                  <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv,.pdf" className="hidden"
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImport(f); e.currentTarget.value = ""; }} />
                   <Button size="sm" variant={batch ? "outline" : "default"} className="gap-1"
-                    disabled={importing || isFiled}
-                    onClick={() => fileInputRef.current?.click()}>
+                    disabled={importing || isFiled} onClick={() => fileInputRef.current?.click()}>
                     {importing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
                     {batch ? "Re-import" : "Import"}
                   </Button>
@@ -442,9 +442,7 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
                 {batch ? (
                   <div className="text-sm">
                     <span className="text-2xl font-bold">{batch.row_count}</span> <span className="text-muted-foreground">records</span>
-                    <p className="text-xs text-muted-foreground mt-1 truncate">
-                      {batch.file_name} · {(batch.file_type || "").toUpperCase()}
-                    </p>
+                    <p className="text-xs text-muted-foreground mt-1 truncate">{batch.file_name} · {(batch.file_type || "").toUpperCase()}</p>
                   </div>
                 ) : (
                   <p className="text-xs text-muted-foreground">Import the client's Excel, CSV or PDF file to compare against Office Data.</p>
@@ -453,26 +451,30 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
             </Card>
           </div>
 
-          {/* Run comparison */}
+          {/* Single Run Validation */}
           <div className="flex items-center gap-3">
-            <Button size="lg" className="gap-2 font-semibold" onClick={handleCompare}
+            <Button size="lg" className="gap-2 font-semibold" onClick={handleRunValidation}
               disabled={comparing || !batch || isFiled}>
               {comparing ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
-              {comparing ? "Comparing…" : "Run Validation"}
+              {comparing ? "Validating…" : "Run Validation"}
             </Button>
-            {!batch && <span className="text-xs text-muted-foreground">Import a client file to enable comparison.</span>}
+            {!batch && <span className="text-xs text-muted-foreground">Import a client file to enable validation.</span>}
           </div>
 
-          {/* Results */}
+          {/* ── STAGE 1 · DATA VALIDATION ─────────────────────────────────────── */}
           {results && (
-            <>
-              {/* Override summary */}
-              <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 pt-1">
+                <FileSpreadsheet size={16} className="text-primary" />
+                <h3 className="text-base font-bold text-foreground">Stage 1 · Data Validation</h3>
+                <span className="text-xs text-muted-foreground">Office ↔ Imported, field by field</span>
+              </div>
+
+              <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
                 {[
                   { label: "Total", value: summary.total, cls: "" },
                   { label: "Matched", value: summary.matched, cls: "text-emerald-600" },
-                  { label: "Needs Review", value: summary.review, cls: summary.review > 0 ? "text-amber-600" : "" },
-                  { label: "Mismatched", value: summary.mismatched, cls: "text-destructive" },
+                  { label: "Mismatched", value: summary.mismatched, cls: summary.mismatched > 0 ? "text-destructive" : "" },
                   { label: "Overridden", value: summary.overridden, cls: "text-blue-600" },
                   { label: "Pending", value: summary.pending, cls: summary.pending > 0 ? "text-amber-600" : "text-emerald-600" },
                 ].map(s => (
@@ -483,195 +485,189 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
                 ))}
               </div>
 
-              {/* Flat, entry-wise table — every one of the (up to 100+) compared
-                  records is its own row with every field visible directly, no
-                  expand/collapse. Each field carries its own ✓/✗ so it's
-                  clear exactly which field(s) caused a row to be flagged —
-                  not just an opaque row-level "Mismatched". Where Office and
-                  Imported disagree, both values are shown stacked (black =
-                  Office, red = Imported) right in the cell. */}
-              <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground px-1 flex-wrap">
-                <Check size={11} className="text-emerald-600" /> Field matched (Office &amp; Imported agree)
-                <X size={11} className="text-destructive ml-3" /> Field differs — <span className="text-foreground">Office</span> / <span className="text-destructive">Imported</span> shown stacked, hover for why
-              </div>
-              <Card><CardContent className="p-0 overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="min-w-[160px] sticky left-0 bg-background z-10">Record</TableHead>
-                      {DIFF_FIELDS.map(f => <TableHead key={f} className="min-w-[110px]">{FIELD_LABELS[f]}</TableHead>)}
-                      <TableHead className="w-[140px]">Status</TableHead>
-                      <TableHead className="w-[120px] text-right">Action</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {results.length === 0 ? (
-                      <TableRow><TableCell colSpan={DIFF_FIELDS.length + 3} className="text-center text-muted-foreground py-8">No records compared</TableCell></TableRow>
-                    ) : [...results].sort((a, b) => {
-                      // Pending mismatches first, then overridden, then matched.
-                      const rank = (r: ReconResult) => r.match_status === "matched" ? 2 : r.overridden ? 1 : 0;
-                      return rank(a) - rank(b);
-                    }).map(r => {
-                      const diffs = r.field_diffs || [];
-                      const isMismatch = r.match_status !== "matched";
-                      return (
-                        <TableRow key={r.id} className={cn(r.overridden && "opacity-70")}>
-                          <TableCell className="font-medium text-sm sticky left-0 bg-background">
-                            {r.record_label || "—"}
-                            {r.overridden && <Badge variant="outline" className="ml-2 text-[10px] text-blue-600 border-blue-300">Overridden</Badge>}
-                          </TableCell>
-                          {DIFF_FIELDS.map(f => (
-                            <TableCell key={f}><DiffCell diffs={diffs} field={f} /></TableCell>
-                          ))}
-                          <TableCell>
-                            {statusBadge(r)}
-                            {isMismatch && (
-                              <p className="text-[11px] text-muted-foreground mt-1 leading-tight max-w-[180px]">{reasonFor(r)}</p>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex items-center justify-end gap-1">
-                              {isMismatch && (
-                                <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => setDetailRow(r)}>
-                                  <Eye size={12} /> Details
-                                </Button>
-                              )}
-                              {isMismatch && !isFiled && (
-                                r.overridden ? (
-                                  <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => handleOverride(r, false)}>
-                                    <RotateCcw size={12} /> Undo
-                                  </Button>
-                                ) : (
-                                  <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => handleOverride(r, true)}>
-                                    <ShieldCheck size={12} /> Override
-                                  </Button>
-                                )
-                              )}
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              </CardContent></Card>
-
-              {/* Finalise */}
-              <Card className={cn(canFile ? "border-emerald-200 dark:border-emerald-800" : "border-amber-200 dark:border-amber-800")}>
-                <CardContent className="p-6">
-                  {isFiled ? (
-                    <div className="p-4 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
-                      <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">
-                        ✓ Return marked as Filed. Generate Genius XLS Export from the Reports section.
-                      </p>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="flex items-center gap-3 mb-4">
-                        {canFile
-                          ? <CheckCircle2 size={24} className="text-emerald-600" />
-                          : <AlertTriangle size={24} className="text-amber-600" />}
-                        <div>
-                          <p className="font-semibold text-foreground">
-                            {canFile ? "All records reconciled — ready to file" : `${summary.pending} record(s) still pending`}
-                          </p>
-                          <p className="text-sm text-muted-foreground">
-                            {canFile
-                              ? "Every record is matched or overridden."
-                              : "Match or override every mismatch (Pending must reach 0) to enable filing."}
-                          </p>
+              {/* Every mismatch as its own comparison table (Field | Office | Imported | Result) */}
+              {attention.length === 0 ? (
+                <div className="flex items-center gap-2 p-4 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/20 text-sm text-emerald-700 dark:text-emerald-300">
+                  <CheckCircle2 size={16} /> Every record matched — no differences found.
+                </div>
+              ) : attention.map(r => {
+                const diffs = r.field_diffs || [];
+                return (
+                  <Card key={r.id} className={cn(r.overridden ? "border-blue-200 dark:border-blue-900 opacity-80" : "border-destructive/30")}>
+                    <CardContent className="p-0">
+                      <div className="flex items-center justify-between gap-2 px-4 py-2 border-b bg-muted/30">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <p className="font-semibold text-sm truncate">{r.record_label || "—"}</p>
+                          {r.overridden && <Badge variant="outline" className="text-[10px] text-blue-600 border-blue-300 shrink-0">Overridden{r.overridden_by && userMap[r.overridden_by] ? ` · ${userMap[r.overridden_by]}` : ""}</Badge>}
                         </div>
+                        {!isFiled && overrideBtn(r)}
                       </div>
-                      <Button size="lg" className="gap-2" disabled={!canFile} onClick={() => setConfirmOpen(true)}>
-                        <ShieldCheck size={16} /> Mark Return as Ready to File
-                      </Button>
-                    </>
-                  )}
-                </CardContent>
-              </Card>
-            </>
+                      <div className="overflow-x-auto">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="w-[90px]">Field</TableHead>
+                              <TableHead>Office Data</TableHead>
+                              <TableHead>Imported Excel</TableHead>
+                              <TableHead className="w-[110px] text-right">Result</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {DIFF_FIELDS.map(f => {
+                              const d = diffs.find(x => x.field === f);
+                              const ok = d ? d.matched !== false : true;
+                              return (
+                                <TableRow key={f} className={cn(!ok && "bg-destructive/5")}>
+                                  <TableCell className="font-medium text-xs">{FIELD_LABELS[f]}</TableCell>
+                                  <TableCell className="text-xs">{fmtVal(d?.office)}</TableCell>
+                                  <TableCell className={cn("text-xs", !ok && "text-destructive font-medium")}>{fmtVal(d?.imported)}</TableCell>
+                                  <TableCell className="text-right">
+                                    {ok
+                                      ? <span className="inline-flex items-center gap-1 text-emerald-600 text-xs"><Check size={12} /> Match</span>
+                                      : <span className="inline-flex items-center gap-1 text-destructive text-xs"><X size={12} /> Mismatch</span>}
+                                  </TableCell>
+                                </TableRow>
+                              );
+                            })}
+                            <TableRow className="bg-muted/40">
+                              <TableCell className="font-semibold text-xs">Result</TableCell>
+                              <TableCell colSpan={3} className={cn("text-xs font-medium", r.overridden ? "text-blue-600" : "text-destructive")}>
+                                {r.overridden ? `Overridden — ${r.override_note || "accepted"}` : reasonFor(r)}
+                              </TableCell>
+                            </TableRow>
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+
+              {/* Matched — compact, collapsed by default */}
+              {matchedRows.length > 0 && (
+                <Card>
+                  <CardContent className="p-0">
+                    <button className="w-full flex items-center gap-2 px-4 py-2 text-sm font-medium hover:bg-muted/40"
+                      onClick={() => setShowMatched(v => !v)}>
+                      {showMatched ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                      <CheckCircle2 size={14} className="text-emerald-600" />
+                      {matchedRows.length} matched record{matchedRows.length > 1 ? "s" : ""}
+                      <span className="text-xs text-muted-foreground font-normal">(all 7 fields agree)</span>
+                    </button>
+                    {showMatched && (
+                      <div className="overflow-x-auto border-t">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Record</TableHead>
+                              {DIFF_FIELDS.map(f => <TableHead key={f} className="text-xs">{FIELD_LABELS[f]}</TableHead>)}
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {matchedRows.map(r => {
+                              const diffs = r.field_diffs || [];
+                              const val = (f: string) => { const d = diffs.find(x => x.field === f); return fmtVal(d?.office ?? d?.imported); };
+                              return (
+                                <TableRow key={r.id}>
+                                  <TableCell className="text-xs font-medium">{r.record_label || "—"}</TableCell>
+                                  {DIFF_FIELDS.map(f => <TableCell key={f} className="text-xs">{val(f)}</TableCell>)}
+                                </TableRow>
+                              );
+                            })}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+          )}
+
+          {/* ── STAGE 2 · PAN VERIFICATION (separate result set) ───────────────── */}
+          <div className="space-y-3 pt-2">
+            <div className="flex items-center gap-2">
+              <BadgeCheck size={16} className="text-primary" />
+              <h3 className="text-base font-bold text-foreground">Stage 2 · PAN Verification</h3>
+              <span className="text-xs text-muted-foreground">Party &amp; PAN existence, PAN status, name &amp; quarter</span>
+            </div>
+            <TdsPanVerification
+              filing={filing}
+              selClient={selClient}
+              selFy={selFy}
+              selQuarter={selQuarter}
+              selForm={selForm}
+              runSignal={runSignal}
+              resolveFirmId={resolveFirmId}
+              disabled={isFiled}
+            />
+          </div>
+
+          {/* Finalise (gated on Stage 1 pending = 0) */}
+          {results && (
+            <Card className={cn(canFile ? "border-emerald-200 dark:border-emerald-800" : "border-amber-200 dark:border-amber-800")}>
+              <CardContent className="p-6">
+                {isFiled ? (
+                  <div className="p-4 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
+                    <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">
+                      ✓ Return marked as Filed. Generate Genius XLS Export from the Reports section.
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-3 mb-4">
+                      {canFile ? <CheckCircle2 size={24} className="text-emerald-600" /> : <AlertTriangle size={24} className="text-amber-600" />}
+                      <div>
+                        <p className="font-semibold text-foreground">
+                          {canFile ? "Stage 1 reconciled — ready to file" : `${summary.pending} record(s) still pending in Stage 1`}
+                        </p>
+                        <p className="text-sm text-muted-foreground">
+                          {canFile ? "Every Stage 1 record is matched or overridden." : "Override every mismatch (Pending must reach 0) to enable filing."}
+                        </p>
+                      </div>
+                    </div>
+                    <Button size="lg" className="gap-2" disabled={!canFile} onClick={() => setConfirmOpen(true)}>
+                      <ShieldCheck size={16} /> Mark Return as Ready to File
+                    </Button>
+                  </>
+                )}
+              </CardContent>
+            </Card>
           )}
         </>
       )}
 
-      {/* Per-record comparison detail (Issue 4 — "View Details") */}
-      <Dialog open={!!detailRow} onOpenChange={(o) => !o && setDetailRow(null)}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Info size={16} /> Record Comparison
-            </DialogTitle>
-          </DialogHeader>
-          {detailRow && (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <p className="font-semibold text-sm text-foreground">{detailRow.record_label || "—"}</p>
-                {statusBadge(detailRow)}
+      {/* Override — mandatory reason (writes the audit trail) */}
+      <Dialog open={ovOpen} onOpenChange={(o) => { if (!o) setOvOpen(false); }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle className="flex items-center gap-2"><ShieldCheck size={16} /> Override mismatch</DialogTitle></DialogHeader>
+          {ovTarget && (
+            <div className="space-y-3 py-1">
+              <div className="text-sm">
+                <p className="font-semibold">{ovTarget.record_label || "—"}</p>
+                <p className="text-destructive text-xs mt-0.5">{reasonFor(ovTarget)}</p>
               </div>
-              <div className={cn(
-                "text-sm rounded-md px-3 py-2 border",
-                detailRow.match_status === "review"
-                  ? "bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200"
-                  : "bg-destructive/5 border-destructive/20 text-destructive",
-              )}>
-                <span className="font-medium">Reason: </span>{reasonFor(detailRow)}
+              <div className="space-y-1">
+                <Label className="text-xs">Reason for accepting this mismatch <span className="text-destructive">*</span></Label>
+                <Textarea value={ovReason} onChange={e => setOvReason(e.target.value)} rows={3}
+                  placeholder="e.g. Office section 194J is correct; client file used a descriptive label. Verified with client." />
+                <p className="text-[11px] text-muted-foreground">Recorded in the filing audit trail with your name, the time, and the difference.</p>
               </div>
-              <div className="rounded-md border overflow-hidden">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-[90px]">Field</TableHead>
-                      <TableHead>Office Data</TableHead>
-                      <TableHead>Imported</TableHead>
-                      <TableHead className="w-[70px] text-right">Result</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {DIFF_FIELDS.map(f => {
-                      const d = (detailRow.field_diffs || []).find(x => x.field === f);
-                      const ok = d ? d.matched !== false : true;
-                      return (
-                        <TableRow key={f} className={cn(!ok && "bg-destructive/5")}>
-                          <TableCell className="font-medium text-xs">{FIELD_LABELS[f]}</TableCell>
-                          <TableCell className="text-xs">{fmtVal(d?.office)}</TableCell>
-                          <TableCell className={cn("text-xs", !ok && "text-destructive")}>{fmtVal(d?.imported)}</TableCell>
-                          <TableCell className="text-right">
-                            {ok
-                              ? <span className="inline-flex items-center gap-1 text-emerald-600 text-xs"><Check size={12} /> Match</span>
-                              : <span className="inline-flex items-center gap-1 text-destructive text-xs"><X size={12} /> Mismatch</span>}
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              </div>
-              {(detailRow.field_diffs || []).some(d => d.matched === false && d.difference) && (
-                <div className="text-xs text-muted-foreground space-y-0.5">
-                  {(detailRow.field_diffs || []).filter(d => d.matched === false && d.difference).map(d => (
-                    <p key={d.field}><span className="font-medium text-foreground">{FIELD_LABELS[d.field] || d.field}:</span> {d.difference}</p>
-                  ))}
-                </div>
-              )}
             </div>
           )}
           <DialogFooter>
-            {detailRow && !detailRow.overridden && detailRow.match_status !== "matched" && !isFiled && (
-              <Button variant="outline" className="gap-1" onClick={() => { handleOverride(detailRow, true); setDetailRow(null); }}>
-                <ShieldCheck size={14} /> Accept &amp; Override
-              </Button>
-            )}
-            <Button onClick={() => setDetailRow(null)}>Close</Button>
+            <Button variant="outline" onClick={() => setOvOpen(false)}>Cancel</Button>
+            <Button onClick={saveOverride} disabled={savingOv || !ovReason.trim()}>
+              {savingOv ? "Saving…" : "Confirm Override"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Confirmation Dialog */}
+      {/* Confirm finalise */}
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Confirm Finalisation</DialogTitle>
-          </DialogHeader>
+          <DialogHeader><DialogTitle>Confirm Finalisation</DialogTitle></DialogHeader>
           <div className="space-y-3 py-4">
             <div className="grid grid-cols-3 gap-4">
               <div className="text-center p-3 rounded-lg bg-muted">

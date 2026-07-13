@@ -39,9 +39,6 @@ const corsFor = (req: Request) => ({
 
 const FIELD_ORDER = ["name", "pan", "date", "amount", "tds", "interest", "section"] as const;
 type FieldKey = (typeof FIELD_ORDER)[number];
-// The four fields whose 100% match downgrades any remaining difference to "review"
-// rather than a hard "mismatched" (Issue 5 — confidence matching).
-const CONFIDENCE_KEYS: FieldKey[] = ["pan", "date", "amount", "tds"];
 
 interface FieldDiff { field: string; office: unknown; imported: unknown; matched: boolean; difference: string; }
 interface Alias { pattern: string; code: string; priority: number; firm: boolean; }
@@ -196,23 +193,15 @@ function comparePair(o: Rec, i: Rec, aliases: Alias[]): { fields: FieldDiff[]; s
   fields.push(fieldDiff("section", o.section, i.section, secOk,
     `Different section: ${show(o.section)}${cs && String(o.section).toUpperCase() !== cs ? ` (${cs})` : ""} vs ${show(i.section)}${ci && String(i.section).toUpperCase() !== ci ? ` (${ci})` : ""}`));
 
-  const byField = new Map(fields.map(f => [f.field, f]));
+  // Binary outcome (no intermediate "review" state): any of the 7 fields
+  // differing => mismatched, and the exact differing field(s) are named in the
+  // reason and shown field-by-field in field_diffs.
   const mismatchFields = fields.filter(f => !f.matched).map(f => f.field);
-  let status: string;
-  let reason: string;
-  if (mismatchFields.length === 0) {
-    status = "matched"; reason = "All 7 fields match.";
-  } else {
-    const keysOk = CONFIDENCE_KEYS.every(k => byField.get(k)?.matched);
-    const labels = mismatchFields.map(f => f === "tds" ? "TDS" : f[0].toUpperCase() + f.slice(1)).join(", ");
-    if (keysOk) {
-      status = "review";
-      reason = `Key fields (PAN, Date, Amount, TDS) all match — only ${labels} differ${mismatchFields.length > 1 ? "" : "s"}. Likely the same transaction; please confirm.`;
-    } else {
-      status = "mismatched";
-      reason = `${labels} ${mismatchFields.length > 1 ? "differ" : "differs"}.`;
-    }
-  }
+  const labels = mismatchFields.map(f => f === "tds" ? "TDS" : f[0].toUpperCase() + f.slice(1)).join(", ");
+  const status = mismatchFields.length === 0 ? "matched" : "mismatched";
+  const reason = mismatchFields.length === 0
+    ? "All 7 fields match."
+    : `${labels} ${mismatchFields.length > 1 ? "differ" : "differs"}.`;
   return { fields, status, mismatchFields, reason };
 }
 
@@ -247,6 +236,14 @@ serve(async (req) => {
     const { data: filing, error: fErr } = await supabase
       .from("tds_filings").select("id, firm_id").eq("id", filing_id).single();
     if (fErr || !filing) return json({ error: "Filing not found" }, 404);
+
+    // AUTHORIZE — the service-role client bypasses RLS, so verify the caller
+    // belongs to this filing's firm (or is a superadmin). Without this, any
+    // authenticated user could reconcile / read / overwrite another firm's data.
+    const { data: caller } = await supabase.from("users").select("firm_id, role").eq("id", user.id).single();
+    if (!caller || (caller.firm_id !== filing.firm_id && caller.role !== "superadmin")) {
+      return json({ error: "You are not authorised for this filing." }, 403);
+    }
 
     // Latest batch unless a specific one is requested.
     let batchId = batchIdIn;
@@ -376,7 +373,6 @@ serve(async (req) => {
     const summary = {
       total: newRows.length,
       matched: newRows.filter(r => r.match_status === "matched").length,
-      review: newRows.filter(r => r.match_status === "review").length,
       mismatched: newRows.filter(r => r.match_status === "mismatched").length,
       office_only: newRows.filter(r => r.match_status === "office_only").length,
       imported_only: newRows.filter(r => r.match_status === "imported_only").length,
