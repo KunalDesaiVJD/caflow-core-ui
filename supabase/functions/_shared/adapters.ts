@@ -157,6 +157,21 @@ export interface SnapshotVoucherRow {
   ledger_name?: string | null;
   account_name?: string | null;
   narration?: string | null;
+  /** tally_vouchers.line_items — the full double entry (kept so cross-leg checks can run) */
+  line_items?: unknown;
+}
+
+/** Map raw line_items ([{ledger_name,dr_cr,amount}]) into VoucherLeg[], or undefined if absent. */
+function legsFrom(raw: unknown): VoucherRow["line_items"] {
+  if (!Array.isArray(raw)) return undefined;
+  return raw.map((li) => {
+    const o = (li ?? {}) as Record<string, unknown>;
+    return {
+      ledger_name: (o.ledger_name ?? o.account_name ?? null) as string | null,
+      dr_cr: (o.dr_cr ?? o.debit_credit ?? null) as VoucherRow["dr_cr"],
+      amount: n(o.amount),
+    };
+  });
 }
 
 export function vouchersFromSnapshot(rows: SnapshotVoucherRow[] | null | undefined): VoucherRow[] {
@@ -169,6 +184,7 @@ export function vouchersFromSnapshot(rows: SnapshotVoucherRow[] | null | undefin
     party_ledger: r.party_ledger ?? r.party ?? null,
     ledger_name: r.ledger_name ?? r.account_name ?? null,
     narration: r.narration ?? null,
+    line_items: legsFrom(r.line_items),
   }));
 }
 

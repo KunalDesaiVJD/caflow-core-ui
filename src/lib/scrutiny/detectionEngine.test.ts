@@ -538,6 +538,60 @@ describe("expr — parent_group scoping on the voucher path (RC1)", () => {
   });
 });
 
+describe("cotag — GST intra/inter co-tagging (line_items)", () => {
+  it("flags a party carrying both CGST/SGST and IGST legs; leaves a single-tax party alone", () => {
+    const r = rule({
+      rule_id: "GST-001", category: "GST",
+      detection_logic: { check: "cotag", sets: [["cgst", "sgst"], ["igst"]] },
+      audit_query_template: "{account} carries both intra and inter-state GST",
+    });
+    const out = run(r, {
+      vouchers: [
+        vch({ amount: 118000, voucher_date: "2025-06-01", party_ledger: "Acme Traders", line_items: [
+          { ledger_name: "Output CGST@9%", dr_cr: "Cr", amount: 9000 },
+          { ledger_name: "Output SGST@9%", dr_cr: "Cr", amount: 9000 },
+        ] }),
+        vch({ amount: 118000, voucher_date: "2025-08-01", party_ledger: "Acme Traders", line_items: [
+          { ledger_name: "Output IGST@18%", dr_cr: "Cr", amount: 18000 },
+        ] }),
+        vch({ amount: 59000, voucher_date: "2025-06-01", party_ledger: "Beta Co", line_items: [
+          { ledger_name: "Output CGST@9%", dr_cr: "Cr", amount: 4500 },
+          { ledger_name: "Output SGST@9%", dr_cr: "Cr", amount: 4500 },
+        ] }),
+      ],
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].account).toBe("Acme Traders");
+  });
+});
+
+describe("stream_gap — money moved, nothing booked (line_items)", () => {
+  it("flags a debtor with only a bank leg and no sales leg", () => {
+    const r = rule({
+      rule_id: "DEBT-020", category: "DEBT",
+      detection_logic: { check: "stream_gap", scope: { parent_group_keywords: ["debtor"] }, present: ["bank", "cash"], missing: ["sales", "income"] },
+      audit_query_template: "{account}: receipts booked but no sales",
+    });
+    const out = run(r, {
+      tb: [
+        tb({ ledger_name: "Ghost Debtor", parent_group: "Sundry Debtors" }),
+        tb({ ledger_name: "Real Debtor", parent_group: "Sundry Debtors" }),
+      ],
+      vouchers: [
+        vch({ amount: 50000, voucher_date: "2025-06-01", party_ledger: "Ghost Debtor", line_items: [
+          { ledger_name: "HDFC Bank", dr_cr: "Dr", amount: 50000 },
+          { ledger_name: "Ghost Debtor", dr_cr: "Cr", amount: 50000 },
+        ] }),
+        vch({ amount: 40000, voucher_date: "2025-06-01", party_ledger: "Real Debtor", line_items: [
+          { ledger_name: "Sales GST@18%", dr_cr: "Cr", amount: 40000 },
+          { ledger_name: "Real Debtor", dr_cr: "Dr", amount: 40000 },
+        ] }),
+      ],
+    });
+    expect(out.map((f) => f.account)).toEqual(["Ghost Debtor"]);
+  });
+});
+
 describe("run ledger — completeness accounting (no rule silently dropped)", () => {
   it("reports executed / needs_data / skipped_no_handler per rule", () => {
     const rExec = rule({ rule_id: "CASH-X", category: "CASH", detection_logic: { check: "single_txn", threshold: 10000 } });

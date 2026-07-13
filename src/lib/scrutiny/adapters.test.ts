@@ -67,6 +67,26 @@ describe("vouchersFromSnapshot", () => {
     ]);
     expect(v[0]).toMatchObject({ amount: 25000, dr_cr: "debit", voucher_date: "2025-06-10", ledger_name: "Cash" });
   });
+
+  it("preserves line_items (the full double entry) instead of flattening it away", () => {
+    const v = vouchersFromSnapshot([
+      {
+        amount: 200334, dr_cr: "Cr", voucher_date: "2025-05-23", party_ledger: "Sevenseas Global Freight Systems Pvt. Ltd.",
+        line_items: [
+          { ledger_name: "Transportation-18%", dr_cr: "Dr", amount: 187511 },
+          { ledger_name: "INPUT IGST@18%", dr_cr: "Dr", amount: 12823 },
+          { ledger_name: "Sevenseas Global Freight Systems Pvt. Ltd.", dr_cr: "Cr", amount: 200334 },
+        ],
+      },
+    ]);
+    expect(v[0].line_items).toHaveLength(3);
+    expect(v[0].line_items?.[0]).toMatchObject({ ledger_name: "Transportation-18%", dr_cr: "Dr", amount: 187511 });
+  });
+
+  it("leaves line_items undefined when absent (snapshot raw_data has none)", () => {
+    const v = vouchersFromSnapshot([{ amount: 100, date: "2025-06-10" }]);
+    expect(v[0].line_items).toBeUndefined();
+  });
 });
 
 describe("findingToRow", () => {
