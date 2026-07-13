@@ -34,7 +34,10 @@ import { AUDIT_STATUS_OPTIONS }          from "./AuditStatusFilters";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const PAGE_SIZE = 25;
+// 2026-06-25 (V J Desai request) — page-size choices in the footer.
+// 25 stays the default for parity with the previous behaviour.
+const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
+type PageSize = typeof PAGE_SIZE_OPTIONS[number];
 
 const YES_NO_OPTIONS = ["Yes", "No"];
 
@@ -141,6 +144,7 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
 
   // ── Pagination ────────────────────────────────────────────────────────────
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<PageSize>(25);
 
   // ── New row ───────────────────────────────────────────────────────────────
   const [addingNew, setAddingNew] = useState(false);
@@ -174,7 +178,7 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
   }
 
   // Reset page when filters change
-  useEffect(() => setPage(1), [search, statusFilter, scanFilter, colFilters]);
+  useEffect(() => setPage(1), [search, statusFilter, scanFilter, colFilters, pageSize]);
 
   // ── Filtering + sorting ───────────────────────────────────────────────────
   const filtered = useMemo(() => {
@@ -253,10 +257,10 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
   }, [rows, search, statusFilter, clientIdFilter]);
 
   // ── Pagination slice ──────────────────────────────────────────────────────
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const safePageRows = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-  const startIdx = filtered.length === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
-  const endIdx   = Math.min(page * PAGE_SIZE, filtered.length);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePageRows = filtered.slice((page - 1) * pageSize, page * pageSize);
+  const startIdx = filtered.length === 0 ? 0 : (page - 1) * pageSize + 1;
+  const endIdx   = Math.min(page * pageSize, filtered.length);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   // BUG A: keep form open on failure so the user can retry; only close on success.
@@ -503,15 +507,40 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
         </div>
       </div>
 
-      {/* ── Footer: count + pagination ── */}
+      {/* ── Footer: count + page-size + pagination ── */}
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <p className="text-[11px] text-muted-foreground">
-          {filtered.length === 0
-            ? "No rows"
-            : `Showing ${startIdx}–${endIdx} of ${filtered.length} row${filtered.length !== 1 ? "s" : ""}` +
-              (rows.length !== filtered.length ? ` (${rows.length} total)` : "")
-          }
-        </p>
+        <div className="flex items-center gap-3 flex-wrap">
+          <p className="text-[11px] text-muted-foreground">
+            {filtered.length === 0
+              ? "No rows"
+              : `Showing ${startIdx}–${endIdx} of ${filtered.length} row${filtered.length !== 1 ? "s" : ""}` +
+                (rows.length !== filtered.length ? ` (${rows.length} total)` : "")
+            }
+          </p>
+
+          {/* 2026-06-25 (V J Desai) — page-size selector: 25 / 50 / 100. */}
+          <div className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+            <span>Rows per page:</span>
+            <div className="inline-flex rounded-md border border-border overflow-hidden h-6">
+              {PAGE_SIZE_OPTIONS.map(sz => (
+                <button
+                  key={sz}
+                  type="button"
+                  onClick={() => setPageSize(sz)}
+                  className={cn(
+                    "px-2 text-[11px] font-medium transition-colors",
+                    sz !== PAGE_SIZE_OPTIONS[PAGE_SIZE_OPTIONS.length - 1] && "border-r border-border",
+                    pageSize === sz
+                      ? "bg-indigo-600 text-white"
+                      : "bg-background text-muted-foreground hover:bg-muted",
+                  )}
+                >
+                  {sz}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
 
         {totalPages > 1 && (
           <div className="flex items-center gap-1">

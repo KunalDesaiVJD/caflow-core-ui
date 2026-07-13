@@ -162,7 +162,7 @@ const FILING_STATUS_COLORS: Record<string, string> = {
   "Processed": "bg-emerald-200 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200",
 };
 
-const getDueDate = (fy: string, quarter: string): Date => {
+export const getDueDate = (fy: string, quarter: string): Date => {
   const fyStart = parseInt(fy.split("-")[0]);
   const dates: Record<string, Date> = {
     Q1: new Date(fyStart, 6, 31), Q2: new Date(fyStart, 9, 31),
@@ -171,7 +171,7 @@ const getDueDate = (fy: string, quarter: string): Date => {
   return dates[quarter] || new Date();
 };
 
-const getDueDateColor = (fy: string, quarter: string, status: string) => {
+export const getDueDateColor = (fy: string, quarter: string, status: string) => {
   if (["Filed", "Processed", "NIL"].includes(status)) return "text-emerald-600";
   const due = getDueDate(fy, quarter);
   const days = differenceInDays(due, new Date());
@@ -190,6 +190,11 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   const [ackFiles, setAckFiles] = useState<Map<string, TdsAckFile>>(new Map());
   const [loading, setLoading] = useState(true);
   const [statusGroup, setStatusGroup] = useState<KpiStatusGroup>("all");
+  // Excel/Tally-style type-to-search — no visible input box. A window-level
+  // keydown listener (below) appends to this buffer whenever no other
+  // interactive element has keyboard focus; the floating "Searching: …"
+  // indicator renders whenever it's non-empty.
+  const [searchBuffer, setSearchBuffer] = useState("");
 
   // Apply an external status-group preset (Dashboard KPI card click) — keyed
   // on `nonce` so re-clicking the same card re-applies it even with no value
@@ -307,6 +312,64 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       return true;
     });
   }, [filings, formFilter, statusGroup, deletedClients, clients]);
+
+  // Live type-to-search — layered on top of the filters above. Matches if
+  // the buffer is a case-insensitive substring of ANY of: Client Name, PAN,
+  // Ack No, Prepared By, Filed By. Empty buffer = no-op.
+  const searchFiltered = useMemo(() => {
+    const q = searchBuffer.trim().toLowerCase();
+    if (!q) return filtered;
+    return filtered.filter(f => {
+      const client = clients.find(c => c.id === f.client_id);
+      const name = client?.name || deletedClients.get(f.client_id)?.name || "";
+      const pan = client?.pan || "";
+      const ackNo = f.acknowledgment_number || "";
+      const preparedBy = users.find(u => u.id === f.preparer_id)?.name || "";
+      const filedBy = users.find(u => u.id === f.checker_id)?.name || "";
+      return [name, pan, ackNo, preparedBy, filedBy].some(v => v.toLowerCase().includes(q));
+    });
+  }, [filtered, searchBuffer, clients, deletedClients, users]);
+
+  // Global type-to-search capture — Excel/Tally style. Fires only when
+  // keyboard focus isn't on a real interactive control (native inputs,
+  // textareas, contentEditable, or any Radix-based control surfaced as a
+  // combobox/listbox/option/checkbox/menuitem/button, which covers the
+  // FY/Quarter/Form/Client Selects, the per-row Status Select, and any
+  // button) and no Radix Dialog/AlertDialog (e.g. the History Sheet, or a
+  // Confirm Finalisation-style dialog elsewhere on the page) is open.
+  useEffect(() => {
+    const INTERACTIVE_SELECTOR = [
+      "input", "textarea", "select", '[contenteditable="true"]',
+      '[role="combobox"]', '[role="listbox"]', '[role="option"]',
+      '[role="checkbox"]', '[role="menuitem"]', "button",
+    ].join(", ");
+    const isInteractiveElementFocused = () => {
+      const el = document.activeElement as HTMLElement | null;
+      return !!el && el !== document.body && !!el.closest(INTERACTIVE_SELECTOR);
+    };
+    const isDialogOpen = () =>
+      !!document.querySelector('[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]');
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (isDialogOpen() || isInteractiveElementFocused()) return;
+
+      if (e.key === "Escape") {
+        if (searchBuffer) { e.preventDefault(); setSearchBuffer(""); }
+        return;
+      }
+      if (e.key === "Backspace") {
+        if (searchBuffer) { e.preventDefault(); setSearchBuffer(prev => prev.slice(0, -1)); }
+        return;
+      }
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        setSearchBuffer(prev => prev + e.key);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [searchBuffer]);
 
   // Excel-style AutoFit for the Status column — width follows the widest
   // possible option (a fixed enum) rather than a fixed guess. Font is copied
@@ -513,16 +576,21 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       updatePayload.date_of_filing = null;
     }
 
-    // Prepared By / Filed By are a read-only audit trail — no manual picker,
-    // set automatically to the logged-in user on the specific transition
-    // that "completes" each role. Never cleared on reversion (the record of
-    // who did it historically stays even if the status later moves again).
+    // Prepared By / Filed By are a read-only audit trail that reflects ONLY the
+    // CURRENT status: Prepared By = who set the current "Reviewed" status; Filed
+    // By = who set the current "Filed" status. Set to the acting user on entering
+    // that status, and cleared to NULL on leaving it — so a name never lingers
+    // under an unrelated status. No manual picker.
     const actingUserName = user?.name || user?.email || "Unknown";
-    if (oldStatus === "Under Process" && newStatus === "Reviewed") {
+    if (newStatus === "Reviewed") {
       updatePayload.preparer_id = user?.id ?? null;
+    } else if (oldStatus === "Reviewed") {
+      updatePayload.preparer_id = null;
     }
     if (newStatus === "Filed") {
       updatePayload.checker_id = user?.id ?? null;
+    } else if (oldStatus === "Filed") {
+      updatePayload.checker_id = null;
     }
 
     const { error } = await supabase.from("tds_filings").update(updatePayload).eq("id", filing.id);
@@ -537,10 +605,12 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
         await logAuditEntry(filing.id, "FILING_DATE_CLEARED", filing.date_of_filing, null, "Status reverted from Filed");
       }
       if ("preparer_id" in updatePayload) {
-        await logAuditEntry(filing.id, "PREPARED_BY_SET", null, actingUserName, "Auto-set: status moved to Reviewed");
+        if (updatePayload.preparer_id) await logAuditEntry(filing.id, "PREPARED_BY_SET", null, actingUserName, "Auto-set: status moved to Reviewed");
+        else await logAuditEntry(filing.id, "PREPARED_BY_CLEARED", null, null, "Status moved out of Reviewed");
       }
       if ("checker_id" in updatePayload) {
-        await logAuditEntry(filing.id, "FILED_BY_SET", null, actingUserName, "Auto-set: status moved to Filed");
+        if (updatePayload.checker_id) await logAuditEntry(filing.id, "FILED_BY_SET", null, actingUserName, "Auto-set: status moved to Filed");
+        else await logAuditEntry(filing.id, "FILED_BY_CLEARED", null, null, "Status moved out of Filed");
       }
       fetchFilings();
       onFilingsChanged?.();
@@ -566,8 +636,8 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   };
 
   const toggleSelectAll = () => {
-    if (selectedIds.size === filtered.length) setSelectedIds(new Set());
-    else setSelectedIds(new Set(filtered.map(f => f.id)));
+    if (selectedIds.size === searchFiltered.length) setSelectedIds(new Set());
+    else setSelectedIds(new Set(searchFiltered.map(f => f.id)));
   };
 
   const handleBulkAction = async () => {
@@ -575,15 +645,33 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     const ids = Array.from(selectedIds);
     if (bulkAction.startsWith("status:")) {
       const newStatus = bulkAction.replace("status:", "");
+      const actingUserName = user?.name || user?.email || "Unknown";
       for (const id of ids) {
         const filing = filings.find(f => f.id === id);
         if (filing) {
-          await supabase.from("tds_filings").update({
+          const payload: any = {
             work_status: newStatus,
             last_updated_by: user?.id,
             last_updated_at: new Date().toISOString(),
-          }).eq("id", id);
+          };
+          // Prepared By / Filed By reflect the CURRENT status here too (same
+          // rule as the per-row status change): set on entering Reviewed/Filed,
+          // clear on leaving.
+          if (newStatus === "Reviewed") payload.preparer_id = user?.id ?? null;
+          else if (filing.work_status === "Reviewed") payload.preparer_id = null;
+          if (newStatus === "Filed") payload.checker_id = user?.id ?? null;
+          else if (filing.work_status === "Filed") payload.checker_id = null;
+
+          await supabase.from("tds_filings").update(payload).eq("id", id);
           await logAuditEntry(id, "STATUS_CHANGE", filing.work_status, newStatus);
+          if ("preparer_id" in payload) {
+            if (payload.preparer_id) await logAuditEntry(id, "PREPARED_BY_SET", null, actingUserName, "Auto-set: status moved to Reviewed");
+            else await logAuditEntry(id, "PREPARED_BY_CLEARED", null, null, "Status moved out of Reviewed");
+          }
+          if ("checker_id" in payload) {
+            if (payload.checker_id) await logAuditEntry(id, "FILED_BY_SET", null, actingUserName, "Auto-set: status moved to Filed");
+            else await logAuditEntry(id, "FILED_BY_CLEARED", null, null, "Status moved out of Filed");
+          }
         }
       }
       toast({ title: `${ids.length} filings updated to ${newStatus}` });
@@ -652,6 +740,13 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
 
   return (
     <div className="space-y-4">
+      {/* Excel/Tally-style type-to-search overlay — floating, non-intrusive,
+          shown only while the search buffer is non-empty. */}
+      {searchBuffer && (
+        <div className="fixed bottom-4 right-4 z-[60] bg-foreground text-background text-xs font-medium px-3 py-1.5 rounded-full shadow-lg pointer-events-none">
+          Searching: {searchBuffer}
+        </div>
+      )}
       {!hideHeader && (
         <div>
           <h2 className="text-xl font-bold text-foreground">Filings Management</h2>
@@ -738,7 +833,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                 <TableRow>
                   <TableHead className="w-10">
                     <Checkbox
-                      checked={filtered.length > 0 && selectedIds.size === filtered.length}
+                      checked={searchFiltered.length > 0 && selectedIds.size === searchFiltered.length}
                       onCheckedChange={toggleSelectAll}
                     />
                   </TableHead>
@@ -754,13 +849,15 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
               <TableBody>
                 {loading ? Array.from({ length: 5 }).map((_, i) => (
                   <TableRow key={i}>{Array.from({ length: 9 }).map((_, j) => <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>)}</TableRow>
-                )) : filtered.length === 0 ? (
+                )) : searchFiltered.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
-                      No filings found. Filings are created when TDS service is activated for a client.
+                      {searchBuffer.trim()
+                        ? `No matches for "${searchBuffer.trim()}".`
+                        : "No filings found. Filings are created when TDS service is activated for a client."}
                     </TableCell>
                   </TableRow>
-                ) : filtered.map(f => {
+                ) : searchFiltered.map(f => {
                   const client = clients.find(c => c.id === f.client_id);
                   const clientTan = client?.tan_number || f.tan;
                   const archived = isArchivedFiling(f);
@@ -825,9 +922,6 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                             </SelectContent>
                           </Select>
                         )}
-                        <div className={cn("text-[10px] mt-1", getDueDateColor(f.financial_year, f.quarter, f.work_status))}>
-                          Due: {format(getDueDate(f.financial_year, f.quarter), "dd/MM/yyyy")}
-                        </div>
                       </TableCell>
                       <TableCell>
                         {/* Filing Date is fully system-managed — auto-set to today when

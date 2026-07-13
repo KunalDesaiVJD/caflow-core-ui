@@ -215,8 +215,15 @@ const Clients = () => {
   const [manageGroupsClient, setManageGroupsClient] = useState<Client | null>(null);
   const [manageGroupsSaving, setManageGroupsSaving] = useState(false);
 
-  // Secondary sub-tab within "Clients via API": Final | Draft Active | Draft Inactive
-  const [apiSubTab, setApiSubTab] = useState<"final" | "draft_active" | "draft_inactive">("final");
+  // Secondary sub-tab within "Clients via API": Final Active | Final Inactive
+  // | Draft Active | Draft Inactive.
+  // 2026-06-25 (V J Desai — ANKUR PLASTIC INDUSTRIES surfacing as active):
+  // "Final" used to be one bucket regardless of is_active. Sync from API
+  // does write is_active=false when the eOffice portal flips a client to
+  // De-Active, but the Final tab was ignoring that. Splitting symmetric
+  // with the Draft treatment lets the auditor spot deactivated clients.
+  type ApiSubTabKey = "final_active" | "final_inactive" | "draft_active" | "draft_inactive";
+  const [apiSubTab, setApiSubTab] = useState<ApiSubTabKey>("final_active");
 
   // GAP-6: draft management
   const [drafts, setDrafts] = useState<Client[]>([]);
@@ -482,7 +489,9 @@ const Clients = () => {
     // API sub-tab filter (only applies when sourceTab === "api")
     let matchesApiSub = true;
     if (sourceTab === "api") {
-      if (apiSubTab === "final")               matchesApiSub = !c.is_draft;
+      // 2026-06-25 — Final now respects is_active, matching the Draft split.
+      if (apiSubTab === "final_active")        matchesApiSub = !c.is_draft && c.is_active !== false;
+      else if (apiSubTab === "final_inactive") matchesApiSub = !c.is_draft && c.is_active === false;
       else if (apiSubTab === "draft_active")   matchesApiSub = !!c.is_draft && c.is_active !== false;
       else if (apiSubTab === "draft_inactive") matchesApiSub = !!c.is_draft && c.is_active === false;
     }
@@ -687,11 +696,13 @@ const Clients = () => {
           { key: "archived" as const, label: "Archived",               count: archivedClients.length },
         ];
 
-        // Sub-tab counts (within api_import clients only)
-        const apiClients       = clients.filter(c => c.source === "api_import");
-        const finalCount        = apiClients.filter(c => !c.is_draft).length;
-        const draftActiveCount  = apiClients.filter(c => !!c.is_draft && c.is_active !== false).length;
-        const draftInactiveCount = apiClients.filter(c => !!c.is_draft && c.is_active === false).length;
+        // Sub-tab counts (within api_import clients only).
+        // 2026-06-25 — Final now split by is_active, symmetric with Draft.
+        const apiClients          = clients.filter(c => c.source === "api_import");
+        const finalActiveCount    = apiClients.filter(c => !c.is_draft && c.is_active !== false).length;
+        const finalInactiveCount  = apiClients.filter(c => !c.is_draft && c.is_active === false).length;
+        const draftActiveCount    = apiClients.filter(c => !!c.is_draft && c.is_active !== false).length;
+        const draftInactiveCount  = apiClients.filter(c => !!c.is_draft && c.is_active === false).length;
 
         return (
           <div className="space-y-0">
@@ -722,15 +733,17 @@ const Clients = () => {
             {sourceTab === "api" && (
               <div className="flex items-center gap-2 pt-3 pb-1 px-0.5 flex-wrap">
                 {[
-                  { key: "final"          as const, label: "Final",          count: finalCount,        color: "emerald" },
-                  { key: "draft_active"   as const, label: "Draft Active",   count: draftActiveCount,  color: "amber"   },
-                  { key: "draft_inactive" as const, label: "Draft Inactive", count: draftInactiveCount, color: "rose"   },
+                  { key: "final_active"   as const, label: "Final Active",   count: finalActiveCount,   color: "emerald" },
+                  { key: "final_inactive" as const, label: "Final Inactive", count: finalInactiveCount, color: "slate"   },
+                  { key: "draft_active"   as const, label: "Draft Active",   count: draftActiveCount,   color: "amber"   },
+                  { key: "draft_inactive" as const, label: "Draft Inactive", count: draftInactiveCount, color: "rose"    },
                 ].map(({ key, label, count, color }) => {
                   const isActive = apiSubTab === key;
                   const colorMap: Record<string, { active: string; inactive: string; dot: string }> = {
                     emerald: { active: "bg-emerald-100 text-emerald-800 border-emerald-400 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-600", inactive: "bg-muted text-muted-foreground border-border hover:border-emerald-300", dot: "bg-emerald-500" },
-                    amber:   { active: "bg-amber-100 text-amber-800 border-amber-400 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-600",   inactive: "bg-muted text-muted-foreground border-border hover:border-amber-300",   dot: "bg-amber-500"   },
-                    rose:    { active: "bg-rose-100 text-rose-800 border-rose-400 dark:bg-rose-900/30 dark:text-rose-300 dark:border-rose-600",         inactive: "bg-muted text-muted-foreground border-border hover:border-rose-300",   dot: "bg-rose-500"    },
+                    slate:   { active: "bg-slate-200 text-slate-800 border-slate-400 dark:bg-slate-800/60 dark:text-slate-300 dark:border-slate-600",           inactive: "bg-muted text-muted-foreground border-border hover:border-slate-300",   dot: "bg-slate-500"   },
+                    amber:   { active: "bg-amber-100 text-amber-800 border-amber-400 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-600",           inactive: "bg-muted text-muted-foreground border-border hover:border-amber-300",   dot: "bg-amber-500"   },
+                    rose:    { active: "bg-rose-100 text-rose-800 border-rose-400 dark:bg-rose-900/30 dark:text-rose-300 dark:border-rose-600",                 inactive: "bg-muted text-muted-foreground border-border hover:border-rose-300",   dot: "bg-rose-500"    },
                   };
                   const cls = colorMap[color];
                   return (
@@ -845,8 +858,10 @@ const Clients = () => {
           <CardContent className="flex flex-col items-center justify-center py-16 text-muted-foreground">
             <Users className="h-10 w-10 mb-3 opacity-40" />
             <p>
-              {sourceTab === "api" && apiSubTab === "final"
-                ? "No finalised API clients yet"
+              {sourceTab === "api" && apiSubTab === "final_active"
+                ? "No active finalised clients from API"
+                : sourceTab === "api" && apiSubTab === "final_inactive"
+                ? "No deactivated finalised clients from API"
                 : sourceTab === "api" && apiSubTab === "draft_active"
                 ? "No active draft clients from API"
                 : sourceTab === "api" && apiSubTab === "draft_inactive"

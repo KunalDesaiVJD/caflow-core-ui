@@ -824,28 +824,49 @@ const NewClientWizard = () => {
       }
     }
 
-    // Save package if package mode — deactivate ALL old packages first, then insert
+    // Save package if package mode.
+    // 2026-06-25 (V J Desai — BALMUKUND INFRA + 9 others): the previous
+    // "deactivate all → insert new" sequence was NOT atomic. If the
+    // INSERT failed after the UPDATE landed (RLS mismatch, PostgREST
+    // hiccup, network drop, etc.), the client ended up with EVERY
+    // package row is_active=false → IT Returns filter dropped the
+    // client into Non-ITR even though the wizard UI showed the
+    // checkboxes ticked (the load path takes the most-recent row
+    // regardless of is_active, which papers over the DB state).
+    //
+    // Fix: INSERT the new active row first; only if that succeeds do
+    // we deactivate the older rows. Worst case on failure is one extra
+    // active row, which the load path handles cleanly (still shows the
+    // right services) — infinitely better than zero active rows.
     if (serviceBilling.billingMode === "package_wise" && serviceBilling.packageConfig.service_ids.length > 0) {
       const pkg = serviceBilling.packageConfig;
-      // Deactivate ALL existing packages for this client (no is_active filter)
-      await supabase
+      const { data: inserted, error: pkgError } = await supabase
         .from("client_service_packages")
-        .update({ is_active: false } as any)
-        .eq("client_id", targetClientId);
-      // Insert the new/updated package
-      const { error: pkgError } = await supabase.from("client_service_packages").insert({
-        client_id: targetClientId,
-        package_name: pkg.package_name,
-        service_category_ids: pkg.service_ids as any,
-        frequency: pkg.frequency,
-        reminder_date: pkg.reminder_date,
-        billing_amount: pkg.billing_amount,
-        invoice_gen_type: pkg.invoice_gen_type,
-        is_active: true,
-      } as any);
+        .insert({
+          client_id: targetClientId,
+          package_name: pkg.package_name,
+          service_category_ids: pkg.service_ids as any,
+          frequency: pkg.frequency,
+          reminder_date: pkg.reminder_date,
+          billing_amount: pkg.billing_amount,
+          invoice_gen_type: pkg.invoice_gen_type,
+          is_active: true,
+        } as any)
+        .select("id")
+        .single();
       if (pkgError) {
         console.error("[Services] package insert error:", pkgError);
         throw pkgError;
+      }
+      // Now retire every OTHER package row for this client (never touches
+      // the row we just wrote — safe even if the second call fails).
+      const newId = (inserted as any)?.id;
+      if (newId) {
+        await supabase
+          .from("client_service_packages")
+          .update({ is_active: false } as any)
+          .eq("client_id", targetClientId)
+          .neq("id", newId);
       }
     } else if (serviceBilling.billingMode === "service_specific") {
       // Switching back from package mode — deactivate all packages

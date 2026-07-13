@@ -1,15 +1,16 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, PenLine,
-  ShieldCheck, BarChart3, Settings, ClipboardList, Combine, RefreshCw,
+  ShieldCheck, BadgeCheck, BarChart3, Settings, ClipboardList, Combine, RefreshCw,
 } from "lucide-react";
 import { TdsRateMaster } from "@/components/tds/TdsRateMaster";
 import { TdsDashboard } from "@/components/tds/TdsDashboard";
 import { TdsDataEntry } from "@/components/tds/TdsDataEntry";
 import { TdsValidateFinalise } from "@/components/tds/TdsValidateFinalise";
+import { TdsPanVerification } from "@/components/tds/TdsPanVerification";
 import { TdsReports } from "@/components/tds/TdsReports";
 import { TdsAuditLog } from "@/components/tds/TdsAuditLog";
 
@@ -45,7 +46,7 @@ const TdsFilings = () => {
   
   const [activeSection, setActiveSection] = useState<NavKey>("dashboard");
   // CP-02: sub-tab inside TDS Workspace
-  const [workspaceTab, setWorkspaceTab] = useState<"data-entry" | "validate">("data-entry");
+  const [workspaceTab, setWorkspaceTab] = useState<"data-entry" | "validate" | "pan-verify">("data-entry");
   // Increment to force TdsDashboard to re-fetch when returning from workspace
   const [dashRefreshKey, setDashRefreshKey] = useState(0);
   const [syncing, setSyncing] = useState(false);
@@ -141,7 +142,17 @@ const TdsFilings = () => {
     setUsers((data as UserOption[]) || []);
   }, [isSuperadmin, resolveFirmId]);
 
-  useEffect(() => { fetchClients(); fetchUsers(); }, [fetchClients, fetchUsers]);
+  // The latest fetchers/refresher are held in refs so the effects below run
+  // ONCE on mount and never tear down + re-run when these callbacks change
+  // identity. Previously the effects listed the callbacks as dependencies; an
+  // unstable dep made fetchClients re-fire on every render — an infinite async
+  // re-fetch loop. It rendered fine on the light Dashboard but the constant
+  // re-renders froze the browser once the heavy Workspace mounted, tripping the
+  // "Something went wrong" error boundary.
+  const fetchClientsRef = useRef(fetchClients); fetchClientsRef.current = fetchClients;
+  const fetchUsersRef = useRef(fetchUsers); fetchUsersRef.current = fetchUsers;
+
+  useEffect(() => { fetchClientsRef.current(); fetchUsersRef.current(); }, []);
 
   // Pull the latest TDS Compliance config + filing rows and force every child
   // screen (Dashboard KPIs, Client Filing Summary, etc.) to re-read.
@@ -149,6 +160,7 @@ const TdsFilings = () => {
     fetchClients();
     setDashRefreshKey(k => k + 1);
   }, [fetchClients]);
+  const refreshRef = useRef(refreshTdsModule); refreshRef.current = refreshTdsModule;
 
   // ── Real-time sync ──────────────────────────────────────────────────────
   // TDS Compliance (client_services) is the single source of truth; a DB
@@ -159,21 +171,21 @@ const TdsFilings = () => {
   useEffect(() => {
     const channel = supabase
       .channel("tds-module-realtime")
-      .on("postgres_changes", { event: "*", schema: "public", table: "client_services" }, refreshTdsModule)
-      .on("postgres_changes", { event: "*", schema: "public", table: "tds_filings" }, refreshTdsModule)
+      .on("postgres_changes", { event: "*", schema: "public", table: "client_services" }, () => refreshRef.current())
+      .on("postgres_changes", { event: "*", schema: "public", table: "tds_filings" }, () => refreshRef.current())
       .subscribe((status) => {
         // On (re)connect, pull once so any change that happened while the
         // socket was down is picked up immediately.
-        if (status === "SUBSCRIBED") refreshTdsModule();
+        if (status === "SUBSCRIBED") refreshRef.current();
       });
     return () => { supabase.removeChannel(channel); };
-  }, [refreshTdsModule]);
+  }, []);
 
   // Fallback for environments without Realtime (or a dropped socket): refetch
   // when the tab regains focus/visibility, and on bfcache restore (back/fwd).
   useEffect(() => {
-    const onVisible = () => { if (!document.hidden) refreshTdsModule(); };
-    const onPageShow = () => refreshTdsModule();
+    const onVisible = () => { if (!document.hidden) refreshRef.current(); };
+    const onPageShow = () => refreshRef.current();
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("focus", onVisible);
     window.addEventListener("pageshow", onPageShow);
@@ -182,7 +194,7 @@ const TdsFilings = () => {
       window.removeEventListener("focus", onVisible);
       window.removeEventListener("pageshow", onPageShow);
     };
-  }, [refreshTdsModule]);
+  }, []);
 
   // Guaranteed-eventual sync: even where WebSockets/Realtime are blocked (some
   // corporate networks/proxies) AND the user never switches tabs, poll every
@@ -191,10 +203,10 @@ const TdsFilings = () => {
   useEffect(() => {
     const POLL_MS = 45000;
     const id = window.setInterval(() => {
-      if (!document.hidden) refreshTdsModule();
+      if (!document.hidden) refreshRef.current();
     }, POLL_MS);
     return () => window.clearInterval(id);
-  }, [refreshTdsModule]);
+  }, []);
 
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)] overflow-hidden">
@@ -272,6 +284,19 @@ const TdsFilings = () => {
                     <ShieldCheck size={14} /> Validate &amp; Finalise
                   </span>
                 </button>
+                <button
+                  onClick={() => setWorkspaceTab("pan-verify")}
+                  className={cn(
+                    "px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors",
+                    workspaceTab === "pan-verify"
+                      ? "border-primary text-primary"
+                      : "border-transparent text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <span className="flex items-center gap-2">
+                    <BadgeCheck size={14} /> PAN Verification
+                  </span>
+                </button>
               </div>
 
               {/* Tab content — rendered but hidden so state is preserved on switch */}
@@ -287,6 +312,9 @@ const TdsFilings = () => {
                   resolveFirmId={resolveFirmId}
                   onNavigateDataEntry={() => setWorkspaceTab("data-entry")}
                 />
+              </div>
+              <div className={workspaceTab === "pan-verify" ? "" : "hidden"}>
+                <TdsPanVerification clients={clients} resolveFirmId={resolveFirmId} />
               </div>
             </div>
           )}

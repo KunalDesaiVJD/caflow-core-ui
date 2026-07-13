@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { TdsFilingsManager, type KpiStatusGroup, type FilingsPreset } from "@/components/tds/TdsFilingsManager";
+import { TdsFilingsManager, type KpiStatusGroup, type FilingsPreset, getDueDate, getDueDateColor } from "@/components/tds/TdsFilingsManager";
 import { getDefaultTdsQuarter, isClientTdsEligible, clientHasTdsForm, isFilingTdsCompliant } from "@/lib/tdsQuarter";
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -354,10 +354,19 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
         className={cn(isFilingSummaryMaximized && "fixed inset-0 z-50 m-0 rounded-none border-0 overflow-y-auto")}
       >
         <CardHeader className="py-2.5 px-4">
-          <CardTitle className="text-sm font-semibold flex items-center gap-2">
-            <TrendingUp size={14} className="text-blue-600" />
-            FY {fyFilter} — Client Filing Summary
-          </CardTitle>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <TrendingUp size={14} className="text-blue-600" />
+              FY {fyFilter} — Client Filing Summary
+            </CardTitle>
+            {quarterFilter !== "all" ? (
+              <div className={cn("text-xs font-semibold", getDueDateColor(fyFilter, quarterFilter, ""))}>
+                {quarterFilter} Due: {format(getDueDate(fyFilter, quarterFilter), "dd/MM/yyyy")}
+              </div>
+            ) : (
+              <div className="text-xs text-muted-foreground">Select a quarter to view its due date</div>
+            )}
+          </div>
         </CardHeader>
         <CardContent>
           <TdsFilingsManager
