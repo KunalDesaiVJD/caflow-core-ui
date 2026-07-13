@@ -488,6 +488,56 @@ describe("expr — generic composable evaluator", () => {
   });
 });
 
+describe("expr — parent_group scoping on the voucher path (RC1)", () => {
+  const creditorTB = [
+    tb({ ledger_name: "Sevenseas Global Freight Systems Pvt. Ltd.", parent_group: "Sundry Creditors" }),
+    tb({ ledger_name: "JRC Transport Company", parent_group: "Sundry Creditors" }),
+    tb({ ledger_name: "HDFC Bank C/A", parent_group: "Bank Accounts" }),
+  ];
+
+  it('ledger_keywords ["creditor"] now matches a party grouped under "Sundry Creditors" (word absent from the party name)', () => {
+    const r = rule({
+      rule_id: "TDS-001", category: "TDS",
+      detection_logic: { check: "expr", grain: "aggregate", scope: { ledger_keywords: ["creditor"], side: "Dr" }, aggregate: { by: ["party"], fn: "sum", field: "abs_amount", having: { op: ">", value: 0 } } },
+    });
+    const out = run(r, {
+      tb: creditorTB,
+      vouchers: [
+        vch({ amount: 31490, voucher_date: "2025-07-26", party_ledger: "Sevenseas Global Freight Systems Pvt. Ltd.", dr_cr: "Dr" }),
+        vch({ amount: 12000, voucher_date: "2025-08-01", party_ledger: "HDFC Bank C/A", dr_cr: "Dr" }),
+      ],
+    });
+    // Sevenseas (a Sundry Creditor) is now in scope; the bank payment is not.
+    expect(out).toHaveLength(1);
+    expect(out[0].account).toBe("Sevenseas Global Freight Systems Pvt. Ltd.");
+  });
+
+  it("matches ZERO when the party's group is unknown (reproduces the old bug: 0 findings)", () => {
+    const r = rule({
+      rule_id: "TDS-002", category: "TDS",
+      detection_logic: { check: "expr", grain: "voucher", scope: { ledger_keywords: ["creditor"] } },
+    });
+    // no TB -> no group resolution -> "creditor" cannot match the party name alone
+    const out = run(r, { tb: [], vouchers: [vch({ amount: 31490, voucher_date: "2025-07-26", party_ledger: "Sevenseas Global Freight Systems Pvt. Ltd." })] });
+    expect(out).toHaveLength(0);
+  });
+
+  it("explicit parent_group_keywords scopes precisely to the family", () => {
+    const r = rule({
+      rule_id: "CRED-010", category: "CRED",
+      detection_logic: { check: "expr", grain: "voucher", scope: { parent_group_keywords: ["sundry creditors"] } },
+    });
+    const out = run(r, {
+      tb: creditorTB,
+      vouchers: [
+        vch({ amount: 100, voucher_date: "2025-07-26", party_ledger: "JRC Transport Company" }),
+        vch({ amount: 200, voucher_date: "2025-07-27", party_ledger: "HDFC Bank C/A" }),
+      ],
+    });
+    expect(out.map((f) => f.account)).toEqual(["JRC Transport Company"]);
+  });
+});
+
 describe("run ledger — completeness accounting (no rule silently dropped)", () => {
   it("reports executed / needs_data / skipped_no_handler per rule", () => {
     const rExec = rule({ rule_id: "CASH-X", category: "CASH", detection_logic: { check: "single_txn", threshold: 10000 } });

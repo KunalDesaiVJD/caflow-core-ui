@@ -9,12 +9,20 @@
 import { supabase } from "@/integrations/supabase/client";
 import { validateRule, type ComposedRule, type ValidationResult } from "./ruleSpec";
 
+export interface NeedsDedicated {
+  capability?: string;
+  reason?: string;
+  suggested_module?: string;
+}
+
 export interface ComposeResult {
   /** true when a rule came back AND it passed validation (no errors) */
   ok: boolean;
   rule?: ComposedRule;
   explanation?: string;
   validation?: ValidationResult;
+  /** set when the intent needs a dedicated module (TDS Recon, GST Recon…) the generic engine cannot express */
+  needsDedicated?: NeedsDedicated;
   error?: string;
 }
 
@@ -28,8 +36,13 @@ export async function composeRuleFromPrompt(prompt: string): Promise<ComposeResu
     });
     if (error) return { ok: false, error: error.message ?? "AI service unavailable." };
 
-    const payload = data as { rule?: unknown; explanation?: string; raw?: string; error?: string } | null;
+    const payload = data as { rule?: unknown; explanation?: string; needs_dedicated?: NeedsDedicated; raw?: string; error?: string } | null;
     if (!payload || payload.error) return { ok: false, error: payload?.error ?? "No response from the AI." };
+    // The composer decided the intent needs a dedicated module (e.g. TDS Recon) — surface that
+    // honestly instead of a hollow rule that would silently find nothing.
+    if (payload.needs_dedicated && typeof payload.needs_dedicated === "object") {
+      return { ok: false, needsDedicated: payload.needs_dedicated, explanation: payload.explanation };
+    }
     if (!payload.rule || typeof payload.rule !== "object") {
       return { ok: false, error: "The AI did not return a structured rule — try rephrasing the description." };
     }

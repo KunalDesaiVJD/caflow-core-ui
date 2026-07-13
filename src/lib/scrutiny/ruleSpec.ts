@@ -56,6 +56,14 @@ export interface ValidationResult {
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
+/**
+ * Intents the generic expr engine genuinely CANNOT compute (it can only compare a summed field to a
+ * CONSTANT, and has no section/rate table). When a rule's name/query promises one of these, the
+ * validator warns so the UI does not show a misleading "runnable" for a rule that would find nothing.
+ * The only computed comparison expr supports is vs_prior_year, so ratio-vs-prior is intentionally excluded.
+ */
+const UNCOMPUTABLE_INTENT = /(short[\s-]*deduc|excess[\s-]*deduc|under[\s-]*deduc|required\s*tds|expected\s*tds|tds.*(rate|%)|deduct.*at\s*\d|gross(ing)?[\s-]*up|gst.*(recon|mismatch|2a|2b|gstr|itc)|reverse\s*charge.*tds)/i;
+
 function validateCond(c: unknown, path: string, errors: string[]): void {
   if (isObj(c) && (Array.isArray(c.all) || Array.isArray(c.any))) {
     const group = (c.all ?? c.any) as unknown[];
@@ -134,6 +142,15 @@ export function validateRule(rule: Partial<ComposedRule>): ValidationResult {
       runnable = true;
       if (check === "expr") validateExpr(dl, errors, warnings);
     }
+  }
+
+  // Semantic lint (RC3): the rule's description promises a computed rate/section/GST test that the
+  // expr grammar cannot perform — flag it so a hollow rule is not shown as trustworthy.
+  const intentText = `${str(rule.rule_name)} ${str(rule.audit_query_template)}`;
+  if (UNCOMPUTABLE_INTENT.test(intentText)) {
+    warnings.push(
+      "This description implies a computed rate / section / GST test (e.g. required TDS = rate × base, or GST reconciliation). The engine can only compare a summed value to a CONSTANT, so this rule would NOT detect what it promises — route it to the dedicated module (TDS Recon / GST Recon), not a generic scrutiny rule.",
+    );
   }
 
   return { valid: errors.length === 0, runnable, errors, warnings };

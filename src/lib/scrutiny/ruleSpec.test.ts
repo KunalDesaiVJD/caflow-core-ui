@@ -62,4 +62,20 @@ describe("validateRule", () => {
     expect(KNOWN_CHECKS.has("expr")).toBe(true);
     expect(KNOWN_CHECKS.has("single_txn")).toBe(true);
   });
+
+  it("warns when the description implies a computed TDS-rate / short-deduction the expr engine cannot do (RC3)", () => {
+    const r = validateRule({
+      ...base,
+      rule_name: "Short deduction of TDS on contractor payments",
+      detection_logic: { check: "expr", grain: "aggregate", scope: { ledger_keywords: ["tds"] }, aggregate: { by: ["party"], fn: "sum", having: { op: "<", value: 1 } } },
+    });
+    // structurally valid, but the semantic lint fires
+    expect(r.valid).toBe(true);
+    expect(r.warnings.join(" ")).toMatch(/dedicated module|computed rate|would NOT detect/i);
+  });
+
+  it("does NOT warn for an ordinary threshold rule", () => {
+    const r = validateRule({ ...base, detection_logic: { check: "expr", grain: "voucher", scope: { cash_only: true }, where: [{ field: "abs_amount", op: ">", value: 10000 }] } });
+    expect(r.warnings.join(" ")).not.toMatch(/dedicated module/i);
+  });
 });
