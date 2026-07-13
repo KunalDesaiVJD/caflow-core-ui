@@ -102,6 +102,16 @@ export interface ScrutinyFinding {
   evidence?: Record<string, unknown>;
 }
 
+export interface RuleRunStatus {
+  rule_id: string;
+  rule_name: string;
+  check: string;
+  /** executed = handler ran (found >= 0); needs_data = ran but a required input was missing; skipped_no_handler = no evaluator for the check; error = handler threw */
+  status: "executed" | "needs_data" | "skipped_no_handler" | "error";
+  found: number;
+  reason?: string;
+}
+
 export interface DetectionResult {
   findings: ScrutinyFinding[];
   coverage: {
@@ -110,6 +120,8 @@ export interface DetectionResult {
     executedKinds: string[];
     unhandled: { rule_id: string; check: string }[];
   };
+  /** Per-rule accounting so no active rule is ever silently dropped (completeness control). */
+  ledger: RuleRunStatus[];
 }
 
 type CheckHandler = (
@@ -769,6 +781,189 @@ const h_cash_capital_payment: CheckHandler = (rule, { vouchers }) => {
 };
 
 // ---------------------------------------------------------------------------
+// Generic composable evaluator (check: "expr") — expresses most rules as DATA,
+// with no bespoke handler. This is what the AI Rule Composer targets and what
+// lets previously-unhandled rules run. detection_logic shape:
+//   { check:"expr", grain?:"voucher"|"account"|"aggregate",
+//     scope?:{voucher_type?:string[], ledger_keywords?:string[], cash_only?:bool, side?:"Dr"|"Cr", nonzero?:bool},
+//     where?: Cond | Cond[] | {all?:Cond[], any?:Cond[]},
+//     aggregate?:{by:("party"|"ledger"|"day"|"month"|"year"|"amount"|"date"|"voucher_type")[], fn:"sum"|"count"|"max", field?:string, having:{op,value}},
+//     vs_prior_year?:{op?:string, pct:number}, message?:string }
+//   Cond = {field:string, op:string, value?:any}
+//   op ∈ > >= < <= == != between contains not_contains in is_blank is_not_blank is_round
+//   voucher fields: amount abs_amount narration voucher_type dr_cr party ledger date month is_weekend days_to_fy_end
+//   account fields: closing(signed) abs_closing balance_type ledger parent_group opening
+// ---------------------------------------------------------------------------
+
+const applyOp = (op: string, a: unknown, b: unknown): boolean => {
+  const na = num(a);
+  const nb = num(b);
+  switch (op) {
+    case ">": return na > nb;
+    case ">=": return na >= nb;
+    case "<": return na < nb;
+    case "<=": return na <= nb;
+    case "==": case "=": return lc(a) === lc(b) || na === nb;
+    case "!=": case "<>": return !(lc(a) === lc(b) || na === nb);
+    case "between": { const arr = Array.isArray(b) ? b : []; return na >= num(arr[0]) && na <= num(arr[1]); }
+    case "contains": return lc(a).includes(lc(b));
+    case "not_contains": return !lc(a).includes(lc(b));
+    case "in": return (Array.isArray(b) ? b : []).some((x) => lc(x) === lc(a));
+    case "is_blank": return String(a ?? "").trim() === "";
+    case "is_not_blank": return String(a ?? "").trim() !== "";
+    case "is_round": return isRound(Math.abs(na), num(b, 1000));
+    default: return false;
+  }
+};
+
+const voucherField = (v: VoucherRow, field: string, ctx: ScrutinyContext): unknown => {
+  switch (field) {
+    case "amount": return num(v.amount);
+    case "abs_amount": return Math.abs(num(v.amount));
+    case "narration": return v.narration ?? "";
+    case "voucher_type": return v.voucher_type ?? "";
+    case "dr_cr": case "side": return sideOf(v.dr_cr);
+    case "party": return v.party_ledger ?? "";
+    case "ledger": return v.ledger_name ?? v.party_ledger ?? "";
+    case "date": return v.voucher_date;
+    case "month": { const d = parseISO(v.voucher_date); return d ? d.getUTCMonth() + 1 : 0; }
+    case "is_weekend": { const d = parseISO(v.voucher_date); return d ? (isWeekend(d) ? 1 : 0) : 0; }
+    case "days_to_fy_end": {
+      const d = parseISO(v.voucher_date);
+      const e = parseISO(ctx.financialYearEnd);
+      return d && e ? Math.round((e.getTime() - d.getTime()) / 86400000) : 9999;
+    }
+    default: return (v as unknown as Record<string, unknown>)[field];
+  }
+};
+
+const accountField = (r: TBRow, field: string): unknown => {
+  switch (field) {
+    case "closing": return signedClosing(r);
+    case "abs_closing": return Math.abs(num(r.closing_balance));
+    case "balance_type": case "side": return sideOf(r.balance_type);
+    case "ledger": return r.ledger_name;
+    case "parent_group": return r.parent_group ?? "";
+    case "opening": return num(r.opening_balance);
+    default: return (r as unknown as Record<string, unknown>)[field];
+  }
+};
+
+type Cond = { field?: string; op?: string; value?: unknown };
+const evalWhere = (where: unknown, resolve: (f: string) => unknown): boolean => {
+  if (where == null) return true;
+  if (Array.isArray(where)) return where.every((c) => evalWhere(c, resolve));
+  const w = where as Record<string, unknown>;
+  if (Array.isArray(w.all)) return (w.all as unknown[]).every((c) => evalWhere(c, resolve));
+  if (Array.isArray(w.any)) return (w.any as unknown[]).some((c) => evalWhere(c, resolve));
+  const c = where as Cond;
+  if (!c.field || !c.op) return true;
+  return applyOp(c.op, resolve(c.field), c.value);
+};
+
+const voucherInScope = (v: VoucherRow, scope: Record<string, unknown> | undefined): boolean => {
+  if (!scope) return true;
+  if (scope.cash_only && !isCashVoucher(v)) return false;
+  if (scope.side && sideOf(v.dr_cr) !== sideOf(scope.side)) return false;
+  const vt = scope.voucher_type as unknown[] | undefined;
+  if (Array.isArray(vt) && vt.length && !vt.some((t) => lc(v.voucher_type).includes(lc(t)))) return false;
+  const kw = scope.ledger_keywords;
+  if (Array.isArray(kw) && kw.length && !kwMatch(`${v.party_ledger ?? ""} ${v.ledger_name ?? ""} ${v.narration ?? ""}`, kw)) return false;
+  return true;
+};
+
+const accountInScope = (r: TBRow, scope: Record<string, unknown> | undefined): boolean => {
+  if (!scope) return true;
+  if (scope.nonzero && num(r.closing_balance) === 0) return false;
+  if (scope.side && sideOf(r.balance_type) !== sideOf(scope.side)) return false;
+  const kw = scope.ledger_keywords;
+  if (Array.isArray(kw) && kw.length && !kwMatch(`${r.ledger_name} ${r.parent_group ?? ""}`, kw)) return false;
+  return true;
+};
+
+const groupKey = (v: VoucherRow, by: string[]): string =>
+  by
+    .map((b) => {
+      switch (b) {
+        case "party": return lc(v.party_ledger);
+        case "ledger": return lc(v.ledger_name ?? v.party_ledger);
+        case "amount": return String(Math.abs(num(v.amount)));
+        case "date": case "day": return String(v.voucher_date).slice(0, 10);
+        case "voucher_type": return lc(v.voucher_type);
+        case "month": { const d = parseISO(v.voucher_date); return d ? `${d.getUTCFullYear()}-${d.getUTCMonth() + 1}` : ""; }
+        case "year": { const d = parseISO(v.voucher_date); return d ? String(d.getUTCFullYear()) : ""; }
+        default: return "";
+      }
+    })
+    .join("|");
+
+const h_expr: CheckHandler = (rule, data, ctx) => {
+  const dl = rule.detection_logic as unknown as Record<string, unknown>;
+  const grain = String(dl.grain ?? "voucher");
+  const scope = dl.scope as Record<string, unknown> | undefined;
+  const where = dl.where;
+  const tpl = (dl.message as string | undefined) ?? rule.audit_query_template;
+
+  if (grain === "account") {
+    if (dl.vs_prior_year) {
+      const vpy = dl.vs_prior_year as Record<string, unknown>;
+      if (!data.tbPY || data.tbPY.length === 0) {
+        return [finding(rule, { advisory: true, flag_message: `${rule.rule_name}: prior-year balances unavailable — review manually.`, evidence: { reason: "no_py" } })];
+      }
+      const pyByName = new Map<string, number>();
+      for (const r of data.tbPY) pyByName.set(normName(r.ledger_name), Math.abs(num(r.closing_balance)));
+      const out: ScrutinyFinding[] = [];
+      for (const r of data.tb) {
+        if (!accountInScope(r, scope)) continue;
+        const cy = Math.abs(num(r.closing_balance));
+        const py = pyByName.get(normName(r.ledger_name)) ?? 0;
+        if (py < 1000 || cy < 1000) continue;
+        const ratioPct = (cy / py) * 100;
+        if (applyOp(String(vpy.op ?? ">="), ratioPct, num(vpy.pct, 200))) {
+          out.push(finding(rule, { account: r.ledger_name, amount: cy, flag_message: render(tpl, { account: r.ledger_name, amount: fmtAmt(cy), pct: Math.round(ratioPct) }), evidence: { cy, py, ratio_pct: Math.round(ratioPct) } }));
+        }
+      }
+      return out;
+    }
+    return data.tb
+      .filter((r) => accountInScope(r, scope))
+      .filter((r) => evalWhere(where, (f) => accountField(r, f)))
+      .map((r) => finding(rule, { account: r.ledger_name, amount: num(r.closing_balance), flag_message: render(tpl, { account: r.ledger_name, amount: fmtAmt(num(r.closing_balance)) }), evidence: { balance_type: r.balance_type, parent_group: r.parent_group } }));
+  }
+
+  const matched = data.vouchers
+    .filter((v) => voucherInScope(v, scope))
+    .filter((v) => evalWhere(where, (f) => voucherField(v, f, ctx)));
+
+  if (grain === "aggregate" && dl.aggregate) {
+    const agg = dl.aggregate as Record<string, unknown>;
+    const by = (Array.isArray(agg.by) ? agg.by : ["party"]) as string[];
+    const fn = String(agg.fn ?? "sum");
+    const field = String(agg.field ?? "abs_amount");
+    const having = (agg.having as { op?: string; value?: unknown } | undefined) ?? { op: ">", value: 0 };
+    const groups = new Map<string, { rows: VoucherRow[]; val: number }>();
+    for (const v of matched) {
+      const k = groupKey(v, by);
+      const g = groups.get(k) ?? groups.set(k, { rows: [], val: 0 }).get(k)!;
+      g.rows.push(v);
+      const fv = num(voucherField(v, field, ctx));
+      g.val = fn === "max" ? Math.max(g.val, fv) : g.val + fv;
+    }
+    const out: ScrutinyFinding[] = [];
+    for (const g of groups.values()) {
+      const metric = fn === "count" ? g.rows.length : g.val;
+      if (applyOp(String(having.op ?? ">"), metric, num(having.value))) {
+        const v = g.rows[0];
+        out.push(finding(rule, { account: v.party_ledger ?? v.ledger_name ?? null, amount: g.val, date: v.voucher_date, flag_message: render(tpl, { account: v.party_ledger ?? v.ledger_name ?? "", amount: fmtAmt(g.val), count: g.rows.length, date: v.voucher_date }), evidence: { group_count: g.rows.length, metric } }));
+      }
+    }
+    return out;
+  }
+
+  return matched.map((v) => finding(rule, { account: v.party_ledger ?? v.ledger_name ?? null, amount: num(v.amount), date: v.voucher_date, flag_message: render(tpl, { account: v.party_ledger ?? v.ledger_name ?? "", amount: fmtAmt(num(v.amount)), date: v.voucher_date, narration: v.narration ?? "" }), evidence: { dr_cr: v.dr_cr, voucher_number: v.voucher_number } }));
+};
+
+// ---------------------------------------------------------------------------
 // Registry + runner
 // ---------------------------------------------------------------------------
 
@@ -810,10 +1005,18 @@ export const TIER_B_HANDLERS: Record<string, CheckHandler> = {
 
 export const TIER_B_CHECK_KINDS = Object.keys(TIER_B_HANDLERS);
 
-/** All implemented handlers (Tier A deterministic + Tier B computable subset). */
+/** Generic composable evaluator — one data-driven handler that expresses most rules without bespoke code. */
+export const GENERIC_HANDLERS: Record<string, CheckHandler> = {
+  expr: h_expr,
+};
+
+export const GENERIC_CHECK_KINDS = Object.keys(GENERIC_HANDLERS);
+
+/** All implemented handlers (Tier A deterministic + Tier B computable subset + generic expr). */
 export const DEFAULT_HANDLERS: Record<string, CheckHandler> = {
   ...TIER_A_HANDLERS,
   ...TIER_B_HANDLERS,
+  ...GENERIC_HANDLERS,
 };
 
 export interface RunOptions {
@@ -839,6 +1042,7 @@ export function runDetection(
   const findings: ScrutinyFinding[] = [];
   const executed = new Set<string>();
   const unhandled: { rule_id: string; check: string }[] = [];
+  const ledger: RuleRunStatus[] = [];
   let handledCount = 0;
 
   for (const rule of rules) {
@@ -846,6 +1050,7 @@ export function runDetection(
     const handler = handlers[check];
     if (!handler) {
       unhandled.push({ rule_id: rule.rule_id, check });
+      ledger.push({ rule_id: rule.rule_id, rule_name: rule.rule_name, check, status: "skipped_no_handler", found: 0, reason: `no evaluator for check "${check}"` });
       if (emitAdvisory) {
         findings.push(
           finding(rule, {
@@ -860,8 +1065,18 @@ export function runDetection(
     handledCount += 1;
     executed.add(check);
     try {
-      findings.push(...handler(rule, data, ctx));
+      const produced = handler(rule, data, ctx);
+      findings.push(...produced);
+      const real = produced.filter((f) => !f.advisory);
+      const adv = produced.filter((f) => f.advisory);
+      if (produced.length > 0 && real.length === 0 && adv.length > 0) {
+        const reason = String((adv[0].evidence as Record<string, unknown> | undefined)?.reason ?? "required input unavailable");
+        ledger.push({ rule_id: rule.rule_id, rule_name: rule.rule_name, check, status: "needs_data", found: 0, reason });
+      } else {
+        ledger.push({ rule_id: rule.rule_id, rule_name: rule.rule_name, check, status: "executed", found: real.length });
+      }
     } catch (err) {
+      ledger.push({ rule_id: rule.rule_id, rule_name: rule.rule_name, check, status: "error", found: 0, reason: String(err) });
       findings.push(
         finding(rule, {
           advisory: true,
@@ -880,5 +1095,6 @@ export function runDetection(
       executedKinds: [...executed],
       unhandled,
     },
+    ledger,
   };
 }

@@ -420,3 +420,90 @@ describe("default handlers include Tier B", () => {
     expect(res.findings.some((f) => f.rule_id === "PROV-003" && !f.advisory)).toBe(true);
   });
 });
+
+describe("expr — generic composable evaluator", () => {
+  it("voucher grain: scope + where flags matching vouchers only", () => {
+    const r = rule({
+      rule_id: "GEN-001",
+      detection_logic: { check: "expr", grain: "voucher", scope: { cash_only: true }, where: [{ field: "abs_amount", op: ">", value: 10000 }] },
+      audit_query_template: "Cash {amount} on {date}",
+    });
+    const out = run(r, {
+      vouchers: [
+        vch({ amount: 15000, voucher_date: "2025-06-01", party_ledger: "Cash", ledger_name: "Cash" }),
+        vch({ amount: 5000, voucher_date: "2025-06-02", party_ledger: "Cash" }),
+        vch({ amount: 99999, voucher_date: "2025-06-03", party_ledger: "HDFC Bank" }),
+      ],
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].amount).toBe(15000);
+  });
+
+  it("account grain: signed closing + keyword scope", () => {
+    const r = rule({
+      rule_id: "GEN-002",
+      detection_logic: { check: "expr", grain: "account", scope: { ledger_keywords: ["creditor"], nonzero: true }, where: [{ field: "closing", op: ">", value: 0 }] },
+    });
+    const out = run(r, {
+      tb: [
+        tb({ ledger_name: "ABC Creditor", parent_group: "Sundry Creditors", closing_balance: 5000, balance_type: "Dr" }),
+        tb({ ledger_name: "XYZ Creditor", parent_group: "Sundry Creditors", closing_balance: 8000, balance_type: "Cr" }),
+      ],
+    });
+    expect(out.map((f) => f.account)).toEqual(["ABC Creditor"]);
+  });
+
+  it("aggregate grain: per-party-per-year sum over threshold", () => {
+    const r = rule({
+      rule_id: "GEN-003",
+      detection_logic: { check: "expr", grain: "aggregate", scope: { side: "Dr" }, aggregate: { by: ["party", "year"], fn: "sum", field: "abs_amount", having: { op: ">", value: 100000 } } },
+      audit_query_template: "{account} total {amount}",
+    });
+    const out = run(r, {
+      vouchers: [
+        vch({ amount: 60000, voucher_date: "2025-06-01", party_ledger: "Vendor A", dr_cr: "Dr" }),
+        vch({ amount: 50000, voucher_date: "2025-07-01", party_ledger: "Vendor A", dr_cr: "Dr" }),
+        vch({ amount: 40000, voucher_date: "2025-06-01", party_ledger: "Vendor B", dr_cr: "Dr" }),
+      ],
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].account).toBe("Vendor A");
+    expect(out[0].amount).toBe(110000);
+  });
+
+  it("aggregate count: duplicate party+amount+date groups", () => {
+    const r = rule({
+      rule_id: "GEN-004",
+      detection_logic: { check: "expr", grain: "aggregate", aggregate: { by: ["party", "amount", "date"], fn: "count", having: { op: ">", value: 1 } } },
+      audit_query_template: "Duplicate {amount} x{count}",
+    });
+    const out = run(r, {
+      vouchers: [
+        vch({ amount: 5000, voucher_date: "2025-06-01", party_ledger: "P" }),
+        vch({ amount: 5000, voucher_date: "2025-06-01", party_ledger: "P" }),
+        vch({ amount: 5000, voucher_date: "2025-06-02", party_ledger: "P" }),
+      ],
+    });
+    expect(out).toHaveLength(1);
+  });
+});
+
+describe("run ledger — completeness accounting (no rule silently dropped)", () => {
+  it("reports executed / needs_data / skipped_no_handler per rule", () => {
+    const rExec = rule({ rule_id: "CASH-X", category: "CASH", detection_logic: { check: "single_txn", threshold: 10000 } });
+    const rNoHandler = rule({ rule_id: "ZZZ-1", detection_logic: { check: "nonexistent_check" } });
+    const rNeedsData = rule({ rule_id: "RAT-X", detection_level: "account", detection_logic: { check: "expr", grain: "account", vs_prior_year: { op: ">=", pct: 200 } } });
+    const res = runDetection(
+      [rExec, rNoHandler, rNeedsData],
+      { tb: [tb({ ledger_name: "X", closing_balance: 5000 })], vouchers: [vch({ amount: 20000, voucher_date: "2025-06-01", party_ledger: "Cash", ledger_name: "Cash", dr_cr: "Dr" })] },
+      FY,
+      { emitAdvisoryForUnhandled: false },
+    );
+    const byId = Object.fromEntries(res.ledger.map((l) => [l.rule_id, l]));
+    expect(res.ledger).toHaveLength(3);
+    expect(byId["CASH-X"].status).toBe("executed");
+    expect(byId["CASH-X"].found).toBe(1);
+    expect(byId["ZZZ-1"].status).toBe("skipped_no_handler");
+    expect(byId["RAT-X"].status).toBe("needs_data");
+  });
+});
