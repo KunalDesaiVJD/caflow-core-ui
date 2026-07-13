@@ -162,7 +162,7 @@ const FILING_STATUS_COLORS: Record<string, string> = {
   "Processed": "bg-emerald-200 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200",
 };
 
-const getDueDate = (fy: string, quarter: string): Date => {
+export const getDueDate = (fy: string, quarter: string): Date => {
   const fyStart = parseInt(fy.split("-")[0]);
   const dates: Record<string, Date> = {
     Q1: new Date(fyStart, 6, 31), Q2: new Date(fyStart, 9, 31),
@@ -171,7 +171,7 @@ const getDueDate = (fy: string, quarter: string): Date => {
   return dates[quarter] || new Date();
 };
 
-const getDueDateColor = (fy: string, quarter: string, status: string) => {
+export const getDueDateColor = (fy: string, quarter: string, status: string) => {
   if (["Filed", "Processed", "NIL"].includes(status)) return "text-emerald-600";
   const due = getDueDate(fy, quarter);
   const days = differenceInDays(due, new Date());
@@ -850,9 +850,6 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                             </SelectContent>
                           </Select>
                         )}
-                        <div className={cn("text-[10px] mt-1", getDueDateColor(f.financial_year, f.quarter, f.work_status))}>
-                          Due: {format(getDueDate(f.financial_year, f.quarter), "dd/MM/yyyy")}
-                        </div>
                       </TableCell>
                       <TableCell>
                         {/* Filing Date is fully system-managed — auto-set to today when
