@@ -365,8 +365,10 @@ type AIResult = { ok: boolean; status: number; errText: string; content: string;
 async function callAI(opts: {
   system: string; userText: string; maxTokens: number;
   pdf?: { base64: string; filename: string };
+  image?: { base64: string; mediaType: string };   // scanned docs / photos (jpg, png, webp, …)
 }): Promise<AIResult> {
-  const dataUrl = opts.pdf ? `data:application/pdf;base64,${opts.pdf.base64}` : "";
+  const dataUrl = opts.pdf ? `data:application/pdf;base64,${opts.pdf.base64}`
+    : opts.image ? `data:${opts.image.mediaType};base64,${opts.image.base64}` : "";
 
   // OpenAI-compatible providers (OpenRouter, Lovable). extractJson downstream
   // tolerates ```json fences, so we skip response_format for portability.
@@ -376,6 +378,8 @@ async function callAI(opts: {
       userContent = pdfMode === "file"
         ? [{ type: "text", text: opts.userText }, { type: "file", file: { filename: opts.pdf.filename, file_data: dataUrl } }]
         : [{ type: "text", text: opts.userText }, { type: "image_url", image_url: { url: dataUrl } }];
+    } else if (opts.image) {
+      userContent = [{ type: "text", text: opts.userText }, { type: "image_url", image_url: { url: dataUrl } }];
     }
     const body: any = { model, temperature: 0, max_tokens: opts.maxTokens, messages: [{ role: "system", content: opts.system }, { role: "user", content: userContent }] };
     if (opts.pdf && pdfMode === "file") body.plugins = [{ id: "file-parser", pdf: { engine: Deno.env.get("OPENROUTER_PDF_ENGINE") || "pdf-text" } }];
@@ -389,6 +393,8 @@ async function callAI(opts: {
     const model = Deno.env.get("ANTHROPIC_MODEL") || "claude-sonnet-4-20250514";
     const userContent: any = opts.pdf
       ? [{ type: "text", text: opts.userText }, { type: "document", source: { type: "base64", media_type: "application/pdf", data: opts.pdf.base64 } }]
+      : opts.image
+      ? [{ type: "text", text: opts.userText }, { type: "image", source: { type: "base64", media_type: opts.image.mediaType, data: opts.image.base64 } }]
       : [{ type: "text", text: opts.userText }];
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -444,10 +450,17 @@ serve(async (req) => {
     }
 
     const body = await req.json();
-    const { filing_id, form_type, file_name, file_type, rows, pdf_base64 } = body ?? {};
+    // Format-agnostic input. The engine accepts ANY source; the client sends the
+    // most useful representation and the LLM normalises whatever it gets:
+    //   • rows          — tabular (xlsx / xls / csv / json array of objects)
+    //   • pdf_base64     — PDF (native/scanned; read by a multimodal model)
+    //   • image_base64   — a scanned document or photo (png/jpg/webp/…)
+    //   • raw_text       — free text / semi-structured (txt / xml / json object / html …)
+    const { filing_id, form_type, file_name, file_type, rows, pdf_base64, image_base64, image_media_type, raw_text } = body ?? {};
     if (!filing_id) return json({ error: "filing_id is required" }, 400);
-    if (file_type === "pdf" ? !pdf_base64 : !Array.isArray(rows)) {
-      return json({ error: "Provide `rows` for xlsx/csv or `pdf_base64` for pdf" }, 400);
+    const hasInput = Array.isArray(rows) || pdf_base64 || image_base64 || (typeof raw_text === "string" && raw_text.trim());
+    if (!hasInput) {
+      return json({ error: "Provide `rows` (tabular), `pdf_base64` (PDF), `image_base64` (image) or `raw_text` (text)." }, 400);
     }
 
     // Resolve filing scope (firm/client/period) — the batch inherits it.
@@ -493,20 +506,36 @@ serve(async (req) => {
       return json({ error: msg }, status >= 500 ? 502 : status);
     };
 
-    if (file_type === "pdf") {
-      const r = await callAI({
-        system: CANONICAL_INSTRUCTION,
-        userText: `Extract every deductee line item from this ${resolvedForm} TDS statement PDF into the canonical rows.`,
-        pdf: { base64: pdf_base64, filename: file_name || "client.pdf" },
-        maxTokens: IMPORT_MAX_TOKENS,
-      });
-      if (!r.ok) return httpErr(r.status, r.errText);
-      if (r.truncated) {
-        return json({ error: "This PDF has more rows than can be read in one pass. Split it into smaller PDFs, or import the data as Excel/CSV." }, 422);
-      }
+    // Single-pass extraction helper (PDF / image / raw text share this).
+    const singlePass = async (userText: string, media?: { pdf?: { base64: string; filename: string }; image?: { base64: string; mediaType: string } }) => {
+      const r = await callAI({ system: CANONICAL_INSTRUCTION, userText, maxTokens: IMPORT_MAX_TOKENS, ...(media || {}) });
+      if (!r.ok) return { err: httpErr(r.status, r.errText) };
+      if (r.truncated) return { err: json({ error: "This document has more rows than can be read in one pass. Split it, or import the data as Excel/CSV." }, 422) };
       const parsed = extractJson(typeof r.content === "string" ? r.content : JSON.stringify(r.content));
       const raw: any[] = Array.isArray(parsed?.rows) ? parsed.rows : Array.isArray(parsed) ? parsed : [];
-      collected.push(...raw.map(coerceRow));
+      return { rows: raw.map(coerceRow) };
+    };
+
+    if (pdf_base64) {
+      const out = await singlePass(
+        `Extract every deductee line item from this ${resolvedForm} TDS statement PDF into the canonical rows.`,
+        { pdf: { base64: pdf_base64, filename: file_name || "client.pdf" } });
+      if (out.err) return out.err;
+      collected.push(...out.rows!);
+    } else if (image_base64) {
+      const out = await singlePass(
+        `Read this scanned ${resolvedForm} TDS statement image and extract every deductee line item into the canonical rows.`,
+        { image: { base64: image_base64, mediaType: image_media_type || "image/png" } });
+      if (out.err) return out.err;
+      collected.push(...out.rows!);
+    } else if (typeof raw_text === "string" && raw_text.trim()) {
+      // Free / semi-structured text (txt, xml, json object, html, …) — the model
+      // reads the business meaning and normalises it. Large tabular data should
+      // arrive as `rows`; text is truncated to keep the single pass within budget.
+      const out = await singlePass(
+        `The following is a ${resolvedForm} TDS statement in raw ${(file_type || "text").toUpperCase()} form. Extract every deductee line item into the canonical rows.\n\n${String(raw_text).slice(0, 200000)}`);
+      if (out.err) return out.err;
+      collected.push(...out.rows!);
     } else {
       // Excel/CSV — chunked small so each call's JSON output stays well within
       // the 8000-token budget (≈50 canonical rows ≈ 3-4k output tokens).

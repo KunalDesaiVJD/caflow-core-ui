@@ -208,22 +208,30 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
-  // ── File → { file_type, rows | pdf_base64 } ──────────────────────────────────
-  const readFile = (file: File): Promise<{ file_type: string; rows?: any[]; pdf_base64?: string }> =>
+  // ── Any source format → a normalised payload the importer understands ────────
+  // rows (tabular) · pdf_base64 · image_base64 (scanned/photo) · raw_text (text).
+  const IMAGE_MIME: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif", bmp: "image/bmp", tif: "image/tiff", tiff: "image/tiff", heic: "image/heic", heif: "image/heif" };
+  const readFile = (file: File): Promise<{ file_type: string; rows?: any[]; pdf_base64?: string; image_base64?: string; image_media_type?: string; raw_text?: string }> =>
     new Promise((resolve, reject) => {
       const name = file.name.toLowerCase();
+      const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : "";
       const reader = new FileReader();
       reader.onerror = () => reject(new Error("Could not read the file"));
-      if (name.endsWith(".pdf")) {
-        reader.onload = () => resolve({ file_type: "pdf", pdf_base64: String(reader.result).split(",")[1] || "" });
+      const b64 = () => String(reader.result).split(",")[1] || "";
+
+      if (ext === "pdf") {
+        reader.onload = () => resolve({ file_type: "pdf", pdf_base64: b64() });
         reader.readAsDataURL(file);
-      } else if (name.endsWith(".csv")) {
+      } else if (IMAGE_MIME[ext] || file.type.startsWith("image/")) {
+        reader.onload = () => resolve({ file_type: "image", image_base64: b64(), image_media_type: file.type || IMAGE_MIME[ext] || "image/png" });
+        reader.readAsDataURL(file);
+      } else if (ext === "csv") {
         reader.onload = () => {
           const parsed = Papa.parse(String(reader.result), { header: false, skipEmptyLines: true });
           resolve({ file_type: "csv", rows: gridToRows((parsed.data as unknown[][]) || []) });
         };
         reader.readAsText(file);
-      } else {
+      } else if (ext === "xlsx" || ext === "xls" || (!ext && file.type.includes("sheet"))) {
         reader.onload = () => {
           const wb = XLSX.read(reader.result, { type: "array", cellDates: true });
           const ws = wb.Sheets[wb.SheetNames[0]];
@@ -231,6 +239,21 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
           resolve({ file_type: "xlsx", rows: gridToRows(grid) });
         };
         reader.readAsArrayBuffer(file);
+      } else if (ext === "json") {
+        reader.onload = () => {
+          const text = String(reader.result);
+          try {
+            const j = JSON.parse(text);
+            const arr = Array.isArray(j) ? j : Array.isArray(j?.rows) ? j.rows : Array.isArray(j?.data) ? j.data : null;
+            if (arr && arr.length && arr.every((x: any) => x && typeof x === "object")) { resolve({ file_type: "json", rows: arr }); return; }
+          } catch { /* not a clean array-of-objects → hand the raw text to the model */ }
+          resolve({ file_type: "json", raw_text: text });
+        };
+        reader.readAsText(file);
+      } else {
+        // txt, xml, html, or anything else textual → the model reads the meaning.
+        reader.onload = () => resolve({ file_type: ext || "txt", raw_text: String(reader.result) });
+        reader.readAsText(file);
       }
     });
 
@@ -446,7 +469,7 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
                     <FileSpreadsheet size={16} className="text-foreground" />
                     <p className="font-semibold text-sm">Imported Client Data <span className="text-muted-foreground font-normal">(Stage 1)</span></p>
                   </div>
-                  <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv,.pdf" className="hidden"
+                  <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv,.pdf,.json,.xml,.txt,.html,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff,image/*" className="hidden"
                     onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImport(f); e.currentTarget.value = ""; }} />
                   <Button size="sm" variant={batch ? "outline" : "default"} className="gap-1"
                     disabled={importing || isFiled} onClick={() => fileInputRef.current?.click()}>
@@ -460,7 +483,7 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
                     <p className="text-xs text-muted-foreground mt-1 truncate">{batch.file_name} · {(batch.file_type || "").toUpperCase()}</p>
                   </div>
                 ) : (
-                  <p className="text-xs text-muted-foreground">Import the client's Excel, CSV or PDF file to compare against Office Data.</p>
+                  <p className="text-xs text-muted-foreground">Import the client's data in any format — Excel, CSV, PDF, image/scan, JSON, XML or text. It's normalised automatically.</p>
                 )}
               </CardContent>
             </Card>
