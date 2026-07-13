@@ -29,6 +29,9 @@ const BOT_TOKEN           = Deno.env.get("TELEGRAM_BOT_TOKEN") ?? "";
 const SUPABASE_URL        = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const ANTHROPIC_API_KEY   = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
+// LLM provider: OpenRouter (OpenAI-compatible). Model configurable via env.
+const OPENROUTER_API_KEY  = Deno.env.get("OPENROUTER_API_KEY") ?? "";
+const OPENROUTER_MODEL    = Deno.env.get("OPENROUTER_MODEL") ?? "anthropic/claude-sonnet-4";
 const GRAPH_TENANT_ID     = Deno.env.get("GRAPH_TENANT_ID");
 const GRAPH_CLIENT_ID     = Deno.env.get("GRAPH_CLIENT_ID");
 const GRAPH_CLIENT_SECRET = Deno.env.get("GRAPH_CLIENT_SECRET");
@@ -571,13 +574,14 @@ async function claudeFetch(url: string, init: RequestInit, maxRetries = 3): Prom
 
 // ─── handleWithClaude — full Claude tool-use loop ──────────────────────────────
 async function handleWithClaude(chatId: number, userId: number, userText: string, auth: AuthContext): Promise<void> {
-  if (!ANTHROPIC_API_KEY) {
+  if (!OPENROUTER_API_KEY) {
     await sendMsg(chatId, "⚠️ AI service unavailable\\. Please try again later\\.");
     return;
   }
 
-  // Load conversation history (last 20 messages = 10 exchanges)
-  let history: Array<{ role: string; content: any }> = [];
+  // Load conversation history (last 20 messages), normalised to plain-text {role,content}.
+  // Only clean user/assistant text turns are ever persisted, so this is safe to replay.
+  let history: Array<{ role: string; content: any; tool_calls?: any; tool_call_id?: string }> = [];
   try {
     const { data: ctx } = await (supabase as any)
       .from("telegram_context")
@@ -585,93 +589,91 @@ async function handleWithClaude(chatId: number, userId: number, userText: string
       .eq("user_id", userId)
       .maybeSingle();
     const raw: any[] = ctx?.history ?? [];
-    // Defensive clean: keep ONLY pure-text messages.
-    // "some text block" is NOT enough — an assistant msg can have BOTH a text block
-    // AND a tool_use block; keeping it while dropping the paired tool_result produces
-    // the same "unexpected tool_use_id" 400. We need ALL blocks to be text.
-    history = raw.filter((m: any) => {
-      if (typeof m.content === "string") return true;
-      if (!Array.isArray(m.content) || m.content.length === 0) return false;
-      return (m.content as any[]).every((b: any) => b.type === "text");
-    });
+    history = raw
+      .filter((m: any) => {
+        if (m.tool_calls || m.role === "tool") return false;
+        if (typeof m.content === "string") return true;
+        if (!Array.isArray(m.content) || m.content.length === 0) return false;
+        return (m.content as any[]).every((b: any) => b.type === "text");
+      })
+      .map((m: any) => ({
+        role: m.role === "assistant" ? "assistant" : "user",
+        content: typeof m.content === "string"
+          ? m.content
+          : (m.content as any[]).filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n"),
+      }));
   } catch { /* table may not exist yet — degrade gracefully */ }
 
   history.push({ role: "user", content: userText });
 
-  const CLAUDE_HEADERS = {
-    "Content-Type":      "application/json",
-    "x-api-key":         ANTHROPIC_API_KEY,
-    "anthropic-version": "2023-06-01",
+  // OpenRouter (OpenAI-compatible). Convert the Anthropic tool schema → OpenAI function schema.
+  const OPENAI_TOOLS = BILLING_TOOLS.map((t: any) => ({
+    type: "function",
+    function: { name: t.name, description: t.description, parameters: t.input_schema },
+  }));
+  const OR_HEADERS = {
+    "Content-Type":  "application/json",
+    "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+    "X-Title":       "CAFlow Billing Bot",
   };
-
-  const makeBody = (msgs: typeof history) => JSON.stringify({
-    model:      "claude-sonnet-4-6",
-    max_tokens: 2000,
-    system:     SYSTEM_PROMPT,
-    tools:      BILLING_TOOLS,
-    messages:   msgs,
+  const makeBody = (msgs: any[]) => JSON.stringify({
+    model:       OPENROUTER_MODEL,
+    max_tokens:  2000,
+    tools:       OPENAI_TOOLS,
+    tool_choice: "auto",
+    messages:    [{ role: "system", content: SYSTEM_PROMPT }, ...msgs],
   });
 
   try {
-    let res = await claudeFetch("https://api.anthropic.com/v1/messages", {
-      method: "POST", headers: CLAUDE_HEADERS, body: makeBody(history),
+    let res = await claudeFetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST", headers: OR_HEADERS, body: makeBody(history),
     });
-    if (!res.ok) throw new Error(`Claude API ${res.status}: ${(await res.text()).slice(0, 200)}`);
-    let msg = await res.json();
+    if (!res.ok) throw new Error(`AI API ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    let data = await res.json();
+    let choice = data?.choices?.[0]?.message ?? {};
 
-    // ── Tool use loop ──────────────────────────────────────────────────────────
+    // ── Tool-call loop (OpenAI/OpenRouter function calling) ─────────────────────
     let rounds = 0;
-    while (msg.stop_reason === "tool_use" && rounds++ < 5) {
-      const toolUses    = (msg.content as any[]).filter(b => b.type === "tool_use");
-      const toolResults: any[] = [];
+    while (Array.isArray(choice?.tool_calls) && choice.tool_calls.length && rounds++ < 5) {
+      // Echo the assistant turn that requested the tools, then each tool result.
+      history.push({ role: "assistant", content: choice.content ?? "", tool_calls: choice.tool_calls });
 
-      for (const tu of toolUses) {
-        console.log(`[Bot] Tool call: ${tu.name}`, JSON.stringify(tu.input).slice(0, 200));
+      for (const tc of choice.tool_calls) {
+        const name = tc.function?.name;
+        let args: Record<string, any> = {};
+        try { args = tc.function?.arguments ? JSON.parse(tc.function.arguments) : {}; } catch { args = {}; }
+        console.log(`[Bot] Tool call: ${name}`, JSON.stringify(args).slice(0, 200));
         let result: any;
         try {
-          result = await executeTool(tu.name, tu.input as Record<string, any>, chatId, auth);
+          result = await executeTool(name, args, chatId, auth);
         } catch (e: unknown) {
           result = { error: e instanceof Error ? e.message : String(e) };
         }
-        toolResults.push({
-          type:        "tool_result",
-          tool_use_id: tu.id,
-          content:     JSON.stringify(result),
-        });
+        history.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify(result) });
       }
 
-      history.push({ role: "assistant", content: msg.content });
-      history.push({ role: "user",      content: toolResults });
-
-      res = await claudeFetch("https://api.anthropic.com/v1/messages", {
-        method: "POST", headers: CLAUDE_HEADERS, body: makeBody(history),
+      res = await claudeFetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST", headers: OR_HEADERS, body: makeBody(history),
       });
-      if (!res.ok) throw new Error(`Claude API (round ${rounds + 1}) ${res.status}`);
-      msg = await res.json();
+      if (!res.ok) throw new Error(`AI API (round ${rounds + 1}) ${res.status}`);
+      data   = await res.json();
+      choice = data?.choices?.[0]?.message ?? {};
     }
 
-    // ── Send Claude's final text reply ─────────────────────────────────────────
-    const textBlocks = ((msg.content ?? []) as any[]).filter(b => b.type === "text");
-    const finalText  = textBlocks.map((b: any) => b.text).join("\n").trim();
+    // ── Send the final text reply ───────────────────────────────────────────────
+    const finalText = (typeof choice?.content === "string" ? choice.content : "").trim();
     if (finalText) await sendTelegram(chatId, finalText, "Markdown");
 
     // ── Persist updated history ────────────────────────────────────────────────
-    history.push({ role: "assistant", content: msg.content });
+    // Store ONLY clean user/assistant text turns — never assistant-with-tool_calls
+    // or role:"tool" turns (replaying those without their pair would 400 on reload).
+    history.push({ role: "assistant", content: finalText });
     try {
-      // Persist ONLY pure-text exchanges — no tool_use, no tool_result blocks at all.
-      // Rule: keep a message only if EVERY content block is type "text".
-      //
-      // Why "every" not "some":
-      //   An assistant turn can be [{type:"text",...},{type:"tool_use",...}].
-      //   "some" kept it while dropping the matching tool_result user turn,
-      //   producing orphaned tool_use_id → 400 on next load.
-      //   "every" drops the whole mixed turn, so stored history is always clean
-      //   user-text → assistant-text pairs with zero tool internals.
-      const cleanHistory = history.filter((m: any) => {
-        if (typeof m.content === "string") return true;
-        if (!Array.isArray(m.content) || m.content.length === 0) return false;
-        return (m.content as any[]).every((b: any) => b.type === "text");
-      });
+      const cleanHistory = history.filter((m: any) =>
+        (m.role === "user" || m.role === "assistant") &&
+        typeof m.content === "string" && m.content.trim().length > 0 &&
+        !m.tool_calls
+      );
       await (supabase as any)
         .from("telegram_context")
         .upsert(
