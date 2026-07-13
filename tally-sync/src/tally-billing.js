@@ -33,6 +33,7 @@ const { createClient } = require('@supabase/supabase-js');
 const {
   buildVoucherXml, invoiceToVoucherInput, buildDeleteByRemoteId, defaultResolveIncome, escXml,
 } = require('./voucher-xml');
+const { matchName, normName } = require('./matcher');
 
 // ---- config ----------------------------------------------------------------
 const CFG = {
@@ -100,6 +101,143 @@ async function fetchLedgerGroups(company) {
     if (name) map.set(name, parent);
   }
   return map;
+}
+// group -> parent group (to walk the tree and know which ledgers roll up to Sundry Debtors)
+async function fetchGroups(company) {
+  const q = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>G</ID></HEADER>` +
+    `<BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT><SVCURRENTCOMPANY>${escXml(company)}</SVCURRENTCOMPANY></STATICVARIABLES>` +
+    `<TDL><TDLMESSAGE><COLLECTION NAME="G" ISMODIFY="No"><TYPE>Group</TYPE><FETCH>Name,Parent</FETCH></COLLECTION></TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
+  let xml = '';
+  for (let i = 0; i < 5; i++) { xml = await postXml(q); if ((xml.match(/<GROUP\s/g) || []).length > 20) break; }
+  const map = new Map();
+  for (const m of xml.matchAll(/<GROUP\s([^>]*)>([\s\S]*?)<\/GROUP>/g)) {
+    const name = ((m[1].match(/NAME="([^"]*)"/) || [])[1] || '').replace(/&amp;/g, '&');
+    const parent = ((m[2].match(/<PARENT[^>]*>([^<]*)</) || [])[1] || '').replace(/&amp;/g, '&').trim();
+    if (name) map.set(name, parent);
+  }
+  return map;
+}
+// closing balance per ledger (for reconciliation). Tally exports Dr as negative,
+// so a debtor's receivable comes back negative -> we flip it to +ve receivable.
+async function fetchLedgerClosings(company) {
+  const q = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>L</ID></HEADER>` +
+    `<BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT><SVCURRENTCOMPANY>${escXml(company)}</SVCURRENTCOMPANY></STATICVARIABLES>` +
+    `<TDL><TDLMESSAGE><COLLECTION NAME="L" ISMODIFY="No"><TYPE>Ledger</TYPE><FETCH>Name,ClosingBalance</FETCH></COLLECTION></TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
+  let xml = '';
+  for (let i = 0; i < 5; i++) { xml = await postXml(q); if ((xml.match(/<LEDGER\s/g) || []).length > 100) break; }
+  const map = new Map();
+  for (const m of xml.matchAll(/<LEDGER\s([^>]*)>([\s\S]*?)<\/LEDGER>/g)) {
+    const name = ((m[1].match(/NAME="([^"]*)"/) || [])[1] || '').replace(/&amp;/g, '&');
+    const raw = parseFloat((m[2].match(/<CLOSINGBALANCE[^>]*>(-?[\d.]+)</) || [])[1] || '0');
+    if (name) map.set(name, -raw); // flip: +ve = receivable owed to the firm
+  }
+  return map;
+}
+
+async function runRecon(sb, company) {
+  const closings = await fetchLedgerClosings(company);
+  const { data: maps, error } = await sb.from('tally_party_map')
+    .select('client_id,tally_ledger_name').eq('firm_id', CFG.firmId).eq('status', 'approved').not('tally_ledger_name', 'is', null);
+  if (error) throw error;
+  if (!maps || !maps.length) { console.log('  recon: no approved party mappings yet (run match + approve first).'); return; }
+  // CAFlow outstanding per client = sum(invoices.amount_due)
+  const { data: invs } = await sb.from('invoices').select('client_id,amount_due').eq('firm_id', CFG.firmId);
+  const outstanding = new Map();
+  for (const iv of invs || []) outstanding.set(iv.client_id, (outstanding.get(iv.client_id) || 0) + (Number(iv.amount_due) || 0));
+
+  const asOf = new Date().toISOString().slice(0, 10);
+  const rows = [];
+  let mismatch = 0;
+  for (const mp of maps) {
+    const tally = round2(closings.get(mp.tally_ledger_name) || 0);
+    const caf = round2(outstanding.get(mp.client_id) || 0);
+    const diff = round2(tally - caf);
+    const status = Math.abs(diff) > 100 ? 'mismatch' : 'ok';
+    if (status === 'mismatch') mismatch++;
+    rows.push({
+      firm_id: CFG.firmId, client_id: mp.client_id, tally_company_name: company,
+      tally_ledger_name: mp.tally_ledger_name, tally_closing: tally, caflow_outstanding: caf,
+      diff, status, as_of: asOf,
+    });
+  }
+  for (let i = 0; i < rows.length; i += 200) {
+    const { error: uErr } = await sb.from('tally_recon').upsert(rows.slice(i, i + 200), { onConflict: 'firm_id,client_id' });
+    if (uErr) throw uErr;
+  }
+  console.log(`  recon: ${rows.length} clients checked, ${mismatch} mismatch(es) > Rs 100.`);
+}
+const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+// does a ledger's parent-group chain roll up to a target primary group?
+function rollsUpTo(parentGroup, target, groupTree, depth = 0) {
+  if (!parentGroup || depth > 20) return false;
+  if (parentGroup === target) return true;
+  return rollsUpTo(groupTree.get(parentGroup), target, groupTree, depth + 1);
+}
+
+// ---- MATCHER: propose tally_party_map + tally_element_map ------------------
+async function buildMappings(sb, company) {
+  // Tally's XML server is single-threaded — fetch sequentially, never concurrently.
+  const ledgerParents = await fetchLedgerGroups(company);
+  const groupTree = await fetchGroups(company);
+  const ledgers = [...ledgerParents.entries()].map(([name, parent]) => ({
+    name, parent,
+    isDebtor: parent === 'Sundry Debtors' || rollsUpTo(parent, 'Sundry Debtors', groupTree),
+    isIncome: rollsUpTo(parent, 'Sales Accounts', groupTree) || rollsUpTo(parent, 'Direct Incomes', groupTree) || rollsUpTo(parent, 'Indirect Incomes', groupTree) || /income|fees|consultancy/i.test(name),
+    isBank: /bank|cash/i.test(parent),
+  }));
+  const debtors = ledgers.filter((l) => l.isDebtor);
+  console.log(`  match: ${ledgers.length} ledgers (${debtors.length} debtors, ${ledgers.filter((l) => l.isIncome).length} income).`);
+
+  // ---- PARTY MAP: CAFlow client -> Tally debtor ledger ----
+  const { data: clients, error: cErr } = await sb.from('clients')
+    .select('id,name').eq('firm_id', CFG.firmId).is('deleted_at', null);
+  if (cErr) throw cErr;
+  let exact = 0, fuzzy = 0, none = 0;
+  const rows = [];
+  for (const c of clients || []) {
+    const m = matchName(c.name, debtors.length ? debtors : ledgers);
+    if (!m.best) { none++; continue; }
+    rows.push({
+      firm_id: CFG.firmId, client_id: c.id, tally_company_name: company,
+      tally_ledger_name: m.best, match_method: m.method, match_confidence: m.conf,
+      candidates: m.candidates, status: m.auto ? 'approved' : 'proposed',
+    });
+    if (m.method === 'name_exact' && m.auto) exact++; else fuzzy++;
+  }
+  // upsert in chunks (UNIQUE firm_id,client_id) — never downgrade an already-approved row
+  for (let i = 0; i < rows.length; i += 200) {
+    const chunk = rows.slice(i, i + 200);
+    const { error } = await sb.from('tally_party_map').upsert(chunk, { onConflict: 'firm_id,client_id', ignoreDuplicates: false });
+    if (error) throw error;
+  }
+  console.log(`  party map: ${exact} auto-approved (exact), ${fuzzy} proposed (fuzzy), ${none} unmatched (of ${(clients || []).length} clients).`);
+
+  // ---- ELEMENT MAP: income / GST / round-off / bank ledgers ----
+  const findLedger = (re) => (ledgers.find((l) => re.test(l.name)) || {}).name || null;
+  const elems = [
+    { element_type: 'output_cgst', element_key: 'default', label: 'Output CGST', led: findLedger(/^output\s*cgst$/i) },
+    { element_type: 'output_sgst', element_key: 'default', label: 'Output SGST', led: findLedger(/^output\s*sgst$/i) },
+    { element_type: 'output_igst', element_key: 'default', label: 'Output IGST', led: findLedger(/^output\s*igst$/i) },
+    { element_type: 'round_off', element_key: 'default', label: 'Round Off', led: findLedger(/^round\s*off$/i) },
+    { element_type: 'bank', element_key: 'default', label: 'Bank', led: (ledgers.find((l) => l.isBank && /bank/i.test(l.name)) || {}).name || null },
+    { element_type: 'income', element_key: 'tax_audit', label: 'Tax Audit', led: findLedger(/^tax audit fees income$/i) },
+    { element_type: 'income', element_key: 'professional', label: 'Professional Fees', led: findLedger(/^professional fees-?income$/i) },
+    { element_type: 'income', element_key: 'gst', label: 'GST', led: findLedger(/^gst consultancy$/i) },
+    { element_type: 'income', element_key: 'rera', label: 'RERA', led: findLedger(/^rera consultancy$/i) },
+    { element_type: 'income', element_key: 'income_tax', label: 'Income Tax', led: findLedger(/income tax matter/i) },
+    { element_type: 'income', element_key: 'certification', label: 'Certification', led: findLedger(/^certification fees$/i) },
+    { element_type: 'income', element_key: 'default', label: 'Default income', led: findLedger(/^professional fees-?income$/i) },
+  ].filter((e) => e.led);
+  const eRows = elems.map((e) => ({
+    firm_id: CFG.firmId, tally_company_name: company, element_type: e.element_type, element_key: e.element_key,
+    element_label: e.label, tally_ledger_name: e.led, match_method: 'name_exact', match_confidence: 100, status: 'proposed',
+  }));
+  if (eRows.length) {
+    const { error } = await sb.from('tally_element_map').upsert(eRows, { onConflict: 'firm_id,element_type,element_key', ignoreDuplicates: false });
+    if (error) throw error;
+  }
+  console.log(`  element map: ${eRows.length} ledgers proposed (GST/round-off/bank/income).`);
 }
 
 // ---- FORWARD: process the outbound queue -----------------------------------
@@ -277,17 +415,19 @@ async function main() {
   console.log(`Tally billing sync | firm ${CFG.firmId} | company "${company}" | ${CFG.tallyUrl}`);
 
   if (cmd === 'push') await processForwardQueue(sb, company);
+  else if (cmd === 'match') await buildMappings(sb, company);
+  else if (cmd === 'recon') await runRecon(sb, company);
   else if (cmd === 'pull-receipts') await pullAndStageReceipts(sb, company, autoImport);
   else if (cmd === 'status') {
     const { count: qn } = await sb.from('tally_sync_queue').select('*', { count: 'exact', head: true }).eq('firm_id', CFG.firmId).eq('status', 'pending');
     const { count: rn } = await sb.from('tally_receipt_staging').select('*', { count: 'exact', head: true }).eq('firm_id', CFG.firmId).eq('status', 'matched');
     console.log(`  queue pending: ${qn || 0} | staged receipts awaiting import (matched): ${rn || 0}`);
-  } else { console.error('Unknown command. Use: push | pull-receipts | status'); process.exit(1); }
+  } else { console.error('Unknown command. Use: push | pull-receipts | match | recon | status'); process.exit(1); }
   console.log('Done.');
 }
 if (require.main === module) main().catch((e) => { console.error('FATAL:', e.message || e); process.exit(1); });
 
 module.exports = {
-  postXml, parseImport, fetchLedgerGst, fetchLedgerGroups, fetchVouchers,
-  parseReceiptVouchers, matchPartyToClient, processForwardQueue, pullAndStageReceipts,
+  postXml, parseImport, fetchLedgerGst, fetchLedgerGroups, fetchGroups, fetchVouchers,
+  parseReceiptVouchers, matchPartyToClient, processForwardQueue, pullAndStageReceipts, buildMappings,
 };

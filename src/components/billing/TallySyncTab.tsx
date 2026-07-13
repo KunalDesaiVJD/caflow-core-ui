@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { RefreshCw, UploadCloud, DownloadCloud, CheckCircle2, AlertTriangle, Clock, Link2 } from "lucide-react";
+import TallyMappingPanel from "@/components/billing/TallyMappingPanel";
 
 /**
  * TallySyncTab — CAFlow <-> Tally billing sync control surface.
@@ -153,6 +154,11 @@ export default function TallySyncTab({ firmId }: Props) {
   if (loading) return <div className="space-y-3 mt-2">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-24 w-full" />)}</div>;
 
   const syncedCount = invoices.filter((i) => i.vch_id).length;
+  // Accountant SLA: invoices/CNs not yet in Tally, older than the SLA window (3 days).
+  const SLA_DAYS = 3;
+  const daysSince = (d: string) => Math.floor((Date.now() - new Date(d).getTime()) / 86400000);
+  const overdue = invoices.filter((i) => !i.vch_id && i.queue_status !== "pending" && i.queue_status !== "processing" && daysSince(i.invoice_date) >= SLA_DAYS);
+  const oldestOverdue = overdue.reduce((m, i) => Math.max(m, daysSince(i.invoice_date)), 0);
   const pendingReceipts = staging.filter((s) => s.status === "pending");
   const matchedReceipts = staging.filter((s) => s.status === "matched");
   const importedReceipts = staging.filter((s) => s.status === "imported");
@@ -172,6 +178,17 @@ export default function TallySyncTab({ firmId }: Props) {
         on that PC to post them (or schedule it). Receipts appear below after you run
         <code className="mx-1 rounded bg-amber-100 dark:bg-amber-900/40 px-1">tally-sync pull-receipts</code>.
       </div>
+
+      {/* ACCOUNTANT SLA REMINDER — docs not recorded in Tally past the SLA window */}
+      {overdue.length > 0 && (
+        <div className="rounded-md border border-red-300 bg-red-50 dark:bg-red-950/20 px-3 py-2 flex items-center justify-between gap-3">
+          <div className="text-sm text-red-800 dark:text-red-300 flex items-center gap-2">
+            <AlertTriangle size={15} />
+            <span><b>{overdue.length}</b> document{overdue.length > 1 ? "s" : ""} not yet recorded in Tally (oldest <b>{oldestOverdue} days</b>). SLA is {SLA_DAYS} days.</span>
+          </div>
+          <Button size="sm" variant="destructive" onClick={queueAllUnsynced} disabled={busy === "all"}>Queue all for Tally</Button>
+        </div>
+      )}
 
       {/* FORWARD */}
       <Card>
@@ -244,6 +261,9 @@ export default function TallySyncTab({ firmId }: Props) {
           </Table>
         </CardContent>
       </Card>
+
+      {/* MAPPINGS (auto-matcher review) */}
+      <TallyMappingPanel firmId={firmId} />
     </div>
   );
 }
