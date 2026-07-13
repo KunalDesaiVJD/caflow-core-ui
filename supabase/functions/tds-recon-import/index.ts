@@ -69,9 +69,15 @@ Each row object MUST have exactly these keys (use null when a value is genuinely
   pan             : string — 10-char PAN, uppercase, or null.
       Common headers: PAN, PAN No., PAN Number, Permanent Account Number,
       Deductee PAN, Party PAN. Data pattern: 5 letters + 4 digits + 1 letter.
-  section_code    : string — TDS section e.g. "194C","194J","194Q" (strip any prefix words).
-      Common headers: Section, TDS Section, Section Code, Nature of Payment,
-      Payment Section, U/S.
+  section_code    : string — TDS section / nature of payment (strip any prefix
+      words). Common headers: Section, TDS Section, Section Code, Nature of
+      Payment, Payment Section, U/S. PREFERENCE when a file has more than one
+      section-like column: a plain-language descriptor (e.g. "TDS - Purchase",
+      "TDS - Contract", "TDS - Professional Fees", "Rent", "Commission") is far
+      more useful than a bare legal clause citation (e.g. "393(1) 8(ii)",
+      "194Q(2)") — prefer the descriptive column when both exist in the same
+      file. If only a legal-citation-style column exists, extract it as-is;
+      never invent or translate a code you cannot read directly from the file.
   amount_paid     : number — amount paid/credited (plain number, no commas/₹).
       Common headers: Amount, Payment Amount, Gross Amount, Invoice Amount,
       Taxable Amount, Credit Amount, Amount Paid/Credited.
@@ -80,12 +86,22 @@ Each row object MUST have exactly these keys (use null when a value is genuinely
   interest        : number — interest amount (plain number), or null if absent.
       Common headers: Interest, Interest Amount, Late Interest, Int.
   rate            : number — TDS rate % (plain number, e.g. 0.1, 1, 10)
-  date_of_payment : string — keep the original date text exactly as printed, do
+  date_of_payment : string — the date the DEDUCTEE was paid/credited (the
+      transaction date), keep the original date text exactly as printed, do
       not reformat it. Common headers: Date of Credit, Date of Payment, Payment
       Date, Credit Date, Voucher Date, Transaction Date, Deduction Date, Date,
       Value Date, Entry Date. IMPORTANT: if the file only has ONE date-like
       column (most client files do), use it here — do not leave this null just
       because the header doesn't literally contain the word "payment".
+      DISAMBIGUATION: some files have TWO separate date columns — one for the
+      deductee's transaction (e.g. "Date of Credit", populated on every row)
+      and a DIFFERENT one that is actually the challan/bank deposit date (even
+      if its header also says "Date of Payment"), recognisable because it is
+      only populated on rows that ALSO have a Bank Name/BSR Code/Challan
+      No./CIN value and is blank elsewhere. When both exist, use the
+      always-populated transaction-date column ("Date of Credit" or
+      equivalent) for date_of_payment — NEVER the sparse challan-deposit
+      column. We have no field for the challan deposit date; leave it unused.
   date_of_deduction : string — same matching rules as date_of_payment. If the
       file has a SEPARATE, distinctly-labelled deduction date column, use that;
       otherwise reuse the same single date column used for date_of_payment.
@@ -104,16 +120,29 @@ totals/header/footer/subtotal lines; convert Indian-format numbers
 // model as an explicit hint, so date/name/PAN/etc. detection doesn't depend
 // entirely on the model noticing them unprompted. The model can still
 // disregard a hint if the actual data in that column contradicts it.
+// Order WITHIN each field's list is a priority ranking, not just a membership
+// list — guessColumnMapping tries synonyms in order and takes the first one
+// that matches an available header, so e.g. date_of_payment's "dateofcredit"
+// is deliberately listed before "dateofpayment": a real client file (verified
+// against an actual TDS export) can have BOTH a "Date of Credit" column
+// (the deductee transaction date we want) and a "Date of Payment" column that
+// is actually the challan/bank deposit date, not the deductee's — see the
+// DISAMBIGUATION note in CANONICAL_INSTRUCTION. Listing the correct one first
+// makes the deterministic pass prefer it regardless of column order.
 const HEADER_SYNONYMS: Record<keyof CanonicalRow, string[]> = {
   deductee_name: ["deducteename", "partyname", "vendorname", "customername", "beneficiaryname", "payeename", "name", "party", "vendor", "deductee"],
   pan: ["pan", "panno", "pannumber", "permanentaccountnumber", "deducteepan", "partypan"],
   section_code: ["section", "tdssection", "sectioncode", "natureofpayment", "paymentsection", "us", "u/s"],
   amount_paid: ["amount", "paymentamount", "grossamount", "invoiceamount", "taxableamount", "creditamount", "amountpaidcredited", "amountpaid"],
-  tds_amount: ["tds", "tdsamount", "taxdeducted", "deductedtax", "taxamount", "tdsdeducted"],
+  // "amountoftds" handles the very common "Amount of TDS" phrasing (word
+  // order reversed from "tdsamount") — substring matching is order-sensitive
+  // so without this exact token that header would go unmatched (verified
+  // against a real client file that uses exactly this header).
+  tds_amount: ["tds", "tdsamount", "amountoftds", "taxdeducted", "deductedtax", "taxamount", "tdsdeducted"],
   interest: ["interest", "interestamount", "lateinterest", "int"],
   rate: ["rate", "tdsrate", "rateoftds"],
-  date_of_payment: ["dateofcredit", "dateofpayment", "paymentdate", "creditdate", "voucherdate", "transactiondate", "deductiondate", "date", "valuedate", "entrydate"],
-  date_of_deduction: ["dateofdeduction", "deductiondate", "tdsdeductiondate"],
+  date_of_payment: ["dateofcredit", "creditdate", "dateofpaymentcredit", "voucherdate", "transactiondate", "date", "valuedate", "entrydate", "dateofpayment", "paymentdate", "deductiondate"],
+  date_of_deduction: ["dateofdeduction", "tdsdeductiondate"],
   challan_bsr: ["bsr", "bsrcode", "challanbsr"],
   challan_no: ["challanno", "challannumber", "challanserialno"],
 };
@@ -138,17 +167,33 @@ function guessColumnMapping(sampleRows: Record<string, unknown>[]): Partial<Reco
   for (const field of Object.keys(HEADER_SYNONYMS) as (keyof CanonicalRow)[]) {
     const synonyms = HEADER_SYNONYMS[field];
     let best: string | null = null;
-    for (const header of headers) {
-      if (claimed.has(header)) continue;
-      const norm = normaliseHeader(header);
-      if (synonyms.includes(norm)) { best = header; break; } // exact normalised match
+    // Iterate SYNONYMS first, headers second, so the priority order within
+    // each field's list (see comment above) decides the winner when several
+    // headers in the same file match different synonyms of the same field —
+    // not just whichever header happens to come first in the sheet.
+    for (const syn of synonyms) {
+      if (best) break;
+      for (const header of headers) {
+        if (claimed.has(header)) continue;
+        if (normaliseHeader(header) === syn) { best = header; break; } // exact normalised match
+      }
     }
     if (!best) {
       // Fallback: substring match (e.g. header "TDS Amount (Rs.)" contains "tdsamount").
-      for (const header of headers) {
-        if (claimed.has(header)) continue;
-        const norm = normaliseHeader(header);
-        if (synonyms.some(s => norm.includes(s) || s.includes(norm))) { best = header; break; }
+      // Synonyms under 4 chars (e.g. "tds", "us", "int", "pan", "bsr") are
+      // skipped here — verified against a real file that a bare "tds" token
+      // substring-matches "TDS Rate" and wrongly claims it for tds_amount
+      // before the `rate` field ever gets a chance at its own exact match.
+      // Short tokens stay fully valid for the EXACT-match pass above, where
+      // there's no collision risk (the whole header must equal them).
+      for (const syn of synonyms) {
+        if (best) break;
+        if (syn.length < 4) continue;
+        for (const header of headers) {
+          if (claimed.has(header)) continue;
+          const norm = normaliseHeader(header);
+          if (norm.includes(syn) || syn.includes(norm)) { best = header; break; }
+        }
       }
     }
     if (best) { mapping[field] = best; claimed.add(best); }

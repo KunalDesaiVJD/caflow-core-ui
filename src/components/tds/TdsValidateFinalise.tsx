@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import Papa from "papaparse";
+import { gridToRows } from "@/lib/tdsImportParsing";
 
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null;
@@ -202,8 +203,10 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
         reader.readAsDataURL(file);
       } else if (name.endsWith(".csv")) {
         reader.onload = () => {
-          const parsed = Papa.parse(String(reader.result), { header: true, skipEmptyLines: true });
-          resolve({ file_type: "csv", rows: (parsed.data as any[]) || [] });
+          // header:false → raw grid, so gridToRows can find the REAL header
+          // row itself rather than assuming row 1 (see detectHeaderRow above).
+          const parsed = Papa.parse(String(reader.result), { header: false, skipEmptyLines: true });
+          resolve({ file_type: "csv", rows: gridToRows((parsed.data as unknown[][]) || []) });
         };
         reader.readAsText(file);
       } else {
@@ -211,9 +214,13 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
           // cellDates + raw:false emit date cells as their printed text (e.g.
           // "01/04/2025") rather than Excel serial numbers (45748) — otherwise
           // every dated row would falsely mismatch during comparison.
+          // header:1 → raw grid (not row-1-is-header), so gridToRows can find
+          // the real header row (client files often prepend a title/TAN-PAN
+          // block before the actual columns).
           const wb = XLSX.read(reader.result, { type: "array", cellDates: true });
           const ws = wb.Sheets[wb.SheetNames[0]];
-          resolve({ file_type: "xlsx", rows: XLSX.utils.sheet_to_json(ws, { defval: null, raw: false }) as any[] });
+          const grid = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: false }) as unknown[][];
+          resolve({ file_type: "xlsx", rows: gridToRows(grid) });
         };
         reader.readAsArrayBuffer(file);
       }

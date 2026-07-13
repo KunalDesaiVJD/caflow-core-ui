@@ -62,7 +62,20 @@ Field match rules:
 - pan: case-insensitive exact.
 - date: same calendar date regardless of format (dd/mm/yyyy vs dd-Mon-yy etc.).
 - amount / tds / interest: equal if within ₹1 (treat a missing/blank/null value as 0).
-- section: equal after trimming words (e.g. "194Q - Purchase" == "194Q").
+- section: equal after trimming words (e.g. "194Q - Purchase" == "194Q"). ALSO
+  treat a section code and a plain-language nature-of-payment description as
+  matching when they denote the SAME standard category — client files often
+  give a descriptive label instead of (or alongside) a code, e.g.:
+  Purchase of goods = 194Q · Contract/Sub-contract work = 194C ·
+  Professional/Technical fees = 194J · Rent = 194I · Commission/Brokerage =
+  194H · Salary = 192 · Interest (other than securities) = 194A ·
+  Insurance commission = 194D · Dividend = 194. So "TDS - Purchase" (one
+  side) vs "194Q" (other side) is a MATCH, not a mismatch. Only mark section
+  mismatched when the two sides genuinely disagree on the nature of payment,
+  not merely on code-vs-description phrasing. If one side is an unfamiliar
+  raw legal-clause citation you cannot confidently map to a standard section
+  (e.g. a bare sub-clause reference with no descriptive text), compare it
+  literally rather than guessing.
 Do NOT compare rate, challan, or any field other than the seven listed.
 status = "matched" only if every one of the seven compared fields matches; otherwise "mismatched".
 For "mismatched", "office_only" and "imported_only": include one fields[] entry per compared field with the actual office/imported values (as strings) and matched true/false. For "matched": return an empty fields array [] (values are equal by definition — this keeps the response compact). Never invent records.`;
