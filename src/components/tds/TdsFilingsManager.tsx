@@ -190,7 +190,11 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   const [ackFiles, setAckFiles] = useState<Map<string, TdsAckFile>>(new Map());
   const [loading, setLoading] = useState(true);
   const [statusGroup, setStatusGroup] = useState<KpiStatusGroup>("all");
-  const [clientNameSearch, setClientNameSearch] = useState("");
+  // Excel/Tally-style type-to-search — no visible input box. A window-level
+  // keydown listener (below) appends to this buffer whenever no other
+  // interactive element has keyboard focus; the floating "Searching: …"
+  // indicator renders whenever it's non-empty.
+  const [searchBuffer, setSearchBuffer] = useState("");
 
   // Apply an external status-group preset (Dashboard KPI card click) — keyed
   // on `nonce` so re-clicking the same card re-applies it even with no value
@@ -309,16 +313,63 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     });
   }, [filings, formFilter, statusGroup, deletedClients, clients]);
 
-  // Live client-name search — layered on top of the filters above, matches
-  // Client Name only (case-insensitive substring). Empty search = no-op.
+  // Live type-to-search — layered on top of the filters above. Matches if
+  // the buffer is a case-insensitive substring of ANY of: Client Name, PAN,
+  // Ack No, Prepared By, Filed By. Empty buffer = no-op.
   const searchFiltered = useMemo(() => {
-    const q = clientNameSearch.trim().toLowerCase();
+    const q = searchBuffer.trim().toLowerCase();
     if (!q) return filtered;
     return filtered.filter(f => {
-      const name = clients.find(c => c.id === f.client_id)?.name || deletedClients.get(f.client_id)?.name || "";
-      return name.toLowerCase().includes(q);
+      const client = clients.find(c => c.id === f.client_id);
+      const name = client?.name || deletedClients.get(f.client_id)?.name || "";
+      const pan = client?.pan || "";
+      const ackNo = f.acknowledgment_number || "";
+      const preparedBy = users.find(u => u.id === f.preparer_id)?.name || "";
+      const filedBy = users.find(u => u.id === f.checker_id)?.name || "";
+      return [name, pan, ackNo, preparedBy, filedBy].some(v => v.toLowerCase().includes(q));
     });
-  }, [filtered, clientNameSearch, clients, deletedClients]);
+  }, [filtered, searchBuffer, clients, deletedClients, users]);
+
+  // Global type-to-search capture — Excel/Tally style. Fires only when
+  // keyboard focus isn't on a real interactive control (native inputs,
+  // textareas, contentEditable, or any Radix-based control surfaced as a
+  // combobox/listbox/option/checkbox/menuitem/button, which covers the
+  // FY/Quarter/Form/Client Selects, the per-row Status Select, and any
+  // button) and no Radix Dialog/AlertDialog (e.g. the History Sheet, or a
+  // Confirm Finalisation-style dialog elsewhere on the page) is open.
+  useEffect(() => {
+    const INTERACTIVE_SELECTOR = [
+      "input", "textarea", "select", '[contenteditable="true"]',
+      '[role="combobox"]', '[role="listbox"]', '[role="option"]',
+      '[role="checkbox"]', '[role="menuitem"]', "button",
+    ].join(", ");
+    const isInteractiveElementFocused = () => {
+      const el = document.activeElement as HTMLElement | null;
+      return !!el && el !== document.body && !!el.closest(INTERACTIVE_SELECTOR);
+    };
+    const isDialogOpen = () =>
+      !!document.querySelector('[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]');
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (isDialogOpen() || isInteractiveElementFocused()) return;
+
+      if (e.key === "Escape") {
+        if (searchBuffer) { e.preventDefault(); setSearchBuffer(""); }
+        return;
+      }
+      if (e.key === "Backspace") {
+        if (searchBuffer) { e.preventDefault(); setSearchBuffer(prev => prev.slice(0, -1)); }
+        return;
+      }
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        setSearchBuffer(prev => prev + e.key);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [searchBuffer]);
 
   // Excel-style AutoFit for the Status column — width follows the widest
   // possible option (a fixed enum) rather than a fixed guess. Font is copied
@@ -689,6 +740,13 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
 
   return (
     <div className="space-y-4">
+      {/* Excel/Tally-style type-to-search overlay — floating, non-intrusive,
+          shown only while the search buffer is non-empty. */}
+      {searchBuffer && (
+        <div className="fixed bottom-4 right-4 z-[60] bg-foreground text-background text-xs font-medium px-3 py-1.5 rounded-full shadow-lg pointer-events-none">
+          Searching: {searchBuffer}
+        </div>
+      )}
       {!hideHeader && (
         <div>
           <h2 className="text-xl font-bold text-foreground">Filings Management</h2>
@@ -703,15 +761,6 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
           in the Dashboard's top-level header and flow down as props, so
           there is a single source of truth and no duplicate filter UI here. */}
       <div className="flex flex-wrap gap-3 items-end">
-        <div className="space-y-0.5">
-          <Label className="text-[10px]">Search Client</Label>
-          <Input
-            placeholder="Search client name…"
-            value={clientNameSearch}
-            onChange={e => setClientNameSearch(e.target.value)}
-            className="h-8 w-[220px] text-xs"
-          />
-        </div>
         <div className="flex-1" />
         {onToggleMaximize && (
           <Button
@@ -803,8 +852,8 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                 )) : searchFiltered.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
-                      {clientNameSearch.trim()
-                        ? `No clients match "${clientNameSearch.trim()}".`
+                      {searchBuffer.trim()
+                        ? `No matches for "${searchBuffer.trim()}".`
                         : "No filings found. Filings are created when TDS service is activated for a client."}
                     </TableCell>
                   </TableRow>
