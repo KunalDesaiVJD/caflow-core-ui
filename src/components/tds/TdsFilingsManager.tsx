@@ -180,6 +180,17 @@ export const getDueDateColor = (fy: string, quarter: string, status: string) => 
   return "text-emerald-600";
 };
 
+// Client names in this CA/tax domain commonly carry a trailing
+// "(PROP:Trade Name)"-style parenthetical after an individual's name.
+// Splitting at the first top-level "(" — rather than leaving it to the
+// browser's own reflow — guarantees the parenthetical always starts on its
+// own line instead of breaking wherever the text happens to wrap.
+const splitClientName = (name: string): { main: string; parenthetical: string | null } => {
+  const match = name.match(/^(.+?)\s*(\(.+)$/);
+  if (!match) return { main: name, parenthetical: null };
+  return { main: match[1], parenthetical: match[2] };
+};
+
 export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId, onNavigateDataEntry, hideHeader, fyFilter, quarterFilter, clientFilter, formFilter, preset, onFilingsChanged, isMaximized, onToggleMaximize, refreshKey }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -837,10 +848,10 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                       onCheckedChange={toggleSelectAll}
                     />
                   </TableHead>
-                  <TableHead className="min-w-[150px] sticky left-0 bg-background z-10">Client</TableHead>
+                  <TableHead className="w-[190px] sticky left-0 bg-background z-10">Client</TableHead>
                   <TableHead style={{ width: statusColWidth, minWidth: statusColWidth }}>Status</TableHead>
                   <TableHead>Filing Date</TableHead>
-                  <TableHead>Ack No</TableHead>
+                  <TableHead className="w-40">Ack No</TableHead>
                   <TableHead>Prepared By</TableHead>
                   <TableHead>Filed By</TableHead>
                   <TableHead className="w-[100px]">Actions</TableHead>
@@ -873,8 +884,17 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                       <TableCell className="font-medium sticky left-0 bg-background">
                         <HoverCard openDelay={200} closeDelay={100}>
                           <HoverCardTrigger asChild>
-                            <span className={cn("cursor-default hover:underline decoration-dotted underline-offset-4", archived && "line-through text-muted-foreground")}>
-                              {client?.name || deletedClients.get(f.client_id)?.name || "—"}
+                            <span className={cn("inline-block max-w-[190px] cursor-default hover:underline decoration-dotted underline-offset-4", archived && "line-through text-muted-foreground")}>
+                              {(() => {
+                                const displayName = client?.name || deletedClients.get(f.client_id)?.name || "—";
+                                const { main, parenthetical } = splitClientName(displayName);
+                                return parenthetical ? (
+                                  <>
+                                    <span className="block">{main}</span>
+                                    <span className="block">{parenthetical}</span>
+                                  </>
+                                ) : displayName;
+                              })()}
                             </span>
                           </HoverCardTrigger>
                           <HoverCardContent side="right" className="w-80 p-3">
@@ -949,7 +969,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                             <div className="space-y-1">
                               {/* Ack No — editable unless Filed */}
                               <Input
-                                className={cn("h-7 w-28 text-xs", isFiledLocked && "bg-muted cursor-not-allowed opacity-70")}
+                                className={cn("h-7 w-32 text-xs", isFiledLocked && "bg-muted cursor-not-allowed opacity-70")}
                                 defaultValue={f.acknowledgment_number || ""}
                                 disabled={isFiledLocked}
                                 onBlur={e => { if (!isFiledLocked && e.target.value !== (f.acknowledgment_number || "")) handleInlineUpdate(f, "acknowledgment_number", e.target.value || null); }}
