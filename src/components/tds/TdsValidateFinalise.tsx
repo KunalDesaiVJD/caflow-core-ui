@@ -20,7 +20,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   ShieldCheck, AlertTriangle, CheckCircle2, Upload, Play, FileSpreadsheet,
-  RotateCcw, Loader2, Users, FileWarning, Info,
+  RotateCcw, Loader2, Users, FileWarning, Info, Check, X,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import Papa from "papaparse";
@@ -78,18 +78,30 @@ const DIFF_FIELDS = ["name", "pan", "date", "amount", "tds", "interest", "sectio
  * One compact cell for a single field's Office-vs-Imported comparison — no
  * expand/collapse; every row shows every field's values directly, so the
  * whole table is scannable at a glance for 100+ entries without clicking
- * into each one.
+ * into each one. A ✓/✗ marks each field individually (not just the row's
+ * overall status) so it's clear at a glance WHICH field(s) actually caused a
+ * row to be flagged, e.g. "PAN/Date/Amount all matched, only Section
+ * differs" instead of a single opaque "Mismatched" badge. Hover a mismatched
+ * field for the AI's short note on why (when it provided one).
  */
 function DiffCell({ diffs, field }: { diffs: FieldDiff[]; field: string }) {
   const d = diffs.find(x => x.field === field);
   if (!d) return <span className="text-muted-foreground text-xs">—</span>;
   if (d.matched !== false) {
-    return <span className="text-xs">{fmtVal(d.office ?? d.imported)}</span>;
+    return (
+      <span className="text-xs inline-flex items-center gap-1">
+        <Check size={11} className="text-emerald-600 shrink-0" />
+        {fmtVal(d.office ?? d.imported)}
+      </span>
+    );
   }
   return (
-    <div className="text-xs leading-tight">
-      <div className="text-foreground">{fmtVal(d.office)}</div>
-      <div className="text-destructive">{fmtVal(d.imported)}</div>
+    <div className="text-xs leading-tight inline-flex items-start gap-1" title={d.difference || undefined}>
+      <X size={11} className="text-destructive shrink-0 mt-0.5" />
+      <div>
+        <div className="text-foreground">{fmtVal(d.office)}</div>
+        <div className="text-destructive">{fmtVal(d.imported)}</div>
+      </div>
     </div>
   );
 }
@@ -449,12 +461,14 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
 
               {/* Flat, entry-wise table — every one of the (up to 100+) compared
                   records is its own row with every field visible directly, no
-                  expand/collapse. Where Office and Imported disagree on a
-                  field, both values are shown stacked (black = Office,
-                  red = Imported) right in the cell. */}
-              <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground px-1">
-                <span className="inline-block w-2 h-2 rounded-full bg-foreground/70" /> Office value
-                <span className="inline-block w-2 h-2 rounded-full bg-destructive ml-3" /> Imported value (shown only when it differs from Office)
+                  expand/collapse. Each field carries its own ✓/✗ so it's
+                  clear exactly which field(s) caused a row to be flagged —
+                  not just an opaque row-level "Mismatched". Where Office and
+                  Imported disagree, both values are shown stacked (black =
+                  Office, red = Imported) right in the cell. */}
+              <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground px-1 flex-wrap">
+                <Check size={11} className="text-emerald-600" /> Field matched (Office &amp; Imported agree)
+                <X size={11} className="text-destructive ml-3" /> Field differs — <span className="text-foreground">Office</span> / <span className="text-destructive">Imported</span> shown stacked, hover for why
               </div>
               <Card><CardContent className="p-0 overflow-x-auto">
                 <Table>
