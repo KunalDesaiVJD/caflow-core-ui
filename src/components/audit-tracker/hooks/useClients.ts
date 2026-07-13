@@ -111,8 +111,21 @@ export function useClients(
           .filter(Boolean)
       );
 
-      // ── Union & fetch the actual client rows
-      const clientIds = [...new Set([...setupClientIds, ...engClientIds, ...clsClientIds])];
+      // 2026-06-25 (V J Desai request v2): Planning + Audit Status dropdowns
+      // should surface ONLY clients whose audit ENGAGEMENT has been created
+      // for the selected FY — not every client flagged audit-applicable in
+      // Advanced Info / classification. Rationale: an engagement is the
+      // canonical "we've committed to auditing this client" record; setup
+      // flags and classifications are earlier signals that shouldn't
+      // pre-populate the tracker.
+      //
+      // Kept the setup + classification queries above ONLY because they
+      // build taxAuditMap (Audit Status uses it to lock the 3CA/3CB columns
+      // to "NA" for statutory-only clients). Their client IDs are ignored
+      // for the actual client list here.
+      void setupClientIds;
+      void clsClientIds;
+      const clientIds = [...engClientIds];
       if (clientIds.length === 0) {
         setClients([]);
         setLoading(false);
