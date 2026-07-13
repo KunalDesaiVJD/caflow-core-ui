@@ -148,6 +148,30 @@ function sectionsMatch(a: unknown, b: unknown, aliases: Alias[]): boolean {
   return ca === cb;
 }
 
+// ── Business rule: the TDS RATE derives the section ──────────────────────────
+// The applicable TDS rate is a hard signal for the nature of payment — e.g.
+// 0.1% is UNIQUELY section 194Q (purchase of goods); a "Contract"/194C or
+// "Professional Fees"/194J payment can never be deducted at 0.1%. So when the
+// effective rate (TDS ÷ Amount) of a paired transaction is a valid rate for the
+// OFFICE section code, the rate CONFIRMS the office section — the client's
+// differing text label (e.g. "TDS - Contract") is just a mislabel, not a real
+// discrepancy. Standard statutory rates per section (percent):
+const SECTION_RATES: Record<string, number[]> = {
+  "192A": [10], "194": [10], "194A": [10], "194B": [30], "194BA": [30], "194BB": [30],
+  "194C": [1, 2], "194D": [5, 10], "194DA": [5], "194EE": [10], "194G": [5],
+  "194H": [2, 5], "194I": [2, 10], "194IA": [1], "194IB": [5, 2], "194IC": [10],
+  "194J": [2, 10], "194K": [10], "194LA": [10], "194LBA": [10], "194M": [5],
+  "194N": [2, 5], "194O": [1], "194Q": [0.1], "194R": [10], "194S": [1], "194T": [10],
+  "206C": [0.1, 1, 2.5, 5], "206CA": [1],
+};
+/** Does the effective rate (percent) match a statutory rate for `section`? */
+function rateConfirmsSection(effRatePct: number | null, section: string | null): boolean {
+  if (effRatePct == null || !section) return false;
+  const rates = SECTION_RATES[section.toUpperCase()];
+  if (!rates || rates.length === 0) return false; // slab-rate sections (192/195) — no derivation
+  return rates.some(x => Math.abs(effRatePct - x) <= Math.max(0.02, x * 0.06));
+}
+
 // ── Records ──────────────────────────────────────────────────────────────────
 interface Rec {
   id: string;
@@ -204,13 +228,20 @@ function comparePair(o: Rec, i: Rec, aliases: Alias[]): { fields: FieldDiff[]; s
 
   let secOk = sectionsMatch(o.section, i.section, aliases);
   const cs = canonicalSection(o.section, aliases), ci = canonicalSection(i.section, aliases);
-  // Office code is AUTHORITATIVE (staff-entered for filing) and this pair is
-  // already the same transaction (PAN+date+amount matched). If the sections
-  // differ only because the CLIENT value is an opaque notation that resolves to
-  // NO recognised TDS section (e.g. "393(1) 6(i) D(b)" — an internal/clause
-  // code), that's not a real discrepancy — accept it. A client value that DOES
-  // resolve to a DIFFERENT recognised section (e.g. Contract/194C vs office
-  // 194Q) stays a mismatch (and is double-checked by the AI adjudicator).
+  // Multi-factor section determination (office code is AUTHORITATIVE, and this
+  // pair already matches on PAN+date+amount):
+  // 1) RATE derives the section — if the effective rate (TDS ÷ Amount) is a
+  //    statutory rate for the office section, the rate CONFIRMS it and a
+  //    differing client text label (e.g. "TDS - Contract" at 0.1% ⇒ actually
+  //    194Q) is a mislabel, not a real mismatch.
+  // 2) Otherwise, an opaque client notation resolving to NO recognised section
+  //    (e.g. "393(1) 6(i) D(b)") defers to the authoritative office code.
+  // A client value that resolves to a DIFFERENT recognised section AND whose
+  // rate does not fit the office section stays a mismatch (AI double-checks it).
+  if (!secOk) {
+    const effRate = amt(o.amount) > 0 ? (amt(o.tds) / amt(o.amount)) * 100 : null;
+    if (rateConfirmsSection(effRate, cs)) secOk = true;
+  }
   const importedRecognised = ci != null && SECTION_CODE_RE.test(ci);
   if (!secOk && !importedRecognised) secOk = true;
   fields.push(fieldDiff("section", o.section, i.section, secOk,
