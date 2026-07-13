@@ -592,6 +592,40 @@ describe("stream_gap — money moved, nothing booked (line_items)", () => {
   });
 });
 
+describe("ageing — outstanding balance with no recent activity", () => {
+  it("flags an aged creditor (no activity > 365d), not one with recent activity, and skips sub-threshold balances", () => {
+    const r = rule({
+      rule_id: "CRED-AGE", category: "CRED", detection_level: "account",
+      detection_logic: { check: "ageing", scope: { parent_group_keywords: ["creditor"] }, days: 365, min_balance: 1000 },
+      audit_query_template: "Creditor {account} balance {amount} outstanding {count} days with no activity",
+    });
+    const out = run(r, {
+      tb: [
+        tb({ ledger_name: "Old Vendor", parent_group: "Sundry Creditors", closing_balance: 50000, balance_type: "Cr" }),
+        tb({ ledger_name: "Active Vendor", parent_group: "Sundry Creditors", closing_balance: 40000, balance_type: "Cr" }),
+        tb({ ledger_name: "Tiny Vendor", parent_group: "Sundry Creditors", closing_balance: 500, balance_type: "Cr" }),
+      ],
+      vouchers: [
+        vch({ amount: 50000, voucher_date: "2024-06-01", party_ledger: "Old Vendor" }),
+        vch({ amount: 40000, voucher_date: "2026-03-01", party_ledger: "Active Vendor" }),
+      ],
+    });
+    expect(out.map((f) => f.account)).toEqual(["Old Vendor"]);
+    expect(out[0].amount).toBe(50000);
+  });
+
+  it("treats a creditor with a balance but zero activity as fully aged", () => {
+    const r = rule({
+      rule_id: "CRED-AGE2", category: "CRED", detection_level: "account",
+      detection_logic: { check: "ageing", scope: { parent_group_keywords: ["creditor"] }, days: 180 },
+      audit_query_template: "Aged: {account}",
+    });
+    const out = run(r, { tb: [tb({ ledger_name: "Dormant Vendor", parent_group: "Sundry Creditors", closing_balance: 20000, balance_type: "Cr" })], vouchers: [] });
+    expect(out).toHaveLength(1);
+    expect(out[0].account).toBe("Dormant Vendor");
+  });
+});
+
 describe("run ledger — completeness accounting (no rule silently dropped)", () => {
   it("reports executed / needs_data / skipped_no_handler per rule", () => {
     const rExec = rule({ rule_id: "CASH-X", category: "CASH", detection_logic: { check: "single_txn", threshold: 10000 } });

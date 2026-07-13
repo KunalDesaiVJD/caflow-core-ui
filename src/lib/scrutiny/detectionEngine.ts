@@ -914,6 +914,8 @@ const accountInScope = (r: TBRow, scope: Record<string, unknown> | undefined): b
   if (!scope) return true;
   if (scope.nonzero && num(r.closing_balance) === 0) return false;
   if (scope.side && sideOf(r.balance_type) !== sideOf(scope.side)) return false;
+  const grpKw = (scope.parent_group_keywords ?? scope.group) as unknown;
+  if (Array.isArray(grpKw) && grpKw.length && !kwMatch(r.parent_group ?? "", grpKw)) return false;
   const kw = scope.ledger_keywords;
   if (Array.isArray(kw) && kw.length && !kwMatch(`${r.ledger_name} ${r.parent_group ?? ""}`, kw)) return false;
   return true;
@@ -1078,6 +1080,63 @@ const h_stream_gap: CheckHandler = (rule, data) => {
   return out;
 };
 
+/**
+ * ageing — flags a scoped ledger (e.g. creditors / debtors) whose non-zero closing balance has had
+ * NO transaction activity for more than `days` before FY-end (a computable proxy for "outstanding
+ * > N days"). Age = days between the ledger's most recent voucher (party leg or any line-item leg)
+ * and financialYearEnd; a ledger with a balance but zero activity is treated as fully aged.
+ * detection_logic: { check:"ageing", days:number, min_balance?:number, scope?, message? }.
+ */
+const h_ageing: CheckHandler = (rule, data, ctx) => {
+  const dl = rule.detection_logic as unknown as Record<string, unknown>;
+  const scope = dl.scope as Record<string, unknown> | undefined;
+  const days = num(dl.days ?? dl.threshold ?? rule.threshold_value, 365);
+  const minBal = num(dl.min_balance, 0);
+  const tpl = (dl.message as string | undefined) ?? rule.audit_query_template;
+  const fyEnd = parseISO(ctx.financialYearEnd);
+  const endT = fyEnd ? fyEnd.getTime() : null;
+
+  // most recent activity date per ledger name (party leg + every line-item leg)
+  const lastAct = new Map<string, number>();
+  const bump = (name: string | null | undefined, t: number) => {
+    const k = normName(name ?? "");
+    if (!k) return;
+    const cur = lastAct.get(k);
+    if (cur == null || t > cur) lastAct.set(k, t);
+  };
+  for (const v of data.vouchers) {
+    const d = parseISO(v.voucher_date);
+    if (!d) continue;
+    const t = d.getTime();
+    bump(v.party_ledger, t);
+    bump(v.ledger_name, t);
+    for (const leg of Array.isArray(v.line_items) ? v.line_items : []) bump(leg.ledger_name, t);
+  }
+
+  const out: ScrutinyFinding[] = [];
+  for (const r of data.tb) {
+    if (!accountInScope(r, scope)) continue;
+    const bal = Math.abs(num(r.closing_balance));
+    if (bal === 0 || bal < minBal) continue;
+    const last = lastAct.get(normName(r.ledger_name));
+    const ageDays = last == null ? 99999 : endT != null ? Math.round((endT - last) / 86400000) : 0;
+    if (ageDays > days) {
+      out.push(finding(rule, {
+        account: r.ledger_name,
+        amount: bal,
+        flag_message: render(tpl, { account: r.ledger_name, amount: fmtAmt(bal), count: ageDays }),
+        evidence: {
+          balance: bal,
+          days_since_last_activity: ageDays === 99999 ? "no activity in year" : ageDays,
+          last_activity: last ? new Date(last).toISOString().slice(0, 10) : null,
+          parent_group: r.parent_group,
+        },
+      }));
+    }
+  }
+  return out;
+};
+
 // ---------------------------------------------------------------------------
 // Registry + runner
 // ---------------------------------------------------------------------------
@@ -1125,6 +1184,7 @@ export const GENERIC_HANDLERS: Record<string, CheckHandler> = {
   expr: h_expr,
   cotag: h_cotag,
   stream_gap: h_stream_gap,
+  ageing: h_ageing,
 };
 
 export const GENERIC_CHECK_KINDS = Object.keys(GENERIC_HANDLERS);
