@@ -105,6 +105,30 @@ async function invokeFn(name: string, body: unknown): Promise<any> {
   return data;
 }
 
+/** A number that smoothly counts up/down to its target (dashboard-style). */
+function AnimatedNumber({ value }: { value: number }) {
+  const [display, setDisplay] = useState(0);
+  const prev = useRef(0);
+  useEffect(() => {
+    const from = prev.current, to = value;
+    if (from === to) { setDisplay(to); return; }
+    let raf = 0; let start = 0;
+    const step = (ts: number) => {
+      if (!start) start = ts;
+      const t = Math.min(1, (ts - start) / 500);
+      const eased = 1 - Math.pow(1 - t, 3); // easeOutCubic
+      setDisplay(Math.round(from + (to - from) * eased));
+      if (t < 1) raf = requestAnimationFrame(step);
+      else { setDisplay(to); prev.current = to; }
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [value]);
+  return <>{display}</>;
+}
+
+type FilterKey = null | "total" | "matched" | "mismatched" | "overridden" | "pending";
+
 export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNavigateDataEntry }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -127,6 +151,7 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
   const [finalising, setFinalising] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [runSignal, setRunSignal] = useState(0);
+  const [activeFilter, setActiveFilter] = useState<FilterKey>(null); // clicked summary card
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const loadSeq = useRef(0); // guards against out-of-order loadAll responses
 
@@ -373,6 +398,22 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     return rs.sort((a, b) => (a.overridden ? 1 : 0) - (b.overridden ? 1 : 0));
   }, [results]);
 
+  // Reset the active card filter when the selection changes.
+  useEffect(() => { setActiveFilter(null); }, [selClient, selFy, selQuarter, selForm]);
+
+  // Records to show when a summary card is clicked (null = default exceptions view).
+  const cardFiltered = useMemo((): ReconResult[] | null => {
+    const rs = results || [];
+    switch (activeFilter) {
+      case "total": return rs;
+      case "matched": return rs.filter(r => r.match_status === "matched");
+      case "mismatched": return rs.filter(r => r.match_status !== "matched");
+      case "overridden": return rs.filter(r => r.overridden);
+      case "pending": return rs.filter(r => r.match_status !== "matched" && !r.overridden);
+      default: return null;
+    }
+  }, [results, activeFilter]);
+
   const overrideBtn = (r: ReconResult) => (
     r.overridden ? (
       <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => undoOverride(r)}>
@@ -383,6 +424,83 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
         <ShieldCheck size={12} /> Override
       </Button>
     )
+  );
+
+  // One mismatch/exception record → a card showing only the differing fields.
+  const renderMismatchCard = (r: ReconResult) => {
+    const diffs = r.field_diffs || [];
+    return (
+      <Card key={r.id} className={cn(r.overridden ? "border-blue-200 dark:border-blue-900 opacity-80" : "border-destructive/30")}>
+        <CardContent className="p-0">
+          <div className="flex items-center justify-between gap-2 px-4 py-2 border-b bg-muted/30">
+            <div className="flex items-center gap-2 min-w-0">
+              <p className="font-semibold text-sm truncate">{r.record_label || "—"}</p>
+              {r.overridden && <Badge variant="outline" className="text-[10px] text-blue-600 border-blue-300 shrink-0">Overridden{r.overridden_by && userMap[r.overridden_by] ? ` · ${userMap[r.overridden_by]}` : ""}</Badge>}
+            </div>
+            {!isFiled && overrideBtn(r)}
+          </div>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[90px]">Field</TableHead>
+                  <TableHead>Office Data</TableHead>
+                  <TableHead>Imported Excel</TableHead>
+                  <TableHead className="w-[110px] text-right">Result</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {DIFF_FIELDS.filter(f => { const d = diffs.find(x => x.field === f); return d ? d.matched === false : false; }).map(f => {
+                  const d = diffs.find(x => x.field === f);
+                  return (
+                    <TableRow key={f} className="bg-destructive/5">
+                      <TableCell className="font-medium text-xs">{FIELD_LABELS[f]}</TableCell>
+                      <TableCell className="text-xs">{fmtVal(d?.office)}</TableCell>
+                      <TableCell className="text-xs text-destructive font-medium">{fmtVal(d?.imported)}</TableCell>
+                      <TableCell className="text-right"><span className="inline-flex items-center gap-1 text-destructive text-xs"><X size={12} /> Mismatch</span></TableCell>
+                    </TableRow>
+                  );
+                })}
+                <TableRow className="bg-muted/40">
+                  <TableCell className="font-semibold text-xs">Result</TableCell>
+                  <TableCell colSpan={3} className={cn("text-xs font-medium", r.overridden ? "text-blue-600" : "text-destructive")}>
+                    {r.overridden ? `Overridden — ${r.override_note || "accepted"}` : reasonFor(r)}
+                  </TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  };
+
+  // Matched records (shown only when the user filters to Matched/Total) → compact table.
+  const renderMatchedTable = (rows: ReconResult[]) => (
+    <Card><CardContent className="p-0 overflow-x-auto">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Record</TableHead>
+            {DIFF_FIELDS.map(f => <TableHead key={f} className="text-xs">{FIELD_LABELS[f]}</TableHead>)}
+            <TableHead className="text-right text-xs">Result</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map(r => {
+            const diffs = r.field_diffs || [];
+            const val = (f: string) => { const d = diffs.find(x => x.field === f); return fmtVal(d?.office ?? d?.imported); };
+            return (
+              <TableRow key={r.id}>
+                <TableCell className="text-xs font-medium">{r.record_label || "—"}</TableCell>
+                {DIFF_FIELDS.map(f => <TableCell key={f} className="text-xs">{val(f)}</TableCell>)}
+                <TableCell className="text-right"><span className="inline-flex items-center gap-1 text-emerald-600 text-xs"><CheckCircle2 size={11} /> Matched</span></TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </CardContent></Card>
   );
 
   return (
@@ -508,25 +626,47 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
                 <span className="text-xs text-muted-foreground">Office ↔ Imported, field by field</span>
               </div>
 
-              <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
-                {[
-                  { label: "Total", value: summary.total, cls: "" },
-                  { label: "Matched", value: summary.matched, cls: "text-emerald-600" },
-                  { label: "Mismatched", value: summary.mismatched, cls: summary.mismatched > 0 ? "text-destructive" : "" },
-                  { label: "Overridden", value: summary.overridden, cls: "text-blue-600" },
-                  { label: "Pending", value: summary.pending, cls: summary.pending > 0 ? "text-amber-600" : "text-emerald-600" },
-                ].map(s => (
-                  <Card key={s.label}><CardContent className="p-3 text-center">
-                    <p className={cn("text-2xl font-bold", s.cls)}>{s.value}</p>
+              {/* Live, clickable dashboard cards — animated counters; click a card
+                  to filter the results to that category, click again to clear. */}
+              <div className={cn("grid grid-cols-3 sm:grid-cols-5 gap-3", comparing && "animate-pulse")}>
+                {([
+                  { key: "total" as const, label: "Total", value: summary.total, cls: "" },
+                  { key: "matched" as const, label: "Matched", value: summary.matched, cls: "text-emerald-600" },
+                  { key: "mismatched" as const, label: "Mismatched", value: summary.mismatched, cls: summary.mismatched > 0 ? "text-destructive" : "" },
+                  { key: "overridden" as const, label: "Overridden", value: summary.overridden, cls: "text-blue-600" },
+                  { key: "pending" as const, label: "Pending", value: summary.pending, cls: summary.pending > 0 ? "text-amber-600" : "text-emerald-600" },
+                ]).map(s => (
+                  <button key={s.label} type="button"
+                    onClick={() => setActiveFilter(activeFilter === s.key ? null : s.key)}
+                    aria-pressed={activeFilter === s.key}
+                    className={cn(
+                      "rounded-lg border bg-card p-3 text-center transition-all hover:border-primary/50 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                      activeFilter === s.key ? "ring-2 ring-primary border-primary" : "border-border",
+                    )}>
+                    <p className={cn("text-2xl font-bold tabular-nums", s.cls)}><AnimatedNumber value={s.value} /></p>
                     <p className="text-xs text-muted-foreground">{s.label}</p>
-                  </CardContent></Card>
+                  </button>
                 ))}
               </div>
 
-              {/* Validation focuses on EXCEPTIONS only — fully-matched records are
-                  not listed (they're counted in the tiles above). When there is
-                  nothing to action, show a professional success summary. */}
-              {attention.length === 0 ? (
+              {cardFiltered !== null ? (
+                /* A summary card is active → show only that category. */
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs px-1">
+                    <span className="text-muted-foreground">Showing <b className="text-foreground">{cardFiltered.length}</b> {activeFilter} record{cardFiltered.length === 1 ? "" : "s"}</span>
+                    <Button variant="ghost" size="sm" className="h-6 text-xs gap-1" onClick={() => setActiveFilter(null)}><X size={11} /> Clear filter</Button>
+                  </div>
+                  {cardFiltered.length === 0 ? (
+                    <div className="p-8 text-center text-sm text-muted-foreground rounded-lg border border-dashed">No {activeFilter} records found.</div>
+                  ) : (
+                    <div className="space-y-3">
+                      {cardFiltered.filter(r => r.match_status !== "matched").map(renderMismatchCard)}
+                      {cardFiltered.some(r => r.match_status === "matched") && renderMatchedTable(cardFiltered.filter(r => r.match_status === "matched"))}
+                    </div>
+                  )}
+                </div>
+              ) : attention.length === 0 ? (
+                /* Default view, nothing to action → professional success panel. */
                 <Card className="border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20">
                   <CardContent className="p-6 space-y-3">
                     <div className="flex items-center gap-2">
@@ -544,57 +684,10 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
                     </p>
                   </CardContent>
                 </Card>
-              ) : attention.map(r => {
-                const diffs = r.field_diffs || [];
-                return (
-                  <Card key={r.id} className={cn(r.overridden ? "border-blue-200 dark:border-blue-900 opacity-80" : "border-destructive/30")}>
-                    <CardContent className="p-0">
-                      <div className="flex items-center justify-between gap-2 px-4 py-2 border-b bg-muted/30">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <p className="font-semibold text-sm truncate">{r.record_label || "—"}</p>
-                          {r.overridden && <Badge variant="outline" className="text-[10px] text-blue-600 border-blue-300 shrink-0">Overridden{r.overridden_by && userMap[r.overridden_by] ? ` · ${userMap[r.overridden_by]}` : ""}</Badge>}
-                        </div>
-                        {!isFiled && overrideBtn(r)}
-                      </div>
-                      <div className="overflow-x-auto">
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead className="w-[90px]">Field</TableHead>
-                              <TableHead>Office Data</TableHead>
-                              <TableHead>Imported Excel</TableHead>
-                              <TableHead className="w-[110px] text-right">Result</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {/* Only the fields that DIFFER are shown — matching
-                                fields are hidden to keep the focus on the issue. */}
-                            {DIFF_FIELDS.filter(f => { const d = diffs.find(x => x.field === f); return d ? d.matched === false : false; }).map(f => {
-                              const d = diffs.find(x => x.field === f);
-                              return (
-                                <TableRow key={f} className="bg-destructive/5">
-                                  <TableCell className="font-medium text-xs">{FIELD_LABELS[f]}</TableCell>
-                                  <TableCell className="text-xs">{fmtVal(d?.office)}</TableCell>
-                                  <TableCell className="text-xs text-destructive font-medium">{fmtVal(d?.imported)}</TableCell>
-                                  <TableCell className="text-right">
-                                    <span className="inline-flex items-center gap-1 text-destructive text-xs"><X size={12} /> Mismatch</span>
-                                  </TableCell>
-                                </TableRow>
-                              );
-                            })}
-                            <TableRow className="bg-muted/40">
-                              <TableCell className="font-semibold text-xs">Result</TableCell>
-                              <TableCell colSpan={3} className={cn("text-xs font-medium", r.overridden ? "text-blue-600" : "text-destructive")}>
-                                {r.overridden ? `Overridden — ${r.override_note || "accepted"}` : reasonFor(r)}
-                              </TableCell>
-                            </TableRow>
-                          </TableBody>
-                        </Table>
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })}
+              ) : (
+                /* Default view → exceptions only. */
+                <div className="space-y-3">{attention.map(renderMismatchCard)}</div>
+              )}
             </div>
           )}
 
