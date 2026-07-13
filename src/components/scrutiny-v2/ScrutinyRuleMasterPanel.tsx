@@ -25,8 +25,10 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Pencil, Trash2, History, Search, ArrowUpDown, Power, Loader2, ShieldAlert } from "lucide-react";
-import { TIER_A_CHECK_KINDS, TIER_B_CHECK_KINDS } from "@/lib/scrutiny/detectionEngine";
+import { Plus, Pencil, Trash2, History, Search, ArrowUpDown, Power, Loader2, ShieldAlert, Sparkles, Wand2, PlayCircle, CheckCircle2, AlertTriangle } from "lucide-react";
+import { TIER_A_CHECK_KINDS, TIER_B_CHECK_KINDS, GENERIC_CHECK_KINDS } from "@/lib/scrutiny/detectionEngine";
+import { composeRuleFromPrompt, type ComposeResult } from "@/lib/scrutiny/aiRuleCompose";
+import type { ComposedRule } from "@/lib/scrutiny/ruleSpec";
 
 interface RuleRow {
   id: string;
@@ -54,9 +56,26 @@ interface AuditRow {
   after: Record<string, unknown> | null;
 }
 
-const SUPPORTED_CHECKS = [...TIER_A_CHECK_KINDS, ...TIER_B_CHECK_KINDS];
+const SUPPORTED_CHECKS = [...TIER_A_CHECK_KINDS, ...TIER_B_CHECK_KINDS, ...GENERIC_CHECK_KINDS];
 const SEVERITIES = ["high", "medium", "low"];
-const LEVELS = ["account", "voucher"];
+const LEVELS = ["account", "voucher", "aggregate"];
+
+/** Optional engagement context — when present the Compose dialog can dry-run a draft against real data. */
+export interface RuleMasterPreviewContext {
+  client_id: string;
+  financial_year: string;
+  firm_id?: string;
+  engagement_id?: string;
+}
+
+interface PreviewState {
+  loading: boolean;
+  error?: string;
+  total?: number;
+  sample?: Array<{ ledger?: string; message?: string; amount?: number }>;
+  input?: { ledgers: number; vouchers: number; priorYearLedgers: number };
+  ledgerLine?: { status: string; found?: number; reason?: string };
+}
 
 type SortKey = "rule_id" | "rule_name" | "category" | "severity" | "detection_level" | "is_active";
 
@@ -83,10 +102,17 @@ const emptyForm = () => ({
   is_active: true,
 });
 
-export default function ScrutinyRuleMasterPanel() {
+export default function ScrutinyRuleMasterPanel({ previewContext }: { previewContext?: RuleMasterPreviewContext } = {}) {
   const { toast } = useToast();
   const [rows, setRows] = useState<RuleRow[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // ── AI Rule Composer state ──
+  const [composeOpen, setComposeOpen] = useState(false);
+  const [composePrompt, setComposePrompt] = useState("");
+  const [composing, setComposing] = useState(false);
+  const [composeResult, setComposeResult] = useState<ComposeResult | null>(null);
+  const [preview, setPreview] = useState<PreviewState | null>(null);
 
   const [q, setQ] = useState("");
   const [fCat, setFCat] = useState("all");
@@ -181,6 +207,77 @@ export default function ScrutinyRuleMasterPanel() {
     try { obj = JSON.parse(form.logicText || "{}"); } catch { obj = {}; }
     obj.check = kind;
     setForm((f) => ({ ...f, logicText: JSON.stringify(obj, null, 2) }));
+  };
+
+  // ── AI Rule Composer ──
+  const openCompose = () => { setComposePrompt(""); setComposeResult(null); setPreview(null); setComposeOpen(true); };
+
+  const doCompose = async () => {
+    setComposing(true);
+    setPreview(null);
+    const res = await composeRuleFromPrompt(composePrompt);
+    setComposeResult(res);
+    setComposing(false);
+    if (res.error) toast({ title: "Could not compose", description: res.error, variant: "destructive" });
+  };
+
+  const inferLevel = (rule: ComposedRule): string => {
+    const grain = String((rule.detection_logic as Record<string, unknown>)?.grain ?? "");
+    if (LEVELS.includes(grain)) return grain;
+    if (LEVELS.includes(rule.detection_level ?? "")) return rule.detection_level as string;
+    return "account";
+  };
+
+  const loadComposedIntoForm = () => {
+    const rule = composeResult?.rule;
+    if (!rule) return;
+    setForm({
+      id: "",
+      rule_id: rule.rule_id ?? "",
+      rule_name: rule.rule_name ?? "",
+      category: (rule.category ?? "").toUpperCase(),
+      detection_level: inferLevel(rule),
+      logicText: JSON.stringify(rule.detection_logic ?? {}, null, 2),
+      threshold_type: rule.threshold_type || "absolute",
+      threshold_value: String(rule.threshold_value ?? 0),
+      severity: SEVERITIES.includes(String(rule.severity).toLowerCase()) ? String(rule.severity).toLowerCase() : "medium",
+      legal_reference: rule.legal_reference ?? "",
+      audit_query_template: rule.audit_query_template ?? "",
+      prior_year_needed: !!rule.prior_year_needed,
+      is_active: true,
+    });
+    setIsNew(true);
+    setComposeOpen(false);
+    setEditOpen(true);
+  };
+
+  const doDryRun = async () => {
+    const rule = composeResult?.rule;
+    if (!rule || !previewContext) return;
+    setPreview({ loading: true });
+    const { data, error } = await supabase.functions.invoke("run-scrutiny-v2", {
+      body: {
+        client_id: previewContext.client_id,
+        financial_year: previewContext.financial_year,
+        firm_id: previewContext.firm_id,
+        engagement_id: previewContext.engagement_id,
+        preview_rule: { ...rule, is_active: true },
+      },
+    });
+    if (error) { setPreview({ loading: false, error: error.message }); return; }
+    const d = data as {
+      total?: number;
+      findings?: Array<{ ledger?: string; message?: string; amount?: number; advisory?: boolean }>;
+      input?: { ledgers: number; vouchers: number; priorYearLedgers: number };
+      ledger?: Array<{ status: string; found?: number; reason?: string }>;
+    };
+    setPreview({
+      loading: false,
+      total: d.total ?? 0,
+      sample: (d.findings ?? []).filter((f) => !f.advisory).slice(0, 8),
+      input: d.input,
+      ledgerLine: d.ledger?.[0],
+    });
   };
 
   const saveRule = async () => {
@@ -302,6 +399,9 @@ export default function ScrutinyRuleMasterPanel() {
         </Select>
         <div className="ml-auto flex items-center gap-2">
           <span className="text-xs text-muted-foreground">{view.length} of {rows.length}</span>
+          <Button size="sm" variant="outline" onClick={openCompose} className="border-primary/40 text-primary hover:bg-primary/10">
+            <Sparkles className="h-4 w-4 mr-1" />Compose with AI
+          </Button>
           <Button size="sm" onClick={openNew}><Plus className="h-4 w-4 mr-1" />Add rule</Button>
         </div>
       </div>
@@ -436,6 +536,132 @@ export default function ScrutinyRuleMasterPanel() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditOpen(false)}>Cancel</Button>
             <Button onClick={saveRule} disabled={saving}>{saving ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}{isNew ? "Add rule" : "Save changes"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Compose with AI */}
+      <Dialog open={composeOpen} onOpenChange={setComposeOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Sparkles className="h-5 w-5 text-primary" />Compose a rule with AI</DialogTitle>
+            <DialogDescription>
+              Describe the exception in plain English. The AI drafts a structured, runnable rule; you review it (and can
+              dry-run it against live data) before it is applied. Nothing is saved until you click <strong>Review &amp; apply</strong>.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label>What should this rule flag?</Label>
+              <Textarea
+                value={composePrompt}
+                onChange={(e) => setComposePrompt(e.target.value)}
+                className="text-sm h-24"
+                placeholder={'e.g. "Flag any single cash payment above 10,000" or "Interest paid to any party over 40,000 in the year without TDS" or "Any creditor ledger with a debit closing balance"'}
+              />
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={doCompose} disabled={composing || !composePrompt.trim()}>
+                  {composing ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Wand2 className="h-4 w-4 mr-1" />}
+                  {composeResult ? "Re-compose" : "Compose"}
+                </Button>
+                <span className="text-[11px] text-muted-foreground">Sonnet drafts the rule; a deterministic validator checks it.</span>
+              </div>
+            </div>
+
+            {composeResult?.rule && (
+              <div className="space-y-3 rounded-md border p-3">
+                {/* Validation banner */}
+                {composeResult.validation && (
+                  composeResult.validation.runnable && composeResult.validation.valid ? (
+                    <div className="flex items-center gap-2 rounded-md bg-green-500/10 border border-green-300 px-3 py-2 text-sm text-green-700">
+                      <CheckCircle2 className="h-4 w-4" /> Valid &amp; runnable — the engine can execute this rule.
+                    </div>
+                  ) : !composeResult.validation.runnable ? (
+                    <div className="flex items-center gap-2 rounded-md bg-destructive/10 border border-destructive/40 px-3 py-2 text-sm text-destructive">
+                      <AlertTriangle className="h-4 w-4" /> This draft would NOT run — its check has no engine handler. Edit before applying.
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 rounded-md bg-amber-500/10 border border-amber-300 px-3 py-2 text-sm text-amber-700">
+                      <AlertTriangle className="h-4 w-4" /> Has issues — review the errors below before applying.
+                    </div>
+                  )
+                )}
+
+                {composeResult.explanation && (
+                  <p className="text-sm"><span className="font-medium">In plain words: </span>{composeResult.explanation}</p>
+                )}
+
+                {/* Rule summary */}
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <Badge variant="outline" className="font-mono">{composeResult.rule.rule_id}</Badge>
+                  <Badge variant="outline">{(composeResult.rule.category ?? "").toUpperCase()}</Badge>
+                  <Badge variant="outline" className={sevBadge(String(composeResult.rule.severity).toLowerCase())}>{composeResult.rule.severity}</Badge>
+                  <Badge variant="outline" className="font-mono">{String((composeResult.rule.detection_logic as Record<string, unknown>)?.check ?? "—")}</Badge>
+                  {composeResult.rule.legal_reference && <Badge variant="outline">{composeResult.rule.legal_reference}</Badge>}
+                </div>
+                <p className="text-sm font-medium">{composeResult.rule.rule_name}</p>
+                <pre className="rounded bg-muted/60 p-2 text-[11px] font-mono overflow-x-auto max-h-40">{JSON.stringify(composeResult.rule.detection_logic ?? {}, null, 2)}</pre>
+
+                {/* Errors / warnings */}
+                {!!composeResult.validation?.errors.length && (
+                  <ul className="list-disc pl-5 text-xs text-destructive space-y-0.5">
+                    {composeResult.validation.errors.map((e, i) => <li key={i}>{e}</li>)}
+                  </ul>
+                )}
+                {!!composeResult.validation?.warnings.length && (
+                  <ul className="list-disc pl-5 text-xs text-amber-700 space-y-0.5">
+                    {composeResult.validation.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                  </ul>
+                )}
+
+                {/* Dry-run */}
+                <div className="border-t pt-3">
+                  {previewContext ? (
+                    <>
+                      <Button size="sm" variant="outline" onClick={doDryRun} disabled={preview?.loading || !composeResult.validation?.runnable}>
+                        {preview?.loading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <PlayCircle className="h-4 w-4 mr-1" />}
+                        Dry-run on {previewContext.financial_year} (no data saved)
+                      </Button>
+                      {preview && !preview.loading && (
+                        preview.error ? (
+                          <p className="mt-2 text-xs text-destructive">{preview.error}</p>
+                        ) : (
+                          <div className="mt-2 space-y-2">
+                            <p className="text-sm">
+                              <span className="font-medium">{preview.total ?? 0}</span> item(s) would be flagged
+                              {preview.input && <span className="text-muted-foreground"> · scanned {preview.input.ledgers} ledgers, {preview.input.vouchers} vouchers</span>}
+                              {preview.ledgerLine && <span className="text-muted-foreground"> · status: {preview.ledgerLine.status}{preview.ledgerLine.reason ? ` (${preview.ledgerLine.reason})` : ""}</span>}
+                            </p>
+                            {!!preview.sample?.length && (
+                              <ul className="space-y-1 text-xs">
+                                {preview.sample.map((s, i) => (
+                                  <li key={i} className="rounded border px-2 py-1">
+                                    {s.ledger && <span className="font-medium">{s.ledger}: </span>}{s.message}
+                                  </li>
+                                ))}
+                                {(preview.total ?? 0) > (preview.sample?.length ?? 0) && (
+                                  <li className="text-muted-foreground">…and {(preview.total ?? 0) - (preview.sample?.length ?? 0)} more.</li>
+                                )}
+                              </ul>
+                            )}
+                          </div>
+                        )
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Open Rule Master from within an engagement to dry-run this rule against live data.</p>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setComposeOpen(false)}>Cancel</Button>
+            <Button onClick={loadComposedIntoForm} disabled={!composeResult?.rule}>
+              <Pencil className="h-4 w-4 mr-1" />Review &amp; apply
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

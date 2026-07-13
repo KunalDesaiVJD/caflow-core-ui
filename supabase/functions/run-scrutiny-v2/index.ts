@@ -53,7 +53,7 @@ serve(async (req) => {
     const { data: { user }, error: authErr } = await supabase.auth.getUser(token);
     if (authErr || !user) return json({ error: "Unauthorized" }, 401);
 
-    const { client_id, financial_year, firm_id, engagement_id } = await req.json();
+    const { client_id, financial_year, firm_id, engagement_id, preview_rule } = await req.json();
     if (!client_id || !financial_year) return json({ error: "Missing client_id or financial_year" }, 400);
 
     // ── Firm-ownership gate (IDOR fix, handoff Ticket 0.4) ──
@@ -139,6 +139,27 @@ serve(async (req) => {
           .single();
         if (prev && Array.isArray(prev.normalised_data)) tbPY = tbFromSnapshot(prev.normalised_data as never[]);
       }
+    }
+
+    // ── DRY-RUN (preview) — run ONE draft rule against this engagement's data and return the
+    // findings WITHOUT persisting or deleting anything. Powers the AI Rule Composer preview so the
+    // user sees exactly what a rule would flag before applying it.
+    if (preview_rule) {
+      const previewRules = rulesFromRows([preview_rule] as never[]);
+      const pv = runDetection(
+        previewRules,
+        { tb: tbCur, vouchers: vouchersCur, tbPY },
+        { financialYearStart: fyStartDate(financial_year), financialYearEnd: fyEndDate(financial_year) },
+        { emitAdvisoryForUnhandled: true },
+      );
+      return json({
+        preview: true,
+        source,
+        input: { ledgers: tbCur.length, vouchers: vouchersCur.length, priorYearLedgers: tbPY?.length ?? 0 },
+        total: pv.findings.filter((f) => !f.advisory).length,
+        findings: pv.findings.slice(0, 200), // sample cap for the preview
+        ledger: pv.ledger,
+      });
     }
 
     // ── Active rule catalogue (the 119 seeded rules) ──

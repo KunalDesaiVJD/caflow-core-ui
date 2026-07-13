@@ -117,6 +117,8 @@ export default function AuditScrutiny() {
   const [linkClauseId, setLinkClauseId] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [auditFirmName, setAuditFirmName] = useState<string | null>(null);
+  // Completeness ledger from the last Run Scrutiny — proves every active rule was accounted for.
+  const [runCompleteness, setRunCompleteness] = useState<{ activeRules: number; accountedFor: number; executed: number; needsData: number; noHandler: number; errored: number } | null>(null);
 
   // View mode: scrutiny findings vs TDS analytics
   type ScrutinyView = "scrutiny" | "tds";
@@ -490,7 +492,10 @@ export default function AuditScrutiny() {
             engagement_id: (auditCtx?.selectedEngagement as any)?.id ?? null,
           },
         })
-        .then(({ error }) => { if (error) invokeErr = error; else invokeOk = true; })
+        .then(({ data, error }) => {
+          if (error) invokeErr = error;
+          else { invokeOk = true; const c = (data as { completeness?: typeof runCompleteness })?.completeness; if (c) setRunCompleteness(c); }
+        })
         .catch((e) => { invokeErr = e; });
 
       const freshFound = async () => {
@@ -646,6 +651,22 @@ export default function AuditScrutiny() {
         <Card className="border-green-400/30"><CardContent className="p-4 text-center"><p className="text-xs text-green-600">Resolved</p><p className="text-2xl font-bold text-green-600">{stats.resolved}</p></CardContent></Card>
       </div>
 
+      {/* Completeness ledger — every active rule accounted for on the last run (no rule left behind) */}
+      {runCompleteness && (() => {
+        const clean = runCompleteness.noHandler === 0 && runCompleteness.errored === 0 && runCompleteness.accountedFor === runCompleteness.activeRules;
+        return (
+          <div className={`rounded-md border px-4 py-2 text-xs flex flex-wrap items-center gap-x-3 gap-y-1 ${clean ? "border-green-300 bg-green-50 text-green-800" : "border-amber-300 bg-amber-50 text-amber-800"}`}>
+            {clean ? <CheckCircle2 size={14} className="shrink-0" /> : <AlertTriangle size={14} className="shrink-0" />}
+            <span className="font-medium">Rule completeness: {runCompleteness.accountedFor}/{runCompleteness.activeRules} active rules accounted for.</span>
+            <span>{runCompleteness.executed} executed</span>
+            {runCompleteness.needsData > 0 && <span>· {runCompleteness.needsData} need more data</span>}
+            {runCompleteness.noHandler > 0 && <span className="font-medium">· {runCompleteness.noHandler} have no engine handler (would not run)</span>}
+            {runCompleteness.errored > 0 && <span className="font-medium text-destructive">· {runCompleteness.errored} errored</span>}
+            {clean && <span className="text-green-700">No rule was silently skipped.</span>}
+          </div>
+        );
+      })()}
+
       {/* v2 scrutiny views (behind flag): advisory coverage panel + Templates / By-Ledger */}
       {v2 && (
         <div className="space-y-4">
@@ -791,7 +812,8 @@ export default function AuditScrutiny() {
                 : v2Tab === "portfolio"
                 ? <ScrutinyPortfolioPanel rules={rules} clientId={clientId} />
                 : v2Tab === "rulemaster" && isSuperAdmin
-                ? <ScrutinyRuleMasterPanel />
+                ? <ScrutinyRuleMasterPanel previewContext={clientId && fy ? { client_id: clientId, financial_year: fy, engagement_id: (auditCtx?.selectedEngagement as any)?.id ?? undefined } : undefined} />
+
                 : v2Tab === "templates"
                   ? <ScrutinyTemplatesView rules={rules} {...v2Shared} />
                   : <ScrutinyWorkpaperView {...v2Shared} />}
