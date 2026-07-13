@@ -34,6 +34,13 @@ export interface TBRow {
   opening_type?: "Dr" | "Cr" | string | null;
 }
 
+/** One leg of a voucher's double entry (from tally_vouchers.line_items). */
+export interface VoucherLeg {
+  ledger_name?: string | null;
+  dr_cr?: "Dr" | "Cr" | string | null;
+  amount?: number | null;
+}
+
 export interface VoucherRow {
   id?: string;
   amount: number;
@@ -46,6 +53,8 @@ export interface VoucherRow {
   narration?: string | null;
   /** primary ledger if available */
   ledger_name?: string | null;
+  /** full double entry — enables cross-leg checks (GST co-tagging, stream gaps). Undefined if not loaded. */
+  line_items?: VoucherLeg[] | null;
 }
 
 export interface DetectionLogic {
@@ -994,6 +1003,82 @@ const h_expr: CheckHandler = (rule, data, ctx) => {
 };
 
 // ---------------------------------------------------------------------------
+// Line-item (cross-leg) handlers — read the full double entry (VoucherRow.line_items) to express
+// checks a single flattened row cannot: GST intra/inter co-tagging and "money moved but nothing
+// booked" stream gaps. Both group by party and scan every leg's ledger_name.
+// ---------------------------------------------------------------------------
+
+/**
+ * cotag — flags a party whose legs (across all its vouchers) hit TWO OR MORE keyword sets that
+ * should be mutually exclusive — e.g. a customer carrying both intra-state CGST/SGST and inter-state
+ * IGST sales. detection_logic: { check:"cotag", sets: string[][], scope?, message? }.
+ */
+const h_cotag: CheckHandler = (rule, data) => {
+  const dl = rule.detection_logic as unknown as Record<string, unknown>;
+  const sets = (Array.isArray(dl.sets) ? dl.sets : []) as unknown[];
+  if (sets.length < 2) return [];
+  const scope = dl.scope as Record<string, unknown> | undefined;
+  const tpl = (dl.message as string | undefined) ?? rule.audit_query_template;
+  const groupOf = groupResolver(data.tb);
+  const acc = new Map<string, { hit: Set<number>; legs: string[]; sample: VoucherRow }>();
+  for (const v of data.vouchers) {
+    if (!voucherInScope(v, scope, groupOf)) continue;
+    const key = lc(v.party_ledger ?? v.ledger_name);
+    if (!key) continue;
+    const rec = acc.get(key) ?? acc.set(key, { hit: new Set(), legs: [], sample: v }).get(key)!;
+    for (const leg of Array.isArray(v.line_items) ? v.line_items : []) {
+      const ln = String(leg.ledger_name ?? "");
+      sets.forEach((s, i) => {
+        if (!rec.hit.has(i) && kwMatch(ln, s)) { rec.hit.add(i); rec.legs.push(ln); }
+      });
+    }
+  }
+  const out: ScrutinyFinding[] = [];
+  for (const [, rec] of acc) {
+    if (rec.hit.size >= sets.length) {
+      const name = rec.sample.party_ledger ?? rec.sample.ledger_name ?? "";
+      out.push(finding(rule, { account: name, flag_message: render(tpl, { account: name }), evidence: { co_tagged_legs: rec.legs } }));
+    }
+  }
+  return out;
+};
+
+/**
+ * stream_gap — flags a party that has legs matching `present` keywords (e.g. bank/cash movement)
+ * but NO leg matching `missing` keywords (e.g. sales/income): money moved, nothing booked.
+ * detection_logic: { check:"stream_gap", present:string[], missing:string[], scope?, message? }.
+ */
+const h_stream_gap: CheckHandler = (rule, data) => {
+  const dl = rule.detection_logic as unknown as Record<string, unknown>;
+  const present = (Array.isArray(dl.present) ? dl.present : []) as unknown[];
+  const missing = (Array.isArray(dl.missing) ? dl.missing : []) as unknown[];
+  if (!present.length || !missing.length) return [];
+  const scope = dl.scope as Record<string, unknown> | undefined;
+  const tpl = (dl.message as string | undefined) ?? rule.audit_query_template;
+  const groupOf = groupResolver(data.tb);
+  const acc = new Map<string, { present: boolean; missing: boolean; sample: VoucherRow }>();
+  for (const v of data.vouchers) {
+    if (!voucherInScope(v, scope, groupOf)) continue;
+    const key = lc(v.party_ledger ?? v.ledger_name);
+    if (!key) continue;
+    const rec = acc.get(key) ?? acc.set(key, { present: false, missing: false, sample: v }).get(key)!;
+    for (const leg of Array.isArray(v.line_items) ? v.line_items : []) {
+      const ln = String(leg.ledger_name ?? "");
+      if (kwMatch(ln, present)) rec.present = true;
+      if (kwMatch(ln, missing)) rec.missing = true;
+    }
+  }
+  const out: ScrutinyFinding[] = [];
+  for (const [, rec] of acc) {
+    if (rec.present && !rec.missing) {
+      const name = rec.sample.party_ledger ?? rec.sample.ledger_name ?? "";
+      out.push(finding(rule, { account: name, flag_message: render(tpl, { account: name }), evidence: { has_present: true, has_missing: false } }));
+    }
+  }
+  return out;
+};
+
+// ---------------------------------------------------------------------------
 // Registry + runner
 // ---------------------------------------------------------------------------
 
@@ -1035,9 +1120,11 @@ export const TIER_B_HANDLERS: Record<string, CheckHandler> = {
 
 export const TIER_B_CHECK_KINDS = Object.keys(TIER_B_HANDLERS);
 
-/** Generic composable evaluator — one data-driven handler that expresses most rules without bespoke code. */
+/** Generic composable evaluator + cross-leg (line_items) handlers — data-driven, no bespoke code per rule. */
 export const GENERIC_HANDLERS: Record<string, CheckHandler> = {
   expr: h_expr,
+  cotag: h_cotag,
+  stream_gap: h_stream_gap,
 };
 
 export const GENERIC_CHECK_KINDS = Object.keys(GENERIC_HANDLERS);
