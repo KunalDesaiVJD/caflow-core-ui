@@ -4,6 +4,7 @@
 
 export type PanValidationResult =
   | "PAN Verified"
+  | "Name Mismatch"
   | "Party Missing in PAN Verification File"
   | "Party Missing in Office Data"
   | "PAN Status Error"
@@ -37,6 +38,61 @@ export interface PanResultRow {
 /** Normalise a PAN for exact matching: uppercase, strip whitespace. */
 export const normalizePan = (pan: string | null | undefined): string =>
   (pan ?? "").trim().toUpperCase().replace(/\s+/g, "");
+
+/**
+ * Normalise a legal-entity name for INTELLIGENT (not exact) comparison: case,
+ * punctuation and spacing insensitive, with the common CA-firm abbreviations
+ * folded (PVT→PRIVATE, LTD→LIMITED, &→AND, CORPN→CORPORATION) — so "Abc Traders
+ * Pvt. Ltd." and "ABC TRADERS PRIVATE LIMITED" normalise identically.
+ */
+export const normalizeName = (v: string | null | undefined): string => {
+  let s = (v ?? "").toUpperCase();
+  s = s.replace(/&/g, " AND ");
+  s = s.replace(/[^A-Z0-9 ]/g, " ");
+  s = ` ${s.replace(/\s+/g, " ").trim()} `;
+  s = s.replace(/ PVT /g, " PRIVATE ").replace(/ LTD /g, " LIMITED ");
+  s = s.replace(/ P LIMITED /g, " PRIVATE LIMITED ").replace(/ CORPN /g, " CORPORATION ").replace(/ CO /g, " COMPANY ");
+  return s.replace(/\s+/g, " ").trim();
+};
+
+/**
+ * Do two names refer to the same party? Exact after normalisation, OR a high
+ * token overlap (≥ 60%) so word-order/extra-token/minor differences don't create
+ * false "Name Mismatch"es. A blank on either side is not compared (returns true).
+ */
+export const namesMatch = (a: string | null | undefined, b: string | null | undefined): boolean => {
+  const na = normalizeName(a), nb = normalizeName(b);
+  if (!na || !nb) return true;              // nothing reliable to compare
+  if (na === nb) return true;
+  const ta = new Set(na.split(" ").filter(Boolean));
+  const tb = new Set(nb.split(" ").filter(Boolean));
+  const inter = [...ta].filter(x => tb.has(x)).length;
+  const union = new Set([...ta, ...tb]).size;
+  return union > 0 && inter / union >= 0.6;
+};
+
+/** Plain-English reason a party is not a clean "PAN Verified". */
+export const panReason = (r: PanValidationResult): string => ({
+  "PAN Verified": "PAN active and name matches the PAN records.",
+  "Name Mismatch": "PAN is active, but the office name does not match the name on the PAN records.",
+  "Party Missing in PAN Verification File": "This party's PAN was not found in the uploaded TRACES bulk-PAN file.",
+  "Party Missing in Office Data": "This PAN is in the TRACES file but has no matching party in the office data for this quarter.",
+  "PAN Status Error": "TRACES returned an unrecognised PAN status.",
+  "PAN Status Blank": "TRACES returned no PAN status for this party.",
+  "PAN Inactive": "PAN is inoperative (typically not linked to Aadhaar) — higher TDS may apply.",
+  "PAN Invalid": "TRACES reports this PAN as invalid / not a valid PAN.",
+}[r] ?? "Requires review.");
+
+/** Recommended next action for an exception. */
+export const panRecommendedAction = (r: PanValidationResult): string => ({
+  "Name Mismatch": "Confirm the correct name against the PAN and update the office record if needed.",
+  "Party Missing in PAN Verification File": "Re-run the TRACES bulk-PAN request including this PAN, then re-import.",
+  "Party Missing in Office Data": "Check whether this deductee belongs to this quarter's office data.",
+  "PAN Status Error": "Re-verify this PAN's status on TRACES.",
+  "PAN Status Blank": "Re-verify this PAN's status on TRACES.",
+  "PAN Inactive": "Ask the client to link PAN–Aadhaar; deduct at the higher rate until active.",
+  "PAN Invalid": "Obtain the correct PAN from the client and update the record.",
+}[r] ?? "");
 
 /**
  * Classify a TRACES "PAN Status" for a party found in BOTH datasets.
@@ -90,7 +146,15 @@ export function comparePanVerification(office: OfficeParty[], traces: TracesPanR
       if (!t) {
         rows.push({ office_deductee_id: o.deductee_id, pan_row_id: null, party_name: o.name, pan: o.pan ?? null, pan_status: null, validation_result: "Party Missing in PAN Verification File" });
       } else {
-        rows.push({ office_deductee_id: o.deductee_id, pan_row_id: t.row_id, party_name: o.name || t.name, pan: o.pan ?? null, pan_status: t.pan_status ?? null, validation_result: classifyPanStatus(t.pan_status) });
+        const status = classifyPanStatus(t.pan_status);
+        // Intelligent name check — only when the PAN itself is verified: compare
+        // the office name against the TRACES verified name (fall back to the
+        // submitted name), tolerant of formatting / word-order differences.
+        const result: PanValidationResult =
+          status === "PAN Verified" && !namesMatch(o.name, t.verified_name || t.name)
+            ? "Name Mismatch"
+            : status;
+        rows.push({ office_deductee_id: o.deductee_id, pan_row_id: t.row_id, party_name: o.name || t.name, pan: o.pan ?? null, pan_status: t.pan_status ?? null, validation_result: result });
       }
     } else {
       // Office party with no PAN — nothing to verify against the TRACES file.

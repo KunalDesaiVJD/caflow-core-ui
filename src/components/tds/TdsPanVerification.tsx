@@ -18,33 +18,35 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import {
-  ShieldCheck, CheckCircle2, Upload, FileSpreadsheet, Loader2, AlertTriangle,
+  ShieldCheck, CheckCircle2, Upload, FileSpreadsheet, Loader2, RotateCcw, X,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { logReconAudit } from "@/lib/tdsReconAudit";
 import {
-  comparePanVerification, isPanException, normalizePan,
+  comparePanVerification, isPanException, normalizePan, panReason, panRecommendedAction,
   PAN_OVERRIDE_REASONS, type OfficeParty, type TracesPanRow, type PanValidationResult,
 } from "@/lib/tdsPanVerification";
 
 /**
- * Stage 2 · PAN Verification — EMBEDDED inside Validate & Finalise.
+ * Stage 2 · PAN Verification — EMBEDDED inside Validate & Finalise, mirroring the
+ * Stage 1 experience: one "Run Validation" (parent's `runSignal`) triggers it,
+ * live animated dashboard cards double as clickable filters, and the results show
+ * ONLY exceptions (verified parties are summarised, not listed) with a clear
+ * reason + recommended action, an override with a mandatory reason, and a success
+ * panel when everything is verified.
  *
- * The parent (TdsValidateFinalise) owns the client/FY/quarter/form selection and
- * the single "Run Validation" button; this component receives the resolved
- * `filing` + selection as props and runs its own comparison whenever `runSignal`
- * is bumped (if a TRACES file has been imported). Results are shown as a distinct
- * section, kept entirely separate from the Stage-1 data reconciliation.
+ * SCOPE: this file + src/lib/tdsPanVerification.ts only — it does not touch Stage
+ * 1 or any edge function.
  */
 interface Props {
-  filing: any;                              // resolved tds_filings row (or null)
+  filing: any;
   selClient: string;
   selFy: string;
   selQuarter: string;
   selForm: string;
-  runSignal: number;                        // bump to trigger Stage-2 validation
+  runSignal: number;
   resolveFirmId: () => Promise<string | null>;
-  disabled?: boolean;                       // parent's compliance gate
+  disabled?: boolean;
 }
 
 interface PanResult {
@@ -61,8 +63,11 @@ interface PanResult {
   office_deductee_id: string | null;
 }
 
+type PanFilter = null | "total" | "matched" | "mismatch" | "pending" | "overridden";
+
 const RESULT_BADGE: Record<string, string> = {
   "PAN Verified": "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
+  "Name Mismatch": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
   "Party Missing in PAN Verification File": "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
   "Party Missing in Office Data": "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300",
   "PAN Status Error": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
@@ -70,6 +75,28 @@ const RESULT_BADGE: Record<string, string> = {
   "PAN Inactive": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
   "PAN Invalid": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
 };
+
+/** Dashboard-style counter that smoothly animates to its target. */
+function AnimatedNumber({ value }: { value: number }) {
+  const [display, setDisplay] = useState(0);
+  const prev = useRef(0);
+  useEffect(() => {
+    const from = prev.current, to = value;
+    if (from === to) { setDisplay(to); return; }
+    let raf = 0; let start = 0;
+    const finish = () => { setDisplay(to); prev.current = to; };
+    const step = (ts: number) => {
+      if (!start) start = ts;
+      const t = Math.min(1, (ts - start) / 500);
+      setDisplay(Math.round(from + (to - from) * (1 - Math.pow(1 - t, 3))));
+      if (t < 1) raf = requestAnimationFrame(step); else finish();
+    };
+    raf = requestAnimationFrame(step);
+    const safety = setTimeout(finish, 700); // land even if rAF is throttled (background tab)
+    return () => { cancelAnimationFrame(raf); clearTimeout(safety); };
+  }, [value]);
+  return <>{display}</>;
+}
 
 /** Parse a TRACES Bulk-PAN Excel: find the sheet whose header row has PAN + a
  *  status/name column, map the columns, and extract the PAN rows. */
@@ -94,14 +121,14 @@ function parseTracesWorkbook(data: ArrayBuffer): Omit<TracesPanRow, "row_id">[] 
   const panCol = find(h => h === "pan" || h.replace(/[^a-z]/g, "") === "pan" || h.includes("pan no") || h.includes("pan number") || h.includes("deductee pan"));
   const statusCol = find(h => h.includes("status"));
   const nameCol = find(h => h === "name" || h === "party name" || h === "deductee name" || h === "party" || h === "deductee");
-  const verifiedCol = find(h => h.includes("verified"));
+  const verifiedCol = find(h => h.includes("verified") || h.includes("name as per") || h.includes("name on pan"));
 
   const cell = (row: unknown[], i: number) => (i >= 0 ? (String(row[i] ?? "").trim() || null) : null);
   const out: Omit<TracesPanRow, "row_id">[] = [];
   for (let r = hdrIdx + 1; r < grid.length; r++) {
     const dr = grid[r] || [];
     const pan = cell(dr, panCol);
-    if (!pan) continue; // skip title/footer/blank rows — a real TRACES row always has a PAN
+    if (!pan) continue;
     out.push({
       pan,
       name: cell(dr, nameCol),
@@ -123,6 +150,7 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
 
   const [importing, setImporting] = useState(false);
   const [validating, setValidating] = useState(false);
+  const [activeFilter, setActiveFilter] = useState<PanFilter>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [ovOpen, setOvOpen] = useState(false);
@@ -133,7 +161,6 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
 
   const filingId = filing?.id ?? null;
 
-  // Load office count + latest TRACES batch + existing results for the parent's filing.
   const loadAll = useCallback(async () => {
     if (!filingId) { setBatch(null); setResults(null); setOfficeCount(0); return; }
     const { data: ch } = await supabase.from("tds_challans").select("id").eq("filing_id", filingId);
@@ -157,6 +184,7 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
   }, [filingId]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => { setActiveFilter(null); }, [filingId]);
 
   const handleImport = async (file: File) => {
     if (!filing) return;
@@ -176,13 +204,11 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
 
       const rowRecords = rows.map((r, i) => ({
         batch_id: batchRow.id, filing_id: filing.id, firm_id: firmId, row_index: i,
-        pan: r.pan, name: r.name, verified_name: r.verified_name, pan_status: r.pan_status,
-        raw: r,
+        pan: r.pan, name: r.name, verified_name: r.verified_name, pan_status: r.pan_status, raw: r,
       }));
       const { error: rErr } = await supabase.from("tds_pan_verification_rows").insert(rowRecords);
       if (rErr) throw new Error(rErr.message);
 
-      // A fresh import invalidates any prior validation for this filing.
       await supabase.from("tds_pan_verification_results").delete().eq("filing_id", filing.id);
       setResults(null);
       toast({ title: `Imported ${rows.length} PAN record(s)`, description: file.name });
@@ -211,13 +237,9 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
 
       const compared = comparePanVerification(office, traces);
 
+      // Preserve overrides across re-runs, keyed by PAN (stable one-per-PAN).
       const { data: prior } = await supabase.from("tds_pan_verification_results")
         .select("id, office_deductee_id, pan, overridden, override_reason, overridden_by, overridden_at").eq("filing_id", filing.id);
-      // Key overrides by PAN (results are one-per-PAN) rather than by
-      // office_deductee_id — the office query has no ORDER BY, so when several
-      // deductees share a PAN the chosen id can change between runs and a
-      // deductee-id key would silently drop the prior override. Fall back to the
-      // deductee id only for the rare PAN-less party.
       const keyOf = (deducteeId: string | null, pan: string | null) => normalizePan(pan) || `d:${deducteeId ?? ""}`;
       const priorMap = new Map<string, any>();
       for (const p of prior || []) priorMap.set(keyOf(p.office_deductee_id, p.pan), p);
@@ -252,8 +274,6 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
     setValidating(false);
   }, [filing, batch, resolveFirmId, selQuarter, toast]);
 
-  // Parent's single "Run Validation" bumps runSignal — run Stage 2 if a TRACES
-  // file has been imported (otherwise stay quiet; Stage 2 is optional).
   const runRef = useRef(runValidation);
   runRef.current = runValidation;
   useEffect(() => {
@@ -293,40 +313,96 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
     await logReconAudit({
       filingId: filing?.id, firmId: filing?.firm_id, userId: user?.id, userName: userMap[user?.id ?? ""],
-      actionType: "PAN_OVERRIDE_UNDO",
-      oldValue: "Overridden", newValue: r.validation_result, remark: `Override removed for ${r.party_name || r.pan}`,
+      actionType: "PAN_OVERRIDE_UNDO", oldValue: "Overridden", newValue: r.validation_result, remark: `Override removed for ${r.party_name || r.pan}`,
     });
     setResults(prev => prev ? prev.map(x => x.id === r.id ? { ...x, overridden: false, override_reason: null, overridden_by: null, overridden_at: null } : x) : prev);
   };
 
   const summary = useMemo(() => {
     const rs = results || [];
-    const count = (v: PanValidationResult) => rs.filter(r => r.validation_result === v).length;
     const exceptions = rs.filter(r => isPanException(r.validation_result));
     return {
       total: rs.length,
-      verified: count("PAN Verified"),
-      exceptions: exceptions.length,
+      matched: rs.filter(r => !isPanException(r.validation_result)).length,
+      mismatch: exceptions.length,
       overridden: rs.filter(r => r.overridden).length,
       pending: exceptions.filter(r => !r.overridden).length,
-      missingOffice: count("Party Missing in Office Data"),
-      missingPan: count("Party Missing in PAN Verification File"),
-      statusError: count("PAN Status Error"),
-      invalid: count("PAN Invalid"),
-      inactive: count("PAN Inactive"),
-      blank: count("PAN Status Blank"),
     };
   }, [results]);
 
-  const finalStatus = (r: PanResult) =>
-    r.overridden ? "Overridden" : !isPanException(r.validation_result) ? "Verified" : "Pending";
+  // Exceptions only (default view), pending first then overridden.
+  const exceptions = useMemo(() => {
+    const rs = (results || []).filter(r => isPanException(r.validation_result));
+    return rs.sort((a, b) => (a.overridden ? 1 : 0) - (b.overridden ? 1 : 0));
+  }, [results]);
 
-  const sortedResults = results
-    ? [...results].sort((a, b) => {
-        const rank = (r: PanResult) => (!isPanException(r.validation_result) ? 2 : r.overridden ? 1 : 0);
-        return rank(a) - rank(b);
-      })
-    : null;
+  const cardFiltered = useMemo((): PanResult[] | null => {
+    const rs = results || [];
+    switch (activeFilter) {
+      case "total": return rs;
+      case "matched": return rs.filter(r => !isPanException(r.validation_result));
+      case "mismatch": return rs.filter(r => isPanException(r.validation_result));
+      case "pending": return rs.filter(r => isPanException(r.validation_result) && !r.overridden);
+      case "overridden": return rs.filter(r => r.overridden);
+      default: return null;
+    }
+  }, [results, activeFilter]);
+
+  const overrideBtn = (r: PanResult) => (
+    r.overridden ? (
+      <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => undoOverride(r)}><RotateCcw size={12} /> Undo override</Button>
+    ) : (
+      <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => openOverride(r)} disabled={disabled}><ShieldCheck size={12} /> Override</Button>
+    )
+  );
+
+  // One exception → a card with the result, reason and recommended action.
+  const renderExceptionCard = (r: PanResult) => (
+    <Card key={r.id} className={cn(r.overridden ? "border-blue-200 dark:border-blue-900 opacity-80" : "border-destructive/30")}>
+      <CardContent className="p-4 space-y-2">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="font-semibold text-sm truncate">{r.party_name || "—"}</p>
+            <p className="text-xs font-mono text-muted-foreground">{r.pan || "—"}{r.pan_status ? ` · ${r.pan_status}` : ""}</p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <Badge className={cn("text-[10px]", RESULT_BADGE[r.validation_result] || "bg-muted")}>{r.validation_result}</Badge>
+            {overrideBtn(r)}
+          </div>
+        </div>
+        <p className={cn("text-xs", r.overridden ? "text-blue-600" : "text-destructive")}>
+          {r.overridden ? `Overridden — ${r.override_reason || "accepted"}${r.overridden_by && userMap[r.overridden_by] ? ` · ${userMap[r.overridden_by]}` : ""}` : panReason(r.validation_result)}
+        </p>
+        {!r.overridden && panRecommendedAction(r.validation_result) && (
+          <p className="text-xs text-muted-foreground"><span className="font-medium text-foreground">Recommended: </span>{panRecommendedAction(r.validation_result)}</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+
+  // Verified parties (only when the user filters to Matched/Total) → compact table.
+  const renderVerifiedTable = (rows: PanResult[]) => (
+    <Card><CardContent className="p-0 overflow-x-auto">
+      <Table>
+        <TableHeader><TableRow>
+          <TableHead>Party Name</TableHead>
+          <TableHead className="w-[130px]">PAN</TableHead>
+          <TableHead className="w-[150px]">PAN Status</TableHead>
+          <TableHead className="w-[110px] text-right">Result</TableHead>
+        </TableRow></TableHeader>
+        <TableBody>
+          {rows.map(r => (
+            <TableRow key={r.id}>
+              <TableCell className="text-xs font-medium">{r.party_name || "—"}</TableCell>
+              <TableCell className="text-xs font-mono">{r.pan || "—"}</TableCell>
+              <TableCell className="text-xs">{r.pan_status || "—"}</TableCell>
+              <TableCell className="text-right"><span className="inline-flex items-center gap-1 text-emerald-600 text-xs"><CheckCircle2 size={11} /> {isPanException(r.validation_result) ? r.validation_result : "Verified"}</span></TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </CardContent></Card>
+  );
 
   if (!filing) return null;
 
@@ -335,7 +411,11 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
       {/* TRACES file */}
       <Card><CardContent className="p-4">
         <div className="flex items-center justify-between mb-2">
-          <p className="font-semibold text-sm flex items-center gap-2"><FileSpreadsheet size={15} /> TRACES Bulk PAN File <span className="text-muted-foreground font-normal">· {officeCount} office parties this quarter</span></p>
+          <p className="font-semibold text-sm flex items-center gap-2">
+            <FileSpreadsheet size={15} /> TRACES Bulk PAN File
+            <span className="text-muted-foreground font-normal">· {officeCount} office parties this quarter</span>
+            {validating && <span className="text-xs text-amber-600 flex items-center gap-1"><Loader2 size={11} className="animate-spin" /> verifying…</span>}
+          </p>
           <input ref={fileInputRef} type="file" accept=".xls,.xlsx" className="hidden"
             onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImport(f); e.currentTarget.value = ""; }} />
           <Button size="sm" variant={batch ? "outline" : "default"} className="gap-1" disabled={importing || disabled}
@@ -345,84 +425,71 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
           </Button>
         </div>
         {batch ? (
-          <p className="text-sm"><span className="font-bold">{batch.row_count}</span> <span className="text-muted-foreground">PANs</span> <span className="text-xs text-muted-foreground">· {batch.file_name}</span>{validating && <span className="text-xs text-amber-600 ml-2"><Loader2 size={11} className="animate-spin inline" /> verifying…</span>}</p>
+          <p className="text-sm"><span className="font-bold">{batch.row_count}</span> <span className="text-muted-foreground">PANs</span> <span className="text-xs text-muted-foreground">· {batch.file_name}</span></p>
         ) : <p className="text-xs text-muted-foreground">Import the TRACES Bulk PAN Verification Excel (.xls / .xlsx), then click <b>Run Validation</b> above. Stage 2 is optional.</p>}
       </CardContent></Card>
 
       {results && (
         <>
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-            {[
-              { label: "Total", value: summary.total, cls: "" },
-              { label: "Verified", value: summary.verified, cls: "text-emerald-600" },
-              { label: "Exceptions", value: summary.exceptions, cls: "text-destructive" },
-              { label: "Overridden", value: summary.overridden, cls: "text-blue-600" },
-              { label: "Pending", value: summary.pending, cls: summary.pending > 0 ? "text-amber-600" : "text-emerald-600" },
-            ].map(s => (
-              <Card key={s.label}><CardContent className="p-3 text-center">
-                <p className={cn("text-2xl font-bold", s.cls)}>{s.value}</p>
-                <p className="text-xs text-muted-foreground">{s.label}</p>
-              </CardContent></Card>
+          {/* Live, clickable dashboard cards */}
+          <div className={cn("grid grid-cols-3 sm:grid-cols-5 gap-3", validating && "animate-pulse")}>
+            {([
+              { key: "total" as const, label: "Total PAN Records", value: summary.total, cls: "" },
+              { key: "matched" as const, label: "Matched", value: summary.matched, cls: "text-emerald-600" },
+              { key: "mismatch" as const, label: "PAN Mismatch", value: summary.mismatch, cls: summary.mismatch > 0 ? "text-destructive" : "" },
+              { key: "pending" as const, label: "Pending", value: summary.pending, cls: summary.pending > 0 ? "text-amber-600" : "text-emerald-600" },
+              { key: "overridden" as const, label: "Overridden", value: summary.overridden, cls: "text-blue-600" },
+            ]).map(s => (
+              <button key={s.label} type="button"
+                onClick={() => setActiveFilter(activeFilter === s.key ? null : s.key)}
+                aria-pressed={activeFilter === s.key}
+                className={cn(
+                  "rounded-lg border bg-card p-3 text-center transition-all hover:border-primary/50 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                  activeFilter === s.key ? "ring-2 ring-primary border-primary" : "border-border",
+                )}>
+                <p className={cn("text-2xl font-bold tabular-nums", s.cls)}><AnimatedNumber value={s.value} /></p>
+                <p className="text-[11px] text-muted-foreground leading-tight">{s.label}</p>
+              </button>
             ))}
           </div>
 
-          <div className="flex flex-wrap gap-2 text-xs">
-            {[
-              { label: "Missing in Office Data", value: summary.missingOffice },
-              { label: "Missing in PAN File", value: summary.missingPan },
-              { label: "PAN Status Error", value: summary.statusError },
-              { label: "PAN Invalid", value: summary.invalid },
-              { label: "PAN Inactive", value: summary.inactive },
-              { label: "PAN Status Blank", value: summary.blank },
-            ].filter(x => x.value > 0).map(x => (
-              <span key={x.label} className="px-2 py-1 rounded-md bg-muted text-muted-foreground">{x.label}: <b className="text-foreground">{x.value}</b></span>
-            ))}
-          </div>
-
-          <Card><CardContent className="p-0 overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[60px]">Quarter</TableHead>
-                  <TableHead>Party Name</TableHead>
-                  <TableHead className="w-[120px]">PAN</TableHead>
-                  <TableHead className="w-[150px]">PAN Status</TableHead>
-                  <TableHead className="w-[210px]">Validation Result</TableHead>
-                  <TableHead className="w-[130px]">Final Status</TableHead>
-                  <TableHead className="w-[110px] text-right">Action</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {sortedResults!.length === 0 ? (
-                  <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-8">No records</TableCell></TableRow>
-                ) : sortedResults!.map(r => {
-                  const fs = finalStatus(r);
-                  const isExc = isPanException(r.validation_result);
-                  return (
-                    <TableRow key={r.id} className={cn(r.overridden && "opacity-70")}>
-                      <TableCell className="text-xs">{r.quarter || selQuarter}</TableCell>
-                      <TableCell className="text-sm font-medium">{r.party_name || "—"}</TableCell>
-                      <TableCell className="text-xs font-mono">{r.pan || "—"}</TableCell>
-                      <TableCell className="text-xs">{r.pan_status || "—"}</TableCell>
-                      <TableCell>
-                        <Badge className={cn("text-[10px]", RESULT_BADGE[r.validation_result] || "bg-muted")}>{r.validation_result}</Badge>
-                      </TableCell>
-                      <TableCell>
-                        {fs === "Verified" && <span className="text-xs text-emerald-600 flex items-center gap-1"><CheckCircle2 size={12} /> Verified</span>}
-                        {fs === "Overridden" && <span className="text-xs text-blue-600" title={r.override_reason || ""}>Overridden{r.overridden_by && userMap[r.overridden_by] ? ` · ${userMap[r.overridden_by]}` : ""}</span>}
-                        {fs === "Pending" && <span className="text-xs text-amber-600 flex items-center gap-1"><AlertTriangle size={12} /> Pending</span>}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {isExc && (r.overridden
-                          ? <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => undoOverride(r)}>Undo</Button>
-                          : <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => openOverride(r)} disabled={disabled}><ShieldCheck size={12} /> Override</Button>)}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </CardContent></Card>
+          {cardFiltered !== null ? (
+            /* A card is active → show only that category. */
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs px-1">
+                <span className="text-muted-foreground">Showing <b className="text-foreground">{cardFiltered.length}</b> record{cardFiltered.length === 1 ? "" : "s"}</span>
+                <Button variant="ghost" size="sm" className="h-6 text-xs gap-1" onClick={() => setActiveFilter(null)}><X size={11} /> Clear filter</Button>
+              </div>
+              {cardFiltered.length === 0 ? (
+                <div className="p-8 text-center text-sm text-muted-foreground rounded-lg border border-dashed">No records found.</div>
+              ) : (
+                <div className="space-y-3">
+                  {cardFiltered.filter(r => isPanException(r.validation_result)).map(renderExceptionCard)}
+                  {cardFiltered.some(r => !isPanException(r.validation_result)) && renderVerifiedTable(cardFiltered.filter(r => !isPanException(r.validation_result)))}
+                </div>
+              )}
+            </div>
+          ) : exceptions.length === 0 ? (
+            /* Default view, nothing to action → success panel. */
+            <Card className="border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20">
+              <CardContent className="p-6 space-y-3">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 size={22} className="text-emerald-600" />
+                  <p className="text-lg font-bold text-emerald-700 dark:text-emerald-300">PAN Verification Completed Successfully</p>
+                </div>
+                <div className="text-sm text-foreground grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1 max-w-xl">
+                  <span className="text-muted-foreground">Total PAN Records</span><span className="font-semibold">{summary.total}</span>
+                  <span className="text-muted-foreground">Matched</span><span className="font-semibold text-emerald-600">{summary.matched}</span>
+                  <span className="text-muted-foreground">PAN Mismatch</span><span className="font-semibold">{summary.mismatch}</span>
+                  <span className="text-muted-foreground">Overridden</span><span className="font-semibold">{summary.overridden}</span>
+                </div>
+                <p className="text-sm text-muted-foreground">All PAN records have been verified successfully. No discrepancies were found.</p>
+              </CardContent>
+            </Card>
+          ) : (
+            /* Default view → exceptions only. */
+            <div className="space-y-3">{exceptions.map(renderExceptionCard)}</div>
+          )}
         </>
       )}
 
