@@ -78,8 +78,13 @@ export function gridToRows(grid: unknown[][]): Record<string, unknown>[] {
     }
     // A non-blank row that itself scores as a HEADER, appearing after a gap, is a
     // genuine second table (e.g. a "194C(6) transporter declaration" block) —
-    // stop before folding its rows in under the wrong columns.
-    if (consecutiveBlank > 0 && headerScore(dataRow) >= 3) break;
+    // stop before folding its rows in under the wrong columns. A second table
+    // is often preceded by its own title row (e.g. "Transporter who have
+    // submitted declaration") sitting between the blank gap and its real
+    // header row — so also peek one row ahead: if THIS row doesn't score as a
+    // header but the NEXT one does, this row is that title, and the table
+    // boundary is here, not one row later.
+    if (consecutiveBlank > 0 && (headerScore(dataRow) >= 3 || headerScore(grid[r + 1] || []) >= 3)) break;
     consecutiveBlank = 0;
     const obj: Record<string, unknown> = {};
     headers.forEach((h, i) => { obj[h] = dataRow[i] ?? null; });
