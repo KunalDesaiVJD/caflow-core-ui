@@ -128,14 +128,19 @@ function buildHeaderNames(headerRow: unknown[]): string[] {
 
 /**
  * Extract every deductee data row from ONE sheet's grid, tolerating repeated
- * header blocks, month labels, TOTAL/summary rows and junk. A row is data iff it
- * contains a PAN, OR (a header has been seen and it has ≥4 non-empty cells and
- * isn't a total/month label) — the PAN test alone already skips totals, month
- * headings and notes. When `sectionHint` is given (the section from the sheet
- * name) it's attached as a synthetic "Section" column so the section is captured
- * even though the file has no section column.
+ * header blocks, month labels, TOTAL/summary rows, pre-header title/TAN-PAN
+ * strips and unrelated content (e.g. Tally ledger vouchers).
+ *
+ * A genuine TDS deductee line ALWAYS carries a PAN, so a PAN is the one reliable,
+ * format-independent signal for a data row — requiring it cleanly rejects ledger
+ * Debit/Credit rows, subtotals, notes and the TAN/PAN header strip, without any
+ * per-file tuning. Rows appearing BEFORE the sheet's header (when it has one) are
+ * also skipped as title/summary strips. When `sectionHint` is given (the section
+ * derived from the sheet name) it's attached as a synthetic "Section" column, so
+ * the section is captured even for files that have no section column.
  */
 export function extractSheetRows(grid: unknown[][], sectionHint: string | null): Record<string, unknown>[] {
+  const hasHeader = grid.some(r => headerScore(r || []) >= 3);
   const rows: Record<string, unknown>[] = [];
   let headers: string[] | null = null;
   const MONTHS = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|q[1-4]|quarter)/i;
@@ -144,11 +149,12 @@ export function extractSheetRows(grid: unknown[][], sectionHint: string | null):
     const nonEmpty = row.filter(c => c != null && String(c).trim() !== "");
     if (nonEmpty.length === 0) continue;
     if (headerScore(row) >= 3) { headers = buildHeaderNames(row); continue; }
+    if (hasHeader && !headers) continue;                                 // pre-header strip (title / TAN-PAN)
     const first = String(row[0] ?? "").toLowerCase().trim();
-    if (/\btotal\b/.test(first) || first.startsWith("total")) continue; // summary row
+    if (/\btotal\b/.test(first) || first.startsWith("total")) continue;  // summary row
     if (nonEmpty.length <= 2 && MONTHS.test(first)) continue;            // month/quarter label
     const hasPan = row.some(c => c != null && PAN_RE.test(String(c).toUpperCase().replace(/\s+/g, "")));
-    if (!hasPan && !(headers && nonEmpty.length >= 4)) continue;         // not a data row
+    if (!hasPan) continue;                                               // deductee lines always have a PAN
     const obj: Record<string, unknown> = {};
     if (headers) headers.forEach((h, i) => { obj[h] = row[i] ?? null; });
     else row.forEach((c, i) => { obj[`Column${i + 1}`] = c ?? null; });
