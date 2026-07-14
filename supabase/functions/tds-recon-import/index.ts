@@ -399,7 +399,7 @@ async function callAI(opts: {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json", ...(opts.pdf ? { "anthropic-beta": "pdfs-2024-09-25" } : {}) },
-      body: JSON.stringify({ model, max_tokens: opts.maxTokens, system: opts.system, messages: [{ role: "user", content: userContent }] }),
+      body: JSON.stringify({ model, max_tokens: Math.min(opts.maxTokens, 8000), system: opts.system, messages: [{ role: "user", content: userContent }] }),
     });
     if (!res.ok) return { ok: false, status: res.status, errText: await res.text(), content: "", truncated: false };
     const j = await res.json();
@@ -483,13 +483,14 @@ serve(async (req) => {
     const resolvedForm = form_type || (Array.isArray(filing.tds_forms) ? filing.tds_forms[0] : null) || "26Q";
 
     // ── Normalise via the LLM ───────────────────────────────────────────────────
-    // Excel/CSV: normalise in row batches so a large client file never overruns
-    // the model's output budget (which would truncate the JSON and silently drop
-    // deductees). PDF: single pass with a large budget + explicit truncation check.
-    // 8000 stays under every Claude model's output ceiling (some tiers cap at
-    // 8192), so the AI provider never 400s on max_tokens. Import is batched, so a
-    // small per-call budget is plenty.
-    const IMPORT_MAX_TOKENS = 8000;
+    // Excel/CSV: normalise in row batches, with ADAPTIVE splitting so a batch that
+    // overruns the model's output budget is halved and retried (down to 1 row)
+    // instead of failing the import. The budget is generous — the primary provider
+    // (OpenRouter/Lovable = Gemini) supports ~65k output tokens; callAI clamps the
+    // Anthropic fallback to its 8192 ceiling. A big value means most batches finish
+    // in one pass and only pathologically wide/long rows ever split.
+    const IMPORT_MAX_TOKENS = 24000;
+    let skippedRows = 0; // lone rows so large even a 1-row batch overruns (rare)
     const collected: CanonicalRow[] = [];
 
     const httpErr = (status: number, errText: string) => {
@@ -537,10 +538,11 @@ serve(async (req) => {
       if (out.err) return out.err;
       collected.push(...out.rows!);
     } else {
-      // Excel/CSV — chunked small so each call's JSON output stays well within
-      // the 8000-token budget (≈50 canonical rows ≈ 3-4k output tokens).
-      const BATCH = 50;
-      const allRows = (rows as any[]).slice(0, 5000);
+      // Excel/CSV — process in batches; each batch's JSON output fits the 24k
+      // budget (≈100 canonical rows). A batch that still overruns is split
+      // adaptively below, so file width/verbosity never fails the import.
+      const BATCH = 100;
+      const allRows = (rows as any[]).slice(0, 20000);
 
       // Deterministic header pass (see guessColumnMapping) — computed ONCE
       // against the whole file's headers, then handed to every batch as a
@@ -571,16 +573,32 @@ serve(async (req) => {
         return det ? { ...r, ...det } : r;
       };
 
-      for (let i = 0; i < allRows.length; i += BATCH) {
-        const batch = allRows.slice(i, i + BATCH);
+      // ADAPTIVE batching: seed a work queue with BATCH-sized chunks; if a chunk's
+      // output is truncated (hit the model's cap), split it in half and retry the
+      // halves — down to a single row — so a large / wide / verbose file always
+      // completes without the user splitting it manually. Order is preserved.
+      const queue: any[][] = [];
+      for (let i = 0; i < allRows.length; i += BATCH) queue.push(allRows.slice(i, i + BATCH));
+
+      while (queue.length) {
+        const batch = queue.shift()!;
         const r = await callAI({
           system: CANONICAL_INSTRUCTION,
-          userText: `Client ${resolvedForm} file rows ${i + 1}-${i + batch.length} (JSON):\n${JSON.stringify(batch)}${mappingHint}`,
+          userText: `Client ${resolvedForm} file rows (JSON):\n${JSON.stringify(batch)}${mappingHint}`,
           maxTokens: IMPORT_MAX_TOKENS,
         });
         if (!r.ok) return httpErr(r.status, r.errText);
         if (r.truncated) {
-          return json({ error: "A batch of client rows exceeded the model output limit. Try a smaller file." }, 422);
+          if (batch.length <= 1) {
+            // A single row still overruns the output budget — abnormal (a huge
+            // cell). Skip it (counted + warned) rather than failing the import.
+            console.warn("tds-recon-import: one row exceeded the output budget; skipped:", JSON.stringify(batch[0]).slice(0, 150));
+            skippedRows++;
+            continue;
+          }
+          const mid = Math.ceil(batch.length / 2);
+          queue.unshift(batch.slice(0, mid), batch.slice(mid)); // retry as two smaller batches
+          continue;
         }
         const parsed = extractJson(typeof r.content === "string" ? r.content : JSON.stringify(r.content));
         const raw: any[] = Array.isArray(parsed?.rows) ? parsed.rows : Array.isArray(parsed) ? parsed : [];
@@ -618,7 +636,10 @@ serve(async (req) => {
     const { error: rErr } = await supabase.from("tds_imported_rows").insert(rowRecords);
     if (rErr) return json({ error: `Row insert failed: ${rErr.message}` }, 500);
 
-    return json({ batch_id: batch.id, row_count: canonical.length, rows: canonical });
+    return json({
+      batch_id: batch.id, row_count: canonical.length, rows: canonical,
+      ...(skippedRows ? { warning: `${skippedRows} row(s) had an unusually large cell and were skipped; all other rows imported.` } : {}),
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error("tds-recon-import fatal:", message);

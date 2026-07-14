@@ -297,7 +297,7 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
       // A fresh import invalidates any prior comparison for this filing.
       await supabase.from("tds_recon_results").delete().eq("filing_id", filing.id);
       setResults(null);
-      toast({ title: `Imported ${data.row_count} client record(s)`, description: file.name });
+      toast({ title: `Imported ${data.row_count} client record(s)`, description: data.warning || file.name, ...(data.warning ? { variant: "default" as const } : {}) });
       await loadAll();
     } catch (e: any) {
       toast({ title: "Import failed", description: e.message, variant: "destructive" });
