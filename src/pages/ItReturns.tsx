@@ -758,6 +758,22 @@ const ItReturns = () => {
         if (!(profile as any).upload_by) {
           autoPatch.upload_by = user.id;
         }
+        // 2026-06-25 (V J Desai — 33 Filed rows had blank Prepared By /
+        // Checked By): the auto-patch previously only stamped date_filed
+        // + upload_by on the Filed transition. If the auditor jumped
+        // straight from Data Pending → Filed without going through
+        // Ready-for-Review and Verified in between (common flow when
+        // marking already-e-filed returns as complete), prepared_by and
+        // checked_by were never populated. Mirror the behaviour of the
+        // Ready-for-Review / Verified transitions — stamp the signed-in
+        // user only if the fields are still empty (manual overrides
+        // continue to win).
+        if (!(profile as any).prepared_by) {
+          autoPatch.prepared_by = user.id;
+        }
+        if (!(profile as any).checked_by) {
+          autoPatch.checked_by = user.id;
+        }
       }
       if (value === "Data Pending") {
         autoPatch.prepared_by       = null;
