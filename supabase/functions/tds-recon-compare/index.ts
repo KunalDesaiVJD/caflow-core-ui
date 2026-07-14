@@ -669,17 +669,62 @@ serve(async (req) => {
       });
     }
 
+    // ── Aggregation reconciliation (N:1 / 1:N by PAN) ───────────────────────────
+    // Office TDS data often records ONE challan/deductee line per party = the SUM
+    // of several client invoices (or the client splits one office line into many).
+    // The strict 1:1 pairing then leaves a false amount-mismatch + phantom
+    // one-sided rows for a party that actually reconciles IN AGGREGATE. So group
+    // every in-comparison record by PAN: if the party's TOTAL amount AND total TDS
+    // reconcile across all its office and imported rows AND the section is
+    // consistent, the per-bill split is not a real discrepancy. Conservative:
+    // tight tolerances + a TDS check + one canonical section, so genuinely
+    // different transactions are not hidden.
+    interface Agg { oAmt: number; iAmt: number; oTds: number; iTds: number; oCount: number; iCount: number; secs: Set<string>; }
+    const byPan = new Map<string, Agg>();
+    const bumpAgg = (pan: string, side: "o" | "i", a: number, t: number, sec: unknown) => {
+      if (!pan) return;
+      let g = byPan.get(pan);
+      if (!g) { g = { oAmt: 0, iAmt: 0, oTds: 0, iTds: 0, oCount: 0, iCount: 0, secs: new Set() }; byPan.set(pan, g); }
+      if (side === "o") { g.oAmt += a; g.oTds += t; g.oCount++; } else { g.iAmt += a; g.iTds += t; g.iCount++; }
+      const cs = canonicalSection(sec, aliases); if (cs && SECTION_CODE_RE.test(cs)) g.secs.add(cs);
+    };
+    for (const o of oRecs) bumpAgg(o.panN, "o", amt(o.amount), amt(o.tds), o.section);
+    for (const i of iRecs) bumpAgg(i.panN, "i", amt(i.amount), amt(i.tds), i.section);
+    const aggregatedPans = new Set<string>();
+    for (const [pan, g] of byPan) {
+      if (g.oCount === 0 || g.iCount === 0) continue;                 // one side absent → genuinely missing, not aggregation
+      const amtOk = Math.abs(g.oAmt - g.iAmt) <= Math.max(1, Math.abs(g.oAmt) * 0.005);
+      const tdsOk = Math.abs(g.oTds - g.iTds) <= Math.max(1, Math.abs(g.oTds) * 0.02);
+      const secOk = g.secs.size <= 1;                                 // one nature of payment across the party
+      if (amtOk && tdsOk && secOk) aggregatedPans.add(pan);
+    }
+    // A paired record is safe to upgrade to matched under aggregation only when
+    // its ONLY differences are the amount/tds/date (which legitimately vary when
+    // bills are split/aggregated) — never name/pan/section/interest.
+    const AGG_OK_FIELDS = new Set(["amount", "tds", "date"]);
+
     const newRows: any[] = [];
+    let aggregatedCount = 0;
     for (const p of paired) {
-      newRows.push(rowFor(p.o.id, p.i.id, p.o.name ?? p.i.name, p.status, p.fields));
+      let status = p.status, fields = p.fields;
+      if (status === "mismatched" && aggregatedPans.has(p.o.panN) && p.mismatchFields.every(f => AGG_OK_FIELDS.has(f))) {
+        status = "matched"; aggregatedCount++;
+      }
+      newRows.push(rowFor(p.o.id, p.i.id, p.o.name ?? p.i.name, status, fields));
     }
     for (let oi = 0; oi < oRecs.length; oi++) if (!oUsed[oi]) {
       const o = oRecs[oi];
-      newRows.push(rowFor(o.id, null, o.name, "office_only", oneSided(o, "office")));
+      // A one-sided office row whose PAN reconciles in aggregate is a split bill,
+      // not a missing record → matched (aggregated).
+      const agg = aggregatedPans.has(o.panN);
+      if (agg) aggregatedCount++;
+      newRows.push(rowFor(o.id, null, o.name, agg ? "matched" : "office_only", oneSided(o, "office")));
     }
     for (let ii = 0; ii < iRecs.length; ii++) if (!iUsed[ii]) {
       const i = iRecs[ii];
-      newRows.push(rowFor(null, i.id, i.name, "imported_only", oneSided(i, "imported")));
+      const agg = aggregatedPans.has(i.panN);
+      if (agg) aggregatedCount++;
+      newRows.push(rowFor(null, i.id, i.name, agg ? "matched" : "imported_only", oneSided(i, "imported")));
     }
 
     // Replace results safely: INSERT new rows first, then delete superseded ids.
@@ -702,6 +747,8 @@ serve(async (req) => {
       // quarter's reconciliation — they reconcile under their own quarter's filing).
       excluded_other_quarter: excludedOtherQuarter,
       filing_quarter: filingQ,
+      // Records reconciled at the party level (office challan = Σ client bills).
+      aggregated: aggregatedCount,
     };
     return json({ batch_id: batchId, summary });
   } catch (err) {
