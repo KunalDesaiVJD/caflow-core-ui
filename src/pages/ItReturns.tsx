@@ -760,19 +760,30 @@ const ItReturns = () => {
         }
         // 2026-06-25 (V J Desai — 33 Filed rows had blank Prepared By /
         // Checked By): the auto-patch previously only stamped date_filed
-        // + upload_by on the Filed transition. If the auditor jumped
-        // straight from Data Pending → Filed without going through
-        // Ready-for-Review and Verified in between (common flow when
-        // marking already-e-filed returns as complete), prepared_by and
-        // checked_by were never populated. Mirror the behaviour of the
-        // Ready-for-Review / Verified transitions — stamp the signed-in
-        // user only if the fields are still empty (manual overrides
-        // continue to win).
-        if (!(profile as any).prepared_by) {
+        // + upload_by on the Filed transition. Straight Data Pending →
+        // Filed skipped the intermediate Ready-for-Review / Verified
+        // steps, so prepared_by and checked_by never got populated.
+        //
+        // 2026-06-25 (V J Desai follow-up — segregation of duties):
+        // Filling checked_by = current user when prepared_by is ALREADY
+        // the current user made Prepared By and Checked By render the
+        // same person (e.g. auditor moved Ready-for-Review → Filed),
+        // defeating the four-eyes review the audit trail is meant to
+        // enforce. Rule: only auto-fill checked_by when the signed-in
+        // user is DIFFERENT from prepared_by. If the same auditor is
+        // closing out their own preparation, checked_by stays blank
+        // and the reviewer must set it explicitly.
+        const existingPreparedBy = (profile as any).prepared_by as string | null | undefined;
+        if (!existingPreparedBy) {
           autoPatch.prepared_by = user.id;
         }
         if (!(profile as any).checked_by) {
-          autoPatch.checked_by = user.id;
+          const effectivePreparedBy = autoPatch.prepared_by ?? existingPreparedBy;
+          if (effectivePreparedBy && effectivePreparedBy !== user.id) {
+            autoPatch.checked_by = user.id;
+          }
+          // Same-person case: leave checked_by blank on purpose — the
+          // reviewer needs to set it.
         }
       }
       if (value === "Data Pending") {
