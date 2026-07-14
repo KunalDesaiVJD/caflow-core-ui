@@ -5,6 +5,7 @@ import {
   rulesFromRows,
   tbFromSnapshot,
   vouchersFromSnapshot,
+  faFromRows,
   findingToRow,
   type ScrutinyRuleRow,
 } from "./adapters";
@@ -86,6 +87,19 @@ describe("vouchersFromSnapshot", () => {
   it("leaves line_items undefined when absent (snapshot raw_data has none)", () => {
     const v = vouchersFromSnapshot([{ amount: 100, date: "2025-06-10" }]);
     expect(v[0].line_items).toBeUndefined();
+  });
+});
+
+describe("faFromRows", () => {
+  it("maps fa_assets rows, coercing numerics and normalising is_fully_depreciated", () => {
+    const fa = faFromRows([
+      { asset_name: "Laptop", gross_block_closing: "60000", wdv_closing: 0, is_fully_depreciated: true, disposals_during_year: null, disposal_date: null },
+    ]);
+    expect(fa[0]).toMatchObject({ asset_name: "Laptop", gross_block_closing: 60000, is_fully_depreciated: true, disposals_during_year: 0 });
+  });
+  it("handles empty/absent input", () => {
+    expect(faFromRows(null)).toEqual([]);
+    expect(faFromRows([])).toEqual([]);
   });
 });
 

@@ -7,6 +7,7 @@ import {
   type ScrutinyRule,
   type TBRow,
   type VoucherRow,
+  type FaAssetRow,
   type ScrutinyContext,
 } from "./detectionEngine";
 
@@ -35,8 +36,8 @@ const vch = (p: Partial<VoucherRow> & { amount: number; voucher_date: string }):
 });
 
 const FY: ScrutinyContext = { financialYearStart: "2025-04-01", financialYearEnd: "2026-03-31", today: "2026-03-31" };
-const run = (r: ScrutinyRule, data: { tb?: TBRow[]; vouchers?: VoucherRow[]; tbPY?: TBRow[] }, ctx: ScrutinyContext = FY) =>
-  runDetection([r], { tb: data.tb ?? [], vouchers: data.vouchers ?? [], tbPY: data.tbPY }, ctx, { emitAdvisoryForUnhandled: false }).findings;
+const run = (r: ScrutinyRule, data: { tb?: TBRow[]; vouchers?: VoucherRow[]; tbPY?: TBRow[]; fa?: FaAssetRow[] }, ctx: ScrutinyContext = FY) =>
+  runDetection([r], { tb: data.tb ?? [], vouchers: data.vouchers ?? [], tbPY: data.tbPY, fa: data.fa }, ctx, { emitAdvisoryForUnhandled: false }).findings;
 
 // ---- account-grain handlers ----------------------------------------------
 
@@ -661,6 +662,31 @@ describe("ratio — computed financial ratios over the TB", () => {
     expect(run(healthy, { tb: [tb({ ledger_name: "CA", parent_group: "Current Assets", closing_balance: 150000, balance_type: "Dr" }), tb({ ledger_name: "CL", parent_group: "Current Liabilities", closing_balance: 100000, balance_type: "Cr" })] })).toHaveLength(0);
     const noBase = rule({ rule_id: "EXP-007b", detection_level: "account", detection_logic: { check: "ratio", numerator: { ledger_keywords: ["misc"] }, denominator: { parent_group_keywords: ["nonexistent"] }, op: ">", pct: 2 } });
     expect(run(noBase, { tb: [tb({ ledger_name: "Misc", parent_group: "Indirect Expenses", closing_balance: 5000 })] })).toHaveLength(0);
+  });
+});
+
+describe("fully_depreciated_in_use — fixed-asset register (data.fa)", () => {
+  it("summarises fully-depreciated assets still in use, excluding disposed ones", () => {
+    const r = rule({
+      rule_id: "FA-006", category: "FA", detection_level: "account",
+      detection_logic: { check: "fully_depreciated_in_use" },
+      audit_query_template: "{count} fully-depreciated assets still in use (gross {amount}) - review continued use / impairment.",
+    });
+    const out = run(r, { fa: [
+      { asset_name: "Laptop A", gross_block_closing: 60000, is_fully_depreciated: true, disposals_during_year: 0, disposal_date: null },
+      { asset_name: "Printer B", gross_block_closing: 20000, is_fully_depreciated: true, disposals_during_year: 0, disposal_date: null },
+      { asset_name: "Old Server (sold)", gross_block_closing: 90000, is_fully_depreciated: true, disposals_during_year: 90000, disposal_date: "2025-08-01" },
+      { asset_name: "New Machine", gross_block_closing: 500000, is_fully_depreciated: false, disposals_during_year: 0, disposal_date: null },
+    ] });
+    expect(out).toHaveLength(1);
+    expect(out[0].amount).toBe(80000); // 60000 + 20000 (sold + not-fully-dep excluded)
+    expect(out[0].evidence?.count).toBe(2);
+  });
+
+  it("returns nothing when the FA register is absent or has no such assets", () => {
+    const r = rule({ rule_id: "FA-006b", detection_logic: { check: "fully_depreciated_in_use" } });
+    expect(run(r, {})).toHaveLength(0);
+    expect(run(r, { fa: [{ asset_name: "X", gross_block_closing: 100, is_fully_depreciated: false }] })).toHaveLength(0);
   });
 });
 

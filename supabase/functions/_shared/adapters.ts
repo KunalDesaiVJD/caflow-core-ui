@@ -11,7 +11,7 @@
  * `run-scrutiny` function and PipelineStage4 use — NOT the `tally_*` tables.
  */
 
-import type { ScrutinyRule, TBRow, VoucherRow, ScrutinyFinding, DetectionLogic } from "./detectionEngine.ts";
+import type { ScrutinyRule, TBRow, VoucherRow, ScrutinyFinding, DetectionLogic, FaAssetRow } from "./detectionEngine.ts";
 
 const n = (v: unknown): number => {
   const x = typeof v === "number" ? v : Number(v);
@@ -185,6 +185,34 @@ export function vouchersFromSnapshot(rows: SnapshotVoucherRow[] | null | undefin
     ledger_name: r.ledger_name ?? r.account_name ?? null,
     narration: r.narration ?? null,
     line_items: legsFrom(r.line_items),
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// fa_assets (fixed-asset register) -> FaAssetRow[]  (enables depreciation checks)
+// ---------------------------------------------------------------------------
+
+export interface FaAssetSourceRow {
+  asset_name?: string | null;
+  gross_block_closing?: number | string | null;
+  wdv_closing?: number | string | null;
+  accumulated_dep_closing?: number | string | null;
+  depreciation_for_year?: number | string | null;
+  is_fully_depreciated?: boolean | null;
+  disposals_during_year?: number | string | null;
+  disposal_date?: string | null;
+}
+
+export function faFromRows(rows: FaAssetSourceRow[] | null | undefined): FaAssetRow[] {
+  return (rows ?? []).map((r) => ({
+    asset_name: r.asset_name ?? null,
+    gross_block_closing: n(r.gross_block_closing),
+    wdv_closing: n(r.wdv_closing),
+    accumulated_dep_closing: n(r.accumulated_dep_closing),
+    depreciation_for_year: n(r.depreciation_for_year),
+    is_fully_depreciated: r.is_fully_depreciated === true,
+    disposals_during_year: n(r.disposals_during_year),
+    disposal_date: r.disposal_date ?? null,
   }));
 }
 

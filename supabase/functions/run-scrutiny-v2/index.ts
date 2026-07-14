@@ -11,7 +11,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { runDetection } from "../_shared/detectionEngine.ts";
-import { rulesFromRows, tbFromSnapshot, tbFromTallyTB, vouchersFromSnapshot, findingToRow } from "../_shared/adapters.ts";
+import { rulesFromRows, tbFromSnapshot, tbFromTallyTB, vouchersFromSnapshot, findingToRow, faFromRows } from "../_shared/adapters.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -141,6 +141,17 @@ serve(async (req) => {
       }
     }
 
+    // ── Fixed-asset register (fa_assets, keyed by client_id + fy) — enables depreciation checks. ──
+    let fa: ReturnType<typeof faFromRows> | undefined;
+    {
+      const { data: faRows } = await supabase
+        .from("fa_assets")
+        .select("asset_name, gross_block_closing, wdv_closing, accumulated_dep_closing, depreciation_for_year, is_fully_depreciated, disposals_during_year, disposal_date")
+        .eq("client_id", client_id)
+        .eq("fy", financial_year);
+      if (faRows && faRows.length > 0) fa = faFromRows(faRows as never[]);
+    }
+
     // ── DRY-RUN (preview) — run ONE draft rule against this engagement's data and return the
     // findings WITHOUT persisting or deleting anything. Powers the AI Rule Composer preview so the
     // user sees exactly what a rule would flag before applying it.
@@ -148,7 +159,7 @@ serve(async (req) => {
       const previewRules = rulesFromRows([preview_rule] as never[]);
       const pv = runDetection(
         previewRules,
-        { tb: tbCur, vouchers: vouchersCur, tbPY },
+        { tb: tbCur, vouchers: vouchersCur, tbPY, fa },
         { financialYearStart: fyStartDate(financial_year), financialYearEnd: fyEndDate(financial_year) },
         { emitAdvisoryForUnhandled: true },
       );
@@ -177,6 +188,7 @@ serve(async (req) => {
         tb: tbCur,
         vouchers: vouchersCur,
         tbPY,
+        fa,
       },
       {
         financialYearStart: fyStartDate(financial_year),

@@ -75,11 +75,25 @@ export interface ScrutinyRule {
   legal_reference?: string | null;
 }
 
+/** A fixed-asset register row (thin projection of fa_assets) — enables depreciation checks. */
+export interface FaAssetRow {
+  asset_name?: string | null;
+  gross_block_closing?: number | null;
+  wdv_closing?: number | null;
+  accumulated_dep_closing?: number | null;
+  depreciation_for_year?: number | null;
+  is_fully_depreciated?: boolean | null;
+  disposals_during_year?: number | null;
+  disposal_date?: string | null;
+}
+
 export interface ScrutinyData {
   tb: TBRow[];
   vouchers: VoucherRow[];
   /** prior-year trial balance (account grain) — enables py_comparison / capital_change */
   tbPY?: TBRow[];
+  /** fixed-asset register (fa_assets) — enables depreciation checks. Undefined if not loaded. */
+  fa?: FaAssetRow[];
 }
 
 export interface ScrutinyContext {
@@ -1172,6 +1186,34 @@ const h_ratio: CheckHandler = (rule, data) => {
   })];
 };
 
+/**
+ * fully_depreciated_in_use — reads the fixed-asset register (data.fa): assets fully depreciated
+ * (is_fully_depreciated) yet still held (not disposed this year, no disposal date). Emits ONE summary
+ * finding with the count + total gross block; the asset names are in evidence for drill-down.
+ * detection_logic: { check:"fully_depreciated_in_use", min_gross?:number, message? }.
+ */
+const h_fully_depreciated_in_use: CheckHandler = (rule, data) => {
+  const fa = Array.isArray(data.fa) ? data.fa : [];
+  if (fa.length === 0) return [];
+  const dl = rule.detection_logic as unknown as Record<string, unknown>;
+  const minGross = num(dl.min_gross, 0);
+  const hits = fa.filter((a) =>
+    a.is_fully_depreciated === true &&
+    num(a.disposals_during_year) === 0 &&
+    !a.disposal_date &&
+    Math.abs(num(a.gross_block_closing)) >= minGross,
+  );
+  if (hits.length === 0) return [];
+  const totalGross = hits.reduce((s, a) => s + Math.abs(num(a.gross_block_closing)), 0);
+  const tpl = (dl.message as string | undefined) ?? rule.audit_query_template;
+  return [finding(rule, {
+    account: `${hits.length} fully-depreciated asset(s) still in use`,
+    amount: totalGross,
+    flag_message: render(tpl, { account: `${hits.length} asset(s)`, amount: fmtAmt(totalGross), count: hits.length }),
+    evidence: { count: hits.length, total_gross_block: totalGross, assets: hits.slice(0, 50).map((a) => a.asset_name).filter(Boolean) },
+  })];
+};
+
 // ---------------------------------------------------------------------------
 // Registry + runner
 // ---------------------------------------------------------------------------
@@ -1221,6 +1263,7 @@ export const GENERIC_HANDLERS: Record<string, CheckHandler> = {
   stream_gap: h_stream_gap,
   ageing: h_ageing,
   ratio: h_ratio,
+  fully_depreciated_in_use: h_fully_depreciated_in_use,
 };
 
 export const GENERIC_CHECK_KINDS = Object.keys(GENERIC_HANDLERS);
