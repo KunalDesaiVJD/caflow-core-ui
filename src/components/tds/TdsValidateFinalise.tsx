@@ -137,7 +137,7 @@ function getImportWorker(): Worker | null {
   } catch { importWorkerBroken = true; return null; }
 }
 let workerReqId = 0;
-type WorkerProgress = { stage: string; sheet?: number; totalSheets?: number; rows?: number };
+type WorkerProgress = { stage: string; sheet?: number; totalSheets?: number; rows?: number; elapsedMs?: number };
 // If the worker reports NO progress for this long, treat the parse as stuck,
 // terminate it (a hung worker can't be reused) and surface an actionable error —
 // this is the hard guarantee that the import can never hang indefinitely on
@@ -167,13 +167,18 @@ function parseInWorker(
       cleanup();
       if (d.ok) resolve(d.rows); else reject(new Error(d.error || "Could not parse the file"));
     };
-    const onErr = (ev: ErrorEvent) => { cleanup(); importWorkerBroken = true; importWorker = null; reject(new Error(ev.message || "worker-error")); };
+    // A worker runtime error → drop this worker so a FRESH one is built next
+    // import (don't permanently disable — that would force every later import
+    // onto the main thread for the whole session over a one-off error).
+    const onErr = (ev: ErrorEvent) => { cleanup(); importWorker = null; reject(new Error(ev.message || "worker-error")); };
     worker.addEventListener("message", onMsg);
     worker.addEventListener("error", onErr);
     arm();
-    // Structured-clone the buffer (no transfer) so it stays valid for a
-    // main-thread fallback if the worker errors.
-    worker.postMessage(payload);
+    // MUST include `id` so the worker can echo it and onMsg's `d.id === id`
+    // guard accepts the reply — without it every worker message is ignored and
+    // the promise hangs until the watchdog fires. Structured-clone (no transfer)
+    // keeps the buffer valid for a main-thread fallback if the worker errors.
+    worker.postMessage({ ...payload, id });
   });
 }
 
@@ -333,7 +338,13 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     try { return await parseInWorker(payload, onProgress); }
     catch (e: any) {
       if (e?.message === "parse-stalled") throw new Error("Reading the file stalled — it may be too large or corrupt. Try a smaller file or split it into sheets.");
-      return fallback(); // worker unavailable / worker error → parse on the main thread
+      // Worker unavailable / errored → parse on the main thread, but ONLY for a
+      // modest file: a large workbook parsed synchronously here would re-freeze
+      // the tab. For a big file with no worker, fail clearly instead.
+      const size = payload.fileType === "xlsx" ? payload.buffer.byteLength : payload.text.length;
+      if (size > 12_000_000) throw new Error("The background file reader isn't available in this browser and the file is too large to read in the foreground. Please try a smaller file or update your browser.");
+      onProgress?.({ stage: "reading" });
+      return fallback();
     }
   };
   const readFile = async (file: File, onProgress?: (p: WorkerProgress) => void): Promise<{ file_type: string; rows?: any[]; pdf_base64?: string; image_base64?: string; image_media_type?: string; raw_text?: string }> => {

@@ -28,7 +28,9 @@ import { extractWorkbookRows, extractSheetRows } from "@/lib/tdsImportParsing";
 const MAX_ROWS = 50000;   // hard ceiling on rows processed per sheet
 const MAX_COLS = 100;     // hard ceiling on columns processed per sheet
 
-export type ParseProgress = { stage: string; sheet?: number; totalSheets?: number; rows?: number };
+const perfNow = (): number => (typeof performance !== "undefined" ? performance.now() : Date.now());
+
+export type ParseProgress = { stage: string; sheet?: number; totalSheets?: number; rows?: number; elapsedMs?: number };
 
 /**
  * The sheet's TRUE used range, derived from its actual cell addresses rather
@@ -65,9 +67,14 @@ function makeGridOf(wb: XLSX.WorkBook): (name: string) => unknown[][] {
       const merges = (ws["!merges"] || []) as XLSX.Range[];
       for (const m of merges) {
         if (m.s.r > range.e.r || m.s.c > range.e.c) continue;
+        const er = Math.min(m.e.r, range.e.r), ec = Math.min(m.e.c, range.e.c);
+        // Defensive: skip a merge covering a huge area. trueRange already bounds
+        // er/ec to real data, but a stray whole-column merge over empty space
+        // still carries no value worth propagating and would cost a lot of
+        // writes — a genuine label/section merge is small.
+        if ((er - m.s.r + 1) * (ec - m.s.c + 1) > 100_000) continue;
         const anchor = ws[XLSX.utils.encode_cell({ r: m.s.r, c: m.s.c })] as XLSX.CellObject | undefined;
         if (!anchor || anchor.v == null) continue;
-        const er = Math.min(m.e.r, range.e.r), ec = Math.min(m.e.c, range.e.c);
         for (let r = m.s.r; r <= er; r++) {
           for (let c = m.s.c; c <= ec; c++) {
             if (r === m.s.r && c === m.s.c) continue;
@@ -94,17 +101,23 @@ function visibleSheetNames(wb: XLSX.WorkBook): string[] {
 /** Parse an .xlsx/.xls ArrayBuffer into keyed deductee rows (all visible sheets),
  * reporting stage + per-sheet progress via onProgress. */
 export function parseWorkbookRows(buffer: ArrayBuffer, onProgress?: (p: ParseProgress) => void): Record<string, unknown>[] {
-  onProgress?.({ stage: "reading" });
+  const t0 = perfNow();
+  onProgress?.({ stage: "reading", elapsedMs: 0 });
   const wb = XLSX.read(buffer, { type: "array", cellDates: true });
+  const tRead = perfNow();
   const names = visibleSheetNames(wb);
-  onProgress?.({ stage: "sheets", totalSheets: names.length });
+  onProgress?.({ stage: "sheets", totalSheets: names.length, elapsedMs: Math.round(tRead - t0) });
   const gridOf = makeGridOf(wb);
-  let rows = extractWorkbookRows(names, gridOf, (sheet) => onProgress?.({ stage: "extracting", sheet, totalSheets: names.length }));
-  // If hidden-sheet filtering removed the only data, retry including hidden.
+  let rows = extractWorkbookRows(names, gridOf, (sheet) => onProgress?.({ stage: "extracting", sheet, totalSheets: names.length, elapsedMs: Math.round(perfNow() - t0) }));
+  // If hidden-sheet filtering removed the only data, retry including hidden —
+  // REUSE the same gridOf so already-parsed visible sheets come from the cache.
   if (!rows.length && names.length !== wb.SheetNames.length) {
-    rows = extractWorkbookRows(wb.SheetNames, makeGridOf(wb));
+    rows = extractWorkbookRows(wb.SheetNames, gridOf);
   }
-  onProgress?.({ stage: "extracted", rows: rows.length });
+  const tEnd = perfNow();
+  // Per-stage timing to the console for diagnosing a slow file in the field.
+  try { console.debug(`[tds-import] read ${Math.round(tRead - t0)}ms · extract ${Math.round(tEnd - tRead)}ms · ${rows.length} rows · ${names.length} sheet(s)`); } catch { /* ignore */ }
+  onProgress?.({ stage: "extracted", rows: rows.length, elapsedMs: Math.round(tEnd - t0) });
   return rows;
 }
 

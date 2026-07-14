@@ -365,6 +365,17 @@ type AIResult = { ok: boolean; status: number; errText: string; content: string;
 // firm set their own key) → Lovable (the app's provisioned Gemini gateway) →
 // Anthropic (last resort). Mirrors claude-gateway's fallback philosophy. All
 // paths read PDFs. Returns text content + a `truncated` flag.
+// Bound every provider fetch: a slow/hung AI provider must not make the whole
+// edge function sit until Supabase's wall-clock limit kills it (a body-less
+// non-2xx). On timeout the provider call returns ok:false and callAI falls
+// through to the next provider.
+async function fetchWithTimeout(url: string, init: RequestInit, ms = 60000): Promise<Response> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try { return await fetch(url, { ...init, signal: ctrl.signal }); }
+  finally { clearTimeout(t); }
+}
+
 async function callAI(opts: {
   system: string; userText: string; maxTokens: number;
   pdf?: { base64: string; filename: string };
@@ -386,7 +397,9 @@ async function callAI(opts: {
     }
     const body: any = { model, temperature: 0, max_tokens: opts.maxTokens, messages: [{ role: "system", content: opts.system }, { role: "user", content: userContent }] };
     if (opts.pdf && pdfMode === "file") body.plugins = [{ id: "file-parser", pdf: { engine: Deno.env.get("OPENROUTER_PDF_ENGINE") || "pdf-text" } }];
-    const res = await fetch(url, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...extra }, body: JSON.stringify(body) });
+    let res: Response;
+    try { res = await fetchWithTimeout(url, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...extra }, body: JSON.stringify(body) }); }
+    catch (e) { return { ok: false, status: 504, errText: `Provider request timed out/failed: ${e instanceof Error ? e.message : String(e)}`, content: "", truncated: false }; }
     if (!res.ok) return { ok: false, status: res.status, errText: await res.text(), content: "", truncated: false };
     const j = await res.json();
     return { ok: true, status: 200, errText: "", content: j?.choices?.[0]?.message?.content ?? "", truncated: j?.choices?.[0]?.finish_reason === "length" };
@@ -399,11 +412,14 @@ async function callAI(opts: {
       : opts.image
       ? [{ type: "text", text: opts.userText }, { type: "image", source: { type: "base64", media_type: opts.image.mediaType, data: opts.image.base64 } }]
       : [{ type: "text", text: opts.userText }];
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json", ...(opts.pdf ? { "anthropic-beta": "pdfs-2024-09-25" } : {}) },
-      body: JSON.stringify({ model, max_tokens: Math.min(opts.maxTokens, 8000), system: opts.system, messages: [{ role: "user", content: userContent }] }),
-    });
+    let res: Response;
+    try {
+      res = await fetchWithTimeout("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json", ...(opts.pdf ? { "anthropic-beta": "pdfs-2024-09-25" } : {}) },
+        body: JSON.stringify({ model, max_tokens: Math.min(opts.maxTokens, 8000), system: opts.system, messages: [{ role: "user", content: userContent }] }),
+      });
+    } catch (e) { return { ok: false, status: 504, errText: `Provider request timed out/failed: ${e instanceof Error ? e.message : String(e)}`, content: "", truncated: false }; }
     if (!res.ok) return { ok: false, status: res.status, errText: await res.text(), content: "", truncated: false };
     const j = await res.json();
     const text = Array.isArray(j?.content) ? j.content.filter((b: any) => b?.type === "text").map((b: any) => b.text).join("") : "";
@@ -638,23 +654,33 @@ serve(async (req) => {
       .single();
     if (bErr || !batch) return json({ error: `Batch insert failed: ${bErr?.message}` }, 500);
 
+    // Every field is already a first-class column, so we DON'T duplicate the
+    // whole row into a `raw` jsonb — that just doubled the insert payload + DB
+    // storage for no reader.
     const rowRecords = canonical.map((r, i) => ({
       batch_id: batch.id, filing_id, firm_id: filing.firm_id, row_index: i,
       deductee_name: r.deductee_name, pan: r.pan, section_code: r.section_code,
       amount_paid: r.amount_paid, tds_amount: r.tds_amount, interest: r.interest, rate: r.rate,
       date_of_payment: r.date_of_payment, date_of_deduction: r.date_of_deduction,
-      challan_bsr: r.challan_bsr, challan_no: r.challan_no, raw: r,
+      challan_bsr: r.challan_bsr, challan_no: r.challan_no,
     }));
     // Chunked insert — a single 20k-row POST can exceed the request/statement
     // size limit or spike memory; 1000-row chunks keep each request small and
-    // report exactly how far a mid-way failure got.
+    // report exactly how far a mid-way failure got. On a mid-way failure, roll
+    // back the batch so a re-import doesn't compare against a half-inserted one.
     const INSERT_CHUNK = 1000;
     for (let i = 0; i < rowRecords.length; i += INSERT_CHUNK) {
       const { error: rErr } = await supabase.from("tds_imported_rows").insert(rowRecords.slice(i, i + INSERT_CHUNK));
-      if (rErr) return json({ error: `Row insert failed (${i} of ${rowRecords.length} rows inserted): ${rErr.message}` }, 500);
+      if (rErr) {
+        await supabase.from("tds_imported_rows").delete().eq("batch_id", batch.id);
+        await supabase.from("tds_import_batches").delete().eq("id", batch.id);
+        return json({ error: `Row insert failed at row ${i + 1} of ${rowRecords.length}: ${rErr.message}` }, 500);
+      }
     }
 
-    return json({ batch_id: batch.id, row_count: canonical.length, rows: canonical });
+    // NOTE: the client re-reads the batch via loadAll(), so we do NOT echo the
+    // full rows array back (a 20k-row response is needless megabytes).
+    return json({ batch_id: batch.id, row_count: canonical.length });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error("tds-recon-import fatal:", message);
