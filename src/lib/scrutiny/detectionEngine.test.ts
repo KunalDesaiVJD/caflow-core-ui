@@ -736,6 +736,47 @@ describe("tds_shortfall — precise per-party TDS coverage (line_items, deductee
   });
 });
 
+describe("ratio_change — year-on-year financial ratio movement (tb vs tbPY)", () => {
+  it("flags a GP% decline of more than 5 points (numerator_less = Sales − COGS)", () => {
+    const r = rule({
+      rule_id: "RAT-001", category: "RAT", detection_level: "account",
+      detection_logic: { check: "ratio_change", numerator: { parent_group_keywords: ["sales"] }, numerator_less: { parent_group_keywords: ["purchase"] }, denominator: { parent_group_keywords: ["sales"] }, as_pct: true, change_mode: "delta_pct_points", direction: "decline", threshold: 5, label: "GP %" },
+      audit_query_template: "GP margin fell to {pct}% (from {value}%), a {count}-point drop.",
+    });
+    const out = run(r, {
+      tb: [tb({ ledger_name: "Sales", parent_group: "Sales Accounts", closing_balance: 100000, balance_type: "Cr" }), tb({ ledger_name: "Purchases", parent_group: "Purchase Accounts", closing_balance: 91000, balance_type: "Dr" })],
+      tbPY: [tb({ ledger_name: "Sales", parent_group: "Sales Accounts", closing_balance: 100000, balance_type: "Cr" }), tb({ ledger_name: "Purchases", parent_group: "Purchase Accounts", closing_balance: 84000, balance_type: "Dr" })],
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].evidence?.cy_ratio).toBe(9); // (100000-91000)/100000
+    expect(out[0].evidence?.py_ratio).toBe(16);
+  });
+
+  it("flags a D/E increase of more than 20% (relative)", () => {
+    const r = rule({
+      rule_id: "RAT-004", category: "RAT", detection_level: "account",
+      detection_logic: { check: "ratio_change", numerator: { parent_group_keywords: ["loan"] }, denominator: { parent_group_keywords: ["capital"] }, change_mode: "relative", direction: "increase", threshold: 20 },
+    });
+    const out = run(r, {
+      tb: [tb({ ledger_name: "Loan", parent_group: "Loans (Liability)", closing_balance: 100000, balance_type: "Cr" }), tb({ ledger_name: "Capital", parent_group: "Capital Account", closing_balance: 100000, balance_type: "Cr" })],
+      tbPY: [tb({ ledger_name: "Loan", parent_group: "Loans (Liability)", closing_balance: 50000, balance_type: "Cr" }), tb({ ledger_name: "Capital", parent_group: "Capital Account", closing_balance: 100000, balance_type: "Cr" })],
+    });
+    expect(out).toHaveLength(1); // 1.0 vs 0.5 = +100%
+  });
+
+  it("does not flag a stable ratio, and emits an advisory when prior-year TB is absent", () => {
+    const r = rule({ rule_id: "RAT-006", detection_level: "account", detection_logic: { check: "ratio_change", numerator: { parent_group_keywords: ["sales"] }, denominator: { parent_group_keywords: ["debtor"] }, change_mode: "relative", direction: "decline", threshold: 20 } });
+    const stable = run(r, {
+      tb: [tb({ ledger_name: "S", parent_group: "Sales Accounts", closing_balance: 100000 }), tb({ ledger_name: "D", parent_group: "Sundry Debtors", closing_balance: 20000 })],
+      tbPY: [tb({ ledger_name: "S", parent_group: "Sales Accounts", closing_balance: 98000 }), tb({ ledger_name: "D", parent_group: "Sundry Debtors", closing_balance: 20000 })],
+    });
+    expect(stable).toHaveLength(0);
+    const noPy = run(r, { tb: [tb({ ledger_name: "S", parent_group: "Sales Accounts", closing_balance: 100000 })] });
+    expect(noPy).toHaveLength(1);
+    expect(noPy[0].advisory).toBe(true);
+  });
+});
+
 describe("run ledger — completeness accounting (no rule silently dropped)", () => {
   it("reports executed / needs_data / skipped_no_handler per rule", () => {
     const rExec = rule({ rule_id: "CASH-X", category: "CASH", detection_logic: { check: "single_txn", threshold: 10000 } });
