@@ -106,6 +106,81 @@ function datesMatch(a: unknown, b: unknown): boolean {
 }
 const primaryIso = (v: unknown): string | null => dateCandidates(v)[0] ?? null;
 
+// ── Column-level date-ORDER detection + FY-quarter derivation ─────────────────
+// Guessing dd/mm-vs-mm/dd per value misreads a whole file: a client's AMERICAN
+// M/D/YY export ("10/6/25" = 6 Oct? no — 6 June under dd/mm) is systematically
+// wrong. Office dates are ISO. So detect each SIDE's convention from its WHOLE
+// column — a value whose FIRST part > 12 can only be M/D; whose SECOND part > 12
+// can only be D/M — then normalise every value with that fixed order. This makes
+// date matching AND quarter detection correct regardless of the client's format.
+type DateOrder = "iso" | "mdy" | "dmy";
+function detectDateOrder(values: unknown[]): DateOrder {
+  let iso = 0, numeric = 0, mdy = 0, dmy = 0;
+  for (const v of values) {
+    const s = v == null ? "" : String(v).trim();
+    if (!s) continue;
+    if (/^\d{4}-\d{1,2}-\d{1,2}/.test(s)) { iso++; continue; }
+    const m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.]\d{2,4}$/);
+    if (!m) continue;
+    numeric++;
+    const a = +m[1], b = +m[2];
+    // If a part exceeds 12 it must be the DAY, which fixes the order:
+    if (a > 12 && b <= 12) dmy++;        // first part is the day  ⇒ D/M/Y
+    else if (b > 12 && a <= 12) mdy++;   // second part is the day ⇒ M/D/Y
+  }
+  if (iso > 0 && iso >= numeric) return "iso";
+  if (mdy > dmy) return "mdy";
+  if (dmy > mdy) return "dmy";
+  return "dmy"; // ambiguous column (all parts ≤ 12) → Indian D/M convention
+}
+/** Normalise a raw date to ISO using a KNOWN column order; ISO/textual-month are
+ * always recognised, and if the fixed order is impossible for a value the other
+ * reading is used as a safety net. */
+function toIsoOrder(raw: unknown, order: DateOrder): string | null {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return isoOf(+m[1], +m[2], +m[3]);
+  m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if (m) {
+    const a = +m[1], b = +m[2], y = normYear(m[3]);
+    if (order === "mdy") return isoOf(y, a, b) ?? isoOf(y, b, a);
+    return isoOf(y, b, a) ?? isoOf(y, a, b); // dmy / iso-column-with-a-slash-value
+  }
+  m = s.match(/^(\d{1,2})[\s\-]([a-zA-Z]{3,9})[\s\-,]+(\d{2,4})$/);
+  if (m) { const mo = MONTHS[m[2].slice(0, 3).toLowerCase()]; if (mo) return isoOf(normYear(m[3]), mo, +m[1]); }
+  m = s.match(/^([a-zA-Z]{3,9})\s+(\d{1,2}),?\s+(\d{2,4})$/);
+  if (m) { const mo = MONTHS[m[1].slice(0, 3).toLowerCase()]; if (mo) return isoOf(normYear(m[3]), mo, +m[2]); }
+  return null;
+}
+
+/** First 4-digit year of an FY string ("2025-26" → 2025). */
+function fyStartYear(fy: unknown): number | null {
+  const m = String(fy ?? "").match(/(\d{4})/);
+  return m ? +m[1] : null;
+}
+/** Filing quarter as "Q1".."Q4" from "Q3"/"3"/"Quarter 3"/etc. */
+function normQuarter(q: unknown): "Q1" | "Q2" | "Q3" | "Q4" | null {
+  const m = String(q ?? "").match(/[1-4]/);
+  return m ? (("Q" + m[0]) as "Q1" | "Q2" | "Q3" | "Q4") : null;
+}
+/** Indian FY quarter of an ISO date within FY starting `fyStart` (Apr of that
+ * year): Q1 Apr-Jun & Q2 Jul-Sep & Q3 Oct-Dec are in `fyStart`; Q4 Jan-Mar is in
+ * `fyStart+1`. Returns null if the date is outside this FY (or unparseable). */
+function quarterOfIso(iso: string | null, fyStart: number | null): "Q1" | "Q2" | "Q3" | "Q4" | null {
+  if (!iso) return null;
+  const m = iso.match(/^(\d{4})-(\d{2})/);
+  if (!m) return null;
+  const y = +m[1], mo = +m[2];
+  if (fyStart != null) {
+    if (y === fyStart) return mo >= 4 && mo <= 6 ? "Q1" : mo >= 7 && mo <= 9 ? "Q2" : mo >= 10 && mo <= 12 ? "Q3" : null;
+    if (y === fyStart + 1) return mo >= 1 && mo <= 3 ? "Q4" : null;
+    return null;
+  }
+  return mo >= 4 && mo <= 6 ? "Q1" : mo >= 7 && mo <= 9 ? "Q2" : mo >= 10 && mo <= 12 ? "Q3" : "Q4";
+}
+
 // ── Section canonicalisation (configurable table + hard-coded fallback) ───────
 // Fallback used only if the tds_section_aliases table can't be read; mirrors the
 // migration seed so the engine still maps correctly out-of-box.
@@ -183,12 +258,20 @@ const toRec = (id: string, r: { name: unknown; pan: unknown; section: unknown; a
   id, ...r, panN: normPan(r.pan), nameN: normName(r.name), iso: primaryIso(r.date), amountN: normAmount(r.amount),
 });
 
+/** Date match for a paired record: use the column-order-normalised ISO on both
+ * sides when available (exact, unambiguous); fall back to the permissive
+ * multi-format matcher only when a side's date couldn't be normalised. */
+function recDatesMatch(o: Rec, i: Rec): boolean {
+  if (o.iso && i.iso) return o.iso === i.iso;
+  return datesMatch(o.date, i.date);
+}
+
 /** Pair candidate strength. null = too weak to pair (unrelated). Requires a PAN
  * match, or a name match anchored by date/amount, so unrelated rows never pair. */
 function pairScore(o: Rec, i: Rec): number | null {
   const panMatch = o.panN !== "" && o.panN === i.panN;
   const nameMatch = o.nameN !== "" && o.nameN === i.nameN;
-  const dateMatch = datesMatch(o.date, i.date);
+  const dateMatch = recDatesMatch(o, i);
   const amountMatch = amountsMatch(o.amount, i.amount);
   const amountNear = o.amountN != null && i.amountN != null && Math.abs(o.amountN - i.amountN) <= Math.max(1, Math.abs(o.amountN) * 0.01);
   if (!panMatch && !(nameMatch && (dateMatch || amountMatch))) return null;
@@ -216,7 +299,7 @@ function comparePair(o: Rec, i: Rec, aliases: Alias[]): { fields: FieldDiff[]; s
   const panOk = o.panN === i.panN;
   fields.push(fieldDiff("pan", o.pan, i.pan, panOk, `PAN differs: ${o.panN || "—"} vs ${i.panN || "—"}`));
 
-  const dateOk = datesMatch(o.date, i.date);
+  const dateOk = recDatesMatch(o, i);
   fields.push(fieldDiff("date", o.date, i.date, dateOk, `Different date: ${show(o.date)} vs ${show(i.date)}`));
 
   for (const f of ["amount", "tds", "interest"] as const) {
@@ -354,7 +437,7 @@ serve(async (req) => {
     if (!filing_id) return json({ error: "filing_id is required" }, 400);
 
     const { data: filing, error: fErr } = await supabase
-      .from("tds_filings").select("id, firm_id").eq("id", filing_id).single();
+      .from("tds_filings").select("id, firm_id, quarter, financial_year").eq("id", filing_id).single();
     if (fErr || !filing) return json({ error: "Filing not found" }, 404);
 
     // AUTHORIZE — the service-role client bypasses RLS, so verify the caller
@@ -422,17 +505,43 @@ serve(async (req) => {
     } catch (_e) { /* table missing / read blocked → hard-coded defaults */ }
     aliases = aliases.slice().sort((a, b) => (a.priority - b.priority) || ((b.firm ? 1 : 0) - (a.firm ? 1 : 0)));
 
-    // ── Build records ──────────────────────────────────────────────────────────
+    // ── Build records + normalise dates by DETECTED column order ────────────────
+    // Detect each side's date convention from its whole column (office is ISO;
+    // imported is whatever the client's file used — American M/D, Indian D/M, …)
+    // and set each record's canonical ISO with that fixed order. This is what
+    // makes date matching correct regardless of the client's format.
+    const officeOrder = detectDateOrder(office.map((d: any) => d.date_of_payment));
+    const importedOrder = detectDateOrder((imported ?? []).map((r: any) => r.date_of_payment));
     const oRecs = office.map((d: any) => toRec(d.id, {
       name: d.deductee_name ?? null, pan: d.deductee_pan ?? null, section: d.section_code ?? null,
       amount: d.amount_paid_credited ?? null, tds: d.total_tax_deducted ?? d.tds_amount ?? null,
       interest: d.interest_amount ?? null, date: d.date_of_payment ?? null,
     }));
-    const iRecs = (imported ?? []).map((r: any) => toRec(r.id, {
+    oRecs.forEach((r) => { r.iso = toIsoOrder(r.date, officeOrder) ?? r.iso; });
+    const iRecsAll = (imported ?? []).map((r: any) => toRec(r.id, {
       name: r.deductee_name ?? null, pan: r.pan ?? null, section: r.section_code ?? null,
       amount: r.amount_paid ?? null, tds: r.tds_amount ?? null, interest: r.interest ?? null,
       date: r.date_of_payment ?? null,
     }));
+    iRecsAll.forEach((r) => { r.iso = toIsoOrder(r.date, importedOrder) ?? r.iso; });
+
+    // ── Intelligent quarter detection ───────────────────────────────────────────
+    // A client working file often holds the WHOLE financial year (one sheet per
+    // month). The Office Data is a single quarter. So compare ONLY the imported
+    // rows whose date falls in THIS filing's quarter; rows clearly belonging to a
+    // DIFFERENT quarter of the same FY are excluded (they reconcile against their
+    // own quarter's filing — never counted here as "imported_only"). Rows whose
+    // date is unparseable or outside this FY are kept so nothing is silently lost.
+    const fyStart = fyStartYear(filing.financial_year);
+    const filingQ = normQuarter(filing.quarter);
+    let excludedOtherQuarter = 0;
+    const iRecs = (filingQ && fyStart != null)
+      ? iRecsAll.filter((r) => {
+          const q = r.iso ? quarterOfIso(r.iso, fyStart) : null;
+          if (q && q !== filingQ) { excludedOtherQuarter++; return false; }
+          return true;
+        })
+      : iRecsAll;
 
     // ── Deterministic pairing: rank ALL candidate pairs, assign best-first 1:1 ──
     const candidates: { oi: number; ii: number; score: number }[] = [];
@@ -536,6 +645,10 @@ serve(async (req) => {
       imported_only: newRows.filter(r => r.match_status === "imported_only").length,
       overridden: newRows.filter(r => r.overridden).length,
       pending: newRows.filter(r => r.match_status !== "matched" && !r.overridden).length,
+      // Imported rows that belong to OTHER quarters of the FY (excluded from this
+      // quarter's reconciliation — they reconcile under their own quarter's filing).
+      excluded_other_quarter: excludedOtherQuarter,
+      filing_quarter: filingQ,
     };
     return json({ batch_id: batchId, summary });
   } catch (err) {
