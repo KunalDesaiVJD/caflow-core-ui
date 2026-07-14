@@ -104,6 +104,12 @@ export function gridToRows(grid: unknown[][]): Record<string, unknown>[] {
 // signal every deductee line has and no total/month/label/junk row does: a PAN.
 
 const PAN_RE = /\b[A-Z]{5}[0-9]{4}[A-Z]\b/;
+// Explicit "PAN unavailable" sentinels — a genuine deductee under 206AA (20%
+// higher-rate) often has no PAN, printed as "PANNOTAVBL"/"PAN Not Available"/
+// "PAN Applied"/"PAN Awaited"/"PAN NA". Such a line IS a real deductee to
+// import, so it's admitted even without a PAN (but only inside a locked header
+// block — see extractSheetRows — so totals/labels/ledger rows stay excluded).
+const NO_PAN_RE = /pan\s*(not\s*av|applied|awaited|na\b|nil\b)/i;
 
 /** "194C" → 194C · "94H" → 194H · "92B" → 192B · "194A " → 194A · else null. */
 export function sectionFromSheetName(name: string): string | null {
@@ -154,7 +160,12 @@ export function extractSheetRows(grid: unknown[][], sectionHint: string | null):
     if (/\btotal\b/.test(first) || first.startsWith("total")) continue;  // summary row
     if (nonEmpty.length <= 2 && MONTHS.test(first)) continue;            // month/quarter label
     const hasPan = row.some(c => c != null && PAN_RE.test(String(c).toUpperCase().replace(/\s+/g, "")));
-    if (!hasPan) continue;                                               // deductee lines always have a PAN
+    // Deductee lines carry a PAN — except genuine 206AA "PAN unavailable" cases,
+    // which we admit only when a header is locked (inside a data block) and a
+    // cell explicitly flags the missing PAN. Everything else PAN-less is a
+    // total/label/ledger row and stays dropped.
+    const hasNoPanSentinel = headers != null && row.some(c => NO_PAN_RE.test(String(c ?? "")));
+    if (!hasPan && !hasNoPanSentinel) continue;
     const obj: Record<string, unknown> = {};
     if (headers) headers.forEach((h, i) => { obj[h] = row[i] ?? null; });
     else row.forEach((c, i) => { obj[`Column${i + 1}`] = c ?? null; });

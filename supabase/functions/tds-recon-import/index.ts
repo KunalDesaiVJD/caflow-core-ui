@@ -112,112 +112,69 @@ Rules: never invent rows or values; one object per deductee line item; ignore
 totals/header/footer/subtotal lines; convert Indian-format numbers
 ("12,34,567.00") to plain numbers.`;
 
-// ── Deterministic header pre-mapper (Excel/CSV only) ────────────────────────
-// A synonym-based pass over the RAW column headers, run BEFORE the LLM call.
-// This is not a replacement for the LLM's semantic matching — it's a
-// reliability floor: common, expected header names (the ones a client's file
-// overwhelmingly likely uses) get identified with certainty and handed to the
-// model as an explicit hint, so date/name/PAN/etc. detection doesn't depend
-// entirely on the model noticing them unprompted. The model can still
-// disregard a hint if the actual data in that column contradicts it.
-// Order WITHIN each field's list is a priority ranking, not just a membership
-// list — guessColumnMapping tries synonyms in order and takes the first one
-// that matches an available header, so e.g. date_of_payment's "dateofcredit"
-// is deliberately listed before "dateofpayment": a real client file (verified
-// against an actual TDS export) can have BOTH a "Date of Credit" column
-// (the deductee transaction date we want) and a "Date of Payment" column that
-// is actually the challan/bank deposit date, not the deductee's — see the
-// DISAMBIGUATION note in CANONICAL_INSTRUCTION. Listing the correct one first
-// makes the deterministic pass prefer it regardless of column order.
+// ── Deterministic HEADER→FIELD mapper (tabular xlsx/csv/json) ────────────────
+// The tabular path is normalised entirely in code — the AI never reads rows.
+// Each DISTINCT source column header is classified to a canonical field by its
+// wording (synonyms) and, for PAN/date/section, its data pattern. A header→field
+// map (rather than field→header) is deliberate: real client workbooks merge
+// several sheets whose columns are named differently ("PAN" on one sheet,
+// "PAN No." on another; "BILL AMT" vs "amount"), so MULTIPLE headers may feed
+// one field and buildCanonicalFromMap takes the first non-empty value per field
+// per row. This is what makes heterogeneous multi-sheet files import correctly.
 const HEADER_SYNONYMS: Record<keyof CanonicalRow, string[]> = {
   deductee_name: ["deducteename", "partyname", "vendorname", "customername", "beneficiaryname", "payeename", "name", "party", "vendor", "deductee"],
   pan: ["pan", "panno", "pannumber", "permanentaccountnumber", "deducteepan", "partypan"],
   section_code: ["section", "tdssection", "sectioncode", "natureofpayment", "paymentsection", "us", "u/s"],
-  amount_paid: ["amount", "paymentamount", "grossamount", "invoiceamount", "taxableamount", "creditamount", "amountpaidcredited", "amountpaid"],
-  // "amountoftds" handles the very common "Amount of TDS" phrasing (word
-  // order reversed from "tdsamount") — substring matching is order-sensitive
-  // so without this exact token that header would go unmatched (verified
-  // against a real client file that uses exactly this header).
-  tds_amount: ["tds", "tdsamount", "amountoftds", "taxdeducted", "deductedtax", "taxamount", "tdsdeducted"],
+  // Money-column synonyms are SPECIFIC (no bare "amt") so "BILL AMT" resolves to
+  // amount_paid and "TDS AMT" to tds_amount without colliding — both are real,
+  // very common client headers (verified against actual files).
+  amount_paid: ["amount", "paymentamount", "grossamount", "invoiceamount", "taxableamount", "creditamount", "amountpaidcredited", "amountpaid", "billamt", "billamount", "billvalue", "invoiceamt", "grossamt", "taxableamt", "invoicevalue", "paidamount"],
+  // "amountoftds" handles "Amount of TDS"; "tdsamt" handles "TDS AMT".
+  tds_amount: ["tds", "tdsamount", "amountoftds", "taxdeducted", "deductedtax", "taxamount", "tdsdeducted", "tdsamt"],
   interest: ["interest", "interestamount", "lateinterest", "int"],
-  rate: ["rate", "tdsrate", "rateoftds"],
-  date_of_payment: ["dateofcredit", "creditdate", "dateofpaymentcredit", "voucherdate", "transactiondate", "date", "valuedate", "entrydate", "dateofpayment", "paymentdate", "deductiondate"],
+  rate: ["rate", "tdsrate", "rateoftds", "oftds", "percentoftds"],
+  date_of_payment: ["dateofcredit", "creditdate", "dateofpaymentcredit", "voucherdate", "transactiondate", "date", "valuedate", "entrydate", "billdate", "billdt", "dateofpayment", "paymentdate", "deductiondate"],
   date_of_deduction: ["dateofdeduction", "tdsdeductiondate"],
   challan_bsr: ["bsr", "bsrcode", "challanbsr"],
-  challan_no: ["challanno", "challannumber", "challanserialno"],
+  challan_no: ["challanno", "challannumber", "challanserialno", "challan"],
 };
 
 /** lowercase, strip everything but letters/digits, so "Date of Credit" and "date_of_credit " and "DATE-OF-CREDIT" all normalise identically. */
 const normaliseHeader = (h: string): string => h.toLowerCase().replace(/[^a-z0-9]/g, "");
 
 /**
- * Best-effort deterministic header→field mapping. Each source column is
- * assigned to at most one canonical field, and each canonical field gets at
- * most one source column (first/best match wins — CanonicalRow's own key
- * order acts as the tie-break priority, so e.g. date_of_payment is resolved
- * before the more specific date_of_deduction only claims a distinct column).
+ * Classify ONE source column header to its best canonical field, or null if it
+ * doesn't correspond to any. Exact synonym match wins over substring; a couple
+ * of structural guards keep challan/paid-deposit columns from being read as the
+ * deductee's payment date (a real client file has a "Paid Date & BSR" column
+ * that is the challan deposit, NOT the transaction date).
  */
-function guessColumnMapping(sampleRows: Record<string, unknown>[]): Partial<Record<keyof CanonicalRow, string>> {
-  const headers = new Set<string>();
-  for (const row of sampleRows.slice(0, 5)) {
-    if (row && typeof row === "object") for (const k of Object.keys(row)) headers.add(k);
-  }
-  const mapping: Partial<Record<keyof CanonicalRow, string>> = {};
-  const claimed = new Set<string>();
-  for (const field of Object.keys(HEADER_SYNONYMS) as (keyof CanonicalRow)[]) {
-    const synonyms = HEADER_SYNONYMS[field];
-    let best: string | null = null;
-    // Iterate SYNONYMS first, headers second, so the priority order within
-    // each field's list (see comment above) decides the winner when several
-    // headers in the same file match different synonyms of the same field —
-    // not just whichever header happens to come first in the sheet.
-    for (const syn of synonyms) {
-      if (best) break;
-      for (const header of headers) {
-        if (claimed.has(header)) continue;
-        if (normaliseHeader(header) === syn) { best = header; break; } // exact normalised match
-      }
-    }
-    if (!best) {
-      // Fallback: substring match (e.g. header "TDS Amount (Rs.)" contains "tdsamount").
-      // Synonyms under 4 chars (e.g. "tds", "us", "int", "pan", "bsr") are
-      // skipped here — verified against a real file that a bare "tds" token
-      // substring-matches "TDS Rate" and wrongly claims it for tds_amount
-      // before the `rate` field ever gets a chance at its own exact match.
-      // Short tokens stay fully valid for the EXACT-match pass above, where
-      // there's no collision risk (the whole header must equal them).
-      for (const syn of synonyms) {
-        if (best) break;
-        if (syn.length < 4) continue;
-        for (const header of headers) {
-          if (claimed.has(header)) continue;
-          const norm = normaliseHeader(header);
-          if (norm.includes(syn) || syn.includes(norm)) { best = header; break; }
-        }
-      }
-    }
-    if (best) { mapping[field] = best; claimed.add(best); }
-  }
-  return mapping;
+function bestFieldForHeader(header: string): keyof CanonicalRow | null {
+  const norm = normaliseHeader(header);
+  if (!norm) return null;
+  if (norm.includes("bsr")) return "challan_bsr";                       // "Paid Date & BSR", "BSR Code" → challan, never date
+  if (norm.includes("paid") && norm.includes("date")) return null;      // challan/bank DEPOSIT date — we have no field for it; must not become date_of_payment
+  const fields = Object.keys(HEADER_SYNONYMS) as (keyof CanonicalRow)[];
+  for (const f of fields) if (HEADER_SYNONYMS[f].some(s => s === norm)) return f;                     // exact match (any length)
+  // Substring match, but BOTH sides must be long enough to be meaningful: a
+  // 2–3 char header like "NO." or "CO" or "S.R" must NEVER match because a
+  // synonym happens to CONTAIN it (e.g. "panno" contains "no" → serial column
+  // wrongly read as PAN). Only match a synonym contained in the header, or a
+  // header (≥4 chars) contained in a synonym.
+  for (const f of fields) if (HEADER_SYNONYMS[f].some(s => s.length >= 4 && (norm.includes(s) || (norm.length >= 4 && s.includes(norm))))) return f;
+  return null;
 }
 
-/** Reads+coerces one field directly from a raw source row via the header
- * mapping, applying the same coercion rules coerceRow uses for the LLM's own
- * output. Returns undefined when there's no confident column for this field
- * or the cell is empty. */
-function readMappedField<F extends keyof CanonicalRow>(
-  row: Record<string, unknown>, mapping: Partial<Record<keyof CanonicalRow, string>>, field: F,
-): CanonicalRow[F] | undefined {
-  const header = mapping[field];
-  if (!header) return undefined;
-  const v = row[header];
-  if (v === null || v === undefined || v === "") return undefined;
-  if (field === "pan") return String(v).trim().toUpperCase() as CanonicalRow[F];
+/** Coerce a raw cell for a given canonical field (same rules coerceRow uses).
+ * Returns undefined for an empty/absent cell. */
+function coerceField(field: keyof CanonicalRow, v: unknown): string | number | undefined {
+  if (v === null || v === undefined || String(v).trim() === "") return undefined;
+  if (field === "pan") return String(v).trim().toUpperCase();
   if (field === "amount_paid" || field === "tds_amount" || field === "interest" || field === "rate") {
     const n = toNum(v);
-    return (n === null ? undefined : n) as CanonicalRow[F];
+    return n === null ? undefined : n;
   }
-  return String(v).trim() as CanonicalRow[F];
+  return String(v).trim();
 }
 
 // ── Deterministic section-column picker ─────────────────────────────────────
@@ -267,52 +224,98 @@ function pickSectionColumn(allRows: Record<string, unknown>[]): string | null {
   return best ? best.header : null;
 }
 
-// Fields where a confident deterministic column match OVERRIDES the LLM's own
-// extraction, not just hints it. section_code is included via the value-based
-// pickSectionColumn (assigned into `mapping` before overrides are built) rather
-// than the header-name guess, because the RIGHT section column is identified far
-// more reliably by its data pattern than by its (often ambiguous) header text.
-const OVERRIDE_FIELDS: (keyof CanonicalRow)[] = ["pan", "deductee_name", "amount_paid", "tds_amount", "interest", "date_of_payment", "section_code"];
-
-/** PAN+amount is used as the join key back to the LLM's own output, because
- * both are independently reliable for the LLM to extract even from garbled
- * headers, and together they disambiguate a party's multiple transactions
- * (a bare PAN alone can't). Ambiguous keys (two source rows sharing the same
- * PAN+amount) are dropped rather than risking a wrong override. */
-function keyFor(pan: unknown, amount: unknown): string | null {
-  if (pan == null || amount == null) return null;
-  const p = String(pan).trim().toUpperCase();
-  const a = Math.round(Number(amount));
-  if (!p || !isFinite(a)) return null;
-  return `${p}|${a}`;
+// ── Data-pattern column detection (deterministic, no LLM) ────────────────────
+// Fills the gaps header-name matching leaves: a PAN column and a date column are
+// identifiable from their VALUES alone, regardless of how the header is worded.
+// Together with the header synonyms and pickSectionColumn this lets the
+// overwhelming majority of real client files map with ZERO AI calls — the file
+// is parsed to structured rows and normalised entirely in code.
+const PAN_VALUE_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+const DATE_VALUE_RE = /^(\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}|\d{4}[/\-.]\d{1,2}[/\-.]\d{1,2})/;
+function looksLikePan(v: unknown): boolean {
+  const s = v == null ? "" : String(v).trim().toUpperCase().replace(/\s+/g, "");
+  return PAN_VALUE_RE.test(s);
+}
+function looksLikeDate(v: unknown): boolean {
+  if (v instanceof Date) return true;
+  const s = v == null ? "" : String(v).trim();
+  return DATE_VALUE_RE.test(s);
+}
+/** Pick the (unclaimed) column whose non-empty VALUES best satisfy `pred`
+ * (≥60%). Used to resolve pan/date columns when their headers didn't match a
+ * synonym. Returns null if no column fits. */
+function detectColumnByValue(
+  allRows: Record<string, unknown>[], claimed: Set<string>, pred: (v: unknown) => boolean,
+): string | null {
+  const headers = new Set<string>();
+  for (const r of allRows) if (r && typeof r === "object") for (const k of Object.keys(r)) headers.add(k);
+  let best: { header: string; frac: number } | null = null;
+  for (const h of headers) {
+    if (claimed.has(h)) continue;
+    let nonEmpty = 0, hit = 0;
+    for (const r of allRows) {
+      const v = r?.[h];
+      if (v === null || v === undefined || String(v).trim() === "") continue;
+      nonEmpty++; if (pred(v)) hit++;
+    }
+    if (nonEmpty === 0) continue;
+    const frac = hit / nonEmpty;
+    if (frac >= 0.6 && (!best || frac > best.frac)) best = { header: h, frac };
+  }
+  return best ? best.header : null;
 }
 
+/** A resolved header→field map: each source column header points at the
+ * canonical field it feeds. Several headers may map to the SAME field. */
+type HeaderMap = Record<string, keyof CanonicalRow>;
+
 /**
- * Builds a PAN+amount → deterministically-read-fields map from the raw
- * source rows. This is the reliability backstop for guessColumnMapping: a
- * hint in the prompt is only ever a suggestion the model CAN ignore — and on
- * a real client file with both a "Date of Credit" column (the deductee date
- * we want) and a separate "Date of Payment" column (actually the challan
- * deposit date), the model sometimes still picked the wrong one despite an
- * explicit hint pointing at the right column. Applying the mapped value
- * directly in code, keyed by PAN+amount, removes the model's discretion
- * entirely for fields we can already read with certainty.
+ * Resolve the header→field map for a whole tabular file, deterministically:
+ *   1. classify every distinct source header by wording (bestFieldForHeader);
+ *   2. value-based section column (pickSectionColumn) — the most reliable way to
+ *      identify the section, and what stops the re-import section flip-flop;
+ *   3. value-based PAN / date columns when no header matched by name.
+ * `aiMap` (from resolveMappingWithAI) is merged in as a LAST resort for fields
+ * still unresolved — deterministic assignments are never overwritten.
  */
-function buildDeterministicOverrides(allRows: Record<string, unknown>[], mapping: Partial<Record<keyof CanonicalRow, string>>): Map<string, Partial<CanonicalRow>> {
-  const byKey = new Map<string, Partial<CanonicalRow>>();
-  const ambiguous = new Set<string>();
-  for (const row of allRows) {
-    const key = keyFor(readMappedField(row, mapping, "pan"), readMappedField(row, mapping, "amount_paid"));
-    if (!key || ambiguous.has(key)) continue;
-    if (byKey.has(key)) { byKey.delete(key); ambiguous.add(key); continue; }
-    const entry: Partial<CanonicalRow> = {};
-    for (const field of OVERRIDE_FIELDS) {
-      const v = readMappedField(row, mapping, field);
-      if (v !== undefined) (entry as any)[field] = v;
+function resolveColumnMapping(allRows: Record<string, unknown>[], aiMap?: Partial<Record<keyof CanonicalRow, string>>): HeaderMap {
+  const headers = new Set<string>();
+  for (const r of allRows) if (r && typeof r === "object") for (const k of Object.keys(r)) headers.add(k);
+
+  const map: HeaderMap = {};
+  for (const h of headers) { const f = bestFieldForHeader(h); if (f) map[h] = f; }
+
+  const mappedFields = () => new Set(Object.values(map));
+  const secCol = pickSectionColumn(allRows);
+  if (secCol && !map[secCol]) map[secCol] = "section_code";
+  if (!mappedFields().has("pan")) { const c = detectColumnByValue(allRows, new Set(Object.keys(map)), looksLikePan); if (c) map[c] = "pan"; }
+  if (!mappedFields().has("date_of_payment")) { const c = detectColumnByValue(allRows, new Set(Object.keys(map)), looksLikeDate); if (c) map[c] = "date_of_payment"; }
+
+  if (aiMap) {
+    const have = mappedFields();
+    for (const [f, h] of Object.entries(aiMap) as [keyof CanonicalRow, string][]) {
+      if (h && !have.has(f) && !map[h]) map[h] = f;
     }
-    byKey.set(key, entry);
   }
-  return byKey;
+  return map;
+}
+
+/** Build a canonical row PURELY from the header→field map — no AI, no per-row
+ * model call. For each field the FIRST non-empty mapped column (in map order)
+ * wins, so heterogeneous sheets (one uses "PAN", another "PAN No.") both feed
+ * the same field. This is the deterministic normaliser that replaces the old
+ * per-batch LLM extraction for tabular files. */
+function buildCanonicalFromMap(row: Record<string, unknown>, map: HeaderMap): CanonicalRow {
+  const out: CanonicalRow = {
+    deductee_name: null, pan: null, section_code: null, amount_paid: null, tds_amount: null,
+    interest: null, rate: null, date_of_payment: null, date_of_deduction: null, challan_bsr: null, challan_no: null,
+  };
+  for (const [header, field] of Object.entries(map)) {
+    if (out[field] !== null) continue;                 // first non-empty mapped column wins
+    const v = coerceField(field, row[header]);
+    if (v !== undefined) (out as Record<string, unknown>)[field] = v;
+  }
+  return out;
 }
 
 function extractJson(text: string): any {
@@ -427,6 +430,43 @@ async function callAI(opts: {
   return last;
 }
 
+// ── AI column-mapping resolver (fallback ONLY) ──────────────────────────────
+// The AI never reads the file row-by-row anymore. When the deterministic passes
+// (header synonyms + data patterns) can't identify a REQUIRED column, this makes
+// ONE small call that sees only the column headers + a handful of sample rows
+// and returns which source column maps to each canonical field. The mapping is
+// then applied to every row in code. One bounded call per import — never scales
+// with row count — so it can't overrun the edge-function time budget.
+const MAPPING_INSTRUCTION = `You are given the COLUMN HEADERS and a few SAMPLE ROWS of a client's TDS statement (already parsed from Excel/CSV — you do NOT read a raw file). Identify which source column corresponds to each canonical TDS field, judging by the header's MEANING and the DATA PATTERN in the samples.
+
+Canonical fields: deductee_name, pan, section_code, amount_paid, tds_amount, interest, rate, date_of_payment, date_of_deduction, challan_bsr, challan_no.
+
+Guidance: a column of values like "AJKPM0355R" is pan; a column of dd/mm/yyyy values is a date; amount_paid is the gross / bill / invoice / paid amount (usually the largest money column) while tds_amount is the smaller tax-deducted column; section_code is the TDS section or nature of payment — prefer a descriptive column ("TDS - Contract", "Professional Fees") or a clean code ("194C", "194Q") over a raw legal-clause citation ("393(1)..."). If the file has BOTH a transaction date ("Date of Credit", populated on every row) and a challan / bank deposit date (only filled where there is a Bank/BSR/Challan value), map date_of_payment to the always-populated transaction date, never the sparse challan column.
+
+Return STRICT JSON only, no prose: {"mapping": {"deductee_name": "<exact source column header or null>", "pan": "...", "section_code": "...", "amount_paid": "...", "tds_amount": "...", "interest": "...", "rate": "...", "date_of_payment": "...", "date_of_deduction": "...", "challan_bsr": "...", "challan_no": "..."}}`;
+
+async function resolveMappingWithAI(allRows: Record<string, unknown>[]): Promise<Partial<Record<keyof CanonicalRow, string>>> {
+  const headers = new Set<string>();
+  for (const r of allRows.slice(0, 50)) if (r && typeof r === "object") for (const k of Object.keys(r)) headers.add(k);
+  const cols = [...headers];
+  if (!cols.length) return {};
+  const r = await callAI({
+    system: MAPPING_INSTRUCTION,
+    userText: `Column headers: ${JSON.stringify(cols)}\n\nSample rows: ${JSON.stringify(allRows.slice(0, 5))}`,
+    maxTokens: 1500,
+  });
+  if (!r.ok) { console.error("resolveMappingWithAI failed", r.status, r.errText.slice(0, 160)); return {}; }
+  const parsed = extractJson(typeof r.content === "string" ? r.content : JSON.stringify(r.content));
+  const m = parsed?.mapping && typeof parsed.mapping === "object" ? parsed.mapping : null;
+  if (!m) return {};
+  const out: Partial<Record<keyof CanonicalRow, string>> = {};
+  const valid = new Set(cols);
+  for (const f of Object.keys(HEADER_SYNONYMS) as (keyof CanonicalRow)[]) {
+    if (typeof m[f] === "string" && valid.has(m[f])) out[f] = m[f];
+  }
+  return out;
+}
+
 serve(async (req) => {
   const corsHeaders = corsFor(req);
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -482,15 +522,16 @@ serve(async (req) => {
 
     const resolvedForm = form_type || (Array.isArray(filing.tds_forms) ? filing.tds_forms[0] : null) || "26Q";
 
-    // ── Normalise via the LLM ───────────────────────────────────────────────────
-    // Excel/CSV: normalise in row batches, with ADAPTIVE splitting so a batch that
-    // overruns the model's output budget is halved and retried (down to 1 row)
-    // instead of failing the import. The budget is generous — the primary provider
-    // (OpenRouter/Lovable = Gemini) supports ~65k output tokens; callAI clamps the
-    // Anthropic fallback to its 8192 ceiling. A big value means most batches finish
-    // in one pass and only pathologically wide/long rows ever split.
+    // ── Normalise ───────────────────────────────────────────────────────────────
+    // Tabular files (xlsx/csv/json) are normalised DETERMINISTICALLY: resolve the
+    // column→field mapping once (header synonyms + data patterns, with a single
+    // bounded AI call only if a required column can't be identified) and build
+    // every canonical row in code — the AI never reads rows batch-by-batch, so a
+    // large file cannot overrun the edge-function time budget (the root cause of
+    // the "non-2xx" failures). Only PDF/image/free-text, which genuinely need a
+    // model to read them, use the single-pass LLM path below. IMPORT_MAX_TOKENS
+    // is the generous output budget for that single pass.
     const IMPORT_MAX_TOKENS = 24000;
-    let skippedRows = 0; // lone rows so large even a 1-row batch overruns (rare)
     const collected: CanonicalRow[] = [];
 
     const httpErr = (status: number, errText: string) => {
@@ -538,72 +579,43 @@ serve(async (req) => {
       if (out.err) return out.err;
       collected.push(...out.rows!);
     } else {
-      // Excel/CSV — process in batches; each batch's JSON output fits the 24k
-      // budget (≈100 canonical rows). A batch that still overruns is split
-      // adaptively below, so file width/verbosity never fails the import.
-      const BATCH = 100;
-      const allRows = (rows as any[]).slice(0, 20000);
+      // Excel/CSV/JSON tabular — DETERMINISTIC normalisation, no per-row AI.
+      // The client already parsed the file into structured rows. We resolve the
+      // column→field mapping once and build every canonical row in code. This is
+      // O(rows) local work (milliseconds), not N sequential model calls, so it
+      // NEVER overruns the edge-function time budget regardless of file size —
+      // the fix for both the "non-2xx" timeouts and the redundant AI work (the
+      // old path called the model per 100-row batch and then overwrote most of
+      // its output with these very same deterministic column reads).
+      const allRows = (rows as Record<string, unknown>[]).slice(0, 20000);
 
-      // Deterministic header pass (see guessColumnMapping) — computed ONCE
-      // against the whole file's headers, then handed to every batch as a
-      // hint. Falls back gracefully (empty mapping → no hint line) if the
-      // headers don't match any known synonym at all, in which case the
-      // model relies purely on the strengthened system prompt + data pattern.
-      const mapping = guessColumnMapping(allRows);
-      // Resolve the section column by DATA, not header text (see
-      // pickSectionColumn) and let it override the header guess — this is what
-      // stops a re-import of the same file from flip-flopping between the clean
-      // code column and an unmappable "393(1)..." clause column.
-      const sectionCol = pickSectionColumn(allRows);
-      if (sectionCol) mapping.section_code = sectionCol;
-      const mappingEntries = Object.entries(mapping);
-      const mappingHint = mappingEntries.length
-        ? `\n\nAutomatic header analysis detected these likely column mappings — use them unless the actual data in that column clearly contradicts it: ${mappingEntries.map(([field, header]) => `${field} ← "${header}"`).join("; ")}.`
-        : "";
-
-      // Reliability backstop: don't just HINT the model, directly override
-      // its output for fields we can read with certainty (see
-      // buildDeterministicOverrides) — verified against a real client file
-      // where the model still picked the wrong of two similar date columns
-      // despite an explicit hint pointing at the correct one.
-      const overridesByKey = buildDeterministicOverrides(allRows, mapping);
-      const applyOverride = (r: CanonicalRow): CanonicalRow => {
-        const key = keyFor(r.pan, r.amount_paid);
-        const det = key ? overridesByKey.get(key) : undefined;
-        return det ? { ...r, ...det } : r;
+      // 1) Resolve the header→field map deterministically (synonyms + value-based
+      //    section/PAN/date). Handles heterogeneous multi-sheet workbooks (many
+      //    headers → one field).
+      let map = resolveColumnMapping(allRows);
+      const enough = (m: HeaderMap) => {
+        const f = new Set(Object.values(m));
+        return (f.has("pan") || f.has("deductee_name")) && (f.has("amount_paid") || f.has("tds_amount"));
       };
 
-      // ADAPTIVE batching: seed a work queue with BATCH-sized chunks; if a chunk's
-      // output is truncated (hit the model's cap), split it in half and retry the
-      // halves — down to a single row — so a large / wide / verbose file always
-      // completes without the user splitting it manually. Order is preserved.
-      const queue: any[][] = [];
-      for (let i = 0; i < allRows.length; i += BATCH) queue.push(allRows.slice(i, i + BATCH));
-
-      while (queue.length) {
-        const batch = queue.shift()!;
-        const r = await callAI({
-          system: CANONICAL_INSTRUCTION,
-          userText: `Client ${resolvedForm} file rows (JSON):\n${JSON.stringify(batch)}${mappingHint}`,
-          maxTokens: IMPORT_MAX_TOKENS,
-        });
-        if (!r.ok) return httpErr(r.status, r.errText);
-        if (r.truncated) {
-          if (batch.length <= 1) {
-            // A single row still overruns the output budget — abnormal (a huge
-            // cell). Skip it (counted + warned) rather than failing the import.
-            console.warn("tds-recon-import: one row exceeded the output budget; skipped:", JSON.stringify(batch[0]).slice(0, 150));
-            skippedRows++;
-            continue;
-          }
-          const mid = Math.ceil(batch.length / 2);
-          queue.unshift(batch.slice(0, mid), batch.slice(mid)); // retry as two smaller batches
-          continue;
-        }
-        const parsed = extractJson(typeof r.content === "string" ? r.content : JSON.stringify(r.content));
-        const raw: any[] = Array.isArray(parsed?.rows) ? parsed.rows : Array.isArray(parsed) ? parsed : [];
-        collected.push(...raw.map(coerceRow).map(applyOverride));
+      // 2) Only if a REQUIRED field is still unidentified (need an identity —
+      //    PAN or name — and a money column — amount or TDS) do we make ONE small
+      //    AI call that maps columns from headers + 5 sample rows. It never scales
+      //    with row count, so it can't overrun the time budget. Deterministic
+      //    assignments are never overwritten.
+      let mappingSource = "deterministic";
+      if (!enough(map)) {
+        const aiMap = await resolveMappingWithAI(allRows);
+        if (Object.keys(aiMap).length) { map = resolveColumnMapping(allRows, aiMap); mappingSource = "ai-assisted"; }
       }
+
+      if (!enough(map)) {
+        return json({ error: "Could not identify the deductee columns — the file needs at least a Name/PAN column and an Amount/TDS column. Please check the column headers." }, 422);
+      }
+
+      // 3) Build every row from the map, in code (no per-row AI).
+      for (const row of allRows) collected.push(buildCanonicalFromMap(row, map));
+      console.log(`tds-recon-import: ${mappingSource} mapping over ${allRows.length} rows →`, JSON.stringify(map));
     }
 
     // drop wholly-empty rows the model may echo
@@ -633,13 +645,16 @@ serve(async (req) => {
       date_of_payment: r.date_of_payment, date_of_deduction: r.date_of_deduction,
       challan_bsr: r.challan_bsr, challan_no: r.challan_no, raw: r,
     }));
-    const { error: rErr } = await supabase.from("tds_imported_rows").insert(rowRecords);
-    if (rErr) return json({ error: `Row insert failed: ${rErr.message}` }, 500);
+    // Chunked insert — a single 20k-row POST can exceed the request/statement
+    // size limit or spike memory; 1000-row chunks keep each request small and
+    // report exactly how far a mid-way failure got.
+    const INSERT_CHUNK = 1000;
+    for (let i = 0; i < rowRecords.length; i += INSERT_CHUNK) {
+      const { error: rErr } = await supabase.from("tds_imported_rows").insert(rowRecords.slice(i, i + INSERT_CHUNK));
+      if (rErr) return json({ error: `Row insert failed (${i} of ${rowRecords.length} rows inserted): ${rErr.message}` }, 500);
+    }
 
-    return json({
-      batch_id: batch.id, row_count: canonical.length, rows: canonical,
-      ...(skippedRows ? { warning: `${skippedRows} row(s) had an unusually large cell and were skipped; all other rows imported.` } : {}),
-    });
+    return json({ batch_id: batch.id, row_count: canonical.length, rows: canonical });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error("tds-recon-import fatal:", message);

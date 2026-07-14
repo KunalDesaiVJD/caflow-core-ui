@@ -23,9 +23,7 @@ import {
   ShieldCheck, AlertTriangle, CheckCircle2, Upload, Play, FileSpreadsheet,
   RotateCcw, Loader2, Users, FileWarning, Info, X, BadgeCheck,
 } from "lucide-react";
-import * as XLSX from "xlsx";
-import Papa from "papaparse";
-import { extractWorkbookRows, extractSheetRows } from "@/lib/tdsImportParsing";
+import { parseWorkbookRows, parseCsvRows } from "@/lib/tdsWorkbook";
 import { logReconAudit } from "@/lib/tdsReconAudit";
 import { TdsPanVerification } from "./TdsPanVerification";
 
@@ -89,20 +87,75 @@ function reasonFor(r: ReconResult): string {
   return `Mismatch — ${labels} ${diffs.length > 1 ? "differ" : "difference"}.`;
 }
 
-/** Invoke an edge function and surface the function's own JSON error message. */
-async function invokeFn(name: string, body: unknown): Promise<any> {
-  const { data, error } = await supabase.functions.invoke(name, { body });
+/** Invoke an edge function and surface the function's own JSON error message.
+ * When the platform kills the worker (wall-clock timeout / OOM), there is NO
+ * JSON body and supabase-js throws a bare "Edge Function returned a non-2xx
+ * status code" — map those body-less cases to an actionable message instead. */
+async function invokeFn(name: string, body: unknown, opts?: { signal?: AbortSignal }): Promise<any> {
+  // `signal` is passed opportunistically (some supabase-js versions honour it);
+  // handleImport also races the call against the same abort, so the UI is
+  // bounded even when the SDK ignores it. Cast to keep TS happy across versions.
+  const invokeOpts: any = { body, ...(opts?.signal ? { signal: opts.signal } : {}) };
+  const { data, error } = await supabase.functions.invoke(name, invokeOpts);
   if (error) {
     let msg = error.message;
+    let status = 0;
     try {
       const ctx = (error as any).context;
+      status = ctx?.status ?? 0;
       const j = ctx && typeof ctx.json === "function" ? await ctx.json() : null;
-      if (j?.error) msg = j.error;
-    } catch { /* keep default */ }
+      // Accept any of the shapes a function or the platform may return.
+      const fromBody = j?.error ?? j?.msg ?? j?.message ?? (typeof j?.code === "string" ? j.code : "");
+      if (fromBody) msg = String(fromBody);
+      else if (status === 504 || status === 546 || status === 502 || status === 500) {
+        msg = "The server took too long or ran out of memory while importing. Try importing fewer rows, or split the file into smaller sheets.";
+      }
+    } catch {
+      // No parseable body (a platform kill) — infer from the status.
+      if (status === 504 || status === 546 || status === 502 || status === 500) {
+        msg = "The server took too long or ran out of memory while importing. Try importing fewer rows, or split the file into smaller sheets.";
+      }
+    }
     throw new Error(msg);
   }
   if (data?.error) throw new Error(data.error);
   return data;
+}
+
+// ── Off-main-thread file parsing ────────────────────────────────────────────
+// A single reused module worker parses Excel/CSV so a large workbook never
+// blocks the UI thread ("Page Unresponsive"). Falls back to a main-thread parse
+// (same shared code) only if the worker can't be constructed in this environment.
+let importWorker: Worker | null = null;
+let importWorkerBroken = false;
+function getImportWorker(): Worker | null {
+  if (importWorkerBroken) return null;
+  if (importWorker) return importWorker;
+  try {
+    importWorker = new Worker(new URL("../../workers/tdsImportParser.worker.ts", import.meta.url), { type: "module" });
+    return importWorker;
+  } catch { importWorkerBroken = true; return null; }
+}
+let workerReqId = 0;
+function parseInWorker(payload: { fileType: "xlsx"; buffer: ArrayBuffer } | { fileType: "csv"; text: string }): Promise<Record<string, unknown>[]> {
+  const worker = getImportWorker();
+  if (!worker) return Promise.reject(new Error("worker-unavailable"));
+  const id = ++workerReqId;
+  return new Promise((resolve, reject) => {
+    const cleanup = () => { worker.removeEventListener("message", onMsg); worker.removeEventListener("error", onErr); };
+    const onMsg = (e: MessageEvent) => {
+      const d = e.data;
+      if (!d || d.id !== id) return;
+      cleanup();
+      if (d.ok) resolve(d.rows); else reject(new Error(d.error || "Could not parse the file"));
+    };
+    const onErr = (ev: ErrorEvent) => { cleanup(); importWorkerBroken = true; importWorker = null; reject(new Error(ev.message || "worker-error")); };
+    worker.addEventListener("message", onMsg);
+    worker.addEventListener("error", onErr);
+    // Structured-clone the buffer (no transfer) so it stays valid for a
+    // main-thread fallback if the worker errors.
+    worker.postMessage(payload);
+  });
 }
 
 /** A number that smoothly counts up/down to its target (dashboard-style). */
@@ -149,6 +202,7 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
   const [userMap, setUserMap] = useState<Record<string, string>>({});
 
   const [importing, setImporting] = useState(false);
+  const [importStage, setImportStage] = useState<string>("");
   const [comparing, setComparing] = useState(false);
   const [finalising, setFinalising] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -238,71 +292,78 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
   // ── Any source format → a normalised payload the importer understands ────────
   // rows (tabular) · pdf_base64 · image_base64 (scanned/photo) · raw_text (text).
   const IMAGE_MIME: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif", bmp: "image/bmp", tif: "image/tiff", tiff: "image/tiff", heic: "image/heic", heif: "image/heif" };
-  const readFile = (file: File): Promise<{ file_type: string; rows?: any[]; pdf_base64?: string; image_base64?: string; image_media_type?: string; raw_text?: string }> =>
-    new Promise((resolve, reject) => {
-      const name = file.name.toLowerCase();
-      const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : "";
-      const reader = new FileReader();
-      reader.onerror = () => reject(new Error("Could not read the file"));
-      const b64 = () => String(reader.result).split(",")[1] || "";
+  // Base64 without loading the whole file into a data-URL string on the main
+  // thread twice — read as ArrayBuffer and encode in chunks.
+  const fileToBase64 = async (file: File): Promise<string> => {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let binary = "";
+    const CHUNK = 0x8000;
+    for (let i = 0; i < bytes.length; i += CHUNK) binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+    return btoa(binary);
+  };
+  // Excel/CSV parse: off the main thread (Web Worker), with a main-thread
+  // fallback using the SAME shared code so a large workbook never freezes the tab.
+  const parseTabular = async (payload: { fileType: "xlsx"; buffer: ArrayBuffer } | { fileType: "csv"; text: string }, fallback: () => Record<string, unknown>[]): Promise<Record<string, unknown>[]> => {
+    try { return await parseInWorker(payload); }
+    catch { return fallback(); }
+  };
+  const readFile = async (file: File): Promise<{ file_type: string; rows?: any[]; pdf_base64?: string; image_base64?: string; image_media_type?: string; raw_text?: string }> => {
+    const name = file.name.toLowerCase();
+    const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : "";
 
-      if (ext === "pdf") {
-        reader.onload = () => resolve({ file_type: "pdf", pdf_base64: b64() });
-        reader.readAsDataURL(file);
-      } else if (IMAGE_MIME[ext] || file.type.startsWith("image/")) {
-        reader.onload = () => resolve({ file_type: "image", image_base64: b64(), image_media_type: file.type || IMAGE_MIME[ext] || "image/png" });
-        reader.readAsDataURL(file);
-      } else if (ext === "csv") {
-        reader.onload = () => {
-          const parsed = Papa.parse(String(reader.result), { header: false, skipEmptyLines: false });
-          resolve({ file_type: "csv", rows: extractSheetRows((parsed.data as unknown[][]) || [], null) });
-        };
-        reader.readAsText(file);
-      } else if (ext === "xlsx" || ext === "xls" || (!ext && file.type.includes("sheet"))) {
-        reader.onload = () => {
-          // Read EVERY sheet — many client working files put one section per sheet
-          // (194C, 194Q, …) with the first sheet being a chart/junk sheet — and let
-          // extractWorkbookRows pull data rows from all month-blocks.
-          const wb = XLSX.read(reader.result, { type: "array", cellDates: true });
-          const gridOf = (sn: string) => XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, defval: null, raw: false }) as unknown[][];
-          resolve({ file_type: "xlsx", rows: extractWorkbookRows(wb.SheetNames, gridOf) });
-        };
-        reader.readAsArrayBuffer(file);
-      } else if (ext === "json") {
-        reader.onload = () => {
-          const text = String(reader.result);
-          try {
-            const j = JSON.parse(text);
-            const arr = Array.isArray(j) ? j : Array.isArray(j?.rows) ? j.rows : Array.isArray(j?.data) ? j.data : null;
-            if (arr && arr.length && arr.every((x: any) => x && typeof x === "object")) { resolve({ file_type: "json", rows: arr }); return; }
-          } catch { /* not a clean array-of-objects → hand the raw text to the model */ }
-          resolve({ file_type: "json", raw_text: text });
-        };
-        reader.readAsText(file);
-      } else {
-        // txt, xml, html, or anything else textual → the model reads the meaning.
-        reader.onload = () => resolve({ file_type: ext || "txt", raw_text: String(reader.result) });
-        reader.readAsText(file);
-      }
-    });
+    if (ext === "pdf") return { file_type: "pdf", pdf_base64: await fileToBase64(file) };
+    if (IMAGE_MIME[ext] || file.type.startsWith("image/")) return { file_type: "image", image_base64: await fileToBase64(file), image_media_type: file.type || IMAGE_MIME[ext] || "image/png" };
+    if (ext === "csv") {
+      const text = await file.text();
+      return { file_type: "csv", rows: await parseTabular({ fileType: "csv", text }, () => parseCsvRows(text)) };
+    }
+    if (ext === "xlsx" || ext === "xls" || (!ext && file.type.includes("sheet"))) {
+      const buffer = await file.arrayBuffer();
+      return { file_type: "xlsx", rows: await parseTabular({ fileType: "xlsx", buffer }, () => parseWorkbookRows(buffer)) };
+    }
+    if (ext === "json") {
+      const text = await file.text();
+      try {
+        const j = JSON.parse(text);
+        const arr = Array.isArray(j) ? j : Array.isArray(j?.rows) ? j.rows : Array.isArray(j?.data) ? j.data : null;
+        if (arr && arr.length && arr.every((x: any) => x && typeof x === "object")) return { file_type: "json", rows: arr };
+      } catch { /* not a clean array-of-objects → hand the raw text to the model */ }
+      return { file_type: "json", raw_text: text };
+    }
+    // txt, xml, html, or anything else textual → the model reads the meaning.
+    return { file_type: ext || "txt", raw_text: await file.text() };
+  };
 
   const handleImport = async (file: File) => {
     if (!filing) return;
     setImporting(true);
+    // Bound the whole import so a stalled connection can never leave the UI
+    // stuck spinning — on timeout the invoke aborts and the user can retry.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 180_000);
     try {
+      setImportStage("Reading file…");
       const parsed = await readFile(file);
-      const data = await invokeFn("tds-recon-import", {
-        filing_id: filing.id, form_type: selForm, file_name: file.name, ...parsed,
-      });
+      setImportStage("Uploading & normalising…");
+      const data = await Promise.race([
+        invokeFn("tds-recon-import", { filing_id: filing.id, form_type: selForm, file_name: file.name, ...parsed }, { signal: ctrl.signal }),
+        new Promise((_, rej) => ctrl.signal.addEventListener("abort", () => rej(new Error("aborted-timeout")))),
+      ]) as any;
       // A fresh import invalidates any prior comparison for this filing.
       await supabase.from("tds_recon_results").delete().eq("filing_id", filing.id);
       setResults(null);
       toast({ title: `Imported ${data.row_count} client record(s)`, description: data.warning || file.name, ...(data.warning ? { variant: "default" as const } : {}) });
       await loadAll();
     } catch (e: any) {
-      toast({ title: "Import failed", description: e.message, variant: "destructive" });
+      const msg = ctrl.signal.aborted
+        ? "The import took too long and was cancelled. Try a smaller file or split it, then retry — no need to reload."
+        : e?.message || "Import failed";
+      toast({ title: "Import failed", description: msg, variant: "destructive" });
+    } finally {
+      clearTimeout(timer);
+      setImportStage("");
+      setImporting(false);
     }
-    setImporting(false);
   };
 
   // Single "Run Validation" — runs Stage 1 (data reconciliation) here, then bumps
@@ -596,7 +657,7 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
                   <Button size="sm" variant={batch ? "outline" : "default"} className="gap-1"
                     disabled={importing || isFiled} onClick={() => fileInputRef.current?.click()}>
                     {importing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
-                    {batch ? "Re-import" : "Import"}
+                    {importing ? (importStage || "Importing…") : batch ? "Re-import" : "Import"}
                   </Button>
                 </div>
                 {batch ? (
