@@ -133,7 +133,12 @@ const HEADER_SYNONYMS: Record<keyof CanonicalRow, string[]> = {
   // very common client headers (verified against actual files).
   amount_paid: ["amount", "paymentamount", "grossamount", "invoiceamount", "taxableamount", "creditamount", "amountcredited", "amountpaidcredited", "amountpaid", "netamount", "billamt", "billamount", "billvalue", "invoiceamt", "grossamt", "taxableamt", "invoicevalue", "paidamount"],
   // "amountoftds" handles "Amount of TDS"; "tdsamt" handles "TDS AMT".
-  tds_amount: ["tds", "tdsamount", "amountoftds", "taxdeducted", "deductedtax", "taxamount", "tdsdeducted", "tdsamt", "tdsdeposited", "incometax"],
+  // "tdspaid"/"tdspayable" are the DOMINANT TDS-column labels in many working files
+  // ("TDS PAID" alone appears 1365× across the client corpus). Without them the tax
+  // column normalises to "tdspaid", matches no synonym (the 3-char "tds" core is
+  // skipped by the ≥4 substring rule), maps to NULL, and every row fabricates a "TDS
+  // differs" mismatch. The `paid && date` guard above still nulls "TDS Paid Date".
+  tds_amount: ["tds", "tdsamount", "amountoftds", "taxdeducted", "deductedtax", "taxamount", "tdsdeducted", "tdsamt", "tdspaid", "tdspayable", "tdsdeposited", "incometax"],
   interest: ["interest", "interestamount", "lateinterest", "int"],
   rate: ["rate", "tdsrate", "rateoftds", "oftds", "percentoftds"],
   date_of_payment: ["dateofcredit", "creditdate", "dateofpaymentcredit", "voucherdate", "transactiondate", "date", "valuedate", "entrydate", "postingdate", "invoicedate", "dateofinvoice", "billdate", "billdt", "dateofpayment", "paymentdate", "deductiondate"],
