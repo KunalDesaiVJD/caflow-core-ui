@@ -48,11 +48,24 @@ const normPan = (v: unknown): string => (v == null ? "" : String(v).trim().toUpp
 
 const normAmount = (v: unknown): number | null => {
   if (v === null || v === undefined || v === "") return null;
-  const n = Number(String(v).replace(/[₹,\s]/g, ""));
+  if (typeof v === "number") return isFinite(v) ? v : null;
+  let s = String(v).trim().replace(/−/g, "-");   // unicode minus (−) → ASCII
+  const paren = /^\(.+\)$/.test(s);                    // (1,234) = accounting negative
+  // Strip EVERYTHING that isn't a digit / dot / minus — handles "₹1,839.00",
+  // "Rs. 170", "170.94/-", "1234 Cr"/"Dr", non-breaking & hidden chars, numbers
+  // stored as text, "1,22,340" Indian grouping. Decimal precision ("170.9" vs
+  // "170.90") and thousands separators fall out for free.
+  s = s.replace(/[^0-9.\-]/g, "");
+  if (paren && s) s = "-" + s.replace(/-/g, "");
+  if (s === "" || s === "-" || s === ".") return null;
+  const n = Number(s);
   return isFinite(n) ? n : null;
 };
 const amt = (v: unknown): number => normAmount(v) ?? 0;
+// Genuinely-equal money within ₹1 (covers rounding/precision differences).
 const amountsMatch = (a: unknown, b: unknown): boolean => Math.abs(amt(a) - amt(b)) <= 1;
+/** Whether a money value is effectively "not recorded" (blank / zero). */
+const isBlankOrZero = (v: unknown): boolean => { const n = normAmount(v); return n === null || n === 0; };
 
 /** Legal-entity name normaliser: case/punctuation/spacing-insensitive, with the
  * common CA-firm abbreviations folded (PVT→PRIVATE, LTD→LIMITED, &→AND) so
@@ -60,23 +73,48 @@ const amountsMatch = (a: unknown, b: unknown): boolean => Math.abs(amt(a) - amt(
 const normName = (v: unknown): string => {
   let s = (v == null ? "" : String(v)).toUpperCase();
   s = s.replace(/&/g, " AND ");
-  s = s.replace(/[^A-Z0-9 ]/g, " ");          // strip punctuation → spaces
+  s = s.replace(/[^A-Z0-9 ]/g, " ");          // strip punctuation → spaces ("M/s."→"M S")
   s = ` ${s.replace(/\s+/g, " ").trim()} `;   // pad so \bword\b via space works
   s = s.replace(/ PVT /g, " PRIVATE ").replace(/ LTD /g, " LIMITED ");
   s = s.replace(/ P LIMITED /g, " PRIVATE LIMITED ");
   s = s.replace(/ CORPN /g, " CORPORATION ").replace(/ CO /g, " COMPANY ");
+  // Drop a LEADING honorific/article a client working file routinely prefixes
+  // (leading-anchored so a legitimate mid-name "M S" or "THE" survives).
+  s = s.replace(/^ (M S|MESSRS|MESSER?S|THE) /, " ");
   return s.replace(/\s+/g, " ").trim();
 };
+
+/** Name equivalence for a PAIRED record. A matching PAN is the legal identifier
+ * (the return is filed by PAN) — so a same-PAN pair is the SAME party and a name
+ * spelling/word-order/honorific/abbreviation difference must NOT hard-fail it.
+ * When PAN does NOT match (pair anchored by name+date/amount), require a strong
+ * token overlap. */
+function namesEquivalent(oNameN: string, iNameN: string, panMatched: boolean): boolean {
+  if (oNameN === iNameN) return true;
+  if (panMatched) return true;                              // same PAN ⇒ same deductee
+  if (!oNameN || !iNameN) return false;
+  const ta = new Set(oNameN.split(" ").filter(w => w.length > 1));
+  const tb = new Set(iNameN.split(" ").filter(w => w.length > 1));
+  if (ta.size === 0 || tb.size === 0) return false;
+  const inter = [...ta].filter(w => tb.has(w)).length;
+  if (inter === ta.size || inter === tb.size) return true;  // one token-set ⊆ the other
+  return inter / new Set([...ta, ...tb]).size >= 0.6;       // strong Jaccard overlap
+}
 
 // Permissive multi-format date → ISO (yyyy-mm-dd). Office dates are ISO (<input
 // type=date>), imported dates are free text in whatever the client's file used.
 const MONTHS: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
 const normYear = (y: string): number => { const n = parseInt(y, 10); return n < 100 ? (n < 70 ? 2000 + n : 1900 + n) : n; };
 const isoOf = (y: number, mo: number, d: number): string | null => (!y || mo < 1 || mo > 12 || d < 1 || d > 31) ? null : `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+/** Remove a trailing time component ("10/6/25 00:00:00", "2025-10-06T00:00",
+ * "6-Oct-25 12:00 AM") so the $-anchored date regexes still match — exported
+ * date columns very commonly carry a midnight time. */
+const stripTime = (s: string): string => s.replace(/[ T]\d{1,2}:\d{2}(:\d{2})?(\.\d+)?\s*([AaPp]\.?[Mm]\.?)?\s*$/, "").trim();
+
 /** All plausible ISO interpretations of a raw date string (dd/mm and mm/dd both). */
 function dateCandidates(raw: unknown): string[] {
   if (raw == null) return [];
-  const s = String(raw).trim();
+  const s = stripTime(String(raw).trim());
   const out: (string | null)[] = [];
   let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
   if (m) out.push(isoOf(+m[1], +m[2], +m[3]));
@@ -120,7 +158,7 @@ function detectDateOrder(values: unknown[]): DateOrder {
     const s = v == null ? "" : String(v).trim();
     if (!s) continue;
     if (/^\d{4}-\d{1,2}-\d{1,2}/.test(s)) { iso++; continue; }
-    const m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.]\d{2,4}$/);
+    const m = stripTime(s).match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.]\d{2,4}$/);
     if (!m) continue;
     numeric++;
     const a = +m[1], b = +m[2];
@@ -138,7 +176,7 @@ function detectDateOrder(values: unknown[]): DateOrder {
  * reading is used as a safety net. */
 function toIsoOrder(raw: unknown, order: DateOrder): string | null {
   if (raw == null) return null;
-  const s = String(raw).trim();
+  const s = stripTime(String(raw).trim());
   if (!s) return null;
   let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
   if (m) return isoOf(+m[1], +m[2], +m[3]);
@@ -293,10 +331,9 @@ const show = (v: unknown): string => (v === null || v === undefined || v === "")
 function comparePair(o: Rec, i: Rec, aliases: Alias[]): { fields: FieldDiff[]; status: string; mismatchFields: string[]; reason: string } {
   const fields: FieldDiff[] = [];
 
-  const nameOk = o.nameN === i.nameN;
+  const panOk = o.panN !== "" && o.panN === i.panN;
+  const nameOk = namesEquivalent(o.nameN, i.nameN, panOk);
   fields.push(fieldDiff("name", o.name, i.name, nameOk, `Different name: "${show(o.name)}" vs "${show(i.name)}"`));
-
-  const panOk = o.panN === i.panN;
   fields.push(fieldDiff("pan", o.pan, i.pan, panOk, `PAN differs: ${o.panN || "—"} vs ${i.panN || "—"}`));
 
   const dateOk = recDatesMatch(o, i);
@@ -304,7 +341,15 @@ function comparePair(o: Rec, i: Rec, aliases: Alias[]): { fields: FieldDiff[]; s
 
   for (const f of ["amount", "tds", "interest"] as const) {
     const ov = (o as any)[f], iv = (i as any)[f];
-    const ok = amountsMatch(ov, iv);
+    // Amount & TDS are core (a 0 there is meaningful). INTEREST is a soft field:
+    // interest-on-late-deposit is tracked at the CHALLAN level, so the office's
+    // per-deductee interest is almost always 0/blank while a client working file
+    // may carry it on individual bills — a difference there is NOT a real
+    // discrepancy when one side simply doesn't record it. So interest matches
+    // when the values agree (±₹1) OR either side is blank/zero.
+    const ok = f === "interest"
+      ? (amountsMatch(ov, iv) || isBlankOrZero(ov) || isBlankOrZero(iv))
+      : amountsMatch(ov, iv);
     const diff = Math.abs(amt(ov) - amt(iv));
     fields.push(fieldDiff(f, ov, iv, ok, `${f === "tds" ? "TDS" : f[0].toUpperCase() + f.slice(1)} differs by ₹${diff.toLocaleString("en-IN")}: ${amt(ov).toLocaleString("en-IN")} vs ${amt(iv).toLocaleString("en-IN")}`));
   }
@@ -514,7 +559,15 @@ serve(async (req) => {
     const importedOrder = detectDateOrder((imported ?? []).map((r: any) => r.date_of_payment));
     const oRecs = office.map((d: any) => toRec(d.id, {
       name: d.deductee_name ?? null, pan: d.deductee_pan ?? null, section: d.section_code ?? null,
-      amount: d.amount_paid_credited ?? null, tds: d.total_tax_deducted ?? d.tds_amount ?? null,
+      // Compare BASE TDS on both sides. `tds_amount` is the actual TDS deducted;
+      // `total_tax_deducted` is base+surcharge+cess (aggregate) which the client
+      // file's TDS column doesn't include — AND is often stored as a literal 0
+      // when staff only fill tds_amount, which under the old `total ?? tds_amount`
+      // made office TDS read 0 for every record → mass false "TDS differs".
+      // Prefer a NON-ZERO tds_amount; fall back to total only when tds_amount is
+      // absent or zero.
+      amount: d.amount_paid_credited ?? null,
+      tds: (normAmount(d.tds_amount) ?? 0) !== 0 ? d.tds_amount : (d.total_tax_deducted ?? d.tds_amount ?? null),
       interest: d.interest_amount ?? null, date: d.date_of_payment ?? null,
     }));
     oRecs.forEach((r) => { r.iso = toIsoOrder(r.date, officeOrder) ?? r.iso; });
