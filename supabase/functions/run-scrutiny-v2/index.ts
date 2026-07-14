@@ -11,7 +11,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { runDetection } from "../_shared/detectionEngine.ts";
-import { rulesFromRows, tbFromSnapshot, tbFromTallyTB, vouchersFromSnapshot, findingToRow, faFromRows } from "../_shared/adapters.ts";
+import { rulesFromRows, tbFromSnapshot, tbFromTallyTB, vouchersFromSnapshot, findingToRow, faFromRows, ruleAppliesToEntity } from "../_shared/adapters.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -66,6 +66,15 @@ serve(async (req) => {
         return json({ error: "Forbidden: client is not in your firm" }, 403);
       }
     }
+
+    // ── Entity-type bucket (corporate vs non-corporate) ──
+    // Companies-Act rules (dividend/DRR/buy-back/CSR/Sec73-186/director remuneration/inter-co) must
+    // never hit an LLP/firm/individual, and partnership rules never hit a Company. Rules carry
+    // applicable_to = ["corporate"] | ["non_corporate"] | both; we filter by the client's bucket.
+    const { data: clientMeta } = await supabase.from("clients").select("entity_type").eq("id", client_id).single();
+    const entityBucket = /private ltd|public ltd|pvt\.? ?ltd|\bcompany\b|corporate/i.test(String(clientMeta?.entity_type ?? ""))
+      ? "corporate"
+      : "non_corporate";
 
     // ── Resolve the engagement ──
     // Tally Sync (the Team Package — the SAME integration main uses) writes tally_trial_balance /
@@ -179,7 +188,8 @@ serve(async (req) => {
       .select("*")
       .eq("is_active", true)
       .order("rule_id");
-    const rules = rulesFromRows(ruleRows as never[]);
+    // Filter to rules applicable to this entity type (corporate vs non-corporate never mix).
+    const rules = rulesFromRows(ruleRows as never[]).filter((r) => ruleAppliesToEntity(r, entityBucket));
 
     // ── Run the interpreter ──
     const result = runDetection(

@@ -777,6 +777,25 @@ describe("ratio_change — year-on-year financial ratio movement (tb vs tbPY)", 
   });
 });
 
+describe("duplicate_ledger — same party entered twice in a group", () => {
+  it("flags near-duplicate ledger names in one group; leaves different parties (shared surname) alone", () => {
+    const r = rule({
+      rule_id: "CRED-DUP", category: "CRED", detection_level: "account",
+      detection_logic: { check: "duplicate_ledger", scope: { parent_group_keywords: ["creditor"] } },
+      audit_query_template: "Duplicate ledgers {account} - merge if same party.",
+    });
+    const out = run(r, { tb: [
+      tb({ ledger_name: "Balvantbhai Parmar", parent_group: "Sundry Creditors" }),
+      tb({ ledger_name: "Balvant Parmar", parent_group: "Sundry Creditors" }),
+      tb({ ledger_name: "Ramesh Patel", parent_group: "Sundry Creditors" }),
+      tb({ ledger_name: "Suresh Patel", parent_group: "Sundry Creditors" }),
+    ] });
+    expect(out).toHaveLength(1);
+    expect(out[0].evidence?.ledger_a).toBe("Balvantbhai Parmar");
+    expect(out[0].evidence?.ledger_b).toBe("Balvant Parmar");
+  });
+});
+
 describe("run ledger — completeness accounting (no rule silently dropped)", () => {
   it("reports executed / needs_data / skipped_no_handler per rule", () => {
     const rExec = rule({ rule_id: "CASH-X", category: "CASH", detection_logic: { check: "single_txn", threshold: 10000 } });
