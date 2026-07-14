@@ -147,12 +147,25 @@ function buildHeaderNames(headerRow: unknown[]): string[] {
  */
 export function extractSheetRows(grid: unknown[][], sectionHint: string | null): Record<string, unknown>[] {
   const n = grid.length;
-  // Score every row ONCE (header detection needs it twice — once to know the
-  // sheet has a header at all, once per row in the loop — so cache it; on a
-  // large sheet the double pass + per-cell token scan was a real cost).
+  // Score every row ONCE, and note whether it carries a PAN. A genuine HEADER
+  // row scores high on field-name tokens AND has no deductee PAN; a DATA row
+  // whose party name/values coincidentally hit ≥3 header tokens (e.g. a vendor
+  // literally named "Intec Infonet Private Limited") must NOT be mistaken for a
+  // header — if it were, it'd be dropped AND every row beneath it would be
+  // re-keyed under this data row's values, corrupting the column mapping and
+  // silently losing those deductees (observed: a whole month-block of rows went
+  // missing this way). Requiring "no PAN" makes header detection robust.
   const scores = new Array<number>(n);
+  const rowHasPan = new Array<boolean>(n);
   let hasHeader = false;
-  for (let r = 0; r < n; r++) { const s = headerScore(grid[r] || []); scores[r] = s; if (s >= 3) hasHeader = true; }
+  for (let r = 0; r < n; r++) {
+    const row = grid[r] || [];
+    scores[r] = headerScore(row);
+    let hp = false;
+    for (let i = 0; i < row.length; i++) { const c = row[i]; if (c != null && PAN_RE.test(String(c).toUpperCase().replace(/\s+/g, ""))) { hp = true; break; } }
+    rowHasPan[r] = hp;
+    if (scores[r] >= 3 && !hp) hasHeader = true;
+  }
   const rows: Record<string, unknown>[] = [];
   let headers: string[] | null = null;
   const MONTHS = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|q[1-4]|quarter)/i;
@@ -162,13 +175,12 @@ export function extractSheetRows(grid: unknown[][], sectionHint: string | null):
     let nonEmptyCount = 0;
     for (let i = 0; i < row.length; i++) { const c = row[i]; if (c != null && String(c).trim() !== "") nonEmptyCount++; }
     if (nonEmptyCount === 0) continue;
-    if (scores[r] >= 3) { headers = buildHeaderNames(row); continue; }
+    if (scores[r] >= 3 && !rowHasPan[r]) { headers = buildHeaderNames(row); continue; } // header ONLY if it has no PAN
     if (hasHeader && !headers) continue;                                 // pre-header strip (title / TAN-PAN)
     const first = String(row[0] ?? "").toLowerCase().trim();
     if (/\btotal\b/.test(first) || first.startsWith("total")) continue;  // summary row
     if (nonEmptyCount <= 2 && MONTHS.test(first)) continue;              // month/quarter label
-    let hasPan = false;
-    for (let i = 0; i < row.length; i++) { const c = row[i]; if (c != null && PAN_RE.test(String(c).toUpperCase().replace(/\s+/g, ""))) { hasPan = true; break; } }
+    const hasPan = rowHasPan[r];
     // Deductee lines carry a PAN — except genuine 206AA "PAN unavailable" cases,
     // which we admit only when a header is locked (inside a data block) and a
     // cell explicitly flags the missing PAN. Everything else PAN-less is a
