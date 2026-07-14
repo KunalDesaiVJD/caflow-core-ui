@@ -7,7 +7,11 @@
     "sync": "node src/index.js sync",
     "watch": "node src/index.js watch",
     "test-connection": "node src/index.js test",
-    "companies": "node src/index.js companies"
+    "companies": "node src/index.js companies",
+    "push": "node src/tally-billing.js push",
+    "pull-receipts": "node src/tally-billing.js pull-receipts",
+    "pull-receipts-import": "node src/tally-billing.js pull-receipts --auto-import",
+    "billing-status": "node src/tally-billing.js status"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",
