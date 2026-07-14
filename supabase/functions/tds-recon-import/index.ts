@@ -122,18 +122,21 @@ totals/header/footer/subtotal lines; convert Indian-format numbers
 // one field and buildCanonicalFromMap takes the first non-empty value per field
 // per row. This is what makes heterogeneous multi-sheet files import correctly.
 const HEADER_SYNONYMS: Record<keyof CanonicalRow, string[]> = {
-  deductee_name: ["deducteename", "partyname", "vendorname", "customername", "beneficiaryname", "payeename", "name", "party", "vendor", "deductee"],
-  pan: ["pan", "panno", "pannumber", "permanentaccountnumber", "deducteepan", "partypan"],
-  section_code: ["section", "tdssection", "sectioncode", "natureofpayment", "paymentsection", "us", "u/s"],
+  // "particulars"/"particular" = the party column in Tally ledger exports;
+  // "nameofdeductee"/"assesseename"/"firmname"/"partnersname" seen across real files.
+  deductee_name: ["deducteename", "partyname", "partysname", "vendorname", "suppliername", "customername", "beneficiaryname", "payeename", "nameofdeductee", "nameofparty", "assesseename", "firmname", "partnername", "partnersname", "ledgername", "accountname", "particulars", "particular", "name", "party", "vendor", "deductee"],
+  pan: ["pan", "panno", "pannumber", "permanentaccountnumber", "deducteepan", "partypan", "vendorpan", "panofdeductee", "panofparty"],
+  // "nature" alone is deliberately EXCLUDED — it substring-matches "Signature".
+  section_code: ["section", "tdssection", "sectioncode", "natureofpayment", "natureofpymt", "paymentsection", "us", "u/s"],
   // Money-column synonyms are SPECIFIC (no bare "amt") so "BILL AMT" resolves to
   // amount_paid and "TDS AMT" to tds_amount without colliding — both are real,
   // very common client headers (verified against actual files).
-  amount_paid: ["amount", "paymentamount", "grossamount", "invoiceamount", "taxableamount", "creditamount", "amountpaidcredited", "amountpaid", "billamt", "billamount", "billvalue", "invoiceamt", "grossamt", "taxableamt", "invoicevalue", "paidamount"],
+  amount_paid: ["amount", "paymentamount", "grossamount", "invoiceamount", "taxableamount", "creditamount", "amountcredited", "amountpaidcredited", "amountpaid", "netamount", "billamt", "billamount", "billvalue", "invoiceamt", "grossamt", "taxableamt", "invoicevalue", "paidamount"],
   // "amountoftds" handles "Amount of TDS"; "tdsamt" handles "TDS AMT".
-  tds_amount: ["tds", "tdsamount", "amountoftds", "taxdeducted", "deductedtax", "taxamount", "tdsdeducted", "tdsamt"],
+  tds_amount: ["tds", "tdsamount", "amountoftds", "taxdeducted", "deductedtax", "taxamount", "tdsdeducted", "tdsamt", "tdsdeposited", "incometax"],
   interest: ["interest", "interestamount", "lateinterest", "int"],
   rate: ["rate", "tdsrate", "rateoftds", "oftds", "percentoftds"],
-  date_of_payment: ["dateofcredit", "creditdate", "dateofpaymentcredit", "voucherdate", "transactiondate", "date", "valuedate", "entrydate", "billdate", "billdt", "dateofpayment", "paymentdate", "deductiondate"],
+  date_of_payment: ["dateofcredit", "creditdate", "dateofpaymentcredit", "voucherdate", "transactiondate", "date", "valuedate", "entrydate", "postingdate", "invoicedate", "dateofinvoice", "billdate", "billdt", "dateofpayment", "paymentdate", "deductiondate"],
   date_of_deduction: ["dateofdeduction", "tdsdeductiondate"],
   challan_bsr: ["bsr", "bsrcode", "challanbsr"],
   challan_no: ["challanno", "challannumber", "challanserialno", "challan"],
@@ -154,6 +157,7 @@ function bestFieldForHeader(header: string): keyof CanonicalRow | null {
   if (!norm) return null;
   if (norm.includes("bsr")) return "challan_bsr";                       // "Paid Date & BSR", "BSR Code" → challan, never date
   if (norm.includes("paid") && norm.includes("date")) return null;      // challan/bank DEPOSIT date — we have no field for it; must not become date_of_payment
+  if (norm.includes("bank") || norm.includes("branch")) return null;    // "Bank Name"/"Branch" → challan bank, NOT the deductee ("name" synonym would otherwise grab it)
   const fields = Object.keys(HEADER_SYNONYMS) as (keyof CanonicalRow)[];
   for (const f of fields) if (HEADER_SYNONYMS[f].some(s => s === norm)) return f;                     // exact match (any length)
   // Substring match, but BOTH sides must be long enough to be meaningful: a
@@ -232,6 +236,10 @@ function pickSectionColumn(allRows: Record<string, unknown>[]): string | null {
 // is parsed to structured rows and normalised entirely in code.
 const PAN_VALUE_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const DATE_VALUE_RE = /^(\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}|\d{4}[/\-.]\d{1,2}[/\-.]\d{1,2})/;
+// Textual-month dates ("6-Oct-25", "6 Oct 2025", "Oct 6, 2025") are common in
+// exported client files; recognise them so a date column is still detected by
+// VALUE when its header isn't a known synonym.
+const DATE_TEXT_RE = /^(\d{1,2}[\s\-][A-Za-z]{3,9}[\s\-,]+\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{2,4})$/;
 function looksLikePan(v: unknown): boolean {
   const s = v == null ? "" : String(v).trim().toUpperCase().replace(/\s+/g, "");
   return PAN_VALUE_RE.test(s);
@@ -239,7 +247,21 @@ function looksLikePan(v: unknown): boolean {
 function looksLikeDate(v: unknown): boolean {
   if (v instanceof Date) return true;
   const s = v == null ? "" : String(v).trim();
-  return DATE_VALUE_RE.test(s);
+  return DATE_VALUE_RE.test(s) || DATE_TEXT_RE.test(s);
+}
+/** A deductee-NAME-looking value: mostly letters, multi-char, and NOT a PAN /
+ * date / pure number / section code. Used only as a LAST-RESORT column detector
+ * when no header matched a name synonym (e.g. an unlabelled or oddly-named party
+ * column). Section/challan columns are claimed before this runs. */
+function looksLikeName(v: unknown): boolean {
+  const s = v == null ? "" : String(v).trim();
+  if (s.length < 4) return false;
+  if (PAN_VALUE_RE.test(s.toUpperCase().replace(/\s+/g, ""))) return false;
+  if (looksLikeDate(s)) return false;
+  if (/^[\d.,\-₹%()\s/]+$/.test(s)) return false;                       // pure number / money
+  if (SEC_CODE_RE.test(s.toUpperCase().replace(/\s+/g, ""))) return false; // a section code
+  const letters = (s.match(/[A-Za-z]/g) || []).length;
+  return letters >= 3 && letters / s.length >= 0.5;                     // predominantly alphabetic
 }
 /** Pick the (unclaimed) column whose non-empty VALUES best satisfy `pred`
  * (≥60%). Used to resolve pan/date columns when their headers didn't match a
@@ -290,6 +312,20 @@ function resolveColumnMapping(allRows: Record<string, unknown>[], aiMap?: Partia
   if (secCol && !map[secCol]) map[secCol] = "section_code";
   if (!mappedFields().has("pan")) { const c = detectColumnByValue(allRows, new Set(Object.keys(map)), looksLikePan); if (c) map[c] = "pan"; }
   if (!mappedFields().has("date_of_payment")) { const c = detectColumnByValue(allRows, new Set(Object.keys(map)), looksLikeDate); if (c) map[c] = "date_of_payment"; }
+  // Last-resort NAME by value — only when no header matched a name synonym. Runs
+  // AFTER section/pan/date are claimed so it can't steal them; picks the unclaimed
+  // column whose values are most name-like (the party column even under an
+  // unlabelled/odd header). Without this, a file with an exotic name header yields
+  // no name → nothing for the compare engine to pair on.
+  if (!mappedFields().has("deductee_name")) {
+    // Exclude challan/bank/narration-ish columns from value-based name detection —
+    // they contain name-like text ("HDFC BANK LTD", narration) but are NOT the
+    // deductee, and their header returned null from bestFieldForHeader so they'd
+    // otherwise be unclaimed and eligible.
+    const blocked = new Set(Object.keys(map));
+    for (const h of headers) { if (/bank|branch|narration|challan|deposit|remark|address|particularsofpayment/.test(normaliseHeader(h))) blocked.add(h); }
+    const c = detectColumnByValue(allRows, blocked, looksLikeName); if (c) map[c] = "deductee_name";
+  }
 
   if (aiMap) {
     const have = mappedFields();
@@ -334,10 +370,24 @@ function extractJson(text: string): any {
   return null;
 }
 
+// Robust money parser — mirrors the compare engine's normAmount so a value the
+// importer stores is read back identically at compare time. Handles ₹/Rs, Indian
+// grouping ("1,22,340"), accounting negatives "(1,234)", a trailing sign "170.94-"
+// or "/-", unicode minus, Cr/Dr suffixes, hidden chars and numbers-stored-as-text.
 function toNum(v: unknown): number | null {
   if (v === null || v === undefined || v === "") return null;
   if (typeof v === "number") return isFinite(v) ? v : null;
-  const n = Number(String(v).replace(/[₹,\s]/g, ""));
+  let s = String(v).trim().replace(/−/g, "-");
+  const paren = /^\(.+\)$/.test(s);
+  const leadingMinus = /^-/.test(s);                            // standard negative "-1234"
+  // A minus AFTER a digit ("1,234-") is an accounting negative; but "170/-" is
+  // the Indian rupee terminator (positive), so exclude the "/-" form.
+  const trailingMinus = /[0-9)]\s*-\s*$/.test(s) && !/\/-\s*$/.test(s);
+  const neg = paren || leadingMinus || trailingMinus;
+  s = s.replace(/[^0-9.]/g, "");                 // drop everything incl. minus; sign is decided above
+  const m = s.match(/\d+(?:\.\d+)?/);            // first numeric token (ignores stray extra dots)
+  if (!m) return null;
+  const n = Number((neg ? "-" : "") + m[0]);
   return isFinite(n) ? n : null;
 }
 

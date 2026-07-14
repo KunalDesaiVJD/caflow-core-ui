@@ -325,21 +325,66 @@ function recDatesMatch(o: Rec, i: Rec): boolean {
   return datesMatch(o.date, i.date);
 }
 
-/** Pair candidate strength. null = too weak to pair (unrelated). Requires a PAN
- * match, or a name match anchored by date/amount, so unrelated rows never pair. */
+/** Pair candidate strength via a MULTI-STAGE eligibility cascade — null = too weak
+ * to pair (unrelated). The gates are PROGRESSIVELY relaxed but each remains strong
+ * enough that unrelated rows never pair, and a PAN conflict (both sides carry a
+ * PAN and they differ) always blocks a non-PAN pairing. Stages, strongest first:
+ *   1. PAN match — the legal identifier; always pairs.
+ *   2. EXACT normalised name + a date OR amount anchor.
+ *   3. FUZZY name (token-subset / strong Jaccard) + BOTH date AND amount, non-zero.
+ *   4. TRI-FIELD: date AND amount AND TDS all agree (±₹1), non-zero — three
+ *      independent agreements make it the same transaction even with no PAN/name.
+ * Scores keep every PAN pair above every non-PAN pair, so relaxed gates only claim
+ * rows the strong gates left unassigned (greedy assignment can't be hijacked).
+ * This maximises true pairings BEFORE the field-by-field comparison decides
+ * matched/mismatched — a record only becomes one-sided when NO stage pairs it. */
 function pairScore(o: Rec, i: Rec): number | null {
   const panMatch = o.panN !== "" && o.panN === i.panN;
-  const nameMatch = o.nameN !== "" && o.nameN === i.nameN;
+  const panConflict = o.panN !== "" && i.panN !== "" && o.panN !== i.panN;
+  const bothNamed = o.nameN !== "" && i.nameN !== "";
+  const nameExact = o.nameN !== "" && o.nameN === i.nameN;
+  // Blank names are NOT equivalent — namesEquivalent("","") is true, which must
+  // not let two unnamed rows pair on a coincidental date/amount.
+  const nameFuzzy = bothNamed && namesEquivalent(o.nameN, i.nameN, false);
+  // Names are CONTRADICTORY only when both are present, not fuzzy-equivalent, AND
+  // share no significant token — "ALPHA TRADERS" vs "BETA SUPPLIES". An
+  // abbreviation like "ABC INDS" vs "ABC INDUSTRIES PVT LTD" shares "ABC" and is
+  // NOT contradictory, so the tri-field stage may still pair it.
+  let nameContradiction = false;
+  if (bothNamed && !nameFuzzy) {
+    const iTokens = new Set(i.nameN.split(" ").filter((w) => w.length >= 3));
+    const shareToken = o.nameN.split(" ").some((w) => w.length >= 3 && iTokens.has(w));
+    nameContradiction = !shareToken;
+  }
   const dateMatch = recDatesMatch(o, i);
   const amountMatch = amountsMatch(o.amount, i.amount);
   const amountNear = o.amountN != null && i.amountN != null && Math.abs(o.amountN - i.amountN) <= Math.max(1, Math.abs(o.amountN) * 0.01);
-  if (!panMatch && !(nameMatch && (dateMatch || amountMatch))) return null;
+  const tdsMatch = amountsMatch(o.tds, i.tds);
+  const nonZero = amt(o.amount) > 0 || amt(o.tds) > 0;   // never pair two all-zero rows
+  // TDS is only a genuine THIRD independent signal when it is actually deducted on
+  // both sides — amountsMatch(0,0) is vacuously true, so for the anchor-less
+  // tri-field stage the TDS must be strictly non-zero on BOTH sides (else two
+  // unrelated below-threshold no-TDS rows sharing date+amount would falsely pair).
+  const tdsBothPos = amt(o.tds) > 0 && amt(i.tds) > 0;
+
+  let eligible = false;
+  if (panMatch) eligible = true;                                                             // Stage 1
+  else if (nameExact && (dateMatch || amountMatch)) eligible = true;                         // Stage 2
+  else if (!panConflict && nameFuzzy && dateMatch && amountMatch && nonZero) eligible = true; // Stage 3
+  // Stage 4 (tri-field) is for rows with NO usable name/PAN anchor — so it needs
+  // THREE genuinely independent agreements (date, amount, and a REAL non-zero TDS
+  // on both sides). If both sides are named and the names are clearly DIFFERENT,
+  // they are different parties even with coincidentally-equal figures, so require
+  // names to be absent or equivalent, never contradictory.
+  else if (!panConflict && (!bothNamed || nameFuzzy) && dateMatch && amountMatch && tdsMatch && tdsBothPos) eligible = true; // Stage 4
+  if (!eligible) return null;
+
   let score = 0;
   if (panMatch) score += 1000;
-  if (nameMatch) score += 300;
+  if (nameExact) score += 300; else if (nameFuzzy) score += 150;
   if (dateMatch) score += 200;
   if (amountMatch) score += 200; else if (amountNear) score += 80;
-  if (amountsMatch(o.tds, i.tds)) score += 40;
+  if (tdsMatch) score += 60;
   return score;
 }
 
@@ -614,24 +659,41 @@ serve(async (req) => {
     // date is unparseable or outside this FY are kept so nothing is silently lost.
     const fyStart = fyStartYear(filing.financial_year);
     const filingQ = normQuarter(filing.quarter);
-    // Which return FORM this filing is (from the batch, else the filing's forms).
-    const filingForm = normForm(batchRow.form_type) ?? normForm(Array.isArray((filing as any).tds_forms) ? (filing as any).tds_forms[0] : (filing as any).tds_forms);
+    // ALLOWED FORMS = every form on the filing (NOT just [0] — a multi-form filing
+    // like 26Q+27Q must not exclude the second form's rows). The batch form_type is
+    // trusted ONLY when it is one of the filing's forms — the importer defaults it
+    // to "26Q", which must never override, say, a 27Q filing.
+    const allowedForms = new Set<string>();
+    const rawForms = Array.isArray((filing as any).tds_forms) ? (filing as any).tds_forms : [(filing as any).tds_forms];
+    for (const f of rawForms) { const nf = normForm(f); if (nf) allowedForms.add(nf); }
+    const batchForm = normForm(batchRow.form_type);
+    if (batchForm && allowedForms.has(batchForm)) { allowedForms.clear(); allowedForms.add(batchForm); }
+    // Representative form for display in the summary/toast (the batch's, else the first allowed).
+    const filingForm = batchForm && allowedForms.has(batchForm) ? batchForm : ([...allowedForms][0] ?? null);
+    // A client row whose PAN is in the Office Data clearly belongs to THIS filing,
+    // so it must NEVER be excluded by the form filter on the strength of a
+    // client-side section label (which is non-authoritative and often mislabelled).
+    const officePanSet = new Set(oRecs.map((r) => r.panN).filter(Boolean));
     let excludedOtherQuarter = 0;
     let excludedOtherForm = 0;
     const iRecs = iRecsAll.filter((r) => {
+      const panInOffice = r.panN !== "" && officePanSet.has(r.panN);
       // FORM filter — a 26Q filing must not compare a client file's salary
       // (192B/24Q), non-resident (27Q) or TCS (27EQ) rows; they reconcile under
-      // their own form's filing. Unrecognised sections are kept.
-      if (filingForm) {
+      // their own form's filing. Unrecognised sections are kept. A row whose PAN is
+      // in Office Data is RESCUED (kept) regardless of its client section label.
+      if (allowedForms.size && !panInOffice) {
         const secForm = formOfSection(canonicalSection(r.section, aliases));
-        if (secForm && secForm !== filingForm) { excludedOtherForm++; return false; }
+        if (secForm && !allowedForms.has(secForm)) { excludedOtherForm++; return false; }
       }
       // QUARTER + FY filter — a client working file often holds several years and
       // all quarters. Keep only rows whose date is in THIS filing's FY-quarter.
       // A row with a PARSEABLE date that is another quarter OR another financial
       // year (e.g. a "06.02.2025" line in a FY2025-26 Q3 file — that's FY2024-25)
       // is excluded so it can't wrongly pair with a same-PAN office row. Rows with
-      // an UNPARSEABLE date are kept (can't classify → don't silently drop).
+      // an UNPARSEABLE date are kept (can't classify → don't silently drop). The
+      // date uses the whole-COLUMN-detected order (r.iso), which is more reliable
+      // than a per-value dd/mm-vs-mm/dd guess.
       if (filingQ && fyStart != null && r.iso) {
         if (quarterOfIso(r.iso, fyStart) !== filingQ) { excludedOtherQuarter++; return false; }
       }
@@ -777,6 +839,58 @@ serve(async (req) => {
       if (delErr) console.error("tds-recon-compare: stale result cleanup failed (recoverable):", delErr.message);
     }
 
+    // ── Diagnostics: explain WHY records didn't match (generic, informational) ──
+    // Rather than only reporting a mismatch count, analyse the data to surface the
+    // most likely ROOT CAUSE of low matching — period/quarter mismatch, missing
+    // identifier columns, systematic date differences — so the user can act.
+    const diagnostics: string[] = [];
+    const matchedN = newRows.filter(r => r.match_status === "matched").length;
+    // (a) Office Data period vs the filing's declared quarter.
+    {
+      const dist: Record<string, number> = {};
+      let parseable = 0;
+      for (const o of oRecs) { const q = quarterOfIso(o.iso, fyStart); if (q) { dist[q] = (dist[q] || 0) + 1; parseable++; } }
+      if (parseable >= 3 && filingQ) {
+        const top = Object.entries(dist).sort((a, b) => b[1] - a[1])[0];
+        if (top && top[0] !== filingQ && top[1] / parseable >= 0.6) {
+          diagnostics.push(`Office Data is dated mostly in ${top[0]} of FY ${filing.financial_year}, but this filing is ${filingQ}. Verify the filing's quarter or the Office Data period — ${filingQ} imported rows cannot match ${top[0]} office rows.`);
+        }
+      }
+    }
+    // (b) Systematic date-only mismatch across paired records.
+    {
+      const mm = newRows.filter(r => r.match_status === "mismatched");
+      const dateOnly = mm.filter(r => (r.mismatch_fields?.length ?? 0) > 0 && r.mismatch_fields.every((f: string) => f === "date"));
+      if (mm.length >= 3 && dateOnly.length / mm.length >= 0.6) {
+        diagnostics.push(`${dateOnly.length} of ${mm.length} mismatches agree on PAN/amount/TDS and differ ONLY on the date — Office and imported data likely cover different periods, or the date was recorded differently on one side.`);
+      }
+    }
+    // (c) Imported file has no usable PAN column.
+    {
+      const withPan = iRecs.filter(r => r.panN !== "").length;
+      if (iRecs.length >= 5 && withPan / iRecs.length < 0.2) {
+        diagnostics.push(`The imported file has almost no PAN values (${withPan}/${iRecs.length}) — matching relied on name + amount + date. Including PAN in the client file improves accuracy.`);
+      }
+    }
+    // (d) Imported file's name column wasn't recognised.
+    {
+      const withName = iRecs.filter(r => r.nameN !== "").length;
+      if (iRecs.length >= 5 && withName / iRecs.length < 0.3) {
+        diagnostics.push(`The imported file's party-name column wasn't recognised (${withName}/${iRecs.length} rows have a name) — check the file's column headers.`);
+      }
+    }
+    // (e) Everything was excluded by the quarter/form filter.
+    if ((imported?.length ?? 0) > 0 && iRecs.length === 0) {
+      diagnostics.push(`All ${imported?.length} imported rows fall outside ${filingQ ?? "this quarter"} ${filing.financial_year} (or belong to a different form) and were set aside — check you imported the correct quarter's file.`);
+    }
+    // (f) Office and imported overlap on PAN but rarely reconcile.
+    if (matchedN === 0 && oRecs.length > 0 && iRecs.length > 0) {
+      const oPans = new Set(oRecs.map(r => r.panN).filter(Boolean));
+      const shared = iRecs.filter(r => r.panN && oPans.has(r.panN)).length;
+      if (shared > 0) diagnostics.push(`Office and imported data share ${shared} PAN(s) but none reconciled cleanly — the amounts, TDS or dates differ. They may be different periods, or one side's figures need correcting.`);
+      else if (oRecs.length > 0 && iRecs.length > 0) diagnostics.push(`Office and imported data share no PANs in this quarter — likely different parties, a wrong file, or a wrong quarter.`);
+    }
+
     const summary = {
       total: newRows.length,
       matched: newRows.filter(r => r.match_status === "matched").length,
@@ -794,6 +908,8 @@ serve(async (req) => {
       filing_form: filingForm,
       // Records reconciled at the party level (office challan = Σ client bills).
       aggregated: aggregatedCount,
+      // Plain-language explanations of the most likely cause(s) of non-matches.
+      diagnostics,
     };
     return json({ batch_id: batchId, summary });
   } catch (err) {
