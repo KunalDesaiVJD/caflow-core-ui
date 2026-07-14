@@ -1871,9 +1871,17 @@ function InfoPanel({ open, onOpenChange, profile, onUpdate, staffUsers }: {
     p.filing_status === "Verified" ||
     p.filing_status === "Sent to CPC";
 
+  // 2026-06-25 (V J Desai request): once the return is Filed, the Ack No is
+  // the immutable ITD acknowledgement — allowing edits after that would
+  // desync CAFlow from the ITD portal. Lock the field. To correct a
+  // wrongly-typed ARN the auditor must first revert status to Data Pending
+  // (which auto-clears acknowledgment_no anyway), then re-file.
+  const ackLocked = p.filing_status === "Filed";
+
   // Auto-save on blur — no Save button. Validation still runs on Ack No so the
   // auditor can't silently leave it blank when the status requires it.
   const commitAck = () => {
+    if (ackLocked) return;
     if (ackNo === (p.acknowledgment_no || "")) return;
     if (ackRequired && !ackNo.trim()) {
       toast({ title: "Ack No is mandatory when status is Filed/Verified/Sent to CPC", variant: "destructive" });
@@ -1894,12 +1902,24 @@ function InfoPanel({ open, onOpenChange, profile, onUpdate, staffUsers }: {
         </SheetHeader>
         <div className="space-y-4 mt-4">
           <div className="space-y-1.5">
-            <Label>Ack No {ackRequired && <span className="text-destructive">*</span>}</Label>
+            <Label>
+              Ack No {ackRequired && <span className="text-destructive">*</span>}
+              {ackLocked && (
+                <span className="ml-2 text-[10px] font-normal text-muted-foreground">
+                  (locked — status is Filed)
+                </span>
+              )}
+            </Label>
             <Input
               value={ackNo}
               onChange={e => setAckNo(e.target.value)}
               onBlur={commitAck}
               placeholder="Enter acknowledgement number"
+              readOnly={ackLocked}
+              className={ackLocked ? "bg-muted/60 cursor-not-allowed" : undefined}
+              title={ackLocked
+                ? "Ack No is locked once the return is Filed. Revert status to Data Pending to change it."
+                : undefined}
             />
           </div>
           <div className="space-y-1.5">
