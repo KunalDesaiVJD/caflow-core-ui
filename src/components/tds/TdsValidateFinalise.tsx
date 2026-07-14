@@ -18,10 +18,15 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogFooter,
+  AlertDialogTitle, AlertDialogDescription, AlertDialogAction, AlertDialogCancel,
+} from "@/components/ui/alert-dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import {
   ShieldCheck, AlertTriangle, CheckCircle2, Upload, Play, FileSpreadsheet,
-  RotateCcw, Loader2, Users, FileWarning, Info, X, BadgeCheck,
+  RotateCcw, Loader2, Users, FileWarning, Info, X, BadgeCheck, Trash2, Eye,
 } from "lucide-react";
 import { parseWorkbookRows, parseCsvRows } from "@/lib/tdsWorkbook";
 import { logReconAudit } from "@/lib/tdsReconAudit";
@@ -221,7 +226,15 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
   const [resolving, setResolving] = useState(false);
   const [filing, setFiling] = useState<any>(null);
   const [officeCount, setOfficeCount] = useState({ deductees: 0, challans: 0 });
-  const [batch, setBatch] = useState<any>(null);
+  const [batch, setBatch] = useState<any>(null);       // combined summary (row_count, file_count, representative id)
+  const [batches, setBatches] = useState<any[]>([]);   // raw per-file batch rows (for file management)
+  const [selBatchIds, setSelBatchIds] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ ids: string[]; label: string } | null>(null);
+  const [replaceTargetId, setReplaceTargetId] = useState<string | null>(null);
+  const [detailsBatch, setDetailsBatch] = useState<any>(null);
+  const [detailsRows, setDetailsRows] = useState<any[] | null>(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
   const [results, setResults] = useState<ReconResult[] | null>(null);
   const [userMap, setUserMap] = useState<Record<string, string>>({});
 
@@ -271,7 +284,7 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     const stale = () => seq !== loadSeq.current;
 
     if (!selClient || complianceError()) {
-      setFiling(null); setBatch(null); setResults(null);
+      setFiling(null); setBatch(null); setBatches([]); setResults(null);
       setOfficeCount({ deductees: 0, challans: 0 });
       return;
     }
@@ -282,7 +295,7 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     const match = (fData || []).find((f: any) => (f.tds_forms || []).includes(selForm)) || null;
     setFiling(match);
     if (!match) {
-      setBatch(null); setResults(null); setOfficeCount({ deductees: 0, challans: 0 });
+      setBatch(null); setBatches([]); setResults(null); setOfficeCount({ deductees: 0, challans: 0 });
       setResolving(false); return;
     }
 
@@ -304,6 +317,12 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
       .eq("filing_id", match.id).order("imported_at", { ascending: false });
     if (stale()) return;
     const bs = batches || [];
+    setBatches(bs);
+    // Drop any selection for files that no longer exist (e.g. after a delete).
+    setSelBatchIds((prev) => {
+      const valid = new Set(bs.map((x: any) => x.id));
+      return new Set([...prev].filter((id) => valid.has(id)));
+    });
     setBatch(bs.length ? {
       ...bs[0],
       row_count: bs.reduce((sum: number, x: any) => sum + (x.row_count || 0), 0),
@@ -397,8 +416,9 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     }
   };
 
-  const handleImport = async (file: File) => {
+  const handleImport = async (file: File, replaceBatchId?: string) => {
     if (!filing) return;
+    const hadResults = !!results; // was a validation already run? → auto-refresh it after
     setImporting(true);
     setImportStage("Uploading file…"); setImportPct(4);
     // Bound the whole import so a stalled connection can never leave the UI
@@ -413,11 +433,32 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
         new Promise((_, rej) => ctrl.signal.addEventListener("abort", () => rej(new Error("aborted-timeout")))),
       ]) as any;
       setImportPct(100);
+      // "Replace this file" with a DIFFERENTLY-named file: drop the old batch so
+      // the new one takes its place. (A same-named file is already replaced by the
+      // importer's own file-name de-dupe, so this becomes a harmless no-op then.)
+      if (replaceBatchId && replaceBatchId !== data.batch_id) {
+        await supabase.from("tds_imported_rows").delete().eq("batch_id", replaceBatchId);
+        const { error: delErr } = await supabase.from("tds_import_batches").delete().eq("id", replaceBatchId);
+        // Non-atomic: the new file is already in. If dropping the old one fails,
+        // both would remain and double-count, so surface it (the file list shows
+        // the leftover and the user can delete it manually).
+        if (delErr) toast({ title: "Old file not removed", description: "The new file imported, but the previous file couldn't be removed automatically — please delete it from the list below.", variant: "destructive" });
+      }
       // A fresh import invalidates any prior comparison for this filing.
       await supabase.from("tds_recon_results").delete().eq("filing_id", filing.id);
       setResults(null);
-      toast({ title: `Imported ${data.row_count} client record(s)`, description: data.warning || file.name, ...(data.warning ? { variant: "default" as const } : {}) });
+      const replacedNote = (data.replaced || (replaceBatchId && replaceBatchId !== data.batch_id)) ? "Replaced the earlier file. " : "";
+      toast({ title: `Imported ${data.row_count} client record(s)`, description: `${replacedNote}${data.warning || file.name}`, ...(data.warning ? { variant: "default" as const } : {}) });
       await loadAll();
+      // Auto-refresh the validation if one had already been run — the user should
+      // never have to manually re-validate after adding or replacing a file.
+      if (hadResults) {
+        setComparing(true);
+        try { validationToast(await runCompare(filing.id)); }
+        catch (e: any) { toast({ title: "Re-validation failed", description: e.message, variant: "destructive" }); }
+        setComparing(false);
+        setRunSignal(s => s + 1);
+      }
     } catch (e: any) {
       const msg = ctrl.signal.aborted
         ? "The import took too long and was cancelled. Try a smaller file or split it, then retry — no need to reload."
@@ -431,6 +472,34 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     }
   };
 
+  // Compare the whole filing (the UNION of every imported file) against Office
+  // Data and reload results. `batch_id` is omitted — the edge function defaults
+  // to the latest batch and reads rows for the whole filing_id, so this is
+  // independent of React state (safe to call right after a file mutation).
+  // Guarded by loadSeq (same as loadAll): the compare is a multi-second edge call
+  // and the selectors stay enabled, so if the user switches client/quarter while
+  // it runs, a late response must NOT write the old filing's results into the new
+  // filing's view (that would let the wrong return be reviewed/overridden/filed).
+  const runCompare = async (filingId: string) => {
+    const seq = loadSeq.current;
+    const data = await invokeFn("tds-recon-compare", { filing_id: filingId });
+    if (seq !== loadSeq.current) return data; // selection changed — abandon
+    const { data: res } = await supabase.from("tds_recon_results").select("*").eq("filing_id", filingId);
+    if (seq !== loadSeq.current) return data;
+    setResults((res as ReconResult[]) || []);
+    return data;
+  };
+
+  const validationToast = (data: any) => {
+    const s = data.summary || {};
+    const notes: string[] = [];
+    if ((s.excluded_other_quarter ?? 0) > 0) notes.push(`${s.excluded_other_quarter} from other quarters`);
+    if ((s.excluded_other_form ?? 0) > 0) notes.push(`${s.excluded_other_form} for other forms (e.g. 192B salary → 24Q)`);
+    if ((s.aggregated ?? 0) > 0) notes.push(`${s.aggregated} reconciled in aggregate`);
+    const note = notes.length ? ` · auto-handled: ${notes.join(", ")}` : "";
+    toast({ title: `Stage 1 · Data validation complete${s.filing_quarter ? ` (${s.filing_quarter}${s.filing_form ? " " + s.filing_form : ""})` : ""}`, description: `${s.matched ?? 0} matched · ${s.mismatched ?? 0} mismatched${note}` });
+  };
+
   // Single "Run Validation" — runs Stage 1 (data reconciliation) here, then bumps
   // runSignal so the embedded Stage 2 (PAN verification) runs too if a TRACES
   // file was imported. The two result sets are shown separately, never merged.
@@ -438,22 +507,65 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     if (!filing || !batch) return;
     setComparing(true);
     try {
-      const data = await invokeFn("tds-recon-compare", { filing_id: filing.id, batch_id: batch.id });
-      const { data: res } = await supabase.from("tds_recon_results").select("*").eq("filing_id", filing.id);
-      setResults((res as ReconResult[]) || []);
-      const s = data.summary || {};
-      const notes: string[] = [];
-      if ((s.excluded_other_quarter ?? 0) > 0) notes.push(`${s.excluded_other_quarter} from other quarters`);
-      if ((s.excluded_other_form ?? 0) > 0) notes.push(`${s.excluded_other_form} for other forms (e.g. 192B salary → 24Q)`);
-      if ((s.aggregated ?? 0) > 0) notes.push(`${s.aggregated} reconciled in aggregate`);
-      const note = notes.length ? ` · auto-handled: ${notes.join(", ")}` : "";
-      toast({ title: `Stage 1 · Data validation complete${s.filing_quarter ? ` (${s.filing_quarter}${s.filing_form ? " " + s.filing_form : ""})` : ""}`, description: `${s.matched ?? 0} matched · ${s.mismatched ?? 0} mismatched${note}` });
+      validationToast(await runCompare(filing.id));
     } catch (e: any) {
       toast({ title: "Validation failed", description: e.message, variant: "destructive" });
     }
     setComparing(false);
     setRunSignal(s => s + 1); // trigger Stage 2 (PAN verification) if a TRACES file is present
   };
+
+  // ── File management: delete / replace / view details ─────────────────────────
+  // The imported dataset must always reflect exactly the files the user chose.
+  const doDeleteBatches = async (ids: string[]) => {
+    if (!filing || !ids.length) return;
+    setDeleting(true);
+    try {
+      const hadResults = !!results;
+      // Remove the rows, then the batch (tds_recon_results referencing it cascade),
+      // then wipe any surviving comparison for the filing — it counted these rows.
+      await supabase.from("tds_imported_rows").delete().in("batch_id", ids);
+      await supabase.from("tds_import_batches").delete().in("id", ids);
+      await supabase.from("tds_recon_results").delete().eq("filing_id", filing.id);
+      setResults(null);
+      setSelBatchIds(new Set());
+      toast({ title: ids.length === 1 ? "File removed" : `${ids.length} files removed`, description: "Imported dataset updated." });
+      await loadAll();
+      // Auto-rebuild validation if files remain and a run had already been done —
+      // the user should never have to manually re-validate after managing files.
+      const { data: remain } = await supabase.from("tds_import_batches").select("id").eq("filing_id", filing.id).limit(1);
+      if (hadResults && remain && remain.length) {
+        setComparing(true);
+        try { validationToast(await runCompare(filing.id)); }
+        catch (e: any) { toast({ title: "Re-validation failed", description: e.message, variant: "destructive" }); }
+        setComparing(false);
+        setRunSignal(s => s + 1);
+      }
+    } catch (e: any) {
+      toast({ title: "Delete failed", description: e?.message || "Could not remove file(s)", variant: "destructive" });
+    } finally {
+      setDeleting(false);
+      setDeleteConfirm(null);
+    }
+  };
+
+  const handleReplaceClick = (batchId: string) => { setReplaceTargetId(batchId); fileInputRef.current?.click(); };
+
+  const openDetails = async (b: any) => {
+    setDetailsBatch(b); setDetailsRows(null); setDetailsLoading(true);
+    const { data } = await supabase.from("tds_imported_rows").select("*")
+      .eq("batch_id", b.id).order("row_index", { ascending: true }).limit(5000);
+    setDetailsRows(data || []); setDetailsLoading(false);
+  };
+
+  const fmtDateTime = (s?: string) => {
+    if (!s) return "";
+    try { return new Date(s).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false }); }
+    catch { return ""; }
+  };
+  const toggleSel = (id: string) => setSelBatchIds((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const allSelected = batches.length > 0 && selBatchIds.size === batches.length;
+  const toggleSelAll = () => setSelBatchIds(allSelected ? new Set() : new Set(batches.map((b) => b.id)));
 
   const openOverride = (r: ReconResult) => { setOvTarget(r); setOvReason(""); setOvOpen(true); };
 
@@ -723,9 +835,9 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
                     <p className="font-semibold text-sm">Imported Client Data <span className="text-muted-foreground font-normal">(Stage 1)</span></p>
                   </div>
                   <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv,.pdf,.json,.xml,.txt,.html,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff,image/*" className="hidden"
-                    onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImport(f); e.currentTarget.value = ""; }} />
+                    onChange={(e) => { const f = e.target.files?.[0]; const tgt = replaceTargetId; setReplaceTargetId(null); if (f) handleImport(f, tgt || undefined); e.currentTarget.value = ""; }} />
                   <Button size="sm" variant={batch ? "outline" : "default"} className="gap-1"
-                    disabled={importing || isFiled} onClick={() => fileInputRef.current?.click()}>
+                    disabled={importing || isFiled} onClick={() => { setReplaceTargetId(null); fileInputRef.current?.click(); }}>
                     {importing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
                     {importing ? "Importing…" : batch ? "Add / re-import file" : "Import"}
                   </Button>
@@ -738,19 +850,56 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
                     <p className="text-[11px] text-muted-foreground mt-1 truncate">{importStage || "Working…"}{importPct ? ` · ${importPct}%` : ""}</p>
                   </div>
                 )}
-                {batch ? (
+                {batches.length > 0 ? (
                   <div className="text-sm">
-                    <span className="text-2xl font-bold">{batch.row_count}</span> <span className="text-muted-foreground">records{batch.file_count > 1 ? ` · ${batch.file_count} files` : ""}</span>
-                    {batch.file_count > 1 ? (
-                      <ul className="text-xs text-muted-foreground mt-1 space-y-0.5">
-                        {(batch.files || []).map((f: any, idx: number) => (
-                          <li key={idx} className="truncate">• {f.name} · {(f.type || "").toUpperCase()} · {f.count} rows</li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p className="text-xs text-muted-foreground mt-1 truncate">{batch.file_name} · {(batch.file_type || "").toUpperCase()}</p>
-                    )}
-                    <p className="text-[11px] text-muted-foreground mt-1.5">Keep a section in a separate workbook (e.g. 194Q)? Add it — all files are validated together. Re-importing the same file name replaces it.</p>
+                    <div className="flex items-end justify-between gap-2">
+                      <div>
+                        <span className="text-2xl font-bold">{batch?.row_count ?? 0}</span>{" "}
+                        <span className="text-muted-foreground text-xs">records · {batches.length} file{batches.length > 1 ? "s" : ""}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        {selBatchIds.size > 0 && (
+                          <Button size="sm" variant="destructive" className="h-7 gap-1 text-xs px-2" disabled={deleting || isFiled}
+                            onClick={() => setDeleteConfirm({ ids: [...selBatchIds], label: `${selBatchIds.size} selected file(s)` })}>
+                            <Trash2 size={12} /> Delete ({selBatchIds.size})
+                          </Button>
+                        )}
+                        {batches.length > 1 && selBatchIds.size === 0 && (
+                          <Button size="sm" variant="ghost" className="h-7 text-xs px-2 text-muted-foreground hover:text-destructive" disabled={deleting || isFiled}
+                            onClick={() => setDeleteConfirm({ ids: batches.map((b) => b.id), label: "all imported files" })}>
+                            Delete all
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="mt-2 rounded-md border divide-y overflow-hidden">
+                      {batches.length > 1 && (
+                        <label className="flex items-center gap-2 px-2 py-1 bg-muted/40 text-[11px] text-muted-foreground cursor-pointer">
+                          <Checkbox checked={allSelected} onCheckedChange={toggleSelAll} aria-label="Select all files" className="h-3.5 w-3.5" disabled={isFiled} />
+                          Select all
+                        </label>
+                      )}
+                      {batches.map((b: any) => (
+                        <div key={b.id} className="flex items-center gap-2 px-2 py-1.5">
+                          <Checkbox checked={selBatchIds.has(b.id)} onCheckedChange={() => toggleSel(b.id)} aria-label={`Select ${b.file_name || "file"}`} className="h-3.5 w-3.5" disabled={isFiled} />
+                          <div className="min-w-0 flex-1">
+                            <p className="font-medium text-xs truncate">{b.file_name || "(unnamed file)"}</p>
+                            <p className="text-[10px] text-muted-foreground truncate">
+                              {(b.file_type || "").toUpperCase()} · {b.row_count} rows{b.imported_at ? ` · ${fmtDateTime(b.imported_at)}` : ""}
+                            </p>
+                          </div>
+                          <Badge variant="secondary" className="text-[9px] px-1.5 py-0 h-4 shrink-0">Imported</Badge>
+                          <div className="flex items-center shrink-0">
+                            <Button size="icon" variant="ghost" className="h-6 w-6" title="View details" onClick={() => openDetails(b)}><Eye size={13} /></Button>
+                            <Button size="icon" variant="ghost" className="h-6 w-6" title="Replace this file" disabled={importing || deleting || isFiled} onClick={() => handleReplaceClick(b.id)}><RotateCcw size={13} /></Button>
+                            <Button size="icon" variant="ghost" className="h-6 w-6 text-muted-foreground hover:text-destructive" title="Delete this file" disabled={deleting || isFiled}
+                              onClick={() => setDeleteConfirm({ ids: [b.id], label: b.file_name || "this file" })}><Trash2 size={13} /></Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-[11px] text-muted-foreground mt-1.5">Keep a section in a separate workbook (e.g. 194Q)? Add it — all files are validated together. Re-importing the same file name replaces it; adding, replacing or deleting a file re-runs validation automatically.</p>
                   </div>
                 ) : (
                   <p className="text-xs text-muted-foreground">Import the client's data in any format — Excel, CSV, PDF, image/scan, JSON, XML or text. You can add multiple files (e.g. a separate 194Q workbook) and they'll be validated together.</p>
@@ -951,6 +1100,79 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
             <Button onClick={handleFinalise} disabled={finalising}>
               {finalising ? "Finalising…" : "Confirm & Mark Filed"}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Confirm file deletion */}
+      <AlertDialog open={!!deleteConfirm} onOpenChange={(o) => { if (!o) setDeleteConfirm(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2"><Trash2 size={16} className="text-destructive" /> Remove {deleteConfirm?.label}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently removes {deleteConfirm && deleteConfirm.ids.length > 1 ? `these ${deleteConfirm.ids.length} files` : "this file"} and every record imported from {deleteConfirm && deleteConfirm.ids.length > 1 ? "them" : "it"} from the consolidated dataset. Validation is re-run automatically on the remaining files. This can't be undone — you'd need to re-import.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={(e) => { e.preventDefault(); if (deleteConfirm) doDeleteBatches(deleteConfirm.ids); }} disabled={deleting}>
+              {deleting ? "Removing…" : "Remove"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Imported-file details */}
+      <Dialog open={!!detailsBatch} onOpenChange={(o) => { if (!o) { setDetailsBatch(null); setDetailsRows(null); } }}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-sm">
+              <FileSpreadsheet size={15} /> {detailsBatch?.file_name || "Imported file"}
+              <span className="text-xs font-normal text-muted-foreground">
+                {detailsBatch ? `· ${(detailsBatch.file_type || "").toUpperCase()} · ${detailsBatch.row_count} rows · ${fmtDateTime(detailsBatch.imported_at)}` : ""}
+              </span>
+            </DialogTitle>
+          </DialogHeader>
+          <div className="max-h-[60vh] overflow-auto rounded-md border">
+            {detailsLoading ? (
+              <div className="p-6 text-center text-sm text-muted-foreground"><Loader2 size={16} className="animate-spin inline mr-2" /> Loading rows…</div>
+            ) : detailsRows && detailsRows.length ? (
+              <Table>
+                <TableHeader className="sticky top-0 bg-background z-10">
+                  <TableRow>
+                    <TableHead className="w-8 text-[11px]">#</TableHead>
+                    <TableHead className="text-[11px]">Name</TableHead>
+                    <TableHead className="text-[11px]">PAN</TableHead>
+                    <TableHead className="text-[11px]">Section</TableHead>
+                    <TableHead className="text-[11px] text-right">Amount</TableHead>
+                    <TableHead className="text-[11px] text-right">TDS</TableHead>
+                    <TableHead className="text-[11px]">Date</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {detailsRows.map((r: any, i: number) => (
+                    <TableRow key={r.id || i}>
+                      <TableCell className="text-[11px] text-muted-foreground">{i + 1}</TableCell>
+                      <TableCell className="text-[11px] max-w-[220px] truncate">{r.deductee_name || "—"}</TableCell>
+                      <TableCell className="text-[11px] font-mono">{r.pan || "—"}</TableCell>
+                      <TableCell className="text-[11px]">{r.section_code || "—"}</TableCell>
+                      <TableCell className="text-[11px] text-right">{r.amount_paid ?? "—"}</TableCell>
+                      <TableCell className="text-[11px] text-right">{r.tds_amount ?? "—"}</TableCell>
+                      <TableCell className="text-[11px]">{r.date_of_payment || r.date_of_deduction || "—"}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : (
+              <div className="p-6 text-center text-sm text-muted-foreground">No rows in this file.</div>
+            )}
+          </div>
+          {detailsRows && detailsRows.length >= 5000 && (
+            <p className="text-[11px] text-muted-foreground">Showing the first 5,000 rows.</p>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setDetailsBatch(null); setDetailsRows(null); }}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

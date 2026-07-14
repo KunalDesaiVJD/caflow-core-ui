@@ -648,6 +648,7 @@ serve(async (req) => {
     // file must REPLACE its data, not add a duplicate, so first drop any earlier
     // batch(es) for this filing with the same file name. Different file names
     // accumulate and are all reconciled together by tds-recon-compare.
+    let replaced = false;
     if (file_name) {
       const { data: dupBatches } = await supabase
         .from("tds_import_batches").select("id").eq("filing_id", filing_id).eq("file_name", file_name);
@@ -655,6 +656,7 @@ serve(async (req) => {
       if (dupIds.length) {
         await supabase.from("tds_imported_rows").delete().in("batch_id", dupIds);
         await supabase.from("tds_import_batches").delete().in("id", dupIds);
+        replaced = true;
       }
     }
 
@@ -668,7 +670,13 @@ serve(async (req) => {
       })
       .select("id")
       .single();
-    if (bErr || !batch) return json({ error: `Batch insert failed: ${bErr?.message}` }, 500);
+    if (bErr || !batch) {
+      // 23505 = the partial unique index (filing_id, file_name) fired — a
+      // same-name batch slipped in between our delete above and this insert
+      // (two imports of the same file racing). Safe to retry after a reload.
+      const dup = (bErr as any)?.code === "23505";
+      return json({ error: dup ? "That file is already being imported for this return — reload and try again." : `Batch insert failed: ${bErr?.message}` }, dup ? 409 : 500);
+    }
 
     // Every field is already a first-class column, so we DON'T duplicate the
     // whole row into a `raw` jsonb — that just doubled the insert payload + DB
@@ -696,7 +704,7 @@ serve(async (req) => {
 
     // NOTE: the client re-reads the batch via loadAll(), so we do NOT echo the
     // full rows array back (a 20k-row response is needless megabytes).
-    return json({ batch_id: batch.id, row_count: canonical.length });
+    return json({ batch_id: batch.id, row_count: canonical.length, replaced });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error("tds-recon-import fatal:", message);
