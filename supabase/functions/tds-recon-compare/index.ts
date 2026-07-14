@@ -620,10 +620,14 @@ serve(async (req) => {
         const secForm = formOfSection(canonicalSection(r.section, aliases));
         if (secForm && secForm !== filingForm) { excludedOtherForm++; return false; }
       }
-      // QUARTER filter — a whole-FY working file: keep only THIS quarter's rows.
-      if (filingQ && fyStart != null) {
-        const q = r.iso ? quarterOfIso(r.iso, fyStart) : null;
-        if (q && q !== filingQ) { excludedOtherQuarter++; return false; }
+      // QUARTER + FY filter — a client working file often holds several years and
+      // all quarters. Keep only rows whose date is in THIS filing's FY-quarter.
+      // A row with a PARSEABLE date that is another quarter OR another financial
+      // year (e.g. a "06.02.2025" line in a FY2025-26 Q3 file — that's FY2024-25)
+      // is excluded so it can't wrongly pair with a same-PAN office row. Rows with
+      // an UNPARSEABLE date are kept (can't classify → don't silently drop).
+      if (filingQ && fyStart != null && r.iso) {
+        if (quarterOfIso(r.iso, fyStart) !== filingQ) { excludedOtherQuarter++; return false; }
       }
       return true;
     });
