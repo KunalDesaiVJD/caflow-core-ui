@@ -1278,6 +1278,55 @@ const h_tds_shortfall: CheckHandler = (rule, data) => {
   return out;
 };
 
+/** sum of |field| over TB ledgers matching a scope (closing or opening balance). */
+const sumScopedField = (tb: TBRow[], scope: Record<string, unknown> | undefined, field: "closing" | "opening"): number =>
+  tb.filter((r) => accountInScope(r, scope)).reduce((s, r) => s + Math.abs(num(field === "opening" ? r.opening_balance : r.closing_balance)), 0);
+
+/** compute a ratio from a TB: (sum(numerator) − sum(numerator_less)) / (avg? sum(denominator)), ×100 if as_pct. */
+const ratioValue = (tb: TBRow[], dl: Record<string, unknown>): number | null => {
+  const numScope = dl.numerator as Record<string, unknown> | undefined;
+  const denScope = dl.denominator as Record<string, unknown> | undefined;
+  if (!numScope || !denScope) return null;
+  let numer = sumScopedField(tb, numScope, "closing");
+  if (dl.numerator_less) numer -= sumScopedField(tb, dl.numerator_less as Record<string, unknown>, "closing");
+  let denom = sumScopedField(tb, denScope, "closing");
+  if (dl.denominator_avg === true) denom = (denom + sumScopedField(tb, denScope, "opening")) / 2;
+  if (denom === 0) return null;
+  return dl.as_pct === true ? (numer / denom) * 100 : numer / denom;
+};
+
+/**
+ * ratio_change — a financial ratio computed for CY (tb) and PY (tbPY), flagged when the year-on-year
+ * change breaches a threshold. numerator may subtract a group (numerator_less, e.g. GP = Sales−COGS);
+ * denominator may be averaged (denominator_avg, for turnover). change_mode "delta_pct_points" compares
+ * ratio points (GP% down 6pp), "relative" compares % change (D/E up 69%). direction gates decline/increase.
+ * Advisory (keyword-estimated group sums). detection_logic: { check:"ratio_change", numerator, numerator_less?,
+ * denominator, denominator_avg?, as_pct?, change_mode?, direction?, threshold, label?, message? }.
+ */
+const h_ratio_change: CheckHandler = (rule, data) => {
+  const dl = rule.detection_logic as unknown as Record<string, unknown>;
+  if (!data.tbPY || data.tbPY.length === 0) {
+    return [finding(rule, { advisory: true, flag_message: `${rule.rule_name}: prior-year TB unavailable — review manually.`, evidence: { reason: "no_py" } })];
+  }
+  const cy = ratioValue(data.tb, dl);
+  const py = ratioValue(data.tbPY, dl);
+  if (cy == null || py == null) return [];
+  const mode = String(dl.change_mode ?? "relative");
+  const change = mode === "delta_pct_points" ? cy - py : (py !== 0 ? ((cy - py) / Math.abs(py)) * 100 : 0);
+  const dir = String(dl.direction ?? "any");
+  const threshold = num(dl.threshold ?? dl.change_pct ?? rule.threshold_value, 5);
+  const directionOk = dir === "any" || (dir === "decline" && change < 0) || (dir === "increase" && change > 0);
+  if (!directionOk || Math.abs(change) < threshold) return [];
+  const label = (dl.label as string | undefined) ?? rule.rule_name;
+  const tpl = (dl.message as string | undefined) ?? rule.audit_query_template;
+  return [finding(rule, {
+    account: label,
+    amount: Math.round(cy * 100) / 100,
+    flag_message: render(tpl, { account: label, pct: Math.round(cy * 100) / 100, value: Math.round(py * 100) / 100, count: Math.round(change * 10) / 10 }),
+    evidence: { cy_ratio: Math.round(cy * 1000) / 1000, py_ratio: Math.round(py * 1000) / 1000, change_pct: Math.round(change * 10) / 10, change_mode: mode, source: "keyword_estimate" },
+  })];
+};
+
 // ---------------------------------------------------------------------------
 // Registry + runner
 // ---------------------------------------------------------------------------
@@ -1329,6 +1378,7 @@ export const GENERIC_HANDLERS: Record<string, CheckHandler> = {
   ratio: h_ratio,
   fully_depreciated_in_use: h_fully_depreciated_in_use,
   tds_shortfall: h_tds_shortfall,
+  ratio_change: h_ratio_change,
 };
 
 export const GENERIC_CHECK_KINDS = Object.keys(GENERIC_HANDLERS);
