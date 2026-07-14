@@ -161,6 +161,15 @@ serve(async (req) => {
       if (faRows && faRows.length > 0) fa = faFromRows(faRows as never[]);
     }
 
+    // ── Related-party master (related_parties.party_name) — enables the RPT checks. When empty the
+    // RPT handlers emit an honest "related-party list not captured" advisory instead of nothing. ──
+    let rp: string[] | undefined;
+    {
+      const { data: rpRows } = await supabase.from("related_parties").select("party_name").eq("client_id", client_id);
+      const names = (rpRows ?? []).map((r: { party_name?: string | null }) => String(r.party_name ?? "").trim()).filter(Boolean);
+      if (names.length > 0) rp = names;
+    }
+
     // ── DRY-RUN (preview) — run ONE draft rule against this engagement's data and return the
     // findings WITHOUT persisting or deleting anything. Powers the AI Rule Composer preview so the
     // user sees exactly what a rule would flag before applying it.
@@ -168,7 +177,7 @@ serve(async (req) => {
       const previewRules = rulesFromRows([preview_rule] as never[]);
       const pv = runDetection(
         previewRules,
-        { tb: tbCur, vouchers: vouchersCur, tbPY, fa },
+        { tb: tbCur, vouchers: vouchersCur, tbPY, fa, rp },
         { financialYearStart: fyStartDate(financial_year), financialYearEnd: fyEndDate(financial_year) },
         { emitAdvisoryForUnhandled: true },
       );
@@ -199,6 +208,7 @@ serve(async (req) => {
         vouchers: vouchersCur,
         tbPY,
         fa,
+        rp,
       },
       {
         financialYearStart: fyStartDate(financial_year),
