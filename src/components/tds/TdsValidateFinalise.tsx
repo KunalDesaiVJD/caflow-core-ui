@@ -137,21 +137,40 @@ function getImportWorker(): Worker | null {
   } catch { importWorkerBroken = true; return null; }
 }
 let workerReqId = 0;
-function parseInWorker(payload: { fileType: "xlsx"; buffer: ArrayBuffer } | { fileType: "csv"; text: string }): Promise<Record<string, unknown>[]> {
+type WorkerProgress = { stage: string; sheet?: number; totalSheets?: number; rows?: number };
+// If the worker reports NO progress for this long, treat the parse as stuck,
+// terminate it (a hung worker can't be reused) and surface an actionable error —
+// this is the hard guarantee that the import can never hang indefinitely on
+// "Reading file…".
+const PARSE_STALL_MS = 60_000;
+function parseInWorker(
+  payload: { fileType: "xlsx"; buffer: ArrayBuffer } | { fileType: "csv"; text: string },
+  onProgress?: (p: WorkerProgress) => void,
+): Promise<Record<string, unknown>[]> {
   const worker = getImportWorker();
   if (!worker) return Promise.reject(new Error("worker-unavailable"));
   const id = ++workerReqId;
   return new Promise((resolve, reject) => {
-    const cleanup = () => { worker.removeEventListener("message", onMsg); worker.removeEventListener("error", onErr); };
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    const arm = () => { if (watchdog) clearTimeout(watchdog); watchdog = setTimeout(onStall, PARSE_STALL_MS); };
+    const cleanup = () => { if (watchdog) clearTimeout(watchdog); worker.removeEventListener("message", onMsg); worker.removeEventListener("error", onErr); };
+    const onStall = () => {
+      cleanup();
+      try { worker.terminate(); } catch { /* ignore */ }
+      importWorker = null; importWorkerBroken = false; // drop the hung worker; a fresh one is made next time
+      reject(new Error("parse-stalled"));
+    };
     const onMsg = (e: MessageEvent) => {
       const d = e.data;
       if (!d || d.id !== id) return;
+      if (d.type === "progress") { arm(); onProgress?.(d as WorkerProgress); return; } // progress keeps the watchdog alive
       cleanup();
       if (d.ok) resolve(d.rows); else reject(new Error(d.error || "Could not parse the file"));
     };
     const onErr = (ev: ErrorEvent) => { cleanup(); importWorkerBroken = true; importWorker = null; reject(new Error(ev.message || "worker-error")); };
     worker.addEventListener("message", onMsg);
     worker.addEventListener("error", onErr);
+    arm();
     // Structured-clone the buffer (no transfer) so it stays valid for a
     // main-thread fallback if the worker errors.
     worker.postMessage(payload);
@@ -203,6 +222,7 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
 
   const [importing, setImporting] = useState(false);
   const [importStage, setImportStage] = useState<string>("");
+  const [importPct, setImportPct] = useState(0);
   const [comparing, setComparing] = useState(false);
   const [finalising, setFinalising] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -303,11 +323,20 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
   };
   // Excel/CSV parse: off the main thread (Web Worker), with a main-thread
   // fallback using the SAME shared code so a large workbook never freezes the tab.
-  const parseTabular = async (payload: { fileType: "xlsx"; buffer: ArrayBuffer } | { fileType: "csv"; text: string }, fallback: () => Record<string, unknown>[]): Promise<Record<string, unknown>[]> => {
-    try { return await parseInWorker(payload); }
-    catch { return fallback(); }
+  // A "parse-stalled" from the worker is NOT retried on the main thread (that
+  // would just freeze the tab redoing the stuck work) — it surfaces as an error.
+  const parseTabular = async (
+    payload: { fileType: "xlsx"; buffer: ArrayBuffer } | { fileType: "csv"; text: string },
+    fallback: () => Record<string, unknown>[],
+    onProgress?: (p: WorkerProgress) => void,
+  ): Promise<Record<string, unknown>[]> => {
+    try { return await parseInWorker(payload, onProgress); }
+    catch (e: any) {
+      if (e?.message === "parse-stalled") throw new Error("Reading the file stalled — it may be too large or corrupt. Try a smaller file or split it into sheets.");
+      return fallback(); // worker unavailable / worker error → parse on the main thread
+    }
   };
-  const readFile = async (file: File): Promise<{ file_type: string; rows?: any[]; pdf_base64?: string; image_base64?: string; image_media_type?: string; raw_text?: string }> => {
+  const readFile = async (file: File, onProgress?: (p: WorkerProgress) => void): Promise<{ file_type: string; rows?: any[]; pdf_base64?: string; image_base64?: string; image_media_type?: string; raw_text?: string }> => {
     const name = file.name.toLowerCase();
     const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : "";
 
@@ -315,11 +344,11 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     if (IMAGE_MIME[ext] || file.type.startsWith("image/")) return { file_type: "image", image_base64: await fileToBase64(file), image_media_type: file.type || IMAGE_MIME[ext] || "image/png" };
     if (ext === "csv") {
       const text = await file.text();
-      return { file_type: "csv", rows: await parseTabular({ fileType: "csv", text }, () => parseCsvRows(text)) };
+      return { file_type: "csv", rows: await parseTabular({ fileType: "csv", text }, () => parseCsvRows(text), onProgress) };
     }
     if (ext === "xlsx" || ext === "xls" || (!ext && file.type.includes("sheet"))) {
       const buffer = await file.arrayBuffer();
-      return { file_type: "xlsx", rows: await parseTabular({ fileType: "xlsx", buffer }, () => parseWorkbookRows(buffer)) };
+      return { file_type: "xlsx", rows: await parseTabular({ fileType: "xlsx", buffer }, () => parseWorkbookRows(buffer), onProgress) };
     }
     if (ext === "json") {
       const text = await file.text();
@@ -334,21 +363,36 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     return { file_type: ext || "txt", raw_text: await file.text() };
   };
 
+  // Map a worker progress event to a friendly label + a percentage.
+  const progressLabel = (p: WorkerProgress): { label: string; pct: number } => {
+    switch (p.stage) {
+      case "reading": return { label: "Reading workbook…", pct: 12 };
+      case "sheets": return { label: `Detecting sheets${p.totalSheets ? ` (${p.totalSheets})` : ""}…`, pct: 20 };
+      case "extracting": {
+        const t = p.totalSheets || 1, s = (p.sheet ?? 0) + 1;
+        return { label: `Extracting data — sheet ${s}/${t}…`, pct: 20 + Math.round(55 * (s / t)) };
+      }
+      case "extracted": return { label: `Read ${p.rows ?? 0} row(s)…`, pct: 78 };
+      default: return { label: "Reading file…", pct: 6 };
+    }
+  };
+
   const handleImport = async (file: File) => {
     if (!filing) return;
     setImporting(true);
+    setImportStage("Uploading file…"); setImportPct(4);
     // Bound the whole import so a stalled connection can never leave the UI
     // stuck spinning — on timeout the invoke aborts and the user can retry.
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 180_000);
     try {
-      setImportStage("Reading file…");
-      const parsed = await readFile(file);
-      setImportStage("Uploading & normalising…");
+      const parsed = await readFile(file, (p) => { const { label, pct } = progressLabel(p); setImportStage(label); setImportPct(pct); });
+      setImportStage("Normalising & saving…"); setImportPct(88);
       const data = await Promise.race([
         invokeFn("tds-recon-import", { filing_id: filing.id, form_type: selForm, file_name: file.name, ...parsed }, { signal: ctrl.signal }),
         new Promise((_, rej) => ctrl.signal.addEventListener("abort", () => rej(new Error("aborted-timeout")))),
       ]) as any;
+      setImportPct(100);
       // A fresh import invalidates any prior comparison for this filing.
       await supabase.from("tds_recon_results").delete().eq("filing_id", filing.id);
       setResults(null);
@@ -362,6 +406,7 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     } finally {
       clearTimeout(timer);
       setImportStage("");
+      setImportPct(0);
       setImporting(false);
     }
   };
@@ -657,9 +702,17 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
                   <Button size="sm" variant={batch ? "outline" : "default"} className="gap-1"
                     disabled={importing || isFiled} onClick={() => fileInputRef.current?.click()}>
                     {importing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
-                    {importing ? (importStage || "Importing…") : batch ? "Re-import" : "Import"}
+                    {importing ? "Importing…" : batch ? "Re-import" : "Import"}
                   </Button>
                 </div>
+                {importing && (
+                  <div className="mt-2" aria-live="polite">
+                    <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                      <div className="h-full bg-primary transition-all duration-300" style={{ width: `${Math.max(4, importPct)}%` }} />
+                    </div>
+                    <p className="text-[11px] text-muted-foreground mt-1 truncate">{importStage || "Working…"}{importPct ? ` · ${importPct}%` : ""}</p>
+                  </div>
+                )}
                 {batch ? (
                   <div className="text-sm">
                     <span className="text-2xl font-bold">{batch.row_count}</span> <span className="text-muted-foreground">records</span>

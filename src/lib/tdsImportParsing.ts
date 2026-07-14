@@ -146,29 +146,39 @@ function buildHeaderNames(headerRow: unknown[]): string[] {
  * the section is captured even for files that have no section column.
  */
 export function extractSheetRows(grid: unknown[][], sectionHint: string | null): Record<string, unknown>[] {
-  const hasHeader = grid.some(r => headerScore(r || []) >= 3);
+  const n = grid.length;
+  // Score every row ONCE (header detection needs it twice — once to know the
+  // sheet has a header at all, once per row in the loop — so cache it; on a
+  // large sheet the double pass + per-cell token scan was a real cost).
+  const scores = new Array<number>(n);
+  let hasHeader = false;
+  for (let r = 0; r < n; r++) { const s = headerScore(grid[r] || []); scores[r] = s; if (s >= 3) hasHeader = true; }
   const rows: Record<string, unknown>[] = [];
   let headers: string[] | null = null;
   const MONTHS = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|q[1-4]|quarter)/i;
-  for (let r = 0; r < grid.length; r++) {
+  for (let r = 0; r < n; r++) {
     const row = grid[r] || [];
-    const nonEmpty = row.filter(c => c != null && String(c).trim() !== "");
-    if (nonEmpty.length === 0) continue;
-    if (headerScore(row) >= 3) { headers = buildHeaderNames(row); continue; }
+    // Count non-empty cells without allocating a filtered array (hot loop).
+    let nonEmptyCount = 0;
+    for (let i = 0; i < row.length; i++) { const c = row[i]; if (c != null && String(c).trim() !== "") nonEmptyCount++; }
+    if (nonEmptyCount === 0) continue;
+    if (scores[r] >= 3) { headers = buildHeaderNames(row); continue; }
     if (hasHeader && !headers) continue;                                 // pre-header strip (title / TAN-PAN)
     const first = String(row[0] ?? "").toLowerCase().trim();
     if (/\btotal\b/.test(first) || first.startsWith("total")) continue;  // summary row
-    if (nonEmpty.length <= 2 && MONTHS.test(first)) continue;            // month/quarter label
-    const hasPan = row.some(c => c != null && PAN_RE.test(String(c).toUpperCase().replace(/\s+/g, "")));
+    if (nonEmptyCount <= 2 && MONTHS.test(first)) continue;              // month/quarter label
+    let hasPan = false;
+    for (let i = 0; i < row.length; i++) { const c = row[i]; if (c != null && PAN_RE.test(String(c).toUpperCase().replace(/\s+/g, ""))) { hasPan = true; break; } }
     // Deductee lines carry a PAN — except genuine 206AA "PAN unavailable" cases,
     // which we admit only when a header is locked (inside a data block) and a
     // cell explicitly flags the missing PAN. Everything else PAN-less is a
     // total/label/ledger row and stays dropped.
-    const hasNoPanSentinel = headers != null && row.some(c => NO_PAN_RE.test(String(c ?? "")));
-    if (!hasPan && !hasNoPanSentinel) continue;
+    let admit = hasPan;
+    if (!admit && headers != null) { for (let i = 0; i < row.length; i++) { if (NO_PAN_RE.test(String(row[i] ?? ""))) { admit = true; break; } } }
+    if (!admit) continue;
     const obj: Record<string, unknown> = {};
-    if (headers) headers.forEach((h, i) => { obj[h] = row[i] ?? null; });
-    else row.forEach((c, i) => { obj[`Column${i + 1}`] = c ?? null; });
+    if (headers) for (let i = 0; i < headers.length; i++) obj[headers[i]] = row[i] ?? null;
+    else for (let i = 0; i < row.length; i++) obj[`Column${i + 1}`] = row[i] ?? null;
     if (sectionHint) obj["Section"] = sectionHint;
     rows.push(obj);
   }
@@ -181,14 +191,22 @@ export function extractSheetRows(grid: unknown[][], sectionHint: string | null):
  * in a plainly-named sheet like "Sheet1"/"Data"), every sheet is read by content
  * as a fallback. `gridOf(sheetName)` returns that sheet's raw grid.
  */
-export function extractWorkbookRows(sheetNames: string[], gridOf: (name: string) => unknown[][]): Record<string, unknown>[] {
+export function extractWorkbookRows(
+  sheetNames: string[],
+  gridOf: (name: string) => unknown[][],
+  onProgress?: (sheetIndex: number) => void,
+): Record<string, unknown>[] {
   const sectioned: Record<string, unknown>[] = [];
-  for (const sn of sheetNames) {
-    const sec = sectionFromSheetName(sn);
-    if (sec) sectioned.push(...extractSheetRows(gridOf(sn), sec));
+  for (let i = 0; i < sheetNames.length; i++) {
+    onProgress?.(i);
+    const sec = sectionFromSheetName(sheetNames[i]);
+    if (sec) sectioned.push(...extractSheetRows(gridOf(sheetNames[i]), sec));
   }
   if (sectioned.length) return sectioned;
   const all: Record<string, unknown>[] = [];
-  for (const sn of sheetNames) all.push(...extractSheetRows(gridOf(sn), null));
+  for (let i = 0; i < sheetNames.length; i++) {
+    onProgress?.(i);
+    all.push(...extractSheetRows(gridOf(sheetNames[i]), null));
+  }
   return all;
 }
