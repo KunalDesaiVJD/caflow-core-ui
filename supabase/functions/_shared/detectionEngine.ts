@@ -96,6 +96,8 @@ export interface ScrutinyData {
   tbPY?: TBRow[];
   /** fixed-asset register (fa_assets) — enables depreciation checks. Undefined if not loaded. */
   fa?: FaAssetRow[];
+  /** related-party names (related_parties.party_name) — enables the RPT checks. Empty = not captured. */
+  rp?: string[];
 }
 
 export interface ScrutinyContext {
@@ -1377,6 +1379,142 @@ const h_duplicate_ledger: CheckHandler = (rule, data) => {
   return out;
 };
 
+/**
+ * no_corresponding_entry — per voucher, flags when a `primary` leg is present but its `counterpart`
+ * leg is absent from the SAME voucher (e.g. a purchase with no creditor/cash counterpart; a loan
+ * repayment with no interest leg). Each leg is matched against its own name PLUS its resolved
+ * parent_group, so family words ("creditor") match a party leg named after the vendor.
+ * detection_logic: { check:"no_corresponding_entry", primary:string[], counterpart:string[], scope?, min_amount?, message? }.
+ */
+const h_no_corresponding_entry: CheckHandler = (rule, data) => {
+  const dl = rule.detection_logic as unknown as Record<string, unknown>;
+  const primary = (Array.isArray(dl.primary) ? dl.primary : []) as unknown[];
+  const counterpart = (Array.isArray(dl.counterpart) ? dl.counterpart : []) as unknown[];
+  if (!primary.length || !counterpart.length) return [];
+  const scope = dl.scope as Record<string, unknown> | undefined;
+  const minAmt = num(dl.min_amount, 0);
+  const tpl = (dl.message as string | undefined) ?? rule.audit_query_template;
+  const groupOf = groupResolver(data.tb);
+  const out: ScrutinyFinding[] = [];
+  for (const v of data.vouchers) {
+    if (!voucherInScope(v, scope, groupOf)) continue;
+    const legs = Array.isArray(v.line_items) ? v.line_items : [];
+    if (legs.length === 0) continue;
+    let hasP = false, hasC = false;
+    for (const leg of legs) {
+      const ln = String(leg.ledger_name ?? "");
+      const hay = `${ln} ${groupOf(ln)}`;
+      if (!hasP && kwMatch(hay, primary)) hasP = true;
+      if (!hasC && kwMatch(hay, counterpart)) hasC = true;
+    }
+    if (hasP && !hasC && Math.abs(num(v.amount)) >= minAmt) {
+      const acct = v.party_ledger ?? v.ledger_name ?? null;
+      out.push(finding(rule, {
+        account: acct,
+        amount: num(v.amount),
+        date: v.voucher_date,
+        flag_message: render(tpl, { account: acct ?? "", amount: fmtAmt(num(v.amount)), date: v.voucher_date }),
+        evidence: { voucher_number: v.voucher_number, legs: legs.map((l) => l.ledger_name) },
+      }));
+    }
+  }
+  return out;
+};
+
+/**
+ * adequacy — compares an `actual` TB sum against a statutory limit derived from a `base` sum
+ * (limit = (base − base_less) × pct/100) and flags per `op`. Covers dividend-vs-distributable-profit,
+ * DRR-vs-debentures, and director/partner remuneration vs book profit. Emits a needs-data advisory
+ * when the base is absent from the books (e.g. no debentures). Advisory: the auditor confirms.
+ * detection_logic: { check:"adequacy"|alias, actual:scope, base:scope, base_less?:scope, pct, op, min_base?, message? }.
+ */
+const h_adequacy: CheckHandler = (rule, data) => {
+  const dl = rule.detection_logic as unknown as Record<string, unknown>;
+  const actualScope = dl.actual as Record<string, unknown> | undefined;
+  const baseScope = dl.base as Record<string, unknown> | undefined;
+  if (!actualScope || !baseScope) return [];
+  const actual = sumScoped(data.tb, actualScope);
+  let base = sumScoped(data.tb, baseScope);
+  if (dl.base_less) base -= sumScoped(data.tb, dl.base_less as Record<string, unknown>);
+  if (base <= 0 || base < num(dl.min_base, 0)) {
+    return [finding(rule, { advisory: true, flag_message: `${rule.rule_name}: the statutory base is not present in the books — confirm manually.`, evidence: { reason: "no_base", base: Math.round(base) } })];
+  }
+  if (actual === 0) return [];
+  const pct = num(dl.pct ?? dl.required_pct ?? dl.threshold_pct ?? rule.threshold_value, 100);
+  const limit = (base * pct) / 100;
+  const op = String(dl.op ?? ">");
+  if (!applyOp(op, actual, limit)) return [];
+  const tpl = (dl.message as string | undefined) ?? rule.audit_query_template;
+  return [finding(rule, {
+    account: rule.rule_name,
+    amount: Math.round(actual),
+    flag_message: render(tpl, { account: rule.rule_name, amount: fmtAmt(Math.round(actual)), value: fmtAmt(Math.round(limit)), pct }),
+    evidence: { actual: Math.round(actual), base: Math.round(base), pct, limit: Math.round(limit), op, source: "keyword_estimate" },
+  })];
+};
+
+/**
+ * related_party — matches ledgers in scope against the captured related-party list (data.rp, from the
+ * related_parties master). If the list is empty it emits an honest needs-data advisory rather than
+ * silently finding nothing. Modes are expressed purely by the rule's scope (investments, guarantees,
+ * debtors/sales, or all) so one handler serves every RPT rule.
+ * detection_logic: { check:"related_party"|alias, scope?, message? }.
+ */
+const h_related_party: CheckHandler = (rule, data) => {
+  const rp = Array.isArray(data.rp) ? data.rp.filter(Boolean) : [];
+  if (rp.length === 0) {
+    return [finding(rule, { advisory: true, flag_message: `${rule.rule_name}: the related-party list has not been captured for this client — enter the related parties to enable this check.`, evidence: { reason: "no_related_party_master" } })];
+  }
+  const dl = rule.detection_logic as unknown as Record<string, unknown>;
+  const scope = dl.scope as Record<string, unknown> | undefined;
+  const tpl = (dl.message as string | undefined) ?? rule.audit_query_template;
+  const rpNorm = rp.map((n) => normName(n)).filter((n) => n.length >= 3);
+  const isRP = (name: string): boolean => {
+    const n = normName(name);
+    return !!n && rpNorm.some((r) => n.includes(r) || r.includes(n));
+  };
+  const out: ScrutinyFinding[] = [];
+  for (const r of data.tb) {
+    if (!accountInScope(r, scope)) continue;
+    const bal = Math.abs(num(r.closing_balance));
+    if (bal === 0 || !isRP(r.ledger_name)) continue;
+    out.push(finding(rule, {
+      account: r.ledger_name,
+      amount: bal,
+      flag_message: render(tpl, { account: r.ledger_name, amount: fmtAmt(bal) }),
+      evidence: { related_party: true, parent_group: r.parent_group },
+    }));
+  }
+  return out;
+};
+
+/**
+ * balance_decreased — flags a scoped ledger whose balance FELL during the year (opening > closing),
+ * i.e. the reserve/fund was utilised. Used for securities-premium utilisation (Sec 52).
+ * detection_logic: { check:"balance_decreased"|alias, scope?, min_drop?, message? }.
+ */
+const h_balance_decreased: CheckHandler = (rule, data) => {
+  const dl = rule.detection_logic as unknown as Record<string, unknown>;
+  const scope = dl.scope as Record<string, unknown> | undefined;
+  const minDrop = num(dl.min_drop, 1);
+  const tpl = (dl.message as string | undefined) ?? rule.audit_query_template;
+  const out: ScrutinyFinding[] = [];
+  for (const r of data.tb) {
+    if (!accountInScope(r, scope)) continue;
+    const open = Math.abs(num(r.opening_balance));
+    const close = Math.abs(num(r.closing_balance));
+    const drop = open - close;
+    if (open <= 0 || drop < minDrop) continue;
+    out.push(finding(rule, {
+      account: r.ledger_name,
+      amount: Math.round(drop),
+      flag_message: render(tpl, { account: r.ledger_name, amount: fmtAmt(Math.round(drop)), value: fmtAmt(Math.round(open)) }),
+      evidence: { opening: Math.round(open), closing: Math.round(close), utilised: Math.round(drop) },
+    }));
+  }
+  return out;
+};
+
 // ---------------------------------------------------------------------------
 // Registry + runner
 // ---------------------------------------------------------------------------
@@ -1430,6 +1568,34 @@ export const GENERIC_HANDLERS: Record<string, CheckHandler> = {
   tds_shortfall: h_tds_shortfall,
   ratio_change: h_ratio_change,
   duplicate_ledger: h_duplicate_ledger,
+
+  // Cross-leg "booked one side, not the other" (voucher grain, uses line_items + resolved groups)
+  no_corresponding_entry: h_no_corresponding_entry,
+  repayment_without_interest: h_no_corresponding_entry,
+
+  // Statutory adequacy: actual vs (base × pct). Emits needs-data when the base is absent.
+  adequacy: h_adequacy,
+  dividend_adequacy: h_adequacy,
+  drr_adequacy: h_adequacy,
+  remuneration_limit: h_adequacy,
+  partner_remuneration_limit: h_adequacy,
+
+  // Related-party family — one handler, mode expressed by the rule's scope. Honest needs-data
+  // advisory until the related_parties master is captured.
+  related_party: h_related_party,
+  rpt_disclosure_missing: h_related_party,
+  guarantee_related_party: h_related_party,
+  investment_related_party: h_related_party,
+  related_party_sales: h_related_party,
+
+  // Reserve/fund utilised during the year (securities premium, Sec 52)
+  balance_decreased: h_balance_decreased,
+  premium_utilization: h_balance_decreased,
+
+  // Aliases onto existing handlers — same logic, legacy check names kept so the rules resolve.
+  msme_payment_delay: h_ageing,      // creditors outstanding beyond N days (auditor confirms MSME status)
+  inventory_ageing: h_ageing,        // stock ledgers with no movement beyond N days
+  guarantee_disclosure: h_keyword_balance, // loan/guarantee ledgers present -> confirm disclosure
 };
 
 export const GENERIC_CHECK_KINDS = Object.keys(GENERIC_HANDLERS);

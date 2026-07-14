@@ -36,8 +36,8 @@ const vch = (p: Partial<VoucherRow> & { amount: number; voucher_date: string }):
 });
 
 const FY: ScrutinyContext = { financialYearStart: "2025-04-01", financialYearEnd: "2026-03-31", today: "2026-03-31" };
-const run = (r: ScrutinyRule, data: { tb?: TBRow[]; vouchers?: VoucherRow[]; tbPY?: TBRow[]; fa?: FaAssetRow[] }, ctx: ScrutinyContext = FY) =>
-  runDetection([r], { tb: data.tb ?? [], vouchers: data.vouchers ?? [], tbPY: data.tbPY, fa: data.fa }, ctx, { emitAdvisoryForUnhandled: false }).findings;
+const run = (r: ScrutinyRule, data: { tb?: TBRow[]; vouchers?: VoucherRow[]; tbPY?: TBRow[]; fa?: FaAssetRow[]; rp?: string[] }, ctx: ScrutinyContext = FY) =>
+  runDetection([r], { tb: data.tb ?? [], vouchers: data.vouchers ?? [], tbPY: data.tbPY, fa: data.fa, rp: data.rp }, ctx, { emitAdvisoryForUnhandled: false }).findings;
 
 // ---- account-grain handlers ----------------------------------------------
 
@@ -292,7 +292,7 @@ describe("runDetection coverage", () => {
   it("handles Tier A and reports Tier B/C as unhandled with an advisory finding", () => {
     const rules: ScrutinyRule[] = [
       rule({ rule_id: "BKR-002", category: "BKR", detection_level: "account", detection_logic: { check: "keyword_balance", keywords: ["suspense"], nonzero: true } }),
-      rule({ rule_id: "CRED-003", category: "CRED", detection_logic: { check: "msme_payment_delay", threshold_days: 45 } }), // Tier C, no handler
+      rule({ rule_id: "ZZZ-999", category: "ZZZ", detection_logic: { check: "not_a_registered_check" } }), // no handler
     ];
     const res = runDetection(
       rules,
@@ -301,9 +301,9 @@ describe("runDetection coverage", () => {
     );
     expect(res.coverage.rulesTotal).toBe(2);
     expect(res.coverage.rulesHandled).toBe(1);
-    expect(res.coverage.unhandled).toEqual([{ rule_id: "CRED-003", check: "msme_payment_delay" }]);
+    expect(res.coverage.unhandled).toEqual([{ rule_id: "ZZZ-999", check: "not_a_registered_check" }]);
     const advisory = res.findings.find((f) => f.advisory);
-    expect(advisory?.rule_id).toBe("CRED-003");
+    expect(advisory?.rule_id).toBe("ZZZ-999");
     expect(res.findings.some((f) => !f.advisory && f.rule_id === "BKR-002")).toBe(true);
   });
 
@@ -793,6 +793,100 @@ describe("duplicate_ledger — same party entered twice in a group", () => {
     expect(out).toHaveLength(1);
     expect(out[0].evidence?.ledger_a).toBe("Balvantbhai Parmar");
     expect(out[0].evidence?.ledger_b).toBe("Balvant Parmar");
+  });
+});
+
+describe("no_corresponding_entry — one side booked, counterpart missing (cross-leg)", () => {
+  it("flags a purchase with no creditor/cash counterpart; leaves a properly-paired purchase alone", () => {
+    const r = rule({
+      rule_id: "EXP-001", category: "EXP", detection_level: "voucher",
+      detection_logic: { check: "no_corresponding_entry", primary: ["purchase"], counterpart: ["creditor", "payable", "cash", "bank"] },
+      audit_query_template: "Purchase {amount} on {date} has no creditor/payment counterpart.",
+    });
+    const out = run(r, {
+      tb: [tb({ ledger_name: "Acme Supplies", parent_group: "Sundry Creditors" })],
+      vouchers: [
+        // dangling: purchase leg, no creditor/cash leg
+        vch({ amount: 50000, voucher_date: "2025-06-01", party_ledger: "X", line_items: [
+          { ledger_name: "Purchase Account", dr_cr: "Dr", amount: 50000 },
+          { ledger_name: "Suspense", dr_cr: "Cr", amount: 50000 },
+        ] }),
+        // properly paired: creditor leg resolved via parent_group "Sundry Creditors"
+        vch({ amount: 40000, voucher_date: "2025-06-02", party_ledger: "Acme Supplies", line_items: [
+          { ledger_name: "Purchase Account", dr_cr: "Dr", amount: 40000 },
+          { ledger_name: "Acme Supplies", dr_cr: "Cr", amount: 40000 },
+        ] }),
+      ],
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].amount).toBe(50000);
+  });
+});
+
+describe("adequacy — actual vs (base x pct)", () => {
+  it("flags a dividend exceeding distributable profit", () => {
+    const r = rule({
+      rule_id: "CAP-002", category: "CAP", detection_level: "account",
+      detection_logic: { check: "dividend_adequacy", actual: { ledger_keywords: ["dividend"] }, base: { parent_group_keywords: ["reserve"] }, pct: 100, op: ">" },
+      audit_query_template: "Dividend {amount} exceeds distributable profit {value}.",
+    });
+    const out = run(r, { tb: [
+      tb({ ledger_name: "Dividend Paid", parent_group: "Appropriations", closing_balance: 500000, balance_type: "Dr" }),
+      tb({ ledger_name: "General Reserve", parent_group: "Reserves & Surplus", closing_balance: 300000, balance_type: "Cr" }),
+    ] });
+    expect(out).toHaveLength(1);
+    expect(out[0].evidence?.limit).toBe(300000);
+  });
+
+  it("emits a needs-data advisory when the statutory base is absent (e.g. no debentures)", () => {
+    const r = rule({
+      rule_id: "CAP-007", detection_level: "account",
+      detection_logic: { check: "drr_adequacy", actual: { ledger_keywords: ["debenture redemption"] }, base: { ledger_keywords: ["debenture"] }, pct: 25, op: "<" },
+    });
+    const out = run(r, { tb: [tb({ ledger_name: "Share Capital", parent_group: "Capital Account", closing_balance: 100000 })] });
+    expect(out).toHaveLength(1);
+    expect(out[0].advisory).toBe(true);
+  });
+});
+
+describe("related_party — needs the RP master, and matches it when captured", () => {
+  const r = rule({
+    rule_id: "RPT-003", category: "RPT", detection_level: "account",
+    detection_logic: { check: "rpt_disclosure_missing" },
+    audit_query_template: "Related party {account} carries {amount} - confirm AS-18 disclosure.",
+  });
+  it("emits an honest needs-data advisory when the related-party list is not captured", () => {
+    const out = run(r, { tb: [tb({ ledger_name: "Sister Co", parent_group: "Sundry Creditors", closing_balance: 50000 })] });
+    expect(out).toHaveLength(1);
+    expect(out[0].advisory).toBe(true);
+  });
+  it("flags ledgers matching the captured related-party list", () => {
+    const out = run(r, {
+      tb: [
+        tb({ ledger_name: "Sister Co Pvt Ltd", parent_group: "Sundry Creditors", closing_balance: 50000 }),
+        tb({ ledger_name: "Unrelated Vendor", parent_group: "Sundry Creditors", closing_balance: 90000 }),
+      ],
+      rp: ["Sister Co Pvt Ltd"],
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].account).toBe("Sister Co Pvt Ltd");
+    expect(out[0].advisory).toBeUndefined();
+  });
+});
+
+describe("balance_decreased — reserve/fund utilised during the year", () => {
+  it("flags securities premium that fell during the year", () => {
+    const r = rule({
+      rule_id: "CAP-003", category: "CAP", detection_level: "account",
+      detection_logic: { check: "premium_utilization", scope: { ledger_keywords: ["securities premium"] } },
+      audit_query_template: "Securities premium reduced by {amount} - confirm Sec 52 purpose.",
+    });
+    const out = run(r, { tb: [
+      tb({ ledger_name: "Securities Premium", parent_group: "Reserves & Surplus", opening_balance: 1000000, closing_balance: 400000, balance_type: "Cr" }),
+      tb({ ledger_name: "General Reserve", parent_group: "Reserves & Surplus", opening_balance: 100000, closing_balance: 200000, balance_type: "Cr" }),
+    ] });
+    expect(out).toHaveLength(1);
+    expect(out[0].amount).toBe(600000);
   });
 });
 
