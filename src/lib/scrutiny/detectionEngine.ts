@@ -1214,6 +1214,70 @@ const h_fully_depreciated_in_use: CheckHandler = (rule, data) => {
   })];
 };
 
+/** payee looks like a business (194C rate 2%) vs an individual/HUF (194C rate 1%). */
+const TDS_ENTITY_RE = /pvt|private|limited|\bltd\b|llp|company|corp|enterprise|industr|trader|logistic|roadway|transport|carrier|freight|associat|\bco\b|services|solutions/i;
+
+/**
+ * tds_shortfall — precise per-party TDS coverage from the voucher legs (line_items). For each party,
+ * sums the expense base per section (Dr legs matching that section's keywords, EXCLUDING the party's
+ * own leg + GST/bank/TDS/round-off legs) and the actual TDS deducted (any tds/194 leg), then flags a
+ * party whose actual TDS falls short of required = base x rate (deductee-type aware: 194C 2% for a
+ * business payee, 1% for an individual). Advisory — the auditor confirms section / RCM / deductee.
+ * detection_logic: { check:"tds_shortfall", sections:[{section,keywords,rate,individual_rate?,threshold}], tolerance?, message? }.
+ */
+const h_tds_shortfall: CheckHandler = (rule, data) => {
+  const dl = rule.detection_logic as unknown as Record<string, unknown>;
+  const sections = (Array.isArray(dl.sections) ? dl.sections : []) as Array<Record<string, unknown>>;
+  if (!sections.length) return [];
+  const tol = num(dl.tolerance, 0.05);
+  const excludeRe = /igst|cgst|sgst|input|output|bank|cash|tds|194|receivable|payable|round|discount|gst/i;
+  const tdsRe = /tds|tax deducted|194[a-z]?/i;
+  const tpl = (dl.message as string | undefined) ?? rule.audit_query_template;
+
+  const acc = new Map<string, { bySection: Map<string, number>; tds: number; sample: VoucherRow }>();
+  for (const v of data.vouchers) {
+    const party = v.party_ledger ?? "";
+    if (!party || /^cash$|^bank/i.test(party.trim())) continue;
+    const pk = lc(party);
+    const rec = acc.get(pk) ?? acc.set(pk, { bySection: new Map(), tds: 0, sample: v }).get(pk)!;
+    for (const leg of Array.isArray(v.line_items) ? v.line_items : []) {
+      const ln = String(leg.ledger_name ?? "");
+      const amt = Math.abs(num(leg.amount));
+      if (tdsRe.test(ln)) { rec.tds += amt; continue; }
+      if (lc(ln) === pk || excludeRe.test(ln) || sideOf(leg.dr_cr) !== "Dr") continue;
+      for (const s of sections) {
+        if (kwMatch(ln, (Array.isArray(s.keywords) ? s.keywords : []) as unknown[])) {
+          const sec = String(s.section ?? "");
+          rec.bySection.set(sec, (rec.bySection.get(sec) ?? 0) + amt);
+        }
+      }
+    }
+  }
+
+  const out: ScrutinyFinding[] = [];
+  for (const [, rec] of acc) {
+    let domSec = "", domBase = 0;
+    for (const [sec, b] of rec.bySection) if (b > domBase) { domBase = b; domSec = sec; }
+    if (!domSec) continue;
+    const scfg = sections.find((s) => String(s.section) === domSec);
+    if (!scfg) continue;
+    if (domBase < num(scfg.threshold, 30000)) continue;
+    const party = rec.sample.party_ledger ?? "";
+    const isEntity = TDS_ENTITY_RE.test(party);
+    const rate = isEntity ? num(scfg.rate, 0.02) : num(scfg.individual_rate ?? scfg.rate, 0.01);
+    const required = domBase * rate;
+    if (rec.tds >= required * (1 - tol)) continue;
+    const shortfall = Math.round(required - rec.tds);
+    out.push(finding(rule, {
+      account: party,
+      amount: shortfall,
+      flag_message: render(tpl, { account: party, amount: fmtAmt(shortfall), pct: Math.round(rate * 10000) / 100, value: fmtAmt(Math.round(domBase)) }),
+      evidence: { section: domSec, base: Math.round(domBase), actual_tds: Math.round(rec.tds), expected_rate_pct: rate * 100, required: Math.round(required), shortfall, deductee: isEntity ? "business (2%)" : "individual (1%)" },
+    }));
+  }
+  return out;
+};
+
 // ---------------------------------------------------------------------------
 // Registry + runner
 // ---------------------------------------------------------------------------
@@ -1264,6 +1328,7 @@ export const GENERIC_HANDLERS: Record<string, CheckHandler> = {
   ageing: h_ageing,
   ratio: h_ratio,
   fully_depreciated_in_use: h_fully_depreciated_in_use,
+  tds_shortfall: h_tds_shortfall,
 };
 
 export const GENERIC_CHECK_KINDS = Object.keys(GENERIC_HANDLERS);
