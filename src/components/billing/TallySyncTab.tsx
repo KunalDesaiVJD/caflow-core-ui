@@ -40,7 +40,7 @@ interface InvRow {
 }
 interface StageRow {
   id: string; voucher_number: string; voucher_date: string; party_ledger: string;
-  amount: number; tds_amount: number; bank_ledger: string | null; match_method: string;
+  amount: number; tds_amount: number; kasar_amount: number; bank_ledger: string | null; match_method: string;
   match_confidence: number; status: string; matched_client_id: string | null; error: string | null;
 }
 
@@ -131,8 +131,16 @@ export default function TallySyncTab({ firmId }: Props) {
         p_created_by: user?.id, p_financial_year: fyFromDate(s.voucher_date),
       });
       if (error) throw error;
+      // mirror a Tally kasar/write-off into CAFlow ([tally-sync] tag stops it bouncing back)
+      if (Number(s.kasar_amount) > 0) {
+        await sb.from("billing_kasars").insert({
+          firm_id: firmId, client_id: s.matched_client_id, kasar_date: s.voucher_date,
+          amount: Number(s.kasar_amount), invoice_id: null, financial_year: fyFromDate(s.voucher_date),
+          narration: `Kasar from Tally receipt ${s.voucher_number || ""} [tally-sync]`,
+        });
+      }
       await sb.from("tally_receipt_staging").update({ status: "imported", receipt_id: receiptId, imported_at: new Date().toISOString(), reviewed_by: user?.id }).eq("id", s.id);
-      toast({ title: `Imported receipt ${s.voucher_number} (₹${fmt(s.amount)}).` });
+      toast({ title: `Imported receipt ${s.voucher_number} (₹${fmt(s.amount)}${Number(s.kasar_amount) > 0 ? ` + ₹${fmt(s.kasar_amount)} kasar` : ""}).` });
       fetchData();
     } catch (e: any) { toast({ title: "Import failed", description: e.message, variant: "destructive" }); }
     finally { setBusy(null); }
@@ -242,7 +250,7 @@ export default function TallySyncTab({ firmId }: Props) {
               {staging.filter((s) => s.status !== "ignored").map((s) => (
                 <TableRow key={s.id}>
                   <TableCell className="font-medium">{s.voucher_number}<div className="text-xs text-muted-foreground">{s.voucher_date}</div></TableCell>
-                  <TableCell className="text-xs">{s.party_ledger}{Number(s.tds_amount) > 0 ? <span className="text-muted-foreground"> · TDS ₹{fmt(s.tds_amount)}</span> : null}</TableCell>
+                  <TableCell className="text-xs">{s.party_ledger}{Number(s.tds_amount) > 0 ? <span className="text-muted-foreground"> · TDS ₹{fmt(s.tds_amount)}</span> : null}{Number(s.kasar_amount) > 0 ? <span className="text-amber-600"> · kasar ₹{fmt(s.kasar_amount)}</span> : null}</TableCell>
                   <TableCell className="text-right">₹{fmt(s.amount)}</TableCell>
                   <TableCell>
                     {s.status === "imported" ? <Badge className="bg-emerald-600 gap-1"><CheckCircle2 size={11} /> Imported</Badge>

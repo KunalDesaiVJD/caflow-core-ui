@@ -31,7 +31,7 @@ require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') }
 const axios = require('axios');
 const { createClient } = require('@supabase/supabase-js');
 const {
-  buildVoucherXml, invoiceToVoucherInput, buildDeleteByRemoteId, defaultResolveIncome, escXml,
+  buildVoucherXml, invoiceToVoucherInput, buildDeleteByRemoteId, buildJournalXml, defaultResolveIncome, escXml,
 } = require('./voucher-xml');
 const { matchName, normName } = require('./matcher');
 
@@ -271,6 +271,41 @@ async function processForwardQueue(sb, company) {
   for (const q of queue) {
     await sb.from('tally_sync_queue').update({ status: 'processing', attempts: q.attempts + 1 }).eq('id', q.id);
     try {
+      // DELETE action (doc voided/deleted in CAFlow) -> remove its Tally voucher.
+      if (q.action === 'delete') {
+        const p = q.payload || {};
+        const vchType = p.document_type === 'credit_note' ? 'Credit Note' : 'Sales';
+        const date = String(p.invoice_date || '').slice(0, 10).replace(/-/g, '');
+        const resp = parseImport(await postXml(buildDeleteByRemoteId(company, vchType, date, p.voucher_number, p.remote_id)));
+        // "does not exist" / "cannot delete" = already gone (goal met). A company/connection
+        // error is transient -> throw so it retries instead of falsely marking done.
+        if (resp.error && /could not set|current company|connect|timeout/i.test(resp.error)) throw new Error(resp.error);
+        await sb.from('tally_sync_queue').update({ status: 'done', last_error: null, processed_at: new Date().toISOString() }).eq('id', q.id);
+        if (q.invoice_id) await sb.from('tally_voucher_log').delete().eq('invoice_id', q.invoice_id).eq('direction', 'forward');
+        console.log(`    OK delete ${p.voucher_number} (deleted=${resp.deleted})`);
+        continue;
+      }
+      // KASAR action (CAFlow write-off) -> Tally Journal: Dr Rebate/Kasar, Cr Party.
+      if (q.action === 'kasar') {
+        const p = q.payload || {};
+        const { data: client } = await sb.from('clients').select('id,name').eq('id', p.client_id).single();
+        const cand = await resolvePartyLedger(sb, p.client_id, client ? client.name : '');
+        const partyLedger = ciLedger.get(String(cand).toLowerCase()) || cand;
+        let kasarLedger = null;
+        const { data: em } = await sb.from('tally_element_map').select('tally_ledger_name')
+          .eq('firm_id', CFG.firmId).eq('element_type', 'discount').eq('status', 'approved').maybeSingle();
+        if (em && em.tally_ledger_name) kasarLedger = em.tally_ledger_name;
+        if (!kasarLedger) kasarLedger = [...ciLedger.values()].find((n) => /rebate|kasar|discount allowed|write.?off|bad.?debt/i.test(n)) || 'Rebate & Kasar';
+        const date = String(p.kasar_date || '').slice(0, 10).replace(/-/g, '');
+        const resp = parseImport(await postXml(buildJournalXml(company, {
+          date, remoteId: `KASAR-${p.kasar_id}`, drLedger: kasarLedger, crLedger: partyLedger,
+          amount: Number(p.amount) || 0, narration: p.narration || 'Kasar write-off',
+        })));
+        if (resp.error) throw new Error(resp.error);
+        await sb.from('tally_sync_queue').update({ status: 'done', tally_vch_id: resp.lastVch, last_error: null, processed_at: new Date().toISOString() }).eq('id', q.id);
+        console.log(`    OK kasar Cr ${partyLedger} / Dr ${kasarLedger} Rs${p.amount} (vch#${resp.lastVch})`);
+        continue;
+      }
       const { data: inv } = await sb.from('invoices').select('*').eq('id', q.invoice_id).single();
       const { data: client } = await sb.from('clients').select('id,name').eq('id', inv.client_id).single();
       const candidate = await resolvePartyLedger(sb, client.id, client.name);
@@ -330,10 +365,13 @@ function parseReceiptVouchers(xml, groups) {
       else if (l.amount > 0) { if (!party || l.amount > party.amount) party = l; } // debtor credited (positive)
     }
     if (!party) continue; // not a party receipt (e.g. capital/other) -> skip
+    // Kasar/discount written off = what the party was settled by, minus cash + TDS.
+    const bankAbs = bank ? Math.abs(bank.amount) : party.amount;
+    const kasar = Math.round((party.amount - bankAbs - tds) * 100) / 100;
     out.push({
       tally_guid: guid, voucher_number: number, voucher_date,
       party_ledger: party.ledger, bank_ledger: bank ? bank.ledger : null,
-      amount: bank ? Math.abs(bank.amount) : party.amount, tds_amount: tds,
+      amount: bankAbs, tds_amount: tds, kasar_amount: kasar > 0.5 ? kasar : 0,
       narration, raw: { legs },
     });
   }
@@ -368,8 +406,8 @@ async function pullAndStageReceipts(sb, company, autoImport) {
     const row = {
       firm_id: CFG.firmId, tally_company_name: company, tally_guid: r.tally_guid,
       voucher_number: r.voucher_number, voucher_date: r.voucher_date, party_ledger: r.party_ledger,
-      bank_ledger: r.bank_ledger, amount: r.amount, tds_amount: r.tds_amount, narration: r.narration,
-      matched_client_id: mt.clientId, match_method: mt.method, match_confidence: mt.conf,
+      bank_ledger: r.bank_ledger, amount: r.amount, tds_amount: r.tds_amount, kasar_amount: r.kasar_amount || 0,
+      narration: r.narration, matched_client_id: mt.clientId, match_method: mt.method, match_confidence: mt.conf,
       status: mt.clientId ? 'matched' : 'pending', raw: r.raw,
     };
     const { data: ins, error: insErr } = await sb.from('tally_receipt_staging').insert(row).select('id').single();
@@ -395,6 +433,15 @@ async function importStagedReceipt(sb, s) {
     p_gstin: null, p_created_by: null, p_financial_year: fy,
   });
   if (error) throw error;
+  // Kasar written off in the Tally receipt -> mirror it in CAFlow. The "[tally-sync]"
+  // tag makes the forward trigger skip it (so it isn't posted back to Tally).
+  if (Number(s.kasar_amount) > 0) {
+    await sb.from('billing_kasars').insert({
+      firm_id: CFG.firmId, client_id: s.matched_client_id, kasar_date: s.voucher_date,
+      amount: Number(s.kasar_amount), invoice_id: null, financial_year: fy,
+      narration: `Kasar from Tally receipt ${s.voucher_number || ''} [tally-sync]`,
+    });
+  }
   await sb.from('tally_receipt_staging').update({ status: 'imported', receipt_id: receiptId, imported_at: new Date().toISOString() }).eq('id', s.id);
 }
 function fyFromDate(d) {
