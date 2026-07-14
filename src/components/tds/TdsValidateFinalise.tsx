@@ -433,9 +433,12 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
       const { data: res } = await supabase.from("tds_recon_results").select("*").eq("filing_id", filing.id);
       setResults((res as ReconResult[]) || []);
       const s = data.summary || {};
-      const excl = s.excluded_other_quarter ?? 0;
-      const quarterNote = excl > 0 ? ` · ${excl} row(s) from other quarters were auto-excluded (they reconcile under their own quarter)` : "";
-      toast({ title: `Stage 1 · Data validation complete${s.filing_quarter ? ` (${s.filing_quarter})` : ""}`, description: `${s.matched ?? 0} matched · ${s.mismatched ?? 0} mismatched${quarterNote}` });
+      const notes: string[] = [];
+      if ((s.excluded_other_quarter ?? 0) > 0) notes.push(`${s.excluded_other_quarter} from other quarters`);
+      if ((s.excluded_other_form ?? 0) > 0) notes.push(`${s.excluded_other_form} for other forms (e.g. 192B salary → 24Q)`);
+      if ((s.aggregated ?? 0) > 0) notes.push(`${s.aggregated} reconciled in aggregate`);
+      const note = notes.length ? ` · auto-handled: ${notes.join(", ")}` : "";
+      toast({ title: `Stage 1 · Data validation complete${s.filing_quarter ? ` (${s.filing_quarter}${s.filing_form ? " " + s.filing_form : ""})` : ""}`, description: `${s.matched ?? 0} matched · ${s.mismatched ?? 0} mismatched${note}` });
     } catch (e: any) {
       toast({ title: "Validation failed", description: e.message, variant: "destructive" });
     }

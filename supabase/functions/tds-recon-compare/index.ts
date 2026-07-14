@@ -203,6 +203,27 @@ function normQuarter(q: unknown): "Q1" | "Q2" | "Q3" | "Q4" | null {
   const m = String(q ?? "").match(/[1-4]/);
   return m ? (("Q" + m[0]) as "Q1" | "Q2" | "Q3" | "Q4") : null;
 }
+/** Which TDS RETURN FORM a section belongs to. A client working file often
+ * carries ALL of a party's TDS in ONE file — salary (192B → 24Q), non-salary
+ * resident (194x → 26Q), non-resident (195/196 → 27Q) and TCS (206C → 27EQ) — so
+ * a 26Q filing must not compare the 24Q salary rows (they reconcile under the
+ * 24Q filing). Returns null for an unrecognised/blank section (kept, never
+ * excluded). */
+function formOfSection(code: string | null): "24Q" | "26Q" | "27Q" | "27EQ" | null {
+  if (!code) return null;
+  const c = code.toUpperCase().replace(/\s+/g, "");
+  // Order matters — specific before the general 194x pattern.
+  if (/^192/.test(c)) return "24Q";                     // salary
+  if (/^206C/.test(c)) return "27EQ";                   // TCS
+  if (/^195|^196/.test(c)) return "27Q";                // non-resident
+  if (/^19[34]/.test(c)) return "26Q";                  // 193 + 194x resident non-salary
+  return null;                                          // 197-199/other → unknown, keep
+}
+/** Filing form as "24Q"/"26Q"/"27Q"/"27EQ" from "26Q"/"26q"/etc. */
+function normForm(f: unknown): string | null {
+  const m = String(f ?? "").toUpperCase().match(/(24Q|26Q|27Q|27EQ|27EQ)/);
+  return m ? m[1] : null;
+}
 /** Indian FY quarter of an ISO date within FY starting `fyStart` (Apr of that
  * year): Q1 Apr-Jun & Q2 Jul-Sep & Q3 Oct-Dec are in `fyStart`; Q4 Jan-Mar is in
  * `fyStart+1`. Returns null if the date is outside this FY (or unparseable). */
@@ -482,7 +503,7 @@ serve(async (req) => {
     if (!filing_id) return json({ error: "filing_id is required" }, 400);
 
     const { data: filing, error: fErr } = await supabase
-      .from("tds_filings").select("id, firm_id, quarter, financial_year").eq("id", filing_id).single();
+      .from("tds_filings").select("id, firm_id, quarter, financial_year, tds_forms").eq("id", filing_id).single();
     if (fErr || !filing) return json({ error: "Filing not found" }, 404);
 
     // AUTHORIZE — the service-role client bypasses RLS, so verify the caller
@@ -506,7 +527,7 @@ serve(async (req) => {
     // A caller-supplied batch_id must belong to THIS filing — otherwise one could
     // reconcile a filing against another (even same-firm) filing's imported rows.
     const { data: batchRow } = await supabase
-      .from("tds_import_batches").select("id, filing_id").eq("id", batchId).maybeSingle();
+      .from("tds_import_batches").select("id, filing_id, form_type").eq("id", batchId).maybeSingle();
     if (!batchRow || batchRow.filing_id !== filing_id) {
       return json({ error: "That import batch does not belong to this filing." }, 400);
     }
@@ -587,14 +608,25 @@ serve(async (req) => {
     // date is unparseable or outside this FY are kept so nothing is silently lost.
     const fyStart = fyStartYear(filing.financial_year);
     const filingQ = normQuarter(filing.quarter);
+    // Which return FORM this filing is (from the batch, else the filing's forms).
+    const filingForm = normForm(batchRow.form_type) ?? normForm(Array.isArray((filing as any).tds_forms) ? (filing as any).tds_forms[0] : (filing as any).tds_forms);
     let excludedOtherQuarter = 0;
-    const iRecs = (filingQ && fyStart != null)
-      ? iRecsAll.filter((r) => {
-          const q = r.iso ? quarterOfIso(r.iso, fyStart) : null;
-          if (q && q !== filingQ) { excludedOtherQuarter++; return false; }
-          return true;
-        })
-      : iRecsAll;
+    let excludedOtherForm = 0;
+    const iRecs = iRecsAll.filter((r) => {
+      // FORM filter — a 26Q filing must not compare a client file's salary
+      // (192B/24Q), non-resident (27Q) or TCS (27EQ) rows; they reconcile under
+      // their own form's filing. Unrecognised sections are kept.
+      if (filingForm) {
+        const secForm = formOfSection(canonicalSection(r.section, aliases));
+        if (secForm && secForm !== filingForm) { excludedOtherForm++; return false; }
+      }
+      // QUARTER filter — a whole-FY working file: keep only THIS quarter's rows.
+      if (filingQ && fyStart != null) {
+        const q = r.iso ? quarterOfIso(r.iso, fyStart) : null;
+        if (q && q !== filingQ) { excludedOtherQuarter++; return false; }
+      }
+      return true;
+    });
 
     // ── Deterministic pairing: rank ALL candidate pairs, assign best-first 1:1 ──
     const candidates: { oi: number; ii: number; score: number }[] = [];
@@ -746,7 +778,10 @@ serve(async (req) => {
       // Imported rows that belong to OTHER quarters of the FY (excluded from this
       // quarter's reconciliation — they reconcile under their own quarter's filing).
       excluded_other_quarter: excludedOtherQuarter,
+      // Client rows for a DIFFERENT form (e.g. 192B salary/24Q in a 26Q file).
+      excluded_other_form: excludedOtherForm,
       filing_quarter: filingQ,
+      filing_form: filingForm,
       // Records reconciled at the party level (office challan = Σ client bills).
       aggregated: aggregatedCount,
     };
