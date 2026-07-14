@@ -433,7 +433,9 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
       const { data: res } = await supabase.from("tds_recon_results").select("*").eq("filing_id", filing.id);
       setResults((res as ReconResult[]) || []);
       const s = data.summary || {};
-      toast({ title: "Stage 1 · Data validation complete", description: `${s.matched ?? 0} matched · ${s.mismatched ?? 0} mismatched` });
+      const excl = s.excluded_other_quarter ?? 0;
+      const quarterNote = excl > 0 ? ` · ${excl} row(s) from other quarters were auto-excluded (they reconcile under their own quarter)` : "";
+      toast({ title: `Stage 1 · Data validation complete${s.filing_quarter ? ` (${s.filing_quarter})` : ""}`, description: `${s.matched ?? 0} matched · ${s.mismatched ?? 0} mismatched${quarterNote}` });
     } catch (e: any) {
       toast({ title: "Validation failed", description: e.message, variant: "destructive" });
     }
