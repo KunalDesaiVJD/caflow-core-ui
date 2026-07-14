@@ -126,6 +126,20 @@ function buildVoucherXml(v, opts = {}) {
 </ENVELOPE>`;
 }
 
+/** Two-leg Journal (used for a CAFlow kasar/write-off -> Tally):
+ *  Dr <kasar/rebate ledger>, Cr <party>. REMOTEID makes it idempotent/deletable. */
+function buildJournalXml(companyName, { date, remoteId, drLedger, crLedger, amount, narration }) {
+  const a = amt(Math.abs(amount));
+  const rid = remoteId ? `REMOTEID="${escXml(remoteId)}" ` : '';
+  return `<ENVELOPE><HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER><BODY><IMPORTDATA>` +
+    `<REQUESTDESC><REPORTNAME>Vouchers</REPORTNAME><STATICVARIABLES><SVCURRENTCOMPANY>${escXml(companyName)}</SVCURRENTCOMPANY></STATICVARIABLES></REQUESTDESC>` +
+    `<REQUESTDATA><TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER ${rid}VCHTYPE="Journal" ACTION="Create">` +
+    `<DATE>${escXml(date)}</DATE><VOUCHERTYPENAME>Journal</VOUCHERTYPENAME><NARRATION>${escXml(narration || '')}</NARRATION>` +
+    `<ALLLEDGERENTRIES.LIST><LEDGERNAME>${escXml(drLedger)}</LEDGERNAME><ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE><AMOUNT>-${a}</AMOUNT></ALLLEDGERENTRIES.LIST>` +
+    `<ALLLEDGERENTRIES.LIST><LEDGERNAME>${escXml(crLedger)}</LEDGERNAME><ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE><AMOUNT>${a}</AMOUNT></ALLLEDGERENTRIES.LIST>` +
+    `</VOUCHER></TALLYMESSAGE></REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>`;
+}
+
 /** Delete-by-REMOTEID XML. Only works when the voucher was created WITH this
  *  REMOTEID (the idempotency key). Run before create for safe re-sync. */
 function buildDeleteByRemoteId(companyName, vchType, date, voucherNumber, remoteId) {
@@ -180,5 +194,5 @@ function invoiceToVoucherInput(row, opts) {
 
 module.exports = {
   buildVoucherXml, buildEntries, entriesImbalance, invoiceToVoucherInput,
-  buildDeleteByRemoteId, formatInr, escXml, defaultResolveIncome,
+  buildDeleteByRemoteId, buildJournalXml, formatInr, escXml, defaultResolveIncome,
 };

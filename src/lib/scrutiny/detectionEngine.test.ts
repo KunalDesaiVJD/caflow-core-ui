@@ -690,6 +690,52 @@ describe("fully_depreciated_in_use — fixed-asset register (data.fa)", () => {
   });
 });
 
+describe("tds_shortfall — precise per-party TDS coverage (line_items, deductee-aware)", () => {
+  const R = rule({
+    rule_id: "TDS-XLEG", category: "TDS", detection_level: "voucher",
+    detection_logic: { check: "tds_shortfall", sections: [{ section: "194C", keywords: ["transport", "freight", "contractor"], rate: 0.02, individual_rate: 0.01, threshold: 30000 }], tolerance: 0.05 },
+    audit_query_template: "{account}: TDS short by {amount} on 194C ({value} base @ {pct}%).",
+  });
+
+  it("reproduces the Sevenseas short (business @2%), excluding the party's own 'Freight' leg and GST", () => {
+    const out = run(R, { vouchers: [
+      vch({ amount: 200334, voucher_date: "2025-05-23", party_ledger: "Sevenseas Global Freight Systems Pvt. Ltd.", line_items: [
+        { ledger_name: "Transportation-18%", dr_cr: "Dr", amount: 187511 },
+        { ledger_name: "Transportation Charges-RCM", dr_cr: "Dr", amount: 21000 },
+        { ledger_name: "INPUT IGST@18%", dr_cr: "Dr", amount: 12823 },
+        { ledger_name: "Sevenseas Global Freight Systems Pvt. Ltd.", dr_cr: "Cr", amount: 200334 },
+        { ledger_name: "TDS on Contractor U/s 94C", dr_cr: "Cr", amount: 3750 },
+      ] }),
+    ] });
+    expect(out).toHaveLength(1);
+    expect(out[0].account).toBe("Sevenseas Global Freight Systems Pvt. Ltd.");
+    expect(out[0].evidence?.base).toBe(208511); // 187511 + 21000 (party 'Freight' leg + IGST excluded)
+    expect(out[0].amount).toBe(420); // req 4170 @2% − actual 3750
+  });
+
+  it("does NOT flag an individual who correctly deducted 1%", () => {
+    const out = run(R, { vouchers: [
+      vch({ amount: 100000, voucher_date: "2025-06-01", party_ledger: "Kanubhai Bharwad", line_items: [
+        { ledger_name: "Labour Charges Transport", dr_cr: "Dr", amount: 100000 },
+        { ledger_name: "Kanubhai Bharwad", dr_cr: "Cr", amount: 99000 },
+        { ledger_name: "TDS on Contractor U/s 94C", dr_cr: "Cr", amount: 1000 },
+      ] }),
+    ] });
+    expect(out).toHaveLength(0);
+  });
+
+  it("flags a business transporter with zero TDS", () => {
+    const out = run(R, { vouchers: [
+      vch({ amount: 500000, voucher_date: "2025-06-01", party_ledger: "JRC Transport Company", line_items: [
+        { ledger_name: "Freight Charges", dr_cr: "Dr", amount: 500000 },
+        { ledger_name: "JRC Transport Company", dr_cr: "Cr", amount: 500000 },
+      ] }),
+    ] });
+    expect(out).toHaveLength(1);
+    expect(out[0].amount).toBe(10000);
+  });
+});
+
 describe("run ledger — completeness accounting (no rule silently dropped)", () => {
   it("reports executed / needs_data / skipped_no_handler per rule", () => {
     const rExec = rule({ rule_id: "CASH-X", category: "CASH", detection_logic: { check: "single_txn", threshold: 10000 } });
