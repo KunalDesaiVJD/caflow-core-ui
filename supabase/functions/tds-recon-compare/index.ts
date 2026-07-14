@@ -545,9 +545,15 @@ serve(async (req) => {
       office = ded ?? [];
     }
 
-    // ── Imported Data: rows for the chosen batch ───────────────────────────────
+    // ── Imported Data: ALL rows across EVERY batch for this filing ──────────────
+    // Clients often keep TDS in SEPARATE files (e.g. 194Q in its own workbook,
+    // or one file per section / month / branch). Each import is its own batch;
+    // the reconciliation must run against the COMBINED dataset so a record that
+    // lives in another file is not falsely reported as missing. (Re-importing the
+    // SAME file replaces its batch on the import side, so this never double-counts
+    // the same file.)
     const { data: imported } = await supabase
-      .from("tds_imported_rows").select("*").eq("batch_id", batchId).order("row_index", { ascending: true });
+      .from("tds_imported_rows").select("*").eq("filing_id", filing_id).order("row_index", { ascending: true });
 
     if ((office?.length ?? 0) === 0 && (imported?.length ?? 0) === 0) {
       return json({ error: "Nothing to compare — both office and imported data are empty." }, 409);

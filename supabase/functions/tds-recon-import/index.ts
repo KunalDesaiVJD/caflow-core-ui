@@ -642,6 +642,22 @@ serve(async (req) => {
     }
 
     // ── Persist batch + rows ───────────────────────────────────────────────────
+    // SEQUENTIAL MULTI-FILE support: a filing's imported dataset is the UNION of
+    // all DISTINCT files imported for it (clients often keep 194Q — or each
+    // section / month / branch — in a separate workbook). Re-importing the SAME
+    // file must REPLACE its data, not add a duplicate, so first drop any earlier
+    // batch(es) for this filing with the same file name. Different file names
+    // accumulate and are all reconciled together by tds-recon-compare.
+    if (file_name) {
+      const { data: dupBatches } = await supabase
+        .from("tds_import_batches").select("id").eq("filing_id", filing_id).eq("file_name", file_name);
+      const dupIds = (dupBatches ?? []).map((b: any) => b.id);
+      if (dupIds.length) {
+        await supabase.from("tds_imported_rows").delete().in("batch_id", dupIds);
+        await supabase.from("tds_import_batches").delete().in("id", dupIds);
+      }
+    }
+
     const { data: batch, error: bErr } = await supabase
       .from("tds_import_batches")
       .insert({

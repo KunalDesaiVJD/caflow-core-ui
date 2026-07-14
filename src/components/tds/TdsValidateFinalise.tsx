@@ -297,10 +297,19 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     }
     setOfficeCount({ deductees: dedCount, challans: chIds.length });
 
-    const { data: b } = await supabase.from("tds_import_batches").select("*")
-      .eq("filing_id", match.id).order("imported_at", { ascending: false }).limit(1).maybeSingle();
+    // Load ALL import batches for the filing (a client may keep sections/months
+    // in separate files) and present a COMBINED view — total records across every
+    // file + the file list — since validation runs against the merged dataset.
+    const { data: batches } = await supabase.from("tds_import_batches").select("*")
+      .eq("filing_id", match.id).order("imported_at", { ascending: false });
     if (stale()) return;
-    setBatch(b || null);
+    const bs = batches || [];
+    setBatch(bs.length ? {
+      ...bs[0],
+      row_count: bs.reduce((sum: number, x: any) => sum + (x.row_count || 0), 0),
+      files: bs.map((x: any) => ({ name: x.file_name, type: x.file_type, count: x.row_count })),
+      file_count: bs.length,
+    } : null);
 
     const { data: res } = await supabase.from("tds_recon_results").select("*").eq("filing_id", match.id);
     if (stale()) return;
@@ -718,7 +727,7 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
                   <Button size="sm" variant={batch ? "outline" : "default"} className="gap-1"
                     disabled={importing || isFiled} onClick={() => fileInputRef.current?.click()}>
                     {importing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
-                    {importing ? "Importing…" : batch ? "Re-import" : "Import"}
+                    {importing ? "Importing…" : batch ? "Add / re-import file" : "Import"}
                   </Button>
                 </div>
                 {importing && (
@@ -731,11 +740,20 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
                 )}
                 {batch ? (
                   <div className="text-sm">
-                    <span className="text-2xl font-bold">{batch.row_count}</span> <span className="text-muted-foreground">records</span>
-                    <p className="text-xs text-muted-foreground mt-1 truncate">{batch.file_name} · {(batch.file_type || "").toUpperCase()}</p>
+                    <span className="text-2xl font-bold">{batch.row_count}</span> <span className="text-muted-foreground">records{batch.file_count > 1 ? ` · ${batch.file_count} files` : ""}</span>
+                    {batch.file_count > 1 ? (
+                      <ul className="text-xs text-muted-foreground mt-1 space-y-0.5">
+                        {(batch.files || []).map((f: any, idx: number) => (
+                          <li key={idx} className="truncate">• {f.name} · {(f.type || "").toUpperCase()} · {f.count} rows</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-xs text-muted-foreground mt-1 truncate">{batch.file_name} · {(batch.file_type || "").toUpperCase()}</p>
+                    )}
+                    <p className="text-[11px] text-muted-foreground mt-1.5">Keep a section in a separate workbook (e.g. 194Q)? Add it — all files are validated together. Re-importing the same file name replaces it.</p>
                   </div>
                 ) : (
-                  <p className="text-xs text-muted-foreground">Import the client's data in any format — Excel, CSV, PDF, image/scan, JSON, XML or text. It's normalised automatically.</p>
+                  <p className="text-xs text-muted-foreground">Import the client's data in any format — Excel, CSV, PDF, image/scan, JSON, XML or text. You can add multiple files (e.g. a separate 194Q workbook) and they'll be validated together.</p>
                 )}
               </CardContent>
             </Card>
