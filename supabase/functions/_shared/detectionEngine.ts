@@ -73,6 +73,8 @@ export interface ScrutinyRule {
   audit_query_template?: string | null;
   severity: string;
   legal_reference?: string | null;
+  /** entity-type buckets this rule applies to ("corporate" | "non_corporate"); empty/absent = all. */
+  applicable_to?: string[] | null;
 }
 
 /** A fixed-asset register row (thin projection of fa_assets) — enables depreciation checks. */
@@ -1327,6 +1329,54 @@ const h_ratio_change: CheckHandler = (rule, data) => {
   })];
 };
 
+/**
+ * duplicate_ledger — flags two ledgers in the SAME parent_group whose names are near-duplicates
+ * (likely the same party entered twice, e.g. "Balvant Parmar" vs "Balvantbhai Parmar"). Token
+ * similarity: tokens match on equality OR prefix (≥4 chars); flag when matched/max ≥ min_similarity.
+ * detection_logic: { check:"duplicate_ledger", scope?, min_similarity?:number, message? }.
+ */
+const h_duplicate_ledger: CheckHandler = (rule, data) => {
+  const dl = rule.detection_logic as unknown as Record<string, unknown>;
+  const scope = dl.scope as Record<string, unknown> | undefined;
+  const minSim = num(dl.min_similarity, 0.7);
+  const tpl = (dl.message as string | undefined) ?? rule.audit_query_template;
+  const tokenize = (s: string) => normName(s).replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((t) => t.length >= 3);
+  const tokMatch = (a: string, b: string) => a === b || (a.length >= 4 && b.length >= 4 && (a.startsWith(b) || b.startsWith(a)));
+  const sim = (aTok: string[], bTok: string[]): number => {
+    if (!aTok.length || !bTok.length) return 0;
+    let m = 0;
+    const used = new Set<number>();
+    for (const ta of aTok) for (let i = 0; i < bTok.length; i++) { if (!used.has(i) && tokMatch(ta, bTok[i])) { used.add(i); m++; break; } }
+    return m / Math.max(aTok.length, bTok.length);
+  };
+  const byGroup = new Map<string, TBRow[]>();
+  for (const r of data.tb) {
+    if (!accountInScope(r, scope)) continue;
+    const g = normName(r.parent_group ?? "");
+    (byGroup.get(g) ?? byGroup.set(g, []).get(g)!).push(r);
+  }
+  const out: ScrutinyFinding[] = [];
+  const seen = new Set<string>();
+  for (const [, rows] of byGroup) {
+    const toks = rows.map((r) => tokenize(r.ledger_name));
+    for (let i = 0; i < rows.length; i++) {
+      if (toks[i].length < 2) continue;
+      for (let j = i + 1; j < rows.length; j++) {
+        if (toks[j].length < 2 || sim(toks[i], toks[j]) < minSim) continue;
+        const key = [normName(rows[i].ledger_name), normName(rows[j].ledger_name)].sort().join("||");
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(finding(rule, {
+          account: rows[i].ledger_name,
+          flag_message: render(tpl, { account: `"${rows[i].ledger_name}" and "${rows[j].ledger_name}"` }),
+          evidence: { ledger_a: rows[i].ledger_name, ledger_b: rows[j].ledger_name, parent_group: rows[i].parent_group },
+        }));
+      }
+    }
+  }
+  return out;
+};
+
 // ---------------------------------------------------------------------------
 // Registry + runner
 // ---------------------------------------------------------------------------
@@ -1379,6 +1429,7 @@ export const GENERIC_HANDLERS: Record<string, CheckHandler> = {
   fully_depreciated_in_use: h_fully_depreciated_in_use,
   tds_shortfall: h_tds_shortfall,
   ratio_change: h_ratio_change,
+  duplicate_ledger: h_duplicate_ledger,
 };
 
 export const GENERIC_CHECK_KINDS = Object.keys(GENERIC_HANDLERS);

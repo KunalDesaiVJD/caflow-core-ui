@@ -7,6 +7,7 @@ import {
   vouchersFromSnapshot,
   faFromRows,
   findingToRow,
+  ruleAppliesToEntity,
   type ScrutinyRuleRow,
 } from "./adapters";
 import { runDetection } from "./detectionEngine";
@@ -87,6 +88,34 @@ describe("vouchersFromSnapshot", () => {
   it("leaves line_items undefined when absent (snapshot raw_data has none)", () => {
     const v = vouchersFromSnapshot([{ amount: 100, date: "2025-06-10" }]);
     expect(v[0].line_items).toBeUndefined();
+  });
+});
+
+describe("ruleFromRow — applicable_to + ledger synonyms (entity split + ledger connection)", () => {
+  it("parses applicable_to and merges synonyms into scope.ledger_keywords when no group condition", () => {
+    const r = ruleFromRow({ rule_id: "X-1", detection_logic: { check: "expr", scope: {} }, applicable_to: ["corporate"], keywords_ledger_synonyms: "bank, cash , petty cash" } as ScrutinyRuleRow);
+    expect(r.applicable_to).toEqual(["corporate"]);
+    expect((r.detection_logic as Record<string, unknown>).scope).toMatchObject({ ledger_keywords: ["bank", "cash", "petty cash"] });
+  });
+  it("does NOT merge synonyms when the rule already scopes by parent_group (avoids AND-narrowing)", () => {
+    const r = ruleFromRow({ rule_id: "X-2", detection_logic: { check: "expr", scope: { parent_group_keywords: ["creditor"] } }, keywords_ledger_synonyms: "bank,cash" } as ScrutinyRuleRow);
+    expect((r.detection_logic as Record<string, unknown>).scope).not.toHaveProperty("ledger_keywords");
+  });
+});
+
+describe("ruleAppliesToEntity", () => {
+  const mk = (at: string[]) => ({ rule_id: "R", rule_name: "R", category: "X", detection_level: "account", detection_logic: { check: "x" }, severity: "low", applicable_to: at } as never);
+  it("filters by entity bucket; empty applicable_to = all entities", () => {
+    expect(ruleAppliesToEntity(mk(["corporate"]), "corporate")).toBe(true);
+    expect(ruleAppliesToEntity(mk(["corporate"]), "non_corporate")).toBe(false);
+    expect(ruleAppliesToEntity(mk(["non_corporate"]), "non_corporate")).toBe(true);
+    expect(ruleAppliesToEntity(mk([]), "corporate")).toBe(true);
+    expect(ruleAppliesToEntity(mk(["corporate", "non_corporate"]), "non_corporate")).toBe(true);
+  });
+  it("treats the legacy entity-name format as both buckets (non-breaking migration)", () => {
+    const legacy = mk(["company", "llp", "individual", "firm", "trust", "huf", "aop"]);
+    expect(ruleAppliesToEntity(legacy, "corporate")).toBe(true);
+    expect(ruleAppliesToEntity(legacy, "non_corporate")).toBe(true);
   });
 });
 

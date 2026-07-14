@@ -52,21 +52,71 @@ export interface ScrutinyRuleRow {
   severity?: string | null;
   legal_reference?: string | null;
   is_active?: boolean | null;
+  /** entity buckets (jsonb array / csv). empty = all entities. */
+  applicable_to?: unknown;
+  /** comma-separated Tally ledger-name variants for this rule's family (the ledger-name connection). */
+  keywords_ledger_synonyms?: string | null;
+}
+
+/** parse applicable_to (jsonb array | JSON string | csv) into a lowercased string[]. */
+function parseApplicableTo(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.map((x) => String(x).toLowerCase().trim()).filter(Boolean);
+  if (typeof raw === "string" && raw.trim()) {
+    try { const o = JSON.parse(raw); if (Array.isArray(o)) return o.map((x) => String(x).toLowerCase().trim()).filter(Boolean); } catch { /* csv */ }
+    return raw.split(",").map((x) => x.toLowerCase().trim()).filter(Boolean);
+  }
+  return [];
 }
 
 export function ruleFromRow(row: ScrutinyRuleRow): ScrutinyRule {
+  const detection_logic = parseDetectionLogic(row.detection_logic);
+
+  // Ledger-name connection: merge the rule's Tally-name synonyms into scope.ledger_keywords so
+  // generic handlers match real Tally ledger names. Only when the rule has NO parent_group/group
+  // condition — kwMatch over ledger_keywords is OR, so appending synonyms only WIDENS the match and
+  // never narrows a rule that already scopes by group (which would be an unwanted AND).
+  const syn = (row.keywords_ledger_synonyms ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  if (syn.length) {
+    const dl = detection_logic as unknown as Record<string, unknown>;
+    const scope = (dl.scope && typeof dl.scope === "object" && !Array.isArray(dl.scope)) ? (dl.scope as Record<string, unknown>) : undefined;
+    if (!scope || (!scope.parent_group_keywords && !scope.group)) {
+      const sc = scope ?? {};
+      const existing = Array.isArray(sc.ledger_keywords) ? (sc.ledger_keywords as unknown[]).map((s) => String(s).toLowerCase()) : [];
+      sc.ledger_keywords = [...new Set([...existing, ...syn])];
+      dl.scope = sc;
+    }
+  }
+
   return {
     rule_id: row.rule_id,
     rule_name: row.rule_name ?? row.rule_id,
     category: row.category ?? (row.rule_id.split("-")[0] ?? ""),
     detection_level: row.detection_level ?? "voucher",
-    detection_logic: parseDetectionLogic(row.detection_logic),
+    detection_logic,
     threshold_value: row.threshold_value == null ? null : n(row.threshold_value),
     threshold_type: row.threshold_type ?? null,
     audit_query_template: row.audit_query_template ?? null,
     severity: row.severity ?? "medium",
     legal_reference: row.legal_reference ?? null,
+    applicable_to: parseApplicableTo(row.applicable_to),
   };
+}
+
+const CORP_HINTS = ["company", "private ltd", "public ltd", "pvt ltd", "pvt. ltd"];
+const NONCORP_HINTS = ["llp", "partnership", "individual", "firm", "trust", "huf", "aop", "proprietor", "society"];
+
+/**
+ * true if a rule applies to a client's entity bucket ("corporate" | "non_corporate").
+ * Handles the new bucket format (["corporate"]) AND the legacy entity-name format
+ * (["company","llp",...]) so migrating rules to buckets is non-breaking: a rule listing both a
+ * corporate and a non-corporate entity name resolves to "both" until it is explicitly bucketed.
+ */
+export function ruleAppliesToEntity(rule: ScrutinyRule, bucket: string): boolean {
+  const at = rule.applicable_to;
+  if (!at || at.length === 0) return true;
+  if (at.includes(bucket) || at.includes("both") || at.includes("all")) return true;
+  const hints = bucket === "corporate" ? CORP_HINTS : NONCORP_HINTS;
+  return at.some((x) => hints.some((h) => x.includes(h)));
 }
 
 /** Active rules only, mapped to engine rules. */
