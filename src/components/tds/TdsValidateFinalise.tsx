@@ -446,7 +446,9 @@ export function TdsValidateFinalise({
       const parsed = await readFile(file, (p) => { const { label, pct } = progressLabel(p); setImportStage(label); setImportPct(pct); });
       setImportStage("Normalising & saving…"); setImportPct(88);
       const data = await Promise.race([
-        invokeFn("tds-recon-import", { filing_id: filing.id, form_type: selForm, file_name: file.name, ...parsed }, { signal: ctrl.signal }),
+        // Pass the Office Data count so the importer can flag a big record-count
+        // gap (e.g. read 33 but Office has 100) instead of silently under-reading.
+        invokeFn("tds-recon-import", { filing_id: filing.id, form_type: selForm, file_name: file.name, expected_count: officeCount.deductees || undefined, ...parsed }, { signal: ctrl.signal }),
         new Promise((_, rej) => ctrl.signal.addEventListener("abort", () => rej(new Error("aborted-timeout")))),
       ]) as any;
       setImportPct(100);
@@ -472,10 +474,16 @@ export function TdsValidateFinalise({
       const mapLine = m?.fields ? formatMappingSummary(m.fields) : "";
       const mapIssues = m?.issues?.length ? ` ⚠ Check mapping: ${m.issues.join("; ")}.` : "";
       const mapNotes = m?.notes?.length ? ` (${m.notes.join("; ")}.)` : "";
-      const hasMapWarning = !!(m?.issues?.length || data.warning);
+      // Record-count reconciliation: surface a de-dupe note and, crucially, any
+      // shortfall WARNING (read far fewer records than Office Data) so an
+      // under-read is never silent.
+      const rec = data.reconciliation as { duplicates_removed?: number; distinct_pans?: number; warning?: string; note?: string } | null;
+      const dupNote = rec?.duplicates_removed ? ` (${rec.duplicates_removed} duplicate row(s) removed)` : "";
+      const reconWarn = rec?.warning ? ` ⚠ ${rec.warning}` : (rec?.note ? ` · ${rec.note}` : "");
+      const hasMapWarning = !!(m?.issues?.length || data.warning || rec?.warning);
       toast({
-        title: `Imported ${data.row_count} client record(s)`,
-        description: `${replacedNote}${data.warning ? data.warning + " " : ""}${mapLine}${mapNotes}${mapIssues}`.trim() || file.name,
+        title: `Imported ${data.row_count} client record(s)${rec?.distinct_pans ? ` · ${rec.distinct_pans} PANs` : ""}`,
+        description: `${replacedNote}${data.warning ? data.warning + " " : ""}${mapLine}${dupNote}${mapNotes}${mapIssues}${reconWarn}`.trim() || file.name,
         ...(hasMapWarning ? { variant: "default" as const } : {}),
       });
       await loadAll();
