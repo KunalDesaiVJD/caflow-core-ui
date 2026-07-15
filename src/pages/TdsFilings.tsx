@@ -314,10 +314,7 @@ const TdsFilings = () => {
                   clients={clients} isSuperadmin={isSuperadmin}
                   resolveFirmId={resolveFirmId}
                   onNavigateDataEntry={() => setWorkspaceTab("data-entry")}
-                  selClient={ctxClient} setSelClient={setCtxClient}
-                  selFy={ctxFy} setSelFy={setCtxFy}
-                  selQuarter={ctxQuarter} setSelQuarter={setCtxQuarter}
-                  selForm={ctxForm} setSelForm={setCtxForm}
+                  selClient={ctxClient} selFy={ctxFy} selQuarter={ctxQuarter} selForm={ctxForm}
                 />
               </div>
             </div>

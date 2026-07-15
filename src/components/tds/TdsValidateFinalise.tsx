@@ -10,9 +10,6 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
-import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
@@ -43,12 +40,13 @@ interface Props {
   isSuperadmin: boolean;
   resolveFirmId: () => Promise<string | null>;
   onNavigateDataEntry?: (filingId: string) => void;
-  // Shared Workspace filing context (owned by the parent TdsFilings page) so the
-  // Data Entry and Validate & Finalise tabs stay on the same Client/FY/Quarter/Form.
-  selClient: string; setSelClient: (v: string) => void;
-  selFy: string; setSelFy: (v: string) => void;
-  selQuarter: string; setSelQuarter: (v: string) => void;
-  selForm: string; setSelForm: (v: string) => void;
+  // Shared Workspace filing context (owned by the parent TdsFilings page). Data
+  // Entry is the SINGLE SOURCE OF TRUTH for the selection — here it is READ-ONLY
+  // (no duplicate selectors), so these are values only, not setters.
+  selClient: string;
+  selFy: string;
+  selQuarter: string;
+  selForm: string;
 }
 
 interface FieldDiff {
@@ -70,10 +68,6 @@ interface ReconResult {
   overridden_by?: string | null;
   override_note?: string | null;
 }
-
-const FY_OPTIONS = Array.from({ length: 7 }, (_, i) => { const s = 2020 + i; return `${s}-${String(s + 1).slice(2)}`; });
-const QUARTER_OPTIONS = ["Q1", "Q2", "Q3", "Q4"];
-const TDS_FORMS = ["24Q", "26Q", "27Q", "27EQ"];
 
 const FIELD_LABELS: Record<string, string> = {
   name: "Name", pan: "PAN", date: "Date", amount: "Amount",
@@ -241,7 +235,7 @@ const PAN_STATUS_BLOCKED: PanStageStatus = { filingId: null, loaded: false, appl
 
 export function TdsValidateFinalise({
   clients, isSuperadmin, resolveFirmId, onNavigateDataEntry,
-  selClient, setSelClient, selFy, setSelFy, selQuarter, setSelQuarter, selForm, setSelForm,
+  selClient, selFy, selQuarter, selForm,
 }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -705,6 +699,7 @@ export function TdsValidateFinalise({
     : "";
   const isFiled = filing?.work_status === "Filed";
   const cErr = selClient ? complianceError() : null;
+  const selectedClient = clients.find(c => c.id === selClient);
 
   // Non-matched records (mismatched / office_only / imported_only) — each gets its
   // own inline comparison table; pending first, then overridden.
@@ -826,41 +821,26 @@ export function TdsValidateFinalise({
         <p className="text-sm text-muted-foreground">Stage&nbsp;1 (data reconciliation) and Stage&nbsp;2 (PAN verification) each have their own <b>Run Validation</b> — run them independently below.</p>
       </div>
 
-      {/* Filter Bar */}
-      <div className="flex flex-wrap gap-3 items-end">
-        <div className="space-y-1">
-          <Label className="text-xs">Client</Label>
-          <Select value={selClient} onValueChange={setSelClient}>
-            <SelectTrigger className="w-[220px]"><SelectValue placeholder="Select client" /></SelectTrigger>
-            <SelectContent>
-              {clients
-                .filter(c => clientHasTdsForm(c.tds_forms_applicable, selForm))
-                .map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
+      {/* Active return — READ-ONLY. The Client/FY/Quarter/Form come from the shared
+          Workspace session (selected once in the Data Entry tab, the single source
+          of truth), so they are never re-selected here. */}
+      {!selClient ? (
+        <div className="flex items-center gap-2 p-4 rounded-lg border bg-muted/30 text-sm text-muted-foreground">
+          <Info size={16} className="shrink-0" />
+          <span>Select the client and return in the{" "}
+            <button type="button" className="underline font-medium text-foreground hover:text-primary" onClick={() => onNavigateDataEntry?.("")}>Data&nbsp;Entry</button>{" "}
+            tab — it is loaded here automatically.</span>
         </div>
-        <div className="space-y-1">
-          <Label className="text-xs">FY</Label>
-          <Select value={selFy} onValueChange={setSelFy}>
-            <SelectTrigger className="w-[120px]"><SelectValue /></SelectTrigger>
-            <SelectContent>{FY_OPTIONS.map(fy => <SelectItem key={fy} value={fy}>{fy}</SelectItem>)}</SelectContent>
-          </Select>
+      ) : (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2.5 rounded-lg border bg-muted/40 text-sm">
+          <span className="font-semibold text-foreground truncate max-w-[260px]">{selectedClient?.name || "—"}</span>
+          {selectedClient?.tan_number && <span className="text-muted-foreground">TAN&nbsp;<b className="font-medium text-foreground">{selectedClient.tan_number}</b></span>}
+          <span className="text-muted-foreground">{selForm}&nbsp;·&nbsp;{selQuarter}&nbsp;·&nbsp;FY&nbsp;{selFy}</span>
+          {filing?.work_status && <Badge variant="outline" className="text-[10px]">{filing.work_status}</Badge>}
+          <div className="flex-1" />
+          <button type="button" className="text-xs text-muted-foreground hover:text-foreground underline shrink-0" onClick={() => onNavigateDataEntry?.(filing?.id || "")}>Change in Data Entry</button>
         </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Quarter</Label>
-          <Select value={selQuarter} onValueChange={setSelQuarter}>
-            <SelectTrigger className="w-[100px]"><SelectValue /></SelectTrigger>
-            <SelectContent>{QUARTER_OPTIONS.map(q => <SelectItem key={q} value={q}>{q}</SelectItem>)}</SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Form</Label>
-          <Select value={selForm} onValueChange={setSelForm}>
-            <SelectTrigger className="w-[100px]"><SelectValue /></SelectTrigger>
-            <SelectContent>{TDS_FORMS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
-          </Select>
-        </div>
-      </div>
+      )}
 
       {cErr && (
         <div className="flex items-center gap-2 p-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 text-sm text-amber-700 dark:text-amber-300">
