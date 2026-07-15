@@ -127,6 +127,22 @@ async function invokeFn(name: string, body: unknown, opts?: { signal?: AbortSign
   return data;
 }
 
+// Human-readable one-line summary of the importer's column-mapping decisions,
+// e.g. "Mapped Name←‘Party's Name’, PAN←‘PAN’, Amount←‘Bill Amt.’, TDS←‘TDS Amt’".
+// Shown after every import so the user can verify the mapping before comparing.
+const MAP_FIELD_LABELS: Record<string, string> = {
+  deductee_name: "Name", pan: "PAN", section_code: "Section",
+  amount_paid: "Amount", tds_amount: "TDS", interest: "Interest",
+  rate: "Rate", date_of_payment: "Date",
+};
+function formatMappingSummary(fields: Record<string, { column: string; by: string }>): string {
+  const order = ["deductee_name", "pan", "section_code", "amount_paid", "tds_amount", "date_of_payment", "interest", "rate"];
+  const parts = order
+    .filter((f) => fields[f]?.column)
+    .map((f) => `${MAP_FIELD_LABELS[f] || f}←‘${fields[f].column.replace(/\s+/g, " ").trim()}’`);
+  return parts.length ? `Mapped ${parts.join(", ")}.` : "";
+}
+
 // ── Off-main-thread file parsing ────────────────────────────────────────────
 // A single reused module worker parses Excel/CSV so a large workbook never
 // blocks the UI thread ("Page Unresponsive"). Falls back to a main-thread parse
@@ -448,7 +464,19 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
       await supabase.from("tds_recon_results").delete().eq("filing_id", filing.id);
       setResults(null);
       const replacedNote = (data.replaced || (replaceBatchId && replaceBatchId !== data.batch_id)) ? "Replaced the earlier file. " : "";
-      toast({ title: `Imported ${data.row_count} client record(s)`, description: `${replacedNote}${data.warning || file.name}`, ...(data.warning ? { variant: "default" as const } : {}) });
+      // Surface the column-mapping decisions so the user can SEE (and trust) how
+      // each field was detected before the comparison runs. Validation issues make
+      // the toast a warning; auto-corrections (e.g. amount/TDS swap) are noted.
+      const m = data.mapping as { fields?: Record<string, { column: string; by: string }>; issues?: string[]; notes?: string[] } | null;
+      const mapLine = m?.fields ? formatMappingSummary(m.fields) : "";
+      const mapIssues = m?.issues?.length ? ` ⚠ Check mapping: ${m.issues.join("; ")}.` : "";
+      const mapNotes = m?.notes?.length ? ` (${m.notes.join("; ")}.)` : "";
+      const hasMapWarning = !!(m?.issues?.length || data.warning);
+      toast({
+        title: `Imported ${data.row_count} client record(s)`,
+        description: `${replacedNote}${data.warning ? data.warning + " " : ""}${mapLine}${mapNotes}${mapIssues}`.trim() || file.name,
+        ...(hasMapWarning ? { variant: "default" as const } : {}),
+      });
       await loadAll();
       // Auto-refresh the validation if one had already been run — the user should
       // never have to manually re-validate after adding or replacing a file.
