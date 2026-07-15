@@ -33,6 +33,28 @@ function headerScore(row: unknown[]): number {
   return score;
 }
 
+// A GENUINE deductee-table header always names the party IDENTITY (PAN / Name /
+// Party / Deductee / Particulars). A row that scores as a header but has NONE of
+// these is a SECTION or MONTH LABEL that merely repeats a few trailing sub-headers
+// (e.g. "Feb-26 … TDS PAID DATE CHALLAN BSR") — it must NOT replace the real header.
+//
+// Match identity terms as WHOLE WORDS on the raw cell (plus a few glued header
+// spellings) — NOT as substrings — so ordinary deductee VALUES like "Suresh
+// Company" or the surname "Pandey" (both contain the letters "pan") are NOT
+// mistaken for a "PAN" header. `\bpan\b` matches "PAN No" but not "pandey".
+const IDENTITY_WORD_RE = /\b(pan|name|party|deductee|deductees|particulars?|vendor|assessee|payee|beneficiary)\b/i;
+const IDENTITY_COMPOUND = ["panno", "pannumber", "panofdeductee", "deducteepan", "partypan", "vendorpan", "deducteename", "partyname", "nameofdeductee", "nameofparty", "vendorname", "payeename", "assesseename", "partysname"];
+function hasIdentityToken(row: unknown[]): boolean {
+  for (const cell of row) {
+    const raw = String(cell ?? "").trim();
+    if (!raw) continue;
+    if (IDENTITY_WORD_RE.test(raw)) return true;                       // "PAN No", "Party Name", "Name of Deductee"
+    const norm = normaliseCell(raw);
+    if (norm && IDENTITY_COMPOUND.some(c => norm === c || norm.includes(c))) return true; // glued: "PANNo", "DeducteeName"
+  }
+  return false;
+}
+
 /** Scores the first 15 rows by how many cells look like known field names and
  * picks the best match; falls back to row 0 (previous behaviour) when
  * nothing scores highly enough, so already-clean files are unaffected. */
@@ -178,26 +200,39 @@ export function extractSheetRows(grid: unknown[][], sectionHint: string | null):
     for (let i = 0; i < row.length; i++) { const c = row[i]; if (c != null && String(c).trim() !== "") nonEmptyCount++; }
     if (nonEmptyCount === 0) continue;
     if (scores[r] >= 3 && !rowHasPan[r]) {
+      const consecutive = headerCells != null && lastHeaderRow === r - 1;
+      // A row that scores as a header but names NO identity column (PAN/Name/Party)
+      // and is NOT the sub-label row of the current header is a SECTION or MONTH
+      // LABEL that only repeats a few trailing sub-headers (e.g. "Feb-26 … TDS PAID
+      // DATE CHALLAN BSR"). REPLACING the locked real header with it re-keys the
+      // whole block below under "Feb-26/Column2/…", so the column mapper — built on
+      // the real header names — then silently DROPS every one of those deductees
+      // (the "33 of 100" record-loss bug). Keep the locked header; treat this row
+      // as a label and skip it (it carries no PAN, so it's never a data row).
+      // Also peek at the NEXT row: a genuine SECOND table can have its identity
+      // column on a sub-label row directly below (a two-row header). Detect that by
+      // whether the next row itself looks like a HEADER (scores ≥ 3 AND has no PAN)
+      // — NOT by scanning its values for identity words, because a real deductee
+      // NAME can legitimately contain "party"/"name"/etc. A data row always carries
+      // a PAN, so it is never "header-like".
+      const nextIsHeaderLike = (scores[r + 1] ?? 0) >= 3 && !(rowHasPan[r + 1] ?? false);
+      if (!consecutive && headers != null && !hasIdentityToken(row) && !nextIsHeaderLike) continue;
       // MULTI-ROW HEADER: a main label row (e.g. "Bill" "TDS" "Bank" "Party's
       // Name") directly followed by a sub-label row ("Amt." "Amt" "Name") is one
       // logical header split across two rows — VERY common in real TDS working
-      // files. Previously the sub-row simply OVERWROTE the main row's headers, so
-      // every deductee below was mis-keyed ("Bank"+"Name"→the "Name" column →
-      // the deductee_name became the bank; "Bill"/"TDS" amounts were lost). MERGE
-      // consecutive header rows PER COLUMN instead: "Bill"+"Amt."→"Bill Amt."
-      // (maps to amount), "TDS"+"Amt"→"TDS Amt" (maps to TDS), "Bank"+"Name"→
-      // "Bank Name" (bank-guarded, never the deductee). A header row that is NOT
-      // consecutive (a genuine second table further down) still replaces.
-      if (headerCells && lastHeaderRow === r - 1) {
-        const m = Math.max(headerCells.length, row.length);
+      // files. MERGE consecutive header rows PER COLUMN: "Bill"+"Amt."→"Bill Amt.".
+      // A genuine, non-consecutive NEW header (with an identity column) still
+      // replaces (a real second table further down).
+      if (consecutive) {
+        const m = Math.max(headerCells!.length, row.length);
         for (let i = 0; i < m; i++) {
           const sub = row[i] == null ? "" : String(row[i]).trim();
-          if (sub) headerCells[i] = `${headerCells[i] == null ? "" : String(headerCells[i]).trim()} ${sub}`.trim();
+          if (sub) headerCells![i] = `${headerCells![i] == null ? "" : String(headerCells![i]).trim()} ${sub}`.trim();
         }
       } else {
         headerCells = row.slice();
       }
-      headers = buildHeaderNames(headerCells);
+      headers = buildHeaderNames(headerCells!);
       lastHeaderRow = r;
       continue;
     } // header ONLY if it has no PAN

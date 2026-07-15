@@ -407,6 +407,37 @@ function resolveMapping(allRows: Record<string, unknown>[], aiMap?: Partial<Reco
       if (overlapFrac(primary, c.header) < 0.2) { map[c.header] = field; claimed.add(c.header); }
     }
   }
+  // SECONDARY IDENTITY / SECTION columns — the record-loss fix for HETEROGENEOUS
+  // files. A client workbook can hold the SAME field under DIFFERENT column names
+  // across sheets/blocks (one block's PAN lands in "PAN No", another's in an
+  // unlabelled "Column4"). With a single mapped column, every row whose value sits
+  // in the OTHER column builds an empty canonical and is dropped. So map an
+  // ADDITIONAL value-consistent column (a PAN-valued / name-valued / section-code
+  // column) when it RARELY co-occurs with the primary (a genuine per-block
+  // alternative, never a same-row second column) — buildCanonicalFromMap then takes
+  // whichever column holds the value for each row. Value-typed, so it can't grab a
+  // wrong text column: PAN needs real PANs, name needs name-shaped values (never a
+  // bank/challan column), section needs statutory codes.
+  const overlapNonEmpty = (h1: string, h2: string) => {
+    let both = 0, either = 0;
+    for (const r of allRows) {
+      const a = r[h1] != null && String(r[h1]).trim() !== "";
+      const b = r[h2] != null && String(r[h2]).trim() !== "";
+      if (a || b) either++; if (a && b) both++;
+    }
+    return either ? both / either : 0;
+  };
+  const addSecondary = (field: keyof CanonicalRow, isType: (c: ColProfile) => boolean) => {
+    const primary = report[field]?.header; if (!primary) return;
+    for (const c of cols) {
+      if (claimed.has(c.header) || !isType(c)) continue;
+      if (overlapNonEmpty(primary, c.header) < 0.2) { map[c.header] = field; claimed.add(c.header); }
+    }
+  };
+  addSecondary("pan", (c) => c.fracPan >= 0.6);
+  addSecondary("deductee_name", (c) => c.fracName >= 0.6 && c.hfield !== "__bank__"
+    && !/bank|branch|narration|challan|remark|address|description|nature|payment/.test(normaliseHeader(c.header)));
+  addSecondary("section_code", (c) => c.fracSecCode >= 0.5);
   // AI-seeded fields (only fills what's still unresolved; never overrides).
   if (aiMap) {
     const have = new Set(Object.values(map));
@@ -662,7 +693,7 @@ serve(async (req) => {
     //   • pdf_base64     — PDF (native/scanned; read by a multimodal model)
     //   • image_base64   — a scanned document or photo (png/jpg/webp/…)
     //   • raw_text       — free text / semi-structured (txt / xml / json object / html …)
-    const { filing_id, form_type, file_name, file_type, rows, pdf_base64, image_base64, image_media_type, raw_text } = body ?? {};
+    const { filing_id, form_type, file_name, file_type, rows, pdf_base64, image_base64, image_media_type, raw_text, expected_count } = body ?? {};
     if (!filing_id) return json({ error: "filing_id is required" }, 400);
     const hasInput = Array.isArray(rows) || pdf_base64 || image_base64 || (typeof raw_text === "string" && raw_text.trim());
     if (!hasInput) {
@@ -701,7 +732,12 @@ serve(async (req) => {
     const collected: CanonicalRow[] = [];
     // Auditable record of how each canonical field was mapped (tabular path only);
     // returned to the UI so every mapping decision is visible before comparison.
-    let mappingReport: { source: string; fields: Record<string, { column: string; by: string }>; issues: string[] } | null = null;
+    let mappingReport: { source: string; fields: Record<string, { column: string; by: string }>; issues: string[]; notes?: string[]; reconciliation?: Record<string, unknown> } | null = null;
+    // Record-count reconciliation (tabular): non-empty INPUT rows vs how many the
+    // mapping turned into data rows — so a silent shortfall (the "33 of 100" bug) is
+    // detected and surfaced, never hidden.
+    let tabularInputRows: number | null = null;
+    let tabularMappedRows: number | null = null;
 
     const httpErr = (status: number, errText: string) => {
       console.error("AI import error:", status, errText);
@@ -770,19 +806,35 @@ serve(async (req) => {
       };
       let { map, report, issues, notes } = resolveMapping(allRows);
 
-      // 2) Escalate to ONE small AI mapping call when a REQUIRED field is still
-      //    unidentified OR validation flagged an issue with a deterministic pick
-      //    (e.g. a PAN column that holds few valid PANs). The AI only fills fields
-      //    the engine left unresolved — validated deterministic picks are kept —
-      //    and the result is re-validated. It never scales with row count, so it
-      //    can't overrun the time budget.
+      // How many INPUT rows are real (any non-empty cell), and how many the map
+      // actually turns into a DATA row — the signal that detects silent row loss.
+      const nonEmptyCanon = (r: CanonicalRow) => !!(r.deductee_name || r.pan || r.amount_paid != null || r.tds_amount != null);
+      const inputRows = allRows.filter((r) => r && typeof r === "object" && Object.values(r).some((v) => v != null && String(v).trim() !== "")).length;
+      const buildAll = (m: HeaderMap) => allRows.map((row) => buildCanonicalFromMap(row, m));
+      const mappedOf = (built: CanonicalRow[]) => built.filter(nonEmptyCanon).length;
+
+      let built = buildAll(map);
       let mappingSource = "deterministic";
-      if (!enough(map) || issues.length) {
+
+      // 2) Escalate to ONE small AI mapping call when a REQUIRED field is unmapped,
+      //    a deterministic pick looks wrong (validation issue), OR a large share of
+      //    the file's non-empty rows produced EMPTY canonicals (a column layout the
+      //    single map missed — the "33 of 100" failure). The AI only fills fields the
+      //    engine left unresolved, and its result is kept ONLY if it maps AS MANY OR
+      //    MORE rows — so an AI pass can only RECOVER records, never lose them. One
+      //    call; it never scales with row count, so it can't overrun the time budget.
+      const dropRate = inputRows > 0 ? 1 - mappedOf(built) / inputRows : 0;
+      if (!enough(map) || issues.length || (inputRows >= 10 && dropRate > 0.15)) {
         const aiMap = await resolveMappingWithAI(allRows);
         if (Object.keys(aiMap).length) {
           const re = resolveMapping(allRows, aiMap);
-          // Keep the AI-assisted result only if it's at least as complete.
-          if (enough(re.map) || !enough(map)) { map = re.map; report = re.report; issues = re.issues; notes = re.notes; mappingSource = "ai-assisted"; }
+          const reBuilt = buildAll(re.map);
+          // Accept the AI map ONLY if it recovers MORE data rows, or it makes an
+          // otherwise-insufficient map complete — never swap a good validated map
+          // for an equal one (a "did we fill more cells" tie is not an improvement).
+          if (mappedOf(reBuilt) > mappedOf(built) || (!enough(map) && enough(re.map))) {
+            map = re.map; report = re.report; issues = re.issues; notes = re.notes; built = reBuilt; mappingSource = "ai-assisted";
+          }
         }
       }
 
@@ -790,8 +842,10 @@ serve(async (req) => {
         return json({ error: "Could not identify the deductee columns — the file needs at least a Name/PAN column and an Amount/TDS column. Please check the column headers." }, 422);
       }
 
-      // 3) Build every row from the validated map, in code (no per-row AI).
-      for (const row of allRows) collected.push(buildCanonicalFromMap(row, map));
+      // 3) Emit the built canonical rows.
+      for (const r of built) collected.push(r);
+      tabularInputRows = inputRows;
+      tabularMappedRows = mappedOf(built);
       // Human-readable mapping report returned to the UI so every mapping decision
       // is visible/auditable (field ← header [method]) before comparison.
       mappingReport = {
@@ -800,15 +854,66 @@ serve(async (req) => {
         issues,
         notes,
       };
-      console.log(`tds-recon-import: ${mappingSource} mapping over ${allRows.length} rows →`, JSON.stringify(mappingReport));
+      console.log(`tds-recon-import: ${mappingSource} mapping — ${tabularMappedRows}/${inputRows} rows mapped →`, JSON.stringify(mappingReport));
     }
 
     // drop wholly-empty rows the model may echo
-    const canonical = collected.filter(r => r.deductee_name || r.pan || r.amount_paid != null || r.tds_amount != null);
+    const mapped = collected.filter(r => r.deductee_name || r.pan || r.amount_paid != null || r.tds_amount != null);
+
+    // CONTENT DE-DUPLICATION — a client file commonly lists the SAME transaction
+    // more than once (a per-section sheet AND a consolidated sheet, or a repeated
+    // subtotal echo). Drop rows with an identical (PAN · date · amount · TDS ·
+    // section) signature so an overlapping layout can't double-count. First wins
+    // (order preserved). A row with no PAN and no amount can't form a safe key, so
+    // it's always kept.
+    // Signature includes the NAME so any real difference (a distinct party, a
+    // corrected amount, a different section) keeps BOTH rows — only an exact echo
+    // (same PAN · name · date · amount · TDS · section) is collapsed. Priority is
+    // never dropping a genuine record, so this stays conservative.
+    const sigOf = (r: CanonicalRow) => `${String(r.pan ?? "").toUpperCase().replace(/\s+/g, "")}|${String(r.deductee_name ?? "").trim().toUpperCase()}|${String(r.date_of_payment ?? "").trim()}|${r.amount_paid ?? ""}|${r.tds_amount ?? ""}|${String(r.section_code ?? "").trim()}`;
+    const seenSig = new Set<string>();
+    const canonical: CanonicalRow[] = [];
+    let duplicatesRemoved = 0;
+    for (const r of mapped) {
+      const keyable = (r.pan != null && String(r.pan).trim() !== "") || r.amount_paid != null;
+      if (!keyable) { canonical.push(r); continue; }
+      const s = sigOf(r);
+      if (seenSig.has(s)) { duplicatesRemoved++; continue; }
+      seenSig.add(s); canonical.push(r);
+    }
 
     if (canonical.length === 0) {
       return json({ error: "No deductee rows could be read from the file. Check the file has recognisable columns/section." }, 422);
     }
+
+    // ── RECONCILIATION ─────────────────────────────────────────────────────────
+    // Make the record count VISIBLE so a shortfall can never be silent: how many
+    // rows the file had, how many mapped, how many de-duplicated, distinct PANs,
+    // and — when the caller passes the Office Data count — a warning on a big gap.
+    const PAN_OK = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+    const distinctPans = new Set(canonical.map(r => String(r.pan ?? "").toUpperCase().replace(/\s+/g, "")).filter(p => PAN_OK.test(p))).size;
+    const reconciliation: Record<string, unknown> = { imported: canonical.length, distinct_pans: distinctPans, duplicates_removed: duplicatesRemoved };
+    if (tabularInputRows != null) {
+      reconciliation.input_rows = tabularInputRows;
+      reconciliation.dropped = Math.max(0, tabularInputRows - (tabularMappedRows ?? 0));
+    }
+    // RELIABLE, intra-file signal FIRST — how many data rows the file HAD vs how
+    // many the mapping actually READ. This directly catches the silent record-loss
+    // bug and never false-alarms on a legitimately-partial file.
+    if (tabularInputRows != null && (tabularMappedRows ?? 0) < tabularInputRows * 0.85)
+      reconciliation.warning = `Only ${tabularMappedRows} of ${tabularInputRows} data rows were read — some rows may use a different column layout. Review before filing.`;
+    // Office-vs-imported gap: a SOFT note (not a warning), on DISTINCT PANs, with a
+    // wide threshold — because one PAN has many line items and a file may cover only
+    // PART of the return (per-section/month workbooks are supported). It's a prompt
+    // to check, never an error, and it never suppresses the reliable warning above.
+    const exp = typeof expected_count === "number" && expected_count > 0 ? expected_count : null;
+    if (exp) {
+      reconciliation.expected = exp;
+      if (!reconciliation.warning && distinctPans < exp * 0.5)
+        reconciliation.note = `Read ${distinctPans} distinct PAN(s); Office Data has ${exp} line item(s). If this file covers the WHOLE return, some records may be unread — review it. If it covers only part (e.g. one section/month), this is expected.`;
+    }
+    if (mappingReport) mappingReport.reconciliation = reconciliation;
+    console.log(`tds-recon-import: reconciliation`, JSON.stringify(reconciliation));
 
     // ── Persist batch + rows ───────────────────────────────────────────────────
     // SEQUENTIAL MULTI-FILE support: a filing's imported dataset is the UNION of
@@ -873,7 +978,7 @@ serve(async (req) => {
 
     // NOTE: the client re-reads the batch via loadAll(), so we do NOT echo the
     // full rows array back (a 20k-row response is needless megabytes).
-    return json({ batch_id: batch.id, row_count: canonical.length, replaced, mapping: mappingReport });
+    return json({ batch_id: batch.id, row_count: canonical.length, replaced, mapping: mappingReport, reconciliation });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error("tds-recon-import fatal:", message);
