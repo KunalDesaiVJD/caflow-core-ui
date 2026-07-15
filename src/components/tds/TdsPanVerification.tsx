@@ -20,10 +20,11 @@ import { cn } from "@/lib/utils";
 import {
   ShieldCheck, CheckCircle2, Upload, FileSpreadsheet, Loader2, RotateCcw, X,
 } from "lucide-react";
-import * as XLSX from "xlsx";
+import { readSheetGrids, readDelimitedGrid } from "@/lib/tdsWorkbook";
 import { logReconAudit } from "@/lib/tdsReconAudit";
 import {
-  comparePanVerification, isPanException, normalizePan, panReason, panRecommendedAction,
+  comparePanVerification, extractTracesRows, panDiagnostics, isPanException, normalizePan,
+  panReason, panRecommendedAction,
   PAN_OVERRIDE_REASONS, type OfficeParty, type TracesPanRow, type PanValidationResult,
 } from "@/lib/tdsPanVerification";
 
@@ -98,45 +99,17 @@ function AnimatedNumber({ value }: { value: number }) {
   return <>{display}</>;
 }
 
-/** Parse a TRACES Bulk-PAN Excel: find the sheet whose header row has PAN + a
- *  status/name column, map the columns, and extract the PAN rows. */
-function parseTracesWorkbook(data: ArrayBuffer): Omit<TracesPanRow, "row_id">[] {
-  const wb = XLSX.read(data, { type: "array" });
-  let grid: unknown[][] | null = null;
-  let hdrIdx = -1;
-  for (const sn of wb.SheetNames) {
-    const g = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, defval: null, raw: false }) as unknown[][];
-    const idx = g.findIndex(r => {
-      const cells = (r || []).map(c => String(c ?? "").toLowerCase().trim());
-      const hasPan = cells.some(c => c === "pan" || c.replace(/[^a-z]/g, "") === "pan" || c.includes("pan no") || c.includes("pan number"));
-      const hasStatusOrName = cells.some(c => c.includes("status")) || cells.some(c => c === "name" || c.includes("party") || c.includes("deductee"));
-      return hasPan && hasStatusOrName;
-    });
-    if (idx >= 0) { grid = g; hdrIdx = idx; break; }
-  }
-  if (!grid || hdrIdx < 0) return [];
-
-  const header = (grid[hdrIdx] || []).map(c => String(c ?? "").toLowerCase().trim());
-  const find = (fn: (h: string) => boolean) => header.findIndex(fn);
-  const panCol = find(h => h === "pan" || h.replace(/[^a-z]/g, "") === "pan" || h.includes("pan no") || h.includes("pan number") || h.includes("deductee pan"));
-  const statusCol = find(h => h.includes("status"));
-  const nameCol = find(h => h === "name" || h === "party name" || h === "deductee name" || h === "party" || h === "deductee");
-  const verifiedCol = find(h => h.includes("verified") || h.includes("name as per") || h.includes("name on pan"));
-
-  const cell = (row: unknown[], i: number) => (i >= 0 ? (String(row[i] ?? "").trim() || null) : null);
-  const out: Omit<TracesPanRow, "row_id">[] = [];
-  for (let r = hdrIdx + 1; r < grid.length; r++) {
-    const dr = grid[r] || [];
-    const pan = cell(dr, panCol);
-    if (!pan) continue;
-    out.push({
-      pan,
-      name: cell(dr, nameCol),
-      verified_name: cell(dr, verifiedCol),
-      pan_status: cell(dr, statusCol),
-    });
-  }
-  return out;
+/** Parse a TRACES Bulk-PAN file (Excel OR delimited .csv/.txt) into PAN rows.
+ *  Excel is read via the shared Stage-1 reader (readSheetGrids → TRUE used range,
+ *  so a bloated-!ref file can never freeze the tab); delimited text via
+ *  readDelimitedGrid. Both feed the same pure, tested extractTracesRows()
+ *  (value-based PAN + status detection). */
+async function parseTracesFile(file: File): Promise<Omit<TracesPanRow, "row_id">[]> {
+  const name = file.name.toLowerCase();
+  const grids = (name.endsWith(".csv") || name.endsWith(".txt"))
+    ? readDelimitedGrid(await file.text())
+    : readSheetGrids(await file.arrayBuffer());
+  return extractTracesRows(grids);
 }
 
 export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selForm, runSignal, resolveFirmId, disabled }: Props) {
@@ -146,6 +119,7 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
   const [officeCount, setOfficeCount] = useState(0);
   const [batch, setBatch] = useState<any>(null);
   const [results, setResults] = useState<PanResult[] | null>(null);
+  const [diagnostics, setDiagnostics] = useState<string[]>([]);
   const [userMap, setUserMap] = useState<Record<string, string>>({});
 
   const [importing, setImporting] = useState(false);
@@ -162,6 +136,7 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
   const filingId = filing?.id ?? null;
 
   const loadAll = useCallback(async () => {
+    setDiagnostics([]); // recomputed on the next Run Validation for the current data
     if (!filingId) { setBatch(null); setResults(null); setOfficeCount(0); return; }
     const { data: ch } = await supabase.from("tds_challans").select("id").eq("filing_id", filingId);
     const chIds = (ch || []).map((c: any) => c.id);
@@ -190,9 +165,8 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
     if (!filing) return;
     setImporting(true);
     try {
-      const buf = await file.arrayBuffer();
-      const rows = parseTracesWorkbook(buf);
-      if (rows.length === 0) throw new Error("No PAN rows found. Expected a TRACES Bulk PAN file with a PAN / PAN Status sheet.");
+      const rows = await parseTracesFile(file);
+      if (rows.length === 0) throw new Error("No PAN rows found. Expected a TRACES Bulk PAN file (Excel/CSV) with a PAN column.");
       const firmId = await resolveFirmId();
 
       const { data: batchRow, error: bErr } = await supabase.from("tds_pan_verification_batches").insert({
@@ -236,6 +210,7 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
       const traces: TracesPanRow[] = (tr || []).map((t: any) => ({ row_id: t.id, pan: t.pan, name: t.name, verified_name: t.verified_name, pan_status: t.pan_status }));
 
       const compared = comparePanVerification(office, traces);
+      setDiagnostics(panDiagnostics(office, traces));
 
       // Preserve overrides across re-runs, keyed by PAN (stable one-per-PAN).
       const { data: prior } = await supabase.from("tds_pan_verification_results")
@@ -416,7 +391,7 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
             <span className="text-muted-foreground font-normal">· {officeCount} office parties this quarter</span>
             {validating && <span className="text-xs text-amber-600 flex items-center gap-1"><Loader2 size={11} className="animate-spin" /> verifying…</span>}
           </p>
-          <input ref={fileInputRef} type="file" accept=".xls,.xlsx" className="hidden"
+          <input ref={fileInputRef} type="file" accept=".xls,.xlsx,.csv,.txt" className="hidden"
             onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImport(f); e.currentTarget.value = ""; }} />
           <Button size="sm" variant={batch ? "outline" : "default"} className="gap-1" disabled={importing || disabled}
             onClick={() => fileInputRef.current?.click()}>
@@ -431,6 +406,18 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
 
       {results && (
         <>
+          {/* Diagnostics — plain-language reasons for a low/zero verified count. */}
+          {diagnostics.length > 0 && (
+            <Card className="border-amber-200 dark:border-amber-900 bg-amber-50/50 dark:bg-amber-950/20">
+              <CardContent className="p-3 space-y-1">
+                <p className="text-xs font-semibold text-amber-700 dark:text-amber-300">Things to check</p>
+                <ul className="text-xs text-amber-800 dark:text-amber-200 list-disc pl-4 space-y-0.5">
+                  {diagnostics.map((d, i) => <li key={i}>{d}</li>)}
+                </ul>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Live, clickable dashboard cards */}
           <div className={cn("grid grid-cols-3 sm:grid-cols-5 gap-3", validating && "animate-pulse")}>
             {([

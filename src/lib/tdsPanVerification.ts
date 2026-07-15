@@ -35,9 +35,17 @@ export interface PanResultRow {
   validation_result: PanValidationResult;
 }
 
-/** Normalise a PAN for exact matching: uppercase, strip whitespace. */
+/** Normalise a PAN for exact matching: uppercase, strip ALL whitespace + hidden
+ * separators so "aaa pp 4792 m", "AAAPP4792M " and a zero-width-space copy all
+ * compare equal (mirrors Stage-1 normPan robustness). */
 export const normalizePan = (pan: string | null | undefined): string =>
-  (pan ?? "").trim().toUpperCase().replace(/\s+/g, "");
+  (pan ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+/** The canonical PAN shape: 5 letters + 4 digits + 1 letter. Used to detect a PAN
+ * column (and validate a PAN cell) by VALUE — so a TRACES file whose PAN header is
+ * unusual/absent still parses, exactly like Stage-1's looksLikePan. */
+const PAN_SHAPE_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+export const looksLikePan = (v: unknown): boolean => PAN_SHAPE_RE.test(normalizePan(v == null ? "" : String(v)));
 
 /**
  * Normalise a legal-entity name for INTELLIGENT (not exact) comparison: case,
@@ -52,6 +60,10 @@ export const normalizeName = (v: string | null | undefined): string => {
   s = ` ${s.replace(/\s+/g, " ").trim()} `;
   s = s.replace(/ PVT /g, " PRIVATE ").replace(/ LTD /g, " LIMITED ");
   s = s.replace(/ P LIMITED /g, " PRIVATE LIMITED ").replace(/ CORPN /g, " CORPORATION ").replace(/ CO /g, " COMPANY ");
+  // Strip a LEADING honorific/article a working file routinely prefixes — mirrors
+  // Stage-1 normName so "M/s ABC" and "ABC" don't read as a false Name Mismatch.
+  // Leading-anchored so a legitimate mid-name "M S" or "THE" survives.
+  s = s.replace(/^ (M S|MESSRS|MESSER?S|THE) /, " ");
   return s.replace(/\s+/g, " ").trim();
 };
 
@@ -128,16 +140,156 @@ export function classifyPanStatus(
   // status ("Valid but Inoperative", "PAN is Valid and Operative") is classified
   // by its strongest signal. "inactive" contains "active" and "inoperative"
   // contains "operative", so those must win before the positive checks below.
-  if (s.includes("invalid") || s.includes("not valid")) return "PAN Invalid";
-  if (s.includes("inoperative") || s.includes("inactive")) return "PAN Inactive";
+  //
+  // INVALID / unusable — the real TRACES/ITD terminal states beyond "invalid":
+  // Deactivated, Deleted, Fake, Struck off (company), Amalgamation/Amalgamated,
+  // "Marked as Invalid", and "not present/found in ITD" (the PAN doesn't exist).
+  if (/invalid|not\s*valid|deactivat|deleted|fake|struck|amalgamat|not\s*(present|found|exist)|non.?exist|not\s*in\s*itd/.test(s)) return "PAN Invalid";
+  // INACTIVE / inoperative — incl. a valid PAN NOT LINKED to Aadhaar (TRACES marks
+  // it operative-but-inoperative; higher TDS applies), so treat "not linked" here.
+  if (/inoperative|inactive|not\s*linked|notlinked/.test(s)) return "PAN Inactive";
   // Keyword (not exact) match so "Valid and Operative", "PAN is Valid", etc. are
-  // recognised as verified rather than falling through to "PAN Status Error".
-  if (s.includes("valid") || s.includes("operative") || s.includes("active")) return "PAN Verified";
+  // recognised as verified rather than "PAN Status Error". Only unambiguously
+  // POSITIVE words — a speculative "existing" is deliberately NOT here (it could
+  // slip a "PAN not existing" past the negative checks into Verified).
+  if (/valid|operative|active/.test(s)) return "PAN Verified";
   return "PAN Status Error";
 }
 
 /** Anything that is not a clean "PAN Verified" is an exception needing review/override. */
 export const isPanException = (r: PanValidationResult): boolean => r !== "PAN Verified";
+
+// ── TRACES-file column recognition (header synonyms, mirrors Stage-1) ──────────
+const nh = (s: unknown): string => String(s ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+const isStatusHeader = (h: string) => h.includes("status");
+const isNameHeader = (h: string) =>
+  h === "name" || h.includes("partyname") || h.includes("deducteename") || h === "party" ||
+  h === "deductee" || h.includes("nameofdeductee") || h.includes("nameofperson") || h.includes("assessee");
+const isVerifiedHeader = (h: string) =>
+  h.includes("verified") || h.includes("nameasper") || h.includes("nameonpan") || h.includes("tracesname") ||
+  h.includes("panholder") || h.includes("nameaspan") || h.includes("asperitd") || h.includes("asperpan") || h.includes("panname");
+
+/**
+ * Extract TRACES PAN rows from a set of sheet grids — GENERIC, mirroring the
+ * Stage-1 import: the PAN column is found by VALUE (looksLikePan) so an unusual or
+ * missing PAN header still parses; the status column is found by header OR by value
+ * (a column of valid/operative/invalid…); and only rows whose PAN cell is a real
+ * PAN are emitted (the header + any title/total rows are skipped automatically).
+ * The grids come from tdsWorkbook.readSheetGrids, which uses the TRUE used range so
+ * a bloated-!ref file can never freeze the tab. Pure + testable (no XLSX/I-O here).
+ */
+export function extractTracesRows(grids: { name: string; grid: unknown[][] }[]): Omit<TracesPanRow, "row_id">[] {
+  let bestOut: Omit<TracesPanRow, "row_id">[] = [];
+  for (const { grid } of grids) {
+    if (!grid || !grid.length) continue;
+    const ncol = grid.reduce((m, row) => Math.max(m, (row || []).length), 0);
+    if (!ncol) continue;
+
+    // 1) VALUE-BASED PAN column — the column whose non-empty values are most often
+    //    PANs, regardless of the header wording (or a missing header).
+    let panCol = -1, bestFrac = 0, firstPanRow = 0;
+    for (let c = 0; c < ncol; c++) {
+      let nonEmpty = 0, pans = 0, firstRow = -1;
+      for (let r = 0; r < grid.length; r++) {
+        const s = String(grid[r]?.[c] ?? "").trim();
+        if (!s) continue;
+        nonEmpty++;
+        if (looksLikePan(s)) { pans++; if (firstRow < 0) firstRow = r; }
+      }
+      const frac = nonEmpty ? pans / nonEmpty : 0;
+      if (pans >= 1 && frac > bestFrac) { bestFrac = frac; panCol = c; firstPanRow = Math.max(0, firstRow); }
+    }
+    if (panCol < 0 || bestFrac < 0.3) continue; // no PAN column on this sheet
+
+    // 2) HEADER row — the best of: a row (in the first 25) carrying a PAN-ish AND a
+    //    DIFFERENT-text status/name header, else the row just above the first PAN.
+    //    The different-text check rejects a merged banner ("PAN Verification
+    //    Status" spread across every column) being taken as the header.
+    let hdrIdx = -1;
+    const scan = Math.min(grid.length, 25);
+    for (let r = 0; r < scan; r++) {
+      const cells = (grid[r] || []).map(nh);
+      const panIdx = cells.findIndex((h) => h.includes("pan"));
+      if (panIdx < 0) continue;
+      const otherIdx = cells.findIndex((h, i) => i !== panIdx && h !== cells[panIdx] && (isStatusHeader(h) || isNameHeader(h) || isVerifiedHeader(h)));
+      if (otherIdx >= 0) { hdrIdx = r; break; }
+    }
+    // A real header sits ABOVE the data; a "header" row at/below the first PAN
+    // value is spurious, so fall back to the row just above the first PAN.
+    const useHdr = hdrIdx >= 0 && (firstPanRow === 0 ? false : hdrIdx < firstPanRow);
+    const headerRow = (useHdr ? grid[hdrIdx] : (firstPanRow > 0 ? grid[firstPanRow - 1] : [])) || [];
+    const header = headerRow.map(nh);
+    const findCol = (pred: (h: string) => boolean) => header.findIndex(pred);
+    const nameCol = findCol(isNameHeader);
+    const verifiedCol = findCol(isVerifiedHeader);
+
+    // 3) STATUS column — VALUE-BASED FIRST (the reliable signal, per Stage 1): the
+    //    column whose values are mostly PAN-status words. The header-labelled column
+    //    is only a fallback, so a mislabelled/serial column can't become the status.
+    let statusCol = -1, bf = 0;
+    for (let c = 0; c < ncol; c++) {
+      if (c === panCol) continue;
+      let ne = 0, hit = 0;
+      for (let r = 0; r < grid.length; r++) {
+        const s = String(grid[r]?.[c] ?? "").toLowerCase();
+        if (!s.trim()) continue;
+        ne++;
+        if (/valid|operative|inactive|\bactive\b|inoperative|deactivat|struck|fake|amalgamat|not\s*(present|found|linked)/.test(s)) hit++;
+      }
+      const frac = ne ? hit / ne : 0;
+      if (frac >= 0.4 && frac > bf) { bf = frac; statusCol = c; }
+    }
+    if (statusCol < 0) statusCol = findCol(isStatusHeader); // header fallback (coded/unusual status values)
+
+    // 4) Emit only rows whose PAN cell is a real PAN (skips header + title/total rows).
+    const cell = (row: unknown[], i: number) => (i >= 0 ? (String(row?.[i] ?? "").trim() || null) : null);
+    const out: Omit<TracesPanRow, "row_id">[] = [];
+    for (let r = 0; r < grid.length; r++) {
+      const dr = grid[r] || [];
+      if (!looksLikePan(dr[panCol])) continue;
+      out.push({
+        pan: normalizePan(dr[panCol]),
+        name: cell(dr, nameCol),
+        verified_name: cell(dr, verifiedCol),
+        pan_status: cell(dr, statusCol),
+      });
+    }
+    // Keep the sheet that yields the MOST PAN rows (a workbook may have a small
+    // summary sheet + the real data sheet; pick the real one, not just the first).
+    if (out.length > bestOut.length) bestOut = out;
+  }
+  return bestOut;
+}
+
+/**
+ * Plain-English diagnostics for the WHOLE verification — the Stage-1 "explain WHY,
+ * don't just count" learning. Surfaces systemic problems (office parties with no
+ * PAN, a wrong-scope/other-client TRACES file, office PANs missing from the file,
+ * a request-file imported instead of the result-file) so a low/zero verified count
+ * is explained rather than left for the user to puzzle out.
+ */
+export function panDiagnostics(office: OfficeParty[], traces: TracesPanRow[]): string[] {
+  const diag: string[] = [];
+  const officePans = new Set(office.map((o) => normalizePan(o.pan)).filter(Boolean));
+  const tracePans = new Set(traces.map((t) => normalizePan(t.pan)).filter(Boolean));
+  const officeNoPan = office.filter((o) => !normalizePan(o.pan)).length;
+  const overlap = [...tracePans].filter((p) => officePans.has(p)).length;
+  const tracesOnly = [...tracePans].filter((p) => !officePans.has(p)).length;
+  const officeOnly = [...officePans].filter((p) => !tracePans.has(p)).length;
+
+  if (office.length > 0 && officeNoPan > 0)
+    diag.push(`${officeNoPan} office part${officeNoPan === 1 ? "y has" : "ies have"} no PAN and cannot be verified — add the PAN in Data Entry.`);
+  if (tracePans.size > 0 && officePans.size > 0 && overlap === 0)
+    diag.push(`None of the ${tracePans.size} PANs in the TRACES file match this quarter's office parties — the file may be for a different client or quarter.`);
+  else if (tracesOnly > 0 && officePans.size > 0 && tracesOnly >= officePans.size)
+    diag.push(`${tracesOnly} PAN(s) in the TRACES file are not in this quarter's office data — check the file's scope (it may cover more than this quarter).`);
+  if (officeOnly > 0)
+    diag.push(`${officeOnly} office PAN(s) were not found in the TRACES file — re-run the TRACES bulk-PAN request including every PAN for this quarter, then re-import.`);
+  const withStatus = traces.filter((t) => (t.pan_status ?? "").trim()).length;
+  if (traces.length >= 3 && withStatus === 0)
+    diag.push(`The TRACES file has no PAN Status values — check you imported the verification RESULT file (with a PAN Status column), not the request file.`);
+  return diag;
+}
 
 /**
  * Stage-2 comparison. The records verified are the PANs in the TRACES bulk file —
@@ -163,8 +315,12 @@ export function comparePanVerification(office: OfficeParty[], traces: TracesPanR
     seenTraces.add(k);
     const o = officeByPan.get(k);
     const status = classifyPanStatus(t.pan_status);
-    const result: PanValidationResult =
-      status === "PAN Verified" && o && !namesMatch(o.name, t.verified_name || t.name, t.pan)
+    // A PAN in the TRACES file with NO matching office party is not this quarter's
+    // deductee — flag it (not silently "verified"), so a wrong-scope / wrong-client
+    // file surfaces instead of inflating the verified count.
+    const result: PanValidationResult = !o
+      ? "Party Missing in Office Data"
+      : status === "PAN Verified" && !namesMatch(o.name, t.verified_name || t.name, t.pan)
         ? "Name Mismatch"
         : status;
     rows.push({ office_deductee_id: o?.deductee_id ?? null, pan_row_id: t.row_id, party_name: o?.name || t.name, pan: t.pan ?? null, pan_status: t.pan_status ?? null, validation_result: result });

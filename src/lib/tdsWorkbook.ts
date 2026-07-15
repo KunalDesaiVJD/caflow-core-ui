@@ -121,6 +121,34 @@ export function parseWorkbookRows(buffer: ArrayBuffer, onProgress?: (p: ParsePro
   return rows;
 }
 
+/**
+ * Read every VISIBLE sheet of an .xlsx/.xls ArrayBuffer to a raw grid (array of
+ * rows), using the SAME anti-freeze machinery as the deductee importer: the TRUE
+ * used range (never the bloated !ref), merged-cell fill, hidden-sheet handling and
+ * per-sheet memoisation. Callers that do their own header/column detection on the
+ * grid (e.g. Stage-2 TRACES PAN parsing) reuse this so they can NEVER freeze the
+ * tab on a bloated-!ref file — the exact hang Stage 1 fixed.
+ */
+export function readSheetGrids(buffer: ArrayBuffer): { name: string; grid: unknown[][] }[] {
+  const wb = XLSX.read(buffer, { type: "array" });
+  const gridOf = makeGridOf(wb);
+  let names = visibleSheetNames(wb);
+  let out = names.map((name) => ({ name, grid: gridOf(name) }));
+  // If hidden-sheet filtering left nothing with data, retry including hidden.
+  if (!out.some((s) => s.grid.length) && names.length !== wb.SheetNames.length) {
+    out = wb.SheetNames.map((name) => ({ name, grid: gridOf(name) }));
+  }
+  return out;
+}
+
+/** Read delimited text (CSV / tab / TRACES .txt) into a single raw grid, shaped
+ * like readSheetGrids so the SAME grid-based extractors work on it. Auto-detects
+ * the delimiter (comma / tab / pipe). */
+export function readDelimitedGrid(text: string): { name: string; grid: unknown[][] }[] {
+  const parsed = Papa.parse<string[]>(text, { header: false, skipEmptyLines: false });
+  return [{ name: "text", grid: (parsed.data as unknown[][]) || [] }];
+}
+
 /** Parse CSV text into keyed deductee rows. */
 export function parseCsvRows(text: string, onProgress?: (p: ParseProgress) => void): Record<string, unknown>[] {
   onProgress?.({ stage: "reading" });
