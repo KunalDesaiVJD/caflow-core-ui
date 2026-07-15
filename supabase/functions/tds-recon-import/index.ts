@@ -186,19 +186,15 @@ function coerceField(field: keyof CanonicalRow, v: unknown): string | number | u
   return String(v).trim();
 }
 
-// ── Deterministic section-column picker ─────────────────────────────────────
-// The single biggest source of false "Section Mismatch"es was the LLM
-// inconsistently choosing WHICH column is the TDS section when a client file has
-// several section-ish columns at once — a clean code column ("194J"), a
-// descriptive one ("TDS - Professional Fees"), AND a raw legal-clause column
-// ("393(1) 6(iii) D(b)"). Re-importing the very SAME file could yield "194J" one
-// day and "393(1)..." the next (observed in production: batch 1 captured
-// "194C/194J", a re-import of the identical file captured "393(1)..." garbage).
-// This resolves the section column deterministically FROM THE DATA: score every
-// column by how many of its values look like a genuine TDS section (a 192–206
-// statutory code, or a standard nature-of-payment word) and pick the best —
-// strongly preferring a column of actual codes, then descriptive text, and never
-// an unmappable clause-citation column. The result overrides the LLM's guess.
+// ── Section-cell classifier ─────────────────────────────────────────────────
+// The single biggest source of false "Section Mismatch"es was inconsistently
+// choosing WHICH column is the TDS section when a client file has several
+// section-ish columns at once — a clean code column ("194J"), a descriptive one
+// ("TDS - Professional Fees"), AND a raw legal-clause column ("393(1) 6(iii)").
+// The profiler (below) uses this classifier to score every column by how many of
+// its values look like a genuine TDS section — a 192–206 statutory CODE or a
+// standard nature-of-payment word — and the mapping engine then prefers a column
+// of real codes (or a section-headed column) over anything ambiguous.
 const SEC_CODE_RE = /\b(19[2-9][A-Z]{0,2}|20[0-9][A-Z]{0,2})\b/;
 const SEC_KEYWORDS = ["contract", "professional", "technical", "rent", "commission", "brokerage", "salary", "interest", "purchase", "goods", "dividend", "royalty", "insurance", "transport", "advertis"];
 function classifySectionCell(v: unknown): "code" | "keyword" | "none" {
@@ -208,35 +204,11 @@ function classifySectionCell(v: unknown): "code" | "keyword" | "none" {
   const low = s.toLowerCase();
   return SEC_KEYWORDS.some(k => low.includes(k)) ? "keyword" : "none";
 }
-/** Best section column by data pattern, or null if no column reads as sections. */
-function pickSectionColumn(allRows: Record<string, unknown>[]): string | null {
-  const headers = new Set<string>();
-  for (const r of allRows) if (r && typeof r === "object") for (const k of Object.keys(r)) headers.add(k);
-  let best: { header: string; code: number; kw: number; frac: number } | null = null;
-  for (const h of headers) {
-    let nonEmpty = 0, code = 0, kw = 0;
-    for (const r of allRows) {
-      const s = r?.[h] == null ? "" : String(r[h]).trim();
-      if (!s) continue;
-      nonEmpty++;
-      const c = classifySectionCell(s);
-      if (c === "code") code++; else if (c === "keyword") kw++;
-    }
-    if (nonEmpty === 0) continue;
-    const frac = (code + kw) / nonEmpty;
-    if (frac < 0.5) continue; // at least half the column's values must read as sections
-    // Prefer most real CODES, then keyword hits, then coverage.
-    if (!best || code > best.code || (code === best.code && kw > best.kw) || (code === best.code && kw === best.kw && frac > best.frac)) {
-      best = { header: h, code, kw, frac };
-    }
-  }
-  return best ? best.header : null;
-}
 
-// ── Data-pattern column detection (deterministic, no LLM) ────────────────────
-// Fills the gaps header-name matching leaves: a PAN column and a date column are
-// identifiable from their VALUES alone, regardless of how the header is worded.
-// Together with the header synonyms and pickSectionColumn this lets the
+// ── Data-pattern value predicates (deterministic, no LLM) ────────────────────
+// A PAN column and a date column are identifiable from their VALUES alone,
+// regardless of how the header is worded. The profiler uses these to build each
+// column's value fingerprint (fracPan / fracDate / fracName), which lets the
 // overwhelming majority of real client files map with ZERO AI calls — the file
 // is parsed to structured rows and normalised entirely in code.
 const PAN_VALUE_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
@@ -255,9 +227,8 @@ function looksLikeDate(v: unknown): boolean {
   return DATE_VALUE_RE.test(s) || DATE_TEXT_RE.test(s);
 }
 /** A deductee-NAME-looking value: mostly letters, multi-char, and NOT a PAN /
- * date / pure number / section code. Used only as a LAST-RESORT column detector
- * when no header matched a name synonym (e.g. an unlabelled or oddly-named party
- * column). Section/challan columns are claimed before this runs. */
+ * date / pure number / section code. The profiler counts these to score which
+ * column is the party/name column even under an unlabelled or odd header. */
 function looksLikeName(v: unknown): boolean {
   const s = v == null ? "" : String(v).trim();
   if (s.length < 4) return false;
@@ -268,77 +239,200 @@ function looksLikeName(v: unknown): boolean {
   const letters = (s.match(/[A-Za-z]/g) || []).length;
   return letters >= 3 && letters / s.length >= 0.5;                     // predominantly alphabetic
 }
-/** Pick the (unclaimed) column whose non-empty VALUES best satisfy `pred`
- * (≥60%). Used to resolve pan/date columns when their headers didn't match a
- * synonym. Returns null if no column fits. */
-function detectColumnByValue(
-  allRows: Record<string, unknown>[], claimed: Set<string>, pred: (v: unknown) => boolean,
-): string | null {
-  const headers = new Set<string>();
-  for (const r of allRows) if (r && typeof r === "object") for (const k of Object.keys(r)) headers.add(k);
-  let best: { header: string; frac: number } | null = null;
-  for (const h of headers) {
-    if (claimed.has(h)) continue;
-    let nonEmpty = 0, hit = 0;
-    for (const r of allRows) {
-      const v = r?.[h];
-      if (v === null || v === undefined || String(v).trim() === "") continue;
-      nonEmpty++; if (pred(v)) hit++;
-    }
-    if (nonEmpty === 0) continue;
-    const frac = hit / nonEmpty;
-    if (frac >= 0.6 && (!best || frac > best.frac)) best = { header: h, frac };
-  }
-  return best ? best.header : null;
-}
 
 /** A resolved header→field map: each source column header points at the
  * canonical field it feeds. Several headers may map to the SAME field. */
 type HeaderMap = Record<string, keyof CanonicalRow>;
 
-/**
- * Resolve the header→field map for a whole tabular file, deterministically:
- *   1. classify every distinct source header by wording (bestFieldForHeader);
- *   2. value-based section column (pickSectionColumn) — the most reliable way to
- *      identify the section, and what stops the re-import section flip-flop;
- *   3. value-based PAN / date columns when no header matched by name.
- * `aiMap` (from resolveMappingWithAI) is merged in as a LAST resort for fields
- * still unresolved — deterministic assignments are never overwritten.
- */
-function resolveColumnMapping(allRows: Record<string, unknown>[], aiMap?: Partial<Record<keyof CanonicalRow, string>>): HeaderMap {
+// ── COLUMN PROFILING + CONFIDENCE-SCORED, VALIDATED MAPPING ENGINE ────────────
+// Every column is PROFILED by the shape of its VALUES (how often they read as a
+// PAN, a date, a name, a section, a number, …). Fields are then assigned by
+// combined header+value confidence, and — critically — the AMOUNT vs TDS columns
+// are resolved by the RATE RELATIONSHIP (TDS is a small statutory % of the amount)
+// rather than trusting header text, which is what makes a decoy column (e.g. a
+// challan-paid "AMOUNT" that actually holds the TDS) lose to the real bill column.
+// Finally EVERY decision is VALIDATED (TDS ≤ amount, PAN/date/name shape); a failed
+// validation surfaces as an issue that escalates the file to the AI mapper.
+interface ColProfile {
+  header: string; ne: number;
+  fracPan: number; fracDate: number; fracName: number; fracSec: number; fracSecCode: number;
+  nums: number[]; fracNum: number; median: number | null; isSerial: boolean;
+  hfield: keyof CanonicalRow | "__bank__" | null;
+}
+// Statutory TDS rates (as fractions) used to recognise a genuine amount/TDS pair.
+const TDS_RATES = [0.001, 0.005, 0.0075, 0.01, 0.02, 0.025, 0.05, 0.075, 0.10, 0.20, 0.30, 0.375];
+// A ratio counts as "near a statutory rate" within ±15% of the rate, with a small
+// absolute floor for rounding. The floor is kept TIGHT (0.0005) so a tiny decoy
+// ratio (e.g. TDS/date-as-integer ≈ 1e-4, or TDS/phone ≈ 1e-8) is NOT mistaken for
+// the 0.1% (194Q) rate — only a genuine ~0.1% ratio lands in [0.0005, 0.0015].
+const nearTdsRate = (x: number) => TDS_RATES.some((r) => Math.abs(x - r) <= Math.max(0.0005, r * 0.15));
+// bestFieldForHeader, but flag bank/branch columns explicitly so they can be kept
+// out of BOTH the deductee-name and money assignments.
+function headerFieldTagged(header: string): keyof CanonicalRow | "__bank__" | null {
+  const norm = normaliseHeader(header);
+  if (norm.includes("bank") || norm.includes("branch")) return "__bank__";
+  return bestFieldForHeader(header);
+}
+function profileColumns(allRows: Record<string, unknown>[]): ColProfile[] {
   const headers = new Set<string>();
   for (const r of allRows) if (r && typeof r === "object") for (const k of Object.keys(r)) headers.add(k);
+  return [...headers].map((h) => {
+    let ne = 0, pan = 0, date = 0, name = 0, scode = 0, skw = 0;
+    const nums: number[] = [];
+    for (const r of allRows) {
+      const v = r?.[h]; const s = v == null ? "" : String(v).trim();
+      if (!s) continue; ne++;
+      if (looksLikePan(s)) pan++;
+      if (looksLikeDate(s)) date++;
+      if (looksLikeName(s)) name++;
+      const sk = classifySectionCell(s); if (sk === "code") scode++; else if (sk === "keyword") skw++;
+      // Only count a value as numeric MONEY when it has NO alphabetic run (so
+      // "IDFC BANK", "194C", "6-Oct-25" are out) AND is not a date. A slash/dot/dash
+      // date like "05/04/2025" would otherwise parse (toNum strips separators) to a
+      // huge integer (5042025) and make a DATE column masquerade as a money column —
+      // which, on the standard two-date 26Q layout, could let the (unclaimed) "Date
+      // of Deduction" column win as amount_paid. Dates must never be money.
+      if (!/[A-Za-z]{2,}/.test(s) && !looksLikeDate(s)) { const n = toNum(v); if (n != null) nums.push(n); }
+    }
+    const sorted = [...nums].sort((a, b) => a - b);
+    const median = sorted.length ? sorted[Math.floor(sorted.length / 2)] : null;
+    const isSerial = nums.length >= 3 && nums.length === ne && Math.min(...nums) >= 0 && Math.max(...nums) <= ne + 2 && nums.every((x) => Number.isInteger(x));
+    return {
+      header: h, ne,
+      fracPan: ne ? pan / ne : 0, fracDate: ne ? date / ne : 0, fracName: ne ? name / ne : 0,
+      fracSec: ne ? (scode + skw) / ne : 0, fracSecCode: ne ? scode / ne : 0,
+      nums, fracNum: ne ? nums.length / ne : 0, median, isSerial, hfield: headerFieldTagged(h),
+    };
+  });
+}
 
+// `issues` are escalation-worthy (a field is unresolved or a pick looks wrong →
+// try the AI mapper). `notes` are informational — deterministic auto-corrections
+// already applied (e.g. an amount/TDS swap) that need no AI, only transparency.
+interface MappingResult { map: HeaderMap; report: Record<string, { header: string; method: string }>; issues: string[]; notes: string[]; }
+
+/**
+ * Resolve the header→field map for a whole tabular file with confidence scoring,
+ * the amount/TDS rate relationship, and full validation. `aiMap` (from the AI
+ * mapper) seeds fields still unresolved after the deterministic pass.
+ */
+function resolveMapping(allRows: Record<string, unknown>[], aiMap?: Partial<Record<keyof CanonicalRow, string>>): MappingResult {
+  const cols = profileColumns(allRows);
+  const byH: Record<string, ColProfile> = {}; for (const c of cols) byH[c.header] = c;
   const map: HeaderMap = {};
-  for (const h of headers) { const f = bestFieldForHeader(h); if (f) map[h] = f; }
-
-  const mappedFields = () => new Set(Object.values(map));
-  const secCol = pickSectionColumn(allRows);
-  if (secCol && !map[secCol]) map[secCol] = "section_code";
-  if (!mappedFields().has("pan")) { const c = detectColumnByValue(allRows, new Set(Object.keys(map)), looksLikePan); if (c) map[c] = "pan"; }
-  if (!mappedFields().has("date_of_payment")) { const c = detectColumnByValue(allRows, new Set(Object.keys(map)), looksLikeDate); if (c) map[c] = "date_of_payment"; }
-  // Last-resort NAME by value — only when no header matched a name synonym. Runs
-  // AFTER section/pan/date are claimed so it can't steal them; picks the unclaimed
-  // column whose values are most name-like (the party column even under an
-  // unlabelled/odd header). Without this, a file with an exotic name header yields
-  // no name → nothing for the compare engine to pair on.
-  if (!mappedFields().has("deductee_name")) {
-    // Exclude challan/bank/narration-ish columns from value-based name detection —
-    // they contain name-like text ("HDFC BANK LTD", narration) but are NOT the
-    // deductee, and their header returned null from bestFieldForHeader so they'd
-    // otherwise be unclaimed and eligible.
-    const blocked = new Set(Object.keys(map));
-    for (const h of headers) { if (/bank|branch|narration|challan|deposit|remark|address|particularsofpayment/.test(normaliseHeader(h))) blocked.add(h); }
-    const c = detectColumnByValue(allRows, blocked, looksLikeName); if (c) map[c] = "deductee_name";
+  const claimed = new Set<string>();
+  const report: Record<string, { header: string; method: string }> = {};
+  const put = (field: keyof CanonicalRow, header: string, method: string) => {
+    if (!map[header]) map[header] = field; claimed.add(header);
+    if (!report[field]) report[field] = { header, method };
+  };
+  const bestUnclaimed = (score: (c: ColProfile) => number): ColProfile | null => {
+    let best: { c: ColProfile; v: number } | null = null;
+    for (const c of cols) { if (claimed.has(c.header)) continue; const v = score(c); if (v > 0 && (!best || v > best.v)) best = { c, v }; }
+    return best?.c ?? null;
+  };
+  // PAN — value first (a PAN column is unambiguous by value), header fallback.
+  { const v = bestUnclaimed((c) => c.fracPan >= 0.6 ? c.fracPan : 0);
+    if (v) put("pan", v.header, "value"); else { const h = cols.find((c) => !claimed.has(c.header) && c.hfield === "pan"); if (h) put("pan", h.header, "header"); } }
+  // DATE (payment) — a header date column that actually holds dates wins; else value.
+  { const h = cols.find((c) => !claimed.has(c.header) && c.hfield === "date_of_payment" && c.fracDate >= 0.3);
+    if (h) put("date_of_payment", h.header, "header"); else { const v = bestUnclaimed((c) => c.fracDate >= 0.5 ? c.fracDate : 0); if (v) put("date_of_payment", v.header, "value"); } }
+  // SECTION — a column of real statutory CODES (192–206) by value is unambiguous;
+  // otherwise a section-HEADED column (Section / Nature of Payment / U/S). A column
+  // that only matches section KEYWORDS by value (e.g. a yes/no "INTEREST PAID" flag
+  // whose text merely contains "interest") is NOT treated as the section unless its
+  // header confirms it — this stops a boolean/indicator column masquerading as the
+  // section (which would otherwise fabricate section mismatches at compare time).
+  { const codeCol = bestUnclaimed((c) => c.fracSecCode >= 0.5 ? c.fracSecCode : 0);
+    if (codeCol) put("section_code", codeCol.header, "value-code");
+    else { const h = cols.find((c) => !claimed.has(c.header) && c.hfield === "section_code"); if (h) put("section_code", h.header, "header"); } }
+  // NAME — a header name column (never bank/branch); else the most name-like column.
+  { const h = cols.find((c) => !claimed.has(c.header) && c.hfield === "deductee_name" && c.fracName >= 0.4);
+    if (h) put("deductee_name", h.header, "header");
+    else { const v = bestUnclaimed((c) => (c.hfield === "__bank__" || /bank|branch|narration|challan|remark|address/.test(normaliseHeader(c.header))) ? 0 : (c.fracName >= 0.6 ? c.fracName : 0)); if (v) put("deductee_name", v.header, "value"); } }
+  // AUXILIARY fields straight from their headers (never money): a second date
+  // (Date of Deduction) and the challan BSR/number. Claiming them here preserves
+  // them in the canonical output AND keeps them out of the money candidate set.
+  for (const f of ["date_of_deduction", "challan_bsr", "challan_no"] as const) {
+    const h = cols.find((c) => !claimed.has(c.header) && c.hfield === f); if (h) put(f, h.header, "header");
   }
-
-  if (aiMap) {
-    const have = mappedFields();
-    for (const [f, h] of Object.entries(aiMap) as [keyof CanonicalRow, string][]) {
-      if (h && !have.has(f) && !map[h]) map[h] = f;
+  // Numeric money candidates — exclude serials, DATE columns (dates parse to big
+  // integers), challan/BSR/cheque columns, and banks. The fracDate guard is
+  // belt-and-braces on top of profileColumns already keeping dates out of `nums`.
+  const money = cols.filter((c) => !claimed.has(c.header) && c.fracNum >= 0.6 && !c.isSerial && c.fracDate < 0.5
+    && c.hfield !== "challan_bsr" && c.hfield !== "challan_no" && c.hfield !== "date_of_payment" && c.hfield !== "date_of_deduction" && c.hfield !== "__bank__"
+    && !/bsr|cin|cheque|chalanno|challanno|srno|serialno/.test(normaliseHeader(c.header)));
+  // RATE — a numeric column of small values (≤ 40) with a rate header.
+  { const rc = money.find((c) => c.hfield === "rate" && c.median != null && c.median <= 40); if (rc) put("rate", rc.header, "header"); }
+  // INTEREST — a numeric column with an interest header.
+  { const ic = money.find((c) => !claimed.has(c.header) && c.hfield === "interest"); if (ic) put("interest", ic.header, "header"); }
+  // AMOUNT + TDS — resolved by the RATE RELATIONSHIP (TDS ≈ statutory % of amount),
+  // not header text, so a decoy money column loses to the real bill/TDS pair.
+  const cand = money.filter((c) => !claimed.has(c.header));
+  let bestPair: { a: string; t: string; fit: number; score: number } | null = null;
+  for (const a of cand) for (const t of cand) {
+    if (a.header === t.header) continue;
+    let both = 0, ok = 0, rateOk = 0;
+    for (const r of allRows) {
+      const av = toNum(r[a.header]), tv = toNum(r[t.header]);
+      if (av == null || tv == null || av <= 0 || tv < 0) continue;
+      both++; const ratio = tv / av;
+      if (ratio > 0 && ratio <= 0.40) { ok++; if (nearTdsRate(ratio)) rateOk++; }
+    }
+    if (both < 1) continue;
+    const fit = ok / both + (rateOk / both) * 0.5;
+    const hb = (a.hfield === "amount_paid" ? 0.3 : 0) + (t.hfield === "tds_amount" ? 0.3 : 0) + (a.hfield === "tds_amount" ? -0.2 : 0);
+    const score = fit + hb + ((a.median ?? 0) > (t.median ?? 0) ? 0.05 : 0);
+    if (fit >= 0.5 && (!bestPair || score > bestPair.score)) bestPair = { a: a.header, t: t.header, fit, score };
+  }
+  if (bestPair) { put("amount_paid", bestPair.a, "relationship"); put("tds_amount", bestPair.t, "relationship"); }
+  else { // no relationship (e.g. only one money column) → header hints, else larger=amount.
+    const ah = cand.find((c) => c.hfield === "amount_paid"), th = cand.find((c) => c.hfield === "tds_amount");
+    if (ah) put("amount_paid", ah.header, "header-only");
+    if (th && th.header !== report.amount_paid?.header) put("tds_amount", th.header, "header-only");
+    if (!report.amount_paid && !report.tds_amount && cand.length === 1) put("amount_paid", cand[0].header, "single-numeric");
+  }
+  // SECONDARY money columns (multi-SHEET files: one sheet "Bill", another "Amount")
+  // — map an additional amount/TDS-headed column ONLY if it rarely co-occurs with
+  // the primary (a genuine per-sheet alternative), never a same-row decoy.
+  const overlapFrac = (h1: string, h2: string) => {
+    let both = 0, either = 0;
+    for (const r of allRows) { const a = toNum(r[h1]) != null, b = toNum(r[h2]) != null; if (a || b) either++; if (a && b) both++; }
+    return either ? both / either : 0;
+  };
+  for (const field of ["amount_paid", "tds_amount"] as const) {
+    const primary = report[field]?.header; if (!primary) continue;
+    for (const c of cand) {
+      if (claimed.has(c.header) || c.hfield !== field) continue;
+      if (overlapFrac(primary, c.header) < 0.2) { map[c.header] = field; claimed.add(c.header); }
     }
   }
-  return map;
+  // AI-seeded fields (only fills what's still unresolved; never overrides).
+  if (aiMap) {
+    const have = new Set(Object.values(map));
+    for (const [f, h] of Object.entries(aiMap) as [keyof CanonicalRow, string][]) {
+      if (h && !have.has(f) && !map[h] && byH[h]) { map[h] = f; if (!report[f]) report[f] = { header: h, method: "ai" }; }
+    }
+  }
+  // ── VALIDATION ──
+  const issues: string[] = [];   // escalation-worthy — try the AI mapper
+  const notes: string[] = [];    // deterministic auto-corrections already applied
+  const amtH = report.amount_paid?.header, tdsH = report.tds_amount?.header;
+  if (amtH && tdsH && amtH !== tdsH) {
+    let inv = 0, tot = 0;
+    for (const r of allRows) { const av = toNum(r[amtH]), tv = toNum(r[tdsH]); if (av == null || tv == null || av <= 0) continue; tot++; if (tv > av) inv++; }
+    if (tot > 0 && inv / tot > 0.5) { // amount < TDS on the majority → the two are swapped → fix in place (deterministic, no AI needed)
+      notes.push("amount/TDS columns were swapped and auto-corrected");
+      report.amount_paid.header = tdsH; report.tds_amount.header = amtH;
+      for (const k of Object.keys(map)) { if (map[k] === "amount_paid") map[k] = "tds_amount"; else if (map[k] === "tds_amount") map[k] = "amount_paid"; }
+    }
+  }
+  if (report.pan && (byH[report.pan.header]?.fracPan ?? 0) < 0.5) issues.push("PAN column has few valid PANs");
+  if (report.date_of_payment && (byH[report.date_of_payment.header]?.fracDate ?? 0) < 0.4) issues.push("date column has few dates");
+  if (report.deductee_name && (byH[report.deductee_name.header]?.fracName ?? 0) < 0.4) issues.push("name column doesn't look like names");
+  if (!report.pan && !report.deductee_name) issues.push("no identity column (PAN/name)");
+  if (!report.amount_paid && !report.tds_amount) issues.push("no money column (amount/TDS)");
+  return { map, report, issues, notes };
 }
 
 /** Build a canonical row PURELY from the header→field map — no AI, no per-row
@@ -351,6 +445,7 @@ function buildCanonicalFromMap(row: Record<string, unknown>, map: HeaderMap): Ca
     deductee_name: null, pan: null, section_code: null, amount_paid: null, tds_amount: null,
     interest: null, rate: null, date_of_payment: null, date_of_deduction: null, challan_bsr: null, challan_no: null,
   };
+  if (!row || typeof row !== "object") return out;   // a blank/degenerate parsed row → all nulls, never a crash
   for (const [header, field] of Object.entries(map)) {
     if (out[field] !== null) continue;                 // first non-empty mapped column wins
     const v = coerceField(field, row[header]);
@@ -604,6 +699,9 @@ serve(async (req) => {
     // is the generous output budget for that single pass.
     const IMPORT_MAX_TOKENS = 24000;
     const collected: CanonicalRow[] = [];
+    // Auditable record of how each canonical field was mapped (tabular path only);
+    // returned to the UI so every mapping decision is visible before comparison.
+    let mappingReport: { source: string; fields: Record<string, { column: string; by: string }>; issues: string[] } | null = null;
 
     const httpErr = (status: number, errText: string) => {
       console.error("AI import error:", status, errText);
@@ -660,33 +758,49 @@ serve(async (req) => {
       // its output with these very same deterministic column reads).
       const allRows = (rows as Record<string, unknown>[]).slice(0, 20000);
 
-      // 1) Resolve the header→field map deterministically (synonyms + value-based
-      //    section/PAN/date). Handles heterogeneous multi-sheet workbooks (many
-      //    headers → one field).
-      let map = resolveColumnMapping(allRows);
+      // 1) Resolve the header→field map with the CONFIDENCE-SCORED, VALIDATED
+      //    engine: every column is profiled by the shape of its VALUES, fields are
+      //    assigned by combined header+value confidence, and amount vs TDS is
+      //    resolved by the statutory RATE RELATIONSHIP (not header text). Every
+      //    decision is then validated and any problem surfaces as an issue.
+      //    Handles heterogeneous multi-sheet workbooks (many headers → one field).
       const enough = (m: HeaderMap) => {
         const f = new Set(Object.values(m));
         return (f.has("pan") || f.has("deductee_name")) && (f.has("amount_paid") || f.has("tds_amount"));
       };
+      let { map, report, issues, notes } = resolveMapping(allRows);
 
-      // 2) Only if a REQUIRED field is still unidentified (need an identity —
-      //    PAN or name — and a money column — amount or TDS) do we make ONE small
-      //    AI call that maps columns from headers + 5 sample rows. It never scales
-      //    with row count, so it can't overrun the time budget. Deterministic
-      //    assignments are never overwritten.
+      // 2) Escalate to ONE small AI mapping call when a REQUIRED field is still
+      //    unidentified OR validation flagged an issue with a deterministic pick
+      //    (e.g. a PAN column that holds few valid PANs). The AI only fills fields
+      //    the engine left unresolved — validated deterministic picks are kept —
+      //    and the result is re-validated. It never scales with row count, so it
+      //    can't overrun the time budget.
       let mappingSource = "deterministic";
-      if (!enough(map)) {
+      if (!enough(map) || issues.length) {
         const aiMap = await resolveMappingWithAI(allRows);
-        if (Object.keys(aiMap).length) { map = resolveColumnMapping(allRows, aiMap); mappingSource = "ai-assisted"; }
+        if (Object.keys(aiMap).length) {
+          const re = resolveMapping(allRows, aiMap);
+          // Keep the AI-assisted result only if it's at least as complete.
+          if (enough(re.map) || !enough(map)) { map = re.map; report = re.report; issues = re.issues; notes = re.notes; mappingSource = "ai-assisted"; }
+        }
       }
 
       if (!enough(map)) {
         return json({ error: "Could not identify the deductee columns — the file needs at least a Name/PAN column and an Amount/TDS column. Please check the column headers." }, 422);
       }
 
-      // 3) Build every row from the map, in code (no per-row AI).
+      // 3) Build every row from the validated map, in code (no per-row AI).
       for (const row of allRows) collected.push(buildCanonicalFromMap(row, map));
-      console.log(`tds-recon-import: ${mappingSource} mapping over ${allRows.length} rows →`, JSON.stringify(map));
+      // Human-readable mapping report returned to the UI so every mapping decision
+      // is visible/auditable (field ← header [method]) before comparison.
+      mappingReport = {
+        source: mappingSource,
+        fields: Object.fromEntries(Object.entries(report).map(([f, v]) => [f, { column: v.header, by: v.method }])),
+        issues,
+        notes,
+      };
+      console.log(`tds-recon-import: ${mappingSource} mapping over ${allRows.length} rows →`, JSON.stringify(mappingReport));
     }
 
     // drop wholly-empty rows the model may echo
@@ -759,7 +873,7 @@ serve(async (req) => {
 
     // NOTE: the client re-reads the batch via loadAll(), so we do NOT echo the
     // full rows array back (a 20k-row response is needless megabytes).
-    return json({ batch_id: batch.id, row_count: canonical.length, replaced });
+    return json({ batch_id: batch.id, row_count: canonical.length, replaced, mapping: mappingReport });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error("tds-recon-import fatal:", message);
