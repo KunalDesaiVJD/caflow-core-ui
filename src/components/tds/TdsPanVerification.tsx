@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import {
-  ShieldCheck, CheckCircle2, Upload, FileSpreadsheet, Loader2, RotateCcw, X,
+  ShieldCheck, CheckCircle2, Upload, FileSpreadsheet, Loader2, RotateCcw, X, Play,
 } from "lucide-react";
 import { readSheetGrids, readDelimitedGrid } from "@/lib/tdsWorkbook";
 import { logReconAudit } from "@/lib/tdsReconAudit";
@@ -30,11 +30,12 @@ import {
 
 /**
  * Stage 2 · PAN Verification — EMBEDDED inside Validate & Finalise, mirroring the
- * Stage 1 experience: one "Run Validation" (parent's `runSignal`) triggers it,
- * live animated dashboard cards double as clickable filters, and the results show
- * ONLY exceptions (verified parties are summarised, not listed) with a clear
- * reason + recommended action, an override with a mandatory reason, and a success
- * panel when everything is verified.
+ * Stage 1 experience but with its OWN "Run Validation" action: PAN verification
+ * runs (and its summary appears) only when the user clicks Stage 2's button, so it
+ * is independent of Stage 1. Live animated dashboard cards double as clickable
+ * filters, and the results show ONLY exceptions (verified parties are summarised,
+ * not listed) with a clear reason + recommended action, an override with a
+ * mandatory reason, and a success panel when everything is verified.
  *
  * SCOPE: this file + src/lib/tdsPanVerification.ts only — it does not touch Stage
  * 1 or any edge function.
@@ -45,7 +46,7 @@ interface Props {
   selFy: string;
   selQuarter: string;
   selForm: string;
-  runSignal: number;
+  runSignal: number; // legacy: still passed by the parent; Stage 2 no longer auto-runs on it
   resolveFirmId: () => Promise<string | null>;
   disabled?: boolean;
 }
@@ -112,7 +113,7 @@ async function parseTracesFile(file: File): Promise<Omit<TracesPanRow, "row_id">
   return extractTracesRows(grids);
 }
 
-export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selForm, runSignal, resolveFirmId, disabled }: Props) {
+export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selForm, resolveFirmId, disabled }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
 
@@ -248,13 +249,6 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
     }
     setValidating(false);
   }, [filing, batch, resolveFirmId, selQuarter, toast]);
-
-  const runRef = useRef(runValidation);
-  runRef.current = runValidation;
-  useEffect(() => {
-    if (runSignal > 0 && batch) runRef.current();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runSignal]);
 
   const openOverride = (r: PanResult) => { setOvTarget(r); setOvReason(""); setOvOther(""); setOvOpen(true); };
 
@@ -401,8 +395,19 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
         </div>
         {batch ? (
           <p className="text-sm"><span className="font-bold">{batch.row_count}</span> <span className="text-muted-foreground">PANs</span> <span className="text-xs text-muted-foreground">· {batch.file_name}</span></p>
-        ) : <p className="text-xs text-muted-foreground">Import the TRACES Bulk PAN Verification Excel (.xls / .xlsx), then click <b>Run Validation</b> above. Stage 2 is optional.</p>}
+        ) : <p className="text-xs text-muted-foreground">Import the TRACES Bulk PAN Verification file (.xls / .xlsx / .csv), then click <b>Run Validation</b> below. Stage 2 is optional.</p>}
       </CardContent></Card>
+
+      {/* Stage 2 has its OWN Run Validation — PAN verification runs (and its summary
+          appears) only when the user clicks this, independently of Stage 1. */}
+      <div className="flex items-center gap-3">
+        <Button size="lg" className="gap-2 font-semibold" onClick={() => runValidation()}
+          disabled={validating || !batch || disabled}>
+          {validating ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
+          {validating ? "Validating…" : "Run Validation"}
+        </Button>
+        {!batch && <span className="text-xs text-muted-foreground">Import the TRACES file to enable PAN verification.</span>}
+      </div>
 
       {results && (
         <>

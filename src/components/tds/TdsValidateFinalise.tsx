@@ -754,7 +754,7 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     <div className="space-y-4">
       <div>
         <h2 className="text-xl font-bold text-foreground">Validate &amp; Finalise</h2>
-        <p className="text-sm text-muted-foreground">One <b>Run Validation</b> runs Stage&nbsp;1 (data reconciliation) and Stage&nbsp;2 (PAN verification), shown separately below.</p>
+        <p className="text-sm text-muted-foreground">Stage&nbsp;1 (data reconciliation) and Stage&nbsp;2 (PAN verification) each have their own <b>Run Validation</b> — run them independently below.</p>
       </div>
 
       {/* Filter Bar */}
