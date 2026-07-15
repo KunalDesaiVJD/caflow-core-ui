@@ -809,6 +809,16 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
 
       {!resolving && filing && (
         <>
+          {/* ── STAGE 1 · DATA VALIDATION ─────────────────────────────────────────
+              The heading labels the WHOLE Stage-1 section — its inputs (Office +
+              Imported), the Run Validation action, and the results below — so the
+              Office/Imported block reads as part of Stage 1, not a separate module. */}
+          <div className="flex items-center gap-2 pt-1">
+            <FileSpreadsheet size={16} className="text-primary" />
+            <h3 className="text-base font-bold text-foreground">Stage 1 · Data Validation</h3>
+            <span className="text-xs text-muted-foreground">Office ↔ Imported, field by field</span>
+          </div>
+
           {/* Inputs */}
           <div className="grid gap-3 md:grid-cols-2">
             <Card>
@@ -918,15 +928,9 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
             {!batch && <span className="text-xs text-muted-foreground">Import a client file to enable validation.</span>}
           </div>
 
-          {/* ── STAGE 1 · DATA VALIDATION ─────────────────────────────────────── */}
+          {/* Stage-1 results (summary + comparison) — the heading is above the inputs. */}
           {results && (
             <div className="space-y-3">
-              <div className="flex items-center gap-2 pt-1">
-                <FileSpreadsheet size={16} className="text-primary" />
-                <h3 className="text-base font-bold text-foreground">Stage 1 · Data Validation</h3>
-                <span className="text-xs text-muted-foreground">Office ↔ Imported, field by field</span>
-              </div>
-
               {/* Live, clickable dashboard cards — animated counters; click a card
                   to filter the results to that category, click again to clear. */}
               <div className={cn("grid grid-cols-3 sm:grid-cols-5 gap-3", comparing && "animate-pulse")}>
