@@ -1729,21 +1729,50 @@ function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, onDelete
     <>
       <TableRow className="hover:bg-muted/30">
         {/* Client Name with hover card (PAN, Email, Mobile, Responsible Person) */}
-        <TableCell className="sticky left-0 z-10 bg-background font-medium">
-          {/* 2026-06-25 (V J Desai) — removed the HoverCard. side="right"
-              covered Constitution / Work Group / Status; side="bottom"
-              covered the PAN of the row below. There's no safe position
-              inside a dense grid, so PAN / Email / Mobile / Responsible
-              have moved to the Info side panel (ⓘ icon) where they never
-              overlay other rows. The client name is now a plain link that
-              opens the client detail page. */}
-          <button
-            className="text-left text-primary hover:underline truncate max-w-[230px] block"
-            onClick={() => navigate(`/clients/${p.client_id}`)}
-            title={p.client_name || undefined}
-          >
-            {p.client_name}
-          </button>
+        <TableCell className="sticky left-0 z-10 bg-background font-medium align-top">
+          {/* 2026-06-25 (V J Desai) — HoverCard restored per user ask. Long
+              client names now WRAP to two lines (whitespace-normal +
+              leading-tight) instead of being truncated with an ellipsis,
+              so the full name is always readable inline. HoverCard opens
+              to the right with collisionPadding so Radix auto-flips it to
+              the left when the card would fall off the viewport edge. */}
+          <HoverCard openDelay={300}>
+            <HoverCardTrigger asChild>
+              <button
+                className="text-left text-primary hover:underline whitespace-normal leading-tight max-w-[230px] block"
+                onClick={() => navigate(`/clients/${p.client_id}`)}
+                title={p.client_name || undefined}
+              >
+                {p.client_name}
+              </button>
+            </HoverCardTrigger>
+            <HoverCardContent
+              side="right"
+              align="start"
+              sideOffset={8}
+              collisionPadding={16}
+              className="w-72 p-3"
+            >
+              <div className="space-y-1.5 text-sm">
+                <div className="flex gap-2">
+                  <span className="text-muted-foreground w-24 shrink-0">PAN</span>
+                  <span className="font-mono">{p.client_pan || "—"}</span>
+                </div>
+                <div className="flex gap-2">
+                  <span className="text-muted-foreground w-24 shrink-0">Email</span>
+                  <span className="truncate">{(p as any).client_email || "—"}</span>
+                </div>
+                <div className="flex gap-2">
+                  <span className="text-muted-foreground w-24 shrink-0">Mobile</span>
+                  <span>{(p as any).client_mobile || "—"}</span>
+                </div>
+                <div className="flex gap-2">
+                  <span className="text-muted-foreground w-24 shrink-0">Responsible</span>
+                  <span>{(p as any).client_responsible_name || "—"}</span>
+                </div>
+              </div>
+            </HoverCardContent>
+          </HoverCard>
         </TableCell>
 
         {/* Constitution */}
@@ -1874,31 +1903,10 @@ function InfoPanel({ open, onOpenChange, profile, onUpdate, staffUsers }: {
           <SheetTitle>{p.client_name} — Info</SheetTitle>
         </SheetHeader>
         <div className="space-y-4 mt-4">
-          {/* 2026-06-25 (V J Desai) — client contact card was previously a
-              HoverCard on the row's client name. That card overlapped
-              Constitution / Work Group / Status when opened side="right",
-              and covered the row below when opened side="bottom". Moved
-              into the Info panel so the grid stays clean and the auditor
-              gets ALL info in one place. */}
-          <div className="rounded-md border border-border bg-muted/40 px-3 py-2.5 text-sm space-y-1.5">
-            <div className="flex gap-2">
-              <span className="text-muted-foreground w-24 shrink-0">PAN</span>
-              <span className="font-mono">{p.client_pan || "—"}</span>
-            </div>
-            <div className="flex gap-2">
-              <span className="text-muted-foreground w-24 shrink-0">Email</span>
-              <span className="truncate">{(p as any).client_email || "—"}</span>
-            </div>
-            <div className="flex gap-2">
-              <span className="text-muted-foreground w-24 shrink-0">Mobile</span>
-              <span>{(p as any).client_mobile || "—"}</span>
-            </div>
-            <div className="flex gap-2">
-              <span className="text-muted-foreground w-24 shrink-0">Responsible</span>
-              <span>{(p as any).client_responsible_name || "—"}</span>
-            </div>
-          </div>
-
+          {/* PAN / Email / Mobile / Responsible moved back to the row's
+              HoverCard per V J Desai request — auditor sees them by
+              hovering the client name. Info panel keeps only the
+              filing-workflow fields (Ack No + Remarks). */}
           <div className="space-y-1.5">
             <Label>
               Ack No {ackRequired && <span className="text-destructive">*</span>}
