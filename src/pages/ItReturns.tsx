@@ -1757,7 +1757,11 @@ function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, onDelete
                 {p.client_name}
               </button>
             </HoverCardTrigger>
-            <HoverCardContent side="right" className="w-80 p-3">
+            {/* 2026-06-25 (V J Desai) — side="right" overlapped Constitution /
+                Work Group / Status columns on the same row. Moved to bottom
+                so the card drops below the client-name cell and leaves the
+                row fully visible. */}
+            <HoverCardContent side="bottom" align="start" sideOffset={4} className="w-80 p-3">
               <div className="space-y-1.5 text-sm">
                 <div className="flex gap-2">
                   <span className="text-muted-foreground w-24 shrink-0">PAN</span>
