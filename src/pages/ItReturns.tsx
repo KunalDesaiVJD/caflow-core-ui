@@ -1332,7 +1332,7 @@ function FilingTab({
                 <Table>
                   <TableHeader className="sticky top-0 z-10 bg-background">
                     <TableRow>
-                      <TableHead className="min-w-[220px]">Client Name</TableHead>
+                      <TableHead className="min-w-[240px]">Client Name</TableHead>
                       <TableHead className="min-w-[100px]">PAN</TableHead>
                       <TableHead className="min-w-[120px]">Constitution</TableHead>
                     </TableRow>
@@ -1351,7 +1351,9 @@ function FilingTab({
                         onClick={() => navigate(`/clients/edit/${p.client_id}?tab=service-billing`)}
                         title="Open Service & Billing to enable ITR for this client"
                       >
-                        <TableCell className="font-medium text-primary">{p.client_name || "Unnamed"}</TableCell>
+                        <TableCell className="font-medium text-primary" title={p.client_name || undefined}>
+                          {p.client_name || "Unnamed"}
+                        </TableCell>
                         <TableCell className="text-xs font-mono text-muted-foreground">{p.client_pan || "—"}</TableCell>
                         <TableCell>{p.entity_type || "—"}</TableCell>
                       </TableRow>
@@ -1365,7 +1367,7 @@ function FilingTab({
                   <TableHeader className="sticky top-0 z-10 bg-background">
                     {/* ── Column labels ── */}
                     <TableRow>
-                      <TableHead className="sticky left-0 z-20 bg-background min-w-[180px]">Client Name</TableHead>
+                      <TableHead className="sticky left-0 z-20 bg-background min-w-[240px]">Client Name</TableHead>
                       <TableHead className="min-w-[100px]">Constitution</TableHead>
                       <TableHead className="min-w-[120px]">Work Group</TableHead>
                       <TableHead className="min-w-[160px]">Status</TableHead>
@@ -1741,11 +1743,16 @@ function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, onDelete
       <TableRow className="hover:bg-muted/30">
         {/* Client Name with hover card (PAN, Email, Mobile, Responsible Person) */}
         <TableCell className="sticky left-0 z-10 bg-background font-medium">
+          {/* 2026-06-25 (V J Desai request) — bumped max-w from 170 to 230
+              so most client names fit in full; added a native title attr
+              so any names that still exceed the width surface the full
+              string on hover. */}
           <HoverCard openDelay={300}>
             <HoverCardTrigger asChild>
               <button
-                className="text-left text-primary hover:underline truncate max-w-[170px] block"
+                className="text-left text-primary hover:underline truncate max-w-[230px] block"
                 onClick={() => navigate(`/clients/${p.client_id}`)}
+                title={p.client_name || undefined}
               >
                 {p.client_name}
               </button>
