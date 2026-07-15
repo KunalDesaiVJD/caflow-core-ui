@@ -61,11 +61,23 @@ function makeGridOf(wb: XLSX.WorkBook): (name: string) => unknown[][] {
     let grid: unknown[][] = [];
     const range = ws ? trueRange(ws) : null;
     if (ws && range) {
-      // Fill merged ranges (bounded to the real extent): copy each merge's
-      // top-left value into its covered cells. Total/subtotal/month rows are
-      // filtered downstream BEFORE the PAN test, so this can't resurrect them.
+      // Fill VERTICAL merged ranges only (bounded to the real extent): copy a
+      // merge's top-left value DOWN into the rows it covers. Total/subtotal/month
+      // rows are filtered downstream BEFORE the PAN test, so this can't resurrect
+      // them.
+      //
+      // Only a single-column, multi-row merge is propagated — that is a genuine
+      // per-row datum (a Name/PAN/Section merged down its block, whose value
+      // belongs to every covered data row). A merge that spans COLUMNS is always
+      // a label/banner: a title across the sheet, a "DEDUCTEE DETAILS" /
+      // "CHALLAN DETAILS" section header, or a month label. Filling those across
+      // columns injects the label into every cell of the row, which turns
+      // mid-sheet label rows into fake header rows and mis-aligns the real data
+      // (SWASTIK "FORMETS" lost every party's amount / TDS / date this way — the
+      // whole return came back with blank imported columns). Skip them.
       const merges = (ws["!merges"] || []) as XLSX.Range[];
       for (const m of merges) {
+        if (m.s.c !== m.e.c || m.e.r <= m.s.r) continue; // vertical merges only
         if (m.s.r > range.e.r || m.s.c > range.e.c) continue;
         const er = Math.min(m.e.r, range.e.r), ec = Math.min(m.e.c, range.e.c);
         // Defensive: skip a merge covering a huge area. trueRange already bounds

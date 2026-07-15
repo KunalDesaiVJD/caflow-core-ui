@@ -130,6 +130,22 @@ function cellNum(ws: XLSX.WorkSheet, addr: string): number {
   return isNaN(n) ? 0 : n;
 }
 
+/** Read a cell by row/column INDEX ("" / 0 / null when the column is absent). */
+const strAt = (ws: XLSX.WorkSheet, r: number, c: number | undefined): string =>
+  (c === undefined || c < 0) ? "" : cellStr(ws, XLSX.utils.encode_cell({ r, c }));
+const numAt = (ws: XLSX.WorkSheet, r: number, c: number | undefined): number =>
+  (c === undefined || c < 0) ? 0 : cellNum(ws, XLSX.utils.encode_cell({ r, c }));
+const dateAt = (ws: XLSX.WorkSheet, r: number, c: number | undefined): string | null =>
+  (c === undefined || c < 0) ? null : parseDdmmyyyy(ws[XLSX.utils.encode_cell({ r, c })]?.v as string | number | undefined);
+
+/** Read a sheet's header row (row 0) across its used width, for column matching. */
+function readHeaderRow(ws: XLSX.WorkSheet): unknown[] {
+  const range = XLSX.utils.decode_range(ws["!ref"] || "A1:A1");
+  const out: unknown[] = [];
+  for (let c = 0; c <= Math.min(range.e.c, 300); c++) out.push(ws[XLSX.utils.encode_cell({ r: 0, c })]?.v ?? null);
+  return out;
+}
+
 /** Map Genius deductee code ("01-Companies", "02-Other than Companies") → app value. */
 function parseDeducteeType(raw: string): string {
   const s = (raw || "").trim();
@@ -137,6 +153,88 @@ function parseDeducteeType(raw: string): string {
   if (s.startsWith("02")) return "Non-Company";
   return s; // leave as-is if non-standard
 }
+
+/** Strip Genius's internal numeric prefix from a section code: "1023-194C" → "194C". */
+function cleanSection(raw: string | number | null | undefined): string {
+  const s = String(raw ?? "").trim();
+  const m = s.match(/^\d+-(.+)$/);
+  return (m ? m[1] : s).trim().toUpperCase();
+}
+
+/** Normalise a header cell for matching: lowercase, collapse whitespace + newlines. */
+const normHeader = (s: unknown): string => String(s ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+
+interface ColSpec { field: string; match: (h: string) => boolean; fallback?: number; }
+
+/**
+ * Resolve each field's COLUMN INDEX from the sheet's header row by matching the
+ * header TEXT — not a hard-coded position. Genius / TRACES emit the same fields in
+ * more than one layout: some files carry a "Deductee Ref No" column (shifting every
+ * later column by one), the cess column is split into a rate and an amount, etc. A
+ * fixed-index reader silently mis-reads whichever layout it wasn't written for —
+ * the Name lands on an Address column, the Amount on a date (this is exactly why
+ * SWASTIK BUILDCON imported blank amounts/TDS). Matching by header makes the parser
+ * layout-agnostic. `fallback` (the canonical FVU order) is used ONLY when a header
+ * can't be matched, so an unfamiliar variant degrades gracefully instead of
+ * failing. First unclaimed header match wins; a claimed column is never reused. */
+function buildColMap(headerRow: unknown[], spec: ColSpec[]): Record<string, number> {
+  const hs = headerRow.map(normHeader);
+  const claimed = new Set<number>();
+  const map: Record<string, number> = {};
+  for (const { field, match } of spec) {
+    for (let c = 0; c < hs.length; c++) {
+      if (claimed.has(c) || !hs[c]) continue;
+      if (match(hs[c])) { map[field] = c; claimed.add(c); break; }
+    }
+  }
+  for (const { field, fallback } of spec) {
+    if (map[field] === undefined && fallback !== undefined && !claimed.has(fallback)) {
+      map[field] = fallback; claimed.add(fallback);
+    }
+  }
+  return map;
+}
+
+/** Header→field matchers for the ChallanDetails sheet (fallbacks = canonical FVU order). */
+const CHALLAN_COLS: ColSpec[] = [
+  { field: "serialNo",       match: (h) => /challan serial/.test(h),                         fallback: 0 },
+  { field: "sectionCode",    match: (h) => /section code/.test(h),                           fallback: 1 },
+  { field: "incomeTax",      match: (h) => /income tax/.test(h),                             fallback: 2 },
+  { field: "surcharge",      match: (h) => /^surcharge$/.test(h),                            fallback: 3 },
+  { field: "cess",           match: (h) => /^(health and education )?cess$|education cess$/.test(h), fallback: 4 },
+  { field: "interest",       match: (h) => /interest/.test(h),                               fallback: 5 },
+  { field: "lateFee234E",    match: (h) => /late fee|fee.*234e/.test(h),                      fallback: 6 },
+  { field: "others",         match: (h) => /^others?$/.test(h),                              fallback: 7 },
+  { field: "totalDeposited", match: (h) => /total tax deposited/.test(h),                    fallback: 8 },
+  { field: "chequeDdNo",     match: (h) => /cheque|dd no/.test(h),                           fallback: 9 },
+  { field: "bsrCode",        match: (h) => /bsr/.test(h),                                    fallback: 10 },
+  { field: "depositDate",    match: (h) => /date on which tax deposited|deposit date/.test(h), fallback: 11 },
+  { field: "bankChallanNo",  match: (h) => /bank challan|transfer vouch/.test(h),            fallback: 12 },
+  { field: "isBookEntry",    match: (h) => /book entry/.test(h),                             fallback: 13 },
+  { field: "minorHead",      match: (h) => /minor head/.test(h),                             fallback: 14 },
+];
+
+/** Header→field matchers for the Annex-I Deductee sheet (fallbacks = canonical FVU order, no Ref-No column). */
+const DEDUCTEE_COLS: ColSpec[] = [
+  { field: "challanSerialNo",  match: (h) => /challan serial/.test(h),                       fallback: 0 },
+  { field: "sectionCode",      match: (h) => /section code/.test(h),                         fallback: 1 },
+  { field: "deducteeType",     match: (h) => /deductee code/.test(h),                        fallback: 2 },
+  { field: "pan",              match: (h) => /permanent account number|\bpan\b/.test(h),     fallback: 3 },
+  { field: "name",             match: (h) => /name of (the )?deductee|deductee name/.test(h), fallback: 4 },
+  { field: "refNo",            match: (h) => /(deductee|party).*\bref|ref(erence)?\.?\s*(no|number)/.test(h) },
+  { field: "amountPaid",       match: (h) => /amount of payment|amount paid|amount credited/.test(h), fallback: 12 },
+  { field: "datePaid",         match: (h) => /date on which amount|date of payment|date.*paid.*credit/.test(h), fallback: 13 },
+  { field: "rateOfTds",        match: (h) => /rate at which tax|rate of tds/.test(h) || h === "rate", fallback: 14 },
+  { field: "surchargeRate",    match: (h) => /surcharge rate/.test(h),                       fallback: 15 },
+  { field: "cessRate",         match: (h) => /cess rate/.test(h),                            fallback: 16 },
+  { field: "tdsAmount",        match: (h) => /amount of tax deducted|tds amount|amount of tax/.test(h), fallback: 17 },
+  { field: "surchargeAmount",  match: (h) => /surcharge amount/.test(h),                     fallback: 18 },
+  { field: "cessAmount",       match: (h) => /cess amount/.test(h),                          fallback: 19 },
+  { field: "totalTaxDeducted", match: (h) => /total tax deposited|total tax deducted/.test(h), fallback: 20 },
+  { field: "dateOfDeduction",  match: (h) => /date on which tax deducted|date of deduction/.test(h), fallback: 21 },
+  { field: "reason",           match: (h) => /reason/.test(h),                               fallback: 22 },
+  { field: "certificateNo",    match: (h) => /certificate/.test(h),                          fallback: 23 },
+];
 
 // ─── Parser ──────────────────────────────────────────────────────────────────
 
@@ -192,72 +290,78 @@ export async function parseGeniusXls(file: File): Promise<ParsedGeniusFile> {
   }
 
   // ── Deductor details (key/value layout) ──────────────────────────────────
+  // Genius writes the form as "140 (26Q)" / "27EQ" etc. — extract the bare form
+  // token so the downstream form-match check compares "26Q" to "26Q", not to
+  // "140 (26Q)" (which would raise a spurious mismatch warning).
+  const rawForm = cellStr(detailSheet, "C6");
+  const formTok = rawForm.match(/\b(24Q|26Q|27Q|27EQ)\b/i);
   const deductor = {
     tan:            cellStr(detailSheet, "B1"),
     pan:            cellStr(detailSheet, "B2"),
     name:           cellStr(detailSheet, "B3"),
     assessmentYear: cellStr(detailSheet, "C2"),
     quarter:        cellStr(detailSheet, "C4") || "Q1",
-    formNo:         cellStr(detailSheet, "C6") || "26Q",
+    formNo:         (formTok ? formTok[1].toUpperCase() : rawForm) || "26Q",
   };
 
-  // ── Challans (row 2+) ────────────────────────────────────────────────────
+  // ── Challans (row 2+) — columns resolved by HEADER TEXT, not position ─────
   const challans: ParsedChallan[] = [];
+  const chMap = buildColMap(readHeaderRow(challanSheet), CHALLAN_COLS);
   const chRange = XLSX.utils.decode_range(challanSheet["!ref"] || "A1:Q1");
   for (let r = 1; r <= chRange.e.r; r++) {
-    // Stop at first fully-empty row (col A blank means no more challans)
-    const serialAddr = XLSX.utils.encode_cell({ r, c: 0 });
-    const serialCell = challanSheet[serialAddr];
-    if (!serialCell || serialCell.v === null || serialCell.v === undefined || serialCell.v === "") break;
-
-    const row = (col: number) => XLSX.utils.encode_cell({ r, c: col });
+    // Stop at the first row with neither a serial nor a section (end of the list;
+    // also shrugs off a bloated !ref that claims tens of thousands of empty rows).
+    const serial = strAt(challanSheet, r, chMap.serialNo);
+    const section = strAt(challanSheet, r, chMap.sectionCode);
+    if (!serial && !section) break;
     challans.push({
-      serialNo:       cellNum(challanSheet, row(0)),
-      sectionCode:    cellStr(challanSheet, row(1)),
-      incomeTax:      cellNum(challanSheet, row(2)),
-      surcharge:      cellNum(challanSheet, row(3)),
-      cess:           cellNum(challanSheet, row(4)),
-      interest:       cellNum(challanSheet, row(5)),
-      lateFee234E:    cellNum(challanSheet, row(6)),
-      others:         cellNum(challanSheet, row(7)),
-      totalDeposited: cellNum(challanSheet, row(8)),
-      chequeDdNo:     cellStr(challanSheet, row(9)),
-      bsrCode:        cellStr(challanSheet, row(10)),
-      depositDate:    parseDdmmyyyy(challanSheet[row(11)]?.v),
-      bankChallanNo:  cellStr(challanSheet, row(12)),
-      isBookEntry:    /yes|true|y/i.test(cellStr(challanSheet, row(13))),
-      minorHead:      cellStr(challanSheet, row(14)) || "200",
+      serialNo:       numAt(challanSheet, r, chMap.serialNo),
+      sectionCode:    cleanSection(strAt(challanSheet, r, chMap.sectionCode)),
+      incomeTax:      numAt(challanSheet, r, chMap.incomeTax),
+      surcharge:      numAt(challanSheet, r, chMap.surcharge),
+      cess:           numAt(challanSheet, r, chMap.cess),
+      interest:       numAt(challanSheet, r, chMap.interest),
+      lateFee234E:    numAt(challanSheet, r, chMap.lateFee234E),
+      others:         numAt(challanSheet, r, chMap.others),
+      totalDeposited: numAt(challanSheet, r, chMap.totalDeposited),
+      chequeDdNo:     strAt(challanSheet, r, chMap.chequeDdNo),
+      bsrCode:        strAt(challanSheet, r, chMap.bsrCode),
+      depositDate:    dateAt(challanSheet, r, chMap.depositDate),
+      bankChallanNo:  strAt(challanSheet, r, chMap.bankChallanNo),
+      isBookEntry:    /yes|true|y/i.test(strAt(challanSheet, r, chMap.isBookEntry)),
+      minorHead:      strAt(challanSheet, r, chMap.minorHead) || "200",
     });
   }
 
-  // ── Deductees (row 2+) ───────────────────────────────────────────────────
+  // ── Deductees (row 2+) — columns resolved by HEADER TEXT, not position ────
   const deductees: ParsedDeductee[] = [];
+  const deMap = buildColMap(readHeaderRow(deducteeSheet), DEDUCTEE_COLS);
   const deRange = XLSX.utils.decode_range(deducteeSheet["!ref"] || "A1:Z1");
   for (let r = 1; r <= deRange.e.r; r++) {
-    const serialAddr = XLSX.utils.encode_cell({ r, c: 0 });
-    const serialCell = deducteeSheet[serialAddr];
-    if (!serialCell || serialCell.v === null || serialCell.v === undefined || serialCell.v === "") break;
-
-    const row = (col: number) => XLSX.utils.encode_cell({ r, c: col });
+    // Stop at the first FULLY-empty deductee row (no serial, PAN or name).
+    const serial = strAt(deducteeSheet, r, deMap.challanSerialNo);
+    const pan = strAt(deducteeSheet, r, deMap.pan);
+    const name = strAt(deducteeSheet, r, deMap.name);
+    if (!serial && !pan && !name) break;
     deductees.push({
-      challanSerialNo:   cellNum(deducteeSheet, row(0)),
-      sectionCode:       cellStr(deducteeSheet, row(1)),
-      deducteeType:      parseDeducteeType(cellStr(deducteeSheet, row(2))),
-      pan:               cellStr(deducteeSheet, row(3)).toUpperCase(),
-      refNo:             cellStr(deducteeSheet, row(4)),
-      name:              cellStr(deducteeSheet, row(5)),
-      amountPaid:        cellNum(deducteeSheet, row(13)),
-      datePaid:          parseDdmmyyyy(deducteeSheet[row(14)]?.v),
-      rateOfTds:         cellNum(deducteeSheet, row(15)),
-      surchargeRate:     cellNum(deducteeSheet, row(16)),
-      cessRate:          cellNum(deducteeSheet, row(17)),
-      tdsAmount:         cellNum(deducteeSheet, row(18)),
-      surchargeAmount:   cellNum(deducteeSheet, row(19)),
-      cessAmount:        cellNum(deducteeSheet, row(20)),
-      totalTaxDeducted:  cellNum(deducteeSheet, row(21)),
-      dateOfDeduction:   parseDdmmyyyy(deducteeSheet[row(22)]?.v),
-      reason:            cellStr(deducteeSheet, row(23)),
-      certificateNo:     cellStr(deducteeSheet, row(24)),
+      challanSerialNo:   numAt(deducteeSheet, r, deMap.challanSerialNo),
+      sectionCode:       cleanSection(strAt(deducteeSheet, r, deMap.sectionCode)),
+      deducteeType:      parseDeducteeType(strAt(deducteeSheet, r, deMap.deducteeType)),
+      pan:               pan.toUpperCase(),
+      refNo:             strAt(deducteeSheet, r, deMap.refNo),
+      name,
+      amountPaid:        numAt(deducteeSheet, r, deMap.amountPaid),
+      datePaid:          dateAt(deducteeSheet, r, deMap.datePaid),
+      rateOfTds:         numAt(deducteeSheet, r, deMap.rateOfTds),
+      surchargeRate:     numAt(deducteeSheet, r, deMap.surchargeRate),
+      cessRate:          numAt(deducteeSheet, r, deMap.cessRate),
+      tdsAmount:         numAt(deducteeSheet, r, deMap.tdsAmount),
+      surchargeAmount:   numAt(deducteeSheet, r, deMap.surchargeAmount),
+      cessAmount:        numAt(deducteeSheet, r, deMap.cessAmount),
+      totalTaxDeducted:  numAt(deducteeSheet, r, deMap.totalTaxDeducted),
+      dateOfDeduction:   dateAt(deducteeSheet, r, deMap.dateOfDeduction),
+      reason:            strAt(deducteeSheet, r, deMap.reason),
+      certificateNo:     strAt(deducteeSheet, r, deMap.certificateNo),
     });
   }
 
