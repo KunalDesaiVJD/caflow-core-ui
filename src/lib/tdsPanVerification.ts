@@ -102,13 +102,13 @@ const NAME_COMPOUND_SUFFIXES = new Set(["KUMAR", "BHAI", "BHAII", "BEN", "BHEN",
 // on the common words alone (the distinctive ABC vs XYZ must decide).
 const NAME_STOPWORDS = new Set(["PRIVATE", "LIMITED", "COMPANY", "CORPORATION", "LLP", "LLC", "INC", "AND", "THE", "MESSRS", "SHREE", "SHRI", "SRI", "SHREEJI"]);
 
-/** Two normalised name TOKENS are compatible when: equal; one is an INITIAL of the
- * other (single letter matching the first letter — "R" ≈ "Rakesh"); or one is the
- * other plus a known Indian compound suffix ("Rakesh" ≈ "Rakeshkumar"). */
+/** Two normalised name TOKENS are compatible when equal, or one is the other plus
+ * a known Indian compound suffix ("Rakesh" ≈ "Rakeshkumar"). A single-letter
+ * INITIAL is deliberately NOT matched here — "A" would match Arun/Anil/Ajay/… and
+ * with a common surname ("A Kumar") could silently verify a wrong PAN. */
 function tokensCompatible(x: string, y: string): boolean {
   if (x === y) return true;
   const [s, l] = x.length <= y.length ? [x, y] : [y, x];
-  if (s.length === 1 && l[0] === s) return true;
   if (s.length >= 3 && l.startsWith(s) && NAME_COMPOUND_SUFFIXES.has(l.slice(s.length))) return true;
   return false;
 }
@@ -116,8 +116,9 @@ export function nameCompare(a: string | null | undefined, b: string | null | und
   const na = normalizeName(a), nb = normalizeName(b);
   if (!na || !nb) return "unknown";
   if (na === nb) return "match";
-  const allA = na.split(" ").filter((w) => w.length >= 1);
-  const allB = nb.split(" ").filter((w) => w.length >= 1);
+  // Drop single-character tokens (bare initials) — too weak to distinguish parties.
+  const allA = na.split(" ").filter((w) => w.length >= 2);
+  const allB = nb.split(" ").filter((w) => w.length >= 2);
   if (!allA.length || !allB.length) return "unknown";
   // Compare the DISTINCTIVE tokens (drop generic legal/honorific words); fall back
   // to all tokens only if a side has no distinctive token left.
@@ -131,7 +132,11 @@ export function nameCompare(a: string | null | undefined, b: string | null | und
     const idx = long.findIndex((l, i) => !used.has(i) && tokensCompatible(s, l));
     if (idx >= 0) { hits++; used.add(idx); }
   }
-  if (hits === short.length) return "match";        // every distinctive shorter-name token matched ⇒ subset / reorder
+  // A MULTI-TOKEN subset (≥2 distinctive tokens, all matched) is a confident match
+  // (reorder / extra middle names). A SINGLE-token subset is NOT — a lone common
+  // surname ("Kumar") must not verify against any "… Kumar"; it falls to Jaccard,
+  // which passes only when the other side has no extra distinctive token.
+  if (short.length >= 2 && hits === short.length) return "match";
   const union = short.length + long.length - hits;
   if (hits / union >= 0.6) return "match";          // strong overlap of distinctive tokens
   if (hits === 0) return "different";               // no distinctive token in common ⇒ different party
