@@ -162,12 +162,16 @@ export const isPanException = (r: PanValidationResult): boolean => r !== "PAN Ve
 // ── TRACES-file column recognition (header synonyms, mirrors Stage-1) ──────────
 const nh = (s: unknown): string => String(s ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
 const isStatusHeader = (h: string) => h.includes("status");
+// Any header containing "name" is a name candidate (safe: comparePanVerification
+// prefers verified_name||name, and isVerifiedHeader still wins the ITD column when
+// both exist). Deliberately NOT value-based — an "adjacent alphabetic column"
+// heuristic would grab City/Address/Father's-Name and cause FALSE Name Mismatches.
 const isNameHeader = (h: string) =>
-  h === "name" || h.includes("partyname") || h.includes("deducteename") || h === "party" ||
-  h === "deductee" || h.includes("nameofdeductee") || h.includes("nameofperson") || h.includes("assessee");
+  h.includes("name") || h === "party" || h === "deductee" || h.includes("assessee");
 const isVerifiedHeader = (h: string) =>
   h.includes("verified") || h.includes("nameasper") || h.includes("nameonpan") || h.includes("tracesname") ||
-  h.includes("panholder") || h.includes("nameaspan") || h.includes("asperitd") || h.includes("asperpan") || h.includes("panname");
+  h.includes("panholder") || h.includes("nameaspan") || h.includes("asperitd") || h.includes("asperpan") ||
+  h.includes("panname") || h.includes("availablein") || h.includes("itddatabase");
 
 /**
  * Extract TRACES PAN rows from a set of sheet grids — GENERIC, mirroring the
@@ -234,7 +238,7 @@ export function extractTracesRows(grids: { name: string; grid: unknown[][] }[]):
         const s = String(grid[r]?.[c] ?? "").toLowerCase();
         if (!s.trim()) continue;
         ne++;
-        if (/valid|operative|inactive|\bactive\b|inoperative|deactivat|struck|fake|amalgamat|not\s*(present|found|linked)/.test(s)) hit++;
+        if (/valid|operative|inactive|\bactive\b|inoperative|deactivat|delet|struck|fake|amalgamat|not\s*(present|found|linked)/.test(s)) hit++;
       }
       const frac = ne ? hit / ne : 0;
       if (frac >= 0.4 && frac > bf) { bf = frac; statusCol = c; }
@@ -285,6 +289,13 @@ export function panDiagnostics(office: OfficeParty[], traces: TracesPanRow[]): s
     diag.push(`${tracesOnly} PAN(s) in the TRACES file are not in this quarter's office data — check the file's scope (it may cover more than this quarter).`);
   if (officeOnly > 0)
     diag.push(`${officeOnly} office PAN(s) were not found in the TRACES file — re-run the TRACES bulk-PAN request including every PAN for this quarter, then re-import.`);
+  // The name cross-check silently passes when a side's name is blank; if the file
+  // has NO name column at all, surface that it was skipped (Stage-1 "explain why")
+  // so a wrong PAN whose ITD name differs isn't quietly reported "verified".
+  const overlapTraces = traces.filter((t) => officePans.has(normalizePan(t.pan)));
+  const overlapWithName = overlapTraces.filter((t) => (t.verified_name ?? "").trim() || (t.name ?? "").trim()).length;
+  if (overlapTraces.length >= 3 && overlapWithName === 0)
+    diag.push(`The TRACES file has no name column — the name cross-check was skipped, so verify the PAN-holder names manually.`);
   const withStatus = traces.filter((t) => (t.pan_status ?? "").trim()).length;
   if (traces.length >= 3 && withStatus === 0)
     diag.push(`The TRACES file has no PAN Status values — check you imported the verification RESULT file (with a PAN Status column), not the request file.`);
