@@ -759,31 +759,18 @@ const ItReturns = () => {
           autoPatch.upload_by = user.id;
         }
         // 2026-06-25 (V J Desai — 33 Filed rows had blank Prepared By /
-        // Checked By): the auto-patch previously only stamped date_filed
-        // + upload_by on the Filed transition. Straight Data Pending →
-        // Filed skipped the intermediate Ready-for-Review / Verified
-        // steps, so prepared_by and checked_by never got populated.
-        //
-        // 2026-06-25 (V J Desai follow-up — segregation of duties):
-        // Filling checked_by = current user when prepared_by is ALREADY
-        // the current user made Prepared By and Checked By render the
-        // same person (e.g. auditor moved Ready-for-Review → Filed),
-        // defeating the four-eyes review the audit trail is meant to
-        // enforce. Rule: only auto-fill checked_by when the signed-in
-        // user is DIFFERENT from prepared_by. If the same auditor is
-        // closing out their own preparation, checked_by stays blank
-        // and the reviewer must set it explicitly.
-        const existingPreparedBy = (profile as any).prepared_by as string | null | undefined;
-        if (!existingPreparedBy) {
+        // Checked By): stamp both fields on the Filed transition so the
+        // audit trail is complete when the auditor jumps straight from
+        // Data Pending / Ready for Review → Filed. Segregation-of-duties
+        // check was relaxed per follow-up ask — the auditor who files
+        // is treated as both preparer and checker when the fields are
+        // empty. Manual overrides still win (auto-patch only writes
+        // when the field is blank).
+        if (!(profile as any).prepared_by) {
           autoPatch.prepared_by = user.id;
         }
         if (!(profile as any).checked_by) {
-          const effectivePreparedBy = autoPatch.prepared_by ?? existingPreparedBy;
-          if (effectivePreparedBy && effectivePreparedBy !== user.id) {
-            autoPatch.checked_by = user.id;
-          }
-          // Same-person case: leave checked_by blank on purpose — the
-          // reviewer needs to set it.
+          autoPatch.checked_by = user.id;
         }
       }
       if (value === "Data Pending") {
@@ -1742,26 +1729,29 @@ function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, onDelete
     <>
       <TableRow className="hover:bg-muted/30">
         {/* Client Name with hover card (PAN, Email, Mobile, Responsible Person) */}
-        <TableCell className="sticky left-0 z-10 bg-background font-medium">
-          {/* 2026-06-25 (V J Desai request) — bumped max-w from 170 to 230
-              so most client names fit in full; added a native title attr
-              so any names that still exceed the width surface the full
-              string on hover. */}
+        <TableCell className="sticky left-0 z-10 bg-background font-medium align-top">
+          {/* 2026-06-25 (V J Desai) — HoverCard restored per user ask. Long
+              client names now WRAP to two lines (whitespace-normal +
+              leading-tight) instead of being truncated with an ellipsis,
+              so the full name is always readable inline. HoverCard opens
+              to the right with collisionPadding so Radix auto-flips it to
+              the left when the card would fall off the viewport edge. */}
           <HoverCard openDelay={300}>
             <HoverCardTrigger asChild>
               <button
-                className="text-left text-primary hover:underline truncate max-w-[230px] block"
+                className="text-left text-primary hover:underline whitespace-normal leading-tight max-w-[230px] block"
                 onClick={() => navigate(`/clients/${p.client_id}`)}
-                title={p.client_name || undefined}
               >
                 {p.client_name}
               </button>
             </HoverCardTrigger>
-            {/* 2026-06-25 (V J Desai) — side="right" overlapped Constitution /
-                Work Group / Status columns on the same row. Moved to bottom
-                so the card drops below the client-name cell and leaves the
-                row fully visible. */}
-            <HoverCardContent side="bottom" align="start" sideOffset={4} className="w-80 p-3">
+            <HoverCardContent
+              side="right"
+              align="start"
+              sideOffset={8}
+              collisionPadding={16}
+              className="w-72 p-3"
+            >
               <div className="space-y-1.5 text-sm">
                 <div className="flex gap-2">
                   <span className="text-muted-foreground w-24 shrink-0">PAN</span>
@@ -1769,15 +1759,15 @@ function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, onDelete
                 </div>
                 <div className="flex gap-2">
                   <span className="text-muted-foreground w-24 shrink-0">Email</span>
-                  <span className="truncate">{p.client_email || "—"}</span>
+                  <span className="truncate">{(p as any).client_email || "—"}</span>
                 </div>
                 <div className="flex gap-2">
                   <span className="text-muted-foreground w-24 shrink-0">Mobile</span>
-                  <span>{p.client_mobile || "—"}</span>
+                  <span>{(p as any).client_mobile || "—"}</span>
                 </div>
                 <div className="flex gap-2">
                   <span className="text-muted-foreground w-24 shrink-0">Responsible</span>
-                  <span>{p.client_responsible_name || "—"}</span>
+                  <span>{(p as any).client_responsible_name || "—"}</span>
                 </div>
               </div>
             </HoverCardContent>
@@ -1912,6 +1902,10 @@ function InfoPanel({ open, onOpenChange, profile, onUpdate, staffUsers }: {
           <SheetTitle>{p.client_name} — Info</SheetTitle>
         </SheetHeader>
         <div className="space-y-4 mt-4">
+          {/* PAN / Email / Mobile / Responsible moved back to the row's
+              HoverCard per V J Desai request — auditor sees them by
+              hovering the client name. Info panel keeps only the
+              filing-workflow fields (Ack No + Remarks). */}
           <div className="space-y-1.5">
             <Label>
               Ack No {ackRequired && <span className="text-destructive">*</span>}
