@@ -743,10 +743,6 @@ const Clients = () => {
         const apiClients        = clients.filter(c => c.source === "api_import");
         const finalActiveCount  = apiClients.filter(c => !c.is_draft && c.is_active !== false).length;
         const draftActiveCount  = apiClients.filter(c => !!c.is_draft && c.is_active !== false).length;
-        // Archived bifurcation counts — used inside the Archived tab's
-        // sub-filter chip row. Read straight off deleted_reason.
-        const archivedManualCount  = archivedClients.filter(c => (c as any).deleted_reason === "manual" || !(c as any).deleted_reason).length;
-        const archivedEofficeCount = archivedClients.filter(c => (c as any).deleted_reason === "eoffice_inactive").length;
 
         return (
           <div className="space-y-0">
@@ -848,8 +844,13 @@ const Clients = () => {
               back into Draft Active / Final Active based on is_draft.
             • Auto-archived via eOffice: deleted_reason=eoffice_inactive.
               No unarchive button — governed by the sync (reactivating in
-              the eOffice portal + re-sync clears the archive automatically). */}
-      {sourceTab === "archived" && (
+              the eOffice portal + re-sync clears the archive automatically).
+          Counts are computed here at the outer scope so the sub-chip row
+          below can reference them (the earlier IIFE was self-contained). */}
+      {sourceTab === "archived" && (() => {
+        const archivedManualCount  = archivedClients.filter(c => (c as any).deleted_reason === "manual" || !(c as any).deleted_reason).length;
+        const archivedEofficeCount = archivedClients.filter(c => (c as any).deleted_reason === "eoffice_inactive").length;
+        return (
         <div className="space-y-3">
           {/* Sub-chip row */}
           <div className="flex items-center gap-2 flex-wrap">
@@ -958,7 +959,8 @@ const Clients = () => {
               : "Auto-archived by sync when eOffice marks them De-Active. To restore, re-activate in the eOffice portal and click Sync from API — CAFlow will move them back to Draft Active / Final Active automatically."}
           </p>
         </div>
-      )}
+        );
+      })()}
 
       {/* Content — shown only for non-archived tabs */}
       {sourceTab !== "archived" && loading ? (
