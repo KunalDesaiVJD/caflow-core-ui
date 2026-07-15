@@ -12,7 +12,7 @@
 // is never touched.
 
 export type PanValidationResult =
-  | "PAN Verified"                       // ✅ found + active/valid + name matched
+  | "PAN Verified"                       // ✅ found + active/valid + name matched (or name not verifiable)
   | "PAN Not Found in TRACES"            // office PAN not in the imported file
   | "Invalid PAN Format"                 // the office PAN isn't a valid 10-char PAN
   | "PAN Missing in Office Data"         // the office party has no PAN to verify
@@ -21,12 +21,21 @@ export type PanValidationResult =
   | "PAN Status Blank"                   // TRACES returned no status (not processed)
   | "PAN Status Error"                   // TRACES returned an unrecognised status
   | "Name Mismatch"                      // names differ (but share something)
-  | "Different Party Name";              // same PAN, an entirely different name
+  | "Different Party Name"               // same PAN, an entirely different name
+  | "Duplicate PAN Across Parties";      // two office parties with different names share one PAN
 
 export interface OfficeParty {
   deductee_id: string;
   pan: string | null;
   name: string | null;
+  // Optional TDS figures for the 206AA higher-rate cross-check (aggregated per PAN
+  // inside comparePanVerification). All amounts in ₹; rate in %.
+  amount?: number | null;               // amount paid/credited
+  tds?: number | null;                  // total tax deducted
+  rate?: number | null;                 // rate of TDS applied (%), if recorded
+  section?: string | null;              // section / nature of payment
+  deductee_type?: string | null;        // Company / Individual / Firm / … (PAN 4th-char cross-check)
+  pan_not_available?: boolean | null;   // office flagged PAN-not-available (PANNOTAVBL)
 }
 
 export interface TracesPanRow {
@@ -38,11 +47,24 @@ export interface TracesPanRow {
   mismatch_in_name: string | null; // TRACES's own Yes/No/Unknown name-mismatch flag
 }
 
+export interface ShortDeduction {
+  required_rate: number;   // the rate that should have applied under 206AA (%)
+  applied_rate: number;    // the rate actually deducted (%)
+  amount: number;          // amount paid/credited (₹)
+  shortfall: number;       // under-deducted tax (₹)
+  basis: string;           // "206AA" | "206AA (194Q/194O cap)" | …
+}
+
 export interface PanCheckDetail {
   pan_found: boolean;
   status_class: string;   // classifyPanStatus bucket
   name_matched: boolean;
   name_kind: "matched" | "mismatch" | "different" | "unknown";
+  // 206AA higher-rate cross-check: present when a PAN defect (invalid/inoperative/
+  // missing) means a higher rate should have been deducted but wasn't.
+  short_deduction?: ShortDeduction | null;
+  // Names sharing this PAN across office parties (Duplicate PAN Across Parties).
+  duplicate_names?: string[];
 }
 
 export interface PanResultRow {
@@ -102,12 +124,15 @@ const NAME_COMPOUND_SUFFIXES = new Set(["KUMAR", "BHAI", "BHAII", "BEN", "BHEN",
 // on the common words alone (the distinctive ABC vs XYZ must decide).
 const NAME_STOPWORDS = new Set(["PRIVATE", "LIMITED", "COMPANY", "CORPORATION", "LLP", "LLC", "INC", "AND", "THE", "MESSRS", "SHREE", "SHRI", "SRI", "SHREEJI"]);
 
-/** Two normalised name TOKENS are compatible when equal, or one is the other plus
- * a known Indian compound suffix ("Rakesh" ≈ "Rakeshkumar"). A single-letter
- * INITIAL is deliberately NOT matched here — "A" would match Arun/Anil/Ajay/… and
- * with a common surname ("A Kumar") could silently verify a wrong PAN. */
+/** Two normalised name TOKENS are compatible when equal, one is the other plus a
+ * known Indian compound suffix ("Rakesh" ≈ "Rakeshkumar"), OR one is a single-letter
+ * INITIAL of the other ("R" ≈ "Ramesh"). Initials are weak on their own, so
+ * nameCompare's subset rule requires at least one FULL-token match alongside them —
+ * a bare initial (or two) can never verify a wrong PAN by itself. */
 function tokensCompatible(x: string, y: string): boolean {
   if (x === y) return true;
+  if (x.length === 1 && y.length >= 2 && y[0] === x) return true;   // initial ↔ expanded
+  if (y.length === 1 && x.length >= 2 && x[0] === y) return true;
   const [s, l] = x.length <= y.length ? [x, y] : [y, x];
   if (s.length >= 3 && l.startsWith(s) && NAME_COMPOUND_SUFFIXES.has(l.slice(s.length))) return true;
   return false;
@@ -116,38 +141,44 @@ export function nameCompare(a: string | null | undefined, b: string | null | und
   const na = normalizeName(a), nb = normalizeName(b);
   if (!na || !nb) return "unknown";
   if (na === nb) return "match";
-  // Drop single-character tokens (bare initials) — too weak to distinguish parties.
-  const allA = na.split(" ").filter((w) => w.length >= 2);
-  const allB = nb.split(" ").filter((w) => w.length >= 2);
-  if (!allA.length || !allB.length) return "unknown";
+  // Keep single-letter INITIALS so "R Krishnan" can match "Ramesh Krishnan"; the
+  // full-token guard below stops a bare initial verifying anything on its own.
+  const allA = na.split(" ").filter(Boolean);
+  const allB = nb.split(" ").filter(Boolean);
+  const hasReal = (ws: string[]) => ws.some((w) => w.length >= 2);
+  if (!hasReal(allA) || !hasReal(allB)) return "unknown";
   // Compare the DISTINCTIVE tokens (drop generic legal/honorific words); fall back
-  // to all tokens only if a side has no distinctive token left.
+  // to all tokens only if a side has no real distinctive token left.
   let ta = allA.filter((w) => !NAME_STOPWORDS.has(w));
   let tb = allB.filter((w) => !NAME_STOPWORDS.has(w));
-  if (!ta.length || !tb.length) { ta = allA; tb = allB; }
+  if (!hasReal(ta) || !hasReal(tb)) { ta = allA; tb = allB; }
   const [short, long] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
   const used = new Set<number>();
-  let hits = 0;
+  let hits = 0, fullHits = 0;
   for (const s of short) {
     const idx = long.findIndex((l, i) => !used.has(i) && tokensCompatible(s, l));
-    if (idx >= 0) { hits++; used.add(idx); }
+    if (idx >= 0) { hits++; used.add(idx); if (s.length >= 2 && long[idx].length >= 2) fullHits++; }
   }
-  // A MULTI-TOKEN subset (≥2 distinctive tokens, all matched) is a confident match
-  // (reorder / extra middle names). A SINGLE-token subset is NOT — a lone common
-  // surname ("Kumar") must not verify against any "… Kumar"; it falls to Jaccard,
-  // which passes only when the other side has no extra distinctive token.
-  if (short.length >= 2 && hits === short.length) return "match";
+  // A MULTI-TOKEN subset (all shorter tokens matched) is a confident match ONLY if
+  // at least one matched pair is a real FULL-token match (not just initials) — so
+  // "R Krishnan"≈"Ramesh Krishnan" passes but two bare initials never do. A lone
+  // common surname ("Kumar") falls to Jaccard, which needs distinctive overlap.
+  if (short.length >= 2 && hits === short.length && fullHits >= 1) return "match";
   const union = short.length + long.length - hits;
-  if (hits / union >= 0.6) return "match";          // strong overlap of distinctive tokens
-  if (hits === 0) return "different";               // no distinctive token in common ⇒ different party
-  return "mismatch";                                // partial overlap
+  if (fullHits >= 1 && hits / union >= 0.6) return "match";   // strong overlap of distinctive tokens
+  if (hits === 0) return "different";                          // no token in common ⇒ different party
+  return "mismatch";                                          // partial overlap
 }
 
-/** TRACES "Mismatch in Name" flag → yes | no | unknown. */
+/** TRACES "Mismatch in Name" flag → yes | no | unknown. Substring/normalised (real
+ * files phrase it "Name Matched" / "Does Not Match" / "Not Matched" / "Y" / "N"),
+ * negatives checked first since "does not match" contains "match". "yes" = there IS
+ * a name mismatch (bad); "no" = names match (good). */
 export function normMismatchFlag(v: string | null | undefined): "yes" | "no" | "unknown" {
   const s = String(v ?? "").trim().toLowerCase();
-  if (s === "no" || s === "n" || s === "false" || s === "match" || s === "matched") return "no";
-  if (s === "yes" || s === "y" || s === "true" || s === "mismatch") return "yes";
+  if (!s) return "unknown";
+  if (/mismatch|not\s*match|does\s*not|differ|unmatch/.test(s) || /^y(es)?$/.test(s) || s === "true") return "yes";
+  if (/match/.test(s) || /^n(o|a)?$/.test(s) || s === "false") return "no";
   return "unknown";
 }
 
@@ -158,22 +189,29 @@ export function normMismatchFlag(v: string | null | undefined): "yes" | "no" | "
 export function resolveNameCheck(
   officeName: string | null | undefined,
   verifiedName: string | null | undefined,
+  submittedName: string | null | undefined,
   mismatchFlag: string | null | undefined,
 ): { matched: boolean; kind: "matched" | "mismatch" | "different" | "unknown" } {
-  const cmp = nameCompare(officeName, verifiedName);
+  // Primary target = the ITD/TRACES VERIFIED name; when the file carries none, fall
+  // back to the SUBMITTED name column (still the ITD-known name in most consolidated
+  // files) before giving up — so the name check runs whenever ANY name is present.
+  const primary = String(verifiedName ?? "").trim() ? verifiedName : submittedName;
+  const cmp = nameCompare(officeName, primary);
   const flag = normMismatchFlag(mismatchFlag);
+  // The flag compares SUBMITTED vs ITD — trust it to clear a mismatch ONLY when the
+  // submitted name is itself this office party (else the flag is about another name).
+  const flagPertains = nameCompare(officeName, submittedName) === "match";
   if (cmp === "match") return { matched: true, kind: "matched" };
-  // A COMPLETELY different name (no distinctive token in common) is authoritative
-  // and is NEVER rescued by the TRACES flag — the flag compares the SUBMITTED name
-  // to ITD, which may not be the office name, so it can't clear a "different party".
+  // A COMPLETELY different name (no token in common) is authoritative and is NEVER
+  // rescued by the flag.
   if (cmp === "different") return { matched: false, kind: "different" };
-  // A PARTIAL mismatch (minor variation) may be rescued when TRACES itself says the
-  // name matches ("No") — this is where we minimise false mismatches.
-  if (cmp === "mismatch") return flag === "no" ? { matched: true, kind: "matched" } : { matched: false, kind: "mismatch" };
-  // cmp === "unknown" (no verified name to compare against) → rely on the flag.
-  if (flag === "no") return { matched: true, kind: "matched" };
+  // A PARTIAL mismatch may be rescued when TRACES says the names match ("No") AND
+  // that flag actually pertains to this office party.
+  if (cmp === "mismatch") return (flag === "no" && flagPertains) ? { matched: true, kind: "matched" } : { matched: false, kind: "mismatch" };
+  // cmp === "unknown" — nothing to compare against at all.
+  if (flag === "no" && flagPertains) return { matched: true, kind: "matched" };
   if (flag === "yes") return { matched: false, kind: "mismatch" };
-  return { matched: true, kind: "unknown" };                          // nothing to compare → don't false-flag
+  return { matched: true, kind: "unknown" };  // truly nothing to compare — NOT a real match (UI shows "not verified")
 }
 
 /**
@@ -186,7 +224,7 @@ export function classifyPanStatus(
 ): "PAN Verified" | "PAN Status Blank" | "PAN Invalid" | "PAN Inactive" | "PAN Status Error" {
   const s = (status ?? "").trim().toLowerCase();
   if (!s) return "PAN Status Blank";
-  if (/invalid|not\s*valid|deactivat|deleted|fake|struck|amalgamat|not\s*(present|found|exist)|non.?exist|not\s*in\s*itd/.test(s)) return "PAN Invalid";
+  if (/invalid|not\s*valid|deactivat|deleted|fake|struck|amalgamat|merg|acqui|liquidat|dissolv|surrender|not\s*(present|found|exist)|non.?exist|not\s*in\s*itd/.test(s)) return "PAN Invalid";
   if (/inoperative|inactive|not\s*linked|notlinked/.test(s)) return "PAN Inactive";
   if (/valid|operative|active/.test(s)) return "PAN Verified";
   return "PAN Status Error";
@@ -207,6 +245,7 @@ export const panReason = (r: PanValidationResult): string => ({
   "PAN Status Error": "TRACES returned an unrecognised PAN status.",
   "Name Mismatch": "PAN is active, but the office name does not match the name on the PAN records.",
   "Different Party Name": "The PAN is active but registered to an entirely different name than the office party.",
+  "Duplicate PAN Across Parties": "Two or more office parties with different names share this PAN — at least one PAN is likely entered against the wrong party.",
 }[r] ?? "Requires review.");
 
 /** Recommended next action for an exception. */
@@ -220,6 +259,7 @@ export const panRecommendedAction = (r: PanValidationResult): string => ({
   "PAN Status Error": "Re-verify this PAN's status on TRACES.",
   "Name Mismatch": "Confirm the correct name against the PAN and update the office record if needed.",
   "Different Party Name": "Confirm the PAN belongs to this party. For a proprietorship the PAN name may be the proprietor's personal name — override with a reason if correct.",
+  "Duplicate PAN Across Parties": "Check each party sharing this PAN — correct the PAN on whichever entry is wrong (a common cause of TDS credit going to the wrong deductee).",
 }[r] ?? "");
 
 // ── TRACES-file column recognition (mirrors Stage-1 value-based detection) ─────
@@ -235,15 +275,46 @@ const isVerifiedHeader = (h: string) =>
     h.includes("panholder") || h.includes("nameaspan") || h.includes("asperitd") || h.includes("asperpan") ||
     h.includes("panname") || h.includes("availablein") || h.includes("itddatabase"));
 
+/** A value that reads like a party/person NAME — mostly letters, multi-char, and
+ * NOT a PAN / pure number / status word. Used as a value-based fallback for the
+ * name column when no header matched (parity with Stage-1's looksLikeName). */
+const TRACES_STATUS_WORD = /valid|operative|inactive|active|inoperative|deactivat|delet|struck|fake|amalgamat|blank|error|pending|processed|not\s*(present|found|linked)/i;
+function looksLikeTracesName(v: unknown): boolean {
+  const s = String(v ?? "").trim();
+  if (s.length < 4) return false;
+  if (looksLikePan(s)) return false;
+  if (/^[\d.,\-()/%\s]+$/.test(s)) return false;   // pure number/punct
+  if (TRACES_STATUS_WORD.test(s) && s.split(/\s+/).length <= 2) return false; // a status value, not a name
+  const letters = (s.match(/[A-Za-z]/g) || []).length;
+  return letters >= 3 && letters / s.length >= 0.5;
+}
+
+/** The columns extractTracesRows detected — surfaced to the user for transparency
+ * (parity with Stage-1's mapping report). Each value is the source header label
+ * (or a positional fallback), or null when the column wasn't found. */
+export interface TracesMapping {
+  sheet: string | null;
+  pan: string | null;
+  pan_status: string | null;
+  name: string | null;
+  verified_name: string | null;
+  mismatch_in_name: string | null;
+  panRows: number;
+}
+
 /**
- * Extract TRACES PAN rows from sheet grids — GENERIC (value-based PAN + status
- * detection; only real-PAN rows emitted; header/title/total rows auto-skipped;
+ * Extract TRACES PAN rows from sheet grids — GENERIC (value-based PAN + status +
+ * name detection; only real-PAN rows emitted; header/title/total rows auto-skipped;
  * the sheet with the most PAN rows wins). Grids come from tdsWorkbook.readSheetGrids
- * (TRUE used range → a bloated-!ref file can never freeze the tab). Pure + testable.
+ * (TRUE used range → a bloated-!ref file can never freeze the tab). Returns the
+ * parsed rows PLUS a mapping report of which column fed each field. Pure + testable.
  */
-export function extractTracesRows(grids: { name: string; grid: unknown[][] }[]): Omit<TracesPanRow, "row_id">[] {
+export function extractTracesRows(
+  grids: { name: string; grid: unknown[][] }[],
+): { rows: Omit<TracesPanRow, "row_id">[]; mapping: TracesMapping } {
   let bestOut: Omit<TracesPanRow, "row_id">[] = [];
-  for (const { grid } of grids) {
+  let bestMapping: TracesMapping = { sheet: null, pan: null, pan_status: null, name: null, verified_name: null, mismatch_in_name: null, panRows: 0 };
+  for (const { name: sheetName, grid } of grids) {
     if (!grid || !grid.length) continue;
     const ncol = grid.reduce((m, row) => Math.max(m, (row || []).length), 0);
     if (!ncol) continue;
@@ -263,24 +334,46 @@ export function extractTracesRows(grids: { name: string; grid: unknown[][] }[]):
     }
     if (panCol < 0 || bestFrac < 0.3) continue;
 
-    // 2) HEADER row — a row (in the first 25) with a PAN-ish header AND a
-    //    different-text status/name header (rejects a merged banner title row).
-    let hdrIdx = -1;
-    const scan = Math.min(grid.length, 25);
-    for (let r = 0; r < scan; r++) {
-      const cells = (grid[r] || []).map(nh);
-      const panIdx = cells.findIndex((h) => h.includes("pan"));
-      if (panIdx < 0) continue;
-      const otherIdx = cells.findIndex((h, i) => i !== panIdx && h !== cells[panIdx] && (isStatusHeader(h) || isNameHeader(h) || isVerifiedHeader(h)));
-      if (otherIdx >= 0) { hdrIdx = r; break; }
+    // 2) HEADER row — the BEST-scoring label row ABOVE the data (not merely the
+    //    first pan-ish row, which could be a preamble/banner). A header row carries
+    //    several recognised labels and NO PAN value. A TWO-ROW header (a main-label
+    //    row directly above a sub-label row) is merged cell-by-cell, like Stage-1.
+    const nbs = (v: unknown) => String(v ?? "").trim();
+    const headerScore = (row: unknown[]): number => {
+      const cells = (row || []).map(nh);
+      let s = 0;
+      if (cells.some((h) => h.includes("pan"))) s++;
+      if (cells.some(isStatusHeader)) s++;
+      if (cells.some(isNameHeader)) s++;
+      if (cells.some(isVerifiedHeader)) s++;
+      if (cells.some(isMismatchHeader)) s++;
+      return s;
+    };
+    const scanEnd = firstPanRow > 0 ? firstPanRow : Math.min(grid.length, 25);
+    let hdrIdx = -1, hdrBest = 1;   // require ≥2 recognised labels to count as a header
+    for (let r = 0; r < scanEnd; r++) {
+      const row = grid[r] || [];
+      if (row.some((c) => looksLikePan(c))) continue;      // a header row carries no PAN value
+      const sc = headerScore(row);
+      if (sc >= 2 && sc >= hdrBest) { hdrBest = sc; hdrIdx = r; }   // ≥ prefers the row CLOSEST to the data on ties
     }
-    const useHdr = hdrIdx >= 0 && (firstPanRow === 0 ? false : hdrIdx < firstPanRow);
-    const headerRow = (useHdr ? grid[hdrIdx] : (firstPanRow > 0 ? grid[firstPanRow - 1] : [])) || [];
+    let headerCells: unknown[] = hdrIdx >= 0 ? [...(grid[hdrIdx] || [])] : (firstPanRow > 0 ? [...(grid[firstPanRow - 1] || [])] : []);
+    if (hdrIdx > 0) {   // merge a header-ish, PAN-less row directly above (split labels)
+      const above = grid[hdrIdx - 1] || [];
+      if (!above.some((c) => looksLikePan(c)) && headerScore(above) >= 1) {
+        const m = Math.max(headerCells.length, above.length);
+        for (let i = 0; i < m; i++) {
+          const top = nbs(above[i]), bot = nbs(headerCells[i]);
+          headerCells[i] = top && bot ? `${top} ${bot}` : (top || headerCells[i]);
+        }
+      }
+    }
+    const headerRow = headerCells;
     const header = headerRow.map(nh);
     const findCol = (pred: (h: string) => boolean) => header.findIndex(pred);
-    const nameCol = findCol(isNameHeader);
+    let nameCol = findCol(isNameHeader);
     const verifiedCol = findCol(isVerifiedHeader);
-    const mismatchCol = findCol(isMismatchHeader);
+    let mismatchCol = findCol(isMismatchHeader);
 
     // 3) STATUS column — value-based FIRST (reliable), header only a fallback.
     let statusCol = -1, bf = 0;
@@ -298,6 +391,44 @@ export function extractTracesRows(grids: { name: string; grid: unknown[][] }[]):
     }
     if (statusCol < 0) statusCol = findCol(isStatusHeader);
 
+    // 3b) NAME column — value-based fallback when no header matched: the column
+    //     (not PAN/status/verified/mismatch) whose values read most like names.
+    if (nameCol < 0) {
+      let bestNameCol = -1, bestNameFrac = 0;
+      for (let c = 0; c < ncol; c++) {
+        if (c === panCol || c === statusCol || c === verifiedCol || c === mismatchCol) continue;
+        let ne = 0, hit = 0;
+        for (let r = Math.max(0, firstPanRow); r < grid.length; r++) {
+          const s = String(grid[r]?.[c] ?? "").trim();
+          if (!s) continue;
+          ne++;
+          if (looksLikeTracesName(s)) hit++;
+        }
+        const frac = ne ? hit / ne : 0;
+        if (frac >= 0.5 && frac > bestNameFrac) { bestNameFrac = frac; bestNameCol = c; }
+      }
+      if (bestNameCol >= 0) nameCol = bestNameCol;
+    }
+
+    // 3c) MISMATCH-flag column — value-based fallback (a Yes/No/Match column) when
+    //     no header matched, so a two-row / oddly-labelled flag still clears names.
+    if (mismatchCol < 0) {
+      let bestM = -1, bestMFrac = 0;
+      for (let c = 0; c < ncol; c++) {
+        if (c === panCol || c === statusCol || c === nameCol || c === verifiedCol) continue;
+        let ne = 0, hit = 0;
+        for (let r = Math.max(0, firstPanRow); r < grid.length; r++) {
+          const s = nbs(grid[r]?.[c]).toLowerCase();
+          if (!s) continue;
+          ne++;
+          if (/^(y|n|yes|no|match|matched|mismatch|not\s*match|does\s*not|differ)/.test(s)) hit++;
+        }
+        const frac = ne ? hit / ne : 0;
+        if (frac >= 0.6 && frac > bestMFrac) { bestMFrac = frac; bestM = c; }
+      }
+      if (bestM >= 0) mismatchCol = bestM;
+    }
+
     // 4) Emit only real-PAN rows.
     const cell = (row: unknown[], i: number) => (i >= 0 ? (String(row?.[i] ?? "").trim() || null) : null);
     const out: Omit<TracesPanRow, "row_id">[] = [];
@@ -312,58 +443,140 @@ export function extractTracesRows(grids: { name: string; grid: unknown[][] }[]):
         mismatch_in_name: cell(dr, mismatchCol),
       });
     }
-    if (out.length > bestOut.length) bestOut = out;
+    if (out.length > bestOut.length) {
+      bestOut = out;
+      // Column label = the source header text (original casing), or a positional
+      // fallback for a value-detected column with no header text.
+      const label = (i: number): string | null => {
+        if (i < 0) return null;
+        const h = String(headerRow[i] ?? "").trim();
+        return h || `Column ${i + 1}`;
+      };
+      bestMapping = {
+        sheet: sheetName ?? null,
+        pan: label(panCol), pan_status: label(statusCol), name: label(nameCol),
+        verified_name: label(verifiedCol), mismatch_in_name: label(mismatchCol),
+        panRows: out.length,
+      };
+    }
   }
-  return bestOut;
+  return { rows: bestOut, mapping: bestMapping };
+}
+
+/** True when every name in the list is name-equivalent (used to decide whether two
+ *  office parties sharing a PAN are the same party or a Duplicate-PAN conflict). */
+function allNamesEquivalent(names: string[]): boolean {
+  for (let i = 1; i < names.length; i++) if (nameCompare(names[0], names[i]) !== "match") return false;
+  return true;
+}
+
+/** The higher TDS rate mandated when the PAN is not effectively furnished (§206AA /
+ *  Rule 114AAA for inoperative PANs). 20% in general; the 206AA proviso caps it at
+ *  5% for 194-Q and 194-O. (max-with-section-rate is unnecessary here: a PAN-defect
+ *  case only under-deducts when the applied rate is below this floor.) */
+function higherRateFor(section: string | null | undefined): { required: number; basis: string } {
+  const s = String(section ?? "").toUpperCase().replace(/[^0-9A-Z]/g, "");
+  if (/194Q/.test(s) || /194O/.test(s)) return { required: 5, basis: "§206AA (194Q/194O cap 5%)" };
+  return { required: 20, basis: "§206AA (20%)" };
+}
+
+/** §206AA short-deduction: given a party's amount/tds/rate + section, the rupee
+ *  under-deduction vs the mandated higher rate, or null if compliant / no amount. */
+function computeShortDeduction(
+  amount: number | null | undefined, tds: number | null | undefined,
+  rate: number | null | undefined, section: string | null | undefined,
+): ShortDeduction | null {
+  const amt = Number(amount) || 0;
+  if (amt <= 0) return null;
+  const applied = (rate != null && Number(rate) > 0) ? Number(rate) : ((Number(tds) || 0) / amt) * 100;
+  const { required, basis } = higherRateFor(section);
+  if (applied >= required - 0.05) return null;          // already at/above the higher rate
+  const shortfall = Math.round(((required - applied) / 100) * amt);
+  if (shortfall <= 1) return null;                      // within ₹1 tolerance
+  return { required_rate: required, applied_rate: Math.round(applied * 100) / 100, amount: amt, shortfall, basis };
 }
 
 /**
- * Stage-2 audit — OFFICE-DRIVEN. For every distinct office PAN: locate it in the
- * TRACES file and produce the correct audit result + a per-check detail (PAN
- * found / status / name). TRACES PANs with no office party are IGNORED.
+ * Stage-2 audit — OFFICE-DRIVEN. Every office party is audited against the TRACES
+ * file: PAN existence → status → name (with the §206AA higher-rate cross-check for
+ * PAN defects, and Duplicate-PAN detection when two parties share one PAN under
+ * different names). TRACES PANs with no office party are IGNORED (office is master).
  */
 export function comparePanVerification(office: OfficeParty[], traces: TracesPanRow[]): PanResultRow[] {
+  // Index TRACES rows by PAN. Across MULTIPLE imported files (or duplicate rows
+  // within one) the SAME PAN can appear more than once. `traces` arrives NEWEST-file
+  // -first, and PAN status is point-in-time, so we take each field from the NEWEST
+  // row that has it (a fresh "Inoperative" must never be shadowed by an older
+  // "Valid"), backfilling blanks from older rows. This "newest non-blank per field"
+  // merge keeps recency on the compliance axis while still filling missing names.
+  const nb = (v: unknown) => String(v ?? "").trim();
   const tracesByPan = new Map<string, TracesPanRow>();
-  for (const t of traces) { const k = normalizePan(t.pan); if (k && !tracesByPan.has(k)) tracesByPan.set(k, t); }
+  for (const t of traces) {
+    const k = normalizePan(t.pan);
+    if (!k) continue;
+    const cur = tracesByPan.get(k);
+    if (!cur) { tracesByPan.set(k, { ...t, pan: k }); continue; }
+    if (!nb(cur.pan_status) && nb(t.pan_status)) cur.pan_status = t.pan_status;
+    if (!nb(cur.verified_name) && nb(t.verified_name)) cur.verified_name = t.verified_name;
+    if (!nb(cur.name) && nb(t.name)) cur.name = t.name;
+    if (!nb(cur.mismatch_in_name) && nb(t.mismatch_in_name)) cur.mismatch_in_name = t.mismatch_in_name;
+  }
 
-  const rows: PanResultRow[] = [];
-  const seenOffice = new Set<string>();
+  // Aggregate office parties by valid PAN — sum amount/TDS (for the §206AA rate) and
+  // collect the DISTINCT names sharing the PAN (for Duplicate-PAN detection). Parties
+  // with no/invalid PAN are audited INDIVIDUALLY (never silently deduped away).
+  interface Agg { rep: OfficeParty; amount: number; tds: number; names: Set<string>; }
+  const byPan = new Map<string, Agg>();
+  const noPan: OfficeParty[] = [];
   for (const o of office) {
     const k = normalizePan(o.pan);
-    const dedupeKey = k || `d:${o.deductee_id}`;
-    if (seenOffice.has(dedupeKey)) continue;   // one audit row per office PAN
-    seenOffice.add(dedupeKey);
+    if (!k || !looksLikePan(k)) { noPan.push(o); continue; }
+    let agg = byPan.get(k);
+    if (!agg) { agg = { rep: o, amount: 0, tds: 0, names: new Set() }; byPan.set(k, agg); }
+    agg.amount += Number(o.amount) || 0;
+    agg.tds += Number(o.tds) || 0;
+    if (o.name && normalizeName(o.name)) agg.names.add(o.name.trim());
+  }
 
+  const rows: PanResultRow[] = [];
+
+  // No-PAN / invalid-format parties — audited individually; §206AA higher rate is
+  // mandatory when the PAN is not furnished, so cross-check the rate here too.
+  for (const o of noPan) {
+    const k = normalizePan(o.pan);
+    const result: PanValidationResult = !k ? "PAN Missing in Office Data" : "Invalid PAN Format";
+    const detail: PanCheckDetail = {
+      pan_found: false, status_class: "", name_matched: false, name_kind: "unknown",
+      short_deduction: computeShortDeduction(o.amount, o.tds, o.rate, o.section),
+    };
+    rows.push({ office_deductee_id: o.deductee_id, office_name: o.name ?? null, pan_row_id: null,
+      verified_name: null, pan: o.pan ?? null, pan_status: null, validation_result: result, detail });
+  }
+
+  // Real-PAN parties — one audit row per PAN.
+  for (const [k, agg] of byPan) {
+    const o = agg.rep;
     const base = { office_deductee_id: o.deductee_id, office_name: o.name ?? null };
-
-    // Office-side PAN sanity.
-    if (!k) {
-      rows.push({ ...base, pan_row_id: null, verified_name: null, pan: o.pan ?? null, pan_status: null,
-        validation_result: "PAN Missing in Office Data",
-        detail: { pan_found: false, status_class: "", name_matched: false, name_kind: "unknown" } });
-      continue;
-    }
-    if (!looksLikePan(k)) {
-      rows.push({ ...base, pan_row_id: null, verified_name: null, pan: o.pan ?? null, pan_status: null,
-        validation_result: "Invalid PAN Format",
-        detail: { pan_found: false, status_class: "", name_matched: false, name_kind: "unknown" } });
-      continue;
-    }
+    const distinctNames = [...agg.names];
+    const namesConflict = distinctNames.length >= 2 && !allNamesEquivalent(distinctNames);
 
     const t = tracesByPan.get(k);
     if (!t) {
+      const detail: PanCheckDetail = { pan_found: false, status_class: "", name_matched: false, name_kind: "unknown" };
+      if (namesConflict) detail.duplicate_names = distinctNames;
       rows.push({ ...base, pan_row_id: null, verified_name: null, pan: o.pan ?? null, pan_status: null,
-        validation_result: "PAN Not Found in TRACES",
-        detail: { pan_found: false, status_class: "", name_matched: false, name_kind: "unknown" } });
+        validation_result: namesConflict ? "Duplicate PAN Across Parties" : "PAN Not Found in TRACES", detail });
       continue;
     }
 
     const statusClass = classifyPanStatus(t.pan_status);
-    const nameChk = resolveNameCheck(o.name, t.verified_name, t.mismatch_in_name);
+    const nameChk = resolveNameCheck(o.name, t.verified_name, t.name, t.mismatch_in_name);
 
-    // Status is the primary axis; name is checked whenever the status is good.
+    // Duplicate-PAN conflict outranks a clean status; otherwise status is primary,
+    // then the name check.
     let result: PanValidationResult;
-    if (statusClass === "PAN Invalid") result = "Invalid PAN";
+    if (namesConflict) result = "Duplicate PAN Across Parties";
+    else if (statusClass === "PAN Invalid") result = "Invalid PAN";
     else if (statusClass === "PAN Inactive") result = "PAN Inoperative";
     else if (statusClass === "PAN Status Blank") result = "PAN Status Blank";
     else if (statusClass === "PAN Status Error") result = "PAN Status Error";
@@ -371,10 +584,18 @@ export function comparePanVerification(office: OfficeParty[], traces: TracesPanR
     else if (nameChk.kind === "different") result = "Different Party Name";
     else result = "Name Mismatch";
 
+    const detail: PanCheckDetail = {
+      pan_found: true, status_class: statusClass, name_matched: nameChk.matched, name_kind: nameChk.kind,
+    };
+    if (namesConflict) detail.duplicate_names = distinctNames;
+    // §206AA: an inoperative / invalid PAN requires the higher rate.
+    if (statusClass === "PAN Invalid" || statusClass === "PAN Inactive") {
+      detail.short_deduction = computeShortDeduction(agg.amount, agg.tds, o.rate, o.section);
+    }
+
     rows.push({
       ...base, pan_row_id: t.row_id, verified_name: t.verified_name ?? null,
-      pan: o.pan ?? null, pan_status: t.pan_status ?? null, validation_result: result,
-      detail: { pan_found: true, status_class: statusClass, name_matched: nameChk.matched, name_kind: nameChk.kind },
+      pan: o.pan ?? null, pan_status: t.pan_status ?? null, validation_result: result, detail,
     });
   }
   return rows;
@@ -407,6 +628,12 @@ export function panDiagnostics(office: OfficeParty[], traces: TracesPanRow[]): s
   const withStatus = traces.filter((t) => (t.pan_status ?? "").trim()).length;
   if (traces.length >= 3 && withStatus === 0)
     diag.push(`The TRACES file has no PAN Status values — check you imported the verification RESULT file, not the request file.`);
+  // Reverse completeness — PANs in the TRACES file that match no office party. A
+  // large number usually means the wrong quarter's/client's file was imported, or
+  // parties were edited/deleted in office after the TRACES request was generated.
+  const unmatched = [...tracePans].filter((p) => !officeSet.has(p)).length;
+  if (tracePans.size > 0 && officeSet.size > 0 && unmatched > 0 && unmatched >= Math.max(3, Math.ceil(tracePans.size * 0.5)))
+    diag.push(`${unmatched} of ${tracePans.size} PAN(s) in the TRACES file have no matching office party — confirm this is the right quarter's/client's file.`);
   return diag;
 }
 
@@ -417,6 +644,8 @@ export const PAN_OVERRIDE_REASONS = [
   "Name variation accepted",
   "Proprietorship — PAN name is the proprietor's personal name",
   "PAN status updated but TRACES report not refreshed",
+  "Higher rate (20% / 5%) already deducted — §206AA satisfied",
+  "Short deduction to be corrected / adjusted",
   "Data entry difference accepted",
   "Other",
 ] as const;

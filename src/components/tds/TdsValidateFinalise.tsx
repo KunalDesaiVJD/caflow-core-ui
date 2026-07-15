@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { getDefaultTdsQuarter, isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
+import { isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -30,7 +30,7 @@ import {
 } from "lucide-react";
 import { parseWorkbookRows, parseCsvRows } from "@/lib/tdsWorkbook";
 import { logReconAudit } from "@/lib/tdsReconAudit";
-import { TdsPanVerification } from "./TdsPanVerification";
+import { TdsPanVerification, type PanStageStatus } from "./TdsPanVerification";
 
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null;
@@ -43,6 +43,12 @@ interface Props {
   isSuperadmin: boolean;
   resolveFirmId: () => Promise<string | null>;
   onNavigateDataEntry?: (filingId: string) => void;
+  // Shared Workspace filing context (owned by the parent TdsFilings page) so the
+  // Data Entry and Validate & Finalise tabs stay on the same Client/FY/Quarter/Form.
+  selClient: string; setSelClient: (v: string) => void;
+  selFy: string; setSelFy: (v: string) => void;
+  selQuarter: string; setSelQuarter: (v: string) => void;
+  selForm: string; setSelForm: (v: string) => void;
 }
 
 interface FieldDiff {
@@ -227,17 +233,18 @@ function AnimatedNumber({ value }: { value: number }) {
   return <>{display}</>;
 }
 
-type FilterKey = null | "total" | "matched" | "mismatched" | "overridden" | "pending";
+type FilterKey = null | "total" | "matched" | "mismatched" | "overridden";
 
-export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNavigateDataEntry }: Props) {
+// A Stage-2 status that BLOCKS filing — the gate starts here and returns here on
+// every selection change, so it can never enable off a previous filing's report.
+const PAN_STATUS_BLOCKED: PanStageStatus = { filingId: null, loaded: false, applicable: false, ran: false, total: 0, verified: 0, issues: 0, overridden: 0 };
+
+export function TdsValidateFinalise({
+  clients, isSuperadmin, resolveFirmId, onNavigateDataEntry,
+  selClient, setSelClient, selFy, setSelFy, selQuarter, setSelQuarter, selForm, setSelForm,
+}: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
-
-  const [selClient, setSelClient] = useState("");
-  const smartDefault = useMemo(() => getDefaultTdsQuarter(), []);
-  const [selFy, setSelFy] = useState(smartDefault.fy);
-  const [selQuarter, setSelQuarter] = useState(smartDefault.quarter);
-  const [selForm, setSelForm] = useState("26Q");
 
   const [resolving, setResolving] = useState(false);
   const [filing, setFiling] = useState<any>(null);
@@ -634,6 +641,10 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
 
   const handleFinalise = async () => {
     if (!filing) return;
+    // Re-assert the whole gate at WRITE time — canFile only guards the button and
+    // the dialog can outlive a late Stage-2 status flip, so never file an unready
+    // return even if the confirm dialog was already open.
+    if (!canFile) { toast({ title: "Not ready to file", description: fileBlockReason || "Complete all validations first.", variant: "destructive" }); setConfirmOpen(false); return; }
     setFinalising(true);
     const actingName = userMap[user?.id ?? ""];
     // Set checker_id ("Filed By") on entering Filed — same invariant the Filings
@@ -651,18 +662,47 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     setConfirmOpen(false);
   };
 
+  // Clean partition: Total = Matched + Mismatched(UNRESOLVED) + Overridden.
+  // "Mismatched" counts only records that are NOT yet overridden — once a record
+  // is overridden it moves to Overridden, so there is no separate "Pending" count
+  // to duplicate it (the redundant Pending card is removed).
   const summary = useMemo(() => {
     const rs = results || [];
     return {
       total: rs.length,
       matched: rs.filter(r => r.match_status === "matched").length,
-      mismatched: rs.filter(r => r.match_status !== "matched").length,
+      mismatched: rs.filter(r => r.match_status !== "matched" && !r.overridden).length,   // UNRESOLVED
       overridden: rs.filter(r => r.overridden).length,
-      pending: rs.filter(r => r.match_status !== "matched" && !r.overridden).length,
     };
   }, [results]);
 
-  const canFile = (results?.length ?? 0) > 0 && summary.pending === 0;
+  // ── Cross-stage filing gate ─────────────────────────────────────────────────
+  // "Mark Return as Ready to File" may enable ONLY when the WHOLE validation
+  // workflow is complete: Stage-1 has run with no unresolved mismatch, AND — when
+  // a TRACES file has been imported (Stage-2 applicable) — Stage-2 has been run
+  // with no unresolved PAN issue. Until then the button stays disabled and the UI
+  // states the exact reason.
+  const [panStatus, setPanStatus] = useState<PanStageStatus>(PAN_STATUS_BLOCKED);
+  const stage1Ran = (results?.length ?? 0) > 0;
+  const stage1Ready = stage1Ran && summary.mismatched === 0;
+  // The Stage-2 report must describe the CURRENTLY-selected filing AND have settled
+  // (loaded) — during a fast filing switch or the initial load window the child's
+  // report can still describe the previous return or hold pre-load defaults, so the
+  // gate defaults CLOSED until the current filing's Stage-2 has genuinely reported.
+  const stage2Reported = panStatus.loaded && panStatus.filingId != null && panStatus.filingId === (filing?.id ?? null);
+  const stage2Ready = stage2Reported && (!panStatus.applicable || (panStatus.ran && panStatus.issues === 0));
+  const canFile = stage1Ready && stage2Ready;
+  const fileBlockReason = !stage1Ran
+    ? "Run Stage-1 validation first."
+    : !stage1Ready
+    ? `${summary.mismatched} Stage-1 mismatch${summary.mismatched === 1 ? "" : "es"} still unresolved — override each one to continue.`
+    : !stage2Reported
+    ? "Finishing Stage-2 status check…"
+    : (panStatus.applicable && !panStatus.ran)
+    ? "A TRACES file is imported — run Stage-2 PAN Verification to complete the audit."
+    : (panStatus.applicable && panStatus.issues > 0)
+    ? `${panStatus.issues} Stage-2 PAN issue${panStatus.issues === 1 ? "" : "s"} still unresolved — override or resolve each one to continue.`
+    : "";
   const isFiled = filing?.work_status === "Filed";
   const cErr = selClient ? complianceError() : null;
 
@@ -673,8 +713,10 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     return rs.sort((a, b) => (a.overridden ? 1 : 0) - (b.overridden ? 1 : 0));
   }, [results]);
 
-  // Reset the active card filter when the selection changes.
-  useEffect(() => { setActiveFilter(null); }, [selClient, selFy, selQuarter, selForm]);
+  // Reset the active card filter AND the Stage-2 gate status when the selection
+  // changes, so the filing gate defaults closed until the new filing's Stage-2
+  // reports (prevents filing off a previous return's status during a fast switch).
+  useEffect(() => { setActiveFilter(null); setPanStatus(PAN_STATUS_BLOCKED); }, [selClient, selFy, selQuarter, selForm]);
 
   // Records to show when a summary card is clicked (null = default exceptions view).
   const cardFiltered = useMemo((): ReconResult[] | null => {
@@ -682,9 +724,8 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     switch (activeFilter) {
       case "total": return rs;
       case "matched": return rs.filter(r => r.match_status === "matched");
-      case "mismatched": return rs.filter(r => r.match_status !== "matched");
+      case "mismatched": return rs.filter(r => r.match_status !== "matched" && !r.overridden); // unresolved
       case "overridden": return rs.filter(r => r.overridden);
-      case "pending": return rs.filter(r => r.match_status !== "matched" && !r.overridden);
       default: return null;
     }
   }, [results, activeFilter]);
@@ -961,13 +1002,12 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
             <div className="space-y-3">
               {/* Live, clickable dashboard cards — animated counters; click a card
                   to filter the results to that category, click again to clear. */}
-              <div className={cn("grid grid-cols-3 sm:grid-cols-5 gap-3", comparing && "animate-pulse")}>
+              <div className={cn("grid grid-cols-2 sm:grid-cols-4 gap-3", comparing && "animate-pulse")}>
                 {([
                   { key: "total" as const, label: "Total", value: summary.total, cls: "" },
                   { key: "matched" as const, label: "Matched", value: summary.matched, cls: "text-emerald-600" },
-                  { key: "mismatched" as const, label: "Mismatched", value: summary.mismatched, cls: summary.mismatched > 0 ? "text-destructive" : "" },
+                  { key: "mismatched" as const, label: "Mismatched", value: summary.mismatched, cls: summary.mismatched > 0 ? "text-destructive" : "text-emerald-600" },
                   { key: "overridden" as const, label: "Overridden", value: summary.overridden, cls: "text-blue-600" },
-                  { key: "pending" as const, label: "Pending", value: summary.pending, cls: summary.pending > 0 ? "text-amber-600" : "text-emerald-600" },
                 ]).map(s => (
                   <button key={s.label} type="button"
                     onClick={() => setActiveFilter(activeFilter === s.key ? null : s.key)}
@@ -1040,6 +1080,7 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
               runSignal={runSignal}
               resolveFirmId={resolveFirmId}
               disabled={isFiled}
+              onStatusChange={setPanStatus}
             />
           </div>
 
@@ -1055,15 +1096,36 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
                   </div>
                 ) : (
                   <>
-                    <div className="flex items-center gap-3 mb-4">
-                      {canFile ? <CheckCircle2 size={24} className="text-emerald-600" /> : <AlertTriangle size={24} className="text-amber-600" />}
-                      <div>
+                    <div className="flex items-start gap-3 mb-4">
+                      {canFile ? <CheckCircle2 size={24} className="text-emerald-600 mt-0.5 shrink-0" /> : <AlertTriangle size={24} className="text-amber-600 mt-0.5 shrink-0" />}
+                      <div className="min-w-0">
                         <p className="font-semibold text-foreground">
-                          {canFile ? "Stage 1 reconciled — ready to file" : `${summary.pending} record(s) still pending in Stage 1`}
+                          {canFile ? "All validations complete — ready to file" : "Return not ready to file"}
                         </p>
                         <p className="text-sm text-muted-foreground">
-                          {canFile ? "Every Stage 1 record is matched or overridden." : "Override every mismatch (Pending must reach 0) to enable filing."}
+                          {canFile
+                            ? (panStatus.applicable ? "Stage 1 and Stage 2 are both reconciled with no unresolved items." : "Stage 1 is reconciled. Stage 2 PAN verification is optional and was not performed.")
+                            : fileBlockReason}
                         </p>
+                        {/* Per-stage completion checklist — the user sees exactly what remains. */}
+                        <div className="mt-3 space-y-1 text-xs">
+                          <div className="flex items-center gap-1.5">
+                            {stage1Ready ? <CheckCircle2 size={13} className="text-emerald-600 shrink-0" /> : <X size={13} className="text-destructive shrink-0" />}
+                            <span className={stage1Ready ? "text-foreground" : "text-muted-foreground"}>
+                              Stage 1 · Data reconciliation{stage1Ready ? " — complete" : stage1Ran ? ` — ${summary.mismatched} unresolved` : " — not run"}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            {!panStatus.applicable ? <Info size={13} className="text-muted-foreground shrink-0" /> : stage2Ready ? <CheckCircle2 size={13} className="text-emerald-600 shrink-0" /> : <X size={13} className="text-destructive shrink-0" />}
+                            <span className={!panStatus.applicable ? "text-muted-foreground" : stage2Ready ? "text-foreground" : "text-muted-foreground"}>
+                              Stage 2 · PAN verification{
+                                !panStatus.applicable ? " — optional (no TRACES file imported)"
+                                : !panStatus.ran ? " — not run"
+                                : panStatus.issues > 0 ? ` — ${panStatus.issues} unresolved`
+                                : " — complete"}
+                            </span>
+                          </div>
+                        </div>
                       </div>
                     </div>
                     <Button size="lg" className="gap-2" disabled={!canFile} onClick={() => setConfirmOpen(true)}>
