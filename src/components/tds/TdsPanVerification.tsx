@@ -16,16 +16,21 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogFooter,
+  AlertDialogTitle, AlertDialogDescription, AlertDialogAction, AlertDialogCancel,
+} from "@/components/ui/alert-dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import {
-  ShieldCheck, CheckCircle2, XCircle, Upload, FileSpreadsheet, Loader2, RotateCcw, X, Play, Users,
+  ShieldCheck, CheckCircle2, XCircle, Upload, FileSpreadsheet, Loader2, RotateCcw, X, Play, Users, Trash2, Eye, MinusCircle, AlertTriangle,
 } from "lucide-react";
 import { readSheetGrids, readDelimitedGrid } from "@/lib/tdsWorkbook";
 import { logReconAudit } from "@/lib/tdsReconAudit";
 import {
-  comparePanVerification, extractTracesRows, panDiagnostics, isPanException, normalizePan,
+  comparePanVerification, extractTracesRows, panDiagnostics, isPanException, normalizePan, looksLikePan,
   panReason, panRecommendedAction, PAN_OVERRIDE_REASONS,
-  type OfficeParty, type TracesPanRow, type PanValidationResult, type PanCheckDetail,
+  type OfficeParty, type TracesPanRow, type TracesMapping, type PanValidationResult, type PanCheckDetail,
 } from "@/lib/tdsPanVerification";
 
 /**
@@ -42,6 +47,18 @@ import {
  *
  * SCOPE: this file + src/lib/tdsPanVerification.ts only.
  */
+/** Stage-2 status the parent needs to gate "Mark Return as Ready to File". */
+export interface PanStageStatus {
+  filingId: string | null;  // the filing this status describes — the parent must match it
+  loaded: boolean;       // loadAll has SETTLED for this filing — until then the report is not trustworthy
+  applicable: boolean;   // a TRACES file has been imported → PAN verification applies
+  ran: boolean;          // the audit has been run (results exist)
+  total: number;
+  verified: number;
+  issues: number;        // unresolved exceptions (not overridden)
+  overridden: number;
+}
+
 interface Props {
   filing: any;
   selClient: string;
@@ -51,6 +68,9 @@ interface Props {
   runSignal: number; // legacy: still passed by the parent; Stage 2 no longer auto-runs on it
   resolveFirmId: () => Promise<string | null>;
   disabled?: boolean;
+  // Report Stage-2 completion state up to the parent so the filing gate can
+  // require Stage-2 to be finished (when applicable) before enabling "Ready to File".
+  onStatusChange?: (s: PanStageStatus) => void;
 }
 
 interface PanResult {
@@ -69,7 +89,7 @@ interface PanResult {
   office_deductee_id: string | null;
 }
 
-type PanFilter = null | "total" | "verified" | "matched" | "issues" | "pending" | "overridden";
+type PanFilter = null | "total" | "verified" | "issues" | "overridden";
 
 const RESULT_BADGE: Record<string, string> = {
   "PAN Verified": "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
@@ -82,7 +102,11 @@ const RESULT_BADGE: Record<string, string> = {
   "PAN Status Error": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
   "Name Mismatch": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
   "Different Party Name": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
+  "Duplicate PAN Across Parties": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
 };
+
+/** ₹ formatter for the §206AA short-deduction figures. */
+const inr = (n: number) => `₹${Math.round(n).toLocaleString("en-IN")}`;
 
 /** Dashboard-style counter that smoothly animates to its target. */
 function AnimatedNumber({ value }: { value: number }) {
@@ -108,8 +132,9 @@ function AnimatedNumber({ value }: { value: number }) {
 
 /** Parse a TRACES Bulk-PAN file (Excel OR delimited .csv/.txt) into PAN rows via
  *  the shared Stage-1 reader (readSheetGrids → TRUE used range, so a bloated-!ref
- *  file can never freeze the tab), then the pure, tested extractTracesRows(). */
-async function parseTracesFile(file: File): Promise<Omit<TracesPanRow, "row_id">[]> {
+ *  file can never freeze the tab), then the pure, tested extractTracesRows().
+ *  Returns the rows plus a column-mapping report for user transparency. */
+async function parseTracesFile(file: File): Promise<{ rows: Omit<TracesPanRow, "row_id">[]; mapping: TracesMapping }> {
   const name = file.name.toLowerCase();
   const grids = (name.endsWith(".csv") || name.endsWith(".txt"))
     ? readDelimitedGrid(await file.text())
@@ -117,16 +142,40 @@ async function parseTracesFile(file: File): Promise<Omit<TracesPanRow, "row_id">
   return extractTracesRows(grids);
 }
 
-/** Whether an audit row's name check passed (defensive for pre-migration rows). */
-const nameMatchedOf = (r: PanResult): boolean =>
-  r.detail?.name_matched ?? (r.validation_result === "PAN Verified");
+/** One-line summary of the TRACES column mapping for the import toast, e.g.
+ *  "Mapped PAN←'PAN', Status←'PAN Status', Verified Name←'Name as per ITD'." */
+function formatTracesMapping(m: TracesMapping): string {
+  const parts: string[] = [];
+  if (m.pan) parts.push(`PAN←'${m.pan}'`);
+  if (m.pan_status) parts.push(`Status←'${m.pan_status}'`);
+  if (m.name) parts.push(`Name←'${m.name}'`);
+  if (m.verified_name) parts.push(`Verified Name←'${m.verified_name}'`);
+  if (m.mismatch_in_name) parts.push(`Mismatch Flag←'${m.mismatch_in_name}'`);
+  return parts.length ? `Mapped ${parts.join(", ")}.` : "";
+}
 
-export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selForm, resolveFirmId, disabled }: Props) {
+/** Whether the name was ACTUALLY compared and matched — an "unknown" (no name to
+ * compare, e.g. the TRACES file had no verified-name column) is NOT a match, so it
+ * is never shown with a green "Name matched" tick (avoids false assurance). */
+const nameMatchedOf = (r: PanResult): boolean =>
+  r.detail ? r.detail.name_kind === "matched" : (r.validation_result === "PAN Verified");
+/** The name check was possible but not yet conclusive (no name available to compare). */
+const nameNotVerified = (r: PanResult): boolean => (r.detail?.name_kind ?? "") === "unknown";
+
+export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selForm, resolveFirmId, disabled, onStatusChange }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
 
   const [officeParties, setOfficeParties] = useState<OfficeParty[]>([]);
-  const [batch, setBatch] = useState<any>(null);
+  const [batch, setBatch] = useState<any>(null);        // combined summary (row_count, file_count, representative id)
+  const [batches, setBatches] = useState<any[]>([]);    // raw per-file batch rows (file management)
+  const [selBatchIds, setSelBatchIds] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ ids: string[]; label: string } | null>(null);
+  const [replaceTargetId, setReplaceTargetId] = useState<string | null>(null);
+  const [detailsBatch, setDetailsBatch] = useState<any>(null);
+  const [detailsRows, setDetailsRows] = useState<any[] | null>(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
   const [results, setResults] = useState<PanResult[] | null>(null);
   const [diagnostics, setDiagnostics] = useState<string[]>([]);
   const [userMap, setUserMap] = useState<Record<string, string>>({});
@@ -135,6 +184,11 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
   const [validating, setValidating] = useState(false);
   const [activeFilter, setActiveFilter] = useState<PanFilter>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const loadSeq = useRef(0); // guards against out-of-order loadAll responses on rapid filing switches
+  // The filing id for which loadAll has SETTLED. Read at report time so the parent
+  // gate can't trust a status stamped with the new filing but still holding the
+  // previous filing's data during the async load window.
+  const settledFiling = useRef<string | null>(null);
 
   const [ovOpen, setOvOpen] = useState(false);
   const [ovTarget, setOvTarget] = useState<PanResult | null>(null);
@@ -149,41 +203,180 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
   const officePanCount = useMemo(() => officeParties.filter((o) => normalizePan(o.pan)).length, [officeParties]);
 
   const loadAll = useCallback(async () => {
+    // Guard against out-of-order responses: a rapid filing switch fires overlapping
+    // loadAll runs; only the newest may write state (mirrors Stage-1's loadSeq).
+    const seq = ++loadSeq.current;
+    const stale = () => seq !== loadSeq.current;
+
     setDiagnostics([]); // recomputed on the next Run Validation for the current data
-    if (!filingId) { setBatch(null); setResults(null); setOfficeParties([]); return; }
+    if (!filingId) { settledFiling.current = null; setBatch(null); setBatches([]); setResults(null); setOfficeParties([]); return; }
 
     // Office Data (master) — party name + PAN for this quarter's filing.
     const { data: ch } = await supabase.from("tds_challans").select("id").eq("filing_id", filingId);
+    if (stale()) return;
     const chIds = (ch || []).map((c: any) => c.id);
     let parties: OfficeParty[] = [];
     if (chIds.length) {
       const { data: ded } = await supabase.from("tds_deductees")
         .select("id, deductee_pan, deductee_name").in("challan_id", chIds);
+      if (stale()) return;
       parties = (ded || []).map((d: any) => ({ deductee_id: d.id, pan: d.deductee_pan, name: d.deductee_name }));
     }
     setOfficeParties(parties);
 
-    const { data: b } = await supabase.from("tds_pan_verification_batches").select("*")
-      .eq("filing_id", filingId).order("imported_at", { ascending: false }).limit(1).maybeSingle();
-    setBatch(b || null);
+    // ALL TRACES batches for the filing — a firm may split the bulk-PAN output
+    // across files, so the audit runs against the UNION (mirrors Stage-1).
+    const { data: bs } = await supabase.from("tds_pan_verification_batches").select("*")
+      .eq("filing_id", filingId).order("imported_at", { ascending: false });
+    if (stale()) return;
+    const list = bs || [];
+    setBatches(list);
+    setSelBatchIds((prev) => { const valid = new Set(list.map((x: any) => x.id)); return new Set([...prev].filter((id) => valid.has(id))); });
+    setBatch(list.length ? {
+      ...list[0],
+      row_count: list.reduce((sum: number, x: any) => sum + (x.row_count || 0), 0),
+      file_count: list.length,
+    } : null);
 
     const { data: res } = await supabase.from("tds_pan_verification_results").select("*").eq("filing_id", filingId);
+    if (stale()) return;
+    // Mark this filing as settled BEFORE the setState that re-fires the status
+    // report, so the report carries loaded=true for the now-current data. Placed
+    // after the stale-check so a superseded run never marks the wrong filing.
+    settledFiling.current = filingId;
     setResults(res && res.length ? (res as PanResult[]) : null);
 
     const { data: us } = await supabase.from("users").select("id, name").limit(5000);
+    if (stale()) return;
     setUserMap(Object.fromEntries((us || []).map((u: any) => [u.id, u.name])));
   }, [filingId]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
   useEffect(() => { setActiveFilter(null); }, [filingId]);
 
-  const handleImport = async (file: File) => {
+  // ── Core audit: office (master) ↔ the UNION of EVERY TRACES batch ───────────
+  // loadSeq-guarded so a filing switch mid-run cannot write the wrong filing's
+  // results. Writes results to the DB (for `fId`, always correct) and updates the
+  // UI only while the selection is unchanged. Returns the audited rows.
+  const runAudit = useCallback(async (fId: string) => {
+    const seq = loadSeq.current;
+    const firmId = await resolveFirmId();
+    const { data: ch } = await supabase.from("tds_challans").select("id").eq("filing_id", fId);
+    const chIds = (ch || []).map((c: any) => c.id);
+    let office: OfficeParty[] = [];
+    if (chIds.length) {
+      // Pull the TDS figures too, for the §206AA higher-rate cross-check.
+      const { data: ded } = await supabase.from("tds_deductees")
+        .select("id, deductee_pan, deductee_name, amount_paid_credited, total_tax_deducted, rate_of_tds, section_code, nature_of_payment, deductee_type, pan_not_available")
+        .in("challan_id", chIds);
+      office = (ded || []).map((d: any) => ({
+        deductee_id: d.id, pan: d.deductee_pan, name: d.deductee_name,
+        amount: d.amount_paid_credited, tds: d.total_tax_deducted, rate: d.rate_of_tds,
+        section: d.section_code || d.nature_of_payment, deductee_type: d.deductee_type,
+        pan_not_available: d.pan_not_available,
+      }));
+    }
+    // UNION of all TRACES rows for the filing, newest import first (created_at
+    // desc) so the richer-row dedupe in comparePanVerification prefers the latest.
+    const { data: tr } = await supabase.from("tds_pan_verification_rows")
+      .select("id, pan, name, verified_name, pan_status, mismatch_in_name")
+      .eq("filing_id", fId).order("created_at", { ascending: false });
+    const traces: TracesPanRow[] = (tr || []).map((t: any) => ({
+      row_id: t.id, pan: t.pan, name: t.name, verified_name: t.verified_name,
+      pan_status: t.pan_status, mismatch_in_name: t.mismatch_in_name,
+    }));
+
+    const audited = comparePanVerification(office, traces);
+    const diag = panDiagnostics(office, traces);
+
+    // Representative (latest) batch for provenance; batch_id is nullable now.
+    const { data: latest } = await supabase.from("tds_pan_verification_batches")
+      .select("id").eq("filing_id", fId).order("imported_at", { ascending: false }).limit(1).maybeSingle();
+    const repBatchId = latest?.id ?? null;
+
+    // Preserve overrides across re-runs, keyed by PAN (stable one-per-PAN). Carry an
+    // override ONLY when the exact defect it accepted still stands — if the result
+    // changed (e.g. a re-import flips "Name Mismatch"→"PAN Inoperative", or a party
+    // becomes "PAN Verified"), the old approval no longer applies and the party
+    // re-surfaces as a fresh unresolved exception. This also keeps the summary a
+    // true partition (a verified row can never also be counted as overridden).
+    const { data: prior } = await supabase.from("tds_pan_verification_results")
+      .select("id, office_deductee_id, pan, validation_result, overridden, override_reason, overridden_by, overridden_at").eq("filing_id", fId);
+    // Key MUST match how comparePanVerification identifies a party: a party with a
+    // GENUINE PAN is one audit row per PAN; a party with a missing/invalid/placeholder
+    // PAN ("PANNOTAVBL", "NA", …) is audited individually, so it must key by its
+    // deductee id — otherwise several placeholder-PAN parties collapse onto one key
+    // and overrides get lost or wrongly spread across them.
+    const keyOf = (deducteeId: string | null, pan: string | null) => {
+      const k = normalizePan(pan);
+      return k && looksLikePan(k) ? k : `d:${deducteeId ?? ""}`;
+    };
+    const priorMap = new Map<string, any>();
+    for (const p of prior || []) priorMap.set(keyOf(p.office_deductee_id, p.pan), p);
+    const priorIds = (prior || []).map((p: any) => p.id);
+
+    const newRows = audited.map((r) => {
+      const carry = priorMap.get(keyOf(r.office_deductee_id, r.pan));
+      const keep = !!carry?.overridden && carry.validation_result === r.validation_result;
+      return {
+        filing_id: fId, batch_id: repBatchId, firm_id: firmId, quarter: selQuarter,
+        office_deductee_id: r.office_deductee_id, pan_row_id: r.pan_row_id,
+        party_name: r.office_name, verified_name: r.verified_name, pan: r.pan, pan_status: r.pan_status,
+        validation_result: r.validation_result, detail: r.detail,
+        overridden: keep,
+        override_reason: keep ? carry.override_reason : null,
+        overridden_by: keep ? carry.overridden_by : null,
+        overridden_at: keep ? carry.overridden_at : null,
+      };
+    });
+
+    const { error: insErr } = await supabase.from("tds_pan_verification_results").insert(newRows);
+    if (insErr) throw new Error(insErr.message);
+    if (priorIds.length) {
+      // Delete the stale prior rows by id. If this fails, the new + old sets coexist
+      // (the next run self-heals by treating both as prior), so surface it clearly
+      // rather than silently persisting doubled counts.
+      const { error: delErr } = await supabase.from("tds_pan_verification_results").delete().in("id", priorIds);
+      if (delErr) throw new Error(`Audit saved but the previous rows couldn't be cleared (${delErr.message}). Run Validation again.`);
+    }
+
+    // Audit trail: record the verification RUN itself (the compliance act of
+    // verifying PANs against TRACES for the quarter), not just later overrides.
+    const verified = audited.filter((r) => r.validation_result === "PAN Verified").length;
+    const issues = audited.filter((r) => isPanException(r.validation_result)).length;
+    await logReconAudit({
+      filingId: fId, firmId, userId: user?.id, userName: userMap[user?.id ?? ""],
+      actionType: "PAN_VERIFICATION_RUN",
+      newValue: `${verified} verified · ${issues} issue(s) / ${audited.length} parties`,
+      remark: `PAN verification run against ${traces.length} TRACES row(s)${repBatchId ? "" : " (no batch)"}`,
+    });
+
+    if (seq !== loadSeq.current) return audited; // selection changed — don't write UI
+    const { data: res } = await supabase.from("tds_pan_verification_results").select("*").eq("filing_id", fId);
+    if (seq !== loadSeq.current) return audited;
+    setResults((res as PanResult[]) || []);
+    setDiagnostics(diag);
+    return audited;
+  }, [resolveFirmId, selQuarter, user?.id, userMap]);
+
+  const handleImport = async (file: File, replaceBatchId?: string) => {
     if (!filing) return;
+    const hadResults = !!results; // a prior audit exists → auto re-run after import
     setImporting(true);
     try {
-      const rows = await parseTracesFile(file);
+      const { rows, mapping } = await parseTracesFile(file);
       if (rows.length === 0) throw new Error("No PAN rows found. Expected a TRACES Bulk PAN file (Excel/CSV) with a PAN column.");
       const firmId = await resolveFirmId();
+
+      // Same-name replace: drop any prior batch (+its rows) with this file name so
+      // re-importing the SAME file REPLACES it; a DIFFERENT name ACCUMULATES (the
+      // audit unions every file). Mirrors Stage-1's importer de-dupe.
+      const { data: dup } = await supabase.from("tds_pan_verification_batches").select("id").eq("filing_id", filing.id).eq("file_name", file.name);
+      const dupIds = (dup || []).map((b: any) => b.id);
+      if (dupIds.length) {
+        await supabase.from("tds_pan_verification_rows").delete().in("batch_id", dupIds);
+        await supabase.from("tds_pan_verification_batches").delete().in("id", dupIds);
+      }
 
       const { data: batchRow, error: bErr } = await supabase.from("tds_pan_verification_batches").insert({
         filing_id: filing.id, client_id: selClient, firm_id: firmId,
@@ -197,82 +390,115 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
         pan: r.pan, name: r.name, verified_name: r.verified_name, pan_status: r.pan_status,
         mismatch_in_name: r.mismatch_in_name, raw: r,
       }));
-      const { error: rErr } = await supabase.from("tds_pan_verification_rows").insert(rowRecords);
-      if (rErr) throw new Error(rErr.message);
+      // Chunked insert so a large TRACES file (10k–50k PANs) can't fail atomically.
+      for (let i = 0; i < rowRecords.length; i += 1000) {
+        const { error: rErr } = await supabase.from("tds_pan_verification_rows").insert(rowRecords.slice(i, i + 1000));
+        if (rErr) throw new Error(rErr.message);
+      }
 
-      // A fresh import invalidates the prior audit — the summary only reappears
-      // after the user clicks Run Validation.
-      await supabase.from("tds_pan_verification_results").delete().eq("filing_id", filing.id);
+      // "Replace this file" with a DIFFERENTLY-named file → drop the old batch.
+      if (replaceBatchId && replaceBatchId !== batchRow.id && !dupIds.includes(replaceBatchId)) {
+        await supabase.from("tds_pan_verification_rows").delete().eq("batch_id", replaceBatchId);
+        await supabase.from("tds_pan_verification_batches").delete().eq("id", replaceBatchId);
+      }
+
+      // Clear the shown results (the audit is stale until re-run) but DO NOT delete
+      // the results table here — runAudit reads it to CARRY FORWARD overrides, and
+      // it replaces the rows atomically (insert-new then delete-stale-by-id). A
+      // pre-delete would wipe every partner-approved override. If no audit had run,
+      // there is nothing to clear and the user runs validation manually.
       setResults(null);
       setDiagnostics([]);
-      toast({ title: `Imported ${rows.length} PAN record(s)`, description: `${file.name} — click Run Validation to audit.` });
+      const mapLine = formatTracesMapping(mapping);
+      // Warn when a column the audit relies on could not be detected — so a limited
+      // status/name check is visible up front, not silently passed as verified.
+      const warns: string[] = [];
+      if (!mapping.pan_status) warns.push("no PAN-Status column detected — PAN status can't be checked");
+      if (!mapping.verified_name && !mapping.name) warns.push("no name column detected — names can't be cross-checked");
+      const warnLine = warns.length ? ` ⚠ ${warns.join("; ")}.` : "";
+      toast({
+        title: `Imported ${rows.length} PAN record(s)`,
+        description: `${file.name}${mapLine ? " · " + mapLine : ""}${warnLine} — ${hadResults ? "re-running audit…" : "click Run Validation to audit."}`,
+      });
       await loadAll();
+      // Auto re-run the audit if one had already been done (parity with Stage-1).
+      if (hadResults) {
+        setValidating(true);
+        try {
+          const audited = await runAudit(filing.id);
+          const verified = audited.filter((r) => r.validation_result === "PAN Verified").length;
+          toast({ title: "Stage 2 · PAN verification updated", description: `${verified} verified · ${audited.length - verified} issue(s)` });
+        } catch (e: any) { toast({ title: "Re-validation failed", description: e.message, variant: "destructive" }); }
+        setValidating(false);
+      }
     } catch (e: any) {
       toast({ title: "PAN file import failed", description: e.message, variant: "destructive" });
     }
     setImporting(false);
   };
 
-  const runValidation = useCallback(async () => {
-    if (!filing || !batch) return;
+  const handleRunValidation = useCallback(async () => {
+    if (!filing || !batch || validating) return;   // guard against overlapping runs (would duplicate result rows)
     setValidating(true);
     try {
-      const firmId = await resolveFirmId();
-      // Office Data (master) — re-read fresh at validation time.
-      const { data: ch } = await supabase.from("tds_challans").select("id").eq("filing_id", filing.id);
-      const chIds = (ch || []).map((c: any) => c.id);
-      let office: OfficeParty[] = [];
-      if (chIds.length) {
-        const { data: ded } = await supabase.from("tds_deductees")
-          .select("id, deductee_pan, deductee_name").in("challan_id", chIds);
-        office = (ded || []).map((d: any) => ({ deductee_id: d.id, pan: d.deductee_pan, name: d.deductee_name }));
-      }
-      const { data: tr } = await supabase.from("tds_pan_verification_rows")
-        .select("id, pan, name, verified_name, pan_status, mismatch_in_name").eq("batch_id", batch.id);
-      const traces: TracesPanRow[] = (tr || []).map((t: any) => ({
-        row_id: t.id, pan: t.pan, name: t.name, verified_name: t.verified_name,
-        pan_status: t.pan_status, mismatch_in_name: t.mismatch_in_name,
-      }));
-
-      const audited = comparePanVerification(office, traces);
-      setDiagnostics(panDiagnostics(office, traces));
-
-      // Preserve overrides across re-runs, keyed by PAN (stable one-per-PAN).
-      const { data: prior } = await supabase.from("tds_pan_verification_results")
-        .select("id, office_deductee_id, pan, overridden, override_reason, overridden_by, overridden_at").eq("filing_id", filing.id);
-      const keyOf = (deducteeId: string | null, pan: string | null) => normalizePan(pan) || `d:${deducteeId ?? ""}`;
-      const priorMap = new Map<string, any>();
-      for (const p of prior || []) priorMap.set(keyOf(p.office_deductee_id, p.pan), p);
-      const priorIds = (prior || []).map((p: any) => p.id);
-
-      const newRows = audited.map((r) => {
-        const carry = priorMap.get(keyOf(r.office_deductee_id, r.pan));
-        const keep = !!carry?.overridden;
-        return {
-          filing_id: filing.id, batch_id: batch.id, firm_id: firmId, quarter: selQuarter,
-          office_deductee_id: r.office_deductee_id, pan_row_id: r.pan_row_id,
-          party_name: r.office_name, verified_name: r.verified_name, pan: r.pan, pan_status: r.pan_status,
-          validation_result: r.validation_result, detail: r.detail,
-          overridden: keep,
-          override_reason: keep ? carry.override_reason : null,
-          overridden_by: keep ? carry.overridden_by : null,
-          overridden_at: keep ? carry.overridden_at : null,
-        };
-      });
-
-      const { error: insErr } = await supabase.from("tds_pan_verification_results").insert(newRows);
-      if (insErr) throw new Error(insErr.message);
-      if (priorIds.length) await supabase.from("tds_pan_verification_results").delete().in("id", priorIds);
-
-      const { data: res } = await supabase.from("tds_pan_verification_results").select("*").eq("filing_id", filing.id);
-      setResults((res as PanResult[]) || []);
+      const audited = await runAudit(filing.id);
       const verified = audited.filter((r) => r.validation_result === "PAN Verified").length;
       toast({ title: "Stage 2 · PAN verification complete", description: `${verified} verified · ${audited.length - verified} issue(s) across ${audited.length} office part${audited.length === 1 ? "y" : "ies"}` });
     } catch (e: any) {
       toast({ title: "PAN verification failed", description: e.message, variant: "destructive" });
     }
     setValidating(false);
-  }, [filing, batch, resolveFirmId, selQuarter, toast]);
+  }, [filing, batch, validating, runAudit, toast]);
+
+  // ── File management: delete / replace / view details (parity with Stage-1) ───
+  const doDeleteBatches = async (ids: string[]) => {
+    if (!filing || !ids.length) return;
+    setDeleting(true);
+    try {
+      const hadResults = !!results;
+      await supabase.from("tds_pan_verification_rows").delete().in("batch_id", ids);
+      await supabase.from("tds_pan_verification_batches").delete().in("id", ids);
+      setResults(null);
+      setSelBatchIds(new Set());
+      toast({ title: ids.length === 1 ? "TRACES file removed" : `${ids.length} files removed`, description: "PAN dataset updated." });
+      await loadAll();
+      const { data: remain } = await supabase.from("tds_pan_verification_batches").select("id").eq("filing_id", filing.id).limit(1);
+      if (remain && remain.length && hadResults) {
+        // Files remain and an audit existed → re-run so overrides carry forward
+        // (runAudit is the single writer; it never pre-deletes, so approved
+        // overrides survive the insert-new-then-delete-stale swap).
+        setValidating(true);
+        try { await runAudit(filing.id); } catch (e: any) { toast({ title: "Re-validation failed", description: e.message, variant: "destructive" }); }
+        setValidating(false);
+      } else {
+        // No files left, or no prior audit to carry → clear any stale audit rows.
+        await supabase.from("tds_pan_verification_results").delete().eq("filing_id", filing.id);
+      }
+    } catch (e: any) {
+      toast({ title: "Delete failed", description: e?.message || "Could not remove file(s)", variant: "destructive" });
+    } finally {
+      setDeleting(false);
+      setDeleteConfirm(null);
+    }
+  };
+
+  const handleReplaceClick = (batchId: string) => { setReplaceTargetId(batchId); fileInputRef.current?.click(); };
+
+  const openDetails = async (b: any) => {
+    setDetailsBatch(b); setDetailsRows(null); setDetailsLoading(true);
+    const { data } = await supabase.from("tds_pan_verification_rows").select("*")
+      .eq("batch_id", b.id).order("row_index", { ascending: true }).limit(5000);
+    setDetailsRows(data || []); setDetailsLoading(false);
+  };
+
+  const fmtDateTime = (s?: string) => {
+    if (!s) return "";
+    try { return new Date(s).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false }); }
+    catch { return ""; }
+  };
+  const toggleSel = (id: string) => setSelBatchIds((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const allSelected = batches.length > 0 && selBatchIds.size === batches.length;
+  const toggleSelAll = () => setSelBatchIds(allSelected ? new Set() : new Set(batches.map((b) => b.id)));
 
   const openOverride = (r: PanResult) => { setOvTarget(r); setOvReason(""); setOvOther(""); setOvOpen(true); };
 
@@ -311,18 +537,38 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
     setResults((prev) => prev ? prev.map((x) => x.id === r.id ? { ...x, overridden: false, override_reason: null, overridden_by: null, overridden_at: null } : x) : prev);
   };
 
+  // Clean partition mirroring Stage-1: Total = Verified + Issues(unresolved) +
+  // Overridden. "Issues" counts UNRESOLVED exceptions only — once a party is
+  // overridden it moves to Overridden (so there is no redundant "Pending" card,
+  // exactly as in Stage-1). `issuesAll` is the raw exception count kept for the
+  // success-state test.
   const summary = useMemo(() => {
     const rs = results || [];
-    const issues = rs.filter((r) => isPanException(r.validation_result));
+    const exceptions = rs.filter((r) => isPanException(r.validation_result));
     return {
       total: rs.length,
       verified: rs.filter((r) => r.validation_result === "PAN Verified").length,
-      matched: rs.filter((r) => r.detail?.pan_found && nameMatchedOf(r)).length, // name matched among PANs found
-      issues: issues.length,
+      nameMatched: rs.filter((r) => r.detail?.pan_found && nameMatchedOf(r)).length, // info (also shown per-record)
+      issues: exceptions.filter((r) => !r.overridden).length,     // UNRESOLVED
       overridden: rs.filter((r) => r.overridden).length,
-      pending: issues.filter((r) => !r.overridden).length,
     };
   }, [results]);
+
+  // Report Stage-2 state to the parent so it can gate "Mark Return as Ready to
+  // File" on Stage-2 completion (when a TRACES file is present). onStatusChange
+  // must be a STABLE callback (the parent passes its setState) to avoid a loop.
+  useEffect(() => {
+    onStatusChange?.({
+      filingId: filingId,
+      loaded: settledFiling.current === filingId,   // only trustworthy once loadAll settled for THIS filing
+      applicable: !!batch,
+      ran: results !== null,
+      total: summary.total,
+      verified: summary.verified,
+      issues: summary.issues,
+      overridden: summary.overridden,
+    });
+  }, [filingId, batch, results, summary, onStatusChange]);
 
   // Issues only (default view), pending first then overridden.
   const issueRows = useMemo(() => {
@@ -335,9 +581,7 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
     switch (activeFilter) {
       case "total": return rs;
       case "verified": return rs.filter((r) => r.validation_result === "PAN Verified");
-      case "matched": return rs.filter((r) => r.detail?.pan_found && nameMatchedOf(r));
-      case "issues": return rs.filter((r) => isPanException(r.validation_result));
-      case "pending": return rs.filter((r) => isPanException(r.validation_result) && !r.overridden);
+      case "issues": return rs.filter((r) => isPanException(r.validation_result) && !r.overridden); // unresolved
       case "overridden": return rs.filter((r) => r.overridden);
       default: return null;
     }
@@ -358,13 +602,23 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
       <span>{text}</span>
     </p>
   );
+  // A neutral (not pass / not fail) line — e.g. a check that couldn't be performed.
+  const neutralLine = (text: string) => (
+    <p className="text-xs flex items-start gap-1.5 text-muted-foreground">
+      <MinusCircle size={13} className="mt-px shrink-0" /><span>{text}</span>
+    </p>
+  );
 
-  // The three-check audit breakdown for a party (PAN found / status / name).
+  // The three-check audit breakdown for a party (PAN found / status / name) plus
+  // the §206AA short-deduction and duplicate-PAN detail where relevant.
   const renderChecks = (r: PanResult) => {
     const d = r.detail;
     const found = d ? d.pan_found : r.validation_result !== "PAN Not Found in TRACES" && r.validation_result !== "Invalid PAN Format" && r.validation_result !== "PAN Missing in Office Data";
     const statusOk = (d?.status_class ?? "") === "PAN Verified";
     const nameOk = nameMatchedOf(r);
+    const nameUnknown = nameNotVerified(r);
+    const sd = d?.short_deduction;
+    const dupes = d?.duplicate_names;
     return (
       <div className="space-y-0.5 pt-1">
         {r.validation_result === "PAN Missing in Office Data"
@@ -375,11 +629,22 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
           <>
             {checkLine(found, found ? "PAN found in the TRACES file" : "PAN not found in the imported TRACES file")}
             {found && checkLine(statusOk, statusOk ? `PAN status: ${r.pan_status || "Active"}` : `PAN status: ${r.pan_status || r.validation_result}`)}
-            {found && checkLine(nameOk, nameOk ? "Name matched" : `Name: ${r.validation_result === "Different Party Name" ? "different party name" : "mismatch"}`)}
-            {found && !nameOk && (
+            {found && (nameUnknown
+              ? neutralLine("Name not verified — the TRACES file had no name to cross-check against.")
+              : checkLine(nameOk, nameOk ? "Name matched" : `Name: ${r.validation_result === "Different Party Name" ? "different party name" : "mismatch"}`))}
+            {found && !nameOk && !nameUnknown && (
               <p className="text-[11px] text-muted-foreground pl-5">Office: <b className="text-foreground">{r.party_name || "—"}</b> · TRACES: <b className="text-foreground">{r.verified_name || "—"}</b></p>
             )}
           </>
+        )}
+        {dupes && dupes.length > 1 && (
+          <p className="text-[11px] text-destructive pl-5">Same PAN entered for: {dupes.map((n) => `"${n}"`).join(", ")}</p>
+        )}
+        {sd && (
+          <p className="text-[11px] text-destructive pl-5 flex items-start gap-1">
+            <AlertTriangle size={11} className="mt-px shrink-0" />
+            <span>{sd.basis}: deducted {sd.applied_rate}% but {sd.required_rate}% is required → <b>short deduction {inr(sd.shortfall)}</b> on {inr(sd.amount)}.</span>
+          </p>
         )}
       </div>
     );
@@ -465,34 +730,80 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
         <Card><CardContent className="p-4">
           <div className="flex items-center justify-between mb-2">
             <p className="font-semibold text-sm flex items-center gap-2">
-              <FileSpreadsheet size={15} className="text-foreground" /> Imported TRACES File
+              <FileSpreadsheet size={15} className="text-foreground" /> Imported TRACES File{batches.length > 1 ? "s" : ""}
               {validating && <span className="text-xs text-amber-600 flex items-center gap-1"><Loader2 size={11} className="animate-spin" /> verifying…</span>}
             </p>
             <input ref={fileInputRef} type="file" accept=".xls,.xlsx,.csv,.txt" className="hidden"
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImport(f); e.currentTarget.value = ""; }} />
+              onChange={(e) => { const f = e.target.files?.[0]; const tgt = replaceTargetId; setReplaceTargetId(null); if (f) handleImport(f, tgt || undefined); e.currentTarget.value = ""; }} />
             <Button size="sm" variant={batch ? "outline" : "default"} className="gap-1" disabled={importing || disabled}
-              onClick={() => fileInputRef.current?.click()}>
+              onClick={() => { setReplaceTargetId(null); fileInputRef.current?.click(); }}>
               {importing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
-              {batch ? "Re-import" : "Import TRACES file"}
+              {importing ? "Importing…" : batch ? "Add / re-import file" : "Import TRACES file"}
             </Button>
           </div>
-          {batch ? (
+          {batches.length > 0 ? (
             <div className="text-sm">
-              <span className="text-2xl font-bold">{batch.row_count}</span> <span className="text-muted-foreground">PANs</span>
-              <p className="text-xs text-muted-foreground mt-1 truncate">{batch.file_name}</p>
+              <div className="flex items-end justify-between gap-2">
+                <div>
+                  <span className="text-2xl font-bold">{batch?.row_count ?? 0}</span>{" "}
+                  <span className="text-muted-foreground text-xs">PANs · {batches.length} file{batches.length > 1 ? "s" : ""}</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  {selBatchIds.size > 0 && (
+                    <Button size="sm" variant="destructive" className="h-7 gap-1 text-xs px-2" disabled={deleting || disabled}
+                      onClick={() => setDeleteConfirm({ ids: [...selBatchIds], label: `${selBatchIds.size} selected file(s)` })}>
+                      <Trash2 size={12} /> Delete ({selBatchIds.size})
+                    </Button>
+                  )}
+                  {batches.length > 1 && selBatchIds.size === 0 && (
+                    <Button size="sm" variant="ghost" className="h-7 text-xs px-2 text-muted-foreground hover:text-destructive" disabled={deleting || disabled}
+                      onClick={() => setDeleteConfirm({ ids: batches.map((b) => b.id), label: "all imported TRACES files" })}>
+                      Delete all
+                    </Button>
+                  )}
+                </div>
+              </div>
+              <div className="mt-2 rounded-md border divide-y overflow-hidden">
+                {batches.length > 1 && (
+                  <label className="flex items-center gap-2 px-2 py-1 bg-muted/40 text-[11px] text-muted-foreground cursor-pointer">
+                    <Checkbox checked={allSelected} onCheckedChange={toggleSelAll} aria-label="Select all files" className="h-3.5 w-3.5" disabled={disabled} />
+                    Select all
+                  </label>
+                )}
+                {batches.map((b: any) => (
+                  <div key={b.id} className="flex items-center gap-2 px-2 py-1.5">
+                    <Checkbox checked={selBatchIds.has(b.id)} onCheckedChange={() => toggleSel(b.id)} aria-label={`Select ${b.file_name || "file"}`} className="h-3.5 w-3.5" disabled={disabled} />
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium text-xs truncate">{b.file_name || "(unnamed file)"}</p>
+                      <p className="text-[10px] text-muted-foreground truncate">{b.row_count} PANs{b.imported_at ? ` · ${fmtDateTime(b.imported_at)}` : ""}</p>
+                    </div>
+                    <div className="flex items-center shrink-0">
+                      <Button size="icon" variant="ghost" className="h-6 w-6" title="View details" onClick={() => openDetails(b)}><Eye size={13} /></Button>
+                      <Button size="icon" variant="ghost" className="h-6 w-6" title="Replace this file" disabled={importing || deleting || disabled} onClick={() => handleReplaceClick(b.id)}><RotateCcw size={13} /></Button>
+                      <Button size="icon" variant="ghost" className="h-6 w-6 text-muted-foreground hover:text-destructive" title="Delete this file" disabled={deleting || disabled}
+                        onClick={() => setDeleteConfirm({ ids: [b.id], label: b.file_name || "this file" })}><Trash2 size={13} /></Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-1.5">Split the bulk-PAN output across files? Add them — all are audited together. Re-importing the same file name replaces it; adding, replacing or deleting a file re-runs the audit automatically.</p>
             </div>
-          ) : <p className="text-xs text-muted-foreground">Import the TRACES Bulk PAN Verification file (.xls / .xlsx / .csv), then click <b>Run Validation</b>. Stage 2 is optional.</p>}
+          ) : <p className="text-xs text-muted-foreground">Import the TRACES Bulk PAN Verification file (.xls / .xlsx / .csv), then click <b>Run Validation</b>. You can add multiple files and they're audited together. Stage 2 is optional.</p>}
         </CardContent></Card>
       </div>
 
       {/* Stage-2's own Run Validation — the audit (and its summary) run only on click. */}
       <div className="flex items-center gap-3">
-        <Button size="lg" className="gap-2 font-semibold" onClick={() => runValidation()}
-          disabled={validating || !batch || disabled}>
+        <Button size="lg" className="gap-2 font-semibold" onClick={handleRunValidation}
+          disabled={validating || !batch || officeCount === 0 || disabled}>
           {validating ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
           {validating ? "Validating…" : "Run Validation"}
         </Button>
-        {!batch && <span className="text-xs text-muted-foreground">Import the TRACES file to enable PAN verification.</span>}
+        {!batch
+          ? <span className="text-xs text-muted-foreground">Import the TRACES file to enable PAN verification.</span>
+          : officeCount === 0
+          ? <span className="text-xs text-muted-foreground">No office parties to verify — add data in the Data Entry tab first.</span>
+          : null}
       </div>
 
       {results && (
@@ -509,14 +820,13 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
             </Card>
           )}
 
-          {/* Summary cards — Total / Verified / Matched / Issues / Pending / Overridden. */}
-          <div className={cn("grid grid-cols-3 sm:grid-cols-6 gap-3", validating && "animate-pulse")}>
+          {/* Summary cards — Total / Verified / Issues / Overridden (clean partition,
+              mirrors Stage-1; "Issues" = unresolved, so no redundant "Pending" card). */}
+          <div className={cn("grid grid-cols-2 sm:grid-cols-4 gap-3", validating && "animate-pulse")}>
             {([
               { key: "total" as const, label: "Total Parties", value: summary.total, cls: "" },
               { key: "verified" as const, label: "Verified", value: summary.verified, cls: "text-emerald-600" },
-              { key: "matched" as const, label: "Name Matched", value: summary.matched, cls: "text-emerald-600" },
-              { key: "issues" as const, label: "Issues Found", value: summary.issues, cls: summary.issues > 0 ? "text-destructive" : "" },
-              { key: "pending" as const, label: "Pending", value: summary.pending, cls: summary.pending > 0 ? "text-amber-600" : "text-emerald-600" },
+              { key: "issues" as const, label: "Issues", value: summary.issues, cls: summary.issues > 0 ? "text-destructive" : "text-emerald-600" },
               { key: "overridden" as const, label: "Overridden", value: summary.overridden, cls: "text-blue-600" },
             ]).map((s) => (
               <button key={s.label} type="button"
@@ -539,7 +849,7 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
                 <Button variant="ghost" size="sm" className="h-6 text-xs gap-1" onClick={() => setActiveFilter(null)}><X size={11} /> Clear filter</Button>
               </div>
               {cardFiltered.length === 0 ? (
-                <div className="p-8 text-center text-sm text-muted-foreground rounded-lg border border-dashed">No records found.</div>
+                <div className="p-8 text-center text-sm text-muted-foreground rounded-lg border border-dashed">No {activeFilter} records found.</div>
               ) : (
                 <div className="space-y-3">
                   {cardFiltered.filter((r) => isPanException(r.validation_result)).map(renderIssueCard)}
@@ -547,6 +857,8 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
                 </div>
               )}
             </div>
+          ) : summary.total === 0 ? (
+            <div className="p-8 text-center text-sm text-muted-foreground rounded-lg border border-dashed">No office parties to verify for this filing — add data in the Data Entry tab.</div>
           ) : issueRows.length === 0 ? (
             <Card className="border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20">
               <CardContent className="p-6 space-y-3">
@@ -557,7 +869,7 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
                 <div className="text-sm text-foreground grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1 max-w-xl">
                   <span className="text-muted-foreground">Total Parties</span><span className="font-semibold">{summary.total}</span>
                   <span className="text-muted-foreground">Verified</span><span className="font-semibold text-emerald-600">{summary.verified}</span>
-                  <span className="text-muted-foreground">Name Matched</span><span className="font-semibold text-emerald-600">{summary.matched}</span>
+                  <span className="text-muted-foreground">Name Matched</span><span className="font-semibold text-emerald-600">{summary.nameMatched}</span>
                   <span className="text-muted-foreground">Overridden</span><span className="font-semibold">{summary.overridden}</span>
                 </div>
                 <p className="text-sm text-muted-foreground">Every office PAN was found in TRACES, active/valid, and the names matched. No issues were found.</p>
@@ -578,6 +890,12 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
             {ovTarget?.verified_name && ovTarget.verified_name !== ovTarget.party_name && (
               <p className="text-xs text-muted-foreground">TRACES verified name: <b className="text-foreground">{ovTarget.verified_name}</b></p>
             )}
+            {ovTarget?.detail?.short_deduction && (
+              <div className="flex items-start gap-2 p-2 rounded-md border border-destructive/30 bg-destructive/5 text-xs text-destructive">
+                <AlertTriangle size={13} className="mt-px shrink-0" />
+                <span>{ovTarget.detail.short_deduction.basis}: TDS was deducted at {ovTarget.detail.short_deduction.applied_rate}% but {ovTarget.detail.short_deduction.required_rate}% is required — a short deduction of <b>{inr(ovTarget.detail.short_deduction.shortfall)}</b> (plus §201(1A) interest). Overriding accepts this exposure.</span>
+              </div>
+            )}
             <div className="space-y-1">
               <Label className="text-xs">Override reason <span className="text-destructive">*</span></Label>
               <Select value={ovReason} onValueChange={setOvReason}>
@@ -597,6 +915,77 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
             <Button onClick={saveOverride} disabled={savingOv || !ovReason || (ovReason === "Other" && !ovOther.trim())}>
               {savingOv ? "Saving…" : "Confirm Override"}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Confirm TRACES file deletion */}
+      <AlertDialog open={!!deleteConfirm} onOpenChange={(o) => { if (!o) setDeleteConfirm(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2"><Trash2 size={16} className="text-destructive" /> Remove {deleteConfirm?.label}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently removes {deleteConfirm && deleteConfirm.ids.length > 1 ? `these ${deleteConfirm.ids.length} files` : "this file"} and every PAN row imported from {deleteConfirm && deleteConfirm.ids.length > 1 ? "them" : "it"}. The audit re-runs automatically on the remaining files. This can't be undone — you'd need to re-import.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={(e) => { e.preventDefault(); if (deleteConfirm) doDeleteBatches(deleteConfirm.ids); }} disabled={deleting}>
+              {deleting ? "Removing…" : "Remove"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Imported TRACES-file details */}
+      <Dialog open={!!detailsBatch} onOpenChange={(o) => { if (!o) { setDetailsBatch(null); setDetailsRows(null); } }}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-sm">
+              <FileSpreadsheet size={15} /> {detailsBatch?.file_name || "Imported TRACES file"}
+              <span className="text-xs font-normal text-muted-foreground">
+                {detailsBatch ? `· ${detailsBatch.row_count} PANs · ${fmtDateTime(detailsBatch.imported_at)}` : ""}
+              </span>
+            </DialogTitle>
+          </DialogHeader>
+          <div className="max-h-[60vh] overflow-auto rounded-md border">
+            {detailsLoading ? (
+              <div className="p-6 text-center text-sm text-muted-foreground"><Loader2 size={16} className="animate-spin inline mr-2" /> Loading rows…</div>
+            ) : detailsRows && detailsRows.length ? (
+              <Table>
+                <TableHeader className="sticky top-0 bg-background z-10">
+                  <TableRow>
+                    <TableHead className="w-8 text-[11px]">#</TableHead>
+                    <TableHead className="text-[11px]">PAN</TableHead>
+                    <TableHead className="text-[11px]">Name</TableHead>
+                    <TableHead className="text-[11px]">Verified Name</TableHead>
+                    <TableHead className="text-[11px]">PAN Status</TableHead>
+                    <TableHead className="text-[11px]">Mismatch</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {detailsRows.map((r: any, i: number) => (
+                    <TableRow key={r.id || i}>
+                      <TableCell className="text-[11px] text-muted-foreground">{i + 1}</TableCell>
+                      <TableCell className="text-[11px] font-mono">{r.pan || "—"}</TableCell>
+                      <TableCell className="text-[11px] max-w-[180px] truncate">{r.name || "—"}</TableCell>
+                      <TableCell className="text-[11px] max-w-[180px] truncate">{r.verified_name || "—"}</TableCell>
+                      <TableCell className="text-[11px]">{r.pan_status || "—"}</TableCell>
+                      <TableCell className="text-[11px]">{r.mismatch_in_name || "—"}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : (
+              <div className="p-6 text-center text-sm text-muted-foreground">No rows in this file.</div>
+            )}
+          </div>
+          {detailsRows && detailsRows.length >= 5000 && (
+            <p className="text-[11px] text-muted-foreground">Showing the first 5,000 rows.</p>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setDetailsBatch(null); setDetailsRows(null); }}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

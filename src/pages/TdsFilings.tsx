@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { getDefaultTdsQuarter } from "@/lib/tdsQuarter";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, PenLine,
@@ -46,6 +47,18 @@ const TdsFilings = () => {
   const [activeSection, setActiveSection] = useState<NavKey>("dashboard");
   // CP-02: sub-tab inside TDS Workspace
   const [workspaceTab, setWorkspaceTab] = useState<"data-entry" | "validate">("data-entry");
+
+  // ── Shared Workspace filing context ─────────────────────────────────────────
+  // Client / FY / Quarter / Form are selected ONCE and shared by BOTH the Data
+  // Entry and Validate & Finalise tabs, so switching tabs never forces the user
+  // to re-select the same return. Lifted here (the common parent) and passed to
+  // both children as controlled value+setter pairs; a change in one tab is
+  // instantly reflected in the other.
+  const tdsDefault = useMemo(() => getDefaultTdsQuarter(), []);
+  const [ctxClient, setCtxClient] = useState("");
+  const [ctxFy, setCtxFy] = useState(tdsDefault.fy);
+  const [ctxQuarter, setCtxQuarter] = useState(tdsDefault.quarter);
+  const [ctxForm, setCtxForm] = useState("26Q");
   // Increment to force TdsDashboard to re-fetch when returning from workspace
   const [dashRefreshKey, setDashRefreshKey] = useState(0);
   const [syncing, setSyncing] = useState(false);
@@ -290,6 +303,10 @@ const TdsFilings = () => {
                 <TdsDataEntry
                   clients={clients} users={users}
                   isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId}
+                  selClient={ctxClient} setSelClient={setCtxClient}
+                  selFy={ctxFy} setSelFy={setCtxFy}
+                  selQuarter={ctxQuarter} setSelQuarter={setCtxQuarter}
+                  selForm={ctxForm} setSelForm={setCtxForm}
                 />
               </div>
               <div className={workspaceTab === "validate" ? "" : "hidden"}>
@@ -297,6 +314,10 @@ const TdsFilings = () => {
                   clients={clients} isSuperadmin={isSuperadmin}
                   resolveFirmId={resolveFirmId}
                   onNavigateDataEntry={() => setWorkspaceTab("data-entry")}
+                  selClient={ctxClient} setSelClient={setCtxClient}
+                  selFy={ctxFy} setSelFy={setCtxFy}
+                  selQuarter={ctxQuarter} setSelQuarter={setCtxQuarter}
+                  selForm={ctxForm} setSelForm={setCtxForm}
                 />
               </div>
             </div>
