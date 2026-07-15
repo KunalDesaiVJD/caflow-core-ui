@@ -168,6 +168,8 @@ export function extractSheetRows(grid: unknown[][], sectionHint: string | null):
   }
   const rows: Record<string, unknown>[] = [];
   let headers: string[] | null = null;
+  let headerCells: unknown[] | null = null; // raw header cells (for MULTI-ROW header merge)
+  let lastHeaderRow = -2;
   const MONTHS = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|q[1-4]|quarter)/i;
   for (let r = 0; r < n; r++) {
     const row = grid[r] || [];
@@ -175,7 +177,30 @@ export function extractSheetRows(grid: unknown[][], sectionHint: string | null):
     let nonEmptyCount = 0;
     for (let i = 0; i < row.length; i++) { const c = row[i]; if (c != null && String(c).trim() !== "") nonEmptyCount++; }
     if (nonEmptyCount === 0) continue;
-    if (scores[r] >= 3 && !rowHasPan[r]) { headers = buildHeaderNames(row); continue; } // header ONLY if it has no PAN
+    if (scores[r] >= 3 && !rowHasPan[r]) {
+      // MULTI-ROW HEADER: a main label row (e.g. "Bill" "TDS" "Bank" "Party's
+      // Name") directly followed by a sub-label row ("Amt." "Amt" "Name") is one
+      // logical header split across two rows — VERY common in real TDS working
+      // files. Previously the sub-row simply OVERWROTE the main row's headers, so
+      // every deductee below was mis-keyed ("Bank"+"Name"→the "Name" column →
+      // the deductee_name became the bank; "Bill"/"TDS" amounts were lost). MERGE
+      // consecutive header rows PER COLUMN instead: "Bill"+"Amt."→"Bill Amt."
+      // (maps to amount), "TDS"+"Amt"→"TDS Amt" (maps to TDS), "Bank"+"Name"→
+      // "Bank Name" (bank-guarded, never the deductee). A header row that is NOT
+      // consecutive (a genuine second table further down) still replaces.
+      if (headerCells && lastHeaderRow === r - 1) {
+        const m = Math.max(headerCells.length, row.length);
+        for (let i = 0; i < m; i++) {
+          const sub = row[i] == null ? "" : String(row[i]).trim();
+          if (sub) headerCells[i] = `${headerCells[i] == null ? "" : String(headerCells[i]).trim()} ${sub}`.trim();
+        }
+      } else {
+        headerCells = row.slice();
+      }
+      headers = buildHeaderNames(headerCells);
+      lastHeaderRow = r;
+      continue;
+    } // header ONLY if it has no PAN
     if (hasHeader && !headers) continue;                                 // pre-header strip (title / TAN-PAN)
     const first = String(row[0] ?? "").toLowerCase().trim();
     if (/\btotal\b/.test(first) || first.startsWith("total")) continue;  // summary row
