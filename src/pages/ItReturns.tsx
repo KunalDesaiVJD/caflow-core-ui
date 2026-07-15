@@ -1741,7 +1741,6 @@ function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, onDelete
               <button
                 className="text-left text-primary hover:underline whitespace-normal leading-tight max-w-[230px] block"
                 onClick={() => navigate(`/clients/${p.client_id}`)}
-                title={p.client_name || undefined}
               >
                 {p.client_name}
               </button>
