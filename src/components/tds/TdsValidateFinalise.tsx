@@ -23,11 +23,12 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import {
   ShieldCheck, AlertTriangle, CheckCircle2, Upload, Play, FileSpreadsheet,
-  RotateCcw, Loader2, Users, FileWarning, Info, X, BadgeCheck, Trash2, Eye,
+  RotateCcw, Loader2, Users, FileWarning, Info, X, BadgeCheck, Trash2, Eye, BookOpen,
 } from "lucide-react";
 import { parseWorkbookRows, parseCsvRows } from "@/lib/tdsWorkbook";
 import { logReconAudit } from "@/lib/tdsReconAudit";
 import { TdsPanVerification, type PanStageStatus } from "./TdsPanVerification";
+import { TdsTallyRecon, type TallyStageStatus } from "./TdsTallyRecon";
 
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null;
@@ -685,25 +686,32 @@ export function TdsValidateFinalise({
   // with no unresolved PAN issue. Until then the button stays disabled and the UI
   // states the exact reason.
   const [panStatus, setPanStatus] = useState<PanStageStatus>(PAN_STATUS_BLOCKED);
+  const [tallyStatus, setTallyStatus] = useState<TallyStageStatus>({ filingId: null, loaded: false, applicable: false, ran: false, total: 0, matched: 0, issues: 0, overridden: 0 });
   const stage1Ran = (results?.length ?? 0) > 0;
   const stage1Ready = stage1Ran && summary.mismatched === 0;
-  // The Stage-2 report must describe the CURRENTLY-selected filing AND have settled
-  // (loaded) — during a fast filing switch or the initial load window the child's
-  // report can still describe the previous return or hold pre-load defaults, so the
-  // gate defaults CLOSED until the current filing's Stage-2 has genuinely reported.
+  // Each embedded stage's report must describe the CURRENTLY-selected filing AND
+  // have settled (loaded) — during a fast filing switch or the initial load window
+  // the child's report can still describe the previous return or hold pre-load
+  // defaults, so the gate defaults CLOSED until the current filing has reported.
   const stage2Reported = panStatus.loaded && panStatus.filingId != null && panStatus.filingId === (filing?.id ?? null);
   const stage2Ready = stage2Reported && (!panStatus.applicable || (panStatus.ran && panStatus.issues === 0));
-  const canFile = stage1Ready && stage2Ready;
+  const stage3Reported = tallyStatus.loaded && tallyStatus.filingId != null && tallyStatus.filingId === (filing?.id ?? null);
+  const stage3Ready = stage3Reported && (!tallyStatus.applicable || (tallyStatus.ran && tallyStatus.issues === 0));
+  const canFile = stage1Ready && stage2Ready && stage3Ready;
   const fileBlockReason = !stage1Ran
     ? "Run Stage-1 validation first."
     : !stage1Ready
     ? `${summary.mismatched} Stage-1 mismatch${summary.mismatched === 1 ? "" : "es"} still unresolved — override each one to continue.`
-    : !stage2Reported
-    ? "Finishing Stage-2 status check…"
+    : !stage2Reported || !stage3Reported
+    ? "Finishing validation status checks…"
     : (panStatus.applicable && !panStatus.ran)
     ? "A TRACES file is imported — run Stage-2 PAN Verification to complete the audit."
     : (panStatus.applicable && panStatus.issues > 0)
     ? `${panStatus.issues} Stage-2 PAN issue${panStatus.issues === 1 ? "" : "s"} still unresolved — override or resolve each one to continue.`
+    : (tallyStatus.applicable && !tallyStatus.ran)
+    ? "A Tally ledger is imported — run Stage-3 reconciliation to complete it."
+    : (tallyStatus.applicable && tallyStatus.issues > 0)
+    ? `${tallyStatus.issues} Stage-3 Tally item${tallyStatus.issues === 1 ? "" : "s"} still unresolved — map, override or resolve each one to continue.`
     : "";
   const isFiled = filing?.work_status === "Filed";
   const cErr = selClient ? complianceError() : null;
@@ -719,7 +727,7 @@ export function TdsValidateFinalise({
   // Reset the active card filter AND the Stage-2 gate status when the selection
   // changes, so the filing gate defaults closed until the new filing's Stage-2
   // reports (prevents filing off a previous return's status during a fast switch).
-  useEffect(() => { setActiveFilter(null); setPanStatus(PAN_STATUS_BLOCKED); }, [selClient, selFy, selQuarter, selForm]);
+  useEffect(() => { setActiveFilter(null); setPanStatus(PAN_STATUS_BLOCKED); setTallyStatus({ filingId: null, loaded: false, applicable: false, ran: false, total: 0, matched: 0, issues: 0, overridden: 0 }); }, [selClient, selFy, selQuarter, selForm]);
 
   // Records to show when a summary card is clicked (null = default exceptions view).
   const cardFiltered = useMemo((): ReconResult[] | null => {
@@ -1072,6 +1080,25 @@ export function TdsValidateFinalise({
             />
           </div>
 
+          {/* ── STAGE 3 · TALLY LEDGER RECONCILIATION (separate result set) ─────── */}
+          <div className="space-y-3 pt-2">
+            <div className="flex items-center gap-2">
+              <BookOpen size={16} className="text-primary" />
+              <h3 className="text-base font-bold text-foreground">Stage 3 · Tally Ledger Reconciliation</h3>
+              <span className="text-xs text-muted-foreground">Office ↔ Tally: date, party, credit amount &amp; section</span>
+            </div>
+            <TdsTallyRecon
+              filing={filing}
+              selClient={selClient}
+              selFy={selFy}
+              selQuarter={selQuarter}
+              selForm={selForm}
+              resolveFirmId={resolveFirmId}
+              disabled={isFiled}
+              onStatusChange={setTallyStatus}
+            />
+          </div>
+
           {/* Finalise (gated on Stage 1 pending = 0) */}
           {results && (
             <Card className={cn(canFile ? "border-emerald-200 dark:border-emerald-800" : "border-amber-200 dark:border-amber-800")}>
@@ -1092,7 +1119,7 @@ export function TdsValidateFinalise({
                         </p>
                         <p className="text-sm text-muted-foreground">
                           {canFile
-                            ? (panStatus.applicable ? "Stage 1 and Stage 2 are both reconciled with no unresolved items." : "Stage 1 is reconciled. Stage 2 PAN verification is optional and was not performed.")
+                            ? "All applicable stages are reconciled with no unresolved items. Optional stages without an imported file are skipped."
                             : fileBlockReason}
                         </p>
                         {/* Per-stage completion checklist — the user sees exactly what remains. */}
@@ -1110,6 +1137,16 @@ export function TdsValidateFinalise({
                                 !panStatus.applicable ? " — optional (no TRACES file imported)"
                                 : !panStatus.ran ? " — not run"
                                 : panStatus.issues > 0 ? ` — ${panStatus.issues} unresolved`
+                                : " — complete"}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            {!tallyStatus.applicable ? <Info size={13} className="text-muted-foreground shrink-0" /> : stage3Ready ? <CheckCircle2 size={13} className="text-emerald-600 shrink-0" /> : <X size={13} className="text-destructive shrink-0" />}
+                            <span className={!tallyStatus.applicable ? "text-muted-foreground" : stage3Ready ? "text-foreground" : "text-muted-foreground"}>
+                              Stage 3 · Tally reconciliation{
+                                !tallyStatus.applicable ? " — optional (no Tally ledger imported)"
+                                : !tallyStatus.ran ? " — not run"
+                                : tallyStatus.issues > 0 ? ` — ${tallyStatus.issues} unresolved`
                                 : " — complete"}
                             </span>
                           </div>
