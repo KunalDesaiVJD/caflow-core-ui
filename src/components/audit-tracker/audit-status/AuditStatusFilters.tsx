@@ -3,10 +3,11 @@
  * Toolbar: global search + quick-filter dropdowns + refresh + add-row.
  * The parent AuditStatusGrid owns all state; this component is pure-presentational.
  */
+import { useState } from "react";
 import { Input }  from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Search, RefreshCw, X, CheckCircle2, Clock, Loader2, AlertCircle, ChevronDown, Check } from "lucide-react";
+import { Search, RefreshCw, X, CheckCircle2, Clock, Loader2, AlertCircle, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // ─── Exported constant ────────────────────────────────────────────────────────
@@ -81,78 +82,14 @@ export default function AuditStatusFilters({
         />
       </div>
 
-      {/* 2026-06-25 (V J Desai) — Audit Status multi-select. Popover with
-          checkboxes so the auditor can pick two or more statuses at once
-          (e.g. "REPORT SIGNED" + "REPORT PRINTED" for the closing sweep).
-          Trigger label reflects the selection count. */}
-      <Popover>
-        <PopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="outline"
-            className="h-8 text-xs w-48 justify-between font-normal"
-          >
-            <span className="truncate">
-              {statusFilter.length === 0
-                ? "All Statuses"
-                : statusFilter.length === 1
-                  ? statusFilter[0]
-                  : `${statusFilter.length} statuses`}
-            </span>
-            <ChevronDown size={13} className="ml-2 shrink-0 opacity-60" />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent align="start" className="w-64 p-1">
-          <button
-            type="button"
-            onClick={() => onStatus([])}
-            className="w-full flex items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted"
-          >
-            <Check
-              size={12}
-              className={cn(
-                "shrink-0",
-                statusFilter.length === 0 ? "opacity-100" : "opacity-0",
-              )}
-            />
-            <span className="font-medium">All Statuses</span>
-          </button>
-          <div className="my-1 h-px bg-border" />
-          {AUDIT_STATUS_OPTIONS.map(s => {
-            const checked = statusFilter.includes(s);
-            const toggle = () => {
-              onStatus(checked ? statusFilter.filter(x => x !== s) : [...statusFilter, s]);
-            };
-            return (
-              <button
-                key={s}
-                type="button"
-                onClick={toggle}
-                className="w-full flex items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted text-left"
-              >
-                <Check
-                  size={12}
-                  className={cn("shrink-0", checked ? "opacity-100 text-primary" : "opacity-0")}
-                />
-                <span className="truncate">{s}</span>
-              </button>
-            );
-          })}
-          {statusFilter.length > 0 && (
-            <>
-              <div className="my-1 h-px bg-border" />
-              <button
-                type="button"
-                onClick={() => onStatus([])}
-                className="w-full flex items-center gap-1.5 rounded px-2 py-1.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
-              >
-                <X size={12} />
-                Clear ({statusFilter.length})
-              </button>
-            </>
-          )}
-        </PopoverContent>
-      </Popover>
+      {/* 2026-06-25 (V J Desai) — Audit Status multi-select filter.
+          Same UI as the per-column header filter: search box, Select All
+          (toggles the visible subset), individual checkbox per status,
+          Clear (N) footer. Trigger label reflects selection count. */}
+      <StatusMultiSelectFilter
+        selection={statusFilter}
+        onChange={onStatus}
+      />
 
       {/* 2026-06-25 (V J Desai request): Completed / Pending scan chips.
           Completed = SCANNED "Yes" (audit fully closed). Pending = "No"
@@ -262,5 +199,140 @@ export default function AuditStatusFilters({
         )}
       </div>
     </div>
+  );
+}
+
+// ─── Top-bar Audit Status multi-select filter ────────────────────────────────
+// V J Desai (2026-06-25) — mirrors the per-column StatusMultiFilter in
+// AuditStatusGrid.tsx so the two entry points share the exact same UX:
+// search box → Select All → checkboxes → Clear (N). Kept as a distinct
+// component (not shared) because the top-bar wraps the list in its own
+// trigger button and hosts a wider popover; the per-column filter is
+// rendered inside a smaller header popover with different chrome.
+function StatusMultiSelectFilter({
+  selection,
+  onChange,
+}: {
+  selection: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const visible = q
+    ? AUDIT_STATUS_OPTIONS.filter(s => s.toLowerCase().includes(q))
+    : AUDIT_STATUS_OPTIONS;
+
+  const set = new Set(selection);
+  const allVisibleChecked = visible.length > 0 && visible.every(s => set.has(s));
+
+  const toggle = (s: string) => {
+    const next = new Set(set);
+    if (next.has(s)) next.delete(s); else next.add(s);
+    onChange([...next]);
+  };
+  const toggleAll = () => {
+    const next = new Set(set);
+    if (allVisibleChecked) visible.forEach(s => next.delete(s));
+    else                   visible.forEach(s => next.add(s));
+    onChange([...next]);
+  };
+
+  const label =
+    selection.length === 0 ? "All Statuses"
+    : selection.length === 1 ? selection[0]
+    : `${selection.length} statuses`;
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          className="h-8 text-xs w-48 justify-between font-normal"
+        >
+          <span className="truncate">{label}</span>
+          <ChevronDown size={13} className="ml-2 shrink-0 opacity-60" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64 p-2">
+        <div className="relative">
+          <Input
+            autoFocus
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder="Search status…"
+            className="h-7 text-xs pr-6"
+          />
+          {query && (
+            <button
+              type="button"
+              onClick={() => setQuery("")}
+              className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            >
+              <X size={11} />
+            </button>
+          )}
+        </div>
+
+        <button
+          type="button"
+          onClick={toggleAll}
+          className="mt-2 flex items-center gap-2 px-1.5 py-1 rounded text-[11px] font-medium hover:bg-muted w-full text-left"
+        >
+          <span
+            className={cn(
+              "inline-flex items-center justify-center h-3.5 w-3.5 rounded border shrink-0",
+              allVisibleChecked
+                ? "bg-indigo-600 border-indigo-600 text-white"
+                : "border-input",
+            )}
+          >
+            {allVisibleChecked && <span className="text-[9px] leading-none">✓</span>}
+          </span>
+          Select All {q && `(${visible.length})`}
+        </button>
+
+        <div className="max-h-56 overflow-y-auto pr-0.5 mt-1">
+          {visible.map(s => {
+            const checked = set.has(s);
+            return (
+              <button
+                key={s}
+                type="button"
+                onClick={() => toggle(s)}
+                className="w-full flex items-center gap-2 px-1.5 py-1 rounded text-[11px] hover:bg-muted text-left"
+              >
+                <span
+                  className={cn(
+                    "inline-flex items-center justify-center h-3.5 w-3.5 rounded border shrink-0",
+                    checked
+                      ? "bg-indigo-600 border-indigo-600 text-white"
+                      : "border-input",
+                  )}
+                >
+                  {checked && <span className="text-[9px] leading-none">✓</span>}
+                </span>
+                <span className="truncate">{s}</span>
+              </button>
+            );
+          })}
+          {visible.length === 0 && (
+            <div className="px-1.5 py-2 text-[11px] text-muted-foreground italic">
+              No status matches “{query}”.
+            </div>
+          )}
+        </div>
+
+        {selection.length > 0 && (
+          <button
+            type="button"
+            onClick={() => onChange([])}
+            className="mt-1.5 pt-1.5 flex items-center justify-center gap-1 w-full px-2 py-1 rounded text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted border-t border-border"
+          >
+            <X size={11} /> Clear ({selection.length})
+          </button>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }
