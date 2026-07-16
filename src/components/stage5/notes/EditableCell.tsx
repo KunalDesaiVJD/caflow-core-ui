@@ -810,9 +810,14 @@ function ListRowWithSources({
   splitToShortTermEnabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  // 2026-06-25 (V J Desai — LT/ST split, revised UX). Mirror rows are
+  // injected into the ST breakup from the LT note; they are not
+  // persisted, so any edit here would silently vanish. Lock the
+  // description, add a "Current maturity" badge, and block deletion.
+  const isMirror = !!r.st_mirror_of;
   return (
     <>
-      <div className="grid grid-cols-12 gap-2 items-center">
+      <div className={cn("grid grid-cols-12 gap-2 items-center", isMirror && "bg-indigo-50/40 dark:bg-indigo-900/10 rounded")}>
         <div className="col-span-6 flex items-center gap-1">
           {/* Drag handle — drag only starts from here, not from inputs */}
           <span
@@ -841,16 +846,30 @@ function ListRowWithSources({
             <div className="w-4 shrink-0" />
           )}
           <div className="flex-1 min-w-0">
-            <EditableCell
-              type="text"
-              value={r.description ?? ""}
-              placeholder={descPlaceholder}
-              isAutoFilled={isLinked}
-              isOverridden={isManual && !!r.description}
-              onCommit={(v) => update(origIdx, { description: String(v ?? "") })}
-            />
+            {isMirror ? (
+              <div className="text-[11px] px-1 py-[3px] truncate" title={`Current maturity of "${r.description ?? ""}" transferred from the Long-term note. Adjust the LT split to change this figure.`}>
+                {r.description ?? ""}
+              </div>
+            ) : (
+              <EditableCell
+                type="text"
+                value={r.description ?? ""}
+                placeholder={descPlaceholder}
+                isAutoFilled={isLinked}
+                isOverridden={isManual && !!r.description}
+                onCommit={(v) => update(origIdx, { description: String(v ?? "") })}
+              />
+            )}
           </div>
-          {isLinked && (
+          {isMirror && (
+            <span
+              title="Current maturity — reclassified from the Long-term note via the ⋮ Split-to-Short-term action. Adjust the split there to change this figure."
+              className="shrink-0 inline-flex items-center px-1 py-[1px] rounded text-[8px] font-semibold uppercase tracking-wide border border-indigo-300 bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-200"
+            >
+              Current maturity
+            </span>
+          )}
+          {!isMirror && isLinked && (
             <span
               title={r.linked_ledger ? `Linked from TB ledger: ${r.linked_ledger} — amount is read-only. Edit COA mapping in Stage 6 to change.` : "Linked from TB — amount is read-only. Edit COA mapping in Stage 6 to change."}
               className="shrink-0 inline-flex items-center px-1 py-[1px] rounded text-[8px] font-semibold uppercase tracking-wide border border-blue-300 bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-200"
@@ -867,9 +886,20 @@ function ListRowWithSources({
             </span>
           )}
         </div>
+        {/* 2026-06-25 (V J Desai — LT/ST split refinement): the row's amount
+            cells now DISPLAY the net amount (amount_cy − st_split_cy) when
+            the parent note has splitToShortTermEnabled turned on. No
+            separate "Less: current maturities" footer is needed — the LT
+            row itself reads as the residual figure. The persisted amount_cy
+            stays untouched (still equals the Tally ledger balance); the
+            split lives on r.st_split_cy and is reversible via the ⋮ menu.
+            For ST notes / everything else, the flag is off and the raw
+            amount renders exactly as before. */}
         <div className="col-span-3">
           <EditableCell
-            value={r.amount_cy ?? 0}
+            value={splitToShortTermEnabled
+              ? (r.amount_cy ?? 0) - (r.st_split_cy ?? 0)
+              : (r.amount_cy ?? 0)}
             isAutoFilled={isLinked}
             isOverridden={isManual && (r.amount_cy ?? 0) !== 0}
             isLocked={lockAmounts || isLinked || !!r.linked_ledger}
@@ -879,7 +909,9 @@ function ListRowWithSources({
         </div>
         <div className="col-span-2">
           <EditableCell
-            value={r.amount_py ?? 0}
+            value={splitToShortTermEnabled
+              ? (r.amount_py ?? 0) - (r.st_split_py ?? 0)
+              : (r.amount_py ?? 0)}
             isAutoFilled={isLinked}
             isOverridden={isManual && (r.amount_py ?? 0) !== 0}
             isLocked={lockAmounts || isLinked || !!r.linked_ledger}
@@ -906,14 +938,16 @@ function ListRowWithSources({
             currentStSplitPy={r.st_split_py}
             onCommitStSplit={(cy, py) => update(origIdx, { st_split_cy: cy ?? undefined, st_split_py: py ?? undefined })}
             deleteDisabledReason={
-              // 2026-06-23 (MICROCIRCUITS — delete guard): block deletion
-              // when the row carries any CY or PY amount, regardless of
-              // Auto/Manual source. Deleting amount-bearing rows leaves
-              // the BS/PL face out of sync with COA mapping; auditor must
-              // zero the amount (or unmap in Stage 6 COA) first.
-              (Math.abs(Number(r.amount_cy ?? 0)) > 0.005 || Math.abs(Number(r.amount_py ?? 0)) > 0.005)
-                ? "Cannot delete — row has a non-zero balance. Set both CY and PY amounts to zero (or unmap the ledger in Stage 6 COA Mapping) before deleting, otherwise the Notes and the BS/PL face would drift from the COA mapping."
-                : undefined
+              isMirror
+                ? "Cannot delete — this row is a current-maturity mirror of a Long-term ledger. Clear the ST split on the source row in the Long-term note (⋮ → Split to Short-term → Clear) to remove it."
+                // 2026-06-23 (MICROCIRCUITS — delete guard): block deletion
+                // when the row carries any CY or PY amount, regardless of
+                // Auto/Manual source. Deleting amount-bearing rows leaves
+                // the BS/PL face out of sync with COA mapping; auditor must
+                // zero the amount (or unmap in Stage 6 COA) first.
+                : (Math.abs(Number(r.amount_cy ?? 0)) > 0.005 || Math.abs(Number(r.amount_py ?? 0)) > 0.005)
+                  ? "Cannot delete — row has a non-zero balance. Set both CY and PY amounts to zero (or unmap the ledger in Stage 6 COA Mapping) before deleting, otherwise the Notes and the BS/PL face would drift from the COA mapping."
+                  : undefined
             }
           />
         </div>
@@ -1297,15 +1331,30 @@ export function ListTable({
   const computeGroupAmounts = (groupId: string) => {
     const members = membersByGroup.get(groupId) ?? [];
     return {
-      cy: members.reduce((s, m) => s + (m?.row?.amount_cy ?? 0), 0),
-      py: members.reduce((s, m) => s + (m?.row?.amount_py ?? 0), 0),
+      // 2026-06-25 (V J Desai — LT/ST split): when the parent note enables
+      // splitToShortTermEnabled, group totals and the sub-total row must
+      // agree with the row-level display (raw − st_split). Otherwise the
+      // subtotal reads higher than the sum of the individual rows the
+      // auditor sees.
+      cy: members.reduce((s, m) => s
+        + (m?.row?.amount_cy ?? 0)
+        - (splitToShortTermEnabled ? (m?.row?.st_split_cy ?? 0) : 0), 0),
+      py: members.reduce((s, m) => s
+        + (m?.row?.amount_py ?? 0)
+        - (splitToShortTermEnabled ? (m?.row?.st_split_py ?? 0) : 0), 0),
     };
   };
 
   const subTotalCY = displayItems.reduce((s, { r }) =>
-    r?.is_group && r?.id ? s + computeGroupAmounts(r.id).cy : s + (r?.amount_cy ?? 0), 0);
+    r?.is_group && r?.id
+      ? s + computeGroupAmounts(r.id).cy
+      : s + (r?.amount_cy ?? 0) - (splitToShortTermEnabled ? (r?.st_split_cy ?? 0) : 0),
+    0);
   const subTotalPY = displayItems.reduce((s, { r }) =>
-    r?.is_group && r?.id ? s + computeGroupAmounts(r.id).py : s + (r?.amount_py ?? 0), 0);
+    r?.is_group && r?.id
+      ? s + computeGroupAmounts(r.id).py
+      : s + (r?.amount_py ?? 0) - (splitToShortTermEnabled ? (r?.st_split_py ?? 0) : 0),
+    0);
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (

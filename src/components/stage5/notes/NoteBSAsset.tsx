@@ -209,10 +209,10 @@ export default function NoteBSAsset({
         />
       </NoteCard>
 
-      {/* 2026-06-25 (V J Desai — LT/ST split): Long-term loans & advances now
-          exposes the "Split to Short-term" ⋮ menu on each ledger row and
-          subtracts the sum of splits from its total. Uses the same helpers
-          as the LT/ST borrowings pair in NoteBSLiab. */}
+      {/* 2026-06-25 (V J Desai — LT/ST split, revised UX): same pattern as
+          borrowings — LT row's amount cell shows the residual inline via
+          splitToShortTermEnabled; no separate "Less:" footer. The ST loans
+          note below injects a mirror row per split. */}
       {(() => {
         const ltEffPY = effectivePY("lt_loans", "bs_asset.lt_loans.breakup");
         const ltSplitCy = sumStSplit("bs_asset.lt_loans.breakup", "st_split_cy");
@@ -232,14 +232,6 @@ export default function NoteBSAsset({
               engagementId={engagementId}
               splitToShortTermEnabled
             />
-            {(ltSplitCy !== 0 || ltSplitPy !== 0) && (
-              <div className="grid grid-cols-12 gap-2 items-center text-[10px] italic text-muted-foreground pt-0.5">
-                <div className="col-span-6">Less: Current maturities transferred to Short-term loans and advances</div>
-                <div className="col-span-3 text-right tabular-nums">({fmtSplit(ltSplitCy)})</div>
-                <div className="col-span-2 text-right tabular-nums">({fmtSplit(ltSplitPy)})</div>
-                <div className="col-span-1" />
-              </div>
-            )}
             <EditableRow
               label="Total — Long-term loans and advances (per BS)"
               cy={ltTotalCy} py={ltTotalPy}
@@ -311,34 +303,46 @@ export default function NoteBSAsset({
 
       {renderSingleNote(sn("cash_bank"), "Cash and bank equivalents", "cash_bank",
         "bs_asset.cash_bank.breakup", "(a) Cash on hand / (b) Balances with banks (Current / Deposit)")}
-      {/* 2026-06-25 (V J Desai — LT/ST split): ST loans & advances gets the
-          current-maturities add-back mirroring the LT loans split. */}
+      {/* 2026-06-25 (V J Desai — LT/ST split, revised UX): ST loans note
+          gets a MIRROR ROW per LT-loans ledger with a non-zero split. The
+          mirror row carries the SAME LEDGER NAME as the LT source and its
+          amount is the split. Mirror rows are derived at render time and
+          stripped from onChange before persisting. */}
       {(() => {
         const stEffPY = effectivePY("st_loans", "bs_asset.st_loans.breakup");
         const ltSplitCy = sumStSplit("bs_asset.lt_loans.breakup", "st_split_cy");
         const ltSplitPy = sumStSplit("bs_asset.lt_loans.breakup", "st_split_py");
         const stTotalCy = cy("st_loans") + ltSplitCy;
         const stTotalPy = stEffPY + ltSplitPy;
+        const ltBreakup = (get("bs_asset.lt_loans.breakup") ?? []) as ListRow[];
+        const stStored  = (get("bs_asset.st_loans.breakup") ?? []) as ListRow[];
+        const mirrorRows: ListRow[] = ltBreakup
+          .filter(r => Math.abs(Number(r.st_split_cy ?? 0)) > 0.005 || Math.abs(Number(r.st_split_py ?? 0)) > 0.005)
+          .map(r => ({
+            id:             `mirror_${r.id ?? (r.linked_ledger || r.description || Math.random())}`,
+            description:    r.description || r.linked_ledger || "(unnamed)",
+            amount_cy:      Number(r.st_split_cy ?? 0),
+            amount_py:      Number(r.st_split_py ?? 0),
+            source:         "linked" as const,
+            linked_ledger:  r.linked_ledger || undefined,
+            st_mirror_of:   r.id || r.linked_ledger || r.description || "",
+          }));
+        const stDisplayRows = [...mirrorRows, ...stStored.filter(r => !r.st_mirror_of)];
         return (
           <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("st_loans", "st_loans_advances")} title="Short-term loans and advances" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={stTotalCy} pyTotal={stTotalPy}>
             <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
             <ListTable
-              rows={(get("bs_asset.st_loans.breakup") ?? []) as ListRow[]}
-              onChange={(next) => updatePath("bs_asset.st_loans.breakup", next)}
+              rows={stDisplayRows}
+              onChange={(next) => {
+                const persisted = next.filter(r => !r.st_mirror_of);
+                updatePath("bs_asset.st_loans.breakup", persisted);
+              }}
               descPlaceholder="Loan particulars"
               addLabel="Add row"
               onRemapLedger={onRemapLedger}
               onUnmapLedger={onUnmapLedger}
               engagementId={engagementId}
             />
-            {(ltSplitCy !== 0 || ltSplitPy !== 0) && (
-              <div className="grid grid-cols-12 gap-2 items-center text-[10px] italic text-indigo-700 dark:text-indigo-300 pt-0.5">
-                <div className="col-span-6">Add: Current maturities of Long-term loans and advances (from Note {sn("lt_loans", "lt_loans_advances") ?? "—"})</div>
-                <div className="col-span-3 text-right tabular-nums">{fmtSplit(ltSplitCy)}</div>
-                <div className="col-span-2 text-right tabular-nums">{fmtSplit(ltSplitPy)}</div>
-                <div className="col-span-1" />
-              </div>
-            )}
             <EditableRow
               label="Total — Short-term loans and advances (per BS)"
               cy={stTotalCy} py={stTotalPy}
