@@ -5,12 +5,16 @@
  */
 import { Input }  from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Search, RefreshCw, X, CheckCircle2, Clock, Loader2, AlertCircle } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Search, RefreshCw, X, CheckCircle2, Clock, Loader2, AlertCircle, ChevronDown, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // ─── Exported constant ────────────────────────────────────────────────────────
 
+// 2026-06-25 (V J Desai request) — "REPORT PRINTED" added between
+// SIGNED and OTHERS so the auditor can flag the final print-out step
+// of the workflow. Order matters here — it drives the dropdown option
+// order in every consumer (AuditStatusFilters + per-row inline picker).
 export const AUDIT_STATUS_OPTIONS = [
   "DATA PENDING",
   "QUERIES GIVEN TO CLIENT",
@@ -20,6 +24,7 @@ export const AUDIT_STATUS_OPTIONS = [
   "REPORT WITH KVD",
   "REPORT SENT TO CLIENT",
   "REPORT SIGNED",
+  "REPORT PRINTED",
   "OTHERS (SPECIFY)",
 ];
 
@@ -28,8 +33,12 @@ export const AUDIT_STATUS_OPTIONS = [
 interface Props {
   search:         string;
   onSearch:       (v: string) => void;
-  statusFilter:   string;
-  onStatus:       (v: string) => void;
+  /** 2026-06-25 (V J Desai) — the Audit Status quick-filter is now a
+   *  multi-select. An empty array means "All Statuses" (no filter applied);
+   *  a non-empty array is the OR-list of statuses to keep. Grid's filter
+   *  pass matches when the row's audit_status is in this set. */
+  statusFilter:   string[];
+  onStatus:       (v: string[]) => void;
   /** All | Completed (scanned=Yes) | Pending (scanned=No/blank) */
   scanFilter?:    "all" | "completed" | "pending";
   onScanFilter?:  (v: "all" | "completed" | "pending") => void;
@@ -72,18 +81,78 @@ export default function AuditStatusFilters({
         />
       </div>
 
-      {/* Audit Status quick-filter */}
-      <Select value={statusFilter} onValueChange={onStatus}>
-        <SelectTrigger className="h-8 text-xs w-40">
-          <SelectValue placeholder="All Statuses" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="all" className="text-xs">All Statuses</SelectItem>
-          {AUDIT_STATUS_OPTIONS.map(s => (
-            <SelectItem key={s} value={s} className="text-xs">{s}</SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      {/* 2026-06-25 (V J Desai) — Audit Status multi-select. Popover with
+          checkboxes so the auditor can pick two or more statuses at once
+          (e.g. "REPORT SIGNED" + "REPORT PRINTED" for the closing sweep).
+          Trigger label reflects the selection count. */}
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            className="h-8 text-xs w-48 justify-between font-normal"
+          >
+            <span className="truncate">
+              {statusFilter.length === 0
+                ? "All Statuses"
+                : statusFilter.length === 1
+                  ? statusFilter[0]
+                  : `${statusFilter.length} statuses`}
+            </span>
+            <ChevronDown size={13} className="ml-2 shrink-0 opacity-60" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="start" className="w-64 p-1">
+          <button
+            type="button"
+            onClick={() => onStatus([])}
+            className="w-full flex items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted"
+          >
+            <Check
+              size={12}
+              className={cn(
+                "shrink-0",
+                statusFilter.length === 0 ? "opacity-100" : "opacity-0",
+              )}
+            />
+            <span className="font-medium">All Statuses</span>
+          </button>
+          <div className="my-1 h-px bg-border" />
+          {AUDIT_STATUS_OPTIONS.map(s => {
+            const checked = statusFilter.includes(s);
+            const toggle = () => {
+              onStatus(checked ? statusFilter.filter(x => x !== s) : [...statusFilter, s]);
+            };
+            return (
+              <button
+                key={s}
+                type="button"
+                onClick={toggle}
+                className="w-full flex items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted text-left"
+              >
+                <Check
+                  size={12}
+                  className={cn("shrink-0", checked ? "opacity-100 text-primary" : "opacity-0")}
+                />
+                <span className="truncate">{s}</span>
+              </button>
+            );
+          })}
+          {statusFilter.length > 0 && (
+            <>
+              <div className="my-1 h-px bg-border" />
+              <button
+                type="button"
+                onClick={() => onStatus([])}
+                className="w-full flex items-center gap-1.5 rounded px-2 py-1.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                <X size={12} />
+                Clear ({statusFilter.length})
+              </button>
+            </>
+          )}
+        </PopoverContent>
+      </Popover>
 
       {/* 2026-06-25 (V J Desai request): Completed / Pending scan chips.
           Completed = SCANNED "Yes" (audit fully closed). Pending = "No"

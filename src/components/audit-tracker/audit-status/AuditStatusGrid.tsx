@@ -114,7 +114,9 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
   }, [searchRaw]);
 
   // ── Quick-filter bar ───────────────────────────────────────────────────────
-  const [statusFilter, setStatusFilter] = useState("all");
+  // 2026-06-25 (V J Desai) — status filter is now a multi-select. Empty
+  // array means "All Statuses"; non-empty means an OR-list of statuses.
+  const [statusFilter, setStatusFilter] = useState<string[]>([]);
   // 2026-06-25 (V J Desai) — Completed / Pending chip.
   // "Completed" = scanned Yes (audit fully signed off).
   // "Pending"   = scanned "No" OR blank.
@@ -209,7 +211,10 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
     }
 
     // Quick-filter bar: Audit Status
-    if (statusFilter !== "all") result = result.filter(r => r.audit_status === statusFilter);
+    if (statusFilter.length > 0) {
+      const wanted = new Set(statusFilter);
+      result = result.filter(r => wanted.has(r.audit_status || ""));
+    }
 
     // Completed / Pending scan chip
     if (scanFilter === "completed") {
@@ -260,7 +265,10 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
       const q = search.toLowerCase();
       base = base.filter(r => Object.values(r).some(v => v && typeof v === "string" && v.toLowerCase().includes(q)));
     }
-    if (statusFilter !== "all") base = base.filter(r => r.audit_status === statusFilter);
+    if (statusFilter.length > 0) {
+      const wanted = new Set(statusFilter);
+      base = base.filter(r => wanted.has(r.audit_status || ""));
+    }
     let completed = 0, pending = 0;
     for (const r of base) {
       if ((r.scanned || "").trim().toLowerCase() === "yes") completed++;
