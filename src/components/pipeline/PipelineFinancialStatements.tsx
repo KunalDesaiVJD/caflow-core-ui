@@ -3873,10 +3873,15 @@ export default function PipelineFinancialStatements({
         // the ⋮ menu inside the Trade Payables note) and split MSME vs
         // Others accordingly. Default section for an unclassified ledger
         // is "others" — matches the Schedule III convention when MSME
-        // vendors haven't been flagged. If the breakup is empty (no per-
-        // ledger data available yet) we fall back to the previous
-        // behaviour (Others = full COA total, MSME = 0) so the BS total
-        // stays honest.
+        // vendors haven't been flagged.
+        //
+        // 2026-06-25 (sign-fix): breakup rows store amount_cy / amount_py
+        // as POSITIVE (already sign-corrected at note-render time), but
+        // ncyOf negates CR-natural codes so the face's negL(v) = -v flip
+        // renders them as positive. Our sums must match that convention
+        // — hence the leading minus. Without this, the face was showing
+        // (2,290) / (7,63,225) style parenthesised negatives (V J Desai
+        // screenshot).
         ...(() => {
           const tpNote     = (stage5NotesData?.bs_liab as any)?.trade_payables ?? {};
           const breakup    = Array.isArray(tpNote.breakup) ? tpNote.breakup : [];
@@ -3892,10 +3897,11 @@ export default function PipelineFinancialStatements({
           const anyBreakup = breakup.length > 0;
           const tpTotalCy  = ncyOf("bs_liab", "trade_payables", "BS_CL_TP");
           const tpTotalPy  = npyOf("bs_liab", "trade_payables", "BS_CL_TP");
-          const msmeCy   = anyBreakup ? sumBy("msme",   "amount_cy") : 0;
-          const msmePy   = anyBreakup ? sumBy("msme",   "amount_py") : 0;
-          const othersCy = anyBreakup ? sumBy("others", "amount_cy") : tpTotalCy;
-          const othersPy = anyBreakup ? sumBy("others", "amount_py") : tpTotalPy;
+          // negate so the face's negL flip renders the amount positive.
+          const msmeCy   = anyBreakup ? -sumBy("msme",   "amount_cy") : 0;
+          const msmePy   = anyBreakup ? -sumBy("msme",   "amount_py") : 0;
+          const othersCy = anyBreakup ? -sumBy("others", "amount_cy") : tpTotalCy;
+          const othersPy = anyBreakup ? -sumBy("others", "amount_py") : tpTotalPy;
           return {
             tradePayables:  { noteNo: dn("trade_payables") },
             tradePayMSME:   { cy: msmeCy,   py: msmePy   },
