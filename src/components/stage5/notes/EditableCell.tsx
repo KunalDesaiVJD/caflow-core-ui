@@ -110,22 +110,38 @@ export function EditableCell({
   // Bug 10: override form state and handler removed.  Auto-linked rows
   // are read-only; auditor must edit COA mapping (Stage 6) to change them.
 
-  // ── Bug 10 — Locked path is now READ-ONLY (no f(x) icon, no override form) ──
-  // Auto-linked rows show their amount in a subtle blue tint with a
-  // tooltip directing the auditor to Stage 6 COA mapping.  To change
-  // an auto-linked amount, edit the COA mapping or the underlying
-  // ledger.  The label cell remains editable elsewhere — only the
-  // amount cell is locked.
-  if (isLocked && !isOverridden && !disabled) {
+  // ── Bug 10 + 2026-06-25 (V J Desai) — Locked path is READ-ONLY, always ─
+  // Auto-linked rows show in blue; MANUAL rows in a note with lockAmounts
+  // set now ALSO stay read-only, tinted amber to keep the "override" hint
+  // visible. Previously the `!isOverridden` guard let manual rows fall
+  // through to the editable input path (so renaming a linked ledger — which
+  // flipped source to "manual" — accidentally unlocked the amount cell).
+  // The only way to change an amount now is via COA Mapping, never the
+  // Notes editor.
+  if (isLocked && !disabled) {
     return (
       <div
         className={cn(
-          "flex items-center justify-end gap-1 rounded px-1 border border-blue-200 bg-blue-50/30",
+          "flex items-center justify-end gap-1 rounded px-1 border",
+          isOverridden
+            ? "border-amber-300 bg-amber-50/40"
+            : "border-blue-200 bg-blue-50/30",
           className,
         )}
-        title="Auto-linked from Tally TB. Edit COA mapping in Stage 6 to change."
+        title={
+          isOverridden
+            ? "Manual value — locked from editing here. Change via COA Mapping (Stage 6)."
+            : "Auto-linked from Tally TB. Edit COA mapping in Stage 6 to change."
+        }
       >
-        <span className="flex-1 text-right tabular-nums text-[11px] text-blue-900 dark:text-blue-200 select-none">
+        <span
+          className={cn(
+            "flex-1 text-right tabular-nums text-[11px] select-none",
+            isOverridden
+              ? "text-amber-900 dark:text-amber-200"
+              : "text-blue-900 dark:text-blue-200",
+          )}
+        >
           {fsUnits.format(Number(value ?? 0))}
         </span>
       </div>
