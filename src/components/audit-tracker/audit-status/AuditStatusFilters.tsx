@@ -11,10 +11,10 @@ import { cn } from "@/lib/utils";
 
 // ─── Exported constant ────────────────────────────────────────────────────────
 
-// 2026-06-25 (V J Desai request) — "REPORT PRINTED" added between
-// SIGNED and OTHERS so the auditor can flag the final print-out step
-// of the workflow. Order matters here — it drives the dropdown option
-// order in every consumer (AuditStatusFilters + per-row inline picker).
+// 2026-06-25 (V J Desai) — workflow order: Report Printed → Report Sent
+// to Client → Report Signed (final stage). Correcting the option order
+// so the dropdown reads top-to-bottom in the actual sequence auditors
+// walk the file through.
 export const AUDIT_STATUS_OPTIONS = [
   "DATA PENDING",
   "QUERIES GIVEN TO CLIENT",
@@ -22,9 +22,9 @@ export const AUDIT_STATUS_OPTIONS = [
   "VERIFICATION PENDING",
   "REPORT WITH VJD",
   "REPORT WITH KVD",
+  "REPORT PRINTED",
   "REPORT SENT TO CLIENT",
   "REPORT SIGNED",
-  "REPORT PRINTED",
   "OTHERS (SPECIFY)",
 ];
 
