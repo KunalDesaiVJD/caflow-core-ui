@@ -3853,7 +3853,24 @@ export default function PipelineFinancialStatements({
         // PPE (ppe) uses the FA grid (not a standard breakup array) — keep raw TB.
         shareCap:        { noteNo: dn("share_capital"),        cy: ncyOf("bs_liab","share_capital","BS_EQ_SC"),              py: npyOf("bs_liab","share_capital","BS_EQ_SC")              },
         reserves:        { noteNo: dn("reserves_surplus"),     cy: ncyOf("bs_liab","reserves_surplus","BS_EQ_RS"),            py: npyOf("bs_liab","reserves_surplus","BS_EQ_RS")            },
-        ltBorrowings:    { noteNo: dn("lt_borrowings"),        cy: ncyOf("bs_liab","lt_borrowings","BS_NCL_LTB"),             py: npyOf("bs_liab","lt_borrowings","BS_NCL_LTB")             },
+        // 2026-06-25 (V J Desai — LT/ST split): subtract the LT-borrowings
+        // st_split sums so the BS face's LT number matches the note total.
+        // ST borrowings (below) gets the same amount ADDED as current maturities.
+        ...(() => {
+          const ltBreakup = ((stage5NotesData?.bs_liab as any)?.lt_borrowings?.breakup ?? []) as any[];
+          const splitCy = ltBreakup.reduce((s, r) => s + (Number(r?.st_split_cy ?? 0) || 0), 0);
+          const splitPy = ltBreakup.reduce((s, r) => s + (Number(r?.st_split_py ?? 0) || 0), 0);
+          // ncyOf returns a NEGATIVE for CR-natural codes; add the split
+          // (positive) so subtracting the split from LT / adding to ST
+          // preserves the FS invariant.
+          const ltCyNeg = ncyOf("bs_liab","lt_borrowings","BS_NCL_LTB");
+          const ltPyNeg = npyOf("bs_liab","lt_borrowings","BS_NCL_LTB");
+          return {
+            ltBorrowings: { noteNo: dn("lt_borrowings"), cy: ltCyNeg + splitCy, py: ltPyNeg + splitPy },
+            _ltBorrowingsSplitCy: splitCy,
+            _ltBorrowingsSplitPy: splitPy,
+          };
+        })(),
         dtLiab:          { noteNo: dn("deferred_tax_liab"),    cy: ncyOf("bs_liab","deferred_tax_liab","BS_NCL_DTL"),         py: npyOf("bs_liab","deferred_tax_liab","BS_NCL_DTL")         },
         // CRITICAL: data keys here MUST match NOTE_ROW_REGISTRY keys in
         // src/lib/notesAutoPopulate.ts. A typo silently routes the lookup
@@ -3866,7 +3883,22 @@ export default function PipelineFinancialStatements({
         //  notes. Fixed by aligning every key to the registry below.)
         otherLtLiab:     { noteNo: dn("other_lt_liab"),        cy: ncyOf("bs_liab","other_lt_liabilities","BS_NCL_OLT"),      py: npyOf("bs_liab","other_lt_liabilities","BS_NCL_OLT")      },
         ltProvisions:    { noteNo: dn("lt_provisions"),        cy: ncyOf("bs_liab","lt_provisions","BS_NCL_LTP"),             py: npyOf("bs_liab","lt_provisions","BS_NCL_LTP")             },
-        stBorrowings:    { noteNo: dn("st_borrowings"),        cy: ncyOf("bs_liab","st_borrowings","BS_CL_STB"),              py: npyOf("bs_liab","st_borrowings","BS_CL_STB")              },
+        // 2026-06-25 (V J Desai — LT/ST split): ST borrowings adds the
+        // LT-borrowings split as current maturities. Split sum is (positive
+        // rupees); ncyOf returns NEGATIVE for CR-natural codes, so
+        // subtracting the (positive) split from a (negative) figure
+        // makes it "more negative" → negL flips it to a bigger positive
+        // on the face. i.e. ST increases by the split amount.
+        ...(() => {
+          const ltBreakup = ((stage5NotesData?.bs_liab as any)?.lt_borrowings?.breakup ?? []) as any[];
+          const splitCy = ltBreakup.reduce((s, r) => s + (Number(r?.st_split_cy ?? 0) || 0), 0);
+          const splitPy = ltBreakup.reduce((s, r) => s + (Number(r?.st_split_py ?? 0) || 0), 0);
+          const stCyNeg = ncyOf("bs_liab","st_borrowings","BS_CL_STB");
+          const stPyNeg = npyOf("bs_liab","st_borrowings","BS_CL_STB");
+          return {
+            stBorrowings: { noteNo: dn("st_borrowings"), cy: stCyNeg - splitCy, py: stPyNeg - splitPy },
+          };
+        })(),
         // 2026-06-25 (V J Desai — TP MSME/Others must reflect the note's
         // per-ledger bifurcation on the BS face): read
         // bs_liab.trade_payables.breakup + .ledger_section (populated by
@@ -3915,7 +3947,22 @@ export default function PipelineFinancialStatements({
         ppe:             { noteNo: dn("ppe"),                  cy: getFAGridNetBlockTotal(stage5NotesData ?? null, "cy") ?? cyOf("BS_NCA_FA"),  py: getFAGridNetBlockTotal(stage5NotesData ?? null, "py") ?? pyOf("BS_NCA_FA") },
         ncInvestments:   { noteNo: dn("nc_investments"),       cy: ncyOf("bs_asset","nc_investments","BS_NCA_INV"),           py: npyOf("bs_asset","nc_investments","BS_NCA_INV")           },
         dtAssets:        { noteNo: dn("deferred_tax_assets"),  cy: ncyOf("bs_asset","deferred_tax_asset","BS_NCA_DTA"),       py: npyOf("bs_asset","deferred_tax_asset","BS_NCA_DTA")       },
-        ltLoans:         { noteNo: dn("lt_loans_advances"),    cy: ncyOf("bs_asset","lt_loans","BS_NCA_LLA"),                 py: npyOf("bs_asset","lt_loans","BS_NCA_LLA")                 },
+        // 2026-06-25 (V J Desai — LT/ST split): LT loans subtracts the
+        // st_split; ST loans (below) adds it. BS_NCA_LLA is DR-natural,
+        // ncyOf returns POSITIVE — so a straight subtraction on LT and
+        // addition on ST does the right thing at the face.
+        ...(() => {
+          const ltBreakup = ((stage5NotesData?.bs_asset as any)?.lt_loans?.breakup ?? []) as any[];
+          const splitCy = ltBreakup.reduce((s, r) => s + (Number(r?.st_split_cy ?? 0) || 0), 0);
+          const splitPy = ltBreakup.reduce((s, r) => s + (Number(r?.st_split_py ?? 0) || 0), 0);
+          const ltCy = ncyOf("bs_asset","lt_loans","BS_NCA_LLA");
+          const ltPy = npyOf("bs_asset","lt_loans","BS_NCA_LLA");
+          return {
+            ltLoans: { noteNo: dn("lt_loans_advances"), cy: ltCy - splitCy, py: ltPy - splitPy },
+            _ltLoansSplitCy: splitCy,
+            _ltLoansSplitPy: splitPy,
+          };
+        })(),
         otherNcAssets:   { noteNo: dn("other_nc_assets"),      cy: ncyOf("bs_asset","other_nc_assets","BS_NCA_ONA"),          py: npyOf("bs_asset","other_nc_assets","BS_NCA_ONA")          },
         currInvestments: { noteNo: dn("current_investments"),  cy: ncyOf("bs_asset","curr_investments","BS_CA_CI"),           py: npyOf("bs_asset","curr_investments","BS_CA_CI")           },
         inventories:     { noteNo: dn("inventories"),          cy: ncyOf("bs_asset","inventories","BS_CA_INV"),               py: npyOf("bs_asset","inventories","BS_CA_INV")               },
@@ -3949,7 +3996,18 @@ export default function PipelineFinancialStatements({
           };
         })(),
         cashBank:        { noteNo: dn("cash_bank"),            cy: ncyOf("bs_asset","cash_bank","BS_CA_CCE"),                 py: npyOf("bs_asset","cash_bank","BS_CA_CCE")                 },
-        stLoans:         { noteNo: dn("st_loans_advances"),    cy: ncyOf("bs_asset","st_loans","BS_CA_SLA"),                  py: npyOf("bs_asset","st_loans","BS_CA_SLA")                  },
+        // 2026-06-25 (V J Desai — LT/ST split): ST loans adds the LT-loans
+        // st_split as current maturities. Asset-side, straightforward add.
+        ...(() => {
+          const ltBreakup = ((stage5NotesData?.bs_asset as any)?.lt_loans?.breakup ?? []) as any[];
+          const splitCy = ltBreakup.reduce((s, r) => s + (Number(r?.st_split_cy ?? 0) || 0), 0);
+          const splitPy = ltBreakup.reduce((s, r) => s + (Number(r?.st_split_py ?? 0) || 0), 0);
+          const stCy = ncyOf("bs_asset","st_loans","BS_CA_SLA");
+          const stPy = npyOf("bs_asset","st_loans","BS_CA_SLA");
+          return {
+            stLoans: { noteNo: dn("st_loans_advances"), cy: stCy + splitCy, py: stPy + splitPy },
+          };
+        })(),
         otherCurrAssets: { noteNo: dn("other_current_assets"), cy: ncyOf("bs_asset","other_curr_assets","BS_CA_OCA"),         py: npyOf("bs_asset","other_curr_assets","BS_CA_OCA")         },
         sigPolicies:     { noteNo: 1 }, // Accounting Policies — always Note 1
       };

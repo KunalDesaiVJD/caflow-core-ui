@@ -160,6 +160,22 @@ export default function NoteBSLiab({
   // effectivePY: same logic — prefer breakup sum over stored headline.
   const effectivePY = (key: string): number => py(key);
 
+  // 2026-06-25 (V J Desai — LT/ST split): sum st_split_cy / st_split_py
+  // across all rows of a Long-term note's breakup. The result is
+  // SUBTRACTED from the LT total (moving that value out to Short-term)
+  // and ADDED to the ST total (moving it in as current maturities).
+  const sumStSplit = (breakupPath: string, field: "st_split_cy" | "st_split_py"): number => {
+    const rows = (get(breakupPath) ?? []) as ListRow[];
+    return rows.reduce((s, r) => {
+      const n = Number((r as any)?.[field] ?? 0);
+      return s + (Number.isFinite(n) ? n : 0);
+    }, 0);
+  };
+  // Format an amount for the "current maturities" tag inline.
+  const fmtSplit = (n: number): string =>
+    new Intl.NumberFormat("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+      .format(Math.round((n + Number.EPSILON) * 100) / 100);
+
   // Smart note: only show a note number when at least one year has data.
   // dataKey = key into notes.bs_liab; regKey = key into noteNumberRegistry
   // (defaults to dataKey when they match, e.g. lt_borrowings → lt_borrowings).
@@ -790,31 +806,51 @@ export default function NoteBSLiab({
           NOTES 3–10 (unchanged)
       ════════════════════════════════════════════════════════════════════ */}
 
-      <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("lt_borrowings")} title="Long-term borrowings" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("lt_borrowings")} pyTotal={effectivePY("lt_borrowings")}>
-        <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
-        <ListTable
-          rows={(get("bs_liab.lt_borrowings.breakup") ?? []) as ListRow[]}
-          onChange={(next) => updatePath("bs_liab.lt_borrowings.breakup", next)}
-          descPlaceholder="Bank / party / loan particulars (Secured / Unsecured)"
-          addLabel="Add row"
-          showSubtotal
-          onRemapLedger={onRemapLedger}
-          onUnmapLedger={onUnmapLedger}
-          engagementId={engagementId}
-        />
-        <EditableRow
-          label="Total — Long-term borrowings (per BS)"
-          cy={cy("lt_borrowings")} py={effectivePY("lt_borrowings")}
-          autoCY={cy("lt_borrowings")} autoPY={effectivePY("lt_borrowings")}
-          isOverriddenCy={isOverridden("bs_liab.lt_borrowings.cy")}
-          isOverriddenPy={isOverridden("bs_liab.lt_borrowings.py")}
-          onCommitCy={(v) => updatePath("bs_liab.lt_borrowings.cy", v)}
-          onCommitPy={(v) => updatePath("bs_liab.lt_borrowings.py", v)}
-          onResetCy={() => resetPath("bs_liab.lt_borrowings.cy")}
-          onResetPy={() => resetPath("bs_liab.lt_borrowings.py")}
-          bold
-        />
-      </NoteCard>
+      {(() => {
+        // 2026-06-25 (V J Desai — LT/ST split): LT borrowings note.
+        //   • splitToShortTermEnabled=true on the ListTable exposes the
+        //     ⋮ menu's "Split to Short-term" input on each ledger row.
+        //   • Total row subtracts the sum of st_split_cy/py so the LT
+        //     figure reflects only what stays long-term.
+        //   • A small "Less: Current maturities transferred to ST" line
+        //     appears above the total so the auditor can see the reduction.
+        const ltSplitCy = sumStSplit("bs_liab.lt_borrowings.breakup", "st_split_cy");
+        const ltSplitPy = sumStSplit("bs_liab.lt_borrowings.breakup", "st_split_py");
+        const ltTotalCy = cy("lt_borrowings") - ltSplitCy;
+        const ltTotalPy = effectivePY("lt_borrowings") - ltSplitPy;
+        return (
+          <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("lt_borrowings")} title="Long-term borrowings" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={ltTotalCy} pyTotal={ltTotalPy}>
+            <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
+            <ListTable
+              rows={(get("bs_liab.lt_borrowings.breakup") ?? []) as ListRow[]}
+              onChange={(next) => updatePath("bs_liab.lt_borrowings.breakup", next)}
+              descPlaceholder="Bank / party / loan particulars (Secured / Unsecured)"
+              addLabel="Add row"
+              showSubtotal
+              onRemapLedger={onRemapLedger}
+              onUnmapLedger={onUnmapLedger}
+              engagementId={engagementId}
+              splitToShortTermEnabled
+            />
+            {(ltSplitCy !== 0 || ltSplitPy !== 0) && (
+              <div className="grid grid-cols-12 gap-2 items-center text-[10px] italic text-muted-foreground pt-0.5">
+                <div className="col-span-6">Less: Current maturities transferred to Short-term borrowings</div>
+                <div className="col-span-3 text-right tabular-nums">({fmtSplit(ltSplitCy)})</div>
+                <div className="col-span-2 text-right tabular-nums">({fmtSplit(ltSplitPy)})</div>
+                <div className="col-span-1" />
+              </div>
+            )}
+            <EditableRow
+              label="Total — Long-term borrowings (per BS)"
+              cy={ltTotalCy} py={ltTotalPy}
+              autoCY={ltTotalCy} autoPY={ltTotalPy}
+              onCommitCy={() => {}} onCommitPy={() => {}}
+              isLocked
+              bold
+            />
+          </NoteCard>
+        );
+      })()}
 
       <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("deferred_tax_liab")} title="Deferred tax liabilities (Net)" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("deferred_tax_liab")} pyTotal={effectivePY("deferred_tax_liab")}>
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
@@ -900,31 +936,46 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("st_borrowings")} title="Short-term borrowings" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("st_borrowings")} pyTotal={effectivePY("st_borrowings")}>
-        <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
-        <ListTable
-          rows={(get("bs_liab.st_borrowings.breakup") ?? []) as ListRow[]}
-          onChange={(next) => updatePath("bs_liab.st_borrowings.breakup", next)}
-          descPlaceholder="Bank OD / CC / Term loan / party (Secured / Unsecured)"
-          addLabel="Add row"
-          showSubtotal
-          onRemapLedger={onRemapLedger}
-          onUnmapLedger={onUnmapLedger}
-          engagementId={engagementId}
-        />
-        <EditableRow
-          label="Total — Short-term borrowings (per BS)"
-          cy={cy("st_borrowings")} py={effectivePY("st_borrowings")}
-          autoCY={cy("st_borrowings")} autoPY={effectivePY("st_borrowings")}
-          isOverriddenCy={isOverridden("bs_liab.st_borrowings.cy")}
-          isOverriddenPy={isOverridden("bs_liab.st_borrowings.py")}
-          onCommitCy={(v) => updatePath("bs_liab.st_borrowings.cy", v)}
-          onCommitPy={(v) => updatePath("bs_liab.st_borrowings.py", v)}
-          onResetCy={() => resetPath("bs_liab.st_borrowings.cy")}
-          onResetPy={() => resetPath("bs_liab.st_borrowings.py")}
-          bold
-        />
-      </NoteCard>
+      {(() => {
+        // 2026-06-25 (V J Desai — LT/ST split): ST borrowings mirrors the
+        // LT split. Adds a "Current maturities of Long-term borrowings"
+        // line above the total so the auditor sees exactly what came in.
+        const ltSplitCy = sumStSplit("bs_liab.lt_borrowings.breakup", "st_split_cy");
+        const ltSplitPy = sumStSplit("bs_liab.lt_borrowings.breakup", "st_split_py");
+        const stTotalCy = cy("st_borrowings") + ltSplitCy;
+        const stTotalPy = effectivePY("st_borrowings") + ltSplitPy;
+        return (
+          <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("st_borrowings")} title="Short-term borrowings" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={stTotalCy} pyTotal={stTotalPy}>
+            <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
+            <ListTable
+              rows={(get("bs_liab.st_borrowings.breakup") ?? []) as ListRow[]}
+              onChange={(next) => updatePath("bs_liab.st_borrowings.breakup", next)}
+              descPlaceholder="Bank OD / CC / Term loan / party (Secured / Unsecured)"
+              addLabel="Add row"
+              showSubtotal
+              onRemapLedger={onRemapLedger}
+              onUnmapLedger={onUnmapLedger}
+              engagementId={engagementId}
+            />
+            {(ltSplitCy !== 0 || ltSplitPy !== 0) && (
+              <div className="grid grid-cols-12 gap-2 items-center text-[10px] italic text-indigo-700 dark:text-indigo-300 pt-0.5">
+                <div className="col-span-6">Add: Current maturities of Long-term borrowings (from Note {sn("lt_borrowings") ?? "—"})</div>
+                <div className="col-span-3 text-right tabular-nums">{fmtSplit(ltSplitCy)}</div>
+                <div className="col-span-2 text-right tabular-nums">{fmtSplit(ltSplitPy)}</div>
+                <div className="col-span-1" />
+              </div>
+            )}
+            <EditableRow
+              label="Total — Short-term borrowings (per BS)"
+              cy={stTotalCy} py={stTotalPy}
+              autoCY={stTotalCy} autoPY={stTotalPy}
+              onCommitCy={() => {}} onCommitPy={() => {}}
+              isLocked
+              bold
+            />
+          </NoteCard>
+        );
+      })()}
 
       {(() => {
         // 2026-06-25 (V J Desai — Trade Payables MSME / Others bifurcation):

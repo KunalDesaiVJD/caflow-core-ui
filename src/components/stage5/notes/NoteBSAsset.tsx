@@ -35,6 +35,20 @@ export default function NoteBSAsset({
 }: Props) {
   const get = (path: string) => path.split(".").reduce<any>((c, k) => c?.[k], notes);
 
+  // 2026-06-25 (V J Desai — LT/ST split for loans & advances): mirrors the
+  // helpers in NoteBSLiab. Sum st_split_cy/py over the LT-loans breakup;
+  // used by the LT and ST loans note renders below and the BS face.
+  const sumStSplit = (breakupPath: string, field: "st_split_cy" | "st_split_py"): number => {
+    const rows = (get(breakupPath) ?? []) as ListRow[];
+    return rows.reduce((s, r) => {
+      const n = Number((r as any)?.[field] ?? 0);
+      return s + (Number.isFinite(n) ? n : 0);
+    }, 0);
+  };
+  const fmtSplit = (n: number): string =>
+    new Intl.NumberFormat("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+      .format(Math.round((n + Number.EPSILON) * 100) / 100);
+
   // Prefer breakup sum over stored headline so the Note "Total per BS"
   // always matches the BS face (which uses ncyOf → breakup sum).
   const sumBreakup = (key: string, col: "amount_cy"|"amount_py", breakupPath?: string): { sum: number; hasAny: boolean } => {
@@ -195,8 +209,48 @@ export default function NoteBSAsset({
         />
       </NoteCard>
 
-      {renderSingleNote(sn("lt_loans", "lt_loans_advances"), "Long-term loans and advances", "lt_loans",
-        "bs_asset.lt_loans.breakup", "Loan particulars")}
+      {/* 2026-06-25 (V J Desai — LT/ST split): Long-term loans & advances now
+          exposes the "Split to Short-term" ⋮ menu on each ledger row and
+          subtracts the sum of splits from its total. Uses the same helpers
+          as the LT/ST borrowings pair in NoteBSLiab. */}
+      {(() => {
+        const ltEffPY = effectivePY("lt_loans", "bs_asset.lt_loans.breakup");
+        const ltSplitCy = sumStSplit("bs_asset.lt_loans.breakup", "st_split_cy");
+        const ltSplitPy = sumStSplit("bs_asset.lt_loans.breakup", "st_split_py");
+        const ltTotalCy = cy("lt_loans") - ltSplitCy;
+        const ltTotalPy = ltEffPY - ltSplitPy;
+        return (
+          <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("lt_loans", "lt_loans_advances")} title="Long-term loans and advances" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={ltTotalCy} pyTotal={ltTotalPy}>
+            <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
+            <ListTable
+              rows={(get("bs_asset.lt_loans.breakup") ?? []) as ListRow[]}
+              onChange={(next) => updatePath("bs_asset.lt_loans.breakup", next)}
+              descPlaceholder="Loan particulars"
+              addLabel="Add row"
+              onRemapLedger={onRemapLedger}
+              onUnmapLedger={onUnmapLedger}
+              engagementId={engagementId}
+              splitToShortTermEnabled
+            />
+            {(ltSplitCy !== 0 || ltSplitPy !== 0) && (
+              <div className="grid grid-cols-12 gap-2 items-center text-[10px] italic text-muted-foreground pt-0.5">
+                <div className="col-span-6">Less: Current maturities transferred to Short-term loans and advances</div>
+                <div className="col-span-3 text-right tabular-nums">({fmtSplit(ltSplitCy)})</div>
+                <div className="col-span-2 text-right tabular-nums">({fmtSplit(ltSplitPy)})</div>
+                <div className="col-span-1" />
+              </div>
+            )}
+            <EditableRow
+              label="Total — Long-term loans and advances (per BS)"
+              cy={ltTotalCy} py={ltTotalPy}
+              autoCY={ltTotalCy} autoPY={ltTotalPy}
+              onCommitCy={() => {}} onCommitPy={() => {}}
+              isLocked
+              bold
+            />
+          </NoteCard>
+        );
+      })()}
       {renderSingleNote(sn("other_nc_assets"), "Other non-current assets", "other_nc_assets",
         "bs_asset.other_nc_assets.breakup", "Particulars")}
       {renderSingleNote(sn("curr_investments", "current_investments"), "Current investments", "curr_investments",
@@ -257,8 +311,45 @@ export default function NoteBSAsset({
 
       {renderSingleNote(sn("cash_bank"), "Cash and bank equivalents", "cash_bank",
         "bs_asset.cash_bank.breakup", "(a) Cash on hand / (b) Balances with banks (Current / Deposit)")}
-      {renderSingleNote(sn("st_loans", "st_loans_advances"), "Short-term loans and advances", "st_loans",
-        "bs_asset.st_loans.breakup", "Loan particulars")}
+      {/* 2026-06-25 (V J Desai — LT/ST split): ST loans & advances gets the
+          current-maturities add-back mirroring the LT loans split. */}
+      {(() => {
+        const stEffPY = effectivePY("st_loans", "bs_asset.st_loans.breakup");
+        const ltSplitCy = sumStSplit("bs_asset.lt_loans.breakup", "st_split_cy");
+        const ltSplitPy = sumStSplit("bs_asset.lt_loans.breakup", "st_split_py");
+        const stTotalCy = cy("st_loans") + ltSplitCy;
+        const stTotalPy = stEffPY + ltSplitPy;
+        return (
+          <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("st_loans", "st_loans_advances")} title="Short-term loans and advances" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={stTotalCy} pyTotal={stTotalPy}>
+            <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
+            <ListTable
+              rows={(get("bs_asset.st_loans.breakup") ?? []) as ListRow[]}
+              onChange={(next) => updatePath("bs_asset.st_loans.breakup", next)}
+              descPlaceholder="Loan particulars"
+              addLabel="Add row"
+              onRemapLedger={onRemapLedger}
+              onUnmapLedger={onUnmapLedger}
+              engagementId={engagementId}
+            />
+            {(ltSplitCy !== 0 || ltSplitPy !== 0) && (
+              <div className="grid grid-cols-12 gap-2 items-center text-[10px] italic text-indigo-700 dark:text-indigo-300 pt-0.5">
+                <div className="col-span-6">Add: Current maturities of Long-term loans and advances (from Note {sn("lt_loans", "lt_loans_advances") ?? "—"})</div>
+                <div className="col-span-3 text-right tabular-nums">{fmtSplit(ltSplitCy)}</div>
+                <div className="col-span-2 text-right tabular-nums">{fmtSplit(ltSplitPy)}</div>
+                <div className="col-span-1" />
+              </div>
+            )}
+            <EditableRow
+              label="Total — Short-term loans and advances (per BS)"
+              cy={stTotalCy} py={stTotalPy}
+              autoCY={stTotalCy} autoPY={stTotalPy}
+              onCommitCy={() => {}} onCommitPy={() => {}}
+              isLocked
+              bold
+            />
+          </NoteCard>
+        );
+      })()}
       {renderSingleNote(sn("other_curr_assets", "other_current_assets"), "Other current assets", "other_curr_assets",
         "bs_asset.other_curr_assets.breakup", "Particulars")}
     </div>
