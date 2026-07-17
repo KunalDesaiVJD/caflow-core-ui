@@ -390,14 +390,14 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, r
   if (!filing) return null;
 
   return (
-    <div className="space-y-4">
-      <div className="grid gap-3 md:grid-cols-2">
-        <Card><CardContent className="p-4">
+    <div className="space-y-3">
+      <div className="grid gap-2 md:grid-cols-2">
+        <Card><CardContent className="p-3">
           <div className="flex items-center gap-2 mb-2"><Users size={16} className="text-foreground" /><p className="font-semibold text-sm">Office Data <span className="text-muted-foreground font-normal">(master · this quarter)</span></p></div>
-          <div><span className="text-2xl font-bold">{officeCount}</span> <span className="text-muted-foreground text-sm">records</span></div>
+          <div><span className="text-lg font-bold">{officeCount}</span> <span className="text-muted-foreground text-sm">records</span></div>
           {officeCount === 0 && <p className="text-xs text-amber-600 mt-2">No office records yet — enter data in the Data Entry tab first.</p>}
         </CardContent></Card>
-        <Card><CardContent className="p-4">
+        <Card><CardContent className="p-3">
           <div className="flex items-center justify-between mb-2">
             <p className="font-semibold text-sm flex items-center gap-2"><FileSpreadsheet size={15} className="text-foreground" /> Imported Tally Ledger{validating && <span className="text-xs text-amber-600 flex items-center gap-1"><Loader2 size={11} className="animate-spin" /> reconciling…</span>}</p>
             <input ref={fileRef} type="file" accept=".pdf,application/pdf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImport(f); e.currentTarget.value = ""; }} />
@@ -407,7 +407,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, r
           </div>
           {batches.length ? (
             <div className="text-sm">
-              <span className="text-2xl font-bold">{ledgerRowCount}</span> <span className="text-muted-foreground">rows</span>
+              <span className="text-lg font-bold">{ledgerRowCount}</span> <span className="text-muted-foreground">rows</span>
               {batches.length > 1 && <span className="text-muted-foreground"> · {batches.length} files</span>}
               <p className="text-xs text-muted-foreground mt-1">Sections: <b className="text-foreground">{ledgerSections.length ? ledgerSections.join(", ") : "—"}</b></p>
               <div className="mt-2 space-y-1 max-h-28 overflow-y-auto">
@@ -427,19 +427,19 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, r
                 </p>
               )}
             </div>
-          ) : <p className="text-xs text-muted-foreground">Import the Tally <b>Ledger Account PDF</b> for each TDS section (194A, 194C, 194J, 194T …) — in Tally open the ledger and print/export it to PDF. The section, dates, parties and TDS (credit) amounts are read from the PDF; they combine across files. Re-importing the same file name replaces it. Stage 3 is optional.</p>}
+          ) : <p className="text-[11px] text-muted-foreground">Import the Tally <b>Ledger Account PDF</b> for each TDS section (194A, 194C, 194J, 194T …) — in Tally open the ledger and print/export it to PDF. The section, dates, parties and TDS (credit) amounts are read from the PDF; they combine across files. Re-importing the same file name replaces it. Stage 3 is optional.</p>}
         </CardContent></Card>
       </div>
 
       <div className="flex items-center gap-3">
-        <Button size="lg" className="gap-2 font-semibold" onClick={runValidation} disabled={validating || !batches.length || officeCount === 0 || disabled}>
+        <Button className="gap-2 font-semibold h-9" onClick={runValidation} disabled={validating || !batches.length || officeCount === 0 || disabled}>
           {validating ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}{validating ? "Validating…" : "Run Validation"}
         </Button>
         {!batches.length ? <span className="text-xs text-muted-foreground">Import the Tally ledger to enable reconciliation.</span> : officeCount === 0 ? <span className="text-xs text-muted-foreground">No office records to reconcile.</span> : null}
       </div>
 
       {results && (<>
-        <div className={cn("grid grid-cols-2 sm:grid-cols-5 gap-3", validating && "animate-pulse")}>
+        <div className={cn("grid grid-cols-2 sm:grid-cols-5 gap-2", validating && "animate-pulse")}>
           {([
             { key: "total" as const, label: "Total", value: summary.total, cls: "" },
             { key: "matched" as const, label: "Matched", value: summary.matched, cls: "text-emerald-600" },
@@ -448,8 +448,8 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, r
             { key: "overridden" as const, label: "Overridden", value: summary.overridden, cls: "text-blue-600" },
           ]).map((s) => (
             <button key={s.label} type="button" onClick={() => setActiveFilter(activeFilter === s.key ? null : s.key)} aria-pressed={activeFilter === s.key}
-              className={cn("rounded-lg border bg-card p-3 text-center transition-all hover:border-primary/50 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary", activeFilter === s.key ? "ring-2 ring-primary border-primary" : "border-border")}>
-              <p className={cn("text-2xl font-bold tabular-nums", s.cls)}><AnimatedNumber value={s.value} /></p><p className="text-[11px] text-muted-foreground">{s.label}</p>
+              className={cn("rounded-md border bg-card p-2 text-center transition-all hover:border-primary/50 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary", activeFilter === s.key ? "ring-2 ring-primary border-primary" : "border-border")}>
+              <p className={cn("text-xl font-bold tabular-nums", s.cls)}><AnimatedNumber value={s.value} /></p><p className="text-[11px] text-muted-foreground">{s.label}</p>
             </button>
           ))}
         </div>
@@ -462,7 +462,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, r
         ) : summary.total === 0 ? (
           <div className="p-8 text-center text-sm text-muted-foreground rounded-lg border border-dashed">No office records to reconcile for this filing.</div>
         ) : issueRows.length === 0 ? (
-          <Card className="border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20"><CardContent className="p-6 space-y-2">
+          <Card className="border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20"><CardContent className="p-4 space-y-2">
             <div className="flex items-center gap-2"><CheckCircle2 size={22} className="text-emerald-600" /><p className="text-lg font-bold text-emerald-700 dark:text-emerald-300">Tally Reconciliation Completed</p></div>
             <p className="text-sm text-muted-foreground">All {summary.total} office records were found in the Tally ledger with matching date, amount and party.</p>
           </CardContent></Card>

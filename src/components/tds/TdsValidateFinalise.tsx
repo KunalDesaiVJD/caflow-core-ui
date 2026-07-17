@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -263,6 +264,10 @@ export function TdsValidateFinalise({
   const [finalising, setFinalising] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [runSignal, setRunSignal] = useState(0);
+  // Which stage tab is showing. The stages are a SEQUENCE (data -> PAN -> ledger),
+  // so they get their own tabs instead of one long scroll, and the Finalise
+  // summary lives only on the last one.
+  const [stage, setStage] = useState<"1" | "2" | "3">("1");
   const [activeFilter, setActiveFilter] = useState<FilterKey>(null); // clicked summary card
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const loadSeq = useRef(0); // guards against out-of-order loadAll responses
@@ -831,10 +836,10 @@ export function TdsValidateFinalise({
   );
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <div>
-        <h2 className="text-xl font-bold text-foreground">Validate &amp; Finalise</h2>
-        <p className="text-sm text-muted-foreground">Stage&nbsp;1 (data reconciliation) and Stage&nbsp;2 (PAN verification) each have their own <b>Run Validation</b> — run them independently below.</p>
+        <h2 className="text-lg font-bold text-foreground">Validate &amp; Finalise</h2>
+        <p className="text-xs text-muted-foreground">Three stages — each has its own <b>Run Validation</b>. Finish all three to mark the return ready to file.</p>
       </div>
 
       {/* Active return — READ-ONLY. The Client/FY/Quarter/Form come from the shared
@@ -874,27 +879,31 @@ export function TdsValidateFinalise({
 
       {!resolving && filing && (
         <>
-          {/* ── STAGE 1 · DATA VALIDATION ─────────────────────────────────────────
-              The heading labels the WHOLE Stage-1 section — its inputs (Office +
-              Imported), the Run Validation action, and the results below — so the
-              Office/Imported block reads as part of Stage 1, not a separate module. */}
-          <div className="flex items-center gap-2 pt-1">
-            <FileSpreadsheet size={16} className="text-primary" />
-            <h3 className="text-base font-bold text-foreground">Stage 1 · Data Validation</h3>
-            <span className="text-xs text-muted-foreground">Office ↔ Imported, field by field</span>
-          </div>
+          {/* The stages are a sequence, so they are TABS rather than one very long
+              page. Stage 2 and 3 stay MOUNTED while hidden (forceMount): each
+              reports its completion up to the Ready-to-File gate, and a stage the
+              user has not opened yet must not read as "not applicable". */}
+          <Tabs value={stage} onValueChange={(v) => setStage(v as "1" | "2" | "3")} className="w-full">
+            <TabsList className="h-8 p-0.5">
+              <TabsTrigger value="1" className="text-xs h-7 gap-1.5 px-3"><FileSpreadsheet size={13} /> Stage 1 · Data{stage1Ran && <span className={cn("ml-0.5 rounded px-1 text-[10px] font-semibold", summary.mismatched === 0 ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-destructive/10 text-destructive")}>{summary.mismatched === 0 ? "OK" : summary.mismatched}</span>}</TabsTrigger>
+              <TabsTrigger value="2" className="text-xs h-7 gap-1.5 px-3"><BadgeCheck size={13} /> Stage 2 · PAN{panStatus.ran && <span className={cn("ml-0.5 rounded px-1 text-[10px] font-semibold", panStatus.issues === 0 ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-destructive/10 text-destructive")}>{panStatus.issues === 0 ? "OK" : panStatus.issues}</span>}</TabsTrigger>
+              <TabsTrigger value="3" className="text-xs h-7 gap-1.5 px-3"><BookOpen size={13} /> Stage 3 · Tally{tallyStatus.ran && <span className={cn("ml-0.5 rounded px-1 text-[10px] font-semibold", tallyStatus.issues === 0 ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-destructive/10 text-destructive")}>{tallyStatus.issues === 0 ? "OK" : tallyStatus.issues}</span>}</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="1" forceMount className="data-[state=inactive]:hidden mt-3 space-y-3">
+          {/* ── STAGE 1 · DATA VALIDATION — the TAB names the stage, so no heading here. */}
 
           {/* Inputs */}
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-2 md:grid-cols-2">
             <Card>
-              <CardContent className="p-4">
+              <CardContent className="p-3">
                 <div className="flex items-center gap-2 mb-2">
                   <Users size={16} className="text-foreground" />
                   <p className="font-semibold text-sm">Office Data <span className="text-muted-foreground font-normal">(entered by staff)</span></p>
                 </div>
                 <div className="flex gap-6 text-sm">
-                  <div><span className="text-2xl font-bold">{officeCount.deductees}</span> <span className="text-muted-foreground">deductees</span></div>
-                  <div><span className="text-2xl font-bold">{officeCount.challans}</span> <span className="text-muted-foreground">challans</span></div>
+                  <div><span className="text-lg font-bold">{officeCount.deductees}</span> <span className="text-muted-foreground">deductees</span></div>
+                  <div><span className="text-lg font-bold">{officeCount.challans}</span> <span className="text-muted-foreground">challans</span></div>
                 </div>
                 {officeCount.deductees === 0 && (
                   <p className="text-xs text-amber-600 mt-2">No office deductees yet — enter data in the Data Entry tab first.</p>
@@ -903,7 +912,7 @@ export function TdsValidateFinalise({
             </Card>
 
             <Card>
-              <CardContent className="p-4">
+              <CardContent className="p-3">
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
                     <FileSpreadsheet size={16} className="text-foreground" />
@@ -929,7 +938,7 @@ export function TdsValidateFinalise({
                   <div className="text-sm">
                     <div className="flex items-end justify-between gap-2">
                       <div>
-                        <span className="text-2xl font-bold">{batch?.row_count ?? 0}</span>{" "}
+                        <span className="text-lg font-bold">{batch?.row_count ?? 0}</span>{" "}
                         <span className="text-muted-foreground text-xs">records · {batches.length} file{batches.length > 1 ? "s" : ""}</span>
                       </div>
                       <div className="flex items-center gap-1.5">
@@ -985,7 +994,7 @@ export function TdsValidateFinalise({
 
           {/* Single Run Validation */}
           <div className="flex items-center gap-3">
-            <Button size="lg" className="gap-2 font-semibold" onClick={handleRunValidation}
+            <Button className="gap-2 font-semibold h-9" onClick={handleRunValidation}
               disabled={comparing || !batch || isFiled}>
               {comparing ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
               {comparing ? "Validating…" : "Run Validation"}
@@ -998,7 +1007,7 @@ export function TdsValidateFinalise({
             <div className="space-y-3">
               {/* Live, clickable dashboard cards — animated counters; click a card
                   to filter the results to that category, click again to clear. */}
-              <div className={cn("grid grid-cols-2 sm:grid-cols-4 gap-3", comparing && "animate-pulse")}>
+              <div className={cn("grid grid-cols-2 sm:grid-cols-4 gap-2", comparing && "animate-pulse")}>
                 {([
                   { key: "total" as const, label: "Total", value: summary.total, cls: "" },
                   { key: "matched" as const, label: "Matched", value: summary.matched, cls: "text-emerald-600" },
@@ -1009,10 +1018,10 @@ export function TdsValidateFinalise({
                     onClick={() => setActiveFilter(activeFilter === s.key ? null : s.key)}
                     aria-pressed={activeFilter === s.key}
                     className={cn(
-                      "rounded-lg border bg-card p-3 text-center transition-all hover:border-primary/50 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                      "rounded-md border bg-card p-2 text-center transition-all hover:border-primary/50 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
                       activeFilter === s.key ? "ring-2 ring-primary border-primary" : "border-border",
                     )}>
-                    <p className={cn("text-2xl font-bold tabular-nums", s.cls)}><AnimatedNumber value={s.value} /></p>
+                    <p className={cn("text-xl font-bold tabular-nums", s.cls)}><AnimatedNumber value={s.value} /></p>
                     <p className="text-xs text-muted-foreground">{s.label}</p>
                   </button>
                 ))}
@@ -1037,7 +1046,7 @@ export function TdsValidateFinalise({
               ) : attention.length === 0 ? (
                 /* Default view, nothing to action → professional success panel. */
                 <Card className="border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20">
-                  <CardContent className="p-6 space-y-3">
+                  <CardContent className="p-4 space-y-3">
                     <div className="flex items-center gap-2">
                       <CheckCircle2 size={22} className="text-emerald-600" />
                       <p className="text-lg font-bold text-emerald-700 dark:text-emerald-300">Validation Completed Successfully</p>
@@ -1060,13 +1069,11 @@ export function TdsValidateFinalise({
             </div>
           )}
 
-          {/* ── STAGE 2 · PAN VERIFICATION (separate result set) ───────────────── */}
-          <div className="space-y-3 pt-2">
-            <div className="flex items-center gap-2">
-              <BadgeCheck size={16} className="text-primary" />
-              <h3 className="text-base font-bold text-foreground">Stage 2 · PAN Verification</h3>
-              <span className="text-xs text-muted-foreground">Party &amp; PAN existence, PAN status, name &amp; quarter</span>
-            </div>
+            </TabsContent>
+
+            <TabsContent value="2" forceMount className="data-[state=inactive]:hidden mt-3 space-y-3">
+          {/* ── STAGE 2 · PAN VERIFICATION — the TAB names the stage. */}
+          <div className="space-y-2">
             <TdsPanVerification
               filing={filing}
               selClient={selClient}
@@ -1080,13 +1087,11 @@ export function TdsValidateFinalise({
             />
           </div>
 
-          {/* ── STAGE 3 · TALLY LEDGER RECONCILIATION (separate result set) ─────── */}
-          <div className="space-y-3 pt-2">
-            <div className="flex items-center gap-2">
-              <BookOpen size={16} className="text-primary" />
-              <h3 className="text-base font-bold text-foreground">Stage 3 · Tally Ledger Reconciliation</h3>
-              <span className="text-xs text-muted-foreground">Office ↔ Tally: date, party, credit amount &amp; section</span>
-            </div>
+            </TabsContent>
+
+            <TabsContent value="3" forceMount className="data-[state=inactive]:hidden mt-3 space-y-3">
+          {/* ── STAGE 3 · TALLY LEDGER RECONCILIATION — the TAB names the stage. */}
+          <div className="space-y-2">
             <TdsTallyRecon
               filing={filing}
               selClient={selClient}
@@ -1099,10 +1104,11 @@ export function TdsValidateFinalise({
             />
           </div>
 
+
           {/* Finalise (gated on Stage 1 pending = 0) */}
           {results && (
             <Card className={cn(canFile ? "border-emerald-200 dark:border-emerald-800" : "border-amber-200 dark:border-amber-800")}>
-              <CardContent className="p-6">
+              <CardContent className="p-4">
                 {isFiled ? (
                   <div className="p-4 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
                     <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">
@@ -1161,6 +1167,8 @@ export function TdsValidateFinalise({
               </CardContent>
             </Card>
           )}
+            </TabsContent>
+          </Tabs>
         </>
       )}
 
@@ -1198,15 +1206,15 @@ export function TdsValidateFinalise({
           <div className="space-y-3 py-4">
             <div className="grid grid-cols-3 gap-4">
               <div className="text-center p-3 rounded-lg bg-muted">
-                <p className="text-2xl font-bold text-foreground">{summary.matched}</p>
+                <p className="text-xl font-bold text-foreground">{summary.matched}</p>
                 <p className="text-xs text-muted-foreground">Matched</p>
               </div>
               <div className="text-center p-3 rounded-lg bg-muted">
-                <p className="text-2xl font-bold text-foreground">{summary.overridden}</p>
+                <p className="text-xl font-bold text-foreground">{summary.overridden}</p>
                 <p className="text-xs text-muted-foreground">Overridden</p>
               </div>
               <div className="text-center p-3 rounded-lg bg-muted">
-                <p className="text-2xl font-bold text-foreground">{summary.total}</p>
+                <p className="text-xl font-bold text-foreground">{summary.total}</p>
                 <p className="text-xs text-muted-foreground">Total</p>
               </div>
             </div>

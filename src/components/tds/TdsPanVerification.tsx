@@ -696,23 +696,23 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
   if (!filing) return null;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {/* Inputs: Office Data (master) + Imported TRACES file — mirrors Stage 1. */}
-      <div className="grid gap-3 md:grid-cols-2">
-        <Card><CardContent className="p-4">
+      <div className="grid gap-2 md:grid-cols-2">
+        <Card><CardContent className="p-3">
           <div className="flex items-center gap-2 mb-2">
             <Users size={16} className="text-foreground" />
             <p className="font-semibold text-sm">Office Data <span className="text-muted-foreground font-normal">(master · this quarter)</span></p>
           </div>
           <div className="flex gap-6 text-sm">
-            <div><span className="text-2xl font-bold">{officeCount}</span> <span className="text-muted-foreground">parties</span></div>
-            <div><span className="text-2xl font-bold">{officePanCount}</span> <span className="text-muted-foreground">with PAN</span></div>
+            <div><span className="text-lg font-bold">{officeCount}</span> <span className="text-muted-foreground">parties</span></div>
+            <div><span className="text-lg font-bold">{officePanCount}</span> <span className="text-muted-foreground">with PAN</span></div>
           </div>
           {officeCount === 0 && <p className="text-xs text-amber-600 mt-2">No office parties yet — enter data in the Data Entry tab first.</p>}
           {officeCount > 0 && officePanCount < officeCount && <p className="text-xs text-amber-600 mt-2">{officeCount - officePanCount} part{officeCount - officePanCount === 1 ? "y has" : "ies have"} no PAN and can't be verified.</p>}
         </CardContent></Card>
 
-        <Card><CardContent className="p-4">
+        <Card><CardContent className="p-3">
           <div className="flex items-center justify-between mb-2">
             <p className="font-semibold text-sm flex items-center gap-2">
               <FileSpreadsheet size={15} className="text-foreground" /> Imported TRACES File{batches.length > 1 ? "s" : ""}
@@ -730,7 +730,7 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
             <div className="text-sm">
               <div className="flex items-end justify-between gap-2">
                 <div>
-                  <span className="text-2xl font-bold">{batch?.row_count ?? 0}</span>{" "}
+                  <span className="text-lg font-bold">{batch?.row_count ?? 0}</span>{" "}
                   <span className="text-muted-foreground text-xs">PANs · {batches.length} file{batches.length > 1 ? "s" : ""}</span>
                 </div>
                 <div className="flex items-center gap-1.5">
@@ -779,7 +779,7 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
 
       {/* Stage-2's own Run Validation — the audit (and its summary) run only on click. */}
       <div className="flex items-center gap-3">
-        <Button size="lg" className="gap-2 font-semibold" onClick={handleRunValidation}
+        <Button className="gap-2 font-semibold h-9" onClick={handleRunValidation}
           disabled={validating || !batch || officeCount === 0 || disabled}>
           {validating ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
           {validating ? "Validating…" : "Run Validation"}
@@ -807,7 +807,7 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
 
           {/* Summary cards — Total / Verified / Issues / Overridden (clean partition,
               mirrors Stage-1; "Issues" = unresolved, so no redundant "Pending" card). */}
-          <div className={cn("grid grid-cols-2 sm:grid-cols-4 gap-3", validating && "animate-pulse")}>
+          <div className={cn("grid grid-cols-2 sm:grid-cols-4 gap-2", validating && "animate-pulse")}>
             {([
               { key: "total" as const, label: "Total Parties", value: summary.total, cls: "" },
               { key: "verified" as const, label: "Verified", value: summary.verified, cls: "text-emerald-600" },
@@ -818,10 +818,10 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
                 onClick={() => setActiveFilter(activeFilter === s.key ? null : s.key)}
                 aria-pressed={activeFilter === s.key}
                 className={cn(
-                  "rounded-lg border bg-card p-3 text-center transition-all hover:border-primary/50 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                  "rounded-md border bg-card p-2 text-center transition-all hover:border-primary/50 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
                   activeFilter === s.key ? "ring-2 ring-primary border-primary" : "border-border",
                 )}>
-                <p className={cn("text-2xl font-bold tabular-nums", s.cls)}><AnimatedNumber value={s.value} /></p>
+                <p className={cn("text-xl font-bold tabular-nums", s.cls)}><AnimatedNumber value={s.value} /></p>
                 <p className="text-[11px] text-muted-foreground leading-tight">{s.label}</p>
               </button>
             ))}
@@ -846,7 +846,7 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
             <div className="p-8 text-center text-sm text-muted-foreground rounded-lg border border-dashed">No office parties to verify for this filing — add data in the Data Entry tab.</div>
           ) : issueRows.length === 0 ? (
             <Card className="border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20">
-              <CardContent className="p-6 space-y-3">
+              <CardContent className="p-4 space-y-3">
                 <div className="flex items-center gap-2">
                   <CheckCircle2 size={22} className="text-emerald-600" />
                   <p className="text-lg font-bold text-emerald-700 dark:text-emerald-300">PAN Verification Completed Successfully</p>
