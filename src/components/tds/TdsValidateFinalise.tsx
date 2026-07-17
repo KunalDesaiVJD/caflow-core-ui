@@ -10,7 +10,9 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { TdsExportMenu } from "./TdsExportMenu";
-import { exportOverviewExcel, exportOverviewPdf, type StageReport, type ReportMeta, type OverviewReport } from "@/lib/tds/tdsReport";
+import { reportFileName, type StageReport, type ReportMeta, type OverviewReport } from "@/lib/tds/tdsReport";
+import { buildOverviewWorkbook, downloadWorkbook } from "@/lib/tds/tdsReportExcel";
+import { exportOverviewPdf } from "@/lib/tds/tdsReportPdf";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -933,9 +935,22 @@ export function TdsValidateFinalise({
       { label: "Stage 2 Issues", value: panStatus.applicable ? panStatus.issues : "n/a" },
       { label: "Stage 3 Issues", value: tallyStatus.applicable ? tallyStatus.issues : "n/a" },
     ],
+    // Derive the status from the STAGES, not from fileBlockReason. That string is
+    // the on-screen hint and can read "Finishing validation status checks…" while
+    // a stage is still settling — a transient UI message that has no business in a
+    // report going to a client or an auditor.
     finalStatus: isFiled ? "Filed / Ready to File"
       : canFile ? "All validations complete — ready to mark as Ready to File"
-      : (fileBlockReason || "Validation incomplete"),
+      : (() => {
+          const open: string[] = [];
+          if (!stage1Ran) open.push("Stage 1 not run");
+          else if (summary.mismatched > 0) open.push(`Stage 1: ${summary.mismatched} unresolved`);
+          if (panStatus.applicable && !panStatus.ran) open.push("Stage 2 not run");
+          else if (panStatus.applicable && panStatus.issues > 0) open.push(`Stage 2: ${panStatus.issues} unresolved`);
+          if (tallyStatus.applicable && !tallyStatus.ran) open.push("Stage 3 not run");
+          else if (tallyStatus.applicable && tallyStatus.issues > 0) open.push(`Stage 3: ${tallyStatus.issues} unresolved`);
+          return open.length ? `Not ready to file — ${open.join("; ")}` : "Validation incomplete";
+        })(),
     ready: isFiled || canFile,
   });
 
@@ -944,7 +959,15 @@ export function TdsValidateFinalise({
     setExportingOverview(true);
     try {
       const o = overviewReport();
-      if (fmt === "xlsx") exportOverviewExcel(o, reportMeta);
+      // The Overview carries each stage's REAL rows, not just its counts — a
+      // summary with no records and no reasons cannot be acted on. Stage 2/3 hand
+      // their report up via onStatusChange; a stage that has not run has none.
+      const stageReports: StageReport[] = [
+        ...(stage1Ran ? [stage1Report()] : []),
+        ...(panStatus.applicable && panStatus.getReport ? [panStatus.getReport()] : []),
+        ...(tallyStatus.applicable && tallyStatus.getReport ? [tallyStatus.getReport()] : []),
+      ];
+      if (fmt === "xlsx") await downloadWorkbook(buildOverviewWorkbook(o, reportMeta, stageReports), reportFileName(reportMeta, "Validation Overview", "xlsx"));
       else await exportOverviewPdf(o, reportMeta);
     } catch (e: any) { toast({ title: "Export failed", description: e?.message || String(e), variant: "destructive" }); }
     setExportingOverview(false);

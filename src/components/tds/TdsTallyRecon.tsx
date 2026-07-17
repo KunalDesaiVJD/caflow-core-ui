@@ -26,6 +26,8 @@ import {
 export interface TallyStageStatus {
   filingId: string | null; loaded: boolean; applicable: boolean; ran: boolean;
   total: number; matched: number; issues: number; overridden: number;
+  /** This stage's FULL report (rows + reasons) for the parent's Overview. Lazy. */
+  getReport?: () => StageReport;
 }
 
 interface Props {
@@ -408,7 +410,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
   }, [results]);
 
   useEffect(() => {
-    onStatusChange?.({ filingId, loaded: settled.current === filingId, applicable: batches.length > 0, ran: results !== null, total: summary.total, matched: summary.matched, issues: summary.issues, overridden: summary.overridden });
+    onStatusChange?.({ getReport: stage3Report, filingId, loaded: settled.current === filingId, applicable: batches.length > 0, ran: results !== null, total: summary.total, matched: summary.matched, issues: summary.issues, overridden: summary.overridden });
   }, [filingId, batches, results, summary, onStatusChange]);
 
   const issueRows = useMemo(() => (results || []).filter((r) => isTallyIssue(r.result)).sort((a, b) => (a.overridden ? 1 : 0) - (b.overridden ? 1 : 0)), [results]);
