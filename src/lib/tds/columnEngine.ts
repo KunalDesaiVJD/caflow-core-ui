@@ -78,7 +78,7 @@ export function looksLikeName(v: unknown): boolean {
 }
 
 // ── Header synonyms ──────────────────────────────────────────────────────────
-const HEADER_SYNONYMS: Record<CanonField, string[]> = {
+export const HEADER_SYNONYMS: Record<CanonField, string[]> = {
   deductee_name: ["deducteename", "partyname", "partysname", "vendorname", "suppliername", "customername", "beneficiaryname", "payeename", "nameofdeductee", "nameofparty", "assesseename", "firmname", "partnername", "partnersname", "ledgername", "accountname", "particulars", "particular", "name", "party", "vendor", "deductee"],
   pan: ["pan", "panno", "pannumber", "permanentaccountnumber", "deducteepan", "partypan", "vendorpan", "panofdeductee", "panofparty"],
   section_code: ["section", "tdssection", "sectioncode", "natureofpayment", "natureofpymt", "paymentsection", "us", "u/s"],
