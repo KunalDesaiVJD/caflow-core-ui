@@ -121,6 +121,54 @@ export function reconcileTally(office: OfficeTxn[], tally: TallyRow[], ledgerSec
       return !s || s === oSec;
     };
 
+    // 0b) A SAVED PARTY MAPPING resolves the PARTY NAME — and nothing else.
+    //
+    // The user has told us "this office party IS this ledger party", so the mapping
+    // is used to LOCATE the entry; the date and the TDS are then still validated on
+    // it. A mapping must never make a record match: a mapped party whose date or
+    // amount is wrong is exactly the row a reviewer needs to see, so it stays an
+    // exception and — being mapped — appears under BOTH Mapped and Mismatched.
+    // Without this the pair could only be found via date/amount, so a mapped party
+    // whose date AND amount both differed came back "Ledger Entry Not Found": the
+    // mapping silently did nothing and the record never showed as mapped at all.
+    const mappedTo = partyMap[norm(o.name)];
+    if (mappedTo) {
+      const byParty = credits.filter(({ t, k }) => !usedTally.has(k) && inSection(t) && norm(t.party) === norm(mappedTo));
+      if (byParty.length) {
+        // Several entries for the mapped party → take the one that reconciles best,
+        // so the mapping lands on the right transaction, not merely the first.
+        const scoreOf = (t: TallyRow) =>
+          (o.date_iso && t.iso && o.date_iso === t.iso ? 2 : 0) +
+          (amountsMatch(t.credit, o.tds) || amountsMatch(t.credit, o.amount) ? 1 : 0);
+        const best = [...byParty].sort((a, b) => scoreOf(b.t) - scoreOf(a.t))[0];
+        usedTally.add(best.k);
+        const t = best.t;
+        const dateOk = !!o.date_iso && !!t.iso && o.date_iso === t.iso;
+        const tdsOk = amountsMatch(t.credit, o.tds);
+        const moneyOk = tdsOk || amountsMatch(t.credit, o.amount);
+        const basis: "tds" | "amount" = tdsOk ? "tds" : "amount";
+        const row = { ...base, tally_row_index: t.row_index, tally_party: t.party, tally_date: t.date, tally_credit: t.credit, mapped: true };
+        if (dateOk && moneyOk) {
+          out.push({ ...row, result: "Matched", amount_basis: basis,
+            reason: `Party matched via the saved mapping to "${t.party}"; date and TDS amount both match.`, confidence: 96 });
+        } else {
+          // Name the field(s) actually wrong — "mismatched" alone is not actionable
+          // once the user has already resolved the party.
+          const bad = [!dateOk ? "date" : null, !moneyOk ? "TDS amount" : null].filter(Boolean) as string[];
+          out.push({
+            ...row,
+            result: !moneyOk ? "Credit Amount Mismatch" : "Date Mismatch",
+            amount_basis: moneyOk ? basis : null,
+            reason: `Party is mapped to "${t.party}", but the ${bad.join(" and ")} still ${bad.length > 1 ? "differ" : "differs"} — `
+              + `office ${o.date_iso ?? "—"} / TDS ${o.tds ?? "—"} vs ledger ${t.date ?? "—"} / credit ${t.credit ?? "—"}. `
+              + `Mapping resolves the party name only; correct the ${bad.join(" and ")} to complete the match.`,
+            confidence: dateOk || moneyOk ? 50 : 30,
+          });
+        }
+        continue;
+      }
+    }
+
     // 1+2) candidates: same section, same DATE, and credit ≈ office TDS or amount.
     const cand = credits.filter(({ t, k }) => {
       if (usedTally.has(k) || !inSection(t)) return false;
