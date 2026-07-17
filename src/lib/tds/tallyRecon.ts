@@ -25,6 +25,11 @@ export interface TallyRow {
   credit: number | null;      // the deduction amount (TDS or principal — see amount_basis)
   vch_no: string | null;
   vch_type: string | null;
+  // The TDS section this row belongs to, taken from ITS OWN sheet/ledger title.
+  // Carried PER ROW (not per file) because a client's Tally dataset is normally
+  // one ledger PER SECTION — spread across several sheets AND several files — and
+  // an office 194A record must only ever be reconciled against 194A ledger rows.
+  section: string | null;
 }
 
 export interface TallyParse {
@@ -103,7 +108,7 @@ export function parseTallySheet(grid: unknown[][], sheetName: string): TallyPars
     if ((credit == null || credit === 0) && (debit == null || debit === 0)) continue; // amountless
     if (credit != null && credit !== 0) creditCount++;
     rows.push({
-      row_index: r, date: dateRaw || null, iso: toIso(dateRaw), party,
+      row_index: r, date: dateRaw || null, iso: toIso(dateRaw), party, section: null,
       debit, credit, vch_no: vchNoCol >= 0 ? (String(g[vchNoCol] ?? "").trim() || null) : null,
       vch_type: vchTypeCol >= 0 ? (String(g[vchTypeCol] ?? "").trim() || null) : null,
     });
@@ -115,18 +120,43 @@ export function parseTallySheet(grid: unknown[][], sheetName: string): TallyPars
     const s = sectionFromLedger(String(grid[r]?.[0] ?? "")); if (s) { section = s; break; }
   }
 
+  // Stamp every row of this sheet with the sheet's own section.
+  for (const row of rows) row.section = section;
+
   const label = (i: number) => (i >= 0 && hdr >= 0 ? String(grid[hdr][i] ?? "").trim() || null : null);
   return { rows, section, creditCount, mapping: { date: label(dateCol), party: label(partyCol), credit: label(creditCol), debit: label(debitCol) } };
 }
 
-/** Merge all sheets of a Tally workbook (pick the section per sheet). */
+/**
+ * Parse EVERY sheet of a Tally workbook and CONCATENATE the rows, each keeping its
+ * own sheet's section. Previously this kept only the single sheet with the most
+ * rows and silently discarded the others — so a workbook holding one ledger per
+ * section (194C on one tab, 194J on the next) imported only one of them and every
+ * office record in the other sections reconciled against nothing.
+ *
+ * `row_index` is made unique ACROSS sheets (sheet ordinal * 100000 + row) because
+ * the reconciler uses it to mark a ledger entry as consumed; two sheets would
+ * otherwise collide on the same index and wrongly block each other's rows.
+ */
 export function parseTallyWorkbook(grids: { name: string; grid: unknown[][] }[]): TallyParse {
-  let best: TallyParse | null = null;
-  for (const { name, grid } of grids) {
+  const rows: TallyRow[] = [];
+  const sections = new Set<string>();
+  let creditCount = 0;
+  let mapping: TallyParse["mapping"] = { date: null, party: null, credit: null, debit: null };
+  let bestRows = -1;
+  grids.forEach(({ name, grid }, i) => {
     const p = parseTallySheet(grid, name);
-    if (!best || p.rows.length > best.rows.length) best = p;
-  }
-  return best ?? { rows: [], section: null, creditCount: 0, mapping: { date: null, party: null, credit: null, debit: null } };
+    if (!p.rows.length) return;
+    for (const r of p.rows) rows.push({ ...r, row_index: i * 100_000 + r.row_index });
+    creditCount += p.creditCount;
+    if (p.section) sections.add(p.section);
+    // report the mapping of the richest sheet (they are normally identical)
+    if (p.rows.length > bestRows) { bestRows = p.rows.length; mapping = p.mapping; }
+  });
+  // A single overall section is reported only when the whole workbook is ONE
+  // section; the per-row section is what reconciliation actually uses.
+  const section = sections.size === 1 ? [...sections][0] : null;
+  return { rows, section, creditCount, mapping };
 }
 
 // ── Reconciliation ───────────────────────────────────────────────────────────
@@ -136,7 +166,13 @@ export interface OfficeTxn {
 }
 export type TallyResult =
   | "Matched" | "Date Mismatch" | "Credit Amount Mismatch" | "Party Name Mismatch"
-  | "Section Mismatch" | "Ledger Entry Not Found" | "Multiple Possible Matches" | "Duplicate Ledger Entries";
+  | "Section Mismatch" | "Ledger Entry Not Found" | "Multiple Possible Matches" | "Duplicate Ledger Entries"
+  // No ledger for this office record's section was imported AT ALL. Distinct from
+  // "Ledger Entry Not Found" (which means: we have that section's ledger, and the
+  // entry isn't in it). Without this, importing only the 194C ledger reported every
+  // 194A/194T office record as a missing entry — sending the user hunting for rows
+  // that were never in scope, when the real action is "import the 194A ledger too".
+  | "No Ledger for Section";
 
 export interface TallyReconRow {
   office_deductee_id: string;
@@ -165,14 +201,42 @@ export function reconcileTally(office: OfficeTxn[], tally: TallyRow[], ledgerSec
   const usedTally = new Set<number>();
   const out: TallyReconRow[] = [];
 
+  // Which sections the imported ledgers actually cover. A row with no section of
+  // its own falls back to `ledgerSection` (a single-section file whose title said
+  // so). If NOTHING carries a section we can't scope by section at all, so every
+  // row stays eligible (old behaviour) rather than wrongly excluding everything.
+  const sectionOf = (t: TallyRow) => canonicalSection(t.section) ?? canonicalSection(ledgerSection);
+  const covered = new Set<string>();
+  for (const t of credits) { const s = sectionOf(t); if (s) covered.add(s); }
+  const sectionScoped = covered.size > 0;
+
   for (const o of office) {
     const base = {
       office_deductee_id: o.deductee_id, office_name: o.name, office_date: o.date_iso,
       office_amount: o.amount, office_tds: o.tds, office_section: o.section,
     };
-    // 1+2) candidates: same DATE and credit ≈ office TDS or office amount.
+    const oSec = canonicalSection(o.section);
+
+    // 0) Is this office record's section represented in the imported ledgers at
+    //    all? If not, say so precisely instead of blaming a missing entry.
+    if (sectionScoped && oSec && !covered.has(oSec)) {
+      out.push({ ...base, tally_row_index: null, tally_party: null, tally_date: null, tally_credit: null,
+        result: "No Ledger for Section", amount_basis: null,
+        reason: `No Tally ledger for section ${oSec} has been imported (imported: ${[...covered].sort().join(", ")}). Import that section's ledger to reconcile this record.`,
+        confidence: 0 });
+      continue;
+    }
+
+    // Only ever reconcile against rows of this record's OWN section.
+    const inSection = (t: TallyRow) => {
+      if (!sectionScoped || !oSec) return true;
+      const s = sectionOf(t);
+      return !s || s === oSec;
+    };
+
+    // 1+2) candidates: same section, same DATE, and credit ≈ office TDS or amount.
     const cand = credits.filter((t) => {
-      if (usedTally.has(t.row_index)) return false;
+      if (usedTally.has(t.row_index) || !inSection(t)) return false;
       const dateOk = !!o.date_iso && !!t.iso && o.date_iso === t.iso;
       if (!dateOk) return false;
       return amountsMatch(t.credit, o.tds) || amountsMatch(t.credit, o.amount);
@@ -180,16 +244,30 @@ export function reconcileTally(office: OfficeTxn[], tally: TallyRow[], ledgerSec
 
     if (cand.length === 0) {
       // relax the date to find a near-miss for a precise reason.
-      const byAmount = credits.find((t) => !usedTally.has(t.row_index) && (amountsMatch(t.credit, o.tds) || amountsMatch(t.credit, o.amount)));
+      const byAmount = credits.find((t) => !usedTally.has(t.row_index) && inSection(t) && (amountsMatch(t.credit, o.tds) || amountsMatch(t.credit, o.amount)));
       if (byAmount) {
         usedTally.add(byAmount.row_index);
+        // The party may ALSO differ here — offer the mapping, don't hide it behind
+        // a date-only reason (this is the common real case: the ledger books the
+        // entry a few days out AND under the proprietor's personal name).
+        const cmp = nameCompare(o.name, byAmount.party);
+        const savedHit = !!partyMap[norm(o.name)] && norm(partyMap[norm(o.name)]) === norm(byAmount.party);
+        const partyDiffers = !savedHit && cmp !== "match" && cmp !== "unknown";
         out.push({ ...base, tally_row_index: byAmount.row_index, tally_party: byAmount.party, tally_date: byAmount.date, tally_credit: byAmount.credit,
           result: "Date Mismatch", amount_basis: amountsMatch(byAmount.credit, o.tds) ? "tds" : "amount",
-          reason: `Amount and party found, but the ledger date (${byAmount.date ?? "—"}) differs from the office date (${o.date_iso ?? "—"}).`, confidence: 55 });
+          mapped: savedHit || undefined,
+          suggested_party: partyDiffers ? (byAmount.party ?? undefined) : undefined,
+          reason: partyDiffers
+            ? `Amount matches, but the ledger date (${byAmount.date ?? "—"}) differs from the office date (${o.date_iso ?? "—"}) and the party differs — office "${o.name ?? "—"}" vs ledger "${byAmount.party ?? "—"}".`
+            : `Amount and party found, but the ledger date (${byAmount.date ?? "—"}) differs from the office date (${o.date_iso ?? "—"}).`,
+          confidence: 55 });
       } else {
         out.push({ ...base, tally_row_index: null, tally_party: null, tally_date: null, tally_credit: null,
           result: "Ledger Entry Not Found", amount_basis: null,
-          reason: `No ledger entry found matching this office record's date and amount.`, confidence: 0 });
+          reason: oSec
+            ? `No entry in the ${oSec} ledger matches this office record's date and amount.`
+            : `No ledger entry found matching this office record's date and amount.`,
+          confidence: 0 });
       }
       continue;
     }
@@ -217,12 +295,13 @@ export function reconcileTally(office: OfficeTxn[], tally: TallyRow[], ledgerSec
 
     const top = scored[0];
     usedTally.add(top.t.row_index);
-    const secOk = sectionEq(o.section, ledgerSection);
+    const topSec = sectionOf(top.t);
+    const secOk = sectionEq(o.section, topSec);
     if (top.savedHit || top.cmp === "match") {
       if (!secOk) {
         out.push({ ...base, tally_row_index: top.t.row_index, tally_party: top.t.party, tally_date: top.t.date, tally_credit: top.t.credit,
           result: "Section Mismatch", amount_basis: top.basis, mapped: !!top.savedHit,
-          reason: `Date, amount and party match, but the office section (${o.section ?? "—"}) differs from the ledger section (${ledgerSection ?? "—"}).`, confidence: 70 });
+          reason: `Date, amount and party match, but the office section (${o.section ?? "—"}) differs from the ledger section (${topSec ?? "—"}).`, confidence: 70 });
       } else {
         out.push({ ...base, tally_row_index: top.t.row_index, tally_party: top.t.party, tally_date: top.t.date, tally_credit: top.t.credit,
           result: "Matched", amount_basis: top.basis, mapped: !!top.savedHit,

@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 import { ShieldCheck, CheckCircle2, XCircle, Upload, FileSpreadsheet, Loader2, RotateCcw, X, Play, Users, Link2 } from "lucide-react";
 import { readSheetGrids, readDelimitedGrid } from "@/lib/tdsWorkbook";
 import { logReconAudit } from "@/lib/tdsReconAudit";
-import { makeDateNormaliser, normalizeName } from "@/lib/tds/match";
+import { makeDateNormaliser, normalizeName, canonicalSection, nameCompare } from "@/lib/tds/match";
 import {
   parseTallyWorkbook, reconcileTally,
   type OfficeTxn, type TallyRow, type TallyReconRow, type PartyMap, type TallyResult,
@@ -48,6 +48,7 @@ const RESULT_BADGE: Record<string, string> = {
   "Section Mismatch": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
   "Multiple Possible Matches": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
   "Duplicate Ledger Entries": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
+  "No Ledger for Section": "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
 };
 const inr = (n: number | null | undefined) => (n == null ? "—" : `₹${Math.round(Number(n)).toLocaleString("en-IN")}`);
 type Filter = null | "total" | "matched" | "issues" | "mapped" | "overridden";
@@ -72,11 +73,33 @@ async function parseTallyFile(file: File) {
 
 const isTallyIssue = (r: string) => r !== "Matched";
 
+/**
+ * The ledger party to offer as a saved mapping for this record, or null.
+ *
+ * Derived from the PERSISTED office/ledger names rather than read back from the
+ * engine's `suggested_party` (results are re-read from tds_tally_results, which
+ * doesn't carry it). It uses the SAME shared nameCompare the engine used, so the
+ * two can't drift: offer a mapping whenever a ledger candidate was found whose
+ * party is neither an actual match nor blank — regardless of WHICH mismatch the
+ * record landed on. Gating this on result === "Party Name Mismatch" is what made
+ * the mapping feature unreachable.
+ */
+const mappingOffer = (r: ResultRow): string | null => {
+  if (r.overridden || r.mapped || r.result === "Matched") return null;
+  if (!r.tally_party || !r.office_name) return null;
+  const cmp = nameCompare(r.office_name, r.tally_party);
+  return cmp === "match" || cmp === "unknown" ? null : r.tally_party;
+};
+
 export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, resolveFirmId, disabled, onStatusChange }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
   const [office, setOffice] = useState<OfficeTxn[]>([]);
-  const [batch, setBatch] = useState<any>(null);
+  // ALL imported ledgers for this filing. A client keeps one ledger PER SECTION
+  // (194C, 194J, 194A …), so the filing's Tally dataset is the UNION of its files:
+  // re-importing the same file NAME replaces it, a different name accumulates —
+  // identical to Stage-1/Stage-2.
+  const [batches, setBatches] = useState<any[]>([]);
   const [results, setResults] = useState<ResultRow[] | null>(null);
   const [partyMaps, setPartyMaps] = useState<PartyMap>({});
   const [userMap, setUserMap] = useState<Record<string, string>>({});
@@ -92,6 +115,19 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, r
 
   const filingId = filing?.id ?? null;
   const officeCount = office.length;
+  const ledgerRowCount = useMemo(() => batches.reduce((s, b: any) => s + (Number(b.row_count) || 0), 0), [batches]);
+  const ledgerSections = useMemo(
+    () => [...new Set(batches.map((b: any) => b.section).filter(Boolean) as string[])].sort(),
+    [batches]);
+  /** Sections Office Data needs but no ledger covers — the actionable gap that
+   *  otherwise shows up as a wall of "Ledger Entry Not Found". */
+  const missingSections = useMemo(() => {
+    if (!batches.length) return [];
+    const have = new Set(ledgerSections.map((s) => canonicalSection(s)).filter(Boolean) as string[]);
+    if (!have.size) return [];
+    const need = new Set(office.map((o) => canonicalSection(o.section)).filter(Boolean) as string[]);
+    return [...need].filter((s) => !have.has(s)).sort();
+  }, [office, batches, ledgerSections]);
 
   const loadOffice = useCallback(async (fId: string): Promise<OfficeTxn[]> => {
     const { data: ch } = await supabase.from("tds_challans").select("id").eq("filing_id", fId);
@@ -117,10 +153,10 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, r
 
   const loadAll = useCallback(async () => {
     const seq = ++loadSeq.current; const stale = () => seq !== loadSeq.current;
-    if (!filingId) { settled.current = null; setBatch(null); setResults(null); setOffice([]); return; }
+    if (!filingId) { settled.current = null; setBatches([]); setResults(null); setOffice([]); return; }
     const parties = await loadOffice(filingId); if (stale()) return; setOffice(parties);
-    const { data: b } = await supabase.from("tds_tally_batches").select("*").eq("filing_id", filingId).order("imported_at", { ascending: false }).limit(1).maybeSingle();
-    if (stale()) return; setBatch(b || null);
+    const { data: b } = await supabase.from("tds_tally_batches").select("*").eq("filing_id", filingId).order("imported_at", { ascending: false });
+    if (stale()) return; setBatches(b || []);
     const maps = await loadMaps(); if (stale()) return; setPartyMaps(maps);
     const { data: res } = await supabase.from("tds_tally_results").select("*").eq("filing_id", filingId);
     if (stale()) return;
@@ -149,32 +185,63 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, r
       if (bErr || !bRow) throw new Error(bErr?.message || "Batch insert failed");
       const recs = parsed.rows.map((r) => ({
         batch_id: bRow.id, filing_id: filing.id, firm_id: firmId, row_index: r.row_index,
+        // section is stored PER ROW: one workbook can hold a ledger per section on
+        // separate sheets, so a single batch-level section would lose that.
+        section: r.section ?? parsed.section ?? null,
         date_text: r.date, date_iso: r.iso, party: r.party, debit: r.debit, credit: r.credit, vch_no: r.vch_no, vch_type: r.vch_type, raw: r,
       }));
       for (let i = 0; i < recs.length; i += 1000) { const { error } = await supabase.from("tds_tally_rows").insert(recs.slice(i, i + 1000)); if (error) throw new Error(error.message); }
       await supabase.from("tds_tally_results").delete().eq("filing_id", filing.id);
       setResults(null);
-      toast({ title: `Imported ${parsed.rows.length} ledger row(s)`, description: `${file.name} · section ${parsed.section || "—"} · ${parsed.creditCount} credit entries — click Run Validation.` });
+      const secs = [...new Set(parsed.rows.map((r) => r.section).filter(Boolean))];
+      toast({ title: `Imported ${parsed.rows.length} ledger row(s)`, description: `${file.name} · section ${secs.length ? secs.join(", ") : parsed.section || "—"} · ${parsed.creditCount} credit entries — click Run Validation.` });
       await loadAll();
     } catch (e: any) { toast({ title: "Tally import failed", description: e.message, variant: "destructive" }); }
+    setImporting(false);
+  };
+
+  /** Remove ONE imported ledger (a filing can hold several). Any prior results are
+   *  invalidated because the reconciliation set just changed. */
+  const deleteBatch = async (id: string) => {
+    if (!filing) return;
+    setImporting(true);
+    try {
+      await supabase.from("tds_tally_rows").delete().eq("batch_id", id);
+      const { error } = await supabase.from("tds_tally_batches").delete().eq("id", id);
+      if (error) throw new Error(error.message);
+      await supabase.from("tds_tally_results").delete().eq("filing_id", filing.id);
+      setResults(null);
+      toast({ title: "Ledger removed", description: "Run Validation again to reconcile against the remaining ledgers." });
+      await loadAll();
+    } catch (e: any) { toast({ title: "Could not remove the ledger", description: e.message, variant: "destructive" }); }
     setImporting(false);
   };
 
   const runAudit = useCallback(async (fId: string) => {
     const seq = loadSeq.current; const firmId = await resolveFirmId();
     const parties = await loadOffice(fId);
-    const { data: b } = await supabase.from("tds_tally_batches").select("id, section").eq("filing_id", fId).order("imported_at", { ascending: false }).limit(1).maybeSingle();
+    // Reconcile against the UNION of EVERY imported ledger for this filing (a
+    // client keeps one per section). Each row carries its own section, so an
+    // office 194A record is only ever matched against 194A ledger rows; a batch's
+    // section is the fallback for rows imported before per-row section existed.
+    const { data: b } = await supabase.from("tds_tally_batches").select("id, section").eq("filing_id", fId).order("imported_at", { ascending: false });
+    const batchSection = new Map<string, string | null>((b || []).map((x: any) => [x.id, x.section ?? null]));
     const { data: tr } = await supabase.from("tds_tally_rows").select("*").eq("filing_id", fId);
-    const tally: TallyRow[] = (tr || []).map((t: any) => ({ row_index: t.row_index, date: t.date_text, iso: t.date_iso, party: t.party, debit: t.debit != null ? Number(t.debit) : null, credit: t.credit != null ? Number(t.credit) : null, vch_no: t.vch_no, vch_type: t.vch_type }));
+    const tally: TallyRow[] = (tr || []).map((t: any) => ({
+      row_index: t.row_index, date: t.date_text, iso: t.date_iso, party: t.party,
+      debit: t.debit != null ? Number(t.debit) : null, credit: t.credit != null ? Number(t.credit) : null,
+      vch_no: t.vch_no, vch_type: t.vch_type,
+      section: t.section ?? batchSection.get(t.batch_id) ?? null,
+    }));
     const maps = await loadMaps();
-    const audited = reconcileTally(parties, tally, b?.section ?? null, maps);
+    const audited = reconcileTally(parties, tally, null, maps);
     // preserve overrides keyed by office_deductee_id
     const { data: prior } = await supabase.from("tds_tally_results").select("id, office_deductee_id, result, overridden, override_reason, overridden_by, overridden_at").eq("filing_id", fId);
     const pm = new Map<string, any>(); for (const p of prior || []) pm.set(p.office_deductee_id ?? "", p);
     const newRows = audited.map((r) => {
       const c = pm.get(r.office_deductee_id ?? ""); const keep = !!c?.overridden && c.result === r.result;
       return {
-        filing_id: fId, batch_id: b?.id ?? null, firm_id: firmId, quarter: selQuarter, office_deductee_id: r.office_deductee_id,
+        filing_id: fId, batch_id: b?.[0]?.id ?? null, firm_id: firmId, quarter: selQuarter, office_deductee_id: r.office_deductee_id,
         office_name: r.office_name, office_date: r.office_date, office_amount: r.office_amount, office_tds: r.office_tds, office_section: r.office_section,
         tally_row_index: r.tally_row_index, tally_party: r.tally_party, tally_date: r.tally_date, tally_credit: r.tally_credit,
         result: r.result, amount_basis: r.amount_basis, reason: r.reason, confidence: r.confidence, mapped: !!r.mapped,
@@ -191,11 +258,11 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, r
   }, [loadOffice, loadMaps, resolveFirmId, selQuarter, user?.id, userMap]);
 
   const runValidation = useCallback(async () => {
-    if (!filing || !batch || validating) return; setValidating(true);
+    if (!filing || !batches.length || validating) return; setValidating(true);
     try { const a = await runAudit(filing.id); const m = a.filter((r) => r.result === "Matched").length; toast({ title: "Stage 3 · Tally reconciliation complete", description: `${m} matched · ${a.length - m} to review across ${a.length} office record(s)` }); }
     catch (e: any) { toast({ title: "Reconciliation failed", description: e.message, variant: "destructive" }); }
     setValidating(false);
-  }, [filing, batch, validating, runAudit, toast]);
+  }, [filing, batches, validating, runAudit, toast]);
 
   // Confirm a party mapping: office name ↔ ledger party → save + re-run.
   const confirmMapping = async (r: ResultRow) => {
@@ -240,8 +307,8 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, r
   }, [results]);
 
   useEffect(() => {
-    onStatusChange?.({ filingId, loaded: settled.current === filingId, applicable: !!batch, ran: results !== null, total: summary.total, matched: summary.matched, issues: summary.issues, overridden: summary.overridden });
-  }, [filingId, batch, results, summary, onStatusChange]);
+    onStatusChange?.({ filingId, loaded: settled.current === filingId, applicable: batches.length > 0, ran: results !== null, total: summary.total, matched: summary.matched, issues: summary.issues, overridden: summary.overridden });
+  }, [filingId, batches, results, summary, onStatusChange]);
 
   const issueRows = useMemo(() => (results || []).filter((r) => isTallyIssue(r.result)).sort((a, b) => (a.overridden ? 1 : 0) - (b.overridden ? 1 : 0)), [results]);
   const cardFiltered = useMemo((): ResultRow[] | null => {
@@ -273,7 +340,12 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, r
         <p className={cn("text-xs", r.overridden ? "text-blue-600" : r.result === "Matched" ? "text-emerald-600" : "text-destructive")}>
           {r.overridden ? `Overridden — ${r.override_reason || "accepted"}${r.overridden_by && userMap[r.overridden_by] ? ` · ${userMap[r.overridden_by]}` : ""}` : r.reason}
         </p>
-        {!r.overridden && r.result === "Party Name Mismatch" && r.tally_party && (
+        {/* Offer the mapping whenever a credible ledger candidate was found whose
+            PARTY differs — not only on "Party Name Mismatch". The common real case
+            is a ledger entry that is a few days out AND booked under the
+            proprietor's personal name, which lands on "Date Mismatch"; gating the
+            button on that one result made the mapping feature unreachable. */}
+        {mappingOffer(r) && (
           <div className="flex items-center gap-2 p-2 rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50/50 dark:bg-amber-950/20 text-xs">
             <Link2 size={13} className="text-amber-600 shrink-0" />
             <span className="text-foreground">Possible mapping: <b>{r.office_name}</b> ↔ <b>{r.tally_party}</b></span>
@@ -299,20 +371,41 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, r
           <div className="flex items-center justify-between mb-2">
             <p className="font-semibold text-sm flex items-center gap-2"><FileSpreadsheet size={15} className="text-foreground" /> Imported Tally Ledger{validating && <span className="text-xs text-amber-600 flex items-center gap-1"><Loader2 size={11} className="animate-spin" /> reconciling…</span>}</p>
             <input ref={fileRef} type="file" accept=".xls,.xlsx,.csv,.txt" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImport(f); e.currentTarget.value = ""; }} />
-            <Button size="sm" variant={batch ? "outline" : "default"} className="gap-1" disabled={importing || disabled} onClick={() => fileRef.current?.click()}>
-              {importing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}{batch ? "Re-import" : "Import Tally ledger"}
+            <Button size="sm" variant={batches.length ? "outline" : "default"} className="gap-1" disabled={importing || disabled} onClick={() => fileRef.current?.click()}>
+              {importing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}{batches.length ? "Add / re-import ledger" : "Import Tally ledger"}
             </Button>
           </div>
-          {batch ? <div className="text-sm"><span className="text-2xl font-bold">{batch.row_count}</span> <span className="text-muted-foreground">rows</span><p className="text-xs text-muted-foreground mt-1 truncate">{batch.file_name} · section {batch.section || "—"}</p></div>
-            : <p className="text-xs text-muted-foreground">Import the section-wise Tally ledger export (.xls / .xlsx / .csv). The credit entries are reconciled against Office Data. Stage 3 is optional.</p>}
+          {batches.length ? (
+            <div className="text-sm">
+              <span className="text-2xl font-bold">{ledgerRowCount}</span> <span className="text-muted-foreground">rows</span>
+              {batches.length > 1 && <span className="text-muted-foreground"> · {batches.length} files</span>}
+              <p className="text-xs text-muted-foreground mt-1">Sections: <b className="text-foreground">{ledgerSections.length ? ledgerSections.join(", ") : "—"}</b></p>
+              <div className="mt-2 space-y-1 max-h-28 overflow-y-auto">
+                {batches.map((b: any) => (
+                  <div key={b.id} className="flex items-center gap-2 text-[11px] rounded border px-2 py-1">
+                    <FileSpreadsheet size={11} className="text-muted-foreground shrink-0" />
+                    <span className="truncate flex-1" title={b.file_name}>{b.file_name}</span>
+                    <span className="text-muted-foreground shrink-0">{b.section || "—"} · {b.row_count}</span>
+                    <button className="text-muted-foreground hover:text-destructive shrink-0" title="Remove this ledger"
+                      disabled={disabled || importing} onClick={() => deleteBatch(b.id)}><X size={11} /></button>
+                  </div>
+                ))}
+              </div>
+              {missingSections.length > 0 && (
+                <p className="text-[11px] text-amber-600 mt-2">
+                  Office Data also has {missingSections.join(", ")} — import {missingSections.length === 1 ? "that section's ledger" : "those sections' ledgers"} too, or those records can't be reconciled.
+                </p>
+              )}
+            </div>
+          ) : <p className="text-xs text-muted-foreground">Import the section-wise Tally ledger export (.xls / .xlsx / .csv). A client normally keeps ONE LEDGER PER SECTION — import each one; they combine. Re-importing the same file name replaces it. Stage 3 is optional.</p>}
         </CardContent></Card>
       </div>
 
       <div className="flex items-center gap-3">
-        <Button size="lg" className="gap-2 font-semibold" onClick={runValidation} disabled={validating || !batch || officeCount === 0 || disabled}>
+        <Button size="lg" className="gap-2 font-semibold" onClick={runValidation} disabled={validating || !batches.length || officeCount === 0 || disabled}>
           {validating ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}{validating ? "Validating…" : "Run Validation"}
         </Button>
-        {!batch ? <span className="text-xs text-muted-foreground">Import the Tally ledger to enable reconciliation.</span> : officeCount === 0 ? <span className="text-xs text-muted-foreground">No office records to reconcile.</span> : null}
+        {!batches.length ? <span className="text-xs text-muted-foreground">Import the Tally ledger to enable reconciliation.</span> : officeCount === 0 ? <span className="text-xs text-muted-foreground">No office records to reconcile.</span> : null}
       </div>
 
       {results && (<>
