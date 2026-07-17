@@ -391,26 +391,35 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, r
 
   return (
     <div className="space-y-3">
-      <div className="grid gap-2 md:grid-cols-2">
-        <Card><CardContent className="p-3">
-          <div className="flex items-center gap-2 mb-2"><Users size={16} className="text-foreground" /><p className="font-semibold text-sm">Office Data <span className="text-muted-foreground font-normal">(master · this quarter)</span></p></div>
-          <div><span className="text-lg font-bold">{officeCount}</span> <span className="text-muted-foreground text-sm">records</span></div>
-          {officeCount === 0 && <p className="text-xs text-amber-600 mt-2">No office records yet — enter data in the Data Entry tab first.</p>}
+      <div className="grid gap-2 md:grid-cols-2 items-start">
+        <Card><CardContent className="p-2.5">
+          <div className="flex items-center gap-2">
+            <Users size={14} className="text-muted-foreground shrink-0" />
+            <p className="font-semibold text-xs whitespace-nowrap">Office Data</p>
+            <div className="flex-1" />
+            <span className="text-xs whitespace-nowrap"><b className="text-sm font-bold">{officeCount}</b> <span className="text-muted-foreground">records</span></span>
+          </div>
+          {officeCount === 0 && <p className="text-[11px] text-amber-600 mt-1.5">No office records yet — enter data in the Data Entry tab first.</p>}
         </CardContent></Card>
-        <Card><CardContent className="p-3">
-          <div className="flex items-center justify-between mb-2">
-            <p className="font-semibold text-sm flex items-center gap-2"><FileSpreadsheet size={15} className="text-foreground" /> Imported Tally Ledger{validating && <span className="text-xs text-amber-600 flex items-center gap-1"><Loader2 size={11} className="animate-spin" /> reconciling…</span>}</p>
+        <Card><CardContent className="p-2.5">
+          <div className="flex items-center gap-2">
+            <FileSpreadsheet size={14} className="text-muted-foreground shrink-0" />
+            <p className="font-semibold text-xs whitespace-nowrap">Imported Tally Ledger</p>
+            {batches.length > 0 && (
+              <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                <b className="text-xs font-bold text-foreground">{ledgerRowCount}</b> rows{batches.length > 1 ? ` · ${batches.length} files` : ""}{ledgerSections.length ? ` · ${ledgerSections.join(", ")}` : ""}
+              </span>
+            )}
+            {validating && <span className="text-[10px] text-amber-600 flex items-center gap-1 shrink-0"><Loader2 size={10} className="animate-spin" /> reconciling…</span>}
+            <div className="flex-1" />
             <input ref={fileRef} type="file" accept=".pdf,application/pdf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImport(f); e.currentTarget.value = ""; }} />
-            <Button size="sm" variant={batches.length ? "outline" : "default"} className="gap-1" disabled={importing || disabled} onClick={() => fileRef.current?.click()}>
-              {importing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}{batches.length ? "Add / re-import ledger" : "Import ledger PDF"}
+            <Button size="sm" variant={batches.length ? "outline" : "default"} className="gap-1 h-6 px-2 text-[11px] shrink-0" disabled={importing || disabled} onClick={() => fileRef.current?.click()}>
+              {importing ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}{batches.length ? "Add / re-import" : "Import ledger PDF"}
             </Button>
           </div>
           {batches.length ? (
             <div className="text-sm">
-              <span className="text-lg font-bold">{ledgerRowCount}</span> <span className="text-muted-foreground">rows</span>
-              {batches.length > 1 && <span className="text-muted-foreground"> · {batches.length} files</span>}
-              <p className="text-xs text-muted-foreground mt-1">Sections: <b className="text-foreground">{ledgerSections.length ? ledgerSections.join(", ") : "—"}</b></p>
-              <div className="mt-2 space-y-1 max-h-28 overflow-y-auto">
+              <div className="mt-1.5 space-y-0.5 max-h-24 overflow-y-auto">
                 {batches.map((b: any) => (
                   <div key={b.id} className="flex items-center gap-2 text-[11px] rounded border px-2 py-1">
                     <FileSpreadsheet size={11} className="text-muted-foreground shrink-0" />

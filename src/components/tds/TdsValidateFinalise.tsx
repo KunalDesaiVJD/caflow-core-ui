@@ -893,37 +893,42 @@ export function TdsValidateFinalise({
             <TabsContent value="1" forceMount className="data-[state=inactive]:hidden mt-3 space-y-3">
           {/* ── STAGE 1 · DATA VALIDATION — the TAB names the stage, so no heading here. */}
 
-          {/* Inputs */}
-          <div className="grid gap-2 md:grid-cols-2">
+          {/* Inputs — items-start so each card is only as tall as its OWN content.
+              Without it the grid stretched Office Data (two numbers) to match the
+              file list beside it, which was most of the wasted height. */}
+          <div className="grid gap-2 md:grid-cols-2 items-start">
             <Card>
-              <CardContent className="p-3">
-                <div className="flex items-center gap-2 mb-2">
-                  <Users size={16} className="text-foreground" />
-                  <p className="font-semibold text-sm">Office Data <span className="text-muted-foreground font-normal">(entered by staff)</span></p>
-                </div>
-                <div className="flex gap-6 text-sm">
-                  <div><span className="text-lg font-bold">{officeCount.deductees}</span> <span className="text-muted-foreground">deductees</span></div>
-                  <div><span className="text-lg font-bold">{officeCount.challans}</span> <span className="text-muted-foreground">challans</span></div>
+              <CardContent className="p-2.5">
+                <div className="flex items-center gap-2">
+                  <Users size={14} className="text-muted-foreground shrink-0" />
+                  <p className="font-semibold text-xs whitespace-nowrap">Office Data</p>
+                  <div className="flex-1" />
+                  <span className="text-xs whitespace-nowrap"><b className="text-sm font-bold">{officeCount.deductees}</b> <span className="text-muted-foreground">deductees</span></span>
+                  <span className="text-xs whitespace-nowrap"><b className="text-sm font-bold">{officeCount.challans}</b> <span className="text-muted-foreground">challans</span></span>
                 </div>
                 {officeCount.deductees === 0 && (
-                  <p className="text-xs text-amber-600 mt-2">No office deductees yet — enter data in the Data Entry tab first.</p>
+                  <p className="text-[11px] text-amber-600 mt-1.5">No office deductees yet — enter data in the Data Entry tab first.</p>
                 )}
               </CardContent>
             </Card>
 
             <Card>
-              <CardContent className="p-3">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <FileSpreadsheet size={16} className="text-foreground" />
-                    <p className="font-semibold text-sm">Imported Client Data <span className="text-muted-foreground font-normal">(Stage 1)</span></p>
-                  </div>
+              <CardContent className="p-2.5">
+                <div className="flex items-center gap-2">
+                  <FileSpreadsheet size={14} className="text-muted-foreground shrink-0" />
+                  <p className="font-semibold text-xs whitespace-nowrap">Imported Client Data</p>
+                  {batches.length > 0 && (
+                    <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                      <b className="text-xs font-bold text-foreground">{batch?.row_count ?? 0}</b> records · {batches.length} file{batches.length > 1 ? "s" : ""}
+                    </span>
+                  )}
+                  <div className="flex-1" />
                   <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv,.pdf,.json,.xml,.txt,.html,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff,image/*" className="hidden"
                     onChange={(e) => { const f = e.target.files?.[0]; const tgt = replaceTargetId; setReplaceTargetId(null); if (f) handleImport(f, tgt || undefined); e.currentTarget.value = ""; }} />
-                  <Button size="sm" variant={batch ? "outline" : "default"} className="gap-1"
+                  <Button size="sm" variant={batch ? "outline" : "default"} className="gap-1 h-6 px-2 text-[11px] shrink-0"
                     disabled={importing || isFiled} onClick={() => { setReplaceTargetId(null); fileInputRef.current?.click(); }}>
-                    {importing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
-                    {importing ? "Importing…" : batch ? "Add / re-import file" : "Import"}
+                    {importing ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+                    {importing ? "Importing…" : batch ? "Add / re-import" : "Import"}
                   </Button>
                 </div>
                 {importing && (
@@ -936,12 +941,8 @@ export function TdsValidateFinalise({
                 )}
                 {batches.length > 0 ? (
                   <div className="text-sm">
-                    <div className="flex items-end justify-between gap-2">
-                      <div>
-                        <span className="text-lg font-bold">{batch?.row_count ?? 0}</span>{" "}
-                        <span className="text-muted-foreground text-xs">records · {batches.length} file{batches.length > 1 ? "s" : ""}</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
+                    {(selBatchIds.size > 0 || batches.length > 1) && (
+                      <div className="flex items-center justify-end gap-1.5 mt-1">
                         {selBatchIds.size > 0 && (
                           <Button size="sm" variant="destructive" className="h-7 gap-1 text-xs px-2" disabled={deleting || isFiled}
                             onClick={() => setDeleteConfirm({ ids: [...selBatchIds], label: `${selBatchIds.size} selected file(s)` })}>
@@ -949,15 +950,15 @@ export function TdsValidateFinalise({
                           </Button>
                         )}
                         {batches.length > 1 && selBatchIds.size === 0 && (
-                          <Button size="sm" variant="ghost" className="h-7 text-xs px-2 text-muted-foreground hover:text-destructive" disabled={deleting || isFiled}
+                          <Button size="sm" variant="ghost" className="h-6 text-[11px] px-2 text-muted-foreground hover:text-destructive" disabled={deleting || isFiled}
                             onClick={() => setDeleteConfirm({ ids: batches.map((b) => b.id), label: "all imported files" })}>
                             Delete all
                           </Button>
                         )}
                       </div>
-                    </div>
+                    )}
 
-                    <div className="mt-2 rounded-md border divide-y overflow-hidden">
+                    <div className="mt-1.5 rounded-md border divide-y overflow-hidden">
                       {batches.length > 1 && (
                         <label className="flex items-center gap-2 px-2 py-1 bg-muted/40 text-[11px] text-muted-foreground cursor-pointer">
                           <Checkbox checked={allSelected} onCheckedChange={toggleSelAll} aria-label="Select all files" className="h-3.5 w-3.5" disabled={isFiled} />
@@ -965,25 +966,24 @@ export function TdsValidateFinalise({
                         </label>
                       )}
                       {batches.map((b: any) => (
-                        <div key={b.id} className="flex items-center gap-2 px-2 py-1.5">
-                          <Checkbox checked={selBatchIds.has(b.id)} onCheckedChange={() => toggleSel(b.id)} aria-label={`Select ${b.file_name || "file"}`} className="h-3.5 w-3.5" disabled={isFiled} />
-                          <div className="min-w-0 flex-1">
-                            <p className="font-medium text-xs truncate">{b.file_name || "(unnamed file)"}</p>
-                            <p className="text-[10px] text-muted-foreground truncate">
-                              {(b.file_type || "").toUpperCase()} · {b.row_count} rows{b.imported_at ? ` · ${fmtDateTime(b.imported_at)}` : ""}
-                            </p>
-                          </div>
-                          <Badge variant="secondary" className="text-[9px] px-1.5 py-0 h-4 shrink-0">Imported</Badge>
+                        /* ONE line per file — name and meta share the row, so N files
+                           cost N lines rather than 2N. Meta hides on narrow widths. */
+                        <div key={b.id} className="flex items-center gap-1.5 px-2 py-1" title={b.file_name || ""}>
+                          <Checkbox checked={selBatchIds.has(b.id)} onCheckedChange={() => toggleSel(b.id)} aria-label={`Select ${b.file_name || "file"}`} className="h-3 w-3 shrink-0" disabled={isFiled} />
+                          <p className="font-medium text-[11px] truncate min-w-0 flex-1">{b.file_name || "(unnamed file)"}</p>
+                          <span className="text-[10px] text-muted-foreground whitespace-nowrap shrink-0 hidden sm:inline">
+                            {b.row_count} rows{b.imported_at ? ` · ${fmtDateTime(b.imported_at)}` : ""}
+                          </span>
                           <div className="flex items-center shrink-0">
-                            <Button size="icon" variant="ghost" className="h-6 w-6" title="View details" onClick={() => openDetails(b)}><Eye size={13} /></Button>
-                            <Button size="icon" variant="ghost" className="h-6 w-6" title="Replace this file" disabled={importing || deleting || isFiled} onClick={() => handleReplaceClick(b.id)}><RotateCcw size={13} /></Button>
-                            <Button size="icon" variant="ghost" className="h-6 w-6 text-muted-foreground hover:text-destructive" title="Delete this file" disabled={deleting || isFiled}
-                              onClick={() => setDeleteConfirm({ ids: [b.id], label: b.file_name || "this file" })}><Trash2 size={13} /></Button>
+                            <Button size="icon" variant="ghost" className="h-5 w-5" title="View details" onClick={() => openDetails(b)}><Eye size={12} /></Button>
+                            <Button size="icon" variant="ghost" className="h-5 w-5" title="Replace this file" disabled={importing || deleting || isFiled} onClick={() => handleReplaceClick(b.id)}><RotateCcw size={12} /></Button>
+                            <Button size="icon" variant="ghost" className="h-5 w-5 text-muted-foreground hover:text-destructive" title="Delete this file" disabled={deleting || isFiled}
+                              onClick={() => setDeleteConfirm({ ids: [b.id], label: b.file_name || "this file" })}><Trash2 size={12} /></Button>
                           </div>
                         </div>
                       ))}
                     </div>
-                    <p className="text-[11px] text-muted-foreground mt-1.5">Keep a section in a separate workbook (e.g. 194Q)? Add it — all files are validated together. Re-importing the same file name replaces it; adding, replacing or deleting a file re-runs validation automatically.</p>
+                    <p className="text-[10px] text-muted-foreground mt-1 truncate" title="Keep a section in a separate workbook (e.g. 194Q)? Add it — all files are validated together. Re-importing the same file name replaces it; adding, replacing or deleting a file re-runs validation automatically.">All files validate together · same file name replaces · changes re-run validation</p>
                   </div>
                 ) : (
                   <p className="text-xs text-muted-foreground">Import the client's data in any format — Excel, CSV, PDF, image/scan, JSON, XML or text. You can add multiple files (e.g. a separate 194Q workbook) and they'll be validated together.</p>
