@@ -4,8 +4,9 @@
  * deciding — the complaint each time was "why are you asking me this?".
  */
 import { describe, it, expect } from "vitest";
-import { nameCompare } from "./match";
-import { reconcileTally, type OfficeTxn, type TallyRow } from "./tallyRecon";
+import { nameCompare, nameEvidence, rank } from "./match";
+import { TIERS, AUTO_MATCH_MAX_RANK } from "./assignment";
+import { reconcileTally, reconcileTallyFull, type OfficeTxn, type TallyRow } from "./tallyRecon";
 
 describe("nameCompare — spelling variants vs genuinely different names", () => {
   // The rule accepts a token pair only when the consonant skeleton is IDENTICAL
@@ -124,5 +125,392 @@ describe("reconcileTally — identical entries pair 1:1 without asking the user"
     const out = reconcileTally(office(1), rows, null);
     expect(out[0].result).toBe("Matched");
     expect(out[0].tally_row_index).toBe(1);
+  });
+
+  it("does not let a LEDGER-ONLY field (vch_no) enter the evidence signature", () => {
+    // ONLY SIGNALS PRESENT ON BOTH SIDES MAY DISTINGUISH A PAIR. vch_no and vch_type
+    // exist in Tally and have no office counterpart, so they cannot tell us which of
+    // four identical bills is which — they can only FAKE distinctness. Admit vch_no
+    // to sigOf and this 4x4 block shatters into four singleton classes, every pairing
+    // looks "unique", and the engine starts asking the user to choose between rows it
+    // has itself made indistinguishable. The fixture below deliberately gives each row
+    // a DIFFERENT vch_no and vch_type; all four must still bulk-pair 1:1, silently.
+    const rows = ledger(4).map((r, i) => ({ ...r, vch_no: `INV-${900 + i}`, vch_type: i % 2 ? "Journal" : "Purchase" }));
+    const out = reconcileTally(office(4), rows, "194C");
+    expect(out.every((r) => r.result === "Matched")).toBe(true);
+    expect(out[0].reason).toMatch(/pair 1:1/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The engine is an ASSIGNMENT, not a per-record decision. Everything below pins a
+// property of the assignment that no pairwise name test can express.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const row = (i: number, party: string, iso: string, credit: number, section = "194C"): TallyRow =>
+  ({ row_index: i, date: iso, iso, party, credit, debit: null, vch_no: `${i}`, vch_type: "Journal", section });
+const txn = (id: string, name: string, iso: string, tds: number, pan?: string): OfficeTxn =>
+  ({ deductee_id: id, name, date_iso: iso, amount: tds * 50, tds, section: "194C", pan: pan ?? null });
+
+describe("reconcileTally — the greedy engine's row stealing is gone", () => {
+  // Two office records, two perfectly determinable ledger rows. The ONLY correct
+  // answer is dY→row0 Matched and dX→row1 Date Mismatch.
+  //
+  // The old engine hard-filtered candidates on the DATE with no name check, so dX's
+  // candidate set was Yankee's row purely because the dates coincided; it then
+  // CONSUMED that row, starving the record that owned it, and offered the user a
+  // one-click "XRAY ENTERPRISE ↔ Yankee Enterprise" mapping that would have silently
+  // mis-filed every future quarter. Both outputs were wrong.
+  const dX = txn("dX", "XRAY ENTERPRISE", "2026-03-05", 5000);
+  const dY = txn("dY", "YANKEE ENTERPRISE", "2026-03-05", 5000);
+  const rows = [row(0, "Yankee Enterprise", "2026-03-05", 5000), row(1, "Xray Enterprise", "2026-03-06", 5000)];
+  const verdicts = (office: OfficeTxn[]) =>
+    Object.fromEntries(reconcileTally(office, rows, null).map((r) => [r.office_deductee_id, `${r.result}@${r.tally_row_index}`]));
+
+  it("pairs each record with ITS OWN entry rather than whichever the date hit first", () => {
+    expect(verdicts([dX, dY])).toEqual({ dY: "Matched@0", dX: "Date Mismatch@1" });
+  });
+
+  it("gives the SAME answer with the office records fed in the opposite order", () => {
+    // This is the cheapest possible proof the greedy loop is gone: on main, reversing
+    // the array flipped the output from wrong to right, so today's correctness there
+    // depended on the order rows happened to arrive from Supabase.
+    expect(verdicts([dY, dX])).toEqual(verdicts([dX, dY]));
+  });
+
+  it("never offers a one-click mapping built on amount-only evidence", () => {
+    // "XRAY ENTERPRISE ↔ Yankee Enterprise" with a Confirm button is a false-match
+    // factory with a human rubber stamp: one click writes a permanent wrong mapping,
+    // and a mapping is forever.
+    const out = reconcileTally([txn("z", "XRAY ENTERPRISE", "2026-03-05", 5000)], [row(0, "Yankee Enterprise", "2026-03-09", 5000)], null);
+    expect(out[0].suggested_party).toBeUndefined();
+    expect(out[0].reason).toMatch(/Yankee Enterprise/);       // still NAMED, so the user can act
+    expect(out[0].reason).toMatch(/invoice/i);
+  });
+});
+
+describe("reconcileTally — exclusivity decides, not a similarity threshold", () => {
+  // THE decisive pair of cases. The name pair is IDENTICAL in both; only the
+  // candidate set differs. No threshold can distinguish them — that is the thesis.
+  const patel = txn("p1", "RAMESH PATEL", "2026-03-05", 20229, "AAAPP1111A");
+
+  it("(i) counterpart ABSENT: pairs and SUGGESTS, but never silently Matches", () => {
+    // Constraint 2's note LICENSES auto-matching a lone PATEL/PATIL. We decline the
+    // licence: exclusivity within ONE quarter's ledger is weak evidence of identity
+    // (the real Patil may simply not have been paid this quarter), and the risky
+    // auto-match buys one click, once, per party, forever — against the risk of a
+    // wrong-PAN filing. So it is paired, explained and offered — never absorbed.
+    const out = reconcileTally([patel], [row(0, "Ramesh Patil", "2026-03-05", 20229)], null);
+    expect(out[0].result).toBe("Party Name Mismatch");
+    expect(out[0].result).not.toBe("Matched");
+    expect(out[0].suggested_party).toBe("Ramesh Patil");
+    expect(out[0].reason).toMatch(/Confirm the mapping/);
+  });
+
+  it("(ii) counterpart PRESENT: picks the RIGHT row and never the risky one", () => {
+    const out = reconcileTally([patel], [row(0, "Ramesh Patil", "2026-03-05", 20229), row(1, "Ramesh Patel", "2026-03-05", 20229)], null);
+    expect(out[0].result).toBe("Matched");
+    expect(out[0].tally_row_index).toBe(1);            // Patel, NOT Patil
+    expect(out[0].suggested_party).toBeUndefined();
+  });
+
+  it("makes the risky pairing UNREACHABLE when both deductees are real", () => {
+    // Not "rejected" — never reached. Both are exact matches to their own rows and
+    // both are consumed at A1, before any risky rule is consulted. No witness, no
+    // guard, no lexicon. This is the thesis paying for itself.
+    const out = reconcileTally(
+      [patel, txn("p2", "RAMESH PATIL", "2026-03-05", 20229, "BBBPP2222B")],
+      [row(0, "Ramesh Patil", "2026-03-05", 20229), row(1, "Ramesh Patel", "2026-03-05", 20229)], null);
+    expect(out.map((r) => `${r.office_deductee_id}:${r.result}@${r.tally_row_index}`))
+      .toEqual(["p1:Matched@1", "p2:Matched@0"]);
+    expect(out.some((r) => r.suggested_party)).toBe(false);
+  });
+
+  it("matches TARUBEN outright — the case the user reported", () => {
+    // nameCompare already returned "match" for this pair on main; it failed in the
+    // ENGINE. Fixing the engine is what recovers the bulk of the false mismatches.
+    const out = reconcileTally(
+      [txn("t1", "TARUBEN SURESHBHAI KATHARANI", "2026-03-05", 5000)],
+      [row(0, "Taruben S Kathrani", "2026-03-05", 5000)], null);
+    expect(out[0].result).toBe("Matched");
+  });
+});
+
+describe("reconcileTally — the 35 adversarial pairs, BOTH configurations", () => {
+  // The existing suite tests these at the nameCompare level only. The engine is where
+  // they can actually hurt, and the danger is a property of the CANDIDATE SET, so each
+  // pair has to be run through reconcileTally in both configurations.
+  const PAIRS: [string, string][] = [
+    ["RAMESH PATEL", "RAMESH PATIL"], ["KAMAL KANTILAL SHAH", "KAMLA KANTILAL SHAH"],
+    ["VIMAL TRADING COMPANY", "VIMLA TRADING COMPANY"], ["DIPAK J MEHTA", "DIPIKA J MEHTA"],
+    ["KIRAN PATEL", "KARAN PATEL"], ["SUNIL KUMAR SHARMA", "SONAL KUMAR SHARMA"],
+    ["HIRALAL PATEL", "HARILAL PATEL"], ["JAYESH THAKKAR", "JAYESH THAKUR"],
+    ["ANIL BHATT", "ANIL BHATIA"], ["NITIN DESAI", "NUTAN DESAI"],
+    ["SAROJ DEVI", "SURAJ DEVI"], ["PRAVIN SHARMA", "PARVIN SHARMA"],
+    ["DINESH PATEL", "DANISH PATEL"], ["MANISH PATEL", "MUNISH PATEL"],
+    ["HARSH B SHAH", "HARISH B SHAH"], ["BHARAT ENTERPRISE", "BHARTI ENTERPRISE"],
+    ["KIRIT KUMAR SHAH", "KIRTI KUMAR SHAH"], ["ASHOK PATEL", "ASHIK PATEL"],
+    ["JAYANT PATEL", "JAYANTI PATEL"], ["HETAL PATEL", "HITUL PATEL"],
+    ["MITAL SHAH", "MITUL SHAH"], ["RAMAN PATEL", "RAMANI PATEL"],
+    ["TARUN PATEL", "TARAN PATEL"], ["NILAM PATEL", "NILIMA PATEL"],
+    ["RAMILA PATEL", "RAMOLA PATEL"], ["HEMANT PATEL", "HIMANT PATEL"],
+    ["SAVITA PATEL", "SUVITA PATEL"], ["PRATIK ENTERPRISE", "PRITIKA ENTERPRISE"],
+    ["RAMESH PATEL", "RAJESH PATEL"], ["SUNIL SHAH", "SUNIT SHAH"],
+    ["MEHTA TRADING", "MOHIT TRADING"],
+  ];
+
+  it.each(PAIRS)("COMPETING: %s and %s each match their OWN entry, with no prompt", (a, b) => {
+    const out = reconcileTally(
+      [txn("oa", a, "2026-03-05", 20229, "AAAPP1111A"), txn("ob", b, "2026-03-05", 20229, "BBBPP2222B")],
+      [row(0, b, "2026-03-05", 20229), row(1, a, "2026-03-05", 20229)], null);
+    expect(out.map((r) => `${r.office_deductee_id}:${r.result}@${r.tally_row_index}`))
+      .toEqual(["oa:Matched@1", "ob:Matched@0"]);
+    expect(out.some((r) => r.suggested_party)).toBe(false);
+  });
+
+  it.each(PAIRS)("ALONE: %s against only %s is SUGGESTED, never Matched", (a, b) => {
+    // This pins DECISION 1. If someone ever flips the risky tier to auto-commit, every
+    // one of these 31 flips to "Matched" and this block goes red — loudly.
+    const out = reconcileTally([txn("oa", a, "2026-03-05", 20229, "AAAPP1111A")], [row(0, b, "2026-03-05", 20229)], null);
+    expect(out[0].result).not.toBe("Matched");
+    expect(out[0].result).toBe("Party Name Mismatch");
+    expect(out[0].suggested_party).toBe(b);
+  });
+});
+
+describe("reconcileTally — indistinguishable records are only ONE deductee if one PARTY", () => {
+  it("escalates identical office records carrying DIFFERENT PANs", () => {
+    // A choice among TRUE indistinguishables cannot be got wrong, so asking is noise.
+    // A choice between two REAL PEOPLE can be got wrong, and different PANs are PROOF
+    // they are two people — not a heuristic. Only the invoice can settle this.
+    const out = reconcileTally(
+      [txn("a", "RAMESH PATEL", "2026-03-05", 20229, "AAAPP1111A"), txn("b", "RAMESH PATEL", "2026-03-05", 20229, "BBBPP2222B")],
+      [row(0, "Ramesh Patel", "2026-03-05", 20229), row(1, "Ramesh Patel", "2026-03-05", 20229)], null);
+    expect(out.every((r) => r.result === "Multiple Possible Matches")).toBe(true);
+    expect(out[0].reason).toMatch(/AAAPP1111A/);
+    expect(out[0].reason).toMatch(/BBBPP2222B/);
+    expect(out[0].reason).toMatch(/invoice/i);
+  });
+
+  it("still bulk-pairs identical records that share ONE PAN", () => {
+    const out = reconcileTally(
+      [txn("a", "RAMESH PATEL", "2026-03-05", 20229, "AAAPP1111A"), txn("b", "RAMESH PATEL", "2026-03-05", 20229, "AAAPP1111A")],
+      [row(0, "Ramesh Patel", "2026-03-05", 20229), row(1, "Ramesh Patel", "2026-03-05", 20229)], null);
+    expect(out.every((r) => r.result === "Matched")).toBe(true);
+  });
+});
+
+describe("reconcileTally — the distinctness witness gates the SUGGESTION", () => {
+  // A suggestion is nearly as dangerous as an auto-match: it is ONE CLICK from
+  // becoming an asserted identity that auto-matches silently for ever. So it is
+  // exclusivity-gated exactly like a match — and over the WHOLE universe, not just the
+  // rows still in play, because a rival that cannot compete THIS quarter is still proof
+  // that this client's books keep the two spellings apart.
+  // The rival is booked under 194J, whose ledger was never imported. He therefore takes
+  // NO part in the assignment — but he is still a deductee in this client's books, and
+  // the witness must see him. If ledger coverage could erase a deductee, importing one
+  // fewer ledger would silently BUY you a wrong mapping.
+  const rival = { ...txn("b", "RAMESH PATIL", "2026-03-05", 20229, "BBBPP2222B"), section: "194J" };
+
+  it("refuses to suggest a spelling its own Office Data keeps apart", () => {
+    // "Ramesh Patil" is forced by elimination onto RAMESH PATEL — nothing else can take
+    // it. Exclusivity alone would say "suggest it". But Office Data lists a SEPARATE
+    // deductee spelled "RAMESH PATIL" under a different PAN, and different PANs are
+    // PROOF of different parties, so the two spellings are two people.
+    const out = reconcileTally(
+      [txn("a", "RAMESH PATEL", "2026-03-05", 20229, "AAAPP1111A"), rival],
+      [row(0, "Ramesh Patil", "2026-03-05", 20229, "194C")], null);
+    const a = out.find((r) => r.office_deductee_id === "a")!;
+    expect(a.result).toBe("Multiple Possible Matches");
+    expect(a.suggested_party).toBeUndefined();
+    expect(a.reason).toMatch(/RAMESH PATIL/);
+    expect(a.reason).toMatch(/BBBPP2222B/);
+    expect(a.reason).toMatch(/not merged/i);
+    // The rival himself is a ledger-coverage problem, not a matching one.
+    expect(out.find((r) => r.office_deductee_id === "b")!.result).toBe("No Ledger for Section");
+  });
+
+  it("DOES suggest the same pairing once the rival spelling is gone", () => {
+    // Same name pair, same facts — only the candidate set differs. This is the whole
+    // thesis in two assertions: the verdict is a property of the SET, not the pair.
+    const out = reconcileTally([txn("a", "RAMESH PATEL", "2026-03-05", 20229, "AAAPP1111A")],
+      [row(0, "Ramesh Patil", "2026-03-05", 20229, "194C")], null);
+    expect(out[0].result).toBe("Party Name Mismatch");
+    expect(out[0].suggested_party).toBe("Ramesh Patil");
+  });
+});
+
+describe("assignment — the tier ladder", () => {
+  it("pins the tier ORDER literally", () => {
+    // The order is load-bearing and SILENTLY breakable: reorder these and a weaker
+    // pairing wins with no other test failing. Hence a test that just says the order.
+    expect(TIERS.map((t) => t.id)).toEqual(["A0", "A1", "A2", "A3", "A4"]);
+  });
+
+  it("pins DECISION 1: the risky tier does NOT auto-commit", () => {
+    expect(TIERS.find((t) => t.id === "A4")!.autoCommit).toBe(false);
+    expect(TIERS.filter((t) => t.autoCommit).map((t) => t.id)).toEqual(["A0", "A1", "A2", "A3"]);
+  });
+
+  it("pins that ONLY the asserted tier is exempt from needing corroboration", () => {
+    // A mapped party whose date AND amount are both wrong must still be FOUND and
+    // reported, or the mapping silently does nothing and the record comes back
+    // "Ledger Entry Not Found" — the exact bug the old mapping branch existed to fix.
+    expect(TIERS.filter((t) => !t.needsCorroboration).map((t) => t.id)).toEqual(["A0"]);
+  });
+});
+
+describe("assignment — safety properties over a randomised corpus", () => {
+  // A hand-picked fixture proves the case it was picked for. These properties must
+  // hold for EVERY input, so they are asserted over a generated population drawn from
+  // the same distribution the adversarial audit found: same surnames, same families,
+  // one vowel apart, sharing dates and amounts.
+  const mulberry = (seed: number) => () => {
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const FIRST = ["RAMESH", "RAMESH", "KIRAN", "KARAN", "HIRALAL", "HARILAL", "DIPAK", "DIPIKA", "MANISH", "MUNISH", "TARUBEN", "KONE"];
+  const LAST = ["PATEL", "PATIL", "SHAH", "MEHTA", "THAKKAR", "THAKUR", "KATHARANI", "KATHRANI"];
+  const DATES = ["2026-03-01", "2026-03-02", "2026-03-05", "2026-03-06"];
+  const AMTS = [5000, 20229, 20529];
+
+  const corpus = (seed: number) => {
+    const rnd = mulberry(seed);
+    const pick = <T,>(xs: T[]) => xs[Math.floor(rnd() * xs.length) % xs.length];
+    const nOff = 3 + Math.floor(rnd() * 6), nLed = 3 + Math.floor(rnd() * 6);
+    const office: OfficeTxn[] = Array.from({ length: nOff }, (_, i) =>
+      txn(`o${i}`, `${pick(FIRST)} ${pick(LAST)}`, pick(DATES), pick(AMTS), `AAAPP${1000 + i}A`));
+    const ledger: TallyRow[] = Array.from({ length: nLed }, (_, i) =>
+      row(i, `${pick(FIRST)} ${pick(LAST)}`, pick(DATES), pick(AMTS)));
+    return { office, ledger };
+  };
+
+  const SEEDS = Array.from({ length: 250 }, (_, i) => i + 1);
+
+  it("is ORDER-INDEPENDENT: reversing the office list yields the same verdicts", () => {
+    // VERIFIED TO FAIL ON MAIN. The greedy loop committed on local information, so the
+    // answer depended on the order Supabase happened to return rows in.
+    for (const s of SEEDS) {
+      const { office, ledger } = corpus(s);
+      const fwd = reconcileTally(office, ledger, null);
+      const rev = reconcileTally([...office].reverse(), ledger, null);
+      const key = (rs: typeof fwd) => rs.map((r) => `${r.office_deductee_id}=${r.result}@${r.tally_row_index}`).sort().join("|");
+      expect(key(rev), `seed ${s}`).toBe(key(fwd));
+    }
+  });
+
+  it("never Matches on a name weaker than the auto-match line (DECISION 1)", () => {
+    for (const s of SEEDS) {
+      const { office, ledger } = corpus(s);
+      for (const r of reconcileTally(office, ledger, null)) {
+        if (r.result !== "Matched" || r.tally_row_index === null) continue;
+        const t = ledger[r.tally_row_index];
+        expect(rank(nameEvidence(r.office_name, t.party).tier), `seed ${s}: "${r.office_name}" vs "${t.party}"`)
+          .toBeLessThanOrEqual(AUTO_MATCH_MAX_RANK);
+      }
+    }
+  });
+
+  it("SAFETY THEOREM: never Matches a record while a better-named entry sits unclaimed", () => {
+    // If a strictly better-named row was left free, the stronger tier would have taken
+    // it. A violation means a weaker tier committed while a stronger alternative was
+    // still available — i.e. the ladder's consumption order broke.
+    for (const s of SEEDS) {
+      const { office, ledger } = corpus(s);
+      const out = reconcileTally(office, ledger, null);
+      const claimed = new Set(out.map((r) => r.tally_row_index).filter((x): x is number => x !== null));
+      for (const r of out) {
+        if (r.result !== "Matched" || r.tally_row_index === null) continue;
+        const mine = rank(nameEvidence(r.office_name, ledger[r.tally_row_index].party).tier);
+        for (let i = 0; i < ledger.length; i++) {
+          if (claimed.has(i)) continue;
+          expect(rank(nameEvidence(r.office_name, ledger[i].party).tier), `seed ${s}: "${r.office_name}" took "${ledger[r.tally_row_index!].party}" while "${ledger[i].party}" was free`)
+            .toBeGreaterThanOrEqual(mine);
+        }
+      }
+    }
+  });
+
+  it("claims every ledger entry AT MOST ONCE", () => {
+    for (const s of SEEDS) {
+      const { office, ledger } = corpus(s);
+      const used = reconcileTally(office, ledger, null).map((r) => r.tally_row_index).filter((x): x is number => x !== null);
+      expect(new Set(used).size, `seed ${s}`).toBe(used.length);
+    }
+  });
+
+  it("accounts for every ledger entry: claimed, or reported as surplus", () => {
+    // Reconciliation is symmetric or it is not reconciliation. A credit no office
+    // record claimed is a deduction in Tally with no line on the return.
+    for (const s of SEEDS) {
+      const { office, ledger } = corpus(s);
+      const { rows, surplusLedger } = reconcileTallyFull(office, ledger, null);
+      const claimed = new Set(rows.map((r) => r.tally_row_index).filter((x): x is number => x !== null));
+      const surplus = new Set(surplusLedger.map((t) => t.row_index));
+      for (const t of ledger) {
+        expect(claimed.has(t.row_index) || surplus.has(t.row_index), `seed ${s}: row ${t.row_index} vanished`).toBe(true);
+      }
+      expect([...claimed].some((c) => surplus.has(c)), `seed ${s}`).toBe(false);
+    }
+  });
+});
+
+describe("reconcileTally — no exception is ever a bare shrug", () => {
+  it("names the closest entry and why it failed, instead of a bare not-found", () => {
+    const out = reconcileTally([txn("a", "KONE ELEVATOR INDIA PRIVATE LIMITED", "2026-03-05", 20229)],
+      [row(0, "Kone Elevator India Pvt Ltd", "2026-03-02", 20229)], null);
+    // In window and forced by elimination, so it is PAIRED and reported honestly.
+    expect(out[0].result).toBe("Date Mismatch");
+    expect(out[0].reason).toMatch(/Kone Elevator India Pvt Ltd/);
+    expect(out[0].reason).toMatch(/3 days/);
+  });
+
+  it("reports cardinality exhaustion as an audit finding, not a shrug", () => {
+    const office = Array.from({ length: 4 }, (_, i) => txn(`k${i}`, "KONE ELEVATOR INDIA PRIVATE LIMITED", "2026-03-01", 20229));
+    const ledger = Array.from({ length: 3 }, (_, i) => row(i, "Kone Elevator India Pvt Ltd", "2026-03-01", 20229));
+    const out = reconcileTally(office, ledger, "194C");
+    const miss = out.find((r) => r.result !== "Matched")!;
+    expect(out.filter((r) => r.result === "Matched")).toHaveLength(3);
+    expect(miss.result).toBe("Ledger Entry Not Found");
+    expect(miss.reason).toMatch(/holds 3 entries/);
+    expect(miss.reason).toMatch(/Office Data holds 4/);
+    expect(miss.reason).toMatch(/short by 1/);
+  });
+
+  it("keeps an out-of-window credit from being dragged into the quarter", () => {
+    // The window is derived from the office records' OWN date span — no quarter
+    // parameter, no hardcoded FY boundary. Without it the residue closer would pair an
+    // August credit with a Q4 record purely because nothing else was left.
+    const out = reconcileTally([txn("a", "KONE ELEVATOR INDIA PRIVATE LIMITED", "2026-03-05", 20229)],
+      [row(0, "Kone Elevator India Pvt Ltd", "2025-08-11", 20229)], null);
+    expect(out[0].result).toBe("Ledger Entry Not Found");
+  });
+});
+
+describe("reconcileTally — a saved mapping resolves the PARTY and nothing else", () => {
+  const map = { "RAMESH PATEL": "Some Trade Name" };
+
+  it("matches via the mapping when the facts agree", () => {
+    const out = reconcileTally([txn("a", "RAMESH PATEL", "2026-03-05", 20229)], [row(0, "Some Trade Name", "2026-03-05", 20229)], null, map);
+    expect(out[0].result).toBe("Matched");
+    expect(out[0].mapped).toBe(true);
+  });
+
+  it("still FINDS a mapped party whose date AND amount are both wrong", () => {
+    // The user asserted the identity, so the assertion IS the corroboration. Requiring
+    // a date or amount hit here is what made the mapping silently do nothing and the
+    // record come back "Ledger Entry Not Found".
+    const out = reconcileTally([txn("a", "RAMESH PATEL", "2026-03-05", 20229)], [row(0, "Some Trade Name", "2026-03-11", 999)], null, map);
+    expect(out[0].result).not.toBe("Ledger Entry Not Found");
+    expect(out[0].mapped).toBe(true);
+    expect(out[0].tally_row_index).toBe(0);
+  });
+
+  it("never lets a mapping manufacture a Match when the money is wrong", () => {
+    const out = reconcileTally([txn("a", "RAMESH PATEL", "2026-03-05", 20229)], [row(0, "Some Trade Name", "2026-03-05", 999)], null, map);
+    expect(out[0].result).toBe("Credit Amount Mismatch");
+    expect(out[0].mapped).toBe(true);
   });
 });

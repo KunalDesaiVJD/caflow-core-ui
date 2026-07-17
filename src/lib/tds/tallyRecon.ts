@@ -1,21 +1,32 @@
 /**
- * STAGE-3 · Tally Ledger Reconciliation — pure logic (no I/O, no AI).
+ * STAGE-3 · Tally Ledger Reconciliation — the ADAPTER. All matching logic lives in
+ * ./assignment.ts (pure, testable, no strings); this file resolves sections, shapes
+ * the rows, and turns an assignment Outcome into a VERDICT and a reason a CA can act
+ * on under a filing deadline.
  *
  * Office Data is the MASTER. A section-wise Tally ledger (194C / 194J / …) is
- * imported; its CREDIT entries ("By" rows) are the deductions. The credit amount
- * may be the TDS amount (a TDS-liability ledger) OR the principal (an expense
- * ledger) — the engine AUTO-DETECTS which by testing whichever reconciles, so it
- * works for any client's ledger without a fixed assumption.
+ * imported; its CREDIT entries ("By" rows) are the deductions. The credit amount may
+ * be the TDS amount (a TDS-liability ledger) OR the principal (an expense ledger) —
+ * the engine AUTO-DETECTS which by voting per section, so it works for any client's
+ * ledger without a fixed assumption.
  *
  * Column IDENTIFICATION, NAME/DATE/AMOUNT normalisation and MATCHING all come from
- * the SHARED engine (columnEngine + match) so a fix there benefits every stage.
- * Only the Tally-specific STRUCTURE (title strip, By/To, Debit/Credit, no PAN) is
- * handled here.
+ * the SHARED engine (columnEngine + match + assignment) so a fix there benefits every
+ * stage. Only the Tally-specific STRUCTURE (title strip, By/To, Debit/Credit, no PAN)
+ * is handled here.
+ *
+ * ── THE RULE THIS FILE ENFORCES ─────────────────────────────────────────────
+ * EXCLUSIVITY BUYS THE COUNTERPART. ONLY CORROBORATION BUYS THE VERDICT.
+ * The tier decides WHICH ledger entry we are confident enough to show. It never
+ * decides whether the two records AGREE. A name-exact, amount-exact pair booked three
+ * days out is a Date Mismatch to REPORT, not a Match to absorb: date_of_payment moves
+ * the due date and the interest, so absorbing it files a defective return.
  */
 
 // (the Excel/CSV ledger parser that needed columnEngine's value sniffers is gone —
 //  Stage-3 reads Tally ledger PDFs only; see ./tallyPdf.ts)
-import { nameCompare, amountsMatch, makeDateNormaliser, canonicalSection, normalizeName } from "./match";
+import { canonicalSection, rank } from "./match";
+import { assign, AUTO_MATCH_MAX_RANK, type AsgLedger, type AsgOffice, type Evidence, type Outcome } from "./assignment";
 
 export interface TallyRow {
   row_index: number;
@@ -32,8 +43,6 @@ export interface TallyRow {
   // an office 194A record must only ever be reconciled against 194A ledger rows.
   section: string | null;
 }
-
-
 
 // ── Reconciliation ───────────────────────────────────────────────────────────
 export interface OfficeTxn {
@@ -70,28 +79,39 @@ export interface TallyReconRow {
 /** Saved per-client party mappings: normalised office name → tally party name. */
 export type PartyMap = Record<string, string>;
 
-const norm = (s: string | null | undefined) => normalizeName(s);
+const inr = (v: number | null | undefined) => (v == null ? "—" : `₹${Math.round(v).toLocaleString("en-IN")}`);
+const days = (n: number) => `${n} day${n === 1 ? "" : "s"}`;
 
 /**
- * Reconcile every OFFICE record against the imported Tally ledger. The Tally
- * credit is matched against office TDS first, then office amount (auto-detect),
- * so it works whether the ledger's credit is the TDS or the principal.
+ * Reconcile every OFFICE record against the imported Tally ledger.
+ *
+ * SIGNATURE UNCHANGED — the production call site (TdsTallyRecon.tsx) and the pinned
+ * tests bind to exactly this. `ledgerSection` is vestigial in production (the call
+ * site always passes null; sections ride per row) but is kept for the tests and as
+ * the fallback for rows imported before per-row section existed.
  */
 export function reconcileTally(office: OfficeTxn[], tally: TallyRow[], ledgerSection: string | null, partyMap: PartyMap = {}): TallyReconRow[] {
-  // Each ledger entry may be claimed by at most ONE office record, tracked here.
-  //
-  // The key is the entry's POSITION IN THIS ARRAY, never its row_index. row_index
-  // is only unique within the file it came from — every imported ledger numbers its
-  // own rows from 0 — so keying on it made the first 194A entry and the first 194C
-  // entry the same key. The 194A record would consume "0" and thereby block a
-  // completely unrelated 194C entry, reporting a byte-exact record as "Ledger Entry
-  // Not Found". Position is unique across the whole union by construction, so no
-  // caller can reintroduce that.
+  return reconcileTallyFull(office, tally, ledgerSection, partyMap).rows;
+}
+
+/**
+ * ADDITIVE — so surplus ships without touching reconcileTally's signature, the call
+ * site, the DB schema or the UI.
+ *
+ * `surplusLedger` is every in-window ledger credit that NO office record claimed: a
+ * deduction sitting in Tally with no line on the return. That is real liability and
+ * it is invisible today, because the old engine only ever walked the office side.
+ * Reconciliation is symmetric or it is not reconciliation. UI/schema in phase 2.
+ */
+export function reconcileTallyFull(
+  office: OfficeTxn[], tally: TallyRow[], ledgerSection: string | null, partyMap: PartyMap = {},
+): { rows: TallyReconRow[]; surplusLedger: TallyRow[] } {
+  // Each ledger entry may be claimed by at most ONE office record. The engine keys on
+  // POSITION IN THIS ARRAY, never row_index — see AsgLedger.pos for the bug that
+  // caused (row_index is unique only within its own file).
   const credits = tally
     .map((t, i) => ({ t, k: i }))
     .filter((c) => c.t.credit != null && c.t.credit !== 0);
-  const usedTally = new Set<number>();
-  const out: TallyReconRow[] = [];
 
   // Which sections the imported ledgers actually cover. A row with no section of
   // its own falls back to `ledgerSection` (a single-section file whose title said
@@ -99,184 +119,227 @@ export function reconcileTally(office: OfficeTxn[], tally: TallyRow[], ledgerSec
   // row stays eligible (old behaviour) rather than wrongly excluding everything.
   const sectionOf = (t: TallyRow) => canonicalSection(t.section) ?? canonicalSection(ledgerSection);
   const covered = new Set<string>();
-  // Destructure — `credits` holds {t, k} wrappers, not bare rows. Passing the
-  // wrapper read `.section` off the wrapper (undefined), so every row silently fell
-  // back to `ledgerSection` and the per-row sections never reached `covered`.
   for (const { t } of credits) { const s = sectionOf(t); if (s) covered.add(s); }
   const sectionScoped = covered.size > 0;
 
-  for (const o of office) {
-    const base = {
-      office_deductee_id: o.deductee_id, office_name: o.name, office_date: o.date_iso,
-      office_amount: o.amount, office_tds: o.tds, office_section: o.section,
-    };
+  const base = (o: OfficeTxn) => ({
+    office_deductee_id: o.deductee_id, office_name: o.name, office_date: o.date_iso,
+    office_amount: o.amount, office_tds: o.tds, office_section: o.section,
+  });
+  const nullTally = { tally_row_index: null, tally_party: null, tally_date: null, tally_credit: null };
+
+  // An office record whose section was never imported is NOT a matching question — the
+  // action is "import that ledger", not "hunt for a row". So it is marked UNASSIGNABLE:
+  // it gets no edges and can never consume a ledger row (otherwise the residue closer,
+  // which relaxes section deliberately, would pair it cross-section and cry "Section
+  // Mismatch" when the true answer is that the ledger is missing).
+  //
+  // It is still PASSED to the engine, because it is still a deductee in this client's
+  // books and the distinctness witness must see it. Ledger coverage must not erase a
+  // deductee — see AsgOffice.assignable for the wrong mapping that caused.
+  const unassignable = (o: OfficeTxn): string | null => {
     const oSec = canonicalSection(o.section);
+    return sectionScoped && oSec && !covered.has(oSec) ? oSec : null;
+  };
 
-    // 0) Is this office record's section represented in the imported ledgers at
-    //    all? If not, say so precisely instead of blaming a missing entry.
-    if (sectionScoped && oSec && !covered.has(oSec)) {
-      out.push({ ...base, tally_row_index: null, tally_party: null, tally_date: null, tally_credit: null,
-        result: "No Ledger for Section", amount_basis: null,
-        reason: `No Tally ledger for section ${oSec} has been imported (imported: ${[...covered].sort().join(", ")}). Import that section's ledger to reconcile this record.`,
-        confidence: 0 });
-      continue;
+  const asgOffice: AsgOffice[] = office.map((o) => ({
+    id: o.deductee_id, name: o.name, dateIso: o.date_iso,
+    amount: o.amount, tds: o.tds, section: canonicalSection(o.section), pan: o.pan ?? null,
+    assignable: !unassignable(o),
+  }));
+  const asgLedger: AsgLedger[] = credits.map(({ t, k }) => ({
+    pos: k, party: t.party, iso: t.iso, credit: t.credit, section: sectionOf(t),
+  }));
+  const rowAt = (pos: number) => tally[pos];
+
+  const { outcomes, surplus } = assign(asgOffice, asgLedger, partyMap);
+
+  const rows = office.map((o, i) => {
+    const missing = unassignable(o);
+    if (missing) {
+      return {
+        ...base(o), ...nullTally, result: "No Ledger for Section" as const, amount_basis: null,
+        reason: `No Tally ledger for section ${missing} has been imported (imported: ${[...covered].sort().join(", ")}). Import that section's ledger to reconcile this record.`,
+        confidence: 0,
+      };
     }
+    return render(o, outcomes[i], rowAt, ledgerSection, sectionOf);
+  });
 
-    // Only ever reconcile against rows of this record's OWN section.
-    const inSection = (t: TallyRow) => {
-      if (!sectionScoped || !oSec) return true;
-      const s = sectionOf(t);
-      return !s || s === oSec;
-    };
-
-    // 0b) A SAVED PARTY MAPPING resolves the PARTY NAME — and nothing else.
-    //
-    // The user has told us "this office party IS this ledger party", so the mapping
-    // is used to LOCATE the entry; the date and the TDS are then still validated on
-    // it. A mapping must never make a record match: a mapped party whose date or
-    // amount is wrong is exactly the row a reviewer needs to see, so it stays an
-    // exception and — being mapped — appears under BOTH Mapped and Mismatched.
-    // Without this the pair could only be found via date/amount, so a mapped party
-    // whose date AND amount both differed came back "Ledger Entry Not Found": the
-    // mapping silently did nothing and the record never showed as mapped at all.
-    const mappedTo = partyMap[norm(o.name)];
-    if (mappedTo) {
-      const byParty = credits.filter(({ t, k }) => !usedTally.has(k) && inSection(t) && norm(t.party) === norm(mappedTo));
-      if (byParty.length) {
-        // Several entries for the mapped party → take the one that reconciles best,
-        // so the mapping lands on the right transaction, not merely the first.
-        const scoreOf = (t: TallyRow) =>
-          (o.date_iso && t.iso && o.date_iso === t.iso ? 2 : 0) +
-          (amountsMatch(t.credit, o.tds) || amountsMatch(t.credit, o.amount) ? 1 : 0);
-        const best = [...byParty].sort((a, b) => scoreOf(b.t) - scoreOf(a.t))[0];
-        usedTally.add(best.k);
-        const t = best.t;
-        const dateOk = !!o.date_iso && !!t.iso && o.date_iso === t.iso;
-        const tdsOk = amountsMatch(t.credit, o.tds);
-        const moneyOk = tdsOk || amountsMatch(t.credit, o.amount);
-        const basis: "tds" | "amount" = tdsOk ? "tds" : "amount";
-        const row = { ...base, tally_row_index: t.row_index, tally_party: t.party, tally_date: t.date, tally_credit: t.credit, mapped: true };
-        if (dateOk && moneyOk) {
-          out.push({ ...row, result: "Matched", amount_basis: basis,
-            reason: `Party matched via the saved mapping to "${t.party}"; date and TDS amount both match.`, confidence: 96 });
-        } else {
-          // Name the field(s) actually wrong — "mismatched" alone is not actionable
-          // once the user has already resolved the party.
-          const bad = [!dateOk ? "date" : null, !moneyOk ? "TDS amount" : null].filter(Boolean) as string[];
-          out.push({
-            ...row,
-            result: !moneyOk ? "Credit Amount Mismatch" : "Date Mismatch",
-            amount_basis: moneyOk ? basis : null,
-            reason: `Party is mapped to "${t.party}", but the ${bad.join(" and ")} still ${bad.length > 1 ? "differ" : "differs"} — `
-              + `office ${o.date_iso ?? "—"} / TDS ${o.tds ?? "—"} vs ledger ${t.date ?? "—"} / credit ${t.credit ?? "—"}. `
-              + `Mapping resolves the party name only; correct the ${bad.join(" and ")} to complete the match.`,
-            confidence: dateOk || moneyOk ? 50 : 30,
-          });
-        }
-        continue;
-      }
-    }
-
-    // 1+2) candidates: same section, same DATE, and credit ≈ office TDS or amount.
-    const cand = credits.filter(({ t, k }) => {
-      if (usedTally.has(k) || !inSection(t)) return false;
-      const dateOk = !!o.date_iso && !!t.iso && o.date_iso === t.iso;
-      if (!dateOk) return false;
-      return amountsMatch(t.credit, o.tds) || amountsMatch(t.credit, o.amount);
-    });
-
-    if (cand.length === 0) {
-      // relax the date to find a near-miss for a precise reason.
-      const near = credits.find(({ t, k }) => !usedTally.has(k) && inSection(t) && (amountsMatch(t.credit, o.tds) || amountsMatch(t.credit, o.amount)));
-      if (near) {
-        const byAmount = near.t;
-        usedTally.add(near.k);
-        // The party may ALSO differ here — offer the mapping, don't hide it behind
-        // a date-only reason (this is the common real case: the ledger books the
-        // entry a few days out AND under the proprietor's personal name).
-        const cmp = nameCompare(o.name, byAmount.party);
-        const savedHit = !!partyMap[norm(o.name)] && norm(partyMap[norm(o.name)]) === norm(byAmount.party);
-        const partyDiffers = !savedHit && cmp !== "match" && cmp !== "unknown";
-        out.push({ ...base, tally_row_index: byAmount.row_index, tally_party: byAmount.party, tally_date: byAmount.date, tally_credit: byAmount.credit,
-          result: "Date Mismatch", amount_basis: amountsMatch(byAmount.credit, o.tds) ? "tds" : "amount",
-          mapped: savedHit || undefined,
-          suggested_party: partyDiffers ? (byAmount.party ?? undefined) : undefined,
-          reason: partyDiffers
-            ? `Amount matches, but the ledger date (${byAmount.date ?? "—"}) differs from the office date (${o.date_iso ?? "—"}) and the party differs — office "${o.name ?? "—"}" vs ledger "${byAmount.party ?? "—"}".`
-            : `Amount and party found, but the ledger date (${byAmount.date ?? "—"}) differs from the office date (${o.date_iso ?? "—"}).`,
-          confidence: 55 });
-      } else {
-        out.push({ ...base, tally_row_index: null, tally_party: null, tally_date: null, tally_credit: null,
-          result: "Ledger Entry Not Found", amount_basis: null,
-          reason: oSec
-            ? `No entry in the ${oSec} ledger matches this office record's date and amount.`
-            : `No ledger entry found matching this office record's date and amount.`,
-          confidence: 0 });
-      }
-      continue;
-    }
-
-    // 4) resolve the party among the date+amount candidates.
-    //
-    // Several ledger entries can share this record's date, party AND amount — a
-    // client legitimately books four identical bills to one party in a day. That is
-    // NOT an ambiguity worth escalating: every ledger row is consumed at most once
-    // (usedTally), so N identical office records pair 1:1 with N identical ledger
-    // rows and the accounting outcome is the same whichever way they are dealt.
-    // Asking "confirm which is correct" for a choice that CANNOT be got wrong is
-    // noise. So exhaust the deterministic signals instead — best name, then exact
-    // amount, then SECTION, then ledger order (the sort is stable and `cand`
-    // preserves the order Tally printed, so equal candidates settle in ledger
-    // sequence). Escalate to the user only when a real signal is missing.
-    const scored = cand.map(({ t, k }, order) => {
-      const basis: "tds" | "amount" = amountsMatch(t.credit, o.tds) ? "tds" : "amount";
-      const saved = partyMap[norm(o.name)];
-      const savedHit = saved && norm(saved) === norm(t.party);
-      const cmp = nameCompare(o.name, t.party);
-      const nameScore = savedHit ? 1 : cmp === "match" ? 0.95 : cmp === "mismatch" ? 0.5 : cmp === "unknown" ? 0.6 : 0.1;
-      const amountExact = amountsMatch(t.credit, basis === "tds" ? o.tds : o.amount) ? 1 : 0.5;
-      const secScore = sectionEq(o.section, sectionOf(t)) ? 1 : 0;
-      return { t, k, order, basis, savedHit, cmp, score: nameScore * 0.6 + amountExact * 0.3 + secScore * 0.1 };
-    }).sort((a, b) => b.score - a.score || a.order - b.order);
-
-    // How many candidates are indistinguishable from the winner on every signal we
-    // have — used only to EXPLAIN the 1:1 pairing in the reason, never to escalate.
-    const identical = scored.filter((s) => s.savedHit || s.cmp === "match").length;
-
-    const top = scored[0];
-    usedTally.add(top.k);
-    const topSec = sectionOf(top.t);
-    const secOk = sectionEq(o.section, topSec);
-    if (top.savedHit || top.cmp === "match") {
-      if (!secOk) {
-        out.push({ ...base, tally_row_index: top.t.row_index, tally_party: top.t.party, tally_date: top.t.date, tally_credit: top.t.credit,
-          result: "Section Mismatch", amount_basis: top.basis, mapped: !!top.savedHit,
-          reason: `Date, amount and party match, but the office section (${o.section ?? "—"}) differs from the ledger section (${topSec ?? "—"}).`, confidence: 70 });
-      } else {
-        out.push({ ...base, tally_row_index: top.t.row_index, tally_party: top.t.party, tally_date: top.t.date, tally_credit: top.t.credit,
-          result: "Matched", amount_basis: top.basis, mapped: !!top.savedHit,
-          reason: (top.savedHit ? `Matched via a saved party mapping.` : `Date, amount, party${secOk ? " and section" : ""} all match.`)
-            + (identical >= 2
-              ? ` ${identical} ledger entries share this date, party and amount; each is used once, so they pair 1:1 with the matching office records in ledger order.`
-              : ``),
-          confidence: top.savedHit ? 96 : 92 });
-      }
-    } else if (top.cmp === "unknown") {
-      out.push({ ...base, tally_row_index: top.t.row_index, tally_party: top.t.party, tally_date: top.t.date, tally_credit: top.t.credit,
-        result: "Matched", amount_basis: top.basis,
-        reason: `Date and amount match; party name could not be compared (missing on one side).`, confidence: 75 });
-    } else {
-      // date + amount match, party differs → suggest a mapping.
-      out.push({ ...base, tally_row_index: top.t.row_index, tally_party: top.t.party, tally_date: top.t.date, tally_credit: top.t.credit,
-        result: "Party Name Mismatch", amount_basis: top.basis, suggested_party: top.t.party ?? undefined,
-        reason: `Date and amount match, but the party differs — office "${o.name ?? "—"}" vs ledger "${top.t.party ?? "—"}". Confirm the mapping to match automatically in future.`, confidence: 65 });
-    }
-  }
-  return out;
+  return { rows, surplusLedger: surplus.map(rowAt) };
 }
 
-function sectionEq(a: string | null | undefined, b: string | null | undefined): boolean {
-  const ca = canonicalSection(a), cb = canonicalSection(b);
-  if (ca && cb) return ca === cb;
-  return true;
+/** Turn one Outcome into a TallyReconRow: the verdict, the confidence and a reason
+ *  line that names the field that differs and says what to do about it. */
+function render(
+  o: OfficeTxn, out: Outcome, rowAt: (pos: number) => TallyRow,
+  ledgerSection: string | null, sectionOf: (t: TallyRow) => string | null,
+): TallyReconRow {
+  const b = {
+    office_deductee_id: o.deductee_id, office_name: o.name, office_date: o.date_iso,
+    office_amount: o.amount, office_tds: o.tds, office_section: o.section,
+  };
+  const oSec = canonicalSection(o.section);
+  const secLabel = oSec ?? canonicalSection(ledgerSection) ?? "";
+  const secWord = secLabel ? `${secLabel} ` : "";
+
+  // ── PAN SPLIT: indistinguishable records, different deductees ──────────────
+  if (out.escalation?.why === "pan-split") {
+    return {
+      ...b, tally_row_index: null, tally_party: null, tally_date: null, tally_credit: null,
+      result: "Multiple Possible Matches", amount_basis: null,
+      reason: `${out.escalation.officeCount} office records are identical on name, date, amount and section but carry different PANs (${out.escalation.pans.join(", ")}). `
+        + `Only your invoice can say which ledger entry belongs to which deductee.`,
+      confidence: 0,
+    };
+  }
+
+  // ── AMBIGUOUS: several entries compete and the signals disagree ────────────
+  if (out.escalation?.why === "ambiguous" && out.ti === null) {
+    const rivals = out.escalation.rivalTis.map((ti) => rowAt(ti)).slice(0, 3);
+    return {
+      ...b, tally_row_index: null, tally_party: null, tally_date: null, tally_credit: null,
+      result: "Multiple Possible Matches", amount_basis: null,
+      // Incomparable means each candidate BEATS the others on some signal and LOSES
+      // on another (one matches the date, another the amount). Say only that — the
+      // engine does not know which signal the user's invoice will vindicate, and a
+      // reason that overstates what was found is how the last engine lost their trust.
+      reason: `${out.escalation.rivalTis.length} ${secWord}ledger entries compete for this record and none is best on every signal — `
+        + rivals.map((t) => `"${t.party ?? "—"}" ${t.date ?? "—"} ${inr(t.credit)}`).join("; ")
+        + `. Each matches this record on something the others do not, so only your invoice can settle which entry is this one's.`,
+      confidence: 0,
+    };
+  }
+
+  // ── UNMATCHED ─────────────────────────────────────────────────────────────
+  if (out.ti === null || !out.ev) {
+    // Cardinality exhaustion is a REAL AUDIT FINDING, not a shrug.
+    if (out.exhaustion) {
+      return {
+        ...b, tally_row_index: null, tally_party: null, tally_date: null, tally_credit: null,
+        result: "Ledger Entry Not Found", amount_basis: null,
+        reason: `The ${secWord}ledger holds ${out.exhaustion.ledgerCount} entr${out.exhaustion.ledgerCount === 1 ? "y" : "ies"} for this party/date/amount; Office Data holds ${out.exhaustion.officeCount}. `
+          + `All ${out.exhaustion.ledgerCount === 1 ? "of it is" : `${out.exhaustion.ledgerCount} are`} matched to your other records, so the ledger appears short by ${out.exhaustion.officeCount - out.exhaustion.ledgerCount} entr${out.exhaustion.officeCount - out.exhaustion.ledgerCount === 1 ? "y" : "ies"}.`,
+        confidence: 0,
+      };
+    }
+    // NEVER a bare not-found: name the closest unclaimed row and say why it failed.
+    if (out.nearest) {
+      const t = rowAt(out.nearest.ti);
+      const ev = out.nearest.ev;
+      const why: string[] = [];
+      if (ev.dateDelta !== null && ev.dateDelta !== 0) why.push(`${days(Math.abs(ev.dateDelta))} out`);
+      if (ev.basis === null) why.push(`credit ${inr(t.credit)} matches neither the office TDS ${inr(o.tds)} nor the amount ${inr(o.amount)}`);
+      if (rank(ev.nameTier) > AUTO_MATCH_MAX_RANK) why.push(`party name differs`);
+      if (out.nearest.consumed) why.push(`already matched to another office record`);
+      return {
+        ...b, tally_row_index: null, tally_party: null, tally_date: null, tally_credit: null,
+        result: "Ledger Entry Not Found", amount_basis: null,
+        reason: `No unclaimed ${secWord}entry matches this office record. Closest: "${t.party ?? "—"}" ${t.date ?? "—"} ${inr(t.credit)} — ${why.join(", ")}.`,
+        confidence: 0,
+      };
+    }
+    return {
+      ...b, tally_row_index: null, tally_party: null, tally_date: null, tally_credit: null,
+      result: "Ledger Entry Not Found", amount_basis: null,
+      reason: secLabel
+        ? `No entry in the ${secLabel} ledger matches this office record's date or amount.`
+        : `No ledger entry found matching this office record's date or amount.`,
+      confidence: 0,
+    };
+  }
+
+  // ── PAIRED ────────────────────────────────────────────────────────────────
+  const t = rowAt(out.ti);
+  const ev: Evidence = out.ev;
+  const paired = { ...b, tally_row_index: t.row_index, tally_party: t.party, tally_date: t.date, tally_credit: t.credit };
+  const dateEq = ev.dateDelta === 0;
+  const moneyEq = ev.basis !== null;
+  // A saved mapping settles the PARTY and nothing else — the user asserted this
+  // identity, so the name is no longer a question, but the date and TDS are still
+  // validated on it and a mapped record that fails them stays an exception carrying
+  // `mapped: true`, so it shows under BOTH Mapped and Mismatched.
+  const nameOk = ev.mapped || rank(ev.nameTier) <= AUTO_MATCH_MAX_RANK;
+  const mapped = ev.mapped || undefined;
+  const tSec = sectionOf(t);
+
+  // ── The witness fired: a better claimant exists somewhere in this client's books
+  if (out.escalation?.why === "better-claimant") {
+    return {
+      ...paired, result: "Multiple Possible Matches", amount_basis: ev.basis, mapped,
+      reason: `The ledger entry "${t.party ?? "—"}" matches this record's date (${o.date_iso ?? "—"}) and TDS (${inr(o.tds)}) exactly, `
+        + `but your Office Data lists a separate deductee "${out.escalation.rivalOfficeName}"${out.escalation.rivalPan ? ` (PAN ${out.escalation.rivalPan})` : ""} whose name matches that ledger entry more closely. `
+        + `Two spellings your own records keep apart are two different parties, so I have not merged them.`,
+      confidence: 0,
+    };
+  }
+
+  const suggested = out.suggest ? (t.party ?? undefined) : undefined;
+
+  // VERDICT precedence: section → party → money → date. Name the field a reviewer
+  // must fix FIRST; the rest is noise until that one is right.
+  if (!ev.sectionEq) {
+    return {
+      ...paired, result: "Section Mismatch", amount_basis: ev.basis, mapped, suggested_party: suggested,
+      reason: `Party, date and amount match, but the entry is booked in the ${tSec ?? "—"} ledger while the office record is ${oSec ?? "—"}.`,
+      confidence: 70,
+    };
+  }
+
+  if (!nameOk) {
+    const competes = out.tier === "RESIDUE"
+      ? `nothing else in this client's books competes for either record`
+      : `no other entry competes for either record`;
+    const facts = [dateEq ? "Date" : null, moneyEq ? "amount" : null].filter(Boolean);
+    return {
+      ...paired, result: "Party Name Mismatch", amount_basis: ev.basis, mapped, suggested_party: suggested,
+      reason: suggested
+        ? `${facts.length === 2 ? "Date, amount and section all match" : `${facts.join(" and ")} match${facts.length > 1 ? "" : "es"}`} ledger entry "${t.party ?? "—"}", and ${competes}. `
+          + `The office spells it "${o.name ?? "—"}". Confirm the mapping to match automatically in future.`
+        // Gate refused: show the counterpart in the REASON but offer NO one-click
+        // identity. A confirmed mapping is for ever, and amount-only evidence is not
+        // enough to assert that two unrelated names are one deductee.
+        : `This is the only ${secWord}entry left that could belong to this record — "${t.party ?? "—"}" ${t.date ?? "—"} ${inr(t.credit)} — but the party name is unrelated to "${o.name ?? "—"}" `
+          + `and only the ${dateEq && moneyEq ? "date and amount" : dateEq ? "date" : "amount"} agree${dateEq && moneyEq ? "" : "s"}. Check the invoice before mapping these together.`,
+      confidence: suggested ? 65 : 50,
+    };
+  }
+
+  if (!moneyEq) {
+    return {
+      ...paired, result: "Credit Amount Mismatch", amount_basis: null, mapped,
+      reason: ev.mapped
+        ? `Party is mapped to "${t.party ?? "—"}", but the ledger credit (${inr(t.credit)}) differs from the office TDS (${inr(o.tds)}). Mapping resolves the party name only.`
+        : `Party and date match, but the ledger credit (${inr(t.credit)}) differs from the office TDS (${inr(o.tds)}).`,
+      confidence: 60,
+    };
+  }
+
+  if (!dateEq) {
+    const dd = ev.dateDelta;
+    return {
+      ...paired, result: "Date Mismatch", amount_basis: ev.basis, mapped,
+      reason: `Party and amount match ledger entry "${t.party ?? "—"}", but the ledger date (${t.date ?? "—"}) differs from the office date (${o.date_iso ?? "—"})`
+        + `${dd !== null ? ` by ${days(Math.abs(dd))}` : ""}. No other entry competes for either record.`,
+      confidence: 55,
+    };
+  }
+
+  // ── MATCHED — earned only by full corroboration, never by tier strength ────
+  const twins = out.classSize >= 2
+    ? ` ${out.classSize} ledger entries share this date, party and amount; each is used once, so they pair 1:1 with the matching office records in ledger order.`
+    : ``;
+  const panWarn = out.panBlankMixed
+    ? ` Note: some of these office records have no PAN, which is mandatory on a TDS return — verify before filing.`
+    : ``;
+  const conf = out.tier === "A0" ? 96 : out.tier === "A1" ? 95 : out.tier === "A2" ? 92 : out.tier === "A3" ? 75 : 55;
+  return {
+    ...paired, result: "Matched", amount_basis: ev.basis, mapped,
+    reason: (ev.mapped
+      ? `Party matched via the saved mapping to "${t.party ?? "—"}"; date and TDS amount both match.`
+      : ev.nameTier === "unknown"
+        ? `Date, amount and section match; the party name could not be compared (missing on one side).`
+        : `Date, amount, party and section all match.`) + twins + panWarn,
+    confidence: conf,
+  };
 }

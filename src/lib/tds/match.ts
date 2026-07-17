@@ -34,8 +34,13 @@ const NAME_STOPWORDS = new Set(["PRIVATE", "LIMITED", "COMPANY", "CORPORATION", 
 /** First letter + the consonants after it, repeats collapsed. Folds the VOWEL noise
  *  that dominates Indian transliteration variants — "KATHARANI"/"KATHRANI" and
  *  "KRISHNA"/"KRISHAN" both reduce to the same skeleton — while keeping genuinely
- *  different names apart: "RAMESH"→RMSH vs "RAJESH"→RJSH. */
-function skeleton(w: string): string {
+ *  different names apart: "RAMESH"→RMSH vs "RAJESH"→RJSH.
+ *
+ *  Exported for the assignment engine's distinctness witness, which buckets names
+ *  by skeleton. It is a CLASSIFIER, never a matcher: skeleton equality alone is the
+ *  loosest signal in this file and is what makes PATEL/PATIL look alike, so nothing
+ *  may ever commit a pairing on it without the guards in tokenRule(). */
+export function skeleton(w: string): string {
   return (w[0] + w.slice(1).replace(/[AEIOU]/g, "")).replace(/(.)\1+/g, "$1");
 }
 
@@ -49,8 +54,9 @@ function isSubsequence(s: string, l: string): boolean {
   return i === s.length;
 }
 
-/** Levenshtein distance, abandoned once it provably exceeds `max`. */
-function editDistance(a: string, b: string, max: number): number {
+/** Levenshtein distance, abandoned once it provably exceeds `max`. Exported for the
+ *  assignment engine's witness — same classifier-not-matcher caveat as skeleton(). */
+export function editDistance(a: string, b: string, max: number): number {
   if (Math.abs(a.length - b.length) > max) return max + 1;
   let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
   for (let i = 1; i <= a.length; i++) {
@@ -66,12 +72,23 @@ function editDistance(a: string, b: string, max: number): number {
   return prev[b.length];
 }
 
-function tokensCompatible(x: string, y: string): boolean {
-  if (x === y) return true;
-  if (x.length === 1 && y.length >= 2 && y[0] === x) return true;
-  if (y.length === 1 && x.length >= 2 && x[0] === y) return true;
+/** Which RULE made two tokens compatible, or null. The number IS the name tier that
+ *  rule justifies, so the alignment can report the WEAKEST rule it had to lean on:
+ *    0 the tokens are identical
+ *    2 an initial ("S" ↔ "SURESHBHAI") or a compound Indian suffix ("RAMESH" ↔
+ *      "RAMESHBHAI") — an abbreviation of the same name
+ *    3 vowel ELISION in a long word ("KATHARANI" ↔ "KATHRANI")
+ *
+ *  This is a refactor of the previous boolean tokensCompatible(): the checks, their
+ *  order and every guard are UNCHANGED. Only the return type carries more
+ *  information, so nothing about which pairs match can have moved. */
+type TokenRule = 0 | 2 | 3 | null;
+function tokenRule(x: string, y: string): TokenRule {
+  if (x === y) return 0;
+  if (x.length === 1 && y.length >= 2 && y[0] === x) return 2;
+  if (y.length === 1 && x.length >= 2 && x[0] === y) return 2;
   const [s, l] = x.length <= y.length ? [x, y] : [y, x];
-  if (s.length >= 3 && l.startsWith(s) && NAME_COMPOUND_SUFFIXES.has(l.slice(s.length))) return true;
+  if (s.length >= 3 && l.startsWith(s) && NAME_COMPOUND_SUFFIXES.has(l.slice(s.length))) return 2;
   // Spelling variants of the SAME word — deliberately NARROW: vowel ELISION only,
   // in a LONG word. Accepts KATHARANI/KATHRANI, KRISHNA/KRISHAN, MOHAMMED/MOHAMED.
   //
@@ -93,35 +110,150 @@ function tokensCompatible(x: string, y: string): boolean {
   if (s.length >= 7 && skeleton(x) === skeleton(y) && editDistance(x, y, 2) <= 2) {
     const [vx, vy] = [vowelsOf(x), vowelsOf(y)];
     const [vShort, vLong] = vx.length <= vy.length ? [vx, vy] : [vy, vx];
-    if (isSubsequence(vShort, vLong)) return true;
+    if (isSubsequence(vShort, vLong)) return 3;
   }
-  return false;
+  return null;
 }
 
-/** Order-independent, initial/compound-tolerant name comparison. */
-export function nameCompare(a: string | null | undefined, b: string | null | undefined): "match" | "different" | "mismatch" | "unknown" {
+/** tokenRule() plus the RISKY rung: the elision branch with its `length >= 7` and
+ *  vowel-subsequence guards DROPPED, so it accepts vowel SUBSTITUTION — PATEL/PATIL,
+ *  HIRALAL/HARILAL, KAMAL/KAMLA.
+ *
+ *  This is a NON-COMMITTING PROBE. It exists to CLASSIFY a pair as "phonetically
+ *  related but not established" (tier 4) so the engine can pair it, explain it and
+ *  offer it as a suggestion. tokenRule() itself is NOT loosened and no code path
+ *  turns a tier-4 pair into a Match — see nameCompare's contract note below. */
+function riskyTokenRule(x: string, y: string): TokenRule | 4 {
+  const r = tokenRule(x, y);
+  if (r !== null) return r;
+  if (skeleton(x) === skeleton(y) && editDistance(x, y, 2) <= 2) return 4;
+  return null;
+}
+
+/** The greedy token alignment, factored out of the old nameCompare BYTE-FOR-BYTE:
+ *  same short/long choice, same first-compatible-wins `findIndex`, same hits /
+ *  fullHits / union arithmetic, same two acceptance clauses. Parameterised only by
+ *  the token comparator, so the risky probe can re-run the identical alignment. */
+function alignTokens(ta: string[], tb: string[], compat: (x: string, y: string) => number | null) {
+  const aIsShort = ta.length <= tb.length;
+  const [short, long] = aIsShort ? [ta, tb] : [tb, ta];
+  const used = new Set<number>();
+  const pairs: { s: string; l: string; rule: number }[] = [];
+  let hits = 0, fullHits = 0, weakestRule = 0;
+  for (const s of short) {
+    let idx = -1, rule: number | null = null;
+    for (let i = 0; i < long.length; i++) {
+      if (used.has(i)) continue;
+      const r = compat(s, long[i]);
+      if (r !== null) { idx = i; rule = r; break; }
+    }
+    if (idx >= 0) {
+      hits++; used.add(idx);
+      if (s.length >= 2 && long[idx].length >= 2) fullHits++;
+      if (rule! > weakestRule) weakestRule = rule!;
+      pairs.push({ s, l: long[idx], rule: rule! });
+    }
+  }
+  const union = short.length + long.length - hits;
+  const accepted = (short.length >= 2 && hits === short.length && fullHits >= 1)
+    || (fullHits >= 1 && hits / union >= 0.6);
+  return { hits, fullHits, union, accepted, weakestRule, pairs, aIsShort };
+}
+
+/**
+ * How strongly two names are related, as a TIER of decreasing evidence.
+ *
+ *   0 EXACT      normalised strings equal          KONE ... PRIVATE LIMITED / Pvt Ltd
+ *   1 TOKEN_SET  same token multiset, any order    Jayant Kantilal Jagani
+ *   2 ABBREV     initial / compound / dropped tok  Taruben S ...
+ *   3 ELISION    vowel elision in a long word      KATHARANI/KATHRANI, KRISHNA/KRISHAN
+ *   ─────────── THE LINE. <=3 may auto-match. >=4 never does. ───────────
+ *   4 RISKY      skeleton-equal + edit<=2, guards dropped   PATEL/PATIL, KAMAL/KAMLA
+ *   5 PARTIAL    some tokens aligned, remainder unrescuable RAMESH PATEL/RAJESH PATEL
+ *   6 UNRELATED  zero tokens aligned                        .../Krishna Construction
+ *
+ * The two populations the pinned corpus encodes are cleanly separated by this line:
+ * every required positive lands at <=3 and every one of the 35 adversarial negatives
+ * lands at >=4. That is WHY the engine can be safe without any similarity threshold
+ * — it never has to ask "how close is close enough?", only "which tier is this?".
+ */
+export type NameTier = 0 | 1 | 2 | 3 | 4 | 5 | 6 | "unknown";
+
+/** Tier as a number, so it can be compared and ordered. "unknown" sits at 3.5 —
+ *  BELOW the risky tier (a name we cannot read is not evidence AGAINST identity, and
+ *  the facts may still carry the record at A3) but ABOVE every tier allowed to
+ *  auto-match on the name alone (an absent name can never itself establish one). */
+export const rank = (t: NameTier): number => (t === "unknown" ? 3.5 : t);
+
+export interface NameEvidence {
+  tier: NameTier;
+  /** The token pairs that only the RISKY rung could align — the actual spelling
+   *  disagreement, for the reason line. Populated at tier 4/5 only. */
+  divergences: { office: string; ledger: string }[];
+}
+
+/** The tiered derivation. `a` is the OFFICE name, `b` the LEDGER name (this only
+ *  orients `divergences`; the tier itself is symmetric). */
+export function nameEvidence(a: string | null | undefined, b: string | null | undefined): NameEvidence {
   const na = normalizeName(a), nb = normalizeName(b);
-  if (!na || !nb) return "unknown";
-  if (na === nb) return "match";
+  if (!na || !nb) return { tier: "unknown", divergences: [] };
+  if (na === nb) return { tier: 0, divergences: [] };
   const allA = na.split(" ").filter(Boolean);
   const allB = nb.split(" ").filter(Boolean);
   const hasReal = (ws: string[]) => ws.some((w) => w.length >= 2);
-  if (!hasReal(allA) || !hasReal(allB)) return "unknown";
+  if (!hasReal(allA) || !hasReal(allB)) return { tier: "unknown", divergences: [] };
   let ta = allA.filter((w) => !NAME_STOPWORDS.has(w));
   let tb = allB.filter((w) => !NAME_STOPWORDS.has(w));
   if (!hasReal(ta) || !hasReal(tb)) { ta = allA; tb = allB; }
-  const [short, long] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
-  const used = new Set<number>();
-  let hits = 0, fullHits = 0;
-  for (const s of short) {
-    const idx = long.findIndex((l, i) => !used.has(i) && tokensCompatible(s, l));
-    if (idx >= 0) { hits++; used.add(idx); if (s.length >= 2 && long[idx].length >= 2) fullHits++; }
+
+  const base = alignTokens(ta, tb, tokenRule);
+  const orient = (p: { s: string; l: string }, aIsShort: boolean) =>
+    aIsShort ? { office: p.s, ledger: p.l } : { office: p.l, ledger: p.s };
+
+  if (base.accepted) {
+    // Same tokens in a different order is a PERMUTATION, not a weakening — it is
+    // tier 1 however the greedy pass happened to align them. Anything else leaned on
+    // an abbreviation or dropped a token, which is tier 2 at best.
+    const sameMultiset = ta.length === tb.length
+      && [...ta].sort().join(" ") === [...tb].sort().join(" ");
+    return { tier: (sameMultiset ? 1 : Math.max(base.weakestRule, 2)) as NameTier, divergences: [] };
   }
-  if (short.length >= 2 && hits === short.length && fullHits >= 1) return "match";
-  const union = short.length + long.length - hits;
-  if (fullHits >= 1 && hits / union >= 0.6) return "match";
-  if (hits === 0) return "different";
-  return "mismatch";
+
+  // ZERO tokens aligned under the REAL comparator ⇒ nothing relates these names.
+  //
+  // Deliberately tested BEFORE the risky probe. The merged spec ordered the probe
+  // first, which is a silent CONTRACT CHANGE: a single-token pair like "PATEL" vs
+  // "PATIL" has hits === 0 and returns "different" today, but the probe accepts it
+  // (fullHits 1, ratio 1.0) and would reclassify it tier 4 → "mismatch". Executed
+  // and confirmed. "different" vs "mismatch" is a distinction production code reads,
+  // and this ordering is what lets nameCompare below be a pure projection of the
+  // tier while still returning exactly what it returns today, for every input.
+  // Safety is unaffected: 4, 5 and 6 are all >= 4, so none of them can auto-match.
+  if (base.hits === 0) return { tier: 6, divergences: [] };
+
+  const risky = alignTokens(ta, tb, riskyTokenRule);
+  const divergences = risky.pairs.filter((p) => p.rule === 4).map((p) => orient(p, risky.aIsShort));
+  return { tier: risky.accepted ? 4 : 5, divergences };
+}
+
+/**
+ * Order-independent, initial/compound-tolerant name comparison.
+ *
+ * CONTRACT UNCHANGED — this is now a pure projection of nameEvidence(), and every
+ * one of the 37 pinned tests passes byte-unmodified against it.
+ *
+ * tier >= 4 is NEVER "match": PATEL/PATIL stays a non-match at the PAIRWISE level,
+ * because a pairwise function cannot possibly know whether a competitor exists.
+ * Whether a tier-4 pair may be PAIRED or SUGGESTED is a decision the ENGINE makes
+ * from the whole CANDIDATE SET (see assignment.ts) — nameCompare has no standing to
+ * express it. That separation is the entire design: exclusivity is a property of the
+ * candidate set, not of the name pair.
+ */
+export function nameCompare(a: string | null | undefined, b: string | null | undefined): "match" | "different" | "mismatch" | "unknown" {
+  const { tier } = nameEvidence(a, b);
+  if (tier === "unknown") return "unknown";
+  if (tier <= 3) return "match";
+  return tier === 6 ? "different" : "mismatch";
 }
 
 // ── Amount ───────────────────────────────────────────────────────────────────
