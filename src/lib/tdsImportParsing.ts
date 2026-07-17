@@ -285,10 +285,22 @@ export function extractWorkbookRows(
   for (let i = 0; i < sheetNames.length; i++) {
     onProgress?.(i);
     const sec = sectionFromSheetName(sheetNames[i]);
-    all.push(...extractSheetRows(gridOf(sheetNames[i]), sec));
+    const rows = extractSheetRows(gridOf(sheetNames[i]), sec);
+    // Tag every row with the sheet it came from. De-duplication downstream needs
+    // it to tell a GENUINE repeat from a cross-sheet ECHO: four identical bills to
+    // one party on one day, all on the 194C sheet, are four real transactions,
+    // while the same four appearing again on a consolidated "Sheet1" are the same
+    // four. Without the sheet, content-dedup cannot distinguish them and silently
+    // deletes real records. Not a data column — the mapper skips SHEET_KEY.
+    for (const r of rows) r[SHEET_KEY] = sheetNames[i];
+    all.push(...rows);
   }
   return all;
 }
+
+/** Marks the sheet a row came from. NOT a client column: the column engine skips
+ *  it, and nothing maps it to a canonical field. */
+export const SHEET_KEY = "__sheet";
 
 /**
  * GROUND TRUTH for the never-lose-a-record safety net: every distinct PAN that
