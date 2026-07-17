@@ -42,6 +42,13 @@ interface Client {
   firm_name?: string | null;
   /** Soft-delete timestamp — non-null means client is archived */
   deleted_at?: string | null;
+  /** Staff member accountable for this client; default assignee in ITR Management */
+  responsible_person_id?: string | null;
+}
+
+interface StaffUser {
+  id: string;
+  name: string | null;
 }
 
 interface GroupInfo {
@@ -197,6 +204,10 @@ const Clients = () => {
   const [search, setSearch] = useState("");
   const [entityFilter, setEntityFilter] = useState("all");
   const [groupFilter, setGroupFilter] = useState<string[]>([]);
+  // "all" = no filter, "unassigned" = clients with no responsible person, else a user id
+  const [rpFilter, setRpFilter] = useState("all");
+  const [staffUsers, setStaffUsers] = useState<StaffUser[]>([]);
+  const [rpSavingId, setRpSavingId] = useState<string | null>(null);
   // GAP-7: API vs Manual bifurcation (+ "archived" view-only tab)
   const [sourceTab, setSourceTab] = useState<"all" | "manual" | "api" | "archived">("all");
   const [archivedClients, setArchivedClients] = useState<Client[]>([]);
@@ -241,7 +252,7 @@ const Clients = () => {
 
     // Only fetch the columns the list view actually renders — avoids transferring
     // unused large fields (audit_questions, address blobs, etc.) for 1000+ rows.
-    const clientCols = "id, name, pan, entity_type, cin, gstin, created_at, firm_id, source, is_draft, is_active";
+    const clientCols = "id, name, pan, entity_type, cin, gstin, created_at, firm_id, source, is_draft, is_active, responsible_person_id";
     const clientSelect = showAllFirms ? `${clientCols}, firms(name)` : clientCols;
 
     let mainQuery = supabase.from("clients").select(clientSelect, { count: "exact" })
@@ -319,9 +330,48 @@ const Clients = () => {
     setLoading(false);
   };
 
+  // Staff list backing the Responsible Person column + filter. Fetched once per
+  // firm scope rather than joined onto each client row: the dropdown needs every
+  // assignable staff member anyway, not just the ones already assigned.
+  const fetchStaffUsers = async () => {
+    if (!effectiveFirmId && !showAllFirms) return;
+    let q = supabase.from("users").select("id, name").neq("role", "client").order("name");
+    if (!showAllFirms && effectiveFirmId) q = q.eq("firm_id", effectiveFirmId);
+    const { data } = await q;
+    setStaffUsers((data as StaffUser[]) || []);
+  };
+
+  const staffNameById = useMemo(
+    () => new Map(staffUsers.map(u => [u.id, (u.name || "").trim()])),
+    [staffUsers],
+  );
+
+  /** Inline reassign from the list. Optimistic — reverts the row if the write fails. */
+  const updateResponsiblePerson = async (client: Client, nextId: string) => {
+    const newValue = nextId === "unassigned" ? null : nextId;
+    if (newValue === (client.responsible_person_id ?? null)) return;
+    const previous = client.responsible_person_id ?? null;
+
+    setRpSavingId(client.id);
+    setClients(prev => prev.map(c => (c.id === client.id ? { ...c, responsible_person_id: newValue } : c)));
+
+    const { error } = await supabase.from("clients").update({ responsible_person_id: newValue }).eq("id", client.id);
+    setRpSavingId(null);
+
+    if (error) {
+      setClients(prev => prev.map(c => (c.id === client.id ? { ...c, responsible_person_id: previous } : c)));
+      toast({ title: "Could not update responsible person", description: error.message, variant: "destructive" });
+      return;
+    }
+    toast({
+      title: "Responsible person updated",
+      description: `${client.name || "Client"} → ${newValue ? staffNameById.get(newValue) || "Unknown" : "Unassigned"}`,
+    });
+  };
+
   // GAP-2: re-fetch whenever effectiveFirmId or showAllFirms changes (superadmin firm selector, auth load)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (effectiveFirmId || showAllFirms) { fetchData(); fetchDrafts(); fetchArchivedClients(); } }, [effectiveFirmId, showAllFirms]);
+  useEffect(() => { if (effectiveFirmId || showAllFirms) { fetchData(); fetchDrafts(); fetchArchivedClients(); fetchStaffUsers(); } }, [effectiveFirmId, showAllFirms]);
 
   useEffect(() => { localStorage.setItem(VIEW_KEY, viewMode); }, [viewMode]);
 
@@ -496,12 +546,16 @@ const Clients = () => {
       else if (apiSubTab === "draft_inactive") matchesApiSub = !!c.is_draft && c.is_active === false;
     }
 
-    return matchesSearch && matchesEntity && matchesGroup && matchesSource && matchesApiSub;
+    const matchesRp =
+      rpFilter === "all" ||
+      (rpFilter === "unassigned" ? !c.responsible_person_id : c.responsible_person_id === rpFilter);
+
+    return matchesSearch && matchesEntity && matchesGroup && matchesSource && matchesApiSub && matchesRp;
   });
 
   // Reset page when filters change; reset apiSubTab when leaving API tab
-  useEffect(() => { setCurrentPage(1); }, [search, entityFilter, groupFilter, sourceTab, apiSubTab]);
-  useEffect(() => { if (sourceTab !== "api") setApiSubTab("final"); }, [sourceTab]);
+  useEffect(() => { setCurrentPage(1); }, [search, entityFilter, groupFilter, rpFilter, sourceTab, apiSubTab]);
+  useEffect(() => { if (sourceTab !== "api") setApiSubTab("final_active"); }, [sourceTab]);
 
   // Pagination
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -713,7 +767,7 @@ const Clients = () => {
                   key={key}
                   onClick={() => {
                     setSourceTab(key);
-                    setSearch(""); setEntityFilter("all"); setGroupFilter([]); setCurrentPage(1);
+                    setSearch(""); setEntityFilter("all"); setGroupFilter([]); setRpFilter("all"); setCurrentPage(1);
                   }}
                   className={`whitespace-nowrap px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
                     sourceTab === key
@@ -775,6 +829,16 @@ const Clients = () => {
           <SelectContent>
             <SelectItem value="all">All Entity Types</SelectItem>
             {ENTITY_TYPES.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Select value={rpFilter} onValueChange={setRpFilter}>
+          <SelectTrigger className="w-full sm:w-[200px]"><SelectValue placeholder="Responsible Person" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Responsible Persons</SelectItem>
+            <SelectItem value="unassigned">Unassigned</SelectItem>
+            {staffUsers.filter(u => (u.name || "").trim()).map(u => (
+              <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+            ))}
           </SelectContent>
         </Select>
         <Popover>
@@ -883,6 +947,7 @@ const Clients = () => {
                   <TableHead className="text-xs">PAN</TableHead>
                   <TableHead className="text-xs">Constitution</TableHead>
                   {showAllFirms && <TableHead className="text-xs">Firm</TableHead>}
+                  <TableHead className="text-xs">Responsible Person</TableHead>
                   <TableHead className="text-xs">Groups</TableHead>
                   <TableHead className="text-xs">Active Services</TableHead>
                   <TableHead className="text-xs w-12"></TableHead>
@@ -911,6 +976,34 @@ const Clients = () => {
                       <TableCell className="text-xs font-mono text-muted-foreground">{client.pan || "—"}</TableCell>
                       <TableCell>{client.entity_type && <Badge variant="outline" className="text-[10px]">{client.entity_type}</Badge>}</TableCell>
                       {showAllFirms && <TableCell className="text-xs text-muted-foreground">{client.firm_name || "—"}</TableCell>}
+                      {/* stopPropagation: the row itself navigates to the client on click */}
+                      <TableCell onClick={e => e.stopPropagation()}>
+                        {canEdit ? (
+                          <Select
+                            value={client.responsible_person_id || "unassigned"}
+                            onValueChange={v => updateResponsiblePerson(client, v)}
+                            disabled={rpSavingId === client.id}
+                          >
+                            <SelectTrigger className="h-7 w-[160px] text-xs">
+                              <SelectValue placeholder="Unassigned" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="unassigned">Unassigned</SelectItem>
+                              {/* Keep an out-of-scope assignee selectable so saving doesn't silently drop it */}
+                              {client.responsible_person_id && !staffNameById.has(client.responsible_person_id) && (
+                                <SelectItem value={client.responsible_person_id}>Unknown user</SelectItem>
+                              )}
+                              {staffUsers.filter(u => (u.name || "").trim()).map(u => (
+                                <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">
+                            {(client.responsible_person_id && staffNameById.get(client.responsible_person_id)) || "—"}
+                          </span>
+                        )}
+                      </TableCell>
                       <TableCell>
                         <div className="flex flex-wrap gap-1 max-w-[220px]">
                           {cGroups.length === 0
