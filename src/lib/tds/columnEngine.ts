@@ -78,18 +78,33 @@ export function looksLikeName(v: unknown): boolean {
 }
 
 // ── Header synonyms ──────────────────────────────────────────────────────────
-const HEADER_SYNONYMS: Record<CanonField, string[]> = {
+export const HEADER_SYNONYMS: Record<CanonField, string[]> = {
   deductee_name: ["deducteename", "partyname", "partysname", "vendorname", "suppliername", "customername", "beneficiaryname", "payeename", "nameofdeductee", "nameofparty", "assesseename", "firmname", "partnername", "partnersname", "ledgername", "accountname", "particulars", "particular", "name", "party", "vendor", "deductee"],
   pan: ["pan", "panno", "pannumber", "permanentaccountnumber", "deducteepan", "partypan", "vendorpan", "panofdeductee", "panofparty"],
   section_code: ["section", "tdssection", "sectioncode", "natureofpayment", "natureofpymt", "paymentsection", "us", "u/s"],
-  amount_paid: ["amount", "paymentamount", "grossamount", "invoiceamount", "taxableamount", "creditamount", "amountcredited", "amountpaidcredited", "amountpaid", "netamount", "billamt", "billamount", "billvalue", "invoiceamt", "grossamt", "taxableamt", "invoicevalue", "paidamount", "credit"],
+  // CAUTION: bestFieldForHeader's substring pass returns the FIRST field (in the
+  // key order of this object) with a matching synonym, and amount_paid is declared
+  // BEFORE date_of_payment. So a SHORT, generic synonym here silently hijacks any
+  // header that merely contains it. A bare "credit" did exactly that: "Date of
+  // payment / credit (dd/mm/yyyy)" normalises to "dateofpaymentcreditddmmyyyy",
+  // which contains "credit" → the column was tagged amount_paid, the real payment
+  // date was never eligible as date_of_payment, and the mapper silently fell back
+  // to "Date of deduction" (diverging from the edge fn on ~30% of real client
+  // files). Do NOT re-add "credit": a bare "Credit" header (Tally) still resolves
+  // here via the reverse-containment rule ("creditamount".includes("credit")), and
+  // tallyRecon.ts finds its own Credit column anyway. Keep this list IDENTICAL to
+  // the tds-recon-import edge function's — this file is a verbatim port of it.
+  amount_paid: ["amount", "paymentamount", "grossamount", "invoiceamount", "taxableamount", "creditamount", "amountcredited", "amountpaidcredited", "amountpaid", "netamount", "billamt", "billamount", "billvalue", "invoiceamt", "grossamt", "taxableamt", "invoicevalue", "paidamount"],
   tds_amount: ["tds", "tdsamount", "amountoftds", "taxdeducted", "deductedtax", "taxamount", "tdsdeducted", "tdsamt", "tdspaid", "tdspayable", "tdsdeposited", "incometax"],
   interest: ["interest", "interestamount", "lateinterest", "int"],
   rate: ["rate", "tdsrate", "rateoftds", "oftds", "percentoftds"],
   date_of_payment: ["dateofcredit", "creditdate", "dateofpaymentcredit", "voucherdate", "transactiondate", "date", "valuedate", "entrydate", "postingdate", "invoicedate", "dateofinvoice", "billdate", "billdt", "dateofpayment", "paymentdate", "deductiondate"],
   date_of_deduction: ["dateofdeduction", "tdsdeductiondate"],
   challan_bsr: ["bsr", "bsrcode", "challanbsr"],
-  challan_no: ["challanno", "challannumber", "challanserialno", "challan", "vchno", "vouchno", "voucherno"],
+  // Kept identical to the edge fn (see the amount_paid note). Tally's "Vch No."
+  // is NOT listed here on purpose — tallyRecon.ts locates that column itself, and
+  // challan_no is never compared, so an extra synonym here would be pure drift.
+  challan_no: ["challanno", "challannumber", "challanserialno", "challan"],
 };
 export const normaliseHeader = (h: string): string => h.toLowerCase().replace(/[^a-z0-9]/g, "");
 function bestFieldForHeader(header: string): CanonField | null {
