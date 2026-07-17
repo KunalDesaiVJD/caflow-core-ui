@@ -26,6 +26,8 @@ import {
   ShieldCheck, CheckCircle2, XCircle, Upload, FileSpreadsheet, Loader2, RotateCcw, X, Play, Users, Trash2, Eye, MinusCircle, AlertTriangle,
 } from "lucide-react";
 import { readSheetGrids, readDelimitedGrid } from "@/lib/tdsWorkbook";
+import { TdsExportMenu } from "./TdsExportMenu";
+import type { StageReport, ReportMeta } from "@/lib/tds/tdsReport";
 import { logReconAudit } from "@/lib/tdsReconAudit";
 import {
   comparePanVerification, extractTracesRows, panDiagnostics, isPanException, normalizePan, looksLikePan,
@@ -65,6 +67,8 @@ interface Props {
   selFy: string;
   selQuarter: string;
   selForm: string;
+  /** Client display name — for the exported report header (the id alone is useless on paper). */
+  clientName?: string;
   runSignal: number; // legacy: still passed by the parent; Stage 2 no longer auto-runs on it
   resolveFirmId: () => Promise<string | null>;
   disabled?: boolean;
@@ -152,7 +156,7 @@ function formatTracesMapping(m: TracesMapping): string {
   return parts.length ? `Mapped ${parts.join(", ")}.` : "";
 }
 
-export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selForm, resolveFirmId, disabled, onStatusChange }: Props) {
+export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selForm, clientName, resolveFirmId, disabled, onStatusChange }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
 
@@ -349,6 +353,16 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
     return audited;
   }, [resolveFirmId, selQuarter, user?.id, userMap]);
 
+  /** Import several picked TRACES files in ONE go — sequentially, because each
+   *  import mutates this filing's batches and clears its results, so parallel
+   *  runs would race. A failure is reported per file and does not abandon the rest. */
+  const handleImportMany = async (files: File[]) => {
+    if (files.length === 1) { await handleImport(files[0]); return; }
+    let ok = 0;
+    for (const f of files) { try { await handleImport(f); ok++; } catch { /* handleImport toasts its own failure */ } }
+    if (ok > 1) toast({ title: `Imported ${ok} of ${files.length} file(s)`, description: "All files are audited together." });
+  };
+
   const handleImport = async (file: File, replaceBatchId?: string) => {
     if (!filing) return;
     const hadResults = !!results; // a prior audit exists → auto re-run after import
@@ -531,6 +545,39 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
   // overridden it moves to Overridden (so there is no redundant "Pending" card,
   // exactly as in Stage-1). `issuesAll` is the raw exception count kept for the
   // success-state test.
+  /** Stage-2 report — the PAN audit as it stands right now. */
+  const stage2Report = (): StageReport => {
+    const rs = results || [];
+    const row = (r: PanResult) => ({
+      Party: r.party_name || "—",
+      PAN: r.pan || "—",
+      "PAN Status": r.pan_status || "—",
+      "Name on PAN Records": r.verified_name || "—",
+      Result: r.validation_result,
+      Remarks: r.overridden ? `Overridden — ${r.override_reason || "accepted"}` : panReason(r.validation_result),
+      "Recommended Action": r.overridden ? "" : panRecommendedAction(r.validation_result),
+      "Short Deduction (Rs)": r.detail?.short_deduction ? Math.round(r.detail.short_deduction.shortfall) : "",
+      Overridden: r.overridden ? "Yes" : "No",
+    });
+    const issues = rs.filter((r) => isPanException(r.validation_result) && !r.overridden);
+    return {
+      title: "Stage 2 - PAN Verification",
+      subtitle: "Office parties vs the TRACES bulk-PAN file — PAN existence and PAN status",
+      summary: [
+        { label: "Total", value: summary.total },
+        { label: "Verified", value: summary.verified },
+        { label: "Issues", value: summary.issues },
+        { label: "Overridden", value: summary.overridden },
+      ],
+      sections: [
+        { title: "Issues", rows: issues.map(row), emptyNote: "No PAN issues — every party's PAN is present and active." },
+        { title: "Overridden", rows: rs.filter((r) => r.overridden).map(row), emptyNote: "No overrides." },
+        { title: "Verified", rows: rs.filter((r) => !isPanException(r.validation_result)).map(row), emptyNote: "No verified PANs." },
+      ],
+      notes: diagnostics,
+    };
+  };
+
   const summary = useMemo(() => {
     const rs = results || [];
     const exceptions = rs.filter((r) => isPanException(r.validation_result));
@@ -718,8 +765,13 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
               <FileSpreadsheet size={15} className="text-foreground" /> Imported TRACES File{batches.length > 1 ? "s" : ""}
               {validating && <span className="text-xs text-amber-600 flex items-center gap-1"><Loader2 size={11} className="animate-spin" /> verifying…</span>}
             </p>
-            <input ref={fileInputRef} type="file" accept=".xls,.xlsx,.csv,.txt" className="hidden"
-              onChange={(e) => { const f = e.target.files?.[0]; const tgt = replaceTargetId; setReplaceTargetId(null); if (f) handleImport(f, tgt || undefined); e.currentTarget.value = ""; }} />
+            <input ref={fileInputRef} type="file" multiple accept=".xls,.xlsx,.csv,.txt" className="hidden"
+              onChange={(e) => {
+                const picked = Array.from(e.target.files ?? []);
+                const tgt = replaceTargetId; setReplaceTargetId(null);
+                if (picked.length) { if (tgt) handleImport(picked[0], tgt); else handleImportMany(picked); }
+                e.currentTarget.value = "";
+              }} />
             <Button size="sm" variant={batch ? "outline" : "default"} className="gap-1" disabled={importing || disabled}
               onClick={() => { setReplaceTargetId(null); fileInputRef.current?.click(); }}>
               {importing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
@@ -789,6 +841,14 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
           : officeCount === 0
           ? <span className="text-xs text-muted-foreground">No office parties to verify — add data in the Data Entry tab first.</span>
           : null}
+        <div className="flex-1" />
+        {results && (
+          <TdsExportMenu
+            build={stage2Report}
+            meta={{ client: clientName || "—", form: selForm, quarter: selQuarter, fy: selFy }}
+            label="Export Stage 2"
+          />
+        )}
       </div>
 
       {results && (

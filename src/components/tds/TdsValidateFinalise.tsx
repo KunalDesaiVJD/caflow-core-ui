@@ -9,6 +9,12 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { TdsExportMenu } from "./TdsExportMenu";
+import { exportOverviewExcel, exportOverviewPdf, type StageReport, type ReportMeta, type OverviewReport } from "@/lib/tds/tdsReport";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Download } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -439,6 +445,21 @@ export function TdsValidateFinalise({
     }
   };
 
+  /** Import several picked files in ONE go, sequentially so each still gets its own
+   *  batch, its own same-name replace and its own toast — the user picks 4 files
+   *  once instead of opening the dialog 4 times. Sequential (not parallel) because
+   *  each import mutates this filing's batches and clears its results; running them
+   *  together would race on the same rows. A failure is reported per file and does
+   *  NOT abandon the rest. */
+  const handleImportMany = async (files: File[]) => {
+    if (files.length === 1) { await handleImport(files[0]); return; }
+    let ok = 0;
+    for (const f of files) {
+      try { await handleImport(f); ok++; } catch { /* handleImport toasts its own failure */ }
+    }
+    if (ok > 1) toast({ title: `Imported ${ok} of ${files.length} file(s)`, description: "All files are validated together." });
+  };
+
   const handleImport = async (file: File, replaceBatchId?: string) => {
     if (!filing) return;
     const hadResults = !!results; // was a validation already run? → auto-refresh it after
@@ -835,11 +856,120 @@ export function TdsValidateFinalise({
     </CardContent></Card>
   );
 
+  // ── Reports ────────────────────────────────────────────────────────────────
+  // Built lazily, from exactly what is on screen, so an un-run stage costs nothing.
+  const reportMeta: ReportMeta = {
+    client: selectedClient?.name || "—",
+    tan: selectedClient?.tan_number || null,
+    form: selForm, quarter: selQuarter, fy: selFy,
+    status: filing?.work_status || null,
+  };
+
+  const stage1Report = (): StageReport => {
+    const rs = results || [];
+    const row = (r: ReconResult) => ({
+      Record: r.record_label || "—",
+      Result: r.match_status === "matched" ? "Matched"
+        : r.match_status === "office_only" ? "Missing in Imported File"
+        : r.match_status === "imported_only" ? "Extra in Imported File" : "Mismatched",
+      "Mismatched Fields": (r.mismatch_fields || []).map((f) => FIELD_LABELS[f] || f).join(", "),
+      Remarks: r.overridden ? `Overridden — ${r.override_note || "accepted"}` : reasonFor(r),
+      Overridden: r.overridden ? "Yes" : "No",
+      ...Object.fromEntries((r.field_diffs || []).flatMap((d) => [
+        [`Office ${FIELD_LABELS[d.field] || d.field}`, d.office ?? ""],
+        [`Imported ${FIELD_LABELS[d.field] || d.field}`, d.imported ?? ""],
+      ])),
+    });
+    return {
+      title: "Stage 1 - Data Validation",
+      subtitle: "Office Data vs Imported Client Data — field by field",
+      summary: [
+        { label: "Total", value: summary.total },
+        { label: "Matched", value: summary.matched },
+        { label: "Mismatched", value: summary.mismatched },
+        { label: "Overridden", value: summary.overridden },
+      ],
+      sections: [
+        { title: "Mismatched", rows: rs.filter((r) => r.match_status !== "matched" && !r.overridden).map(row), emptyNote: "No mismatched records — every office record reconciled." },
+        { title: "Missing in Imported", rows: rs.filter((r) => r.match_status === "office_only").map(row), emptyNote: "No office record is missing from the imported file." },
+        { title: "Extra in Imported", rows: rs.filter((r) => r.match_status === "imported_only").map(row), emptyNote: "No extra rows in the imported file." },
+        { title: "Overridden", rows: rs.filter((r) => r.overridden).map(row), emptyNote: "No overrides." },
+        { title: "Matched", rows: rs.filter((r) => r.match_status === "matched" && !r.overridden).map(row), emptyNote: "No matched records." },
+      ],
+    };
+  };
+
+  /** Stage 1 + 2 + 3 in one document, from each stage's reported status. */
+  const overviewReport = (): OverviewReport => ({
+    stages: [
+      {
+        title: "Stage 1 · Data Validation", applicable: true, ran: stage1Ran,
+        summary: [
+          { label: "Total", value: summary.total }, { label: "Matched", value: summary.matched },
+          { label: "Mismatched", value: summary.mismatched }, { label: "Overridden", value: summary.overridden },
+        ],
+        status: !stage1Ran ? "Not run" : summary.mismatched === 0 ? "Complete" : `${summary.mismatched} unresolved`,
+      },
+      {
+        title: "Stage 2 · PAN Verification", applicable: panStatus.applicable, ran: panStatus.ran,
+        summary: [
+          { label: "Total", value: panStatus.total }, { label: "Verified", value: panStatus.verified },
+          { label: "Issues", value: panStatus.issues }, { label: "Overridden", value: panStatus.overridden },
+        ],
+        status: !panStatus.applicable ? "Not applicable" : !panStatus.ran ? "Not run" : panStatus.issues === 0 ? "Complete" : `${panStatus.issues} unresolved`,
+      },
+      {
+        title: "Stage 3 · Tally Ledger Reconciliation", applicable: tallyStatus.applicable, ran: tallyStatus.ran,
+        summary: [
+          { label: "Total", value: tallyStatus.total }, { label: "Matched", value: tallyStatus.matched },
+          { label: "Issues", value: tallyStatus.issues }, { label: "Overridden", value: tallyStatus.overridden },
+        ],
+        status: !tallyStatus.applicable ? "Not applicable" : !tallyStatus.ran ? "Not run" : tallyStatus.issues === 0 ? "Complete" : `${tallyStatus.issues} unresolved`,
+      },
+    ],
+    overall: [
+      { label: "Office Records", value: officeCount.deductees },
+      { label: "Stage 1 Mismatched", value: summary.mismatched },
+      { label: "Stage 2 Issues", value: panStatus.applicable ? panStatus.issues : "n/a" },
+      { label: "Stage 3 Issues", value: tallyStatus.applicable ? tallyStatus.issues : "n/a" },
+    ],
+    finalStatus: isFiled ? "Filed / Ready to File"
+      : canFile ? "All validations complete — ready to mark as Ready to File"
+      : (fileBlockReason || "Validation incomplete"),
+    ready: isFiled || canFile,
+  });
+
+  const [exportingOverview, setExportingOverview] = useState(false);
+  const runOverview = async (fmt: "xlsx" | "pdf") => {
+    setExportingOverview(true);
+    try {
+      const o = overviewReport();
+      if (fmt === "xlsx") exportOverviewExcel(o, reportMeta);
+      else await exportOverviewPdf(o, reportMeta);
+    } catch (e: any) { toast({ title: "Export failed", description: e?.message || String(e), variant: "destructive" }); }
+    setExportingOverview(false);
+  };
+
   return (
     <div className="space-y-3">
-      <div>
+      <div className="flex items-start gap-2">
+        <div className="flex-1 min-w-0">
         <h2 className="text-lg font-bold text-foreground">Validate &amp; Finalise</h2>
         <p className="text-xs text-muted-foreground">Three stages — each has its own <b>Run Validation</b>. Finish all three to mark the return ready to file.</p>
+        </div>
+        {filing && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant="outline" className="h-7 px-2 text-xs gap-1 shrink-0" disabled={exportingOverview}>
+                {exportingOverview ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />} Overview Report
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => runOverview("xlsx")} className="text-xs gap-2"><FileSpreadsheet size={13} /> Export to Excel (.xlsx)</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => runOverview("pdf")} className="text-xs gap-2"><FileWarning size={13} /> Export to PDF (.pdf)</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
 
       {/* Active return — READ-ONLY. The Client/FY/Quarter/Form come from the shared
@@ -923,8 +1053,15 @@ export function TdsValidateFinalise({
                     </span>
                   )}
                   <div className="flex-1" />
-                  <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv,.pdf,.json,.xml,.txt,.html,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff,image/*" className="hidden"
-                    onChange={(e) => { const f = e.target.files?.[0]; const tgt = replaceTargetId; setReplaceTargetId(null); if (f) handleImport(f, tgt || undefined); e.currentTarget.value = ""; }} />
+                  <input ref={fileInputRef} type="file" multiple accept=".xlsx,.xls,.csv,.pdf,.json,.xml,.txt,.html,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff,image/*" className="hidden"
+                    onChange={(e) => {
+                      const picked = Array.from(e.target.files ?? []);
+                      const tgt = replaceTargetId; setReplaceTargetId(null);
+                      // "Replace this file" targets ONE batch, so it takes the first
+                      // pick; a plain Add imports everything selected in one go.
+                      if (picked.length) { if (tgt) handleImport(picked[0], tgt); else handleImportMany(picked); }
+                      e.currentTarget.value = "";
+                    }} />
                   <Button size="sm" variant={batch ? "outline" : "default"} className="gap-1 h-6 px-2 text-[11px] shrink-0"
                     disabled={importing || isFiled} onClick={() => { setReplaceTargetId(null); fileInputRef.current?.click(); }}>
                     {importing ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
@@ -1000,6 +1137,8 @@ export function TdsValidateFinalise({
               {comparing ? "Validating…" : "Run Validation"}
             </Button>
             {!batch && <span className="text-xs text-muted-foreground">Import a client file to enable validation.</span>}
+            <div className="flex-1" />
+            {results && <TdsExportMenu build={stage1Report} meta={reportMeta} label="Export Stage 1" />}
           </div>
 
           {/* Stage-1 results (summary + comparison) — the heading is above the inputs. */}
@@ -1076,6 +1215,7 @@ export function TdsValidateFinalise({
           <div className="space-y-2">
             <TdsPanVerification
               filing={filing}
+              clientName={selectedClient?.name || ""}
               selClient={selClient}
               selFy={selFy}
               selQuarter={selQuarter}
@@ -1094,6 +1234,7 @@ export function TdsValidateFinalise({
           <div className="space-y-2">
             <TdsTallyRecon
               filing={filing}
+              clientName={selectedClient?.name || ""}
               selClient={selClient}
               selFy={selFy}
               selQuarter={selQuarter}
