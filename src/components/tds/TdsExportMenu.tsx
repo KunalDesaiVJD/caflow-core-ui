@@ -5,7 +5,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Download, FileSpreadsheet, FileText, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { exportStageExcel, exportStagePdf, type StageReport, type ReportMeta } from "@/lib/tds/tdsReport";
+import { reportFileName, type StageReport, type ReportMeta } from "@/lib/tds/tdsReport";
+import { buildStageWorkbook, downloadWorkbook } from "@/lib/tds/tdsReportExcel";
+import { exportStagePdf } from "@/lib/tds/tdsReportPdf";
 
 /**
  * "Export" for a validation stage — Excel or PDF from the SAME StageReport.
@@ -28,7 +30,7 @@ export function TdsExportMenu({
     setBusy(true);
     try {
       const report = build();
-      if (fmt === "xlsx") exportStageExcel(report, meta);
+      if (fmt === "xlsx") await downloadWorkbook(buildStageWorkbook(report, meta), reportFileName(meta, report.title, "xlsx"));
       else await exportStagePdf(report, meta);
     } catch (e: any) {
       toast({ title: "Export failed", description: e?.message || String(e), variant: "destructive" });

@@ -59,6 +59,9 @@ export interface PanStageStatus {
   verified: number;
   issues: number;        // unresolved exceptions (not overridden)
   overridden: number;
+  /** This stage's FULL report (rows + reasons), so the parent's Overview can carry
+   *  real detail instead of restating counts. Lazy — only called on export. */
+  getReport?: () => StageReport;
 }
 
 interface Props {
@@ -594,6 +597,7 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
   // must be a STABLE callback (the parent passes its setState) to avoid a loop.
   useEffect(() => {
     onStatusChange?.({
+      getReport: stage2Report,
       filingId: filingId,
       loaded: settledFiling.current === filingId,   // only trustworthy once loadAll settled for THIS filing
       applicable: !!batch,
