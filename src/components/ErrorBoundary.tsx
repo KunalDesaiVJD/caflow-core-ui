@@ -7,10 +7,11 @@ import { AlertTriangle, RefreshCw } from "lucide-react";
 // Vercel deployment is pushed the old hash URLs are gone. Any React.lazy()
 // call that was loaded before the deployment will try to fetch a 404 chunk →
 // throws a "Failed to fetch dynamically imported module" error.
-// We auto-reload ONCE (guarded by sessionStorage) so the browser picks up the
-// fresh HTML with updated chunk URLs.  Subsequent errors fall through to the
-// normal UI so we don't get stuck in an infinite reload loop.
-const CHUNK_RELOAD_KEY = "caflow_chunk_error_reloaded";
+// We auto-reload so the browser picks up the fresh HTML with updated chunk
+// URLs.  A timestamped cooldown bounds this: if the reload doesn't cure the
+// error we fall through to the normal UI instead of looping forever.
+const CHUNK_RELOAD_KEY = "caflow_chunk_error_reloaded_at";
+const CHUNK_RELOAD_COOLDOWN_MS = 30_000;
 
 function isChunkLoadError(err: Error | null | undefined): boolean {
   if (!err) return false;
@@ -22,6 +23,25 @@ function isChunkLoadError(err: Error | null | undefined): boolean {
     msg.includes("Unable to preload CSS") ||
     (err as any).name === "ChunkLoadError"
   );
+}
+
+/**
+ * True when no stale-chunk reload has been attempted within the cooldown.
+ *
+ * Stored as a timestamp rather than a boolean flag on purpose: a successful
+ * mount must NOT be able to clear it. The outer boundary always mounts fine
+ * (its lazy children live behind Suspense), so a mount-time `removeItem` wiped
+ * the flag before every chunk error and turned "reload once" into an infinite
+ * reload loop. A timestamp still self-heals — a genuinely new deploy later in
+ * the session is outside the cooldown and reloads normally.
+ */
+function canReloadForChunkError(): boolean {
+  try {
+    const last = Number(sessionStorage.getItem(CHUNK_RELOAD_KEY)) || 0;
+    return Date.now() - last > CHUNK_RELOAD_COOLDOWN_MS;
+  } catch {
+    return false; // sessionStorage blocked — never risk an unbounded reload loop
+  }
 }
 
 // ── Props / State ────────────────────────────────────────────────────────────
@@ -41,6 +61,8 @@ interface State {
   error: Error | null;
   /** Snapshot of the resetKey at the time the error was captured */
   capturedResetKey: string;
+  /** A stale-chunk reload is in flight — suppress the error UI until it lands */
+  reloading: boolean;
 }
 
 // ── ErrorBoundary (class component — required by React) ──────────────────────
@@ -52,16 +74,8 @@ export class ErrorBoundary extends React.Component<Props, State> {
       hasError: false,
       error: null,
       capturedResetKey: props.resetKey ?? "",
+      reloading: false,
     };
-  }
-
-  /** Clear the chunk-reload guard once the tree renders successfully. */
-  componentDidMount() {
-    sessionStorage.removeItem(CHUNK_RELOAD_KEY);
-  }
-
-  componentDidUpdate() {
-    if (!this.state.hasError) sessionStorage.removeItem(CHUNK_RELOAD_KEY);
   }
 
   /**
@@ -75,34 +89,56 @@ export class ErrorBoundary extends React.Component<Props, State> {
       props.resetKey !== undefined &&
       props.resetKey !== state.capturedResetKey
     ) {
-      return { hasError: false, error: null, capturedResetKey: props.resetKey };
+      return { hasError: false, error: null, reloading: false, capturedResetKey: props.resetKey };
     }
     return null;
   }
 
   static getDerivedStateFromError(error: Error): Partial<State> {
-    return { hasError: true, error };
+    // Classify the error HERE, in the render phase, rather than in
+    // componentDidCatch. A stale-chunk 404 ends in window.location.reload(),
+    // but componentDidCatch runs a full lifecycle phase later — by then
+    // render() has already committed and painted the "Something went wrong"
+    // panel, so the user sees it flash for a frame before the reload wipes it.
+    // Setting `reloading` up front lets render() stay silent instead.
+    return {
+      hasError: true,
+      error,
+      reloading: isChunkLoadError(error) && canReloadForChunkError(),
+    };
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
-    console.error("[ErrorBoundary] caught:", error, info);
-
-    // Auto-reload once for chunk load failures (Vite + Vercel stale-deployment)
+    // Auto-reload for chunk load failures (Vite + Vercel stale-deployment)
     if (isChunkLoadError(error)) {
-      if (!sessionStorage.getItem(CHUNK_RELOAD_KEY)) {
-        sessionStorage.setItem(CHUNK_RELOAD_KEY, "1");
+      if (canReloadForChunkError()) {
+        try {
+          sessionStorage.setItem(CHUNK_RELOAD_KEY, String(Date.now()));
+        } catch {
+          /* sessionStorage blocked — reload anyway, cooldown just won't persist */
+        }
         window.location.reload();
+      } else {
+        // Already reloaded once and the chunk is still missing: show the real
+        // error UI rather than looping.
+        console.error("[ErrorBoundary] chunk still failing after reload:", error, info);
       }
       return;
     }
+
+    console.error("[ErrorBoundary] caught:", error, info);
 
     // Store which resetKey was active when the error fired
     this.setState({ capturedResetKey: this.props.resetKey ?? "" });
   }
 
-  private reset = () => this.setState({ hasError: false, error: null });
+  private reset = () => this.setState({ hasError: false, error: null, reloading: false });
 
   render() {
+    // A reload is already in flight — render nothing so the error panel never
+    // flashes on screen for the frame before the fresh HTML lands.
+    if (this.state.reloading) return null;
+
     if (this.state.hasError) {
       return (
         <div className="min-h-screen flex items-center justify-center bg-background p-4">
