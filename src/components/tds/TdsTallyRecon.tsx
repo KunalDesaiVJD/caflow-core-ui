@@ -6,11 +6,13 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { ShieldCheck, CheckCircle2, XCircle, Upload, FileSpreadsheet, Loader2, RotateCcw, X, Play, Users, Link2, Unlink } from "lucide-react";
+import { ShieldCheck, CheckCircle2, XCircle, Upload, FileSpreadsheet, Loader2, RotateCcw, X, Play, Users, Link2, Unlink, Search } from "lucide-react";
 import { pdfToTextPages } from "@/lib/tds/pdfText";
 import { parseTallyPdfPages } from "@/lib/tds/tallyPdf";
 import { logReconAudit } from "@/lib/tdsReconAudit";
@@ -123,6 +125,9 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
   // re-importing the same file NAME replaces it, a different name accumulates —
   // identical to Stage-1/Stage-2.
   const [batches, setBatches] = useState<any[]>([]);
+  // The imported ledger rows themselves, kept in state so the "Choose another
+  // record" picker can list them without re-reading the PDFs.
+  const [tallyRows, setTallyRows] = useState<TallyRow[]>([]);
   const [results, setResults] = useState<ResultRow[] | null>(null);
   const [partyMaps, setPartyMaps] = useState<PartyMap>({});
   const [userMap, setUserMap] = useState<Record<string, string>>({});
@@ -135,6 +140,10 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
 
   const [ovOpen, setOvOpen] = useState(false); const [ovTarget, setOvTarget] = useState<ResultRow | null>(null);
   const [ovReason, setOvReason] = useState(""); const [ovOther, setOvOther] = useState(""); const [savingOv, setSavingOv] = useState(false);
+
+  // "Choose another record" picker — the user overrides the engine's suggestion.
+  const [pickOpen, setPickOpen] = useState(false); const [pickTarget, setPickTarget] = useState<ResultRow | null>(null);
+  const [pickQuery, setPickQuery] = useState("");
 
   const filingId = filing?.id ?? null;
   const officeCount = office.length;
@@ -168,6 +177,20 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     }));
   }, []);
 
+  /** The filing's ledger rows shaped for the engine — the UNION of every imported
+   *  ledger. `batchList` supplies a row's fallback section (rows imported before
+   *  per-row section existed), so it must be the same filing's batches. */
+  const fetchTallyRows = useCallback(async (fId: string, batchList: any[]): Promise<TallyRow[]> => {
+    const batchSection = new Map<string, string | null>(batchList.map((x: any) => [x.id, x.section ?? null]));
+    const { data: tr } = await supabase.from("tds_tally_rows").select("*").eq("filing_id", fId);
+    return (tr || []).map((t: any) => ({
+      row_index: t.row_index, date: t.date_text, iso: t.date_iso, party: t.party,
+      debit: t.debit != null ? Number(t.debit) : null, credit: t.credit != null ? Number(t.credit) : null,
+      vch_no: t.vch_no, vch_type: t.vch_type,
+      section: t.section ?? batchSection.get(t.batch_id) ?? null,
+    }));
+  }, []);
+
   const loadMaps = useCallback(async (): Promise<PartyMap> => {
     if (!selClient) return {};
     const { data } = await supabase.from("tds_tally_party_maps").select("office_name_norm, tally_party").eq("client_id", selClient);
@@ -176,10 +199,11 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
 
   const loadAll = useCallback(async () => {
     const seq = ++loadSeq.current; const stale = () => seq !== loadSeq.current;
-    if (!filingId) { settled.current = null; setBatches([]); setResults(null); setOffice([]); return; }
+    if (!filingId) { settled.current = null; setBatches([]); setTallyRows([]); setResults(null); setOffice([]); return; }
     const parties = await loadOffice(filingId); if (stale()) return; setOffice(parties);
     const { data: b } = await supabase.from("tds_tally_batches").select("*").eq("filing_id", filingId).order("imported_at", { ascending: false });
     if (stale()) return; setBatches(b || []);
+    const rows = await fetchTallyRows(filingId, b || []); if (stale()) return; setTallyRows(rows);
     const maps = await loadMaps(); if (stale()) return; setPartyMaps(maps);
     const { data: res } = await supabase.from("tds_tally_results").select("*").eq("filing_id", filingId);
     if (stale()) return;
@@ -187,7 +211,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     setResults(res && res.length ? (res as ResultRow[]) : null);
     const { data: us } = await supabase.from("users").select("id, name").limit(5000); if (stale()) return;
     setUserMap(Object.fromEntries((us || []).map((u: any) => [u.id, u.name])));
-  }, [filingId, loadOffice, loadMaps]);
+  }, [filingId, loadOffice, loadMaps, fetchTallyRows]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
   useEffect(() => { setActiveFilter(null); }, [filingId]);
@@ -272,14 +296,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     // office 194A record is only ever matched against 194A ledger rows; a batch's
     // section is the fallback for rows imported before per-row section existed.
     const { data: b } = await supabase.from("tds_tally_batches").select("id, section").eq("filing_id", fId).order("imported_at", { ascending: false });
-    const batchSection = new Map<string, string | null>((b || []).map((x: any) => [x.id, x.section ?? null]));
-    const { data: tr } = await supabase.from("tds_tally_rows").select("*").eq("filing_id", fId);
-    const tally: TallyRow[] = (tr || []).map((t: any) => ({
-      row_index: t.row_index, date: t.date_text, iso: t.date_iso, party: t.party,
-      debit: t.debit != null ? Number(t.debit) : null, credit: t.credit != null ? Number(t.credit) : null,
-      vch_no: t.vch_no, vch_type: t.vch_type,
-      section: t.section ?? batchSection.get(t.batch_id) ?? null,
-    }));
+    const tally = await fetchTallyRows(fId, b || []);
     const maps = await loadMaps();
     const audited = reconcileTally(parties, tally, null, maps);
     // preserve overrides keyed by office_deductee_id
@@ -300,9 +317,10 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     await logReconAudit({ filingId: fId, firmId, userId: user?.id, userName: userMap[user?.id ?? ""], actionType: "TALLY_RECON_RUN", newValue: `${audited.filter((r) => r.result === "Matched").length} matched / ${audited.length}`, remark: `Tally reconciliation over ${tally.length} ledger rows` });
     if (seq !== loadSeq.current) return audited;
     const { data: res } = await supabase.from("tds_tally_results").select("*").eq("filing_id", fId); if (seq !== loadSeq.current) return audited;
+    setTallyRows(tally);
     setResults((res as ResultRow[]) || []);
     return audited;
-  }, [loadOffice, loadMaps, resolveFirmId, selQuarter, user?.id, userMap]);
+  }, [loadOffice, loadMaps, fetchTallyRows, resolveFirmId, selQuarter, user?.id, userMap]);
 
   const runValidation = useCallback(async () => {
     if (!filing || !batches.length || validating) return; setValidating(true);
@@ -311,17 +329,30 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     setValidating(false);
   }, [filing, batches, validating, runAudit, toast]);
 
-  // Confirm a party mapping: office name ↔ ledger party → save + re-run.
-  const confirmMapping = async (r: ResultRow) => {
-    if (!r.office_name || !r.tally_party) return;
+  /** Save a party mapping (office name ↔ ledger party) → re-run.
+   *
+   *  The ledger party is a PARAMETER, not read off the record: two different
+   *  parties can legitimately share a date and a TDS amount, so the engine's
+   *  suggestion is only a recommendation. Both "Confirm mapping" (accept the
+   *  suggestion) and the record picker (the user chose a different ledger entry)
+   *  land here, so the upsert / audit log / re-run happen exactly once. */
+  const saveMapping = async (officeName: string | null, tallyParty: string | null, remark = "Saved party mapping") => {
+    if (!officeName || !tallyParty) return;
     const firmId = await resolveFirmId();
     const { error } = await supabase.from("tds_tally_party_maps").upsert({
-      firm_id: firmId, client_id: selClient, office_name_norm: normalizeName(r.office_name), office_name: r.office_name, tally_party: r.tally_party, created_by: user?.id,
+      firm_id: firmId, client_id: selClient, office_name_norm: normalizeName(officeName), office_name: officeName, tally_party: tallyParty, created_by: user?.id,
     }, { onConflict: "client_id,office_name_norm" });
     if (error) { toast({ title: "Could not save mapping", description: error.message, variant: "destructive" }); return; }
-    await logReconAudit({ filingId: filing?.id, firmId: filing?.firm_id, userId: user?.id, userName: userMap[user?.id ?? ""], actionType: "TALLY_PARTY_MAP", oldValue: r.office_name, newValue: r.tally_party, remark: "Saved party mapping" });
-    toast({ title: "Party mapping saved", description: `"${r.office_name}" ↔ "${r.tally_party}" — re-running.` });
+    await logReconAudit({ filingId: filing?.id, firmId: filing?.firm_id, userId: user?.id, userName: userMap[user?.id ?? ""], actionType: "TALLY_PARTY_MAP", oldValue: officeName, newValue: tallyParty, remark });
+    toast({ title: "Party mapping saved", description: `"${officeName}" ↔ "${tallyParty}" — re-running.` });
     setValidating(true); try { await runAudit(filing.id); } catch (e: any) { toast({ title: "Re-validation failed", description: e.message, variant: "destructive" }); } setValidating(false);
+  };
+
+  const openPicker = (r: ResultRow) => { setPickTarget(r); setPickQuery(""); setPickOpen(true); };
+  /** Map to the ledger record the USER chose, overriding the suggestion. */
+  const pickRecord = (party: string | null) => {
+    const t = pickTarget; setPickOpen(false);
+    if (t) void saveMapping(t.office_name, party, "Saved party mapping — ledger record chosen by the user");
   };
 
   /** Undo a saved party mapping. Deletes the mapping and re-runs, so the record
@@ -424,6 +455,23 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     }
   }, [results, activeFilter]);
 
+  /** Ledger records offered by the picker: the engine's suggestion first, then the
+   *  rest in ledger order. Only CREDIT rows — those are the deductions the engine
+   *  pairs against, so mapping to a party that never appears as a credit could not
+   *  match anything. "suggested" is party-level because the saved mapping is. */
+  const pickRows = useMemo(() => {
+    const sug = pickTarget?.tally_party ? normalizeName(pickTarget.tally_party) : null;
+    const rows = tallyRows
+      .filter((t) => t.party && t.credit != null && Number(t.credit) !== 0)
+      .map((t, i) => ({ t, i, suggested: !!sug && normalizeName(t.party) === sug }));
+    const q = pickQuery.trim().toLowerCase();
+    const hit = q
+      ? rows.filter(({ t }) => [t.party, t.date, t.iso, t.section, t.credit == null ? "" : String(t.credit), inr(t.credit)]
+          .filter(Boolean).join(" ").toLowerCase().includes(q))
+      : rows;
+    return [...hit].sort((a, b) => (b.suggested ? 1 : 0) - (a.suggested ? 1 : 0) || a.i - b.i);
+  }, [tallyRows, pickTarget, pickQuery]);
+
   const renderCard = (r: ResultRow) => (
     <Card key={r.id} className={cn(r.overridden ? "border-blue-200 dark:border-blue-900 opacity-80" : r.result === "Matched" ? "border-emerald-200 dark:border-emerald-900" : "border-destructive/30")}>
       <CardContent className="p-4 space-y-1.5">
@@ -460,11 +508,19 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
             proprietor's personal name, which lands on "Date Mismatch"; gating the
             button on that one result made the mapping feature unreachable. */}
         {mappingOffer(r) && (
-          <div className="flex items-center gap-2 p-2 rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50/50 dark:bg-amber-950/20 text-xs">
+          <div className="flex items-center gap-2 flex-wrap p-2 rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50/50 dark:bg-amber-950/20 text-xs">
             <Link2 size={13} className="text-amber-600 shrink-0" />
-            <span className="text-foreground">Possible mapping: <b>{r.office_name}</b> ↔ <b>{r.tally_party}</b></span>
+            <span className="text-foreground min-w-0">Suggested mapping: <b>{r.office_name}</b> ↔ <b>{r.tally_party}</b></span>
             <div className="flex-1" />
-            <Button size="sm" className="h-6 text-xs px-2" disabled={disabled} onClick={() => confirmMapping(r)}>Confirm mapping</Button>
+            {/* A suggestion, never an assumption: the same date + TDS amount can
+                belong to two different parties, so the user decides. */}
+            <div className="flex items-center gap-2 shrink-0">
+              <Button size="sm" className="h-6 text-xs px-2" disabled={disabled || validating} onClick={() => saveMapping(r.office_name, r.tally_party)}>Confirm mapping</Button>
+              <Button size="sm" variant="outline" className="h-6 text-xs px-2 gap-1" disabled={disabled || validating}
+                onClick={() => openPicker(r)} title="The suggestion is based on date and amount only — pick the correct ledger record yourself">
+                <Search size={11} /> Choose another record
+              </Button>
+            </div>
           </div>
         )}
       </CardContent>
@@ -583,6 +639,40 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
           </div>
           <DialogFooter><Button variant="outline" onClick={() => setOvOpen(false)}>Cancel</Button>
             <Button onClick={saveOverride} disabled={savingOv || !ovReason || (ovReason === "Other" && !ovOther.trim())}>{savingOv ? "Saving…" : "Confirm Override"}</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={pickOpen} onOpenChange={setPickOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader><DialogTitle className="text-base">Choose the ledger record</DialogTitle></DialogHeader>
+          <div className="space-y-2">
+            <p className="text-xs text-muted-foreground">
+              Office record: <b className="text-foreground">{pickTarget?.office_name || "—"}</b> · {pickTarget?.office_date || "—"} · TDS {inr(pickTarget?.office_tds)} · {pickTarget?.office_section || "—"}
+            </p>
+            <Input value={pickQuery} onChange={(e) => setPickQuery(e.target.value)} placeholder="Search by party, date or amount…" className="h-8 text-xs" />
+            <ScrollArea className="h-72 rounded-md border">
+              {pickRows.length === 0 ? (
+                <p className="p-6 text-center text-xs text-muted-foreground">
+                  {tallyRows.length ? "No ledger record matches that search." : "No ledger records — import the Tally ledger PDF first."}
+                </p>
+              ) : (
+                <div className="p-1 space-y-0.5">
+                  {pickRows.map(({ t, i, suggested }) => (
+                    <button key={i} type="button" disabled={disabled || validating} onClick={() => pickRecord(t.party)}
+                      className="w-full text-left flex items-center gap-2 rounded px-2 py-1.5 hover:bg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-medium truncate">{t.party}</p>
+                        <p className="text-[10px] text-muted-foreground">{t.date || t.iso || "—"} · credit {inr(t.credit)} · {t.section || "—"}</p>
+                      </div>
+                      {suggested && <Badge variant="secondary" className="text-[9px] px-1 py-0 h-4 shrink-0">suggested</Badge>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </ScrollArea>
+            <p className="text-[10px] text-muted-foreground">Selecting a record saves "{pickTarget?.office_name || "—"}" ↔ that ledger party for this client and re-runs the reconciliation.</p>
+          </div>
+          <DialogFooter><Button variant="outline" size="sm" onClick={() => setPickOpen(false)}>Cancel</Button></DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
