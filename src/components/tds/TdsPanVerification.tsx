@@ -29,7 +29,7 @@ import { readSheetGrids, readDelimitedGrid } from "@/lib/tdsWorkbook";
 import { logReconAudit } from "@/lib/tdsReconAudit";
 import {
   comparePanVerification, extractTracesRows, panDiagnostics, isPanException, normalizePan, looksLikePan,
-  panReason, panRecommendedAction, PAN_OVERRIDE_REASONS,
+  panReason, panRecommendedAction, PAN_OVERRIDE_REASONS, normalizeName as normName,
   type OfficeParty, type TracesPanRow, type TracesMapping, type PanValidationResult, type PanCheckDetail,
 } from "@/lib/tdsPanVerification";
 
@@ -39,11 +39,11 @@ import {
  * cards → detailed record-wise results) but is a fully independent module.
  *
  * Office Data is the MASTER: the audit runs over the quarter's office parties and,
- * for each, finds its PAN in the imported TRACES bulk-PAN file and produces a
- * complete result using PAN Status + Verified Name + Mismatch-in-Name. A TRACES
- * PAN with no office party is IGNORED. Name comparison inherits Stage-1's
- * intelligence (order-independent, prefix/initial-tolerant) — reimplemented in
- * src/lib/tdsPanVerification.ts so Stage-1 is never touched.
+ * for each, finds its PAN in the imported TRACES bulk-PAN file and checks the PAN
+ * STATUS it reports. A TRACES PAN with no office party is IGNORED. The office name
+ * is NOT compared against the TRACES verified name (that check only ever produced
+ * false "Name Mismatch" noise on legitimate short forms) — the verified name is
+ * shown as context only. See src/lib/tdsPanVerification.ts.
  *
  * SCOPE: this file + src/lib/tdsPanVerification.ts only.
  */
@@ -100,8 +100,6 @@ const RESULT_BADGE: Record<string, string> = {
   "PAN Inoperative": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
   "PAN Status Blank": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
   "PAN Status Error": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
-  "Name Mismatch": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
-  "Different Party Name": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
   "Duplicate PAN Across Parties": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
 };
 
@@ -153,14 +151,6 @@ function formatTracesMapping(m: TracesMapping): string {
   if (m.mismatch_in_name) parts.push(`Mismatch Flag←'${m.mismatch_in_name}'`);
   return parts.length ? `Mapped ${parts.join(", ")}.` : "";
 }
-
-/** Whether the name was ACTUALLY compared and matched — an "unknown" (no name to
- * compare, e.g. the TRACES file had no verified-name column) is NOT a match, so it
- * is never shown with a green "Name matched" tick (avoids false assurance). */
-const nameMatchedOf = (r: PanResult): boolean =>
-  r.detail ? r.detail.name_kind === "matched" : (r.validation_result === "PAN Verified");
-/** The name check was possible but not yet conclusive (no name available to compare). */
-const nameNotVerified = (r: PanResult): boolean => (r.detail?.name_kind ?? "") === "unknown";
 
 export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selForm, resolveFirmId, disabled, onStatusChange }: Props) {
   const { user } = useAuth();
@@ -296,7 +286,7 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
 
     // Preserve overrides across re-runs, keyed by PAN (stable one-per-PAN). Carry an
     // override ONLY when the exact defect it accepted still stands — if the result
-    // changed (e.g. a re-import flips "Name Mismatch"→"PAN Inoperative", or a party
+    // changed (e.g. a re-import flips "PAN Verified"→"PAN Inoperative", or a party
     // becomes "PAN Verified"), the old approval no longer applies and the party
     // re-surfaces as a fresh unresolved exception. This also keeps the summary a
     // true partition (a verified row can never also be counted as overridden).
@@ -414,7 +404,6 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
       // status/name check is visible up front, not silently passed as verified.
       const warns: string[] = [];
       if (!mapping.pan_status) warns.push("no PAN-Status column detected — PAN status can't be checked");
-      if (!mapping.verified_name && !mapping.name) warns.push("no name column detected — names can't be cross-checked");
       const warnLine = warns.length ? ` ⚠ ${warns.join("; ")}.` : "";
       toast({
         title: `Imported ${rows.length} PAN record(s)`,
@@ -548,7 +537,6 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
     return {
       total: rs.length,
       verified: rs.filter((r) => r.validation_result === "PAN Verified").length,
-      nameMatched: rs.filter((r) => r.detail?.pan_found && nameMatchedOf(r)).length, // info (also shown per-record)
       issues: exceptions.filter((r) => !r.overridden).length,     // UNRESOLVED
       overridden: rs.filter((r) => r.overridden).length,
     };
@@ -615,8 +603,6 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
     const d = r.detail;
     const found = d ? d.pan_found : r.validation_result !== "PAN Not Found in TRACES" && r.validation_result !== "Invalid PAN Format" && r.validation_result !== "PAN Missing in Office Data";
     const statusOk = (d?.status_class ?? "") === "PAN Verified";
-    const nameOk = nameMatchedOf(r);
-    const nameUnknown = nameNotVerified(r);
     const sd = d?.short_deduction;
     const dupes = d?.duplicate_names;
     return (
@@ -629,11 +615,10 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
           <>
             {checkLine(found, found ? "PAN found in the TRACES file" : "PAN not found in the imported TRACES file")}
             {found && checkLine(statusOk, statusOk ? `PAN status: ${r.pan_status || "Active"}` : `PAN status: ${r.pan_status || r.validation_result}`)}
-            {found && (nameUnknown
-              ? neutralLine("Name not verified — the TRACES file had no name to cross-check against.")
-              : checkLine(nameOk, nameOk ? "Name matched" : `Name: ${r.validation_result === "Different Party Name" ? "different party name" : "mismatch"}`))}
-            {found && !nameOk && !nameUnknown && (
-              <p className="text-[11px] text-muted-foreground pl-5">Office: <b className="text-foreground">{r.party_name || "—"}</b> · TRACES: <b className="text-foreground">{r.verified_name || "—"}</b></p>
+            {/* The TRACES name is shown as context only — Stage-2 does not compare
+                it to the office name, so it never raises an exception. */}
+            {found && r.verified_name && normName(r.verified_name) !== normName(r.party_name) && (
+              <p className="text-[11px] text-muted-foreground pl-5">Name on PAN records: <b className="text-foreground">{r.verified_name}</b></p>
             )}
           </>
         )}
@@ -869,7 +854,6 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
                 <div className="text-sm text-foreground grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1 max-w-xl">
                   <span className="text-muted-foreground">Total Parties</span><span className="font-semibold">{summary.total}</span>
                   <span className="text-muted-foreground">Verified</span><span className="font-semibold text-emerald-600">{summary.verified}</span>
-                  <span className="text-muted-foreground">Name Matched</span><span className="font-semibold text-emerald-600">{summary.nameMatched}</span>
                   <span className="text-muted-foreground">Overridden</span><span className="font-semibold">{summary.overridden}</span>
                 </div>
                 <p className="text-sm text-muted-foreground">Every office PAN was found in TRACES, active/valid, and the names matched. No issues were found.</p>

@@ -1,18 +1,15 @@
 // Stage-2 PAN Verification — pure, deterministic audit logic (no AI, no I/O).
 //
 // OFFICE DATA IS THE MASTER. The audit iterates the office parties for a quarter
-// and, for each, finds its PAN in the imported TRACES Bulk-PAN file and runs a
-// COMPLETE PAN audit using every column the TRACES report provides — PAN Status,
-// Verified Name and "Mismatch in Name". A TRACES PAN that has NO office party is
+// and, for each, finds its PAN in the imported TRACES Bulk-PAN file and checks
+// the PAN STATUS the report returns. A TRACES PAN that has NO office party is
 // IGNORED (office is the master; we only validate parties in the software).
 //
-// Name comparison INHERITS Stage-1's intelligence (order-independent token-set
-// matching with subset + Jaccard) so "Jayant Kantilal Jagani" == "Jayant Jagani
-// Kantilal" — reimplemented here (Stage-1's lives in an edge function) so Stage-1
-// is never touched.
+// The office party name is NOT compared against the TRACES verified name — see the
+// note on PanValidationResult below.
 
 export type PanValidationResult =
-  | "PAN Verified"                       // ✅ found + active/valid + name matched (or name not verifiable)
+  | "PAN Verified"                       // ✅ found in TRACES + status active/valid
   | "PAN Not Found in TRACES"            // office PAN not in the imported file
   | "Invalid PAN Format"                 // the office PAN isn't a valid 10-char PAN
   | "PAN Missing in Office Data"         // the office party has no PAN to verify
@@ -20,9 +17,19 @@ export type PanValidationResult =
   | "PAN Inoperative"                    // TRACES reports the PAN inoperative/inactive
   | "PAN Status Blank"                   // TRACES returned no status (not processed)
   | "PAN Status Error"                   // TRACES returned an unrecognised status
-  | "Name Mismatch"                      // names differ (but share something)
-  | "Different Party Name"               // same PAN, an entirely different name
   | "Duplicate PAN Across Parties";      // two office parties with different names share one PAN
+
+// NOTE: Stage-2 does NOT cross-check the office party name against the TRACES
+// verified name. The office name is routinely a legitimate short form of the ITD
+// name ("KALPNABEN D PATEL" vs "KALPNABEN DIPAKBHAI PATEL", "KRUPAL HARSHADBHAI
+// PATEL" vs "KRUPALKUMAR HARSHADKUMAR PATEL"), so the check produced almost
+// nothing but false "Name Mismatch" noise on real returns. The PAN is the legal
+// identifier and it is what the return is filed on, so Stage-2 verifies exactly
+// two things: the PAN exists in TRACES, and its PAN STATUS is good. The TRACES
+// verified name is still carried and displayed as context — it just never
+// produces an exception. ("Duplicate PAN Across Parties" below is unrelated: it
+// compares two OFFICE parties to each other to catch one PAN entered against two
+// different parties — a data-entry error, not a TRACES name comparison.)
 
 export interface OfficeParty {
   deductee_id: string;
@@ -58,8 +65,6 @@ export interface ShortDeduction {
 export interface PanCheckDetail {
   pan_found: boolean;
   status_class: string;   // classifyPanStatus bucket
-  name_matched: boolean;
-  name_kind: "matched" | "mismatch" | "different" | "unknown";
   // 206AA higher-rate cross-check: present when a PAN defect (invalid/inoperative/
   // missing) means a higher rate should have been deducted but wasn't.
   short_deduction?: ShortDeduction | null;
@@ -112,9 +117,10 @@ export const normalizeName = (v: string | null | undefined): string => {
  *  - "different" NO significant token in common → almost certainly a different party
  *  - "mismatch"  some overlap but not enough to be confident it's the same party
  *  - "unknown"   a side is blank / has no significant tokens (can't compare)
- * NOTE: unlike Stage-1's namesEquivalent this has NO "PAN matched ⇒ same party"
- * bypass — in Stage-2 the PAN always matches (we found the row by PAN), and the
- * whole point is to still catch a "same PAN, different party name". */
+ * NOTE: this is NOT used to compare an office name against TRACES — Stage-2 does
+ * no such check. Its only remaining caller is allNamesEquivalent, which compares
+ * two OFFICE party names to each other to decide whether one PAN has been entered
+ * against two genuinely different parties ("Duplicate PAN Across Parties"). */
 // Compound suffixes an Indian given name legitimately picks up ("Rakesh" →
 // "Rakeshkumar", "Jagdish" → "Jagdishbhai"). Prefix matching is allowed ONLY for
 // these, so "Ram" is NOT collapsed into "Ramesh" (which would be a false match).
@@ -182,38 +188,6 @@ export function normMismatchFlag(v: string | null | undefined): "yes" | "no" | "
   return "unknown";
 }
 
-/** Combine our intelligent comparison with TRACES's own Mismatch-in-Name flag.
- * Minimises FALSE mismatches: a name is treated as matched if EITHER our
- * comparison passes OR TRACES explicitly says the names match ("No"). Only a
- * confident negative is reported. */
-export function resolveNameCheck(
-  officeName: string | null | undefined,
-  verifiedName: string | null | undefined,
-  submittedName: string | null | undefined,
-  mismatchFlag: string | null | undefined,
-): { matched: boolean; kind: "matched" | "mismatch" | "different" | "unknown" } {
-  // Primary target = the ITD/TRACES VERIFIED name; when the file carries none, fall
-  // back to the SUBMITTED name column (still the ITD-known name in most consolidated
-  // files) before giving up — so the name check runs whenever ANY name is present.
-  const primary = String(verifiedName ?? "").trim() ? verifiedName : submittedName;
-  const cmp = nameCompare(officeName, primary);
-  const flag = normMismatchFlag(mismatchFlag);
-  // The flag compares SUBMITTED vs ITD — trust it to clear a mismatch ONLY when the
-  // submitted name is itself this office party (else the flag is about another name).
-  const flagPertains = nameCompare(officeName, submittedName) === "match";
-  if (cmp === "match") return { matched: true, kind: "matched" };
-  // A COMPLETELY different name (no token in common) is authoritative and is NEVER
-  // rescued by the flag.
-  if (cmp === "different") return { matched: false, kind: "different" };
-  // A PARTIAL mismatch may be rescued when TRACES says the names match ("No") AND
-  // that flag actually pertains to this office party.
-  if (cmp === "mismatch") return (flag === "no" && flagPertains) ? { matched: true, kind: "matched" } : { matched: false, kind: "mismatch" };
-  // cmp === "unknown" — nothing to compare against at all.
-  if (flag === "no" && flagPertains) return { matched: true, kind: "matched" };
-  if (flag === "yes") return { matched: false, kind: "mismatch" };
-  return { matched: true, kind: "unknown" };  // truly nothing to compare — NOT a real match (UI shows "not verified")
-}
-
 /**
  * Classify a TRACES "PAN Status" string. Keyword-priority (negative states
  * first, since "inactive" contains "active" and "inoperative" contains
@@ -243,8 +217,6 @@ export const panReason = (r: PanValidationResult): string => ({
   "PAN Inoperative": "PAN is inoperative (typically not linked to Aadhaar) — higher TDS may apply.",
   "PAN Status Blank": "TRACES returned no PAN status for this party — verification was not processed.",
   "PAN Status Error": "TRACES returned an unrecognised PAN status.",
-  "Name Mismatch": "PAN is active, but the office name does not match the name on the PAN records.",
-  "Different Party Name": "The PAN is active but registered to an entirely different name than the office party.",
   "Duplicate PAN Across Parties": "Two or more office parties with different names share this PAN — at least one PAN is likely entered against the wrong party.",
 }[r] ?? "Requires review.");
 
@@ -257,8 +229,6 @@ export const panRecommendedAction = (r: PanValidationResult): string => ({
   "PAN Inoperative": "Ask the client to link PAN–Aadhaar; deduct at the higher rate until it is active.",
   "PAN Status Blank": "Re-verify this PAN's status on TRACES (it may not have been processed).",
   "PAN Status Error": "Re-verify this PAN's status on TRACES.",
-  "Name Mismatch": "Confirm the correct name against the PAN and update the office record if needed.",
-  "Different Party Name": "Confirm the PAN belongs to this party. For a proprietorship the PAN name may be the proprietor's personal name — override with a reason if correct.",
   "Duplicate PAN Across Parties": "Check each party sharing this PAN — correct the PAN on whichever entry is wrong (a common cause of TDS credit going to the wrong deductee).",
 }[r] ?? "");
 
@@ -546,7 +516,7 @@ export function comparePanVerification(office: OfficeParty[], traces: TracesPanR
     const k = normalizePan(o.pan);
     const result: PanValidationResult = !k ? "PAN Missing in Office Data" : "Invalid PAN Format";
     const detail: PanCheckDetail = {
-      pan_found: false, status_class: "", name_matched: false, name_kind: "unknown",
+      pan_found: false, status_class: "",
       short_deduction: computeShortDeduction(o.amount, o.tds, o.rate, o.section),
     };
     rows.push({ office_deductee_id: o.deductee_id, office_name: o.name ?? null, pan_row_id: null,
@@ -562,7 +532,7 @@ export function comparePanVerification(office: OfficeParty[], traces: TracesPanR
 
     const t = tracesByPan.get(k);
     if (!t) {
-      const detail: PanCheckDetail = { pan_found: false, status_class: "", name_matched: false, name_kind: "unknown" };
+      const detail: PanCheckDetail = { pan_found: false, status_class: "" };
       if (namesConflict) detail.duplicate_names = distinctNames;
       rows.push({ ...base, pan_row_id: null, verified_name: null, pan: o.pan ?? null, pan_status: null,
         validation_result: namesConflict ? "Duplicate PAN Across Parties" : "PAN Not Found in TRACES", detail });
@@ -570,23 +540,19 @@ export function comparePanVerification(office: OfficeParty[], traces: TracesPanR
     }
 
     const statusClass = classifyPanStatus(t.pan_status);
-    const nameChk = resolveNameCheck(o.name, t.verified_name, t.name, t.mismatch_in_name);
 
-    // Duplicate-PAN conflict outranks a clean status; otherwise status is primary,
-    // then the name check.
+    // Duplicate-PAN conflict outranks a clean status; otherwise the PAN STATUS is
+    // the only thing that can raise an exception. A good status = verified — the
+    // party name is NOT compared against TRACES (see the note on PanValidationResult).
     let result: PanValidationResult;
     if (namesConflict) result = "Duplicate PAN Across Parties";
     else if (statusClass === "PAN Invalid") result = "Invalid PAN";
     else if (statusClass === "PAN Inactive") result = "PAN Inoperative";
     else if (statusClass === "PAN Status Blank") result = "PAN Status Blank";
     else if (statusClass === "PAN Status Error") result = "PAN Status Error";
-    else if (nameChk.matched) result = "PAN Verified";
-    else if (nameChk.kind === "different") result = "Different Party Name";
-    else result = "Name Mismatch";
+    else result = "PAN Verified";
 
-    const detail: PanCheckDetail = {
-      pan_found: true, status_class: statusClass, name_matched: nameChk.matched, name_kind: nameChk.kind,
-    };
+    const detail: PanCheckDetail = { pan_found: true, status_class: statusClass };
     if (namesConflict) detail.duplicate_names = distinctNames;
     // §206AA: an inoperative / invalid PAN requires the higher rate.
     if (statusClass === "PAN Invalid" || statusClass === "PAN Inactive") {
@@ -620,11 +586,6 @@ export function panDiagnostics(office: OfficeParty[], traces: TracesPanRow[]): s
     diag.push(`None of this quarter's ${officeSet.size} office PANs were found in the TRACES file — the file may be for a different client or quarter.`);
   else if (notFound > 0)
     diag.push(`${notFound} office PAN(s) were not found in the TRACES file — include every office PAN in the TRACES bulk-PAN request and re-import.`);
-  // Name cross-check couldn't run: overlapping rows exist but none carry a verified name.
-  const overlapTraces = traces.filter((t) => officeSet.has(normalizePan(t.pan)));
-  const overlapWithName = overlapTraces.filter((t) => (t.verified_name ?? "").trim()).length;
-  if (overlapTraces.length >= 3 && overlapWithName === 0)
-    diag.push(`The TRACES file has no Verified Name column — the name cross-check was skipped, so verify the PAN-holder names manually.`);
   const withStatus = traces.filter((t) => (t.pan_status ?? "").trim()).length;
   if (traces.length >= 3 && withStatus === 0)
     diag.push(`The TRACES file has no PAN Status values — check you imported the verification RESULT file, not the request file.`);
@@ -641,7 +602,6 @@ export function panDiagnostics(office: OfficeParty[], traces: TracesPanRow[]): s
 export const PAN_OVERRIDE_REASONS = [
   "PAN verified manually",
   "Client confirmation received",
-  "Name variation accepted",
   "Proprietorship — PAN name is the proprietor's personal name",
   "PAN status updated but TRACES report not refreshed",
   "Higher rate (20% / 5%) already deducted — §206AA satisfied",
