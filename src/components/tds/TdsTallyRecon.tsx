@@ -14,6 +14,8 @@ import { ShieldCheck, CheckCircle2, XCircle, Upload, FileSpreadsheet, Loader2, R
 import { pdfToTextPages } from "@/lib/tds/pdfText";
 import { parseTallyPdfPages } from "@/lib/tds/tallyPdf";
 import { logReconAudit } from "@/lib/tdsReconAudit";
+import { TdsExportMenu } from "./TdsExportMenu";
+import type { StageReport, ReportMeta } from "@/lib/tds/tdsReport";
 import { makeDateNormaliser, normalizeName, canonicalSection, nameCompare } from "@/lib/tds/match";
 import {
   reconcileTally,
@@ -28,6 +30,8 @@ export interface TallyStageStatus {
 
 interface Props {
   filing: any; selClient: string; selFy: string; selQuarter: string; selForm: string;
+  /** Client display name — for the exported report header. */
+  clientName?: string;
   resolveFirmId: () => Promise<string | null>; disabled?: boolean;
   onStatusChange?: (s: TallyStageStatus) => void;
 }
@@ -108,7 +112,7 @@ const mappingOffer = (r: ResultRow): string | null => {
   return cmp === "match" || cmp === "unknown" ? null : r.tally_party;
 };
 
-export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, resolveFirmId, disabled, onStatusChange }: Props) {
+export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, clientName, resolveFirmId, disabled, onStatusChange }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
   const [office, setOffice] = useState<OfficeTxn[]>([]);
@@ -185,6 +189,17 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, r
 
   useEffect(() => { loadAll(); }, [loadAll]);
   useEffect(() => { setActiveFilter(null); }, [filingId]);
+
+  /** Import several ledger PDFs at once — a client keeps one ledger PER SECTION, so
+   *  picking 194A/194C/194J/194T together is the normal case, not the exception.
+   *  Sequential: each import clears this filing's results, so parallel runs would
+   *  race. One file failing does not abandon the rest. */
+  const handleImportMany = async (files: File[]) => {
+    if (files.length === 1) { await handleImport(files[0]); return; }
+    let ok = 0;
+    for (const f of files) { try { await handleImport(f); ok++; } catch { /* handleImport toasts */ } }
+    if (ok > 1) toast({ title: `Imported ${ok} of ${files.length} ledger(s)`, description: "All ledgers reconcile together — click Run Validation." });
+  };
 
   const handleImport = async (file: File) => {
     if (!filing) return; setImporting(true);
@@ -307,6 +322,23 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, r
     setValidating(true); try { await runAudit(filing.id); } catch (e: any) { toast({ title: "Re-validation failed", description: e.message, variant: "destructive" }); } setValidating(false);
   };
 
+  /** Undo a saved party mapping. Deletes the mapping and re-runs, so the record
+   *  drops straight back out of Matched into the mismatch list and every count
+   *  (Matched / Mapped / Mismatched) follows from the fresh audit — no separate
+   *  bookkeeping to drift. */
+  const unmapParty = async (r: ResultRow) => {
+    if (!r.office_name || !selClient) return;
+    const { error } = await supabase.from("tds_tally_party_maps").delete()
+      .eq("client_id", selClient).eq("office_name_norm", normalizeName(r.office_name));
+    if (error) { toast({ title: "Could not remove the mapping", description: error.message, variant: "destructive" }); return; }
+    await logReconAudit({ filingId: filing?.id, firmId: filing?.firm_id, userId: user?.id, userName: userMap[user?.id ?? ""], actionType: "TALLY_PARTY_MAP", oldValue: r.tally_party, newValue: null, remark: `Removed party mapping for "${r.office_name}"` });
+    toast({ title: "Mapping removed", description: `"${r.office_name}" is no longer mapped — re-running.` });
+    setValidating(true);
+    try { await runAudit(filing.id); await loadAll(); }
+    catch (e: any) { toast({ title: "Re-validation failed", description: e.message, variant: "destructive" }); }
+    setValidating(false);
+  };
+
   const openOverride = (r: ResultRow) => { setOvTarget(r); setOvReason(""); setOvOther(""); setOvOpen(true); };
   const saveOverride = async () => {
     if (!ovTarget) return; const reason = ovReason === "Other" ? ovOther.trim() : ovReason;
@@ -325,6 +357,45 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, r
     const { error } = await supabase.from("tds_tally_results").update({ overridden: false, override_reason: null, overridden_by: null, overridden_at: null }).eq("id", r.id);
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
     setResults((p) => p ? p.map((x) => x.id === r.id ? { ...x, overridden: false, override_reason: null } : x) : p);
+  };
+
+  /** Stage-3 report — the ledger reconciliation as it stands right now. */
+  const stage3Report = (): StageReport => {
+    const rs = results || [];
+    const row = (r: ResultRow) => ({
+      "Office Party": r.office_name || "—",
+      "Office Date": r.office_date || "—",
+      "Office TDS": r.office_tds ?? "",
+      Section: r.office_section || "—",
+      "Ledger Party": r.tally_party || "—",
+      "Ledger Date": r.tally_date || "—",
+      "Ledger Credit": r.tally_credit ?? "",
+      Result: r.result,
+      Mapped: r.mapped ? "Yes" : "No",
+      Remarks: r.overridden ? `Overridden — ${r.override_reason || "accepted"}` : (r.reason || ""),
+      Overridden: r.overridden ? "Yes" : "No",
+    });
+    const unresolved = rs.filter((r) => isTallyIssue(r.result) && !r.overridden && !r.mapped);
+    return {
+      title: "Stage 3 - Tally Ledger Reconciliation",
+      subtitle: `Office Data vs the imported Tally ledger PDFs — date, party and TDS (credit)${ledgerSections.length ? ` · sections ${ledgerSections.join(", ")}` : ""}`,
+      summary: [
+        { label: "Total", value: summary.total },
+        { label: "Matched", value: summary.matched },
+        { label: "Mismatched", value: summary.issues },
+        { label: "Mapped", value: summary.mapped },
+        { label: "Overridden", value: summary.overridden },
+      ],
+      sections: [
+        { title: "Mismatched", rows: unresolved.map(row), emptyNote: "No mismatches — every office record reconciled to the ledger." },
+        { title: "Mapped", rows: rs.filter((r) => r.mapped).map(row), emptyNote: "No records matched via a saved party mapping." },
+        { title: "Overridden", rows: rs.filter((r) => r.overridden).map(row), emptyNote: "No overrides." },
+        { title: "Matched", rows: rs.filter((r) => r.result === "Matched").map(row), emptyNote: "No matched records." },
+      ],
+      notes: missingSections.length
+        ? [`Office Data has section(s) ${missingSections.join(", ")} with no imported ledger — those records cannot be reconciled until that ledger PDF is imported.`]
+        : [],
+    };
   };
 
   const summary = useMemo(() => {
@@ -365,7 +436,17 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, r
           </div>
         </div>
         {r.tally_party != null && (
-          <p className="text-[11px] text-muted-foreground">Ledger: <b className="text-foreground">{r.tally_party}</b> · {r.tally_date || "—"} · credit {inr(r.tally_credit)}{r.mapped ? " · mapped" : ""}</p>
+          <p className="text-[11px] text-muted-foreground flex items-center gap-1.5 flex-wrap">
+            <span>Ledger: <b className="text-foreground">{r.tally_party}</b> · {r.tally_date || "—"} · credit {inr(r.tally_credit)}</span>
+            {r.mapped && (
+              <>
+                <Badge variant="secondary" className="text-[9px] px-1 py-0 h-4">mapped</Badge>
+                <button type="button" disabled={disabled || validating}
+                  className="text-[10px] underline text-muted-foreground hover:text-destructive disabled:opacity-50"
+                  onClick={() => unmapParty(r)}>Unmap</button>
+              </>
+            )}
+          </p>
         )}
         <p className={cn("text-xs", r.overridden ? "text-blue-600" : r.result === "Matched" ? "text-emerald-600" : "text-destructive")}>
           {r.overridden ? `Overridden — ${r.override_reason || "accepted"}${r.overridden_by && userMap[r.overridden_by] ? ` · ${userMap[r.overridden_by]}` : ""}` : r.reason}
@@ -412,7 +493,8 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, r
             )}
             {validating && <span className="text-[10px] text-amber-600 flex items-center gap-1 shrink-0"><Loader2 size={10} className="animate-spin" /> reconciling…</span>}
             <div className="flex-1" />
-            <input ref={fileRef} type="file" accept=".pdf,application/pdf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImport(f); e.currentTarget.value = ""; }} />
+            <input ref={fileRef} type="file" multiple accept=".pdf,application/pdf" className="hidden"
+              onChange={(e) => { const picked = Array.from(e.target.files ?? []); if (picked.length) handleImportMany(picked); e.currentTarget.value = ""; }} />
             <Button size="sm" variant={batches.length ? "outline" : "default"} className="gap-1 h-6 px-2 text-[11px] shrink-0" disabled={importing || disabled} onClick={() => fileRef.current?.click()}>
               {importing ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}{batches.length ? "Add / re-import" : "Import ledger PDF"}
             </Button>
@@ -445,6 +527,14 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, r
           {validating ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}{validating ? "Validating…" : "Run Validation"}
         </Button>
         {!batches.length ? <span className="text-xs text-muted-foreground">Import the Tally ledger to enable reconciliation.</span> : officeCount === 0 ? <span className="text-xs text-muted-foreground">No office records to reconcile.</span> : null}
+        <div className="flex-1" />
+        {results && (
+          <TdsExportMenu
+            build={stage3Report}
+            meta={{ client: clientName || "—", form: selForm, quarter: selQuarter, fy: selFy }}
+            label="Export Stage 3"
+          />
+        )}
       </div>
 
       {results && (<>
