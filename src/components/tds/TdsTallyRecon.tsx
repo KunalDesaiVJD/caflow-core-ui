@@ -11,11 +11,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { ShieldCheck, CheckCircle2, XCircle, Upload, FileSpreadsheet, Loader2, RotateCcw, X, Play, Users, Link2 } from "lucide-react";
-import { readSheetGrids, readDelimitedGrid } from "@/lib/tdsWorkbook";
+import { pdfToTextPages } from "@/lib/tds/pdfText";
+import { parseTallyPdfPages } from "@/lib/tds/tallyPdf";
 import { logReconAudit } from "@/lib/tdsReconAudit";
 import { makeDateNormaliser, normalizeName, canonicalSection, nameCompare } from "@/lib/tds/match";
 import {
-  parseTallyWorkbook, reconcileTally,
+  reconcileTally,
   type OfficeTxn, type TallyRow, type TallyReconRow, type PartyMap, type TallyResult,
 } from "@/lib/tds/tallyRecon";
 
@@ -65,10 +66,26 @@ function AnimatedNumber({ value }: { value: number }) {
   return <>{d}</>;
 }
 
+/**
+ * Stage-3 imports Tally ledger PDFs ONLY.
+ *
+ * The Excel/CSV path is gone on purpose: a Tally ledger EXPORTED to Excel loses
+ * the ledger name (so the section had to be guessed), and every client's export
+ * settings produced a different sheet shape — which is what made Stage-3 need a
+ * fix per client. The PRINTED ledger PDF is the one artefact Tally emits
+ * identically for every client and every section, so the parser can learn that
+ * one structure once. See src/lib/tds/tallyPdf.ts.
+ */
 async function parseTallyFile(file: File) {
-  const name = file.name.toLowerCase();
-  const grids = (name.endsWith(".csv") || name.endsWith(".txt")) ? readDelimitedGrid(await file.text()) : readSheetGrids(await file.arrayBuffer());
-  return parseTallyWorkbook(grids);
+  if (!file.name.toLowerCase().endsWith(".pdf")) {
+    throw new Error("Stage 3 reads Tally ledger PDFs only. Export the ledger from Tally as PDF (Ledger Account → print/export to PDF) and import that.");
+  }
+  const pages = await pdfToTextPages(file);
+  const parsed = parseTallyPdfPages(pages);
+  if (!parsed.rows.length) {
+    throw new Error(parsed.issues[0] || "No deduction (credit) entries found — is this a Tally Ledger Account print?");
+  }
+  return parsed;
 }
 
 const isTallyIssue = (r: string) => r !== "Matched";
@@ -173,7 +190,6 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, r
     if (!filing) return; setImporting(true);
     try {
       const parsed = await parseTallyFile(file);
-      if (parsed.rows.length === 0) throw new Error("No ledger rows found. Expected a Tally ledger export with Date / Particulars / Debit / Credit columns.");
       const firmId = await resolveFirmId();
       const { data: dup } = await supabase.from("tds_tally_batches").select("id").eq("filing_id", filing.id).eq("file_name", file.name);
       const dupIds = (dup || []).map((b: any) => b.id);
@@ -193,8 +209,22 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, r
       for (let i = 0; i < recs.length; i += 1000) { const { error } = await supabase.from("tds_tally_rows").insert(recs.slice(i, i + 1000)); if (error) throw new Error(error.message); }
       await supabase.from("tds_tally_results").delete().eq("filing_id", filing.id);
       setResults(null);
-      const secs = [...new Set(parsed.rows.map((r) => r.section).filter(Boolean))];
-      toast({ title: `Imported ${parsed.rows.length} ledger row(s)`, description: `${file.name} · section ${secs.length ? secs.join(", ") : parsed.section || "—"} · ${parsed.creditCount} credit entries — click Run Validation.` });
+      // Report what the ledger actually yielded, including what was deliberately
+      // left out (challan payments / balances / totals) so a low count is never a
+      // mystery, and surface any parse issue rather than importing quietly.
+      const sk = parsed.skipped;
+      const dropped = [sk.payments && `${sk.payments} payment`, sk.balances && `${sk.balances} balance`, sk.totals && `${sk.totals} total`]
+        .filter(Boolean).join(", ");
+      toast({
+        title: `Imported ${parsed.rows.length} deduction(s) from ${parsed.section || "the ledger"}`,
+        description: [
+          `${parsed.ledgerName || file.name}${parsed.period ? ` · ${parsed.period}` : ""}`,
+          dropped ? `Skipped ${dropped} row(s) — not deductions.` : "",
+          parsed.issues.join(" "),
+          "Click Run Validation.",
+        ].filter(Boolean).join(" "),
+        ...(parsed.issues.length ? { variant: "default" as const } : {}),
+      });
       await loadAll();
     } catch (e: any) { toast({ title: "Tally import failed", description: e.message, variant: "destructive" }); }
     setImporting(false);
@@ -370,9 +400,9 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, r
         <Card><CardContent className="p-4">
           <div className="flex items-center justify-between mb-2">
             <p className="font-semibold text-sm flex items-center gap-2"><FileSpreadsheet size={15} className="text-foreground" /> Imported Tally Ledger{validating && <span className="text-xs text-amber-600 flex items-center gap-1"><Loader2 size={11} className="animate-spin" /> reconciling…</span>}</p>
-            <input ref={fileRef} type="file" accept=".xls,.xlsx,.csv,.txt" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImport(f); e.currentTarget.value = ""; }} />
+            <input ref={fileRef} type="file" accept=".pdf,application/pdf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImport(f); e.currentTarget.value = ""; }} />
             <Button size="sm" variant={batches.length ? "outline" : "default"} className="gap-1" disabled={importing || disabled} onClick={() => fileRef.current?.click()}>
-              {importing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}{batches.length ? "Add / re-import ledger" : "Import Tally ledger"}
+              {importing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}{batches.length ? "Add / re-import ledger" : "Import ledger PDF"}
             </Button>
           </div>
           {batches.length ? (
@@ -397,7 +427,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, r
                 </p>
               )}
             </div>
-          ) : <p className="text-xs text-muted-foreground">Import the section-wise Tally ledger export (.xls / .xlsx / .csv). A client normally keeps ONE LEDGER PER SECTION — import each one; they combine. Re-importing the same file name replaces it. Stage 3 is optional.</p>}
+          ) : <p className="text-xs text-muted-foreground">Import the Tally <b>Ledger Account PDF</b> for each TDS section (194A, 194C, 194J, 194T …) — in Tally open the ledger and print/export it to PDF. The section, dates, parties and TDS (credit) amounts are read from the PDF; they combine across files. Re-importing the same file name replaces it. Stage 3 is optional.</p>}
         </CardContent></Card>
       </div>
 
