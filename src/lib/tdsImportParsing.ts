@@ -268,17 +268,49 @@ export function extractWorkbookRows(
   gridOf: (name: string) => unknown[][],
   onProgress?: (sheetIndex: number) => void,
 ): Record<string, unknown>[] {
-  const sectioned: Record<string, unknown>[] = [];
-  for (let i = 0; i < sheetNames.length; i++) {
-    onProgress?.(i);
-    const sec = sectionFromSheetName(sheetNames[i]);
-    if (sec) sectioned.push(...extractSheetRows(gridOf(sheetNames[i]), sec));
-  }
-  if (sectioned.length) return sectioned;
+  // READ EVERY SHEET. The section taken from a sheet's NAME is only a HINT for the
+  // rows of THAT sheet (used when the sheet carries no section column) — it must
+  // never decide WHICH sheets are read.
+  //
+  // This previously ran in two passes: collect rows from sheets whose NAME looks
+  // like a TDS section, and if that found anything, RETURN ONLY THOSE — discarding
+  // every other sheet in the workbook. So a client whose real data sits on sheets
+  // named by quarter/month ("QUT-01 April 01 to June-30" …) alongside ONE small
+  // incidental section-named tab ("194T") had their whole return silently reduced
+  // to that one tab. Measured on a real file: 159 rows across 6 sheets came back as
+  // 3, with no warning — the four quarterly sheets (24+34+28+70 rows) were dropped
+  // wholesale. That is the "entries not captured" bug, and it is format-dependent,
+  // which is why it kept resurfacing with each new client's workbook.
   const all: Record<string, unknown>[] = [];
   for (let i = 0; i < sheetNames.length; i++) {
     onProgress?.(i);
-    all.push(...extractSheetRows(gridOf(sheetNames[i]), null));
+    const sec = sectionFromSheetName(sheetNames[i]);
+    all.push(...extractSheetRows(gridOf(sheetNames[i]), sec));
   }
   return all;
+}
+
+/**
+ * GROUND TRUTH for the never-lose-a-record safety net: every distinct PAN that
+ * appears in ANY cell of the workbook.
+ *
+ * The import's existing shortfall warning compares rows MAPPED against rows
+ * EXTRACTED — so it is structurally blind to a sheet that extracts nothing at all
+ * (0 of 0 reads as 100%). A TDS deductee line always carries a PAN, so the PANs
+ * physically present in the file are an independent measure of what SHOULD have
+ * been read. Comparing against this catches whole-sheet loss, which no amount of
+ * header heuristics can.
+ */
+const PAN_CELL_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;   // the WHOLE cell is a PAN
+export function countPansInGrids(sheetNames: string[], gridOf: (name: string) => unknown[][]): number {
+  const pans = new Set<string>();
+  for (const name of sheetNames) {
+    for (const row of gridOf(name) || []) {
+      for (const cell of row || []) {
+        const s = String(cell ?? "").trim().toUpperCase().replace(/\s+/g, "");
+        if (PAN_CELL_RE.test(s)) pans.add(s);
+      }
+    }
+  }
+  return pans.size;
 }
