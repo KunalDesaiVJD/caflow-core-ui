@@ -10,7 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { ShieldCheck, CheckCircle2, XCircle, Upload, FileSpreadsheet, Loader2, RotateCcw, X, Play, Users, Link2 } from "lucide-react";
+import { ShieldCheck, CheckCircle2, XCircle, Upload, FileSpreadsheet, Loader2, RotateCcw, X, Play, Users, Link2, Unlink } from "lucide-react";
 import { pdfToTextPages } from "@/lib/tds/pdfText";
 import { parseTallyPdfPages } from "@/lib/tds/tallyPdf";
 import { logReconAudit } from "@/lib/tdsReconAudit";
@@ -375,7 +375,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       Remarks: r.overridden ? `Overridden — ${r.override_reason || "accepted"}` : (r.reason || ""),
       Overridden: r.overridden ? "Yes" : "No",
     });
-    const unresolved = rs.filter((r) => isTallyIssue(r.result) && !r.overridden && !r.mapped);
+    const unresolved = rs.filter((r) => isTallyIssue(r.result) && !r.overridden);
     return {
       title: "Stage 3 - Tally Ledger Reconciliation",
       subtitle: `Office Data vs the imported Tally ledger PDFs — date, party and TDS (credit)${ledgerSections.length ? ` · sections ${ledgerSections.join(", ")}` : ""}`,
@@ -388,7 +388,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       ],
       sections: [
         { title: "Mismatched", rows: unresolved.map(row), emptyNote: "No mismatches — every office record reconciled to the ledger." },
-        { title: "Mapped", rows: rs.filter((r) => r.mapped).map(row), emptyNote: "No records matched via a saved party mapping." },
+        { title: "Mapped", rows: rs.filter((r) => r.mapped).map(row), emptyNote: "No records have a manual party mapping." },
         { title: "Overridden", rows: rs.filter((r) => r.overridden).map(row), emptyNote: "No overrides." },
         { title: "Matched", rows: rs.filter((r) => r.result === "Matched").map(row), emptyNote: "No matched records." },
       ],
@@ -433,19 +433,20 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
             {typeof r.confidence === "number" && <span className="text-[10px] text-muted-foreground">{r.confidence}%</span>}
             {!r.overridden ? <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => openOverride(r)} disabled={disabled}><ShieldCheck size={12} /> Override</Button>
               : <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => undoOverride(r)}><RotateCcw size={12} /> Undo</Button>}
+            {/* Only a manually-mapped record can be unmapped. It sits with the other
+                record actions rather than as a text link buried in the details. */}
+            {r.mapped && (
+              <Button variant="outline" size="sm" className="h-7 gap-1 text-xs text-muted-foreground hover:text-destructive"
+                disabled={disabled || validating} onClick={() => unmapParty(r)} title="Remove the saved party mapping and re-validate">
+                <Unlink size={12} /> Unmap
+              </Button>
+            )}
           </div>
         </div>
         {r.tally_party != null && (
           <p className="text-[11px] text-muted-foreground flex items-center gap-1.5 flex-wrap">
             <span>Ledger: <b className="text-foreground">{r.tally_party}</b> · {r.tally_date || "—"} · credit {inr(r.tally_credit)}</span>
-            {r.mapped && (
-              <>
-                <Badge variant="secondary" className="text-[9px] px-1 py-0 h-4">mapped</Badge>
-                <button type="button" disabled={disabled || validating}
-                  className="text-[10px] underline text-muted-foreground hover:text-destructive disabled:opacity-50"
-                  onClick={() => unmapParty(r)}>Unmap</button>
-              </>
-            )}
+            {r.mapped && <Badge variant="secondary" className="text-[9px] px-1 py-0 h-4">party mapped</Badge>}
           </p>
         )}
         <p className={cn("text-xs", r.overridden ? "text-blue-600" : r.result === "Matched" ? "text-emerald-600" : "text-destructive")}>
