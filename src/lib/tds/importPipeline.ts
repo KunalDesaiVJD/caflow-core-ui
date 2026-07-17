@@ -60,23 +60,48 @@ export function mapAndCanonicalise(rows: Record<string, unknown>[], opts: MapOpt
   const { map, report, issues, notes } = resolveMapping(allRows, opts.aiMap);
 
   const inputRows = allRows.filter((r) => r && typeof r === "object" && Object.values(r).some((v) => v != null && String(v).trim() !== "")).length;
-  const built = allRows.map((row) => buildCanonicalRow(row, map));
-  const mapped = built.filter(nonEmptyCanon);
+  // Keep each canonical row paired with the SOURCE row it came from — the dedup
+  // below needs the source's "__sheet" tag to tell an echo from a real repeat.
+  const built = allRows.map((src) => ({ row: buildCanonicalRow(src, map), src }));
+  const mapped = built.filter((b) => nonEmptyCanon(b.row));
 
-  // CONTENT DE-DUPLICATION — collapse exact echoes (a per-section sheet AND a
-  // consolidated sheet, or a repeated subtotal). The signature includes the NAME
-  // so any real difference keeps both rows — priority is never dropping a record.
+  // CROSS-SHEET ECHO DE-DUPLICATION.
+  //
+  // A workbook often holds the same records twice: one sheet per section PLUS a
+  // consolidated sheet. Those echoes must collapse or every record double-counts.
+  //
+  // But identical rows on the SAME sheet are NOT echoes — they are real, separate
+  // transactions. A client legitimately books four identical bills to one party on
+  // one day (verified on ELENZA CALLISTA: KONE Elevator has 4 identical rows on
+  // 01.03.2026 and 6 more on 02.03.2026, all genuine). Keying dedup on content
+  // ALONE collapsed those ten to one and removed 122 of 228 rows from that file —
+  // every lost row then surfaced as a FALSE "no matching row in the imported file".
+  //
+  // So the key is the signature PLUS its occurrence index WITHIN ITS SHEET: the
+  // 2nd "KONE|1011450|20229" on sheet 194C is a different record from the 1st, but
+  // the 2nd on Sheet1 is the same record as the 2nd on 194C. Genuine repeats
+  // survive; echoes collapse. Rows with no sheet tag (CSV, a single grid) fall back
+  // to a per-row unique key — i.e. NEVER dropped, because for them we cannot tell
+  // an echo from a repeat, and losing a real record is the worse error.
   const sigOf = (r: CanonicalRow) => `${normalizePan(r.pan)}|${String(r.deductee_name ?? "").trim().toUpperCase()}|${String(r.date_of_payment ?? "").trim()}|${r.amount_paid ?? ""}|${r.tds_amount ?? ""}|${String(r.section_code ?? "").trim()}`;
   const seen = new Set<string>();
+  const perSheetSeen = new Map<string, number>();
   const canonical: CanonicalRow[] = [];
   let duplicatesRemoved = 0;
-  for (const r of mapped) {
+  mapped.forEach(({ row, src }, i) => {
+    const r = row;
     const keyable = (r.pan != null && String(r.pan).trim() !== "") || r.amount_paid != null;
-    if (!keyable) { canonical.push(r); continue; }
-    const s = sigOf(r);
-    if (seen.has(s)) { duplicatesRemoved++; continue; }
-    seen.add(s); canonical.push(r);
-  }
+    if (!keyable) { canonical.push(r); return; }
+    const sheet = String((src as Record<string, unknown>)?.["__sheet"] ?? "");
+    const sig = sigOf(r);
+    if (!sheet) { canonical.push(r); return; }   // untagged → cannot judge → keep
+    const occKey = `${sheet}::${sig}`;
+    const occ = perSheetSeen.get(occKey) ?? 0;
+    perSheetSeen.set(occKey, occ + 1);
+    const key = `${sig}#${occ}`;                 // Nth occurrence of this record
+    if (seen.has(key)) { duplicatesRemoved++; return; }
+    seen.add(key); canonical.push(r);
+  });
 
   const distinctPans = new Set(canonical.map((r) => normalizePan(r.pan)).filter((p) => PAN_OK.test(p))).size;
   const reconciliation: ImportReconciliation = {

@@ -131,9 +131,15 @@ interface ColProfile {
   fracPan: number; fracDate: number; fracName: number; fracSec: number; fracSecCode: number;
   nums: number[]; fracNum: number; median: number | null; isSerial: boolean; hfield: CanonField | "__bank__" | null;
 }
+/** Internal bookkeeping keys the extractor attaches to a row. They are NOT client
+ *  columns and must never be profiled or mapped: "__sheet" holds the source sheet
+ *  name, which for a per-section workbook looks exactly like a section code
+ *  ("194C") and would otherwise be a very convincing section column. */
+const INTERNAL_KEYS = new Set(["__sheet"]);
+
 function profileColumns(allRows: Record<string, unknown>[]): ColProfile[] {
   const headers = new Set<string>();
-  for (const r of allRows) if (r && typeof r === "object") for (const k of Object.keys(r)) headers.add(k);
+  for (const r of allRows) if (r && typeof r === "object") for (const k of Object.keys(r)) if (!INTERNAL_KEYS.has(k)) headers.add(k);
   return [...headers].map((h) => {
     let ne = 0, pan = 0, date = 0, name = 0, scode = 0, skw = 0;
     const nums: number[] = [];

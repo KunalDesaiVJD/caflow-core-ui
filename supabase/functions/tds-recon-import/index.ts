@@ -335,6 +335,11 @@ serve(async (req) => {
     // is the generous output budget for that single pass.
     const IMPORT_MAX_TOKENS = 24000;
     const collected: CanonicalRow[] = [];
+    // The source sheet of each collected row, index-aligned with `collected`. The
+    // echo de-duplication needs it to tell a cross-sheet echo from a real repeat.
+    // Empty for the AI paths (PDF/image/text), which have no sheets — those rows
+    // are then never dropped, which is the safe direction.
+    const collectedSheets: string[] = [];
     // Auditable record of how each canonical field was mapped (tabular path only);
     // returned to the UI so every mapping decision is visible before comparison.
     let mappingReport: { source: string; fields: Record<string, { column: string; by: string }>; issues: string[]; notes?: string[]; reconciliation?: Record<string, unknown> } | null = null;
@@ -447,8 +452,10 @@ serve(async (req) => {
         return json({ error: "Could not identify the deductee columns — the file needs at least a Name/PAN column and an Amount/TDS column. Please check the column headers." }, 422);
       }
 
-      // 3) Emit the built canonical rows.
-      for (const r of built) collected.push(r);
+      // 3) Emit the built canonical rows, each carrying the SHEET it came from so
+      //    the de-duplication below can tell a cross-sheet echo from a genuine
+      //    repeat. (Client rows are tagged with __sheet by extractWorkbookRows.)
+      built.forEach((r, i) => { collectedSheets.push(String((allRows[i] as Record<string, unknown>)?.["__sheet"] ?? "")); collected.push(r); });
       tabularInputRows = inputRows;
       tabularMappedRows = mappedOf(built);
       // Human-readable mapping report returned to the UI so every mapping decision
@@ -462,30 +469,50 @@ serve(async (req) => {
       console.log(`tds-recon-import: ${mappingSource} mapping — ${tabularMappedRows}/${inputRows} rows mapped →`, JSON.stringify(mappingReport));
     }
 
-    // drop wholly-empty rows the model may echo
-    const mapped = collected.filter(r => r.deductee_name || r.pan || r.amount_paid != null || r.tds_amount != null);
+    // drop wholly-empty rows the model may echo — keeping each row paired with its
+    // source sheet, which the de-duplication below depends on.
+    const mappedWithSheet = collected
+      .map((r, i) => ({ r, sheet: collectedSheets[i] ?? "" }))
+      .filter(({ r }) => r.deductee_name || r.pan || r.amount_paid != null || r.tds_amount != null);
+    const mapped = mappedWithSheet.map(({ r }) => r);
 
-    // CONTENT DE-DUPLICATION — a client file commonly lists the SAME transaction
-    // more than once (a per-section sheet AND a consolidated sheet, or a repeated
-    // subtotal echo). Drop rows with an identical (PAN · date · amount · TDS ·
-    // section) signature so an overlapping layout can't double-count. First wins
-    // (order preserved). A row with no PAN and no amount can't form a safe key, so
-    // it's always kept.
-    // Signature includes the NAME so any real difference (a distinct party, a
-    // corrected amount, a different section) keeps BOTH rows — only an exact echo
-    // (same PAN · name · date · amount · TDS · section) is collapsed. Priority is
-    // never dropping a genuine record, so this stays conservative.
+    // CROSS-SHEET ECHO DE-DUPLICATION.
+    //
+    // A client workbook often lists the same transaction twice: one sheet per
+    // section PLUS a consolidated sheet. Those echoes must collapse or everything
+    // double-counts.
+    //
+    // But identical rows on the SAME sheet are NOT echoes — they are real, separate
+    // transactions. A client legitimately books several identical bills to one party
+    // on one day (verified on ELENZA CALLISTA: KONE Elevator has 4 identical rows on
+    // 01.03.2026 and 6 more on 02.03.2026, all genuine). Keying on content ALONE
+    // collapsed those ten to one and removed 122 of 228 rows from that file — and
+    // every row it removed then surfaced to the user as a FALSE "no matching row in
+    // the imported client file". This dedup, not the Excel reading, was the source
+    // of the recurring false mismatches.
+    //
+    // The key is therefore the signature PLUS its occurrence index WITHIN ITS SHEET:
+    // the 2nd "KONE|1011450|20229" on sheet 194C is a DIFFERENT record from the 1st,
+    // but the 2nd on Sheet1 is the SAME record as the 2nd on 194C. Genuine repeats
+    // survive; echoes collapse. An untagged row (CSV, PDF/AI path, a single grid) is
+    // NEVER dropped: without a sheet we cannot tell an echo from a repeat, and
+    // losing a real record is by far the worse error.
     const sigOf = (r: CanonicalRow) => `${String(r.pan ?? "").toUpperCase().replace(/\s+/g, "")}|${String(r.deductee_name ?? "").trim().toUpperCase()}|${String(r.date_of_payment ?? "").trim()}|${r.amount_paid ?? ""}|${r.tds_amount ?? ""}|${String(r.section_code ?? "").trim()}`;
     const seenSig = new Set<string>();
+    const perSheetSeen = new Map<string, number>();
     const canonical: CanonicalRow[] = [];
     let duplicatesRemoved = 0;
-    for (const r of mapped) {
+    mappedWithSheet.forEach(({ r, sheet }) => {
       const keyable = (r.pan != null && String(r.pan).trim() !== "") || r.amount_paid != null;
-      if (!keyable) { canonical.push(r); continue; }
-      const s = sigOf(r);
-      if (seenSig.has(s)) { duplicatesRemoved++; continue; }
-      seenSig.add(s); canonical.push(r);
-    }
+      if (!keyable || !sheet) { canonical.push(r); return; }
+      const sig = sigOf(r);
+      const occKey = `${sheet}::${sig}`;
+      const occ = perSheetSeen.get(occKey) ?? 0;
+      perSheetSeen.set(occKey, occ + 1);
+      const key = `${sig}#${occ}`;
+      if (seenSig.has(key)) { duplicatesRemoved++; return; }
+      seenSig.add(key); canonical.push(r);
+    });
 
     if (canonical.length === 0) {
       return json({ error: "No deductee rows could be read from the file. Check the file has recognisable columns/section." }, 422);
