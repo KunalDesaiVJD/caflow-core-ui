@@ -269,8 +269,11 @@ describe("reconcileTally — the 35 adversarial pairs, BOTH configurations", () 
   });
 
   it.each(PAIRS)("ALONE: %s against only %s is SUGGESTED, never Matched", (a, b) => {
-    // This pins DECISION 1. If someone ever flips the risky tier to auto-commit, every
-    // one of these 31 flips to "Matched" and this block goes red — loudly.
+    // The risky tier auto-commits a PAIRING (so tier-4 names resolve on crowded
+    // month-end blocks), but AUTO_MATCH_MAX_RANK — a separate gate — still withholds
+    // "Matched" and routes to a suggestion. This block is the proof: it stays green
+    // WITH A4 auto-committing. What must never happen is one of these 31 turning into
+    // "Matched"; if AUTO_MATCH_MAX_RANK is ever raised past rank 4, they do, loudly.
     const out = reconcileTally([txn("oa", a, "2026-03-05", 20229, "AAAPP1111A")], [row(0, b, "2026-03-05", 20229)], null);
     expect(out[0].result).not.toBe("Matched");
     expect(out[0].result).toBe("Party Name Mismatch");
@@ -344,12 +347,22 @@ describe("assignment — the tier ladder", () => {
   it("pins the tier ORDER literally", () => {
     // The order is load-bearing and SILENTLY breakable: reorder these and a weaker
     // pairing wins with no other test failing. Hence a test that just says the order.
-    expect(TIERS.map((t) => t.id)).toEqual(["A0", "A1", "A2", "A3", "A4"]);
+    //
+    // A1 (EXACT) PRECEDES A0 (ASSERTED) deliberately. A saved mapping must beat every
+    // weaker INFERENCE for its row but YIELD to a direct verbatim-name claim. When A0
+    // ran first, a stale mapping silently stole a row from the record whose name was
+    // that party verbatim — a wrong-PAN filing (fixed; see the A0-vs-verbatim test).
+    expect(TIERS.map((t) => t.id)).toEqual(["A1", "A0", "A2", "A3", "A4"]);
   });
 
-  it("pins DECISION 1: the risky tier does NOT auto-commit", () => {
-    expect(TIERS.find((t) => t.id === "A4")!.autoCommit).toBe(false);
-    expect(TIERS.filter((t) => t.autoCommit).map((t) => t.id)).toEqual(["A0", "A1", "A2", "A3"]);
+  it("pins that EVERY tier auto-commits, and safety rests on AUTO_MATCH_MAX_RANK", () => {
+    // A4 (RISKY) now auto-commits its mutually-best PAIRING, so tier-4 names resolve on
+    // crowded month-end blocks where the old degree-1 residue closer deadlocked and
+    // committed nothing. Auto-commit is NOT a match: AUTO_MATCH_MAX_RANK (rank 3.5)
+    // independently withholds "Matched" from rank-4 names. The 31 "ALONE" adversarial
+    // pairs staying at "Party Name Mismatch" with A4 auto-committing is the live proof.
+    expect(TIERS.every((t) => t.autoCommit)).toBe(true);
+    expect(AUTO_MATCH_MAX_RANK).toBeLessThan(4);
   });
 
   it("pins that ONLY the asserted tier is exempt from needing corroboration", () => {
@@ -479,13 +492,30 @@ describe("reconcileTally — no exception is ever a bare shrug", () => {
     expect(miss.reason).toMatch(/short by 1/);
   });
 
-  it("keeps an out-of-window credit from being dragged into the quarter", () => {
-    // The window is derived from the office records' OWN date span — no quarter
-    // parameter, no hardcoded FY boundary. Without it the residue closer would pair an
-    // August credit with a Q4 record purely because nothing else was left.
+  it("reports a far-dated lone credit as a Date Mismatch, not a phantom not-found", () => {
+    // There is NO date window (a span-derived ±15 days was the same client-shape bug on
+    // the date axis — it turned an ordinary 31-Mar provision booked 10-Apr into a
+    // phantom "Ledger Entry Not Found"). When the ONLY ledger entry for a party is far
+    // off, the honest, actionable verdict is a Date Mismatch naming the day count — the
+    // CA learns this quarter's entry is missing — never a silent Match (dateDelta drives
+    // the verdict) and never a bare not-found.
     const out = reconcileTally([txn("a", "KONE ELEVATOR INDIA PRIVATE LIMITED", "2026-03-05", 20229)],
       [row(0, "Kone Elevator India Pvt Ltd", "2025-08-11", 20229)], null);
-    expect(out[0].result).toBe("Ledger Entry Not Found");
+    expect(out[0].result).toBe("Date Mismatch");
+    expect(out[0].result).not.toBe("Matched");
+    expect(out[0].reason).toMatch(/day/i);
+  });
+
+  it("EXCLUSIVITY, not a window, keeps the stale credit out when the real one exists", () => {
+    // This is the window's only legitimate job, done by evidence instead of a cutoff:
+    // when this quarter's entry is present it carries dateDelta 0 and strictly dominates
+    // the recurring stale one, so the near entry Matches and the stale one is left as
+    // surplus — no client-shape parameter anywhere.
+    const out = reconcileTally([txn("a", "KONE ELEVATOR INDIA PRIVATE LIMITED", "2026-03-05", 20229)],
+      [row(0, "Kone Elevator India Pvt Ltd", "2025-08-11", 20229),
+       row(1, "Kone Elevator India Pvt Ltd", "2026-03-05", 20229)], null);
+    expect(out[0].result).toBe("Matched");
+    expect(out[0].tally_row_index).toBe(1);
   });
 });
 
@@ -512,5 +542,78 @@ describe("reconcileTally — a saved mapping resolves the PARTY and nothing else
     const out = reconcileTally([txn("a", "RAMESH PATEL", "2026-03-05", 20229)], [row(0, "Some Trade Name", "2026-03-05", 999)], null, map);
     expect(out[0].result).toBe("Credit Amount Mismatch");
     expect(out[0].mapped).toBe(true);
+  });
+
+  it("a saved mapping never steals a row from the record whose name IS that party", () => {
+    // FINDING 1. office A's name is the ledger party VERBATIM; office B (different PAN)
+    // is mapped onto the same party. When A0 (mapped) ran before A1 (exact) the mapping
+    // won the row uncontested and filed B against A's ledger entry — a silent wrong-PAN
+    // filing. A1 now precedes A0, so the verbatim owner takes its row and the mapping,
+    // denied it, is reported instead of mis-committed.
+    const out = reconcileTally(
+      [txn("a", "SOME TRADE NAME", "2026-03-05", 20229, "AAAPP1111A"),
+       txn("b", "RAMESH PATEL", "2026-03-05", 20229, "BBBPP2222B")],
+      [row(0, "Some Trade Name", "2026-03-05", 20229)], null, { "RAMESH PATEL": "Some Trade Name" });
+    const a = out.find((r) => r.office_deductee_id === "a")!;
+    const b = out.find((r) => r.office_deductee_id === "b")!;
+    expect(a.result).toBe("Matched");
+    expect(a.tally_row_index).toBe(0);
+    expect(b.result).not.toBe("Matched");        // the mapping did NOT steal the row
+    expect(b.tally_row_index).not.toBe(0);
+  });
+});
+
+describe("reconcileTally — evidence, not degree, resolves a crowded month-end block", () => {
+  it("resolves risky (tier-4) names on a same-date, same-amount crowd — FINDING 2", () => {
+    // The old residue closer only paired an office with exactly ONE edge whose row had
+    // exactly ONE suitor. On a month-end block every record is adjacent to every row, so
+    // it deadlocked and reported all of them "Ledger Entry Not Found". A4 now commits its
+    // evidence-dominant pairing: each office resolves to its OWN best-name row. Each is a
+    // suggestion (tier 4), never a silent Match.
+    const names: [string, string][] = [
+      ["RAMESH PATEL", "Ramesh Patil"], ["MAHESH PATEL", "Mahesh Patil"], ["SURESH PATEL", "Suresh Patil"],
+    ];
+    const out = reconcileTally(
+      names.map(([o], i) => txn(`o${i}`, o, "2026-03-31", 20229, `AAAPP111${i}A`)),
+      names.map(([, l], i) => row(i, l, "2026-03-31", 20229)), null);
+    for (let i = 0; i < names.length; i++) {
+      const r = out.find((x) => x.office_deductee_id === `o${i}`)!;
+      expect(r.result).toBe("Party Name Mismatch");     // resolved, not deadlocked
+      expect(r.result).not.toBe("Matched");             // risky name never auto-matches
+      expect(r.suggested_party).toBe(names[i][1]);       // and to the RIGHT counterpart
+    }
+  });
+});
+
+describe("reconcileTally — no client-shape date window (FINDING 3)", () => {
+  it("reports a year-end provision booked in April as a Date Mismatch, not not-found", () => {
+    // Deduction dated 31-Mar, ledger books it 10-Apr — the ordinary Q4 shape. The
+    // span-derived ±15-day window made this a phantom "Ledger Entry Not Found"; the CA
+    // must instead see a Date Mismatch naming the day count.
+    const out = reconcileTally(
+      [txn("a", "SHARMA AND ASSOCIATES", "2026-03-31", 10000),
+       txn("b", "VERMA CONSULTANCY", "2026-03-31", 10000)],
+      [row(0, "Sharma & Associates", "2026-03-31", 10000),
+       row(1, "Verma Consultancy", "2026-04-10", 10000)], null);
+    const b = out.find((r) => r.office_deductee_id === "b")!;
+    expect(b.result).toBe("Date Mismatch");
+    expect(b.result).not.toBe("Ledger Entry Not Found");
+    expect(b.reason).toMatch(/day/i);
+  });
+
+  it("gives one pair the SAME verdict regardless of unrelated records in the file", () => {
+    // The span window made a verdict depend on OTHER records: adding a far-dated
+    // unrelated record widened the span and flipped this pair from not-found to Date
+    // Mismatch. The verdict is now a property of the pair and its competitors only.
+    const office = txn("a", "ACME TRADING COMPANY", "2026-03-05", 5000, "AAAPP1111A");
+    const led = row(0, "Acme Trading Company", "2026-03-21", 5000);   // 16 days out
+    const alone = reconcileTally([office], [led], null);
+    const withOthers = reconcileTally(
+      [office, txn("z", "ZEBRA CORPORATION", "2026-04-30", 9999, "ZZZPP9999Z")],
+      [led, row(1, "Zebra Corporation", "2026-04-30", 9999)], null);
+    const a1 = alone[0];
+    const a2 = withOthers.find((r) => r.office_deductee_id === "a")!;
+    expect(a2.result).toBe(a1.result);
+    expect(a2.tally_row_index).toBe(a1.tally_row_index);
   });
 });

@@ -157,15 +157,25 @@ export type TierId = "A0" | "A1" | "A2" | "A3" | "A4" | "RESIDUE";
 interface TierDef {
   id: TierId;
   label: string;
-  /** DECISION 1, the load-bearing knob. Tier >= 4 (RISKY: PATEL/PATIL) does not
-   *  auto-commit a pairing here — it falls to the residue closer, which pairs it
-   *  only when FORCED BY ELIMINATION, and the verdict rule below independently
-   *  withholds "Matched" from it in every case.
+  /** Whether this tier commits its mutually-exclusive pairings in the ladder. ALL
+   *  tiers now do, including A4 (RISKY: PATEL/PATIL), and here is why that is safe:
    *
-   *  Flipping A4 to true would let an exclusively-best risky pair commit in the
-   *  ladder instead of the residue. It would NOT make it a Match: that is governed
-   *  by AUTO_MATCH_MAX_RANK, deliberately a SECOND, independent gate, so no single
-   *  edit to this table can turn a spelling guess into a filed return. */
+   *  A committed pairing is NOT a Match. Whether a committed pair is reported "Matched"
+   *  is governed by AUTO_MATCH_MAX_RANK — a SECOND, independent gate — so a rank-4
+   *  spelling guess commits a PAIRING but is reported "Party Name Mismatch" with a
+   *  suggestion, never a filed return. Two edits to two different places would be
+   *  needed to turn a guess into a match; no single one can.
+   *
+   *  A4 used to be autoCommit:false, deferring risky names to the residue closer. That
+   *  closer only commits a pair when the office record has exactly ONE edge AND its row
+   *  has exactly ONE suitor. Real deductions bunch on month-end, so on any 31-Mar block
+   *  every uncommitted record is adjacent to every unclaimed row, both degree tests
+   *  fail, and the closer commits NOTHING — a tier-4 name like TARUBEN/Taruben S paired
+   *  in a 1×1 unit test but never on a real Q4 ledger. Running A4 through the tier's own
+   *  EVIDENCE-DOMINANCE (uniquely-best-for-both) picks the counterpart correctly on a
+   *  crowded block, where degree-1 exclusivity cannot. Degree-1 is not exclusivity;
+   *  evidence-dominance is. For a genuinely 1×1 case the two paths give the identical
+   *  outcome, so this only ever ADDS resolutions, never changes an existing one. */
   autoCommit: boolean;
   /** A0 only. The user's assertion IS the corroboration, so a mapped party whose
    *  date AND amount are both wrong must still be FOUND and reported — otherwise the
@@ -179,14 +189,24 @@ interface TierDef {
 /**
  * ORDER IS LOAD-BEARING AND SILENTLY BREAKABLE — reordering these rows changes which
  * pairing wins with no test failing unless one asserts the order itself. Two do.
+ *
+ * A1 (EXACT) PRECEDES A0 (ASSERTED) on purpose. A saved mapping is the user's stored
+ * assertion that a differently-spelled office name refers to a ledger party; it must
+ * beat every weaker INFERENCE (A2/A3/A4) for its row, but it must YIELD to a direct,
+ * corroborated EXACT-name claim from a different office record. Running A0 first let a
+ * stale or over-broad mapping steal a row from the record whose name IS that party
+ * verbatim — a silent wrong-PAN filing. With A1 first, the verbatim owner takes its row
+ * and the mapping, denied it, is reported rather than silently mis-committed. A0 still
+ * precedes A2/A3/A4, so the user's assertion still outranks every inferred match.
  */
 export const TIERS: TierDef[] = [
-  // The user asserted this identity. Not exclusive across parties — it is a fact,
-  // not an inference — but still a sub-ladder among that party's own rows.
-  { id: "A0", label: "ASSERTED", autoCommit: true, needsCorroboration: false, admits: (ev) => ev.mapped },
-  // Same string, or the same tokens reordered. PATEL and PATIL are both consumed
-  // here when both are present, which is what makes the risky tier unreachable.
+  // Same string, or the same tokens reordered. PATEL and PATIL are both consumed here
+  // when both are present, which is what makes the risky tier unreachable. Runs BEFORE
+  // A0 so a verbatim-name record is never out-competed by a saved mapping for its row.
   { id: "A1", label: "EXACT", autoCommit: true, needsCorroboration: true, admits: (ev) => rank(ev.nameTier) <= 1 },
+  // The user asserted this identity. Not exclusive across parties — it is a fact, not an
+  // inference — but still a sub-ladder among that party's own rows. Beats A2/A3/A4.
+  { id: "A0", label: "ASSERTED", autoCommit: true, needsCorroboration: false, admits: (ev) => ev.mapped },
   // Abbreviation and vowel ELISION — TARUBEN/Taruben S, KATHARANI/KATHRANI.
   { id: "A2", label: "CANONICAL", autoCommit: true, needsCorroboration: true, admits: (ev) => rank(ev.nameTier) <= 3 },
   // No name to compare on one side. STRICT: with no name to tell two rows apart, a
@@ -195,8 +215,10 @@ export const TIERS: TierDef[] = [
     id: "A3", label: "FACTS_ONLY", autoCommit: true, needsCorroboration: true,
     admits: (ev) => ev.nameTier === "unknown" && ev.dateDelta === 0 && ev.amountExact,
   },
-  // See TierDef.autoCommit. Present so the decision is one reversible line of data.
-  { id: "A4", label: "RISKY", autoCommit: false, needsCorroboration: true, admits: (ev) => rank(ev.nameTier) === 4 },
+  // RISKY (rank 4: PATEL/PATIL). Commits its mutually-best pairing so tier-4 names
+  // resolve on crowded month-end blocks — but AUTO_MATCH_MAX_RANK still withholds
+  // "Matched", so this yields a suggestion, never a filed return. See TierDef.autoCommit.
+  { id: "A4", label: "RISKY", autoCommit: true, needsCorroboration: true, admits: (ev) => rank(ev.nameTier) === 4 },
 ];
 
 /** EXCLUSIVITY BUYS THE COUNTERPART. ONLY CORROBORATION BUYS THE VERDICT.
@@ -327,19 +349,29 @@ export function assign(offices: AsgOffice[], ledger: AsgLedger[], partyMap: Reco
   }
   const basisFor = (section: string | null): "tds" | "amount" => basisBySection.get(section ?? "") ?? "tds";
 
-  /** The filing window, derived from the OFFICE RECORDS' OWN DATE SPAN — so there is
-   *  no quarter parameter, no hardcoded FY boundary and no 31-Mar/2-Apr argument.
-   *  Applied ONLY to date-relaxed edges; exact-date edges are self-bounding. This is
-   *  what stops an August credit pairing with a Q4 record in the residue closer. */
-  const officeDays = offices.map((o) => dayNum(o.dateIso)).filter((d): d is number => d !== null);
-  const winLo = officeDays.length ? Math.min(...officeDays) - 15 : null;
-  const winHi = officeDays.length ? Math.max(...officeDays) + 15 : null;
-  const inWindow = (t: AsgLedger): boolean => {
-    if (winLo === null || winHi === null) return true;
-    const d = dayNum(t.iso);
-    if (d === null) return true;         // cannot prove it is out of window
-    return d >= winLo && d <= winHi;
-  };
+  // ── NO DATE WINDOW. Deliberate, and it replaced one. ────────────────────────
+  //
+  // A previous version bounded date-relaxed edges to the office records' own date
+  // SPAN ± 15 days. That was the SAME bug this module exists to kill, moved from the
+  // name axis to the date axis: it discarded a uniquely-best, name-exact, amount-exact
+  // pairing by a fixed cutoff, and because the span is a property of how many records a
+  // client happens to have, the SAME (office, ledger) pair got DIFFERENT verdicts for
+  // different clients — the client-specific behaviour the user has demanded be removed.
+  // Concretely it turned an ordinary year-end provision (deduction dated 31-Mar, ledger
+  // booked 10-Apr) into a phantom "Ledger Entry Not Found" instead of a material,
+  // actionable "Date Mismatch by 10 days", and it silently voided saved mappings whose
+  // date was out of range.
+  //
+  // The window's ONE legitimate job — stop a recurring monthly amount on an
+  // out-of-period credit (an Aug-25 bill) being dragged into a Q4 filing — is already
+  // done by EXCLUSIVITY, not a cutoff: when this quarter's entry is present it carries
+  // dateDelta 0 and strictly dominates the stale one, so the near entry wins and the
+  // stale one is left as surplus. Only when this quarter's entry is genuinely ABSENT
+  // does the stale credit pair, and it is then reported as a large "Date Mismatch" —
+  // never a silent Match (the verdict is driven by dateDelta, and AUTO_MATCH_MAX_RANK
+  // is a name gate) — which correctly tells the CA the current entry is missing.
+  // Widening the candidate set this way also makes the RISKY rung LESS likely to fire,
+  // not more, because a rival that a window would have hidden is now visible to compete.
 
   const sectionEqOf = (a: string | null, b: string | null) => (a && b ? a === b : true);
 
@@ -395,21 +427,6 @@ export function assign(offices: AsgOffice[], ledger: AsgLedger[], partyMap: Reco
 
   const corroborated = (ev: Evidence) => ev.dateDelta === 0 || ev.basis !== null;
 
-  /** The filing window, applied to DATE-RELAXED edges at EVERY tier — not just in the
-   *  residue closer.
-   *
-   *  The merged spec bounded only the residue. That leaves a hole: an A-tier edge
-   *  needs the name plus EITHER the date or the money, so a name-exact, amount-exact
-   *  credit with an unbounded date is admissible at A1. Executed: an office record
-   *  dated 05-Mar-26 paired at A1 with a byte-identical KONE credit from 11-Aug-25 —
-   *  a different quarter's bill for the same recurring amount, which is exactly how a
-   *  monthly contract looks — and reported "Date Mismatch by 206 days". That drags an
-   *  out-of-period credit into the filing and hides the fact that THIS quarter's entry
-   *  is genuinely missing. The spec's own rationale for the window ("what stops an
-   *  August credit pairing with a Q4 record") applies here verbatim; it just named the
-   *  wrong pass. Exact-date edges are self-bounding and are never window-checked. */
-  const inScope = (e: Edge) => e.ev.dateDelta === 0 || inWindow(ledger[e.ti]);
-
   const admissible = (tier: TierDef, e: Edge) =>
     e.ev.sectionEq                                      // HARD at every A-tier: a 194C
                                                         // deduction cannot legally be a
@@ -417,7 +434,6 @@ export function assign(offices: AsgOffice[], ledger: AsgLedger[], partyMap: Reco
                                                         // residue closer, which reports
                                                         // "Section Mismatch" rather than
                                                         // ever producing a silent Match.
-    && inScope(e)
     && (!tier.needsCorroboration || corroborated(e.ev))
     && tier.admits(e.ev);
 
@@ -526,7 +542,7 @@ export function assign(offices: AsgOffice[], ledger: AsgLedger[], partyMap: Reco
   // Cross-section edges are admitted HERE ONLY, which revives "Section Mismatch" as a
   // real verdict for a genuinely misclassified booking without ever letting a section
   // disagreement produce a silent Match.
-  let resPool = edges.filter((e) => corroborated(e.ev) && inScope(e));
+  let resPool = edges.filter((e) => corroborated(e.ev));
   for (;;) {
     resPool = resPool.filter((e) => !usedO.has(e.oi) && !usedT.has(e.ti));
     const live = resPool;
@@ -639,12 +655,18 @@ export function assign(offices: AsgOffice[], ledger: AsgLedger[], partyMap: Reco
     let nearest: Outcome["nearest"] = null;
     {
       const cands = mine
-        .filter((e) => e.ev.sectionEq && inScope(e))
+        .filter((e) => e.ev.sectionEq)
+        // Tie-break on the ledger row's own CONTENT, never its array position: two
+        // evidence-tied rows must name the same "closest" entry no matter what order
+        // the ledger was imported in (verdicts are already order-independent; this
+        // keeps the EXPLANATION order-independent too).
         .sort((a, b) =>
           rank(a.ev.nameTier) - rank(b.ev.nameTier)
           || Math.abs(a.ev.dateDelta ?? 9999) - Math.abs(b.ev.dateDelta ?? 9999)
           || (a.ev.amountExact ? 0 : 1) - (b.ev.amountExact ? 0 : 1)
-          || a.ti - b.ti);
+          || (ledger[a.ti].party ?? "").localeCompare(ledger[b.ti].party ?? "")
+          || (ledger[a.ti].credit ?? 0) - (ledger[b.ti].credit ?? 0)
+          || (ledger[a.ti].iso ?? "").localeCompare(ledger[b.ti].iso ?? ""));
       if (cands.length) nearest = { ti: cands[0].ti, consumed: usedT.has(cands[0].ti), ev: cands[0].ev };
     }
 
@@ -674,8 +696,10 @@ export function assign(offices: AsgOffice[], ledger: AsgLedger[], partyMap: Reco
 
   // A ledger credit no office record claimed is a deduction in Tally with NO RETURN
   // LINE: real liability, invisible today. Reconciliation is symmetric or it is not
-  // reconciliation.
-  const surplus = ledger.filter((t, ti) => !usedT.has(ti) && inWindow(t)).map((t) => t.pos);
+  // reconciliation. Reported WITHOUT a date filter — hiding an unclaimed credit because
+  // it fell outside a date window is how a real deduction goes unreconciled on both
+  // sides at once.
+  const surplus = ledger.filter((t, ti) => !usedT.has(ti)).map((t) => t.pos);
 
   return { outcomes, surplus, basisFor };
 }
