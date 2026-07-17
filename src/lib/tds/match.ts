@@ -31,12 +31,70 @@ export const normalizeName = (v: string | null | undefined): string => {
 const NAME_COMPOUND_SUFFIXES = new Set(["KUMAR", "BHAI", "BHAII", "BEN", "BHEN", "KUMARI", "LAL", "DAS", "CHANDRA", "PRASAD", "DEVI", "RAJ", "NATH", "SINH", "BABU", "RAO"]);
 const NAME_STOPWORDS = new Set(["PRIVATE", "LIMITED", "COMPANY", "CORPORATION", "LLP", "LLC", "INC", "AND", "THE", "MESSRS", "SHREE", "SHRI", "SRI", "SHREEJI", "ENTERPRISE", "ENTERPRISES", "TRADERS", "INDUSTRIES"]);
 
+/** First letter + the consonants after it, repeats collapsed. Folds the VOWEL noise
+ *  that dominates Indian transliteration variants — "KATHARANI"/"KATHRANI" and
+ *  "KRISHNA"/"KRISHAN" both reduce to the same skeleton — while keeping genuinely
+ *  different names apart: "RAMESH"→RMSH vs "RAJESH"→RJSH. */
+function skeleton(w: string): string {
+  return (w[0] + w.slice(1).replace(/[AEIOU]/g, "")).replace(/(.)\1+/g, "$1");
+}
+
+/** The word's vowels, in order — the signal skeleton() throws away. */
+const vowelsOf = (w: string) => w.replace(/[^AEIOU]/g, "");
+
+/** Is every character of `s` present in `l`, in order? */
+function isSubsequence(s: string, l: string): boolean {
+  let i = 0;
+  for (const c of l) if (i < s.length && s[i] === c) i++;
+  return i === s.length;
+}
+
+/** Levenshtein distance, abandoned once it provably exceeds `max`. */
+function editDistance(a: string, b: string, max: number): number {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let best = i;
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (cur[j] < best) best = cur[j];
+    }
+    if (best > max) return max + 1;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
 function tokensCompatible(x: string, y: string): boolean {
   if (x === y) return true;
   if (x.length === 1 && y.length >= 2 && y[0] === x) return true;
   if (y.length === 1 && x.length >= 2 && x[0] === y) return true;
   const [s, l] = x.length <= y.length ? [x, y] : [y, x];
   if (s.length >= 3 && l.startsWith(s) && NAME_COMPOUND_SUFFIXES.has(l.slice(s.length))) return true;
+  // Spelling variants of the SAME word — deliberately NARROW: vowel ELISION only,
+  // in a LONG word. Accepts KATHARANI/KATHRANI, KRISHNA/KRISHAN, MOHAMMED/MOHAMED.
+  //
+  // It must NEVER accept a vowel SUBSTITUTION. Indian vowels are phonemic and often
+  // mark gender or community, so a single substituted vowel routinely separates two
+  // real, different deductees who share a surname, a family and an address:
+  // PATEL/PATIL, KAMAL/KAMLA, VIMAL/VIMLA, DIPAK/DIPIKA, KIRAN/KARAN, HIRALAL/
+  // HARILAL. A false match files the return against the WRONG PAN and says nothing;
+  // a miss merely asks the user to map the party once. The 35 adversarial pairs that
+  // forced this shape are pinned as negatives in match.test.ts.
+  //
+  // Hence all three guards, none of which is redundant:
+  //   length >= 7   — below this an edit is too large a share of the word, and every
+  //                   short pair above collides.
+  //   skeleton      — rejects CONSONANT differences (RAMESH/RAJESH → RMSH vs RJSH).
+  //   vowel subsequence — rejects vowel SUBSTITUTION and REORDERING, which the
+  //                   skeleton cannot see at all (it deletes the vowels). This is
+  //                   what separates KATHRANI ⊂ KATHARANI from HIRALAL vs HARILAL.
+  if (s.length >= 7 && skeleton(x) === skeleton(y) && editDistance(x, y, 2) <= 2) {
+    const [vx, vy] = [vowelsOf(x), vowelsOf(y)];
+    const [vShort, vLong] = vx.length <= vy.length ? [vx, vy] : [vy, vx];
+    if (isSubsequence(vShort, vLong)) return true;
+  }
   return false;
 }
 

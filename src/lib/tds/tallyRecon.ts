@@ -42,7 +42,12 @@ export interface OfficeTxn {
 }
 export type TallyResult =
   | "Matched" | "Date Mismatch" | "Credit Amount Mismatch" | "Party Name Mismatch"
-  | "Section Mismatch" | "Ledger Entry Not Found" | "Multiple Possible Matches" | "Duplicate Ledger Entries"
+  | "Section Mismatch" | "Ledger Entry Not Found" | "Multiple Possible Matches"
+  // LEGACY — no longer produced. Identical ledger entries now pair 1:1 with the
+  // identical office records instead of asking the user "which is correct?" for a
+  // choice that cannot be got wrong. Kept only so results stored by an earlier run
+  // still type-check when read back; a re-run clears them.
+  | "Duplicate Ledger Entries"
   // No ledger for this office record's section was imported AT ALL. Distinct from
   // "Ledger Entry Not Found" (which means: we have that section's ledger, and the
   // entry isn't in it). Without this, importing only the 194C ledger reported every
@@ -94,7 +99,10 @@ export function reconcileTally(office: OfficeTxn[], tally: TallyRow[], ledgerSec
   // row stays eligible (old behaviour) rather than wrongly excluding everything.
   const sectionOf = (t: TallyRow) => canonicalSection(t.section) ?? canonicalSection(ledgerSection);
   const covered = new Set<string>();
-  for (const t of credits) { const s = sectionOf(t); if (s) covered.add(s); }
+  // Destructure — `credits` holds {t, k} wrappers, not bare rows. Passing the
+  // wrapper read `.section` off the wrapper (undefined), so every row silently fell
+  // back to `ledgerSection` and the per-row sections never reached `covered`.
+  for (const { t } of credits) { const s = sectionOf(t); if (s) covered.add(s); }
   const sectionScoped = covered.size > 0;
 
   for (const o of office) {
@@ -209,25 +217,31 @@ export function reconcileTally(office: OfficeTxn[], tally: TallyRow[], ledgerSec
     }
 
     // 4) resolve the party among the date+amount candidates.
-    const scored = cand.map(({ t, k }) => {
+    //
+    // Several ledger entries can share this record's date, party AND amount — a
+    // client legitimately books four identical bills to one party in a day. That is
+    // NOT an ambiguity worth escalating: every ledger row is consumed at most once
+    // (usedTally), so N identical office records pair 1:1 with N identical ledger
+    // rows and the accounting outcome is the same whichever way they are dealt.
+    // Asking "confirm which is correct" for a choice that CANNOT be got wrong is
+    // noise. So exhaust the deterministic signals instead — best name, then exact
+    // amount, then SECTION, then ledger order (the sort is stable and `cand`
+    // preserves the order Tally printed, so equal candidates settle in ledger
+    // sequence). Escalate to the user only when a real signal is missing.
+    const scored = cand.map(({ t, k }, order) => {
       const basis: "tds" | "amount" = amountsMatch(t.credit, o.tds) ? "tds" : "amount";
       const saved = partyMap[norm(o.name)];
       const savedHit = saved && norm(saved) === norm(t.party);
       const cmp = nameCompare(o.name, t.party);
       const nameScore = savedHit ? 1 : cmp === "match" ? 0.95 : cmp === "mismatch" ? 0.5 : cmp === "unknown" ? 0.6 : 0.1;
       const amountExact = amountsMatch(t.credit, basis === "tds" ? o.tds : o.amount) ? 1 : 0.5;
-      return { t, k, basis, savedHit, cmp, score: nameScore * 0.6 + amountExact * 0.4 };
-    }).sort((a, b) => b.score - a.score);
+      const secScore = sectionEq(o.section, sectionOf(t)) ? 1 : 0;
+      return { t, k, order, basis, savedHit, cmp, score: nameScore * 0.6 + amountExact * 0.3 + secScore * 0.1 };
+    }).sort((a, b) => b.score - a.score || a.order - b.order);
 
-    // Duplicate ledger entries: 2+ candidates whose party ALSO matches.
-    const partyMatches = scored.filter((s) => s.savedHit || s.cmp === "match");
-    if (partyMatches.length >= 2) {
-      const top = partyMatches[0]; usedTally.add(top.k);
-      out.push({ ...base, tally_row_index: top.t.row_index, tally_party: top.t.party, tally_date: top.t.date, tally_credit: top.t.credit,
-        result: "Duplicate Ledger Entries", amount_basis: top.basis, mapped: !!top.savedHit,
-        reason: `${partyMatches.length} ledger entries match this office record (same date, amount and party) — confirm which is correct.`, confidence: 60 });
-      continue;
-    }
+    // How many candidates are indistinguishable from the winner on every signal we
+    // have — used only to EXPLAIN the 1:1 pairing in the reason, never to escalate.
+    const identical = scored.filter((s) => s.savedHit || s.cmp === "match").length;
 
     const top = scored[0];
     usedTally.add(top.k);
@@ -241,7 +255,11 @@ export function reconcileTally(office: OfficeTxn[], tally: TallyRow[], ledgerSec
       } else {
         out.push({ ...base, tally_row_index: top.t.row_index, tally_party: top.t.party, tally_date: top.t.date, tally_credit: top.t.credit,
           result: "Matched", amount_basis: top.basis, mapped: !!top.savedHit,
-          reason: top.savedHit ? `Matched via a saved party mapping.` : `Date, amount, party${secOk ? " and section" : ""} all match.`, confidence: top.savedHit ? 96 : 92 });
+          reason: (top.savedHit ? `Matched via a saved party mapping.` : `Date, amount, party${secOk ? " and section" : ""} all match.`)
+            + (identical >= 2
+              ? ` ${identical} ledger entries share this date, party and amount; each is used once, so they pair 1:1 with the matching office records in ledger order.`
+              : ``),
+          confidence: top.savedHit ? 96 : 92 });
       }
     } else if (top.cmp === "unknown") {
       out.push({ ...base, tally_row_index: top.t.row_index, tally_party: top.t.party, tally_date: top.t.date, tally_credit: top.t.credit,
