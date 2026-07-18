@@ -86,10 +86,21 @@ export interface AsgLedger {
   iso: string | null;
   credit: number | null;
   section: string | null;   // canonical, or null
+  /** The counterpart's PAN, when this side HAS one. A Stage-3 Tally ledger row has NO
+   *  PAN, so this is undefined there and every PAN-dependent rule below is inert. A
+   *  Stage-1 imported client row DOES carry a PAN, so both sides do — and PAN then
+   *  becomes the strongest evidence tier (see the APAN rung) and a PAN DIFFERENCE
+   *  blocks a pairing outright (see the edge loop). One engine, two data shapes. */
+  pan?: string | null;
 }
 
 // ── Evidence ─────────────────────────────────────────────────────────────────
 export interface Evidence {
+  /** Both sides carry a PAN and they are EQUAL. PAN is the legal identity on a TDS
+   *  return, so this is the strongest identity signal there is — stronger than any
+   *  name (two different people can share a name; they cannot share a PAN). Always
+   *  false in Stage 3 (a Tally ledger row has no PAN), so it changes nothing there. */
+  panEq: boolean;
   nameTier: NameTier;
   /** RAW integer days (ledger − office), never bucketed: bucketing would make two
    *  genuinely different dates look identical and merge their evidence classes. */
@@ -133,7 +144,7 @@ export interface Edge { oi: number; ti: number; ev: Evidence; ne: NameEvidence }
  * the maximal set is never empty.
  */
 const sigOf = (e: Evidence) =>
-  `${e.mapped ? 1 : 0}|${e.nameTier}|${Math.abs(e.dateDelta ?? 9999)}|${e.basis ? 1 : 0}|${e.amountExact ? 1 : 0}|${e.sectionEq ? 1 : 0}`;
+  `${e.panEq ? 1 : 0}|${e.mapped ? 1 : 0}|${e.nameTier}|${Math.abs(e.dateDelta ?? 9999)}|${e.basis ? 1 : 0}|${e.amountExact ? 1 : 0}|${e.sectionEq ? 1 : 0}`;
 
 /**
  * Pareto dominance. NO scalar score, NO weights, NO cutoff.
@@ -147,6 +158,7 @@ const sigOf = (e: Evidence) =>
 function dominates(a: Evidence, b: Evidence): boolean {
   const dd = (e: Evidence) => Math.abs(e.dateDelta ?? 9999);
   const noWorse =
+    (a.panEq ? 0 : 1) <= (b.panEq ? 0 : 1) &&
     rank(a.nameTier) <= rank(b.nameTier) &&
     dd(a) <= dd(b) &&
     (a.basis ? 0 : 1) <= (b.basis ? 0 : 1) &&
@@ -157,7 +169,7 @@ function dominates(a: Evidence, b: Evidence): boolean {
 }
 
 // ── The tier ladder ─────────────────────────────────────────────────────────
-export type TierId = "A0" | "A1" | "A2" | "A3" | "A4" | "RESIDUE";
+export type TierId = "APAN" | "A0" | "A1" | "A2" | "A3" | "A4" | "RESIDUE";
 
 interface TierDef {
   id: TierId;
@@ -205,6 +217,16 @@ interface TierDef {
  * precedes A2/A3/A4, so the user's assertion still outranks every inferred match.
  */
 export const TIERS: TierDef[] = [
+  // PAN EQUALITY — the legal identity, and therefore the STRONGEST rung, above even an
+  // exact name. Two records that both carry a PAN and agree on it ARE the same deductee;
+  // WHICH of that party's several transactions pairs with which is then settled by
+  // evidence-dominance (date/amount) within the block, exactly as identical names are.
+  // needsCorroboration:false for the same reason A0 is exempt — the PAN IS the
+  // corroboration, so a same-PAN pair whose date AND amount are both wrong must still be
+  // FOUND and reported (as a Date/Amount mismatch), never left as a phantom "not found".
+  // Inert in Stage 3: a Tally ledger row has no PAN, so ev.panEq is always false and this
+  // rung never admits an edge there — the ladder behaves byte-identically to before.
+  { id: "APAN", label: "PAN", autoCommit: true, needsCorroboration: false, admits: (ev) => ev.panEq },
   // Same string, or the same tokens reordered. PATEL and PATIL are both consumed here
   // when both are present, which is what makes the risky tier unreachable. Runs BEFORE
   // A0 so a verbatim-name record is never out-competed by a saved mapping for its row.
@@ -388,9 +410,11 @@ export function assign(offices: AsgOffice[], ledger: AsgLedger[], partyMap: Reco
     const secBasis = basisFor(o.section);
     const amountExact = secBasis === "tds" ? tdsOk : amtOk;
     const mappedTo = partyMap[norm(o.name)];
+    const oPan = normalizePan(o.pan), tPan = normalizePan(t.pan);
     return {
       ne: nev,
       ev: {
+        panEq: !!oPan && !!tPan && oPan === tPan,
         nameTier: nev.tier,
         dateDelta: od !== null && td !== null ? td - od : null,
         basis: amountExact ? secBasis : tdsOk ? "tds" : amtOk ? "amount" : null,
@@ -409,12 +433,23 @@ export function assign(offices: AsgOffice[], ledger: AsgLedger[], partyMap: Reco
     const o = offices[oi];
     if (o.assignable === false) continue;   // in the universe, out of the assignment
     const mappedTo = partyMap[norm(o.name)];
+    const oPan = normalizePan(o.pan);
     for (let ti = 0; ti < ledger.length; ti++) {
       const t = ledger[ti];
+      // A PAN DIFFERENCE is proof of NON-identity: when BOTH sides carry a PAN and the
+      // two disagree, they are different parties and must NEVER pair — no edge, so no
+      // tier and no residue closer can ever join them (this is the cross-side twin of
+      // the pan-split rule below). Inert in Stage 3, where the ledger side has no PAN.
+      const tPan = normalizePan(t.pan);
+      if (oPan && tPan && oPan !== tPan) continue;
+      const panEq = !!oPan && !!tPan && oPan === tPan;
       const dateEq = !!o.dateIso && !!t.iso && o.dateIso === t.iso;
       const moneyEq = amountsMatch(t.credit, o.tds) || amountsMatch(t.credit, o.amount);
       const isMapped = !!mappedTo && norm(t.party) === norm(mappedTo);
-      if (!dateEq && !moneyEq && !isMapped) continue;
+      // PAN equality is proof of identity, so — like a saved mapping — it earns an edge
+      // on its own even with no date/amount corroboration (the figures are then compared
+      // and any difference REPORTED, never used to withhold the pairing).
+      if (!dateEq && !moneyEq && !isMapped && !panEq) continue;
       const { ev, ne: nev } = evidenceFor(o, t);
       edges.push({ oi, ti, ev, ne: nev });
     }
@@ -433,12 +468,23 @@ export function assign(offices: AsgOffice[], ledger: AsgLedger[], partyMap: Reco
   const corroborated = (ev: Evidence) => ev.dateDelta === 0 || ev.basis !== null;
 
   const admissible = (tier: TierDef, e: Edge) =>
-    e.ev.sectionEq                                      // HARD at every A-tier: a 194C
-                                                        // deduction cannot legally be a
-                                                        // 194J one. Relaxed ONLY in the
-                                                        // residue closer, which reports
-                                                        // "Section Mismatch" rather than
-                                                        // ever producing a silent Match.
+    (e.ev.sectionEq || e.ev.panEq)                      // sectionEq is HARD at every
+                                                        // A-tier: a 194C deduction cannot
+                                                        // legally be a 194J one, so with
+                                                        // NO PAN the section is the only
+                                                        // thing keeping two same-name
+                                                        // parties apart. But a PAN EQUALITY
+                                                        // already PROVES identity, so the
+                                                        // section is then just a field to
+                                                        // compare (via rate/AI downstream),
+                                                        // not a gate — else a same-PAN pair
+                                                        // with a mislabelled section would
+                                                        // fail to pair at all. Inert in
+                                                        // Stage 3 (panEq always false).
+                                                        // Cross-section is still relaxed
+                                                        // ONLY in the residue closer, which
+                                                        // reports "Section Mismatch" rather
+                                                        // than ever a silent Match.
     && (!tier.needsCorroboration || corroborated(e.ev))
     && tier.admits(e.ev);
 

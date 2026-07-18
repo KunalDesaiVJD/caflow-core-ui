@@ -348,11 +348,16 @@ describe("assignment — the tier ladder", () => {
     // The order is load-bearing and SILENTLY breakable: reorder these and a weaker
     // pairing wins with no other test failing. Hence a test that just says the order.
     //
+    // APAN (PAN EQUALITY) is FIRST — the legal identity, stronger than any name (two
+    // different people can share a name; they cannot share a PAN). It is inert in
+    // Stage 3 (a Tally ledger row has no PAN) and only fires for Stage 1, where BOTH
+    // sides carry a PAN.
+    //
     // A1 (EXACT) PRECEDES A0 (ASSERTED) deliberately. A saved mapping must beat every
     // weaker INFERENCE for its row but YIELD to a direct verbatim-name claim. When A0
     // ran first, a stale mapping silently stole a row from the record whose name was
     // that party verbatim — a wrong-PAN filing (fixed; see the A0-vs-verbatim test).
-    expect(TIERS.map((t) => t.id)).toEqual(["A1", "A0", "A2", "A3", "A4"]);
+    expect(TIERS.map((t) => t.id)).toEqual(["APAN", "A1", "A0", "A2", "A3", "A4"]);
   });
 
   it("pins that EVERY tier auto-commits, and safety rests on AUTO_MATCH_MAX_RANK", () => {
@@ -365,11 +370,14 @@ describe("assignment — the tier ladder", () => {
     expect(AUTO_MATCH_MAX_RANK).toBeLessThan(4);
   });
 
-  it("pins that ONLY the asserted tier is exempt from needing corroboration", () => {
+  it("pins that only the ASSERTED and PAN tiers are exempt from needing corroboration", () => {
     // A mapped party whose date AND amount are both wrong must still be FOUND and
     // reported, or the mapping silently does nothing and the record comes back
     // "Ledger Entry Not Found" — the exact bug the old mapping branch existed to fix.
-    expect(TIERS.filter((t) => !t.needsCorroboration).map((t) => t.id)).toEqual(["A0"]);
+    // A same-PAN pair (APAN) is exempt for the identical reason: the PAN IS the
+    // corroboration, so a same-party pair whose figures both differ must still pair and
+    // be reported as a mismatch rather than vanish as a phantom "not found".
+    expect(TIERS.filter((t) => !t.needsCorroboration).map((t) => t.id)).toEqual(["APAN", "A0"]);
   });
 });
 
