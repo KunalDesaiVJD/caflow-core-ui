@@ -235,34 +235,49 @@ describe("repairFilingSectionCodes — fixes rows already sitting in the databas
   });
 });
 
-describe("resolveExistingChallansByNumber — scoped to ONE client, never firm-wide", () => {
+describe("resolveExistingChallansByNumber — scoped to ONE client AND ONE financial year", () => {
   // The reported symptom: importing "q3 dbs.xls" for a brand-new client (DBS
   // REALTY, status "Not Started") reported "re-used 1 carry-forward
   // challan(s)" and inserted 1 deductee, yet the Challans list stayed empty.
-  // Root cause: the lookup matched ANY challan in the firm sharing the same
-  // Bank Challan Number, with no client scope at all — a short, often-
-  // sequential OLTAS number with zero cross-client uniqueness guarantee. The
-  // deductee got attached to a DIFFERENT client's challan (a different
-  // filing_id), so it vanished from this client's own list.
+  // Root cause, traced to the real database: the lookup matched ANY challan
+  // in the firm sharing the same Bank Challan Number, with no client scope at
+  // all — a short, often-sequential OLTAS number with zero cross-client
+  // uniqueness guarantee. DBS Realty's challan "55043" collided with an
+  // unrelated challan already belonging to AMADIUS REALTY; the deductee got
+  // attached to Amadius's challan (a different filing_id), so it vanished
+  // from DBS Realty's own list, and 8 duplicate copies accumulated across
+  // repeated import attempts (deductees have no dedup).
   it("does NOT match a different client's challan sharing the same Bank Challan Number", async () => {
     challanRows = [
-      { id: "challan-CLIENT-A", client_id: "client-A", challan_serial_no: "55043" } as any,
+      { id: "challan-CLIENT-A", client_id: "client-A", challan_serial_no: "55043", financial_year: "2025-26" } as any,
     ];
-    const map = await resolveExistingChallansByNumber(["55043"], "client-B");
-    expect(map.has("55043")).toBe(false);
+    const { reusable } = await resolveExistingChallansByNumber(["55043"], "client-B", "2025-26");
+    expect(reusable.has("55043")).toBe(false);
   });
 
-  it("DOES find the SAME client's own challan — legitimate carry-forward reuse still works", async () => {
+  it("DOES find the SAME client's own challan in the SAME financial year — legitimate cross-quarter carry-forward still works", async () => {
     challanRows = [
       { id: "challan-B-prior-quarter", client_id: "client-B", challan_serial_no: "55043", quarter: "Q2", financial_year: "2025-26", form_type: "26Q" } as any,
     ];
-    const map = await resolveExistingChallansByNumber(["55043"], "client-B");
-    expect(map.get("55043")?.id).toBe("challan-B-prior-quarter");
+    const { reusable } = await resolveExistingChallansByNumber(["55043"], "client-B", "2025-26");
+    expect(reusable.get("55043")?.id).toBe("challan-B-prior-quarter");
+  });
+
+  it("does NOT reuse the SAME client's own challan from a DIFFERENT financial year, and reports it", async () => {
+    // A challan deposit is tied to one return period; it cannot legitimately
+    // fund a different FY's filing, even for the same client.
+    challanRows = [
+      { id: "challan-B-old-fy", client_id: "client-B", challan_serial_no: "55043", quarter: "Q4", financial_year: "2023-24", form_type: "26Q" } as any,
+    ];
+    const { reusable, yearMismatched } = await resolveExistingChallansByNumber(["55043"], "client-B", "2025-26");
+    expect(reusable.has("55043")).toBe(false);
+    expect(yearMismatched).toHaveLength(1);
+    expect(yearMismatched[0]).toMatchObject({ challanNumber: "55043", ref: { id: "challan-B-old-fy", financial_year: "2023-24" } });
   });
 
   it("is a no-op for an empty or all-blank challan-number list", async () => {
-    challanRows = [{ id: "x", client_id: "client-B", challan_serial_no: "1" } as any];
-    expect((await resolveExistingChallansByNumber([], "client-B")).size).toBe(0);
-    expect((await resolveExistingChallansByNumber([null, undefined, ""], "client-B")).size).toBe(0);
+    challanRows = [{ id: "x", client_id: "client-B", challan_serial_no: "1", financial_year: "2025-26" } as any];
+    expect((await resolveExistingChallansByNumber([], "client-B", "2025-26")).reusable.size).toBe(0);
+    expect((await resolveExistingChallansByNumber([null, undefined, ""], "client-B", "2025-26")).reusable.size).toBe(0);
   });
 });

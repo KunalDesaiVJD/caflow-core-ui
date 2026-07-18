@@ -400,10 +400,20 @@ export interface ExistingChallanRef {
   form_type: string;
 }
 
+export interface ChallanLookupResult {
+  /** Safe to reuse: same client, same financial year. */
+  reusable: Map<string, ExistingChallanRef>;
+  /** Same client, same Bank Challan Number, but a DIFFERENT financial year —
+   *  never reused (a challan cannot legitimately fund a different FY's
+   *  return), but worth explaining rather than silently creating a new
+   *  challan with no comment. */
+  yearMismatched: { challanNumber: string; ref: ExistingChallanRef }[];
+}
+
 /**
  * Resolve which of this file's Bank Challan Numbers already exist as a
- * challan for THIS CLIENT — so importGeniusXls can decide reuse (carry
- * forward) vs. insert a new challan.
+ * challan for THIS CLIENT, in THIS FINANCIAL YEAR — so importGeniusXls can
+ * decide reuse (carry forward) vs. insert a new challan.
  *
  * Scoped to client_id, not merely firm_id — the client scope is load-bearing,
  * not defensive. A Bank Challan Number is a short, often-sequential integer
@@ -419,19 +429,27 @@ export interface ExistingChallanRef {
  * scopes tds_challans reads to the FIRM, never the client, so this filter
  * cannot be left to the database to enforce.
  *
- * A client's own Bank Challan Number IS meant to repeat across their own
- * filings — a big lump-sum challan can be carried forward and its balance
- * allocated to deductees across several quarters. That legitimate reuse is
- * exactly what this function still enables, just never across two different
- * clients (TANs).
+ * Also scoped to financial_year — a challan deposit is tied to ONE return
+ * period; it cannot legitimately fund a DIFFERENT financial year's filing.
+ * A same-client, same-number match in a different FY is reported via
+ * `yearMismatched` (so the caller can explain it) rather than silently
+ * reused or silently ignored.
+ *
+ * A client's own Bank Challan Number IS meant to repeat ACROSS QUARTERS of
+ * the SAME financial year — a big lump-sum challan can be carried forward
+ * and its balance allocated to deductees across several quarters. That
+ * legitimate reuse is exactly what `reusable` still enables, just never
+ * across two different clients (TANs) or two different financial years.
  */
 export async function resolveExistingChallansByNumber(
   bankChallanNumbers: (string | null | undefined)[],
   clientId: string,
-): Promise<Map<string, ExistingChallanRef>> {
-  const map = new Map<string, ExistingChallanRef>();
+  financialYear: string,
+): Promise<ChallanLookupResult> {
+  const reusable = new Map<string, ExistingChallanRef>();
+  const yearMismatched: { challanNumber: string; ref: ExistingChallanRef }[] = [];
   const numList = Array.from(new Set(bankChallanNumbers.filter((n): n is string => !!n)));
-  if (numList.length === 0) return map;
+  if (numList.length === 0) return { reusable, yearMismatched };
 
   const { data } = await supabase
     .from("tds_challans")
@@ -440,11 +458,15 @@ export async function resolveExistingChallansByNumber(
     .in("challan_serial_no", numList);
   for (const row of (data || []) as any[]) {
     const key = String(row.challan_serial_no ?? "");
-    if (key && !map.has(key)) {
-      map.set(key, { id: String(row.id), quarter: row.quarter, financial_year: row.financial_year, form_type: row.form_type });
+    if (!key) continue;
+    const ref: ExistingChallanRef = { id: String(row.id), quarter: row.quarter, financial_year: row.financial_year, form_type: row.form_type };
+    if (row.financial_year === financialYear) {
+      if (!reusable.has(key)) reusable.set(key, ref);
+    } else if (!reusable.has(key)) {
+      yearMismatched.push({ challanNumber: key, ref });
     }
   }
-  return map;
+  return { reusable, yearMismatched };
 }
 
 /**
@@ -776,11 +798,22 @@ export async function importGeniusXls(
   }
 
   // Build map: Challan Number (from file) -> existing challan's UUID, scoped
-  // to THIS client. See resolveExistingChallansByNumber() for why the client
-  // scope is load-bearing rather than defensive.
-  const existingChallanByNum = await resolveExistingChallansByNumber(
-    parsed.challans.map((c) => c.bankChallanNo), filing.client_id,
+  // to THIS client AND this financial year. See resolveExistingChallansByNumber()
+  // for why both scopes are load-bearing rather than defensive.
+  const { reusable: existingChallanByNum, yearMismatched } = await resolveExistingChallansByNumber(
+    parsed.challans.map((c) => c.bankChallanNo), filing.client_id, financialYear,
   );
+
+  if (yearMismatched.length > 0) {
+    const sample = yearMismatched.slice(0, 3)
+      .map((m) => `${m.challanNumber} (already exists for FY ${m.ref.financial_year})`)
+      .join("; ");
+    warnings.push(
+      `Challan Number${yearMismatched.length > 1 ? "s" : ""} already exist for this client under a DIFFERENT financial year — ` +
+      `a challan cannot be carried across financial years, so a NEW challan was created for FY ${financialYear} instead: ` +
+      `${sample}${yearMismatched.length > 3 ? "…" : ""}.`
+    );
+  }
 
   const reusedChallans: { fileSerial: number; challanNum: string; from: string }[] = [];
   const newChallans: typeof parsed.challans = [];
