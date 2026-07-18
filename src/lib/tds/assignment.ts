@@ -41,10 +41,15 @@
  * in either silently corrupts the other.
  */
 
+// NOTE the ".ts" extension: this file is copied BYTE-IDENTICALLY to
+// supabase/functions/_shared/assignment.ts, where Deno requires an explicit
+// extension on relative imports. Vite/TS resolve "./match.ts" fine
+// (allowImportingTsExtensions + bundler resolution), so the SAME text is valid in
+// both runtimes and the byte-identity guard in sharedSync.test.ts can hold.
 import {
   rank, nameEvidence, type NameTier, type NameEvidence,
   normalizeName, normalizePan, amountsMatch, canonicalSection,
-} from "./match";
+} from "./match.ts";
 
 // ── Inputs (already canonicalised by the adapter) ────────────────────────────
 export interface AsgOffice {
