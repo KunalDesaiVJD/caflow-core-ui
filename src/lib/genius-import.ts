@@ -393,6 +393,60 @@ export interface ImportResult {
   warnings: string[];
 }
 
+export interface ExistingChallanRef {
+  id: string;
+  quarter: string;
+  financial_year: string;
+  form_type: string;
+}
+
+/**
+ * Resolve which of this file's Bank Challan Numbers already exist as a
+ * challan for THIS CLIENT — so importGeniusXls can decide reuse (carry
+ * forward) vs. insert a new challan.
+ *
+ * Scoped to client_id, not merely firm_id — the client scope is load-bearing,
+ * not defensive. A Bank Challan Number is a short, often-sequential integer
+ * with no cross-client uniqueness guarantee at all (OLTAS numbers it per TAN,
+ * never firm-wide), so a firm running 100+ clients WILL see coincidental
+ * collisions between unrelated clients. Without this filter, importing
+ * client B's genuinely first-ever challan can match client A's unrelated
+ * challan number, silently attach B's deductee to A's challan (a real
+ * cross-client data-integrity break — B's deductee then points at a challan
+ * under a DIFFERENT filing_id, so it vanishes from B's own Challans list,
+ * which is exactly what "0 challans added" with an empty Challans list looks
+ * like on screen), and report a false "carried forward" success. RLS only
+ * scopes tds_challans reads to the FIRM, never the client, so this filter
+ * cannot be left to the database to enforce.
+ *
+ * A client's own Bank Challan Number IS meant to repeat across their own
+ * filings — a big lump-sum challan can be carried forward and its balance
+ * allocated to deductees across several quarters. That legitimate reuse is
+ * exactly what this function still enables, just never across two different
+ * clients (TANs).
+ */
+export async function resolveExistingChallansByNumber(
+  bankChallanNumbers: (string | null | undefined)[],
+  clientId: string,
+): Promise<Map<string, ExistingChallanRef>> {
+  const map = new Map<string, ExistingChallanRef>();
+  const numList = Array.from(new Set(bankChallanNumbers.filter((n): n is string => !!n)));
+  if (numList.length === 0) return map;
+
+  const { data } = await supabase
+    .from("tds_challans")
+    .select("id, challan_serial_no, bsr_code, quarter, financial_year, form_type")
+    .eq("client_id", clientId)
+    .in("challan_serial_no", numList);
+  for (const row of (data || []) as any[]) {
+    const key = String(row.challan_serial_no ?? "");
+    if (key && !map.has(key)) {
+      map.set(key, { id: String(row.id), quarter: row.quarter, financial_year: row.financial_year, form_type: row.form_type });
+    }
+  }
+  return map;
+}
+
 /**
  * Ensure every section code this import references exists in the firm's Rate
  * Master, and return a REWRITE MAP so the parsed records use whichever exact
@@ -721,33 +775,12 @@ export async function importGeniusXls(
     );
   }
 
-  // ── Duplicate detection: Challan Number is globally unique ───────────────
-  // BSR code may legitimately repeat (same bank branch handles many deposits)
-  // but each Challan Number is unique. If a Challan Number already exists in
-  // the DB we DON'T create a new challan — instead we re-use the existing one
-  // and link any deductees from this file under Serial N to the existing
-  // challan's UUID (but inserted with the CURRENT filing_id so they count as
-  // this quarter's utilisation of carry-forward balance).
-  //
-  // Build map: Challan Number (from file) -> existing challan's UUID
-  const existingChallanByNum = new Map<string, { id: string; quarter: string; financial_year: string; form_type: string }>();
-  const numList = Array.from(new Set(parsed.challans.map(c => c.bankChallanNo).filter(Boolean)));
-  if (numList.length > 0) {
-    const { data: existing } = await supabase
-      .from("tds_challans")
-      .select("id, challan_serial_no, bsr_code, quarter, financial_year, form_type")
-      .in("challan_serial_no", numList);
-    (existing || []).forEach((row: any) => {
-      if (row.challan_serial_no && !existingChallanByNum.has(row.challan_serial_no)) {
-        existingChallanByNum.set(String(row.challan_serial_no), {
-          id: String(row.id),
-          quarter: row.quarter,
-          financial_year: row.financial_year,
-          form_type: row.form_type,
-        });
-      }
-    });
-  }
+  // Build map: Challan Number (from file) -> existing challan's UUID, scoped
+  // to THIS client. See resolveExistingChallansByNumber() for why the client
+  // scope is load-bearing rather than defensive.
+  const existingChallanByNum = await resolveExistingChallansByNumber(
+    parsed.challans.map((c) => c.bankChallanNo), filing.client_id,
+  );
 
   const reusedChallans: { fileSerial: number; challanNum: string; from: string }[] = [];
   const newChallans: typeof parsed.challans = [];

@@ -27,15 +27,26 @@ let deducteeRows: { id: string; section_code: string }[] = [];
 
 function makeBuilder(table: string) {
   let pendingPatch: any = null;
+  const eqFilters: [string, any][] = [];
   const builder: any = {
     select: () => builder,
-    eq: () => builder,
+    eq: (col: string, val: any) => { eqFilters.push([col, val]); return builder; },
     delete: () => builder,
     update: (patch: any) => { pendingPatch = patch; return builder; },
-    in: (_col: string, ids: any[]) => {
+    in: (col: string, vals: any[]) => {
       if (pendingPatch) {
-        updateCalls.push({ table, patch: pendingPatch, ids });
-        return Promise.resolve({ data: ids, error: null });
+        updateCalls.push({ table, patch: pendingPatch, ids: vals });
+        return Promise.resolve({ data: vals, error: null });
+      }
+      // Real filtering, but ONLY for tds_challans — the table
+      // resolveExistingChallansByNumber's client-scoping regression needs to
+      // actually prove out. Every other table keeps returning its full
+      // canned set regardless of .eq()/.in(), exactly as before, so none of
+      // the other tests below need to change.
+      if (table === "tds_challans") {
+        const filtered = challanRows.filter((r: any) =>
+          eqFilters.every(([c, v]) => r[c] === v) && vals.includes(r.challan_serial_no));
+        return Promise.resolve({ data: filtered, error: null });
       }
       return builder;
     },
@@ -55,7 +66,7 @@ vi.mock("@/integrations/supabase/client", () => ({
   supabase: { from: (table: string) => makeBuilder(table) },
 }));
 
-import { cleanSection, ensureRateMasterSections, repairFilingSectionCodes } from "./genius-import";
+import { cleanSection, ensureRateMasterSections, repairFilingSectionCodes, resolveExistingChallansByNumber } from "./genius-import";
 
 beforeEach(() => {
   upsertCalls.length = 0;
@@ -221,5 +232,37 @@ describe("repairFilingSectionCodes — fixes rows already sitting in the databas
     expect(result.challansFixed).toBe(0);
     expect(result.deducteesFixed).toBe(0);
     expect(updateCalls).toHaveLength(0);
+  });
+});
+
+describe("resolveExistingChallansByNumber — scoped to ONE client, never firm-wide", () => {
+  // The reported symptom: importing "q3 dbs.xls" for a brand-new client (DBS
+  // REALTY, status "Not Started") reported "re-used 1 carry-forward
+  // challan(s)" and inserted 1 deductee, yet the Challans list stayed empty.
+  // Root cause: the lookup matched ANY challan in the firm sharing the same
+  // Bank Challan Number, with no client scope at all — a short, often-
+  // sequential OLTAS number with zero cross-client uniqueness guarantee. The
+  // deductee got attached to a DIFFERENT client's challan (a different
+  // filing_id), so it vanished from this client's own list.
+  it("does NOT match a different client's challan sharing the same Bank Challan Number", async () => {
+    challanRows = [
+      { id: "challan-CLIENT-A", client_id: "client-A", challan_serial_no: "55043" } as any,
+    ];
+    const map = await resolveExistingChallansByNumber(["55043"], "client-B");
+    expect(map.has("55043")).toBe(false);
+  });
+
+  it("DOES find the SAME client's own challan — legitimate carry-forward reuse still works", async () => {
+    challanRows = [
+      { id: "challan-B-prior-quarter", client_id: "client-B", challan_serial_no: "55043", quarter: "Q2", financial_year: "2025-26", form_type: "26Q" } as any,
+    ];
+    const map = await resolveExistingChallansByNumber(["55043"], "client-B");
+    expect(map.get("55043")?.id).toBe("challan-B-prior-quarter");
+  });
+
+  it("is a no-op for an empty or all-blank challan-number list", async () => {
+    challanRows = [{ id: "x", client_id: "client-B", challan_serial_no: "1" } as any];
+    expect((await resolveExistingChallansByNumber([], "client-B")).size).toBe(0);
+    expect((await resolveExistingChallansByNumber([null, undefined, ""], "client-B")).size).toBe(0);
   });
 });
