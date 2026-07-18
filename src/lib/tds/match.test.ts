@@ -644,6 +644,66 @@ describe("nameEvidence — a Tally annotation is not part of the party name", ()
   });
 });
 
+describe("nameEvidence — a trailing free-text clause is not part of the party name", () => {
+  // Reported verbatim from real Tally exports: office data drops the deductee's middle
+  // (patronymic) name, WHILE the ledger head appends a nature-of-transaction or
+  // proprietor aside after a hyphen/parenthesis. Either alone is already rescued
+  // elsewhere in this file; together they used to fail, because each side then carries
+  // exactly one token the other cannot match, and that pushes the 0.6 hits/union ratio
+  // below the line. Confirmed against the user's real 194A/194C ledger PDFs.
+  it("drops a Tally nature-of-transaction tag introduced by a hyphen", () => {
+    expect(rank(nameEvidence("DUSHYANT JASHVANTBHAI PRAJAPATI", "Dushyant Prajapati - Exp.").tier)).toBeLessThanOrEqual(3);
+    expect(rank(nameEvidence("PINNAG BIPINBHAI RATHOD", "Pinnag Rathod - Exp.").tier)).toBeLessThanOrEqual(3);
+    expect(rank(nameEvidence("KETANKUMAR HARIBHAI PARMAR", "Technosol Corporation-Pur").tier)).toBeGreaterThan(3.5); // sanity: unrelated names still don't match
+  });
+
+  it("drops a proprietor/branch aside in a trailing parenthesis", () => {
+    expect(rank(nameEvidence("KETANKUMAR HARIBHAI PARMAR", "Ketan Parmar (BH Parmar Electrician)").tier)).toBeLessThanOrEqual(3);
+  });
+
+  it("matches such a record outright instead of asking for a mapping", () => {
+    const out = reconcileTally(
+      [txn("a", "DUSHYANT JASHVANTBHAI PRAJAPATI", "2026-03-31", 10807)],
+      [row(0, "Dushyant Prajapati - Exp.", "2026-03-31", 10807)], null);
+    expect(out[0].result).toBe("Matched");
+  });
+
+  it("does NOT strip a clause that both sides carry — a shared tail is not asymmetric", () => {
+    // Two different branch ledgers must not be merged just because both happen to
+    // trail a location tag — the annotation is then CONTRASTIVE, not decorative,
+    // mirroring the numeric-annotation rule above.
+    expect(rank(nameEvidence("ABC Traders - Pune", "ABC Traders - Mumbai").tier)).toBeGreaterThan(3.5);
+  });
+
+  it("never collapses a genuinely different name into a false match", () => {
+    // A trailing tag must not rescue an otherwise-unrelated pair, and the vowel-
+    // substitution guard (PATEL/PATIL) must still hold with a tag riding along.
+    expect(nameCompare("Ramesh Patil", "Ramesh Patel - Pur")).not.toBe("match");
+    expect(nameCompare("Kiran Shah", "Karan Shah - Exp.")).not.toBe("match");
+  });
+
+  it("never treats a legal-status qualifier (HUF/Firm/AOP/BOI/Trust) as decoration", () => {
+    // An HUF (or firm/AOP/BOI/trust) is a DIFFERENT ASSESSEE from the individual named
+    // beside it under the Income Tax Act — its own PAN, its own return. Unlike "Exp."
+    // or a location tag, dropping this changes WHO THE DEDUCTEE IS, so it must never
+    // clear the auto-match bar, whether it arrives via a hyphen/parenthesis or as a
+    // plain extra token.
+    expect(rank(nameEvidence("Ramesh Patel", "Ramesh Patel - HUF").tier)).toBeGreaterThan(3.5);
+    expect(rank(nameEvidence("Ramesh Patel", "Ramesh Patel HUF").tier)).toBeGreaterThan(3.5);
+    expect(rank(nameEvidence("Suresh Kumar Shah", "Suresh Shah (HUF)").tier)).toBeGreaterThan(3.5);
+    expect(rank(nameEvidence("Amit Mehta", "Amit Mehta - Firm").tier)).toBeGreaterThan(3.5);
+  });
+
+  it("never collapses a compound hyphenated identity down to one fragile token", () => {
+    // "R-Tech Solutions" must not be read as "R" plus a droppable "Tech Solutions"
+    // clause — a single surviving short token risks a spurious initial-match against
+    // unrelated names elsewhere. The core must retain at least two real tokens for a
+    // trailing clause to be stripped at all.
+    expect(nameCompare("R-Tech Solutions Private Limited", "Rajesh Patel")).not.toBe("match");
+    expect(nameCompare("J-Mart Retail", "Suresh Kumar")).not.toBe("match");
+  });
+});
+
 describe("amountsMatch — rounding, not an unbounded percentage", () => {
   it("still forgives genuine rounding", () => {
     expect(amountsMatch(20229, 20229)).toBe(true);

@@ -55,6 +55,47 @@ export function skeleton(w: string): string {
 /** The word's vowels, in order — the signal skeleton() throws away. */
 const vowelsOf = (w: string) => w.replace(/[^AEIOU]/g, "");
 
+/** A trailing "(...)" or " - ..." clause on a RAW name, captured before normalisation
+ *  erases the boundary that marks it as a TAIL rather than a token. Tally writes a
+ *  nature- or location-of-transaction note this way — "Dushyant Prajapati - Exp.",
+ *  "Ketan Parmar (BH Parmar Electrician)", "Technosol Corporation-Pur" — a convention
+ *  of WHERE the note sits, not WHAT it says, so this is detected POSITIONALLY rather
+ *  than by any word list (a list is exactly the party-specific patching this file
+ *  exists to avoid — "Exp"/"Pur"/"Pune"/"Tata"/a proprietor's own name all sit in the
+ *  same tail position and must all be caught the same way).
+ *
+ *  Two guards bound the risk of misreading a genuine compound name as noise:
+ *    clause <= 3 tokens   — short enough for a tag, too short to be a second full
+ *                           name accidentally trailing a stray hyphen.
+ *    core >= 2 real tokens — never collapses an identity down to one fragile token
+ *                           ("R-Tech Solutions" must NOT become the single letter "R";
+ *                           a lone surviving token risks a spurious initial-match
+ *                           against unrelated names elsewhere in tokenRule()). */
+const NAME_TRAILING_CLAUSE_MAX_TOKENS = 3;
+
+/** A small, CLOSED set of legal-status qualifiers, not a vocabulary of business jargon:
+ *  an HUF, a firm, an AOP/BOI or a trust is a DIFFERENT ASSESSEE from the individual
+ *  named beside it under the Income Tax Act — its own PAN, its own return. A location
+ *  or nature-of-transaction tag ("Pune", "Exp.", a proprietor's own name) can be
+ *  dropped without changing who was paid; one of these changes WHO THE DEDUCTEE IS, so
+ *  it is carved out of both the trailing-clause strip and the plain-extra-token
+ *  acceptance clause below rather than folded in as decoration. */
+const NAME_LEGAL_STATUS_TOKENS = new Set(["HUF", "FIRM", "AOP", "BOI", "TRUST"]);
+
+function splitTrailingClause(raw: string | null | undefined): { core: string } | null {
+  const s = (raw ?? "").trim();
+  if (!s) return null;
+  const m = /^(.+\S)\s*(?:\(([^()]+)\)|[-–—]\s*([A-Za-z][A-Za-z0-9. ]*))\s*$/.exec(s);
+  if (!m) return null;
+  const clause = m[2] ?? m[3] ?? "";
+  const clauseTokens = clause.toUpperCase().replace(/[^A-Z0-9 ]/g, " ").split(/\s+/).filter(Boolean);
+  if (!clauseTokens.length || clauseTokens.length > NAME_TRAILING_CLAUSE_MAX_TOKENS) return null;
+  if (clauseTokens.some((w) => NAME_LEGAL_STATUS_TOKENS.has(w))) return null;
+  const coreTokens = m[1].toUpperCase().replace(/[^A-Z0-9 ]/g, " ").split(/\s+/).filter((w) => w.length >= 2);
+  if (coreTokens.length < 2) return null;
+  return { core: m[1] };
+}
+
 /** Is every character of `s` present in `l`, in order? */
 function isSubsequence(s: string, l: string): boolean {
   let i = 0;
@@ -165,8 +206,18 @@ function alignTokens(ta: string[], tb: string[], compat: (x: string, y: string) 
   const union = short.length + long.length - hits;
   const accepted = (short.length >= 2 && hits === short.length && fullHits >= 1)
     || (fullHits >= 1 && hits / union >= 0.6);
-  return { hits, fullHits, union, accepted, weakestRule, pairs, aIsShort };
+  // Unmatched tokens on EITHER side — an extra token on the longer side never blocks
+  // `accepted` above (that is what lets "KULBIR SINGH" absorb a trailing "- LABOUR"),
+  // so callers that need to know whether a LEGAL-STATUS qualifier rode along unmatched
+  // (see NAME_LEGAL_STATUS_TOKENS) must inspect these explicitly.
+  const matchedShort = new Set(pairs.map((p) => p.s));
+  const unmatchedShort = short.filter((s) => !matchedShort.has(s));
+  const unmatchedLong = long.filter((_, i) => !used.has(i));
+  return { hits, fullHits, union, accepted, weakestRule, pairs, aIsShort, unmatchedShort, unmatchedLong };
 }
+
+const hasLegalStatusLeftover = (r: { unmatchedShort: string[]; unmatchedLong: string[] }): boolean =>
+  r.unmatchedShort.some((w) => NAME_LEGAL_STATUS_TOKENS.has(w)) || r.unmatchedLong.some((w) => NAME_LEGAL_STATUS_TOKENS.has(w));
 
 /**
  * How strongly two names are related, as a TIER of decreasing evidence.
@@ -203,7 +254,18 @@ export interface NameEvidence {
 /** The tiered derivation. `a` is the OFFICE name, `b` the LEDGER name (this only
  *  orients `divergences`; the tier itself is symmetric). */
 export function nameEvidence(a: string | null | undefined, b: string | null | undefined): NameEvidence {
-  const na = normalizeName(a), nb = normalizeName(b);
+  // Tally-style trailing note on exactly ONE side: compare that side's CORE (pre-
+  // clause) text below instead. Both sides or neither carrying a clause is left
+  // untouched — see splitTrailingClause. If BOTH sides trail one, stripping loses
+  // nothing (a shared decorative tail cancels out anyway) but keeping the guard
+  // symmetric to isAnnotation() below means a genuinely CONTRASTIVE pair of tails
+  // ("- Pune" vs "- Mumbai" on two different branch ledgers) is never silently erased.
+  const clauseA = splitTrailingClause(a);
+  const clauseB = splitTrailingClause(b);
+  const useA = clauseA && !clauseB ? clauseA.core : a;
+  const useB = clauseB && !clauseA ? clauseB.core : b;
+
+  const na = normalizeName(useA), nb = normalizeName(useB);
   if (!na || !nb) return { tier: "unknown", divergences: [] };
   if (na === nb) return { tier: 0, divergences: [] };
   const allA = na.split(" ").filter(Boolean);
@@ -234,7 +296,13 @@ export function nameEvidence(a: string | null | undefined, b: string | null | un
   const orient = (p: { s: string; l: string }, aIsShort: boolean) =>
     aIsShort ? { office: p.s, ledger: p.l } : { office: p.l, ledger: p.s };
 
-  if (base.accepted) {
+  // A LEGAL-STATUS qualifier riding along unmatched (HUF/Firm/AOP/BOI/Trust — see
+  // NAME_LEGAL_STATUS_TOKENS) is never waved through as "just an extra token": an
+  // office record for the individual and a ledger head for their own HUF can otherwise
+  // clear this exact acceptance clause ("KULBIR SINGH" absorbing "- LABOUR" is fine;
+  // "RAMESH PATEL" absorbing "HUF" is a DIFFERENT ASSESSEE). Demoted below instead of
+  // accepted here — same treatment as any other unrescuable remainder.
+  if (base.accepted && !hasLegalStatusLeftover(base)) {
     // Same tokens in a different order is a PERMUTATION, not a weakening — it is
     // tier 1 however the greedy pass happened to align them. Anything else leaned on
     // an abbreviation or dropped a token, which is tier 2 at best.
@@ -257,7 +325,7 @@ export function nameEvidence(a: string | null | undefined, b: string | null | un
 
   const risky = alignTokens(ta, tb, riskyTokenRule);
   const divergences = risky.pairs.filter((p) => p.rule === 4).map((p) => orient(p, risky.aIsShort));
-  return { tier: risky.accepted ? 4 : 5, divergences };
+  return { tier: risky.accepted && !hasLegalStatusLeftover(risky) ? 4 : 5, divergences };
 }
 
 /**
