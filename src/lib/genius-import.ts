@@ -16,6 +16,7 @@
  */
 import * as XLSX from "xlsx";
 import { supabase } from "@/integrations/supabase/client";
+import { findSeedRate } from "@/lib/tdsRateSeed";
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -154,11 +155,25 @@ function parseDeducteeType(raw: string): string {
   return s; // leave as-is if non-standard
 }
 
-/** Strip Genius's internal numeric prefix from a section code: "1023-194C" → "194C". */
-function cleanSection(raw: string | number | null | undefined): string {
+/** Strip Genius's internal numeric prefix from a section code: "1023-194C" → "194C".
+ *
+ *  Deliberately does NOT force a case. It used to `.toUpperCase()` the whole cell,
+ *  which silently corrupted every section carrying a parenthetical sub-code —
+ *  "194J(b)" (Technical Services, 2%) became "194J(B)", matching NOTHING already in
+ *  Rate Master (the app's established convention everywhere — Rate Master's own seed
+ *  data, section393.ts, every prior rate-master migration — is a LOWERCASE letter
+ *  inside the parens; zero uppercase-paren occurrences exist anywhere in the
+ *  codebase). Plain codes (194A, 194C, 194H…) were unaffected, since they have no
+ *  lowercase letters to corrupt — which is exactly why the Section field went
+ *  missing "sometimes" rather than always. Genius already writes the correct
+ *  convention; preserving its text verbatim is simpler and safer than re-deriving
+ *  casing rules here. ensureRateMasterSections() below still canonicalises
+ *  case-insensitively against Rate Master / the standard seed table, so an oddly
+ *  cased file is corrected rather than left to manufacture a duplicate section. */
+export function cleanSection(raw: string | number | null | undefined): string {
   const s = String(raw ?? "").trim();
   const m = s.match(/^\d+-(.+)$/);
-  return (m ? m[1] : s).trim().toUpperCase();
+  return (m ? m[1] : s).trim();
 }
 
 /** Normalise a header cell for matching: lowercase, collapse whitespace + newlines. */
@@ -379,6 +394,107 @@ export interface ImportResult {
 }
 
 /**
+ * Ensure every section code this import references exists in the firm's Rate
+ * Master, and return a REWRITE MAP so the parsed records use whichever exact
+ * casing Rate Master actually has — an existing row's casing if one already
+ * matches case-insensitively, else the standard seed table's casing, else the
+ * file's own text verbatim for a section CAFlow has never seen. Never a
+ * manufactured duplicate: the DB's (assessment_year, form_type, section_code,
+ * firm_id) uniqueness is case-SENSITIVE plain text, so two differently-cased
+ * spellings of "the same" section would otherwise sit side by side forever,
+ * each with its own empty Section dropdown.
+ *
+ * Generic by construction — this replaced logic that only ever auto-created
+ * "194C". Any section a Genius file carries (194J(a), 194J(b), 206C(1G)(a), a
+ * code CAFlow has genuinely never seen before) is handled the same way, so a
+ * fix here applies to every section and every future client, not one file.
+ */
+export async function ensureRateMasterSections(
+  sectionCodes: string[],
+  firmId: string,
+  formType: string,
+  financialYear: string,
+): Promise<{ rewrite: Map<string, string>; warnings: string[] }> {
+  const rewrite = new Map<string, string>();
+  const warnings: string[] = [];
+  const distinct = Array.from(new Set(sectionCodes.map((s) => s.trim()).filter(Boolean)));
+  if (distinct.length === 0) return { rewrite, warnings };
+
+  // AY is derived from the financial year: "2025-26" -> "2026-27".
+  const fyParts = (financialYear || "").split("-");
+  const ay = fyParts.length === 2
+    ? `${parseInt(fyParts[0]) + 1}-${String(parseInt(fyParts[0]) + 2).slice(2)}`
+    : "2026-27";
+  const fyStart = fyParts.length === 2 ? fyParts[0] : "2025";
+
+  const { data: existing } = await supabase
+    .from("tds_rate_master")
+    .select("section_code")
+    .eq("firm_id", firmId)
+    .eq("assessment_year", ay)
+    .eq("form_type", formType);
+  const existingByUpper = new Map<string, string>();
+  for (const row of existing || []) {
+    const code = String((row as any)?.section_code ?? "");
+    if (code) existingByUpper.set(code.toUpperCase(), code);
+  }
+
+  const toInsert: Record<string, unknown>[] = [];
+  const queuedCanonical = new Set<string>(); // de-dup within this one insert batch
+  for (const raw of distinct) {
+    const already = existingByUpper.get(raw.toUpperCase());
+    if (already) { rewrite.set(raw, already); continue; }
+
+    const seed = findSeedRate(raw, formType);
+    const canonical = seed ? seed.section_code : raw;
+    rewrite.set(raw, canonical);
+    if (queuedCanonical.has(canonical)) continue;
+    queuedCanonical.add(canonical);
+
+    if (seed) {
+      toInsert.push({
+        assessment_year: ay, financial_year: financialYear, form_type: formType,
+        section_code: seed.section_code, section_description: seed.section_description,
+        nature_of_payment: seed.nature_of_payment,
+        threshold_individual: seed.threshold_individual, threshold_company: seed.threshold_company,
+        rate_individual: seed.rate_individual, rate_company: seed.rate_company, rate_no_pan: seed.rate_no_pan,
+        surcharge_applicable: seed.surcharge_applicable, cess_applicable: seed.cess_applicable,
+        is_active: true, effective_from: seed.effective_from, effective_to: seed.effective_to,
+        notes: seed.notes, firm_id: firmId,
+      });
+      warnings.push(`Added ${seed.section_code} (${seed.nature_of_payment || "—"}) to Rate Master using CAflow's standard rate table.`);
+    } else {
+      // A code CAFlow has no standard rate for. Create it anyway — the section
+      // must be SELECTABLE and the record must never be silently unfileable —
+      // but with rate 0 and a note, so the CA is told to verify it rather than
+      // the software guessing a rate it doesn't actually know.
+      toInsert.push({
+        assessment_year: ay, financial_year: financialYear, form_type: formType,
+        section_code: raw, section_description: null, nature_of_payment: null,
+        threshold_individual: 0, threshold_company: 0,
+        rate_individual: 0, rate_company: 0, rate_no_pan: 20,
+        surcharge_applicable: false, cess_applicable: false,
+        is_active: true, effective_from: `${fyStart}-04-01`, effective_to: null,
+        notes: "Auto-created from Genius import — rate/threshold not in CAflow's standard table. Please verify in Rate Master.",
+        firm_id: firmId,
+      });
+      warnings.push(`Added ${raw} to Rate Master as a placeholder (rate 0%) — it isn't in CAflow's standard table. Please verify its rate and threshold in Rate Master.`);
+    }
+  }
+
+  if (toInsert.length > 0) {
+    const { error } = await supabase.from("tds_rate_master")
+      .upsert(toInsert as any[], { onConflict: "assessment_year,form_type,section_code,firm_id" });
+    if (error) {
+      console.warn("[GeniusImport] Failed to auto-create Rate Master section(s):", error.message);
+      warnings.push(`Could not add some section(s) to Rate Master automatically: ${error.message}. Add them manually in Rate Master.`);
+    }
+  }
+
+  return { rewrite, warnings };
+}
+
+/**
  * Full import: parse → validate → bulk-insert.
  * Does NOT delete existing challans/deductees — only adds new ones. If the
  * caller wants replace semantics they should clear existing rows first.
@@ -418,25 +534,21 @@ export async function importGeniusXls(
     throw new Error("No challans found in the file. Nothing to import.");
   }
 
-  // ── Auto-migration: ensure plain "194C" is usable in dropdowns ───────────
-  // Genius uses "194C"; older CAFlow seeds split this into 194C-A / 194C-S.
-  // Three jobs (all idempotent):
-  //   1. Convert any existing challans/deductees with 194C-A or 194C-S to 194C
-  //   2. Delete legacy 194C-A / 194C-S rows from rate_master
-  //   3. Ensure a 194C rate_master row exists for this firm + AY + form_type
-  //      so the dropdown actually has "194C" as a selectable option after import
+  // ── Legacy data migration: 194C-A / 194C-S → 194C ────────────────────────
+  // Genius uses plain "194C"; older CAFlow seeds split this into 194C-A
+  // (Aggregate) / 194C-S (Single transaction) — the same rate, a CAflow-only
+  // schema quirk from before Genius round-trips existed, not something any
+  // Genius file itself would emit. Unrelated to section auto-creation below;
+  // this only cleans up any of THIS firm's already-imported historical rows.
   const firmId = resolvedFirmId || filing.firm_id || null;
   if (firmId) {
     try {
-      // 1. Normalise existing challan/deductee section codes
       await supabase.from("tds_challans")
         .update({ section_code: "194C" })
         .in("section_code", ["194C-A", "194C-S"]);
       await supabase.from("tds_deductees")
         .update({ section_code: "194C" })
         .in("section_code", ["194C-A", "194C-S"]);
-
-      // 2. Drop legacy rate master rows for this firm
       const { data: deletedLegacy } = await supabase.from("tds_rate_master")
         .delete()
         .eq("firm_id", firmId)
@@ -445,51 +557,36 @@ export async function importGeniusXls(
       if (deletedLegacy && deletedLegacy.length > 0) {
         warnings.push(`Merged ${deletedLegacy.length} legacy 194C-A/194C-S rate master row(s) into 194C.`);
       }
-
-      // 3. Ensure 194C exists for this AY + form_type. AY is derived from
-      //    the financial year: "2025-26" -> "2026-27".
-      const fyParts = (financialYear || "").split("-");
-      const ay = fyParts.length === 2
-        ? `${parseInt(fyParts[0]) + 1}-${String(parseInt(fyParts[0]) + 2).slice(2)}`
-        : "2026-27";
-      const { data: existing194C } = await supabase
-        .from("tds_rate_master")
-        .select("id")
-        .eq("firm_id", firmId)
-        .eq("assessment_year", ay)
-        .eq("form_type", formType)
-        .eq("section_code", "194C")
-        .limit(1);
-      if (!existing194C || existing194C.length === 0) {
-        const newRow: any = {
-          assessment_year: ay,
-          financial_year: financialYear,
-          form_type: formType,
-          section_code: "194C",
-          nature_of_payment: "Contractor / Sub-contractor",
-          threshold_individual: 30000,
-          threshold_company: 30000,
-          rate_individual: 1,
-          rate_company: 2,
-          rate_no_pan: 20,
-          surcharge_applicable: false,
-          cess_applicable: false,
-          is_active: true,
-          effective_from: "2025-04-01",
-          effective_to: null,
-          notes: "1% for Ind/HUF, 2% for Others. Threshold: ₹30,000 per single transaction OR ₹1,00,000 aggregate in FY.",
-          firm_id: firmId,
-        };
-        const insertRes = await supabase.from("tds_rate_master").insert(newRow as any);
-        if (insertRes.error) {
-          console.warn("[GeniusImport] Failed to seed 194C rate master row:", insertRes.error.message);
-          warnings.push(`Could not add 194C to rate master: ${insertRes.error.message}. Add it manually in Rate Master.`);
-        } else {
-          warnings.push("Added 194C (Contractor / Sub-contractor) to Rate Master so dropdowns can match it.");
-        }
-      }
     } catch (mErr: any) {
-      console.warn("[GeniusImport] 194C auto-migration skipped:", mErr);
+      console.warn("[GeniusImport] 194C-A/194C-S legacy migration skipped:", mErr);
+    }
+
+    // ── Ensure every section THIS FILE references is usable in dropdowns ────
+    // Generic — covers 194C exactly the way it covers 194J(a), 194J(b),
+    // 206C(1G)(a), or a code CAFlow has never seen. See
+    // ensureRateMasterSections() for why this replaced a 194C-only special case.
+    try {
+      const codesInFile = [
+        ...parsed.challans.map((c) => c.sectionCode),
+        ...parsed.deductees.map((d) => d.sectionCode),
+      ];
+      const { rewrite, warnings: sectionWarnings } =
+        await ensureRateMasterSections(codesInFile, firmId, formType, financialYear);
+      warnings.push(...sectionWarnings);
+      // Apply the rewrite so every inserted record uses the EXACT casing Rate
+      // Master now has for its section — never the file's own casing verbatim,
+      // which is what let a correctly-existing-but-differently-cased Rate
+      // Master row still fail to match.
+      for (const c of parsed.challans) {
+        const mapped = rewrite.get(c.sectionCode);
+        if (mapped) c.sectionCode = mapped;
+      }
+      for (const d of parsed.deductees) {
+        const mapped = rewrite.get(d.sectionCode);
+        if (mapped) d.sectionCode = mapped;
+      }
+    } catch (sErr: any) {
+      console.warn("[GeniusImport] Section auto-creation skipped:", sErr);
     }
   }
 
