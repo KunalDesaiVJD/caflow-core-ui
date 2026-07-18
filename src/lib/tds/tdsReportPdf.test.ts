@@ -19,7 +19,7 @@
  */
 import { describe, it, expect, vi } from "vitest";
 
-const exportToPdfMock = vi.fn().mockResolvedValue(undefined);
+const { exportToPdfMock } = vi.hoisted(() => ({ exportToPdfMock: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@/lib/exportUtils", () => ({ exportToPdf: exportToPdfMock }));
 
 import { exportStagePdf, exportOverviewPdf } from "./tdsReportPdf";
