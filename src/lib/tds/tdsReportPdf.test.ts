@@ -19,7 +19,24 @@
  */
 import { describe, it, expect, vi } from "vitest";
 
-const { exportToPdfMock } = vi.hoisted(() => ({ exportToPdfMock: vi.fn().mockResolvedValue(undefined) }));
+// `printHtml`'s `finally { hider.remove() }` runs before control returns to the
+// test's `await`, so the DOM shape must be captured SYNCHRONOUSLY inside the mock
+// implementation — by the time the outer export*Pdf() call resolves, the host has
+// already been detached and `.parentElement` reads back null either way.
+const { exportToPdfMock, snapshots } = vi.hoisted(() => {
+  const snapshots: { hostPosition: string; parentPosition: string | null; parentIsBody: boolean; parentParentIsBody: boolean }[] = [];
+  const exportToPdfMock = vi.fn((el: HTMLElement) => {
+    const parent = el.parentElement;
+    snapshots.push({
+      hostPosition: el.style.position,
+      parentPosition: parent ? parent.style.position : null,
+      parentIsBody: parent === document.body,
+      parentParentIsBody: parent?.parentElement === document.body,
+    });
+    return Promise.resolve(undefined);
+  });
+  return { exportToPdfMock, snapshots };
+});
 vi.mock("@/lib/exportUtils", () => ({ exportToPdf: exportToPdfMock }));
 
 import { exportStagePdf, exportOverviewPdf } from "./tdsReportPdf";
@@ -44,20 +61,18 @@ const sampleOverview: OverviewReport = {
 /** The element html2pdf actually rasterises — never itself out of normal flow. */
 function assertHostIsSafeForHtml2pdf() {
   expect(exportToPdfMock).toHaveBeenCalledTimes(1);
-  const host = exportToPdfMock.mock.calls[0][0] as HTMLElement;
+  const snap = snapshots[snapshots.length - 1];
 
   // The host itself must stay in NORMAL FLOW — html2pdf clones exactly this node
   // and re-parents the clone inside its own `height:auto` wrapper; a fixed/absolute
   // host would carry that positioning into the clone and never contribute height.
-  expect(["", "static"]).toContain(host.style.position);
+  expect(["", "static"]).toContain(snap.hostPosition);
 
   // Off-screen hiding must live on a SEPARATE ancestor that is not the html2pdf
   // source itself, so it never gets cloned into html2pdf's wrapper.
-  const parent = host.parentElement;
-  expect(parent).not.toBeNull();
-  expect(parent).not.toBe(document.body);
-  expect(parent!.style.position).toBe("fixed");
-  expect(parent!.parentElement).toBe(document.body);
+  expect(snap.parentIsBody).toBe(false);
+  expect(snap.parentPosition).toBe("fixed");
+  expect(snap.parentParentIsBody).toBe(true);
 }
 
 describe("tdsReportPdf — the html2pdf source element stays in normal flow", () => {
