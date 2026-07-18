@@ -30,7 +30,7 @@ import { TdsExportMenu } from "./TdsExportMenu";
 import type { StageReport, ReportMeta } from "@/lib/tds/tdsReport";
 import { logReconAudit } from "@/lib/tdsReconAudit";
 import {
-  comparePanVerification, extractTracesRows, panDiagnostics, isPanException, normalizePan, looksLikePan,
+  comparePanVerification, countDistinctOfficeParties, extractTracesRows, panDiagnostics, isPanException, normalizePan, looksLikePan,
   panReason, panRecommendedAction, PAN_OVERRIDE_REASONS, normalizeName as normName,
   type OfficeParty, type TracesPanRow, type TracesMapping, type PanValidationResult, type PanCheckDetail,
 } from "@/lib/tdsPanVerification";
@@ -195,9 +195,15 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
 
   const filingId = filing?.id ?? null;
 
-  // Office party count + how many carry a PAN (shown on the Office Data card).
-  const officeCount = officeParties.length;
-  const officePanCount = useMemo(() => officeParties.filter((o) => normalizePan(o.pan)).length, [officeParties]);
+  // Office party count + how many carry a PAN (shown on the Office Data card). A
+  // DISTINCT-party count, via the same PAN-based grouping the audit itself runs on
+  // (countDistinctOfficeParties) — not a raw `tds_deductees` row count, which
+  // over-counts whenever one party has several TDS entries in the quarter (routine:
+  // multiple months' payments to the same deductee). Otherwise this card and the
+  // "Total Parties" summary below it disagree on what "a party" means.
+  const officeDistinct = useMemo(() => countDistinctOfficeParties(officeParties), [officeParties]);
+  const officeCount = officeDistinct.total;
+  const officePanCount = officeDistinct.withPan;
 
   const loadAll = useCallback(async () => {
     // Guard against out-of-order responses: a rapid filing switch fires overlapping

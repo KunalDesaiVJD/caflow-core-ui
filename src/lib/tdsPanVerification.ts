@@ -404,6 +404,47 @@ function computeShortDeduction(
   return { required_rate: required, applied_rate: Math.round(applied * 100) / 100, amount: amt, shortfall, basis };
 }
 
+/** One entry in the office-side PAN grouping — see groupOfficeByParty(). */
+interface OfficePartyAgg { rep: OfficeParty; amount: number; tds: number; names: Set<string>; }
+
+/**
+ * Groups raw office rows into PARTIES: one entry per valid PAN (a party can have
+ * several `tds_deductees` rows in a quarter — one per payment/transaction — and
+ * they must count as ONE party, not several), with amount/TDS summed and every
+ * distinct name sharing that PAN collected (for Duplicate-PAN detection). A
+ * missing/invalid PAN is never silently merged into another party — each such row
+ * is its own, individually-audited party.
+ *
+ * This is the ONE definition of "a party" for Stage 2 — comparePanVerification and
+ * countDistinctOfficeParties both call it, so the audit's "Total Parties" and the
+ * Office Data card's "parties" count can never disagree.
+ */
+function groupOfficeByParty(office: OfficeParty[]): { byPan: Map<string, OfficePartyAgg>; noPan: OfficeParty[] } {
+  const byPan = new Map<string, OfficePartyAgg>();
+  const noPan: OfficeParty[] = [];
+  for (const o of office) {
+    const k = normalizePan(o.pan);
+    if (!k || !looksLikePan(k)) { noPan.push(o); continue; }
+    let agg = byPan.get(k);
+    if (!agg) { agg = { rep: o, amount: 0, tds: 0, names: new Set() }; byPan.set(k, agg); }
+    agg.amount += Number(o.amount) || 0;
+    agg.tds += Number(o.tds) || 0;
+    if (o.name && normalizeName(o.name)) agg.names.add(o.name.trim());
+  }
+  return { byPan, noPan };
+}
+
+/**
+ * Distinct-PARTY counts for the office data, using the SAME grouping the audit runs
+ * on (see groupOfficeByParty). This is what the Office Data card must show: a raw
+ * `tds_deductees` row count over-counts whenever one party has multiple TDS entries
+ * in the quarter, which is routine (several months' payments to the same deductee).
+ */
+export function countDistinctOfficeParties(office: OfficeParty[]): { total: number; withPan: number } {
+  const { byPan, noPan } = groupOfficeByParty(office);
+  return { total: byPan.size + noPan.length, withPan: byPan.size };
+}
+
 /**
  * Stage-2 audit — OFFICE-DRIVEN. Every office party is audited against the TRACES
  * file: PAN existence → status → name (with the §206AA higher-rate cross-check for
@@ -430,21 +471,8 @@ export function comparePanVerification(office: OfficeParty[], traces: TracesPanR
     if (!nb(cur.mismatch_in_name) && nb(t.mismatch_in_name)) cur.mismatch_in_name = t.mismatch_in_name;
   }
 
-  // Aggregate office parties by valid PAN — sum amount/TDS (for the §206AA rate) and
-  // collect the DISTINCT names sharing the PAN (for Duplicate-PAN detection). Parties
-  // with no/invalid PAN are audited INDIVIDUALLY (never silently deduped away).
-  interface Agg { rep: OfficeParty; amount: number; tds: number; names: Set<string>; }
-  const byPan = new Map<string, Agg>();
-  const noPan: OfficeParty[] = [];
-  for (const o of office) {
-    const k = normalizePan(o.pan);
-    if (!k || !looksLikePan(k)) { noPan.push(o); continue; }
-    let agg = byPan.get(k);
-    if (!agg) { agg = { rep: o, amount: 0, tds: 0, names: new Set() }; byPan.set(k, agg); }
-    agg.amount += Number(o.amount) || 0;
-    agg.tds += Number(o.tds) || 0;
-    if (o.name && normalizeName(o.name)) agg.names.add(o.name.trim());
-  }
+  // Aggregate office parties by valid PAN — one row per PARTY, not per transaction.
+  const { byPan, noPan } = groupOfficeByParty(office);
 
   const rows: PanResultRow[] = [];
 
