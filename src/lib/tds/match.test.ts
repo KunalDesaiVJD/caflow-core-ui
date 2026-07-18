@@ -4,7 +4,7 @@
  * deciding — the complaint each time was "why are you asking me this?".
  */
 import { describe, it, expect } from "vitest";
-import { nameCompare, nameEvidence, rank } from "./match";
+import { nameCompare, nameEvidence, rank, canonicalSection, amountsMatch } from "./match";
 import { TIERS, AUTO_MATCH_MAX_RANK } from "./assignment";
 import { reconcileTally, reconcileTallyFull, type OfficeTxn, type TallyRow } from "./tallyRecon";
 
@@ -560,6 +560,77 @@ describe("reconcileTally — a saved mapping resolves the PARTY and nothing else
     expect(a.tally_row_index).toBe(0);
     expect(b.result).not.toBe("Matched");        // the mapping did NOT steal the row
     expect(b.tally_row_index).not.toBe(0);
+  });
+});
+
+describe("canonicalSection — a hand-written Tally ledger title", () => {
+  // Stage 3 reads the section off the ledger's free-text NAME line, which a human typed.
+  // Requiring the sub-section letter to be glued to the digits read "TDS Payable - 194 C
+  // 25-26" as bare "194" (dividend), so EVERY office record in that file came back "No
+  // Ledger for Section" — a whole-client false mismatch from one space.
+  it.each([
+    ["TDS Payable-194C 25-26", "194C"],
+    ["TDS Payable - 194 C 25-26", "194C"],
+    ["TDS Payable-194-C 25-26", "194C"],
+    ["TDS Payable 194 J 25-26", "194J"],
+    ["Sec 194 I Rent Payable", "194I"],
+    ["TDS 194 Q Purchase", "194Q"],
+    ["194C(2)", "194C"],
+    ["206 C", "206C"],
+    ["194IA", "194IA"],
+  ])("reads %s as %s", (raw, want) => {
+    expect(canonicalSection(raw)).toBe(want);
+  });
+
+  it("lets a keyword REFINE a bare number, but never override it", () => {
+    // The digits ran first and returned early, so /contract/ could not add the letter
+    // the title omitted. It may now refine 194 -> 194C, but only on the same base.
+    expect(canonicalSection("TDS on Contractors 194")).toBe("194C");
+    expect(canonicalSection("TDS on Professional Fees 194")).toBe("194J");
+    expect(canonicalSection("194 Dividend")).toBe("194");   // keyword agrees, no letter
+    expect(canonicalSection("192 Salary")).toBe("192");
+    // A keyword must never move the record to a different base section.
+    expect(canonicalSection("195 Payment to contractor abroad")).toBe("195");
+  });
+
+  it("does not invent a section code out of ordinary words", () => {
+    // The letter may be separated by a space, so an open [A-Z]{1,2} would read "194 to
+    // 195" as "194TO" — a code that matches nothing and fails the file.
+    expect(canonicalSection("Sec 194 to 195")).toBe("194");
+    expect(canonicalSection("194 and 195")).toBe("194");
+  });
+
+  it("still reconciles a ledger whose title spaces the sub-section letter", () => {
+    // End-to-end: the section is the HARD gate at every tier, so this used to make the
+    // whole file unreconcilable.
+    const out = reconcileTally(
+      [txn("a", "ACME CONTRACTORS", "2026-03-05", 20229)],
+      [row(0, "Acme Contractors", "2026-03-05", 20229, "TDS Payable - 194 C 25-26")], null);
+    expect(out[0].result).toBe("Matched");
+    expect(out[0].result).not.toBe("No Ledger for Section");
+  });
+});
+
+describe("amountsMatch — rounding, not an unbounded percentage", () => {
+  it("still forgives genuine rounding", () => {
+    expect(amountsMatch(20229, 20229)).toBe(true);
+    expect(amountsMatch(20229, 20228)).toBe(true);       // rupee rounding
+    expect(amountsMatch(1011450, 1011445)).toBe(true);   // round to nearest ten
+  });
+
+  it("no longer absorbs a real short deduction into a silent Match", () => {
+    // The tolerance was RELATIVE and unbounded, so the rupee gap it forgave grew without
+    // limit — a ₹5cr credit absorbed ₹2.5 lakh. Each of these is a real 201(1A) exposure.
+    expect(amountsMatch(200000, 199100)).toBe(false);      // short by ₹900
+    expect(amountsMatch(1000000, 995500)).toBe(false);     // short by ₹4,500
+    expect(amountsMatch(5000000, 4980000)).toBe(false);    // short by ₹20,000
+    expect(amountsMatch(20000, 19910)).toBe(false);        // short by ₹90
+  });
+
+  it("reports the short deduction instead of reconciling it", () => {
+    const out = reconcileTally([txn("a", "ACME TRADING", "2026-03-05", 200000)],
+      [row(0, "Acme Trading", "2026-03-05", 199100)], null);
+    expect(out[0].result).not.toBe("Matched");
   });
 });
 

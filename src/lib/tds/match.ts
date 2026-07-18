@@ -257,10 +257,23 @@ export function nameCompare(a: string | null | undefined, b: string | null | und
 }
 
 // ── Amount ───────────────────────────────────────────────────────────────────
-/** Two amounts match within ₹1 or 0.5% (nulls treated as 0). */
+/** The largest absolute gap that can still be ROUNDING rather than a real difference.
+ *
+ *  This exists because the old 0.5% was RELATIVE and UNBOUNDED, so the rupee gap it
+ *  forgave grew without limit: a ₹5 crore credit absorbed ₹2.5 lakh, and a genuine
+ *  short deduction — interest under 201(1A) and a 40(a)(ia) disallowance — was reported
+ *  as fully reconciled. That is a silent FALSE MATCH, the expensive direction.
+ *
+ *  ₹10 is not a similarity threshold tuned to anyone's data: TDS is computed as a rate
+ *  on a gross and rounded to the rupee, so a legitimate gap is ₹1, or a few rupees where
+ *  a firm rounds to the nearest ten. Anything larger is a finding the CA must see. */
+const AMOUNT_ROUNDING_MAX = 10;
+
+/** Two amounts match within rounding: ₹1, or 0.5% capped at ₹10 (nulls treated as 0). */
 export function amountsMatch(a: number | null | undefined, b: number | null | undefined): boolean {
   const x = Number(a) || 0, y = Number(b) || 0;
-  return Math.abs(x - y) <= Math.max(1, Math.max(Math.abs(x), Math.abs(y)) * 0.005);
+  const tolerance = Math.min(Math.max(1, Math.max(Math.abs(x), Math.abs(y)) * 0.005), AMOUNT_ROUNDING_MAX);
+  return Math.abs(x - y) <= tolerance;
 }
 
 // ── Date ─────────────────────────────────────────────────────────────────────
@@ -315,14 +328,41 @@ const SECTION_KEYWORD_CODES: Array<[RegExp, string]> = [
   [/rent/i, "194I"], [/commission|brokerage/i, "194H"], [/interest/i, "194A"], [/salary/i, "192"],
   [/purchase|goods/i, "194Q"], [/dividend/i, "194"], [/commission.*lottery/i, "194G"],
 ];
-/** Canonical section code from a raw section/nature string, or null. */
+/** The sub-section letters that actually exist in the Act. Deliberately a CLOSED list
+ *  rather than [A-Z]{1,2}: the letter may be separated from the number by a space or a
+ *  hyphen, so an open pattern would read "Sec 194 to 195" as "194TO" — inventing a
+ *  section code that matches nothing and failing the whole file. */
+const SECTION_SUB = "AA|AB|BB|DA|EE|IA|IB|IC|LA|LB|LC|LD|[A-T]";
+const SECTION_RE = new RegExp(`\\b(19[2-9]|20[0-9])\\s*-?\\s*(${SECTION_SUB})?\\b`);
+
+/** Canonical section code from a raw section/nature string, or null.
+ *
+ *  The separator tolerance is load-bearing, not cosmetic. Stage 3 derives a ledger's
+ *  section from the free-text Tally ledger-name line, and Tally titles are written by
+ *  hand: "TDS Payable-194C 25-26", "TDS Payable - 194 C 25-26" and "TDS on Contractors
+ *  194 C" are the same account. A pattern requiring the letter to be glued to the digits
+ *  read the middle two as bare "194" (the dividend section), so every office record in
+ *  that file came back "No Ledger for Section" — a whole-client false mismatch telling
+ *  the CA to import a ledger they had already imported.
+ *
+ *  The keyword table also has to be able to REFINE a bare number, not just substitute
+ *  for a missing one: "TDS on Contractors 194" yields base 194, and /contract/ knows
+ *  that is really 194C. Running the digits first and returning early denied it that. */
 export function canonicalSection(v: string | null | undefined): string | null {
   const s = (v ?? "").toUpperCase().replace(/\s+/g, " ").trim();
   if (!s) return null;
-  const code = s.match(/\b(19[2-9][A-Z]{0,2}|20[0-9][A-Z]{0,2})\b/);
-  if (code) return code[1].replace(/\s+/g, "");
-  for (const [re, c] of SECTION_KEYWORD_CODES) if (re.test(s)) return c;
-  return null;
+  const byKeyword = (): string | null => {
+    for (const [re, c] of SECTION_KEYWORD_CODES) if (re.test(s)) return c;
+    return null;
+  };
+  const m = SECTION_RE.exec(s);
+  if (!m) return byKeyword();
+  const [, base, sub] = m;
+  if (sub) return base + sub;
+  // Bare base: accept a keyword's refinement only when it agrees on the base, so a
+  // keyword can add the letter the title omitted but can never override the digits.
+  const kw = byKeyword();
+  return kw && kw.length > base.length && kw.startsWith(base) ? kw : base;
 }
 export function sectionsMatch(a: string | null | undefined, b: string | null | undefined): boolean {
   const ca = canonicalSection(a), cb = canonicalSection(b);
