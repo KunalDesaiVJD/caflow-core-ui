@@ -17,6 +17,7 @@
 import * as XLSX from "xlsx";
 import { supabase } from "@/integrations/supabase/client";
 import { findSeedRate } from "@/lib/tdsRateSeed";
+import { assessmentYearToFinancialYear } from "@/lib/tdsQuarter";
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -174,6 +175,39 @@ export function cleanSection(raw: string | number | null | undefined): string {
   const s = String(raw ?? "").trim();
   const m = s.match(/^\d+-(.+)$/);
   return (m ? m[1] : s).trim();
+}
+
+/**
+ * Throw if the Genius file's own Assessment Year doesn't correspond to the
+ * SELECTED filing's Financial Year. A hard stop, unlike the Form/Quarter
+ * checks in importGeniusXls (which warn and continue) — there is no
+ * legitimate reason to import one financial year's challan into a different
+ * financial year's filing.
+ *
+ * A Genius file states its period as an ASSESSMENT YEAR ("A.Y. 2025-26"),
+ * never a Financial Year, and the ±1 offset is easy to misread: a file for
+ * FY 2024-25 literally shows "2025-26" on screen, which looks like it should
+ * mean FY 2025-26 unless the offset is applied. Traced to a real incident: a
+ * client's challan (deposit date 07/08/2024 — unambiguously FY 2024-25) was
+ * already sitting in the database tagged financial_year "2025-26", and a
+ * later import of the same challan for a different quarter would have
+ * silently carried the SAME wrong year forward without this check, because
+ * client + FY scoping (resolveExistingChallansByNumber) can't tell a
+ * consistently-wrong FY from a correct one — only comparing against the
+ * file itself can. A malformed/blank Assessment Year is not validated —
+ * fails open, matching how Form/Quarter behave on an empty field.
+ */
+export function validateFinancialYearMatch(assessmentYear: string, financialYear: string): void {
+  if (!/^\d{4}-\d{2}$/.test(assessmentYear)) return;
+  const fileFinancialYear = assessmentYearToFinancialYear(assessmentYear);
+  if (fileFinancialYear !== financialYear) {
+    throw new Error(
+      `Financial Year mismatch: this file is for Financial Year ${fileFinancialYear} ` +
+      `(shown in the file as Assessment Year ${assessmentYear}), but the selected filing is for ` +
+      `Financial Year ${financialYear}. A challan deposited for one financial year cannot be imported into a ` +
+      `different one — select Financial Year ${fileFinancialYear} before importing this file.`
+    );
+  }
 }
 
 /** Normalise a header cell for matching: lowercase, collapse whitespace + newlines. */
@@ -670,6 +704,7 @@ export async function importGeniusXls(
       `Please select the correct client/filing before importing.`
     );
   }
+  validateFinancialYearMatch(parsed.deductor.assessmentYear, financialYear);
   if (parsed.deductor.formNo && parsed.deductor.formNo.toUpperCase() !== formType.toUpperCase()) {
     warnings.push(
       `Form mismatch: file is for ${parsed.deductor.formNo} but filing is for ${formType}. Importing anyway.`

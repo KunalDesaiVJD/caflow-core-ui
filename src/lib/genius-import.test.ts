@@ -66,7 +66,7 @@ vi.mock("@/integrations/supabase/client", () => ({
   supabase: { from: (table: string) => makeBuilder(table) },
 }));
 
-import { cleanSection, ensureRateMasterSections, repairFilingSectionCodes, resolveExistingChallansByNumber } from "./genius-import";
+import { cleanSection, ensureRateMasterSections, repairFilingSectionCodes, resolveExistingChallansByNumber, validateFinancialYearMatch } from "./genius-import";
 
 beforeEach(() => {
   upsertCalls.length = 0;
@@ -279,5 +279,29 @@ describe("resolveExistingChallansByNumber — scoped to ONE client AND ONE finan
     challanRows = [{ id: "x", client_id: "client-B", challan_serial_no: "1", financial_year: "2025-26" } as any];
     expect((await resolveExistingChallansByNumber([], "client-B", "2025-26")).reusable.size).toBe(0);
     expect((await resolveExistingChallansByNumber([null, undefined, ""], "client-B", "2025-26")).reusable.size).toBe(0);
+  });
+});
+
+describe("validateFinancialYearMatch — a hard stop, not a warning", () => {
+  // Traced to a real client's file: "Q3 SHREE MARUTI INFRA.xls" states
+  // "A.Y. 2025-26" (= Financial Year 2024-25 — deposit date 07/08/2024
+  // confirms it). Nothing previously compared this to the SELECTED filing's
+  // Financial Year, so a file for one year could be imported straight into a
+  // different year's filing with no error at all.
+  it("throws when the file's Assessment Year implies a DIFFERENT Financial Year", () => {
+    expect(() => validateFinancialYearMatch("2025-26", "2025-26")).toThrowError(/Financial Year mismatch/);
+  });
+
+  it("names both years and tells the user which FY to select", () => {
+    expect(() => validateFinancialYearMatch("2025-26", "2025-26")).toThrowError(/2024-25/);
+  });
+
+  it("does NOT throw when the Assessment Year correctly implies the selected Financial Year", () => {
+    expect(() => validateFinancialYearMatch("2025-26", "2024-25")).not.toThrow();
+  });
+
+  it("fails open on a blank or malformed Assessment Year, matching Form/Quarter", () => {
+    expect(() => validateFinancialYearMatch("", "2025-26")).not.toThrow();
+    expect(() => validateFinancialYearMatch("garbled", "2025-26")).not.toThrow();
   });
 });

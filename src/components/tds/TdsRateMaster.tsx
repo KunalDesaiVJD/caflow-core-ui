@@ -22,6 +22,7 @@ import { Plus, Upload, Copy, Pencil, Trash2, Search, FileUp, AlertCircle, Info }
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { resolveSection393, isItAct2025Regime, SECTION_393_DISCLAIMER } from "@/lib/section393";
 import { TDS_RATE_SEED_DATA } from "@/lib/tdsRateSeed";
+import { financialYearToAssessmentYear } from "@/lib/tdsQuarter";
 
 const TAX_YEAR_OPTIONS = Array.from({ length: 8 }, (_, i) => {
   const s = 2023 + i;
@@ -33,10 +34,9 @@ const FORM_TYPES = ["24Q", "26Q", "27Q", "27EQ"] as const;
 // Assessment Year = Tax Year (financial_year) + 1, per Indian tax convention.
 // The DB still has an assessment_year column/unique-constraint member; this
 // keeps it internally consistent without exposing the concept in the UI.
-const taxYearToAssessmentYear = (taxYear: string): string => {
-  const start = parseInt(taxYear.split("-")[0], 10) + 1;
-  return `${start}-${String(start + 1).slice(2)}`;
-};
+// Shared with genius-import.ts's file-vs-selected-FY validation — see
+// tdsQuarter.ts for why this conversion has exactly one copy.
+const taxYearToAssessmentYear = financialYearToAssessmentYear;
 
 interface RateRecord {
   id: string;

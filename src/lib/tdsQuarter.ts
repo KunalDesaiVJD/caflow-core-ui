@@ -32,6 +32,24 @@ export function getDefaultTdsQuarter(): { fy: string; quarter: string } {
 export const DEFAULT_TDS_START_FY = "2025-26";
 export const DEFAULT_TDS_START_QUARTER = "Q1";
 
+/** Assessment Year = Financial Year + 1, per Indian tax convention: income
+ *  earned in FY 2024-25 is ASSESSED in AY 2025-26. Both directions live here
+ *  as the ONE conversion — a Genius file states its period as an Assessment
+ *  Year, never a Financial Year, and every screen that lets a user pick "the
+ *  FY" needs the same round-trip. A second, independently-written copy of
+ *  this ±1 is exactly how a Genius import for FY 2024-25 ends up silently
+ *  filed under FY 2025-26: the file's own "A.Y. 2025-26" reads, at a glance,
+ *  like it already says "2025-26" — the offset is invisible unless it's
+ *  applied consistently everywhere by one function. */
+export function financialYearToAssessmentYear(financialYear: string): string {
+  const start = parseInt(financialYear.split("-")[0], 10) + 1;
+  return `${start}-${String(start + 1).slice(2)}`;
+}
+export function assessmentYearToFinancialYear(assessmentYear: string): string {
+  const start = parseInt(assessmentYear.split("-")[0], 10) - 1;
+  return `${start}-${String(start + 1).slice(2)}`;
+}
+
 const QUARTER_ORDER = ["Q1", "Q2", "Q3", "Q4"];
 
 // Monotonically increasing period number for an FY+quarter pair, so ranges
