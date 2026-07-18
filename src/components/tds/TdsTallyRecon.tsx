@@ -17,6 +17,7 @@ import { pdfToTextPages } from "@/lib/tds/pdfText";
 import { parseTallyPdfPages } from "@/lib/tds/tallyPdf";
 import { logReconAudit } from "@/lib/tdsReconAudit";
 import { TdsExportMenu } from "./TdsExportMenu";
+import { ErrorTypeBreakdown, filterByErrorType } from "./ErrorTypeBreakdown";
 import type { StageReport, ReportMeta } from "@/lib/tds/tdsReport";
 import { makeDateNormaliser, normalizeName, canonicalSection, nameCompare } from "@/lib/tds/match";
 import {
@@ -134,6 +135,9 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
   const [importing, setImporting] = useState(false);
   const [validating, setValidating] = useState(false);
   const [activeFilter, setActiveFilter] = useState<Filter>(null);
+  // Secondary breakdown WITHIN the issue list, by the specific result reason (e.g.
+  // "Date Mismatch" vs "Ledger Entry Not Found") — see ErrorTypeBreakdown.
+  const [errorTypeFilter, setErrorTypeFilter] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const loadSeq = useRef(0);
   const settled = useRef<string | null>(null);
@@ -214,7 +218,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
   }, [filingId, loadOffice, loadMaps, fetchTallyRows]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
-  useEffect(() => { setActiveFilter(null); }, [filingId]);
+  useEffect(() => { setActiveFilter(null); setErrorTypeFilter(null); }, [filingId]);
 
   /** Import several ledger PDFs at once — a client keeps one ledger PER SECTION, so
    *  picking 194A/194C/194J/194T together is the normal case, not the exception.
@@ -605,7 +609,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
             { key: "mapped" as const, label: "Mapped", value: summary.mapped, cls: "text-blue-600" },
             { key: "overridden" as const, label: "Overridden", value: summary.overridden, cls: "text-blue-600" },
           ]).map((s) => (
-            <button key={s.label} type="button" onClick={() => setActiveFilter(activeFilter === s.key ? null : s.key)} aria-pressed={activeFilter === s.key}
+            <button key={s.label} type="button" onClick={() => { setActiveFilter(activeFilter === s.key ? null : s.key); setErrorTypeFilter(null); }} aria-pressed={activeFilter === s.key}
               className={cn("rounded-md border bg-card p-2 text-center transition-all hover:border-primary/50 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary", activeFilter === s.key ? "ring-2 ring-primary border-primary" : "border-border")}>
               <p className={cn("text-xl font-bold tabular-nums", s.cls)}><AnimatedNumber value={s.value} /></p><p className="text-[11px] text-muted-foreground">{s.label}</p>
             </button>
@@ -615,7 +619,14 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs px-1"><span className="text-muted-foreground">Showing <b className="text-foreground">{cardFiltered.length}</b> record(s)</span>
               <Button variant="ghost" size="sm" className="h-6 text-xs gap-1" onClick={() => setActiveFilter(null)}><X size={11} /> Clear</Button></div>
-            {cardFiltered.length === 0 ? <div className="p-8 text-center text-sm text-muted-foreground rounded-lg border border-dashed">No {activeFilter} records.</div> : <div className="space-y-3">{cardFiltered.map(renderCard)}</div>}
+            {cardFiltered.length === 0 ? <div className="p-8 text-center text-sm text-muted-foreground rounded-lg border border-dashed">No {activeFilter} records.</div> : (
+              <div className="space-y-3">
+                {activeFilter === "issues" && (
+                  <ErrorTypeBreakdown rows={cardFiltered} getType={(r) => r.result} activeType={errorTypeFilter} onSelectType={setErrorTypeFilter} />
+                )}
+                {(activeFilter === "issues" ? filterByErrorType(cardFiltered, (r) => r.result, errorTypeFilter) : cardFiltered).map(renderCard)}
+              </div>
+            )}
           </div>
         ) : summary.total === 0 ? (
           <div className="p-8 text-center text-sm text-muted-foreground rounded-lg border border-dashed">No office records to reconcile for this filing.</div>
@@ -624,7 +635,12 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
             <div className="flex items-center gap-2"><CheckCircle2 size={22} className="text-emerald-600" /><p className="text-lg font-bold text-emerald-700 dark:text-emerald-300">Tally Reconciliation Completed</p></div>
             <p className="text-sm text-muted-foreground">All {summary.total} office records were found in the Tally ledger with matching date, amount and party.</p>
           </CardContent></Card>
-        ) : <div className="space-y-3">{issueRows.map(renderCard)}</div>}
+        ) : (
+          <div className="space-y-3">
+            <ErrorTypeBreakdown rows={issueRows} getType={(r) => r.result} activeType={errorTypeFilter} onSelectType={setErrorTypeFilter} />
+            {filterByErrorType(issueRows, (r) => r.result, errorTypeFilter).map(renderCard)}
+          </div>
+        )}
       </>)}
 
       <Dialog open={ovOpen} onOpenChange={setOvOpen}>

@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { TdsExportMenu } from "./TdsExportMenu";
+import { ErrorTypeBreakdown, filterByErrorType } from "./ErrorTypeBreakdown";
 import { reportFileName, type StageReport, type ReportMeta, type OverviewReport } from "@/lib/tds/tdsReport";
 import { buildOverviewWorkbook, downloadWorkbook } from "@/lib/tds/tdsReportExcel";
 import { exportOverviewPdf } from "@/lib/tds/tdsReportPdf";
@@ -100,6 +101,15 @@ function reasonFor(r: ReconResult): string {
   const diffs = (r.field_diffs || []).filter(f => f.matched === false);
   const labels = diffs.map(f => FIELD_LABELS[f.field] || f.field).join(", ") || "some fields";
   return `Mismatch — ${labels} ${diffs.length > 1 ? "differ" : "difference"}.`;
+}
+
+/** Readable error-TYPE label for the ErrorTypeBreakdown chips — the closest thing
+ *  Stage-1 has to Stage-3's single "result" verdict, since a mismatch here is a
+ *  per-FIELD diff rather than one overall reason. */
+function errorTypeFor(r: ReconResult): string {
+  if (r.match_status === "office_only") return "Office Data Only";
+  if (r.match_status === "imported_only") return "Imported Data Only";
+  return "Field Mismatch";
 }
 
 /** Invoke an edge function and surface the function's own JSON error message.
@@ -277,6 +287,9 @@ export function TdsValidateFinalise({
   // summary lives only on the last one.
   const [stage, setStage] = useState<"1" | "2" | "3">("1");
   const [activeFilter, setActiveFilter] = useState<FilterKey>(null); // clicked summary card
+  // Secondary breakdown WITHIN the mismatch list, by the specific match_status
+  // (e.g. "Office Data Only" vs "Imported Data Only") — see ErrorTypeBreakdown.
+  const [errorTypeFilter, setErrorTypeFilter] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const loadSeq = useRef(0); // guards against out-of-order loadAll responses
 
@@ -755,7 +768,7 @@ export function TdsValidateFinalise({
   // Reset the active card filter AND the Stage-2 gate status when the selection
   // changes, so the filing gate defaults closed until the new filing's Stage-2
   // reports (prevents filing off a previous return's status during a fast switch).
-  useEffect(() => { setActiveFilter(null); setPanStatus(PAN_STATUS_BLOCKED); setTallyStatus({ filingId: null, loaded: false, applicable: false, ran: false, total: 0, matched: 0, issues: 0, overridden: 0 }); }, [selClient, selFy, selQuarter, selForm]);
+  useEffect(() => { setActiveFilter(null); setErrorTypeFilter(null); setPanStatus(PAN_STATUS_BLOCKED); setTallyStatus({ filingId: null, loaded: false, applicable: false, ran: false, total: 0, matched: 0, issues: 0, overridden: 0 }); }, [selClient, selFy, selQuarter, selForm]);
 
   // Records to show when a summary card is clicked (null = default exceptions view).
   const cardFiltered = useMemo((): ReconResult[] | null => {
@@ -1177,7 +1190,7 @@ export function TdsValidateFinalise({
                   { key: "overridden" as const, label: "Overridden", value: summary.overridden, cls: "text-blue-600" },
                 ]).map(s => (
                   <button key={s.label} type="button"
-                    onClick={() => setActiveFilter(activeFilter === s.key ? null : s.key)}
+                    onClick={() => { setActiveFilter(activeFilter === s.key ? null : s.key); setErrorTypeFilter(null); }}
                     aria-pressed={activeFilter === s.key}
                     className={cn(
                       "rounded-md border bg-card p-2 text-center transition-all hover:border-primary/50 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
@@ -1200,7 +1213,13 @@ export function TdsValidateFinalise({
                     <div className="p-8 text-center text-sm text-muted-foreground rounded-lg border border-dashed">No {activeFilter} records found.</div>
                   ) : (
                     <div className="space-y-3">
-                      {cardFiltered.filter(r => r.match_status !== "matched").map(renderMismatchCard)}
+                      {activeFilter === "mismatched" && (
+                        <ErrorTypeBreakdown rows={cardFiltered} getType={errorTypeFor} activeType={errorTypeFilter} onSelectType={setErrorTypeFilter} />
+                      )}
+                      {(activeFilter === "mismatched"
+                        ? filterByErrorType(cardFiltered.filter(r => r.match_status !== "matched"), errorTypeFor, errorTypeFilter)
+                        : cardFiltered.filter(r => r.match_status !== "matched")
+                      ).map(renderMismatchCard)}
                       {cardFiltered.some(r => r.match_status === "matched") && renderMatchedTable(cardFiltered.filter(r => r.match_status === "matched"))}
                     </div>
                   )}
@@ -1226,7 +1245,10 @@ export function TdsValidateFinalise({
                 </Card>
               ) : (
                 /* Default view → exceptions only. */
-                <div className="space-y-3">{attention.map(renderMismatchCard)}</div>
+                <div className="space-y-3">
+                  <ErrorTypeBreakdown rows={attention} getType={errorTypeFor} activeType={errorTypeFilter} onSelectType={setErrorTypeFilter} />
+                  {filterByErrorType(attention, errorTypeFor, errorTypeFilter).map(renderMismatchCard)}
+                </div>
               )}
             </div>
           )}

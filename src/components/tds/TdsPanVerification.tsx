@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { readSheetGrids, readDelimitedGrid } from "@/lib/tdsWorkbook";
 import { TdsExportMenu } from "./TdsExportMenu";
+import { ErrorTypeBreakdown, filterByErrorType } from "./ErrorTypeBreakdown";
 import type { StageReport, ReportMeta } from "@/lib/tds/tdsReport";
 import { logReconAudit } from "@/lib/tdsReconAudit";
 import {
@@ -180,6 +181,9 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
   const [importing, setImporting] = useState(false);
   const [validating, setValidating] = useState(false);
   const [activeFilter, setActiveFilter] = useState<PanFilter>(null);
+  // Secondary breakdown WITHIN the issue list, by the specific validation_result
+  // (e.g. "Invalid PAN" vs "PAN Inoperative") — see ErrorTypeBreakdown.
+  const [errorTypeFilter, setErrorTypeFilter] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const loadSeq = useRef(0); // guards against out-of-order loadAll responses on rapid filing switches
   // The filing id for which loadAll has SETTLED. Read at report time so the parent
@@ -255,7 +259,7 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
   }, [filingId]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
-  useEffect(() => { setActiveFilter(null); }, [filingId]);
+  useEffect(() => { setActiveFilter(null); setErrorTypeFilter(null); }, [filingId]);
 
   // ── Core audit: office (master) ↔ the UNION of EVERY TRACES batch ───────────
   // loadSeq-guarded so a filing switch mid-run cannot write the wrong filing's
@@ -885,7 +889,7 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
               { key: "overridden" as const, label: "Overridden", value: summary.overridden, cls: "text-blue-600" },
             ]).map((s) => (
               <button key={s.label} type="button"
-                onClick={() => setActiveFilter(activeFilter === s.key ? null : s.key)}
+                onClick={() => { setActiveFilter(activeFilter === s.key ? null : s.key); setErrorTypeFilter(null); }}
                 aria-pressed={activeFilter === s.key}
                 className={cn(
                   "rounded-md border bg-card p-2 text-center transition-all hover:border-primary/50 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
@@ -907,7 +911,13 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
                 <div className="p-8 text-center text-sm text-muted-foreground rounded-lg border border-dashed">No {activeFilter} records found.</div>
               ) : (
                 <div className="space-y-3">
-                  {cardFiltered.filter((r) => isPanException(r.validation_result)).map(renderIssueCard)}
+                  {activeFilter === "issues" && (
+                    <ErrorTypeBreakdown rows={cardFiltered} getType={(r) => r.validation_result} activeType={errorTypeFilter} onSelectType={setErrorTypeFilter} />
+                  )}
+                  {(activeFilter === "issues"
+                    ? filterByErrorType(cardFiltered.filter((r) => isPanException(r.validation_result)), (r) => r.validation_result, errorTypeFilter)
+                    : cardFiltered.filter((r) => isPanException(r.validation_result))
+                  ).map(renderIssueCard)}
                   {cardFiltered.some((r) => !isPanException(r.validation_result)) && renderPartyTable(cardFiltered.filter((r) => !isPanException(r.validation_result)))}
                 </div>
               )}
@@ -930,7 +940,10 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
               </CardContent>
             </Card>
           ) : (
-            <div className="space-y-3">{issueRows.map(renderIssueCard)}</div>
+            <div className="space-y-3">
+              <ErrorTypeBreakdown rows={issueRows} getType={(r) => r.validation_result} activeType={errorTypeFilter} onSelectType={setErrorTypeFilter} />
+              {filterByErrorType(issueRows, (r) => r.validation_result, errorTypeFilter).map(renderIssueCard)}
+            </div>
           )}
         </>
       )}
