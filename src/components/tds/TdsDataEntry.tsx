@@ -33,7 +33,7 @@ import {
   CreditCard, RefreshCw, ArrowRight, RotateCcw, Lock, FileText, Loader2, FileSpreadsheet, Upload,
 } from "lucide-react";
 import { generateGeniusExport } from "@/lib/genius-export";
-import { importGeniusXls } from "@/lib/genius-import";
+import { importGeniusXls, repairFilingSectionCodes } from "@/lib/genius-import";
 
 // ─── Types ───
 interface ClientOption {
@@ -364,6 +364,21 @@ export function TdsDataEntry({
 
       if (match) {
         setFiling(match as TdsFiling);
+        // Self-heal existing rows before displaying them: a filing imported
+        // before the Genius section-code fix has challans/deductees stuck
+        // with a corrupted or Rate-Master-less section_code — re-importing
+        // would only duplicate deductees (there's no dedup on that table), so
+        // the fix has to reach into what's already stored. Cheap when there's
+        // nothing to fix (two reads, zero writes); see repairFilingSectionCodes.
+        try {
+          const firmIdForRepair = await resolveFirmId();
+          if (firmIdForRepair) {
+            const repair = await repairFilingSectionCodes((match as TdsFiling).id, firmIdForRepair, selForm, selFy);
+            if (repair.challansFixed || repair.deducteesFixed) await fetchRates();
+          }
+        } catch (rErr) {
+          console.warn("[TdsDataEntry] Section-code repair skipped:", rErr);
+        }
         await fetchChallans((match as TdsFiling).id);
         await fetchCarryForwardChallans(selClient, selFy, selQuarter, selForm);
       } else {

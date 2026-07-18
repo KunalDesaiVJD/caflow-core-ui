@@ -494,6 +494,80 @@ export async function ensureRateMasterSections(
   return { rewrite, warnings };
 }
 
+export interface RepairResult {
+  challansFixed: number;
+  deducteesFixed: number;
+  warnings: string[];
+}
+
+/**
+ * Repair a filing's ALREADY-STORED challan/deductee rows whose section_code
+ * was corrupted by a past bug, or whose section still has no Rate Master row
+ * — WITHOUT re-importing or duplicating a single record.
+ *
+ * Fixing the importer (ensureRateMasterSections above) stops NEW corruption.
+ * It does nothing for rows a firm already imported before the fix — those
+ * stay broken (blank Section dropdown, "Differs from challan") forever
+ * unless something goes back and repairs the text actually sitting in the
+ * database. Re-importing the same file is not that something: challans dedupe
+ * by Challan Number, but deductees do not, so a second import of an
+ * already-imported file DOUBLES the deductee rows instead of correcting them.
+ *
+ * Safe to call on every filing load: reuses the same canonicalisation
+ * ensureRateMasterSections uses for a fresh import, then rewrites in place
+ * only the rows whose stored text doesn't already match the canonical form —
+ * a filing with nothing to fix costs two reads and zero writes.
+ */
+export async function repairFilingSectionCodes(
+  filingId: string,
+  firmId: string,
+  formType: string,
+  financialYear: string,
+): Promise<RepairResult> {
+  const [{ data: challans }, { data: deductees }] = await Promise.all([
+    supabase.from("tds_challans").select("id, section_code").eq("filing_id", filingId),
+    supabase.from("tds_deductees").select("id, section_code").eq("filing_id", filingId),
+  ]);
+
+  const allCodes = [
+    ...(challans || []).map((c: any) => String(c.section_code ?? "")),
+    ...(deductees || []).map((d: any) => String(d.section_code ?? "")),
+  ];
+  const { rewrite, warnings } = await ensureRateMasterSections(allCodes, firmId, formType, financialYear);
+
+  // Group by the TARGET canonical value, so every row sharing one wrong
+  // spelling is corrected in a single UPDATE instead of one call per row.
+  const groupByCanonical = (rows: { id: string; section_code: string }[]) => {
+    const groups = new Map<string, string[]>();
+    for (const r of rows) {
+      const raw = String(r.section_code ?? "");
+      const canonical = rewrite.get(raw);
+      if (canonical && canonical !== raw) {
+        const ids = groups.get(canonical) ?? [];
+        ids.push(r.id);
+        groups.set(canonical, ids);
+      }
+    }
+    return groups;
+  };
+
+  let challansFixed = 0;
+  for (const [canonical, ids] of groupByCanonical((challans || []) as any[])) {
+    const { error } = await supabase.from("tds_challans")
+      .update({ section_code: canonical }).eq("firm_id", firmId).in("id", ids);
+    if (!error) challansFixed += ids.length;
+  }
+
+  let deducteesFixed = 0;
+  for (const [canonical, ids] of groupByCanonical((deductees || []) as any[])) {
+    const { error } = await supabase.from("tds_deductees")
+      .update({ section_code: canonical }).eq("firm_id", firmId).in("id", ids);
+    if (!error) deducteesFixed += ids.length;
+  }
+
+  return { challansFixed, deducteesFixed, warnings };
+}
+
 /**
  * Full import: parse → validate → bulk-insert.
  * Does NOT delete existing challans/deductees — only adds new ones. If the

@@ -15,34 +15,54 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// Table-aware mock: tds_rate_master (select existing / upsert new),
+// tds_challans and tds_deductees (select current rows / update in place —
+// exercised by repairFilingSectionCodes, which reads and rewrites ALREADY
+// STORED rows without touching tds_rate_master's own select/upsert path).
 const upsertCalls: { rows: any[]; opts: any }[] = [];
+const updateCalls: { table: string; patch: any; ids: any[] }[] = [];
 let existingRows: { section_code: string }[] = [];
+let challanRows: { id: string; section_code: string }[] = [];
+let deducteeRows: { id: string; section_code: string }[] = [];
 
-function makeBuilder() {
+function makeBuilder(table: string) {
+  let pendingPatch: any = null;
   const builder: any = {
     select: () => builder,
     eq: () => builder,
     delete: () => builder,
-    update: () => builder,
-    in: () => builder,
+    update: (patch: any) => { pendingPatch = patch; return builder; },
+    in: (_col: string, ids: any[]) => {
+      if (pendingPatch) {
+        updateCalls.push({ table, patch: pendingPatch, ids });
+        return Promise.resolve({ data: ids, error: null });
+      }
+      return builder;
+    },
     upsert: (rows: any[], opts: any) => {
       upsertCalls.push({ rows, opts });
       return Promise.resolve({ data: rows, error: null });
     },
-    then: (resolve: any) => resolve({ data: existingRows, error: null }),
+    then: (resolve: any) => {
+      const data = table === "tds_challans" ? challanRows : table === "tds_deductees" ? deducteeRows : existingRows;
+      resolve({ data, error: null });
+    },
   };
   return builder;
 }
 
 vi.mock("@/integrations/supabase/client", () => ({
-  supabase: { from: () => makeBuilder() },
+  supabase: { from: (table: string) => makeBuilder(table) },
 }));
 
-import { cleanSection, ensureRateMasterSections } from "./genius-import";
+import { cleanSection, ensureRateMasterSections, repairFilingSectionCodes } from "./genius-import";
 
 beforeEach(() => {
   upsertCalls.length = 0;
+  updateCalls.length = 0;
   existingRows = [];
+  challanRows = [];
+  deducteeRows = [];
 });
 
 describe("cleanSection — preserves the file's own casing", () => {
@@ -140,5 +160,66 @@ describe("ensureRateMasterSections — generic auto-create, not a 194C special c
     expect(rewrite.size).toBe(0);
     expect(warnings).toHaveLength(0);
     expect(upsertCalls).toHaveLength(0);
+  });
+});
+
+describe("repairFilingSectionCodes — fixes rows already sitting in the database", () => {
+  // The user's reported symptom AFTER the importer fix shipped: the SAME
+  // filing's deductee rows, imported before the fix, still show a blank
+  // Section dropdown. Re-importing is not the answer — deductees have no
+  // dedup, so it would double the rows instead of correcting them. This
+  // rewrites what's already stored, exercised end-to-end against the exact
+  // shape the bug produced: challan "194J", deductees corrupted to "194J(B)".
+  it("rewrites the corrupted deductee rows in place, without touching challans that are already correct", async () => {
+    existingRows = []; // firm has never seeded 194J(b)
+    challanRows = [{ id: "ch-1", section_code: "194J" }];
+    deducteeRows = [
+      { id: "d-1", section_code: "194J(B)" },
+      { id: "d-2", section_code: "194J(B)" },
+      { id: "d-3", section_code: "194J(B)" },
+    ];
+
+    const result = await repairFilingSectionCodes("filing-1", "firm-1", "26Q", "2025-26");
+
+    expect(result.deducteesFixed).toBe(3);
+    // 194J (bare) has no seed rate — it's created as a placeholder, not
+    // rewritten, so the challan needs NO update (its stored text already
+    // equals its own canonical form).
+    expect(result.challansFixed).toBe(0);
+
+    const deducteeUpdate = updateCalls.find((u) => u.table === "tds_deductees");
+    expect(deducteeUpdate?.patch).toEqual({ section_code: "194J(b)" });
+    expect(deducteeUpdate?.ids.sort()).toEqual(["d-1", "d-2", "d-3"]);
+    expect(updateCalls.some((u) => u.table === "tds_challans")).toBe(false);
+
+    // Rate Master gained the missing sections along the way (194J(b) from
+    // the seed table, bare 194J as a flagged placeholder) — same generic
+    // path a fresh import uses.
+    const created = upsertCalls.flatMap((u) => u.rows).map((r: any) => r.section_code);
+    expect(created).toEqual(expect.arrayContaining(["194J(b)", "194J"]));
+  });
+
+  it("costs zero writes when everything already matches Rate Master", async () => {
+    existingRows = [{ section_code: "194C" }];
+    challanRows = [{ id: "ch-1", section_code: "194C" }];
+    deducteeRows = [{ id: "d-1", section_code: "194C" }];
+
+    const result = await repairFilingSectionCodes("filing-2", "firm-1", "26Q", "2025-26");
+
+    expect(result.challansFixed).toBe(0);
+    expect(result.deducteesFixed).toBe(0);
+    expect(updateCalls).toHaveLength(0);
+    expect(upsertCalls).toHaveLength(0);
+  });
+
+  it("never touches a blank section_code", async () => {
+    challanRows = [{ id: "ch-1", section_code: "" }];
+    deducteeRows = [{ id: "d-1", section_code: "" }];
+
+    const result = await repairFilingSectionCodes("filing-3", "firm-1", "26Q", "2025-26");
+
+    expect(result.challansFixed).toBe(0);
+    expect(result.deducteesFixed).toBe(0);
+    expect(updateCalls).toHaveLength(0);
   });
 });
