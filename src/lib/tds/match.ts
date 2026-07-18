@@ -206,6 +206,22 @@ export function nameEvidence(a: string | null | undefined, b: string | null | un
   let tb = allB.filter((w) => !NAME_STOPWORDS.has(w));
   if (!hasReal(ta) || !hasReal(tb)) { ta = allA; tb = allB; }
 
+  // Tally appends bookkeeping annotations to a ledger name — a rate ("(2%)"), the
+  // section ("194C"), a year. These are not the party. Dropping them rescues names the
+  // 0.6 hits/union ratio cannot reach: "ABC ENTERPRISE" vs "ABC ENTERPRISE (2%)" is one
+  // token against two once ENTERPRISE is a stopword, i.e. ratio 0.5, so an obviously
+  // identical party escalated as a Party Name Mismatch.
+  //
+  // Only when the annotation is ASYMMETRIC. If BOTH sides carry a number it is
+  // CONTRASTIVE, not decorative — "UNIT 1 TRADERS" and "UNIT 2 TRADERS" are different
+  // parties, and stripping the digit would silently merge them.
+  const isAnnotation = (w: string) => /^\d+$/.test(w) || /^(?:19[2-9]|20[0-9])[A-Z]{0,2}$/.test(w);
+  if (ta.some(isAnnotation) !== tb.some(isAnnotation)) {
+    const sa = ta.filter((w) => !isAnnotation(w));
+    const sb = tb.filter((w) => !isAnnotation(w));
+    if (hasReal(sa) && hasReal(sb)) { ta = sa; tb = sb; }
+  }
+
   const base = alignTokens(ta, tb, tokenRule);
   const orient = (p: { s: string; l: string }, aIsShort: boolean) =>
     aIsShort ? { office: p.s, ledger: p.l } : { office: p.l, ledger: p.s };

@@ -611,6 +611,31 @@ describe("canonicalSection — a hand-written Tally ledger title", () => {
   });
 });
 
+describe("nameEvidence — a Tally annotation is not part of the party name", () => {
+  it("ignores a rate or section suffix the ledger appends", () => {
+    // Once ENTERPRISE/TRADERS are stopwords these collapse to ONE token, and one token
+    // against two can never reach the 0.6 hits/union ratio — so an obviously identical
+    // party escalated as a Party Name Mismatch.
+    expect(rank(nameEvidence("ABC ENTERPRISE", "ABC ENTERPRISE (2%)").tier)).toBeLessThanOrEqual(3);
+    expect(rank(nameEvidence("XYZ ENTERPRISE", "XYZ ENTERPRISE 194C").tier)).toBeLessThanOrEqual(3);
+    expect(rank(nameEvidence("SHAH TRADING", "SHAH TRADING - 194C 2%").tier)).toBeLessThanOrEqual(3);
+  });
+
+  it("matches such a record outright instead of asking for a mapping", () => {
+    const out = reconcileTally([txn("a", "ABC ENTERPRISE", "2026-03-05", 20229)],
+      [row(0, "ABC ENTERPRISE (2%)", "2026-03-05", 20229)], null);
+    expect(out[0].result).toBe("Matched");
+    expect(out[0].suggested_party).toBeUndefined();
+  });
+
+  it("KEEPS a number that both sides carry — it distinguishes the parties", () => {
+    // The asymmetry test is what makes the rule safe: a digit present on both sides is
+    // contrastive, and stripping it would merge two genuinely different ledger accounts.
+    expect(rank(nameEvidence("UNIT 1 TRADERS", "UNIT 2 TRADERS").tier)).toBeGreaterThan(3.5);
+    expect(rank(nameEvidence("PLOT 7 ENTERPRISE", "PLOT 9 ENTERPRISE").tier)).toBeGreaterThan(3.5);
+  });
+});
+
 describe("amountsMatch — rounding, not an unbounded percentage", () => {
   it("still forgives genuine rounding", () => {
     expect(amountsMatch(20229, 20229)).toBe(true);
