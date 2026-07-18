@@ -10,10 +10,18 @@
  * auto-detection, section-code canonicalisation).
  */
 
-import { looksLikePan } from "./columnEngine";
-
 // ── PAN ──────────────────────────────────────────────────────────────────────
 export const normalizePan = (pan: string | null | undefined): string => (pan ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+/** PAN shape: 5 letters, 4 digits, 1 letter. INLINED from columnEngine.looksLikePan
+ *  (a one-liner) so this module has ZERO imports and can be copied byte-identically
+ *  into supabase/functions/_shared/match.ts for the Deno edge functions — the same
+ *  proven pattern as tdsColumnEngine.ts. columnEngine.ts deliberately keeps its OWN
+ *  copy: it uses looksLikePan internally and is itself a byte-identity-guarded,
+ *  dependency-free leaf module. Duplicating this single line across two independent
+ *  dependency-free leaf modules is the correct trade — neither may import the other. */
+const PAN_VALUE_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+export const looksLikePan = (v: unknown): boolean => PAN_VALUE_RE.test(String(v ?? "").trim().toUpperCase().replace(/\s+/g, ""));
 
 // ── Entity-name normalisation + intelligent comparison ───────────────────────
 export const normalizeName = (v: string | null | undefined): string => {
@@ -386,4 +394,5 @@ export function sectionsMatch(a: string | null | undefined, b: string | null | u
   return true; // if either is unrecognisable, don't manufacture a mismatch
 }
 
-export { looksLikePan };
+// looksLikePan is exported at its definition above (previously re-exported here from
+// columnEngine). Existing importers of it from "./match" are unaffected.

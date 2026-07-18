@@ -34,4 +34,30 @@ describe("shared TDS engine stays in sync with src", () => {
   it("columnEngine.ts has no imports, so the copy is valid in Deno and the browser", () => {
     expect(read("./columnEngine.ts")).not.toMatch(/^\s*import\s/m);
   });
+
+  // match.ts + assignment.ts are the SINGLE matching engine every TDS stage shares.
+  // Stage-1 (tds-recon-compare) and any future Deno stage import them from _shared/;
+  // the app imports them from src/. Both trees MUST stay byte-identical or the three
+  // stages silently diverge again — exactly the failure this whole engine unifies.
+  //
+  // The copy is only possible because match.ts is DEPENDENCY-FREE (looksLikePan is
+  // inlined, not imported from columnEngine) and assignment.ts imports ONLY
+  // "./match.ts". The ".ts" extension is load-bearing: Deno requires it on relative
+  // imports, and the byte-identity guard forces the src file to carry it too.
+  it("match.ts matches the _shared copy the edge functions import", () => {
+    expect(read("../../../supabase/functions/_shared/match.ts")).toBe(read("./match.ts"));
+  });
+
+  it("assignment.ts matches the _shared copy the edge functions import", () => {
+    expect(read("../../../supabase/functions/_shared/assignment.ts")).toBe(read("./assignment.ts"));
+  });
+
+  it("match.ts has no imports, so the copy is valid in Deno and the browser", () => {
+    expect(read("./match.ts")).not.toMatch(/^\s*import\s/m);
+  });
+
+  it("assignment.ts imports only ./match.ts, so the copy is valid in Deno and the browser", () => {
+    const imports = [...read("./assignment.ts").matchAll(/^\s*import[^;]*?from\s*["']([^"']+)["']/gm)].map((m) => m[1]);
+    expect(imports).toEqual(["./match.ts"]);
+  });
 });

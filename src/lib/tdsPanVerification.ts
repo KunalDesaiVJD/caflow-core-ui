@@ -92,89 +92,27 @@ export const normalizePan = (pan: string | null | undefined): string =>
 const PAN_SHAPE_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 export const looksLikePan = (v: unknown): boolean => PAN_SHAPE_RE.test(normalizePan(v == null ? "" : String(v)));
 
-// ── Entity-name normalisation + intelligent comparison (Stage-1 parity) ───────
-/** Legal-entity name normaliser: case/punctuation/spacing-insensitive, common
- * abbreviations folded, leading honorific stripped — identical to Stage-1 normName. */
-export const normalizeName = (v: string | null | undefined): string => {
-  let s = (v ?? "").toUpperCase();
-  s = s.replace(/&/g, " AND ");
-  s = s.replace(/[^A-Z0-9 ]/g, " ");
-  s = ` ${s.replace(/\s+/g, " ").trim()} `;
-  // Glue "Co-operative" / "Co op" (hyphen already stripped above) BEFORE the
-  // standalone CO→COMPANY fold, so a co-operative bank/society is not mangled to
-  // "COMPANY OPERATIVE" and falsely reported as a Name Mismatch.
-  s = s.replace(/ CO OPERATIVE /g, " COOPERATIVE ").replace(/ CO OP /g, " COOPERATIVE ");
-  s = s.replace(/ PVT /g, " PRIVATE ").replace(/ LTD /g, " LIMITED ");
-  s = s.replace(/ P LIMITED /g, " PRIVATE LIMITED ").replace(/ CORPN /g, " CORPORATION ").replace(/ CO /g, " COMPANY ");
-  s = s.replace(/^ (M S|MESSRS|MESSER?S|THE) /, " ");
-  return s.replace(/\s+/g, " ").trim();
-};
-
-/** Intelligent name comparison — ORDER-INDEPENDENT (token sets), tolerant of
- * spacing/case/punctuation/abbreviations, extra middle names and reordered
- * first/middle/surnames. Returns how the two names relate:
- *  - "match"     exact after normalisation, one token-set ⊆ the other, or Jaccard ≥ 0.6
- *  - "different" NO significant token in common → almost certainly a different party
- *  - "mismatch"  some overlap but not enough to be confident it's the same party
- *  - "unknown"   a side is blank / has no significant tokens (can't compare)
- * NOTE: this is NOT used to compare an office name against TRACES — Stage-2 does
- * no such check. Its only remaining caller is allNamesEquivalent, which compares
- * two OFFICE party names to each other to decide whether one PAN has been entered
- * against two genuinely different parties ("Duplicate PAN Across Parties"). */
-// Compound suffixes an Indian given name legitimately picks up ("Rakesh" →
-// "Rakeshkumar", "Jagdish" → "Jagdishbhai"). Prefix matching is allowed ONLY for
-// these, so "Ram" is NOT collapsed into "Ramesh" (which would be a false match).
-const NAME_COMPOUND_SUFFIXES = new Set(["KUMAR", "BHAI", "BHAII", "BEN", "BHEN", "KUMARI", "LAL", "DAS", "CHANDRA", "PRASAD", "DEVI", "RAJ", "NATH", "SINH", "BABU", "RAO"]);
-// Generic legal / honorific words that carry NO distinguishing power — removed
-// before comparison so "SHREE ABC PVT LTD" and "SHREE XYZ PVT LTD" do NOT match
-// on the common words alone (the distinctive ABC vs XYZ must decide).
-const NAME_STOPWORDS = new Set(["PRIVATE", "LIMITED", "COMPANY", "CORPORATION", "LLP", "LLC", "INC", "AND", "THE", "MESSRS", "SHREE", "SHRI", "SRI", "SHREEJI"]);
-
-/** Two normalised name TOKENS are compatible when equal, one is the other plus a
- * known Indian compound suffix ("Rakesh" ≈ "Rakeshkumar"), OR one is a single-letter
- * INITIAL of the other ("R" ≈ "Ramesh"). Initials are weak on their own, so
- * nameCompare's subset rule requires at least one FULL-token match alongside them —
- * a bare initial (or two) can never verify a wrong PAN by itself. */
-function tokensCompatible(x: string, y: string): boolean {
-  if (x === y) return true;
-  if (x.length === 1 && y.length >= 2 && y[0] === x) return true;   // initial ↔ expanded
-  if (y.length === 1 && x.length >= 2 && x[0] === y) return true;
-  const [s, l] = x.length <= y.length ? [x, y] : [y, x];
-  if (s.length >= 3 && l.startsWith(s) && NAME_COMPOUND_SUFFIXES.has(l.slice(s.length))) return true;
-  return false;
-}
-export function nameCompare(a: string | null | undefined, b: string | null | undefined): "match" | "different" | "mismatch" | "unknown" {
-  const na = normalizeName(a), nb = normalizeName(b);
-  if (!na || !nb) return "unknown";
-  if (na === nb) return "match";
-  // Keep single-letter INITIALS so "R Krishnan" can match "Ramesh Krishnan"; the
-  // full-token guard below stops a bare initial verifying anything on its own.
-  const allA = na.split(" ").filter(Boolean);
-  const allB = nb.split(" ").filter(Boolean);
-  const hasReal = (ws: string[]) => ws.some((w) => w.length >= 2);
-  if (!hasReal(allA) || !hasReal(allB)) return "unknown";
-  // Compare the DISTINCTIVE tokens (drop generic legal/honorific words); fall back
-  // to all tokens only if a side has no real distinctive token left.
-  let ta = allA.filter((w) => !NAME_STOPWORDS.has(w));
-  let tb = allB.filter((w) => !NAME_STOPWORDS.has(w));
-  if (!hasReal(ta) || !hasReal(tb)) { ta = allA; tb = allB; }
-  const [short, long] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
-  const used = new Set<number>();
-  let hits = 0, fullHits = 0;
-  for (const s of short) {
-    const idx = long.findIndex((l, i) => !used.has(i) && tokensCompatible(s, l));
-    if (idx >= 0) { hits++; used.add(idx); if (s.length >= 2 && long[idx].length >= 2) fullHits++; }
-  }
-  // A MULTI-TOKEN subset (all shorter tokens matched) is a confident match ONLY if
-  // at least one matched pair is a real FULL-token match (not just initials) — so
-  // "R Krishnan"≈"Ramesh Krishnan" passes but two bare initials never do. A lone
-  // common surname ("Kumar") falls to Jaccard, which needs distinctive overlap.
-  if (short.length >= 2 && hits === short.length && fullHits >= 1) return "match";
-  const union = short.length + long.length - hits;
-  if (fullHits >= 1 && hits / union >= 0.6) return "match";   // strong overlap of distinctive tokens
-  if (hits === 0) return "different";                          // no token in common ⇒ different party
-  return "mismatch";                                          // partial overlap
-}
+// ── Entity-name normalisation + intelligent comparison — THE SHARED ENGINE ────
+// normalizeName and nameCompare were once a LOCAL copy here (an older fork of the
+// Stage-3 logic that had drifted: it lacked the vowel-elision rule, the Tally
+// annotation stripping, and the whole tier system). That divergence is precisely
+// the bug being unified away — a fix landing in one stage never reached the others.
+// Stage-2 now imports the ONE engine from ./tds/match, so name comparison behaves
+// identically in Stage-1, Stage-2 and Stage-3.
+//
+// Re-exported so existing importers of normalizeName/nameCompare FROM this module
+// (e.g. TdsPanVerification.tsx imports normalizeName as normName) keep working.
+//
+// Stage-2's own behaviour is UNCHANGED in intent: it still does NOT compare the
+// office name against the TRACES verified name (that produced false "Name Mismatch"
+// noise the user asked us to remove). nameCompare's ONLY caller in this module is
+// allNamesEquivalent(), which compares two OFFICE parties sharing one PAN to decide
+// whether it is a Duplicate-PAN-Across-Parties data-entry error. The shared engine
+// is a strict improvement for that check (vowel-elision + annotation stripping mean
+// two genuine spellings of the SAME party are correctly seen as equivalent, so it
+// no longer raises a spurious duplicate conflict).
+export { normalizeName, nameCompare } from "./tds/match";
+import { normalizeName, nameCompare } from "./tds/match";
 
 /** TRACES "Mismatch in Name" flag → yes | no | unknown. Substring/normalised (real
  * files phrase it "Name Matched" / "Does Not Match" / "Not Matched" / "Y" / "N"),
