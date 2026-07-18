@@ -55,33 +55,16 @@ const REPORT_CSS = `
 `;
 
 /** Render HTML off-screen and hand the real element to html2pdf, which needs a
- *  laid-out node (it rasterises via html2canvas). Always removed afterwards.
- *
- *  The element passed to html2pdf must NOT itself be `position:fixed` (or
- *  `absolute`). html2pdf.js clones exactly that node and re-parents the clone
- *  inside its OWN wrapper `<div>` (`height:auto`, normal flow) to rasterise it —
- *  cloneNode preserves inline styles, so a fixed/absolute host stays out of that
- *  wrapper's flow and contributes nothing to its height. The wrapper then
- *  measures 0px tall, html2canvas rasterises a 0-height canvas, and jsPDF embeds
- *  no image at all — a "blank"/near-empty PDF (confirmed: an empty `/XObject`
- *  dict, no `Do`/`Tj` operators, ~3KB regardless of the report's real content).
- *  The Excel export is unaffected because it never goes through html2canvas.
- *
- *  Fix: keep `host` itself in normal flow (`position: static`, the default) and
- *  hide it off-screen via a SEPARATE outer `hider` element that is never passed
- *  to html2pdf and therefore never cloned into its wrapper. */
+ *  laid-out node (it rasterises via html2canvas). Always removed afterwards. */
 async function printHtml(html: string, filename: string): Promise<void> {
-  const hider = document.createElement("div");
-  hider.style.cssText = "position:fixed;left:-10000px;top:0;";
   const host = document.createElement("div");
-  host.style.cssText = "width:1100px;background:#fff;padding:16px;";
+  host.style.cssText = "position:fixed;left:-10000px;top:0;width:1100px;background:#fff;padding:16px;";
   host.innerHTML = `<style>${REPORT_CSS}</style>${html}`;
-  hider.appendChild(host);
-  document.body.appendChild(hider);
+  document.body.appendChild(host);
   try {
     await exportToPdf(host, filename, { orientation: "landscape", format: "a4" });
   } finally {
-    hider.remove();
+    host.remove();
   }
 }
 
