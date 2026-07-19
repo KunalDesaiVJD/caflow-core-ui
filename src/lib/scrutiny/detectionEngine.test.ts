@@ -923,6 +923,84 @@ describe("aggregate is never silently dropped on a grain mismatch", () => {
   });
 });
 
+describe("count_distinct — 'booked in fewer than twelve months'", () => {
+  // A ledger can carry many vouchers all falling in the same few months, so plain count (which
+  // returns rows.length) cannot express a months-covered test. count_distinct counts unique
+  // VALUES of the field instead.
+  const r = (fn: string) => rule({
+    rule_id: "RG-201", detection_level: "aggregate",
+    detection_logic: { check: "expr", grain: "aggregate", scope: { ledger_keywords: ["electricity"] }, aggregate: { by: ["party"], fn, field: "month", having: { op: "<", value: 12 } } },
+    audit_query_template: "{account} booked in only {count} months of the year.",
+  });
+  // Torrent: 13 vouchers but only 3 distinct months -> a real gap.
+  // Adani: 12 vouchers across 12 distinct months -> complete, must NOT fire.
+  const data = { vouchers: [
+    ...[1, 2, 3].flatMap((m) => [1, 2, 3, 4].map((d) => vch({
+      amount: 5000, voucher_date: `2025-${String(m + 3).padStart(2, "0")}-0${d}`, party_ledger: "Torrent Power Electricity",
+    }))),
+    ...Array.from({ length: 12 }, (_, i) => vch({
+      amount: 4000,
+      voucher_date: `${i < 9 ? 2025 : 2026}-${String(((i + 3) % 12) + 1).padStart(2, "0")}-10`,
+      party_ledger: "Adani Electricity",
+    })),
+  ] };
+
+  it("counts distinct months, not vouchers", () => {
+    const out = run(r("count_distinct"), data);
+    expect(out.map((f) => f.account)).toEqual(["Torrent Power Electricity"]);
+    expect(out[0].evidence?.metric).toBe(3);
+    expect(out[0].flag_message).toContain("only 3 months");
+  });
+
+  it("plain count gets it wrong — the distinction the new fn exists for", () => {
+    // count sees 12 Torrent vouchers (not < 12, so it MISSES the real gap) and 12 Adani vouchers.
+    const out = run(r("count"), data);
+    expect(out.map((f) => f.account)).not.toContain("Torrent Power Electricity");
+  });
+});
+
+describe("aggregate by:['leg'] — group over the expense ledger, not the party", () => {
+  // A recurring charge is a property of the HEAD, not the vendor. Grouping by party lumps every
+  // month of "Electricity Expenses" under whichever vendor was paid, and flags each vendor who
+  // legitimately supplied in only a few months.
+  const r = (by: string[]) => rule({
+    rule_id: "RG-201", detection_level: "aggregate",
+    detection_logic: {
+      check: "expr", grain: "aggregate",
+      scope: { match_legs: true, ledger_keywords: ["electricity"] },
+      aggregate: { by, fn: "count_distinct", field: "month", having: { op: "<", value: 12 } },
+    },
+    audit_query_template: "'{account}' is booked in only {count} months ({amount}).",
+  });
+  // One expense head, three months, paid to three DIFFERENT vendors.
+  const data = { vouchers: [1, 2, 3].map((m) => vch({
+    amount: 10000, voucher_date: `2025-0${m + 3}-10`, party_ledger: `Vendor ${m}`,
+    line_items: [
+      { ledger_name: "Electricity Expenses", dr_cr: "Dr", amount: 10000 },
+      { ledger_name: `Vendor ${m}`, dr_cr: "Cr", amount: 10000 },
+    ],
+  })) };
+
+  it("reports ONE finding against the expense head", () => {
+    const out = run(r(["leg"]), data);
+    expect(out).toHaveLength(1);
+    expect(out[0].account).toBe("Electricity Expenses");
+    expect(out[0].evidence?.metric).toBe(3);
+    expect(out[0].amount).toBe(30000);
+  });
+
+  it("the party axis fragments the same books into one finding per vendor", () => {
+    const out = run(r(["party"]), data);
+    expect(out).toHaveLength(3);
+    expect(out.map((f) => f.account).sort()).toEqual(["Vendor 1", "Vendor 2", "Vendor 3"]);
+  });
+
+  it("only legs matching ledger_keywords open a group — the bank/party side never does", () => {
+    const out = run(r(["leg"]), data);
+    expect(out.map((f) => f.account)).not.toContain("Vendor 1");
+  });
+});
+
 describe("related_party — needs the RP master, and matches it when captured", () => {
   const r = rule({
     rule_id: "RPT-003", category: "RPT", detection_level: "account",

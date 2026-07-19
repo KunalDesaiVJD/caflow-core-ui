@@ -1012,20 +1012,46 @@ const h_expr: CheckHandler = (rule, data, ctx) => {
     const fn = String(agg.fn ?? "sum");
     const field = String(agg.field ?? "abs_amount");
     const having = (agg.having as { op?: string; value?: unknown } | undefined) ?? { op: ">", value: 0 };
-    const groups = new Map<string, { rows: VoucherRow[]; val: number }>();
+    // by:["leg"] aggregates over the EXPENSE LEDGER rather than the party. A recurring charge is a
+    // property of the head ("Electricity Expenses"), not of the vendor: grouping the same test by
+    // party measured 42 findings per engagement against 2.8 by leg, because every vendor who ever
+    // supplied anything legitimately transacts in only a few months. Only legs matching the scope's
+    // ledger_keywords open a group, so the bank/party side of the entry never forms one.
+    const byLeg = by.includes("leg");
+    const otherBy = by.filter((b) => b !== "leg");
+    const legKw = scope?.ledger_keywords as unknown;
+    const legsOf = (v: VoucherRow): Array<{ name: string; amount: number }> =>
+      (Array.isArray(v.line_items) ? v.line_items : [])
+        .map((l) => ({ name: l.ledger_name ?? "", amount: Math.abs(num(l.amount)) }))
+        .filter((l) => l.name && (!Array.isArray(legKw) || !legKw.length || kwMatch(l.name, legKw)));
+
+    const groups = new Map<string, { rows: VoucherRow[]; val: number; distinct: Set<string>; label: string | null }>();
     for (const v of matched) {
-      const k = groupKey(v, by);
-      const g = groups.get(k) ?? groups.set(k, { rows: [], val: 0 }).get(k)!;
-      g.rows.push(v);
-      const fv = num(voucherField(v, field, ctx));
-      g.val = fn === "max" ? Math.max(g.val, fv) : g.val + fv;
+      const units = byLeg ? legsOf(v) : [null];
+      for (const u of units) {
+        const k = byLeg ? `${lc(u!.name)}|${groupKey(v, otherBy)}` : groupKey(v, by);
+        const g = groups.get(k) ?? groups.set(k, { rows: [], val: 0, distinct: new Set<string>(), label: u ? u.name : null }).get(k)!;
+        g.rows.push(v);
+        // count_distinct counts unique VALUES of `field`, not rows — the only way to express
+        // "booked in fewer than twelve distinct months", which plain count cannot say (a ledger
+        // can carry twenty vouchers all falling in the same three months).
+        if (fn === "count_distinct") g.distinct.add(String(voucherField(v, field, ctx) ?? ""));
+        else {
+          const fv = u ? u.amount : num(voucherField(v, field, ctx));
+          g.val = fn === "max" ? Math.max(g.val, fv) : g.val + fv;
+        }
+      }
     }
     const out: ScrutinyFinding[] = [];
     for (const g of groups.values()) {
-      const metric = fn === "count" ? g.rows.length : g.val;
+      const metric = fn === "count" ? g.rows.length : fn === "count_distinct" ? g.distinct.size : g.val;
       if (applyOp(String(having.op ?? ">"), metric, num(having.value))) {
         const v = g.rows[0];
-        out.push(finding(rule, { account: v.party_ledger ?? v.ledger_name ?? null, amount: g.val, date: v.voucher_date, flag_message: render(tpl, { account: v.party_ledger ?? v.ledger_name ?? "", amount: fmtAmt(g.val), count: g.rows.length, date: v.voucher_date }), evidence: { group_count: g.rows.length, metric } }));
+        const acct = g.label ?? v.party_ledger ?? v.ledger_name ?? null;
+        const amt = fn === "count_distinct"
+          ? (byLeg ? g.rows.reduce((s, r) => s + legsOf(r).reduce((t, l) => t + l.amount, 0), 0) : g.rows.reduce((s, r) => s + Math.abs(num(r.amount)), 0))
+          : g.val;
+        out.push(finding(rule, { account: acct, amount: amt, date: v.voucher_date, flag_message: render(tpl, { account: acct ?? "", amount: fmtAmt(amt), count: fn === "count_distinct" ? metric : g.rows.length, date: v.voucher_date }), evidence: { group_count: g.rows.length, metric, distinct: fn === "count_distinct" ? [...g.distinct].sort() : undefined } }));
       }
     }
     return out;
