@@ -847,6 +847,80 @@ describe("adequacy — actual vs (base x pct)", () => {
     expect(out).toHaveLength(1);
     expect(out[0].advisory).toBe(true);
   });
+
+  // Regression: a zero actual against a base that IS present is the strongest form of this finding.
+  // The handler used to short-circuit on actual===0 and so passed exactly the engagements it should
+  // fail — an asset block carried with no depreciation charged at all.
+  it("flags a ZERO actual against a real base (no depreciation charged at all)", () => {
+    const r = rule({
+      rule_id: "FA-202", detection_level: "account",
+      detection_logic: { check: "adequacy", actual: { ledger_keywords: ["depreciation"] }, base: { parent_group_keywords: ["fixed asset"] }, pct: 5, op: "<" },
+      audit_query_template: "Depreciation {amount} is short of {value} on the asset block.",
+    });
+    const out = run(r, { tb: [tb({ ledger_name: "Plant & Machinery", parent_group: "Fixed Assets", closing_balance: 1000000, balance_type: "Dr" })] });
+    expect(out).toHaveLength(1);
+    expect(out[0].advisory).toBeFalsy();
+    expect(out[0].evidence?.actual).toBe(0);
+  });
+});
+
+describe("scope regressions — voucher_type as a string, and leg-aware matching", () => {
+  const salesOnly = (vt: unknown) => rule({
+    rule_id: "GST-201", detection_level: "voucher",
+    detection_logic: { check: "expr", grain: "voucher", scope: { voucher_type: vt }, where: [{ field: "abs_amount", op: ">", value: 0 }] },
+    audit_query_template: "{account} {amount}",
+  });
+
+  // A bare string used to be ignored, silently widening the rule to EVERY voucher type.
+  it("honours scope.voucher_type given as a plain string", () => {
+    const data = { vouchers: [
+      vch({ amount: 100, voucher_date: "2025-06-01", voucher_type: "Sales" }),
+      vch({ amount: 200, voucher_date: "2025-06-02", voucher_type: "Purchase" }),
+    ] };
+    expect(run(salesOnly("Sales"), data)).toHaveLength(1);
+    expect(run(salesOnly(["Sales"]), data)).toHaveLength(1);
+  });
+
+  // The asset/repair head of a purchase is a LEG, never the party, so a party-only haystack
+  // can never match it. match_legs opts a rule into the full double entry.
+  const legRule = (matchLegs: boolean) => rule({
+    rule_id: "FA-203", detection_level: "voucher",
+    detection_logic: { check: "expr", grain: "voucher", scope: { ledger_keywords: ["repairs"], match_legs: matchLegs }, where: [{ field: "abs_amount", op: ">", value: 0 }] },
+    audit_query_template: "{account} {amount}",
+  });
+
+  it("matches a keyword that appears only on a leg when match_legs is set", () => {
+    const data = { vouchers: [vch({
+      amount: 90000, voucher_date: "2025-06-01", party_ledger: "Krishna Enterprise",
+      line_items: [
+        { ledger_name: "Repairs to Building", dr_cr: "Dr", amount: 90000 },
+        { ledger_name: "Krishna Enterprise", dr_cr: "Cr", amount: 90000 },
+      ],
+    })] };
+    expect(run(legRule(true), data)).toHaveLength(1);
+    // opt-in by design: without the flag the leg is invisible, so existing rules do not widen
+    expect(run(legRule(false), data)).toHaveLength(0);
+  });
+});
+
+describe("aggregate is never silently dropped on a grain mismatch", () => {
+  // grain:"voucher" with an aggregate block used to fall through to the per-voucher path, dropping
+  // the having clause and emitting one finding PER VOUCHER instead of one per breaching group.
+  it("applies the aggregate even when grain says voucher", () => {
+    const r = rule({
+      rule_id: "PROV-204", detection_level: "voucher",
+      detection_logic: { check: "expr", grain: "voucher", aggregate: { by: ["party"], fn: "count", having: { op: ">=", value: 3 } } },
+      audit_query_template: "{account} {count}",
+    });
+    const out = run(r, { vouchers: [
+      vch({ amount: 10, voucher_date: "2025-06-01", party_ledger: "Torrent Power" }),
+      vch({ amount: 10, voucher_date: "2025-07-01", party_ledger: "Torrent Power" }),
+      vch({ amount: 10, voucher_date: "2025-08-01", party_ledger: "Torrent Power" }),
+      vch({ amount: 10, voucher_date: "2025-06-01", party_ledger: "Adani Gas" }),
+    ] });
+    expect(out).toHaveLength(1);
+    expect(out[0].evidence?.group_count).toBe(3);
+  });
 });
 
 describe("related_party — needs the RP master, and matches it when captured", () => {
@@ -887,6 +961,24 @@ describe("balance_decreased — reserve/fund utilised during the year", () => {
     ] });
     expect(out).toHaveLength(1);
     expect(out[0].amount).toBe(600000);
+  });
+});
+
+describe("no_movement — balance unchanged all year (stale PY provision)", () => {
+  it("flags a provision whose opening equals closing; ignores moved and small balances", () => {
+    const r = rule({
+      rule_id: "PROV-STALE", category: "PROV", detection_level: "account",
+      detection_logic: { check: "no_movement", scope: { parent_group_keywords: ["provision"] }, min_balance: 1000 },
+      audit_query_template: "Provision {account} of {amount} is unchanged since last year - is it still payable, or pending reversal?",
+    });
+    const out = run(r, { tb: [
+      tb({ ledger_name: "Provision for Audit Fees", parent_group: "Short-term Provisions", opening_balance: 26000, closing_balance: 26000, balance_type: "Cr" }),
+      tb({ ledger_name: "Provision for Tax", parent_group: "Short-term Provisions", opening_balance: 50000, closing_balance: 75000, balance_type: "Cr" }),
+      tb({ ledger_name: "Tiny Provision", parent_group: "Short-term Provisions", opening_balance: 500, closing_balance: 500, balance_type: "Cr" }),
+    ] });
+    expect(out).toHaveLength(1);
+    expect(out[0].account).toBe("Provision for Audit Fees");
+    expect(out[0].amount).toBe(26000);
   });
 });
 

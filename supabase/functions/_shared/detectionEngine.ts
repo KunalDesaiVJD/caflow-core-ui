@@ -915,16 +915,25 @@ const voucherInScope = (
   if (!scope) return true;
   if (scope.cash_only && !isCashVoucher(v)) return false;
   if (scope.side && sideOf(v.dr_cr) !== sideOf(scope.side)) return false;
-  const vt = scope.voucher_type as unknown[] | undefined;
-  if (Array.isArray(vt) && vt.length && !vt.some((t) => lc(v.voucher_type).includes(lc(t)))) return false;
+  // voucher_type accepts a single string as well as a list — a bare string used to be ignored
+  // silently, which widened the rule to every voucher type instead of narrowing it.
+  const vtRaw = scope.voucher_type;
+  const vt = typeof vtRaw === "string" ? [vtRaw] : Array.isArray(vtRaw) ? vtRaw : undefined;
+  if (vt && vt.length && !vt.some((t) => lc(v.voucher_type).includes(lc(t)))) return false;
   // resolved parent_group of the voucher's party/ledger (RC1)
   const grp = groupOf(v.party_ledger ?? v.ledger_name);
+  // scope.match_legs opts a rule into scanning the full double entry: the target ledger of an asset
+  // purchase or a repair bill is a LEG, never the party, so a party-only haystack can never match it.
+  // Opt-in by design — switching it on globally would widen every existing voucher rule.
+  const legs = scope.match_legs && Array.isArray(v.line_items) ? v.line_items : [];
+  const legNames = legs.map((l) => l.ledger_name ?? "").join(" ");
+  const legGroups = legs.map((l) => groupOf(l.ledger_name)).join(" ");
   // explicit group scoping: scope.parent_group_keywords (alias: scope.group)
   const grpKw = (scope.parent_group_keywords ?? scope.group) as unknown;
-  if (Array.isArray(grpKw) && grpKw.length && !kwMatch(grp, grpKw)) return false;
+  if (Array.isArray(grpKw) && grpKw.length && !kwMatch(`${grp} ${legGroups}`, grpKw)) return false;
   const kw = scope.ledger_keywords;
   // ledger_keywords also matches the resolved parent_group so family words work on the voucher path (RC1)
-  if (Array.isArray(kw) && kw.length && !kwMatch(`${v.party_ledger ?? ""} ${v.ledger_name ?? ""} ${v.narration ?? ""} ${grp}`, kw)) return false;
+  if (Array.isArray(kw) && kw.length && !kwMatch(`${v.party_ledger ?? ""} ${v.ledger_name ?? ""} ${v.narration ?? ""} ${grp} ${legNames} ${legGroups}`, kw)) return false;
   return true;
 };
 
@@ -994,7 +1003,10 @@ const h_expr: CheckHandler = (rule, data, ctx) => {
     .filter((v) => voucherInScope(v, scope, groupOf))
     .filter((v) => evalWhere(where, (f) => voucherField(v, f, ctx)));
 
-  if (grain === "aggregate" && dl.aggregate) {
+  // An aggregate block is honoured whenever it is present, even if grain says "voucher". Requiring
+  // grain==="aggregate" meant a grain/aggregate mismatch silently dropped the having clause and the
+  // rule emitted one finding per voucher instead of one per breaching group — a flood, not a no-op.
+  if (dl.aggregate) {
     const agg = dl.aggregate as Record<string, unknown>;
     const by = (Array.isArray(agg.by) ? agg.by : ["party"]) as string[];
     const fn = String(agg.fn ?? "sum");
@@ -1439,7 +1451,9 @@ const h_adequacy: CheckHandler = (rule, data) => {
   if (base <= 0 || base < num(dl.min_base, 0)) {
     return [finding(rule, { advisory: true, flag_message: `${rule.rule_name}: the statutory base is not present in the books — confirm manually.`, evidence: { reason: "no_base", base: Math.round(base) } })];
   }
-  if (actual === 0) return [];
+  // actual === 0 against a base that IS present is the strongest form of this finding — no
+  // depreciation charged at all on a live asset block, no reverse charge discharged at all. It was
+  // previously short-circuited away, so the engine passed exactly the engagements it should fail.
   const pct = num(dl.pct ?? dl.required_pct ?? dl.threshold_pct ?? rule.threshold_value, 100);
   const limit = (base * pct) / 100;
   const op = String(dl.op ?? ">");
@@ -1515,6 +1529,36 @@ const h_balance_decreased: CheckHandler = (rule, data) => {
   return out;
 };
 
+/**
+ * no_movement — flags a scoped ledger that carries a balance which did NOT move during the year
+ * (opening ≈ closing). This is the "previous year's provision still exists / pending reversal",
+ * "old balance never adjusted" query an auditor raises. Distinct from missing_provision (which fires
+ * when the ledger is ABSENT) and from ageing (which needs voucher activity to judge dormancy).
+ * detection_logic: { check:"no_movement", scope?, min_balance?:number, tolerance?:number, message? }.
+ */
+const h_no_movement: CheckHandler = (rule, data) => {
+  const dl = rule.detection_logic as unknown as Record<string, unknown>;
+  const scope = dl.scope as Record<string, unknown> | undefined;
+  const minBal = num(dl.min_balance, 1000);
+  const tol = num(dl.tolerance, 1);
+  const tpl = (dl.message as string | undefined) ?? rule.audit_query_template;
+  const out: ScrutinyFinding[] = [];
+  for (const r of data.tb) {
+    if (!accountInScope(r, scope)) continue;
+    const open = Math.abs(num(r.opening_balance));
+    const close = Math.abs(num(r.closing_balance));
+    if (open < minBal || close < minBal) continue;
+    if (Math.abs(open - close) > tol) continue;
+    out.push(finding(rule, {
+      account: r.ledger_name,
+      amount: close,
+      flag_message: render(tpl, { account: r.ledger_name, amount: fmtAmt(close) }),
+      evidence: { opening: Math.round(open), closing: Math.round(close), moved: false, parent_group: r.parent_group },
+    }));
+  }
+  return out;
+};
+
 // ---------------------------------------------------------------------------
 // Registry + runner
 // ---------------------------------------------------------------------------
@@ -1568,6 +1612,7 @@ export const GENERIC_HANDLERS: Record<string, CheckHandler> = {
   tds_shortfall: h_tds_shortfall,
   ratio_change: h_ratio_change,
   duplicate_ledger: h_duplicate_ledger,
+  no_movement: h_no_movement,
 
   // Cross-leg "booked one side, not the other" (voucher grain, uses line_items + resolved groups)
   no_corresponding_entry: h_no_corresponding_entry,
