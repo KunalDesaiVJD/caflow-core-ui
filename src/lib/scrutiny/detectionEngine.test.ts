@@ -328,19 +328,20 @@ describe("runDetection coverage", () => {
 // ---- Tier B handlers ------------------------------------------------------
 
 describe("missing_provision (absence)", () => {
-  it("flags when the provision ledger is absent, not when present", () => {
+  it("flags when the provision ledger is absent, not when it was raised this year", () => {
     const r = rule({ rule_id: "PROV-006", category: "PROV", detection_level: "account", detection_logic: { check: "missing_provision", keywords: ["deferred tax"] } });
     expect(run(r, { tb: [tb({ ledger_name: "Rent", closing_balance: 100, balance_type: "Dr" })] })).toHaveLength(1);
-    expect(run(r, { tb: [tb({ ledger_name: "Deferred Tax Liability", closing_balance: 5000, balance_type: "Cr" })] })).toHaveLength(0);
+    // present AND moved during the year -> the provision was actually created, stay silent
+    expect(run(r, { tb: [tb({ ledger_name: "Deferred Tax Liability", closing_balance: 5000, balance_type: "Cr", credit_amount: 5000 })] })).toHaveLength(0);
   });
 });
 
 describe("provision_adequacy_keyword & missing_disclosure", () => {
-  it("flag when gratuity / contingent ledger absent, not when present", () => {
+  it("flag when gratuity / contingent ledger absent, not when raised this year", () => {
     const grat = rule({ rule_id: "PAY-004", category: "PAY", detection_level: "account", detection_logic: { check: "provision_adequacy_keyword", keywords: ["gratuity"] } });
     expect(run(grat, { tb: [tb({ ledger_name: "Salary", closing_balance: 1000, balance_type: "Dr" })] })).toHaveLength(1);
     const cont = rule({ rule_id: "PROV-001", category: "PROV", detection_level: "account", detection_logic: { check: "missing_disclosure", keywords: ["contingent", "claim"] } });
-    expect(run(cont, { tb: [tb({ ledger_name: "Contingent Liability — Guarantee", closing_balance: 1, balance_type: "Cr" })] })).toHaveLength(0);
+    expect(run(cont, { tb: [tb({ ledger_name: "Contingent Liability — Guarantee", closing_balance: 1, balance_type: "Cr", credit_amount: 1 })] })).toHaveLength(0);
   });
 });
 
@@ -920,6 +921,35 @@ describe("aggregate is never silently dropped on a grain mismatch", () => {
     ] });
     expect(out).toHaveLength(1);
     expect(out[0].evidence?.group_count).toBe(3);
+  });
+});
+
+describe("missing_provision — three states, not two", () => {
+  const r = rule({
+    rule_id: "PROV-201", category: "PROV", detection_level: "account",
+    detection_logic: { check: "missing_provision", keywords: ["audit fee"] },
+    audit_query_template: "No provision for audit fee appears in the books.",
+  });
+
+  it("flags when the ledger is absent altogether", () => {
+    const out = run(r, { tb: [tb({ ledger_name: "Rent", parent_group: "Indirect Expenses", closing_balance: 50000 })] });
+    expect(out).toHaveLength(1);
+    expect(out[0].evidence?.present).toBe(false);
+  });
+
+  it("stays silent when the provision was actually created this year", () => {
+    const out = run(r, { tb: [tb({ ledger_name: "Provision for Audit Fee", parent_group: "Provisions", closing_balance: 50000, balance_type: "Cr", credit_amount: 50000 })] });
+    expect(out).toHaveLength(0);
+  });
+
+  // The regression: a stale prior-year balance with no movement used to satisfy the existence
+  // test and silence the rule, which is exactly the case auditors raise.
+  it("flags a prior-year balance still standing with no movement in the year", () => {
+    const out = run(r, { tb: [tb({ ledger_name: "Unpaid Audit Fee", parent_group: "Provisions", closing_balance: 25000, balance_type: "Cr", debit_amount: 0, credit_amount: 0 })] });
+    expect(out).toHaveLength(1);
+    expect(out[0].evidence?.stale_py_only).toBe(true);
+    expect(out[0].account).toBe("Unpaid Audit Fee");
+    expect(out[0].flag_message).toContain("no movement whatsoever");
   });
 });
 

@@ -707,11 +707,34 @@ const flagEngagement = (rule: ScrutinyRule, message: string, evidence?: Record<s
   finding(rule, { flag_message: message, evidence }),
 ];
 
-/** Absence check: flag when an expected provision/disclosure ledger is NOT present. */
+/**
+ * Absence check: flag when an expected provision/disclosure was not made THIS year.
+ *
+ * Testing mere existence was wrong. A ledger such as "Unpaid Audit Fee" that carries only last
+ * year's balance and saw no movement at all in the current year satisfied `anyLedger` and silenced
+ * the rule — yet that stale prior-year figure standing alone IS the finding auditors raise. The
+ * check now distinguishes three states: never created (absent or nil), created this year (silent),
+ * and carried over untouched from the prior year (flagged as stale).
+ */
 const h_missing_provision: CheckHandler = (rule, { tb }) => {
   const kws = rule.detection_logic.keywords ?? [];
-  if (anyLedger(tb, kws)) return [];
-  return flagEngagement(rule, render(rule.audit_query_template, {}), { keywords: kws, present: false });
+  const live = tb.filter((r) => kwMatch(`${r.ledger_name} ${r.parent_group ?? ""}`, kws) && num(r.closing_balance) !== 0);
+  if (live.length === 0) {
+    return flagEngagement(rule, render(rule.audit_query_template, {}), { keywords: kws, present: false });
+  }
+  // Movement is the test for "created this year". Tally reports the year's turnover on the ledger,
+  // so a provision raised, reversed or topped up in the year shows a non-zero debit or credit.
+  const moved = live.some((r) => Math.abs(num(r.debit_amount)) > 0 || Math.abs(num(r.credit_amount)) > 0);
+  if (moved) return [];
+  const worst = live.reduce((a, b) => (Math.abs(num(b.closing_balance)) > Math.abs(num(a.closing_balance)) ? b : a));
+  const bal = Math.abs(num(worst.closing_balance));
+  return [finding(rule, {
+    account: worst.ledger_name,
+    amount: bal,
+    flag_message: render(rule.audit_query_template, { account: worst.ledger_name, amount: fmtAmt(bal) })
+      + ` The ledger "${worst.ledger_name}" carries ${fmtAmt(bal)} but shows no movement whatsoever during the year, so the balance is the earlier year's figure still standing rather than a provision created for the current year.`,
+    evidence: { keywords: kws, present: true, stale_py_only: true, closing: bal },
+  })];
 };
 
 // provision_adequacy_keyword & missing_disclosure share the absence pattern
