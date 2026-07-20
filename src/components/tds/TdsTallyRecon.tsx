@@ -105,17 +105,27 @@ const isTallyIssue = (r: string) => r !== "Matched";
 /**
  * The ledger party to offer as a saved mapping for this record, or null.
  *
- * Derived from the PERSISTED office/ledger names rather than read back from the
- * engine's `suggested_party` (results are re-read from tds_tally_results, which
- * doesn't carry it). It uses the SAME shared nameCompare the engine used, so the
- * two can't drift: offer a mapping whenever a ledger candidate was found whose
- * party is neither an actual match nor blank — regardless of WHICH mismatch the
- * record landed on. Gating this on result === "Party Name Mismatch" is what made
- * the mapping feature unreachable.
+ * A record the engine itself landed on "Party Name Mismatch" ALWAYS gets the
+ * offer — that result IS the engine saying the party is the (or a) problem, and
+ * it decided that with full exclusivity context (rival claimants, the
+ * distinctness witness) a standalone recompute here cannot see. Never let a
+ * client-side re-check silently withhold the one resolution action for the
+ * exact case it names, even if match.ts's tolerance has since moved (e.g. after
+ * an engine fix, before this filing is re-validated) and would now call the
+ * same two names a match — the checker still needs a way to resolve what's on
+ * screen right now, not a re-run.
+ *
+ * For every OTHER mismatch (e.g. "Date Mismatch" on an entry booked under a
+ * different name), fall back to a fresh nameCompare over the PERSISTED names —
+ * results are re-read from tds_tally_results, which doesn't carry the engine's
+ * in-memory `suggested_party` for those cases. Gating the offer on
+ * result === "Party Name Mismatch" alone is what made it unreachable for this
+ * second group, so keep both paths.
  */
 const mappingOffer = (r: ResultRow): string | null => {
   if (r.overridden || r.mapped || r.result === "Matched") return null;
   if (!r.tally_party || !r.office_name) return null;
+  if (r.result === "Party Name Mismatch") return r.tally_party;
   const cmp = nameCompare(r.office_name, r.tally_party);
   return cmp === "match" || cmp === "unknown" ? null : r.tally_party;
 };
