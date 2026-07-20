@@ -92,12 +92,13 @@ export interface OverviewReport {
 // ── Checker Review (Stage 4) — one row per exception, across all 3 stages ────
 
 /**
- * One exception record for the Stage-4 Checker Review audit table. Each stage
- * produces its OWN rows (from its own already-loaded results — no new fetch),
- * so a fix to a stage's reason/status text lands here automatically.
+ * One exception record for the Stage-4 Checker Review. Each stage produces its
+ * OWN rows (from its own already-loaded results — no new fetch), so a fix to
+ * a stage's reason/status text lands here automatically.
  *
  *   Unresolved — still an open issue, nothing has been done about it yet.
- *   Overridden — a user manually accepted the exception, with a reason.
+ *   Overridden — a user manually accepted the exception; `reason` IS the
+ *                override reason, shown inline so the checker sees why.
  *   Resolved   — reconciled by a mechanism OTHER than an override (currently
  *                only Stage 3's saved party mapping — "Auto Match (Mapped)").
  */
@@ -107,7 +108,4 @@ export interface AuditRow {
   errorType: string;
   status: "Unresolved" | "Resolved" | "Overridden";
   reason: string;
-  action: string;
-  performedBy: string | null;
-  performedAt: string | null;
 }

@@ -36,6 +36,7 @@ import { cn } from "@/lib/utils";
 import {
   ShieldCheck, AlertTriangle, CheckCircle2, Upload, Play, FileSpreadsheet,
   RotateCcw, Loader2, Users, FileWarning, Info, X, BadgeCheck, Trash2, Eye, BookOpen, ClipboardCheck,
+  ChevronDown, ChevronRight,
 } from "lucide-react";
 import { parseWorkbookRows, parseCsvRows } from "@/lib/tdsWorkbook";
 import { logReconAudit } from "@/lib/tdsReconAudit";
@@ -283,10 +284,13 @@ export function TdsValidateFinalise({
   const [comparing, setComparing] = useState(false);
   const [finalising, setFinalising] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  // Stage-4 Checker Review — filters over the combined audit table ("all" = no filter).
-  const [auditStageFilter, setAuditStageFilter] = useState<string>("all");
+  // Stage-4 Checker Review — one card section per stage (not a flat table) so
+  // each stage's exceptions keep their own vocabulary; "all" = no filter.
   const [auditStatusFilter, setAuditStatusFilter] = useState<string>("all");
   const [auditErrorTypeFilter, setAuditErrorTypeFilter] = useState<string>("all");
+  // Sections start expanded — the checker must see every exception before
+  // signing, so nothing is hidden by default; collapsing is a manual choice.
+  const [collapsedStages, setCollapsedStages] = useState<Set<string>>(new Set());
   // Digital signature — persisted as a tds_filing_audit_log entry (no schema
   // change needed), so it survives a refresh and carries its own audit trail.
   const [signature, setSignature] = useState<{ signedByName: string; signedAt: string } | null>(null);
@@ -838,11 +842,11 @@ export function TdsValidateFinalise({
     const s3IssueRows = s3Report?.sections.find((s) => s.title === "Mismatched")?.rows ?? [];
     const s3MappedCount = s3Report?.sections.find((s) => s.title === "Mapped")?.rows.length ?? 0;
 
-    // One audit row per exception, across all 3 stages — the Stage-4 detailed
-    // review table. Stage 1's rows are built directly (its data already lives in
-    // THIS component); Stage 2/3 hand theirs up via the same lazy getAuditRows()
-    // pattern getReport() already uses, so this can never drift from what each
-    // stage's own tab shows.
+    // One audit row per exception, across all 3 stages — grouped into a
+    // per-stage section in the JSX below (not a flat table). Stage 1's rows are
+    // built directly (its data already lives in THIS component); Stage 2/3 hand
+    // theirs up via the same lazy getAuditRows() pattern getReport() already
+    // uses, so this can never drift from what each stage's own tab shows.
     const s1Audit: AuditRow[] = (results || [])
       .filter((r) => r.match_status !== "matched" || r.overridden)
       .map((r): AuditRow => ({
@@ -851,11 +855,6 @@ export function TdsValidateFinalise({
         errorType: errorTypeFor(r),
         status: r.overridden ? "Overridden" : "Unresolved",
         reason: r.overridden ? (r.override_note || "accepted") : reasonFor(r),
-        action: r.overridden ? "Overridden" : "Pending Review",
-        performedBy: r.overridden && r.overridden_by ? (userMap[r.overridden_by] ?? null) : null,
-        // Stage 1's override has no stored timestamp column — "if available" per
-        // the checker's own requirement, so this is left blank rather than guessed.
-        performedAt: null,
       }));
     const s2Audit = panStatus.applicable && panStatus.getAuditRows ? panStatus.getAuditRows() : [];
     const s3Audit = tallyStatus.applicable && tallyStatus.getAuditRows ? tallyStatus.getAuditRows() : [];
@@ -871,7 +870,7 @@ export function TdsValidateFinalise({
       totalOverridden: summary.overridden + (panStatus.applicable ? panStatus.overridden : 0) + (tallyStatus.applicable ? tallyStatus.overridden : 0),
       s1Issues, s2IssueRows, s3IssueRows, s3MappedCount, auditRows,
     };
-  }, [results, summary, panStatus, tallyStatus, userMap]);
+  }, [results, summary, panStatus, tallyStatus]);
 
   // Distinct error types actually present, so the filter never lists a type that
   // matches nothing (and picks up a brand-new one automatically).
@@ -881,11 +880,17 @@ export function TdsValidateFinalise({
   );
   const filteredAuditRows = useMemo(
     () => stage4Data.auditRows.filter((r) =>
-      (auditStageFilter === "all" || r.stage === auditStageFilter)
-      && (auditStatusFilter === "all" || r.status === auditStatusFilter)
+      (auditStatusFilter === "all" || r.status === auditStatusFilter)
       && (auditErrorTypeFilter === "all" || r.errorType === auditErrorTypeFilter)),
-    [stage4Data.auditRows, auditStageFilter, auditStatusFilter, auditErrorTypeFilter],
+    [stage4Data.auditRows, auditStatusFilter, auditErrorTypeFilter],
   );
+  const toggleStageCollapsed = (stage: string) => {
+    setCollapsedStages((prev) => {
+      const next = new Set(prev);
+      if (next.has(stage)) next.delete(stage); else next.add(stage);
+      return next;
+    });
+  };
 
   // Non-matched records (mismatched / office_only / imported_only) — each gets its
   // own inline comparison table; pending first, then overridden.
@@ -899,7 +904,7 @@ export function TdsValidateFinalise({
   // reports (prevents filing off a previous return's status during a fast switch).
   useEffect(() => {
     setActiveFilter(null); setErrorTypeFilter(null);
-    setAuditStageFilter("all"); setAuditStatusFilter("all"); setAuditErrorTypeFilter("all");
+    setAuditStatusFilter("all"); setAuditErrorTypeFilter("all"); setCollapsedStages(new Set());
     setSignerNameInput(""); setAttestChecked(false); setSignature(null);
     setPanStatus(PAN_STATUS_BLOCKED); setTallyStatus({ filingId: null, loaded: false, applicable: false, ran: false, total: 0, matched: 0, issues: 0, overridden: 0 });
   }, [selClient, selFy, selQuarter, selForm]);
@@ -1450,60 +1455,29 @@ export function TdsValidateFinalise({
                 ))}
               </div>
 
-              {/* Per-stage status — the quick "which stage still needs attention"
-                  glance; the table below carries the actual row-level detail. */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                <div className="rounded-md border p-2 flex items-center justify-between">
-                  <p className="text-xs font-semibold">Stage 1 · Data</p>
-                  <span className={cn("text-[10px] rounded px-1.5 py-0.5 font-semibold", !stage1Ran ? "bg-muted text-muted-foreground" : stage1Ready ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-destructive/10 text-destructive")}>
-                    {!stage1Ran ? "Not run" : stage1Ready ? "Complete" : `${summary.mismatched} unresolved`}
-                  </span>
-                </div>
-                <div className="rounded-md border p-2 flex items-center justify-between">
-                  <p className="text-xs font-semibold">Stage 2 · PAN</p>
-                  <span className={cn("text-[10px] rounded px-1.5 py-0.5 font-semibold", !panStatus.applicable || !panStatus.ran ? "bg-muted text-muted-foreground" : stage2Ready ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-destructive/10 text-destructive")}>
-                    {!panStatus.applicable ? "Not applicable" : !panStatus.ran ? "Not run" : stage2Ready ? "Complete" : `${panStatus.issues} unresolved`}
-                  </span>
-                </div>
-                <div className="rounded-md border p-2 flex items-center justify-between">
-                  <p className="text-xs font-semibold">Stage 3 · Tally</p>
-                  <span className={cn("text-[10px] rounded px-1.5 py-0.5 font-semibold", !tallyStatus.applicable || !tallyStatus.ran ? "bg-muted text-muted-foreground" : stage3Ready ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-destructive/10 text-destructive")}>
-                    {!tallyStatus.applicable ? "Not applicable" : !tallyStatus.ran ? "Not run" : stage3Ready ? "Complete" : `${tallyStatus.issues} unresolved`}
-                  </span>
-                </div>
-              </div>
-
-              {/* Complete exception & override review — every unresolved mismatch
-                  and every overridden/resolved record from all 3 stages, in one
-                  filterable table, so the checker never re-visits Stage 1-3. */}
+              {/* Exception & override review — one section per stage (not a flat
+                  table), so each keeps its own vocabulary. Every matching record
+                  renders — nothing paginated — since the checker must see every
+                  mismatch and override before signing. Overridden records show
+                  their reason inline, right where the record is. */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between flex-wrap gap-2">
-                  <p className="text-xs font-semibold">Complete Exception &amp; Override Review ({filteredAuditRows.length} of {stage4Data.auditRows.length})</p>
-                  {(auditStageFilter !== "all" || auditStatusFilter !== "all" || auditErrorTypeFilter !== "all") && (
-                    <Button variant="ghost" size="sm" className="h-6 text-xs gap-1" onClick={() => { setAuditStageFilter("all"); setAuditStatusFilter("all"); setAuditErrorTypeFilter("all"); }}>
+                  <p className="text-xs font-semibold">Exception &amp; Override Review</p>
+                  {(auditStatusFilter !== "all" || auditErrorTypeFilter !== "all") && (
+                    <Button variant="ghost" size="sm" className="h-6 text-xs gap-1" onClick={() => { setAuditStatusFilter("all"); setAuditErrorTypeFilter("all"); }}>
                       <X size={11} /> Clear filters
                     </Button>
                   )}
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <Select value={auditStageFilter} onValueChange={setAuditStageFilter}>
-                    <SelectTrigger className="h-7 w-[140px] text-xs"><SelectValue placeholder="Stage" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Stages</SelectItem>
-                      <SelectItem value="Stage 1">Stage 1</SelectItem>
-                      <SelectItem value="Stage 2">Stage 2</SelectItem>
-                      <SelectItem value="Stage 3">Stage 3</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Select value={auditStatusFilter} onValueChange={setAuditStatusFilter}>
-                    <SelectTrigger className="h-7 w-[150px] text-xs"><SelectValue placeholder="Status" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Statuses</SelectItem>
-                      <SelectItem value="Unresolved">Unresolved</SelectItem>
-                      <SelectItem value="Resolved">Resolved</SelectItem>
-                      <SelectItem value="Overridden">Overridden</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <div className="inline-flex rounded-md border overflow-hidden">
+                    {([["all", "All"], ["Unresolved", "Unresolved"], ["Overridden", "Overridden"], ["Resolved", "Resolved"]] as const).map(([v, label], i) => (
+                      <button key={v} type="button" onClick={() => setAuditStatusFilter(v)}
+                        className={cn("px-2.5 h-7 text-xs font-medium", i > 0 && "border-l", auditStatusFilter === v ? "bg-primary text-primary-foreground" : "bg-background hover:bg-muted")}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                   <Select value={auditErrorTypeFilter} onValueChange={setAuditErrorTypeFilter}>
                     <SelectTrigger className="h-7 w-[180px] text-xs"><SelectValue placeholder="Error Type" /></SelectTrigger>
                     <SelectContent>
@@ -1514,44 +1488,64 @@ export function TdsValidateFinalise({
                 </div>
                 {stage4Data.auditRows.length === 0 ? (
                   <div className="p-6 text-center text-sm text-emerald-600 rounded-lg border border-dashed">No mismatches or overrides across any stage — clean return.</div>
-                ) : filteredAuditRows.length === 0 ? (
-                  <div className="p-6 text-center text-sm text-muted-foreground rounded-lg border border-dashed">No records match the current filters.</div>
                 ) : (
-                  <div className="rounded-md border overflow-x-auto">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead className="text-[11px]">Stage</TableHead>
-                          <TableHead className="text-[11px]">Record</TableHead>
-                          <TableHead className="text-[11px]">Error Type</TableHead>
-                          <TableHead className="text-[11px]">Status</TableHead>
-                          <TableHead className="text-[11px]">Reason</TableHead>
-                          <TableHead className="text-[11px]">Action Taken</TableHead>
-                          <TableHead className="text-[11px]">Performed By</TableHead>
-                          <TableHead className="text-[11px]">Performed At</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {filteredAuditRows.map((r, i) => (
-                          <TableRow key={`${r.stage}-${i}`}>
-                            <TableCell className="text-xs whitespace-nowrap">{r.stage}</TableCell>
-                            <TableCell className="text-xs max-w-[220px] truncate" title={r.record}>{r.record}</TableCell>
-                            <TableCell className="text-xs whitespace-nowrap">{r.errorType}</TableCell>
-                            <TableCell className="text-xs">
-                              <Badge variant="outline" className={cn("text-[10px]",
-                                r.status === "Overridden" ? "border-blue-300 text-blue-600" : r.status === "Resolved" ? "border-emerald-300 text-emerald-600" : "border-destructive/40 text-destructive")}>
-                                {r.status}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="text-xs max-w-[260px] truncate" title={r.reason}>{r.reason}</TableCell>
-                            <TableCell className="text-xs whitespace-nowrap">{r.action}</TableCell>
-                            <TableCell className="text-xs whitespace-nowrap">{r.performedBy || "—"}</TableCell>
-                            <TableCell className="text-xs whitespace-nowrap">{r.performedAt ? new Date(r.performedAt).toLocaleString("en-IN") : "—"}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
+                  ([
+                    ["Stage 1", "Data Validation", true, stage1Ran],
+                    ["Stage 2", "PAN Verification", panStatus.applicable, panStatus.ran],
+                    ["Stage 3", "Tally Reconciliation", tallyStatus.applicable, tallyStatus.ran],
+                  ] as const).map(([stageKey, label, applicable, ran]) => {
+                    const stageRows = stage4Data.auditRows.filter((r) => r.stage === stageKey);
+                    const visibleRows = filteredAuditRows.filter((r) => r.stage === stageKey);
+                    const unresolvedCount = stageRows.filter((r) => r.status === "Unresolved").length;
+                    const collapsed = collapsedStages.has(stageKey);
+                    return (
+                      <div key={stageKey} className="rounded-lg border overflow-hidden">
+                        <button type="button" onClick={() => toggleStageCollapsed(stageKey)}
+                          className="w-full flex items-center justify-between gap-2 px-3 py-2.5 bg-muted/40 hover:bg-muted/60 text-left">
+                          <span className="flex items-center gap-2 text-sm font-medium">
+                            {collapsed ? <ChevronRight size={16} className="text-muted-foreground shrink-0" /> : <ChevronDown size={16} className="text-muted-foreground shrink-0" />}
+                            {stageKey} · {label}
+                          </span>
+                          {!applicable ? (
+                            <span className="text-[10px] rounded px-1.5 py-0.5 font-semibold bg-muted text-muted-foreground shrink-0">Not applicable</span>
+                          ) : !ran ? (
+                            <span className="text-[10px] rounded px-1.5 py-0.5 font-semibold bg-muted text-muted-foreground shrink-0">Not run</span>
+                          ) : unresolvedCount > 0 ? (
+                            <span className="text-[10px] rounded px-1.5 py-0.5 font-semibold bg-destructive/10 text-destructive shrink-0">{unresolvedCount} unresolved</span>
+                          ) : (
+                            <span className="text-[10px] rounded px-1.5 py-0.5 font-semibold bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300 inline-flex items-center gap-1 shrink-0"><CheckCircle2 size={11} /> Complete</span>
+                          )}
+                        </button>
+                        {!collapsed && (
+                          <div className="p-2.5 space-y-2">
+                            {stageRows.length === 0 ? (
+                              <p className="text-xs text-muted-foreground px-1 py-1">No exceptions or overrides in this stage.</p>
+                            ) : visibleRows.length === 0 ? (
+                              <p className="text-xs text-muted-foreground px-1 py-1">No records match the current filters.</p>
+                            ) : visibleRows.map((r, i) => (
+                              <div key={`${stageKey}-${i}`} className="rounded-md border p-2.5 space-y-1.5">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-sm font-medium truncate">{r.record}</span>
+                                  <Badge variant="outline" className={cn("text-[10px] shrink-0",
+                                    r.status === "Overridden" ? "border-blue-300 text-blue-600" : r.status === "Resolved" ? "border-emerald-300 text-emerald-600" : "border-destructive/40 text-destructive")}>
+                                    {r.status}
+                                  </Badge>
+                                </div>
+                                <p className="text-xs text-muted-foreground">{r.errorType}</p>
+                                {r.status === "Overridden" ? (
+                                  <p className="text-xs rounded bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 px-2 py-1.5 text-blue-700 dark:text-blue-300">
+                                    <span className="font-medium">Override reason: </span>{r.reason || "accepted"}
+                                  </p>
+                                ) : (
+                                  <p className="text-xs text-foreground">{r.reason || "—"}</p>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
                 )}
               </div>
 

@@ -459,10 +459,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
         record: r.office_name || "—",
         errorType: r.result,
         status: r.overridden ? "Overridden" : isTallyIssue(r.result) ? "Unresolved" : "Resolved",
-        reason: r.overridden ? (r.override_reason || "accepted") : (r.reason || ""),
-        action: r.overridden ? "Overridden" : isTallyIssue(r.result) ? "Pending Review" : "Auto Match (Mapped)",
-        performedBy: r.overridden && r.overridden_by ? (userMap[r.overridden_by] ?? null) : null,
-        performedAt: r.overridden ? (r.overridden_at ?? null) : null,
+        reason: r.overridden ? (r.override_reason || "accepted") : (r.reason || (r.mapped ? "Reconciled via saved party mapping" : "")),
       }));
 
   useEffect(() => {

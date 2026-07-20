@@ -613,9 +613,6 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
       errorType: r.validation_result,
       status: r.overridden ? "Overridden" : "Unresolved",
       reason: r.overridden ? (r.override_reason || "accepted") : panReason(r.validation_result),
-      action: r.overridden ? "Overridden" : "Pending Review",
-      performedBy: r.overridden && r.overridden_by ? (userMap[r.overridden_by] ?? null) : null,
-      performedAt: r.overridden ? r.overridden_at : null,
     }));
 
   // Report Stage-2 state to the parent so it can gate "Mark Return as Ready to
