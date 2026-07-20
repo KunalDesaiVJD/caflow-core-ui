@@ -17,6 +17,11 @@ describe("shared scrutiny modules stay in sync with src", () => {
     expect(read("../../../supabase/functions/_shared/detectionEngine.ts")).toBe(read("./detectionEngine.ts"));
   });
 
+  // triage.ts is imported by the engine, so it must mirror too or the Deno bundle breaks.
+  it("triage.ts matches the _shared copy", () => {
+    expect(read("../../../supabase/functions/_shared/triage.ts")).toBe(read("./triage.ts"));
+  });
+
   it("adapters.ts matches the _shared copy", () => {
     expect(read("../../../supabase/functions/_shared/adapters.ts")).toBe(read("./adapters.ts"));
   });

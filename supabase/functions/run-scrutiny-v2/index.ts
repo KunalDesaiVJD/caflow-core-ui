@@ -233,7 +233,9 @@ serve(async (req) => {
         financialYearEnd: fyEndDate(financial_year),
         materiality,
       },
-      { emitAdvisoryForUnhandled: false },
+      // Two-tier output: a capped, ranked shortlist plus review notes. Without this the auditor
+      // faces ~95 undifferentiated items per engagement, which is why none have ever been actioned.
+      { emitAdvisoryForUnhandled: false, triage: { maxQueries: 25, maxPerRule: 3 } },
     );
 
     // ── Persist findings (existing scrutiny_findings shape) ──

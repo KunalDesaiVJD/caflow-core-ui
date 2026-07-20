@@ -108,6 +108,9 @@ export default function AuditScrutiny() {
   const [category, setCategory] = useState("All");
   const [severity, setSeverity] = useState("All");
   const [status, setStatus] = useState("All");
+  // Defaults to the client-facing shortlist. Showing all ~95 findings per engagement by default is
+  // exactly why none were ever actioned; review notes stay one click away.
+  const [tier, setTier] = useState<"query" | "note" | "All">("query");
   const [page, setPage] = useState(0);
 
   // Actions
@@ -274,9 +277,11 @@ export default function AuditScrutiny() {
       if (category !== "All" && !(f.rule_id || "").toLowerCase().includes(category.toLowerCase())) return false;
       if (severity !== "All" && f.severity?.toUpperCase() !== severity) return false;
       if (status !== "All" && f.status?.toLowerCase() !== status.toLowerCase()) return false;
+      // Untiered rows (written before tiering existed) default to the shortlist so nothing is hidden.
+      if (tier !== "All" && ((f as { tier?: string }).tier ?? "query") !== tier) return false;
       return true;
     });
-  }, [findings, category, severity, status]);
+  }, [findings, category, severity, status, tier]);
 
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
   const pageData = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
@@ -833,6 +838,21 @@ export default function AuditScrutiny() {
       {!v2 && (<>
       {/* Filters */}
       <div className="flex flex-wrap gap-3 items-end">
+        <div className="space-y-1">
+          <label className="text-xs text-muted-foreground">Show</label>
+          <Select value={tier} onValueChange={v => { setTier(v as "query" | "note" | "All"); setPage(0); }}>
+            <SelectTrigger className="w-52"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="query">
+                Client queries ({findings.filter(f => ((f as { tier?: string }).tier ?? "query") === "query").length})
+              </SelectItem>
+              <SelectItem value="note">
+                Review notes ({findings.filter(f => (f as { tier?: string }).tier === "note").length})
+              </SelectItem>
+              <SelectItem value="All">Everything ({findings.length})</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
         <div className="space-y-1">
           <label className="text-xs text-muted-foreground">Financial Year</label>
           <Select value={fy} onValueChange={v => { setFy(v); setPage(0); }}>

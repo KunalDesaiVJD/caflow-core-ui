@@ -1,7 +1,7 @@
 /**
  * Scrutiny detection engine — Tier A interpreter (gap G1).
  *
- * Pure, dependency-free functions that execute the `detection_logic` of the seeded
+ * Pure functions (the single import, ./triage.ts, is itself dependency-free) that execute the `detection_logic` of the seeded
  * scrutiny_rules against in-memory Trial Balance (account grain) and Voucher (voucher grain)
  * rows. NO database, NO network, NO React — so it is fully unit-testable and later drops into
  * the `run-scrutiny` edge function unchanged.
@@ -16,6 +16,8 @@
  * Where that happens, handlers apply a documented category/keyword scope. These may over- or
  * under-detect; that is acceptable for an advisory tool where the auditor reviews each finding.
  */
+
+import { triage } from "./triage.ts";
 
 // ---------------------------------------------------------------------------
 // Types — thin projections of tally_trial_balance / tally_vouchers / scrutiny_rules
@@ -139,6 +141,12 @@ export interface ScrutinyFinding {
   detection_level: string;
   /** true when emitted by the unhandled-advisory path, not a real detection */
   advisory?: boolean;
+  /**
+   * "query" = on the capped, ranked shortlist an auditor is expected to act on.
+   * "note"  = kept, searchable and promotable, but never auto-raised.
+   * Assigned by runDetection when opts.triage is set; undefined means untriaged.
+   */
+  tier?: "query" | "note";
   /** raw values for drill-down */
   evidence?: Record<string, unknown>;
 }
@@ -1728,6 +1736,12 @@ export interface RunOptions {
   handlers?: Record<string, CheckHandler>;
   /** emit an advisory finding for rules whose check kind has no handler (default true) */
   emitAdvisoryForUnhandled?: boolean;
+  /**
+   * Split the run's findings into a capped, ranked shortlist ("query") and review notes ("note").
+   * Applied here rather than at the call site so neither write path can forget it — the same
+   * reasoning as materiality resolution. Omit to leave every finding untiered.
+   */
+  triage?: { maxQueries?: number; maxPerRule?: number };
 }
 
 /**
@@ -1893,6 +1907,19 @@ export function runDetection(
         }),
       );
     }
+  }
+
+  // Tier the real findings. Advisories are never client-facing, so they stay out of the shortlist
+  // and out of the ranking entirely rather than consuming slots.
+  if (opts.triage) {
+    const real = findings.filter((f) => !f.advisory);
+    const { queries } = triage(real, {
+      maxQueries: opts.triage.maxQueries,
+      maxPerRule: opts.triage.maxPerRule,
+      performanceMateriality: ctx.materiality?.performance ?? null,
+    });
+    const shortlist = new Set<ScrutinyFinding>(queries);
+    for (const f of real) f.tier = shortlist.has(f) ? "query" : "note";
   }
 
   return {

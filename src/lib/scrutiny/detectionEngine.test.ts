@@ -985,6 +985,35 @@ describe("materiality — thresholds scale to the engagement, once a human appro
   });
 });
 
+describe("triage through runDetection — tiering reaches every write path", () => {
+  const bigRule = rule({
+    rule_id: "CRED-004", category: "CRED", detection_level: "account",
+    detection_logic: { check: "expr", grain: "account", where: [{ field: "abs_closing", op: ">", value: 0 }] },
+    audit_query_template: "{account} {amount}",
+  });
+  const data = { tb: Array.from({ length: 30 }, (_, i) => tb({ ledger_name: `L${i}`, parent_group: "Sundry Creditors", closing_balance: (i + 1) * 100_000, balance_type: "Cr" })) };
+
+  it("leaves findings untiered when triage is not requested", () => {
+    const out = runDetection([bigRule], data as never, FY, { emitAdvisoryForUnhandled: false });
+    expect(out.findings.every((f) => f.tier === undefined)).toBe(true);
+  });
+
+  it("caps the shortlist and marks the rest as notes", () => {
+    const out = runDetection([bigRule], data as never, FY, { emitAdvisoryForUnhandled: false, triage: { maxQueries: 25, maxPerRule: 5 } });
+    const real = out.findings.filter((f) => !f.advisory);
+    expect(real.filter((f) => f.tier === "query")).toHaveLength(5);   // per-rule cap binds
+    expect(real.filter((f) => f.tier === "note")).toHaveLength(25);
+  });
+
+  // Tiering tags findings in place; it deliberately does NOT reorder them, so the caller's
+  // original ordering is preserved and the UI stays free to sort however it likes.
+  it("puts the largest balances on the shortlist", () => {
+    const out = runDetection([bigRule], data as never, FY, { emitAdvisoryForUnhandled: false, triage: { maxQueries: 25, maxPerRule: 3 } });
+    const q = out.findings.filter((f) => f.tier === "query").map((f) => Math.abs(Number(f.amount)));
+    expect(q.sort((a, b) => b - a)).toEqual([3_000_000, 2_900_000, 2_800_000]);
+  });
+});
+
 describe("rollup — one query per issue, not one per occurrence", () => {
   const cashRule = (rollup: unknown) => rule({
     rule_id: "CASH-001", category: "CASH", detection_level: "voucher",

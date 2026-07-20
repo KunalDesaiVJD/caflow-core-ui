@@ -279,6 +279,8 @@ export interface FindingRow {
   flag_message: string;
   clause_3cd: string | null;
   narration: string | null;
+  /** "query" = client-facing shortlist, "note" = internal review list */
+  tier: string;
 }
 
 export function findingToRow(
@@ -295,5 +297,8 @@ export function findingToRow(
     flag_message: f.flag_message,
     clause_3cd: null,
     narration: f.account ?? null,
+    // Untiered findings default to "query" so an older caller that never ran triage keeps its
+    // current visibility rather than silently vanishing from the auditor's list.
+    tier: f.tier ?? "query",
   };
 }
