@@ -39,6 +39,14 @@ export const normalizeName = (v: string | null | undefined): string => {
 const NAME_COMPOUND_SUFFIXES = new Set(["KUMAR", "BHAI", "BHAII", "BEN", "BHEN", "KUMARI", "LAL", "DAS", "CHANDRA", "PRASAD", "DEVI", "RAJ", "NATH", "SINH", "BABU", "RAO"]);
 const NAME_STOPWORDS = new Set(["PRIVATE", "LIMITED", "COMPANY", "CORPORATION", "LLP", "LLC", "INC", "AND", "THE", "MESSRS", "SHREE", "SHRI", "SRI", "SHREEJI", "ENTERPRISE", "ENTERPRISES", "TRADERS", "INDUSTRIES"]);
 
+/** A Tally ledger head that names the NATURE of a payment, not a party. Firms
+ *  commonly book TDS-bearing interest to several unsecured-loan lenders under
+ *  ONE shared account rather than a per-lender sub-ledger, so the "party" text
+ *  Tally exports for every such credit is literally this head's title — sharing
+ *  no token with any real deductee name. Matched WHOLE-STRING (not "contains"),
+ *  so a lender who happens to be named e.g. "Interest Loans Pvt Ltd" is unaffected. */
+const GENERIC_LEDGER_HEAD_RE = /^INTEREST( PAID)?( ON)?( UNSECURED)? LOANS?$/;
+
 /** First letter + the consonants after it, repeats collapsed. Folds the VOWEL noise
  *  that dominates Indian transliteration variants — "KATHARANI"/"KATHRANI" and
  *  "KRISHNA"/"KRISHAN" both reduce to the same skeleton — while keeping genuinely
@@ -268,6 +276,11 @@ export function nameEvidence(a: string | null | undefined, b: string | null | un
   const na = normalizeName(useA), nb = normalizeName(useB);
   if (!na || !nb) return { tier: "unknown", divergences: [] };
   if (na === nb) return { tier: 0, divergences: [] };
+  // A generic ledger head carries no party identity — treat it exactly like a
+  // blank name (tier "unknown", rank 3.5): not evidence AGAINST any office
+  // record, so an otherwise-exact date+amount pairing can still be found at A3
+  // instead of the transaction being reported missing from the ledger entirely.
+  if (GENERIC_LEDGER_HEAD_RE.test(na) || GENERIC_LEDGER_HEAD_RE.test(nb)) return { tier: "unknown", divergences: [] };
   const allA = na.split(" ").filter(Boolean);
   const allB = nb.split(" ").filter(Boolean);
   const hasReal = (ws: string[]) => ws.some((w) => w.length >= 2);

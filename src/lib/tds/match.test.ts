@@ -644,6 +644,44 @@ describe("nameEvidence — a Tally annotation is not part of the party name", ()
   });
 });
 
+describe("nameEvidence — a generic ledger head (no party name in the ledger at all)", () => {
+  // Reported verbatim from REVTI INFRA's real 194A ledger: interest TDS-deducted for
+  // several DIFFERENT unsecured-loan lenders is booked to ONE shared account named
+  // "Interest on Unsecured Loan" instead of a per-lender sub-ledger, so Tally's export
+  // has no party text at all for any of these credits — every one of them shared 0
+  // tokens with its real office deductee and was reported "Ledger Entry Not Found" even
+  // with an EXACT date+amount match sitting right there in the ledger.
+  it("is rank 3.5 (\"unknown\"), same as a blank name — never a hard mismatch", () => {
+    expect(nameEvidence("DWARKESH CHEMICALS", "Interest on Unsecured Loan").tier).toBe("unknown");
+    expect(nameEvidence("PRAVINKUMAR HARJIBHAI LAKHANI", "Interest on Unsecured Loan").tier).toBe("unknown");
+    expect(nameEvidence("KIRIT PANCHABHAI SUKHADIA HUF", "interest paid on unsecured loans").tier).toBe("unknown");
+  });
+
+  it("does NOT fire on a real party whose name merely contains those words", () => {
+    // Whole-string match only — a lender actually named this must still compare normally.
+    expect(nameEvidence("DWARKESH CHEMICALS", "Interest Loans Finance Private Limited").tier).not.toBe("unknown");
+  });
+
+  it("matches outright on an exact date+amount instead of 'Ledger Entry Not Found'", () => {
+    const out = reconcileTally(
+      [txn("a", "DWARKESH CHEMICALS", "2026-03-01", 925), txn("b", "PRAVINKUMAR HARJIBHAI LAKHANI", "2026-03-31", 11250)],
+      [row(0, "Interest on Unsecured Loan", "2026-03-01", 925), row(1, "Interest on Unsecured Loan", "2026-03-31", 11250)],
+      null,
+    );
+    expect(out.map((r) => r.result)).toEqual(["Matched", "Matched"]);
+  });
+
+  it("still reports the record — as the correct remaining issue — when date or amount genuinely differ", () => {
+    // No party text is not a licence to match anything: A3 still demands the facts exactly.
+    const out = reconcileTally(
+      [txn("a", "DWARKESH CHEMICALS", "2026-03-01", 925)],
+      [row(0, "Interest on Unsecured Loan", "2026-03-05", 925)], // 4 days out
+      null,
+    );
+    expect(out[0].result).toBe("Date Mismatch");
+  });
+});
+
 describe("nameEvidence — a trailing free-text clause is not part of the party name", () => {
   // Reported verbatim from real Tally exports: office data drops the deductee's middle
   // (patronymic) name, WHILE the ledger head appends a nature-of-transaction or
