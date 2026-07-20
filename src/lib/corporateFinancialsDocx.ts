@@ -59,16 +59,29 @@ const MARG_T  = 720;
 const MARG_B  = 900;
 const TW      = A4_W - MARG_H * 2;  // 10466
 
+// 2026-07-20 (V J Desai — Word export polish, Item 7 of user's checklist):
+// "Note No." column was 400 DXA (~0.28") — far too narrow for the two-word
+// heading, which forced Word to wrap the label letter-by-letter into
+// "N/o/t/e/N/o.". Widened to 900 DXA (~0.63") so the header renders on a
+// single line and the "Note No." digits sit centred in a stable-width
+// column. CW_DESC absorbs the delta so total width TW = 10466 stays
+// identical (row edge alignment is preserved across every table).
 // Main table columns: Particulars | Note No. | CY | PY
-const CW_DESC = 7100;
-const CW_NOTE = 400;
+const CW_DESC = 6600;
+const CW_NOTE = 900;
 const CW_CY   = 1483;
 const CW_PY   = 1483;
 
-// Note table columns (3-col Pattern B): Particulars | CY | PY
+// Note table columns (3-col Pattern B): Particulars | CY | PY — unchanged
+// (the 3-col notes have no "Note No." column, so no repositioning needed).
 const NW_DESC = 7550;
 const NW_CY   = 1458;
 const NW_PY   = 1458;
+
+// Consistent right-side padding for every amount cell so the columns read
+// as visually straight verticals from the header row through subtotal /
+// grand-total rows (Item 6 of user's checklist).
+const AMT_PAD_R = 140;
 
 
 // FA schedule (landscape 11 cols)
@@ -228,7 +241,7 @@ function ac(
     w,
     align:   AlignmentType.RIGHT,
     padL:    20,
-    padR:    120,
+    padR:    AMT_PAD_R,
     bold:    opts.bold,
     bg:      opts.bg,
     borders: opts.borders ?? BDR_ROW,
@@ -248,15 +261,25 @@ function colHeaderRow(cyLabel: string, pyLabel: string): TableRow {
     height: _rowH > 0 ? { value: _rowH, rule: HeightRule.ATLEAST } : undefined,
     children: [
       cell({ text: "Particulars",    w: CW_DESC, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, padL: 100 }),
-      cell({ text: "Note\nNo.",      w: CW_NOTE, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.CENTER }),
-      cell({ text: `${cyLabel}\n${_exportSuffix}`, w: CW_CY, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
-      cell({ text: `${pyLabel}\n${_exportSuffix}`, w: CW_PY, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: 120 }),
+      // Single-line "Note No." — the column is now wide enough to hold it
+      // without wrapping (see CW_NOTE comment above).
+      cell({ text: "Note No.",       w: CW_NOTE, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.CENTER }),
+      cell({ text: `${cyLabel}\n${_exportSuffix}`, w: CW_CY, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: AMT_PAD_R }),
+      cell({ text: `${pyLabel}\n${_exportSuffix}`, w: CW_PY, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, align: AlignmentType.RIGHT, padR: AMT_PAD_R }),
     ],
   });
 }
 
 function sectionRow(label: string): TableRow {
+  // 2026-07-20 (V J Desai — Word export polish, Items 9 & 10 of user's
+  // checklist): BS / P&L section headings ("EQUITY AND LIABILITIES",
+  // "ASSETS", "INCOME", "EXPENSES") need to stand out clearly. Made them
+  // upright bold (dropped the italic — too decorative for a statutory
+  // heading) at SZ_TITLE and kept the same left accent bar so the
+  // existing theme palette is untouched. keepNext so the heading is
+  // never orphaned above a page break.
   return new TableRow({
+    cantSplit: true,
     height: _rowH > 0 ? { value: _rowH, rule: HeightRule.ATLEAST } : undefined,
     children: [
       new TableCell({
@@ -264,10 +287,12 @@ function sectionRow(label: string): TableRow {
         width:   { size: TW, type: WidthType.DXA },
         shading: { fill: BG_SECT, type: ShadingType.CLEAR },
         borders: { top: bThin, bottom: bHair, left: bAccL, right: bNone },
-        margins: { top: _compact ? 30 : 60, bottom: _compact ? 30 : 60, left: 140, right: 100 },
+        margins: { top: _compact ? 40 : 80, bottom: _compact ? 40 : 80, left: 140, right: 100 },
+        verticalAlign: VerticalAlign.CENTER,
         children: [new Paragraph({
+          keepNext: true, keepLines: true,
           spacing: { before: 0, after: 0 },
-          children: [new TextRun({ text: label, font: FONT, size: SZ_HDR, bold: true, italic: true, color: NAVY })],
+          children: [new TextRun({ text: label, font: FONT, size: SZ_TITLE, bold: true, color: NAVY })],
         })],
       }),
     ],
@@ -591,8 +616,8 @@ function buildPLTable(
       children: [
         cell({ text: label, w: CW_DESC, indent: 1 }),
         cell({ text: noteNo ? String(noteNo) : "", w: CW_NOTE, align: AlignmentType.CENTER, bold: true, color: noteNo ? NAVY : BLACK }),
-        cell({ text: fmtEps(valCy), w: CW_CY, align: AlignmentType.RIGHT, padR: 120 }),
-        cell({ text: fmtEps(valPy), w: CW_PY, align: AlignmentType.RIGHT, padR: 120 }),
+        cell({ text: fmtEps(valCy), w: CW_CY, align: AlignmentType.RIGHT, padR: AMT_PAD_R }),
+        cell({ text: fmtEps(valPy), w: CW_PY, align: AlignmentType.RIGHT, padR: AMT_PAD_R }),
       ],
     });
 
@@ -734,15 +759,20 @@ function buildCorpSignatureTable(sig: CorpSigData, entityName: string): Table {
       })),
     });
 
+  // 2026-07-20 (V J Desai — Word export polish, Item 14): signature block
+  // gets a thin top rule so it reads as a distinct section under the BS/P&L
+  // table, mirroring an audit-report signature area. Border colour reuses
+  // the existing NAVY palette — no theme change.
   const prefaceRow = new TableRow({
     children: [new TableCell({
       columnSpan: nCols,
       width:   { size: TW, type: WidthType.DXA },
-      borders: BDR_NONE,
-      margins: { top: 40, bottom: 40, left: 80, right: 80 },
+      borders: { top: { style: BorderStyle.SINGLE, size: 8, color: NAVY }, bottom: bNone, left: bNone, right: bNone },
+      margins: { top: 120, bottom: 60, left: 80, right: 80 },
       children: [new Paragraph({
         spacing: { before: 0, after: 0 },
-        children: [new TextRun({ text: "As per our Audit Report of even date", font: FONT, size: SZ_BODY, color: BLACK })],
+        keepNext: true, keepLines: true,
+        children: [new TextRun({ text: "As per our Audit Report of even date", font: FONT, size: SZ_BODY, italic: true, color: DK_GREY })],
       })],
     })],
   });
@@ -960,8 +990,8 @@ function noteHdr3(cyLabel: string, pyLabel: string, keepNext = false): TableRow 
     height: { value: 320, rule: HeightRule.ATLEAST },
     children: [
       cell({ text: "Particulars", w: NW_DESC, sz: SZ_SM, bold: true, color: BLACK, borders: BDR_SUB, padL: 160, keepNext }),
-      cell({ text: `${cyLabel}\n${_exportSuffix}`, w: NW_CY, sz: SZ_SM, bold: true, color: BLACK, borders: BDR_SUB, align: AlignmentType.RIGHT, padR: 120, keepNext }),
-      cell({ text: `${pyLabel}\n${_exportSuffix}`, w: NW_PY, sz: SZ_SM, bold: true, color: BLACK, borders: BDR_SUB, align: AlignmentType.RIGHT, padR: 120, keepNext }),
+      cell({ text: `${cyLabel}\n${_exportSuffix}`, w: NW_CY, sz: SZ_SM, bold: true, color: BLACK, borders: BDR_SUB, align: AlignmentType.RIGHT, padR: AMT_PAD_R, keepNext }),
+      cell({ text: `${pyLabel}\n${_exportSuffix}`, w: NW_PY, sz: SZ_SM, bold: true, color: BLACK, borders: BDR_SUB, align: AlignmentType.RIGHT, padR: AMT_PAD_R, keepNext }),
     ],
   });
 }
@@ -1318,7 +1348,7 @@ function buildRatiosTable(
         spanCell(String(no), RW[0], { bold: true, color: NAVY }),
         spanCell(name, RW[1], { bold: true, align: AlignmentType.LEFT }),
         cell({ text: numLabel,        w: RW[2], sz: SZ_SM, color: BLACK, borders: BDR_ROW, padL: 100 }),
-        cell({ text: fmtAmt(numVal),  w: RW[3], sz: SZ_SM, align: AlignmentType.RIGHT, padR: 120, borders: BDR_ROW }),
+        cell({ text: fmtAmt(numVal),  w: RW[3], sz: SZ_SM, align: AlignmentType.RIGHT, padR: AMT_PAD_R, borders: BDR_ROW }),
         spanCell(cyDisp, RW[4], { bold: true, color: cyComp == null ? DK_GREY : BLACK }),
         spanCell(pyDisp, RW[5], { bold: true, color: pyComp == null ? DK_GREY : BLACK }),
         spanCell(vStr,   RW[6], { bold: true }),
@@ -1328,7 +1358,7 @@ function buildRatiosTable(
     rows.push(new TableRow({
       children: [
         cell({ text: denLabel,       w: RW[2], sz: SZ_SM, color: BLACK, borders: BDR_ROW, padL: 100 }),
-        cell({ text: fmtAmt(denVal), w: RW[3], sz: SZ_SM, align: AlignmentType.RIGHT, padR: 120, borders: BDR_ROW }),
+        cell({ text: fmtAmt(denVal), w: RW[3], sz: SZ_SM, align: AlignmentType.RIGHT, padR: AMT_PAD_R, borders: BDR_ROW }),
       ],
     }));
     // Commentary row (full width)
@@ -1753,10 +1783,10 @@ function buildShareCapitalNote(
     return new TableRow({
       children: [
         cell({ text: label, w: RC[0], bold, bg, borders: bdr, padL: 120 }),
-        cell({ text: fmtShares(cyN), w: RC[1], align: AlignmentType.RIGHT, padR: 120, bold, bg, borders: bdr }),
-        cell({ text: fmt(cyA),       w: RC[2], align: AlignmentType.RIGHT, padR: 120, bold, bg, borders: bdr }),
-        cell({ text: fmtShares(pyN), w: RC[3], align: AlignmentType.RIGHT, padR: 120, bold, bg, borders: bdr }),
-        cell({ text: fmt(pyA),       w: RC[4], align: AlignmentType.RIGHT, padR: 120, bold, bg, borders: bdr }),
+        cell({ text: fmtShares(cyN), w: RC[1], align: AlignmentType.RIGHT, padR: AMT_PAD_R, bold, bg, borders: bdr }),
+        cell({ text: fmt(cyA),       w: RC[2], align: AlignmentType.RIGHT, padR: AMT_PAD_R, bold, bg, borders: bdr }),
+        cell({ text: fmtShares(pyN), w: RC[3], align: AlignmentType.RIGHT, padR: AMT_PAD_R, bold, bg, borders: bdr }),
+        cell({ text: fmt(pyA),       w: RC[4], align: AlignmentType.RIGHT, padR: AMT_PAD_R, bold, bg, borders: bdr }),
       ],
     });
   };
@@ -1820,10 +1850,10 @@ function buildShareCapitalNote(
       shRows.push(new TableRow({
         children: [
           cell({ text: String(r?.name || "—"), w: SH[0], borders: BDR_ROW, padL: 120 }),
-          cell({ text: fmtShares(num(r?.cy_shares)), w: SH[1], align: AlignmentType.RIGHT, padR: 120, borders: BDR_ROW }),
-          cell({ text: fmtPct(num(r?.cy_pct)),       w: SH[2], align: AlignmentType.RIGHT, padR: 120, borders: BDR_ROW }),
-          cell({ text: fmtShares(num(r?.py_shares)), w: SH[3], align: AlignmentType.RIGHT, padR: 120, borders: BDR_ROW }),
-          cell({ text: fmtPct(num(r?.py_pct)),       w: SH[4], align: AlignmentType.RIGHT, padR: 120, borders: BDR_ROW }),
+          cell({ text: fmtShares(num(r?.cy_shares)), w: SH[1], align: AlignmentType.RIGHT, padR: AMT_PAD_R, borders: BDR_ROW }),
+          cell({ text: fmtPct(num(r?.cy_pct)),       w: SH[2], align: AlignmentType.RIGHT, padR: AMT_PAD_R, borders: BDR_ROW }),
+          cell({ text: fmtShares(num(r?.py_shares)), w: SH[3], align: AlignmentType.RIGHT, padR: AMT_PAD_R, borders: BDR_ROW }),
+          cell({ text: fmtPct(num(r?.py_pct)),       w: SH[4], align: AlignmentType.RIGHT, padR: AMT_PAD_R, borders: BDR_ROW }),
         ],
       }));
     }
@@ -1866,22 +1896,22 @@ function buildShareCapitalNote(
       prRows.push(new TableRow({
         children: [
           cell({ text: String(r?.name || "—"), w: PR[0], borders: BDR_ROW, padL: 120 }),
-          cell({ text: fmtShares(cyS), w: PR[1], align: AlignmentType.RIGHT, padR: 120, borders: BDR_ROW }),
-          cell({ text: fmtPct(cyP),    w: PR[2], align: AlignmentType.RIGHT, padR: 120, borders: BDR_ROW }),
-          cell({ text: fmtShares(pyS), w: PR[3], align: AlignmentType.RIGHT, padR: 120, borders: BDR_ROW }),
-          cell({ text: fmtPct(pyP),    w: PR[4], align: AlignmentType.RIGHT, padR: 120, borders: BDR_ROW }),
-          cell({ text: fmtPctChg(cyP - pyP), w: PR[5], align: AlignmentType.RIGHT, padR: 120, borders: BDR_ROW }),
+          cell({ text: fmtShares(cyS), w: PR[1], align: AlignmentType.RIGHT, padR: AMT_PAD_R, borders: BDR_ROW }),
+          cell({ text: fmtPct(cyP),    w: PR[2], align: AlignmentType.RIGHT, padR: AMT_PAD_R, borders: BDR_ROW }),
+          cell({ text: fmtShares(pyS), w: PR[3], align: AlignmentType.RIGHT, padR: AMT_PAD_R, borders: BDR_ROW }),
+          cell({ text: fmtPct(pyP),    w: PR[4], align: AlignmentType.RIGHT, padR: AMT_PAD_R, borders: BDR_ROW }),
+          cell({ text: fmtPctChg(cyP - pyP), w: PR[5], align: AlignmentType.RIGHT, padR: AMT_PAD_R, borders: BDR_ROW }),
         ],
       }));
     }
     prRows.push(new TableRow({
       children: [
         cell({ text: "Total", w: PR[0], bold: true, borders: BDR_GRAND, padL: 120 }),
-        cell({ text: fmtShares(tCyS), w: PR[1], align: AlignmentType.RIGHT, padR: 120, bold: true, borders: BDR_GRAND }),
-        cell({ text: fmtPct(tCyP),    w: PR[2], align: AlignmentType.RIGHT, padR: 120, bold: true, borders: BDR_GRAND }),
-        cell({ text: fmtShares(tPyS), w: PR[3], align: AlignmentType.RIGHT, padR: 120, bold: true, borders: BDR_GRAND }),
-        cell({ text: fmtPct(tPyP),    w: PR[4], align: AlignmentType.RIGHT, padR: 120, bold: true, borders: BDR_GRAND }),
-        cell({ text: fmtPctChg(tCyP - tPyP), w: PR[5], align: AlignmentType.RIGHT, padR: 120, bold: true, borders: BDR_GRAND }),
+        cell({ text: fmtShares(tCyS), w: PR[1], align: AlignmentType.RIGHT, padR: AMT_PAD_R, bold: true, borders: BDR_GRAND }),
+        cell({ text: fmtPct(tCyP),    w: PR[2], align: AlignmentType.RIGHT, padR: AMT_PAD_R, bold: true, borders: BDR_GRAND }),
+        cell({ text: fmtShares(tPyS), w: PR[3], align: AlignmentType.RIGHT, padR: AMT_PAD_R, bold: true, borders: BDR_GRAND }),
+        cell({ text: fmtPct(tPyP),    w: PR[4], align: AlignmentType.RIGHT, padR: AMT_PAD_R, bold: true, borders: BDR_GRAND }),
+        cell({ text: fmtPctChg(tCyP - tPyP), w: PR[5], align: AlignmentType.RIGHT, padR: AMT_PAD_R, bold: true, borders: BDR_GRAND }),
       ],
     }));
   }
@@ -2089,7 +2119,12 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
   // the current one, then left the bottom of the previous page blank.
   // Dropped the gap to 200 DXA (10pt) and removed keepNext so notes flow
   // continuously and the renderer can fill each page before breaking.
-  const spacer = () => new Paragraph({ spacing: { before: 200, after: 0 }, children: [] });
+  // 2026-07-20 (V J Desai — Word export polish, Items 4 & 17): inter-note
+  // spacer trimmed from 10pt to 6pt so notes read as a compact continuous
+  // series without excessive vertical air between them, matching how
+  // audit-report notes flow. keepLines/keepNext on note title rows still
+  // prevent bad splits — this only tightens *good* layouts.
+  const spacer = () => new Paragraph({ spacing: { before: 120, after: 0 }, children: [] });
   // Issue 1 — each numbered note must START ON A NEW PAGE so it is never
   // rendered in continuation of the previous note (e.g. Note 2 — Share
   // Capital must not flow directly after Note 1 — Accounting Policies).
@@ -2208,7 +2243,11 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
   // Running header ONLY on schedule/notes sections (never on the BS/P&L faces);
   // no footer anywhere.
   const hdr = (subtitle?: string) => ({ headers: { default: makeHeader(entityName, subtitle) } });
-  const sigSpacer = () => new Paragraph({ spacing: { before: 160 }, children: [] });
+  // 2026-07-20 (V J Desai — Word export polish, Item 14): tighter breathing
+  // room between the last BS/P&L row and the signature block. Was 8pt,
+  // dropped to ~5pt — enough separation for readability without leaving a
+  // conspicuous gap on the printed page.
+  const sigSpacer = () => new Paragraph({ spacing: { before: 100 }, children: [] });
 
   // Build sections
   const sections: any[] = [
