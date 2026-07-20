@@ -538,8 +538,12 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
             PARTY differs — not only on "Party Name Mismatch". The common real case
             is a ledger entry that is a few days out AND booked under the
             proprietor's personal name, which lands on "Date Mismatch"; gating the
-            button on that one result made the mapping feature unreachable. */}
-        {mappingOffer(r) && (
+            button on that one result made the mapping feature unreachable.
+            "Ledger Entry Not Found" gets the SAME resolution path even though it
+            has no auto-suggested candidate (tally_party is null — nothing paired):
+            the office record may still be sitting in the ledger under a name the
+            engine's search missed, so offer a manual pick rather than nothing. */}
+        {mappingOffer(r) ? (
           <div className="flex items-center gap-2 flex-wrap p-2 rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50/50 dark:bg-amber-950/20 text-xs">
             <Link2 size={13} className="text-amber-600 shrink-0" />
             <span className="text-foreground min-w-0">Suggested mapping: <b>{r.office_name}</b> ↔ <b>{r.tally_party}</b></span>
@@ -553,6 +557,15 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
                 <Search size={11} /> Choose another record
               </Button>
             </div>
+          </div>
+        ) : r.result === "Ledger Entry Not Found" && !r.overridden && !r.mapped && r.office_name && (
+          <div className="flex items-center gap-2 flex-wrap p-2 rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50/50 dark:bg-amber-950/20 text-xs">
+            <Link2 size={13} className="text-amber-600 shrink-0" />
+            <span className="text-foreground min-w-0">No automatic ledger match for <b>{r.office_name}</b> — it may be booked under a different name.</span>
+            <div className="flex-1" />
+            <Button size="sm" variant="outline" className="h-6 text-xs px-2 gap-1 shrink-0" disabled={disabled || validating} onClick={() => openPicker(r)}>
+              <Search size={11} /> Map to ledger record
+            </Button>
           </div>
         )}
       </CardContent>
