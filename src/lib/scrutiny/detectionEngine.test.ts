@@ -924,6 +924,48 @@ describe("aggregate is never silently dropped on a grain mismatch", () => {
   });
 });
 
+describe("rollup — one query per issue, not one per occurrence", () => {
+  const cashRule = (rollup: unknown) => rule({
+    rule_id: "CASH-001", category: "CASH", detection_level: "voucher",
+    detection_logic: { check: "daily_max", threshold: 200000, ...(rollup ? { rollup } : {}) },
+    audit_query_template: "Cash exceeded the limit on {count} days, peaking at Rs.{amount} on {date}.",
+  });
+  // Three separate days above the limit — one behaviour, not three findings.
+  const data = { vouchers: [
+    vch({ amount: 300000, voucher_date: "2025-06-01", party_ledger: "Cash" }),
+    vch({ amount: 500000, voucher_date: "2025-07-01", party_ledger: "Cash" }),
+    vch({ amount: 250000, voucher_date: "2025-08-01", party_ledger: "Cash" }),
+  ] };
+
+  it("emits one finding per day when rollup is off (the flood)", () => {
+    expect(run(cashRule(null), data).length).toBeGreaterThan(1);
+  });
+
+  it("collapses to a single summary carrying count, peak and worst date", () => {
+    const out = run(cashRule({ metric: "peak" }), data);
+    expect(out).toHaveLength(1);
+    expect(out[0].evidence?.rolled_up).toBe(3);
+    // daily_max tracks the running cash balance, so the peak is the closing high (300k+500k+250k)
+    // on the last breaching day — not the largest single day's movement.
+    expect(out[0].evidence?.peak).toBe(1_050_000);
+    expect(out[0].evidence?.first).toBe("2025-06-01");
+    expect(out[0].evidence?.last).toBe("2025-08-01");
+    expect(out[0].flag_message).toContain("on 3 days");
+  });
+
+  it("leaves a single occurrence alone — nothing to summarise", () => {
+    const one = { vouchers: [vch({ amount: 300000, voucher_date: "2025-06-01", party_ledger: "Cash" })] };
+    const out = run(cashRule({ metric: "peak" }), one);
+    expect(out).toHaveLength(1);
+    expect(out[0].evidence?.rolled_up).toBeUndefined();
+  });
+
+  it("does not touch rules that never opt in", () => {
+    const out = run(cashRule(null), data);
+    expect(out.every((f) => f.evidence?.rolled_up === undefined)).toBe(true);
+  });
+});
+
 describe("missing_provision — three states, not two", () => {
   const r = rule({
     rule_id: "PROV-201", category: "PROV", detection_level: "account",

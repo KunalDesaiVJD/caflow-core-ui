@@ -1713,6 +1713,64 @@ export interface RunOptions {
  * and, when emitAdvisoryForUnhandled is true, also produce an advisory finding so they are never
  * silently passed.
  */
+/**
+ * Collapse a rule's findings into ONE engagement-level summary.
+ *
+ * An auditor raises one query per issue. Several checks naturally emit one finding per day, per
+ * voucher or per ledger, so a single behaviour becomes dozens of rows — a cash balance sitting
+ * above the limit for 54 days produced 54 findings, none of which a human would ever write up
+ * separately. Rolling up preserves every fact (count, total, peak, span, the ledgers involved)
+ * while presenting one reviewable item.
+ *
+ * Opt-in per rule so nothing changes for checks that are already one-per-issue.
+ * detection_logic.rollup: true | { min_count?: number, metric?: "total"|"peak", message?: string }
+ * The message may use {count} {amount} {peak} {accounts} {date} {value}.
+ */
+const rollupFindings = (rule: ScrutinyRule, produced: ScrutinyFinding[]): ScrutinyFinding[] => {
+  const dl = rule.detection_logic as unknown as Record<string, unknown>;
+  const cfg = dl.rollup;
+  if (!cfg) return produced;
+  const advisory = produced.filter((f) => f.advisory);
+  const real = produced.filter((f) => !f.advisory);
+  const o = (typeof cfg === "object" && cfg !== null ? cfg : {}) as Record<string, unknown>;
+  const minCount = num(o.min_count, 2);
+  if (real.length < minCount) return produced;
+
+  const accounts = [...new Set(real.map((f) => f.account).filter(Boolean) as string[])];
+  const total = real.reduce((s, f) => s + Math.abs(num(f.amount)), 0);
+  const peak = real.reduce((m, f) => Math.max(m, Math.abs(num(f.amount))), 0);
+  const dates = (real.map((f) => f.date).filter(Boolean) as string[]).sort();
+  const worst = real.reduce((a, b) => (Math.abs(num(b.amount)) > Math.abs(num(a.amount)) ? b : a));
+  const headline = num(o.metric === "peak" ? peak : total);
+  const shown = accounts.slice(0, 3).join(", ") + (accounts.length > 3 ? ` and ${accounts.length - 3} more` : "");
+  const tpl = (o.message as string | undefined) ?? (dl.rollup_message as string | undefined) ?? rule.audit_query_template;
+
+  return [
+    ...advisory,
+    finding(rule, {
+      account: accounts.length === 1 ? accounts[0] : null,
+      amount: headline,
+      date: worst.date ?? dates[0] ?? null,
+      flag_message: render(tpl, {
+        count: real.length,
+        amount: fmtAmt(headline),
+        peak: fmtAmt(peak),
+        value: fmtAmt(total),
+        accounts: shown,
+        date: worst.date ?? dates[0] ?? "",
+      }),
+      evidence: {
+        rolled_up: real.length,
+        accounts: accounts.slice(0, 25),
+        total: Math.round(total),
+        peak: Math.round(peak),
+        first: dates[0] ?? null,
+        last: dates[dates.length - 1] ?? null,
+      },
+    }),
+  ];
+};
+
 export function runDetection(
   rules: ScrutinyRule[],
   data: ScrutinyData,
@@ -1747,7 +1805,7 @@ export function runDetection(
     handledCount += 1;
     executed.add(check);
     try {
-      const produced = handler(rule, data, ctx);
+      const produced = rollupFindings(rule, handler(rule, data, ctx));
       findings.push(...produced);
       const real = produced.filter((f) => !f.advisory);
       const adv = produced.filter((f) => f.advisory);
