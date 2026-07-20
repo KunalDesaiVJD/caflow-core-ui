@@ -258,12 +258,36 @@ export default function NotePL({
     );
   };
 
-  // EPS values — formula per FS NOTES.xlsx template: NPAT × 100 / Weighted Avg Shares
-  // (the ×100 reflects the template convention of values in `'000s).
+  // 2026-07-20 (V J Desai — Issue 1, EPS on P&L face): the note now computes
+  // EPS using the correct AS-20 formula (NPAT / Weighted Avg Shares) — the
+  // legacy "× 100" was a stale template holdover that inflated the ratio
+  // by 100× and left every corporate P&L face displaying "—" (because the
+  // face-side path also treated the shares divisor as zero when unset).
+  //
+  // Weighted-average shares now auto-populate from the Share Capital
+  // paid-up breakup (share_count_cy / share_count_py) when the auditor
+  // has not overridden them on this note. This makes EPS render on every
+  // corporate client the moment Share Capital is filled — no separate
+  // data entry required — while manual overrides on this note still win.
   const npat    = Number(get("pl.eps.npat") ?? 0);
+  const npatPy  = Number(get("pl.eps.npat_py") ?? 0);
   const nominal = Number(get("pl.eps.nominal_value") ?? 10);
-  const wavg    = Number(get("pl.eps.weighted_avg_shares") ?? 0);
-  const basicEps = wavg > 0 ? Math.round(((npat * 100) / wavg) * 10000) / 10000 : 0;
+  const shareCapBreakup: any[] = Array.isArray((notes.bs_liab as any)?.share_capital?.breakup)
+    ? (notes.bs_liab as any).share_capital.breakup
+    : [];
+  const shareCapCount = (col: "cy" | "py"): number =>
+    shareCapBreakup
+      .filter(r => r != null && (r.is_paid_up === true || r.subType === "issued_paid_up"))
+      .reduce((s: number, r: any) => {
+        const n = Number(col === "cy" ? r.share_count_cy : r.share_count_py);
+        return s + (Number.isFinite(n) ? n : 0);
+      }, 0);
+  const wavgStored   = Number(get("pl.eps.weighted_avg_shares") ?? 0);
+  const wavgStoredPy = Number(get("pl.eps.weighted_avg_shares_py") ?? 0);
+  const wavg   = wavgStored   > 0 ? wavgStored   : shareCapCount("cy");
+  const wavgPy = wavgStoredPy > 0 ? wavgStoredPy : shareCapCount("py");
+  const basicEps   = wavg   > 0 ? Math.round((npat   / wavg)   * 10000) / 10000 : 0;
+  const basicEpsPy = wavgPy > 0 ? Math.round((npatPy / wavgPy) * 10000) / 10000 : 0;
 
   return (
     <div className="space-y-4">
@@ -440,7 +464,7 @@ export default function NotePL({
         <EditableRow
           label="Weighted avg. number of equity shares"
           cy={wavg}
-          py={Number(get("pl.eps.weighted_avg_shares_py") ?? 0)}
+          py={wavgPy}
           isOverriddenCy={isOverridden("pl.eps.weighted_avg_shares")}
           isOverriddenPy={isOverridden("pl.eps.weighted_avg_shares_py")}
           onCommitCy={(v) => updatePath("pl.eps.weighted_avg_shares", v)}
@@ -448,8 +472,8 @@ export default function NotePL({
         />
         <EditableRow
           label="Basic EPS (₹)"
-          cy={basicEps}
-          py={Number(get("pl.eps.basic_py") ?? 0)}
+          cy={Number(get("pl.eps.basic") ?? basicEps)}
+          py={Number(get("pl.eps.basic_py") ?? basicEpsPy)}
           isOverriddenCy={isOverridden("pl.eps.basic")}
           isOverriddenPy={isOverridden("pl.eps.basic_py")}
           onCommitCy={(v) => updatePath("pl.eps.basic", v)}
@@ -459,7 +483,7 @@ export default function NotePL({
         <EditableRow
           label="Diluted EPS (₹)"
           cy={Number(get("pl.eps.diluted") ?? basicEps)}
-          py={Number(get("pl.eps.diluted_py") ?? 0)}
+          py={Number(get("pl.eps.diluted_py") ?? basicEpsPy)}
           isOverriddenCy={isOverridden("pl.eps.diluted")}
           isOverriddenPy={isOverridden("pl.eps.diluted_py")}
           onCommitCy={(v) => updatePath("pl.eps.diluted", v)}

@@ -251,52 +251,83 @@ export default function NoteBSAsset({
         "bs_asset.inventories.breakup", "Raw materials / WIP / Finished goods / Stores & spares")}
 
       {(() => {
-        // 2026-06-25 (V J Desai — Trade Receivables >6m / Other bifurcation):
-        // Mirrors the Trade Payables treatment. Per-ledger breakup from
-        // bs_asset.trade_receivables.breakup gets rendered with a three-dots
-        // menu to reassign each customer between ">6 months" and "Other".
-        // Sub-totals sum live; grand total anchored to cy("trade_receivables")
-        // so BS ↔ note invariance stays intact.
-        const trBreakup = (get("bs_asset.trade_receivables.breakup") ?? []) as ListRow[];
-        const getTrSection = (ledger: string): string | undefined => {
-          const raw = get(`bs_asset.trade_receivables.ledger_section.${ledger}`);
-          return typeof raw === "string" && raw ? raw : undefined;
+        // 2026-07-20 (V J Desai — Issue 3, TR manual allocation):
+        // Replaces the earlier per-ledger >6m / Other classification. A
+        // customer can move between buckets across FY (e.g. Others in PY
+        // becomes >6m in CY), and a single ledger-level flag can't
+        // represent both — so we now expose CY & PY as independent
+        // manual allocations. Default: everything under "Others" (residual
+        // = Total − >6m), which matches Schedule III convention when the
+        // auditor hasn't yet done ageing. Grand total stays anchored to
+        // the COA-derived TR total so BS ↔ note invariance is preserved
+        // even if the auditor never touches the note.
+        //
+        // Storage (independent for each FY):
+        //   bs_asset.trade_receivables.gt6m_cy  / gt6m_py
+        //   bs_asset.trade_receivables.other_cy / other_py  (optional; residual otherwise)
+        const trTotalCy = cy("trade_receivables");
+        const trTotalPy = py("trade_receivables");
+        const num = (v: any): number => {
+          const n = Number(v);
+          return Number.isFinite(n) ? n : 0;
         };
-        const setTrSection = (ledger: string, section: string) => {
-          updatePath(`bs_asset.trade_receivables.ledger_section.${ledger}`, section);
-        };
+        const gt6mCy = num(get("bs_asset.trade_receivables.gt6m_cy"));
+        const gt6mPy = num(get("bs_asset.trade_receivables.gt6m_py"));
+        const otherStoredCy = get("bs_asset.trade_receivables.other_cy");
+        const otherStoredPy = get("bs_asset.trade_receivables.other_py");
+        const otherCy = (otherStoredCy != null && otherStoredCy !== "")
+          ? num(otherStoredCy) : (trTotalCy - gt6mCy);
+        const otherPy = (otherStoredPy != null && otherStoredPy !== "")
+          ? num(otherStoredPy) : (trTotalPy - gt6mPy);
+        const driftCy = Math.abs((gt6mCy + otherCy) - trTotalCy);
+        const driftPy = Math.abs((gt6mPy + otherPy) - trTotalPy);
         return (
-          <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("trade_receivables")} title="Trade Receivables" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("trade_receivables")} pyTotal={py("trade_receivables")}>
+          <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("trade_receivables")} title="Trade Receivables" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={trTotalCy} pyTotal={trTotalPy}>
             <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
 
             <div className="text-[10px] italic text-muted-foreground mt-1">
-              Expand a row to see the ledgers grouped under it. Use the three-dots menu to move a customer between &gt;6 months and Other.
+              Enter CY &amp; PY amounts under &quot;Outstanding for a period exceeding 6 months&quot; below. Whatever is left over (Total − &gt;6m) is automatically classified under &quot;Others&quot;. Manual amounts for the two years are independent.
             </div>
-            {/* Section rows ARE the sub-totals — no duplicate rows below. */}
-            <SectionedLedgerBreakup
-              rows={trBreakup}
-              sections={[
-                { key: "gt6m",  label: "Outstanding for a period exceeding 6 months" },
-                { key: "other", label: "Other receivables" },
-              ]}
-              getSection={getTrSection}
-              setSection={setTrSection}
+
+            <EditableRow
+              label="(i) Outstanding for a period exceeding 6 months"
+              cy={gt6mCy}
+              py={gt6mPy}
+              isOverriddenCy={isOverridden("bs_asset.trade_receivables.gt6m_cy")}
+              isOverriddenPy={isOverridden("bs_asset.trade_receivables.gt6m_py")}
+              onCommitCy={(v) => updatePath("bs_asset.trade_receivables.gt6m_cy", v == null ? null : Number(v))}
+              onCommitPy={(v) => updatePath("bs_asset.trade_receivables.gt6m_py", v == null ? null : Number(v))}
+            />
+            <EditableRow
+              label="(ii) Others"
+              cy={otherCy}
+              py={otherPy}
+              autoCY={trTotalCy - gt6mCy}
+              autoPY={trTotalPy - gt6mPy}
+              isOverriddenCy={isOverridden("bs_asset.trade_receivables.other_cy")}
+              isOverriddenPy={isOverridden("bs_asset.trade_receivables.other_py")}
+              onCommitCy={(v) => updatePath("bs_asset.trade_receivables.other_cy", v == null ? null : Number(v))}
+              onCommitPy={(v) => updatePath("bs_asset.trade_receivables.other_py", v == null ? null : Number(v))}
             />
 
             <EditableRow
               label="Total — Trade Receivables (per BS)"
-              cy={cy("trade_receivables")} py={py("trade_receivables")}
-              autoCY={cy("trade_receivables")} autoPY={py("trade_receivables")}
+              cy={trTotalCy} py={trTotalPy}
+              autoCY={trTotalCy} autoPY={trTotalPy}
               onCommitCy={() => {}} onCommitPy={() => {}}
               isLocked
               bold
             />
 
-            {/* Ageing schedule (TR_ROWS / TR_BUCKETS) remains persisted on
-                the engagement if previously entered; UI rendering was
-                intentionally suppressed by the earlier Issue-11 change and
-                that behaviour is preserved here — only the bifurcation
-                block above is new. */}
+            {(driftCy > 1 || driftPy > 1) && (
+              <div className="text-[10px] text-amber-700 dark:text-amber-300 mt-1">
+                ⚠ Sum of (i) + (ii) differs from the COA-derived Total by
+                {driftCy > 1 ? ` CY ${driftCy.toFixed(0)}` : ""}
+                {driftCy > 1 && driftPy > 1 ? "," : ""}
+                {driftPy > 1 ? ` PY ${driftPy.toFixed(0)}` : ""}
+                {" "}— adjust the &gt;6m amount so the residual (Others) matches the ledger balance.
+              </div>
+            )}
           </NoteCard>
         );
       })()}
