@@ -490,11 +490,24 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
   /** Ledger records offered by the picker: the engine's suggestion first, then the
    *  rest in ledger order. Only CREDIT rows — those are the deductions the engine
    *  pairs against, so mapping to a party that never appears as a credit could not
-   *  match anything. "suggested" is party-level because the saved mapping is. */
+   *  match anything. "suggested" is party-level because the saved mapping is.
+   *
+   *  Excludes any credit ALREADY paired to a DIFFERENT office record (Matched,
+   *  mapped, or simply the candidate a weaker tier already assigned) — otherwise
+   *  the picker would let two office records both claim the same ledger entry,
+   *  a conflict nothing else in this dialog would surface. Identified by VALUE
+   *  (party+date+credit), not position: `tally_row_index` is a raw file row_index
+   *  and collides across the several files a filing's ledger is imported from. */
   const pickRows = useMemo(() => {
     const sug = pickTarget?.tally_party ? normalizeName(pickTarget.tally_party) : null;
+    const claimed = new Set(
+      (results || [])
+        .filter((r) => r.id !== pickTarget?.id && r.tally_party && r.tally_date != null && r.tally_credit != null)
+        .map((r) => `${normalizeName(r.tally_party)}|${r.tally_date}|${r.tally_credit}`),
+    );
     const rows = tallyRows
       .filter((t) => t.party && t.credit != null && Number(t.credit) !== 0)
+      .filter((t) => !claimed.has(`${normalizeName(t.party)}|${t.date}|${t.credit}`))
       .map((t, i) => ({ t, i, suggested: !!sug && normalizeName(t.party) === sug }));
     const q = pickQuery.trim().toLowerCase();
     const hit = q
