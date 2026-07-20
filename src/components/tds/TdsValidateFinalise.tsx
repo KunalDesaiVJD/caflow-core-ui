@@ -33,7 +33,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import {
   ShieldCheck, AlertTriangle, CheckCircle2, Upload, Play, FileSpreadsheet,
-  RotateCcw, Loader2, Users, FileWarning, Info, X, BadgeCheck, Trash2, Eye, BookOpen,
+  RotateCcw, Loader2, Users, FileWarning, Info, X, BadgeCheck, Trash2, Eye, BookOpen, ClipboardCheck,
 } from "lucide-react";
 import { parseWorkbookRows, parseCsvRows } from "@/lib/tdsWorkbook";
 import { logReconAudit } from "@/lib/tdsReconAudit";
@@ -758,6 +758,32 @@ export function TdsValidateFinalise({
   const cErr = selClient ? complianceError() : null;
   const selectedClient = clients.find(c => c.id === selClient);
 
+  // ── Stage 4 · Checker Review — a consolidated view across all 3 stages, so the
+  // checker reviews ONE tab instead of clicking through Stages 1-3. Reuses each
+  // stage's OWN already-computed report (the same StageReport the Excel/PDF
+  // exports use) rather than re-deriving anything — a fix to a stage's counts or
+  // categorisation lands here automatically. Categorised by each row's own
+  // `Result` field via the shared ErrorTypeBreakdown component (same one Stage 1's
+  // own tab uses), so "N mismatches" is never one undifferentiated bucket.
+  const stage4Data = useMemo(() => {
+    const s1Issues = (results || []).filter((r) => r.match_status !== "matched" && !r.overridden);
+    const s2Report = panStatus.applicable && panStatus.getReport ? panStatus.getReport() : null;
+    const s3Report = tallyStatus.applicable && tallyStatus.getReport ? tallyStatus.getReport() : null;
+    const s2IssueRows = s2Report?.sections.find((s) => s.title === "Issues")?.rows ?? [];
+    const s3IssueRows = s3Report?.sections.find((s) => s.title === "Mismatched")?.rows ?? [];
+    const s3MappedCount = s3Report?.sections.find((s) => s.title === "Mapped")?.rows.length ?? 0;
+    return {
+      totalRecords: summary.total,
+      totalMatched: summary.matched,
+      // Combined across the 3 independent reconciliations — NOT a de-duplicated
+      // per-office-record count (the same record can carry a Stage-1 AND a
+      // Stage-3 issue at once), so this is labelled "combined", never "unique".
+      totalMismatches: summary.mismatched + (panStatus.applicable ? panStatus.issues : 0) + (tallyStatus.applicable ? tallyStatus.issues : 0),
+      totalOverridden: summary.overridden + (panStatus.applicable ? panStatus.overridden : 0) + (tallyStatus.applicable ? tallyStatus.overridden : 0),
+      s1Issues, s2IssueRows, s3IssueRows, s3MappedCount,
+    };
+  }, [results, summary, panStatus, tallyStatus]);
+
   // Non-matched records (mismatched / office_only / imported_only) — each gets its
   // own inline comparison table; pending first, then overridden.
   const attention = useMemo(() => {
@@ -1054,6 +1080,7 @@ export function TdsValidateFinalise({
               <TabsTrigger value="1" className="text-xs h-7 gap-1.5 px-3"><FileSpreadsheet size={13} /> Stage 1 · Data{stage1Ran && <span className={cn("ml-0.5 rounded px-1 text-[10px] font-semibold", summary.mismatched === 0 ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-destructive/10 text-destructive")}>{summary.mismatched === 0 ? "OK" : summary.mismatched}</span>}</TabsTrigger>
               <TabsTrigger value="2" className="text-xs h-7 gap-1.5 px-3"><BadgeCheck size={13} /> Stage 2 · PAN{panStatus.ran && <span className={cn("ml-0.5 rounded px-1 text-[10px] font-semibold", panStatus.issues === 0 ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-destructive/10 text-destructive")}>{panStatus.issues === 0 ? "OK" : panStatus.issues}</span>}</TabsTrigger>
               <TabsTrigger value="3" className="text-xs h-7 gap-1.5 px-3"><BookOpen size={13} /> Stage 3 · Tally{tallyStatus.ran && <span className={cn("ml-0.5 rounded px-1 text-[10px] font-semibold", tallyStatus.issues === 0 ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-destructive/10 text-destructive")}>{tallyStatus.issues === 0 ? "OK" : tallyStatus.issues}</span>}</TabsTrigger>
+              <TabsTrigger value="4" className="text-xs h-7 gap-1.5 px-3"><ClipboardCheck size={13} /> Stage 4 · Checker Review{stage1Ran && <span className={cn("ml-0.5 rounded px-1 text-[10px] font-semibold", canFile ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-destructive/10 text-destructive")}>{canFile ? "OK" : stage4Data.totalMismatches}</span>}</TabsTrigger>
             </TabsList>
 
             <TabsContent value="1" forceMount className="data-[state=inactive]:hidden mt-3 space-y-3">
@@ -1289,69 +1316,151 @@ export function TdsValidateFinalise({
               onStatusChange={setTallyStatus}
             />
           </div>
+            </TabsContent>
 
-
-          {/* Finalise (gated on Stage 1 pending = 0) */}
+            <TabsContent value="4" forceMount className="data-[state=inactive]:hidden mt-3 space-y-3">
+          {/* ── STAGE 4 · CHECKER REVIEW — one consolidated summary of Stages 1-3,
+              so the checker approves from here without re-visiting each tab. */}
           {results && (
-            <Card className={cn(canFile ? "border-emerald-200 dark:border-emerald-800" : "border-amber-200 dark:border-amber-800")}>
-              <CardContent className="p-4">
-                {isFiled ? (
-                  <div className="p-4 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
-                    <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">
-                      ✓ Return marked as Filed. Generate Genius XLS Export from the Reports section.
-                    </p>
+            <>
+              <div>
+                <p className="font-semibold text-sm">Final Validation Summary</p>
+                <p className="text-xs text-muted-foreground">Consolidated results from Stage 1 (Data), Stage 2 (PAN) and Stage 3 (Tally) — reviewed here, not re-checked stage by stage.</p>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {([
+                  { label: "Total Records", value: stage4Data.totalRecords, cls: "" },
+                  { label: "Total Matched", value: stage4Data.totalMatched, cls: "text-emerald-600" },
+                  { label: "Total Mismatches (Combined)", value: stage4Data.totalMismatches, cls: stage4Data.totalMismatches > 0 ? "text-destructive" : "text-emerald-600" },
+                  { label: "Total Overridden", value: stage4Data.totalOverridden, cls: "text-blue-600" },
+                ]).map((s) => (
+                  <div key={s.label} className="rounded-md border bg-card p-2 text-center">
+                    <p className={cn("text-xl font-bold tabular-nums", s.cls)}>{s.value}</p>
+                    <p className="text-[11px] text-muted-foreground">{s.label}</p>
                   </div>
-                ) : (
-                  <>
-                    <div className="flex items-start gap-3 mb-4">
-                      {canFile ? <CheckCircle2 size={24} className="text-emerald-600 mt-0.5 shrink-0" /> : <AlertTriangle size={24} className="text-amber-600 mt-0.5 shrink-0" />}
-                      <div className="min-w-0">
-                        <p className="font-semibold text-foreground">
-                          {canFile ? "All validations complete — ready to file" : "Return not ready to file"}
-                        </p>
-                        <p className="text-sm text-muted-foreground">
-                          {canFile
-                            ? "All applicable stages are reconciled with no unresolved items. Optional stages without an imported file are skipped."
-                            : fileBlockReason}
-                        </p>
-                        {/* Per-stage completion checklist — the user sees exactly what remains. */}
-                        <div className="mt-3 space-y-1 text-xs">
-                          <div className="flex items-center gap-1.5">
-                            {stage1Ready ? <CheckCircle2 size={13} className="text-emerald-600 shrink-0" /> : <X size={13} className="text-destructive shrink-0" />}
-                            <span className={stage1Ready ? "text-foreground" : "text-muted-foreground"}>
-                              Stage 1 · Data reconciliation{stage1Ready ? " — complete" : stage1Ran ? ` — ${summary.mismatched} unresolved` : " — not run"}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            {!panStatus.applicable ? <Info size={13} className="text-muted-foreground shrink-0" /> : stage2Ready ? <CheckCircle2 size={13} className="text-emerald-600 shrink-0" /> : <X size={13} className="text-destructive shrink-0" />}
-                            <span className={!panStatus.applicable ? "text-muted-foreground" : stage2Ready ? "text-foreground" : "text-muted-foreground"}>
-                              Stage 2 · PAN verification{
-                                !panStatus.applicable ? " — optional (no TRACES file imported)"
-                                : !panStatus.ran ? " — not run"
-                                : panStatus.issues > 0 ? ` — ${panStatus.issues} unresolved`
-                                : " — complete"}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            {!tallyStatus.applicable ? <Info size={13} className="text-muted-foreground shrink-0" /> : stage3Ready ? <CheckCircle2 size={13} className="text-emerald-600 shrink-0" /> : <X size={13} className="text-destructive shrink-0" />}
-                            <span className={!tallyStatus.applicable ? "text-muted-foreground" : stage3Ready ? "text-foreground" : "text-muted-foreground"}>
-                              Stage 3 · Tally reconciliation{
-                                !tallyStatus.applicable ? " — optional (no Tally ledger imported)"
-                                : !tallyStatus.ran ? " — not run"
-                                : tallyStatus.issues > 0 ? ` — ${tallyStatus.issues} unresolved`
-                                : " — complete"}
-                            </span>
+                ))}
+              </div>
+
+              {/* Per-stage categorised mismatch breakdown — same ErrorTypeBreakdown
+                  component each stage's own tab uses, driven by that stage's OWN
+                  report, so a fix to one lands here automatically. */}
+              <div className="space-y-3">
+                <div className="rounded-md border p-3 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-semibold">Stage 1 · Data Validation</p>
+                    <span className={cn("text-[10px] rounded px-1.5 py-0.5 font-semibold", !stage1Ran ? "bg-muted text-muted-foreground" : stage1Ready ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-destructive/10 text-destructive")}>
+                      {!stage1Ran ? "Not run" : stage1Ready ? "Complete" : `${summary.mismatched} unresolved`}
+                    </span>
+                  </div>
+                  {stage4Data.s1Issues.length === 0
+                    ? <p className="text-[11px] text-emerald-600">No unresolved Stage 1 mismatches.</p>
+                    : <ErrorTypeBreakdown rows={stage4Data.s1Issues} getType={errorTypeFor} activeType={null} onSelectType={() => {}} />}
+                </div>
+
+                <div className="rounded-md border p-3 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-semibold">Stage 2 · PAN Verification</p>
+                    <span className={cn("text-[10px] rounded px-1.5 py-0.5 font-semibold", !panStatus.applicable ? "bg-muted text-muted-foreground" : !panStatus.ran ? "bg-muted text-muted-foreground" : stage2Ready ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-destructive/10 text-destructive")}>
+                      {!panStatus.applicable ? "Not applicable" : !panStatus.ran ? "Not run" : stage2Ready ? "Complete" : `${panStatus.issues} unresolved`}
+                    </span>
+                  </div>
+                  {!panStatus.applicable
+                    ? <p className="text-[11px] text-muted-foreground">Optional — no TRACES file imported.</p>
+                    : stage4Data.s2IssueRows.length === 0
+                    ? <p className="text-[11px] text-emerald-600">No unresolved Stage 2 PAN issues.</p>
+                    : <ErrorTypeBreakdown rows={stage4Data.s2IssueRows} getType={(r) => String(r.Result ?? "Unknown")} activeType={null} onSelectType={() => {}} />}
+                </div>
+
+                <div className="rounded-md border p-3 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-semibold">Stage 3 · Tally Ledger Reconciliation</p>
+                    <span className={cn("text-[10px] rounded px-1.5 py-0.5 font-semibold", !tallyStatus.applicable ? "bg-muted text-muted-foreground" : !tallyStatus.ran ? "bg-muted text-muted-foreground" : stage3Ready ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-destructive/10 text-destructive")}>
+                      {!tallyStatus.applicable ? "Not applicable" : !tallyStatus.ran ? "Not run" : stage3Ready ? "Complete" : `${tallyStatus.issues} unresolved`}
+                    </span>
+                  </div>
+                  {!tallyStatus.applicable
+                    ? <p className="text-[11px] text-muted-foreground">Optional — no Tally ledger imported.</p>
+                    : stage4Data.s3IssueRows.length === 0
+                    ? <p className="text-[11px] text-emerald-600">No unresolved Stage 3 Tally mismatches.</p>
+                    : <ErrorTypeBreakdown rows={stage4Data.s3IssueRows} getType={(r) => String(r.Result ?? "Unknown")} activeType={null} onSelectType={() => {}} />}
+                </div>
+              </div>
+
+              {/* Overrides & manual mappings — a decision was made, not an error;
+                  the checker still needs to see every one before signing off. */}
+              <div className="rounded-md border p-3">
+                <p className="text-xs font-semibold mb-1.5">Overrides &amp; Manual Mappings Applied</p>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1 text-[11px]">
+                  <span className="text-muted-foreground">Stage 1 Overridden</span><span className="font-semibold text-blue-600">{summary.overridden}</span>
+                  <span className="text-muted-foreground">Stage 2 Overridden</span><span className="font-semibold text-blue-600">{panStatus.applicable ? panStatus.overridden : "n/a"}</span>
+                  <span className="text-muted-foreground">Stage 3 Overridden</span><span className="font-semibold text-blue-600">{tallyStatus.applicable ? tallyStatus.overridden : "n/a"}</span>
+                  <span className="text-muted-foreground">Stage 3 Mapped Parties</span><span className="font-semibold text-blue-600">{tallyStatus.applicable ? stage4Data.s3MappedCount : "n/a"}</span>
+                </div>
+              </div>
+
+              {/* Final verdict + filing action — moved here from Stage 3: the
+                  checker signs off from this ONE tab. */}
+              <Card className={cn(canFile ? "border-emerald-200 dark:border-emerald-800" : "border-amber-200 dark:border-amber-800")}>
+                <CardContent className="p-4">
+                  {isFiled ? (
+                    <div className="p-4 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
+                      <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">
+                        ✓ Return marked as Filed. Generate Genius XLS Export from the Reports section.
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-start gap-3 mb-4">
+                        {canFile ? <CheckCircle2 size={24} className="text-emerald-600 mt-0.5 shrink-0" /> : <AlertTriangle size={24} className="text-amber-600 mt-0.5 shrink-0" />}
+                        <div className="min-w-0">
+                          <p className="font-semibold text-foreground">
+                            {canFile ? "All validations complete — ready to file" : "Return not ready to file"}
+                          </p>
+                          <p className="text-sm text-muted-foreground">
+                            {canFile
+                              ? "All applicable stages are reconciled with no unresolved items. Optional stages without an imported file are skipped."
+                              : fileBlockReason}
+                          </p>
+                          {/* Per-stage completion checklist — the user sees exactly what remains. */}
+                          <div className="mt-3 space-y-1 text-xs">
+                            <div className="flex items-center gap-1.5">
+                              {stage1Ready ? <CheckCircle2 size={13} className="text-emerald-600 shrink-0" /> : <X size={13} className="text-destructive shrink-0" />}
+                              <span className={stage1Ready ? "text-foreground" : "text-muted-foreground"}>
+                                Stage 1 · Data reconciliation{stage1Ready ? " — complete" : stage1Ran ? ` — ${summary.mismatched} unresolved` : " — not run"}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              {!panStatus.applicable ? <Info size={13} className="text-muted-foreground shrink-0" /> : stage2Ready ? <CheckCircle2 size={13} className="text-emerald-600 shrink-0" /> : <X size={13} className="text-destructive shrink-0" />}
+                              <span className={!panStatus.applicable ? "text-muted-foreground" : stage2Ready ? "text-foreground" : "text-muted-foreground"}>
+                                Stage 2 · PAN verification{
+                                  !panStatus.applicable ? " — optional (no TRACES file imported)"
+                                  : !panStatus.ran ? " — not run"
+                                  : panStatus.issues > 0 ? ` — ${panStatus.issues} unresolved`
+                                  : " — complete"}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              {!tallyStatus.applicable ? <Info size={13} className="text-muted-foreground shrink-0" /> : stage3Ready ? <CheckCircle2 size={13} className="text-emerald-600 shrink-0" /> : <X size={13} className="text-destructive shrink-0" />}
+                              <span className={!tallyStatus.applicable ? "text-muted-foreground" : stage3Ready ? "text-foreground" : "text-muted-foreground"}>
+                                Stage 3 · Tally reconciliation{
+                                  !tallyStatus.applicable ? " — optional (no Tally ledger imported)"
+                                  : !tallyStatus.ran ? " — not run"
+                                  : tallyStatus.issues > 0 ? ` — ${tallyStatus.issues} unresolved`
+                                  : " — complete"}
+                              </span>
+                            </div>
                           </div>
                         </div>
                       </div>
-                    </div>
-                    <Button size="lg" className="gap-2" disabled={!canFile} onClick={() => setConfirmOpen(true)}>
-                      <ShieldCheck size={16} /> Mark Return as Ready to File
-                    </Button>
-                  </>
-                )}
-              </CardContent>
-            </Card>
+                      <Button size="lg" className="gap-2" disabled={!canFile} onClick={() => setConfirmOpen(true)}>
+                        <ShieldCheck size={16} /> Mark Return as Ready to File
+                      </Button>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+            </>
           )}
             </TabsContent>
           </Tabs>
