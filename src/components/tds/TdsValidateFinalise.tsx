@@ -829,19 +829,9 @@ export function TdsValidateFinalise({
 
   // ── Stage 4 · Checker Review — a consolidated view across all 3 stages, so the
   // checker reviews ONE tab instead of clicking through Stages 1-3. Reuses each
-  // stage's OWN already-computed report (the same StageReport the Excel/PDF
-  // exports use) rather than re-deriving anything — a fix to a stage's counts or
-  // categorisation lands here automatically. Categorised by each row's own
-  // `Result` field via the shared ErrorTypeBreakdown component (same one Stage 1's
-  // own tab uses), so "N mismatches" is never one undifferentiated bucket.
+  // stage's OWN already-computed data rather than re-deriving anything — a fix
+  // to a stage's counts or categorisation lands here automatically.
   const stage4Data = useMemo(() => {
-    const s1Issues = (results || []).filter((r) => r.match_status !== "matched" && !r.overridden);
-    const s2Report = panStatus.applicable && panStatus.getReport ? panStatus.getReport() : null;
-    const s3Report = tallyStatus.applicable && tallyStatus.getReport ? tallyStatus.getReport() : null;
-    const s2IssueRows = s2Report?.sections.find((s) => s.title === "Issues")?.rows ?? [];
-    const s3IssueRows = s3Report?.sections.find((s) => s.title === "Mismatched")?.rows ?? [];
-    const s3MappedCount = s3Report?.sections.find((s) => s.title === "Mapped")?.rows.length ?? 0;
-
     // One audit row per exception, across all 3 stages — grouped into a
     // per-stage section in the JSX below (not a flat table). Stage 1's rows are
     // built directly (its data already lives in THIS component); Stage 2/3 hand
@@ -858,17 +848,21 @@ export function TdsValidateFinalise({
       }));
     const s2Audit = panStatus.applicable && panStatus.getAuditRows ? panStatus.getAuditRows() : [];
     const s3Audit = tallyStatus.applicable && tallyStatus.getAuditRows ? tallyStatus.getAuditRows() : [];
-    const auditRows = [...s1Audit, ...s2Audit, ...s3Audit];
+    // Stage 4 reviews EXCEPTIONS — a record auto-reconciled via a saved mapping
+    // ("Resolved", surfaced as errorType "Matched") needs no checker attention,
+    // so it never enters the review list, not even under "All".
+    const auditRows = [...s1Audit, ...s2Audit, ...s3Audit]
+      .filter((r) => r.status !== "Resolved" && r.errorType !== "Matched");
 
     return {
       totalRecords: summary.total,
       totalMatched: summary.matched,
       // Combined across the 3 independent reconciliations — NOT a de-duplicated
       // per-office-record count (the same record can carry a Stage-1 AND a
-      // Stage-3 issue at once), so this is labelled "combined", never "unique".
+      // Stage-3 issue at once).
       totalMismatches: summary.mismatched + (panStatus.applicable ? panStatus.issues : 0) + (tallyStatus.applicable ? tallyStatus.issues : 0),
       totalOverridden: summary.overridden + (panStatus.applicable ? panStatus.overridden : 0) + (tallyStatus.applicable ? tallyStatus.overridden : 0),
-      s1Issues, s2IssueRows, s3IssueRows, s3MappedCount, auditRows,
+      auditRows,
     };
   }, [results, summary, panStatus, tallyStatus]);
 
@@ -1445,7 +1439,7 @@ export function TdsValidateFinalise({
                 {([
                   { label: "Total Records", value: stage4Data.totalRecords, cls: "" },
                   { label: "Total Matched", value: stage4Data.totalMatched, cls: "text-emerald-600" },
-                  { label: "Total Mismatches (Combined)", value: stage4Data.totalMismatches, cls: stage4Data.totalMismatches > 0 ? "text-destructive" : "text-emerald-600" },
+                  { label: "Total Mismatches", value: stage4Data.totalMismatches, cls: stage4Data.totalMismatches > 0 ? "text-destructive" : "text-emerald-600" },
                   { label: "Total Overridden", value: stage4Data.totalOverridden, cls: "text-blue-600" },
                 ]).map((s) => (
                   <div key={s.label} className="rounded-md border bg-card p-2 text-center">
@@ -1471,7 +1465,7 @@ export function TdsValidateFinalise({
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <div className="inline-flex rounded-md border overflow-hidden">
-                    {([["all", "All"], ["Unresolved", "Unresolved"], ["Overridden", "Overridden"], ["Resolved", "Resolved"]] as const).map(([v, label], i) => (
+                    {([["all", "All"], ["Unresolved", "Unresolved"], ["Overridden", "Overridden"]] as const).map(([v, label], i) => (
                       <button key={v} type="button" onClick={() => setAuditStatusFilter(v)}
                         className={cn("px-2.5 h-7 text-xs font-medium", i > 0 && "border-l", auditStatusFilter === v ? "bg-primary text-primary-foreground" : "bg-background hover:bg-muted")}>
                         {label}
@@ -1497,6 +1491,7 @@ export function TdsValidateFinalise({
                     const stageRows = stage4Data.auditRows.filter((r) => r.stage === stageKey);
                     const visibleRows = filteredAuditRows.filter((r) => r.stage === stageKey);
                     const unresolvedCount = stageRows.filter((r) => r.status === "Unresolved").length;
+                    const overriddenCount = stageRows.filter((r) => r.status === "Overridden").length;
                     const collapsed = collapsedStages.has(stageKey);
                     return (
                       <div key={stageKey} className="rounded-lg border overflow-hidden">
@@ -1510,10 +1505,13 @@ export function TdsValidateFinalise({
                             <span className="text-[10px] rounded px-1.5 py-0.5 font-semibold bg-muted text-muted-foreground shrink-0">Not applicable</span>
                           ) : !ran ? (
                             <span className="text-[10px] rounded px-1.5 py-0.5 font-semibold bg-muted text-muted-foreground shrink-0">Not run</span>
-                          ) : unresolvedCount > 0 ? (
-                            <span className="text-[10px] rounded px-1.5 py-0.5 font-semibold bg-destructive/10 text-destructive shrink-0">{unresolvedCount} unresolved</span>
-                          ) : (
+                          ) : unresolvedCount === 0 && overriddenCount === 0 ? (
                             <span className="text-[10px] rounded px-1.5 py-0.5 font-semibold bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300 inline-flex items-center gap-1 shrink-0"><CheckCircle2 size={11} /> Complete</span>
+                          ) : (
+                            <span className="flex items-center gap-1.5 shrink-0">
+                              {unresolvedCount > 0 && <span className="text-[10px] rounded px-1.5 py-0.5 font-semibold bg-destructive/10 text-destructive">{unresolvedCount} unresolved</span>}
+                              {overriddenCount > 0 && <span className="text-[10px] rounded px-1.5 py-0.5 font-semibold bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">{overriddenCount} overridden</span>}
+                            </span>
                           )}
                         </button>
                         {!collapsed && (

@@ -105,17 +105,27 @@ const isTallyIssue = (r: string) => r !== "Matched";
 /**
  * The ledger party to offer as a saved mapping for this record, or null.
  *
- * Derived from the PERSISTED office/ledger names rather than read back from the
- * engine's `suggested_party` (results are re-read from tds_tally_results, which
- * doesn't carry it). It uses the SAME shared nameCompare the engine used, so the
- * two can't drift: offer a mapping whenever a ledger candidate was found whose
- * party is neither an actual match nor blank — regardless of WHICH mismatch the
- * record landed on. Gating this on result === "Party Name Mismatch" is what made
- * the mapping feature unreachable.
+ * A record the engine itself landed on "Party Name Mismatch" ALWAYS gets the
+ * offer — that result IS the engine saying the party is the (or a) problem, and
+ * it decided that with full exclusivity context (rival claimants, the
+ * distinctness witness) a standalone recompute here cannot see. Never let a
+ * client-side re-check silently withhold the one resolution action for the
+ * exact case it names, even if match.ts's tolerance has since moved (e.g. after
+ * an engine fix, before this filing is re-validated) and would now call the
+ * same two names a match — the checker still needs a way to resolve what's on
+ * screen right now, not a re-run.
+ *
+ * For every OTHER mismatch (e.g. "Date Mismatch" on an entry booked under a
+ * different name), fall back to a fresh nameCompare over the PERSISTED names —
+ * results are re-read from tds_tally_results, which doesn't carry the engine's
+ * in-memory `suggested_party` for those cases. Gating the offer on
+ * result === "Party Name Mismatch" alone is what made it unreachable for this
+ * second group, so keep both paths.
  */
 const mappingOffer = (r: ResultRow): string | null => {
   if (r.overridden || r.mapped || r.result === "Matched") return null;
   if (!r.tally_party || !r.office_name) return null;
+  if (r.result === "Party Name Mismatch") return r.tally_party;
   const cmp = nameCompare(r.office_name, r.tally_party);
   return cmp === "match" || cmp === "unknown" ? null : r.tally_party;
 };
@@ -480,11 +490,24 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
   /** Ledger records offered by the picker: the engine's suggestion first, then the
    *  rest in ledger order. Only CREDIT rows — those are the deductions the engine
    *  pairs against, so mapping to a party that never appears as a credit could not
-   *  match anything. "suggested" is party-level because the saved mapping is. */
+   *  match anything. "suggested" is party-level because the saved mapping is.
+   *
+   *  Excludes any credit ALREADY paired to a DIFFERENT office record (Matched,
+   *  mapped, or simply the candidate a weaker tier already assigned) — otherwise
+   *  the picker would let two office records both claim the same ledger entry,
+   *  a conflict nothing else in this dialog would surface. Identified by VALUE
+   *  (party+date+credit), not position: `tally_row_index` is a raw file row_index
+   *  and collides across the several files a filing's ledger is imported from. */
   const pickRows = useMemo(() => {
     const sug = pickTarget?.tally_party ? normalizeName(pickTarget.tally_party) : null;
+    const claimed = new Set(
+      (results || [])
+        .filter((r) => r.id !== pickTarget?.id && r.tally_party && r.tally_date != null && r.tally_credit != null)
+        .map((r) => `${normalizeName(r.tally_party)}|${r.tally_date}|${r.tally_credit}`),
+    );
     const rows = tallyRows
       .filter((t) => t.party && t.credit != null && Number(t.credit) !== 0)
+      .filter((t) => !claimed.has(`${normalizeName(t.party)}|${t.date}|${t.credit}`))
       .map((t, i) => ({ t, i, suggested: !!sug && normalizeName(t.party) === sug }));
     const q = pickQuery.trim().toLowerCase();
     const hit = q
@@ -528,8 +551,12 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
             PARTY differs — not only on "Party Name Mismatch". The common real case
             is a ledger entry that is a few days out AND booked under the
             proprietor's personal name, which lands on "Date Mismatch"; gating the
-            button on that one result made the mapping feature unreachable. */}
-        {mappingOffer(r) && (
+            button on that one result made the mapping feature unreachable.
+            "Ledger Entry Not Found" gets the SAME resolution path even though it
+            has no auto-suggested candidate (tally_party is null — nothing paired):
+            the office record may still be sitting in the ledger under a name the
+            engine's search missed, so offer a manual pick rather than nothing. */}
+        {mappingOffer(r) ? (
           <div className="flex items-center gap-2 flex-wrap p-2 rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50/50 dark:bg-amber-950/20 text-xs">
             <Link2 size={13} className="text-amber-600 shrink-0" />
             <span className="text-foreground min-w-0">Suggested mapping: <b>{r.office_name}</b> ↔ <b>{r.tally_party}</b></span>
@@ -543,6 +570,15 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
                 <Search size={11} /> Choose another record
               </Button>
             </div>
+          </div>
+        ) : r.result === "Ledger Entry Not Found" && !r.overridden && !r.mapped && r.office_name && (
+          <div className="flex items-center gap-2 flex-wrap p-2 rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50/50 dark:bg-amber-950/20 text-xs">
+            <Link2 size={13} className="text-amber-600 shrink-0" />
+            <span className="text-foreground min-w-0">No automatic ledger match for <b>{r.office_name}</b> — it may be booked under a different name.</span>
+            <div className="flex-1" />
+            <Button size="sm" variant="outline" className="h-6 text-xs px-2 gap-1 shrink-0" disabled={disabled || validating} onClick={() => openPicker(r)}>
+              <Search size={11} /> Map to ledger record
+            </Button>
           </div>
         )}
       </CardContent>
