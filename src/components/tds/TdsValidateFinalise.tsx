@@ -115,6 +115,16 @@ function errorTypeFor(r: ReconResult): string {
   return "Field Mismatch";
 }
 
+/** Digital-signature text validation. The signature is an attestation typed by
+ *  an authorized role (Firm Admin / Super Admin), never a password — it's
+ *  accepted against a fixed allow-list rather than matched to the logged-in
+ *  account's own name, so either a generic role signature or a named signer
+ *  is valid. Comparison ignores case and collapses internal whitespace so
+ *  "KUNAL DESAI", "kunal   desai" and "Kunal Desai" are all the same value. */
+const AUTHORIZED_SIGNATURES = ["firm admin", "super admin", "kunal desai", "mukesh baldha"];
+const normalizeSignatureText = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+const isAuthorizedSignature = (s: string) => AUTHORIZED_SIGNATURES.includes(normalizeSignatureText(s));
+
 /** Invoke an edge function and surface the function's own JSON error message.
  * When the platform kills the worker (wall-clock timeout / OOM), there is NO
  * JSON body and supabase-js throws a bare "Edge Function returned a non-2xx
@@ -713,24 +723,28 @@ export function TdsValidateFinalise({
     setResults(prev => prev ? prev.map(x => x.id === r.id ? { ...x, overridden: false, override_note: null } : x) : prev);
   };
 
-  /** Digital signature — the checker types their own account name (never a
-   *  password: this is an attestation, not a login) plus a review checkbox.
+  /** Digital signature — the signer types an authorized attestation value
+   *  (never a password: see isAuthorizedSignature) plus a review checkbox.
    *  Persisted as a tds_filing_audit_log entry rather than a new column, so it
    *  needs no migration and already carries WHO/WHEN via that table's own
-   *  changed_by_name/changed_at. Signing is only offered once canFile is true —
-   *  there is nothing to attest to while Stage 1-3 still have open issues. */
+   *  changed_by_name/changed_at (the acting user's OWN account — `userId`/
+   *  `userName` below — not the typed signature text, so the audit trail always
+   *  shows who actually clicked Sign & Confirm even when they typed a role
+   *  name like "Firm Admin"). Only a Firm Admin/Super Admin role (canSign) may
+   *  call this. Signing is only offered once canFile is true — there is
+   *  nothing to attest to while Stage 1-3 still have open issues. */
   const handleSign = async () => {
     if (!filing || !user?.id) return;
-    const actualName = (userMap[user.id] || "").trim();
-    if (!signerNameInput.trim() || signerNameInput.trim().toLowerCase() !== actualName.toLowerCase()) {
-      toast({ title: "Name doesn't match your account", description: actualName ? `Type your full name exactly as it appears on your account: "${actualName}".` : "Your account name could not be verified.", variant: "destructive" });
+    if (!canSign) { toast({ title: "Not authorized", description: "Only the Firm Admin or Super Admin is authorized to digitally sign and approve this return for filing.", variant: "destructive" }); return; }
+    if (!isAuthorizedSignature(signerNameInput)) {
+      toast({ title: "Signature not recognized", description: "Type an authorized signature — Firm Admin, Super Admin, or an authorized signer's name.", variant: "destructive" });
       return;
     }
     if (!attestChecked) { toast({ title: "Confirmation required", description: "Confirm you have reviewed every exception before signing.", variant: "destructive" }); return; }
     if (!canFile) { toast({ title: "Not ready to sign", description: "Resolve every Stage 1-3 issue above before signing.", variant: "destructive" }); return; }
     setSigning(true);
     await logReconAudit({
-      filingId: filing.id, firmId: filing.firm_id, userId: user.id, userName: actualName,
+      filingId: filing.id, firmId: filing.firm_id, userId: user.id, userName: userMap[user.id],
       actionType: "CHECKER_SIGNATURE", newValue: signerNameInput.trim(),
       remark: "Digitally signed — confirms review of every Stage 1-3 exception, override and mapping.",
     });
@@ -740,7 +754,7 @@ export function TdsValidateFinalise({
   };
 
   const handleRevokeSignature = async () => {
-    if (!filing || !user?.id || !signature) return;
+    if (!filing || !user?.id || !signature || !canSign) return;
     setSigning(true);
     await logReconAudit({
       filingId: filing.id, firmId: filing.firm_id, userId: user.id, userName: userMap[user.id],
@@ -808,6 +822,11 @@ export function TdsValidateFinalise({
   const stage3Reported = tallyStatus.loaded && tallyStatus.filingId != null && tallyStatus.filingId === (filing?.id ?? null);
   const stage3Ready = stage3Reported && (!tallyStatus.applicable || (tallyStatus.ran && tallyStatus.issues === 0));
   const canFile = stage1Ready && stage2Ready && stage3Ready;
+  // Only the Firm Admin / Super Admin role may digitally sign (or revoke a
+  // signature) — final filing approval is restricted to authorized personnel.
+  // Every other role may still VIEW the sign-off section (already-signed state,
+  // reason text) but never act on it.
+  const canSign = user?.role === "firm_admin" || user?.role === "superadmin";
   const fileBlockReason = !stage1Ran
     ? "Run Stage-1 validation first."
     : !stage1Ready
@@ -1572,16 +1591,22 @@ export function TdsValidateFinalise({
                       <p className="text-xs text-emerald-700 dark:text-emerald-300">
                         ✓ Digitally signed by <b>{signature.signedByName}</b> on {new Date(signature.signedAt).toLocaleString("en-IN")}
                       </p>
-                      <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" disabled={signing} onClick={handleRevokeSignature}>
-                        <RotateCcw size={12} /> Revoke Signature
-                      </Button>
+                      {canSign && (
+                        <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" disabled={signing} onClick={handleRevokeSignature}>
+                          <RotateCcw size={12} /> Revoke Signature
+                        </Button>
+                      )}
                     </div>
+                  ) : !canSign ? (
+                    <p className="text-xs text-muted-foreground">
+                      Only the Firm Admin or Super Admin is authorized to digitally sign and approve this return for filing.
+                    </p>
                   ) : !canFile ? (
                     <p className="text-xs text-muted-foreground">Resolve every Stage 1, 2 and 3 issue above before signing.</p>
                   ) : (
                     <div className="space-y-2">
                       <p className="text-xs text-muted-foreground">
-                        Type your full name to digitally sign this return, confirming you have reviewed every mismatch, override and mapping listed above.
+                        Type your name to digitally sign this return, confirming you have reviewed every mismatch, override and mapping listed above.
                       </p>
                       <div className="flex items-start gap-2">
                         <Checkbox id="checker-attest" checked={attestChecked} onCheckedChange={(v) => setAttestChecked(!!v)} className="mt-0.5" />
