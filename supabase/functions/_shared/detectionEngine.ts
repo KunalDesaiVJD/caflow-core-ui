@@ -100,6 +100,13 @@ export interface ScrutinyData {
   rp?: string[];
 }
 
+/** Approved engagement materiality. Absent until a human has signed it off. */
+export interface MaterialityValues {
+  materiality: number;
+  performance: number;
+  trivial: number;
+}
+
 export interface ScrutinyContext {
   /** FY start, "YYYY-MM-DD" (e.g. 2025-04-01) */
   financialYearStart?: string;
@@ -109,6 +116,13 @@ export interface ScrutinyContext {
   holidays?: string[];
   /** "today" for future-date checks; defaults to financialYearEnd then real now */
   today?: string;
+  /**
+   * Human-APPROVED materiality for this engagement. Rules that opt in via
+   * detection_logic.materiality have their thresholds rescaled to it. Undefined means nobody has
+   * approved anything yet, and every rule falls back to its literal threshold — an unapproved
+   * engagement behaves exactly as it does today rather than going silent.
+   */
+  materiality?: MaterialityValues | null;
 }
 
 export interface ScrutinyFinding {
@@ -1137,12 +1151,16 @@ const h_stream_gap: CheckHandler = (rule, data) => {
   const scope = dl.scope as Record<string, unknown> | undefined;
   const tpl = (dl.message as string | undefined) ?? rule.audit_query_template;
   const groupOf = groupResolver(data.tb);
-  const acc = new Map<string, { present: boolean; missing: boolean; sample: VoucherRow }>();
+  // Value moved through the party during the year. Without this the check has no notion of size and
+  // flags every counterparty in the ledger — the single largest source of noise in the system.
+  const minAmount = num(dl.min_amount, 0);
+  const acc = new Map<string, { present: boolean; missing: boolean; value: number; sample: VoucherRow }>();
   for (const v of data.vouchers) {
     if (!voucherInScope(v, scope, groupOf)) continue;
     const key = lc(v.party_ledger ?? v.ledger_name);
     if (!key) continue;
-    const rec = acc.get(key) ?? acc.set(key, { present: false, missing: false, sample: v }).get(key)!;
+    const rec = acc.get(key) ?? acc.set(key, { present: false, missing: false, value: 0, sample: v }).get(key)!;
+    rec.value += Math.abs(num(v.amount));
     for (const leg of Array.isArray(v.line_items) ? v.line_items : []) {
       const ln = String(leg.ledger_name ?? "");
       if (kwMatch(ln, present)) rec.present = true;
@@ -1151,9 +1169,14 @@ const h_stream_gap: CheckHandler = (rule, data) => {
   }
   const out: ScrutinyFinding[] = [];
   for (const [, rec] of acc) {
-    if (rec.present && !rec.missing) {
+    if (rec.present && !rec.missing && rec.value >= minAmount) {
       const name = rec.sample.party_ledger ?? rec.sample.ledger_name ?? "";
-      out.push(finding(rule, { account: name, flag_message: render(tpl, { account: name }), evidence: { has_present: true, has_missing: false } }));
+      out.push(finding(rule, {
+        account: name,
+        amount: Math.round(rec.value),
+        flag_message: render(tpl, { account: name, amount: fmtAmt(Math.round(rec.value)) }),
+        evidence: { has_present: true, has_missing: false, value: Math.round(rec.value) },
+      }));
     }
   }
   return out;
@@ -1714,6 +1737,48 @@ export interface RunOptions {
  * silently passed.
  */
 /**
+ * Rewrite a rule's materiality-relative thresholds into absolute rupees for this engagement.
+ *
+ * A flat rupee threshold is why a ₹1,000 creditor balance is raised at a ₹100 crore company and a
+ * ₹35,000 dormant balance is missed at a small firm. A rule opts in with a `materiality` map of
+ * dotted paths to MULTIPLES of performance materiality:
+ *
+ *   { "check":"no_movement", "min_balance":100000,
+ *     "materiality": { "min_balance": 0.25, "where.0.value": 0.5 } }
+ *
+ * The literal value stays as the fallback, so a rule behaves exactly as it does today until a
+ * human has approved materiality for the engagement. Applied here rather than at the call site so
+ * no caller can forget it.
+ */
+export const applyMateriality = <T extends { detection_logic?: Record<string, unknown> | null }>(
+  rule: T,
+  values: MaterialityValues | null | undefined,
+): T => {
+  const dl = rule.detection_logic as Record<string, unknown> | undefined | null;
+  const map = dl?.materiality as Record<string, unknown> | undefined;
+  if (!dl || !map || !values || !Number.isFinite(Number(values.performance))) return rule;
+
+  const next = JSON.parse(JSON.stringify(dl)) as Record<string, unknown>;
+  for (const [path, factorRaw] of Object.entries(map)) {
+    const factor = Number(factorRaw);
+    if (!Number.isFinite(factor)) continue;
+    const target = Math.round(num(values.performance) * factor);
+    const parts = path.split(".");
+    let node: unknown = next;
+    for (let i = 0; i < parts.length - 1 && node && typeof node === "object"; i++) {
+      node = Array.isArray(node)
+        ? (node as unknown[])[Number(parts[i])]
+        : (node as Record<string, unknown>)[parts[i]];
+    }
+    if (!node || typeof node !== "object") continue;
+    const leaf = parts[parts.length - 1];
+    if (Array.isArray(node)) (node as unknown[])[Number(leaf)] = target;
+    else (node as Record<string, unknown>)[leaf] = target;
+  }
+  return { ...rule, detection_logic: next };
+};
+
+/**
  * Collapse a rule's findings into ONE engagement-level summary.
  *
  * An auditor raises one query per issue. Several checks naturally emit one finding per day, per
@@ -1785,7 +1850,10 @@ export function runDetection(
   const ledger: RuleRunStatus[] = [];
   let handledCount = 0;
 
-  for (const rule of rules) {
+  for (const raw of rules) {
+    // Thresholds are rescaled to the engagement's APPROVED materiality before dispatch. With no
+    // approval this is a no-op and the rule's literal thresholds apply.
+    const rule = applyMateriality(raw, ctx.materiality);
     const check = String(rule.detection_logic?.check ?? "");
     const handler = handlers[check];
     if (!handler) {

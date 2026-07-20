@@ -924,6 +924,67 @@ describe("aggregate is never silently dropped on a grain mismatch", () => {
   });
 });
 
+describe("stream_gap — min_amount keeps small counterparties out", () => {
+  const r = (min?: number) => rule({
+    rule_id: "CRED-004", category: "CRED", detection_level: "voucher",
+    detection_logic: { check: "stream_gap", present: ["bank"], missing: ["purchase"], ...(min ? { min_amount: min } : {}) },
+    audit_query_template: "{account} paid {amount} with no purchase booked.",
+  });
+  const data = { vouchers: [
+    vch({ amount: 900, voucher_date: "2025-06-01", party_ledger: "Tiny Vendor", line_items: [
+      { ledger_name: "HDFC Bank", dr_cr: "Cr", amount: 900 }, { ledger_name: "Tiny Vendor", dr_cr: "Dr", amount: 900 }] }),
+    vch({ amount: 800_000, voucher_date: "2025-06-02", party_ledger: "Major Supplier", line_items: [
+      { ledger_name: "HDFC Bank", dr_cr: "Cr", amount: 800_000 }, { ledger_name: "Major Supplier", dr_cr: "Dr", amount: 800_000 }] }),
+  ] };
+
+  it("without a floor it flags every counterparty, however small", () => {
+    expect(run(r(), data).map((f) => f.account).sort()).toEqual(["Major Supplier", "Tiny Vendor"]);
+  });
+
+  it("with a floor only the material counterparty survives", () => {
+    const out = run(r(100_000), data);
+    expect(out.map((f) => f.account)).toEqual(["Major Supplier"]);
+    expect(out[0].amount).toBe(800_000);
+  });
+});
+
+describe("materiality — thresholds scale to the engagement, once a human approves", () => {
+  const r = rule({
+    rule_id: "DORM-201", category: "DORM", detection_level: "account",
+    detection_logic: {
+      check: "no_movement", min_balance: 1_000_000, tolerance: 1,
+      materiality: { min_balance: 0.25 },
+    },
+    audit_query_template: "{account} unmoved at {amount}.",
+  });
+  // A ₹2,00,000 dormant balance: below the rule's literal ₹10,00,000 floor, but well above
+  // 0.25 x performance materiality at a small engagement.
+  const data = { tb: [tb({ ledger_name: "Old Deposit", parent_group: "Deposits", closing_balance: 200_000, balance_type: "Dr", opening_balance: 200_000 })] };
+
+  it("misses the small-entity balance while no materiality is approved", () => {
+    expect(run(r, data)).toHaveLength(0);
+  });
+
+  it("catches it once a small engagement's materiality is approved", () => {
+    const out = run(r, data, { ...FY, materiality: { materiality: 500_000, performance: 300_000, trivial: 25_000 } });
+    expect(out).toHaveLength(1);
+    expect(out[0].account).toBe("Old Deposit");
+  });
+
+  it("still ignores it at a large engagement, where it is genuinely immaterial", () => {
+    const out = run(r, data, { ...FY, materiality: { materiality: 20_000_000, performance: 12_000_000, trivial: 1_000_000 } });
+    expect(out).toHaveLength(0);
+  });
+
+  it("does not disturb rules that never opted in", () => {
+    const plain = rule({
+      rule_id: "X", detection_level: "account",
+      detection_logic: { check: "no_movement", min_balance: 1_000_000, tolerance: 1 },
+    });
+    expect(run(plain, data, { ...FY, materiality: { materiality: 500_000, performance: 300_000, trivial: 25_000 } })).toHaveLength(0);
+  });
+});
+
 describe("rollup — one query per issue, not one per occurrence", () => {
   const cashRule = (rollup: unknown) => rule({
     rule_id: "CASH-001", category: "CASH", detection_level: "voucher",
