@@ -152,6 +152,12 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
   // Secondary breakdown WITHIN the issue list, by the specific result reason (e.g.
   // "Date Mismatch" vs "Ledger Entry Not Found") — see ErrorTypeBreakdown.
   const [errorTypeFilter, setErrorTypeFilter] = useState<string | null>(null);
+  // Free-text search across the WHOLE list (office name OR ledger party), on top
+  // of the summary-card/error-type filters. Without it, a name that's only ever
+  // embedded text inside a DIFFERENT record's card (e.g. the ledger side of a
+  // "Multiple Possible Matches" dispute, or a name mentioned only in a reason
+  // sentence) is unfindable — there's no card titled with it to scan for.
+  const [recordSearch, setRecordSearch] = useState("");
   const fileRef = useRef<HTMLInputElement | null>(null);
   const loadSeq = useRef(0);
   const settled = useRef<string | null>(null);
@@ -236,7 +242,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
   }, [filingId, loadOffice, loadMaps, fetchTallyRows]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
-  useEffect(() => { setActiveFilter(null); setErrorTypeFilter(null); }, [filingId]);
+  useEffect(() => { setActiveFilter(null); setErrorTypeFilter(null); setRecordSearch(""); }, [filingId]);
 
   /** Import several ledger PDFs at once — a client keeps one ledger PER SECTION, so
    *  picking 194A/194C/194J/194T together is the normal case, not the exception.
@@ -517,16 +523,28 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     onStatusChange?.({ getReport: stage3Report, getAuditRows: tallyAuditRows, filingId, loaded: settled.current === filingId, applicable: batches.length > 0, ran: results !== null, total: summary.total, matched: summary.matched, issues: summary.issues, overridden: summary.overridden });
   }, [filingId, batches, results, summary, onStatusChange]);
 
-  const issueRows = useMemo(() => (results || []).filter((r) => isTallyIssue(r.result)).sort((a, b) => (a.overridden ? 1 : 0) - (b.overridden ? 1 : 0)), [results]);
+  /** Matches office_name OR tally_party — a name only ever embedded as text
+   *  inside a DIFFERENT record's card (the ledger side of a paired dispute, or a
+   *  rival named only in a reason sentence) is otherwise unfindable, since there
+   *  is no card titled with it to scan for. */
+  const bySearch = (list: ResultRow[], q: string): ResultRow[] =>
+    q ? list.filter((r) => [r.office_name, r.tally_party].filter(Boolean).join(" ").toLowerCase().includes(q)) : list;
+
+  const issueRows = useMemo(() => {
+    const q = recordSearch.trim().toLowerCase();
+    return bySearch((results || []).filter((r) => isTallyIssue(r.result)), q)
+      .sort((a, b) => (a.overridden ? 1 : 0) - (b.overridden ? 1 : 0));
+  }, [results, recordSearch]);
   const cardFiltered = useMemo((): ResultRow[] | null => {
     const rs = results || [];
+    const q = recordSearch.trim().toLowerCase();
     switch (activeFilter) {
-      case "total": return rs; case "matched": return rs.filter((r) => r.result === "Matched");
-      case "issues": return rs.filter((r) => isTallyIssue(r.result) && !r.overridden);
-      case "mapped": return rs.filter((r) => r.mapped); case "overridden": return rs.filter((r) => r.overridden);
+      case "total": return bySearch(rs, q); case "matched": return bySearch(rs.filter((r) => r.result === "Matched"), q);
+      case "issues": return bySearch(rs.filter((r) => isTallyIssue(r.result) && !r.overridden), q);
+      case "mapped": return bySearch(rs.filter((r) => r.mapped), q); case "overridden": return bySearch(rs.filter((r) => r.overridden), q);
       default: return null;
     }
-  }, [results, activeFilter]);
+  }, [results, activeFilter, recordSearch]);
 
   /** Ledger records offered by the picker: the engine's suggestion first, then the
    *  rest in ledger order. Only CREDIT rows — those are the deductions the engine
@@ -804,11 +822,22 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
             </button>
           ))}
         </div>
+        {/* Free-text search over the WHOLE list, on top of whichever summary-card
+            filter is active — the only way to locate a name that's only ever
+            embedded text inside a different record's card (see bySearch above). */}
+        <div className="flex items-center gap-2">
+          <Input value={recordSearch} onChange={(e) => setRecordSearch(e.target.value)} placeholder="Search by office or ledger party name…" className="h-8 text-xs" />
+          {recordSearch && <Button variant="ghost" size="sm" className="h-8 text-xs gap-1 shrink-0" onClick={() => setRecordSearch("")}><X size={11} /> Clear</Button>}
+        </div>
         {cardFiltered !== null ? (
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs px-1"><span className="text-muted-foreground">Showing <b className="text-foreground">{cardFiltered.length}</b> record(s)</span>
               <Button variant="ghost" size="sm" className="h-6 text-xs gap-1" onClick={() => setActiveFilter(null)}><X size={11} /> Clear</Button></div>
-            {cardFiltered.length === 0 ? <div className="p-8 text-center text-sm text-muted-foreground rounded-lg border border-dashed">No {activeFilter} records.</div> : (
+            {cardFiltered.length === 0 ? (
+              <div className="p-8 text-center text-sm text-muted-foreground rounded-lg border border-dashed">
+                {recordSearch ? "No records match your search." : `No ${activeFilter} records.`}
+              </div>
+            ) : (
               <div className="space-y-3">
                 {activeFilter === "issues" && (
                   <ErrorTypeBreakdown rows={cardFiltered} getType={(r) => r.result} activeType={errorTypeFilter} onSelectType={setErrorTypeFilter} />
@@ -820,10 +849,14 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
         ) : summary.total === 0 ? (
           <div className="p-8 text-center text-sm text-muted-foreground rounded-lg border border-dashed">No office records to reconcile for this filing.</div>
         ) : issueRows.length === 0 ? (
-          <Card className="border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20"><CardContent className="p-4 space-y-2">
-            <div className="flex items-center gap-2"><CheckCircle2 size={22} className="text-emerald-600" /><p className="text-lg font-bold text-emerald-700 dark:text-emerald-300">Tally Reconciliation Completed</p></div>
-            <p className="text-sm text-muted-foreground">All {summary.total} office records were found in the Tally ledger with matching date, amount and party.</p>
-          </CardContent></Card>
+          recordSearch ? (
+            <div className="p-8 text-center text-sm text-muted-foreground rounded-lg border border-dashed">No records match your search.</div>
+          ) : (
+            <Card className="border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20"><CardContent className="p-4 space-y-2">
+              <div className="flex items-center gap-2"><CheckCircle2 size={22} className="text-emerald-600" /><p className="text-lg font-bold text-emerald-700 dark:text-emerald-300">Tally Reconciliation Completed</p></div>
+              <p className="text-sm text-muted-foreground">All {summary.total} office records were found in the Tally ledger with matching date, amount and party.</p>
+            </CardContent></Card>
+          )
         ) : (
           <div className="space-y-3">
             <ErrorTypeBreakdown rows={issueRows} getType={(r) => r.result} activeType={errorTypeFilter} onSelectType={setErrorTypeFilter} />
