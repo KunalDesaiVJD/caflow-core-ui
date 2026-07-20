@@ -59,29 +59,24 @@ const MARG_T  = 720;
 const MARG_B  = 900;
 const TW      = A4_W - MARG_H * 2;  // 10466
 
-// 2026-07-20 (V J Desai — Word export polish, Items 7 & 8 of user's
-// checklist):
-//   • Item 7: "Note No." column was 400 DXA (~0.28") — far too narrow for
-//     the two-word heading, which forced Word to wrap the label
-//     letter-by-letter into "N/o/t/e/N/o.". Widened to 900 DXA (~0.63") so
-//     the header renders on a single line.
-//   • Item 8: CY / PY columns were 1483 DXA (~1.03") — long-form currency
-//     headers like "As at 31 Mar 2026" needed ~1.13" and wrapped at the
-//     final year. Widened to 1600 DXA (~1.11") in the 4-col table and
-//     1620 DXA in the 3-col note table so the header renders on a single
-//     line without any inter-word wrap.
-//   • CW_DESC absorbs the delta so total width TW = 10466 stays identical
-//     (row edge alignment is preserved across every table).
+// 2026-07-20 (V J Desai — Word export polish, Item 7 of user's checklist):
+// "Note No." column was 400 DXA (~0.28") — far too narrow for the two-word
+// heading, which forced Word to wrap the label letter-by-letter into
+// "N/o/t/e/N/o.". Widened to 900 DXA (~0.63") so the header renders on a
+// single line and the "Note No." digits sit centred in a stable-width
+// column. CW_DESC absorbs the delta so total width TW = 10466 stays
+// identical (row edge alignment is preserved across every table).
 // Main table columns: Particulars | Note No. | CY | PY
-const CW_DESC = 6366;
+const CW_DESC = 6600;
 const CW_NOTE = 900;
-const CW_CY   = 1600;
-const CW_PY   = 1600;
+const CW_CY   = 1483;
+const CW_PY   = 1483;
 
-// Note table columns (3-col Pattern B): Particulars | CY | PY
-const NW_DESC = 7226;
-const NW_CY   = 1620;
-const NW_PY   = 1620;
+// Note table columns (3-col Pattern B): Particulars | CY | PY — unchanged
+// (the 3-col notes have no "Note No." column, so no repositioning needed).
+const NW_DESC = 7550;
+const NW_CY   = 1458;
+const NW_PY   = 1458;
 
 // Consistent right-side padding for every amount cell so the columns read
 // as visually straight verticals from the header row through subtotal /
@@ -901,22 +896,21 @@ const CORP_NOTE1_POLICIES = [
 ];
 
 function buildNote1Section(entityName: string, cyYear: string): Paragraph[] {
-  // 2026-07-20 (V J Desai — Word export polish, Item 12 of user's checklist):
-  // Long accounting-policy paragraphs now render with JUSTIFIED alignment,
-  // 1.15× line spacing, and a consistent policy-to-policy gap — matching a
-  // professionally prepared audit-report body. Labels stay LEFT so the
-  // heading edge is always visible on the left margin.
+  // ROOT-CAUSE FIX: previously EVERY paragraph had keepNext:true, so Word kept
+  // all 14 accounting policies together and crammed them onto one crowded page.
+  // Now only headings/labels keep with their following paragraph (so a heading
+  // is never orphaned), body text uses keepNext:false, and spacing is roomier —
+  // the note flows naturally onto ~2 well-spaced, readable pages.
   const GAP = 160;  // separation between policies
   const txt = (text: string, bold = false) =>
     new TextRun({ text, font: FONT, size: SZ_BODY, bold, color: BLACK });
 
   const block = (
     runs: TextRun[],
-    opts: { indent?: number; after?: number; keepNext?: boolean; justify?: boolean } = {},
+    opts: { indent?: number; after?: number; keepNext?: boolean } = {},
   ): Paragraph =>
     new Paragraph({
-      alignment: opts.justify ? AlignmentType.JUSTIFIED : AlignmentType.LEFT,
-      spacing:   { before: 0, after: opts.after ?? 40, line: 300, lineRule: "auto" as any },
+      spacing:   { before: 0, after: opts.after ?? 40, line: 276, lineRule: "auto" as any },
       indent:    opts.indent ? { left: opts.indent } : undefined,
       keepLines: true,                       // never split a single paragraph mid-way
       keepNext:  opts.keepNext ?? false,     // allow page breaks BETWEEN policies
@@ -924,26 +918,9 @@ function buildNote1Section(entityName: string, cyYear: string): Paragraph[] {
     });
 
   return [
-    // Note 1 heading — matches the BS/P&L statement titles: centred, bold,
-    // SZ_TITLE (12pt), with a top+bottom accent rule instead of the previous
-    // 10pt inline heading. Consistent "report-title" look across BS / P&L /
-    // Notes as the auditor asked (Item 3 of the checklist).
     new Paragraph({
-      alignment: AlignmentType.CENTER,
-      spacing:   { before: 0, after: 140 },
-      border:    {
-        top:    { style: BorderStyle.SINGLE, size: 12, color: ACCENT, space: 6 },
-        bottom: { style: BorderStyle.SINGLE, size: 8,  color: NAVY,   space: 6 },
-      },
-      keepNext:  true,
-      keepLines: true,
-      children: [
-        new TextRun({ text: "NOTES TO ACCOUNTS", font: FONT, size: SZ_TITLE, bold: true, color: BLACK }),
-      ],
-    }),
-    new Paragraph({
-      alignment: AlignmentType.CENTER,
-      spacing:   { before: 0, after: 200 },
+      spacing:   { before: 0, after: 100 },
+      border:    { bottom: { style: BorderStyle.SINGLE, size: 4, color: NAVY, space: 4 } },
       keepNext:  true,
       keepLines: true,
       children: [
@@ -953,15 +930,14 @@ function buildNote1Section(entityName: string, cyYear: string): Paragraph[] {
     block([txt("1.  Basis of Preparation", true)], { after: 40, keepNext: true }),
     block(
       [txt(`The financial statements of ${entityName} have been prepared in accordance with Schedule III to the Companies Act, 2013 and the applicable Accounting Standards as prescribed under Section 133 of the Companies Act, 2013. The financial statements comply with all material aspects of Indian GAAP.`)],
-      { after: GAP, justify: true },
+      { after: GAP },
     ),
     block([txt("2.  Significant Accounting Policies", true)], { after: 60, keepNext: true }),
     ...CORP_NOTE1_POLICIES.flatMap((p, i) => [
-      // Label LEFT-aligned + keepNext with its body; body JUSTIFIED so it
-      // reads as an audit-report paragraph. Body allows page break after it
-      // so policies flow naturally across pages.
+      // Label kept with its body (keepNext); body allows a page break after it
+      // so the 14 policies flow naturally across two pages.
       block([txt(p.label, true)], { indent: 280, after: 20, keepNext: true }),
-      block([txt(p.text)],        { indent: 280, after: GAP, justify: true }),
+      block([txt(p.text)],        { indent: 280, after: GAP }),
     ]),
   ];
 }
@@ -1129,7 +1105,6 @@ function buildFATable(
 
   const hdrRow = new TableRow({
     tableHeader: true,
-    height: { value: 480, rule: HeightRule.ATLEAST },
     children: [
       h("Particulars",              FA_COLS[0]),
       h("Useful\nLife",             FA_COLS[1]),
@@ -1162,12 +1137,7 @@ function buildFATable(
     const ul        = r.useful_life != null && String(r.useful_life) !== ""
       ? (String(r.useful_life) === "indefinite" ? "∞" : String(r.useful_life))
       : "";
-    // 2026-07-20 (V J Desai — Word export polish, Item 13): every FA data
-    // row now enforces a 320 DXA minimum height and cantSplit so rows read
-    // as equal-height bands and never break across a landscape page.
     return new TableRow({
-      cantSplit: true,
-      height: { value: 320, rule: HeightRule.ATLEAST },
       children: [
         // Issue 2 — Particulars at 9pt (SZ_BODY), Proper case.
         cell({ text: toProper(r.particulars || ""), w: FA_COLS[0], sz: SZ_BODY }),
@@ -1198,13 +1168,7 @@ function buildFATable(
   const sumNetPy     = sumField("gross_open") - sumField("depn_open");
 
   // ── Issue 1 — totals render WHITE (bold + grand-total rule keeps them legible)
-  // 2026-07-20 (V J Desai — Word export polish, Item 15): both FA total rows
-  // now cantSplit and match the data-row min height so the CY and PY totals
-  // read as clean bands under the ledger rows and can't get chopped between
-  // pages.
   const totalCYRow = new TableRow({
-    cantSplit: true,
-    height: { value: 320, rule: HeightRule.ATLEAST },
     children: [
       cell({ text: "Total — Current year", w: FA_COLS[0],  sz: SZ_BODY, bold: true, borders: BDR_GRAND }),
       cell({ text: "",      w: FA_COLS[1],  sz: SZ_BODY, borders: BDR_GRAND }),
@@ -1246,8 +1210,6 @@ function buildFATable(
     return (m != null) ? Number(m) : (pyComputed[field] ?? 0);
   };
   const totalPYRow = new TableRow({
-    cantSplit: true,
-    height: { value: 320, rule: HeightRule.ATLEAST },
     children: [
       cell({ text: "Total — Previous year", w: FA_COLS[0], sz: SZ_BODY, bold: true, borders: BDR_SUB }),
       cell({ text: "",      w: FA_COLS[1], sz: SZ_BODY, borders: BDR_SUB }),
