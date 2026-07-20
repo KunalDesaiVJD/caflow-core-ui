@@ -785,6 +785,39 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     </Card>
   );
 
+  /** True two-sided reconciliation display: every record from BOTH sources
+   *  stays independently visible in its OWN section until it has its own
+   *  final status — approving one side (e.g. "Keep as Office Data Only")
+   *  never removes, merges or hides the opposite side's own unresolved
+   *  record, since each is its own `ResultRow` with its own override state.
+   *  This only reorganizes an already-complete list (renderCard already
+   *  dispatches office- vs ledger-anchored rows correctly); it surfaces no
+   *  new data. */
+  const splitByOrigin = (rows: ResultRow[]) => ({
+    office: rows.filter((r) => r.office_name != null),
+    ledger: rows.filter((r) => r.office_name == null),
+  });
+
+  const renderMismatchSections = (rows: ResultRow[]) => {
+    const { office, ledger } = splitByOrigin(rows);
+    return (
+      <div className="space-y-5">
+        <div className="space-y-3">
+          <h4 className="text-sm font-semibold text-foreground px-1">Office Data Mismatches ({office.length})</h4>
+          {office.length === 0
+            ? <p className="text-xs text-muted-foreground px-1">No unresolved Office Data records.</p>
+            : office.map(renderCard)}
+        </div>
+        <div className="space-y-3">
+          <h4 className="text-sm font-semibold text-foreground px-1">Tally Ledger Mismatches ({ledger.length})</h4>
+          {ledger.length === 0
+            ? <p className="text-xs text-muted-foreground px-1">No unresolved Tally Ledger records.</p>
+            : ledger.map(renderCard)}
+        </div>
+      </div>
+    );
+  };
+
   if (!filing) return null;
 
   return (
@@ -889,7 +922,9 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
                 {activeFilter === "issues" && (
                   <ErrorTypeBreakdown rows={cardFiltered} getType={(r) => r.result} activeType={errorTypeFilter} onSelectType={setErrorTypeFilter} />
                 )}
-                {(activeFilter === "issues" ? filterByErrorType(cardFiltered, (r) => r.result, errorTypeFilter) : cardFiltered).map(renderCard)}
+                {activeFilter === "issues"
+                  ? renderMismatchSections(filterByErrorType(cardFiltered, (r) => r.result, errorTypeFilter))
+                  : cardFiltered.map(renderCard)}
               </div>
             )}
           </div>
@@ -907,7 +942,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
         ) : (
           <div className="space-y-3">
             <ErrorTypeBreakdown rows={issueRows} getType={(r) => r.result} activeType={errorTypeFilter} onSelectType={setErrorTypeFilter} />
-            {filterByErrorType(issueRows, (r) => r.result, errorTypeFilter).map(renderCard)}
+            {renderMismatchSections(filterByErrorType(issueRows, (r) => r.result, errorTypeFilter))}
           </div>
         )}
       </>)}
