@@ -31,6 +31,7 @@ import ScrutinyConnectorsPanel from "@/components/scrutiny-v2/ScrutinyConnectors
 import ScrutinyOverviewPanel from "@/components/scrutiny-v2/ScrutinyOverviewPanel";
 import ScrutinyDeliverablesPanel from "@/components/scrutiny-v2/ScrutinyDeliverablesPanel";
 import ScrutinyPortfolioPanel from "@/components/scrutiny-v2/ScrutinyPortfolioPanel";
+import MaterialityQueuePanel from "@/components/scrutiny-v2/MaterialityQueuePanel";
 import ScrutinyRuleMasterPanel from "@/components/scrutiny-v2/ScrutinyRuleMasterPanel";
 import {
   buildDraftQuery, canReviewQuery, SCRUTINY_QUERY_SOURCE,
@@ -79,7 +80,7 @@ export default function AuditScrutiny() {
   // Scrutiny-raised queries (maker-checker): finding_id -> { id, status }
   const [scrutinyQueries, setScrutinyQueries] = useState<{ id: string; source_ref_id: string | null; status: string; created_at?: string | null; client_reply?: string | null }[]>([]);
   const [rejectTarget, setRejectTarget] = useState<{ finding: Finding; queryId: string } | null>(null);
-  const [v2Tab, setV2Tab] = useState<"overview" | "templates" | "ledger" | "facts" | "forensics" | "connectors" | "deliverables" | "portfolio" | "rulemaster">("overview");
+  const [v2Tab, setV2Tab] = useState<"overview" | "templates" | "ledger" | "facts" | "forensics" | "connectors" | "deliverables" | "portfolio" | "materiality" | "rulemaster">("overview");
   const isSuperAdmin = user?.role === "superadmin";
   // AI narration classification (Ticket 2.2): finding_id -> suggested category / 3CD clause
   const [narrationClasses, setNarrationClasses] = useState<Record<string, NarrationClass>>({});
@@ -785,9 +786,16 @@ export default function AuditScrutiny() {
             <button
               type="button"
               onClick={() => setV2Tab("portfolio")}
-              className={`px-3 py-1.5 text-xs font-medium transition-colors ${v2Tab === "portfolio" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted/60"}`}
+              className={`px-3 py-1.5 text-xs font-medium border-r transition-colors ${v2Tab === "portfolio" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted/60"}`}
             >
               Portfolio
+            </button>
+            <button
+              type="button"
+              onClick={() => setV2Tab("materiality")}
+              className={`px-3 py-1.5 text-xs font-medium transition-colors ${v2Tab === "materiality" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted/60"}`}
+            >
+              Materiality
             </button>
             {isSuperAdmin && (
               <button
@@ -811,6 +819,8 @@ export default function AuditScrutiny() {
                 ? <ScrutinyDeliverablesPanel findings={findings} rules={rules} financialYear={fy} factGate={factGate} />
                 : v2Tab === "portfolio"
                 ? <ScrutinyPortfolioPanel rules={rules} clientId={clientId} />
+                : v2Tab === "materiality"
+                ? <MaterialityQueuePanel />
                 : v2Tab === "rulemaster" && isSuperAdmin
                 ? <ScrutinyRuleMasterPanel previewContext={clientId && fy ? { client_id: clientId, financial_year: fy, engagement_id: (auditCtx?.selectedEngagement as any)?.id ?? undefined } : undefined} />
 
