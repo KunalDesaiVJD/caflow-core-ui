@@ -1,5 +1,5 @@
 {
-  "_comment": "The SPA catch-all deliberately EXCLUDES /assets/. Vite names bundles by content hash, so a browser holding a page from a previous deploy requests a chunk that no longer exists. With a blanket /(.*) rewrite that request returned 200 with index.html — HTML where the module loader expects JavaScript — so ErrorBoundary's stale-chunk auto-reload never fired and the app hung on a blank loading state with nothing in the console. Excluding /assets/ lets a missing chunk 404 properly, which is the condition that reload path is written to detect.",
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/$1" },
     { "source": "/((?!assets/).*)", "destination": "/index.html" }
