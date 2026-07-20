@@ -200,6 +200,24 @@ serve(async (req) => {
     // Filter to rules applicable to this entity type (corporate vs non-corporate never mix).
     const rules = rulesFromRows(ruleRows as never[]).filter((r) => ruleAppliesToEntity(r, entityBucket));
 
+    // ── Approved materiality for this engagement ──
+    // Rules that opt in via detection_logic.materiality have their thresholds rescaled to it, so a
+    // Rs.1,000 balance is not raised at a Rs.100cr company. Only an APPROVED judgment counts: a
+    // proposal nobody has signed off must not affect a run, and with none approved every rule falls
+    // back to its literal threshold rather than going silent.
+    const { data: matRow } = await supabase
+      .from("scrutiny_judgments")
+      .select("decided")
+      .eq("client_id", client_id)
+      .eq("financial_year", financial_year)
+      .eq("kind", "materiality")
+      .eq("status", "approved")
+      .not("decided", "is", null)
+      .maybeSingle();
+    const materiality = (matRow?.decided ?? null) as
+      | { materiality: number; performance: number; trivial: number }
+      | null;
+
     // ── Run the interpreter ──
     const result = runDetection(
       rules,
@@ -213,6 +231,7 @@ serve(async (req) => {
       {
         financialYearStart: fyStartDate(financial_year),
         financialYearEnd: fyEndDate(financial_year),
+        materiality,
       },
       { emitAdvisoryForUnhandled: false },
     );
