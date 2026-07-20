@@ -1040,6 +1040,57 @@ export default function NoteBSLiab({
               bold
             />
 
+            {/* 2026-07-20 (V J Desai — Issue 2): Schedule III Trade Payables
+                Ageing Schedule. Two matrices (CY / PY) at
+                  bs_liab.trade_payables.ageing_cy / ageing_py
+                each keyed by TP_ROWS.key → TP_BUCKETS.key → amount.
+                Row/column totals compute live; the grand total is compared
+                against the note's headline Total to flag any drift so the
+                auditor knows if the matrix is out of sync with the ledger
+                bifurcation above. Rendered generically via AgeingTable so
+                every corporate client sees the same table without extra
+                per-client wiring. */}
+            <div className="mt-4 text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Trade Payables Ageing Schedule (Schedule III)</div>
+            {(() => {
+              const tpTotalCy = cy("trade_payables");
+              const tpTotalPy = py("trade_payables");
+              const grand = (m: any): number =>
+                TP_ROWS.reduce((s, r) =>
+                  s + TP_BUCKETS.reduce((ss, b) => ss + Number(m?.[r.key]?.[b.key] ?? 0), 0), 0);
+              const ageCy = get("bs_liab.trade_payables.ageing_cy") ?? {};
+              const agePy = get("bs_liab.trade_payables.ageing_py") ?? {};
+              const driftCy = Math.abs(grand(ageCy) - tpTotalCy);
+              const driftPy = Math.abs(grand(agePy) - tpTotalPy);
+              return (
+                <>
+                  <div className="text-[10px] italic text-muted-foreground mt-1">As at {cyDateLbl}</div>
+                  <AgeingTable
+                    rowDefs={TP_ROWS}
+                    bucketDefs={TP_BUCKETS}
+                    matrix={ageCy}
+                    onChange={(next) => updatePath("bs_liab.trade_payables.ageing_cy", next)}
+                  />
+                  {driftCy > 1 && (
+                    <div className="text-[10px] text-amber-700 dark:text-amber-300 mt-1">
+                      ⚠ Ageing grand total differs from note total by {formatINR(driftCy)} (matrix {formatINR(grand(ageCy))} vs. note {formatINR(tpTotalCy)}).
+                    </div>
+                  )}
+                  <div className="text-[10px] italic text-muted-foreground mt-3">As at {pyDateLbl}</div>
+                  <AgeingTable
+                    rowDefs={TP_ROWS}
+                    bucketDefs={TP_BUCKETS}
+                    matrix={agePy}
+                    onChange={(next) => updatePath("bs_liab.trade_payables.ageing_py", next)}
+                  />
+                  {driftPy > 1 && (
+                    <div className="text-[10px] text-amber-700 dark:text-amber-300 mt-1">
+                      ⚠ Ageing grand total differs from note total by {formatINR(driftPy)} (matrix {formatINR(grand(agePy))} vs. note {formatINR(tpTotalPy)}).
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+
             <div className="text-[10px] italic text-muted-foreground mt-3">Notes (free text)</div>
             <EditableCell
               type="text"

@@ -822,16 +822,40 @@ function buildPLRows(pl: PLRowData, notesData?: Stage5Notes | null): PLDisplayRo
   const profitCy = profitContOpsCy;                                // XV
   const profitPy = profitContOpsPy;                                // XV
 
-  // Bug 1 — EPS divisor uses paid-up share count from the Share Capital note
-  // breakup (share_count_cy / share_count_py), NOT the note number.  Falls
-  // back to "—" display when the share count is 0/missing.
-  const sharesCy = getSharesOutstanding(notesData ?? null, "cy");
-  const sharesPy = getSharesOutstanding(notesData ?? null, "py");
-  const epsBasicCy: number | null = sharesCy > 0 ? profitCy / sharesCy : null;
-  const epsBasicPy: number | null = sharesPy > 0 ? profitPy / sharesPy : null;
-  // Default Diluted = Basic when no dilution adjustment is captured.
-  const epsDilCy = epsBasicCy;
-  const epsDilPy = epsBasicPy;
+  // 2026-07-20 (V J Desai — Issue 1, EPS on P&L face):
+  //   Read order for the divisor:
+  //     1. EPS note override (pl.eps.weighted_avg_shares / _py) — respected
+  //        the instant the auditor types it.
+  //     2. Share Capital paid-up breakup (getSharesOutstanding).
+  //   Read order for Basic / Diluted values:
+  //     1. Explicit override on the EPS note (pl.eps.basic / diluted / _py).
+  //     2. Auto: profitCy / wavg  (with wavg per the order above).
+  //   Face falls back to "—" only when neither an override nor a divisor
+  //   is available. This works out-of-the-box for every corporate client
+  //   the moment either Share Capital or the EPS note is populated.
+  const epsNote = ((notesData?.pl as any)?.eps ?? {}) as Record<string, any>;
+  const readNum = (v: any): number => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const wavgCy = readNum(epsNote.weighted_avg_shares)    || getSharesOutstanding(notesData ?? null, "cy");
+  const wavgPy = readNum(epsNote.weighted_avg_shares_py) || getSharesOutstanding(notesData ?? null, "py");
+  const epsBasicOverrideCy = readNum(epsNote.basic);
+  const epsBasicOverridePy = readNum(epsNote.basic_py);
+  const epsDilOverrideCy   = readNum(epsNote.diluted);
+  const epsDilOverridePy   = readNum(epsNote.diluted_py);
+  const epsBasicCy: number | null =
+    epsBasicOverrideCy !== 0 ? epsBasicOverrideCy
+    : wavgCy > 0 ? profitCy / wavgCy
+    : null;
+  const epsBasicPy: number | null =
+    epsBasicOverridePy !== 0 ? epsBasicOverridePy
+    : wavgPy > 0 ? profitPy / wavgPy
+    : null;
+  const epsDilCy: number | null =
+    epsDilOverrideCy !== 0 ? epsDilOverrideCy : epsBasicCy;
+  const epsDilPy: number | null =
+    epsDilOverridePy !== 0 ? epsDilOverridePy : epsBasicPy;
 
   return [
     { kind: "item",   roman: "I.",   label: "Revenue from operations", noteNo: sn(pl.revFromOps.noteNo, pl.revFromOps.cy, pl.revFromOps.py),     cy: negI(pl.revFromOps.cy), py: negI(pl.revFromOps.py), code: "PL_REV_OPS" },
@@ -3966,29 +3990,35 @@ export default function PipelineFinancialStatements({
         otherNcAssets:   { noteNo: dn("other_nc_assets"),      cy: ncyOf("bs_asset","other_nc_assets","BS_NCA_ONA"),          py: npyOf("bs_asset","other_nc_assets","BS_NCA_ONA")          },
         currInvestments: { noteNo: dn("current_investments"),  cy: ncyOf("bs_asset","curr_investments","BS_CA_CI"),           py: npyOf("bs_asset","curr_investments","BS_CA_CI")           },
         inventories:     { noteNo: dn("inventories"),          cy: ncyOf("bs_asset","inventories","BS_CA_INV"),               py: npyOf("bs_asset","inventories","BS_CA_INV")               },
-        // 2026-06-25 (V J Desai — TR >6m / Other must reflect the note's
-        // per-ledger bifurcation on the BS face, mirror of the TP treatment).
-        // Default section for an unclassified ledger is "other". Fallback
-        // when breakup is empty: Other = full TR total, gt6m = 0.
+        // 2026-07-20 (V J Desai — Issue 3, TR manual allocation): the
+        // per-ledger `ledger_section` bifurcation was removed because the
+        // same ledger can flip classification across FY (e.g. Others in PY
+        // → >6m in CY) and the ledger-level flag couldn't hold both. The
+        // note now stores independent CY & PY manual allocations at
+        //   bs_asset.trade_receivables.gt6m_cy / gt6m_py
+        //   bs_asset.trade_receivables.other_cy / other_py
+        // Default (all unset): everything sits under "Other" — grand total
+        // still equals the COA-derived Trade Receivables total, so the BS
+        // face never goes blank on a fresh engagement.
         ...(() => {
-          const trNote     = (stage5NotesData?.bs_asset as any)?.trade_receivables ?? {};
-          const breakup    = Array.isArray(trNote.breakup) ? trNote.breakup : [];
-          const sectionMap = trNote.ledger_section ?? {};
-          const sumBy = (sec: "gt6m" | "other", field: "amount_cy" | "amount_py"): number =>
-            breakup.reduce((s: number, r: any) => {
-              const name = ((r?.linked_ledger || r?.description) ?? "").trim();
-              const resolved = sectionMap[name] ?? "other";
-              if (resolved !== sec) return s;
-              const n = Number(r?.[field] ?? 0);
-              return s + (Number.isFinite(n) ? n : 0);
-            }, 0);
-          const anyBreakup = breakup.length > 0;
-          const trTotalCy  = ncyOf("bs_asset", "trade_receivables", "BS_CA_TR");
-          const trTotalPy  = npyOf("bs_asset", "trade_receivables", "BS_CA_TR");
-          const gt6mCy   = anyBreakup ? sumBy("gt6m",  "amount_cy") : 0;
-          const gt6mPy   = anyBreakup ? sumBy("gt6m",  "amount_py") : 0;
-          const otherCy  = anyBreakup ? sumBy("other", "amount_cy") : trTotalCy;
-          const otherPy  = anyBreakup ? sumBy("other", "amount_py") : trTotalPy;
+          const trNote    = (stage5NotesData?.bs_asset as any)?.trade_receivables ?? {};
+          const num = (v: any): number => {
+            const n = Number(v);
+            return Number.isFinite(n) ? n : 0;
+          };
+          const trTotalCy = ncyOf("bs_asset", "trade_receivables", "BS_CA_TR");
+          const trTotalPy = npyOf("bs_asset", "trade_receivables", "BS_CA_TR");
+          const gt6mCy = num(trNote.gt6m_cy);
+          const gt6mPy = num(trNote.gt6m_py);
+          // "Other" defaults to the residual (Total − >6m) unless the
+          // auditor explicitly stamps it — that way the note stays
+          // internally consistent even before any manual entry.
+          const otherCy = trNote.other_cy != null && trNote.other_cy !== ""
+            ? num(trNote.other_cy)
+            : trTotalCy - gt6mCy;
+          const otherPy = trNote.other_py != null && trNote.other_py !== ""
+            ? num(trNote.other_py)
+            : trTotalPy - gt6mPy;
           return {
             tradeRec:       { noteNo: dn("trade_receivables"), cy: trTotalCy, py: trTotalPy },
             tradeRec6mPlus: { cy: gt6mCy,  py: gt6mPy  },
@@ -7856,10 +7886,18 @@ export default function PipelineFinancialStatements({
           + posD(memoPLD.depreciation.py) + posD(memoPLD.otherExpenses.py))
         - posD(memoPLD.currentTax.py) - (memoPLD.deferredTax.py ?? 0);
 
-      const sharesCyD = getSharesOutstanding(stage5NotesData ?? null, "cy");
-      const sharesPyD = getSharesOutstanding(stage5NotesData ?? null, "py");
-      const epsBasicCyD = sharesCyD > 0 ? patCyD / sharesCyD : 0;
-      const epsBasicPyD = sharesPyD > 0 ? patPyD / sharesPyD : 0;
+      // 2026-07-20 (V J Desai — Issue 1): DOCX export uses the same read
+      // order as the on-screen face — EPS note override first, else the
+      // Share Capital paid-up divisor.
+      const epsNoteD: any = (stage5NotesData as any)?.pl?.eps ?? {};
+      const readNumD = (v: any): number => {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : 0;
+      };
+      const sharesCyD = readNumD(epsNoteD.weighted_avg_shares)    || getSharesOutstanding(stage5NotesData ?? null, "cy");
+      const sharesPyD = readNumD(epsNoteD.weighted_avg_shares_py) || getSharesOutstanding(stage5NotesData ?? null, "py");
+      const epsBasicCyD = readNumD(epsNoteD.basic)    || (sharesCyD > 0 ? patCyD / sharesCyD : 0);
+      const epsBasicPyD = readNumD(epsNoteD.basic_py) || (sharesPyD > 0 ? patPyD / sharesPyD : 0);
 
       const corpDocxAmounts: Record<string, { cy: number; py: number }> = {
         BS_EQ_SC:    { cy: posD(memoBsD.shareCap.cy),        py: posD(memoBsD.shareCap.py) },
@@ -7896,7 +7934,8 @@ export default function PipelineFinancialStatements({
         PL_TAX_DEF:  { cy: memoPLD.deferredTax.cy ?? 0,      py: memoPLD.deferredTax.py ?? 0 },
         PL_EI:       { cy: 0, py: 0 },
         PL_EPS_B:    { cy: epsBasicCyD,  py: epsBasicPyD },
-        PL_EPS_D:    { cy: epsBasicCyD,  py: epsBasicPyD },
+        PL_EPS_D:    { cy: readNumD(epsNoteD.diluted)    || epsBasicCyD,
+                       py: readNumD(epsNoteD.diluted_py) || epsBasicPyD },
       };
 
       const corpDocxNoteNos: Record<string, number | null | undefined> = {
