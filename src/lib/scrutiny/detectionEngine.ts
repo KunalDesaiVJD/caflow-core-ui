@@ -1436,6 +1436,27 @@ const h_duplicate_ledger: CheckHandler = (rule, data) => {
   const tpl = (dl.message as string | undefined) ?? rule.audit_query_template;
   const tokenize = (s: string) => normName(s).replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((t) => t.length >= 3);
   const tokMatch = (a: string, b: string) => a === b || (a.length >= 4 && b.length >= 4 && (a.startsWith(b) || b.startsWith(a)));
+
+  /**
+   * A GST rate split is not a duplicate party. Tally practice is to keep one ledger per rate —
+   * "Hardware Purchase - 5%", "- 12%", "- 18%", "- 28%" — which tokenises to the SAME words once
+   * the short numeric tokens drop out, scoring similarity 1.0. Raising min_similarity cannot help
+   * because these are perfect matches; they have to be recognised and excluded. Four rate variants
+   * of one head also produce six pairs, so this is where the volume came from.
+   *
+   * Only pairs that are identical APART FROM rate/percentage markers are excluded, so genuine
+   * near-duplicates ("Balvant Parmar" vs "Balvantbhai Parmar") are untouched.
+   */
+  const rateStripped = (s: string) =>
+    normName(s)
+      .replace(/\d+(\.\d+)?\s*%/g, " ")
+      .replace(/\b(nil|zero|exempt|urd|rcm)\s*(rate|rated)?\b/g, " ")
+      .replace(/[^a-z ]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  const hasRateMarker = (s: string) => /\d|%|\b(nil|exempt|urd|rcm)\b/i.test(s);
+  const isRateVariantPair = (a: string, b: string) =>
+    (hasRateMarker(a) || hasRateMarker(b)) && rateStripped(a) === rateStripped(b) && rateStripped(a).length > 0;
   const sim = (aTok: string[], bTok: string[]): number => {
     if (!aTok.length || !bTok.length) return 0;
     let m = 0;
@@ -1457,6 +1478,7 @@ const h_duplicate_ledger: CheckHandler = (rule, data) => {
       if (toks[i].length < 2) continue;
       for (let j = i + 1; j < rows.length; j++) {
         if (toks[j].length < 2 || sim(toks[i], toks[j]) < minSim) continue;
+        if (isRateVariantPair(rows[i].ledger_name, rows[j].ledger_name)) continue;
         const key = [normName(rows[i].ledger_name), normName(rows[j].ledger_name)].sort().join("||");
         if (seen.has(key)) continue;
         seen.add(key);

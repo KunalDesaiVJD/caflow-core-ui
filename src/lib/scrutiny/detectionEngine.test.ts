@@ -985,6 +985,49 @@ describe("materiality — thresholds scale to the engagement, once a human appro
   });
 });
 
+describe("duplicate_ledger — a GST rate split is not a duplicate party", () => {
+  const r = rule({
+    rule_id: "BKR-DUP-01", category: "BKR", detection_level: "account",
+    detection_logic: { check: "duplicate_ledger", scope: { nonzero: true }, min_similarity: 0.85 },
+    audit_query_template: "Ledgers {account} look like the same party recorded twice.",
+  });
+
+  // Tally keeps one ledger per GST rate. These tokenise identically once the short numeric tokens
+  // drop out, so they score 1.0 — raising min_similarity would never have excluded them. Four rate
+  // variants of one head also generate six pairs, which is where the volume came from.
+  it("ignores rate variants of the same head", () => {
+    const out = run(r, { tb: ["5%", "12%", "18%", "28%"].map((p) => tb({
+      ledger_name: `Hardware Purchase - ${p}`, parent_group: "Sundry Creditors", closing_balance: 100000, balance_type: "Cr",
+    })) });
+    expect(out).toHaveLength(0);
+  });
+
+  it("ignores nil-rated and URD variants too", () => {
+    const out = run(r, { tb: [
+      tb({ ledger_name: "Office Expense@ Nil Rate", parent_group: "Sundry Creditors", closing_balance: 50000, balance_type: "Cr" }),
+      tb({ ledger_name: "Office Expense - 18%", parent_group: "Sundry Creditors", closing_balance: 60000, balance_type: "Cr" }),
+    ] });
+    expect(out).toHaveLength(0);
+  });
+
+  // The regression guard: the rule must still catch what it exists for.
+  it("still flags a genuine same-party duplicate", () => {
+    const out = run(r, { tb: [
+      tb({ ledger_name: "Balvant Parmar", parent_group: "Sundry Creditors", closing_balance: 40000, balance_type: "Cr" }),
+      tb({ ledger_name: "Balvantbhai Parmar", parent_group: "Sundry Creditors", closing_balance: 30000, balance_type: "Cr" }),
+    ] });
+    expect(out).toHaveLength(1);
+  });
+
+  it("does not treat two different parties as a rate variant", () => {
+    const out = run(r, { tb: [
+      tb({ ledger_name: "Alpha Traders - 18%", parent_group: "Sundry Creditors", closing_balance: 40000, balance_type: "Cr" }),
+      tb({ ledger_name: "Beta Traders - 18%", parent_group: "Sundry Creditors", closing_balance: 30000, balance_type: "Cr" }),
+    ] });
+    expect(out).toHaveLength(0); // different names, similarity below threshold — and not a rate pair
+  });
+});
+
 describe("triage through runDetection — tiering reaches every write path", () => {
   const bigRule = rule({
     rule_id: "CRED-004", category: "CRED", detection_level: "account",
