@@ -104,6 +104,19 @@ async function parseTallyFile(file: File) {
 const isTallyIssue = (r: string) => r !== "Matched";
 
 /**
+ * Whether a record is still "open" — i.e. eligible to appear as a mapping
+ * candidate on the OPPOSITE side's picker. A record stops being open only once
+ * it is CONFIRMED one way or another: auto-Matched by the engine, manually
+ * mapped, or approved as a one-sided override. Merely being REFERENCED
+ * elsewhere — as its own still-unclaimed surplus row, or as another record's
+ * tentative/unconfirmed engine suggestion — is NOT a claim. Getting this wrong
+ * is exactly what broke bidirectional mapping: a ledger row that had its own
+ * open "Office Data Not Found" surplus entry was being treated as claimed by
+ * ITSELF, so it could never be offered to a different unmatched office record.
+ */
+const isOpenRow = (r: ResultRow) => isTallyIssue(r.result) && !r.mapped && !r.overridden;
+
+/**
  * The ledger party to offer as a saved mapping for this record, or null.
  *
  * A record the engine itself landed on "Party Name Mismatch" ALWAYS gets the
@@ -368,7 +381,8 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       };
     });
     const { error } = await supabase.from("tds_tally_results").insert([...newRows, ...surplusRows]); if (error) throw new Error(error.message);
-    const priorIds = (prior || []).map((p: any) => p.id); if (priorIds.length) await supabase.from("tds_tally_results").delete().in("id", priorIds);
+    const priorIds = (prior || []).map((p: any) => p.id);
+    if (priorIds.length) { const { error: delErr } = await supabase.from("tds_tally_results").delete().in("id", priorIds); if (delErr) throw new Error(delErr.message); }
     await logReconAudit({ filingId: fId, firmId, userId: user?.id, userName: userMap[user?.id ?? ""], actionType: "TALLY_RECON_RUN", newValue: `${audited.filter((r) => r.result === "Matched").length} matched / ${audited.length}`, remark: `Tally reconciliation over ${tally.length} ledger rows` });
     if (seq !== loadSeq.current) return audited;
     const { data: res } = await supabase.from("tds_tally_results").select("*").eq("filing_id", fId); if (seq !== loadSeq.current) return audited;
@@ -392,7 +406,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
    *  suggestion) and the record picker (the user chose a different ledger entry)
    *  land here, so the upsert / audit log / re-run happen exactly once. */
   const saveMapping = async (officeName: string | null, tallyParty: string | null, remark = "Saved party mapping") => {
-    if (!officeName || !tallyParty) return;
+    if (!officeName || !tallyParty || validating) return;
     const firmId = await resolveFirmId();
     const { error } = await supabase.from("tds_tally_party_maps").upsert({
       firm_id: firmId, client_id: selClient, office_name_norm: normalizeName(officeName), office_name: officeName, tally_party: tallyParty, created_by: user?.id,
@@ -467,7 +481,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       "Ledger Party": r.tally_party || "—",
       "Ledger Date": r.tally_date || "—",
       "Ledger Credit": r.tally_credit ?? "",
-      Result: r.result,
+      Result: r.overridden ? oneSidedLabel(r) : r.result,
       Mapped: r.mapped ? "Yes" : "No",
       Remarks: r.overridden ? `Overridden — ${r.override_reason || "accepted"}` : (r.reason || ""),
       Overridden: r.overridden ? "Yes" : "No",
@@ -514,7 +528,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       .map((r): AuditRow => ({
         stage: "Stage 3",
         record: r.office_name || r.tally_party || "—",
-        errorType: r.result,
+        errorType: r.overridden ? oneSidedLabel(r) : r.result,
         status: r.overridden ? "Overridden" : isTallyIssue(r.result) ? "Unresolved" : "Resolved",
         reason: r.overridden ? (r.override_reason || "accepted") : (r.reason || (r.mapped ? "Reconciled via saved party mapping" : "")),
       }));
@@ -551,22 +565,41 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
    *  pairs against, so mapping to a party that never appears as a credit could not
    *  match anything. "suggested" is party-level because the saved mapping is.
    *
-   *  Excludes any credit ALREADY paired to a DIFFERENT office record (Matched,
-   *  mapped, or simply the candidate a weaker tier already assigned) — otherwise
-   *  the picker would let two office records both claim the same ledger entry,
-   *  a conflict nothing else in this dialog would surface. Identified by VALUE
-   *  (party+date+credit), not position: `tally_row_index` is a raw file row_index
-   *  and collides across the several files a filing's ledger is imported from. */
+   *  Excludes only a credit CONFIRMED to belong elsewhere — Matched, manually
+   *  mapped, or an approved one-sided override ("Tally Ledger Only") for a
+   *  DIFFERENT record (see isOpenRow). A credit that's merely its own still-open
+   *  surplus row, or another record's unconfirmed tentative suggestion, stays
+   *  offered: per the bidirectional-mapping requirement, both sides of a
+   *  possible pairing remain available to EVERY unresolved record until one of
+   *  them is actually confirmed. Identified by VALUE (party+date+credit), not
+   *  position: `tally_row_index` is a raw file row_index and collides across the
+   *  several files a filing's ledger is imported from.
+   *
+   *  Counts claims rather than a boolean Set: two ledger rows can share the
+   *  exact same party+date+credit ("twins" — tallyRecon.ts's own term for this
+   *  real, anticipated case, resolved there by array position). If only ONE
+   *  twin is confirmed elsewhere, only ONE occurrence should be excluded here —
+   *  a boolean claimed-value Set would wrongly hide BOTH twins the moment
+   *  either one is confirmed, breaking bidirectional symmetry for the other,
+   *  still-open one. Depends on `results` (read inside the body) so the list
+   *  never goes stale relative to overrides/unmaps applied while this dialog
+   *  is open. */
   const pickRows = useMemo(() => {
     const sug = pickTarget?.tally_party ? normalizeName(pickTarget.tally_party) : null;
-    const claimed = new Set(
-      (results || [])
-        .filter((r) => r.id !== pickTarget?.id && r.tally_party && r.tally_date != null && r.tally_credit != null)
-        .map((r) => `${normalizeName(r.tally_party)}|${r.tally_date}|${r.tally_credit}`),
-    );
+    const claimedCounts = new Map<string, number>();
+    for (const r of results || []) {
+      if (r.id === pickTarget?.id || !r.tally_party || r.tally_date == null || r.tally_credit == null || isOpenRow(r)) continue;
+      const key = `${normalizeName(r.tally_party)}|${r.tally_date}|${r.tally_credit}`;
+      claimedCounts.set(key, (claimedCounts.get(key) || 0) + 1);
+    }
     const rows = tallyRows
       .filter((t) => t.party && t.credit != null && Number(t.credit) !== 0)
-      .filter((t) => !claimed.has(`${normalizeName(t.party)}|${t.date}|${t.credit}`))
+      .filter((t) => {
+        const key = `${normalizeName(t.party)}|${t.date}|${t.credit}`;
+        const left = claimedCounts.get(key) || 0;
+        if (left > 0) { claimedCounts.set(key, left - 1); return false; }
+        return true;
+      })
       .map((t, i) => ({ t, i, suggested: !!sug && normalizeName(t.party) === sug }));
     const q = pickQuery.trim().toLowerCase();
     const hit = q
@@ -574,16 +607,20 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
           .filter(Boolean).join(" ").toLowerCase().includes(q))
       : rows;
     return [...hit].sort((a, b) => (b.suggested ? 1 : 0) - (a.suggested ? 1 : 0) || a.i - b.i);
-  }, [tallyRows, pickTarget, pickQuery]);
+  }, [results, tallyRows, pickTarget, pickQuery]);
 
   /** Office records offered by the REVERSE picker (opened from a ledger-only card).
-   *  Candidates are office records genuinely unpaired ("Ledger Entry Not Found",
-   *  not overridden or already mapped) — anything else already has a claimed
-   *  counterpart, even if disputed, so offering it here would let one office
+   *  Candidates are every OPEN office record (see isOpenRow) — not just ones whose
+   *  own result happens to be exactly "Ledger Entry Not Found". An office record
+   *  mid-dispute against a DIFFERENT ledger row (e.g. "Date Mismatch") must still
+   *  be offerable here: the engine's tentative pairing isn't confirmed, so the
+   *  checker may need to redirect it to THIS ledger credit instead. Only a
+   *  CONFIRMED record (Matched, mapped, or overridden) is excluded — that one
+   *  already has a settled counterpart, so offering it here would let one office
    *  record be mapped to two different ledger credits at once. */
   const pickOfficeRows = useMemo(() => {
     const rows = (results || [])
-      .filter((r) => r.office_name && r.result === "Ledger Entry Not Found" && !r.overridden && !r.mapped)
+      .filter((r) => r.office_name && r.id !== officePickTarget?.id && isOpenRow(r))
       .map((r, i) => ({ r, i }));
     const q = officePickQuery.trim().toLowerCase();
     return q
@@ -601,6 +638,16 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     r.result === "Ledger Entry Not Found" ? "Keep as Office Data Only"
       : r.result === "Office Data Not Found" ? "Keep as Tally Ledger Only"
       : "Override";
+
+  /** The audit-facing label for an APPROVED one-sided override — reads as a
+   *  final state ("Office Data Only" / "Tally Ledger Only"), not an open
+   *  "... Not Found" problem. Only meaningful once `overridden` is true; every
+   *  other override keeps the engine's own result label, since that IS a
+   *  genuine accepted dispute over a real pairing, not a one-sided entry. */
+  const oneSidedLabel = (r: ResultRow): string =>
+    r.result === "Ledger Entry Not Found" ? "Office Data Only"
+      : r.result === "Office Data Not Found" ? "Tally Ledger Only"
+      : r.result;
 
   /** Office vs Ledger, one row per comparable field, for a record that IS paired
    *  to a specific ledger entry but disputed (anything except "Matched" — that
@@ -644,7 +691,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
           <div className="min-w-0"><p className="font-semibold text-sm truncate">{r.tally_party || "—"}</p>
             <p className="text-[11px] text-muted-foreground">{r.tally_date || "—"} · ledger credit {inr(r.tally_credit)}</p></div>
           <div className="flex items-center gap-2 shrink-0">
-            <Badge className={cn("text-[10px]", RESULT_BADGE[r.result] || "bg-muted")}>{r.result}</Badge>
+            <Badge className={cn("text-[10px]", RESULT_BADGE[r.result] || "bg-muted")}>{r.overridden ? oneSidedLabel(r) : r.result}</Badge>
             {!r.overridden ? <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => openOverride(r)} disabled={disabled}><ShieldCheck size={12} /> {overrideLabel(r)}</Button>
               : <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => undoOverride(r)}><RotateCcw size={12} /> Undo</Button>}
           </div>
@@ -673,7 +720,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
           <div className="min-w-0"><p className="font-semibold text-sm truncate">{r.office_name || "—"}</p>
             <p className="text-[11px] text-muted-foreground">{r.office_date || "—"} · office {inr(r.office_amount)} / TDS {inr(r.office_tds)} · {r.office_section || "—"}</p></div>
           <div className="flex items-center gap-2 shrink-0">
-            <Badge className={cn("text-[10px]", RESULT_BADGE[r.result] || "bg-muted")}>{r.result}</Badge>
+            <Badge className={cn("text-[10px]", RESULT_BADGE[r.result] || "bg-muted")}>{r.overridden ? oneSidedLabel(r) : r.result}</Badge>
             {typeof r.confidence === "number" && <span className="text-[10px] text-muted-foreground">{r.confidence}%</span>}
             {!r.overridden ? <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => openOverride(r)} disabled={disabled}><ShieldCheck size={12} /> {overrideLabel(r)}</Button>
               : <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => undoOverride(r)}><RotateCcw size={12} /> Undo</Button>}
@@ -737,6 +784,39 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       </CardContent>
     </Card>
   );
+
+  /** True two-sided reconciliation display: every record from BOTH sources
+   *  stays independently visible in its OWN section until it has its own
+   *  final status — approving one side (e.g. "Keep as Office Data Only")
+   *  never removes, merges or hides the opposite side's own unresolved
+   *  record, since each is its own `ResultRow` with its own override state.
+   *  This only reorganizes an already-complete list (renderCard already
+   *  dispatches office- vs ledger-anchored rows correctly); it surfaces no
+   *  new data. */
+  const splitByOrigin = (rows: ResultRow[]) => ({
+    office: rows.filter((r) => r.office_name != null),
+    ledger: rows.filter((r) => r.office_name == null),
+  });
+
+  const renderMismatchSections = (rows: ResultRow[]) => {
+    const { office, ledger } = splitByOrigin(rows);
+    return (
+      <div className="space-y-5">
+        <div className="space-y-3">
+          <h4 className="text-sm font-semibold text-foreground px-1">Office Data Mismatches ({office.length})</h4>
+          {office.length === 0
+            ? <p className="text-xs text-muted-foreground px-1">No unresolved Office Data records.</p>
+            : office.map(renderCard)}
+        </div>
+        <div className="space-y-3">
+          <h4 className="text-sm font-semibold text-foreground px-1">Tally Ledger Mismatches ({ledger.length})</h4>
+          {ledger.length === 0
+            ? <p className="text-xs text-muted-foreground px-1">No unresolved Tally Ledger records.</p>
+            : ledger.map(renderCard)}
+        </div>
+      </div>
+    );
+  };
 
   if (!filing) return null;
 
@@ -842,7 +922,9 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
                 {activeFilter === "issues" && (
                   <ErrorTypeBreakdown rows={cardFiltered} getType={(r) => r.result} activeType={errorTypeFilter} onSelectType={setErrorTypeFilter} />
                 )}
-                {(activeFilter === "issues" ? filterByErrorType(cardFiltered, (r) => r.result, errorTypeFilter) : cardFiltered).map(renderCard)}
+                {activeFilter === "issues"
+                  ? renderMismatchSections(filterByErrorType(cardFiltered, (r) => r.result, errorTypeFilter))
+                  : cardFiltered.map(renderCard)}
               </div>
             )}
           </div>
@@ -860,7 +942,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
         ) : (
           <div className="space-y-3">
             <ErrorTypeBreakdown rows={issueRows} getType={(r) => r.result} activeType={errorTypeFilter} onSelectType={setErrorTypeFilter} />
-            {filterByErrorType(issueRows, (r) => r.result, errorTypeFilter).map(renderCard)}
+            {renderMismatchSections(filterByErrorType(issueRows, (r) => r.result, errorTypeFilter))}
           </div>
         )}
       </>)}

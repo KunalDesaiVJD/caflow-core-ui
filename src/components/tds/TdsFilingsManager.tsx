@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { isFilingTdsCompliant } from "@/lib/tdsQuarter";
+import { isPanException } from "@/lib/tdsPanVerification";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -77,6 +78,21 @@ interface TdsAckFile {
   file_name: string;
   file_url: string;
   created_at: string | null;
+}
+
+/** Per-stage state for the "Validate & Finalise" summary column — mirrors the
+ *  same three-way split each stage's own tab already uses (done/warn/none),
+ *  computed here in BULK across every loaded filing rather than by embedding
+ *  each Stage 1-3 component, so this column costs a handful of grouped queries
+ *  instead of N component mounts. */
+type VfState = "done" | "warn" | "none";
+interface VfStatus {
+  s1: VfState; s1Detail: string;
+  s2: VfState; s2Detail: string;
+  s3: VfState; s3Detail: string;
+  s4: VfState; s4Detail: string;
+  signed: boolean; signedDetail: string;
+  ready: boolean;
 }
 
 // Aggregate status groups driven by Dashboard KPI card clicks — these don't
@@ -199,6 +215,9 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   const [ackUploading, setAckUploading] = useState<string | null>(null);
   // Map of filing_id → TdsAckFile (populated after each fetch)
   const [ackFiles, setAckFiles] = useState<Map<string, TdsAckFile>>(new Map());
+  // Map of filing_id → VfStatus, for the "Validate & Finalise" summary column
+  // (populated after each fetch, same lifecycle as ackFiles).
+  const [vfStatuses, setVfStatuses] = useState<Map<string, VfStatus>>(new Map());
   const [loading, setLoading] = useState(true);
   const [statusGroup, setStatusGroup] = useState<KpiStatusGroup>("all");
   // Excel/Tally-style type-to-search — no visible input box. A window-level
@@ -278,8 +297,9 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     setDeletedClients(delMap);
     setFilings(allFilings);
     setLoading(false);
-    // Fetch ACK files for all loaded filings
-    await fetchAckFiles(allFilings.map(f => f.id));
+    // Fetch ACK files + the Validate & Finalise status summary for all loaded filings
+    const filingIds = allFilings.map(f => f.id);
+    await Promise.all([fetchAckFiles(filingIds), fetchVfStatuses(filingIds)]);
   }, [isSuperadmin, resolveFirmId, fyFilter, quarterFilter, clientFilter]);
 
   // Re-fetch on mount, on filter change, and whenever the host bumps
@@ -392,15 +412,16 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   const [statusColWidth, setStatusColWidth] = useState(180);
 
   // Sum of every OTHER column's explicit width (checkbox 40 + Status
-  // (dynamic) + Filing Date 160 + Ack No 160 + Prepared By 112 + Filed By 112
-  // + Actions 100) plus Client's own min-w-[260px] floor. This is now a
+  // (dynamic) + Filing Date 160 + Ack No 160 + Validate & Finalise 224 +
+  // Prepared By 112 + Filed By 112 + Actions 100) plus Client's own
+  // min-w-[260px] floor. This is now a
   // MINIMUM width, not a pinned total: the <Table> itself stretches to 100%
   // of its container, and Client — the only column left without an explicit
   // width — deterministically absorbs all width beyond this sum per the
   // table-layout:fixed algorithm. Below this minimum the shadcn Table's own
   // overflow-auto wrapper kicks in with horizontal scroll instead of
   // squeezing columns below what they need.
-  const TABLE_MIN_WIDTH = 40 + 260 + statusColWidth + 160 + 160 + 112 + 112 + 100;
+  const TABLE_MIN_WIDTH = 40 + 260 + statusColWidth + 160 + 160 + 224 + 112 + 112 + 100;
 
   useLayoutEffect(() => {
     const statusEl = statusMeasureRef.current;
@@ -434,6 +455,90 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     const map = new Map<string, TdsAckFile>();
     (data || []).forEach((f: any) => map.set(f.filing_id, f as TdsAckFile));
     setAckFiles(map);
+  };
+
+  /** Bulk-computes the "Validate & Finalise" column for every loaded filing —
+   *  6 grouped queries total (never one per row), mirroring exactly what each
+   *  stage's own tab already treats as "applicable"/"an issue":
+   *  Stage 1 = tds_recon_results (match_status !== "matched" = issue, same as
+   *  TdsValidateFinalise's own `summary.mismatched`); Stage 2 = a
+   *  tds_pan_verification_batches row makes it applicable, isPanException(...)
+   *  on tds_pan_verification_results marks an issue (TdsPanVerification.tsx);
+   *  Stage 3 = a tds_tally_batches row makes it applicable, result !== "Matched"
+   *  on tds_tally_results marks an issue (TdsTallyRecon.tsx). A stage that
+   *  isn't applicable counts as satisfied (matches each stage's own
+   *  `!applicable || issues === 0` gate), not as an open issue. */
+  const fetchVfStatuses = async (filingIds: string[]) => {
+    if (filingIds.length === 0) { setVfStatuses(new Map()); return; }
+    const [s1Res, panBatchRes, panResRes, tallyBatchRes, tallyResRes, sigRes] = await Promise.all([
+      supabase.from("tds_recon_results").select("filing_id, match_status, overridden").in("filing_id", filingIds),
+      supabase.from("tds_pan_verification_batches").select("filing_id").in("filing_id", filingIds),
+      supabase.from("tds_pan_verification_results").select("filing_id, validation_result, overridden").in("filing_id", filingIds),
+      supabase.from("tds_tally_batches").select("filing_id").in("filing_id", filingIds),
+      supabase.from("tds_tally_results").select("filing_id, result, overridden").in("filing_id", filingIds),
+      supabase.from("tds_filing_audit_log").select("filing_id, action_type, new_value, changed_at")
+        .in("filing_id", filingIds).in("action_type", ["CHECKER_SIGNATURE", "CHECKER_SIGNATURE_REVOKED"])
+        .order("changed_at", { ascending: true }),
+    ]);
+
+    // filing_id -> { total, issues } — issues excludes any row already overridden.
+    const groupByFiling = (rows: any[] | null | undefined, isIssue: (r: any) => boolean) => {
+      const m = new Map<string, { total: number; issues: number }>();
+      for (const r of rows || []) {
+        const cur = m.get(r.filing_id) || { total: 0, issues: 0 };
+        cur.total += 1;
+        if (isIssue(r) && !r.overridden) cur.issues += 1;
+        m.set(r.filing_id, cur);
+      }
+      return m;
+    };
+    const s1ByFiling = groupByFiling(s1Res.data, (r) => r.match_status !== "matched");
+    const s2ByFiling = groupByFiling(panResRes.data, (r) => isPanException(r.validation_result));
+    const s3ByFiling = groupByFiling(tallyResRes.data, (r) => r.result !== "Matched");
+    const s2Applicable = new Set((panBatchRes.data || []).map((b: any) => b.filing_id));
+    const s3Applicable = new Set((tallyBatchRes.data || []).map((b: any) => b.filing_id));
+
+    // Latest signature action per filing wins — a later revoke undoes an
+    // earlier sign (same rule TdsValidateFinalise's own loadAll uses).
+    const sigByFiling = new Map<string, { signed: boolean; name: string | null }>();
+    for (const row of sigRes.data || []) {
+      sigByFiling.set(row.filing_id, {
+        signed: row.action_type === "CHECKER_SIGNATURE",
+        name: row.action_type === "CHECKER_SIGNATURE" ? row.new_value : null,
+      });
+    }
+
+    const map = new Map<string, VfStatus>();
+    for (const id of filingIds) {
+      const s1c = s1ByFiling.get(id);
+      const s1: VfState = !s1c ? "none" : s1c.issues > 0 ? "warn" : "done";
+      const s1Detail = !s1c ? "Not run" : s1c.issues > 0 ? `${s1c.issues} unresolved mismatch${s1c.issues === 1 ? "" : "es"}` : "Completed";
+
+      const s2app = s2Applicable.has(id);
+      const s2c = s2ByFiling.get(id);
+      const s2: VfState = !s2app ? "done" : !s2c ? "none" : s2c.issues > 0 ? "warn" : "done";
+      const s2Detail = !s2app ? "Not applicable (no TRACES file imported)" : !s2c ? "Not run" : s2c.issues > 0 ? `${s2c.issues} unresolved PAN issue${s2c.issues === 1 ? "" : "s"}` : "Completed";
+
+      const s3app = s3Applicable.has(id);
+      const s3c = s3ByFiling.get(id);
+      const s3: VfState = !s3app ? "done" : !s3c ? "none" : s3c.issues > 0 ? "warn" : "done";
+      const s3Detail = !s3app ? "Not applicable (no Tally ledger imported)" : !s3c ? "Not run" : s3c.issues > 0 ? `${s3c.issues} unresolved mismatch${s3c.issues === 1 ? "" : "es"}` : "Completed";
+
+      // Stage 4 (Checker Review) has no data of its own — it's a consolidated
+      // review of Stage 1-3, so it's "done" exactly when they all are, same
+      // as TdsValidateFinalise's own `canFile`.
+      const s4: VfState = s1 === "done" && s2 === "done" && s3 === "done" ? "done" : "none";
+      const s4Detail = s4 === "done" ? "Completed" : "Pending";
+
+      const sig = sigByFiling.get(id);
+      const signed = !!sig?.signed;
+      const signedDetail = signed ? `Signed by ${sig?.name || "—"}` : "Not signed";
+
+      const ready = s1 === "done" && s2 === "done" && s3 === "done" && s4 === "done" && signed;
+
+      map.set(id, { s1, s1Detail, s2, s2Detail, s3, s3Detail, s4, s4Detail, signed, signedDetail, ready });
+    }
+    setVfStatuses(map);
   };
 
   // Upload PDF → documents bucket → insert tds_ack_files record
@@ -877,6 +982,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                 <TableHead style={{ width: statusColWidth, minWidth: statusColWidth }}>Status</TableHead>
                 <TableHead className="w-40">Filing Date</TableHead>
                 <TableHead className="w-40">Ack No</TableHead>
+                <TableHead className="w-56">Validate &amp; Finalise</TableHead>
                 <TableHead className="w-28">Prepared By</TableHead>
                 <TableHead className="w-28">Filed By</TableHead>
                 <TableHead className="w-[100px]">Actions</TableHead>
@@ -884,10 +990,10 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
             </TableHeader>
             <TableBody>
               {loading ? Array.from({ length: 5 }).map((_, i) => (
-                <TableRow key={i}>{Array.from({ length: 8 }).map((_, j) => <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>)}</TableRow>
+                <TableRow key={i}>{Array.from({ length: 9 }).map((_, j) => <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>)}</TableRow>
               )) : searchFiltered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
                     {searchBuffer.trim()
                       ? `No matches for "${searchBuffer.trim()}".`
                       : "No filings found. Filings are created when TDS service is activated for a client."}
@@ -1045,6 +1151,42 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                               )}
                             </div>
                           </div>
+                        );
+                      })()}
+                    </TableCell>
+                    <TableCell>
+                      {(() => {
+                        const vf = vfStatuses.get(f.id);
+                        if (!vf) return <span className="text-xs text-muted-foreground">—</span>;
+                        const ICON: Record<VfState, string> = { done: "✓", warn: "⚠", none: "✗" };
+                        const CLS: Record<VfState, string> = { done: "text-emerald-600", warn: "text-amber-600", none: "text-destructive" };
+                        const seg = (state: VfState, label: string) => (
+                          <span className={cn("font-medium whitespace-nowrap", CLS[state])}>{ICON[state]} {label}</span>
+                        );
+                        return (
+                          <HoverCard openDelay={200} closeDelay={100}>
+                            <HoverCardTrigger asChild>
+                              <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5 text-[11px] cursor-default">
+                                {seg(vf.s1, "S1")}<span className="text-muted-foreground">|</span>
+                                {seg(vf.s2, "S2")}<span className="text-muted-foreground">|</span>
+                                {seg(vf.s3, "S3")}<span className="text-muted-foreground">|</span>
+                                {seg(vf.s4, "S4")}<span className="text-muted-foreground">|</span>
+                                <span className={cn("font-medium whitespace-nowrap", vf.signed ? "text-emerald-600" : "text-destructive")}>{vf.signed ? "✍" : "✗"} Sign</span>
+                                <span className="text-muted-foreground">|</span>
+                                <span className={cn("font-medium whitespace-nowrap", vf.ready ? "text-emerald-600" : "text-destructive")}>{vf.ready ? "✓" : "✗"} Ready</span>
+                              </div>
+                            </HoverCardTrigger>
+                            <HoverCardContent side="left" className="w-72 p-3">
+                              <div className="space-y-1 text-xs">
+                                <div className="flex justify-between gap-2"><span className="text-muted-foreground">Stage 1</span><span>{vf.s1Detail}</span></div>
+                                <div className="flex justify-between gap-2"><span className="text-muted-foreground">Stage 2</span><span>{vf.s2Detail}</span></div>
+                                <div className="flex justify-between gap-2"><span className="text-muted-foreground">Stage 3</span><span>{vf.s3Detail}</span></div>
+                                <div className="flex justify-between gap-2"><span className="text-muted-foreground">Stage 4</span><span>{vf.s4Detail}</span></div>
+                                <div className="flex justify-between gap-2"><span className="text-muted-foreground">Digital Signature</span><span>{vf.signedDetail}</span></div>
+                                <div className="flex justify-between gap-2 pt-1 border-t"><span className="text-muted-foreground">Ready to File</span><span className={cn("font-medium", vf.ready ? "text-emerald-600" : "text-destructive")}>{vf.ready ? "Yes" : "No"}</span></div>
+                              </div>
+                            </HoverCardContent>
+                          </HoverCard>
                         );
                       })()}
                     </TableCell>
