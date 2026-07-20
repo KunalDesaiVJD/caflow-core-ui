@@ -930,12 +930,20 @@ export function TdsValidateFinalise({
   // One mismatch/exception record → a card showing only the differing fields.
   const renderMismatchCard = (r: ReconResult) => {
     const diffs = r.field_diffs || [];
+    // Section, shown as a badge right on the header — not just a row buried in
+    // the diff table below — so the checker can identify and jump to the right
+    // record by section (194A/194C/194J/…) without opening every card. Office
+    // Data is the master source; the imported side is only a fallback for an
+    // office_only/imported_only record where one side has no value at all.
+    const sectionDiff = diffs.find((d) => d.field === "section");
+    const section = sectionDiff ? (sectionDiff.office ?? sectionDiff.imported) : null;
     return (
       <Card key={r.id} className={cn(r.overridden ? "border-blue-200 dark:border-blue-900 opacity-80" : "border-destructive/30")}>
         <CardContent className="p-0">
           <div className="flex items-center justify-between gap-2 px-4 py-2 border-b bg-muted/30">
             <div className="flex items-center gap-2 min-w-0">
               <p className="font-semibold text-sm truncate">{r.record_label || "—"}</p>
+              {section != null && section !== "" && <Badge variant="outline" className="text-[10px] shrink-0">{String(section)}</Badge>}
               {r.overridden && <Badge variant="outline" className="text-[10px] text-blue-600 border-blue-300 shrink-0">Overridden{r.overridden_by && userMap[r.overridden_by] ? ` · ${userMap[r.overridden_by]}` : ""}</Badge>}
             </div>
             {!isFiled && overrideBtn(r)}
