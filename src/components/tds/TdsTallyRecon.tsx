@@ -381,7 +381,8 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       };
     });
     const { error } = await supabase.from("tds_tally_results").insert([...newRows, ...surplusRows]); if (error) throw new Error(error.message);
-    const priorIds = (prior || []).map((p: any) => p.id); if (priorIds.length) await supabase.from("tds_tally_results").delete().in("id", priorIds);
+    const priorIds = (prior || []).map((p: any) => p.id);
+    if (priorIds.length) { const { error: delErr } = await supabase.from("tds_tally_results").delete().in("id", priorIds); if (delErr) throw new Error(delErr.message); }
     await logReconAudit({ filingId: fId, firmId, userId: user?.id, userName: userMap[user?.id ?? ""], actionType: "TALLY_RECON_RUN", newValue: `${audited.filter((r) => r.result === "Matched").length} matched / ${audited.length}`, remark: `Tally reconciliation over ${tally.length} ledger rows` });
     if (seq !== loadSeq.current) return audited;
     const { data: res } = await supabase.from("tds_tally_results").select("*").eq("filing_id", fId); if (seq !== loadSeq.current) return audited;
@@ -405,7 +406,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
    *  suggestion) and the record picker (the user chose a different ledger entry)
    *  land here, so the upsert / audit log / re-run happen exactly once. */
   const saveMapping = async (officeName: string | null, tallyParty: string | null, remark = "Saved party mapping") => {
-    if (!officeName || !tallyParty) return;
+    if (!officeName || !tallyParty || validating) return;
     const firmId = await resolveFirmId();
     const { error } = await supabase.from("tds_tally_party_maps").upsert({
       firm_id: firmId, client_id: selClient, office_name_norm: normalizeName(officeName), office_name: officeName, tally_party: tallyParty, created_by: user?.id,
@@ -572,17 +573,33 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
    *  possible pairing remain available to EVERY unresolved record until one of
    *  them is actually confirmed. Identified by VALUE (party+date+credit), not
    *  position: `tally_row_index` is a raw file row_index and collides across the
-   *  several files a filing's ledger is imported from. */
+   *  several files a filing's ledger is imported from.
+   *
+   *  Counts claims rather than a boolean Set: two ledger rows can share the
+   *  exact same party+date+credit ("twins" — tallyRecon.ts's own term for this
+   *  real, anticipated case, resolved there by array position). If only ONE
+   *  twin is confirmed elsewhere, only ONE occurrence should be excluded here —
+   *  a boolean claimed-value Set would wrongly hide BOTH twins the moment
+   *  either one is confirmed, breaking bidirectional symmetry for the other,
+   *  still-open one. Depends on `results` (read inside the body) so the list
+   *  never goes stale relative to overrides/unmaps applied while this dialog
+   *  is open. */
   const pickRows = useMemo(() => {
     const sug = pickTarget?.tally_party ? normalizeName(pickTarget.tally_party) : null;
-    const claimed = new Set(
-      (results || [])
-        .filter((r) => r.id !== pickTarget?.id && r.tally_party && r.tally_date != null && r.tally_credit != null && !isOpenRow(r))
-        .map((r) => `${normalizeName(r.tally_party)}|${r.tally_date}|${r.tally_credit}`),
-    );
+    const claimedCounts = new Map<string, number>();
+    for (const r of results || []) {
+      if (r.id === pickTarget?.id || !r.tally_party || r.tally_date == null || r.tally_credit == null || isOpenRow(r)) continue;
+      const key = `${normalizeName(r.tally_party)}|${r.tally_date}|${r.tally_credit}`;
+      claimedCounts.set(key, (claimedCounts.get(key) || 0) + 1);
+    }
     const rows = tallyRows
       .filter((t) => t.party && t.credit != null && Number(t.credit) !== 0)
-      .filter((t) => !claimed.has(`${normalizeName(t.party)}|${t.date}|${t.credit}`))
+      .filter((t) => {
+        const key = `${normalizeName(t.party)}|${t.date}|${t.credit}`;
+        const left = claimedCounts.get(key) || 0;
+        if (left > 0) { claimedCounts.set(key, left - 1); return false; }
+        return true;
+      })
       .map((t, i) => ({ t, i, suggested: !!sug && normalizeName(t.party) === sug }));
     const q = pickQuery.trim().toLowerCase();
     const hit = q
@@ -590,7 +607,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
           .filter(Boolean).join(" ").toLowerCase().includes(q))
       : rows;
     return [...hit].sort((a, b) => (b.suggested ? 1 : 0) - (a.suggested ? 1 : 0) || a.i - b.i);
-  }, [tallyRows, pickTarget, pickQuery]);
+  }, [results, tallyRows, pickTarget, pickQuery]);
 
   /** Office records offered by the REVERSE picker (opened from a ledger-only card).
    *  Candidates are every OPEN office record (see isOpenRow) — not just ones whose
