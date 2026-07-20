@@ -4057,7 +4057,33 @@ export default function PipelineFinancialStatements({
       pl = {
         revFromOps:         { noteNo: dn("revenue_from_ops"),   cy: ncyOf("pl","revenue_from_ops","PL_REV_OPS"),   py: npyOf("pl","revenue_from_ops","PL_REV_OPS")   },
         otherIncome:        { noteNo: dn("other_income"),        cy: ncyOf("pl","other_income","PL_REV_OI"),        py: npyOf("pl","other_income","PL_REV_OI")        },
-        costMaterials:      { noteNo: dn("cost_materials"),      cy: ncyOf("pl","cost_materials","PL_EXP_MAT"),     py: npyOf("pl","cost_materials","PL_EXP_MAT")     },
+        // 2026-07-20 (V J Desai — Issue 1 for corporate FS): Cost of
+        // Materials Consumed on the P&L face must honour any manual entry
+        // the auditor makes on the note (Opening / Add:Purchases / Less:
+        // Closing). Same formula as NotePL — kept inline instead of a
+        // shared helper so both sides fail loudly on drift.
+        //   total = opening + purchases − closing
+        // Purchases defaults to the note's ledger breakup sum (auto-linked
+        // to PL_EXP_MAT); breakup absent → COA total via ncyOf fallback.
+        costMaterials:      (() => {
+          const cm = (stage5NotesData?.pl as any)?.cost_materials ?? {};
+          const num = (v: any): number => {
+            const n = Number(v);
+            return Number.isFinite(n) ? n : 0;
+          };
+          const isEntered = (v: any) => v != null && v !== "";
+          const breakSumCy = sumNotesSubRowsCY(stage5NotesData ?? null, "pl", "cost_materials");
+          const breakSumPy = sumNotesSubRowsPY(stage5NotesData ?? null, "pl", "cost_materials");
+          const fallbackCy = ncyOf("pl","cost_materials","PL_EXP_MAT");
+          const fallbackPy = npyOf("pl","cost_materials","PL_EXP_MAT");
+          const puCy = isEntered(cm.purchases_cy) ? num(cm.purchases_cy) : (breakSumCy ?? fallbackCy);
+          const puPy = isEntered(cm.purchases_py) ? num(cm.purchases_py) : (breakSumPy ?? fallbackPy);
+          const editedCy = isEntered(cm.opening_cy) || isEntered(cm.closing_cy) || isEntered(cm.purchases_cy);
+          const editedPy = isEntered(cm.opening_py) || isEntered(cm.closing_py) || isEntered(cm.purchases_py);
+          const cyVal = editedCy ? (num(cm.opening_cy) + puCy - num(cm.closing_cy)) : fallbackCy;
+          const pyVal = editedPy ? (num(cm.opening_py) + puPy - num(cm.closing_py)) : fallbackPy;
+          return { noteNo: dn("cost_materials"), cy: cyVal, py: pyVal };
+        })(),
         purchasesStock:     { noteNo: dn("purchases_stock"),     cy: ncyOf("pl","purchases_stock","PL_EXP_SIT"),    py: npyOf("pl","purchases_stock","PL_EXP_SIT")    },
         // Bug 7 — When the Inventories note breakup is populated, P&L Changes
         // in Inventories CY is computed as (opening − closing) where:
@@ -4068,6 +4094,53 @@ export default function PipelineFinancialStatements({
         // come from pyInvCII (PY Shell TB) when available, else falls back
         // to the breakup sum / raw TB.
         changesInventories: (() => {
+          // 2026-07-20 (V J Desai — Issue 2 for corporate FS): the six
+          // sub-cells (Closing/Opening × FG/WIP/SIT × CY/PY) inside the
+          // Changes in Inventories note are now manually overridable at
+          //     pl.changes_inventory.override.{fg|wip|sit}_{close|open}_{cy|py}
+          // Face total mirrors the note's own computation so BS/PDF/Excel
+          // reflect the auditor's edits without any extra plumbing.
+          const ci   = (stage5NotesData?.pl as any)?.changes_inventory ?? {};
+          const src  = (k: string): number => {
+            const n = Number(ci[k]);
+            return Number.isFinite(n) ? n : 0;
+          };
+          const map: Record<"fg"|"wip"|"sit", "fg"|"wip"|"sit"> = {
+            fg:  (ci?.bucket_map?.fg  as any) ?? "fg",
+            wip: (ci?.bucket_map?.wip as any) ?? "wip",
+            sit: (ci?.bucket_map?.sit as any) ?? "sit",
+          };
+          const feeders = (d: "fg"|"wip"|"sit"): ("fg"|"wip"|"sit")[] =>
+            (["fg","wip","sit"] as const).filter(s => map[s] === d);
+          const disp = (bucket: "fg"|"wip"|"sit", kind: "close"|"open", col: "cy"|"py"): number =>
+            feeders(bucket).reduce((sum, s) => sum + src(`${s}_${kind}_${col}`), 0);
+          const cell = (bucket: "fg"|"wip"|"sit", kind: "close"|"open", col: "cy"|"py"): number => {
+            const ov = ci?.override?.[`${bucket}_${kind}_${col}`];
+            if (ov != null && ov !== "") {
+              const n = Number(ov);
+              return Number.isFinite(n) ? n : disp(bucket, kind, col);
+            }
+            return disp(bucket, kind, col);
+          };
+          const openCy  = cell("fg","open","cy")  + cell("wip","open","cy")  + cell("sit","open","cy");
+          const closeCy = cell("fg","close","cy") + cell("wip","close","cy") + cell("sit","close","cy");
+          const openPy  = cell("fg","open","py")  + cell("wip","open","py")  + cell("sit","open","py");
+          const closePy = cell("fg","close","py") + cell("wip","close","py") + cell("sit","close","py");
+          const hasAnyOverride = ci?.override && Object.keys(ci.override).some(k => {
+            const v = (ci.override as any)[k];
+            return v != null && v !== "";
+          });
+          // If the auditor has entered any override, the note's own total
+          // is authoritative — use it verbatim. Otherwise keep the pre-fix
+          // behaviour that pulled from the Inventories BS note (which is
+          // the correct fallback for the common single-lump case).
+          if (hasAnyOverride) {
+            return {
+              noteNo: dn("changes_inventories"),
+              cy: openCy - closeCy,
+              py: openPy - closePy,
+            };
+          }
           const invCy = sumNotesSubRowsCY(stage5NotesData ?? null, "bs_asset", "inventories");
           const invPy = sumNotesSubRowsPY(stage5NotesData ?? null, "bs_asset", "inventories");
           if (invCy != null || invPy != null) {

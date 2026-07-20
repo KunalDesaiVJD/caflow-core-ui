@@ -62,7 +62,16 @@ export type TallyResult =
   // entry isn't in it). Without this, importing only the 194C ledger reported every
   // 194A/194T office record as a missing entry — sending the user hunting for rows
   // that were never in scope, when the real action is "import the 194A ledger too".
-  | "No Ledger for Section";
+  | "No Ledger for Section"
+  // The mirror image of "Ledger Entry Not Found": a ledger CREDIT no office record
+  // claimed (assignment.ts's `surplus`/reconcileTallyFull's `surplusLedger`) — a
+  // deduction sitting in Tally with no line on the return. NOT produced by
+  // reconcileTally()/reconcileTallyFull() themselves (both stay OFFICE-anchored,
+  // one row per office record) — the adapter (TdsTallyRecon.tsx) assigns this label
+  // when it turns a surplusLedger entry into its own displayed/persisted row, so
+  // the checker can review and map a ledger-side record with no office counterpart
+  // the same way an unmatched office record is reviewed and mapped today.
+  | "Office Data Not Found";
 
 export interface TallyReconRow {
   office_deductee_id: string;

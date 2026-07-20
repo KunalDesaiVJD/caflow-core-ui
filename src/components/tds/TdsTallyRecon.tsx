@@ -21,7 +21,7 @@ import { ErrorTypeBreakdown, filterByErrorType } from "./ErrorTypeBreakdown";
 import type { StageReport, ReportMeta, AuditRow } from "@/lib/tds/tdsReport";
 import { makeDateNormaliser, normalizeName, canonicalSection, nameCompare } from "@/lib/tds/match";
 import {
-  reconcileTally,
+  reconcileTallyFull,
   type OfficeTxn, type TallyRow, type TallyReconRow, type PartyMap, type TallyResult,
 } from "@/lib/tds/tallyRecon";
 
@@ -55,6 +55,7 @@ interface ResultRow {
 const RESULT_BADGE: Record<string, string> = {
   "Matched": "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
   "Ledger Entry Not Found": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
+  "Office Data Not Found": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
   "Party Name Mismatch": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
   "Date Mismatch": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
   "Credit Amount Mismatch": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
@@ -151,6 +152,12 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
   // Secondary breakdown WITHIN the issue list, by the specific result reason (e.g.
   // "Date Mismatch" vs "Ledger Entry Not Found") — see ErrorTypeBreakdown.
   const [errorTypeFilter, setErrorTypeFilter] = useState<string | null>(null);
+  // Free-text search across the WHOLE list (office name OR ledger party), on top
+  // of the summary-card/error-type filters. Without it, a name that's only ever
+  // embedded text inside a DIFFERENT record's card (e.g. the ledger side of a
+  // "Multiple Possible Matches" dispute, or a name mentioned only in a reason
+  // sentence) is unfindable — there's no card titled with it to scan for.
+  const [recordSearch, setRecordSearch] = useState("");
   const fileRef = useRef<HTMLInputElement | null>(null);
   const loadSeq = useRef(0);
   const settled = useRef<string | null>(null);
@@ -161,6 +168,10 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
   // "Choose another record" picker — the user overrides the engine's suggestion.
   const [pickOpen, setPickOpen] = useState(false); const [pickTarget, setPickTarget] = useState<ResultRow | null>(null);
   const [pickQuery, setPickQuery] = useState("");
+  // The REVERSE picker — opened from a ledger-only ("Office Data Not Found") card
+  // to pick an unmatched OFFICE record for it, mirroring pick*/openPicker above.
+  const [officePickOpen, setOfficePickOpen] = useState(false); const [officePickTarget, setOfficePickTarget] = useState<ResultRow | null>(null);
+  const [officePickQuery, setOfficePickQuery] = useState("");
 
   const filingId = filing?.id ?? null;
   const officeCount = office.length;
@@ -231,7 +242,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
   }, [filingId, loadOffice, loadMaps, fetchTallyRows]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
-  useEffect(() => { setActiveFilter(null); setErrorTypeFilter(null); }, [filingId]);
+  useEffect(() => { setActiveFilter(null); setErrorTypeFilter(null); setRecordSearch(""); }, [filingId]);
 
   /** Import several ledger PDFs at once — a client keeps one ledger PER SECTION, so
    *  picking 194A/194C/194J/194T together is the normal case, not the exception.
@@ -315,10 +326,14 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     const { data: b } = await supabase.from("tds_tally_batches").select("id, section").eq("filing_id", fId).order("imported_at", { ascending: false });
     const tally = await fetchTallyRows(fId, b || []);
     const maps = await loadMaps();
-    const audited = reconcileTally(parties, tally, null, maps);
+    // reconcileTallyFull (not reconcileTally) so a ledger credit no office record
+    // claims is not silently discarded — the checker must be able to see and
+    // resolve it, the same way an unmatched office record already is.
+    const { rows: audited, surplusLedger } = reconcileTallyFull(parties, tally, null, maps);
     // preserve overrides keyed by office_deductee_id
-    const { data: prior } = await supabase.from("tds_tally_results").select("id, office_deductee_id, result, overridden, override_reason, overridden_by, overridden_at").eq("filing_id", fId);
-    const pm = new Map<string, any>(); for (const p of prior || []) pm.set(p.office_deductee_id ?? "", p);
+    const { data: prior } = await supabase.from("tds_tally_results").select("id, office_deductee_id, tally_party, tally_date, tally_credit, result, overridden, override_reason, overridden_by, overridden_at").eq("filing_id", fId);
+    const priorOffice = (prior || []).filter((p: any) => p.office_deductee_id);
+    const pm = new Map<string, any>(); for (const p of priorOffice) pm.set(p.office_deductee_id ?? "", p);
     const newRows = audited.map((r) => {
       const c = pm.get(r.office_deductee_id ?? ""); const keep = !!c?.overridden && c.result === r.result;
       return {
@@ -329,7 +344,30 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
         overridden: keep, override_reason: keep ? c.override_reason : null, overridden_by: keep ? c.overridden_by : null, overridden_at: keep ? c.overridden_at : null,
       };
     });
-    const { error } = await supabase.from("tds_tally_results").insert(newRows); if (error) throw new Error(error.message);
+    // Ledger credits nobody claimed become their own rows (office_* columns null,
+    // result "Office Data Not Found") — no schema change needed, every column is
+    // already nullable except filing_id/firm_id/result. Prior overrides are
+    // preserved by VALUE (party+date+credit) since a ledger row has no column
+    // here to carry a stable id across runs — the office side uses
+    // office_deductee_id for this because it IS a stable id; this is a
+    // best-effort match for the same convenience, not a correctness requirement
+    // (worst case, a re-run asks the user to re-confirm one override).
+    const surplusKey = (party: string | null, date: string | null, credit: number | null) => `${normalizeName(party)}|${date ?? ""}|${credit ?? ""}`;
+    const priorLedger = (prior || []).filter((p: any) => !p.office_deductee_id && p.result === "Office Data Not Found");
+    const lm = new Map<string, any>(); for (const p of priorLedger) lm.set(surplusKey(p.tally_party, p.tally_date, p.tally_credit), p);
+    const surplusRows = surplusLedger.map((t) => {
+      const key = surplusKey(t.party, t.date, t.credit);
+      const c = lm.get(key); const keep = !!c?.overridden && c.result === "Office Data Not Found";
+      return {
+        filing_id: fId, batch_id: b?.[0]?.id ?? null, firm_id: firmId, quarter: selQuarter, office_deductee_id: null,
+        office_name: null, office_date: null, office_amount: null, office_tds: null, office_section: null,
+        tally_row_index: t.row_index, tally_party: t.party, tally_date: t.date, tally_credit: t.credit,
+        result: "Office Data Not Found" as TallyResult, amount_basis: null,
+        reason: "No office record matches this ledger entry.", confidence: 0, mapped: false,
+        overridden: keep, override_reason: keep ? c.override_reason : null, overridden_by: keep ? c.overridden_by : null, overridden_at: keep ? c.overridden_at : null,
+      };
+    });
+    const { error } = await supabase.from("tds_tally_results").insert([...newRows, ...surplusRows]); if (error) throw new Error(error.message);
     const priorIds = (prior || []).map((p: any) => p.id); if (priorIds.length) await supabase.from("tds_tally_results").delete().in("id", priorIds);
     await logReconAudit({ filingId: fId, firmId, userId: user?.id, userName: userMap[user?.id ?? ""], actionType: "TALLY_RECON_RUN", newValue: `${audited.filter((r) => r.result === "Matched").length} matched / ${audited.length}`, remark: `Tally reconciliation over ${tally.length} ledger rows` });
     if (seq !== loadSeq.current) return audited;
@@ -370,6 +408,15 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
   const pickRecord = (party: string | null) => {
     const t = pickTarget; setPickOpen(false);
     if (t) void saveMapping(t.office_name, party, "Saved party mapping — ledger record chosen by the user");
+  };
+
+  /** The REVERSE of openPicker/pickRecord — opened from a ledger-only card to pick
+   *  an office record for IT, instead of a ledger record for an office record.
+   *  Same saveMapping() underneath; only which side the user searches differs. */
+  const openOfficePicker = (r: ResultRow) => { setOfficePickTarget(r); setOfficePickQuery(""); setOfficePickOpen(true); };
+  const pickOfficeRecord = (officeName: string | null) => {
+    const t = officePickTarget; setOfficePickOpen(false);
+    if (t) void saveMapping(officeName, t.tally_party, "Saved party mapping — office record chosen by the user");
   };
 
   /** Undo a saved party mapping. Deletes the mapping and re-runs, so the record
@@ -466,7 +513,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       .filter((r) => r.overridden || isTallyIssue(r.result) || (r.mapped && r.result === "Matched"))
       .map((r): AuditRow => ({
         stage: "Stage 3",
-        record: r.office_name || "—",
+        record: r.office_name || r.tally_party || "—",
         errorType: r.result,
         status: r.overridden ? "Overridden" : isTallyIssue(r.result) ? "Unresolved" : "Resolved",
         reason: r.overridden ? (r.override_reason || "accepted") : (r.reason || (r.mapped ? "Reconciled via saved party mapping" : "")),
@@ -476,16 +523,28 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     onStatusChange?.({ getReport: stage3Report, getAuditRows: tallyAuditRows, filingId, loaded: settled.current === filingId, applicable: batches.length > 0, ran: results !== null, total: summary.total, matched: summary.matched, issues: summary.issues, overridden: summary.overridden });
   }, [filingId, batches, results, summary, onStatusChange]);
 
-  const issueRows = useMemo(() => (results || []).filter((r) => isTallyIssue(r.result)).sort((a, b) => (a.overridden ? 1 : 0) - (b.overridden ? 1 : 0)), [results]);
+  /** Matches office_name OR tally_party — a name only ever embedded as text
+   *  inside a DIFFERENT record's card (the ledger side of a paired dispute, or a
+   *  rival named only in a reason sentence) is otherwise unfindable, since there
+   *  is no card titled with it to scan for. */
+  const bySearch = (list: ResultRow[], q: string): ResultRow[] =>
+    q ? list.filter((r) => [r.office_name, r.tally_party].filter(Boolean).join(" ").toLowerCase().includes(q)) : list;
+
+  const issueRows = useMemo(() => {
+    const q = recordSearch.trim().toLowerCase();
+    return bySearch((results || []).filter((r) => isTallyIssue(r.result)), q)
+      .sort((a, b) => (a.overridden ? 1 : 0) - (b.overridden ? 1 : 0));
+  }, [results, recordSearch]);
   const cardFiltered = useMemo((): ResultRow[] | null => {
     const rs = results || [];
+    const q = recordSearch.trim().toLowerCase();
     switch (activeFilter) {
-      case "total": return rs; case "matched": return rs.filter((r) => r.result === "Matched");
-      case "issues": return rs.filter((r) => isTallyIssue(r.result) && !r.overridden);
-      case "mapped": return rs.filter((r) => r.mapped); case "overridden": return rs.filter((r) => r.overridden);
+      case "total": return bySearch(rs, q); case "matched": return bySearch(rs.filter((r) => r.result === "Matched"), q);
+      case "issues": return bySearch(rs.filter((r) => isTallyIssue(r.result) && !r.overridden), q);
+      case "mapped": return bySearch(rs.filter((r) => r.mapped), q); case "overridden": return bySearch(rs.filter((r) => r.overridden), q);
       default: return null;
     }
-  }, [results, activeFilter]);
+  }, [results, activeFilter, recordSearch]);
 
   /** Ledger records offered by the picker: the engine's suggestion first, then the
    *  rest in ledger order. Only CREDIT rows — those are the deductions the engine
@@ -517,7 +576,97 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     return [...hit].sort((a, b) => (b.suggested ? 1 : 0) - (a.suggested ? 1 : 0) || a.i - b.i);
   }, [tallyRows, pickTarget, pickQuery]);
 
-  const renderCard = (r: ResultRow) => (
+  /** Office records offered by the REVERSE picker (opened from a ledger-only card).
+   *  Candidates are office records genuinely unpaired ("Ledger Entry Not Found",
+   *  not overridden or already mapped) — anything else already has a claimed
+   *  counterpart, even if disputed, so offering it here would let one office
+   *  record be mapped to two different ledger credits at once. */
+  const pickOfficeRows = useMemo(() => {
+    const rows = (results || [])
+      .filter((r) => r.office_name && r.result === "Ledger Entry Not Found" && !r.overridden && !r.mapped)
+      .map((r, i) => ({ r, i }));
+    const q = officePickQuery.trim().toLowerCase();
+    return q
+      ? rows.filter(({ r }) => [r.office_name, r.office_date, r.office_section, r.office_tds == null ? "" : String(r.office_tds), inr(r.office_tds)]
+          .filter(Boolean).join(" ").toLowerCase().includes(q))
+      : rows;
+  }, [results, officePickQuery]);
+
+  /** The Override button's label. Every genuine DISPUTE over an existing pairing
+   *  (Party Name Mismatch, Date Mismatch, …) keeps the plain generic "Override".
+   *  The two ONE-SIDED results get their own explicit label instead — the user's
+   *  action here isn't "accept a difference", it's "confirm this record belongs
+   *  to only one side of the books", which deserves saying so directly. */
+  const overrideLabel = (r: ResultRow): string =>
+    r.result === "Ledger Entry Not Found" ? "Keep as Office Data Only"
+      : r.result === "Office Data Not Found" ? "Keep as Tally Ledger Only"
+      : "Override";
+
+  /** Office vs Ledger, one row per comparable field, for a record that IS paired
+   *  to a specific ledger entry but disputed (anything except "Matched" — that
+   *  needs no highlighting since nothing disagrees). Replaces a single "Ledger:
+   *  X" sub-line: the field the record's own `result` is actually about is
+   *  flagged, so the checker sees BOTH sides at a glance instead of having to
+   *  hunt for the ledger party buried in a sentence. */
+  const disputeTable = (r: ResultRow) => {
+    const rows: { label: string; office: string; ledger: string; flagged: boolean }[] = [
+      { label: "Party", office: r.office_name || "—", ledger: r.tally_party || "—", flagged: r.result === "Party Name Mismatch" },
+      { label: "Date", office: r.office_date || "—", ledger: r.tally_date || "—", flagged: r.result === "Date Mismatch" },
+      { label: "Amount", office: inr(r.office_tds ?? r.office_amount), ledger: inr(r.tally_credit), flagged: r.result === "Credit Amount Mismatch" },
+    ];
+    return (
+      <table className="w-full text-[11px] border rounded-md overflow-hidden">
+        <thead className="bg-muted/50">
+          <tr><th className="text-left px-2 py-1 font-medium w-14">Field</th><th className="text-left px-2 py-1 font-medium">Office</th><th className="text-left px-2 py-1 font-medium">Ledger</th></tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.label} className={cn(row.flagged && "bg-destructive/5")}>
+              <td className="px-2 py-1 text-muted-foreground">{row.label}</td>
+              <td className={cn("px-2 py-1", row.flagged && "text-destructive font-medium")}>{row.office}</td>
+              <td className={cn("px-2 py-1", row.flagged && "text-destructive font-medium")}>{row.ledger}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+  };
+
+  /** A ledger credit no office record claims (result "Office Data Not Found") —
+   *  anchored on the LEDGER side instead of the office side, the mirror image of
+   *  the office-anchored card below. Same actions, reversed: Override reads
+   *  "Keep as Tally Ledger Only", and instead of picking a ledger record for an
+   *  office record, the checker picks an OFFICE record for this ledger credit. */
+  const renderLedgerOnlyCard = (r: ResultRow) => (
+    <Card key={r.id} className={cn(r.overridden ? "border-blue-200 dark:border-blue-900 opacity-80" : "border-destructive/30")}>
+      <CardContent className="p-4 space-y-1.5">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0"><p className="font-semibold text-sm truncate">{r.tally_party || "—"}</p>
+            <p className="text-[11px] text-muted-foreground">{r.tally_date || "—"} · ledger credit {inr(r.tally_credit)}</p></div>
+          <div className="flex items-center gap-2 shrink-0">
+            <Badge className={cn("text-[10px]", RESULT_BADGE[r.result] || "bg-muted")}>{r.result}</Badge>
+            {!r.overridden ? <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => openOverride(r)} disabled={disabled}><ShieldCheck size={12} /> {overrideLabel(r)}</Button>
+              : <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => undoOverride(r)}><RotateCcw size={12} /> Undo</Button>}
+          </div>
+        </div>
+        <p className={cn("text-xs", r.overridden ? "text-blue-600" : "text-destructive")}>
+          {r.overridden ? `Overridden — ${r.override_reason || "accepted"}${r.overridden_by && userMap[r.overridden_by] ? ` · ${userMap[r.overridden_by]}` : ""}` : r.reason}
+        </p>
+        {!r.overridden && (
+          <div className="flex items-center gap-2 flex-wrap p-2 rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50/50 dark:bg-amber-950/20 text-xs">
+            <Link2 size={13} className="text-amber-600 shrink-0" />
+            <span className="text-foreground min-w-0">No office record matches <b>{r.tally_party}</b> — it may belong to a deductee booked under a different name.</span>
+            <div className="flex-1" />
+            <Button size="sm" variant="outline" className="h-6 text-xs px-2 gap-1 shrink-0" disabled={disabled || validating} onClick={() => openOfficePicker(r)}>
+              <Search size={11} /> Map to office record
+            </Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+
+  const renderCard = (r: ResultRow) => r.office_name == null ? renderLedgerOnlyCard(r) : (
     <Card key={r.id} className={cn(r.overridden ? "border-blue-200 dark:border-blue-900 opacity-80" : r.result === "Matched" ? "border-emerald-200 dark:border-emerald-900" : "border-destructive/30")}>
       <CardContent className="p-4 space-y-1.5">
         <div className="flex items-start justify-between gap-2">
@@ -526,7 +675,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
           <div className="flex items-center gap-2 shrink-0">
             <Badge className={cn("text-[10px]", RESULT_BADGE[r.result] || "bg-muted")}>{r.result}</Badge>
             {typeof r.confidence === "number" && <span className="text-[10px] text-muted-foreground">{r.confidence}%</span>}
-            {!r.overridden ? <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => openOverride(r)} disabled={disabled}><ShieldCheck size={12} /> Override</Button>
+            {!r.overridden ? <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => openOverride(r)} disabled={disabled}><ShieldCheck size={12} /> {overrideLabel(r)}</Button>
               : <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => undoOverride(r)}><RotateCcw size={12} /> Undo</Button>}
             {/* Only a manually-mapped record can be unmapped. It sits with the other
                 record actions rather than as a text link buried in the details. */}
@@ -538,7 +687,11 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
             )}
           </div>
         </div>
-        {r.tally_party != null && (
+        {/* Genuinely paired + disputed: BOTH sides, field by field, with the
+            actually-wrong one flagged — not a subdued one-liner the ledger side
+            can get lost in. A clean Match keeps the terser summary; nothing there
+            needs highlighting. */}
+        {r.tally_party != null && r.result !== "Matched" ? disputeTable(r) : r.tally_party != null && (
           <p className="text-[11px] text-muted-foreground flex items-center gap-1.5 flex-wrap">
             <span>Ledger: <b className="text-foreground">{r.tally_party}</b> · {r.tally_date || "—"} · credit {inr(r.tally_credit)}</span>
             {r.mapped && <Badge variant="secondary" className="text-[9px] px-1 py-0 h-4">party mapped</Badge>}
@@ -669,11 +822,22 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
             </button>
           ))}
         </div>
+        {/* Free-text search over the WHOLE list, on top of whichever summary-card
+            filter is active — the only way to locate a name that's only ever
+            embedded text inside a different record's card (see bySearch above). */}
+        <div className="flex items-center gap-2">
+          <Input value={recordSearch} onChange={(e) => setRecordSearch(e.target.value)} placeholder="Search by office or ledger party name…" className="h-8 text-xs" />
+          {recordSearch && <Button variant="ghost" size="sm" className="h-8 text-xs gap-1 shrink-0" onClick={() => setRecordSearch("")}><X size={11} /> Clear</Button>}
+        </div>
         {cardFiltered !== null ? (
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs px-1"><span className="text-muted-foreground">Showing <b className="text-foreground">{cardFiltered.length}</b> record(s)</span>
               <Button variant="ghost" size="sm" className="h-6 text-xs gap-1" onClick={() => setActiveFilter(null)}><X size={11} /> Clear</Button></div>
-            {cardFiltered.length === 0 ? <div className="p-8 text-center text-sm text-muted-foreground rounded-lg border border-dashed">No {activeFilter} records.</div> : (
+            {cardFiltered.length === 0 ? (
+              <div className="p-8 text-center text-sm text-muted-foreground rounded-lg border border-dashed">
+                {recordSearch ? "No records match your search." : `No ${activeFilter} records.`}
+              </div>
+            ) : (
               <div className="space-y-3">
                 {activeFilter === "issues" && (
                   <ErrorTypeBreakdown rows={cardFiltered} getType={(r) => r.result} activeType={errorTypeFilter} onSelectType={setErrorTypeFilter} />
@@ -685,10 +849,14 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
         ) : summary.total === 0 ? (
           <div className="p-8 text-center text-sm text-muted-foreground rounded-lg border border-dashed">No office records to reconcile for this filing.</div>
         ) : issueRows.length === 0 ? (
-          <Card className="border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20"><CardContent className="p-4 space-y-2">
-            <div className="flex items-center gap-2"><CheckCircle2 size={22} className="text-emerald-600" /><p className="text-lg font-bold text-emerald-700 dark:text-emerald-300">Tally Reconciliation Completed</p></div>
-            <p className="text-sm text-muted-foreground">All {summary.total} office records were found in the Tally ledger with matching date, amount and party.</p>
-          </CardContent></Card>
+          recordSearch ? (
+            <div className="p-8 text-center text-sm text-muted-foreground rounded-lg border border-dashed">No records match your search.</div>
+          ) : (
+            <Card className="border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20"><CardContent className="p-4 space-y-2">
+              <div className="flex items-center gap-2"><CheckCircle2 size={22} className="text-emerald-600" /><p className="text-lg font-bold text-emerald-700 dark:text-emerald-300">Tally Reconciliation Completed</p></div>
+              <p className="text-sm text-muted-foreground">All {summary.total} office records were found in the Tally ledger with matching date, amount and party.</p>
+            </CardContent></Card>
+          )
         ) : (
           <div className="space-y-3">
             <ErrorTypeBreakdown rows={issueRows} getType={(r) => r.result} activeType={errorTypeFilter} onSelectType={setErrorTypeFilter} />
@@ -699,9 +867,11 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
 
       <Dialog open={ovOpen} onOpenChange={setOvOpen}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Override — {ovTarget?.result}</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{ovTarget ? overrideLabel(ovTarget) : "Override"} — {ovTarget?.result}</DialogTitle></DialogHeader>
           <div className="space-y-3 py-2">
-            <p className="text-sm text-muted-foreground">{ovTarget?.office_name} · {ovTarget?.office_date}</p>
+            {/* A ledger-only record has no office_name — fall back to its own
+                (ledger) identity so this line is never blank. */}
+            <p className="text-sm text-muted-foreground">{ovTarget?.office_name || ovTarget?.tally_party} · {ovTarget?.office_date || ovTarget?.tally_date}</p>
             <div className="space-y-1"><Label className="text-xs">Override reason <span className="text-destructive">*</span></Label>
               <Select value={ovReason} onValueChange={setOvReason}><SelectTrigger><SelectValue placeholder="Select a reason" /></SelectTrigger>
                 <SelectContent>{["Verified manually against Tally", "Timing/period difference accepted", "Rounding difference accepted", "Entry in another ledger", "Other"].map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent></Select></div>
@@ -743,6 +913,39 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
             <p className="text-[10px] text-muted-foreground">Selecting a record saves "{pickTarget?.office_name || "—"}" ↔ that ledger party for this client and re-runs the reconciliation.</p>
           </div>
           <DialogFooter><Button variant="outline" size="sm" onClick={() => setPickOpen(false)}>Cancel</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={officePickOpen} onOpenChange={setOfficePickOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader><DialogTitle className="text-base">Choose the office record</DialogTitle></DialogHeader>
+          <div className="space-y-2">
+            <p className="text-xs text-muted-foreground">
+              Ledger record: <b className="text-foreground">{officePickTarget?.tally_party || "—"}</b> · {officePickTarget?.tally_date || "—"} · credit {inr(officePickTarget?.tally_credit)}
+            </p>
+            <Input value={officePickQuery} onChange={(e) => setOfficePickQuery(e.target.value)} placeholder="Search by party, date or amount…" className="h-8 text-xs" />
+            <ScrollArea className="h-72 rounded-md border">
+              {pickOfficeRows.length === 0 ? (
+                <p className="p-6 text-center text-xs text-muted-foreground">
+                  {(results || []).some((r) => r.office_name) ? "No unmatched office record matches that search." : "No office records to reconcile for this filing."}
+                </p>
+              ) : (
+                <div className="p-1 space-y-0.5">
+                  {pickOfficeRows.map(({ r, i }) => (
+                    <button key={i} type="button" disabled={disabled || validating} onClick={() => pickOfficeRecord(r.office_name)}
+                      className="w-full text-left flex items-center gap-2 rounded px-2 py-1.5 hover:bg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-medium truncate">{r.office_name}</p>
+                        <p className="text-[10px] text-muted-foreground">{r.office_date || "—"} · TDS {inr(r.office_tds)} · {r.office_section || "—"}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </ScrollArea>
+            <p className="text-[10px] text-muted-foreground">Selecting a record saves that office party ↔ "{officePickTarget?.tally_party || "—"}" for this client and re-runs the reconciliation.</p>
+          </div>
+          <DialogFooter><Button variant="outline" size="sm" onClick={() => setOfficePickOpen(false)}>Cancel</Button></DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
