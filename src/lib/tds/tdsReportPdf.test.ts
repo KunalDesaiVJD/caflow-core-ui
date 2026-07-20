@@ -150,3 +150,78 @@ describe("tdsReportPdf — summary cards are coloured BY MEANING, matching the E
     expect(html).toMatch(/color:#107C41;">40</);
   });
 });
+
+describe("tdsReportPdf — Stage 1's Office/Imported field-pairs render as compact cards", () => {
+  // Real reported bug: a Stage 1 row carries up to 7 "Office {field}"/"Imported
+  // {field}" pairs (19 columns total incl. Record/Result/Remarks/Overridden), so
+  // the old one-table-every-key-is-a-column renderer wrapped every cell onto
+  // several lines — one mismatch spanned 4-5 printed pages, and a REAL exported
+  // PDF for ~170 total records across 3 stages came back 74 pages long.
+  const mismatchRow = {
+    Record: "JATIN PATEL", Result: "Mismatched", "Mismatched Fields": "Amount, TDS",
+    Remarks: "Mismatch — Amount, TDS differ.", Overridden: "No",
+    "Office Name": "JATIN PATEL", "Imported Name": "Jatin Patel",
+    "Office PAN": "ASBPP1794K", "Imported PAN": "ASBPP1794K",
+    "Office Amount": 81770, "Imported Amount": 81870,
+    "Office TDS": 8177, "Imported TDS": 8187,
+  };
+  const matchedRow = {
+    Record: "CAVITAK MARKETING", Result: "Matched", "Mismatched Fields": "",
+    Remarks: "All 7 fields match.", Overridden: "No",
+    "Office Name": "CAVITAK MARKETING", "Imported Name": "CAVITAK MARKETING",
+    "Office PAN": "AAECC3416H", "Imported PAN": "AAECC3416H",
+    "Office Amount": 42800, "Imported Amount": 42800,
+    "Office TDS": 856, "Imported TDS": 856,
+  };
+  const stage1Report: StageReport = {
+    title: "Stage 1 - Data Validation",
+    sections: [{ title: "Mismatched", rows: [mismatchRow], emptyNote: "None" }, { title: "Matched", rows: [matchedRow], emptyNote: "None" }],
+    summary: [{ label: "Total", value: 2 }],
+  };
+
+  it("shows only the fields that actually differ, not all 7", async () => {
+    exportToPdfMock.mockClear();
+    await exportStagePdf(stage1Report, meta);
+    const html = snapshots[snapshots.length - 1].html;
+    expect(html).toContain('<div class="rec-card">');
+    expect(html).toMatch(/<td>Amount<\/td><td>81770<\/td><td>81870<\/td>/);
+    expect(html).toMatch(/<td>TDS<\/td><td>8177<\/td><td>8187<\/td>/);
+    // Name and PAN agree on both sides for this record — must NOT appear as a diff row.
+    expect(html).not.toMatch(/<td>Name<\/td>/);
+    expect(html).not.toMatch(/<td>PAN<\/td>/);
+  });
+
+  it("collapses a fully-agreeing (Matched) record to one row in a plain table, not a card", async () => {
+    exportToPdfMock.mockClear();
+    await exportStagePdf(stage1Report, meta);
+    const html = snapshots[snapshots.length - 1].html;
+    expect(html).toContain('<table class="clean">');
+    expect(html).toMatch(/<td>CAVITAK MARKETING<\/td><td>Matched<\/td>/);
+    // The Matched record's own name must not spawn a second .rec-card.
+    expect(html.match(/<div class="rec-card">/g)?.length ?? 0).toBe(1);
+  });
+
+  it("shows an em dash, not a blank cell, for a record with no office-side counterpart", async () => {
+    const extraRow = {
+      Record: "Dinesh Padsala", Result: "Extra in Imported File",
+      "Mismatched Fields": "Name, PAN, Amount", Remarks: "In the imported client file only — no matching Office Data record.", Overridden: "No",
+      "Office Name": "", "Imported Name": "Dinesh Padsala",
+      "Office PAN": "", "Imported PAN": "AHYPP2567Q",
+      "Office Amount": "", "Imported Amount": 151700,
+    };
+    const report: StageReport = { title: "Stage 1 - Data Validation", summary: [], sections: [{ title: "Extra in Imported", rows: [extraRow], emptyNote: "None" }] };
+    exportToPdfMock.mockClear();
+    await exportStagePdf(report, meta);
+    const html = snapshots[snapshots.length - 1].html;
+    expect(html).toMatch(/<td>Name<\/td><td>—<\/td><td>Dinesh Padsala<\/td>/);
+    expect(html).not.toMatch(/<td>Name<\/td><td><\/td>/);
+  });
+
+  it("does not touch Stage 2/3's flat rows (no Office/Imported pairs)", async () => {
+    exportToPdfMock.mockClear();
+    await exportStagePdf(sampleReport, meta); // Stage 3 fixture from above — no field pairs
+    const html = snapshots[snapshots.length - 1].html;
+    expect(html).not.toContain('<div class="rec-card">');
+    expect(html).toContain("LALITKUMAR MOHANBHAI PATEL");
+  });
+});

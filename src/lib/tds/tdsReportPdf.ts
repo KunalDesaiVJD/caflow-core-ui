@@ -10,7 +10,7 @@
 import { exportToPdf } from "@/lib/exportUtils";
 import {
   reportStamp, reportFileName, metaRows, esc,
-  type StageReport, type ReportMeta, type OverviewReport,
+  type StageReport, type ReportSection, type ReportMeta, type OverviewReport,
 } from "./tdsReport";
 
 function tableHtml(rows: Record<string, unknown>[], emptyNote?: string): string {
@@ -19,6 +19,89 @@ function tableHtml(rows: Record<string, unknown>[], emptyNote?: string): string 
   return `<table><thead><tr>${cols.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>${
     rows.map((r) => `<tr>${cols.map((c) => `<td>${esc(r[c])}</td>`).join("")}</tr>`).join("")
   }</tbody></table>`;
+}
+
+/** The base field names Stage 1 compares — recognised STRUCTURALLY from a row's
+ *  own keys (an "Office {x}" with a matching "Imported {x}"), never hardcoded,
+ *  so a future field Stage 1 adds or renames still gets the compact layout
+ *  below with no change here. Stage 2/3's rows carry no such pair and are
+ *  unaffected — they already fit a normal table at their own column count. */
+function pairedFieldsOf(row: Record<string, unknown>): string[] {
+  return Object.keys(row)
+    .filter((k) => k.startsWith("Office ") && `Imported ${k.slice(7)}` in row)
+    .map((k) => k.slice(7));
+}
+
+const RESULT_COLOUR: Record<string, string> = {
+  Matched: "#107C41", Mismatched: "#C00000",
+  "Missing in Imported File": "#C00000", "Extra in Imported File": "#C00000",
+};
+
+/** Which of a row's paired fields to actually show as a diff — driven by the
+ *  row's OWN pre-computed "Mismatched Fields" list (the same one Stage 1's own
+ *  screen and the Excel export already show), never re-derived by comparing
+ *  Office/Imported values here. That comparison is already field-aware
+ *  upstream (case-insensitive names, format-tolerant dates, …) — redoing it as
+ *  a raw string compare would flag e.g. "JATIN PATEL" vs "Jatin Patel" as a
+ *  spurious diff even though nothing about this record is actually wrong. */
+const mismatchedFieldsOf = (r: Record<string, unknown>): Set<string> =>
+  new Set(String(r["Mismatched Fields"] ?? "").split(",").map((s) => s.trim()).filter(Boolean));
+
+/** An em dash for a genuinely absent value (e.g. the Office side of a record
+ *  that exists only in the imported file) — an empty printed cell reads as a
+ *  rendering bug, not "no data on this side". */
+const dashIfBlank = (v: unknown): string => (v === null || v === undefined || v === "" ? "—" : esc(v));
+
+/** One compact card per record, in place of a table row wide enough (up to 7
+ *  Office/Imported field-pairs, 19 columns total) that every cell wrapped onto
+ *  several lines — a single mismatch could run 4-5 printed pages on its own.
+ *  Shows ONLY the fields actually listed as mismatched, as a tight 3-column
+ *  table, so a card is only ever as tall as what it has to explain. */
+function pairedRowsHtml(rows: Record<string, unknown>[], fields: string[]): string {
+  return rows.map((r) => {
+    const mismatched = mismatchedFieldsOf(r);
+    const diffFields = fields.filter((f) => mismatched.has(f));
+    const result = String(r.Result ?? "");
+    const colour = RESULT_COLOUR[result] || "#555";
+    return `
+      <div class="rec-card">
+        <div class="rec-head">
+          <b>${esc(r.Record)}</b>
+          <span class="badge" style="color:${colour};border-color:${colour};">${esc(result)}</span>
+          ${r.Overridden === "Yes" ? `<span class="ov-tag">Overridden</span>` : ""}
+        </div>
+        ${r.Remarks ? `<p class="remarks">${esc(r.Remarks)}</p>` : ""}
+        ${diffFields.length ? `
+          <table class="diff">
+            <thead><tr><th>Field</th><th>Office</th><th>Imported</th></tr></thead>
+            <tbody>${diffFields.map((f) => `<tr><td>${esc(f)}</td><td>${dashIfBlank(r[`Office ${f}`])}</td><td>${dashIfBlank(r[`Imported ${f}`])}</td></tr>`).join("")}</tbody>
+          </table>` : ""}
+      </div>`;
+  }).join("");
+}
+
+/** Records where nothing is listed as mismatched (Stage 1's "Matched" section)
+ *  need no explanation at all — one row each in a single small table, not one
+ *  card each with a "Matched" badge and every field repeated twice for no
+ *  reason. */
+function cleanRowsHtml(rows: Record<string, unknown>[]): string {
+  if (!rows.length) return "";
+  return `<table class="clean"><thead><tr><th>Record</th><th>Result</th></tr></thead><tbody>${
+    rows.map((r) => `<tr><td>${esc(r.Record)}</td><td>${esc(r.Result)}</td></tr>`).join("")
+  }</tbody></table>`;
+}
+
+function sectionHtml(sec: ReportSection): string {
+  const head = `<h2>${esc(sec.title)} <span class="count">(${sec.rows.length})</span></h2>`;
+  if (!sec.rows.length) return `${head}<p class="empty">${esc(sec.emptyNote || "None")}</p>`;
+  const fields = pairedFieldsOf(sec.rows[0]);
+  if (!fields.length) return `${head}${tableHtml(sec.rows)}`;
+  const withDiffs: Record<string, unknown>[] = [];
+  const clean: Record<string, unknown>[] = [];
+  for (const r of sec.rows) {
+    (mismatchedFieldsOf(r).size ? withDiffs : clean).push(r);
+  }
+  return `${head}${pairedRowsHtml(withDiffs, fields)}${cleanRowsHtml(clean)}`;
 }
 
 /** Colour a summary metric BY MEANING — the same rule tdsReportExcel.ts uses
@@ -41,13 +124,11 @@ function cardsHtml(summary: { label: string; value: string | number }[]): string
   ).join("")}</div>`;
 }
 
-/** A report's detail tables — one titled, counted table per section. Shared by
- *  the single-stage PDF and the combined Overview PDF so a table never renders
+/** A report's detail tables — one titled block per section. Shared by the
+ *  single-stage PDF and the combined Overview PDF so a section never renders
  *  differently (or goes missing) depending on which button produced it. */
 function sectionsHtml(report: StageReport): string {
-  return report.sections.map((sec) =>
-    `<h2>${esc(sec.title)} <span class="count">(${sec.rows.length})</span></h2>${tableHtml(sec.rows, sec.emptyNote)}`,
-  ).join("");
+  return report.sections.map(sectionHtml).join("");
 }
 
 function notesHtml(notes?: string[]): string {
@@ -84,6 +165,17 @@ const REPORT_CSS = `
   .card .l { font-size: 8px; color: #666; text-transform: uppercase; }
   .empty { color: #777; font-style: italic; margin: 2px 0 8px; }
   .notes ul { margin: 2px 0 8px 16px; padding: 0; }
+  .rec-card { border: 1px solid #ddd; border-radius: 4px; padding: 5px 8px; margin: 0 0 5px; page-break-inside: avoid; }
+  .rec-head { display: flex; align-items: center; gap: 6px; }
+  .rec-head b { font-size: 10px; }
+  .badge { font-size: 8px; font-weight: bold; border: 1px solid; border-radius: 8px; padding: 1px 6px; }
+  .ov-tag { font-size: 8px; color: #2F5496; background: #eaf0fb; border-radius: 8px; padding: 1px 6px; }
+  .remarks { margin: 3px 0; color: #444; font-size: 9px; }
+  table.diff { margin: 3px 0 0; }
+  table.diff th, table.diff td { padding: 2px 5px; }
+  table.diff th:first-child, table.diff td:first-child { width: 90px; }
+  table.clean { margin: 4px 0 10px; }
+  table.clean td, table.clean th { padding: 2px 5px; }
   .stage-block { page-break-inside: avoid; }
 `;
 
