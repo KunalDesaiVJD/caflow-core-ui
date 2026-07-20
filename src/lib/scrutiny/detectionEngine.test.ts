@@ -328,19 +328,20 @@ describe("runDetection coverage", () => {
 // ---- Tier B handlers ------------------------------------------------------
 
 describe("missing_provision (absence)", () => {
-  it("flags when the provision ledger is absent, not when present", () => {
+  it("flags when the provision ledger is absent, not when it was raised this year", () => {
     const r = rule({ rule_id: "PROV-006", category: "PROV", detection_level: "account", detection_logic: { check: "missing_provision", keywords: ["deferred tax"] } });
     expect(run(r, { tb: [tb({ ledger_name: "Rent", closing_balance: 100, balance_type: "Dr" })] })).toHaveLength(1);
-    expect(run(r, { tb: [tb({ ledger_name: "Deferred Tax Liability", closing_balance: 5000, balance_type: "Cr" })] })).toHaveLength(0);
+    // present AND moved during the year -> the provision was actually created, stay silent
+    expect(run(r, { tb: [tb({ ledger_name: "Deferred Tax Liability", closing_balance: 5000, balance_type: "Cr", credit_amount: 5000 })] })).toHaveLength(0);
   });
 });
 
 describe("provision_adequacy_keyword & missing_disclosure", () => {
-  it("flag when gratuity / contingent ledger absent, not when present", () => {
+  it("flag when gratuity / contingent ledger absent, not when raised this year", () => {
     const grat = rule({ rule_id: "PAY-004", category: "PAY", detection_level: "account", detection_logic: { check: "provision_adequacy_keyword", keywords: ["gratuity"] } });
     expect(run(grat, { tb: [tb({ ledger_name: "Salary", closing_balance: 1000, balance_type: "Dr" })] })).toHaveLength(1);
     const cont = rule({ rule_id: "PROV-001", category: "PROV", detection_level: "account", detection_logic: { check: "missing_disclosure", keywords: ["contingent", "claim"] } });
-    expect(run(cont, { tb: [tb({ ledger_name: "Contingent Liability — Guarantee", closing_balance: 1, balance_type: "Cr" })] })).toHaveLength(0);
+    expect(run(cont, { tb: [tb({ ledger_name: "Contingent Liability — Guarantee", closing_balance: 1, balance_type: "Cr", credit_amount: 1 })] })).toHaveLength(0);
   });
 });
 
@@ -847,6 +848,290 @@ describe("adequacy — actual vs (base x pct)", () => {
     expect(out).toHaveLength(1);
     expect(out[0].advisory).toBe(true);
   });
+
+  // Regression: a zero actual against a base that IS present is the strongest form of this finding.
+  // The handler used to short-circuit on actual===0 and so passed exactly the engagements it should
+  // fail — an asset block carried with no depreciation charged at all.
+  it("flags a ZERO actual against a real base (no depreciation charged at all)", () => {
+    const r = rule({
+      rule_id: "FA-202", detection_level: "account",
+      detection_logic: { check: "adequacy", actual: { ledger_keywords: ["depreciation"] }, base: { parent_group_keywords: ["fixed asset"] }, pct: 5, op: "<" },
+      audit_query_template: "Depreciation {amount} is short of {value} on the asset block.",
+    });
+    const out = run(r, { tb: [tb({ ledger_name: "Plant & Machinery", parent_group: "Fixed Assets", closing_balance: 1000000, balance_type: "Dr" })] });
+    expect(out).toHaveLength(1);
+    expect(out[0].advisory).toBeFalsy();
+    expect(out[0].evidence?.actual).toBe(0);
+  });
+});
+
+describe("scope regressions — voucher_type as a string, and leg-aware matching", () => {
+  const salesOnly = (vt: unknown) => rule({
+    rule_id: "GST-201", detection_level: "voucher",
+    detection_logic: { check: "expr", grain: "voucher", scope: { voucher_type: vt }, where: [{ field: "abs_amount", op: ">", value: 0 }] },
+    audit_query_template: "{account} {amount}",
+  });
+
+  // A bare string used to be ignored, silently widening the rule to EVERY voucher type.
+  it("honours scope.voucher_type given as a plain string", () => {
+    const data = { vouchers: [
+      vch({ amount: 100, voucher_date: "2025-06-01", voucher_type: "Sales" }),
+      vch({ amount: 200, voucher_date: "2025-06-02", voucher_type: "Purchase" }),
+    ] };
+    expect(run(salesOnly("Sales"), data)).toHaveLength(1);
+    expect(run(salesOnly(["Sales"]), data)).toHaveLength(1);
+  });
+
+  // The asset/repair head of a purchase is a LEG, never the party, so a party-only haystack
+  // can never match it. match_legs opts a rule into the full double entry.
+  const legRule = (matchLegs: boolean) => rule({
+    rule_id: "FA-203", detection_level: "voucher",
+    detection_logic: { check: "expr", grain: "voucher", scope: { ledger_keywords: ["repairs"], match_legs: matchLegs }, where: [{ field: "abs_amount", op: ">", value: 0 }] },
+    audit_query_template: "{account} {amount}",
+  });
+
+  it("matches a keyword that appears only on a leg when match_legs is set", () => {
+    const data = { vouchers: [vch({
+      amount: 90000, voucher_date: "2025-06-01", party_ledger: "Krishna Enterprise",
+      line_items: [
+        { ledger_name: "Repairs to Building", dr_cr: "Dr", amount: 90000 },
+        { ledger_name: "Krishna Enterprise", dr_cr: "Cr", amount: 90000 },
+      ],
+    })] };
+    expect(run(legRule(true), data)).toHaveLength(1);
+    // opt-in by design: without the flag the leg is invisible, so existing rules do not widen
+    expect(run(legRule(false), data)).toHaveLength(0);
+  });
+});
+
+describe("aggregate is never silently dropped on a grain mismatch", () => {
+  // grain:"voucher" with an aggregate block used to fall through to the per-voucher path, dropping
+  // the having clause and emitting one finding PER VOUCHER instead of one per breaching group.
+  it("applies the aggregate even when grain says voucher", () => {
+    const r = rule({
+      rule_id: "PROV-204", detection_level: "voucher",
+      detection_logic: { check: "expr", grain: "voucher", aggregate: { by: ["party"], fn: "count", having: { op: ">=", value: 3 } } },
+      audit_query_template: "{account} {count}",
+    });
+    const out = run(r, { vouchers: [
+      vch({ amount: 10, voucher_date: "2025-06-01", party_ledger: "Torrent Power" }),
+      vch({ amount: 10, voucher_date: "2025-07-01", party_ledger: "Torrent Power" }),
+      vch({ amount: 10, voucher_date: "2025-08-01", party_ledger: "Torrent Power" }),
+      vch({ amount: 10, voucher_date: "2025-06-01", party_ledger: "Adani Gas" }),
+    ] });
+    expect(out).toHaveLength(1);
+    expect(out[0].evidence?.group_count).toBe(3);
+  });
+});
+
+describe("stream_gap — min_amount keeps small counterparties out", () => {
+  const r = (min?: number) => rule({
+    rule_id: "CRED-004", category: "CRED", detection_level: "voucher",
+    detection_logic: { check: "stream_gap", present: ["bank"], missing: ["purchase"], ...(min ? { min_amount: min } : {}) },
+    audit_query_template: "{account} paid {amount} with no purchase booked.",
+  });
+  const data = { vouchers: [
+    vch({ amount: 900, voucher_date: "2025-06-01", party_ledger: "Tiny Vendor", line_items: [
+      { ledger_name: "HDFC Bank", dr_cr: "Cr", amount: 900 }, { ledger_name: "Tiny Vendor", dr_cr: "Dr", amount: 900 }] }),
+    vch({ amount: 800_000, voucher_date: "2025-06-02", party_ledger: "Major Supplier", line_items: [
+      { ledger_name: "HDFC Bank", dr_cr: "Cr", amount: 800_000 }, { ledger_name: "Major Supplier", dr_cr: "Dr", amount: 800_000 }] }),
+  ] };
+
+  it("without a floor it flags every counterparty, however small", () => {
+    expect(run(r(), data).map((f) => f.account).sort()).toEqual(["Major Supplier", "Tiny Vendor"]);
+  });
+
+  it("with a floor only the material counterparty survives", () => {
+    const out = run(r(100_000), data);
+    expect(out.map((f) => f.account)).toEqual(["Major Supplier"]);
+    expect(out[0].amount).toBe(800_000);
+  });
+});
+
+describe("materiality — thresholds scale to the engagement, once a human approves", () => {
+  const r = rule({
+    rule_id: "DORM-201", category: "DORM", detection_level: "account",
+    detection_logic: {
+      check: "no_movement", min_balance: 1_000_000, tolerance: 1,
+      materiality: { min_balance: 0.25 },
+    },
+    audit_query_template: "{account} unmoved at {amount}.",
+  });
+  // A ₹2,00,000 dormant balance: below the rule's literal ₹10,00,000 floor, but well above
+  // 0.25 x performance materiality at a small engagement.
+  const data = { tb: [tb({ ledger_name: "Old Deposit", parent_group: "Deposits", closing_balance: 200_000, balance_type: "Dr", opening_balance: 200_000 })] };
+
+  it("misses the small-entity balance while no materiality is approved", () => {
+    expect(run(r, data)).toHaveLength(0);
+  });
+
+  it("catches it once a small engagement's materiality is approved", () => {
+    const out = run(r, data, { ...FY, materiality: { materiality: 500_000, performance: 300_000, trivial: 25_000 } });
+    expect(out).toHaveLength(1);
+    expect(out[0].account).toBe("Old Deposit");
+  });
+
+  it("still ignores it at a large engagement, where it is genuinely immaterial", () => {
+    const out = run(r, data, { ...FY, materiality: { materiality: 20_000_000, performance: 12_000_000, trivial: 1_000_000 } });
+    expect(out).toHaveLength(0);
+  });
+
+  it("does not disturb rules that never opted in", () => {
+    const plain = rule({
+      rule_id: "X", detection_level: "account",
+      detection_logic: { check: "no_movement", min_balance: 1_000_000, tolerance: 1 },
+    });
+    expect(run(plain, data, { ...FY, materiality: { materiality: 500_000, performance: 300_000, trivial: 25_000 } })).toHaveLength(0);
+  });
+});
+
+describe("rollup — one query per issue, not one per occurrence", () => {
+  const cashRule = (rollup: unknown) => rule({
+    rule_id: "CASH-001", category: "CASH", detection_level: "voucher",
+    detection_logic: { check: "daily_max", threshold: 200000, ...(rollup ? { rollup } : {}) },
+    audit_query_template: "Cash exceeded the limit on {count} days, peaking at Rs.{amount} on {date}.",
+  });
+  // Three separate days above the limit — one behaviour, not three findings.
+  const data = { vouchers: [
+    vch({ amount: 300000, voucher_date: "2025-06-01", party_ledger: "Cash" }),
+    vch({ amount: 500000, voucher_date: "2025-07-01", party_ledger: "Cash" }),
+    vch({ amount: 250000, voucher_date: "2025-08-01", party_ledger: "Cash" }),
+  ] };
+
+  it("emits one finding per day when rollup is off (the flood)", () => {
+    expect(run(cashRule(null), data).length).toBeGreaterThan(1);
+  });
+
+  it("collapses to a single summary carrying count, peak and worst date", () => {
+    const out = run(cashRule({ metric: "peak" }), data);
+    expect(out).toHaveLength(1);
+    expect(out[0].evidence?.rolled_up).toBe(3);
+    // daily_max tracks the running cash balance, so the peak is the closing high (300k+500k+250k)
+    // on the last breaching day — not the largest single day's movement.
+    expect(out[0].evidence?.peak).toBe(1_050_000);
+    expect(out[0].evidence?.first).toBe("2025-06-01");
+    expect(out[0].evidence?.last).toBe("2025-08-01");
+    expect(out[0].flag_message).toContain("on 3 days");
+  });
+
+  it("leaves a single occurrence alone — nothing to summarise", () => {
+    const one = { vouchers: [vch({ amount: 300000, voucher_date: "2025-06-01", party_ledger: "Cash" })] };
+    const out = run(cashRule({ metric: "peak" }), one);
+    expect(out).toHaveLength(1);
+    expect(out[0].evidence?.rolled_up).toBeUndefined();
+  });
+
+  it("does not touch rules that never opt in", () => {
+    const out = run(cashRule(null), data);
+    expect(out.every((f) => f.evidence?.rolled_up === undefined)).toBe(true);
+  });
+});
+
+describe("missing_provision — three states, not two", () => {
+  const r = rule({
+    rule_id: "PROV-201", category: "PROV", detection_level: "account",
+    detection_logic: { check: "missing_provision", keywords: ["audit fee"] },
+    audit_query_template: "No provision for audit fee appears in the books.",
+  });
+
+  it("flags when the ledger is absent altogether", () => {
+    const out = run(r, { tb: [tb({ ledger_name: "Rent", parent_group: "Indirect Expenses", closing_balance: 50000 })] });
+    expect(out).toHaveLength(1);
+    expect(out[0].evidence?.present).toBe(false);
+  });
+
+  it("stays silent when the provision was actually created this year", () => {
+    const out = run(r, { tb: [tb({ ledger_name: "Provision for Audit Fee", parent_group: "Provisions", closing_balance: 50000, balance_type: "Cr", credit_amount: 50000 })] });
+    expect(out).toHaveLength(0);
+  });
+
+  // The regression: a stale prior-year balance with no movement used to satisfy the existence
+  // test and silence the rule, which is exactly the case auditors raise.
+  it("flags a prior-year balance still standing with no movement in the year", () => {
+    const out = run(r, { tb: [tb({ ledger_name: "Unpaid Audit Fee", parent_group: "Provisions", closing_balance: 25000, balance_type: "Cr", debit_amount: 0, credit_amount: 0 })] });
+    expect(out).toHaveLength(1);
+    expect(out[0].evidence?.stale_py_only).toBe(true);
+    expect(out[0].account).toBe("Unpaid Audit Fee");
+    expect(out[0].flag_message).toContain("no movement whatsoever");
+  });
+});
+
+describe("count_distinct — 'booked in fewer than twelve months'", () => {
+  // A ledger can carry many vouchers all falling in the same few months, so plain count (which
+  // returns rows.length) cannot express a months-covered test. count_distinct counts unique
+  // VALUES of the field instead.
+  const r = (fn: string) => rule({
+    rule_id: "RG-201", detection_level: "aggregate",
+    detection_logic: { check: "expr", grain: "aggregate", scope: { ledger_keywords: ["electricity"] }, aggregate: { by: ["party"], fn, field: "month", having: { op: "<", value: 12 } } },
+    audit_query_template: "{account} booked in only {count} months of the year.",
+  });
+  // Torrent: 13 vouchers but only 3 distinct months -> a real gap.
+  // Adani: 12 vouchers across 12 distinct months -> complete, must NOT fire.
+  const data = { vouchers: [
+    ...[1, 2, 3].flatMap((m) => [1, 2, 3, 4].map((d) => vch({
+      amount: 5000, voucher_date: `2025-${String(m + 3).padStart(2, "0")}-0${d}`, party_ledger: "Torrent Power Electricity",
+    }))),
+    ...Array.from({ length: 12 }, (_, i) => vch({
+      amount: 4000,
+      voucher_date: `${i < 9 ? 2025 : 2026}-${String(((i + 3) % 12) + 1).padStart(2, "0")}-10`,
+      party_ledger: "Adani Electricity",
+    })),
+  ] };
+
+  it("counts distinct months, not vouchers", () => {
+    const out = run(r("count_distinct"), data);
+    expect(out.map((f) => f.account)).toEqual(["Torrent Power Electricity"]);
+    expect(out[0].evidence?.metric).toBe(3);
+    expect(out[0].flag_message).toContain("only 3 months");
+  });
+
+  it("plain count gets it wrong — the distinction the new fn exists for", () => {
+    // count sees 12 Torrent vouchers (not < 12, so it MISSES the real gap) and 12 Adani vouchers.
+    const out = run(r("count"), data);
+    expect(out.map((f) => f.account)).not.toContain("Torrent Power Electricity");
+  });
+});
+
+describe("aggregate by:['leg'] — group over the expense ledger, not the party", () => {
+  // A recurring charge is a property of the HEAD, not the vendor. Grouping by party lumps every
+  // month of "Electricity Expenses" under whichever vendor was paid, and flags each vendor who
+  // legitimately supplied in only a few months.
+  const r = (by: string[]) => rule({
+    rule_id: "RG-201", detection_level: "aggregate",
+    detection_logic: {
+      check: "expr", grain: "aggregate",
+      scope: { match_legs: true, ledger_keywords: ["electricity"] },
+      aggregate: { by, fn: "count_distinct", field: "month", having: { op: "<", value: 12 } },
+    },
+    audit_query_template: "'{account}' is booked in only {count} months ({amount}).",
+  });
+  // One expense head, three months, paid to three DIFFERENT vendors.
+  const data = { vouchers: [1, 2, 3].map((m) => vch({
+    amount: 10000, voucher_date: `2025-0${m + 3}-10`, party_ledger: `Vendor ${m}`,
+    line_items: [
+      { ledger_name: "Electricity Expenses", dr_cr: "Dr", amount: 10000 },
+      { ledger_name: `Vendor ${m}`, dr_cr: "Cr", amount: 10000 },
+    ],
+  })) };
+
+  it("reports ONE finding against the expense head", () => {
+    const out = run(r(["leg"]), data);
+    expect(out).toHaveLength(1);
+    expect(out[0].account).toBe("Electricity Expenses");
+    expect(out[0].evidence?.metric).toBe(3);
+    expect(out[0].amount).toBe(30000);
+  });
+
+  it("the party axis fragments the same books into one finding per vendor", () => {
+    const out = run(r(["party"]), data);
+    expect(out).toHaveLength(3);
+    expect(out.map((f) => f.account).sort()).toEqual(["Vendor 1", "Vendor 2", "Vendor 3"]);
+  });
+
+  it("only legs matching ledger_keywords open a group — the bank/party side never does", () => {
+    const out = run(r(["leg"]), data);
+    expect(out.map((f) => f.account)).not.toContain("Vendor 1");
+  });
 });
 
 describe("related_party — needs the RP master, and matches it when captured", () => {
@@ -887,6 +1172,24 @@ describe("balance_decreased — reserve/fund utilised during the year", () => {
     ] });
     expect(out).toHaveLength(1);
     expect(out[0].amount).toBe(600000);
+  });
+});
+
+describe("no_movement — balance unchanged all year (stale PY provision)", () => {
+  it("flags a provision whose opening equals closing; ignores moved and small balances", () => {
+    const r = rule({
+      rule_id: "PROV-STALE", category: "PROV", detection_level: "account",
+      detection_logic: { check: "no_movement", scope: { parent_group_keywords: ["provision"] }, min_balance: 1000 },
+      audit_query_template: "Provision {account} of {amount} is unchanged since last year - is it still payable, or pending reversal?",
+    });
+    const out = run(r, { tb: [
+      tb({ ledger_name: "Provision for Audit Fees", parent_group: "Short-term Provisions", opening_balance: 26000, closing_balance: 26000, balance_type: "Cr" }),
+      tb({ ledger_name: "Provision for Tax", parent_group: "Short-term Provisions", opening_balance: 50000, closing_balance: 75000, balance_type: "Cr" }),
+      tb({ ledger_name: "Tiny Provision", parent_group: "Short-term Provisions", opening_balance: 500, closing_balance: 500, balance_type: "Cr" }),
+    ] });
+    expect(out).toHaveLength(1);
+    expect(out[0].account).toBe("Provision for Audit Fees");
+    expect(out[0].amount).toBe(26000);
   });
 });
 

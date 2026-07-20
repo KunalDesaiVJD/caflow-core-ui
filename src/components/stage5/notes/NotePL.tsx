@@ -7,13 +7,14 @@
  * Finance Costs and Depreciation have noteRef: null per Schedule III.
  */
 
+import { useState } from "react";
 import {
   EditableRow, NoteCard, NoteHeaderRow, ListTable,
   type ListRow,
 } from "./EditableCell";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 import { useDynamicNoteRegistry } from "@/lib/noteNumberRegistry";
-import { MoreVertical, Check as CheckIcon } from "lucide-react";
+import { MoreVertical, Check as CheckIcon, ChevronDown, ChevronRight } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuLabel,
   DropdownMenuItem, DropdownMenuSeparator,
@@ -134,12 +135,52 @@ export default function NotePL({
   const dispWipOpenPy  = disp("wip_open_py",  "wip");
   const dispSitOpenPy  = disp("sit_open_py",  "sit");
 
+  // 2026-07-20 (V J Desai — Issue 2 for corporate FS): the six sub-cells
+  // in "Changes in inventories of FG/WIP/SIT" are now MANUALLY EDITABLE.
+  // Each cell renders `override ?? disp(...)`, where `override` is a
+  // per-cell auditor entry persisted at
+  //     pl.changes_inventory.override.{fg|wip|sit}_{close|open}_{cy|py}
+  // Clearing the cell (blank commit → null) removes the override and the
+  // cell reverts to the COA-derived value. The note total and the P&L
+  // face both recompute from the SAME six display values, so edits flow
+  // through automatically — root-cause fix, valid for every corporate
+  // client.
+  const ciOverride = (bucket: Bucket, kind: "close" | "open", col: "cy" | "py"): number | null => {
+    const raw = get(`pl.changes_inventory.override.${bucket}_${kind}_${col}`);
+    if (raw == null || raw === "") return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  };
+  const ciDisplay = (bucket: Bucket, kind: "close" | "open", col: "cy" | "py"): number => {
+    const ov = ciOverride(bucket, kind, col);
+    if (ov != null) return ov;
+    return disp(`${bucket}_${kind}_${col}` as keyof typeof src, bucket);
+  };
+  const ciCommit = (bucket: Bucket, kind: "close" | "open", col: "cy" | "py") =>
+    (v: number | null) => {
+      const path = `pl.changes_inventory.override.${bucket}_${kind}_${col}`;
+      updatePath(path, v == null ? null : Number(v));
+    };
+  // Six display cells now go through ciDisplay so manual overrides win.
+  const cellFgCloseCy  = ciDisplay("fg",  "close", "cy");
+  const cellWipCloseCy = ciDisplay("wip", "close", "cy");
+  const cellSitCloseCy = ciDisplay("sit", "close", "cy");
+  const cellFgClosePy  = ciDisplay("fg",  "close", "py");
+  const cellWipClosePy = ciDisplay("wip", "close", "py");
+  const cellSitClosePy = ciDisplay("sit", "close", "py");
+  const cellFgOpenCy   = ciDisplay("fg",  "open",  "cy");
+  const cellWipOpenCy  = ciDisplay("wip", "open",  "cy");
+  const cellSitOpenCy  = ciDisplay("sit", "open",  "cy");
+  const cellFgOpenPy   = ciDisplay("fg",  "open",  "py");
+  const cellWipOpenPy  = ciDisplay("wip", "open",  "py");
+  const cellSitOpenPy  = ciDisplay("sit", "open",  "py");
+
   // "Changes in inventories (per P&L)" total = (Opening) − (Closing).
   // Positive = inventory decreased = expense.
-  const ciTotalCy = (dispFgOpenCy + dispWipOpenCy + dispSitOpenCy)
-                  - (dispFgCloseCy + dispWipCloseCy + dispSitCloseCy);
-  const ciTotalPy = (dispFgOpenPy + dispWipOpenPy + dispSitOpenPy)
-                  - (dispFgClosePy + dispWipClosePy + dispSitClosePy);
+  const ciTotalCy = (cellFgOpenCy + cellWipOpenCy + cellSitOpenCy)
+                  - (cellFgCloseCy + cellWipCloseCy + cellSitCloseCy);
+  const ciTotalPy = (cellFgOpenPy + cellWipOpenPy + cellSitOpenPy)
+                  - (cellFgClosePy + cellWipClosePy + cellSitClosePy);
 
   // Bucket-reassignment handler used by the "Move to..." dropdown next to
   // each sub-row. Writes to `pl.changes_inventory.bucket_map.<source>` so
@@ -258,12 +299,36 @@ export default function NotePL({
     );
   };
 
-  // EPS values — formula per FS NOTES.xlsx template: NPAT × 100 / Weighted Avg Shares
-  // (the ×100 reflects the template convention of values in `'000s).
+  // 2026-07-20 (V J Desai — Issue 1, EPS on P&L face): the note now computes
+  // EPS using the correct AS-20 formula (NPAT / Weighted Avg Shares) — the
+  // legacy "× 100" was a stale template holdover that inflated the ratio
+  // by 100× and left every corporate P&L face displaying "—" (because the
+  // face-side path also treated the shares divisor as zero when unset).
+  //
+  // Weighted-average shares now auto-populate from the Share Capital
+  // paid-up breakup (share_count_cy / share_count_py) when the auditor
+  // has not overridden them on this note. This makes EPS render on every
+  // corporate client the moment Share Capital is filled — no separate
+  // data entry required — while manual overrides on this note still win.
   const npat    = Number(get("pl.eps.npat") ?? 0);
+  const npatPy  = Number(get("pl.eps.npat_py") ?? 0);
   const nominal = Number(get("pl.eps.nominal_value") ?? 10);
-  const wavg    = Number(get("pl.eps.weighted_avg_shares") ?? 0);
-  const basicEps = wavg > 0 ? Math.round(((npat * 100) / wavg) * 10000) / 10000 : 0;
+  const shareCapBreakup: any[] = Array.isArray((notes.bs_liab as any)?.share_capital?.breakup)
+    ? (notes.bs_liab as any).share_capital.breakup
+    : [];
+  const shareCapCount = (col: "cy" | "py"): number =>
+    shareCapBreakup
+      .filter(r => r != null && (r.is_paid_up === true || r.subType === "issued_paid_up"))
+      .reduce((s: number, r: any) => {
+        const n = Number(col === "cy" ? r.share_count_cy : r.share_count_py);
+        return s + (Number.isFinite(n) ? n : 0);
+      }, 0);
+  const wavgStored   = Number(get("pl.eps.weighted_avg_shares") ?? 0);
+  const wavgStoredPy = Number(get("pl.eps.weighted_avg_shares_py") ?? 0);
+  const wavg   = wavgStored   > 0 ? wavgStored   : shareCapCount("cy");
+  const wavgPy = wavgStoredPy > 0 ? wavgStoredPy : shareCapCount("py");
+  const basicEps   = wavg   > 0 ? Math.round((npat   / wavg)   * 10000) / 10000 : 0;
+  const basicEpsPy = wavgPy > 0 ? Math.round((npatPy / wavgPy) * 10000) / 10000 : 0;
 
   return (
     <div className="space-y-4">
@@ -272,48 +337,98 @@ export default function NotePL({
       {renderListNote(sn("other_income"), "Other Income", "other_income",
         "Interest / Forex gain / Misc income")}
 
-      <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("cost_materials")} title="Cost of materials consumed" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("cost_materials")} pyTotal={py("cost_materials")}>
-        <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
-        <EditableRow
-          label="Opening Stock"
-          cy={Number(get("pl.cost_materials.opening_cy") ?? 0)}
-          py={Number(get("pl.cost_materials.opening_py") ?? 0)}
-          isOverriddenCy={isOverridden("pl.cost_materials.opening_cy")}
-          isOverriddenPy={isOverridden("pl.cost_materials.opening_py")}
-          onCommitCy={(v) => updatePath("pl.cost_materials.opening_cy", v)}
-          onCommitPy={(v) => updatePath("pl.cost_materials.opening_py", v)}
-        />
-        <EditableRow
-          label="Add: Purchases"
-          cy={Number(get("pl.cost_materials.purchases_cy") ?? 0)}
-          py={Number(get("pl.cost_materials.purchases_py") ?? 0)}
-          isOverriddenCy={isOverridden("pl.cost_materials.purchases_cy")}
-          isOverriddenPy={isOverridden("pl.cost_materials.purchases_py")}
-          onCommitCy={(v) => updatePath("pl.cost_materials.purchases_cy", v)}
-          onCommitPy={(v) => updatePath("pl.cost_materials.purchases_py", v)}
-        />
-        <EditableRow
-          label="Less: Closing Stock"
-          cy={Number(get("pl.cost_materials.closing_cy") ?? 0)}
-          py={Number(get("pl.cost_materials.closing_py") ?? 0)}
-          isOverriddenCy={isOverridden("pl.cost_materials.closing_cy")}
-          isOverriddenPy={isOverridden("pl.cost_materials.closing_py")}
-          onCommitCy={(v) => updatePath("pl.cost_materials.closing_cy", v)}
-          onCommitPy={(v) => updatePath("pl.cost_materials.closing_py", v)}
-        />
-        <EditableRow
-          label="Cost of materials consumed (per P&L)"
-          cy={cy("cost_materials")} py={py("cost_materials")}
-          autoCY={cy("cost_materials")} autoPY={py("cost_materials")}
-          isOverriddenCy={isOverridden("pl.cost_materials.cy")}
-          isOverriddenPy={isOverridden("pl.cost_materials.py")}
-          onCommitCy={(v) => updatePath("pl.cost_materials.cy", v)}
-          onCommitPy={(v) => updatePath("pl.cost_materials.py", v)}
-          onResetCy={() => resetPath("pl.cost_materials.cy")}
-          onResetPy={() => resetPath("pl.cost_materials.py")}
-          bold
-        />
-      </NoteCard>
+      {(() => {
+        // 2026-07-20 (V J Desai — Issues 1 & 3 for corporate FS):
+        //   Issue 1 — the note's total row (and the P&L face) must reflect
+        //             live changes to Opening / Purchases / Closing:
+        //                total = opening + purchases − closing.
+        //   Issue 3 — "Add: Purchases" now exposes an expandable per-ledger
+        //             breakup (COA-mapped PL_EXP_MAT ledgers) so auditors can
+        //             see the make-up of the figure without leaving the note.
+        //             Purchases amount auto-defaults to the breakup sum;
+        //             manual override still wins.
+        // Face-side mirror lives in PipelineFinancialStatements.tsx →
+        // pl.costMaterials. Both sides share the same formula so BS ↔ face
+        // ↔ note stay in lock-step for every corporate client.
+        const cmBreakupRows = (get("pl.cost_materials.breakup") ?? []) as ListRow[];
+        const cmBreakupSumCy = cmBreakupRows.reduce((s, r) => {
+          const n = Number(r?.amount_cy);
+          return s + (Number.isFinite(n) ? n : 0);
+        }, 0);
+        const cmBreakupSumPy = cmBreakupRows.reduce((s, r) => {
+          const n = Number(r?.amount_py);
+          return s + (Number.isFinite(n) ? n : 0);
+        }, 0);
+        const purchasesStoredCy = get("pl.cost_materials.purchases_cy");
+        const purchasesStoredPy = get("pl.cost_materials.purchases_py");
+        const purchasesCy = (purchasesStoredCy != null && purchasesStoredCy !== "")
+          ? Number(purchasesStoredCy) : cmBreakupSumCy;
+        const purchasesPy = (purchasesStoredPy != null && purchasesStoredPy !== "")
+          ? Number(purchasesStoredPy) : cmBreakupSumPy;
+        const openingCy = Number(get("pl.cost_materials.opening_cy") ?? 0);
+        const openingPy = Number(get("pl.cost_materials.opening_py") ?? 0);
+        const closingCy = Number(get("pl.cost_materials.closing_cy") ?? 0);
+        const closingPy = Number(get("pl.cost_materials.closing_py") ?? 0);
+        // Any manual entry present anywhere → compute from formula.
+        // Nothing entered yet → keep the note total tied to the COA-derived
+        // headline so a fresh engagement doesn't show 0.
+        const anyEditsCy = get("pl.cost_materials.opening_cy") != null
+                        || get("pl.cost_materials.closing_cy") != null
+                        || purchasesStoredCy != null;
+        const anyEditsPy = get("pl.cost_materials.opening_py") != null
+                        || get("pl.cost_materials.closing_py") != null
+                        || purchasesStoredPy != null;
+        const cmTotalCy = anyEditsCy ? (openingCy + purchasesCy - closingCy) : cy("cost_materials");
+        const cmTotalPy = anyEditsPy ? (openingPy + purchasesPy - closingPy) : effectivePY("cost_materials");
+        return (
+          <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("cost_materials")} title="Cost of materials consumed" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cmTotalCy} pyTotal={cmTotalPy}>
+            <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
+            <EditableRow
+              label="Opening Stock"
+              cy={openingCy}
+              py={openingPy}
+              isOverriddenCy={isOverridden("pl.cost_materials.opening_cy")}
+              isOverriddenPy={isOverridden("pl.cost_materials.opening_py")}
+              onCommitCy={(v) => updatePath("pl.cost_materials.opening_cy", v)}
+              onCommitPy={(v) => updatePath("pl.cost_materials.opening_py", v)}
+            />
+            <CoMPurchasesRow
+              cy={purchasesCy}
+              py={purchasesPy}
+              autoCy={cmBreakupSumCy}
+              autoPy={cmBreakupSumPy}
+              rows={cmBreakupRows}
+              onRowsChange={(next) => updatePath("pl.cost_materials.breakup", next)}
+              onCommitCy={(v) => updatePath("pl.cost_materials.purchases_cy", v)}
+              onCommitPy={(v) => updatePath("pl.cost_materials.purchases_py", v)}
+              onResetCy={() => resetPath("pl.cost_materials.purchases_cy")}
+              onResetPy={() => resetPath("pl.cost_materials.purchases_py")}
+              isOverriddenCy={purchasesStoredCy != null && purchasesStoredCy !== ""}
+              isOverriddenPy={purchasesStoredPy != null && purchasesStoredPy !== ""}
+              engagementId={engagementId}
+              onRemapLedger={onRemapLedger}
+              onUnmapLedger={onUnmapLedger}
+            />
+            <EditableRow
+              label="Less: Closing Stock"
+              cy={closingCy}
+              py={closingPy}
+              isOverriddenCy={isOverridden("pl.cost_materials.closing_cy")}
+              isOverriddenPy={isOverridden("pl.cost_materials.closing_py")}
+              onCommitCy={(v) => updatePath("pl.cost_materials.closing_cy", v)}
+              onCommitPy={(v) => updatePath("pl.cost_materials.closing_py", v)}
+            />
+            <EditableRow
+              label="Cost of materials consumed (per P&L)"
+              cy={cmTotalCy} py={cmTotalPy}
+              autoCY={cmTotalCy} autoPY={cmTotalPy}
+              onCommitCy={() => {}} onCommitPy={() => {}}
+              isLocked
+              bold
+            />
+          </NoteCard>
+        );
+      })()}
 
       {renderListNote(sn("purchases_stock"), "Purchase of stock-in-trade", "purchases_stock",
         "Purchase break-up")}
@@ -322,24 +437,24 @@ export default function NotePL({
         <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
         <div className="text-[10px] italic text-muted-foreground mt-1 flex items-center gap-1">
           <span>Closing Stock</span>
-          <span className="text-muted-foreground/70">— amounts flow from COA mapping; use “Move to…” to reassign</span>
+          <span className="text-muted-foreground/70">— defaults flow from COA mapping; type any cell to override, blank to revert.</span>
         </div>
-        {/* Closing Stock rows — locked, auto-populated from INV_FG / INV_WIP /
-            INV_STT / INV_STOCK / NCE_STCK / BS_CA_INV codes via notesAutoPopulate.
-            2026-06-25 (V J Desai — Stock-in-trade shifted left): the previous
-            flex-wrap around EditableRow broke its internal 12-col grid so the
-            amount columns misaligned with the "Less: Opening Stock" block
-            below. Fix — keep EditableRow's grid intact and float the three-
-            dots button ABSOLUTELY over the row's own action gutter (col-span-1
-            reserved by actionGutter=true). Layout stays identical to the
-            Opening Stock rows. */}
+        {/* 2026-07-20 (V J Desai — Issue 2): each of the six sub-cells now
+            takes a manual override. `autoCY` / `autoPY` still passes the
+            COA-derived value so the ↺ reset control appears when an
+            override is present, and the amber-tint override highlight fires
+            automatically via EditableRow's isOverridden props. */}
         <div className="relative">
           <EditableRow
             label="Finished Goods" indent={1}
-            cy={dispFgCloseCy} py={dispFgClosePy}
+            cy={cellFgCloseCy} py={cellFgClosePy}
             autoCY={dispFgCloseCy} autoPY={dispFgClosePy}
-            onCommitCy={() => {}} onCommitPy={() => {}}
-            isLocked
+            isOverriddenCy={ciOverride("fg", "close", "cy") != null}
+            isOverriddenPy={ciOverride("fg", "close", "py") != null}
+            onCommitCy={ciCommit("fg", "close", "cy")}
+            onCommitPy={ciCommit("fg", "close", "py")}
+            onResetCy={() => resetPath("pl.changes_inventory.override.fg_close_cy")}
+            onResetPy={() => resetPath("pl.changes_inventory.override.fg_close_py")}
           />
           <div className="absolute right-0 top-1/2 -translate-y-1/2">
             {renderMoveDropdown("fg")}
@@ -348,10 +463,14 @@ export default function NotePL({
         <div className="relative">
           <EditableRow
             label="Work-in-progress" indent={1}
-            cy={dispWipCloseCy} py={dispWipClosePy}
+            cy={cellWipCloseCy} py={cellWipClosePy}
             autoCY={dispWipCloseCy} autoPY={dispWipClosePy}
-            onCommitCy={() => {}} onCommitPy={() => {}}
-            isLocked
+            isOverriddenCy={ciOverride("wip", "close", "cy") != null}
+            isOverriddenPy={ciOverride("wip", "close", "py") != null}
+            onCommitCy={ciCommit("wip", "close", "cy")}
+            onCommitPy={ciCommit("wip", "close", "py")}
+            onResetCy={() => resetPath("pl.changes_inventory.override.wip_close_cy")}
+            onResetPy={() => resetPath("pl.changes_inventory.override.wip_close_py")}
           />
           <div className="absolute right-0 top-1/2 -translate-y-1/2">
             {renderMoveDropdown("wip")}
@@ -360,41 +479,55 @@ export default function NotePL({
         <div className="relative">
           <EditableRow
             label="Stock-in-trade" indent={1}
-            cy={dispSitCloseCy} py={dispSitClosePy}
+            cy={cellSitCloseCy} py={cellSitClosePy}
             autoCY={dispSitCloseCy} autoPY={dispSitClosePy}
-            onCommitCy={() => {}} onCommitPy={() => {}}
-            isLocked
+            isOverriddenCy={ciOverride("sit", "close", "cy") != null}
+            isOverriddenPy={ciOverride("sit", "close", "py") != null}
+            onCommitCy={ciCommit("sit", "close", "cy")}
+            onCommitPy={ciCommit("sit", "close", "py")}
+            onResetCy={() => resetPath("pl.changes_inventory.override.sit_close_cy")}
+            onResetPy={() => resetPath("pl.changes_inventory.override.sit_close_py")}
           />
           <div className="absolute right-0 top-1/2 -translate-y-1/2">
             {renderMoveDropdown("sit")}
           </div>
         </div>
         <div className="text-[10px] italic text-muted-foreground mt-2">Less: Opening Stock</div>
-        {/* Opening = closing of prior period, honouring the same bucket_map. */}
         <EditableRow
           label="Finished Goods" indent={1}
-          cy={dispFgOpenCy} py={dispFgOpenPy}
+          cy={cellFgOpenCy} py={cellFgOpenPy}
           autoCY={dispFgOpenCy} autoPY={dispFgOpenPy}
-          onCommitCy={() => {}} onCommitPy={() => {}}
-          isLocked
+          isOverriddenCy={ciOverride("fg", "open", "cy") != null}
+          isOverriddenPy={ciOverride("fg", "open", "py") != null}
+          onCommitCy={ciCommit("fg", "open", "cy")}
+          onCommitPy={ciCommit("fg", "open", "py")}
+          onResetCy={() => resetPath("pl.changes_inventory.override.fg_open_cy")}
+          onResetPy={() => resetPath("pl.changes_inventory.override.fg_open_py")}
         />
         <EditableRow
           label="Work-in-progress" indent={1}
-          cy={dispWipOpenCy} py={dispWipOpenPy}
+          cy={cellWipOpenCy} py={cellWipOpenPy}
           autoCY={dispWipOpenCy} autoPY={dispWipOpenPy}
-          onCommitCy={() => {}} onCommitPy={() => {}}
-          isLocked
+          isOverriddenCy={ciOverride("wip", "open", "cy") != null}
+          isOverriddenPy={ciOverride("wip", "open", "py") != null}
+          onCommitCy={ciCommit("wip", "open", "cy")}
+          onCommitPy={ciCommit("wip", "open", "py")}
+          onResetCy={() => resetPath("pl.changes_inventory.override.wip_open_cy")}
+          onResetPy={() => resetPath("pl.changes_inventory.override.wip_open_py")}
         />
         <EditableRow
           label="Stock-in-trade" indent={1}
-          cy={dispSitOpenCy} py={dispSitOpenPy}
+          cy={cellSitOpenCy} py={cellSitOpenPy}
           autoCY={dispSitOpenCy} autoPY={dispSitOpenPy}
-          onCommitCy={() => {}} onCommitPy={() => {}}
-          isLocked
+          isOverriddenCy={ciOverride("sit", "open", "cy") != null}
+          isOverriddenPy={ciOverride("sit", "open", "py") != null}
+          onCommitCy={ciCommit("sit", "open", "cy")}
+          onCommitPy={ciCommit("sit", "open", "py")}
+          onResetCy={() => resetPath("pl.changes_inventory.override.sit_open_cy")}
+          onResetPy={() => resetPath("pl.changes_inventory.override.sit_open_py")}
         />
-        {/* Total row is auto-computed from the six display sub-cells — never
-            editable. Consistent with the "amounts flow from COA" rule the
-            user asked for; auditor changes the COA mapping to change values. */}
+        {/* Total row is auto-computed from the six display sub-cells (each
+            of which respects manual overrides). Read-only. */}
         <EditableRow
           label="Changes in inventories (per P&L)"
           cy={ciTotalCy} py={ciTotalPy}
@@ -440,7 +573,7 @@ export default function NotePL({
         <EditableRow
           label="Weighted avg. number of equity shares"
           cy={wavg}
-          py={Number(get("pl.eps.weighted_avg_shares_py") ?? 0)}
+          py={wavgPy}
           isOverriddenCy={isOverridden("pl.eps.weighted_avg_shares")}
           isOverriddenPy={isOverridden("pl.eps.weighted_avg_shares_py")}
           onCommitCy={(v) => updatePath("pl.eps.weighted_avg_shares", v)}
@@ -448,8 +581,8 @@ export default function NotePL({
         />
         <EditableRow
           label="Basic EPS (₹)"
-          cy={basicEps}
-          py={Number(get("pl.eps.basic_py") ?? 0)}
+          cy={Number(get("pl.eps.basic") ?? basicEps)}
+          py={Number(get("pl.eps.basic_py") ?? basicEpsPy)}
           isOverriddenCy={isOverridden("pl.eps.basic")}
           isOverriddenPy={isOverridden("pl.eps.basic_py")}
           onCommitCy={(v) => updatePath("pl.eps.basic", v)}
@@ -459,7 +592,7 @@ export default function NotePL({
         <EditableRow
           label="Diluted EPS (₹)"
           cy={Number(get("pl.eps.diluted") ?? basicEps)}
-          py={Number(get("pl.eps.diluted_py") ?? 0)}
+          py={Number(get("pl.eps.diluted_py") ?? basicEpsPy)}
           isOverriddenCy={isOverridden("pl.eps.diluted")}
           isOverriddenPy={isOverridden("pl.eps.diluted_py")}
           onCommitCy={(v) => updatePath("pl.eps.diluted", v)}
@@ -467,6 +600,83 @@ export default function NotePL({
           bold
         />
       </NoteCard>
+    </div>
+  );
+}
+
+/**
+ * 2026-07-20 (V J Desai — Issue 3): "Add: Purchases" row inside the Cost of
+ * Materials Consumed note. Renders like a normal EditableRow but with a
+ * disclosure chevron that expands into the underlying COA-mapped ledger
+ * breakup (bs / p&l note style ListTable). Amount auto-defaults to the
+ * breakup sum, so editing / adding rows updates the row's headline figure
+ * — which in turn feeds the note total (opening + purchases − closing) and
+ * the P&L face. Manual amount override still wins over the auto-sum.
+ */
+function CoMPurchasesRow({
+  cy, py, autoCy, autoPy, rows, onRowsChange,
+  onCommitCy, onCommitPy, onResetCy, onResetPy,
+  isOverriddenCy, isOverriddenPy,
+  engagementId, onRemapLedger, onUnmapLedger,
+}: {
+  cy: number; py: number;
+  autoCy: number; autoPy: number;
+  rows: ListRow[];
+  onRowsChange: (rows: ListRow[]) => void;
+  onCommitCy:   (v: number | null) => void;
+  onCommitPy:   (v: number | null) => void;
+  onResetCy:    () => void;
+  onResetPy:    () => void;
+  isOverriddenCy: boolean;
+  isOverriddenPy: boolean;
+  engagementId: string;
+  onRemapLedger?: (ledger: string, code: string) => void;
+  onUnmapLedger?: (ledger: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const hasBreakup = Array.isArray(rows) && rows.length > 0;
+  return (
+    <div>
+      <div className="relative">
+        <EditableRow
+          label={hasBreakup
+            ? (open ? "Add: Purchases (hide ledger breakup)" : "Add: Purchases (show ledger breakup)")
+            : "Add: Purchases"}
+          cy={cy} py={py}
+          autoCY={autoCy} autoPY={autoPy}
+          isOverriddenCy={isOverriddenCy}
+          isOverriddenPy={isOverriddenPy}
+          onCommitCy={onCommitCy}
+          onCommitPy={onCommitPy}
+          onResetCy={onResetCy}
+          onResetPy={onResetPy}
+        />
+        {hasBreakup && (
+          <button
+            type="button"
+            onClick={() => setOpen(o => !o)}
+            title={open ? "Hide ledger breakup" : "Show ledger breakup"}
+            className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-4 text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {open ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          </button>
+        )}
+      </div>
+      {open && hasBreakup && (
+        <div className="ml-4 mt-1 mb-2 pl-3 border-l-2 border-muted">
+          <div className="text-[10px] italic text-muted-foreground pb-1">Ledger-wise breakup (COA-mapped). Sum feeds the "Add: Purchases" amount above.</div>
+          <ListTable
+            rows={rows}
+            onChange={onRowsChange}
+            descPlaceholder="Purchase ledger"
+            addLabel="Add row"
+            showSubtotal
+            onRemapLedger={onRemapLedger}
+            onUnmapLedger={onUnmapLedger}
+            engagementId={engagementId}
+          />
+        </div>
+      )}
     </div>
   );
 }

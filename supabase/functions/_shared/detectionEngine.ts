@@ -100,6 +100,13 @@ export interface ScrutinyData {
   rp?: string[];
 }
 
+/** Approved engagement materiality. Absent until a human has signed it off. */
+export interface MaterialityValues {
+  materiality: number;
+  performance: number;
+  trivial: number;
+}
+
 export interface ScrutinyContext {
   /** FY start, "YYYY-MM-DD" (e.g. 2025-04-01) */
   financialYearStart?: string;
@@ -109,6 +116,13 @@ export interface ScrutinyContext {
   holidays?: string[];
   /** "today" for future-date checks; defaults to financialYearEnd then real now */
   today?: string;
+  /**
+   * Human-APPROVED materiality for this engagement. Rules that opt in via
+   * detection_logic.materiality have their thresholds rescaled to it. Undefined means nobody has
+   * approved anything yet, and every rule falls back to its literal threshold — an unapproved
+   * engagement behaves exactly as it does today rather than going silent.
+   */
+  materiality?: MaterialityValues | null;
 }
 
 export interface ScrutinyFinding {
@@ -707,11 +721,34 @@ const flagEngagement = (rule: ScrutinyRule, message: string, evidence?: Record<s
   finding(rule, { flag_message: message, evidence }),
 ];
 
-/** Absence check: flag when an expected provision/disclosure ledger is NOT present. */
+/**
+ * Absence check: flag when an expected provision/disclosure was not made THIS year.
+ *
+ * Testing mere existence was wrong. A ledger such as "Unpaid Audit Fee" that carries only last
+ * year's balance and saw no movement at all in the current year satisfied `anyLedger` and silenced
+ * the rule — yet that stale prior-year figure standing alone IS the finding auditors raise. The
+ * check now distinguishes three states: never created (absent or nil), created this year (silent),
+ * and carried over untouched from the prior year (flagged as stale).
+ */
 const h_missing_provision: CheckHandler = (rule, { tb }) => {
   const kws = rule.detection_logic.keywords ?? [];
-  if (anyLedger(tb, kws)) return [];
-  return flagEngagement(rule, render(rule.audit_query_template, {}), { keywords: kws, present: false });
+  const live = tb.filter((r) => kwMatch(`${r.ledger_name} ${r.parent_group ?? ""}`, kws) && num(r.closing_balance) !== 0);
+  if (live.length === 0) {
+    return flagEngagement(rule, render(rule.audit_query_template, {}), { keywords: kws, present: false });
+  }
+  // Movement is the test for "created this year". Tally reports the year's turnover on the ledger,
+  // so a provision raised, reversed or topped up in the year shows a non-zero debit or credit.
+  const moved = live.some((r) => Math.abs(num(r.debit_amount)) > 0 || Math.abs(num(r.credit_amount)) > 0);
+  if (moved) return [];
+  const worst = live.reduce((a, b) => (Math.abs(num(b.closing_balance)) > Math.abs(num(a.closing_balance)) ? b : a));
+  const bal = Math.abs(num(worst.closing_balance));
+  return [finding(rule, {
+    account: worst.ledger_name,
+    amount: bal,
+    flag_message: render(rule.audit_query_template, { account: worst.ledger_name, amount: fmtAmt(bal) })
+      + ` The ledger "${worst.ledger_name}" carries ${fmtAmt(bal)} but shows no movement whatsoever during the year, so the balance is the earlier year's figure still standing rather than a provision created for the current year.`,
+    evidence: { keywords: kws, present: true, stale_py_only: true, closing: bal },
+  })];
 };
 
 // provision_adequacy_keyword & missing_disclosure share the absence pattern
@@ -915,16 +952,25 @@ const voucherInScope = (
   if (!scope) return true;
   if (scope.cash_only && !isCashVoucher(v)) return false;
   if (scope.side && sideOf(v.dr_cr) !== sideOf(scope.side)) return false;
-  const vt = scope.voucher_type as unknown[] | undefined;
-  if (Array.isArray(vt) && vt.length && !vt.some((t) => lc(v.voucher_type).includes(lc(t)))) return false;
+  // voucher_type accepts a single string as well as a list — a bare string used to be ignored
+  // silently, which widened the rule to every voucher type instead of narrowing it.
+  const vtRaw = scope.voucher_type;
+  const vt = typeof vtRaw === "string" ? [vtRaw] : Array.isArray(vtRaw) ? vtRaw : undefined;
+  if (vt && vt.length && !vt.some((t) => lc(v.voucher_type).includes(lc(t)))) return false;
   // resolved parent_group of the voucher's party/ledger (RC1)
   const grp = groupOf(v.party_ledger ?? v.ledger_name);
+  // scope.match_legs opts a rule into scanning the full double entry: the target ledger of an asset
+  // purchase or a repair bill is a LEG, never the party, so a party-only haystack can never match it.
+  // Opt-in by design — switching it on globally would widen every existing voucher rule.
+  const legs = scope.match_legs && Array.isArray(v.line_items) ? v.line_items : [];
+  const legNames = legs.map((l) => l.ledger_name ?? "").join(" ");
+  const legGroups = legs.map((l) => groupOf(l.ledger_name)).join(" ");
   // explicit group scoping: scope.parent_group_keywords (alias: scope.group)
   const grpKw = (scope.parent_group_keywords ?? scope.group) as unknown;
-  if (Array.isArray(grpKw) && grpKw.length && !kwMatch(grp, grpKw)) return false;
+  if (Array.isArray(grpKw) && grpKw.length && !kwMatch(`${grp} ${legGroups}`, grpKw)) return false;
   const kw = scope.ledger_keywords;
   // ledger_keywords also matches the resolved parent_group so family words work on the voucher path (RC1)
-  if (Array.isArray(kw) && kw.length && !kwMatch(`${v.party_ledger ?? ""} ${v.ledger_name ?? ""} ${v.narration ?? ""} ${grp}`, kw)) return false;
+  if (Array.isArray(kw) && kw.length && !kwMatch(`${v.party_ledger ?? ""} ${v.ledger_name ?? ""} ${v.narration ?? ""} ${grp} ${legNames} ${legGroups}`, kw)) return false;
   return true;
 };
 
@@ -994,26 +1040,55 @@ const h_expr: CheckHandler = (rule, data, ctx) => {
     .filter((v) => voucherInScope(v, scope, groupOf))
     .filter((v) => evalWhere(where, (f) => voucherField(v, f, ctx)));
 
-  if (grain === "aggregate" && dl.aggregate) {
+  // An aggregate block is honoured whenever it is present, even if grain says "voucher". Requiring
+  // grain==="aggregate" meant a grain/aggregate mismatch silently dropped the having clause and the
+  // rule emitted one finding per voucher instead of one per breaching group — a flood, not a no-op.
+  if (dl.aggregate) {
     const agg = dl.aggregate as Record<string, unknown>;
     const by = (Array.isArray(agg.by) ? agg.by : ["party"]) as string[];
     const fn = String(agg.fn ?? "sum");
     const field = String(agg.field ?? "abs_amount");
     const having = (agg.having as { op?: string; value?: unknown } | undefined) ?? { op: ">", value: 0 };
-    const groups = new Map<string, { rows: VoucherRow[]; val: number }>();
+    // by:["leg"] aggregates over the EXPENSE LEDGER rather than the party. A recurring charge is a
+    // property of the head ("Electricity Expenses"), not of the vendor: grouping the same test by
+    // party measured 42 findings per engagement against 2.8 by leg, because every vendor who ever
+    // supplied anything legitimately transacts in only a few months. Only legs matching the scope's
+    // ledger_keywords open a group, so the bank/party side of the entry never forms one.
+    const byLeg = by.includes("leg");
+    const otherBy = by.filter((b) => b !== "leg");
+    const legKw = scope?.ledger_keywords as unknown;
+    const legsOf = (v: VoucherRow): Array<{ name: string; amount: number }> =>
+      (Array.isArray(v.line_items) ? v.line_items : [])
+        .map((l) => ({ name: l.ledger_name ?? "", amount: Math.abs(num(l.amount)) }))
+        .filter((l) => l.name && (!Array.isArray(legKw) || !legKw.length || kwMatch(l.name, legKw)));
+
+    const groups = new Map<string, { rows: VoucherRow[]; val: number; distinct: Set<string>; label: string | null }>();
     for (const v of matched) {
-      const k = groupKey(v, by);
-      const g = groups.get(k) ?? groups.set(k, { rows: [], val: 0 }).get(k)!;
-      g.rows.push(v);
-      const fv = num(voucherField(v, field, ctx));
-      g.val = fn === "max" ? Math.max(g.val, fv) : g.val + fv;
+      const units = byLeg ? legsOf(v) : [null];
+      for (const u of units) {
+        const k = byLeg ? `${lc(u!.name)}|${groupKey(v, otherBy)}` : groupKey(v, by);
+        const g = groups.get(k) ?? groups.set(k, { rows: [], val: 0, distinct: new Set<string>(), label: u ? u.name : null }).get(k)!;
+        g.rows.push(v);
+        // count_distinct counts unique VALUES of `field`, not rows — the only way to express
+        // "booked in fewer than twelve distinct months", which plain count cannot say (a ledger
+        // can carry twenty vouchers all falling in the same three months).
+        if (fn === "count_distinct") g.distinct.add(String(voucherField(v, field, ctx) ?? ""));
+        else {
+          const fv = u ? u.amount : num(voucherField(v, field, ctx));
+          g.val = fn === "max" ? Math.max(g.val, fv) : g.val + fv;
+        }
+      }
     }
     const out: ScrutinyFinding[] = [];
     for (const g of groups.values()) {
-      const metric = fn === "count" ? g.rows.length : g.val;
+      const metric = fn === "count" ? g.rows.length : fn === "count_distinct" ? g.distinct.size : g.val;
       if (applyOp(String(having.op ?? ">"), metric, num(having.value))) {
         const v = g.rows[0];
-        out.push(finding(rule, { account: v.party_ledger ?? v.ledger_name ?? null, amount: g.val, date: v.voucher_date, flag_message: render(tpl, { account: v.party_ledger ?? v.ledger_name ?? "", amount: fmtAmt(g.val), count: g.rows.length, date: v.voucher_date }), evidence: { group_count: g.rows.length, metric } }));
+        const acct = g.label ?? v.party_ledger ?? v.ledger_name ?? null;
+        const amt = fn === "count_distinct"
+          ? (byLeg ? g.rows.reduce((s, r) => s + legsOf(r).reduce((t, l) => t + l.amount, 0), 0) : g.rows.reduce((s, r) => s + Math.abs(num(r.amount)), 0))
+          : g.val;
+        out.push(finding(rule, { account: acct, amount: amt, date: v.voucher_date, flag_message: render(tpl, { account: acct ?? "", amount: fmtAmt(amt), count: fn === "count_distinct" ? metric : g.rows.length, date: v.voucher_date }), evidence: { group_count: g.rows.length, metric, distinct: fn === "count_distinct" ? [...g.distinct].sort() : undefined } }));
       }
     }
     return out;
@@ -1076,12 +1151,16 @@ const h_stream_gap: CheckHandler = (rule, data) => {
   const scope = dl.scope as Record<string, unknown> | undefined;
   const tpl = (dl.message as string | undefined) ?? rule.audit_query_template;
   const groupOf = groupResolver(data.tb);
-  const acc = new Map<string, { present: boolean; missing: boolean; sample: VoucherRow }>();
+  // Value moved through the party during the year. Without this the check has no notion of size and
+  // flags every counterparty in the ledger — the single largest source of noise in the system.
+  const minAmount = num(dl.min_amount, 0);
+  const acc = new Map<string, { present: boolean; missing: boolean; value: number; sample: VoucherRow }>();
   for (const v of data.vouchers) {
     if (!voucherInScope(v, scope, groupOf)) continue;
     const key = lc(v.party_ledger ?? v.ledger_name);
     if (!key) continue;
-    const rec = acc.get(key) ?? acc.set(key, { present: false, missing: false, sample: v }).get(key)!;
+    const rec = acc.get(key) ?? acc.set(key, { present: false, missing: false, value: 0, sample: v }).get(key)!;
+    rec.value += Math.abs(num(v.amount));
     for (const leg of Array.isArray(v.line_items) ? v.line_items : []) {
       const ln = String(leg.ledger_name ?? "");
       if (kwMatch(ln, present)) rec.present = true;
@@ -1090,9 +1169,14 @@ const h_stream_gap: CheckHandler = (rule, data) => {
   }
   const out: ScrutinyFinding[] = [];
   for (const [, rec] of acc) {
-    if (rec.present && !rec.missing) {
+    if (rec.present && !rec.missing && rec.value >= minAmount) {
       const name = rec.sample.party_ledger ?? rec.sample.ledger_name ?? "";
-      out.push(finding(rule, { account: name, flag_message: render(tpl, { account: name }), evidence: { has_present: true, has_missing: false } }));
+      out.push(finding(rule, {
+        account: name,
+        amount: Math.round(rec.value),
+        flag_message: render(tpl, { account: name, amount: fmtAmt(Math.round(rec.value)) }),
+        evidence: { has_present: true, has_missing: false, value: Math.round(rec.value) },
+      }));
     }
   }
   return out;
@@ -1439,7 +1523,9 @@ const h_adequacy: CheckHandler = (rule, data) => {
   if (base <= 0 || base < num(dl.min_base, 0)) {
     return [finding(rule, { advisory: true, flag_message: `${rule.rule_name}: the statutory base is not present in the books — confirm manually.`, evidence: { reason: "no_base", base: Math.round(base) } })];
   }
-  if (actual === 0) return [];
+  // actual === 0 against a base that IS present is the strongest form of this finding — no
+  // depreciation charged at all on a live asset block, no reverse charge discharged at all. It was
+  // previously short-circuited away, so the engine passed exactly the engagements it should fail.
   const pct = num(dl.pct ?? dl.required_pct ?? dl.threshold_pct ?? rule.threshold_value, 100);
   const limit = (base * pct) / 100;
   const op = String(dl.op ?? ">");
@@ -1515,6 +1601,36 @@ const h_balance_decreased: CheckHandler = (rule, data) => {
   return out;
 };
 
+/**
+ * no_movement — flags a scoped ledger that carries a balance which did NOT move during the year
+ * (opening ≈ closing). This is the "previous year's provision still exists / pending reversal",
+ * "old balance never adjusted" query an auditor raises. Distinct from missing_provision (which fires
+ * when the ledger is ABSENT) and from ageing (which needs voucher activity to judge dormancy).
+ * detection_logic: { check:"no_movement", scope?, min_balance?:number, tolerance?:number, message? }.
+ */
+const h_no_movement: CheckHandler = (rule, data) => {
+  const dl = rule.detection_logic as unknown as Record<string, unknown>;
+  const scope = dl.scope as Record<string, unknown> | undefined;
+  const minBal = num(dl.min_balance, 1000);
+  const tol = num(dl.tolerance, 1);
+  const tpl = (dl.message as string | undefined) ?? rule.audit_query_template;
+  const out: ScrutinyFinding[] = [];
+  for (const r of data.tb) {
+    if (!accountInScope(r, scope)) continue;
+    const open = Math.abs(num(r.opening_balance));
+    const close = Math.abs(num(r.closing_balance));
+    if (open < minBal || close < minBal) continue;
+    if (Math.abs(open - close) > tol) continue;
+    out.push(finding(rule, {
+      account: r.ledger_name,
+      amount: close,
+      flag_message: render(tpl, { account: r.ledger_name, amount: fmtAmt(close) }),
+      evidence: { opening: Math.round(open), closing: Math.round(close), moved: false, parent_group: r.parent_group },
+    }));
+  }
+  return out;
+};
+
 // ---------------------------------------------------------------------------
 // Registry + runner
 // ---------------------------------------------------------------------------
@@ -1568,6 +1684,7 @@ export const GENERIC_HANDLERS: Record<string, CheckHandler> = {
   tds_shortfall: h_tds_shortfall,
   ratio_change: h_ratio_change,
   duplicate_ledger: h_duplicate_ledger,
+  no_movement: h_no_movement,
 
   // Cross-leg "booked one side, not the other" (voucher grain, uses line_items + resolved groups)
   no_corresponding_entry: h_no_corresponding_entry,
@@ -1619,6 +1736,106 @@ export interface RunOptions {
  * and, when emitAdvisoryForUnhandled is true, also produce an advisory finding so they are never
  * silently passed.
  */
+/**
+ * Rewrite a rule's materiality-relative thresholds into absolute rupees for this engagement.
+ *
+ * A flat rupee threshold is why a ₹1,000 creditor balance is raised at a ₹100 crore company and a
+ * ₹35,000 dormant balance is missed at a small firm. A rule opts in with a `materiality` map of
+ * dotted paths to MULTIPLES of performance materiality:
+ *
+ *   { "check":"no_movement", "min_balance":100000,
+ *     "materiality": { "min_balance": 0.25, "where.0.value": 0.5 } }
+ *
+ * The literal value stays as the fallback, so a rule behaves exactly as it does today until a
+ * human has approved materiality for the engagement. Applied here rather than at the call site so
+ * no caller can forget it.
+ */
+export const applyMateriality = <T extends { detection_logic?: Record<string, unknown> | null }>(
+  rule: T,
+  values: MaterialityValues | null | undefined,
+): T => {
+  const dl = rule.detection_logic as Record<string, unknown> | undefined | null;
+  const map = dl?.materiality as Record<string, unknown> | undefined;
+  if (!dl || !map || !values || !Number.isFinite(Number(values.performance))) return rule;
+
+  const next = JSON.parse(JSON.stringify(dl)) as Record<string, unknown>;
+  for (const [path, factorRaw] of Object.entries(map)) {
+    const factor = Number(factorRaw);
+    if (!Number.isFinite(factor)) continue;
+    const target = Math.round(num(values.performance) * factor);
+    const parts = path.split(".");
+    let node: unknown = next;
+    for (let i = 0; i < parts.length - 1 && node && typeof node === "object"; i++) {
+      node = Array.isArray(node)
+        ? (node as unknown[])[Number(parts[i])]
+        : (node as Record<string, unknown>)[parts[i]];
+    }
+    if (!node || typeof node !== "object") continue;
+    const leaf = parts[parts.length - 1];
+    if (Array.isArray(node)) (node as unknown[])[Number(leaf)] = target;
+    else (node as Record<string, unknown>)[leaf] = target;
+  }
+  return { ...rule, detection_logic: next };
+};
+
+/**
+ * Collapse a rule's findings into ONE engagement-level summary.
+ *
+ * An auditor raises one query per issue. Several checks naturally emit one finding per day, per
+ * voucher or per ledger, so a single behaviour becomes dozens of rows — a cash balance sitting
+ * above the limit for 54 days produced 54 findings, none of which a human would ever write up
+ * separately. Rolling up preserves every fact (count, total, peak, span, the ledgers involved)
+ * while presenting one reviewable item.
+ *
+ * Opt-in per rule so nothing changes for checks that are already one-per-issue.
+ * detection_logic.rollup: true | { min_count?: number, metric?: "total"|"peak", message?: string }
+ * The message may use {count} {amount} {peak} {accounts} {date} {value}.
+ */
+const rollupFindings = (rule: ScrutinyRule, produced: ScrutinyFinding[]): ScrutinyFinding[] => {
+  const dl = rule.detection_logic as unknown as Record<string, unknown>;
+  const cfg = dl.rollup;
+  if (!cfg) return produced;
+  const advisory = produced.filter((f) => f.advisory);
+  const real = produced.filter((f) => !f.advisory);
+  const o = (typeof cfg === "object" && cfg !== null ? cfg : {}) as Record<string, unknown>;
+  const minCount = num(o.min_count, 2);
+  if (real.length < minCount) return produced;
+
+  const accounts = [...new Set(real.map((f) => f.account).filter(Boolean) as string[])];
+  const total = real.reduce((s, f) => s + Math.abs(num(f.amount)), 0);
+  const peak = real.reduce((m, f) => Math.max(m, Math.abs(num(f.amount))), 0);
+  const dates = (real.map((f) => f.date).filter(Boolean) as string[]).sort();
+  const worst = real.reduce((a, b) => (Math.abs(num(b.amount)) > Math.abs(num(a.amount)) ? b : a));
+  const headline = num(o.metric === "peak" ? peak : total);
+  const shown = accounts.slice(0, 3).join(", ") + (accounts.length > 3 ? ` and ${accounts.length - 3} more` : "");
+  const tpl = (o.message as string | undefined) ?? (dl.rollup_message as string | undefined) ?? rule.audit_query_template;
+
+  return [
+    ...advisory,
+    finding(rule, {
+      account: accounts.length === 1 ? accounts[0] : null,
+      amount: headline,
+      date: worst.date ?? dates[0] ?? null,
+      flag_message: render(tpl, {
+        count: real.length,
+        amount: fmtAmt(headline),
+        peak: fmtAmt(peak),
+        value: fmtAmt(total),
+        accounts: shown,
+        date: worst.date ?? dates[0] ?? "",
+      }),
+      evidence: {
+        rolled_up: real.length,
+        accounts: accounts.slice(0, 25),
+        total: Math.round(total),
+        peak: Math.round(peak),
+        first: dates[0] ?? null,
+        last: dates[dates.length - 1] ?? null,
+      },
+    }),
+  ];
+};
+
 export function runDetection(
   rules: ScrutinyRule[],
   data: ScrutinyData,
@@ -1633,7 +1850,10 @@ export function runDetection(
   const ledger: RuleRunStatus[] = [];
   let handledCount = 0;
 
-  for (const rule of rules) {
+  for (const raw of rules) {
+    // Thresholds are rescaled to the engagement's APPROVED materiality before dispatch. With no
+    // approval this is a no-op and the rule's literal thresholds apply.
+    const rule = applyMateriality(raw, ctx.materiality);
     const check = String(rule.detection_logic?.check ?? "");
     const handler = handlers[check];
     if (!handler) {
@@ -1653,7 +1873,7 @@ export function runDetection(
     handledCount += 1;
     executed.add(check);
     try {
-      const produced = handler(rule, data, ctx);
+      const produced = rollupFindings(rule, handler(rule, data, ctx));
       findings.push(...produced);
       const real = produced.filter((f) => !f.advisory);
       const adv = produced.filter((f) => f.advisory);

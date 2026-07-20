@@ -45,10 +45,15 @@ describe("noteAmt choke-point (BUG 1 sign)", () => {
   });
 
   describe("production default", () => {
-    it("flag is OFF so the build is byte-identical to pre-fix", () => {
-      expect(NCE_SIGNED_NOTE_AMOUNTS).toBe(false);
-      // With the flag default, noteAmt() must equal the legacy magnitude.
-      expect(noteAmt({ closing_balance: 5_000_000, balance_type: "Dr" }, "borrowings")).toBe(5_000_000);
+    // The sign fix was permanently enabled in d3d4a95b ("enable permanent NCE sign fix +
+    // transfer-safe re-sync") and deployed. This block previously asserted the flag was still OFF,
+    // which is why it began failing on main; the guard is kept but now pins the shipped behaviour,
+    // so an accidental revert to the legacy magnitude is still caught.
+    it("flag is ON, so the signed convention applies by default", () => {
+      expect(NCE_SIGNED_NOTE_AMOUNTS).toBe(true);
+      // Default call must deduct a contra, matching signed = true above.
+      expect(noteAmt({ closing_balance: 5_000_000, balance_type: "Dr" }, "borrowings")).toBe(-5_000_000);
+      expect(noteAmt({ closing_balance: 1_000_000, balance_type: "Cr" }, "borrowings")).toBe(1_000_000);
     });
   });
 });
