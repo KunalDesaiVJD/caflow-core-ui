@@ -18,7 +18,7 @@ import { parseTallyPdfPages } from "@/lib/tds/tallyPdf";
 import { logReconAudit } from "@/lib/tdsReconAudit";
 import { TdsExportMenu } from "./TdsExportMenu";
 import { ErrorTypeBreakdown, filterByErrorType } from "./ErrorTypeBreakdown";
-import type { StageReport, ReportMeta } from "@/lib/tds/tdsReport";
+import type { StageReport, ReportMeta, AuditRow } from "@/lib/tds/tdsReport";
 import { makeDateNormaliser, normalizeName, canonicalSection, nameCompare } from "@/lib/tds/match";
 import {
   reconcileTally,
@@ -31,6 +31,9 @@ export interface TallyStageStatus {
   total: number; matched: number; issues: number; overridden: number;
   /** This stage's FULL report (rows + reasons) for the parent's Overview. Lazy. */
   getReport?: () => StageReport;
+  /** Every Tally exception (unresolved, overridden, or resolved via a saved party
+   *  mapping) as one audit row each, for the Stage-4 Checker Review table. Lazy. */
+  getAuditRows?: () => AuditRow[];
 }
 
 interface Props {
@@ -46,7 +49,7 @@ interface ResultRow {
   office_name: string | null; office_date: string | null; office_amount: number | null; office_tds: number | null; office_section: string | null;
   tally_party: string | null; tally_date: string | null; tally_credit: number | null;
   result: TallyResult; amount_basis: string | null; reason: string | null; confidence: number | null; mapped: boolean;
-  overridden: boolean; override_reason: string | null; overridden_by: string | null;
+  overridden: boolean; override_reason: string | null; overridden_by: string | null; overridden_at?: string | null;
 }
 
 const RESULT_BADGE: Record<string, string> = {
@@ -444,8 +447,26 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     };
   }, [results]);
 
+  /** Every Tally exception as one Stage-4 audit row. A record resolved via a saved
+   *  party mapping (matched AND mapped) is "Resolved", not "Unresolved" — a real
+   *  decision (the mapping) is why it reconciles, so the checker should see that,
+   *  not just silence. Overridden always wins (it can co-exist with a mapping). */
+  const tallyAuditRows = (): AuditRow[] =>
+    (results || [])
+      .filter((r) => r.overridden || isTallyIssue(r.result) || (r.mapped && r.result === "Matched"))
+      .map((r): AuditRow => ({
+        stage: "Stage 3",
+        record: r.office_name || "—",
+        errorType: r.result,
+        status: r.overridden ? "Overridden" : isTallyIssue(r.result) ? "Unresolved" : "Resolved",
+        reason: r.overridden ? (r.override_reason || "accepted") : (r.reason || ""),
+        action: r.overridden ? "Overridden" : isTallyIssue(r.result) ? "Pending Review" : "Auto Match (Mapped)",
+        performedBy: r.overridden && r.overridden_by ? (userMap[r.overridden_by] ?? null) : null,
+        performedAt: r.overridden ? (r.overridden_at ?? null) : null,
+      }));
+
   useEffect(() => {
-    onStatusChange?.({ getReport: stage3Report, filingId, loaded: settled.current === filingId, applicable: batches.length > 0, ran: results !== null, total: summary.total, matched: summary.matched, issues: summary.issues, overridden: summary.overridden });
+    onStatusChange?.({ getReport: stage3Report, getAuditRows: tallyAuditRows, filingId, loaded: settled.current === filingId, applicable: batches.length > 0, ran: results !== null, total: summary.total, matched: summary.matched, issues: summary.issues, overridden: summary.overridden });
   }, [filingId, batches, results, summary, onStatusChange]);
 
   const issueRows = useMemo(() => (results || []).filter((r) => isTallyIssue(r.result)).sort((a, b) => (a.overridden ? 1 : 0) - (b.overridden ? 1 : 0)), [results]);

@@ -28,7 +28,7 @@ import {
 import { readSheetGrids, readDelimitedGrid } from "@/lib/tdsWorkbook";
 import { TdsExportMenu } from "./TdsExportMenu";
 import { ErrorTypeBreakdown, filterByErrorType } from "./ErrorTypeBreakdown";
-import type { StageReport, ReportMeta } from "@/lib/tds/tdsReport";
+import type { StageReport, ReportMeta, AuditRow } from "@/lib/tds/tdsReport";
 import { logReconAudit } from "@/lib/tdsReconAudit";
 import {
   comparePanVerification, countDistinctOfficeParties, extractTracesRows, panDiagnostics, isPanException, normalizePan, looksLikePan,
@@ -63,6 +63,9 @@ export interface PanStageStatus {
   /** This stage's FULL report (rows + reasons), so the parent's Overview can carry
    *  real detail instead of restating counts. Lazy — only called on export. */
   getReport?: () => StageReport;
+  /** Every PAN exception (unresolved or overridden) as one audit row each, for the
+   *  Stage-4 Checker Review table. Lazy — only called when that tab renders. */
+  getAuditRows?: () => AuditRow[];
 }
 
 interface Props {
@@ -602,12 +605,26 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
     };
   }, [results]);
 
+  /** Every PAN exception as one Stage-4 audit row — see AuditRow's own contract. */
+  const panAuditRows = (): AuditRow[] =>
+    (results || []).filter((r) => isPanException(r.validation_result)).map((r): AuditRow => ({
+      stage: "Stage 2",
+      record: r.party_name || "—",
+      errorType: r.validation_result,
+      status: r.overridden ? "Overridden" : "Unresolved",
+      reason: r.overridden ? (r.override_reason || "accepted") : panReason(r.validation_result),
+      action: r.overridden ? "Overridden" : "Pending Review",
+      performedBy: r.overridden && r.overridden_by ? (userMap[r.overridden_by] ?? null) : null,
+      performedAt: r.overridden ? r.overridden_at : null,
+    }));
+
   // Report Stage-2 state to the parent so it can gate "Mark Return as Ready to
   // File" on Stage-2 completion (when a TRACES file is present). onStatusChange
   // must be a STABLE callback (the parent passes its setState) to avoid a loop.
   useEffect(() => {
     onStatusChange?.({
       getReport: stage2Report,
+      getAuditRows: panAuditRows,
       filingId: filingId,
       loaded: settledFiling.current === filingId,   // only trustworthy once loadAll settled for THIS filing
       applicable: !!batch,
