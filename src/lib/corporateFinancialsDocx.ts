@@ -60,28 +60,28 @@ const MARG_B  = 900;
 const TW      = A4_W - MARG_H * 2;  // 10466
 
 // 2026-07-20 (V J Desai — Word export polish, Items 7 & 8 of user's
-// checklist):
-//   • Item 7: "Note No." column was 400 DXA (~0.28") — far too narrow for
-//     the two-word heading, which forced Word to wrap the label
-//     letter-by-letter into "N/o/t/e/N/o.". Widened to 900 DXA (~0.63") so
-//     the header renders on a single line.
-//   • Item 8: CY / PY columns were 1483 DXA (~1.03") — long-form currency
-//     headers like "As at 31 Mar 2026" needed ~1.13" and wrapped at the
-//     final year. Widened to 1600 DXA (~1.11") in the 4-col table and
-//     1620 DXA in the 3-col note table so the header renders on a single
-//     line without any inter-word wrap.
-//   • CW_DESC absorbs the delta so total width TW = 10466 stays identical
-//     (row edge alignment is preserved across every table).
+// checklist) — final widths:
+//   • Item 7: "Note No." column was 400 DXA (~0.28") — the two-word
+//     heading was wrapping to "N/o/t/e/N/o." on every corporate export.
+//     Widened to 1200 DXA (~0.83") — enough headroom for the widest
+//     Arial-9pt render of "Note No." on any Word installation.
+//   • Item 8: CY / PY columns widened to 1750 DXA (~1.22") so any
+//     currency-header wording ("As at 31 March 2026", "Year ended
+//     31 March 2026") renders on a single line. Currency headers are
+//     also split with an intentional `\n` after the "As at" / "Year
+//     ended" prefix so wrapping never depends on column-width margins.
+//   • CW_DESC / NW_DESC absorb the delta so total width TW = 10466 stays
+//     identical (row edges align across every table on the page).
 // Main table columns: Particulars | Note No. | CY | PY
-const CW_DESC = 6366;
-const CW_NOTE = 900;
-const CW_CY   = 1600;
-const CW_PY   = 1600;
+const CW_DESC = 5766;
+const CW_NOTE = 1200;
+const CW_CY   = 1750;
+const CW_PY   = 1750;
 
 // Note table columns (3-col Pattern B): Particulars | CY | PY
-const NW_DESC = 7226;
-const NW_CY   = 1620;
-const NW_PY   = 1620;
+const NW_DESC = 6966;
+const NW_CY   = 1750;
+const NW_PY   = 1750;
 
 // Consistent right-side padding for every amount cell so the columns read
 // as visually straight verticals from the header row through subtotal /
@@ -261,9 +261,13 @@ function ec(w: number, bg?: string, borders?: Record<string, typeof bNone>): Tab
 // ─── Standard row factories ───────────────────────────────────────────────────
 
 function colHeaderRow(cyLabel: string, pyLabel: string): TableRow {
+  // 2026-07-20 (V J Desai — Word export polish): the currency header is
+  // three lines ("As at" / "31 March YYYY" / "(₹)"). Force a 720 DXA
+  // minimum height so the header sits as a clean band above the data
+  // rows, regardless of the per-statement _rowH setting.
   return new TableRow({
     tableHeader: true,
-    height: _rowH > 0 ? { value: _rowH, rule: HeightRule.ATLEAST } : undefined,
+    height: { value: Math.max(_rowH, 720), rule: HeightRule.ATLEAST },
     children: [
       cell({ text: "Particulars",    w: CW_DESC, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_NONE, padL: 100 }),
       // Single-line "Note No." — the column is now wide enough to hold it
@@ -496,7 +500,11 @@ function buildBSTable(
   _rowH = 250;
   const rows: TableRow[] = [
     ...titleRows(entityName, "BALANCE SHEET", `AS AT 31 MARCH ${cyYear}`),
-    colHeaderRow(`As at 31 Mar ${cyYear}`, `As at 31 Mar ${pyYear}`),
+    // 2026-07-20 (V J Desai — Word export polish, Item 8): currency
+    // headers explicitly wrap after the prefix so wrapping never depends
+    // on column-width margins. Same treatment applied to the P&L face
+    // and to every 3-col note table via colHeaderRow / noteHdr3 below.
+    colHeaderRow(`As at\n31 March ${cyYear}`, `As at\n31 March ${pyYear}`),
 
     // ── EQUITY AND LIABILITIES ────────────────────────────────────────────
     sectionRow("EQUITY AND LIABILITIES"),
@@ -633,7 +641,7 @@ function buildPLTable(
   _rowH = 320;
   const rows: TableRow[] = [
     ...titleRows(entityName, "STATEMENT OF PROFIT AND LOSS", `FOR THE YEAR ENDED 31 MARCH ${cyYear}`),
-    colHeaderRow(`Year ended 31 Mar ${cyYear}`, `Year ended 31 Mar ${pyYear}`),
+    colHeaderRow(`Year ended\n31 March ${cyYear}`, `Year ended\n31 March ${pyYear}`),
 
     // ── INCOME ────────────────────────────────────────────────────────────
     sectionRow("INCOME"),
@@ -1009,13 +1017,18 @@ function noteHdr3(cyLabel: string, pyLabel: string, keepNext = false): TableRow 
   //     now WHITE with bold black text + a thin bottom rule for visual
   //     separation. Matches the user's "subgroups should not be darker"
   //     directive (Issue 3) without losing the header hierarchy.
+  // 2026-07-20 (V J Desai — Word export polish, Item 5): the currency
+  // header is now three lines ("As at" / "31 March YYYY" / "(₹)") — bump
+  // the row min height from 320 → 720 DXA so all three lines sit inside
+  // a single row band without cramping. Bottom rule + BG_HDR shading
+  // give the header the same visual weight as the BS / P&L header row.
   return new TableRow({
     tableHeader: true,
-    height: { value: 320, rule: HeightRule.ATLEAST },
+    height: { value: 720, rule: HeightRule.ATLEAST },
     children: [
-      cell({ text: "Particulars", w: NW_DESC, sz: SZ_SM, bold: true, color: BLACK, borders: BDR_SUB, padL: 160, keepNext }),
-      cell({ text: `${cyLabel}\n${_exportSuffix}`, w: NW_CY, sz: SZ_SM, bold: true, color: BLACK, borders: BDR_SUB, align: AlignmentType.RIGHT, padR: AMT_PAD_R, keepNext }),
-      cell({ text: `${pyLabel}\n${_exportSuffix}`, w: NW_PY, sz: SZ_SM, bold: true, color: BLACK, borders: BDR_SUB, align: AlignmentType.RIGHT, padR: AMT_PAD_R, keepNext }),
+      cell({ text: "Particulars", w: NW_DESC, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_SUB, padL: 160, keepNext }),
+      cell({ text: `${cyLabel}\n${_exportSuffix}`, w: NW_CY, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_SUB, align: AlignmentType.RIGHT, padR: AMT_PAD_R, keepNext }),
+      cell({ text: `${pyLabel}\n${_exportSuffix}`, w: NW_PY, sz: SZ_SM, bold: true, color: BLACK, bg: BG_HDR, borders: BDR_SUB, align: AlignmentType.RIGHT, padR: AMT_PAD_R, keepNext }),
     ],
   });
 }
@@ -1720,8 +1733,10 @@ function buildShareCapitalNote(
   const fmtPct    = (v: number) => (v === 0 ? "—" : `${v.toFixed(2)}%`);
   const fmtPctChg = (v: number) => (v === 0 ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(2)}%`);
 
-  const cyDateLbl = `As on 31.03.${cyYearNum}`;
-  const pyDateLbl = `As on 31.03.${pyYearNum}`;
+  // 2026-07-20 (V J Desai — Word export polish, Item 8): unified currency
+  // heading across BS / P&L / notes / share-capital sub-tables.
+  const cyDateLbl = `As at\n31 March ${cyYearNum}`;
+  const pyDateLbl = `As at\n31 March ${pyYearNum}`;
   const cyLbl     = `FY ${cyYearNum - 1}-${String(cyYearNum).slice(-2)}`;
   const pyLbl     = `FY ${pyYearNum - 1}-${String(pyYearNum).slice(-2)}`;
 
@@ -2218,10 +2233,12 @@ export async function generateCorporateFinancialsDocx(params: CorpDocxParams): P
     const rows = extractNoteRows(meta.renderType, noteData, amounts, meta.fsCode, stage5Notes, expandSubGroups, collapsedGroups);
     if (rows.length === 0) continue;
 
-    // Issue 5 — every note's amount columns are headed "As on 31.03.YYYY"
-    // (both BS and P&L notes), instead of "As at 31 Mar …" / "Year ended 31 Mar …".
-    const cyFull  = `As on 31.03.${cyLabel}`;
-    const pyFull  = `As on 31.03.${pyLabel}`;
+    // 2026-07-20 (V J Desai — Word export polish, Item 8): every note's
+    // amount columns are now headed with the SAME "As at\n31 March YYYY"
+    // wording and layout as the BS face — one consistent currency
+    // heading across every statement and every note.
+    const cyFull  = `As at\n31 March ${cyLabel}`;
+    const pyFull  = `As at\n31 March ${pyLabel}`;
 
     pendingNotes.push({
       noteNo,
