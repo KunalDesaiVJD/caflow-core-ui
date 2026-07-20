@@ -500,6 +500,11 @@ export function useCustomerSync() {
 
             if (isNew) {
               // ── INSERT new client as draft ──────────────────────────────────
+              // 2026-06-25 (V J Desai — auto-archive on De-Active): new
+              // records that come in already inactive land straight in the
+              // Archived tab tagged as eoffice_inactive so the Clients
+              // page's Final/Draft Active chips never surface them.
+              const startsInactive = !isActiveRecord(r);
               const baseInsert = {
                 customer_id,
                 ...payload,
@@ -507,7 +512,11 @@ export function useCustomerSync() {
                 user_id:   userId,
                 is_draft:  true,
                 source:    "api_import",
-                is_active: isActiveRecord(r),
+                is_active: !startsInactive,
+                ...(startsInactive ? {
+                  deleted_at:      new Date().toISOString(),
+                  deleted_reason:  "eoffice_inactive",
+                } : {}),
               } as any;
 
               let { error } = await supabase.from("clients").insert(baseInsert);
@@ -550,12 +559,26 @@ export function useCustomerSync() {
               //           updates from the API as usual.
               //     • Single-GSTIN or zero-GSTIN client
               //         → Update the gstin field as before (payload wins).
+              // 2026-06-25 (V J Desai — auto-archive / auto-unarchive):
+              // Fetch the archive state too. We need to reach archived rows
+              // (deleted_at IS NOT NULL) that were auto-archived by a
+              // previous sync, so we can unarchive them when eOffice flips
+              // the record back to Active. Manual archives (deleted_reason
+              // = "manual") are left alone regardless of the eOffice state
+              // — a manual archive is a business decision and must never
+              // be overridden by a sync.
               const { data: existing } = await supabase
                 .from("clients")
-                .select("gstin, gstin_addresses, gstin_states")
+                .select("gstin, gstin_addresses, gstin_states, deleted_at, deleted_reason")
                 .eq("customer_id", customer_id)
-                .is("deleted_at", null)
                 .maybeSingle();
+
+              // If the row was manually archived, skip the entire UPDATE —
+              // preserves the intentional archive and prevents accidental
+              // resurrection.
+              if (existing?.deleted_reason === "manual") {
+                return { ok: true, wasNew: false };
+              }
 
               const existingArr: string[] = Array.isArray(existing?.gstin)
                 ? (existing!.gstin as string[]).filter(Boolean)
@@ -573,21 +596,39 @@ export function useCustomerSync() {
               ).size;
 
               let updatePayload: any;
+              const active = isActiveRecord(r);
+              // Archive flip logic — three cases:
+              //   1. Active in eOffice AND row is currently auto-archived → UNARCHIVE
+              //   2. Inactive in eOffice AND row is currently un-archived → AUTO-ARCHIVE
+              //   3. Otherwise → leave deleted_at / deleted_reason alone
+              const archiveFlip: any = {};
+              const isCurrentlyAutoArchived =
+                existing?.deleted_at !== null && existing?.deleted_reason === "eoffice_inactive";
+              if (active && isCurrentlyAutoArchived) {
+                archiveFlip.deleted_at     = null;
+                archiveFlip.deleted_reason = null;
+              } else if (!active && (existing?.deleted_at === null || existing?.deleted_at === undefined)) {
+                archiveFlip.deleted_at     = new Date().toISOString();
+                archiveFlip.deleted_reason = "eoffice_inactive";
+              }
+
               if (knownGstinCount >= 2) {
                 // Multi-GSTIN client — strip every GSTIN-related field from
                 // the payload so the sync leaves them untouched.
                 const { gstin: _drop, ...rest } = payload;
-                updatePayload = { ...rest, is_active: isActiveRecord(r) };
+                updatePayload = { ...rest, is_active: active, ...archiveFlip };
               } else {
                 // Single / zero GSTIN — regular sync path.
-                updatePayload = { ...payload, is_active: isActiveRecord(r) };
+                updatePayload = { ...payload, is_active: active, ...archiveFlip };
               }
 
+              // No `.is("deleted_at", null)` filter — we need to reach the
+              // auto-archived rows too so they can be unarchived when the
+              // eOffice record flips back to Active.
               const { error } = await supabase
                 .from("clients")
                 .update(updatePayload)
-                .eq("customer_id", customer_id)
-                .is("deleted_at", null);
+                .eq("customer_id", customer_id);
 
               if (error) {
                 return { ok: false, syncError: { customer_id, name: name ?? "", error: error.message } };

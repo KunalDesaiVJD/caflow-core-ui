@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { getDefaultTdsQuarter, isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
+import { isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -33,7 +33,7 @@ import {
   CreditCard, RefreshCw, ArrowRight, RotateCcw, Lock, FileText, Loader2, FileSpreadsheet, Upload,
 } from "lucide-react";
 import { generateGeniusExport } from "@/lib/genius-export";
-import { importGeniusXls } from "@/lib/genius-import";
+import { importGeniusXls, repairFilingSectionCodes } from "@/lib/genius-import";
 
 // ─── Types ───
 interface ClientOption {
@@ -97,6 +97,12 @@ interface Props {
   users: UserOption[];
   isSuperadmin: boolean;
   resolveFirmId: () => Promise<string | null>;
+  // Shared Workspace filing context (owned by the parent TdsFilings page) so the
+  // Data Entry and Validate & Finalise tabs stay on the same Client/FY/Quarter/Form.
+  selClient: string; setSelClient: (v: string) => void;
+  selFy: string; setSelFy: (v: string) => void;
+  selQuarter: string; setSelQuarter: (v: string) => void;
+  selForm: string; setSelForm: (v: string) => void;
 }
 
 // ─── Constants ───
@@ -260,16 +266,16 @@ const buildPrevQuarterLabel = (
 // ═══════════════════════════════════════
 // MAIN COMPONENT
 // ═══════════════════════════════════════
-export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Props) {
+export function TdsDataEntry({
+  clients, users, isSuperadmin, resolveFirmId,
+  selClient, setSelClient, selFy, setSelFy, selQuarter, setSelQuarter, selForm, setSelForm,
+}: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
 
-  const [selClient, setSelClient] = useState("");
+  // Client/FY/Quarter/Form are the SHARED Workspace context (owned by the parent),
+  // so a return selected here is already loaded when the user opens Validate & Finalise.
   const [clientSearch, setClientSearch] = useState("");
-  const defaultTdsQuarter = useMemo(() => getDefaultTdsQuarter(), []);
-  const [selFy, setSelFy] = useState(defaultTdsQuarter.fy);
-  const [selQuarter, setSelQuarter] = useState(defaultTdsQuarter.quarter);
-  const [selForm, setSelForm] = useState("26Q");
   const [filingLoaded, setFilingLoaded] = useState(false);
 
   const [filing, setFiling] = useState<TdsFiling | null>(null);
@@ -358,6 +364,21 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
 
       if (match) {
         setFiling(match as TdsFiling);
+        // Self-heal existing rows before displaying them: a filing imported
+        // before the Genius section-code fix has challans/deductees stuck
+        // with a corrupted or Rate-Master-less section_code — re-importing
+        // would only duplicate deductees (there's no dedup on that table), so
+        // the fix has to reach into what's already stored. Cheap when there's
+        // nothing to fix (two reads, zero writes); see repairFilingSectionCodes.
+        try {
+          const firmIdForRepair = await resolveFirmId();
+          if (firmIdForRepair) {
+            const repair = await repairFilingSectionCodes((match as TdsFiling).id, firmIdForRepair, selForm, selFy);
+            if (repair.challansFixed || repair.deducteesFixed) await fetchRates();
+          }
+        } catch (rErr) {
+          console.warn("[TdsDataEntry] Section-code repair skipped:", rErr);
+        }
         await fetchChallans((match as TdsFiling).id);
         await fetchCarryForwardChallans(selClient, selFy, selQuarter, selForm);
       } else {

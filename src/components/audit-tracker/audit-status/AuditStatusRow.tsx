@@ -41,6 +41,7 @@ const STATUS_COLORS: Record<string, string> = {
   "REPORT WITH KVD":         "bg-purple-100 text-purple-700",
   "REPORT SENT TO CLIENT":   "bg-teal-100 text-teal-700",
   "REPORT SIGNED":           "bg-green-100 text-green-700",
+  "REPORT PRINTED":          "bg-emerald-200 text-emerald-800",
   "OTHERS (SPECIFY)":        "bg-pink-100 text-pink-700",
 };
 

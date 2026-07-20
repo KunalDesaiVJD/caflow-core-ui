@@ -21,6 +21,19 @@
  */
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+// The tabular mapping engine is SHARED with the app — ../_shared/tdsColumnEngine.ts is a
+// byte-identical copy of src/lib/tds/columnEngine.ts, enforced by src/lib/tds/sharedSync.test.ts.
+// It used to be duplicated inline in this file, and the two copies silently DRIFTED: a stray
+// "credit" synonym in the app's port made it tag "Date of payment / credit" as an AMOUNT column,
+// so it mapped the wrong date on ~30% of real client files. One engine, one behaviour.
+import {
+  type CanonicalRow,
+  type HeaderMap,
+  HEADER_SYNONYMS,
+  toNum,
+  resolveMapping,
+  buildCanonicalRow as buildCanonicalFromMap,
+} from "../_shared/tdsColumnEngine.ts";
 
 // Reflect the browser's requested headers on the preflight. Newer supabase-js
 // (v2.98+) attaches x-supabase-client-* headers to every functions.invoke call;
@@ -35,20 +48,6 @@ const corsFor = (req: Request) => ({
 });
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-
-interface CanonicalRow {
-  deductee_name: string | null;
-  pan: string | null;
-  section_code: string | null;
-  amount_paid: number | null;
-  tds_amount: number | null;
-  interest: number | null;
-  rate: number | null;
-  date_of_payment: string | null;
-  date_of_deduction: string | null;
-  challan_bsr: string | null;
-  challan_no: string | null;
-}
 
 const CANONICAL_INSTRUCTION = `You normalise a client's TDS statement into canonical rows.
 Client files use WILDLY different column headers, capitalisation, spacing,
@@ -112,253 +111,6 @@ Rules: never invent rows or values; one object per deductee line item; ignore
 totals/header/footer/subtotal lines; convert Indian-format numbers
 ("12,34,567.00") to plain numbers.`;
 
-// ── Deterministic HEADER→FIELD mapper (tabular xlsx/csv/json) ────────────────
-// The tabular path is normalised entirely in code — the AI never reads rows.
-// Each DISTINCT source column header is classified to a canonical field by its
-// wording (synonyms) and, for PAN/date/section, its data pattern. A header→field
-// map (rather than field→header) is deliberate: real client workbooks merge
-// several sheets whose columns are named differently ("PAN" on one sheet,
-// "PAN No." on another; "BILL AMT" vs "amount"), so MULTIPLE headers may feed
-// one field and buildCanonicalFromMap takes the first non-empty value per field
-// per row. This is what makes heterogeneous multi-sheet files import correctly.
-const HEADER_SYNONYMS: Record<keyof CanonicalRow, string[]> = {
-  // "particulars"/"particular" = the party column in Tally ledger exports;
-  // "nameofdeductee"/"assesseename"/"firmname"/"partnersname" seen across real files.
-  deductee_name: ["deducteename", "partyname", "partysname", "vendorname", "suppliername", "customername", "beneficiaryname", "payeename", "nameofdeductee", "nameofparty", "assesseename", "firmname", "partnername", "partnersname", "ledgername", "accountname", "particulars", "particular", "name", "party", "vendor", "deductee"],
-  pan: ["pan", "panno", "pannumber", "permanentaccountnumber", "deducteepan", "partypan", "vendorpan", "panofdeductee", "panofparty"],
-  // "nature" alone is deliberately EXCLUDED — it substring-matches "Signature".
-  section_code: ["section", "tdssection", "sectioncode", "natureofpayment", "natureofpymt", "paymentsection", "us", "u/s"],
-  // Money-column synonyms are SPECIFIC (no bare "amt") so "BILL AMT" resolves to
-  // amount_paid and "TDS AMT" to tds_amount without colliding — both are real,
-  // very common client headers (verified against actual files).
-  amount_paid: ["amount", "paymentamount", "grossamount", "invoiceamount", "taxableamount", "creditamount", "amountcredited", "amountpaidcredited", "amountpaid", "netamount", "billamt", "billamount", "billvalue", "invoiceamt", "grossamt", "taxableamt", "invoicevalue", "paidamount"],
-  // "amountoftds" handles "Amount of TDS"; "tdsamt" handles "TDS AMT".
-  // "tdspaid"/"tdspayable" are the DOMINANT TDS-column labels in many working files
-  // ("TDS PAID" alone appears 1365× across the client corpus). Without them the tax
-  // column normalises to "tdspaid", matches no synonym (the 3-char "tds" core is
-  // skipped by the ≥4 substring rule), maps to NULL, and every row fabricates a "TDS
-  // differs" mismatch. The `paid && date` guard above still nulls "TDS Paid Date".
-  tds_amount: ["tds", "tdsamount", "amountoftds", "taxdeducted", "deductedtax", "taxamount", "tdsdeducted", "tdsamt", "tdspaid", "tdspayable", "tdsdeposited", "incometax"],
-  interest: ["interest", "interestamount", "lateinterest", "int"],
-  rate: ["rate", "tdsrate", "rateoftds", "oftds", "percentoftds"],
-  date_of_payment: ["dateofcredit", "creditdate", "dateofpaymentcredit", "voucherdate", "transactiondate", "date", "valuedate", "entrydate", "postingdate", "invoicedate", "dateofinvoice", "billdate", "billdt", "dateofpayment", "paymentdate", "deductiondate"],
-  date_of_deduction: ["dateofdeduction", "tdsdeductiondate"],
-  challan_bsr: ["bsr", "bsrcode", "challanbsr"],
-  challan_no: ["challanno", "challannumber", "challanserialno", "challan"],
-};
-
-/** lowercase, strip everything but letters/digits, so "Date of Credit" and "date_of_credit " and "DATE-OF-CREDIT" all normalise identically. */
-const normaliseHeader = (h: string): string => h.toLowerCase().replace(/[^a-z0-9]/g, "");
-
-/**
- * Classify ONE source column header to its best canonical field, or null if it
- * doesn't correspond to any. Exact synonym match wins over substring; a couple
- * of structural guards keep challan/paid-deposit columns from being read as the
- * deductee's payment date (a real client file has a "Paid Date & BSR" column
- * that is the challan deposit, NOT the transaction date).
- */
-function bestFieldForHeader(header: string): keyof CanonicalRow | null {
-  const norm = normaliseHeader(header);
-  if (!norm) return null;
-  if (norm.includes("bsr")) return "challan_bsr";                       // "Paid Date & BSR", "BSR Code" → challan, never date
-  if (norm.includes("paid") && norm.includes("date")) return null;      // challan/bank DEPOSIT date — we have no field for it; must not become date_of_payment
-  if (norm.includes("bank") || norm.includes("branch")) return null;    // "Bank Name"/"Branch" → challan bank, NOT the deductee ("name" synonym would otherwise grab it)
-  const fields = Object.keys(HEADER_SYNONYMS) as (keyof CanonicalRow)[];
-  for (const f of fields) if (HEADER_SYNONYMS[f].some(s => s === norm)) return f;                     // exact match (any length)
-  // Substring match, but BOTH sides must be long enough to be meaningful: a
-  // 2–3 char header like "NO." or "CO" or "S.R" must NEVER match because a
-  // synonym happens to CONTAIN it (e.g. "panno" contains "no" → serial column
-  // wrongly read as PAN). Only match a synonym contained in the header, or a
-  // header (≥4 chars) contained in a synonym.
-  for (const f of fields) if (HEADER_SYNONYMS[f].some(s => s.length >= 4 && (norm.includes(s) || (norm.length >= 4 && s.includes(norm))))) return f;
-  return null;
-}
-
-/** Coerce a raw cell for a given canonical field (same rules coerceRow uses).
- * Returns undefined for an empty/absent cell. */
-function coerceField(field: keyof CanonicalRow, v: unknown): string | number | undefined {
-  if (v === null || v === undefined || String(v).trim() === "") return undefined;
-  if (field === "pan") return String(v).trim().toUpperCase();
-  if (field === "amount_paid" || field === "tds_amount" || field === "interest" || field === "rate") {
-    const n = toNum(v);
-    return n === null ? undefined : n;
-  }
-  return String(v).trim();
-}
-
-// ── Deterministic section-column picker ─────────────────────────────────────
-// The single biggest source of false "Section Mismatch"es was the LLM
-// inconsistently choosing WHICH column is the TDS section when a client file has
-// several section-ish columns at once — a clean code column ("194J"), a
-// descriptive one ("TDS - Professional Fees"), AND a raw legal-clause column
-// ("393(1) 6(iii) D(b)"). Re-importing the very SAME file could yield "194J" one
-// day and "393(1)..." the next (observed in production: batch 1 captured
-// "194C/194J", a re-import of the identical file captured "393(1)..." garbage).
-// This resolves the section column deterministically FROM THE DATA: score every
-// column by how many of its values look like a genuine TDS section (a 192–206
-// statutory code, or a standard nature-of-payment word) and pick the best —
-// strongly preferring a column of actual codes, then descriptive text, and never
-// an unmappable clause-citation column. The result overrides the LLM's guess.
-const SEC_CODE_RE = /\b(19[2-9][A-Z]{0,2}|20[0-9][A-Z]{0,2})\b/;
-const SEC_KEYWORDS = ["contract", "professional", "technical", "rent", "commission", "brokerage", "salary", "interest", "purchase", "goods", "dividend", "royalty", "insurance", "transport", "advertis"];
-function classifySectionCell(v: unknown): "code" | "keyword" | "none" {
-  const s = v == null ? "" : String(v).trim();
-  if (!s) return "none";
-  if (SEC_CODE_RE.test(s.toUpperCase().replace(/\s+/g, ""))) return "code";
-  const low = s.toLowerCase();
-  return SEC_KEYWORDS.some(k => low.includes(k)) ? "keyword" : "none";
-}
-/** Best section column by data pattern, or null if no column reads as sections. */
-function pickSectionColumn(allRows: Record<string, unknown>[]): string | null {
-  const headers = new Set<string>();
-  for (const r of allRows) if (r && typeof r === "object") for (const k of Object.keys(r)) headers.add(k);
-  let best: { header: string; code: number; kw: number; frac: number } | null = null;
-  for (const h of headers) {
-    let nonEmpty = 0, code = 0, kw = 0;
-    for (const r of allRows) {
-      const s = r?.[h] == null ? "" : String(r[h]).trim();
-      if (!s) continue;
-      nonEmpty++;
-      const c = classifySectionCell(s);
-      if (c === "code") code++; else if (c === "keyword") kw++;
-    }
-    if (nonEmpty === 0) continue;
-    const frac = (code + kw) / nonEmpty;
-    if (frac < 0.5) continue; // at least half the column's values must read as sections
-    // Prefer most real CODES, then keyword hits, then coverage.
-    if (!best || code > best.code || (code === best.code && kw > best.kw) || (code === best.code && kw === best.kw && frac > best.frac)) {
-      best = { header: h, code, kw, frac };
-    }
-  }
-  return best ? best.header : null;
-}
-
-// ── Data-pattern column detection (deterministic, no LLM) ────────────────────
-// Fills the gaps header-name matching leaves: a PAN column and a date column are
-// identifiable from their VALUES alone, regardless of how the header is worded.
-// Together with the header synonyms and pickSectionColumn this lets the
-// overwhelming majority of real client files map with ZERO AI calls — the file
-// is parsed to structured rows and normalised entirely in code.
-const PAN_VALUE_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
-const DATE_VALUE_RE = /^(\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}|\d{4}[/\-.]\d{1,2}[/\-.]\d{1,2})/;
-// Textual-month dates ("6-Oct-25", "6 Oct 2025", "Oct 6, 2025") are common in
-// exported client files; recognise them so a date column is still detected by
-// VALUE when its header isn't a known synonym.
-const DATE_TEXT_RE = /^(\d{1,2}[\s\-][A-Za-z]{3,9}[\s\-,]+\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{2,4})$/;
-function looksLikePan(v: unknown): boolean {
-  const s = v == null ? "" : String(v).trim().toUpperCase().replace(/\s+/g, "");
-  return PAN_VALUE_RE.test(s);
-}
-function looksLikeDate(v: unknown): boolean {
-  if (v instanceof Date) return true;
-  const s = v == null ? "" : String(v).trim();
-  return DATE_VALUE_RE.test(s) || DATE_TEXT_RE.test(s);
-}
-/** A deductee-NAME-looking value: mostly letters, multi-char, and NOT a PAN /
- * date / pure number / section code. Used only as a LAST-RESORT column detector
- * when no header matched a name synonym (e.g. an unlabelled or oddly-named party
- * column). Section/challan columns are claimed before this runs. */
-function looksLikeName(v: unknown): boolean {
-  const s = v == null ? "" : String(v).trim();
-  if (s.length < 4) return false;
-  if (PAN_VALUE_RE.test(s.toUpperCase().replace(/\s+/g, ""))) return false;
-  if (looksLikeDate(s)) return false;
-  if (/^[\d.,\-₹%()\s/]+$/.test(s)) return false;                       // pure number / money
-  if (SEC_CODE_RE.test(s.toUpperCase().replace(/\s+/g, ""))) return false; // a section code
-  const letters = (s.match(/[A-Za-z]/g) || []).length;
-  return letters >= 3 && letters / s.length >= 0.5;                     // predominantly alphabetic
-}
-/** Pick the (unclaimed) column whose non-empty VALUES best satisfy `pred`
- * (≥60%). Used to resolve pan/date columns when their headers didn't match a
- * synonym. Returns null if no column fits. */
-function detectColumnByValue(
-  allRows: Record<string, unknown>[], claimed: Set<string>, pred: (v: unknown) => boolean,
-): string | null {
-  const headers = new Set<string>();
-  for (const r of allRows) if (r && typeof r === "object") for (const k of Object.keys(r)) headers.add(k);
-  let best: { header: string; frac: number } | null = null;
-  for (const h of headers) {
-    if (claimed.has(h)) continue;
-    let nonEmpty = 0, hit = 0;
-    for (const r of allRows) {
-      const v = r?.[h];
-      if (v === null || v === undefined || String(v).trim() === "") continue;
-      nonEmpty++; if (pred(v)) hit++;
-    }
-    if (nonEmpty === 0) continue;
-    const frac = hit / nonEmpty;
-    if (frac >= 0.6 && (!best || frac > best.frac)) best = { header: h, frac };
-  }
-  return best ? best.header : null;
-}
-
-/** A resolved header→field map: each source column header points at the
- * canonical field it feeds. Several headers may map to the SAME field. */
-type HeaderMap = Record<string, keyof CanonicalRow>;
-
-/**
- * Resolve the header→field map for a whole tabular file, deterministically:
- *   1. classify every distinct source header by wording (bestFieldForHeader);
- *   2. value-based section column (pickSectionColumn) — the most reliable way to
- *      identify the section, and what stops the re-import section flip-flop;
- *   3. value-based PAN / date columns when no header matched by name.
- * `aiMap` (from resolveMappingWithAI) is merged in as a LAST resort for fields
- * still unresolved — deterministic assignments are never overwritten.
- */
-function resolveColumnMapping(allRows: Record<string, unknown>[], aiMap?: Partial<Record<keyof CanonicalRow, string>>): HeaderMap {
-  const headers = new Set<string>();
-  for (const r of allRows) if (r && typeof r === "object") for (const k of Object.keys(r)) headers.add(k);
-
-  const map: HeaderMap = {};
-  for (const h of headers) { const f = bestFieldForHeader(h); if (f) map[h] = f; }
-
-  const mappedFields = () => new Set(Object.values(map));
-  const secCol = pickSectionColumn(allRows);
-  if (secCol && !map[secCol]) map[secCol] = "section_code";
-  if (!mappedFields().has("pan")) { const c = detectColumnByValue(allRows, new Set(Object.keys(map)), looksLikePan); if (c) map[c] = "pan"; }
-  if (!mappedFields().has("date_of_payment")) { const c = detectColumnByValue(allRows, new Set(Object.keys(map)), looksLikeDate); if (c) map[c] = "date_of_payment"; }
-  // Last-resort NAME by value — only when no header matched a name synonym. Runs
-  // AFTER section/pan/date are claimed so it can't steal them; picks the unclaimed
-  // column whose values are most name-like (the party column even under an
-  // unlabelled/odd header). Without this, a file with an exotic name header yields
-  // no name → nothing for the compare engine to pair on.
-  if (!mappedFields().has("deductee_name")) {
-    // Exclude challan/bank/narration-ish columns from value-based name detection —
-    // they contain name-like text ("HDFC BANK LTD", narration) but are NOT the
-    // deductee, and their header returned null from bestFieldForHeader so they'd
-    // otherwise be unclaimed and eligible.
-    const blocked = new Set(Object.keys(map));
-    for (const h of headers) { if (/bank|branch|narration|challan|deposit|remark|address|particularsofpayment/.test(normaliseHeader(h))) blocked.add(h); }
-    const c = detectColumnByValue(allRows, blocked, looksLikeName); if (c) map[c] = "deductee_name";
-  }
-
-  if (aiMap) {
-    const have = mappedFields();
-    for (const [f, h] of Object.entries(aiMap) as [keyof CanonicalRow, string][]) {
-      if (h && !have.has(f) && !map[h]) map[h] = f;
-    }
-  }
-  return map;
-}
-
-/** Build a canonical row PURELY from the header→field map — no AI, no per-row
- * model call. For each field the FIRST non-empty mapped column (in map order)
- * wins, so heterogeneous sheets (one uses "PAN", another "PAN No.") both feed
- * the same field. This is the deterministic normaliser that replaces the old
- * per-batch LLM extraction for tabular files. */
-function buildCanonicalFromMap(row: Record<string, unknown>, map: HeaderMap): CanonicalRow {
-  const out: CanonicalRow = {
-    deductee_name: null, pan: null, section_code: null, amount_paid: null, tds_amount: null,
-    interest: null, rate: null, date_of_payment: null, date_of_deduction: null, challan_bsr: null, challan_no: null,
-  };
-  for (const [header, field] of Object.entries(map)) {
-    if (out[field] !== null) continue;                 // first non-empty mapped column wins
-    const v = coerceField(field, row[header]);
-    if (v !== undefined) (out as Record<string, unknown>)[field] = v;
-  }
-  return out;
-}
-
 function extractJson(text: string): any {
   if (!text) return null;
   let s = text.trim();
@@ -373,27 +125,6 @@ function extractJson(text: string): any {
     try { return JSON.parse(s.slice(first, last + 1)); } catch { /* ignore */ }
   }
   return null;
-}
-
-// Robust money parser — mirrors the compare engine's normAmount so a value the
-// importer stores is read back identically at compare time. Handles ₹/Rs, Indian
-// grouping ("1,22,340"), accounting negatives "(1,234)", a trailing sign "170.94-"
-// or "/-", unicode minus, Cr/Dr suffixes, hidden chars and numbers-stored-as-text.
-function toNum(v: unknown): number | null {
-  if (v === null || v === undefined || v === "") return null;
-  if (typeof v === "number") return isFinite(v) ? v : null;
-  let s = String(v).trim().replace(/−/g, "-");
-  const paren = /^\(.+\)$/.test(s);
-  const leadingMinus = /^-/.test(s);                            // standard negative "-1234"
-  // A minus AFTER a digit ("1,234-") is an accounting negative; but "170/-" is
-  // the Indian rupee terminator (positive), so exclude the "/-" form.
-  const trailingMinus = /[0-9)]\s*-\s*$/.test(s) && !/\/-\s*$/.test(s);
-  const neg = paren || leadingMinus || trailingMinus;
-  s = s.replace(/[^0-9.]/g, "");                 // drop everything incl. minus; sign is decided above
-  const m = s.match(/\d+(?:\.\d+)?/);            // first numeric token (ignores stray extra dots)
-  if (!m) return null;
-  const n = Number((neg ? "-" : "") + m[0]);
-  return isFinite(n) ? n : null;
 }
 
 function coerceRow(r: any): CanonicalRow {
@@ -567,7 +298,7 @@ serve(async (req) => {
     //   • pdf_base64     — PDF (native/scanned; read by a multimodal model)
     //   • image_base64   — a scanned document or photo (png/jpg/webp/…)
     //   • raw_text       — free text / semi-structured (txt / xml / json object / html …)
-    const { filing_id, form_type, file_name, file_type, rows, pdf_base64, image_base64, image_media_type, raw_text } = body ?? {};
+    const { filing_id, form_type, file_name, file_type, rows, pdf_base64, image_base64, image_media_type, raw_text, expected_count } = body ?? {};
     if (!filing_id) return json({ error: "filing_id is required" }, 400);
     const hasInput = Array.isArray(rows) || pdf_base64 || image_base64 || (typeof raw_text === "string" && raw_text.trim());
     if (!hasInput) {
@@ -604,6 +335,19 @@ serve(async (req) => {
     // is the generous output budget for that single pass.
     const IMPORT_MAX_TOKENS = 24000;
     const collected: CanonicalRow[] = [];
+    // The source sheet of each collected row, index-aligned with `collected`. The
+    // echo de-duplication needs it to tell a cross-sheet echo from a real repeat.
+    // Empty for the AI paths (PDF/image/text), which have no sheets — those rows
+    // are then never dropped, which is the safe direction.
+    const collectedSheets: string[] = [];
+    // Auditable record of how each canonical field was mapped (tabular path only);
+    // returned to the UI so every mapping decision is visible before comparison.
+    let mappingReport: { source: string; fields: Record<string, { column: string; by: string }>; issues: string[]; notes?: string[]; reconciliation?: Record<string, unknown> } | null = null;
+    // Record-count reconciliation (tabular): non-empty INPUT rows vs how many the
+    // mapping turned into data rows — so a silent shortfall (the "33 of 100" bug) is
+    // detected and surfaced, never hidden.
+    let tabularInputRows: number | null = null;
+    let tabularMappedRows: number | null = null;
 
     const httpErr = (status: number, errText: string) => {
       console.error("AI import error:", status, errText);
@@ -660,41 +404,148 @@ serve(async (req) => {
       // its output with these very same deterministic column reads).
       const allRows = (rows as Record<string, unknown>[]).slice(0, 20000);
 
-      // 1) Resolve the header→field map deterministically (synonyms + value-based
-      //    section/PAN/date). Handles heterogeneous multi-sheet workbooks (many
-      //    headers → one field).
-      let map = resolveColumnMapping(allRows);
+      // 1) Resolve the header→field map with the CONFIDENCE-SCORED, VALIDATED
+      //    engine: every column is profiled by the shape of its VALUES, fields are
+      //    assigned by combined header+value confidence, and amount vs TDS is
+      //    resolved by the statutory RATE RELATIONSHIP (not header text). Every
+      //    decision is then validated and any problem surfaces as an issue.
+      //    Handles heterogeneous multi-sheet workbooks (many headers → one field).
       const enough = (m: HeaderMap) => {
         const f = new Set(Object.values(m));
         return (f.has("pan") || f.has("deductee_name")) && (f.has("amount_paid") || f.has("tds_amount"));
       };
+      let { map, report, issues, notes } = resolveMapping(allRows);
 
-      // 2) Only if a REQUIRED field is still unidentified (need an identity —
-      //    PAN or name — and a money column — amount or TDS) do we make ONE small
-      //    AI call that maps columns from headers + 5 sample rows. It never scales
-      //    with row count, so it can't overrun the time budget. Deterministic
-      //    assignments are never overwritten.
+      // How many INPUT rows are real (any non-empty cell), and how many the map
+      // actually turns into a DATA row — the signal that detects silent row loss.
+      const nonEmptyCanon = (r: CanonicalRow) => !!(r.deductee_name || r.pan || r.amount_paid != null || r.tds_amount != null);
+      const inputRows = allRows.filter((r) => r && typeof r === "object" && Object.values(r).some((v) => v != null && String(v).trim() !== "")).length;
+      const buildAll = (m: HeaderMap) => allRows.map((row) => buildCanonicalFromMap(row, m));
+      const mappedOf = (built: CanonicalRow[]) => built.filter(nonEmptyCanon).length;
+
+      let built = buildAll(map);
       let mappingSource = "deterministic";
-      if (!enough(map)) {
+
+      // 2) Escalate to ONE small AI mapping call when a REQUIRED field is unmapped,
+      //    a deterministic pick looks wrong (validation issue), OR a large share of
+      //    the file's non-empty rows produced EMPTY canonicals (a column layout the
+      //    single map missed — the "33 of 100" failure). The AI only fills fields the
+      //    engine left unresolved, and its result is kept ONLY if it maps AS MANY OR
+      //    MORE rows — so an AI pass can only RECOVER records, never lose them. One
+      //    call; it never scales with row count, so it can't overrun the time budget.
+      const dropRate = inputRows > 0 ? 1 - mappedOf(built) / inputRows : 0;
+      if (!enough(map) || issues.length || (inputRows >= 10 && dropRate > 0.15)) {
         const aiMap = await resolveMappingWithAI(allRows);
-        if (Object.keys(aiMap).length) { map = resolveColumnMapping(allRows, aiMap); mappingSource = "ai-assisted"; }
+        if (Object.keys(aiMap).length) {
+          const re = resolveMapping(allRows, aiMap);
+          const reBuilt = buildAll(re.map);
+          // Accept the AI map ONLY if it recovers MORE data rows, or it makes an
+          // otherwise-insufficient map complete — never swap a good validated map
+          // for an equal one (a "did we fill more cells" tie is not an improvement).
+          if (mappedOf(reBuilt) > mappedOf(built) || (!enough(map) && enough(re.map))) {
+            map = re.map; report = re.report; issues = re.issues; notes = re.notes; built = reBuilt; mappingSource = "ai-assisted";
+          }
+        }
       }
 
       if (!enough(map)) {
         return json({ error: "Could not identify the deductee columns — the file needs at least a Name/PAN column and an Amount/TDS column. Please check the column headers." }, 422);
       }
 
-      // 3) Build every row from the map, in code (no per-row AI).
-      for (const row of allRows) collected.push(buildCanonicalFromMap(row, map));
-      console.log(`tds-recon-import: ${mappingSource} mapping over ${allRows.length} rows →`, JSON.stringify(map));
+      // 3) Emit the built canonical rows, each carrying the SHEET it came from so
+      //    the de-duplication below can tell a cross-sheet echo from a genuine
+      //    repeat. (Client rows are tagged with __sheet by extractWorkbookRows.)
+      built.forEach((r, i) => { collectedSheets.push(String((allRows[i] as Record<string, unknown>)?.["__sheet"] ?? "")); collected.push(r); });
+      tabularInputRows = inputRows;
+      tabularMappedRows = mappedOf(built);
+      // Human-readable mapping report returned to the UI so every mapping decision
+      // is visible/auditable (field ← header [method]) before comparison.
+      mappingReport = {
+        source: mappingSource,
+        fields: Object.fromEntries(Object.entries(report).map(([f, v]) => [f, { column: v.header, by: v.method }])),
+        issues,
+        notes,
+      };
+      console.log(`tds-recon-import: ${mappingSource} mapping — ${tabularMappedRows}/${inputRows} rows mapped →`, JSON.stringify(mappingReport));
     }
 
-    // drop wholly-empty rows the model may echo
-    const canonical = collected.filter(r => r.deductee_name || r.pan || r.amount_paid != null || r.tds_amount != null);
+    // drop wholly-empty rows the model may echo — keeping each row paired with its
+    // source sheet, which the de-duplication below depends on.
+    const mappedWithSheet = collected
+      .map((r, i) => ({ r, sheet: collectedSheets[i] ?? "" }))
+      .filter(({ r }) => r.deductee_name || r.pan || r.amount_paid != null || r.tds_amount != null);
+    const mapped = mappedWithSheet.map(({ r }) => r);
+
+    // CROSS-SHEET ECHO DE-DUPLICATION.
+    //
+    // A client workbook often lists the same transaction twice: one sheet per
+    // section PLUS a consolidated sheet. Those echoes must collapse or everything
+    // double-counts.
+    //
+    // But identical rows on the SAME sheet are NOT echoes — they are real, separate
+    // transactions. A client legitimately books several identical bills to one party
+    // on one day (verified on ELENZA CALLISTA: KONE Elevator has 4 identical rows on
+    // 01.03.2026 and 6 more on 02.03.2026, all genuine). Keying on content ALONE
+    // collapsed those ten to one and removed 122 of 228 rows from that file — and
+    // every row it removed then surfaced to the user as a FALSE "no matching row in
+    // the imported client file". This dedup, not the Excel reading, was the source
+    // of the recurring false mismatches.
+    //
+    // The key is therefore the signature PLUS its occurrence index WITHIN ITS SHEET:
+    // the 2nd "KONE|1011450|20229" on sheet 194C is a DIFFERENT record from the 1st,
+    // but the 2nd on Sheet1 is the SAME record as the 2nd on 194C. Genuine repeats
+    // survive; echoes collapse. An untagged row (CSV, PDF/AI path, a single grid) is
+    // NEVER dropped: without a sheet we cannot tell an echo from a repeat, and
+    // losing a real record is by far the worse error.
+    const sigOf = (r: CanonicalRow) => `${String(r.pan ?? "").toUpperCase().replace(/\s+/g, "")}|${String(r.deductee_name ?? "").trim().toUpperCase()}|${String(r.date_of_payment ?? "").trim()}|${r.amount_paid ?? ""}|${r.tds_amount ?? ""}|${String(r.section_code ?? "").trim()}`;
+    const seenSig = new Set<string>();
+    const perSheetSeen = new Map<string, number>();
+    const canonical: CanonicalRow[] = [];
+    let duplicatesRemoved = 0;
+    mappedWithSheet.forEach(({ r, sheet }) => {
+      const keyable = (r.pan != null && String(r.pan).trim() !== "") || r.amount_paid != null;
+      if (!keyable || !sheet) { canonical.push(r); return; }
+      const sig = sigOf(r);
+      const occKey = `${sheet}::${sig}`;
+      const occ = perSheetSeen.get(occKey) ?? 0;
+      perSheetSeen.set(occKey, occ + 1);
+      const key = `${sig}#${occ}`;
+      if (seenSig.has(key)) { duplicatesRemoved++; return; }
+      seenSig.add(key); canonical.push(r);
+    });
 
     if (canonical.length === 0) {
       return json({ error: "No deductee rows could be read from the file. Check the file has recognisable columns/section." }, 422);
     }
+
+    // ── RECONCILIATION ─────────────────────────────────────────────────────────
+    // Make the record count VISIBLE so a shortfall can never be silent: how many
+    // rows the file had, how many mapped, how many de-duplicated, distinct PANs,
+    // and — when the caller passes the Office Data count — a warning on a big gap.
+    const PAN_OK = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+    const distinctPans = new Set(canonical.map(r => String(r.pan ?? "").toUpperCase().replace(/\s+/g, "")).filter(p => PAN_OK.test(p))).size;
+    const reconciliation: Record<string, unknown> = { imported: canonical.length, distinct_pans: distinctPans, duplicates_removed: duplicatesRemoved };
+    if (tabularInputRows != null) {
+      reconciliation.input_rows = tabularInputRows;
+      reconciliation.dropped = Math.max(0, tabularInputRows - (tabularMappedRows ?? 0));
+    }
+    // RELIABLE, intra-file signal FIRST — how many data rows the file HAD vs how
+    // many the mapping actually READ. This directly catches the silent record-loss
+    // bug and never false-alarms on a legitimately-partial file.
+    if (tabularInputRows != null && (tabularMappedRows ?? 0) < tabularInputRows * 0.85)
+      reconciliation.warning = `Only ${tabularMappedRows} of ${tabularInputRows} data rows were read — some rows may use a different column layout. Review before filing.`;
+    // Office-vs-imported gap: a SOFT note (not a warning), on DISTINCT PANs, with a
+    // wide threshold — because one PAN has many line items and a file may cover only
+    // PART of the return (per-section/month workbooks are supported). It's a prompt
+    // to check, never an error, and it never suppresses the reliable warning above.
+    const exp = typeof expected_count === "number" && expected_count > 0 ? expected_count : null;
+    if (exp) {
+      reconciliation.expected = exp;
+      if (!reconciliation.warning && distinctPans < exp * 0.5)
+        reconciliation.note = `Read ${distinctPans} distinct PAN(s); Office Data has ${exp} line item(s). If this file covers the WHOLE return, some records may be unread — review it. If it covers only part (e.g. one section/month), this is expected.`;
+    }
+    if (mappingReport) mappingReport.reconciliation = reconciliation;
+    console.log(`tds-recon-import: reconciliation`, JSON.stringify(reconciliation));
 
     // ── Persist batch + rows ───────────────────────────────────────────────────
     // SEQUENTIAL MULTI-FILE support: a filing's imported dataset is the UNION of
@@ -759,7 +610,7 @@ serve(async (req) => {
 
     // NOTE: the client re-reads the batch via loadAll(), so we do NOT echo the
     // full rows array back (a 20k-row response is needless megabytes).
-    return json({ batch_id: batch.id, row_count: canonical.length, replaced });
+    return json({ batch_id: batch.id, row_count: canonical.length, replaced, mapping: mappingReport, reconciliation });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error("tds-recon-import fatal:", message);

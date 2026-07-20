@@ -57,6 +57,7 @@ const STATUS_STYLES: Record<string, { wrap: string; dot: string }> = {
   "REPORT WITH KVD":          { wrap: "bg-purple-100 text-purple-800", dot: "bg-purple-500" },
   "REPORT SENT TO CLIENT":    { wrap: "bg-teal-100 text-teal-800",     dot: "bg-teal-500"   },
   "REPORT SIGNED":            { wrap: "bg-green-100 text-green-800",   dot: "bg-green-500"  },
+  "REPORT PRINTED":           { wrap: "bg-emerald-200 text-emerald-900", dot: "bg-emerald-600" },
   "OTHERS (SPECIFY)":         { wrap: "bg-pink-100 text-pink-800",     dot: "bg-pink-500"   },
 };
 

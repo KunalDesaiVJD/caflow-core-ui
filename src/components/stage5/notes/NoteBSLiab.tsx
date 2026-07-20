@@ -160,6 +160,22 @@ export default function NoteBSLiab({
   // effectivePY: same logic — prefer breakup sum over stored headline.
   const effectivePY = (key: string): number => py(key);
 
+  // 2026-06-25 (V J Desai — LT/ST split): sum st_split_cy / st_split_py
+  // across all rows of a Long-term note's breakup. The result is
+  // SUBTRACTED from the LT total (moving that value out to Short-term)
+  // and ADDED to the ST total (moving it in as current maturities).
+  const sumStSplit = (breakupPath: string, field: "st_split_cy" | "st_split_py"): number => {
+    const rows = (get(breakupPath) ?? []) as ListRow[];
+    return rows.reduce((s, r) => {
+      const n = Number((r as any)?.[field] ?? 0);
+      return s + (Number.isFinite(n) ? n : 0);
+    }, 0);
+  };
+  // Format an amount for the "current maturities" tag inline.
+  const fmtSplit = (n: number): string =>
+    new Intl.NumberFormat("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+      .format(Math.round((n + Number.EPSILON) * 100) / 100);
+
   // Smart note: only show a note number when at least one year has data.
   // dataKey = key into notes.bs_liab; regKey = key into noteNumberRegistry
   // (defaults to dataKey when they match, e.g. lt_borrowings → lt_borrowings).
@@ -790,31 +806,42 @@ export default function NoteBSLiab({
           NOTES 3–10 (unchanged)
       ════════════════════════════════════════════════════════════════════ */}
 
-      <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("lt_borrowings")} title="Long-term borrowings" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("lt_borrowings")} pyTotal={effectivePY("lt_borrowings")}>
-        <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
-        <ListTable
-          rows={(get("bs_liab.lt_borrowings.breakup") ?? []) as ListRow[]}
-          onChange={(next) => updatePath("bs_liab.lt_borrowings.breakup", next)}
-          descPlaceholder="Bank / party / loan particulars (Secured / Unsecured)"
-          addLabel="Add row"
-          showSubtotal
-          onRemapLedger={onRemapLedger}
-          onUnmapLedger={onUnmapLedger}
-          engagementId={engagementId}
-        />
-        <EditableRow
-          label="Total — Long-term borrowings (per BS)"
-          cy={cy("lt_borrowings")} py={effectivePY("lt_borrowings")}
-          autoCY={cy("lt_borrowings")} autoPY={effectivePY("lt_borrowings")}
-          isOverriddenCy={isOverridden("bs_liab.lt_borrowings.cy")}
-          isOverriddenPy={isOverridden("bs_liab.lt_borrowings.py")}
-          onCommitCy={(v) => updatePath("bs_liab.lt_borrowings.cy", v)}
-          onCommitPy={(v) => updatePath("bs_liab.lt_borrowings.py", v)}
-          onResetCy={() => resetPath("bs_liab.lt_borrowings.cy")}
-          onResetPy={() => resetPath("bs_liab.lt_borrowings.py")}
-          bold
-        />
-      </NoteCard>
+      {(() => {
+        // 2026-06-25 (V J Desai — LT/ST split, revised UX): the LT row's
+        // amount cell now DISPLAYS the residual (raw − st_split) inline via
+        // splitToShortTermEnabled. No separate "Less: current maturities"
+        // footer — the row itself reads as the reduced figure. The ST
+        // counterpart note injects a mirror row with the same ledger name
+        // for the split amount.
+        const ltSplitCy = sumStSplit("bs_liab.lt_borrowings.breakup", "st_split_cy");
+        const ltSplitPy = sumStSplit("bs_liab.lt_borrowings.breakup", "st_split_py");
+        const ltTotalCy = cy("lt_borrowings") - ltSplitCy;
+        const ltTotalPy = effectivePY("lt_borrowings") - ltSplitPy;
+        return (
+          <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("lt_borrowings")} title="Long-term borrowings" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={ltTotalCy} pyTotal={ltTotalPy}>
+            <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
+            <ListTable
+              rows={(get("bs_liab.lt_borrowings.breakup") ?? []) as ListRow[]}
+              onChange={(next) => updatePath("bs_liab.lt_borrowings.breakup", next)}
+              descPlaceholder="Bank / party / loan particulars (Secured / Unsecured)"
+              addLabel="Add row"
+              showSubtotal
+              onRemapLedger={onRemapLedger}
+              onUnmapLedger={onUnmapLedger}
+              engagementId={engagementId}
+              splitToShortTermEnabled
+            />
+            <EditableRow
+              label="Total — Long-term borrowings (per BS)"
+              cy={ltTotalCy} py={ltTotalPy}
+              autoCY={ltTotalCy} autoPY={ltTotalPy}
+              onCommitCy={() => {}} onCommitPy={() => {}}
+              isLocked
+              bold
+            />
+          </NoteCard>
+        );
+      })()}
 
       <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("deferred_tax_liab")} title="Deferred tax liabilities (Net)" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("deferred_tax_liab")} pyTotal={effectivePY("deferred_tax_liab")}>
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
@@ -900,31 +927,69 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("st_borrowings")} title="Short-term borrowings" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={cy("st_borrowings")} pyTotal={effectivePY("st_borrowings")}>
-        <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
-        <ListTable
-          rows={(get("bs_liab.st_borrowings.breakup") ?? []) as ListRow[]}
-          onChange={(next) => updatePath("bs_liab.st_borrowings.breakup", next)}
-          descPlaceholder="Bank OD / CC / Term loan / party (Secured / Unsecured)"
-          addLabel="Add row"
-          showSubtotal
-          onRemapLedger={onRemapLedger}
-          onUnmapLedger={onUnmapLedger}
-          engagementId={engagementId}
-        />
-        <EditableRow
-          label="Total — Short-term borrowings (per BS)"
-          cy={cy("st_borrowings")} py={effectivePY("st_borrowings")}
-          autoCY={cy("st_borrowings")} autoPY={effectivePY("st_borrowings")}
-          isOverriddenCy={isOverridden("bs_liab.st_borrowings.cy")}
-          isOverriddenPy={isOverridden("bs_liab.st_borrowings.py")}
-          onCommitCy={(v) => updatePath("bs_liab.st_borrowings.cy", v)}
-          onCommitPy={(v) => updatePath("bs_liab.st_borrowings.py", v)}
-          onResetCy={() => resetPath("bs_liab.st_borrowings.cy")}
-          onResetPy={() => resetPath("bs_liab.st_borrowings.py")}
-          bold
-        />
-      </NoteCard>
+      {(() => {
+        // 2026-06-25 (V J Desai — LT/ST split, revised UX): the ST note now
+        // gets a MIRROR ROW per LT-borrowings ledger with a non-zero split.
+        // The mirror row carries the SAME LEDGER NAME (from the LT row's
+        // description) and shows the split amount as its balance. Marked
+        // with st_mirror_of so it can be identified and stripped from the
+        // persisted array on any Save.
+        //
+        // The mirror rows are derived at render time — never persisted. On
+        // ListTable's onChange we filter them out before updatePath fires,
+        // so subsequent renders re-derive them from the (unchanged) LT
+        // breakup. This keeps the two notes in sync without duplicating
+        // data in the JSONB store.
+        const ltSplitCy = sumStSplit("bs_liab.lt_borrowings.breakup", "st_split_cy");
+        const ltSplitPy = sumStSplit("bs_liab.lt_borrowings.breakup", "st_split_py");
+        const stTotalCy = cy("st_borrowings") + ltSplitCy;
+        const stTotalPy = effectivePY("st_borrowings") + ltSplitPy;
+        const ltBreakup = (get("bs_liab.lt_borrowings.breakup") ?? []) as ListRow[];
+        const stStored  = (get("bs_liab.st_borrowings.breakup") ?? []) as ListRow[];
+        const mirrorRows: ListRow[] = ltBreakup
+          .filter(r => Math.abs(Number(r.st_split_cy ?? 0)) > 0.005 || Math.abs(Number(r.st_split_py ?? 0)) > 0.005)
+          .map(r => ({
+            id:             `mirror_${r.id ?? (r.linked_ledger || r.description || Math.random())}`,
+            description:    r.description || r.linked_ledger || "(unnamed)",
+            amount_cy:      Number(r.st_split_cy ?? 0),
+            amount_py:      Number(r.st_split_py ?? 0),
+            source:         "linked" as const,
+            linked_ledger:  r.linked_ledger || undefined,
+            st_mirror_of:   r.id || r.linked_ledger || r.description || "",
+          }));
+        // Show mirror rows on top of the ST breakup so current maturities
+        // read first, then the client's own ST facilities.
+        const stDisplayRows = [...mirrorRows, ...stStored.filter(r => !r.st_mirror_of)];
+        return (
+          <NoteCard engagementId={engagementId} collapseControl={collapseControl} noteNo={sn("st_borrowings")} title="Short-term borrowings" readOnly={hideEmpty} hideWhenEmpty={hideEmpty} cyTotal={stTotalCy} pyTotal={stTotalPy}>
+            <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
+            <ListTable
+              rows={stDisplayRows}
+              onChange={(next) => {
+                // Strip mirror rows before persisting — they belong to
+                // the LT note. Anything the user typed into the ST-own
+                // rows survives.
+                const persisted = next.filter(r => !r.st_mirror_of);
+                updatePath("bs_liab.st_borrowings.breakup", persisted);
+              }}
+              descPlaceholder="Bank OD / CC / Term loan / party (Secured / Unsecured)"
+              addLabel="Add row"
+              showSubtotal
+              onRemapLedger={onRemapLedger}
+              onUnmapLedger={onUnmapLedger}
+              engagementId={engagementId}
+            />
+            <EditableRow
+              label="Total — Short-term borrowings (per BS)"
+              cy={stTotalCy} py={stTotalPy}
+              autoCY={stTotalCy} autoPY={stTotalPy}
+              onCommitCy={() => {}} onCommitPy={() => {}}
+              isLocked
+              bold
+            />
+          </NoteCard>
+        );
+      })()}
 
       {(() => {
         // 2026-06-25 (V J Desai — Trade Payables MSME / Others bifurcation):

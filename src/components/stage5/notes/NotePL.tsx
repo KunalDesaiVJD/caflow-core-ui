@@ -326,44 +326,48 @@ export default function NotePL({
         </div>
         {/* Closing Stock rows — locked, auto-populated from INV_FG / INV_WIP /
             INV_STT / INV_STOCK / NCE_STCK / BS_CA_INV codes via notesAutoPopulate.
-            The Move-to dropdown lets the auditor redirect an entire source
-            bucket to a different display sub-row when the underlying ledger
-            doesn't have the right sub-code in COA. */}
-        <div className="flex items-center">
-          <div className="flex-1">
-            <EditableRow
-              label="Finished Goods" indent={1}
-              cy={dispFgCloseCy} py={dispFgClosePy}
-              autoCY={dispFgCloseCy} autoPY={dispFgClosePy}
-              onCommitCy={() => {}} onCommitPy={() => {}}
-              isLocked
-            />
+            2026-06-25 (V J Desai — Stock-in-trade shifted left): the previous
+            flex-wrap around EditableRow broke its internal 12-col grid so the
+            amount columns misaligned with the "Less: Opening Stock" block
+            below. Fix — keep EditableRow's grid intact and float the three-
+            dots button ABSOLUTELY over the row's own action gutter (col-span-1
+            reserved by actionGutter=true). Layout stays identical to the
+            Opening Stock rows. */}
+        <div className="relative">
+          <EditableRow
+            label="Finished Goods" indent={1}
+            cy={dispFgCloseCy} py={dispFgClosePy}
+            autoCY={dispFgCloseCy} autoPY={dispFgClosePy}
+            onCommitCy={() => {}} onCommitPy={() => {}}
+            isLocked
+          />
+          <div className="absolute right-0 top-1/2 -translate-y-1/2">
+            {renderMoveDropdown("fg")}
           </div>
-          {renderMoveDropdown("fg")}
         </div>
-        <div className="flex items-center">
-          <div className="flex-1">
-            <EditableRow
-              label="Work-in-progress" indent={1}
-              cy={dispWipCloseCy} py={dispWipClosePy}
-              autoCY={dispWipCloseCy} autoPY={dispWipClosePy}
-              onCommitCy={() => {}} onCommitPy={() => {}}
-              isLocked
-            />
+        <div className="relative">
+          <EditableRow
+            label="Work-in-progress" indent={1}
+            cy={dispWipCloseCy} py={dispWipClosePy}
+            autoCY={dispWipCloseCy} autoPY={dispWipClosePy}
+            onCommitCy={() => {}} onCommitPy={() => {}}
+            isLocked
+          />
+          <div className="absolute right-0 top-1/2 -translate-y-1/2">
+            {renderMoveDropdown("wip")}
           </div>
-          {renderMoveDropdown("wip")}
         </div>
-        <div className="flex items-center">
-          <div className="flex-1">
-            <EditableRow
-              label="Stock-in-trade" indent={1}
-              cy={dispSitCloseCy} py={dispSitClosePy}
-              autoCY={dispSitCloseCy} autoPY={dispSitClosePy}
-              onCommitCy={() => {}} onCommitPy={() => {}}
-              isLocked
-            />
+        <div className="relative">
+          <EditableRow
+            label="Stock-in-trade" indent={1}
+            cy={dispSitCloseCy} py={dispSitClosePy}
+            autoCY={dispSitCloseCy} autoPY={dispSitClosePy}
+            onCommitCy={() => {}} onCommitPy={() => {}}
+            isLocked
+          />
+          <div className="absolute right-0 top-1/2 -translate-y-1/2">
+            {renderMoveDropdown("sit")}
           </div>
-          {renderMoveDropdown("sit")}
         </div>
         <div className="text-[10px] italic text-muted-foreground mt-2">Less: Opening Stock</div>
         {/* Opening = closing of prior period, honouring the same bucket_map. */}

@@ -397,7 +397,11 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
     if (effectiveFirmId) iQuery = iQuery.eq("firm_id", effectiveFirmId);
     const { data: invData } = await iQuery;
 
-    let cQuery = supabase.from("clients").select("id, name, entity_type, email, mobile, compliance_flags, responsible_person_id").eq("is_draft", false).is("deleted_at", null);
+    // 2026-06-25 (V J Desai): Billing shows BOTH archived and active clients
+    // so pending invoices for deactivated-in-eOffice clients can still be
+    // managed. No .is("deleted_at", null) filter here (nor on the other two
+    // client fetches below at responsibleFilter and item-master flows).
+    let cQuery = supabase.from("clients").select("id, name, entity_type, email, mobile, compliance_flags, responsible_person_id").eq("is_draft", false);
     const { data: clientData } = await cQuery;
 
     const { data: firmData } = await supabase.from("firms").select("id, name, display_name");
@@ -468,7 +472,7 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
   useEffect(() => {
     if (responsibleFilter === "all") { setResponsibleClientIds([]); return; }
     (async () => {
-      const { data } = await supabase.from("clients").select("id").eq("responsible_person_id", responsibleFilter).eq("is_draft", false).is("deleted_at", null);
+      const { data } = await supabase.from("clients").select("id").eq("responsible_person_id", responsibleFilter).eq("is_draft", false);
       setResponsibleClientIds((data || []).map((d: any) => d.id));
     })();
   }, [responsibleFilter]);
@@ -1851,7 +1855,7 @@ function TimesheetTab() {
 
   useEffect(() => {
     (async () => {
-      let q = supabase.from("clients").select("id, name").eq("is_draft", false).is("deleted_at", null).order("name");
+      let q = supabase.from("clients").select("id, name").eq("is_draft", false).order("name");
       if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
       const { data } = await q;
       setClients(data || []);

@@ -33,6 +33,28 @@ function headerScore(row: unknown[]): number {
   return score;
 }
 
+// A GENUINE deductee-table header always names the party IDENTITY (PAN / Name /
+// Party / Deductee / Particulars). A row that scores as a header but has NONE of
+// these is a SECTION or MONTH LABEL that merely repeats a few trailing sub-headers
+// (e.g. "Feb-26 … TDS PAID DATE CHALLAN BSR") — it must NOT replace the real header.
+//
+// Match identity terms as WHOLE WORDS on the raw cell (plus a few glued header
+// spellings) — NOT as substrings — so ordinary deductee VALUES like "Suresh
+// Company" or the surname "Pandey" (both contain the letters "pan") are NOT
+// mistaken for a "PAN" header. `\bpan\b` matches "PAN No" but not "pandey".
+const IDENTITY_WORD_RE = /\b(pan|name|party|deductee|deductees|particulars?|vendor|assessee|payee|beneficiary)\b/i;
+const IDENTITY_COMPOUND = ["panno", "pannumber", "panofdeductee", "deducteepan", "partypan", "vendorpan", "deducteename", "partyname", "nameofdeductee", "nameofparty", "vendorname", "payeename", "assesseename", "partysname"];
+function hasIdentityToken(row: unknown[]): boolean {
+  for (const cell of row) {
+    const raw = String(cell ?? "").trim();
+    if (!raw) continue;
+    if (IDENTITY_WORD_RE.test(raw)) return true;                       // "PAN No", "Party Name", "Name of Deductee"
+    const norm = normaliseCell(raw);
+    if (norm && IDENTITY_COMPOUND.some(c => norm === c || norm.includes(c))) return true; // glued: "PANNo", "DeducteeName"
+  }
+  return false;
+}
+
 /** Scores the first 15 rows by how many cells look like known field names and
  * picks the best match; falls back to row 0 (previous behaviour) when
  * nothing scores highly enough, so already-clean files are unaffected. */
@@ -168,6 +190,8 @@ export function extractSheetRows(grid: unknown[][], sectionHint: string | null):
   }
   const rows: Record<string, unknown>[] = [];
   let headers: string[] | null = null;
+  let headerCells: unknown[] | null = null; // raw header cells (for MULTI-ROW header merge)
+  let lastHeaderRow = -2;
   const MONTHS = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|q[1-4]|quarter)/i;
   for (let r = 0; r < n; r++) {
     const row = grid[r] || [];
@@ -175,7 +199,43 @@ export function extractSheetRows(grid: unknown[][], sectionHint: string | null):
     let nonEmptyCount = 0;
     for (let i = 0; i < row.length; i++) { const c = row[i]; if (c != null && String(c).trim() !== "") nonEmptyCount++; }
     if (nonEmptyCount === 0) continue;
-    if (scores[r] >= 3 && !rowHasPan[r]) { headers = buildHeaderNames(row); continue; } // header ONLY if it has no PAN
+    if (scores[r] >= 3 && !rowHasPan[r]) {
+      const consecutive = headerCells != null && lastHeaderRow === r - 1;
+      // A row that scores as a header but names NO identity column (PAN/Name/Party)
+      // and is NOT the sub-label row of the current header is a SECTION or MONTH
+      // LABEL that only repeats a few trailing sub-headers (e.g. "Feb-26 … TDS PAID
+      // DATE CHALLAN BSR"). REPLACING the locked real header with it re-keys the
+      // whole block below under "Feb-26/Column2/…", so the column mapper — built on
+      // the real header names — then silently DROPS every one of those deductees
+      // (the "33 of 100" record-loss bug). Keep the locked header; treat this row
+      // as a label and skip it (it carries no PAN, so it's never a data row).
+      // Also peek at the NEXT row: a genuine SECOND table can have its identity
+      // column on a sub-label row directly below (a two-row header). Detect that by
+      // whether the next row itself looks like a HEADER (scores ≥ 3 AND has no PAN)
+      // — NOT by scanning its values for identity words, because a real deductee
+      // NAME can legitimately contain "party"/"name"/etc. A data row always carries
+      // a PAN, so it is never "header-like".
+      const nextIsHeaderLike = (scores[r + 1] ?? 0) >= 3 && !(rowHasPan[r + 1] ?? false);
+      if (!consecutive && headers != null && !hasIdentityToken(row) && !nextIsHeaderLike) continue;
+      // MULTI-ROW HEADER: a main label row (e.g. "Bill" "TDS" "Bank" "Party's
+      // Name") directly followed by a sub-label row ("Amt." "Amt" "Name") is one
+      // logical header split across two rows — VERY common in real TDS working
+      // files. MERGE consecutive header rows PER COLUMN: "Bill"+"Amt."→"Bill Amt.".
+      // A genuine, non-consecutive NEW header (with an identity column) still
+      // replaces (a real second table further down).
+      if (consecutive) {
+        const m = Math.max(headerCells!.length, row.length);
+        for (let i = 0; i < m; i++) {
+          const sub = row[i] == null ? "" : String(row[i]).trim();
+          if (sub) headerCells![i] = `${headerCells![i] == null ? "" : String(headerCells![i]).trim()} ${sub}`.trim();
+        }
+      } else {
+        headerCells = row.slice();
+      }
+      headers = buildHeaderNames(headerCells!);
+      lastHeaderRow = r;
+      continue;
+    } // header ONLY if it has no PAN
     if (hasHeader && !headers) continue;                                 // pre-header strip (title / TAN-PAN)
     const first = String(row[0] ?? "").toLowerCase().trim();
     if (/\btotal\b/.test(first) || first.startsWith("total")) continue;  // summary row
@@ -208,17 +268,61 @@ export function extractWorkbookRows(
   gridOf: (name: string) => unknown[][],
   onProgress?: (sheetIndex: number) => void,
 ): Record<string, unknown>[] {
-  const sectioned: Record<string, unknown>[] = [];
-  for (let i = 0; i < sheetNames.length; i++) {
-    onProgress?.(i);
-    const sec = sectionFromSheetName(sheetNames[i]);
-    if (sec) sectioned.push(...extractSheetRows(gridOf(sheetNames[i]), sec));
-  }
-  if (sectioned.length) return sectioned;
+  // READ EVERY SHEET. The section taken from a sheet's NAME is only a HINT for the
+  // rows of THAT sheet (used when the sheet carries no section column) — it must
+  // never decide WHICH sheets are read.
+  //
+  // This previously ran in two passes: collect rows from sheets whose NAME looks
+  // like a TDS section, and if that found anything, RETURN ONLY THOSE — discarding
+  // every other sheet in the workbook. So a client whose real data sits on sheets
+  // named by quarter/month ("QUT-01 April 01 to June-30" …) alongside ONE small
+  // incidental section-named tab ("194T") had their whole return silently reduced
+  // to that one tab. Measured on a real file: 159 rows across 6 sheets came back as
+  // 3, with no warning — the four quarterly sheets (24+34+28+70 rows) were dropped
+  // wholesale. That is the "entries not captured" bug, and it is format-dependent,
+  // which is why it kept resurfacing with each new client's workbook.
   const all: Record<string, unknown>[] = [];
   for (let i = 0; i < sheetNames.length; i++) {
     onProgress?.(i);
-    all.push(...extractSheetRows(gridOf(sheetNames[i]), null));
+    const sec = sectionFromSheetName(sheetNames[i]);
+    const rows = extractSheetRows(gridOf(sheetNames[i]), sec);
+    // Tag every row with the sheet it came from. De-duplication downstream needs
+    // it to tell a GENUINE repeat from a cross-sheet ECHO: four identical bills to
+    // one party on one day, all on the 194C sheet, are four real transactions,
+    // while the same four appearing again on a consolidated "Sheet1" are the same
+    // four. Without the sheet, content-dedup cannot distinguish them and silently
+    // deletes real records. Not a data column — the mapper skips SHEET_KEY.
+    for (const r of rows) r[SHEET_KEY] = sheetNames[i];
+    all.push(...rows);
   }
   return all;
+}
+
+/** Marks the sheet a row came from. NOT a client column: the column engine skips
+ *  it, and nothing maps it to a canonical field. */
+export const SHEET_KEY = "__sheet";
+
+/**
+ * GROUND TRUTH for the never-lose-a-record safety net: every distinct PAN that
+ * appears in ANY cell of the workbook.
+ *
+ * The import's existing shortfall warning compares rows MAPPED against rows
+ * EXTRACTED — so it is structurally blind to a sheet that extracts nothing at all
+ * (0 of 0 reads as 100%). A TDS deductee line always carries a PAN, so the PANs
+ * physically present in the file are an independent measure of what SHOULD have
+ * been read. Comparing against this catches whole-sheet loss, which no amount of
+ * header heuristics can.
+ */
+const PAN_CELL_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;   // the WHOLE cell is a PAN
+export function countPansInGrids(sheetNames: string[], gridOf: (name: string) => unknown[][]): number {
+  const pans = new Set<string>();
+  for (const name of sheetNames) {
+    for (const row of gridOf(name) || []) {
+      for (const cell of row || []) {
+        const s = String(cell ?? "").trim().toUpperCase().replace(/\s+/g, "");
+        if (PAN_CELL_RE.test(s)) pans.add(s);
+      }
+    }
+  }
+  return pans.size;
 }

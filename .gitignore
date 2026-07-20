@@ -32,6 +32,10 @@ tally-xml-service/.env
 # Claude Code local settings (personal, not for team)
 .claude/settings.local.json
 .claude/launch.json
+# Claude Code session worktrees — never commit these (they land as gitlinks
+# with no .gitmodules entry, which fails `git submodule foreach` in CI with
+# exit 128 during actions/checkout). Purely local scratch.
+.claude/worktrees/
 
 # Supabase temp build files
 supabase/.temp/

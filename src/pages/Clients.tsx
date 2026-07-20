@@ -42,6 +42,17 @@ interface Client {
   firm_name?: string | null;
   /** Soft-delete timestamp — non-null means client is archived */
   deleted_at?: string | null;
+  /** 2026-06-25 (V J Desai) — how did this client get archived?
+   *  "manual"           — user clicked the delete button
+   *  "eoffice_inactive" — sync auto-archived because eOffice flipped De-Active */
+  deleted_reason?: string | null;
+  /** Staff member accountable for this client; default assignee in ITR Management */
+  responsible_person_id?: string | null;
+}
+
+interface StaffUser {
+  id: string;
+  name: string | null;
 }
 
 interface GroupInfo {
@@ -197,6 +208,10 @@ const Clients = () => {
   const [search, setSearch] = useState("");
   const [entityFilter, setEntityFilter] = useState("all");
   const [groupFilter, setGroupFilter] = useState<string[]>([]);
+  // "all" = no filter, "unassigned" = clients with no responsible person, else a user id
+  const [rpFilter, setRpFilter] = useState("all");
+  const [staffUsers, setStaffUsers] = useState<StaffUser[]>([]);
+  const [rpSavingId, setRpSavingId] = useState<string | null>(null);
   // GAP-7: API vs Manual bifurcation (+ "archived" view-only tab)
   const [sourceTab, setSourceTab] = useState<"all" | "manual" | "api" | "archived">("all");
   const [archivedClients, setArchivedClients] = useState<Client[]>([]);
@@ -215,15 +230,23 @@ const Clients = () => {
   const [manageGroupsClient, setManageGroupsClient] = useState<Client | null>(null);
   const [manageGroupsSaving, setManageGroupsSaving] = useState(false);
 
-  // Secondary sub-tab within "Clients via API": Final Active | Final Inactive
-  // | Draft Active | Draft Inactive.
-  // 2026-06-25 (V J Desai — ANKUR PLASTIC INDUSTRIES surfacing as active):
-  // "Final" used to be one bucket regardless of is_active. Sync from API
-  // does write is_active=false when the eOffice portal flips a client to
-  // De-Active, but the Final tab was ignoring that. Splitting symmetric
-  // with the Draft treatment lets the auditor spot deactivated clients.
-  type ApiSubTabKey = "final_active" | "final_inactive" | "draft_active" | "draft_inactive";
+  // Secondary sub-tab within "Clients via API": Final Active | Draft Active.
+  // 2026-06-25 (V J Desai — inactive clients move to Archived): the previous
+  // Final Inactive / Draft Inactive chips are gone. The sync now sets
+  // deleted_at + deleted_reason="eoffice_inactive" whenever an eOffice
+  // record is De-Active, and those clients live under the Archived tab
+  // (with a sub-filter to bifurcate auto-archived vs manually-archived).
+  // The Clients-via-API view is therefore only two chips now.
+  type ApiSubTabKey = "final_active" | "draft_active";
   const [apiSubTab, setApiSubTab] = useState<ApiSubTabKey>("final_active");
+
+  // 2026-06-25 (V J Desai — Archived bifurcation): split archived clients
+  // into two logical buckets so the auditor can see which archives were
+  // manual (with an Unarchive button) vs sync-driven (governed by the
+  // eOffice portal). Default = manual so freshly-archived-by-user rows
+  // are always front-and-centre.
+  type ArchivedSubTabKey = "manual" | "eoffice_inactive";
+  const [archivedSubTab, setArchivedSubTab] = useState<ArchivedSubTabKey>("manual");
 
   // GAP-6: draft management
   const [drafts, setDrafts] = useState<Client[]>([]);
@@ -241,7 +264,7 @@ const Clients = () => {
 
     // Only fetch the columns the list view actually renders — avoids transferring
     // unused large fields (audit_questions, address blobs, etc.) for 1000+ rows.
-    const clientCols = "id, name, pan, entity_type, cin, gstin, created_at, firm_id, source, is_draft, is_active";
+    const clientCols = "id, name, pan, entity_type, cin, gstin, created_at, firm_id, source, is_draft, is_active, responsible_person_id";
     const clientSelect = showAllFirms ? `${clientCols}, firms(name)` : clientCols;
 
     let mainQuery = supabase.from("clients").select(clientSelect, { count: "exact" })
@@ -319,9 +342,48 @@ const Clients = () => {
     setLoading(false);
   };
 
+  // Staff list backing the Responsible Person column + filter. Fetched once per
+  // firm scope rather than joined onto each client row: the dropdown needs every
+  // assignable staff member anyway, not just the ones already assigned.
+  const fetchStaffUsers = async () => {
+    if (!effectiveFirmId && !showAllFirms) return;
+    let q = supabase.from("users").select("id, name").neq("role", "client").order("name");
+    if (!showAllFirms && effectiveFirmId) q = q.eq("firm_id", effectiveFirmId);
+    const { data } = await q;
+    setStaffUsers((data as StaffUser[]) || []);
+  };
+
+  const staffNameById = useMemo(
+    () => new Map(staffUsers.map(u => [u.id, (u.name || "").trim()])),
+    [staffUsers],
+  );
+
+  /** Inline reassign from the list. Optimistic — reverts the row if the write fails. */
+  const updateResponsiblePerson = async (client: Client, nextId: string) => {
+    const newValue = nextId === "unassigned" ? null : nextId;
+    if (newValue === (client.responsible_person_id ?? null)) return;
+    const previous = client.responsible_person_id ?? null;
+
+    setRpSavingId(client.id);
+    setClients(prev => prev.map(c => (c.id === client.id ? { ...c, responsible_person_id: newValue } : c)));
+
+    const { error } = await supabase.from("clients").update({ responsible_person_id: newValue }).eq("id", client.id);
+    setRpSavingId(null);
+
+    if (error) {
+      setClients(prev => prev.map(c => (c.id === client.id ? { ...c, responsible_person_id: previous } : c)));
+      toast({ title: "Could not update responsible person", description: error.message, variant: "destructive" });
+      return;
+    }
+    toast({
+      title: "Responsible person updated",
+      description: `${client.name || "Client"} → ${newValue ? staffNameById.get(newValue) || "Unknown" : "Unassigned"}`,
+    });
+  };
+
   // GAP-2: re-fetch whenever effectiveFirmId or showAllFirms changes (superadmin firm selector, auth load)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (effectiveFirmId || showAllFirms) { fetchData(); fetchDrafts(); fetchArchivedClients(); } }, [effectiveFirmId, showAllFirms]);
+  useEffect(() => { if (effectiveFirmId || showAllFirms) { fetchData(); fetchDrafts(); fetchArchivedClients(); fetchStaffUsers(); } }, [effectiveFirmId, showAllFirms]);
 
   useEffect(() => { localStorage.setItem(VIEW_KEY, viewMode); }, [viewMode]);
 
@@ -362,7 +424,7 @@ const Clients = () => {
   const fetchArchivedClients = async () => {
     if (!effectiveFirmId && !showAllFirms) { setArchivedClients([]); return; }
     try {
-      const clientCols = "id, name, pan, entity_type, cin, created_at, deleted_at, firm_id, source";
+      const clientCols = "id, name, pan, entity_type, cin, created_at, deleted_at, deleted_reason, firm_id, source, is_draft, is_active";
       let q = supabase.from("clients").select(clientCols)
         .not("deleted_at", "is", null)
         .order("deleted_at", { ascending: false });
@@ -415,19 +477,49 @@ const Clients = () => {
         setDeleteLoading(false);
         return;
       }
-      // Soft delete
+      // Soft delete — tag as manual so the sync's auto-unarchive rule
+      // never resurrects this row when eOffice reports the client active.
       const { error } = await supabase
         .from("clients")
-        .update({ deleted_at: new Date().toISOString() } as any)
+        .update({
+          deleted_at: new Date().toISOString(),
+          deleted_reason: "manual",
+        } as any)
         .eq("id", deleteClient.id);
       if (error) throw error;
       toast({ title: "Client archived successfully" });
       setDeleteClient(null);
       fetchData();
+      fetchArchivedClients();
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
     } finally {
       setDeleteLoading(false);
+    }
+  };
+
+  /** 2026-06-25 (V J Desai) — Unarchive a manually-archived client.
+   *  Clears deleted_at + deleted_reason; the client drops back into
+   *  Draft Active / Final Active based on its existing is_draft flag
+   *  (no state change to is_draft or is_active). Auto-archived rows
+   *  do not get this button — they're governed by the eOffice sync. */
+  const handleUnarchive = async (c: Client) => {
+    try {
+      const { error } = await supabase
+        .from("clients")
+        .update({
+          deleted_at: null,
+          deleted_reason: null,
+        } as any)
+        .eq("id", c.id);
+      if (error) throw error;
+      toast({
+        title: "Client unarchived",
+        description: `${c.name || "Client"} moved back to ${c.is_draft ? "Draft Active" : "Final Active"}.`,
+      });
+      await Promise.all([fetchData(), fetchArchivedClients()]);
+    } catch (e: any) {
+      toast({ title: "Unarchive failed", description: e.message, variant: "destructive" });
     }
   };
 
@@ -489,19 +581,23 @@ const Clients = () => {
     // API sub-tab filter (only applies when sourceTab === "api")
     let matchesApiSub = true;
     if (sourceTab === "api") {
-      // 2026-06-25 — Final now respects is_active, matching the Draft split.
+      // 2026-06-25 — only two active chips now; inactive clients live in
+      // Archived (via deleted_at). Filter mirrors that: only unarchived
+      // clients count for these chips.
       if (apiSubTab === "final_active")        matchesApiSub = !c.is_draft && c.is_active !== false;
-      else if (apiSubTab === "final_inactive") matchesApiSub = !c.is_draft && c.is_active === false;
       else if (apiSubTab === "draft_active")   matchesApiSub = !!c.is_draft && c.is_active !== false;
-      else if (apiSubTab === "draft_inactive") matchesApiSub = !!c.is_draft && c.is_active === false;
     }
 
-    return matchesSearch && matchesEntity && matchesGroup && matchesSource && matchesApiSub;
+    const matchesRp =
+      rpFilter === "all" ||
+      (rpFilter === "unassigned" ? !c.responsible_person_id : c.responsible_person_id === rpFilter);
+
+    return matchesSearch && matchesEntity && matchesGroup && matchesSource && matchesApiSub && matchesRp;
   });
 
   // Reset page when filters change; reset apiSubTab when leaving API tab
-  useEffect(() => { setCurrentPage(1); }, [search, entityFilter, groupFilter, sourceTab, apiSubTab]);
-  useEffect(() => { if (sourceTab !== "api") setApiSubTab("final"); }, [sourceTab]);
+  useEffect(() => { setCurrentPage(1); }, [search, entityFilter, groupFilter, rpFilter, sourceTab, apiSubTab]);
+  useEffect(() => { if (sourceTab !== "api") setApiSubTab("final_active"); }, [sourceTab]);
 
   // Pagination
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -696,13 +792,11 @@ const Clients = () => {
           { key: "archived" as const, label: "Archived",               count: archivedClients.length },
         ];
 
-        // Sub-tab counts (within api_import clients only).
-        // 2026-06-25 — Final now split by is_active, symmetric with Draft.
-        const apiClients          = clients.filter(c => c.source === "api_import");
-        const finalActiveCount    = apiClients.filter(c => !c.is_draft && c.is_active !== false).length;
-        const finalInactiveCount  = apiClients.filter(c => !c.is_draft && c.is_active === false).length;
-        const draftActiveCount    = apiClients.filter(c => !!c.is_draft && c.is_active !== false).length;
-        const draftInactiveCount  = apiClients.filter(c => !!c.is_draft && c.is_active === false).length;
+        // Sub-tab counts (within api_import clients only). Only the two
+        // active buckets remain — inactive clients live in Archived now.
+        const apiClients        = clients.filter(c => c.source === "api_import");
+        const finalActiveCount  = apiClients.filter(c => !c.is_draft && c.is_active !== false).length;
+        const draftActiveCount  = apiClients.filter(c => !!c.is_draft && c.is_active !== false).length;
 
         return (
           <div className="space-y-0">
@@ -713,7 +807,7 @@ const Clients = () => {
                   key={key}
                   onClick={() => {
                     setSourceTab(key);
-                    setSearch(""); setEntityFilter("all"); setGroupFilter([]); setCurrentPage(1);
+                    setSearch(""); setEntityFilter("all"); setGroupFilter([]); setRpFilter("all"); setCurrentPage(1);
                   }}
                   className={`whitespace-nowrap px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
                     sourceTab === key
@@ -734,9 +828,7 @@ const Clients = () => {
               <div className="flex items-center gap-2 pt-3 pb-1 px-0.5 flex-wrap">
                 {[
                   { key: "final_active"   as const, label: "Final Active",   count: finalActiveCount,   color: "emerald" },
-                  { key: "final_inactive" as const, label: "Final Inactive", count: finalInactiveCount, color: "slate"   },
                   { key: "draft_active"   as const, label: "Draft Active",   count: draftActiveCount,   color: "amber"   },
-                  { key: "draft_inactive" as const, label: "Draft Inactive", count: draftInactiveCount, color: "rose"    },
                 ].map(({ key, label, count, color }) => {
                   const isActive = apiSubTab === key;
                   const colorMap: Record<string, { active: string; inactive: string; dot: string }> = {
@@ -777,6 +869,16 @@ const Clients = () => {
             {ENTITY_TYPES.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
           </SelectContent>
         </Select>
+        <Select value={rpFilter} onValueChange={setRpFilter}>
+          <SelectTrigger className="w-full sm:w-[200px]"><SelectValue placeholder="Responsible Person" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Responsible Persons</SelectItem>
+            <SelectItem value="unassigned">Unassigned</SelectItem>
+            {staffUsers.filter(u => (u.name || "").trim()).map(u => (
+              <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <Popover>
           <PopoverTrigger asChild>
             <Button variant="outline" className="w-full sm:w-[200px] justify-between">
@@ -799,9 +901,47 @@ const Clients = () => {
         </Popover>
       </div>}
 
-      {/* Archived Clients — view-only list, shown only when "Archived" tab is active */}
-      {sourceTab === "archived" && (
+      {/* Archived Clients — view-only list, shown only when "Archived" tab is active.
+          2026-06-25 (V J Desai) — Archived now splits into two sub-chips:
+            • Manually archived: clicked delete on the row. Includes an
+              Unarchive button that clears deleted_at and drops the client
+              back into Draft Active / Final Active based on is_draft.
+            • Auto-archived via eOffice: deleted_reason=eoffice_inactive.
+              No unarchive button — governed by the sync (reactivating in
+              the eOffice portal + re-sync clears the archive automatically).
+          Counts are computed here at the outer scope so the sub-chip row
+          below can reference them (the earlier IIFE was self-contained). */}
+      {sourceTab === "archived" && (() => {
+        const archivedManualCount  = archivedClients.filter(c => (c as any).deleted_reason === "manual" || !(c as any).deleted_reason).length;
+        const archivedEofficeCount = archivedClients.filter(c => (c as any).deleted_reason === "eoffice_inactive").length;
+        return (
         <div className="space-y-3">
+          {/* Sub-chip row */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {[
+              { key: "manual"           as const, label: "Manually Archived",           count: archivedManualCount,  color: "rose"   },
+              { key: "eoffice_inactive" as const, label: "Auto-archived (via eOffice)", count: archivedEofficeCount, color: "slate"  },
+            ].map(({ key, label, count, color }) => {
+              const isActive = archivedSubTab === key;
+              const colorMap: Record<string, { active: string; inactive: string; dot: string }> = {
+                rose:  { active: "bg-rose-100 text-rose-800 border-rose-400 dark:bg-rose-900/30 dark:text-rose-300 dark:border-rose-600",   inactive: "bg-muted text-muted-foreground border-border hover:border-rose-300",  dot: "bg-rose-500"  },
+                slate: { active: "bg-slate-200 text-slate-800 border-slate-400 dark:bg-slate-800/60 dark:text-slate-300 dark:border-slate-600", inactive: "bg-muted text-muted-foreground border-border hover:border-slate-300", dot: "bg-slate-500" },
+              };
+              const cls = colorMap[color];
+              return (
+                <button
+                  key={key}
+                  onClick={() => setArchivedSubTab(key)}
+                  className={`inline-flex items-center gap-1.5 h-7 px-3 rounded-full text-xs font-medium border transition-colors ${isActive ? cls.active : cls.inactive}`}
+                >
+                  <span className={`inline-block w-1.5 h-1.5 rounded-full ${cls.dot}`} />
+                  {label}
+                  <span className="ml-0.5 text-[10px] px-1 rounded-full bg-black/10 dark:bg-white/10">{count}</span>
+                </button>
+              );
+            })}
+          </div>
+
           <div className="flex items-center gap-3">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -816,17 +956,42 @@ const Clients = () => {
                   <TableHead className="text-xs">PAN</TableHead>
                   <TableHead className="text-xs">Constitution</TableHead>
                   <TableHead className="text-xs">Archived On</TableHead>
+                  {archivedSubTab === "manual" && (
+                    <TableHead className="text-xs text-right">Actions</TableHead>
+                  )}
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {archivedClients
-                  .filter(c => !archivedSearch || (c.name || "").toLowerCase().includes(archivedSearch.toLowerCase()) || (c.pan || "").toLowerCase().includes(archivedSearch.toLowerCase()))
-                  .map(c => (
-                    <TableRow key={c.id} className="opacity-70">
+                {(() => {
+                  // Filter archived clients by sub-tab (manual vs eoffice_inactive)
+                  // AND the search term. Manual bucket also captures legacy
+                  // archives whose deleted_reason column is NULL (pre-feature).
+                  const inSubTab = archivedClients.filter(c => {
+                    const reason = (c as any).deleted_reason;
+                    return archivedSubTab === "manual"
+                      ? (reason === "manual" || !reason)
+                      : reason === "eoffice_inactive";
+                  });
+                  const filtered = inSubTab.filter(c => !archivedSearch
+                    || (c.name || "").toLowerCase().includes(archivedSearch.toLowerCase())
+                    || (c.pan  || "").toLowerCase().includes(archivedSearch.toLowerCase()));
+                  if (filtered.length === 0) {
+                    return (
+                      <TableRow>
+                        <TableCell colSpan={archivedSubTab === "manual" ? 5 : 4} className="text-center py-10 text-muted-foreground text-sm">
+                          No archived clients found
+                        </TableCell>
+                      </TableRow>
+                    );
+                  }
+                  return filtered.map(c => (
+                    <TableRow key={c.id} className="opacity-80">
                       <TableCell className="font-medium text-sm">
                         <span className="flex items-center gap-2">
                           {c.name || "Unnamed"}
-                          <Badge variant="destructive" className="text-[9px] px-1 py-0">Archived</Badge>
+                          <Badge variant="destructive" className="text-[9px] px-1 py-0">
+                            {archivedSubTab === "manual" ? "Manual" : "eOffice"}
+                          </Badge>
                         </span>
                       </TableCell>
                       <TableCell className="text-xs font-mono text-muted-foreground">{c.pan || "—"}</TableCell>
@@ -834,21 +999,32 @@ const Clients = () => {
                       <TableCell className="text-xs text-muted-foreground">
                         {c.deleted_at ? new Date(c.deleted_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—"}
                       </TableCell>
+                      {archivedSubTab === "manual" && (
+                        <TableCell className="text-right">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs gap-1 border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-300"
+                            onClick={() => handleUnarchive(c)}
+                          >
+                            <RefreshCw className="h-3 w-3" /> Unarchive
+                          </Button>
+                        </TableCell>
+                      )}
                     </TableRow>
-                  ))}
-                {archivedClients.filter(c => !archivedSearch || (c.name || "").toLowerCase().includes(archivedSearch.toLowerCase())).length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={4} className="text-center py-10 text-muted-foreground text-sm">No archived clients found</TableCell>
-                  </TableRow>
-                )}
+                  ));
+                })()}
               </TableBody>
             </Table>
           </div>
           <p className="text-xs text-muted-foreground">
-            Archived clients are view-only. All audit, billing, and sync operations are blocked for archived clients.
+            {archivedSubTab === "manual"
+              ? "Manually archived clients can be unarchived to move them back to Draft Active / Final Active based on their setup state."
+              : "Auto-archived by sync when eOffice marks them De-Active. To restore, re-activate in the eOffice portal and click Sync from API — CAFlow will move them back to Draft Active / Final Active automatically."}
           </p>
         </div>
-      )}
+        );
+      })()}
 
       {/* Content — shown only for non-archived tabs */}
       {sourceTab !== "archived" && loading ? (
@@ -860,12 +1036,8 @@ const Clients = () => {
             <p>
               {sourceTab === "api" && apiSubTab === "final_active"
                 ? "No active finalised clients from API"
-                : sourceTab === "api" && apiSubTab === "final_inactive"
-                ? "No deactivated finalised clients from API"
                 : sourceTab === "api" && apiSubTab === "draft_active"
                 ? "No active draft clients from API"
-                : sourceTab === "api" && apiSubTab === "draft_inactive"
-                ? "No inactive draft clients from API"
                 : sourceTab === "manual"
                 ? "No manually added clients found"
                 : "No clients found"}
@@ -883,6 +1055,7 @@ const Clients = () => {
                   <TableHead className="text-xs">PAN</TableHead>
                   <TableHead className="text-xs">Constitution</TableHead>
                   {showAllFirms && <TableHead className="text-xs">Firm</TableHead>}
+                  <TableHead className="text-xs">Responsible Person</TableHead>
                   <TableHead className="text-xs">Groups</TableHead>
                   <TableHead className="text-xs">Active Services</TableHead>
                   <TableHead className="text-xs w-12"></TableHead>
@@ -911,6 +1084,34 @@ const Clients = () => {
                       <TableCell className="text-xs font-mono text-muted-foreground">{client.pan || "—"}</TableCell>
                       <TableCell>{client.entity_type && <Badge variant="outline" className="text-[10px]">{client.entity_type}</Badge>}</TableCell>
                       {showAllFirms && <TableCell className="text-xs text-muted-foreground">{client.firm_name || "—"}</TableCell>}
+                      {/* stopPropagation: the row itself navigates to the client on click */}
+                      <TableCell onClick={e => e.stopPropagation()}>
+                        {canEdit ? (
+                          <Select
+                            value={client.responsible_person_id || "unassigned"}
+                            onValueChange={v => updateResponsiblePerson(client, v)}
+                            disabled={rpSavingId === client.id}
+                          >
+                            <SelectTrigger className="h-7 w-[160px] text-xs">
+                              <SelectValue placeholder="Unassigned" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="unassigned">Unassigned</SelectItem>
+                              {/* Keep an out-of-scope assignee selectable so saving doesn't silently drop it */}
+                              {client.responsible_person_id && !staffNameById.has(client.responsible_person_id) && (
+                                <SelectItem value={client.responsible_person_id}>Unknown user</SelectItem>
+                              )}
+                              {staffUsers.filter(u => (u.name || "").trim()).map(u => (
+                                <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">
+                            {(client.responsible_person_id && staffNameById.get(client.responsible_person_id)) || "—"}
+                          </span>
+                        )}
+                      </TableCell>
                       <TableCell>
                         <div className="flex flex-wrap gap-1 max-w-[220px]">
                           {cGroups.length === 0

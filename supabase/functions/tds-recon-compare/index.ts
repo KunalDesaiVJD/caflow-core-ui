@@ -3,28 +3,45 @@
  *
  * Reconciles Office Data (manually-entered tds_deductees for a filing) against the
  * latest Imported Client Data batch (tds_imported_rows), record-by-record and
- * field-by-field, using DETERMINISTIC rules — not an LLM. The previous LLM
- * approach mis-PAIRED rows (matching an office row to the wrong transaction of the
- * same party), producing false "Section Mismatch"es. This engine:
+ * field-by-field, using DETERMINISTIC rules — not an LLM (bar the one section
+ * adjudication below). The previous LLM approach mis-PAIRED rows (matching an office
+ * row to the wrong transaction of the same party), producing false "Section
+ * Mismatch"es. This engine:
  *
- *   1. PAIRS by PAN + Date + Amount (never by position) — Issue 2. A global,
- *      score-ranked 1:1 assignment resolves multi-transaction parties correctly.
- *   2. Canonicalises SECTION via the configurable tds_section_aliases table
- *      (e.g. "TDS - Contract" → 194C) before comparing — Issue 3.
+ *   1. PAIRS with the ONE SHARED EXCLUSIVITY ENGINE (../_shared/assignment.ts) — the
+ *      same code Stage 3 runs. No score, no threshold: it commits a pairing only when
+ *      it is uniquely best for BOTH sides. Because BOTH sides here carry a PAN, PAN
+ *      equality is the strongest tier and a PAN difference blocks a pairing outright —
+ *      Issue 2, multi-transaction parties resolved by identity, not position.
+ *   2. Canonicalises SECTION through the SHARED canonicalSection, with the configurable
+ *      tds_section_aliases table resolved on top (e.g. "TDS - Contract" → 194C) — Issue 3.
  *   3. Emits a full, human-readable per-field diff (Office vs Imported + reason)
  *      for all 7 fields — Issues 1 & 4.
- *   4. Applies a CONFIDENCE rule — when PAN, Date, Amount and TDS all match but a
- *      softer field (name/section/interest) differs, the record is flagged
- *      "review" instead of a hard "mismatched", to cut false mismatches — Issue 5.
+ *   4. All name/amount/date comparison uses the SHARED match.ts primitives, so a fix
+ *      lands in Stage 1, 2 and 3 at once — the three stages can never diverge again.
  *
  * Compares EXACTLY seven fields: name, pan, date, amount, tds, interest, section.
- * Existing override decisions are preserved across re-runs. No AI key required.
+ * Existing override decisions are preserved across re-runs.
  *
  * Input (POST, Bearer auth): { filing_id, batch_id? }   (defaults to latest batch)
- * Output: { batch_id, summary: { total, matched, review, mismatched, office_only, imported_only, overridden, pending } }
+ * Output: { batch_id, summary: { total, matched, mismatched, office_only, imported_only, overridden, pending, ... } }
  */
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+
+// ── THE ONE SHARED ENGINE ─────────────────────────────────────────────────────
+// Every TDS stage compares with the SAME primitives and pairs with the SAME
+// exclusivity engine, so a fix lands everywhere at once and can never again be
+// stage-specific. These files are BYTE-IDENTICAL copies of src/lib/tds/{match,
+// assignment}.ts (guarded by src/lib/tds/sharedSync.test.ts) — the app cannot import
+// from supabase/, and the edge function cannot import from src/, so the proven
+// pattern is a guarded copy (same as ../_shared/tdsColumnEngine.ts). Stage 1's own
+// divergent amountsMatch / canonicalSection / name logic / greedy pairScore are GONE.
+import {
+  amountsMatch, normalizeName, nameCompare, normalizePan,
+  canonicalSection, makeDateNormaliser,
+} from "../_shared/match.ts";
+import { assign, type AsgOffice, type AsgLedger } from "../_shared/assignment.ts";
 
 // Reflect the browser's requested headers on the preflight (supabase-js v2.98+
 // attaches x-supabase-client-* headers; a static allow-list that omits them fails
@@ -44,8 +61,9 @@ interface FieldDiff { field: string; office: unknown; imported: unknown; matched
 interface Alias { pattern: string; code: string; priority: number; firm: boolean; }
 
 // ── Normalisers ──────────────────────────────────────────────────────────────
-const normPan = (v: unknown): string => (v == null ? "" : String(v).trim().toUpperCase().replace(/\s+/g, ""));
-
+// normPan → the shared normalizePan; amountsMatch → the shared rounding-aware
+// amountsMatch (0.5% capped at ₹10); normName → the shared normalizeName. All three
+// were Stage-1-local forks that had drifted from the other stages — deleted here.
 const normAmount = (v: unknown): number | null => {
   if (v === null || v === undefined || v === "") return null;
   if (typeof v === "number") return isFinite(v) ? v : null;
@@ -62,43 +80,20 @@ const normAmount = (v: unknown): number | null => {
   return isFinite(n) ? n : null;
 };
 const amt = (v: unknown): number => normAmount(v) ?? 0;
-// Genuinely-equal money within ₹1 (covers rounding/precision differences).
-const amountsMatch = (a: unknown, b: unknown): boolean => Math.abs(amt(a) - amt(b)) <= 1;
 /** Whether a money value is effectively "not recorded" (blank / zero). */
 const isBlankOrZero = (v: unknown): boolean => { const n = normAmount(v); return n === null || n === 0; };
 
-/** Legal-entity name normaliser: case/punctuation/spacing-insensitive, with the
- * common CA-firm abbreviations folded (PVT→PRIVATE, LTD→LIMITED, &→AND) so
- * "Adinath ... Pvt. Ltd." == "ADINATH ... PRIVATE LIMITED". */
-const normName = (v: unknown): string => {
-  let s = (v == null ? "" : String(v)).toUpperCase();
-  s = s.replace(/&/g, " AND ");
-  s = s.replace(/[^A-Z0-9 ]/g, " ");          // strip punctuation → spaces ("M/s."→"M S")
-  s = ` ${s.replace(/\s+/g, " ").trim()} `;   // pad so \bword\b via space works
-  s = s.replace(/ PVT /g, " PRIVATE ").replace(/ LTD /g, " LIMITED ");
-  s = s.replace(/ P LIMITED /g, " PRIVATE LIMITED ");
-  s = s.replace(/ CORPN /g, " CORPORATION ").replace(/ CO /g, " COMPANY ");
-  // Drop a LEADING honorific/article a client working file routinely prefixes
-  // (leading-anchored so a legitimate mid-name "M S" or "THE" survives).
-  s = s.replace(/^ (M S|MESSRS|MESSER?S|THE) /, " ");
-  return s.replace(/\s+/g, " ").trim();
-};
-
-/** Name equivalence for a PAIRED record. A matching PAN is the legal identifier
- * (the return is filed by PAN) — so a same-PAN pair is the SAME party and a name
- * spelling/word-order/honorific/abbreviation difference must NOT hard-fail it.
- * When PAN does NOT match (pair anchored by name+date/amount), require a strong
- * token overlap. */
-function namesEquivalent(oNameN: string, iNameN: string, panMatched: boolean): boolean {
-  if (oNameN === iNameN) return true;
+/** Name equivalence for a PAIRED record, decided by the SHARED name engine so it
+ * behaves identically to Stage 2/3. A matching PAN is the legal identifier (the return
+ * is filed by PAN) — so a same-PAN pair is the SAME party and a name spelling/word-
+ * order/honorific/abbreviation difference must NOT hard-fail it. Otherwise the name
+ * field is OK only when the shared tiered comparison returns "match" (tier ≤ 3 —
+ * exact/permutation/abbreviation/vowel-elision), which is exactly the line above which
+ * a name may auto-match everywhere else. `unknown` (a name missing on one side) is NOT
+ * a match on its own, matching the previous behaviour (blank names never equated). */
+function namesEquivalent(oName: unknown, iName: unknown, panMatched: boolean): boolean {
   if (panMatched) return true;                              // same PAN ⇒ same deductee
-  if (!oNameN || !iNameN) return false;
-  const ta = new Set(oNameN.split(" ").filter(w => w.length > 1));
-  const tb = new Set(iNameN.split(" ").filter(w => w.length > 1));
-  if (ta.size === 0 || tb.size === 0) return false;
-  const inter = [...ta].filter(w => tb.has(w)).length;
-  if (inter === ta.size || inter === tb.size) return true;  // one token-set ⊆ the other
-  return inter / new Set([...ta, ...tb]).size >= 0.6;       // strong Jaccard overlap
+  return nameCompare(oName == null ? null : String(oName), iName == null ? null : String(iName)) === "match";
 }
 
 // Permissive multi-format date → ISO (yyyy-mm-dd). Office dates are ISO (<input
@@ -144,53 +139,18 @@ function datesMatch(a: unknown, b: unknown): boolean {
 }
 const primaryIso = (v: unknown): string | null => dateCandidates(v)[0] ?? null;
 
-// ── Column-level date-ORDER detection + FY-quarter derivation ─────────────────
+// ── Column-level date-ORDER detection ─────────────────────────────────────────
 // Guessing dd/mm-vs-mm/dd per value misreads a whole file: a client's AMERICAN
-// M/D/YY export ("10/6/25" = 6 Oct? no — 6 June under dd/mm) is systematically
-// wrong. Office dates are ISO. So detect each SIDE's convention from its WHOLE
-// column — a value whose FIRST part > 12 can only be M/D; whose SECOND part > 12
-// can only be D/M — then normalise every value with that fixed order. This makes
-// date matching AND quarter detection correct regardless of the client's format.
-type DateOrder = "iso" | "mdy" | "dmy";
-function detectDateOrder(values: unknown[]): DateOrder {
-  let iso = 0, numeric = 0, mdy = 0, dmy = 0;
-  for (const v of values) {
-    const s = v == null ? "" : String(v).trim();
-    if (!s) continue;
-    if (/^\d{4}-\d{1,2}-\d{1,2}/.test(s)) { iso++; continue; }
-    const m = stripTime(s).match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.]\d{2,4}$/);
-    if (!m) continue;
-    numeric++;
-    const a = +m[1], b = +m[2];
-    // If a part exceeds 12 it must be the DAY, which fixes the order:
-    if (a > 12 && b <= 12) dmy++;        // first part is the day  ⇒ D/M/Y
-    else if (b > 12 && a <= 12) mdy++;   // second part is the day ⇒ M/D/Y
-  }
-  if (iso > 0 && iso >= numeric) return "iso";
-  if (mdy > dmy) return "mdy";
-  if (dmy > mdy) return "dmy";
-  return "dmy"; // ambiguous column (all parts ≤ 12) → Indian D/M convention
-}
-/** Normalise a raw date to ISO using a KNOWN column order; ISO/textual-month are
- * always recognised, and if the fixed order is impossible for a value the other
- * reading is used as a safety net. */
-function toIsoOrder(raw: unknown, order: DateOrder): string | null {
-  if (raw == null) return null;
-  const s = stripTime(String(raw).trim());
-  if (!s) return null;
-  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (m) return isoOf(+m[1], +m[2], +m[3]);
-  m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
-  if (m) {
-    const a = +m[1], b = +m[2], y = normYear(m[3]);
-    if (order === "mdy") return isoOf(y, a, b) ?? isoOf(y, b, a);
-    return isoOf(y, b, a) ?? isoOf(y, a, b); // dmy / iso-column-with-a-slash-value
-  }
-  m = s.match(/^(\d{1,2})[\s\-]([a-zA-Z]{3,9})[\s\-,]+(\d{2,4})$/);
-  if (m) { const mo = MONTHS[m[2].slice(0, 3).toLowerCase()]; if (mo) return isoOf(normYear(m[3]), mo, +m[1]); }
-  m = s.match(/^([a-zA-Z]{3,9})\s+(\d{1,2}),?\s+(\d{2,4})$/);
-  if (m) { const mo = MONTHS[m[1].slice(0, 3).toLowerCase()]; if (mo) return isoOf(normYear(m[3]), mo, +m[2]); }
-  return null;
+// M/D/YY export ("10/6/25" = 6 Oct? no — 6 June under dd/mm) is systematically wrong.
+// The SHARED makeDateNormaliser detects each column's convention from its WHOLE set of
+// values (a value whose first part > 12 can only be M/D; whose second > 12 only D/M) and
+// returns a normaliser using that fixed order — the same algorithm Stage 3 uses. Stage
+// 1's own detectDateOrder/toIsoOrder forks are deleted. The local dateCandidates() is
+// kept only as a FALLBACK for the extra textual formats ("Apr 5, 2024") that the shared
+// primitive doesn't parse, so no client date that matched before stops matching.
+function makeIsoNormaliser(values: unknown[]): (v: unknown) => string | null {
+  const shared = makeDateNormaliser(values);
+  return (v: unknown) => shared(v) ?? primaryIso(v);
 }
 
 /** First 4-digit year of an FY string ("2025-26" → 2025). */
@@ -256,27 +216,34 @@ const DEFAULT_SECTION_ALIASES: Alias[] = [
 ].map(([pattern, code, priority]) => ({ pattern: String(pattern), code: String(code), priority: Number(priority), firm: false }));
 
 const SECTION_CODE_RE = /\b(19[2-9][A-Z]{0,2}|20[0-9][A-Z]{0,2})\b/;
-/** Raw section text → canonical code. An explicit code (194C, 194Q…) wins; else
- * the first alias whose keyword appears in the text (aliases pre-sorted
- * specific-first); else the trimmed upper-cased literal. */
-function canonicalSection(raw: unknown, aliases: Alias[]): string | null {
+/** Raw section text → canonical code, fed THROUGH the shared canonicalSection so the
+ * code/keyword/separator-tolerance logic is IDENTICAL across all three stages (Stage 1's
+ * own SECTION_CODE_RE fork is gone). The ONE Stage-1-specific layer preserved on top is
+ * the configurable `tds_section_aliases` table — real, firm-editable domain knowledge:
+ *
+ *   1. An EXPLICIT statutory code in the text (194C, 194 Q, Section 194Q) is
+ *      authoritative — take the shared canonicaliser's answer verbatim.
+ *   2. Otherwise consult the firm/global alias table (whole-word match, pre-sorted
+ *      specific-first) and canonicalise THAT code through the shared engine.
+ *   3. Otherwise fall back to the shared engine's own keyword table, else the literal.
+ *
+ * This is "resolve aliases first, then canonicalise" — never a second, divergent
+ * implementation of the code extraction. */
+function resolveSection(raw: unknown, aliases: Alias[]): string | null {
   if (raw == null || String(raw).trim() === "") return null;
-  const s = String(raw).trim();
-  const up = s.toUpperCase();
-  // Match the code regex on the SPACED string first (so "Section 194Q" keeps its
-  // word boundary before 194), then on a despaced copy (so a rare "194 Q" still
-  // resolves). Stripping spaces unconditionally destroyed the \b, making
-  // "SECTION 194Q" fail to extract a code.
-  const code = up.match(SECTION_CODE_RE) || up.replace(/\s+/g, "").match(SECTION_CODE_RE);
-  if (code) return code[1].toUpperCase();
-  const norm = ` ${s.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim()} `;
-  // WHOLE-WORD match (not raw substring) so "current account interest" does not
+  const s = String(raw);
+  const shared = canonicalSection(s);   // shared: explicit code OR built-in keyword
+  const hasExplicitCode = SECTION_CODE_RE.test(s.toUpperCase())
+    || SECTION_CODE_RE.test(s.toUpperCase().replace(/\s+/g, ""));
+  if (hasExplicitCode && shared) return shared;
+  // WHOLE-WORD alias match (not raw substring) so "current account interest" does not
   // match the "rent" alias inside "cur[rent]" and wrongly resolve to 194I.
-  for (const a of aliases) if (norm.includes(` ${a.pattern} `)) return a.code;
-  return up.replace(/\s+/g, " ");
+  const norm = ` ${s.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim()} `;
+  for (const a of aliases) if (norm.includes(` ${a.pattern} `)) return canonicalSection(a.code) ?? a.code;
+  return shared ?? s.toUpperCase().replace(/\s+/g, " ").trim();
 }
 function sectionsMatch(a: unknown, b: unknown, aliases: Alias[]): boolean {
-  const ca = canonicalSection(a, aliases), cb = canonicalSection(b, aliases);
+  const ca = resolveSection(a, aliases), cb = resolveSection(b, aliases);
   if (ca === null && cb === null) return true;
   if (ca === null || cb === null) return false;
   return ca === cb;
@@ -314,7 +281,7 @@ interface Rec {
   panN: string; nameN: string; iso: string | null; amountN: number | null;
 }
 const toRec = (id: string, r: { name: unknown; pan: unknown; section: unknown; amount: unknown; tds: unknown; interest: unknown; date: unknown }): Rec => ({
-  id, ...r, panN: normPan(r.pan), nameN: normName(r.name), iso: primaryIso(r.date), amountN: normAmount(r.amount),
+  id, ...r, panN: normalizePan(r.pan == null ? null : String(r.pan)), nameN: normalizeName(r.name == null ? null : String(r.name)), iso: primaryIso(r.date), amountN: normAmount(r.amount),
 });
 
 /** Date match for a paired record: use the column-order-normalised ISO on both
@@ -325,68 +292,12 @@ function recDatesMatch(o: Rec, i: Rec): boolean {
   return datesMatch(o.date, i.date);
 }
 
-/** Pair candidate strength via a MULTI-STAGE eligibility cascade — null = too weak
- * to pair (unrelated). The gates are PROGRESSIVELY relaxed but each remains strong
- * enough that unrelated rows never pair, and a PAN conflict (both sides carry a
- * PAN and they differ) always blocks a non-PAN pairing. Stages, strongest first:
- *   1. PAN match — the legal identifier; always pairs.
- *   2. EXACT normalised name + a date OR amount anchor.
- *   3. FUZZY name (token-subset / strong Jaccard) + BOTH date AND amount, non-zero.
- *   4. TRI-FIELD: date AND amount AND TDS all agree (±₹1), non-zero — three
- *      independent agreements make it the same transaction even with no PAN/name.
- * Scores keep every PAN pair above every non-PAN pair, so relaxed gates only claim
- * rows the strong gates left unassigned (greedy assignment can't be hijacked).
- * This maximises true pairings BEFORE the field-by-field comparison decides
- * matched/mismatched — a record only becomes one-sided when NO stage pairs it. */
-function pairScore(o: Rec, i: Rec): number | null {
-  const panMatch = o.panN !== "" && o.panN === i.panN;
-  const panConflict = o.panN !== "" && i.panN !== "" && o.panN !== i.panN;
-  const bothNamed = o.nameN !== "" && i.nameN !== "";
-  const nameExact = o.nameN !== "" && o.nameN === i.nameN;
-  // Blank names are NOT equivalent — namesEquivalent("","") is true, which must
-  // not let two unnamed rows pair on a coincidental date/amount.
-  const nameFuzzy = bothNamed && namesEquivalent(o.nameN, i.nameN, false);
-  // Names are CONTRADICTORY only when both are present, not fuzzy-equivalent, AND
-  // share no significant token — "ALPHA TRADERS" vs "BETA SUPPLIES". An
-  // abbreviation like "ABC INDS" vs "ABC INDUSTRIES PVT LTD" shares "ABC" and is
-  // NOT contradictory, so the tri-field stage may still pair it.
-  let nameContradiction = false;
-  if (bothNamed && !nameFuzzy) {
-    const iTokens = new Set(i.nameN.split(" ").filter((w) => w.length >= 3));
-    const shareToken = o.nameN.split(" ").some((w) => w.length >= 3 && iTokens.has(w));
-    nameContradiction = !shareToken;
-  }
-  const dateMatch = recDatesMatch(o, i);
-  const amountMatch = amountsMatch(o.amount, i.amount);
-  const amountNear = o.amountN != null && i.amountN != null && Math.abs(o.amountN - i.amountN) <= Math.max(1, Math.abs(o.amountN) * 0.01);
-  const tdsMatch = amountsMatch(o.tds, i.tds);
-  const nonZero = amt(o.amount) > 0 || amt(o.tds) > 0;   // never pair two all-zero rows
-  // TDS is only a genuine THIRD independent signal when it is actually deducted on
-  // both sides — amountsMatch(0,0) is vacuously true, so for the anchor-less
-  // tri-field stage the TDS must be strictly non-zero on BOTH sides (else two
-  // unrelated below-threshold no-TDS rows sharing date+amount would falsely pair).
-  const tdsBothPos = amt(o.tds) > 0 && amt(i.tds) > 0;
-
-  let eligible = false;
-  if (panMatch) eligible = true;                                                             // Stage 1
-  else if (nameExact && (dateMatch || amountMatch)) eligible = true;                         // Stage 2
-  else if (!panConflict && nameFuzzy && dateMatch && amountMatch && nonZero) eligible = true; // Stage 3
-  // Stage 4 (tri-field) is for rows with NO usable name/PAN anchor — so it needs
-  // THREE genuinely independent agreements (date, amount, and a REAL non-zero TDS
-  // on both sides). If both sides are named and the names are clearly DIFFERENT,
-  // they are different parties even with coincidentally-equal figures, so require
-  // names to be absent or equivalent, never contradictory.
-  else if (!panConflict && (!bothNamed || nameFuzzy) && dateMatch && amountMatch && tdsMatch && tdsBothPos) eligible = true; // Stage 4
-  if (!eligible) return null;
-
-  let score = 0;
-  if (panMatch) score += 1000;
-  if (nameExact) score += 300; else if (nameFuzzy) score += 150;
-  if (dateMatch) score += 200;
-  if (amountMatch) score += 200; else if (amountNear) score += 80;
-  if (tdsMatch) score += 60;
-  return score;
-}
+// The GREEDY, score-ranked pairScore that used to live here is GONE. A score is a
+// threshold in disguise, and a threshold is precisely the thing the exclusivity rewrite
+// replaced (tightening → false mismatches, loosening → wrong-PAN filings). Pairing is now
+// the SHARED assign() engine: PAN equality is its strongest tier, a PAN difference blocks
+// a pairing outright, and a fuzzy name pairs only when it is uniquely best for BOTH sides.
+// See the pairing section in serve() below.
 
 function fieldDiff(field: FieldKey, office: unknown, imported: unknown, matched: boolean, reason: string): FieldDiff {
   return { field, office, imported, matched, difference: matched ? "" : reason };
@@ -398,7 +309,7 @@ function comparePair(o: Rec, i: Rec, aliases: Alias[]): { fields: FieldDiff[]; s
   const fields: FieldDiff[] = [];
 
   const panOk = o.panN !== "" && o.panN === i.panN;
-  const nameOk = namesEquivalent(o.nameN, i.nameN, panOk);
+  const nameOk = namesEquivalent(o.name, i.name, panOk);
   fields.push(fieldDiff("name", o.name, i.name, nameOk, `Different name: "${show(o.name)}" vs "${show(i.name)}"`));
   fields.push(fieldDiff("pan", o.pan, i.pan, panOk, `PAN differs: ${o.panN || "—"} vs ${i.panN || "—"}`));
 
@@ -421,7 +332,7 @@ function comparePair(o: Rec, i: Rec, aliases: Alias[]): { fields: FieldDiff[]; s
   }
 
   let secOk = sectionsMatch(o.section, i.section, aliases);
-  const cs = canonicalSection(o.section, aliases), ci = canonicalSection(i.section, aliases);
+  const cs = resolveSection(o.section, aliases), ci = resolveSection(i.section, aliases);
   // Multi-factor section determination (office code is AUTHORITATIVE, and this
   // pair already matches on PAN+date+amount):
   // 1) RATE derives the section — if the effective rate (TDS ÷ Amount) is a
@@ -462,6 +373,47 @@ function oneSided(r: Rec, side: "office" | "imported"): FieldDiff[] {
     matched: false,
     difference: side === "office" ? "Present in Office Data but not found in the imported client file." : "Present in the imported client file but not in Office Data.",
   }));
+}
+
+// ── Pairing: the SHARED EXCLUSIVITY ENGINE (assign) — the same code Stage 3 runs ─
+// No score, no threshold. assign() pairs in tiers of decreasing evidence and commits
+// only a pairing that is uniquely best for BOTH sides, consuming both endpoints so a
+// weaker tier sees a smaller board. What Stage 1 adds — because here BOTH sides carry a
+// PAN — is proof-grade identity: PAN equality is assign()'s STRONGEST tier (APAN), and a
+// PAN DIFFERENCE blocks a pairing outright (both encoded IN the shared engine, so Stage 3
+// gets them too — its ledger just has no PAN, so they never fire). A committed pairing is
+// only the COUNTERPART; comparePair still decides matched/mismatched (exclusivity buys the
+// counterpart, corroboration buys the verdict). credit = the imported AMOUNT; assign votes
+// per section whether a credit corroborates the office amount or TDS, and the office side
+// carries both explicitly. Factored out of serve() so the Node test can EXECUTE the real
+// pairing (PAN tier, PAN-diff block, exclusivity) without standing up Supabase.
+function pairRecords(oRecs: Rec[], iRecs: Rec[], aliases: Alias[]): {
+  pairs: { o: Rec; i: Rec }[]; oUsed: boolean[]; iUsed: boolean[];
+} {
+  const asgOffice: AsgOffice[] = oRecs.map((o) => ({
+    id: o.id, name: o.name == null ? null : String(o.name), dateIso: o.iso,
+    amount: o.amountN, tds: normAmount(o.tds), section: resolveSection(o.section, aliases),
+    pan: o.panN || null, assignable: true,
+  }));
+  const asgLedger: AsgLedger[] = iRecs.map((i, ii) => ({
+    pos: ii, party: i.name == null ? null : String(i.name), iso: i.iso,
+    credit: i.amountN, section: resolveSection(i.section, aliases), pan: i.panN || null,
+  }));
+  const { outcomes } = assign(asgOffice, asgLedger);
+  const oUsed = new Array(oRecs.length).fill(false);
+  const iUsed = new Array(iRecs.length).fill(false);
+  const pairs: { o: Rec; i: Rec }[] = [];
+  // outcome.ti is the ledger array index, which we built === the iRecs index (=== pos).
+  // A committed counterpart (ti != null) is a pair; everything assign left uncommitted —
+  // whether unmatched or escalated (ambiguous / pan-split / better-claimant) — stays
+  // one-sided, which in Stage-1 terms is office_only / imported_only. This is the cost
+  // asymmetry in action: never pair against an unproven counterpart.
+  for (const oc of outcomes) {
+    if (oc.ti == null) continue;
+    oUsed[oc.oi] = true; iUsed[oc.ti] = true;
+    pairs.push({ o: oRecs[oc.oi], i: iRecs[oc.ti] });
+  }
+  return { pairs, oUsed, iUsed };
 }
 
 // ── AI section adjudication (the ONE genuinely fuzzy field) ──────────────────
@@ -627,8 +579,8 @@ serve(async (req) => {
     // imported is whatever the client's file used — American M/D, Indian D/M, …)
     // and set each record's canonical ISO with that fixed order. This is what
     // makes date matching correct regardless of the client's format.
-    const officeOrder = detectDateOrder(office.map((d: any) => d.date_of_payment));
-    const importedOrder = detectDateOrder((imported ?? []).map((r: any) => r.date_of_payment));
+    const officeIso = makeIsoNormaliser(office.map((d: any) => d.date_of_payment));
+    const importedIso = makeIsoNormaliser((imported ?? []).map((r: any) => r.date_of_payment));
     const oRecs = office.map((d: any) => toRec(d.id, {
       name: d.deductee_name ?? null, pan: d.deductee_pan ?? null, section: d.section_code ?? null,
       // Compare BASE TDS on both sides. `tds_amount` is the actual TDS deducted;
@@ -642,13 +594,13 @@ serve(async (req) => {
       tds: (normAmount(d.tds_amount) ?? 0) !== 0 ? d.tds_amount : (d.total_tax_deducted ?? d.tds_amount ?? null),
       interest: d.interest_amount ?? null, date: d.date_of_payment ?? null,
     }));
-    oRecs.forEach((r) => { r.iso = toIsoOrder(r.date, officeOrder) ?? r.iso; });
+    oRecs.forEach((r) => { r.iso = officeIso(r.date) ?? r.iso; });
     const iRecsAll = (imported ?? []).map((r: any) => toRec(r.id, {
       name: r.deductee_name ?? null, pan: r.pan ?? null, section: r.section_code ?? null,
       amount: r.amount_paid ?? null, tds: r.tds_amount ?? null, interest: r.interest ?? null,
       date: r.date_of_payment ?? null,
     }));
-    iRecsAll.forEach((r) => { r.iso = toIsoOrder(r.date, importedOrder) ?? r.iso; });
+    iRecsAll.forEach((r) => { r.iso = importedIso(r.date) ?? r.iso; });
 
     // ── Intelligent quarter detection ───────────────────────────────────────────
     // A client working file often holds the WHOLE financial year (one sheet per
@@ -683,7 +635,7 @@ serve(async (req) => {
       // their own form's filing. Unrecognised sections are kept. A row whose PAN is
       // in Office Data is RESCUED (kept) regardless of its client section label.
       if (allowedForms.size && !panInOffice) {
-        const secForm = formOfSection(canonicalSection(r.section, aliases));
+        const secForm = formOfSection(resolveSection(r.section, aliases));
         if (secForm && !allowedForms.has(secForm)) { excludedOtherForm++; return false; }
       }
       // QUARTER + FY filter — a client working file often holds several years and
@@ -700,23 +652,8 @@ serve(async (req) => {
       return true;
     });
 
-    // ── Deterministic pairing: rank ALL candidate pairs, assign best-first 1:1 ──
-    const candidates: { oi: number; ii: number; score: number }[] = [];
-    for (let oi = 0; oi < oRecs.length; oi++) {
-      for (let ii = 0; ii < iRecs.length; ii++) {
-        const s = pairScore(oRecs[oi], iRecs[ii]);
-        if (s !== null) candidates.push({ oi, ii, score: s });
-      }
-    }
-    candidates.sort((a, b) => b.score - a.score);
-    const oUsed = new Array(oRecs.length).fill(false);
-    const iUsed = new Array(iRecs.length).fill(false);
-    const pairs: { o: Rec; i: Rec }[] = [];
-    for (const c of candidates) {
-      if (oUsed[c.oi] || iUsed[c.ii]) continue;
-      oUsed[c.oi] = true; iUsed[c.ii] = true;
-      pairs.push({ o: oRecs[c.oi], i: iRecs[c.ii] });
-    }
+    // ── Pairing: the SHARED EXCLUSIVITY ENGINE (see pairRecords above) ──────────
+    const { pairs, oUsed, iUsed } = pairRecords(oRecs, iRecs, aliases);
 
     // ── Preserve prior overrides (keyed by office+imported pairing) ─────────────
     const { data: prior } = await supabase
@@ -790,7 +727,7 @@ serve(async (req) => {
       let g = byPan.get(pan);
       if (!g) { g = { oAmt: 0, iAmt: 0, oTds: 0, iTds: 0, oCount: 0, iCount: 0, secs: new Set() }; byPan.set(pan, g); }
       if (side === "o") { g.oAmt += a; g.oTds += t; g.oCount++; } else { g.iAmt += a; g.iTds += t; g.iCount++; }
-      const cs = canonicalSection(sec, aliases); if (cs && SECTION_CODE_RE.test(cs)) g.secs.add(cs);
+      const cs = resolveSection(sec, aliases); if (cs && SECTION_CODE_RE.test(cs)) g.secs.add(cs);
     };
     for (const o of oRecs) bumpAgg(o.panN, "o", amt(o.amount), amt(o.tds), o.section);
     for (const i of iRecs) bumpAgg(i.panN, "i", amt(i.amount), amt(i.tds), i.section);

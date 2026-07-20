@@ -114,7 +114,9 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
   }, [searchRaw]);
 
   // ── Quick-filter bar ───────────────────────────────────────────────────────
-  const [statusFilter, setStatusFilter] = useState("all");
+  // 2026-06-25 (V J Desai) — status filter is now a multi-select. Empty
+  // array means "All Statuses"; non-empty means an OR-list of statuses.
+  const [statusFilter, setStatusFilter] = useState<string[]>([]);
   // 2026-06-25 (V J Desai) — Completed / Pending chip.
   // "Completed" = scanned Yes (audit fully signed off).
   // "Pending"   = scanned "No" OR blank.
@@ -209,7 +211,10 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
     }
 
     // Quick-filter bar: Audit Status
-    if (statusFilter !== "all") result = result.filter(r => r.audit_status === statusFilter);
+    if (statusFilter.length > 0) {
+      const wanted = new Set(statusFilter);
+      result = result.filter(r => wanted.has(r.audit_status || ""));
+    }
 
     // Completed / Pending scan chip
     if (scanFilter === "completed") {
@@ -221,14 +226,21 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
       });
     }
 
-    // Per-column filters
+    // Per-column filters.
+    // 2026-06-25 (V J Desai) — the "status" filterType now stores its
+    // selection as a pipe-separated multi-value string (e.g.
+    // "REPORT SIGNED|REPORT PRINTED"). Any of the tokens matches the row
+    // (OR semantics). Yes/no and text stay single-value as before.
     Object.entries(colFilters).forEach(([id, val]) => {
       if (!val || val === "all") return;
       const colDef = COLS.find(c => c.id === id);
       result = result.filter(r => {
         const rv = String((r as any)[id] ?? "");
-        // Exact match for select-based filters (yes/no and status)
-        if (colDef?.filterType === "yesno" || colDef?.filterType === "status") {
+        if (colDef?.filterType === "status") {
+          const wanted = new Set(val.split("|").filter(Boolean));
+          return wanted.has(rv);
+        }
+        if (colDef?.filterType === "yesno") {
           return rv === val;
         }
         // Substring match for text / date columns
@@ -260,7 +272,10 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
       const q = search.toLowerCase();
       base = base.filter(r => Object.values(r).some(v => v && typeof v === "string" && v.toLowerCase().includes(q)));
     }
-    if (statusFilter !== "all") base = base.filter(r => r.audit_status === statusFilter);
+    if (statusFilter.length > 0) {
+      const wanted = new Set(statusFilter);
+      base = base.filter(r => wanted.has(r.audit_status || ""));
+    }
     let completed = 0, pending = 0;
     for (const r of base) {
       if ((r.scanned || "").trim().toLowerCase() === "yes") completed++;
@@ -423,24 +438,23 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
                                   </SelectContent>
                                 </Select>
                               ) : col.filterType === "status" ? (
-                                /* Audit-status select */
-                                <Select
-                                  value={activeFilter || "all"}
-                                  onValueChange={v => {
-                                    setColFilter(col.id, v === "all" ? "" : v);
-                                    setOpenFilterCol(null);
+                                // 2026-06-25 (V J Desai) — per-column status
+                                // filter is now a multi-select with search
+                                // and "Select All", matching the accountants
+                                // reference. Selection stored as pipe-joined
+                                // string in colFilters[col.id]; the filter
+                                // pass splits on "|" for OR-match.
+                                <StatusMultiFilter
+                                  selection={
+                                    activeFilter
+                                      ? new Set(activeFilter.split("|").filter(Boolean))
+                                      : new Set<string>()
+                                  }
+                                  onChange={(next) => {
+                                    const arr = Array.from(next);
+                                    setColFilter(col.id, arr.length === 0 ? "" : arr.join("|"));
                                   }}
-                                >
-                                  <SelectTrigger className="h-7 text-xs">
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="all" className="text-xs">All Statuses</SelectItem>
-                                    {AUDIT_STATUS_OPTIONS.map(s => (
-                                      <SelectItem key={s} value={s} className="text-xs">{s}</SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
+                                />
                               ) : (
                                 /* Free-text input for text / date columns */
                                 <div className="flex items-center gap-1">
@@ -607,6 +621,127 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
         open={!!historyRowId}
         onClose={() => setHistoryRowId(null)}
       />
+    </div>
+  );
+}
+
+// ─── Per-column Audit Status multi-select filter ─────────────────────────────
+// V J Desai request (2026-06-25) — replaces the single-select dropdown on
+// the AUDIT STATUS column header with a search + Select All + checkbox list
+// so the auditor can filter by two or more statuses at once
+// (e.g. "REPORT PRINTED" + "REPORT SIGNED" for the closing sweep).
+function StatusMultiFilter({
+  selection,
+  onChange,
+}: {
+  selection: Set<string>;
+  onChange: (next: Set<string>) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const visible = q
+    ? AUDIT_STATUS_OPTIONS.filter(s => s.toLowerCase().includes(q))
+    : AUDIT_STATUS_OPTIONS;
+
+  const allVisibleChecked =
+    visible.length > 0 && visible.every(s => selection.has(s));
+
+  const toggle = (s: string) => {
+    const next = new Set(selection);
+    if (next.has(s)) next.delete(s); else next.add(s);
+    onChange(next);
+  };
+  const toggleAll = () => {
+    if (allVisibleChecked) {
+      const next = new Set(selection);
+      visible.forEach(s => next.delete(s));
+      onChange(next);
+    } else {
+      const next = new Set(selection);
+      visible.forEach(s => next.add(s));
+      onChange(next);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-1.5" onClick={e => e.stopPropagation()}>
+      <div className="relative">
+        <Input
+          autoFocus
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder="Search status…"
+          className="h-7 text-xs pr-6"
+        />
+        {query && (
+          <button
+            type="button"
+            onClick={() => setQuery("")}
+            className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+          >
+            <X size={11} />
+          </button>
+        )}
+      </div>
+
+      <button
+        type="button"
+        onClick={toggleAll}
+        className="flex items-center gap-2 px-1.5 py-1 rounded text-[11px] font-medium hover:bg-muted"
+      >
+        <span
+          className={cn(
+            "inline-flex items-center justify-center h-3.5 w-3.5 rounded border",
+            allVisibleChecked
+              ? "bg-indigo-600 border-indigo-600 text-white"
+              : "border-input",
+          )}
+        >
+          {allVisibleChecked && <span className="text-[9px] leading-none">✓</span>}
+        </span>
+        Select All {q && `(${visible.length})`}
+      </button>
+
+      <div className="max-h-56 overflow-y-auto pr-0.5">
+        {visible.map(s => {
+          const checked = selection.has(s);
+          return (
+            <button
+              key={s}
+              type="button"
+              onClick={() => toggle(s)}
+              className="w-full flex items-center gap-2 px-1.5 py-1 rounded text-[11px] hover:bg-muted text-left"
+            >
+              <span
+                className={cn(
+                  "inline-flex items-center justify-center h-3.5 w-3.5 rounded border shrink-0",
+                  checked
+                    ? "bg-indigo-600 border-indigo-600 text-white"
+                    : "border-input",
+                )}
+              >
+                {checked && <span className="text-[9px] leading-none">✓</span>}
+              </span>
+              <span className="truncate">{s}</span>
+            </button>
+          );
+        })}
+        {visible.length === 0 && (
+          <div className="px-1.5 py-2 text-[11px] text-muted-foreground italic">
+            No status matches “{query}”.
+          </div>
+        )}
+      </div>
+
+      {selection.size > 0 && (
+        <button
+          type="button"
+          onClick={() => onChange(new Set())}
+          className="flex items-center justify-center gap-1 px-2 py-1 rounded text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted border-t border-border pt-1.5 mt-0.5"
+        >
+          <X size={11} /> Clear ({selection.size})
+        </button>
+      )}
     </div>
   );
 }

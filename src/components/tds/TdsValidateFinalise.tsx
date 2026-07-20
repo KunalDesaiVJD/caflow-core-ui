@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { getDefaultTdsQuarter, isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
+import { isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -8,10 +8,18 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { TdsExportMenu } from "./TdsExportMenu";
+import { ErrorTypeBreakdown, filterByErrorType } from "./ErrorTypeBreakdown";
+import { reportFileName, type StageReport, type ReportMeta, type OverviewReport, type AuditRow } from "@/lib/tds/tdsReport";
+import { buildOverviewWorkbook, downloadWorkbook } from "@/lib/tds/tdsReportExcel";
+import { exportOverviewPdf } from "@/lib/tds/tdsReportPdf";
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Download } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -23,14 +31,17 @@ import {
   AlertDialogTitle, AlertDialogDescription, AlertDialogAction, AlertDialogCancel,
 } from "@/components/ui/alert-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
   ShieldCheck, AlertTriangle, CheckCircle2, Upload, Play, FileSpreadsheet,
-  RotateCcw, Loader2, Users, FileWarning, Info, X, BadgeCheck, Trash2, Eye,
+  RotateCcw, Loader2, Users, FileWarning, Info, X, BadgeCheck, Trash2, Eye, BookOpen, ClipboardCheck,
+  ChevronDown, ChevronRight,
 } from "lucide-react";
 import { parseWorkbookRows, parseCsvRows } from "@/lib/tdsWorkbook";
 import { logReconAudit } from "@/lib/tdsReconAudit";
-import { TdsPanVerification } from "./TdsPanVerification";
+import { TdsPanVerification, type PanStageStatus } from "./TdsPanVerification";
+import { TdsTallyRecon, type TallyStageStatus } from "./TdsTallyRecon";
 
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null;
@@ -43,6 +54,13 @@ interface Props {
   isSuperadmin: boolean;
   resolveFirmId: () => Promise<string | null>;
   onNavigateDataEntry?: (filingId: string) => void;
+  // Shared Workspace filing context (owned by the parent TdsFilings page). Data
+  // Entry is the SINGLE SOURCE OF TRUTH for the selection — here it is READ-ONLY
+  // (no duplicate selectors), so these are values only, not setters.
+  selClient: string;
+  selFy: string;
+  selQuarter: string;
+  selForm: string;
 }
 
 interface FieldDiff {
@@ -65,10 +83,6 @@ interface ReconResult {
   override_note?: string | null;
 }
 
-const FY_OPTIONS = Array.from({ length: 7 }, (_, i) => { const s = 2020 + i; return `${s}-${String(s + 1).slice(2)}`; });
-const QUARTER_OPTIONS = ["Q1", "Q2", "Q3", "Q4"];
-const TDS_FORMS = ["24Q", "26Q", "27Q", "27EQ"];
-
 const FIELD_LABELS: Record<string, string> = {
   name: "Name", pan: "PAN", date: "Date", amount: "Amount",
   tds: "TDS", interest: "Interest", section: "Section",
@@ -90,6 +104,15 @@ function reasonFor(r: ReconResult): string {
   const diffs = (r.field_diffs || []).filter(f => f.matched === false);
   const labels = diffs.map(f => FIELD_LABELS[f.field] || f.field).join(", ") || "some fields";
   return `Mismatch — ${labels} ${diffs.length > 1 ? "differ" : "difference"}.`;
+}
+
+/** Readable error-TYPE label for the ErrorTypeBreakdown chips — the closest thing
+ *  Stage-1 has to Stage-3's single "result" verdict, since a mismatch here is a
+ *  per-FIELD diff rather than one overall reason. */
+function errorTypeFor(r: ReconResult): string {
+  if (r.match_status === "office_only") return "Office Data Only";
+  if (r.match_status === "imported_only") return "Imported Data Only";
+  return "Field Mismatch";
 }
 
 /** Invoke an edge function and surface the function's own JSON error message.
@@ -125,6 +148,22 @@ async function invokeFn(name: string, body: unknown, opts?: { signal?: AbortSign
   }
   if (data?.error) throw new Error(data.error);
   return data;
+}
+
+// Human-readable one-line summary of the importer's column-mapping decisions,
+// e.g. "Mapped Name←‘Party's Name’, PAN←‘PAN’, Amount←‘Bill Amt.’, TDS←‘TDS Amt’".
+// Shown after every import so the user can verify the mapping before comparing.
+const MAP_FIELD_LABELS: Record<string, string> = {
+  deductee_name: "Name", pan: "PAN", section_code: "Section",
+  amount_paid: "Amount", tds_amount: "TDS", interest: "Interest",
+  rate: "Rate", date_of_payment: "Date",
+};
+function formatMappingSummary(fields: Record<string, { column: string; by: string }>): string {
+  const order = ["deductee_name", "pan", "section_code", "amount_paid", "tds_amount", "date_of_payment", "interest", "rate"];
+  const parts = order
+    .filter((f) => fields[f]?.column)
+    .map((f) => `${MAP_FIELD_LABELS[f] || f}←‘${fields[f].column.replace(/\s+/g, " ").trim()}’`);
+  return parts.length ? `Mapped ${parts.join(", ")}.` : "";
 }
 
 // ── Off-main-thread file parsing ────────────────────────────────────────────
@@ -211,17 +250,18 @@ function AnimatedNumber({ value }: { value: number }) {
   return <>{display}</>;
 }
 
-type FilterKey = null | "total" | "matched" | "mismatched" | "overridden" | "pending";
+type FilterKey = null | "total" | "matched" | "mismatched" | "overridden";
 
-export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNavigateDataEntry }: Props) {
+// A Stage-2 status that BLOCKS filing — the gate starts here and returns here on
+// every selection change, so it can never enable off a previous filing's report.
+const PAN_STATUS_BLOCKED: PanStageStatus = { filingId: null, loaded: false, applicable: false, ran: false, total: 0, verified: 0, issues: 0, overridden: 0 };
+
+export function TdsValidateFinalise({
+  clients, isSuperadmin, resolveFirmId, onNavigateDataEntry,
+  selClient, selFy, selQuarter, selForm,
+}: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
-
-  const [selClient, setSelClient] = useState("");
-  const smartDefault = useMemo(() => getDefaultTdsQuarter(), []);
-  const [selFy, setSelFy] = useState(smartDefault.fy);
-  const [selQuarter, setSelQuarter] = useState(smartDefault.quarter);
-  const [selForm, setSelForm] = useState("26Q");
 
   const [resolving, setResolving] = useState(false);
   const [filing, setFiling] = useState<any>(null);
@@ -244,8 +284,28 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
   const [comparing, setComparing] = useState(false);
   const [finalising, setFinalising] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // Stage-4 Checker Review — one card section per stage (not a flat table) so
+  // each stage's exceptions keep their own vocabulary; "all" = no filter.
+  const [auditStatusFilter, setAuditStatusFilter] = useState<string>("all");
+  const [auditErrorTypeFilter, setAuditErrorTypeFilter] = useState<string>("all");
+  // Sections start expanded — the checker must see every exception before
+  // signing, so nothing is hidden by default; collapsing is a manual choice.
+  const [collapsedStages, setCollapsedStages] = useState<Set<string>>(new Set());
+  // Digital signature — persisted as a tds_filing_audit_log entry (no schema
+  // change needed), so it survives a refresh and carries its own audit trail.
+  const [signature, setSignature] = useState<{ signedByName: string; signedAt: string } | null>(null);
+  const [signerNameInput, setSignerNameInput] = useState("");
+  const [attestChecked, setAttestChecked] = useState(false);
+  const [signing, setSigning] = useState(false);
   const [runSignal, setRunSignal] = useState(0);
+  // Which stage tab is showing. The stages are a SEQUENCE (data -> PAN -> ledger),
+  // so they get their own tabs instead of one long scroll, and the Finalise
+  // summary lives only on the last one.
+  const [stage, setStage] = useState<"1" | "2" | "3" | "4">("1");
   const [activeFilter, setActiveFilter] = useState<FilterKey>(null); // clicked summary card
+  // Secondary breakdown WITHIN the mismatch list, by the specific match_status
+  // (e.g. "Office Data Only" vs "Imported Data Only") — see ErrorTypeBreakdown.
+  const [errorTypeFilter, setErrorTypeFilter] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const loadSeq = useRef(0); // guards against out-of-order loadAll responses
 
@@ -337,6 +397,20 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     const { data: us } = await supabase.from("users").select("id, name").limit(5000);
     if (stale()) return;
     setUserMap(Object.fromEntries((us || []).map((u: any) => [u.id, u.name])));
+
+    // The checker's digital signature — the LATEST of the two action types for
+    // this filing decides current state (a later revoke undoes an earlier sign).
+    const { data: sigRows } = await supabase.from("tds_filing_audit_log")
+      .select("action_type, new_value, changed_at")
+      .eq("filing_id", match.id)
+      .in("action_type", ["CHECKER_SIGNATURE", "CHECKER_SIGNATURE_REVOKED"])
+      .order("changed_at", { ascending: false })
+      .limit(1);
+    if (stale()) return;
+    const latestSig = (sigRows || [])[0];
+    setSignature(latestSig && latestSig.action_type === "CHECKER_SIGNATURE" && latestSig.changed_at
+      ? { signedByName: latestSig.new_value || "—", signedAt: latestSig.changed_at }
+      : null);
     setResolving(false);
   }, [selClient, selFy, selQuarter, selForm, complianceError]);
 
@@ -416,6 +490,21 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     }
   };
 
+  /** Import several picked files in ONE go, sequentially so each still gets its own
+   *  batch, its own same-name replace and its own toast — the user picks 4 files
+   *  once instead of opening the dialog 4 times. Sequential (not parallel) because
+   *  each import mutates this filing's batches and clears its results; running them
+   *  together would race on the same rows. A failure is reported per file and does
+   *  NOT abandon the rest. */
+  const handleImportMany = async (files: File[]) => {
+    if (files.length === 1) { await handleImport(files[0]); return; }
+    let ok = 0;
+    for (const f of files) {
+      try { await handleImport(f); ok++; } catch { /* handleImport toasts its own failure */ }
+    }
+    if (ok > 1) toast({ title: `Imported ${ok} of ${files.length} file(s)`, description: "All files are validated together." });
+  };
+
   const handleImport = async (file: File, replaceBatchId?: string) => {
     if (!filing) return;
     const hadResults = !!results; // was a validation already run? → auto-refresh it after
@@ -429,7 +518,9 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
       const parsed = await readFile(file, (p) => { const { label, pct } = progressLabel(p); setImportStage(label); setImportPct(pct); });
       setImportStage("Normalising & saving…"); setImportPct(88);
       const data = await Promise.race([
-        invokeFn("tds-recon-import", { filing_id: filing.id, form_type: selForm, file_name: file.name, ...parsed }, { signal: ctrl.signal }),
+        // Pass the Office Data count so the importer can flag a big record-count
+        // gap (e.g. read 33 but Office has 100) instead of silently under-reading.
+        invokeFn("tds-recon-import", { filing_id: filing.id, form_type: selForm, file_name: file.name, expected_count: officeCount.deductees || undefined, ...parsed }, { signal: ctrl.signal }),
         new Promise((_, rej) => ctrl.signal.addEventListener("abort", () => rej(new Error("aborted-timeout")))),
       ]) as any;
       setImportPct(100);
@@ -448,7 +539,25 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
       await supabase.from("tds_recon_results").delete().eq("filing_id", filing.id);
       setResults(null);
       const replacedNote = (data.replaced || (replaceBatchId && replaceBatchId !== data.batch_id)) ? "Replaced the earlier file. " : "";
-      toast({ title: `Imported ${data.row_count} client record(s)`, description: `${replacedNote}${data.warning || file.name}`, ...(data.warning ? { variant: "default" as const } : {}) });
+      // Surface the column-mapping decisions so the user can SEE (and trust) how
+      // each field was detected before the comparison runs. Validation issues make
+      // the toast a warning; auto-corrections (e.g. amount/TDS swap) are noted.
+      const m = data.mapping as { fields?: Record<string, { column: string; by: string }>; issues?: string[]; notes?: string[] } | null;
+      const mapLine = m?.fields ? formatMappingSummary(m.fields) : "";
+      const mapIssues = m?.issues?.length ? ` ⚠ Check mapping: ${m.issues.join("; ")}.` : "";
+      const mapNotes = m?.notes?.length ? ` (${m.notes.join("; ")}.)` : "";
+      // Record-count reconciliation: surface a de-dupe note and, crucially, any
+      // shortfall WARNING (read far fewer records than Office Data) so an
+      // under-read is never silent.
+      const rec = data.reconciliation as { duplicates_removed?: number; distinct_pans?: number; warning?: string; note?: string } | null;
+      const dupNote = rec?.duplicates_removed ? ` (${rec.duplicates_removed} duplicate row(s) removed)` : "";
+      const reconWarn = rec?.warning ? ` ⚠ ${rec.warning}` : (rec?.note ? ` · ${rec.note}` : "");
+      const hasMapWarning = !!(m?.issues?.length || data.warning || rec?.warning);
+      toast({
+        title: `Imported ${data.row_count} client record(s)${rec?.distinct_pans ? ` · ${rec.distinct_pans} PANs` : ""}`,
+        description: `${replacedNote}${data.warning ? data.warning + " " : ""}${mapLine}${dupNote}${mapNotes}${mapIssues}${reconWarn}`.trim() || file.name,
+        ...(hasMapWarning ? { variant: "default" as const } : {}),
+      });
       await loadAll();
       // Auto-refresh the validation if one had already been run — the user should
       // never have to manually re-validate after adding or replacing a file.
@@ -604,8 +713,51 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     setResults(prev => prev ? prev.map(x => x.id === r.id ? { ...x, overridden: false, override_note: null } : x) : prev);
   };
 
+  /** Digital signature — the checker types their own account name (never a
+   *  password: this is an attestation, not a login) plus a review checkbox.
+   *  Persisted as a tds_filing_audit_log entry rather than a new column, so it
+   *  needs no migration and already carries WHO/WHEN via that table's own
+   *  changed_by_name/changed_at. Signing is only offered once canFile is true —
+   *  there is nothing to attest to while Stage 1-3 still have open issues. */
+  const handleSign = async () => {
+    if (!filing || !user?.id) return;
+    const actualName = (userMap[user.id] || "").trim();
+    if (!signerNameInput.trim() || signerNameInput.trim().toLowerCase() !== actualName.toLowerCase()) {
+      toast({ title: "Name doesn't match your account", description: actualName ? `Type your full name exactly as it appears on your account: "${actualName}".` : "Your account name could not be verified.", variant: "destructive" });
+      return;
+    }
+    if (!attestChecked) { toast({ title: "Confirmation required", description: "Confirm you have reviewed every exception before signing.", variant: "destructive" }); return; }
+    if (!canFile) { toast({ title: "Not ready to sign", description: "Resolve every Stage 1-3 issue above before signing.", variant: "destructive" }); return; }
+    setSigning(true);
+    await logReconAudit({
+      filingId: filing.id, firmId: filing.firm_id, userId: user.id, userName: actualName,
+      actionType: "CHECKER_SIGNATURE", newValue: signerNameInput.trim(),
+      remark: "Digitally signed — confirms review of every Stage 1-3 exception, override and mapping.",
+    });
+    setSignature({ signedByName: signerNameInput.trim(), signedAt: new Date().toISOString() });
+    setSigning(false);
+    toast({ title: "Digitally signed", description: "You can now mark this return as ready to file." });
+  };
+
+  const handleRevokeSignature = async () => {
+    if (!filing || !user?.id || !signature) return;
+    setSigning(true);
+    await logReconAudit({
+      filingId: filing.id, firmId: filing.firm_id, userId: user.id, userName: userMap[user.id],
+      actionType: "CHECKER_SIGNATURE_REVOKED", oldValue: signature.signedByName,
+      remark: "Signature revoked before filing.",
+    });
+    setSignature(null); setSignerNameInput(""); setAttestChecked(false);
+    setSigning(false);
+  };
+
   const handleFinalise = async () => {
     if (!filing) return;
+    // Re-assert the whole gate at WRITE time — canFile only guards the button and
+    // the dialog can outlive a late Stage-2 status flip, so never file an unready
+    // return even if the confirm dialog was already open.
+    if (!canFile) { toast({ title: "Not ready to file", description: fileBlockReason || "Complete all validations first.", variant: "destructive" }); setConfirmOpen(false); return; }
+    if (!signature) { toast({ title: "Digital signature required", description: "The checker must digitally sign this return before it can be marked ready to file.", variant: "destructive" }); setConfirmOpen(false); return; }
     setFinalising(true);
     const actingName = userMap[user?.id ?? ""];
     // Set checker_id ("Filed By") on entering Filed — same invariant the Filings
@@ -623,20 +775,122 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     setConfirmOpen(false);
   };
 
+  // Clean partition: Total = Matched + Mismatched(UNRESOLVED) + Overridden.
+  // "Mismatched" counts only records that are NOT yet overridden — once a record
+  // is overridden it moves to Overridden, so there is no separate "Pending" count
+  // to duplicate it (the redundant Pending card is removed).
   const summary = useMemo(() => {
     const rs = results || [];
     return {
       total: rs.length,
       matched: rs.filter(r => r.match_status === "matched").length,
-      mismatched: rs.filter(r => r.match_status !== "matched").length,
+      mismatched: rs.filter(r => r.match_status !== "matched" && !r.overridden).length,   // UNRESOLVED
       overridden: rs.filter(r => r.overridden).length,
-      pending: rs.filter(r => r.match_status !== "matched" && !r.overridden).length,
     };
   }, [results]);
 
-  const canFile = (results?.length ?? 0) > 0 && summary.pending === 0;
+  // ── Cross-stage filing gate ─────────────────────────────────────────────────
+  // "Mark Return as Ready to File" may enable ONLY when the WHOLE validation
+  // workflow is complete: Stage-1 has run with no unresolved mismatch, AND — when
+  // a TRACES file has been imported (Stage-2 applicable) — Stage-2 has been run
+  // with no unresolved PAN issue. Until then the button stays disabled and the UI
+  // states the exact reason.
+  const [panStatus, setPanStatus] = useState<PanStageStatus>(PAN_STATUS_BLOCKED);
+  const [tallyStatus, setTallyStatus] = useState<TallyStageStatus>({ filingId: null, loaded: false, applicable: false, ran: false, total: 0, matched: 0, issues: 0, overridden: 0 });
+  const stage1Ran = (results?.length ?? 0) > 0;
+  const stage1Ready = stage1Ran && summary.mismatched === 0;
+  // Each embedded stage's report must describe the CURRENTLY-selected filing AND
+  // have settled (loaded) — during a fast filing switch or the initial load window
+  // the child's report can still describe the previous return or hold pre-load
+  // defaults, so the gate defaults CLOSED until the current filing has reported.
+  const stage2Reported = panStatus.loaded && panStatus.filingId != null && panStatus.filingId === (filing?.id ?? null);
+  const stage2Ready = stage2Reported && (!panStatus.applicable || (panStatus.ran && panStatus.issues === 0));
+  const stage3Reported = tallyStatus.loaded && tallyStatus.filingId != null && tallyStatus.filingId === (filing?.id ?? null);
+  const stage3Ready = stage3Reported && (!tallyStatus.applicable || (tallyStatus.ran && tallyStatus.issues === 0));
+  const canFile = stage1Ready && stage2Ready && stage3Ready;
+  const fileBlockReason = !stage1Ran
+    ? "Run Stage-1 validation first."
+    : !stage1Ready
+    ? `${summary.mismatched} Stage-1 mismatch${summary.mismatched === 1 ? "" : "es"} still unresolved — override each one to continue.`
+    : !stage2Reported || !stage3Reported
+    ? "Finishing validation status checks…"
+    : (panStatus.applicable && !panStatus.ran)
+    ? "A TRACES file is imported — run Stage-2 PAN Verification to complete the audit."
+    : (panStatus.applicable && panStatus.issues > 0)
+    ? `${panStatus.issues} Stage-2 PAN issue${panStatus.issues === 1 ? "" : "s"} still unresolved — override or resolve each one to continue.`
+    : (tallyStatus.applicable && !tallyStatus.ran)
+    ? "A Tally ledger is imported — run Stage-3 reconciliation to complete it."
+    : (tallyStatus.applicable && tallyStatus.issues > 0)
+    ? `${tallyStatus.issues} Stage-3 Tally item${tallyStatus.issues === 1 ? "" : "s"} still unresolved — map, override or resolve each one to continue.`
+    : "";
   const isFiled = filing?.work_status === "Filed";
   const cErr = selClient ? complianceError() : null;
+  const selectedClient = clients.find(c => c.id === selClient);
+
+  // ── Stage 4 · Checker Review — a consolidated view across all 3 stages, so the
+  // checker reviews ONE tab instead of clicking through Stages 1-3. Reuses each
+  // stage's OWN already-computed report (the same StageReport the Excel/PDF
+  // exports use) rather than re-deriving anything — a fix to a stage's counts or
+  // categorisation lands here automatically. Categorised by each row's own
+  // `Result` field via the shared ErrorTypeBreakdown component (same one Stage 1's
+  // own tab uses), so "N mismatches" is never one undifferentiated bucket.
+  const stage4Data = useMemo(() => {
+    const s1Issues = (results || []).filter((r) => r.match_status !== "matched" && !r.overridden);
+    const s2Report = panStatus.applicable && panStatus.getReport ? panStatus.getReport() : null;
+    const s3Report = tallyStatus.applicable && tallyStatus.getReport ? tallyStatus.getReport() : null;
+    const s2IssueRows = s2Report?.sections.find((s) => s.title === "Issues")?.rows ?? [];
+    const s3IssueRows = s3Report?.sections.find((s) => s.title === "Mismatched")?.rows ?? [];
+    const s3MappedCount = s3Report?.sections.find((s) => s.title === "Mapped")?.rows.length ?? 0;
+
+    // One audit row per exception, across all 3 stages — grouped into a
+    // per-stage section in the JSX below (not a flat table). Stage 1's rows are
+    // built directly (its data already lives in THIS component); Stage 2/3 hand
+    // theirs up via the same lazy getAuditRows() pattern getReport() already
+    // uses, so this can never drift from what each stage's own tab shows.
+    const s1Audit: AuditRow[] = (results || [])
+      .filter((r) => r.match_status !== "matched" || r.overridden)
+      .map((r): AuditRow => ({
+        stage: "Stage 1",
+        record: r.record_label || "—",
+        errorType: errorTypeFor(r),
+        status: r.overridden ? "Overridden" : "Unresolved",
+        reason: r.overridden ? (r.override_note || "accepted") : reasonFor(r),
+      }));
+    const s2Audit = panStatus.applicable && panStatus.getAuditRows ? panStatus.getAuditRows() : [];
+    const s3Audit = tallyStatus.applicable && tallyStatus.getAuditRows ? tallyStatus.getAuditRows() : [];
+    const auditRows = [...s1Audit, ...s2Audit, ...s3Audit];
+
+    return {
+      totalRecords: summary.total,
+      totalMatched: summary.matched,
+      // Combined across the 3 independent reconciliations — NOT a de-duplicated
+      // per-office-record count (the same record can carry a Stage-1 AND a
+      // Stage-3 issue at once), so this is labelled "combined", never "unique".
+      totalMismatches: summary.mismatched + (panStatus.applicable ? panStatus.issues : 0) + (tallyStatus.applicable ? tallyStatus.issues : 0),
+      totalOverridden: summary.overridden + (panStatus.applicable ? panStatus.overridden : 0) + (tallyStatus.applicable ? tallyStatus.overridden : 0),
+      s1Issues, s2IssueRows, s3IssueRows, s3MappedCount, auditRows,
+    };
+  }, [results, summary, panStatus, tallyStatus]);
+
+  // Distinct error types actually present, so the filter never lists a type that
+  // matches nothing (and picks up a brand-new one automatically).
+  const auditErrorTypes = useMemo(
+    () => [...new Set(stage4Data.auditRows.map((r) => r.errorType))].sort(),
+    [stage4Data.auditRows],
+  );
+  const filteredAuditRows = useMemo(
+    () => stage4Data.auditRows.filter((r) =>
+      (auditStatusFilter === "all" || r.status === auditStatusFilter)
+      && (auditErrorTypeFilter === "all" || r.errorType === auditErrorTypeFilter)),
+    [stage4Data.auditRows, auditStatusFilter, auditErrorTypeFilter],
+  );
+  const toggleStageCollapsed = (stage: string) => {
+    setCollapsedStages((prev) => {
+      const next = new Set(prev);
+      if (next.has(stage)) next.delete(stage); else next.add(stage);
+      return next;
+    });
+  };
 
   // Non-matched records (mismatched / office_only / imported_only) — each gets its
   // own inline comparison table; pending first, then overridden.
@@ -645,8 +899,15 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     return rs.sort((a, b) => (a.overridden ? 1 : 0) - (b.overridden ? 1 : 0));
   }, [results]);
 
-  // Reset the active card filter when the selection changes.
-  useEffect(() => { setActiveFilter(null); }, [selClient, selFy, selQuarter, selForm]);
+  // Reset the active card filter AND the Stage-2 gate status when the selection
+  // changes, so the filing gate defaults closed until the new filing's Stage-2
+  // reports (prevents filing off a previous return's status during a fast switch).
+  useEffect(() => {
+    setActiveFilter(null); setErrorTypeFilter(null);
+    setAuditStatusFilter("all"); setAuditErrorTypeFilter("all"); setCollapsedStages(new Set());
+    setSignerNameInput(""); setAttestChecked(false); setSignature(null);
+    setPanStatus(PAN_STATUS_BLOCKED); setTallyStatus({ filingId: null, loaded: false, applicable: false, ran: false, total: 0, matched: 0, issues: 0, overridden: 0 });
+  }, [selClient, selFy, selQuarter, selForm]);
 
   // Records to show when a summary card is clicked (null = default exceptions view).
   const cardFiltered = useMemo((): ReconResult[] | null => {
@@ -654,9 +915,8 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     switch (activeFilter) {
       case "total": return rs;
       case "matched": return rs.filter(r => r.match_status === "matched");
-      case "mismatched": return rs.filter(r => r.match_status !== "matched");
+      case "mismatched": return rs.filter(r => r.match_status !== "matched" && !r.overridden); // unresolved
       case "overridden": return rs.filter(r => r.overridden);
-      case "pending": return rs.filter(r => r.match_status !== "matched" && !r.overridden);
       default: return null;
     }
   }, [results, activeFilter]);
@@ -750,48 +1010,163 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     </CardContent></Card>
   );
 
+  // ── Reports ────────────────────────────────────────────────────────────────
+  // Built lazily, from exactly what is on screen, so an un-run stage costs nothing.
+  const reportMeta: ReportMeta = {
+    client: selectedClient?.name || "—",
+    tan: selectedClient?.tan_number || null,
+    form: selForm, quarter: selQuarter, fy: selFy,
+    status: filing?.work_status || null,
+  };
+
+  const stage1Report = (): StageReport => {
+    const rs = results || [];
+    const row = (r: ReconResult) => ({
+      Record: r.record_label || "—",
+      Result: r.match_status === "matched" ? "Matched"
+        : r.match_status === "office_only" ? "Missing in Imported File"
+        : r.match_status === "imported_only" ? "Extra in Imported File" : "Mismatched",
+      "Mismatched Fields": (r.mismatch_fields || []).map((f) => FIELD_LABELS[f] || f).join(", "),
+      Remarks: r.overridden ? `Overridden — ${r.override_note || "accepted"}` : reasonFor(r),
+      Overridden: r.overridden ? "Yes" : "No",
+      ...Object.fromEntries((r.field_diffs || []).flatMap((d) => [
+        [`Office ${FIELD_LABELS[d.field] || d.field}`, d.office ?? ""],
+        [`Imported ${FIELD_LABELS[d.field] || d.field}`, d.imported ?? ""],
+      ])),
+    });
+    return {
+      title: "Stage 1 - Data Validation",
+      subtitle: "Office Data vs Imported Client Data — field by field",
+      summary: [
+        { label: "Total", value: summary.total },
+        { label: "Matched", value: summary.matched },
+        { label: "Mismatched", value: summary.mismatched },
+        { label: "Overridden", value: summary.overridden },
+      ],
+      sections: [
+        { title: "Mismatched", rows: rs.filter((r) => r.match_status !== "matched" && !r.overridden).map(row), emptyNote: "No mismatched records — every office record reconciled." },
+        { title: "Missing in Imported", rows: rs.filter((r) => r.match_status === "office_only").map(row), emptyNote: "No office record is missing from the imported file." },
+        { title: "Extra in Imported", rows: rs.filter((r) => r.match_status === "imported_only").map(row), emptyNote: "No extra rows in the imported file." },
+        { title: "Overridden", rows: rs.filter((r) => r.overridden).map(row), emptyNote: "No overrides." },
+        { title: "Matched", rows: rs.filter((r) => r.match_status === "matched" && !r.overridden).map(row), emptyNote: "No matched records." },
+      ],
+    };
+  };
+
+  /** Stage 1 + 2 + 3 in one document, from each stage's reported status. */
+  const overviewReport = (): OverviewReport => ({
+    stages: [
+      {
+        title: "Stage 1 · Data Validation", applicable: true, ran: stage1Ran,
+        summary: [
+          { label: "Total", value: summary.total }, { label: "Matched", value: summary.matched },
+          { label: "Mismatched", value: summary.mismatched }, { label: "Overridden", value: summary.overridden },
+        ],
+        status: !stage1Ran ? "Not run" : summary.mismatched === 0 ? "Complete" : `${summary.mismatched} unresolved`,
+      },
+      {
+        title: "Stage 2 · PAN Verification", applicable: panStatus.applicable, ran: panStatus.ran,
+        summary: [
+          { label: "Total", value: panStatus.total }, { label: "Verified", value: panStatus.verified },
+          { label: "Issues", value: panStatus.issues }, { label: "Overridden", value: panStatus.overridden },
+        ],
+        status: !panStatus.applicable ? "Not applicable" : !panStatus.ran ? "Not run" : panStatus.issues === 0 ? "Complete" : `${panStatus.issues} unresolved`,
+      },
+      {
+        title: "Stage 3 · Tally Ledger Reconciliation", applicable: tallyStatus.applicable, ran: tallyStatus.ran,
+        summary: [
+          { label: "Total", value: tallyStatus.total }, { label: "Matched", value: tallyStatus.matched },
+          { label: "Issues", value: tallyStatus.issues }, { label: "Overridden", value: tallyStatus.overridden },
+        ],
+        status: !tallyStatus.applicable ? "Not applicable" : !tallyStatus.ran ? "Not run" : tallyStatus.issues === 0 ? "Complete" : `${tallyStatus.issues} unresolved`,
+      },
+    ],
+    overall: [
+      { label: "Office Records", value: officeCount.deductees },
+      { label: "Stage 1 Mismatched", value: summary.mismatched },
+      { label: "Stage 2 Issues", value: panStatus.applicable ? panStatus.issues : "n/a" },
+      { label: "Stage 3 Issues", value: tallyStatus.applicable ? tallyStatus.issues : "n/a" },
+    ],
+    // Derive the status from the STAGES, not from fileBlockReason. That string is
+    // the on-screen hint and can read "Finishing validation status checks…" while
+    // a stage is still settling — a transient UI message that has no business in a
+    // report going to a client or an auditor.
+    finalStatus: isFiled ? "Filed / Ready to File"
+      : canFile ? "All validations complete — ready to mark as Ready to File"
+      : (() => {
+          const open: string[] = [];
+          if (!stage1Ran) open.push("Stage 1 not run");
+          else if (summary.mismatched > 0) open.push(`Stage 1: ${summary.mismatched} unresolved`);
+          if (panStatus.applicable && !panStatus.ran) open.push("Stage 2 not run");
+          else if (panStatus.applicable && panStatus.issues > 0) open.push(`Stage 2: ${panStatus.issues} unresolved`);
+          if (tallyStatus.applicable && !tallyStatus.ran) open.push("Stage 3 not run");
+          else if (tallyStatus.applicable && tallyStatus.issues > 0) open.push(`Stage 3: ${tallyStatus.issues} unresolved`);
+          return open.length ? `Not ready to file — ${open.join("; ")}` : "Validation incomplete";
+        })(),
+    ready: isFiled || canFile,
+  });
+
+  const [exportingOverview, setExportingOverview] = useState(false);
+  const runOverview = async (fmt: "xlsx" | "pdf") => {
+    setExportingOverview(true);
+    try {
+      const o = overviewReport();
+      // The Overview carries each stage's REAL rows, not just its counts — a
+      // summary with no records and no reasons cannot be acted on. Stage 2/3 hand
+      // their report up via onStatusChange; a stage that has not run has none.
+      const stageReports: StageReport[] = [
+        ...(stage1Ran ? [stage1Report()] : []),
+        ...(panStatus.applicable && panStatus.getReport ? [panStatus.getReport()] : []),
+        ...(tallyStatus.applicable && tallyStatus.getReport ? [tallyStatus.getReport()] : []),
+      ];
+      if (fmt === "xlsx") await downloadWorkbook(buildOverviewWorkbook(o, reportMeta, stageReports), reportFileName(reportMeta, "Validation Overview", "xlsx"));
+      else await exportOverviewPdf(o, reportMeta, stageReports);
+    } catch (e: any) { toast({ title: "Export failed", description: e?.message || String(e), variant: "destructive" }); }
+    setExportingOverview(false);
+  };
+
   return (
-    <div className="space-y-4">
-      <div>
-        <h2 className="text-xl font-bold text-foreground">Validate &amp; Finalise</h2>
-        <p className="text-sm text-muted-foreground">Stage&nbsp;1 (data reconciliation) and Stage&nbsp;2 (PAN verification) each have their own <b>Run Validation</b> — run them independently below.</p>
+    <div className="space-y-3">
+      <div className="flex items-start gap-2">
+        <div className="flex-1 min-w-0">
+        <h2 className="text-lg font-bold text-foreground">Validate &amp; Finalise</h2>
+        <p className="text-xs text-muted-foreground">Three stages — each has its own <b>Run Validation</b>. Finish all three to mark the return ready to file.</p>
+        </div>
+        {filing && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant="outline" className="h-7 px-2 text-xs gap-1 shrink-0" disabled={exportingOverview}>
+                {exportingOverview ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />} Overview Report
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => runOverview("xlsx")} className="text-xs gap-2"><FileSpreadsheet size={13} /> Export to Excel (.xlsx)</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => runOverview("pdf")} className="text-xs gap-2"><FileWarning size={13} /> Export to PDF (.pdf)</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
 
-      {/* Filter Bar */}
-      <div className="flex flex-wrap gap-3 items-end">
-        <div className="space-y-1">
-          <Label className="text-xs">Client</Label>
-          <Select value={selClient} onValueChange={setSelClient}>
-            <SelectTrigger className="w-[220px]"><SelectValue placeholder="Select client" /></SelectTrigger>
-            <SelectContent>
-              {clients
-                .filter(c => clientHasTdsForm(c.tds_forms_applicable, selForm))
-                .map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
+      {/* Active return — READ-ONLY. The Client/FY/Quarter/Form come from the shared
+          Workspace session (selected once in the Data Entry tab, the single source
+          of truth), so they are never re-selected here. */}
+      {!selClient ? (
+        <div className="flex items-center gap-2 p-4 rounded-lg border bg-muted/30 text-sm text-muted-foreground">
+          <Info size={16} className="shrink-0" />
+          <span>Select the client and return in the{" "}
+            <button type="button" className="underline font-medium text-foreground hover:text-primary" onClick={() => onNavigateDataEntry?.("")}>Data&nbsp;Entry</button>{" "}
+            tab — it is loaded here automatically.</span>
         </div>
-        <div className="space-y-1">
-          <Label className="text-xs">FY</Label>
-          <Select value={selFy} onValueChange={setSelFy}>
-            <SelectTrigger className="w-[120px]"><SelectValue /></SelectTrigger>
-            <SelectContent>{FY_OPTIONS.map(fy => <SelectItem key={fy} value={fy}>{fy}</SelectItem>)}</SelectContent>
-          </Select>
+      ) : (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2.5 rounded-lg border bg-muted/40 text-sm">
+          <span className="font-semibold text-foreground truncate max-w-[260px]">{selectedClient?.name || "—"}</span>
+          {selectedClient?.tan_number && <span className="text-muted-foreground">TAN&nbsp;<b className="font-medium text-foreground">{selectedClient.tan_number}</b></span>}
+          <span className="text-muted-foreground">{selForm}&nbsp;·&nbsp;{selQuarter}&nbsp;·&nbsp;FY&nbsp;{selFy}</span>
+          {filing?.work_status && <Badge variant="outline" className="text-[10px]">{filing.work_status}</Badge>}
+          <div className="flex-1" />
+          <button type="button" className="text-xs text-muted-foreground hover:text-foreground underline shrink-0" onClick={() => onNavigateDataEntry?.(filing?.id || "")}>Change in Data Entry</button>
         </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Quarter</Label>
-          <Select value={selQuarter} onValueChange={setSelQuarter}>
-            <SelectTrigger className="w-[100px]"><SelectValue /></SelectTrigger>
-            <SelectContent>{QUARTER_OPTIONS.map(q => <SelectItem key={q} value={q}>{q}</SelectItem>)}</SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Form</Label>
-          <Select value={selForm} onValueChange={setSelForm}>
-            <SelectTrigger className="w-[100px]"><SelectValue /></SelectTrigger>
-            <SelectContent>{TDS_FORMS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
-          </Select>
-        </div>
-      </div>
+      )}
 
       {cErr && (
         <div className="flex items-center gap-2 p-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 text-sm text-amber-700 dark:text-amber-300">
@@ -809,47 +1184,64 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
 
       {!resolving && filing && (
         <>
-          {/* ── STAGE 1 · DATA VALIDATION ─────────────────────────────────────────
-              The heading labels the WHOLE Stage-1 section — its inputs (Office +
-              Imported), the Run Validation action, and the results below — so the
-              Office/Imported block reads as part of Stage 1, not a separate module. */}
-          <div className="flex items-center gap-2 pt-1">
-            <FileSpreadsheet size={16} className="text-primary" />
-            <h3 className="text-base font-bold text-foreground">Stage 1 · Data Validation</h3>
-            <span className="text-xs text-muted-foreground">Office ↔ Imported, field by field</span>
-          </div>
+          {/* The stages are a sequence, so they are TABS rather than one very long
+              page. Stage 2 and 3 stay MOUNTED while hidden (forceMount): each
+              reports its completion up to the Ready-to-File gate, and a stage the
+              user has not opened yet must not read as "not applicable". */}
+          <Tabs value={stage} onValueChange={(v) => setStage(v as "1" | "2" | "3" | "4")} className="w-full">
+            <TabsList className="h-8 p-0.5">
+              <TabsTrigger value="1" className="text-xs h-7 gap-1.5 px-3"><FileSpreadsheet size={13} /> Stage 1 · Data{stage1Ran && <span className={cn("ml-0.5 rounded px-1 text-[10px] font-semibold", summary.mismatched === 0 ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-destructive/10 text-destructive")}>{summary.mismatched === 0 ? "OK" : summary.mismatched}</span>}</TabsTrigger>
+              <TabsTrigger value="2" className="text-xs h-7 gap-1.5 px-3"><BadgeCheck size={13} /> Stage 2 · PAN{panStatus.ran && <span className={cn("ml-0.5 rounded px-1 text-[10px] font-semibold", panStatus.issues === 0 ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-destructive/10 text-destructive")}>{panStatus.issues === 0 ? "OK" : panStatus.issues}</span>}</TabsTrigger>
+              <TabsTrigger value="3" className="text-xs h-7 gap-1.5 px-3"><BookOpen size={13} /> Stage 3 · Tally{tallyStatus.ran && <span className={cn("ml-0.5 rounded px-1 text-[10px] font-semibold", tallyStatus.issues === 0 ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-destructive/10 text-destructive")}>{tallyStatus.issues === 0 ? "OK" : tallyStatus.issues}</span>}</TabsTrigger>
+              <TabsTrigger value="4" className="text-xs h-7 gap-1.5 px-3"><ClipboardCheck size={13} /> Stage 4 · Checker Review{stage1Ran && <span className={cn("ml-0.5 rounded px-1 text-[10px] font-semibold", canFile ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-destructive/10 text-destructive")}>{canFile ? "OK" : stage4Data.totalMismatches}</span>}</TabsTrigger>
+            </TabsList>
 
-          {/* Inputs */}
-          <div className="grid gap-3 md:grid-cols-2">
+            <TabsContent value="1" forceMount className="data-[state=inactive]:hidden mt-3 space-y-3">
+          {/* ── STAGE 1 · DATA VALIDATION — the TAB names the stage, so no heading here. */}
+
+          {/* Inputs — items-start so each card is only as tall as its OWN content.
+              Without it the grid stretched Office Data (two numbers) to match the
+              file list beside it, which was most of the wasted height. */}
+          <div className="grid gap-2 md:grid-cols-2 items-start">
             <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <Users size={16} className="text-foreground" />
-                  <p className="font-semibold text-sm">Office Data <span className="text-muted-foreground font-normal">(entered by staff)</span></p>
-                </div>
-                <div className="flex gap-6 text-sm">
-                  <div><span className="text-2xl font-bold">{officeCount.deductees}</span> <span className="text-muted-foreground">deductees</span></div>
-                  <div><span className="text-2xl font-bold">{officeCount.challans}</span> <span className="text-muted-foreground">challans</span></div>
+              <CardContent className="p-2.5">
+                <div className="flex items-center gap-2">
+                  <Users size={14} className="text-muted-foreground shrink-0" />
+                  <p className="font-semibold text-xs whitespace-nowrap">Office Data</p>
+                  <div className="flex-1" />
+                  <span className="text-xs whitespace-nowrap"><b className="text-sm font-bold">{officeCount.deductees}</b> <span className="text-muted-foreground">deductees</span></span>
+                  <span className="text-xs whitespace-nowrap"><b className="text-sm font-bold">{officeCount.challans}</b> <span className="text-muted-foreground">challans</span></span>
                 </div>
                 {officeCount.deductees === 0 && (
-                  <p className="text-xs text-amber-600 mt-2">No office deductees yet — enter data in the Data Entry tab first.</p>
+                  <p className="text-[11px] text-amber-600 mt-1.5">No office deductees yet — enter data in the Data Entry tab first.</p>
                 )}
               </CardContent>
             </Card>
 
             <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <FileSpreadsheet size={16} className="text-foreground" />
-                    <p className="font-semibold text-sm">Imported Client Data <span className="text-muted-foreground font-normal">(Stage 1)</span></p>
-                  </div>
-                  <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv,.pdf,.json,.xml,.txt,.html,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff,image/*" className="hidden"
-                    onChange={(e) => { const f = e.target.files?.[0]; const tgt = replaceTargetId; setReplaceTargetId(null); if (f) handleImport(f, tgt || undefined); e.currentTarget.value = ""; }} />
-                  <Button size="sm" variant={batch ? "outline" : "default"} className="gap-1"
+              <CardContent className="p-2.5">
+                <div className="flex items-center gap-2">
+                  <FileSpreadsheet size={14} className="text-muted-foreground shrink-0" />
+                  <p className="font-semibold text-xs whitespace-nowrap">Imported Client Data</p>
+                  {batches.length > 0 && (
+                    <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                      <b className="text-xs font-bold text-foreground">{batch?.row_count ?? 0}</b> records · {batches.length} file{batches.length > 1 ? "s" : ""}
+                    </span>
+                  )}
+                  <div className="flex-1" />
+                  <input ref={fileInputRef} type="file" multiple accept=".xlsx,.xls,.csv,.pdf,.json,.xml,.txt,.html,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff,image/*" className="hidden"
+                    onChange={(e) => {
+                      const picked = Array.from(e.target.files ?? []);
+                      const tgt = replaceTargetId; setReplaceTargetId(null);
+                      // "Replace this file" targets ONE batch, so it takes the first
+                      // pick; a plain Add imports everything selected in one go.
+                      if (picked.length) { if (tgt) handleImport(picked[0], tgt); else handleImportMany(picked); }
+                      e.currentTarget.value = "";
+                    }} />
+                  <Button size="sm" variant={batch ? "outline" : "default"} className="gap-1 h-6 px-2 text-[11px] shrink-0"
                     disabled={importing || isFiled} onClick={() => { setReplaceTargetId(null); fileInputRef.current?.click(); }}>
-                    {importing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
-                    {importing ? "Importing…" : batch ? "Add / re-import file" : "Import"}
+                    {importing ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+                    {importing ? "Importing…" : batch ? "Add / re-import" : "Import"}
                   </Button>
                 </div>
                 {importing && (
@@ -862,12 +1254,8 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
                 )}
                 {batches.length > 0 ? (
                   <div className="text-sm">
-                    <div className="flex items-end justify-between gap-2">
-                      <div>
-                        <span className="text-2xl font-bold">{batch?.row_count ?? 0}</span>{" "}
-                        <span className="text-muted-foreground text-xs">records · {batches.length} file{batches.length > 1 ? "s" : ""}</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
+                    {(selBatchIds.size > 0 || batches.length > 1) && (
+                      <div className="flex items-center justify-end gap-1.5 mt-1">
                         {selBatchIds.size > 0 && (
                           <Button size="sm" variant="destructive" className="h-7 gap-1 text-xs px-2" disabled={deleting || isFiled}
                             onClick={() => setDeleteConfirm({ ids: [...selBatchIds], label: `${selBatchIds.size} selected file(s)` })}>
@@ -875,15 +1263,15 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
                           </Button>
                         )}
                         {batches.length > 1 && selBatchIds.size === 0 && (
-                          <Button size="sm" variant="ghost" className="h-7 text-xs px-2 text-muted-foreground hover:text-destructive" disabled={deleting || isFiled}
+                          <Button size="sm" variant="ghost" className="h-6 text-[11px] px-2 text-muted-foreground hover:text-destructive" disabled={deleting || isFiled}
                             onClick={() => setDeleteConfirm({ ids: batches.map((b) => b.id), label: "all imported files" })}>
                             Delete all
                           </Button>
                         )}
                       </div>
-                    </div>
+                    )}
 
-                    <div className="mt-2 rounded-md border divide-y overflow-hidden">
+                    <div className="mt-1.5 rounded-md border divide-y overflow-hidden">
                       {batches.length > 1 && (
                         <label className="flex items-center gap-2 px-2 py-1 bg-muted/40 text-[11px] text-muted-foreground cursor-pointer">
                           <Checkbox checked={allSelected} onCheckedChange={toggleSelAll} aria-label="Select all files" className="h-3.5 w-3.5" disabled={isFiled} />
@@ -891,25 +1279,24 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
                         </label>
                       )}
                       {batches.map((b: any) => (
-                        <div key={b.id} className="flex items-center gap-2 px-2 py-1.5">
-                          <Checkbox checked={selBatchIds.has(b.id)} onCheckedChange={() => toggleSel(b.id)} aria-label={`Select ${b.file_name || "file"}`} className="h-3.5 w-3.5" disabled={isFiled} />
-                          <div className="min-w-0 flex-1">
-                            <p className="font-medium text-xs truncate">{b.file_name || "(unnamed file)"}</p>
-                            <p className="text-[10px] text-muted-foreground truncate">
-                              {(b.file_type || "").toUpperCase()} · {b.row_count} rows{b.imported_at ? ` · ${fmtDateTime(b.imported_at)}` : ""}
-                            </p>
-                          </div>
-                          <Badge variant="secondary" className="text-[9px] px-1.5 py-0 h-4 shrink-0">Imported</Badge>
+                        /* ONE line per file — name and meta share the row, so N files
+                           cost N lines rather than 2N. Meta hides on narrow widths. */
+                        <div key={b.id} className="flex items-center gap-1.5 px-2 py-1" title={b.file_name || ""}>
+                          <Checkbox checked={selBatchIds.has(b.id)} onCheckedChange={() => toggleSel(b.id)} aria-label={`Select ${b.file_name || "file"}`} className="h-3 w-3 shrink-0" disabled={isFiled} />
+                          <p className="font-medium text-[11px] truncate min-w-0 flex-1">{b.file_name || "(unnamed file)"}</p>
+                          <span className="text-[10px] text-muted-foreground whitespace-nowrap shrink-0 hidden sm:inline">
+                            {b.row_count} rows{b.imported_at ? ` · ${fmtDateTime(b.imported_at)}` : ""}
+                          </span>
                           <div className="flex items-center shrink-0">
-                            <Button size="icon" variant="ghost" className="h-6 w-6" title="View details" onClick={() => openDetails(b)}><Eye size={13} /></Button>
-                            <Button size="icon" variant="ghost" className="h-6 w-6" title="Replace this file" disabled={importing || deleting || isFiled} onClick={() => handleReplaceClick(b.id)}><RotateCcw size={13} /></Button>
-                            <Button size="icon" variant="ghost" className="h-6 w-6 text-muted-foreground hover:text-destructive" title="Delete this file" disabled={deleting || isFiled}
-                              onClick={() => setDeleteConfirm({ ids: [b.id], label: b.file_name || "this file" })}><Trash2 size={13} /></Button>
+                            <Button size="icon" variant="ghost" className="h-5 w-5" title="View details" onClick={() => openDetails(b)}><Eye size={12} /></Button>
+                            <Button size="icon" variant="ghost" className="h-5 w-5" title="Replace this file" disabled={importing || deleting || isFiled} onClick={() => handleReplaceClick(b.id)}><RotateCcw size={12} /></Button>
+                            <Button size="icon" variant="ghost" className="h-5 w-5 text-muted-foreground hover:text-destructive" title="Delete this file" disabled={deleting || isFiled}
+                              onClick={() => setDeleteConfirm({ ids: [b.id], label: b.file_name || "this file" })}><Trash2 size={12} /></Button>
                           </div>
                         </div>
                       ))}
                     </div>
-                    <p className="text-[11px] text-muted-foreground mt-1.5">Keep a section in a separate workbook (e.g. 194Q)? Add it — all files are validated together. Re-importing the same file name replaces it; adding, replacing or deleting a file re-runs validation automatically.</p>
+                    <p className="text-[10px] text-muted-foreground mt-1 truncate" title="Keep a section in a separate workbook (e.g. 194Q)? Add it — all files are validated together. Re-importing the same file name replaces it; adding, replacing or deleting a file re-runs validation automatically.">All files validate together · same file name replaces · changes re-run validation</p>
                   </div>
                 ) : (
                   <p className="text-xs text-muted-foreground">Import the client's data in any format — Excel, CSV, PDF, image/scan, JSON, XML or text. You can add multiple files (e.g. a separate 194Q workbook) and they'll be validated together.</p>
@@ -920,12 +1307,14 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
 
           {/* Single Run Validation */}
           <div className="flex items-center gap-3">
-            <Button size="lg" className="gap-2 font-semibold" onClick={handleRunValidation}
+            <Button className="gap-2 font-semibold h-9" onClick={handleRunValidation}
               disabled={comparing || !batch || isFiled}>
               {comparing ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
               {comparing ? "Validating…" : "Run Validation"}
             </Button>
             {!batch && <span className="text-xs text-muted-foreground">Import a client file to enable validation.</span>}
+            <div className="flex-1" />
+            {results && <TdsExportMenu build={stage1Report} meta={reportMeta} label="Export Stage 1" />}
           </div>
 
           {/* Stage-1 results (summary + comparison) — the heading is above the inputs. */}
@@ -933,22 +1322,21 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
             <div className="space-y-3">
               {/* Live, clickable dashboard cards — animated counters; click a card
                   to filter the results to that category, click again to clear. */}
-              <div className={cn("grid grid-cols-3 sm:grid-cols-5 gap-3", comparing && "animate-pulse")}>
+              <div className={cn("grid grid-cols-2 sm:grid-cols-4 gap-2", comparing && "animate-pulse")}>
                 {([
                   { key: "total" as const, label: "Total", value: summary.total, cls: "" },
                   { key: "matched" as const, label: "Matched", value: summary.matched, cls: "text-emerald-600" },
-                  { key: "mismatched" as const, label: "Mismatched", value: summary.mismatched, cls: summary.mismatched > 0 ? "text-destructive" : "" },
+                  { key: "mismatched" as const, label: "Mismatched", value: summary.mismatched, cls: summary.mismatched > 0 ? "text-destructive" : "text-emerald-600" },
                   { key: "overridden" as const, label: "Overridden", value: summary.overridden, cls: "text-blue-600" },
-                  { key: "pending" as const, label: "Pending", value: summary.pending, cls: summary.pending > 0 ? "text-amber-600" : "text-emerald-600" },
                 ]).map(s => (
                   <button key={s.label} type="button"
-                    onClick={() => setActiveFilter(activeFilter === s.key ? null : s.key)}
+                    onClick={() => { setActiveFilter(activeFilter === s.key ? null : s.key); setErrorTypeFilter(null); }}
                     aria-pressed={activeFilter === s.key}
                     className={cn(
-                      "rounded-lg border bg-card p-3 text-center transition-all hover:border-primary/50 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                      "rounded-md border bg-card p-2 text-center transition-all hover:border-primary/50 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
                       activeFilter === s.key ? "ring-2 ring-primary border-primary" : "border-border",
                     )}>
-                    <p className={cn("text-2xl font-bold tabular-nums", s.cls)}><AnimatedNumber value={s.value} /></p>
+                    <p className={cn("text-xl font-bold tabular-nums", s.cls)}><AnimatedNumber value={s.value} /></p>
                     <p className="text-xs text-muted-foreground">{s.label}</p>
                   </button>
                 ))}
@@ -965,7 +1353,13 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
                     <div className="p-8 text-center text-sm text-muted-foreground rounded-lg border border-dashed">No {activeFilter} records found.</div>
                   ) : (
                     <div className="space-y-3">
-                      {cardFiltered.filter(r => r.match_status !== "matched").map(renderMismatchCard)}
+                      {activeFilter === "mismatched" && (
+                        <ErrorTypeBreakdown rows={cardFiltered} getType={errorTypeFor} activeType={errorTypeFilter} onSelectType={setErrorTypeFilter} />
+                      )}
+                      {(activeFilter === "mismatched"
+                        ? filterByErrorType(cardFiltered.filter(r => r.match_status !== "matched"), errorTypeFor, errorTypeFilter)
+                        : cardFiltered.filter(r => r.match_status !== "matched")
+                      ).map(renderMismatchCard)}
                       {cardFiltered.some(r => r.match_status === "matched") && renderMatchedTable(cardFiltered.filter(r => r.match_status === "matched"))}
                     </div>
                   )}
@@ -973,7 +1367,7 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
               ) : attention.length === 0 ? (
                 /* Default view, nothing to action → professional success panel. */
                 <Card className="border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20">
-                  <CardContent className="p-6 space-y-3">
+                  <CardContent className="p-4 space-y-3">
                     <div className="flex items-center gap-2">
                       <CheckCircle2 size={22} className="text-emerald-600" />
                       <p className="text-lg font-bold text-emerald-700 dark:text-emerald-300">Validation Completed Successfully</p>
@@ -991,20 +1385,22 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
                 </Card>
               ) : (
                 /* Default view → exceptions only. */
-                <div className="space-y-3">{attention.map(renderMismatchCard)}</div>
+                <div className="space-y-3">
+                  <ErrorTypeBreakdown rows={attention} getType={errorTypeFor} activeType={errorTypeFilter} onSelectType={setErrorTypeFilter} />
+                  {filterByErrorType(attention, errorTypeFor, errorTypeFilter).map(renderMismatchCard)}
+                </div>
               )}
             </div>
           )}
 
-          {/* ── STAGE 2 · PAN VERIFICATION (separate result set) ───────────────── */}
-          <div className="space-y-3 pt-2">
-            <div className="flex items-center gap-2">
-              <BadgeCheck size={16} className="text-primary" />
-              <h3 className="text-base font-bold text-foreground">Stage 2 · PAN Verification</h3>
-              <span className="text-xs text-muted-foreground">Party &amp; PAN existence, PAN status, name &amp; quarter</span>
-            </div>
+            </TabsContent>
+
+            <TabsContent value="2" forceMount className="data-[state=inactive]:hidden mt-3 space-y-3">
+          {/* ── STAGE 2 · PAN VERIFICATION — the TAB names the stage. */}
+          <div className="space-y-2">
             <TdsPanVerification
               filing={filing}
+              clientName={selectedClient?.name || ""}
               selClient={selClient}
               selFy={selFy}
               selQuarter={selQuarter}
@@ -1012,40 +1408,263 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
               runSignal={runSignal}
               resolveFirmId={resolveFirmId}
               disabled={isFiled}
+              onStatusChange={setPanStatus}
             />
           </div>
 
-          {/* Finalise (gated on Stage 1 pending = 0) */}
+            </TabsContent>
+
+            <TabsContent value="3" forceMount className="data-[state=inactive]:hidden mt-3 space-y-3">
+          {/* ── STAGE 3 · TALLY LEDGER RECONCILIATION — the TAB names the stage. */}
+          <div className="space-y-2">
+            <TdsTallyRecon
+              filing={filing}
+              clientName={selectedClient?.name || ""}
+              selClient={selClient}
+              selFy={selFy}
+              selQuarter={selQuarter}
+              selForm={selForm}
+              resolveFirmId={resolveFirmId}
+              disabled={isFiled}
+              onStatusChange={setTallyStatus}
+            />
+          </div>
+            </TabsContent>
+
+            <TabsContent value="4" forceMount className="data-[state=inactive]:hidden mt-3 space-y-3">
+          {/* ── STAGE 4 · CHECKER REVIEW — one consolidated summary of Stages 1-3,
+              so the checker approves from here without re-visiting each tab. */}
           {results && (
-            <Card className={cn(canFile ? "border-emerald-200 dark:border-emerald-800" : "border-amber-200 dark:border-amber-800")}>
-              <CardContent className="p-6">
-                {isFiled ? (
-                  <div className="p-4 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
-                    <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">
-                      ✓ Return marked as Filed. Generate Genius XLS Export from the Reports section.
-                    </p>
+            <>
+              <div>
+                <p className="font-semibold text-sm">Final Validation Summary</p>
+                <p className="text-xs text-muted-foreground">Consolidated results from Stage 1 (Data), Stage 2 (PAN) and Stage 3 (Tally) — reviewed here, not re-checked stage by stage.</p>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {([
+                  { label: "Total Records", value: stage4Data.totalRecords, cls: "" },
+                  { label: "Total Matched", value: stage4Data.totalMatched, cls: "text-emerald-600" },
+                  { label: "Total Mismatches (Combined)", value: stage4Data.totalMismatches, cls: stage4Data.totalMismatches > 0 ? "text-destructive" : "text-emerald-600" },
+                  { label: "Total Overridden", value: stage4Data.totalOverridden, cls: "text-blue-600" },
+                ]).map((s) => (
+                  <div key={s.label} className="rounded-md border bg-card p-2 text-center">
+                    <p className={cn("text-xl font-bold tabular-nums", s.cls)}>{s.value}</p>
+                    <p className="text-[11px] text-muted-foreground">{s.label}</p>
                   </div>
+                ))}
+              </div>
+
+              {/* Exception & override review — one section per stage (not a flat
+                  table), so each keeps its own vocabulary. Every matching record
+                  renders — nothing paginated — since the checker must see every
+                  mismatch and override before signing. Overridden records show
+                  their reason inline, right where the record is. */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <p className="text-xs font-semibold">Exception &amp; Override Review</p>
+                  {(auditStatusFilter !== "all" || auditErrorTypeFilter !== "all") && (
+                    <Button variant="ghost" size="sm" className="h-6 text-xs gap-1" onClick={() => { setAuditStatusFilter("all"); setAuditErrorTypeFilter("all"); }}>
+                      <X size={11} /> Clear filters
+                    </Button>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <div className="inline-flex rounded-md border overflow-hidden">
+                    {([["all", "All"], ["Unresolved", "Unresolved"], ["Overridden", "Overridden"], ["Resolved", "Resolved"]] as const).map(([v, label], i) => (
+                      <button key={v} type="button" onClick={() => setAuditStatusFilter(v)}
+                        className={cn("px-2.5 h-7 text-xs font-medium", i > 0 && "border-l", auditStatusFilter === v ? "bg-primary text-primary-foreground" : "bg-background hover:bg-muted")}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <Select value={auditErrorTypeFilter} onValueChange={setAuditErrorTypeFilter}>
+                    <SelectTrigger className="h-7 w-[180px] text-xs"><SelectValue placeholder="Error Type" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Error Types</SelectItem>
+                      {auditErrorTypes.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {stage4Data.auditRows.length === 0 ? (
+                  <div className="p-6 text-center text-sm text-emerald-600 rounded-lg border border-dashed">No mismatches or overrides across any stage — clean return.</div>
                 ) : (
-                  <>
-                    <div className="flex items-center gap-3 mb-4">
-                      {canFile ? <CheckCircle2 size={24} className="text-emerald-600" /> : <AlertTriangle size={24} className="text-amber-600" />}
-                      <div>
-                        <p className="font-semibold text-foreground">
-                          {canFile ? "Stage 1 reconciled — ready to file" : `${summary.pending} record(s) still pending in Stage 1`}
-                        </p>
-                        <p className="text-sm text-muted-foreground">
-                          {canFile ? "Every Stage 1 record is matched or overridden." : "Override every mismatch (Pending must reach 0) to enable filing."}
-                        </p>
+                  ([
+                    ["Stage 1", "Data Validation", true, stage1Ran],
+                    ["Stage 2", "PAN Verification", panStatus.applicable, panStatus.ran],
+                    ["Stage 3", "Tally Reconciliation", tallyStatus.applicable, tallyStatus.ran],
+                  ] as const).map(([stageKey, label, applicable, ran]) => {
+                    const stageRows = stage4Data.auditRows.filter((r) => r.stage === stageKey);
+                    const visibleRows = filteredAuditRows.filter((r) => r.stage === stageKey);
+                    const unresolvedCount = stageRows.filter((r) => r.status === "Unresolved").length;
+                    const collapsed = collapsedStages.has(stageKey);
+                    return (
+                      <div key={stageKey} className="rounded-lg border overflow-hidden">
+                        <button type="button" onClick={() => toggleStageCollapsed(stageKey)}
+                          className="w-full flex items-center justify-between gap-2 px-3 py-2.5 bg-muted/40 hover:bg-muted/60 text-left">
+                          <span className="flex items-center gap-2 text-sm font-medium">
+                            {collapsed ? <ChevronRight size={16} className="text-muted-foreground shrink-0" /> : <ChevronDown size={16} className="text-muted-foreground shrink-0" />}
+                            {stageKey} · {label}
+                          </span>
+                          {!applicable ? (
+                            <span className="text-[10px] rounded px-1.5 py-0.5 font-semibold bg-muted text-muted-foreground shrink-0">Not applicable</span>
+                          ) : !ran ? (
+                            <span className="text-[10px] rounded px-1.5 py-0.5 font-semibold bg-muted text-muted-foreground shrink-0">Not run</span>
+                          ) : unresolvedCount > 0 ? (
+                            <span className="text-[10px] rounded px-1.5 py-0.5 font-semibold bg-destructive/10 text-destructive shrink-0">{unresolvedCount} unresolved</span>
+                          ) : (
+                            <span className="text-[10px] rounded px-1.5 py-0.5 font-semibold bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300 inline-flex items-center gap-1 shrink-0"><CheckCircle2 size={11} /> Complete</span>
+                          )}
+                        </button>
+                        {!collapsed && (
+                          <div className="p-2.5 space-y-2">
+                            {stageRows.length === 0 ? (
+                              <p className="text-xs text-muted-foreground px-1 py-1">No exceptions or overrides in this stage.</p>
+                            ) : visibleRows.length === 0 ? (
+                              <p className="text-xs text-muted-foreground px-1 py-1">No records match the current filters.</p>
+                            ) : visibleRows.map((r, i) => (
+                              <div key={`${stageKey}-${i}`} className="rounded-md border p-2.5 space-y-1.5">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-sm font-medium truncate">{r.record}</span>
+                                  <Badge variant="outline" className={cn("text-[10px] shrink-0",
+                                    r.status === "Overridden" ? "border-blue-300 text-blue-600" : r.status === "Resolved" ? "border-emerald-300 text-emerald-600" : "border-destructive/40 text-destructive")}>
+                                    {r.status}
+                                  </Badge>
+                                </div>
+                                <p className="text-xs text-muted-foreground">{r.errorType}</p>
+                                {r.status === "Overridden" ? (
+                                  <p className="text-xs rounded bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 px-2 py-1.5 text-blue-700 dark:text-blue-300">
+                                    <span className="font-medium">Override reason: </span>{r.reason || "accepted"}
+                                  </p>
+                                ) : (
+                                  <p className="text-xs text-foreground">{r.reason || "—"}</p>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              {/* Digital signature — a mandatory gate BEFORE the return can be
+                  marked ready to file, on top of (not instead of) canFile. */}
+              <Card className={cn(signature ? "border-emerald-200 dark:border-emerald-800" : "border-amber-200 dark:border-amber-800")}>
+                <CardContent className="p-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck size={16} className={signature ? "text-emerald-600" : "text-muted-foreground"} />
+                    <p className="text-sm font-semibold">Digital Signature — Checker Sign-Off</p>
+                  </div>
+                  {isFiled ? (
+                    <p className="text-xs text-muted-foreground">
+                      {signature ? <>Signed by <b>{signature.signedByName}</b> on {new Date(signature.signedAt).toLocaleString("en-IN")}.</> : "Return already filed."}
+                    </p>
+                  ) : signature ? (
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <p className="text-xs text-emerald-700 dark:text-emerald-300">
+                        ✓ Digitally signed by <b>{signature.signedByName}</b> on {new Date(signature.signedAt).toLocaleString("en-IN")}
+                      </p>
+                      <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" disabled={signing} onClick={handleRevokeSignature}>
+                        <RotateCcw size={12} /> Revoke Signature
+                      </Button>
+                    </div>
+                  ) : !canFile ? (
+                    <p className="text-xs text-muted-foreground">Resolve every Stage 1, 2 and 3 issue above before signing.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      <p className="text-xs text-muted-foreground">
+                        Type your full name to digitally sign this return, confirming you have reviewed every mismatch, override and mapping listed above.
+                      </p>
+                      <div className="flex items-start gap-2">
+                        <Checkbox id="checker-attest" checked={attestChecked} onCheckedChange={(v) => setAttestChecked(!!v)} className="mt-0.5" />
+                        <Label htmlFor="checker-attest" className="text-xs font-normal leading-snug">
+                          I have reviewed all exceptions, overrides and mappings across Stage 1, 2 and 3, and I confirm this return is ready for filing.
+                        </Label>
+                      </div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Input value={signerNameInput} onChange={(e) => setSignerNameInput(e.target.value)} placeholder="Type your full name" className="h-8 text-xs w-56" />
+                        <Button size="sm" className="h-8 gap-1 text-xs" disabled={signing || !signerNameInput.trim() || !attestChecked} onClick={handleSign}>
+                          {signing ? <Loader2 size={13} className="animate-spin" /> : <ShieldCheck size={13} />} Sign &amp; Confirm
+                        </Button>
                       </div>
                     </div>
-                    <Button size="lg" className="gap-2" disabled={!canFile} onClick={() => setConfirmOpen(true)}>
-                      <ShieldCheck size={16} /> Mark Return as Ready to File
-                    </Button>
-                  </>
-                )}
-              </CardContent>
-            </Card>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Final verdict + filing action — moved here from Stage 3: the
+                  checker signs off from this ONE tab. */}
+              <Card className={cn(canFile ? "border-emerald-200 dark:border-emerald-800" : "border-amber-200 dark:border-amber-800")}>
+                <CardContent className="p-4">
+                  {isFiled ? (
+                    <div className="p-4 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
+                      <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">
+                        ✓ Return marked as Filed. Generate Genius XLS Export from the Reports section.
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-start gap-3 mb-4">
+                        {canFile && signature ? <CheckCircle2 size={24} className="text-emerald-600 mt-0.5 shrink-0" /> : <AlertTriangle size={24} className="text-amber-600 mt-0.5 shrink-0" />}
+                        <div className="min-w-0">
+                          <p className="font-semibold text-foreground">
+                            {canFile && signature ? "All validations complete — ready to file" : "Return not ready to file"}
+                          </p>
+                          <p className="text-sm text-muted-foreground">
+                            {canFile && signature
+                              ? "All applicable stages are reconciled with no unresolved items and the checker has signed. Optional stages without an imported file are skipped."
+                              : !canFile ? fileBlockReason : "The checker must digitally sign this return (above) before it can be marked ready to file."}
+                          </p>
+                          {/* Per-stage completion checklist — the user sees exactly what remains. */}
+                          <div className="mt-3 space-y-1 text-xs">
+                            <div className="flex items-center gap-1.5">
+                              {stage1Ready ? <CheckCircle2 size={13} className="text-emerald-600 shrink-0" /> : <X size={13} className="text-destructive shrink-0" />}
+                              <span className={stage1Ready ? "text-foreground" : "text-muted-foreground"}>
+                                Stage 1 · Data reconciliation{stage1Ready ? " — complete" : stage1Ran ? ` — ${summary.mismatched} unresolved` : " — not run"}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              {!panStatus.applicable ? <Info size={13} className="text-muted-foreground shrink-0" /> : stage2Ready ? <CheckCircle2 size={13} className="text-emerald-600 shrink-0" /> : <X size={13} className="text-destructive shrink-0" />}
+                              <span className={!panStatus.applicable ? "text-muted-foreground" : stage2Ready ? "text-foreground" : "text-muted-foreground"}>
+                                Stage 2 · PAN verification{
+                                  !panStatus.applicable ? " — optional (no TRACES file imported)"
+                                  : !panStatus.ran ? " — not run"
+                                  : panStatus.issues > 0 ? ` — ${panStatus.issues} unresolved`
+                                  : " — complete"}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              {!tallyStatus.applicable ? <Info size={13} className="text-muted-foreground shrink-0" /> : stage3Ready ? <CheckCircle2 size={13} className="text-emerald-600 shrink-0" /> : <X size={13} className="text-destructive shrink-0" />}
+                              <span className={!tallyStatus.applicable ? "text-muted-foreground" : stage3Ready ? "text-foreground" : "text-muted-foreground"}>
+                                Stage 3 · Tally reconciliation{
+                                  !tallyStatus.applicable ? " — optional (no Tally ledger imported)"
+                                  : !tallyStatus.ran ? " — not run"
+                                  : tallyStatus.issues > 0 ? ` — ${tallyStatus.issues} unresolved`
+                                  : " — complete"}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              {signature ? <CheckCircle2 size={13} className="text-emerald-600 shrink-0" /> : <X size={13} className="text-destructive shrink-0" />}
+                              <span className={signature ? "text-foreground" : "text-muted-foreground"}>
+                                Digital signature{signature ? ` — signed by ${signature.signedByName}` : " — not signed"}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <Button size="lg" className="gap-2" disabled={!canFile || !signature} onClick={() => setConfirmOpen(true)}>
+                        <ShieldCheck size={16} /> Mark Return as Ready to File
+                      </Button>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+            </>
           )}
+            </TabsContent>
+          </Tabs>
         </>
       )}
 
@@ -1083,15 +1702,15 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
           <div className="space-y-3 py-4">
             <div className="grid grid-cols-3 gap-4">
               <div className="text-center p-3 rounded-lg bg-muted">
-                <p className="text-2xl font-bold text-foreground">{summary.matched}</p>
+                <p className="text-xl font-bold text-foreground">{summary.matched}</p>
                 <p className="text-xs text-muted-foreground">Matched</p>
               </div>
               <div className="text-center p-3 rounded-lg bg-muted">
-                <p className="text-2xl font-bold text-foreground">{summary.overridden}</p>
+                <p className="text-xl font-bold text-foreground">{summary.overridden}</p>
                 <p className="text-xs text-muted-foreground">Overridden</p>
               </div>
               <div className="text-center p-3 rounded-lg bg-muted">
-                <p className="text-2xl font-bold text-foreground">{summary.total}</p>
+                <p className="text-xl font-bold text-foreground">{summary.total}</p>
                 <p className="text-xs text-muted-foreground">Total</p>
               </div>
             </div>

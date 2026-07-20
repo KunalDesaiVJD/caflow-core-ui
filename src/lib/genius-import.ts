@@ -16,6 +16,8 @@
  */
 import * as XLSX from "xlsx";
 import { supabase } from "@/integrations/supabase/client";
+import { findSeedRate } from "@/lib/tdsRateSeed";
+import { assessmentYearToFinancialYear } from "@/lib/tdsQuarter";
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -130,6 +132,22 @@ function cellNum(ws: XLSX.WorkSheet, addr: string): number {
   return isNaN(n) ? 0 : n;
 }
 
+/** Read a cell by row/column INDEX ("" / 0 / null when the column is absent). */
+const strAt = (ws: XLSX.WorkSheet, r: number, c: number | undefined): string =>
+  (c === undefined || c < 0) ? "" : cellStr(ws, XLSX.utils.encode_cell({ r, c }));
+const numAt = (ws: XLSX.WorkSheet, r: number, c: number | undefined): number =>
+  (c === undefined || c < 0) ? 0 : cellNum(ws, XLSX.utils.encode_cell({ r, c }));
+const dateAt = (ws: XLSX.WorkSheet, r: number, c: number | undefined): string | null =>
+  (c === undefined || c < 0) ? null : parseDdmmyyyy(ws[XLSX.utils.encode_cell({ r, c })]?.v as string | number | undefined);
+
+/** Read a sheet's header row (row 0) across its used width, for column matching. */
+function readHeaderRow(ws: XLSX.WorkSheet): unknown[] {
+  const range = XLSX.utils.decode_range(ws["!ref"] || "A1:A1");
+  const out: unknown[] = [];
+  for (let c = 0; c <= Math.min(range.e.c, 300); c++) out.push(ws[XLSX.utils.encode_cell({ r: 0, c })]?.v ?? null);
+  return out;
+}
+
 /** Map Genius deductee code ("01-Companies", "02-Other than Companies") → app value. */
 function parseDeducteeType(raw: string): string {
   const s = (raw || "").trim();
@@ -137,6 +155,135 @@ function parseDeducteeType(raw: string): string {
   if (s.startsWith("02")) return "Non-Company";
   return s; // leave as-is if non-standard
 }
+
+/** Strip Genius's internal numeric prefix from a section code: "1023-194C" → "194C".
+ *
+ *  Deliberately does NOT force a case. It used to `.toUpperCase()` the whole cell,
+ *  which silently corrupted every section carrying a parenthetical sub-code —
+ *  "194J(b)" (Technical Services, 2%) became "194J(B)", matching NOTHING already in
+ *  Rate Master (the app's established convention everywhere — Rate Master's own seed
+ *  data, section393.ts, every prior rate-master migration — is a LOWERCASE letter
+ *  inside the parens; zero uppercase-paren occurrences exist anywhere in the
+ *  codebase). Plain codes (194A, 194C, 194H…) were unaffected, since they have no
+ *  lowercase letters to corrupt — which is exactly why the Section field went
+ *  missing "sometimes" rather than always. Genius already writes the correct
+ *  convention; preserving its text verbatim is simpler and safer than re-deriving
+ *  casing rules here. ensureRateMasterSections() below still canonicalises
+ *  case-insensitively against Rate Master / the standard seed table, so an oddly
+ *  cased file is corrected rather than left to manufacture a duplicate section. */
+export function cleanSection(raw: string | number | null | undefined): string {
+  const s = String(raw ?? "").trim();
+  const m = s.match(/^\d+-(.+)$/);
+  return (m ? m[1] : s).trim();
+}
+
+/**
+ * Throw if the Genius file's own Assessment Year doesn't correspond to the
+ * SELECTED filing's Financial Year. A hard stop, unlike the Form/Quarter
+ * checks in importGeniusXls (which warn and continue) — there is no
+ * legitimate reason to import one financial year's challan into a different
+ * financial year's filing.
+ *
+ * A Genius file states its period as an ASSESSMENT YEAR ("A.Y. 2025-26"),
+ * never a Financial Year, and the ±1 offset is easy to misread: a file for
+ * FY 2024-25 literally shows "2025-26" on screen, which looks like it should
+ * mean FY 2025-26 unless the offset is applied. Traced to a real incident: a
+ * client's challan (deposit date 07/08/2024 — unambiguously FY 2024-25) was
+ * already sitting in the database tagged financial_year "2025-26", and a
+ * later import of the same challan for a different quarter would have
+ * silently carried the SAME wrong year forward without this check, because
+ * client + FY scoping (resolveExistingChallansByNumber) can't tell a
+ * consistently-wrong FY from a correct one — only comparing against the
+ * file itself can. A malformed/blank Assessment Year is not validated —
+ * fails open, matching how Form/Quarter behave on an empty field.
+ */
+export function validateFinancialYearMatch(assessmentYear: string, financialYear: string): void {
+  if (!/^\d{4}-\d{2}$/.test(assessmentYear)) return;
+  const fileFinancialYear = assessmentYearToFinancialYear(assessmentYear);
+  if (fileFinancialYear !== financialYear) {
+    throw new Error(
+      `Financial Year mismatch: this file is for Financial Year ${fileFinancialYear} ` +
+      `(shown in the file as Assessment Year ${assessmentYear}), but the selected filing is for ` +
+      `Financial Year ${financialYear}. A challan deposited for one financial year cannot be imported into a ` +
+      `different one — select Financial Year ${fileFinancialYear} before importing this file.`
+    );
+  }
+}
+
+/** Normalise a header cell for matching: lowercase, collapse whitespace + newlines. */
+const normHeader = (s: unknown): string => String(s ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+
+interface ColSpec { field: string; match: (h: string) => boolean; fallback?: number; }
+
+/**
+ * Resolve each field's COLUMN INDEX from the sheet's header row by matching the
+ * header TEXT — not a hard-coded position. Genius / TRACES emit the same fields in
+ * more than one layout: some files carry a "Deductee Ref No" column (shifting every
+ * later column by one), the cess column is split into a rate and an amount, etc. A
+ * fixed-index reader silently mis-reads whichever layout it wasn't written for —
+ * the Name lands on an Address column, the Amount on a date (this is exactly why
+ * SWASTIK BUILDCON imported blank amounts/TDS). Matching by header makes the parser
+ * layout-agnostic. `fallback` (the canonical FVU order) is used ONLY when a header
+ * can't be matched, so an unfamiliar variant degrades gracefully instead of
+ * failing. First unclaimed header match wins; a claimed column is never reused. */
+function buildColMap(headerRow: unknown[], spec: ColSpec[]): Record<string, number> {
+  const hs = headerRow.map(normHeader);
+  const claimed = new Set<number>();
+  const map: Record<string, number> = {};
+  for (const { field, match } of spec) {
+    for (let c = 0; c < hs.length; c++) {
+      if (claimed.has(c) || !hs[c]) continue;
+      if (match(hs[c])) { map[field] = c; claimed.add(c); break; }
+    }
+  }
+  for (const { field, fallback } of spec) {
+    if (map[field] === undefined && fallback !== undefined && !claimed.has(fallback)) {
+      map[field] = fallback; claimed.add(fallback);
+    }
+  }
+  return map;
+}
+
+/** Header→field matchers for the ChallanDetails sheet (fallbacks = canonical FVU order). */
+const CHALLAN_COLS: ColSpec[] = [
+  { field: "serialNo",       match: (h) => /challan serial/.test(h),                         fallback: 0 },
+  { field: "sectionCode",    match: (h) => /section code/.test(h),                           fallback: 1 },
+  { field: "incomeTax",      match: (h) => /income tax/.test(h),                             fallback: 2 },
+  { field: "surcharge",      match: (h) => /^surcharge$/.test(h),                            fallback: 3 },
+  { field: "cess",           match: (h) => /^(health and education )?cess$|education cess$/.test(h), fallback: 4 },
+  { field: "interest",       match: (h) => /interest/.test(h),                               fallback: 5 },
+  { field: "lateFee234E",    match: (h) => /late fee|fee.*234e/.test(h),                      fallback: 6 },
+  { field: "others",         match: (h) => /^others?$/.test(h),                              fallback: 7 },
+  { field: "totalDeposited", match: (h) => /total tax deposited/.test(h),                    fallback: 8 },
+  { field: "chequeDdNo",     match: (h) => /cheque|dd no/.test(h),                           fallback: 9 },
+  { field: "bsrCode",        match: (h) => /bsr/.test(h),                                    fallback: 10 },
+  { field: "depositDate",    match: (h) => /date on which tax deposited|deposit date/.test(h), fallback: 11 },
+  { field: "bankChallanNo",  match: (h) => /bank challan|transfer vouch/.test(h),            fallback: 12 },
+  { field: "isBookEntry",    match: (h) => /book entry/.test(h),                             fallback: 13 },
+  { field: "minorHead",      match: (h) => /minor head/.test(h),                             fallback: 14 },
+];
+
+/** Header→field matchers for the Annex-I Deductee sheet (fallbacks = canonical FVU order, no Ref-No column). */
+const DEDUCTEE_COLS: ColSpec[] = [
+  { field: "challanSerialNo",  match: (h) => /challan serial/.test(h),                       fallback: 0 },
+  { field: "sectionCode",      match: (h) => /section code/.test(h),                         fallback: 1 },
+  { field: "deducteeType",     match: (h) => /deductee code/.test(h),                        fallback: 2 },
+  { field: "pan",              match: (h) => /permanent account number|\bpan\b/.test(h),     fallback: 3 },
+  { field: "name",             match: (h) => /name of (the )?deductee|deductee name/.test(h), fallback: 4 },
+  { field: "refNo",            match: (h) => /(deductee|party).*\bref|ref(erence)?\.?\s*(no|number)/.test(h) },
+  { field: "amountPaid",       match: (h) => /amount of payment|amount paid|amount credited/.test(h), fallback: 12 },
+  { field: "datePaid",         match: (h) => /date on which amount|date of payment|date.*paid.*credit/.test(h), fallback: 13 },
+  { field: "rateOfTds",        match: (h) => /rate at which tax|rate of tds/.test(h) || h === "rate", fallback: 14 },
+  { field: "surchargeRate",    match: (h) => /surcharge rate/.test(h),                       fallback: 15 },
+  { field: "cessRate",         match: (h) => /cess rate/.test(h),                            fallback: 16 },
+  { field: "tdsAmount",        match: (h) => /amount of tax deducted|tds amount|amount of tax/.test(h), fallback: 17 },
+  { field: "surchargeAmount",  match: (h) => /surcharge amount/.test(h),                     fallback: 18 },
+  { field: "cessAmount",       match: (h) => /cess amount/.test(h),                          fallback: 19 },
+  { field: "totalTaxDeducted", match: (h) => /total tax deposited|total tax deducted/.test(h), fallback: 20 },
+  { field: "dateOfDeduction",  match: (h) => /date on which tax deducted|date of deduction/.test(h), fallback: 21 },
+  { field: "reason",           match: (h) => /reason/.test(h),                               fallback: 22 },
+  { field: "certificateNo",    match: (h) => /certificate/.test(h),                          fallback: 23 },
+];
 
 // ─── Parser ──────────────────────────────────────────────────────────────────
 
@@ -192,72 +339,78 @@ export async function parseGeniusXls(file: File): Promise<ParsedGeniusFile> {
   }
 
   // ── Deductor details (key/value layout) ──────────────────────────────────
+  // Genius writes the form as "140 (26Q)" / "27EQ" etc. — extract the bare form
+  // token so the downstream form-match check compares "26Q" to "26Q", not to
+  // "140 (26Q)" (which would raise a spurious mismatch warning).
+  const rawForm = cellStr(detailSheet, "C6");
+  const formTok = rawForm.match(/\b(24Q|26Q|27Q|27EQ)\b/i);
   const deductor = {
     tan:            cellStr(detailSheet, "B1"),
     pan:            cellStr(detailSheet, "B2"),
     name:           cellStr(detailSheet, "B3"),
     assessmentYear: cellStr(detailSheet, "C2"),
     quarter:        cellStr(detailSheet, "C4") || "Q1",
-    formNo:         cellStr(detailSheet, "C6") || "26Q",
+    formNo:         (formTok ? formTok[1].toUpperCase() : rawForm) || "26Q",
   };
 
-  // ── Challans (row 2+) ────────────────────────────────────────────────────
+  // ── Challans (row 2+) — columns resolved by HEADER TEXT, not position ─────
   const challans: ParsedChallan[] = [];
+  const chMap = buildColMap(readHeaderRow(challanSheet), CHALLAN_COLS);
   const chRange = XLSX.utils.decode_range(challanSheet["!ref"] || "A1:Q1");
   for (let r = 1; r <= chRange.e.r; r++) {
-    // Stop at first fully-empty row (col A blank means no more challans)
-    const serialAddr = XLSX.utils.encode_cell({ r, c: 0 });
-    const serialCell = challanSheet[serialAddr];
-    if (!serialCell || serialCell.v === null || serialCell.v === undefined || serialCell.v === "") break;
-
-    const row = (col: number) => XLSX.utils.encode_cell({ r, c: col });
+    // Stop at the first row with neither a serial nor a section (end of the list;
+    // also shrugs off a bloated !ref that claims tens of thousands of empty rows).
+    const serial = strAt(challanSheet, r, chMap.serialNo);
+    const section = strAt(challanSheet, r, chMap.sectionCode);
+    if (!serial && !section) break;
     challans.push({
-      serialNo:       cellNum(challanSheet, row(0)),
-      sectionCode:    cellStr(challanSheet, row(1)),
-      incomeTax:      cellNum(challanSheet, row(2)),
-      surcharge:      cellNum(challanSheet, row(3)),
-      cess:           cellNum(challanSheet, row(4)),
-      interest:       cellNum(challanSheet, row(5)),
-      lateFee234E:    cellNum(challanSheet, row(6)),
-      others:         cellNum(challanSheet, row(7)),
-      totalDeposited: cellNum(challanSheet, row(8)),
-      chequeDdNo:     cellStr(challanSheet, row(9)),
-      bsrCode:        cellStr(challanSheet, row(10)),
-      depositDate:    parseDdmmyyyy(challanSheet[row(11)]?.v),
-      bankChallanNo:  cellStr(challanSheet, row(12)),
-      isBookEntry:    /yes|true|y/i.test(cellStr(challanSheet, row(13))),
-      minorHead:      cellStr(challanSheet, row(14)) || "200",
+      serialNo:       numAt(challanSheet, r, chMap.serialNo),
+      sectionCode:    cleanSection(strAt(challanSheet, r, chMap.sectionCode)),
+      incomeTax:      numAt(challanSheet, r, chMap.incomeTax),
+      surcharge:      numAt(challanSheet, r, chMap.surcharge),
+      cess:           numAt(challanSheet, r, chMap.cess),
+      interest:       numAt(challanSheet, r, chMap.interest),
+      lateFee234E:    numAt(challanSheet, r, chMap.lateFee234E),
+      others:         numAt(challanSheet, r, chMap.others),
+      totalDeposited: numAt(challanSheet, r, chMap.totalDeposited),
+      chequeDdNo:     strAt(challanSheet, r, chMap.chequeDdNo),
+      bsrCode:        strAt(challanSheet, r, chMap.bsrCode),
+      depositDate:    dateAt(challanSheet, r, chMap.depositDate),
+      bankChallanNo:  strAt(challanSheet, r, chMap.bankChallanNo),
+      isBookEntry:    /yes|true|y/i.test(strAt(challanSheet, r, chMap.isBookEntry)),
+      minorHead:      strAt(challanSheet, r, chMap.minorHead) || "200",
     });
   }
 
-  // ── Deductees (row 2+) ───────────────────────────────────────────────────
+  // ── Deductees (row 2+) — columns resolved by HEADER TEXT, not position ────
   const deductees: ParsedDeductee[] = [];
+  const deMap = buildColMap(readHeaderRow(deducteeSheet), DEDUCTEE_COLS);
   const deRange = XLSX.utils.decode_range(deducteeSheet["!ref"] || "A1:Z1");
   for (let r = 1; r <= deRange.e.r; r++) {
-    const serialAddr = XLSX.utils.encode_cell({ r, c: 0 });
-    const serialCell = deducteeSheet[serialAddr];
-    if (!serialCell || serialCell.v === null || serialCell.v === undefined || serialCell.v === "") break;
-
-    const row = (col: number) => XLSX.utils.encode_cell({ r, c: col });
+    // Stop at the first FULLY-empty deductee row (no serial, PAN or name).
+    const serial = strAt(deducteeSheet, r, deMap.challanSerialNo);
+    const pan = strAt(deducteeSheet, r, deMap.pan);
+    const name = strAt(deducteeSheet, r, deMap.name);
+    if (!serial && !pan && !name) break;
     deductees.push({
-      challanSerialNo:   cellNum(deducteeSheet, row(0)),
-      sectionCode:       cellStr(deducteeSheet, row(1)),
-      deducteeType:      parseDeducteeType(cellStr(deducteeSheet, row(2))),
-      pan:               cellStr(deducteeSheet, row(3)).toUpperCase(),
-      refNo:             cellStr(deducteeSheet, row(4)),
-      name:              cellStr(deducteeSheet, row(5)),
-      amountPaid:        cellNum(deducteeSheet, row(13)),
-      datePaid:          parseDdmmyyyy(deducteeSheet[row(14)]?.v),
-      rateOfTds:         cellNum(deducteeSheet, row(15)),
-      surchargeRate:     cellNum(deducteeSheet, row(16)),
-      cessRate:          cellNum(deducteeSheet, row(17)),
-      tdsAmount:         cellNum(deducteeSheet, row(18)),
-      surchargeAmount:   cellNum(deducteeSheet, row(19)),
-      cessAmount:        cellNum(deducteeSheet, row(20)),
-      totalTaxDeducted:  cellNum(deducteeSheet, row(21)),
-      dateOfDeduction:   parseDdmmyyyy(deducteeSheet[row(22)]?.v),
-      reason:            cellStr(deducteeSheet, row(23)),
-      certificateNo:     cellStr(deducteeSheet, row(24)),
+      challanSerialNo:   numAt(deducteeSheet, r, deMap.challanSerialNo),
+      sectionCode:       cleanSection(strAt(deducteeSheet, r, deMap.sectionCode)),
+      deducteeType:      parseDeducteeType(strAt(deducteeSheet, r, deMap.deducteeType)),
+      pan:               pan.toUpperCase(),
+      refNo:             strAt(deducteeSheet, r, deMap.refNo),
+      name,
+      amountPaid:        numAt(deducteeSheet, r, deMap.amountPaid),
+      datePaid:          dateAt(deducteeSheet, r, deMap.datePaid),
+      rateOfTds:         numAt(deducteeSheet, r, deMap.rateOfTds),
+      surchargeRate:     numAt(deducteeSheet, r, deMap.surchargeRate),
+      cessRate:          numAt(deducteeSheet, r, deMap.cessRate),
+      tdsAmount:         numAt(deducteeSheet, r, deMap.tdsAmount),
+      surchargeAmount:   numAt(deducteeSheet, r, deMap.surchargeAmount),
+      cessAmount:        numAt(deducteeSheet, r, deMap.cessAmount),
+      totalTaxDeducted:  numAt(deducteeSheet, r, deMap.totalTaxDeducted),
+      dateOfDeduction:   dateAt(deducteeSheet, r, deMap.dateOfDeduction),
+      reason:            strAt(deducteeSheet, r, deMap.reason),
+      certificateNo:     strAt(deducteeSheet, r, deMap.certificateNo),
     });
   }
 
@@ -272,6 +425,257 @@ export interface ImportResult {
   challansReused: number;      // pre-existing challans whose deductees were attached as carry-forward utilisation
   deducteesInserted: number;
   warnings: string[];
+}
+
+export interface ExistingChallanRef {
+  id: string;
+  quarter: string;
+  financial_year: string;
+  form_type: string;
+}
+
+export interface ChallanLookupResult {
+  /** Safe to reuse: same client, same financial year. */
+  reusable: Map<string, ExistingChallanRef>;
+  /** Same client, same Bank Challan Number, but a DIFFERENT financial year —
+   *  never reused (a challan cannot legitimately fund a different FY's
+   *  return), but worth explaining rather than silently creating a new
+   *  challan with no comment. */
+  yearMismatched: { challanNumber: string; ref: ExistingChallanRef }[];
+}
+
+/**
+ * Resolve which of this file's Bank Challan Numbers already exist as a
+ * challan for THIS CLIENT, in THIS FINANCIAL YEAR — so importGeniusXls can
+ * decide reuse (carry forward) vs. insert a new challan.
+ *
+ * Scoped to client_id, not merely firm_id — the client scope is load-bearing,
+ * not defensive. A Bank Challan Number is a short, often-sequential integer
+ * with no cross-client uniqueness guarantee at all (OLTAS numbers it per TAN,
+ * never firm-wide), so a firm running 100+ clients WILL see coincidental
+ * collisions between unrelated clients. Without this filter, importing
+ * client B's genuinely first-ever challan can match client A's unrelated
+ * challan number, silently attach B's deductee to A's challan (a real
+ * cross-client data-integrity break — B's deductee then points at a challan
+ * under a DIFFERENT filing_id, so it vanishes from B's own Challans list,
+ * which is exactly what "0 challans added" with an empty Challans list looks
+ * like on screen), and report a false "carried forward" success. RLS only
+ * scopes tds_challans reads to the FIRM, never the client, so this filter
+ * cannot be left to the database to enforce.
+ *
+ * Also scoped to financial_year — a challan deposit is tied to ONE return
+ * period; it cannot legitimately fund a DIFFERENT financial year's filing.
+ * A same-client, same-number match in a different FY is reported via
+ * `yearMismatched` (so the caller can explain it) rather than silently
+ * reused or silently ignored.
+ *
+ * A client's own Bank Challan Number IS meant to repeat ACROSS QUARTERS of
+ * the SAME financial year — a big lump-sum challan can be carried forward
+ * and its balance allocated to deductees across several quarters. That
+ * legitimate reuse is exactly what `reusable` still enables, just never
+ * across two different clients (TANs) or two different financial years.
+ */
+export async function resolveExistingChallansByNumber(
+  bankChallanNumbers: (string | null | undefined)[],
+  clientId: string,
+  financialYear: string,
+): Promise<ChallanLookupResult> {
+  const reusable = new Map<string, ExistingChallanRef>();
+  const yearMismatched: { challanNumber: string; ref: ExistingChallanRef }[] = [];
+  const numList = Array.from(new Set(bankChallanNumbers.filter((n): n is string => !!n)));
+  if (numList.length === 0) return { reusable, yearMismatched };
+
+  const { data } = await supabase
+    .from("tds_challans")
+    .select("id, challan_serial_no, bsr_code, quarter, financial_year, form_type")
+    .eq("client_id", clientId)
+    .in("challan_serial_no", numList);
+  for (const row of (data || []) as any[]) {
+    const key = String(row.challan_serial_no ?? "");
+    if (!key) continue;
+    const ref: ExistingChallanRef = { id: String(row.id), quarter: row.quarter, financial_year: row.financial_year, form_type: row.form_type };
+    if (row.financial_year === financialYear) {
+      if (!reusable.has(key)) reusable.set(key, ref);
+    } else if (!reusable.has(key)) {
+      yearMismatched.push({ challanNumber: key, ref });
+    }
+  }
+  return { reusable, yearMismatched };
+}
+
+/**
+ * Ensure every section code this import references exists in the firm's Rate
+ * Master, and return a REWRITE MAP so the parsed records use whichever exact
+ * casing Rate Master actually has — an existing row's casing if one already
+ * matches case-insensitively, else the standard seed table's casing, else the
+ * file's own text verbatim for a section CAFlow has never seen. Never a
+ * manufactured duplicate: the DB's (assessment_year, form_type, section_code,
+ * firm_id) uniqueness is case-SENSITIVE plain text, so two differently-cased
+ * spellings of "the same" section would otherwise sit side by side forever,
+ * each with its own empty Section dropdown.
+ *
+ * Generic by construction — this replaced logic that only ever auto-created
+ * "194C". Any section a Genius file carries (194J(a), 194J(b), 206C(1G)(a), a
+ * code CAFlow has genuinely never seen before) is handled the same way, so a
+ * fix here applies to every section and every future client, not one file.
+ */
+export async function ensureRateMasterSections(
+  sectionCodes: string[],
+  firmId: string,
+  formType: string,
+  financialYear: string,
+): Promise<{ rewrite: Map<string, string>; warnings: string[] }> {
+  const rewrite = new Map<string, string>();
+  const warnings: string[] = [];
+  const distinct = Array.from(new Set(sectionCodes.map((s) => s.trim()).filter(Boolean)));
+  if (distinct.length === 0) return { rewrite, warnings };
+
+  // AY is derived from the financial year: "2025-26" -> "2026-27".
+  const fyParts = (financialYear || "").split("-");
+  const ay = fyParts.length === 2
+    ? `${parseInt(fyParts[0]) + 1}-${String(parseInt(fyParts[0]) + 2).slice(2)}`
+    : "2026-27";
+  const fyStart = fyParts.length === 2 ? fyParts[0] : "2025";
+
+  const { data: existing } = await supabase
+    .from("tds_rate_master")
+    .select("section_code")
+    .eq("firm_id", firmId)
+    .eq("assessment_year", ay)
+    .eq("form_type", formType);
+  const existingByUpper = new Map<string, string>();
+  for (const row of existing || []) {
+    const code = String((row as any)?.section_code ?? "");
+    if (code) existingByUpper.set(code.toUpperCase(), code);
+  }
+
+  const toInsert: Record<string, unknown>[] = [];
+  const queuedCanonical = new Set<string>(); // de-dup within this one insert batch
+  for (const raw of distinct) {
+    const already = existingByUpper.get(raw.toUpperCase());
+    if (already) { rewrite.set(raw, already); continue; }
+
+    const seed = findSeedRate(raw, formType);
+    const canonical = seed ? seed.section_code : raw;
+    rewrite.set(raw, canonical);
+    if (queuedCanonical.has(canonical)) continue;
+    queuedCanonical.add(canonical);
+
+    if (seed) {
+      toInsert.push({
+        assessment_year: ay, financial_year: financialYear, form_type: formType,
+        section_code: seed.section_code, section_description: seed.section_description,
+        nature_of_payment: seed.nature_of_payment,
+        threshold_individual: seed.threshold_individual, threshold_company: seed.threshold_company,
+        rate_individual: seed.rate_individual, rate_company: seed.rate_company, rate_no_pan: seed.rate_no_pan,
+        surcharge_applicable: seed.surcharge_applicable, cess_applicable: seed.cess_applicable,
+        is_active: true, effective_from: seed.effective_from, effective_to: seed.effective_to,
+        notes: seed.notes, firm_id: firmId,
+      });
+      warnings.push(`Added ${seed.section_code} (${seed.nature_of_payment || "—"}) to Rate Master using CAflow's standard rate table.`);
+    } else {
+      // A code CAFlow has no standard rate for. Create it anyway — the section
+      // must be SELECTABLE and the record must never be silently unfileable —
+      // but with rate 0 and a note, so the CA is told to verify it rather than
+      // the software guessing a rate it doesn't actually know.
+      toInsert.push({
+        assessment_year: ay, financial_year: financialYear, form_type: formType,
+        section_code: raw, section_description: null, nature_of_payment: null,
+        threshold_individual: 0, threshold_company: 0,
+        rate_individual: 0, rate_company: 0, rate_no_pan: 20,
+        surcharge_applicable: false, cess_applicable: false,
+        is_active: true, effective_from: `${fyStart}-04-01`, effective_to: null,
+        notes: "Auto-created from Genius import — rate/threshold not in CAflow's standard table. Please verify in Rate Master.",
+        firm_id: firmId,
+      });
+      warnings.push(`Added ${raw} to Rate Master as a placeholder (rate 0%) — it isn't in CAflow's standard table. Please verify its rate and threshold in Rate Master.`);
+    }
+  }
+
+  if (toInsert.length > 0) {
+    const { error } = await supabase.from("tds_rate_master")
+      .upsert(toInsert as any[], { onConflict: "assessment_year,form_type,section_code,firm_id" });
+    if (error) {
+      console.warn("[GeniusImport] Failed to auto-create Rate Master section(s):", error.message);
+      warnings.push(`Could not add some section(s) to Rate Master automatically: ${error.message}. Add them manually in Rate Master.`);
+    }
+  }
+
+  return { rewrite, warnings };
+}
+
+export interface RepairResult {
+  challansFixed: number;
+  deducteesFixed: number;
+  warnings: string[];
+}
+
+/**
+ * Repair a filing's ALREADY-STORED challan/deductee rows whose section_code
+ * was corrupted by a past bug, or whose section still has no Rate Master row
+ * — WITHOUT re-importing or duplicating a single record.
+ *
+ * Fixing the importer (ensureRateMasterSections above) stops NEW corruption.
+ * It does nothing for rows a firm already imported before the fix — those
+ * stay broken (blank Section dropdown, "Differs from challan") forever
+ * unless something goes back and repairs the text actually sitting in the
+ * database. Re-importing the same file is not that something: challans dedupe
+ * by Challan Number, but deductees do not, so a second import of an
+ * already-imported file DOUBLES the deductee rows instead of correcting them.
+ *
+ * Safe to call on every filing load: reuses the same canonicalisation
+ * ensureRateMasterSections uses for a fresh import, then rewrites in place
+ * only the rows whose stored text doesn't already match the canonical form —
+ * a filing with nothing to fix costs two reads and zero writes.
+ */
+export async function repairFilingSectionCodes(
+  filingId: string,
+  firmId: string,
+  formType: string,
+  financialYear: string,
+): Promise<RepairResult> {
+  const [{ data: challans }, { data: deductees }] = await Promise.all([
+    supabase.from("tds_challans").select("id, section_code").eq("filing_id", filingId),
+    supabase.from("tds_deductees").select("id, section_code").eq("filing_id", filingId),
+  ]);
+
+  const allCodes = [
+    ...(challans || []).map((c: any) => String(c.section_code ?? "")),
+    ...(deductees || []).map((d: any) => String(d.section_code ?? "")),
+  ];
+  const { rewrite, warnings } = await ensureRateMasterSections(allCodes, firmId, formType, financialYear);
+
+  // Group by the TARGET canonical value, so every row sharing one wrong
+  // spelling is corrected in a single UPDATE instead of one call per row.
+  const groupByCanonical = (rows: { id: string; section_code: string }[]) => {
+    const groups = new Map<string, string[]>();
+    for (const r of rows) {
+      const raw = String(r.section_code ?? "");
+      const canonical = rewrite.get(raw);
+      if (canonical && canonical !== raw) {
+        const ids = groups.get(canonical) ?? [];
+        ids.push(r.id);
+        groups.set(canonical, ids);
+      }
+    }
+    return groups;
+  };
+
+  let challansFixed = 0;
+  for (const [canonical, ids] of groupByCanonical((challans || []) as any[])) {
+    const { error } = await supabase.from("tds_challans")
+      .update({ section_code: canonical }).eq("firm_id", firmId).in("id", ids);
+    if (!error) challansFixed += ids.length;
+  }
+
+  let deducteesFixed = 0;
+  for (const [canonical, ids] of groupByCanonical((deductees || []) as any[])) {
+    const { error } = await supabase.from("tds_deductees")
+      .update({ section_code: canonical }).eq("firm_id", firmId).in("id", ids);
+    if (!error) deducteesFixed += ids.length;
+  }
+
+  return { challansFixed, deducteesFixed, warnings };
 }
 
 /**
@@ -300,6 +704,7 @@ export async function importGeniusXls(
       `Please select the correct client/filing before importing.`
     );
   }
+  validateFinancialYearMatch(parsed.deductor.assessmentYear, financialYear);
   if (parsed.deductor.formNo && parsed.deductor.formNo.toUpperCase() !== formType.toUpperCase()) {
     warnings.push(
       `Form mismatch: file is for ${parsed.deductor.formNo} but filing is for ${formType}. Importing anyway.`
@@ -314,25 +719,21 @@ export async function importGeniusXls(
     throw new Error("No challans found in the file. Nothing to import.");
   }
 
-  // ── Auto-migration: ensure plain "194C" is usable in dropdowns ───────────
-  // Genius uses "194C"; older CAFlow seeds split this into 194C-A / 194C-S.
-  // Three jobs (all idempotent):
-  //   1. Convert any existing challans/deductees with 194C-A or 194C-S to 194C
-  //   2. Delete legacy 194C-A / 194C-S rows from rate_master
-  //   3. Ensure a 194C rate_master row exists for this firm + AY + form_type
-  //      so the dropdown actually has "194C" as a selectable option after import
+  // ── Legacy data migration: 194C-A / 194C-S → 194C ────────────────────────
+  // Genius uses plain "194C"; older CAFlow seeds split this into 194C-A
+  // (Aggregate) / 194C-S (Single transaction) — the same rate, a CAflow-only
+  // schema quirk from before Genius round-trips existed, not something any
+  // Genius file itself would emit. Unrelated to section auto-creation below;
+  // this only cleans up any of THIS firm's already-imported historical rows.
   const firmId = resolvedFirmId || filing.firm_id || null;
   if (firmId) {
     try {
-      // 1. Normalise existing challan/deductee section codes
       await supabase.from("tds_challans")
         .update({ section_code: "194C" })
         .in("section_code", ["194C-A", "194C-S"]);
       await supabase.from("tds_deductees")
         .update({ section_code: "194C" })
         .in("section_code", ["194C-A", "194C-S"]);
-
-      // 2. Drop legacy rate master rows for this firm
       const { data: deletedLegacy } = await supabase.from("tds_rate_master")
         .delete()
         .eq("firm_id", firmId)
@@ -341,51 +742,36 @@ export async function importGeniusXls(
       if (deletedLegacy && deletedLegacy.length > 0) {
         warnings.push(`Merged ${deletedLegacy.length} legacy 194C-A/194C-S rate master row(s) into 194C.`);
       }
-
-      // 3. Ensure 194C exists for this AY + form_type. AY is derived from
-      //    the financial year: "2025-26" -> "2026-27".
-      const fyParts = (financialYear || "").split("-");
-      const ay = fyParts.length === 2
-        ? `${parseInt(fyParts[0]) + 1}-${String(parseInt(fyParts[0]) + 2).slice(2)}`
-        : "2026-27";
-      const { data: existing194C } = await supabase
-        .from("tds_rate_master")
-        .select("id")
-        .eq("firm_id", firmId)
-        .eq("assessment_year", ay)
-        .eq("form_type", formType)
-        .eq("section_code", "194C")
-        .limit(1);
-      if (!existing194C || existing194C.length === 0) {
-        const newRow: any = {
-          assessment_year: ay,
-          financial_year: financialYear,
-          form_type: formType,
-          section_code: "194C",
-          nature_of_payment: "Contractor / Sub-contractor",
-          threshold_individual: 30000,
-          threshold_company: 30000,
-          rate_individual: 1,
-          rate_company: 2,
-          rate_no_pan: 20,
-          surcharge_applicable: false,
-          cess_applicable: false,
-          is_active: true,
-          effective_from: "2025-04-01",
-          effective_to: null,
-          notes: "1% for Ind/HUF, 2% for Others. Threshold: ₹30,000 per single transaction OR ₹1,00,000 aggregate in FY.",
-          firm_id: firmId,
-        };
-        const insertRes = await supabase.from("tds_rate_master").insert(newRow as any);
-        if (insertRes.error) {
-          console.warn("[GeniusImport] Failed to seed 194C rate master row:", insertRes.error.message);
-          warnings.push(`Could not add 194C to rate master: ${insertRes.error.message}. Add it manually in Rate Master.`);
-        } else {
-          warnings.push("Added 194C (Contractor / Sub-contractor) to Rate Master so dropdowns can match it.");
-        }
-      }
     } catch (mErr: any) {
-      console.warn("[GeniusImport] 194C auto-migration skipped:", mErr);
+      console.warn("[GeniusImport] 194C-A/194C-S legacy migration skipped:", mErr);
+    }
+
+    // ── Ensure every section THIS FILE references is usable in dropdowns ────
+    // Generic — covers 194C exactly the way it covers 194J(a), 194J(b),
+    // 206C(1G)(a), or a code CAFlow has never seen. See
+    // ensureRateMasterSections() for why this replaced a 194C-only special case.
+    try {
+      const codesInFile = [
+        ...parsed.challans.map((c) => c.sectionCode),
+        ...parsed.deductees.map((d) => d.sectionCode),
+      ];
+      const { rewrite, warnings: sectionWarnings } =
+        await ensureRateMasterSections(codesInFile, firmId, formType, financialYear);
+      warnings.push(...sectionWarnings);
+      // Apply the rewrite so every inserted record uses the EXACT casing Rate
+      // Master now has for its section — never the file's own casing verbatim,
+      // which is what let a correctly-existing-but-differently-cased Rate
+      // Master row still fail to match.
+      for (const c of parsed.challans) {
+        const mapped = rewrite.get(c.sectionCode);
+        if (mapped) c.sectionCode = mapped;
+      }
+      for (const d of parsed.deductees) {
+        const mapped = rewrite.get(d.sectionCode);
+        if (mapped) d.sectionCode = mapped;
+      }
+    } catch (sErr: any) {
+      console.warn("[GeniusImport] Section auto-creation skipped:", sErr);
     }
   }
 
@@ -446,32 +832,22 @@ export async function importGeniusXls(
     );
   }
 
-  // ── Duplicate detection: Challan Number is globally unique ───────────────
-  // BSR code may legitimately repeat (same bank branch handles many deposits)
-  // but each Challan Number is unique. If a Challan Number already exists in
-  // the DB we DON'T create a new challan — instead we re-use the existing one
-  // and link any deductees from this file under Serial N to the existing
-  // challan's UUID (but inserted with the CURRENT filing_id so they count as
-  // this quarter's utilisation of carry-forward balance).
-  //
-  // Build map: Challan Number (from file) -> existing challan's UUID
-  const existingChallanByNum = new Map<string, { id: string; quarter: string; financial_year: string; form_type: string }>();
-  const numList = Array.from(new Set(parsed.challans.map(c => c.bankChallanNo).filter(Boolean)));
-  if (numList.length > 0) {
-    const { data: existing } = await supabase
-      .from("tds_challans")
-      .select("id, challan_serial_no, bsr_code, quarter, financial_year, form_type")
-      .in("challan_serial_no", numList);
-    (existing || []).forEach((row: any) => {
-      if (row.challan_serial_no && !existingChallanByNum.has(row.challan_serial_no)) {
-        existingChallanByNum.set(String(row.challan_serial_no), {
-          id: String(row.id),
-          quarter: row.quarter,
-          financial_year: row.financial_year,
-          form_type: row.form_type,
-        });
-      }
-    });
+  // Build map: Challan Number (from file) -> existing challan's UUID, scoped
+  // to THIS client AND this financial year. See resolveExistingChallansByNumber()
+  // for why both scopes are load-bearing rather than defensive.
+  const { reusable: existingChallanByNum, yearMismatched } = await resolveExistingChallansByNumber(
+    parsed.challans.map((c) => c.bankChallanNo), filing.client_id, financialYear,
+  );
+
+  if (yearMismatched.length > 0) {
+    const sample = yearMismatched.slice(0, 3)
+      .map((m) => `${m.challanNumber} (already exists for FY ${m.ref.financial_year})`)
+      .join("; ");
+    warnings.push(
+      `Challan Number${yearMismatched.length > 1 ? "s" : ""} already exist for this client under a DIFFERENT financial year — ` +
+      `a challan cannot be carried across financial years, so a NEW challan was created for FY ${financialYear} instead: ` +
+      `${sample}${yearMismatched.length > 3 ? "…" : ""}.`
+    );
   }
 
   const reusedChallans: { fileSerial: number; challanNum: string; from: string }[] = [];

@@ -356,7 +356,12 @@ function buildBSRows(bs: BSRowData): BSDisplayRow[] {
     { kind: "subhead", label: "(2) Current assets" },
     { kind: "item", label: "(a) Current investments",          noteNo: sn(bs.currInvestments.noteNo, bs.currInvestments.cy, bs.currInvestments.py), cy: bs.currInvestments.cy || 0, py: bs.currInvestments.py || 0, indent: 1, code: "BS_CA_CI" },
     { kind: "item", label: "(b) Inventories",                  noteNo: sn(bs.inventories.noteNo, bs.inventories.cy, bs.inventories.py),             cy: bs.inventories.cy || 0,     py: bs.inventories.py || 0,     indent: 1, code: "BS_CA_INV" },
-    { kind: "item", label: "(c) Trade receivables",            noteNo: sn(bs.tradeRec.noteNo, bs.tradeRec.cy, bs.tradeRec.py),                     cy: bs.tradeRec.cy || 0,        py: bs.tradeRec.py || 0,        indent: 1, code: "BS_CA_TR" },
+    // 2026-06-25 (V J Desai) — TR bifurcated on face like TP.
+    // The subhead prints the total (sum of gt6m + Other from the note's
+    // ledger_section map); the two indented sub-lines print the split.
+    { kind: "subhead", label: "(c) Trade receivables", noteNo: sn(bs.tradeRec.noteNo, (bs.tradeRec6mPlus?.cy ?? 0) + (bs.tradeRecOther?.cy ?? 0), (bs.tradeRec6mPlus?.py ?? 0) + (bs.tradeRecOther?.py ?? 0)), indent: 1, code: "BS_CA_TR" },
+    { kind: "item", label: "(i) Outstanding for a period exceeding six months", cy: bs.tradeRec6mPlus?.cy || 0, py: bs.tradeRec6mPlus?.py || 0, indent: 2 },
+    { kind: "item", label: "(ii) Others",                                       cy: bs.tradeRecOther?.cy  || 0, py: bs.tradeRecOther?.py  || 0, indent: 2, code: "BS_CA_TR" },
     { kind: "item", label: "(d) Cash and bank equivalents",    noteNo: sn(bs.cashBank.noteNo, bs.cashBank.cy, bs.cashBank.py),                     cy: bs.cashBank.cy || 0,        py: bs.cashBank.py || 0,        indent: 1, code: "BS_CA_CCE" },
     { kind: "item", label: "(e) Short-term loans and advances",noteNo: sn(bs.stLoans.noteNo, bs.stLoans.cy, bs.stLoans.py),                       cy: bs.stLoans.cy || 0,         py: bs.stLoans.py || 0,         indent: 1, code: "BS_CA_SLA" },
     { kind: "item", label: "(f) Other current assets",         noteNo: sn(bs.otherCurrAssets.noteNo, bs.otherCurrAssets.cy, bs.otherCurrAssets.py), cy: bs.otherCurrAssets.cy || 0, py: bs.otherCurrAssets.py || 0, indent: 1, code: "BS_CA_OCA" },
@@ -3848,7 +3853,24 @@ export default function PipelineFinancialStatements({
         // PPE (ppe) uses the FA grid (not a standard breakup array) — keep raw TB.
         shareCap:        { noteNo: dn("share_capital"),        cy: ncyOf("bs_liab","share_capital","BS_EQ_SC"),              py: npyOf("bs_liab","share_capital","BS_EQ_SC")              },
         reserves:        { noteNo: dn("reserves_surplus"),     cy: ncyOf("bs_liab","reserves_surplus","BS_EQ_RS"),            py: npyOf("bs_liab","reserves_surplus","BS_EQ_RS")            },
-        ltBorrowings:    { noteNo: dn("lt_borrowings"),        cy: ncyOf("bs_liab","lt_borrowings","BS_NCL_LTB"),             py: npyOf("bs_liab","lt_borrowings","BS_NCL_LTB")             },
+        // 2026-06-25 (V J Desai — LT/ST split): subtract the LT-borrowings
+        // st_split sums so the BS face's LT number matches the note total.
+        // ST borrowings (below) gets the same amount ADDED as current maturities.
+        ...(() => {
+          const ltBreakup = ((stage5NotesData?.bs_liab as any)?.lt_borrowings?.breakup ?? []) as any[];
+          const splitCy = ltBreakup.reduce((s, r) => s + (Number(r?.st_split_cy ?? 0) || 0), 0);
+          const splitPy = ltBreakup.reduce((s, r) => s + (Number(r?.st_split_py ?? 0) || 0), 0);
+          // ncyOf returns a NEGATIVE for CR-natural codes; add the split
+          // (positive) so subtracting the split from LT / adding to ST
+          // preserves the FS invariant.
+          const ltCyNeg = ncyOf("bs_liab","lt_borrowings","BS_NCL_LTB");
+          const ltPyNeg = npyOf("bs_liab","lt_borrowings","BS_NCL_LTB");
+          return {
+            ltBorrowings: { noteNo: dn("lt_borrowings"), cy: ltCyNeg + splitCy, py: ltPyNeg + splitPy },
+            _ltBorrowingsSplitCy: splitCy,
+            _ltBorrowingsSplitPy: splitPy,
+          };
+        })(),
         dtLiab:          { noteNo: dn("deferred_tax_liab"),    cy: ncyOf("bs_liab","deferred_tax_liab","BS_NCL_DTL"),         py: npyOf("bs_liab","deferred_tax_liab","BS_NCL_DTL")         },
         // CRITICAL: data keys here MUST match NOTE_ROW_REGISTRY keys in
         // src/lib/notesAutoPopulate.ts. A typo silently routes the lookup
@@ -3861,10 +3883,63 @@ export default function PipelineFinancialStatements({
         //  notes. Fixed by aligning every key to the registry below.)
         otherLtLiab:     { noteNo: dn("other_lt_liab"),        cy: ncyOf("bs_liab","other_lt_liabilities","BS_NCL_OLT"),      py: npyOf("bs_liab","other_lt_liabilities","BS_NCL_OLT")      },
         ltProvisions:    { noteNo: dn("lt_provisions"),        cy: ncyOf("bs_liab","lt_provisions","BS_NCL_LTP"),             py: npyOf("bs_liab","lt_provisions","BS_NCL_LTP")             },
-        stBorrowings:    { noteNo: dn("st_borrowings"),        cy: ncyOf("bs_liab","st_borrowings","BS_CL_STB"),              py: npyOf("bs_liab","st_borrowings","BS_CL_STB")              },
-        tradePayables:   { noteNo: dn("trade_payables") },
-        tradePayMSME:    { cy: 0, py: 0 },  // ageing MSME split kept at 0; full TP total below
-        tradePayOthers:  { cy: ncyOf("bs_liab","trade_payables","BS_CL_TP"),       py: npyOf("bs_liab","trade_payables","BS_CL_TP")       },
+        // 2026-06-25 (V J Desai — LT/ST split): ST borrowings adds the
+        // LT-borrowings split as current maturities. Split sum is (positive
+        // rupees); ncyOf returns NEGATIVE for CR-natural codes, so
+        // subtracting the (positive) split from a (negative) figure
+        // makes it "more negative" → negL flips it to a bigger positive
+        // on the face. i.e. ST increases by the split amount.
+        ...(() => {
+          const ltBreakup = ((stage5NotesData?.bs_liab as any)?.lt_borrowings?.breakup ?? []) as any[];
+          const splitCy = ltBreakup.reduce((s, r) => s + (Number(r?.st_split_cy ?? 0) || 0), 0);
+          const splitPy = ltBreakup.reduce((s, r) => s + (Number(r?.st_split_py ?? 0) || 0), 0);
+          const stCyNeg = ncyOf("bs_liab","st_borrowings","BS_CL_STB");
+          const stPyNeg = npyOf("bs_liab","st_borrowings","BS_CL_STB");
+          return {
+            stBorrowings: { noteNo: dn("st_borrowings"), cy: stCyNeg - splitCy, py: stPyNeg - splitPy },
+          };
+        })(),
+        // 2026-06-25 (V J Desai — TP MSME/Others must reflect the note's
+        // per-ledger bifurcation on the BS face): read
+        // bs_liab.trade_payables.breakup + .ledger_section (populated by
+        // the ⋮ menu inside the Trade Payables note) and split MSME vs
+        // Others accordingly. Default section for an unclassified ledger
+        // is "others" — matches the Schedule III convention when MSME
+        // vendors haven't been flagged.
+        //
+        // 2026-06-25 (sign-fix): breakup rows store amount_cy / amount_py
+        // as POSITIVE (already sign-corrected at note-render time), but
+        // ncyOf negates CR-natural codes so the face's negL(v) = -v flip
+        // renders them as positive. Our sums must match that convention
+        // — hence the leading minus. Without this, the face was showing
+        // (2,290) / (7,63,225) style parenthesised negatives (V J Desai
+        // screenshot).
+        ...(() => {
+          const tpNote     = (stage5NotesData?.bs_liab as any)?.trade_payables ?? {};
+          const breakup    = Array.isArray(tpNote.breakup) ? tpNote.breakup : [];
+          const sectionMap = tpNote.ledger_section ?? {};
+          const sumBy = (sec: "msme" | "others", field: "amount_cy" | "amount_py"): number =>
+            breakup.reduce((s: number, r: any) => {
+              const name = ((r?.linked_ledger || r?.description) ?? "").trim();
+              const resolved = sectionMap[name] ?? "others";
+              if (resolved !== sec) return s;
+              const n = Number(r?.[field] ?? 0);
+              return s + (Number.isFinite(n) ? n : 0);
+            }, 0);
+          const anyBreakup = breakup.length > 0;
+          const tpTotalCy  = ncyOf("bs_liab", "trade_payables", "BS_CL_TP");
+          const tpTotalPy  = npyOf("bs_liab", "trade_payables", "BS_CL_TP");
+          // negate so the face's negL flip renders the amount positive.
+          const msmeCy   = anyBreakup ? -sumBy("msme",   "amount_cy") : 0;
+          const msmePy   = anyBreakup ? -sumBy("msme",   "amount_py") : 0;
+          const othersCy = anyBreakup ? -sumBy("others", "amount_cy") : tpTotalCy;
+          const othersPy = anyBreakup ? -sumBy("others", "amount_py") : tpTotalPy;
+          return {
+            tradePayables:  { noteNo: dn("trade_payables") },
+            tradePayMSME:   { cy: msmeCy,   py: msmePy   },
+            tradePayOthers: { cy: othersCy, py: othersPy },
+          };
+        })(),
         otherCurrLiab:   { noteNo: dn("other_current_liab"),   cy: ncyOf("bs_liab","other_curr_liab","BS_CL_OCL"),            py: npyOf("bs_liab","other_curr_liab","BS_CL_OCL")            },
         stProvisions:    { noteNo: dn("st_provisions"),        cy: ncyOf("bs_liab","st_provisions","BS_CL_STP"),              py: npyOf("bs_liab","st_provisions","BS_CL_STP")              },
         // Bug 6 — PPE prefers FA grid Net Block total over raw TB.
@@ -3872,13 +3947,67 @@ export default function PipelineFinancialStatements({
         ppe:             { noteNo: dn("ppe"),                  cy: getFAGridNetBlockTotal(stage5NotesData ?? null, "cy") ?? cyOf("BS_NCA_FA"),  py: getFAGridNetBlockTotal(stage5NotesData ?? null, "py") ?? pyOf("BS_NCA_FA") },
         ncInvestments:   { noteNo: dn("nc_investments"),       cy: ncyOf("bs_asset","nc_investments","BS_NCA_INV"),           py: npyOf("bs_asset","nc_investments","BS_NCA_INV")           },
         dtAssets:        { noteNo: dn("deferred_tax_assets"),  cy: ncyOf("bs_asset","deferred_tax_asset","BS_NCA_DTA"),       py: npyOf("bs_asset","deferred_tax_asset","BS_NCA_DTA")       },
-        ltLoans:         { noteNo: dn("lt_loans_advances"),    cy: ncyOf("bs_asset","lt_loans","BS_NCA_LLA"),                 py: npyOf("bs_asset","lt_loans","BS_NCA_LLA")                 },
+        // 2026-06-25 (V J Desai — LT/ST split): LT loans subtracts the
+        // st_split; ST loans (below) adds it. BS_NCA_LLA is DR-natural,
+        // ncyOf returns POSITIVE — so a straight subtraction on LT and
+        // addition on ST does the right thing at the face.
+        ...(() => {
+          const ltBreakup = ((stage5NotesData?.bs_asset as any)?.lt_loans?.breakup ?? []) as any[];
+          const splitCy = ltBreakup.reduce((s, r) => s + (Number(r?.st_split_cy ?? 0) || 0), 0);
+          const splitPy = ltBreakup.reduce((s, r) => s + (Number(r?.st_split_py ?? 0) || 0), 0);
+          const ltCy = ncyOf("bs_asset","lt_loans","BS_NCA_LLA");
+          const ltPy = npyOf("bs_asset","lt_loans","BS_NCA_LLA");
+          return {
+            ltLoans: { noteNo: dn("lt_loans_advances"), cy: ltCy - splitCy, py: ltPy - splitPy },
+            _ltLoansSplitCy: splitCy,
+            _ltLoansSplitPy: splitPy,
+          };
+        })(),
         otherNcAssets:   { noteNo: dn("other_nc_assets"),      cy: ncyOf("bs_asset","other_nc_assets","BS_NCA_ONA"),          py: npyOf("bs_asset","other_nc_assets","BS_NCA_ONA")          },
         currInvestments: { noteNo: dn("current_investments"),  cy: ncyOf("bs_asset","curr_investments","BS_CA_CI"),           py: npyOf("bs_asset","curr_investments","BS_CA_CI")           },
         inventories:     { noteNo: dn("inventories"),          cy: ncyOf("bs_asset","inventories","BS_CA_INV"),               py: npyOf("bs_asset","inventories","BS_CA_INV")               },
-        tradeRec:        { noteNo: dn("trade_receivables"),    cy: ncyOf("bs_asset","trade_receivables","BS_CA_TR"),          py: npyOf("bs_asset","trade_receivables","BS_CA_TR")          },
+        // 2026-06-25 (V J Desai — TR >6m / Other must reflect the note's
+        // per-ledger bifurcation on the BS face, mirror of the TP treatment).
+        // Default section for an unclassified ledger is "other". Fallback
+        // when breakup is empty: Other = full TR total, gt6m = 0.
+        ...(() => {
+          const trNote     = (stage5NotesData?.bs_asset as any)?.trade_receivables ?? {};
+          const breakup    = Array.isArray(trNote.breakup) ? trNote.breakup : [];
+          const sectionMap = trNote.ledger_section ?? {};
+          const sumBy = (sec: "gt6m" | "other", field: "amount_cy" | "amount_py"): number =>
+            breakup.reduce((s: number, r: any) => {
+              const name = ((r?.linked_ledger || r?.description) ?? "").trim();
+              const resolved = sectionMap[name] ?? "other";
+              if (resolved !== sec) return s;
+              const n = Number(r?.[field] ?? 0);
+              return s + (Number.isFinite(n) ? n : 0);
+            }, 0);
+          const anyBreakup = breakup.length > 0;
+          const trTotalCy  = ncyOf("bs_asset", "trade_receivables", "BS_CA_TR");
+          const trTotalPy  = npyOf("bs_asset", "trade_receivables", "BS_CA_TR");
+          const gt6mCy   = anyBreakup ? sumBy("gt6m",  "amount_cy") : 0;
+          const gt6mPy   = anyBreakup ? sumBy("gt6m",  "amount_py") : 0;
+          const otherCy  = anyBreakup ? sumBy("other", "amount_cy") : trTotalCy;
+          const otherPy  = anyBreakup ? sumBy("other", "amount_py") : trTotalPy;
+          return {
+            tradeRec:       { noteNo: dn("trade_receivables"), cy: trTotalCy, py: trTotalPy },
+            tradeRec6mPlus: { cy: gt6mCy,  py: gt6mPy  },
+            tradeRecOther:  { cy: otherCy, py: otherPy },
+          };
+        })(),
         cashBank:        { noteNo: dn("cash_bank"),            cy: ncyOf("bs_asset","cash_bank","BS_CA_CCE"),                 py: npyOf("bs_asset","cash_bank","BS_CA_CCE")                 },
-        stLoans:         { noteNo: dn("st_loans_advances"),    cy: ncyOf("bs_asset","st_loans","BS_CA_SLA"),                  py: npyOf("bs_asset","st_loans","BS_CA_SLA")                  },
+        // 2026-06-25 (V J Desai — LT/ST split): ST loans adds the LT-loans
+        // st_split as current maturities. Asset-side, straightforward add.
+        ...(() => {
+          const ltBreakup = ((stage5NotesData?.bs_asset as any)?.lt_loans?.breakup ?? []) as any[];
+          const splitCy = ltBreakup.reduce((s, r) => s + (Number(r?.st_split_cy ?? 0) || 0), 0);
+          const splitPy = ltBreakup.reduce((s, r) => s + (Number(r?.st_split_py ?? 0) || 0), 0);
+          const stCy = ncyOf("bs_asset","st_loans","BS_CA_SLA");
+          const stPy = npyOf("bs_asset","st_loans","BS_CA_SLA");
+          return {
+            stLoans: { noteNo: dn("st_loans_advances"), cy: stCy + splitCy, py: stPy + splitPy },
+          };
+        })(),
         otherCurrAssets: { noteNo: dn("other_current_assets"), cy: ncyOf("bs_asset","other_curr_assets","BS_CA_OCA"),         py: npyOf("bs_asset","other_curr_assets","BS_CA_OCA")         },
         sigPolicies:     { noteNo: 1 }, // Accounting Policies — always Note 1
       };
