@@ -981,7 +981,7 @@ export function TdsValidateFinalise({
         ...(tallyStatus.applicable && tallyStatus.getReport ? [tallyStatus.getReport()] : []),
       ];
       if (fmt === "xlsx") await downloadWorkbook(buildOverviewWorkbook(o, reportMeta, stageReports), reportFileName(reportMeta, "Validation Overview", "xlsx"));
-      else await exportOverviewPdf(o, reportMeta);
+      else await exportOverviewPdf(o, reportMeta, stageReports);
     } catch (e: any) { toast({ title: "Export failed", description: e?.message || String(e), variant: "destructive" }); }
     setExportingOverview(false);
   };

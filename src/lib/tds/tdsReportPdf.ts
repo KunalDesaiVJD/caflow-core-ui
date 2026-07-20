@@ -21,6 +21,39 @@ function tableHtml(rows: Record<string, unknown>[], emptyNote?: string): string 
   }</tbody></table>`;
 }
 
+/** Colour a summary metric BY MEANING — the same rule tdsReportExcel.ts uses
+ *  (metricColour there), so a metric never looks "fine" in one export and
+ *  "failing" in the other. Matched/Verified green; Mismatched/Issues/Missing
+ *  red ONLY when non-zero (a clean "0" is good news, not a warning); Overridden/
+ *  Mapped blue (a decision was made, not an error); anything else plain. */
+function metricColour(label: string, value: string | number): string {
+  const n = typeof value === "number" ? value : Number(value);
+  const l = label.toLowerCase();
+  if (/matched$|^verified/.test(l) && !/mis/.test(l)) return "#107C41";
+  if (/mismatch|issue|missing|extra|unresolved/.test(l)) return Number.isFinite(n) && n > 0 ? "#C00000" : "#107C41";
+  if (/overrid|mapped/.test(l)) return "#2F5496";
+  return "#111";
+}
+
+function cardsHtml(summary: { label: string; value: string | number }[]): string {
+  return `<div class="cards">${summary.map((s) =>
+    `<div class="card"><div class="v" style="color:${metricColour(s.label, s.value)};">${esc(s.value)}</div><div class="l">${esc(s.label)}</div></div>`,
+  ).join("")}</div>`;
+}
+
+/** A report's detail tables — one titled, counted table per section. Shared by
+ *  the single-stage PDF and the combined Overview PDF so a table never renders
+ *  differently (or goes missing) depending on which button produced it. */
+function sectionsHtml(report: StageReport): string {
+  return report.sections.map((sec) =>
+    `<h2>${esc(sec.title)} <span class="count">(${sec.rows.length})</span></h2>${tableHtml(sec.rows, sec.emptyNote)}`,
+  ).join("");
+}
+
+function notesHtml(notes?: string[]): string {
+  return notes?.length ? `<div class="notes"><b>Notes</b><ul>${notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul></div>` : "";
+}
+
 /** Build the printable HTML for a report (also used by the Overview). */
 export function stageReportHtml(report: StageReport, meta: ReportMeta, generatedAt: string): string {
   return `
@@ -28,9 +61,9 @@ export function stageReportHtml(report: StageReport, meta: ReportMeta, generated
       <h1>${esc(report.title)}</h1>
       ${report.subtitle ? `<p class="sub">${esc(report.subtitle)}</p>` : ""}
       <table class="meta">${metaRows(meta, generatedAt).map((m) => `<tr><th>${esc(m.Field)}</th><td>${esc(m.Value)}</td></tr>`).join("")}</table>
-      <div class="cards">${report.summary.map((s) => `<div class="card"><div class="v">${esc(s.value)}</div><div class="l">${esc(s.label)}</div></div>`).join("")}</div>
-      ${report.notes?.length ? `<div class="notes"><b>Notes</b><ul>${report.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul></div>` : ""}
-      ${report.sections.map((sec) => `<h2>${esc(sec.title)} <span class="count">(${sec.rows.length})</span></h2>${tableHtml(sec.rows, sec.emptyNote)}`).join("")}
+      ${cardsHtml(report.summary)}
+      ${notesHtml(report.notes)}
+      ${sectionsHtml(report)}
     </div>`;
 }
 
@@ -91,22 +124,34 @@ export async function exportStagePdf(report: StageReport, meta: ReportMeta): Pro
 
 // ── Overview — all three stages in one document ──────────────────────────────
 
-export async function exportOverviewPdf(o: OverviewReport, meta: ReportMeta): Promise<void> {
+/**
+ * `stageReports` carries each RUN stage's real records/reasons — exactly what
+ * `buildOverviewWorkbook` receives as its detail sheets (one per stage that ran).
+ * Without it the PDF only ever showed the at-a-glance counts, never the actual
+ * mismatched/issue rows a CA needs to act on — the Excel export always had both,
+ * so the two files disagreed on content, not just layout.
+ */
+export async function exportOverviewPdf(o: OverviewReport, meta: ReportMeta, stageReports: StageReport[]): Promise<void> {
   const generatedAt = reportStamp();
   const html = `
     <div class="doc">
       <h1>TDS Validation — Overview Report</h1>
       <p class="sub">Stage 1 (data reconciliation) · Stage 2 (PAN verification) · Stage 3 (Tally ledger)</p>
       <table class="meta">${metaRows(meta, generatedAt).map((m) => `<tr><th>${esc(m.Field)}</th><td>${esc(m.Value)}</td></tr>`).join("")}</table>
-      <div class="cards">${o.overall.map((s) => `<div class="card"><div class="v">${esc(s.value)}</div><div class="l">${esc(s.label)}</div></div>`).join("")}</div>
+      ${cardsHtml(o.overall)}
       <h2>Final Validation Status</h2>
       <p style="font-size:13px;font-weight:bold;color:${o.ready ? "#047857" : "#b45309"};margin:2px 0 10px;">${esc(o.finalStatus)}</p>
       ${o.stages.map((s) => `
         <div class="stage-block">
           <h2>${esc(s.title)} <span class="count">— ${esc(s.status)}</span></h2>
-          ${s.applicable
-            ? `<div class="cards">${s.summary.map((x) => `<div class="card"><div class="v">${esc(x.value)}</div><div class="l">${esc(x.label)}</div></div>`).join("")}</div>`
-            : `<p class="empty">Not applicable for this return — no file imported for this stage.</p>`}
+          ${s.applicable ? cardsHtml(s.summary) : `<p class="empty">Not applicable for this return — no file imported for this stage.</p>`}
+        </div>`).join("")}
+      ${stageReports.map((report) => `
+        <div class="stage-block">
+          <h1 style="font-size:13px;margin-top:18px;padding-top:10px;border-top:2px solid #333;">${esc(report.title)}</h1>
+          ${report.subtitle ? `<p class="sub">${esc(report.subtitle)}</p>` : ""}
+          ${notesHtml(report.notes)}
+          ${sectionsHtml(report)}
         </div>`).join("")}
     </div>`;
   await printHtml(html, reportFileName(meta, "Validation Overview", "pdf"));

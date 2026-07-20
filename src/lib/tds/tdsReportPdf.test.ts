@@ -24,7 +24,7 @@ import { describe, it, expect, vi } from "vitest";
 // implementation — by the time the outer export*Pdf() call resolves, the host has
 // already been detached and `.parentElement` reads back null either way.
 const { exportToPdfMock, snapshots } = vi.hoisted(() => {
-  const snapshots: { hostPosition: string; parentPosition: string | null; parentIsBody: boolean; parentParentIsBody: boolean }[] = [];
+  const snapshots: { hostPosition: string; parentPosition: string | null; parentIsBody: boolean; parentParentIsBody: boolean; html: string }[] = [];
   const exportToPdfMock = vi.fn((el: HTMLElement) => {
     const parent = el.parentElement;
     snapshots.push({
@@ -32,6 +32,7 @@ const { exportToPdfMock, snapshots } = vi.hoisted(() => {
       parentPosition: parent ? parent.style.position : null,
       parentIsBody: parent === document.body,
       parentParentIsBody: parent?.parentElement === document.body,
+      html: el.innerHTML,
     });
     return Promise.resolve(undefined);
   });
@@ -47,8 +48,8 @@ const meta: ReportMeta = { client: "ACCURATE PMS PVT. LTD.", tan: "AHMA13819B", 
 const sampleReport: StageReport = {
   title: "Stage 3 - Tally Ledger Reconciliation",
   subtitle: "Office Data vs the imported Tally ledger PDFs",
-  summary: [{ label: "Total", value: 89 }, { label: "Matched", value: 40 }],
-  sections: [{ title: "Matched", rows: [{ Party: "A" }], emptyNote: "None" }],
+  summary: [{ label: "Total", value: 89 }, { label: "Matched", value: 40 }, { label: "Mismatched", value: 9 }, { label: "Overridden", value: 0 }],
+  sections: [{ title: "Mismatched", rows: [{ "Office Party": "LALITKUMAR MOHANBHAI PATEL", Result: "Ledger Entry Not Found" }], emptyNote: "None" }],
 };
 
 const sampleOverview: OverviewReport = {
@@ -84,7 +85,7 @@ describe("tdsReportPdf — the html2pdf source element stays in normal flow", ()
 
   it("exportOverviewPdf hands html2pdf a non-fixed, non-absolute host", async () => {
     exportToPdfMock.mockClear();
-    await exportOverviewPdf(sampleOverview, meta);
+    await exportOverviewPdf(sampleOverview, meta, [sampleReport]);
     assertHostIsSafeForHtml2pdf();
   });
 
@@ -101,5 +102,51 @@ describe("tdsReportPdf — the html2pdf source element stays in normal flow", ()
     const before = document.body.childElementCount;
     await expect(exportStagePdf(sampleReport, meta)).rejects.toThrow("html2canvas failed");
     expect(document.body.childElementCount).toBe(before);
+  });
+});
+
+describe("tdsReportPdf — Overview carries each stage's real rows, not just its counts", () => {
+  // Regression for a real reported bug: the Excel Overview export had 4 sheets
+  // (Overview + a detail sheet per stage that ran, ~300 rows of actual records),
+  // but the PDF Overview only ever rendered the summary-card counts — the two
+  // "same" exports disagreed on CONTENT, not just layout. exportOverviewPdf now
+  // takes the same `stageReports` buildOverviewWorkbook already receives.
+  it("includes each stage report's detail table rows in the rendered HTML", async () => {
+    exportToPdfMock.mockClear();
+    await exportOverviewPdf(sampleOverview, meta, [sampleReport]);
+    const html = snapshots[snapshots.length - 1].html;
+    expect(html).toContain("LALITKUMAR MOHANBHAI PATEL");
+    expect(html).toContain("Ledger Entry Not Found");
+    expect(html).toContain(sampleReport.title);
+  });
+
+  it("renders nothing extra when no stage has run yet", async () => {
+    exportToPdfMock.mockClear();
+    await exportOverviewPdf(sampleOverview, meta, []);
+    const html = snapshots[snapshots.length - 1].html;
+    expect(html).not.toContain("LALITKUMAR");
+  });
+});
+
+describe("tdsReportPdf — summary cards are coloured BY MEANING, matching the Excel export", () => {
+  it("colours a non-zero Mismatched/Issues count red, not the same as a clean one", async () => {
+    exportToPdfMock.mockClear();
+    await exportStagePdf(sampleReport, meta); // Mismatched: 9
+    const html = snapshots[snapshots.length - 1].html;
+    expect(html).toMatch(/color:#C00000;">9</);
+  });
+
+  it("colours a zero Overridden/Mismatched count green or neutral, never red", async () => {
+    exportToPdfMock.mockClear();
+    await exportStagePdf(sampleReport, meta); // Overridden: 0
+    const html = snapshots[snapshots.length - 1].html;
+    expect(html).not.toMatch(/color:#C00000;">0</);
+  });
+
+  it("colours Matched green", async () => {
+    exportToPdfMock.mockClear();
+    await exportStagePdf(sampleReport, meta); // Matched: 40
+    const html = snapshots[snapshots.length - 1].html;
+    expect(html).toMatch(/color:#107C41;">40</);
   });
 });
