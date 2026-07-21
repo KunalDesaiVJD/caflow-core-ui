@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } fr
 import { supabase } from "@/integrations/supabase/client";
 import { isFilingTdsCompliant } from "@/lib/tdsQuarter";
 import { isPanException } from "@/lib/tdsPanVerification";
+import { extractAckNumberFromFile } from "@/lib/tds/ackPdf";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -106,7 +107,7 @@ export type KpiStatusGroup = "all" | "returns-due" | "reviewed" | "filed" | "pro
 
 const KPI_STATUS_GROUP_LABELS: Record<Exclude<KpiStatusGroup, "all">, string> = {
   "returns-due": "Returns Due",
-  reviewed: "Reviewed",
+  reviewed: "Under Review",
   filed: "Filed / Submitted",
   processed: "Processed / Accepted",
   nil: "NIL Returns",
@@ -183,6 +184,13 @@ const FILING_STATUS_COLORS: Record<string, string> = {
   "Filed": "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
   "Processed": "bg-emerald-200 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200",
 };
+
+// Display-only rename: the STORED/compared work_status value stays "Reviewed"
+// (zero DB migration, zero risk to the many === "Reviewed" comparisons in
+// handleStatusChange/handleBulkAction/filtering below) — only what the user
+// SEES changes, to "Under Review".
+const FILING_STATUS_LABELS: Record<string, string> = { "Reviewed": "Under Review" };
+const statusLabel = (s: string): string => FILING_STATUS_LABELS[s] ?? s;
 
 export const getDueDate = (fy: string, quarter: string): Date => {
   const fyStart = parseInt(fy.split("-")[0]);
@@ -418,16 +426,16 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   const [statusColWidth, setStatusColWidth] = useState(180);
 
   // Sum of every OTHER column's explicit width (checkbox 40 + Status
-  // (dynamic) + Filing Date 160 + Ack No 160 + Validate & Finalise 224 +
-  // Prepared By 112 + Filed By 112 + Actions 100) plus Client's own
-  // min-w-[260px] floor. This is now a
+  // (dynamic) + Filing Date 184 [160 + extra pl-6 gap after Status] + Ack No
+  // 160 + Validate & Finalise 224 + Prepared By 112 + Filed By 112 + Actions
+  // 100) plus Client's own min-w-[220px] floor. This is now a
   // MINIMUM width, not a pinned total: the <Table> itself stretches to 100%
   // of its container, and Client — the only column left without an explicit
   // width — deterministically absorbs all width beyond this sum per the
   // table-layout:fixed algorithm. Below this minimum the shadcn Table's own
   // overflow-auto wrapper kicks in with horizontal scroll instead of
   // squeezing columns below what they need.
-  const TABLE_MIN_WIDTH = 40 + 260 + statusColWidth + 160 + 160 + 224 + 112 + 112 + 100;
+  const TABLE_MIN_WIDTH = 40 + 220 + statusColWidth + 184 + 160 + 224 + 112 + 112 + 100;
 
   useLayoutEffect(() => {
     const statusEl = statusMeasureRef.current;
@@ -441,7 +449,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     const STATUS_PADDING = 34 + 16 + 8;
     let maxStatus = 0;
     for (const text of FILING_STATUSES) {
-      statusEl.textContent = text;
+      statusEl.textContent = statusLabel(text);
       maxStatus = Math.max(maxStatus, statusEl.getBoundingClientRect().width);
     }
     setStatusColWidth(Math.ceil(maxStatus) + STATUS_PADDING);
@@ -603,6 +611,30 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       next.set(filing.id, insertResult.data as TdsAckFile);
       return next;
     });
+    // g. Auto-fill Ack No. from the receipt's own printed "e-Filing
+    // Acknowledgement Number" — only when the field is still empty, so this
+    // never clobbers a value the user already typed in by hand. Extraction
+    // failure (e.g. a differently formatted PDF) is silent: the user can
+    // still fill it in manually, same as before this feature existed.
+    if (!filing.acknowledgment_number) {
+      try {
+        const ackNo = await extractAckNumberFromFile(file);
+        if (ackNo) {
+          await supabase.from("tds_filings").update({
+            acknowledgment_number: ackNo,
+            last_updated_by: user?.id,
+            last_updated_at: new Date().toISOString(),
+          }).eq("id", filing.id);
+          fetchFilings();
+          onFilingsChanged?.();
+          toast({ title: '✅ ACK file uploaded', description: `Ack No. auto-filled: ${ackNo}` });
+          setAckUploading(null);
+          return;
+        }
+      } catch (e) {
+        console.log('Ack number extraction failed:', e);
+      }
+    }
     toast({ title: '✅ ACK file uploaded' });
     setAckUploading(null);
   };
@@ -883,7 +915,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
         <td style="border:1px solid #ccc;padding:6px;font-size:12px">${f.tds_forms?.join(", ") || "—"}</td>
         <td style="border:1px solid #ccc;padding:6px;font-size:12px">${f.quarter}</td>
         <td style="border:1px solid #ccc;padding:6px;font-size:12px">${f.financial_year}</td>
-        <td style="border:1px solid #ccc;padding:6px;font-size:12px">${f.work_status}</td>
+        <td style="border:1px solid #ccc;padding:6px;font-size:12px">${statusLabel(f.work_status)}</td>
         <td style="border:1px solid #ccc;padding:6px;font-size:12px">${format(getDueDate(f.financial_year, f.quarter), "dd/MM/yyyy")}</td>
         <td style="border:1px solid #ccc;padding:6px;font-size:12px">${f.date_of_filing ? format(new Date(f.date_of_filing), "dd/MM/yyyy") : "—"}</td>
         <td style="border:1px solid #ccc;padding:6px;font-size:12px">${f.acknowledgment_number || "—"}</td>
@@ -1012,9 +1044,9 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                     onCheckedChange={toggleSelectAll}
                   />
                 </TableHead>
-                <TableHead className="min-w-[260px] sticky left-0 bg-background z-10">Client</TableHead>
+                <TableHead className="min-w-[220px] sticky left-0 bg-background z-10">Client</TableHead>
                 <TableHead style={{ width: statusColWidth, minWidth: statusColWidth }}>Status</TableHead>
-                <TableHead className="w-40">Filing Date</TableHead>
+                <TableHead className="w-[184px] pl-6">Filing Date</TableHead>
                 <TableHead className="w-40">Ack No</TableHead>
                 <TableHead className="w-56">Validate &amp; Finalise</TableHead>
                 <TableHead className="w-28">Prepared By</TableHead>
@@ -1092,7 +1124,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                     </TableCell>
                     <TableCell>
                       {archived ? (
-                        <Badge className={cn("text-xs", FILING_STATUS_COLORS[f.work_status] || "bg-muted")}>{f.work_status}</Badge>
+                        <Badge className={cn("text-xs", FILING_STATUS_COLORS[f.work_status] || "bg-muted")}>{statusLabel(f.work_status)}</Badge>
                       ) : (
                         <Select value={f.work_status} onValueChange={v => handleStatusChange(f, v)}>
                           {/* Colour the TRIGGER itself (not a smaller badge floating
@@ -1105,7 +1137,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                             className={cn("h-7 text-xs font-medium border-0", FILING_STATUS_COLORS[f.work_status] || "bg-muted")}
                             style={{ width: statusColWidth }}
                           >
-                            <span className="truncate">{f.work_status}</span>
+                            <span className="truncate">{statusLabel(f.work_status)}</span>
                           </SelectTrigger>
                           <SelectContent>
                             {FILING_STATUSES.map(s => {
@@ -1113,7 +1145,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                               return (
                                 <SelectItem key={s} value={s} disabled={blocked}>
                                   <span className={cn(blocked && "text-muted-foreground")}>
-                                    {s}{blocked && " (complete Validate & Finalise first)"}
+                                    {statusLabel(s)}{blocked && " (complete Validate & Finalise first)"}
                                   </span>
                                 </SelectItem>
                               );
@@ -1122,7 +1154,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                         </Select>
                       )}
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="pl-6">
                       {/* Filing Date is fully system-managed — auto-set to today when
                           status becomes Filed, auto-cleared on reverting away from it.
                           Never manually editable, so no onBlur/save handler here. */}
@@ -1146,8 +1178,13 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                         const ackFile = ackFiles.get(f.id);
                         return (
                           <div className="space-y-1">
-                            {/* Ack No — editable unless Filed */}
+                            {/* Ack No — editable unless Filed. Keyed on the value itself so
+                                an auto-fill from the uploaded ACK PDF (which updates
+                                f.acknowledgment_number from outside this input) forces a
+                                remount and actually shows up — defaultValue alone only
+                                applies on first mount and won't reflect later prop changes. */}
                             <Input
+                              key={f.acknowledgment_number || "empty"}
                               className={cn("h-7 w-32 text-xs", isFiledLocked && "bg-muted cursor-not-allowed opacity-70")}
                               defaultValue={f.acknowledgment_number || ""}
                               disabled={isFiledLocked}

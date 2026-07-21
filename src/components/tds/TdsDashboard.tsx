@@ -241,7 +241,7 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
       label: "Returns Due", value: stats.returnsDue, icon: Clock, color: "text-amber-600", bg: "bg-amber-50 dark:bg-amber-950/30", statusGroup: "returns-due",
       tooltip: "Counts pending returns, not clients. A client may have multiple pending returns (different TANs/forms), so this count can exceed Active TDS Clients.",
     },
-    { label: "Reviewed", value: stats.reviewed, icon: CheckCheck, color: "text-violet-600", bg: "bg-violet-50 dark:bg-violet-950/30", statusGroup: "reviewed" },
+    { label: "Under Review", value: stats.reviewed, icon: CheckCheck, color: "text-violet-600", bg: "bg-violet-50 dark:bg-violet-950/30", statusGroup: "reviewed" },
     { label: "Filed / Submitted", value: stats.filed, icon: CheckCircle2, color: "text-emerald-600", bg: "bg-emerald-50 dark:bg-emerald-950/30", statusGroup: "filed" },
     { label: "Processed / Accepted", value: stats.processed, icon: FileCheck, color: "text-emerald-700", bg: "bg-emerald-100 dark:bg-emerald-900/40", statusGroup: "processed" },
     { label: "NIL Returns", value: stats.nil, icon: MinusCircle, color: "text-teal-600", bg: "bg-teal-50 dark:bg-teal-950/30", statusGroup: "nil" },
