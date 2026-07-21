@@ -42,6 +42,9 @@ interface Props {
   clientName?: string;
   resolveFirmId: () => Promise<string | null>; disabled?: boolean;
   onStatusChange?: (s: TallyStageStatus) => void;
+  // Called after any real Stage-3 activity (a completed reconciliation run)
+  // so the parent can auto-advance the filing out of "Not Started".
+  onActivity?: () => void;
 }
 
 interface ResultRow {
@@ -144,7 +147,7 @@ const mappingOffer = (r: ResultRow): string | null => {
   return cmp === "match" || cmp === "unknown" ? null : r.tally_party;
 };
 
-export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, clientName, resolveFirmId, disabled, onStatusChange }: Props) {
+export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, clientName, resolveFirmId, disabled, onStatusChange, onActivity }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
   const [office, setOffice] = useState<OfficeTxn[]>([]);
@@ -403,10 +406,10 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
 
   const runValidation = useCallback(async () => {
     if (!filing || !batches.length || validating) return; setValidating(true);
-    try { const a = await runAudit(filing.id); const m = a.filter((r) => r.result === "Matched").length; toast({ title: "Stage 3 · Tally reconciliation complete", description: `${m} matched · ${a.length - m} to review across ${a.length} office record(s)` }); }
+    try { const a = await runAudit(filing.id); const m = a.filter((r) => r.result === "Matched").length; toast({ title: "Stage 3 · Tally reconciliation complete", description: `${m} matched · ${a.length - m} to review across ${a.length} office record(s)` }); onActivity?.(); }
     catch (e: any) { toast({ title: "Reconciliation failed", description: e.message, variant: "destructive" }); }
     setValidating(false);
-  }, [filing, batches, validating, runAudit, toast]);
+  }, [filing, batches, validating, runAudit, toast, onActivity]);
 
   /** Save a party mapping (office name ↔ ledger party) → re-run.
    *

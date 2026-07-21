@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
+import { markUnderProcessIfNotStarted } from "@/lib/tds/filingActivity";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -292,6 +293,16 @@ export function TdsValidateFinalise({
   const [results, setResults] = useState<ReconResult[] | null>(null);
   const [userMap, setUserMap] = useState<Record<string, string>>({});
 
+  // Any Validate & Finalise activity (Stage 1 import/compare here, or Stage
+  // 2/3 below via the onActivity prop) auto-advances a fresh filing out of
+  // "Not Started" — mirrors the same helper Data Entry uses, so the Status
+  // dropdown never needs a manual nudge just because work has begun.
+  const bumpUnderProcess = useCallback(async () => {
+    if (!filing) return;
+    const flipped = await markUnderProcessIfNotStarted(filing.id, filing.work_status, user?.id);
+    if (flipped) setFiling((prev: any) => (prev ? { ...prev, work_status: "Under Process" } : prev));
+  }, [filing, user?.id]);
+
   const [importing, setImporting] = useState(false);
   const [importStage, setImportStage] = useState<string>("");
   const [importPct, setImportPct] = useState(0);
@@ -577,6 +588,7 @@ export function TdsValidateFinalise({
         ...(hasMapWarning ? { variant: "default" as const } : {}),
       });
       await loadAll();
+      await bumpUnderProcess();
       // Auto-refresh the validation if one had already been run — the user should
       // never have to manually re-validate after adding or replacing a file.
       if (hadResults) {
@@ -635,6 +647,7 @@ export function TdsValidateFinalise({
     setComparing(true);
     try {
       validationToast(await runCompare(filing.id));
+      await bumpUnderProcess();
     } catch (e: any) {
       toast({ title: "Validation failed", description: e.message, variant: "destructive" });
     }
@@ -1441,6 +1454,7 @@ export function TdsValidateFinalise({
               resolveFirmId={resolveFirmId}
               disabled={isFiled}
               onStatusChange={setPanStatus}
+              onActivity={bumpUnderProcess}
             />
           </div>
 
@@ -1459,6 +1473,7 @@ export function TdsValidateFinalise({
               resolveFirmId={resolveFirmId}
               disabled={isFiled}
               onStatusChange={setTallyStatus}
+              onActivity={bumpUnderProcess}
             />
           </div>
             </TabsContent>

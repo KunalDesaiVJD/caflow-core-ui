@@ -612,30 +612,37 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       return next;
     });
     // g. Auto-fill Ack No. from the receipt's own printed "e-Filing
-    // Acknowledgement Number" — only when the field is still empty, so this
-    // never clobbers a value the user already typed in by hand. Extraction
-    // failure (e.g. a differently formatted PDF) is silent: the user can
-    // still fill it in manually, same as before this feature existed.
-    if (!filing.acknowledgment_number) {
-      try {
-        const ackNo = await extractAckNumberFromFile(file);
-        if (ackNo) {
-          await supabase.from("tds_filings").update({
-            acknowledgment_number: ackNo,
-            last_updated_by: user?.id,
-            last_updated_at: new Date().toISOString(),
-          }).eq("id", filing.id);
-          fetchFilings();
-          onFilingsChanged?.();
-          toast({ title: '✅ ACK file uploaded', description: `Ack No. auto-filled: ${ackNo}` });
-          setAckUploading(null);
-          return;
-        }
-      } catch (e) {
-        console.log('Ack number extraction failed:', e);
+    // Acknowledgement Number". The write uses a DB-level compare-and-swap
+    // (.is("acknowledgment_number", null)) rather than trusting this stale
+    // `filing` snapshot — the Ack No. input stays enabled during upload, so
+    // the user could be typing a value by hand in this exact window; the
+    // CAS guarantees the auto-fill silently no-ops if the column is no
+    // longer null by the time it runs, instead of racing a manual entry.
+    let ackNo: string | null = null;
+    try {
+      ackNo = await extractAckNumberFromFile(file);
+    } catch (e) {
+      console.error('Ack number extraction failed:', e);
+    }
+    if (ackNo && !filing.acknowledgment_number) {
+      const { data: casRows, error: casError } = await supabase.from("tds_filings").update({
+        acknowledgment_number: ackNo,
+        last_updated_by: user?.id,
+        last_updated_at: new Date().toISOString(),
+      }).eq("id", filing.id).is("acknowledgment_number", null).select("id");
+      if (!casError && casRows && casRows.length > 0) {
+        fetchFilings();
+        onFilingsChanged?.();
+        toast({ title: '✅ ACK file uploaded', description: `Ack No. auto-filled: ${ackNo}` });
+        setAckUploading(null);
+        return;
       }
     }
-    toast({ title: '✅ ACK file uploaded' });
+    toast(
+      !filing.acknowledgment_number
+        ? { title: '✅ ACK file uploaded', description: "Couldn't auto-read the acknowledgement number from this PDF — please enter it manually." }
+        : { title: '✅ ACK file uploaded' },
+    );
     setAckUploading(null);
   };
 
@@ -1182,12 +1189,16 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                                 an auto-fill from the uploaded ACK PDF (which updates
                                 f.acknowledgment_number from outside this input) forces a
                                 remount and actually shows up — defaultValue alone only
-                                applies on first mount and won't reflect later prop changes. */}
+                                applies on first mount and won't reflect later prop changes.
+                                Also disabled while its own ACK PDF is uploading/parsing, so
+                                there's no window where the user can be mid-typing here at the
+                                exact moment an auto-fill could land (the DB write itself is
+                                additionally guarded by a compare-and-swap in handleAttachAck). */}
                             <Input
                               key={f.acknowledgment_number || "empty"}
-                              className={cn("h-7 w-32 text-xs", isFiledLocked && "bg-muted cursor-not-allowed opacity-70")}
+                              className={cn("h-7 w-32 text-xs", (isFiledLocked || ackUploading === f.id) && "bg-muted cursor-not-allowed opacity-70")}
                               defaultValue={f.acknowledgment_number || ""}
-                              disabled={isFiledLocked}
+                              disabled={isFiledLocked || ackUploading === f.id}
                               onBlur={e => { if (!isFiledLocked && e.target.value !== (f.acknowledgment_number || "")) handleInlineUpdate(f, "acknowledgment_number", e.target.value || null); }}
                             />
                             {/* ACK PDF attachment — documents bucket + tds_ack_files table */}

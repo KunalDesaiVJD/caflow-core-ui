@@ -34,6 +34,7 @@ import {
 } from "lucide-react";
 import { generateGeniusExport } from "@/lib/genius-export";
 import { importGeniusXls, repairFilingSectionCodes } from "@/lib/genius-import";
+import { markUnderProcessIfNotStarted } from "@/lib/tds/filingActivity";
 
 // ─── Types ───
 interface ClientOption {
@@ -311,6 +312,15 @@ export function TdsDataEntry({
   }, [selForm]);
 
   useEffect(() => { fetchRates(); }, [fetchRates, selFy]);
+
+  // Any Data Entry activity on a fresh filing auto-advances it out of
+  // "Not Started" — the user shouldn't have to separately remember to flip
+  // the Dashboard's Status dropdown just to reflect that work has begun.
+  const bumpUnderProcess = useCallback(async () => {
+    if (!filing) return;
+    const flipped = await markUnderProcessIfNotStarted(filing.id, filing.work_status, user?.id);
+    if (flipped) setFiling(prev => (prev ? { ...prev, work_status: "Under Process" } : prev));
+  }, [filing, user?.id]);
 
   // ─── Load Filing (Issue 6: try-catch, never crash, empty state on error) ───
   const loadFiling = useCallback(async () => {
@@ -819,6 +829,7 @@ export function TdsDataEntry({
         toast({ title: editingChallan ? "Challan updated" : "Challan added", description: "Note: Late Fees field will be available after database migration is applied." });
         setChallanDialogOpen(false);
         await refreshChallansAndCF(filing.id);
+        await bumpUnderProcess();
         return;
       }
     }
@@ -826,6 +837,7 @@ export function TdsDataEntry({
     toast({ title: editingChallan ? "Challan updated" : "Challan added" });
     setChallanDialogOpen(false);
     await refreshChallansAndCF(filing.id);
+    await bumpUnderProcess();
   };
 
   const deleteChallan = async (id: string) => {
@@ -833,6 +845,7 @@ export function TdsDataEntry({
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
     toast({ title: "Challan deleted" });
     if (filing) await refreshChallansAndCF(filing.id);
+    await bumpUnderProcess();
   };
 
   // ─── Deductee CRUD ───
@@ -864,6 +877,7 @@ export function TdsDataEntry({
       ...prev,
       [selectedChallan.id]: [...(prev[selectedChallan.id] || []), newDed],
     }));
+    await bumpUnderProcess();
   };
 
   const updateDeducteeField = async (deducteeId: string, field: string, value: any) => {
@@ -949,6 +963,7 @@ export function TdsDataEntry({
         [selectedChallan.id]: (prev[selectedChallan.id] || []).map(d => d.id === deducteeId ? merged : d),
       }));
     }
+    await bumpUnderProcess();
   };
 
   // Issue 7I: Delete + instant recalculation
@@ -969,6 +984,7 @@ export function TdsDataEntry({
         setSelectedChallan(prev => prev ? { ...prev, fully_utilized: false } : prev);
       }
     }
+    await bumpUnderProcess();
   };
 
   // ─── 24Q Salary ───
@@ -1016,6 +1032,7 @@ export function TdsDataEntry({
     setDeductees(prev => prev.map(d => d.id === salaryDeductee.id ? { ...d, ...updates } : d));
     setSalaryDrawerOpen(false);
     toast({ title: "Salary details saved" });
+    await bumpUnderProcess();
   };
 
   // ─── Challan breakdown (Issue 7A: cross-quarter total) ───
@@ -1133,6 +1150,7 @@ export function TdsDataEntry({
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
     setDeductees(prev => [...prev, data as Deductee]);
     toast({ title: "Row duplicated" });
+    await bumpUnderProcess();
   };
 
   useEffect(() => {
@@ -1279,6 +1297,7 @@ export function TdsDataEntry({
         title: "Genius file imported successfully",
         description: `Added ${result.challansInserted} challan(s)${reusedText} and ${result.deducteesInserted} deductee(s)${warningText}`,
       });
+      await bumpUnderProcess();
     } catch (err: any) {
       console.error("[GeniusImport] Failed:", err);
       toast({
@@ -1609,6 +1628,7 @@ export function TdsDataEntry({
                                           const val = Math.min(parseFloat(e.target.value) || 0, c.late_fees_234e || 0);
                                           await supabase.from("tds_challans").update({ late_fees_used: val } as any).eq("id", c.id);
                                           if (filing) await refreshChallansAndCF(filing.id);
+                                          await bumpUnderProcess();
                                         }}
                                       />
                                     )}

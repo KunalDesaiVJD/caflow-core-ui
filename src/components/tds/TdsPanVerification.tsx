@@ -82,6 +82,9 @@ interface Props {
   // Report Stage-2 completion state up to the parent so the filing gate can
   // require Stage-2 to be finished (when applicable) before enabling "Ready to File".
   onStatusChange?: (s: PanStageStatus) => void;
+  // Called after any real Stage-2 activity (a completed audit run) so the
+  // parent can auto-advance the filing out of "Not Started".
+  onActivity?: () => void;
 }
 
 interface PanResult {
@@ -163,7 +166,7 @@ function formatTracesMapping(m: TracesMapping): string {
   return parts.length ? `Mapped ${parts.join(", ")}.` : "";
 }
 
-export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selForm, clientName, resolveFirmId, disabled, onStatusChange }: Props) {
+export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selForm, clientName, resolveFirmId, disabled, onStatusChange, onActivity }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
 
@@ -463,11 +466,12 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
       const audited = await runAudit(filing.id);
       const verified = audited.filter((r) => r.validation_result === "PAN Verified").length;
       toast({ title: "Stage 2 · PAN verification complete", description: `${verified} verified · ${audited.length - verified} issue(s) across ${audited.length} office part${audited.length === 1 ? "y" : "ies"}` });
+      onActivity?.();
     } catch (e: any) {
       toast({ title: "PAN verification failed", description: e.message, variant: "destructive" });
     }
     setValidating(false);
-  }, [filing, batch, validating, runAudit, toast]);
+  }, [filing, batch, validating, runAudit, toast, onActivity]);
 
   // ── File management: delete / replace / view details (parity with Stage-1) ───
   const doDeleteBatches = async (ids: string[]) => {
