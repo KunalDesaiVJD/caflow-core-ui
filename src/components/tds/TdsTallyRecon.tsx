@@ -380,9 +380,19 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
         overridden: keep, override_reason: keep ? c.override_reason : null, overridden_by: keep ? c.overridden_by : null, overridden_at: keep ? c.overridden_at : null,
       };
     });
-    const { error } = await supabase.from("tds_tally_results").insert([...newRows, ...surplusRows]); if (error) throw new Error(error.message);
-    const priorIds = (prior || []).map((p: any) => p.id);
-    if (priorIds.length) { const { error: delErr } = await supabase.from("tds_tally_results").delete().in("id", priorIds); if (delErr) throw new Error(delErr.message); }
+    // Atomic replace (one DB transaction, see the migration's own comment) —
+    // NOT a separate insert-then-delete: two overlapping runAudit() calls for
+    // the same filing (two browser tabs, or a mapping-triggered re-run racing
+    // a manual re-validate) could otherwise both insert a full row set before
+    // either deleted the other's, leaving duplicate result rows behind. Cast
+    // to `any` because this RPC isn't in the generated Supabase types — same
+    // tolerance already used elsewhere in this file for tables/functions a
+    // full `supabase gen types` regen hasn't caught up with yet.
+    const { error } = await (supabase.rpc as any)("replace_tally_results", {
+      p_filing_id: fId,
+      p_rows: [...newRows, ...surplusRows],
+    });
+    if (error) throw new Error(error.message);
     await logReconAudit({ filingId: fId, firmId, userId: user?.id, userName: userMap[user?.id ?? ""], actionType: "TALLY_RECON_RUN", newValue: `${audited.filter((r) => r.result === "Matched").length} matched / ${audited.length}`, remark: `Tally reconciliation over ${tally.length} ledger rows` });
     if (seq !== loadSeq.current) return audited;
     const { data: res } = await supabase.from("tds_tally_results").select("*").eq("filing_id", fId); if (seq !== loadSeq.current) return audited;
@@ -586,6 +596,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
    *  is open. */
   const pickRows = useMemo(() => {
     const sug = pickTarget?.tally_party ? normalizeName(pickTarget.tally_party) : null;
+    const targetSection = canonicalSection(pickTarget?.office_section ?? null);
     const claimedCounts = new Map<string, number>();
     for (const r of results || []) {
       if (r.id === pickTarget?.id || !r.tally_party || r.tally_date == null || r.tally_credit == null || isOpenRow(r)) continue;
@@ -594,6 +605,17 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     }
     const rows = tallyRows
       .filter((t) => t.party && t.credit != null && Number(t.credit) !== 0)
+      // A 194C deductee can never legitimately be booked under a 192B (or any
+      // other) ledger — TDS sections are not interchangeable, so a candidate
+      // from a different section is never a valid mapping target regardless
+      // of how well the name/date/amount happen to line up. Permissive only
+      // when EITHER side's section is unknown, matching the engine's own
+      // sectionEqOf() convention (assignment.ts) — never exclude a candidate
+      // just because section metadata happens to be missing.
+      .filter((t) => {
+        const tSection = canonicalSection(t.section);
+        return !targetSection || !tSection || tSection === targetSection;
+      })
       .filter((t) => {
         const key = `${normalizeName(t.party)}|${t.date}|${t.credit}`;
         const left = claimedCounts.get(key) || 0;
@@ -609,6 +631,17 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     return [...hit].sort((a, b) => (b.suggested ? 1 : 0) - (a.suggested ? 1 : 0) || a.i - b.i);
   }, [results, tallyRows, pickTarget, pickQuery]);
 
+  /** A ledger-anchored ResultRow's OWN section — NOT persisted on
+   *  tds_tally_results (only office_section is a column, and that's always
+   *  null for a ledger-anchored row), so looked up by VALUE against the
+   *  imported tallyRows, the same value-matching convention runAudit()
+   *  already uses (surplusKey) to survive a re-run with no stable ledger id. */
+  const ledgerSectionOf = (r: ResultRow): string | null => {
+    if (!r.tally_party) return null;
+    const match = tallyRows.find((t) => normalizeName(t.party) === normalizeName(r.tally_party) && t.date === r.tally_date && t.credit === r.tally_credit);
+    return match?.section ?? null;
+  };
+
   /** Office records offered by the REVERSE picker (opened from a ledger-only card).
    *  Candidates are every OPEN office record (see isOpenRow) — not just ones whose
    *  own result happens to be exactly "Ledger Entry Not Found". An office record
@@ -619,15 +652,23 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
    *  already has a settled counterpart, so offering it here would let one office
    *  record be mapped to two different ledger credits at once. */
   const pickOfficeRows = useMemo(() => {
+    const targetSection = canonicalSection(officePickTarget ? ledgerSectionOf(officePickTarget) : null);
     const rows = (results || [])
       .filter((r) => r.office_name && r.id !== officePickTarget?.id && isOpenRow(r))
+      // Mirrors pickRows' own section filter: a ledger credit from a specific
+      // section can only ever legitimately belong to an office record of that
+      // SAME section. Permissive only when either side's section is unknown.
+      .filter((r) => {
+        const rSection = canonicalSection(r.office_section);
+        return !targetSection || !rSection || rSection === targetSection;
+      })
       .map((r, i) => ({ r, i }));
     const q = officePickQuery.trim().toLowerCase();
     return q
       ? rows.filter(({ r }) => [r.office_name, r.office_date, r.office_section, r.office_tds == null ? "" : String(r.office_tds), inr(r.office_tds)]
           .filter(Boolean).join(" ").toLowerCase().includes(q))
       : rows;
-  }, [results, officePickQuery]);
+  }, [results, officePickQuery, officePickTarget, tallyRows]);
 
   /** The Override button's label. Every genuine DISPUTE over an existing pairing
    *  (Party Name Mismatch, Date Mismatch, …) keeps the plain generic "Override".
