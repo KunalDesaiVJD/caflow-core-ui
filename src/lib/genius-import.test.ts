@@ -66,7 +66,7 @@ vi.mock("@/integrations/supabase/client", () => ({
   supabase: { from: (table: string) => makeBuilder(table) },
 }));
 
-import { cleanSection, ensureRateMasterSections, repairFilingSectionCodes, resolveExistingChallansByNumber, validateFinancialYearMatch } from "./genius-import";
+import { cleanSection, ensureRateMasterSections, repairFilingSectionCodes, resolveExistingChallansByNumber, resolveDeclaredAssessmentYear, validateFinancialYearMatch } from "./genius-import";
 
 beforeEach(() => {
   upsertCalls.length = 0;
@@ -303,5 +303,35 @@ describe("validateFinancialYearMatch — a hard stop, not a warning", () => {
   it("fails open on a blank or malformed Assessment Year, matching Form/Quarter", () => {
     expect(() => validateFinancialYearMatch("", "2025-26")).not.toThrow();
     expect(() => validateFinancialYearMatch("garbled", "2025-26")).not.toThrow();
+  });
+});
+
+describe("resolveDeclaredAssessmentYear — Genius files disagree on what this field means", () => {
+  // Real reported bug: a client's genuine Genius-generated file
+  // ("KWIKTEAM SUPPORT SERVICES...Q1.xls") states "T.Y. 2026-27" for an
+  // honest FY 2026-27 return. Reading that value as an Assessment Year (the
+  // classic "A.Y." case validateFinancialYearMatch itself is built around)
+  // silently shifted it back a year to FY 2025-26, so importing the file into
+  // its OWN, correct FY 2026-27 filing failed with a false mismatch.
+  it("pre-converts a literal Financial-Year label (T.Y.) so it round-trips to itself", () => {
+    expect(resolveDeclaredAssessmentYear("T.Y.", "2026-27")).toBe("2027-28");
+    expect(() => validateFinancialYearMatch(resolveDeclaredAssessmentYear("T.Y.", "2026-27"), "2026-27")).not.toThrow();
+  });
+
+  it("recognises T.Y./F.Y. in a few real-world spellings", () => {
+    expect(resolveDeclaredAssessmentYear("TY", "2026-27")).toBe("2027-28");
+    expect(resolveDeclaredAssessmentYear("F.Y.", "2026-27")).toBe("2027-28");
+    expect(resolveDeclaredAssessmentYear("Financial Year", "2026-27")).toBe("2027-28");
+  });
+
+  it("leaves a genuine Assessment Year label untouched — the incident this whole check exists for", () => {
+    expect(resolveDeclaredAssessmentYear("A.Y.", "2025-26")).toBe("2025-26");
+    expect(() => validateFinancialYearMatch(resolveDeclaredAssessmentYear("A.Y.", "2025-26"), "2025-26")).toThrowError(/Financial Year mismatch/);
+    expect(() => validateFinancialYearMatch(resolveDeclaredAssessmentYear("A.Y.", "2025-26"), "2024-25")).not.toThrow();
+  });
+
+  it("defaults to the original (Assessment Year) behaviour on a blank or unrecognised label", () => {
+    expect(resolveDeclaredAssessmentYear("", "2025-26")).toBe("2025-26");
+    expect(resolveDeclaredAssessmentYear("Period", "2025-26")).toBe("2025-26");
   });
 });

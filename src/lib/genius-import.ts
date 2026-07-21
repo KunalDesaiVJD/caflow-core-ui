@@ -17,7 +17,7 @@
 import * as XLSX from "xlsx";
 import { supabase } from "@/integrations/supabase/client";
 import { findSeedRate } from "@/lib/tdsRateSeed";
-import { assessmentYearToFinancialYear } from "@/lib/tdsQuarter";
+import { assessmentYearToFinancialYear, financialYearToAssessmentYear } from "@/lib/tdsQuarter";
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -175,6 +175,28 @@ export function cleanSection(raw: string | number | null | undefined): string {
   const s = String(raw ?? "").trim();
   const m = s.match(/^\d+-(.+)$/);
   return (m ? m[1] : s).trim();
+}
+
+/**
+ * Resolve the file's declared Assessment Year from its own period LABEL and
+ * value cell — Genius exports are NOT consistent about what this field means.
+ * Some genuinely state an Assessment Year ("A.Y. 2025-26" = FY 2024-25 — see
+ * validateFinancialYearMatch's own comment for the real incident this whole
+ * check exists to catch). Others state the Financial Year itself directly
+ * under a label like "T.Y." ("Tax/Transaction Year") or "F.Y.". Assuming every
+ * file is the former is exactly a real reported bug: a file honestly stating
+ * "T.Y. 2026-27" (i.e. Financial Year 2026-27) was read as if it said "A.Y.
+ * 2026-27", silently shifting it back a year to FY 2025-26 and failing an
+ * import into the SAME financial year it was actually for.
+ *
+ * Only the LITERAL-financial-year case is pre-converted here (to an assessment
+ * year, so it round-trips back to the original value through
+ * validateFinancialYearMatch's unchanged -1 conversion) — a blank label or a
+ * genuine "A.Y." keeps the original, already-correct behaviour exactly as
+ * before, so this can never regress the incident the check was built for. */
+export function resolveDeclaredAssessmentYear(periodLabel: string, rawPeriodValue: string): string {
+  const isLiteralFinancialYearLabel = /\bT\.?\s*Y\.?\b|\bF\.?\s*Y\.?\b|FINANCIAL\s*YEAR/i.test(periodLabel);
+  return isLiteralFinancialYearLabel ? financialYearToAssessmentYear(rawPeriodValue) : rawPeriodValue;
 }
 
 /**
@@ -348,7 +370,7 @@ export async function parseGeniusXls(file: File): Promise<ParsedGeniusFile> {
     tan:            cellStr(detailSheet, "B1"),
     pan:            cellStr(detailSheet, "B2"),
     name:           cellStr(detailSheet, "B3"),
-    assessmentYear: cellStr(detailSheet, "C2"),
+    assessmentYear: resolveDeclaredAssessmentYear(cellStr(detailSheet, "C1"), cellStr(detailSheet, "C2")),
     quarter:        cellStr(detailSheet, "C4") || "Q1",
     formNo:         (formTok ? formTok[1].toUpperCase() : rawForm) || "26Q",
   };
