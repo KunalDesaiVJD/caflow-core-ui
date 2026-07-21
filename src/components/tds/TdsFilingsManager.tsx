@@ -1095,8 +1095,17 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                         <Badge className={cn("text-xs", FILING_STATUS_COLORS[f.work_status] || "bg-muted")}>{f.work_status}</Badge>
                       ) : (
                         <Select value={f.work_status} onValueChange={v => handleStatusChange(f, v)}>
-                          <SelectTrigger className="h-7 text-xs" style={{ width: statusColWidth }}>
-                            <Badge data-autofit="status" className={cn("text-xs", FILING_STATUS_COLORS[f.work_status] || "bg-muted")}>{f.work_status}</Badge>
+                          {/* Colour the TRIGGER itself (not a smaller badge floating
+                              inside it) — FILING_STATUS_COLORS already pairs a bg-* with
+                              its own text-*, so the whole dropdown reads as one uniform
+                              coloured pill instead of a colour patch sitting inside a
+                              separately-shaded box. */}
+                          <SelectTrigger
+                            data-autofit="status"
+                            className={cn("h-7 text-xs font-medium border-0", FILING_STATUS_COLORS[f.work_status] || "bg-muted")}
+                            style={{ width: statusColWidth }}
+                          >
+                            <span className="truncate">{f.work_status}</span>
                           </SelectTrigger>
                           <SelectContent>
                             {FILING_STATUSES.map(s => {
