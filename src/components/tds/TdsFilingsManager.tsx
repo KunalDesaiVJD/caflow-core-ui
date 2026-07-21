@@ -678,9 +678,26 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     } as any);
   };
 
+  // "Filed"/"Processed" declare the return actually went out — that must mean
+  // the SAME thing here as it does inside Validate & Finalise's own gate
+  // (Stage 1-3 clean AND the checker's Digital Signature), not just "someone
+  // picked it from a dropdown". NIL and every other status are never gated —
+  // a NIL return has no deductee records to run Stage 1-4 against at all.
+  const isFiledLikeStatus = (s: string) => s === "Filed" || s === "Processed";
+  const isReadyToFile = (filingId: string) => vfStatuses.get(filingId)?.ready ?? false;
+
   const handleStatusChange = async (filing: TdsFiling, newStatus: string) => {
     const oldStatus = filing.work_status;
     if (oldStatus === newStatus) return;
+
+    if (isFiledLikeStatus(newStatus) && !isReadyToFile(filing.id)) {
+      toast({
+        title: "Not ready to file",
+        description: "Complete Stage 1-3 and the checker's Digital Signature in Validate & Finalise before marking this return Filed/Processed.",
+        variant: "destructive",
+      });
+      return;
+    }
 
     // Issue 5 (CRITICAL OVERRIDE): ACK is COMPLETELY OPTIONAL — never block filing.
     // Show a non-blocking yellow hint only if BOTH ack number AND ack file are absent.
@@ -779,9 +796,13 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     if (bulkAction.startsWith("status:")) {
       const newStatus = bulkAction.replace("status:", "");
       const actingUserName = user?.name || user?.email || "Unknown";
+      // Same gate as the per-row Status dropdown — a bulk action must never be
+      // able to mark a return Filed/Processed that individually couldn't be.
+      let skippedNotReady = 0;
       for (const id of ids) {
         const filing = filings.find(f => f.id === id);
         if (filing) {
+          if (isFiledLikeStatus(newStatus) && !isReadyToFile(id)) { skippedNotReady++; continue; }
           const payload: any = {
             work_status: newStatus,
             last_updated_by: user?.id,
@@ -807,7 +828,14 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
           }
         }
       }
-      toast({ title: `${ids.length} filings updated to ${newStatus}` });
+      const updated = ids.length - skippedNotReady;
+      toast({
+        title: `${updated} filing${updated === 1 ? "" : "s"} updated to ${newStatus}`,
+        description: skippedNotReady
+          ? `${skippedNotReady} skipped — not ready to file (complete Validate & Finalise first).`
+          : undefined,
+        ...(skippedNotReady ? { variant: "default" as const } : {}),
+      });
     }
     setSelectedIds(new Set());
     setBulkAction("");
@@ -1071,11 +1099,16 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                             <Badge data-autofit="status" className={cn("text-xs", FILING_STATUS_COLORS[f.work_status] || "bg-muted")}>{f.work_status}</Badge>
                           </SelectTrigger>
                           <SelectContent>
-                            {FILING_STATUSES.map(s => (
-                              <SelectItem key={s} value={s}>
-                                <span>{s}</span>
-                              </SelectItem>
-                            ))}
+                            {FILING_STATUSES.map(s => {
+                              const blocked = isFiledLikeStatus(s) && !isReadyToFile(f.id);
+                              return (
+                                <SelectItem key={s} value={s} disabled={blocked}>
+                                  <span className={cn(blocked && "text-muted-foreground")}>
+                                    {s}{blocked && " (complete Validate & Finalise first)"}
+                                  </span>
+                                </SelectItem>
+                              );
+                            })}
                           </SelectContent>
                         </Select>
                       )}
