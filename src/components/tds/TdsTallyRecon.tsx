@@ -570,6 +570,23 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     }
   }, [results, activeFilter, recordSearch]);
 
+  /** A ledger-anchored ResultRow's OWN section — NOT persisted on
+   *  tds_tally_results (only office_section is a column, and that's always
+   *  null for a ledger-anchored row), so looked up by VALUE against the
+   *  imported tallyRows, the same value-matching convention runAudit()
+   *  already uses (surplusKey) to survive a re-run with no stable ledger id. */
+  const ledgerSectionOf = (r: ResultRow): string | null => {
+    if (!r.tally_party) return null;
+    const match = tallyRows.find((t) => normalizeName(t.party) === normalizeName(r.tally_party) && t.date === r.tally_date && t.credit === r.tally_credit);
+    return match?.section ?? null;
+  };
+
+  /** A confirmed row's OWN section, whichever side it's anchored on — used to
+   *  keep claimedCounts (below) from "orphan-spending" a claim across
+   *  sections (see pickRows). */
+  const confirmedRowSection = (r: ResultRow): string | null =>
+    canonicalSection(r.office_name != null ? r.office_section : ledgerSectionOf(r));
+
   /** Ledger records offered by the picker: the engine's suggestion first, then the
    *  rest in ledger order. Only CREDIT rows — those are the deductions the engine
    *  pairs against, so mapping to a party that never appears as a credit could not
@@ -593,13 +610,22 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
    *  either one is confirmed, breaking bidirectional symmetry for the other,
    *  still-open one. Depends on `results` (read inside the body) so the list
    *  never goes stale relative to overrides/unmaps applied while this dialog
-   *  is open. */
+   *  is open.
+   *
+   *  claimedCounts is scoped to the TARGET's section: a confirmed row from a
+   *  DIFFERENT section that happens to share the exact same party+date+credit
+   *  value must never consume a claim here — the candidate pool below is
+   *  already filtered to the target's own section, so an unscoped count would
+   *  "orphan-spend" against an irrelevant cross-section value-twin, wrongly
+   *  hiding the correct, same-section candidate. */
   const pickRows = useMemo(() => {
     const sug = pickTarget?.tally_party ? normalizeName(pickTarget.tally_party) : null;
     const targetSection = canonicalSection(pickTarget?.office_section ?? null);
     const claimedCounts = new Map<string, number>();
     for (const r of results || []) {
       if (r.id === pickTarget?.id || !r.tally_party || r.tally_date == null || r.tally_credit == null || isOpenRow(r)) continue;
+      const rSection = confirmedRowSection(r);
+      if (targetSection && rSection && rSection !== targetSection) continue;
       const key = `${normalizeName(r.tally_party)}|${r.tally_date}|${r.tally_credit}`;
       claimedCounts.set(key, (claimedCounts.get(key) || 0) + 1);
     }
@@ -630,17 +656,6 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       : rows;
     return [...hit].sort((a, b) => (b.suggested ? 1 : 0) - (a.suggested ? 1 : 0) || a.i - b.i);
   }, [results, tallyRows, pickTarget, pickQuery]);
-
-  /** A ledger-anchored ResultRow's OWN section — NOT persisted on
-   *  tds_tally_results (only office_section is a column, and that's always
-   *  null for a ledger-anchored row), so looked up by VALUE against the
-   *  imported tallyRows, the same value-matching convention runAudit()
-   *  already uses (surplusKey) to survive a re-run with no stable ledger id. */
-  const ledgerSectionOf = (r: ResultRow): string | null => {
-    if (!r.tally_party) return null;
-    const match = tallyRows.find((t) => normalizeName(t.party) === normalizeName(r.tally_party) && t.date === r.tally_date && t.credit === r.tally_credit);
-    return match?.section ?? null;
-  };
 
   /** Office records offered by the REVERSE picker (opened from a ledger-only card).
    *  Candidates are every OPEN office record (see isOpenRow) — not just ones whose
