@@ -126,6 +126,12 @@ interface Props {
   isSuperadmin: boolean;
   resolveFirmId: () => Promise<string | null>;
   onNavigateDataEntry?: (filingId?: string) => void;
+  // Navigate to a SPECIFIC filing's Stage 1 (Validate & Finalise) in the TDS
+  // Workspace — fired by the "Validate & Finalise" summary column's Ready
+  // link. Unlike onNavigateDataEntry (which only switches tabs, relying on
+  // whatever client/FY/quarter was already selected), this carries the full
+  // selection so the correct filing is pre-selected on arrival.
+  onNavigateStage1?: (sel: { clientId: string; financialYear: string; quarter: string; formType: string }) => void;
   // When embedded elsewhere (e.g. the Dashboard's Client Filing Summary card),
   // the host already provides its own title — suppress this component's own.
   hideHeader?: boolean;
@@ -207,7 +213,7 @@ const splitClientName = (name: string): { main: string; parenthetical: string | 
   return { main: match[1], parenthetical: match[2] };
 };
 
-export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId, onNavigateDataEntry, hideHeader, fyFilter, quarterFilter, clientFilter, formFilter, preset, onFilingsChanged, isMaximized, onToggleMaximize, refreshKey }: Props) {
+export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId, onNavigateDataEntry, onNavigateStage1, hideHeader, fyFilter, quarterFilter, clientFilter, formFilter, preset, onFilingsChanged, isMaximized, onToggleMaximize, refreshKey }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
   const [filings, setFilings] = useState<TdsFiling[]>([]);
@@ -1158,35 +1164,23 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                       {(() => {
                         const vf = vfStatuses.get(f.id);
                         if (!vf) return <span className="text-xs text-muted-foreground">—</span>;
-                        const ICON: Record<VfState, string> = { done: "✓", warn: "⚠", none: "✗" };
-                        const CLS: Record<VfState, string> = { done: "text-emerald-600", warn: "text-amber-600", none: "text-destructive" };
-                        const seg = (state: VfState, label: string) => (
-                          <span className={cn("font-medium whitespace-nowrap", CLS[state])}>{ICON[state]} {label}</span>
-                        );
+                        // Deliberately just ONE word — the per-stage (S1/S2/S3/S4/Sign)
+                        // breakdown lives in Stage 4 · Checker Review inside the
+                        // Workspace, not here. Clicking straight through to Stage 1 is
+                        // the actionable next step regardless of which stage is
+                        // actually blocking readiness.
                         return (
-                          <HoverCard openDelay={200} closeDelay={100}>
-                            <HoverCardTrigger asChild>
-                              <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5 text-[11px] cursor-default">
-                                {seg(vf.s1, "S1")}<span className="text-muted-foreground">|</span>
-                                {seg(vf.s2, "S2")}<span className="text-muted-foreground">|</span>
-                                {seg(vf.s3, "S3")}<span className="text-muted-foreground">|</span>
-                                {seg(vf.s4, "S4")}<span className="text-muted-foreground">|</span>
-                                <span className={cn("font-medium whitespace-nowrap", vf.signed ? "text-emerald-600" : "text-destructive")}>{vf.signed ? "✍" : "✗"} Sign</span>
-                                <span className="text-muted-foreground">|</span>
-                                <span className={cn("font-medium whitespace-nowrap", vf.ready ? "text-emerald-600" : "text-destructive")}>{vf.ready ? "✓" : "✗"} Ready</span>
-                              </div>
-                            </HoverCardTrigger>
-                            <HoverCardContent side="left" className="w-72 p-3">
-                              <div className="space-y-1 text-xs">
-                                <div className="flex justify-between gap-2"><span className="text-muted-foreground">Stage 1</span><span>{vf.s1Detail}</span></div>
-                                <div className="flex justify-between gap-2"><span className="text-muted-foreground">Stage 2</span><span>{vf.s2Detail}</span></div>
-                                <div className="flex justify-between gap-2"><span className="text-muted-foreground">Stage 3</span><span>{vf.s3Detail}</span></div>
-                                <div className="flex justify-between gap-2"><span className="text-muted-foreground">Stage 4</span><span>{vf.s4Detail}</span></div>
-                                <div className="flex justify-between gap-2"><span className="text-muted-foreground">Digital Signature</span><span>{vf.signedDetail}</span></div>
-                                <div className="flex justify-between gap-2 pt-1 border-t"><span className="text-muted-foreground">Ready to File</span><span className={cn("font-medium", vf.ready ? "text-emerald-600" : "text-destructive")}>{vf.ready ? "Yes" : "No"}</span></div>
-                              </div>
-                            </HoverCardContent>
-                          </HoverCard>
+                          <button
+                            type="button"
+                            className={cn("text-xs font-semibold hover:underline underline-offset-2", vf.ready ? "text-emerald-600" : "text-destructive")}
+                            title={vf.ready ? "Ready to file — click to open Stage 1" : "Not ready — click to open Stage 1"}
+                            onClick={() => onNavigateStage1?.({
+                              clientId: f.client_id, financialYear: f.financial_year, quarter: f.quarter,
+                              formType: (f.tds_forms && f.tds_forms[0]) || "26Q",
+                            })}
+                          >
+                            {vf.ready ? "✓" : "✗"} Ready
+                          </button>
                         );
                       })()}
                     </TableCell>

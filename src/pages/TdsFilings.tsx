@@ -59,6 +59,10 @@ const TdsFilings = () => {
   const [ctxFy, setCtxFy] = useState(tdsDefault.fy);
   const [ctxQuarter, setCtxQuarter] = useState(tdsDefault.quarter);
   const [ctxForm, setCtxForm] = useState("26Q");
+  // Bumped whenever the Dashboard's Validate & Finalise "Ready" link navigates
+  // to a SPECIFIC filing, so Stage 1 opens regardless of whichever stage the
+  // Validate & Finalise tab happened to be left on from a previous visit.
+  const [forceStage1Signal, setForceStage1Signal] = useState(0);
   // Increment to force TdsDashboard to re-fetch when returning from workspace
   const [dashRefreshKey, setDashRefreshKey] = useState(0);
   const [syncing, setSyncing] = useState(false);
@@ -257,10 +261,23 @@ const TdsFilings = () => {
             <TdsDashboard
               clients={clients} users={users} isSuperadmin={isSuperadmin}
               resolveFirmId={resolveFirmId} refreshKey={dashRefreshKey}
-              onNavigate={(section) => {
+              onNavigate={(section, filters) => {
                 // CP-02: "data-entry" and "validate" deep-links now open workspace
                 if (section === "data-entry") { setWorkspaceTab("data-entry"); setActiveSection("workspace"); }
-                else if (section === "validate") { setWorkspaceTab("validate"); setActiveSection("workspace"); }
+                else if (section === "validate") {
+                  // A specific filing's "Ready" link (Dashboard's Validate & Finalise
+                  // column) carries its own client/FY/quarter/form — pre-select the
+                  // SAME filing here and force Stage 1 open, instead of leaving
+                  // whatever was last selected/viewed in the Workspace.
+                  if (filters?.clientId) {
+                    setCtxClient(filters.clientId);
+                    if (filters.financialYear) setCtxFy(filters.financialYear);
+                    if (filters.quarter) setCtxQuarter(filters.quarter);
+                    if (filters.formType) setCtxForm(filters.formType);
+                    setForceStage1Signal((n) => n + 1);
+                  }
+                  setWorkspaceTab("validate"); setActiveSection("workspace");
+                }
                 else setActiveSection(section as NavKey);
               }}
             />
@@ -315,6 +332,7 @@ const TdsFilings = () => {
                   resolveFirmId={resolveFirmId}
                   onNavigateDataEntry={() => setWorkspaceTab("data-entry")}
                   selClient={ctxClient} selFy={ctxFy} selQuarter={ctxQuarter} selForm={ctxForm}
+                  forceStage1Signal={forceStage1Signal}
                 />
               </div>
             </div>

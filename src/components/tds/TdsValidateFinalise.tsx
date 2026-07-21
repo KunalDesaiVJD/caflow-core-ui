@@ -61,6 +61,10 @@ interface Props {
   selFy: string;
   selQuarter: string;
   selForm: string;
+  // Bumped by the parent whenever the Dashboard's Validate & Finalise "Ready"
+  // link navigates here for a specific filing — forces the Stage tab back to
+  // "1" regardless of whichever stage this component was last left on.
+  forceStage1Signal?: number;
 }
 
 interface FieldDiff {
@@ -268,7 +272,7 @@ const PAN_STATUS_BLOCKED: PanStageStatus = { filingId: null, loaded: false, appl
 
 export function TdsValidateFinalise({
   clients, isSuperadmin, resolveFirmId, onNavigateDataEntry,
-  selClient, selFy, selQuarter, selForm,
+  selClient, selFy, selQuarter, selForm, forceStage1Signal,
 }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -312,6 +316,10 @@ export function TdsValidateFinalise({
   // so they get their own tabs instead of one long scroll, and the Finalise
   // summary lives only on the last one.
   const [stage, setStage] = useState<"1" | "2" | "3" | "4">("1");
+  // The Dashboard's "Ready" link is only ever useful if it actually lands on
+  // Stage 1 — without this, arriving here after a previous session left the
+  // tab on Stage 3 (say) would silently show the wrong stage.
+  useEffect(() => { setStage("1"); }, [forceStage1Signal]);
   const [activeFilter, setActiveFilter] = useState<FilterKey>(null); // clicked summary card
   // Secondary breakdown WITHIN the mismatch list, by the specific match_status
   // (e.g. "Office Data Only" vs "Imported Data Only") — see ErrorTypeBreakdown.
