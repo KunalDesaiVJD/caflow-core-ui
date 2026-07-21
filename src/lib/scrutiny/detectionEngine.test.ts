@@ -985,6 +985,29 @@ describe("materiality — thresholds scale to the engagement, once a human appro
   });
 });
 
+describe("sign_reversal — opt-in materiality floor", () => {
+  const r = (min?: number) => rule({
+    rule_id: "DEBT-005", category: "DEBT", detection_level: "account",
+    detection_logic: { check: "sign_reversal", expected_sign: "debit", ...(min ? { min_balance: min } : {}) },
+    audit_query_template: "Debtor {account} carries a credit balance of Rs.{amount}.",
+  });
+  const data = { tb: [
+    tb({ ledger_name: "Block A 104 - Narendra", parent_group: "Sundry Debtors", closing_balance: 99_000, balance_type: "Cr" }),
+    tb({ ledger_name: "Block A 101 - Ujwal", parent_group: "Sundry Debtors", closing_balance: 3_825_100, balance_type: "Cr" }),
+  ] };
+
+  // Existing rules set no floor and must be untouched by the new option.
+  it("flags every wrong-side balance when no floor is set", () => {
+    expect(run(r(), data)).toHaveLength(2);
+  });
+
+  it("drops immaterial ones once a floor is set", () => {
+    const out = run(r(1_000_000), data);
+    expect(out).toHaveLength(1);
+    expect(out[0].account).toBe("Block A 101 - Ujwal");
+  });
+});
+
 describe("duplicate_ledger — a GST rate split is not a duplicate party", () => {
   const r = rule({
     rule_id: "BKR-DUP-01", category: "BKR", detection_level: "account",
