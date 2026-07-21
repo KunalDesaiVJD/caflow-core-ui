@@ -335,12 +335,23 @@ const h_keyword_narration: CheckHandler = (rule, { vouchers }) => {
     );
 };
 
+/**
+ * sign_reversal — a balance sitting on the wrong side of its natural head.
+ *
+ * min_balance is opt-in and defaults to 0, so rules that do not set it behave exactly as before.
+ * Without it the check had no notion of size at all: a Rs.99,000 customer advance and a Rs.44 lakh
+ * one were reported identically, and at a developer — where every flat buyer legitimately carries a
+ * credit balance until possession — that meant one finding per buyer.
+ */
 const h_sign_reversal: CheckHandler = (rule, { tb }) => {
-  const expected = sideOf(rule.detection_logic.expected_sign === "credit" ? "Cr" : "Dr");
+  const dl = rule.detection_logic as unknown as Record<string, unknown>;
+  const expected = sideOf(dl.expected_sign === "credit" ? "Cr" : "Dr");
   const re = SCOPE[rule.category];
+  const minBal = num(dl.min_balance, 0);
   return tb
     .filter((r) => inScope(r, re))
     .filter((r) => num(r.closing_balance) !== 0 && sideOf(r.balance_type) !== expected)
+    .filter((r) => Math.abs(num(r.closing_balance)) >= minBal)
     .map((r) =>
       finding(rule, {
         account: r.ledger_name,
