@@ -37,6 +37,7 @@ type Fn = (...args: any[]) => any;
 let mod: {
   toRec: Fn; makeIsoNormaliser: Fn; pairRecords: Fn; comparePair: Fn;
   resolveSection: Fn; namesEquivalent: Fn; DEFAULT_SECTION_ALIASES: any[];
+  filterImportedRows: Fn; fyStartYear: Fn; normQuarter: Fn;
 };
 
 beforeAll(() => {
@@ -59,7 +60,7 @@ const SRC = ${JSON.stringify(SRC)};
 const OUT = ${JSON.stringify(outfile)};
 const RESOLVE_DIR = ${JSON.stringify(dirname(SRC))};
 const source = fs.readFileSync(SRC, "utf8") +
-  "\\nexport { toRec, makeIsoNormaliser, pairRecords, comparePair, resolveSection, namesEquivalent, DEFAULT_SECTION_ALIASES };\\n";
+  "\\nexport { toRec, makeIsoNormaliser, pairRecords, comparePair, resolveSection, namesEquivalent, DEFAULT_SECTION_ALIASES, filterImportedRows, fyStartYear, normQuarter };\\n";
 const stubRemote = {
   name: "stub-remote",
   setup(b) {
@@ -265,6 +266,55 @@ describe("Stage 1 — N identical office rows pair 1:1 with N identical imported
     const { paired, officeOnly, importedOnly } = runStage1(office, imported);
     expect(paired.length).toBe(4);
     expect(paired.every((p) => p.status === "matched")).toBe(true);
+    expect(officeOnly).toEqual([]);
+    expect(importedOnly).toEqual([]);
+  });
+});
+
+describe("filterImportedRows — a same-PAN client row must never vanish before pairing", () => {
+  // Real reported bug: a client-file row (SRUTHI RAMANAN, PAN HDYPS8232N, date
+  // 2026-06-30 — genuinely Q1 of FY 2026-27) was excluded by the quarter filter
+  // before it ever reached pairing, because the FORM filter already had a
+  // same-PAN rescue but the QUARTER filter did not. The office row then showed
+  // "In Office Data Only" with the imported side entirely blank — not a field
+  // mismatch, the counterpart never got there.
+
+  it("keeps a same-PAN row even when its OWN date lands in a different quarter", () => {
+    const iRecsAll = [{ panN: "HDYPS8232N", section: "194J(a)", iso: "2026-07-05" }]; // Q2, not Q1
+    const officePanSet = new Set(["HDYPS8232N"]);
+    const { iRecs, excludedOtherQuarter } = mod.filterImportedRows(
+      iRecsAll, officePanSet, new Set<string>(), "Q1", mod.fyStartYear("2026-27"), mod.DEFAULT_SECTION_ALIASES,
+    );
+    expect(iRecs.length).toBe(1);
+    expect(excludedOtherQuarter).toBe(0);
+  });
+
+  it("still excludes a DIFFERENT-PAN row from a different quarter (the filter still does its job)", () => {
+    const iRecsAll = [{ panN: "ZZZZZ0000Z", section: "194J(a)", iso: "2026-07-05" }]; // Q2, not Q1, PAN not in office
+    const officePanSet = new Set(["HDYPS8232N"]);
+    const { iRecs, excludedOtherQuarter } = mod.filterImportedRows(
+      iRecsAll, officePanSet, new Set<string>(), "Q1", mod.fyStartYear("2026-27"), mod.DEFAULT_SECTION_ALIASES,
+    );
+    expect(iRecs.length).toBe(0);
+    expect(excludedOtherQuarter).toBe(1);
+  });
+
+  it("keeps a same-PAN row even when its section implies a different FORM (existing rescue, unchanged)", () => {
+    const iRecsAll = [{ panN: "HDYPS8232N", section: "192B", iso: "2026-06-30" }]; // salary section -> 24Q, filing is 26Q
+    const officePanSet = new Set(["HDYPS8232N"]);
+    const { iRecs, excludedOtherForm } = mod.filterImportedRows(
+      iRecsAll, officePanSet, new Set(["26Q"]), "Q1", mod.fyStartYear("2026-27"), mod.DEFAULT_SECTION_ALIASES,
+    );
+    expect(iRecs.length).toBe(1);
+    expect(excludedOtherForm).toBe(0);
+  });
+
+  it("the exact reported scenario end-to-end: same-PAN, same-quarter row now reaches pairing and matches", () => {
+    const office: RawRow[] = [{ name: "SRUTHI RAMANAN", pan: "HDYPS8232N", section: "194J(a)", amount: 25000, tds: 500, date: "2026-06-30" }];
+    const imported: RawRow[] = [{ name: "SRUTHI RAMANAN", pan: "HDYPS8232N", section: "194J(a)", amount: 25000, tds: 500, date: "30/06/2026" }];
+    const { paired, officeOnly, importedOnly } = runStage1(office, imported);
+    expect(paired.length).toBe(1);
+    expect(paired[0].status).toBe("matched");
     expect(officeOnly).toEqual([]);
     expect(importedOnly).toEqual([]);
   });

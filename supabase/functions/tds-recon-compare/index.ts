@@ -200,6 +200,59 @@ function quarterOfIso(iso: string | null, fyStart: number | null): "Q1" | "Q2" |
   return mo >= 4 && mo <= 6 ? "Q1" : mo >= 7 && mo <= 9 ? "Q2" : mo >= 10 && mo <= 12 ? "Q3" : "Q4";
 }
 
+/**
+ * Narrows the imported client-file rows to the ones this filing should compare
+ * against — a client working file often holds a WHOLE financial year's data
+ * (every section, every quarter) in one sheet, so rows belonging to a
+ * different TDS return form or a different quarter are excluded here (they
+ * reconcile under THEIR OWN filing, never counted as "imported_only" here).
+ *
+ * PAN RESCUE — the load-bearing rule of this function: a client row whose PAN
+ * is already in Office Data unambiguously belongs to THIS filing, so it is
+ * NEVER excluded by either filter below, regardless of its own (non-authoritative,
+ * often mislabelled) section, or a possibly-misclassified date. Real reported
+ * bug fixed by extending this rescue to the quarter filter: a client file's
+ * date cell (Excel serial date / column-wide format detection / etc.) can
+ * misclassify an in-quarter payment into a neighbouring quarter even though
+ * the PAN proves it belongs here — that must be a Date Mismatch to REPORT
+ * during pairing, never a gate that silently drops the row before pairing
+ * even runs (which reads as "In Office Data Only" with the imported side
+ * entirely blank — not a field mismatch, the counterpart never got there).
+ */
+function filterImportedRows(
+  iRecsAll: any[],
+  officePanSet: Set<string>,
+  allowedForms: Set<string>,
+  filingQ: "Q1" | "Q2" | "Q3" | "Q4" | null,
+  fyStart: number | null,
+  aliases: any[],
+): { iRecs: any[]; excludedOtherForm: number; excludedOtherQuarter: number } {
+  let excludedOtherForm = 0;
+  let excludedOtherQuarter = 0;
+  const iRecs = iRecsAll.filter((r) => {
+    const panInOffice = r.panN !== "" && officePanSet.has(r.panN);
+    // FORM filter — a 26Q filing must not compare a client file's salary
+    // (192B/24Q), non-resident (27Q) or TCS (27EQ) rows; they reconcile under
+    // their own form's filing. Unrecognised sections are kept.
+    if (allowedForms.size && !panInOffice) {
+      const secForm = formOfSection(resolveSection(r.section, aliases));
+      if (secForm && !allowedForms.has(secForm)) { excludedOtherForm++; return false; }
+    }
+    // QUARTER + FY filter — keep only rows whose date is in THIS filing's
+    // FY-quarter. A row with a PARSEABLE date that is another quarter OR
+    // another financial year (e.g. a "06.02.2025" line in a FY2025-26 Q3 file
+    // — that's FY2024-25) is excluded so it can't wrongly pair with a
+    // same-PAN office row. Rows with an UNPARSEABLE date are kept (can't
+    // classify → don't silently drop). The date uses the whole-COLUMN-detected
+    // order (r.iso), more reliable than a per-value dd/mm-vs-mm/dd guess.
+    if (filingQ && fyStart != null && r.iso && !panInOffice) {
+      if (quarterOfIso(r.iso, fyStart) !== filingQ) { excludedOtherQuarter++; return false; }
+    }
+    return true;
+  });
+  return { iRecs, excludedOtherForm, excludedOtherQuarter };
+}
+
 // ── Section canonicalisation (configurable table + hard-coded fallback) ───────
 // Fallback used only if the tds_section_aliases table can't be read; mirrors the
 // migration seed so the engine still maps correctly out-of-box.
@@ -623,34 +676,12 @@ serve(async (req) => {
     // Representative form for display in the summary/toast (the batch's, else the first allowed).
     const filingForm = batchForm && allowedForms.has(batchForm) ? batchForm : ([...allowedForms][0] ?? null);
     // A client row whose PAN is in the Office Data clearly belongs to THIS filing,
-    // so it must NEVER be excluded by the form filter on the strength of a
-    // client-side section label (which is non-authoritative and often mislabelled).
+    // so it must NEVER be excluded by the form/quarter filters below on the
+    // strength of a client-side section label or a possibly-misclassified date
+    // (see filterImportedRows's own doc comment).
     const officePanSet = new Set(oRecs.map((r) => r.panN).filter(Boolean));
-    let excludedOtherQuarter = 0;
-    let excludedOtherForm = 0;
-    const iRecs = iRecsAll.filter((r) => {
-      const panInOffice = r.panN !== "" && officePanSet.has(r.panN);
-      // FORM filter — a 26Q filing must not compare a client file's salary
-      // (192B/24Q), non-resident (27Q) or TCS (27EQ) rows; they reconcile under
-      // their own form's filing. Unrecognised sections are kept. A row whose PAN is
-      // in Office Data is RESCUED (kept) regardless of its client section label.
-      if (allowedForms.size && !panInOffice) {
-        const secForm = formOfSection(resolveSection(r.section, aliases));
-        if (secForm && !allowedForms.has(secForm)) { excludedOtherForm++; return false; }
-      }
-      // QUARTER + FY filter — a client working file often holds several years and
-      // all quarters. Keep only rows whose date is in THIS filing's FY-quarter.
-      // A row with a PARSEABLE date that is another quarter OR another financial
-      // year (e.g. a "06.02.2025" line in a FY2025-26 Q3 file — that's FY2024-25)
-      // is excluded so it can't wrongly pair with a same-PAN office row. Rows with
-      // an UNPARSEABLE date are kept (can't classify → don't silently drop). The
-      // date uses the whole-COLUMN-detected order (r.iso), which is more reliable
-      // than a per-value dd/mm-vs-mm/dd guess.
-      if (filingQ && fyStart != null && r.iso) {
-        if (quarterOfIso(r.iso, fyStart) !== filingQ) { excludedOtherQuarter++; return false; }
-      }
-      return true;
-    });
+    const { iRecs, excludedOtherForm, excludedOtherQuarter } =
+      filterImportedRows(iRecsAll, officePanSet, allowedForms, filingQ, fyStart, aliases);
 
     // ── Pairing: the SHARED EXCLUSIVITY ENGINE (see pairRecords above) ──────────
     const { pairs, oUsed, iUsed } = pairRecords(oRecs, iRecs, aliases);
