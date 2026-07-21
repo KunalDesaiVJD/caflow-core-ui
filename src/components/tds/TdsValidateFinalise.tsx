@@ -1095,7 +1095,34 @@ export function TdsValidateFinalise({
     };
   };
 
-  /** Stage 1 + 2 + 3 in one document, from each stage's reported status. */
+  /** Stage 4's own detail sheet — the consolidated exceptions list (same rows
+   * the on-screen tab shows), plus the sign-off/filing gate as plain notes,
+   * since those don't fit the Record/Result/Reason row shape. */
+  const stage4Report = (): StageReport => {
+    const row = (r: AuditRow) => ({ Stage: r.stage, Record: r.record, "Error Type": r.errorType, Status: r.status, Reason: r.reason });
+    const rows = stage4Data.auditRows;
+    return {
+      title: "Stage 4 - Checker Review",
+      subtitle: "Consolidated exceptions across Stage 1-3, plus the sign-off gate",
+      summary: [
+        { label: "Total", value: stage4Data.totalRecords },
+        { label: "Matched", value: stage4Data.totalMatched },
+        { label: "Mismatched", value: stage4Data.totalMismatches },
+        { label: "Overridden", value: stage4Data.totalOverridden },
+      ],
+      sections: [
+        { title: "Unresolved", rows: rows.filter((r) => r.status === "Unresolved").map(row), emptyNote: "No unresolved exceptions across Stage 1-3." },
+        { title: "Overridden", rows: rows.filter((r) => r.status === "Overridden").map(row), emptyNote: "No overrides." },
+      ],
+      notes: [
+        `Ready to file: ${canFile ? "Yes" : "No"}${!canFile && fileBlockReason ? ` — ${fileBlockReason}` : ""}`,
+        `Digital signature: ${signature ? `Signed by ${signature.signedByName} on ${new Date(signature.signedAt).toLocaleString("en-IN")}` : "Not signed"}`,
+        `Filing status: ${isFiled ? "Filed" : "Not filed"}`,
+      ],
+    };
+  };
+
+  /** Stage 1 + 2 + 3 + 4 in one document, from each stage's reported status. */
   const overviewReport = (): OverviewReport => ({
     stages: [
       {
@@ -1122,12 +1149,30 @@ export function TdsValidateFinalise({
         ],
         status: !tallyStatus.applicable ? "Not applicable" : !tallyStatus.ran ? "Not run" : tallyStatus.issues === 0 ? "Complete" : `${tallyStatus.issues} unresolved`,
       },
+      {
+        title: "Stage 4 · Checker Review", applicable: true, ran: stage1Ran,
+        summary: [
+          { label: "Total", value: stage4Data.totalRecords }, { label: "Matched", value: stage4Data.totalMatched },
+          { label: "Mismatched", value: stage4Data.totalMismatches }, { label: "Overridden", value: stage4Data.totalOverridden },
+        ],
+        // "OK"/Complete must mean the SAME thing here as the on-screen tab badge:
+        // canFile alone (Stage 1-3 clean) is NOT enough — the checker's Digital
+        // Signature is required too, so a clean Stage 1-3 with no signature yet
+        // is reported as its own distinct state, not folded into "0 unresolved"
+        // (which would misleadingly read as fully done).
+        status: !stage1Ran ? "Not run"
+          : isFiled ? "Filed"
+          : !canFile ? `${stage4Data.totalMismatches} unresolved`
+          : !signature ? "Awaiting digital signature"
+          : "Complete",
+      },
     ],
     overall: [
       { label: "Office Records", value: officeCount.deductees },
       { label: "Stage 1 Mismatched", value: summary.mismatched },
       { label: "Stage 2 Issues", value: panStatus.applicable ? panStatus.issues : "n/a" },
       { label: "Stage 3 Issues", value: tallyStatus.applicable ? tallyStatus.issues : "n/a" },
+      { label: "Digital Signature", value: signature ? `Signed — ${signature.signedByName}` : "Not signed" },
     ],
     // Derive the status from the STAGES, not from fileBlockReason. That string is
     // the on-screen hint and can read "Finishing validation status checks…" while
@@ -1160,6 +1205,7 @@ export function TdsValidateFinalise({
         ...(stage1Ran ? [stage1Report()] : []),
         ...(panStatus.applicable && panStatus.getReport ? [panStatus.getReport()] : []),
         ...(tallyStatus.applicable && tallyStatus.getReport ? [tallyStatus.getReport()] : []),
+        ...(stage1Ran ? [stage4Report()] : []),
       ];
       if (fmt === "xlsx") await downloadWorkbook(buildOverviewWorkbook(o, reportMeta, stageReports), reportFileName(reportMeta, "Validation Overview", "xlsx"));
       else await exportOverviewPdf(o, reportMeta, stageReports);

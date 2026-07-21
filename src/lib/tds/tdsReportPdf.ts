@@ -228,7 +228,7 @@ export async function exportOverviewPdf(o: OverviewReport, meta: ReportMeta, sta
   const html = `
     <div class="doc">
       <h1>TDS Validation — Overview Report</h1>
-      <p class="sub">Stage 1 (data reconciliation) · Stage 2 (PAN verification) · Stage 3 (Tally ledger)</p>
+      <p class="sub">Stage 1 (data reconciliation) · Stage 2 (PAN verification) · Stage 3 (Tally ledger) · Stage 4 (checker review)</p>
       <table class="meta">${metaRows(meta, generatedAt).map((m) => `<tr><th>${esc(m.Field)}</th><td>${esc(m.Value)}</td></tr>`).join("")}</table>
       ${cardsHtml(o.overall)}
       <h2>Final Validation Status</h2>

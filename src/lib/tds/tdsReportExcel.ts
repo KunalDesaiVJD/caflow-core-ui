@@ -238,7 +238,7 @@ export function buildOverviewWorkbook(o: OverviewReport, meta: ReportMeta, stage
   const W = 9;
 
   let r = titleBanner(ws, 1, W, "TDS Validation — Overview Report",
-    "Stage 1 (data reconciliation) · Stage 2 (PAN verification) · Stage 3 (Tally ledger reconciliation)");
+    "Stage 1 (data reconciliation) · Stage 2 (PAN verification) · Stage 3 (Tally ledger reconciliation) · Stage 4 (checker review)");
   r = metaBlock(ws, r, meta, generatedAt);
   r = summaryStrip(ws, r, o.overall);
 
