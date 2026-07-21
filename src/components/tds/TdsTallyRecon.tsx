@@ -380,9 +380,19 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
         overridden: keep, override_reason: keep ? c.override_reason : null, overridden_by: keep ? c.overridden_by : null, overridden_at: keep ? c.overridden_at : null,
       };
     });
-    const { error } = await supabase.from("tds_tally_results").insert([...newRows, ...surplusRows]); if (error) throw new Error(error.message);
-    const priorIds = (prior || []).map((p: any) => p.id);
-    if (priorIds.length) { const { error: delErr } = await supabase.from("tds_tally_results").delete().in("id", priorIds); if (delErr) throw new Error(delErr.message); }
+    // Atomic replace (one DB transaction, see the migration's own comment) —
+    // NOT a separate insert-then-delete: two overlapping runAudit() calls for
+    // the same filing (two browser tabs, or a mapping-triggered re-run racing
+    // a manual re-validate) could otherwise both insert a full row set before
+    // either deleted the other's, leaving duplicate result rows behind. Cast
+    // to `any` because this RPC isn't in the generated Supabase types — same
+    // tolerance already used elsewhere in this file for tables/functions a
+    // full `supabase gen types` regen hasn't caught up with yet.
+    const { error } = await (supabase.rpc as any)("replace_tally_results", {
+      p_filing_id: fId,
+      p_rows: [...newRows, ...surplusRows],
+    });
+    if (error) throw new Error(error.message);
     await logReconAudit({ filingId: fId, firmId, userId: user?.id, userName: userMap[user?.id ?? ""], actionType: "TALLY_RECON_RUN", newValue: `${audited.filter((r) => r.result === "Matched").length} matched / ${audited.length}`, remark: `Tally reconciliation over ${tally.length} ledger rows` });
     if (seq !== loadSeq.current) return audited;
     const { data: res } = await supabase.from("tds_tally_results").select("*").eq("filing_id", fId); if (seq !== loadSeq.current) return audited;
