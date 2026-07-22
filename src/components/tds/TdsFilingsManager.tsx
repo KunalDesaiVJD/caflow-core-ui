@@ -1094,26 +1094,31 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                     <TableCell className="font-medium sticky left-0 bg-background">
                       <HoverCard openDelay={200} closeDelay={100}>
                         <HoverCardTrigger asChild>
-                          <span className={cn("inline-block max-w-full cursor-default hover:underline decoration-dotted underline-offset-4", archived && "line-through text-muted-foreground")}>
-                            {(() => {
-                              const displayName = client?.name || deletedClients.get(f.client_id)?.name || "—";
-                              const { main, parenthetical } = splitClientName(displayName);
-                              return parenthetical ? (
-                                <>
-                                  <span className="block">{main}</span>
-                                  <span className="block">{parenthetical}</span>
-                                </>
-                              ) : displayName;
-                            })()}
-                          </span>
-                          {/* A client can have MULTIPLE filings side by side for the same
-                              quarter (e.g. both 26Q and 24Q) — each is its own independent
-                              row/status, so without this badge two rows for the same client
-                              are visually indistinguishable and easy to mix up (e.g. reading
-                              a brand-new, untouched 24Q row's "Not Started" as if it were the
-                              26Q return that already has real work done on it). */}
-                          <span className="block text-[10px] font-normal text-muted-foreground">
-                            {f.quarter} · {(f.tds_forms && f.tds_forms.length ? f.tds_forms.join(", ") : "—")}
+                          {/* HoverCardTrigger asChild (Radix Slot) requires EXACTLY ONE child
+                              element — this outer span is that one child, wrapping both the
+                              name and the quarter/form badge below. */}
+                          <span className="inline-block max-w-full">
+                            <span className={cn("block cursor-default hover:underline decoration-dotted underline-offset-4", archived && "line-through text-muted-foreground")}>
+                              {(() => {
+                                const displayName = client?.name || deletedClients.get(f.client_id)?.name || "—";
+                                const { main, parenthetical } = splitClientName(displayName);
+                                return parenthetical ? (
+                                  <>
+                                    <span className="block">{main}</span>
+                                    <span className="block">{parenthetical}</span>
+                                  </>
+                                ) : displayName;
+                              })()}
+                            </span>
+                            {/* A client can have MULTIPLE filings side by side for the same
+                                quarter (e.g. both 26Q and 24Q) — each is its own independent
+                                row/status, so without this badge two rows for the same client
+                                are visually indistinguishable and easy to mix up (e.g. reading
+                                a brand-new, untouched 24Q row's "Not Started" as if it were the
+                                26Q return that already has real work done on it). */}
+                            <span className="block text-[10px] font-normal text-muted-foreground">
+                              {f.quarter} · {(f.tds_forms && f.tds_forms.length ? f.tds_forms.join(", ") : "—")}
+                            </span>
                           </span>
                         </HoverCardTrigger>
                         <HoverCardContent side="right" className="w-80 p-3">
