@@ -1106,6 +1106,15 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                               ) : displayName;
                             })()}
                           </span>
+                          {/* A client can have MULTIPLE filings side by side for the same
+                              quarter (e.g. both 26Q and 24Q) — each is its own independent
+                              row/status, so without this badge two rows for the same client
+                              are visually indistinguishable and easy to mix up (e.g. reading
+                              a brand-new, untouched 24Q row's "Not Started" as if it were the
+                              26Q return that already has real work done on it). */}
+                          <span className="block text-[10px] font-normal text-muted-foreground">
+                            {f.quarter} · {(f.tds_forms && f.tds_forms.length ? f.tds_forms.join(", ") : "—")}
+                          </span>
                         </HoverCardTrigger>
                         <HoverCardContent side="right" className="w-80 p-3">
                           <div className="space-y-1.5 text-sm">
