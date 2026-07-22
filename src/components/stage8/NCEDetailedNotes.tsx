@@ -759,7 +759,7 @@ function PatternBTable({
   customRows, hiddenRows, labelOverrides, cySources,
   sourceLabelOverrides,
   onChangeCy, onChangePy, onAddRow, onDeleteRow, onChangeLabel,
-  onHideStatic, onChangeStaticLabel, onPromote, onEjectSource, onEjectCustomSource,
+  onHideStatic, onChangeStaticLabel, onPromote, onBulkPromote, onEjectSource, onEjectCustomSource,
   onChangeSourceLabel, noteType, onExpansionChange, hideEmptySections, initialExpandedRows,
 }: {
   config:       NoteConfig;
@@ -779,6 +779,9 @@ function PatternBTable({
   onHideStatic: (id: string) => void;
   onChangeStaticLabel: (id: string, label: string) => void;
   onPromote:    (customId: string, staticId: string) => void;
+  /** Moves every id in one atomic state update so the bulk toolbar's toast
+   *  reflects what actually happened (see handleBulkPromoteCustomToStatic). */
+  onBulkPromote: (customIds: string[], staticId: string) => void;
   onEjectSource:(rowId: string, ledger: string, amount: number, attachToId?: string) => void;
   onEjectCustomSource:(customRowId: string, ledger: string, amount: number, attachToId?: string) => void;
   onChangeSourceLabel: (rowId: string, ledger: string, newLabel: string) => void;
@@ -936,11 +939,9 @@ function PatternBTable({
     setSelectedCustomRows(prev => { const n = new Set(prev); checked ? n.add(id) : n.delete(id); return n; });
   const handleBulkMove = () => {
     if (!bulkTarget || selectedCustomRows.size === 0) return;
-    const count = selectedCustomRows.size;
-    for (const id of selectedCustomRows) onPromote(id, bulkTarget);
+    onBulkPromote(Array.from(selectedCustomRows), bulkTarget);
     setSelectedCustomRows(new Set());
     setBulkTarget("");
-    toast.success(`Moved ${count} row(s)`);
   };
   const clearSelection = () => { setSelectedCustomRows(new Set()); setBulkTarget(""); };
   // Build move-target options, qualifying each row's label with its section
@@ -2906,26 +2907,34 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
     }, 500);
   }, [persistOneNote]);
 
+  // Returns the resulting note plus whether the move was blocked, instead of
+  // toasting directly — callers decide how to report the outcome. This lets a
+  // bulk move (many rows in one click) aggregate real per-row results into one
+  // honest summary instead of a blanket "Moved N row(s)" regardless of what
+  // actually happened (previously every row in a bulk selection could be
+  // individually reverted here while the toolbar still reported full success).
   const commitMoveGuarded = useCallback((
     noteType: string, cur: NCENoteData, nextNote: NCENoteData, _okMsg: string,
-  ): NCENoteData => {
+    // A move can legitimately shift the grand total when it also fixes a
+    // pre-existing double-count (see the cy_sources dedup in
+    // handlePromoteCustomToStatic) — that intended shift must not trip the
+    // guard. Callers pass the shift they expect; only a DEVIATION from it
+    // blocks the move.
+    expectedDelta: { cy: number; py: number } = { cy: 0, py: 0 },
+  ): { note: NCENoteData; blocked: boolean; delta: number } => {
     const config = NOTES_CONFIG.find(c => c.noteType === noteType);
     const before = config ? noteGrandTotal(config, cur)      : { cy: 0, py: 0 };
     const after  = config ? noteGrandTotal(config, nextNote) : { cy: 0, py: 0 };
-    const dCy = Math.abs(after.cy - before.cy);
-    const dPy = Math.abs(after.py - before.py);
+    const dCy = Math.abs((after.cy - before.cy) - expectedDelta.cy);
+    const dPy = Math.abs((after.py - before.py) - expectedDelta.py);
     if (dCy > 0.5 || dPy > 0.5) {
-      const delta = Math.max(dCy, dPy);
-      queueMicrotask(() => toast.error(
-        `Move blocked — it would change the note total by ₹${Math.round(delta).toLocaleString("en-IN")}. Nothing was changed.`,
-      ));
-      return cur; // revert — keep the note exactly as it was
+      return { note: cur, blocked: true, delta: Math.max(dCy, dPy) }; // revert — keep the note exactly as it was
     }
     // Coalesced auto-save: one debounced write per note, immune to the bulk-move
     // race. The guard above already ran per move, so the accumulated state is
     // total-preserving.
     scheduleNotePersist(noteType);
-    return nextNote;
+    return { note: nextNote, blocked: false, delta: 0 };
   }, [scheduleNotePersist]);
 
   // ── Cell change ─────────────────────────────────────────────────────────
@@ -3110,9 +3119,16 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
     scheduleLabelPersist(noteType);
   }, [readOnly, scheduleLabelPersist]);
 
-  const handlePromoteCustomToStatic = useCallback((noteType: string, customId: string, targetId: string) => {
-    setNoteData(prev => {
-      const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
+  // Pure builder: computes the note that results from attaching `customId`
+  // under `targetId`, plus the total change this move is EXPECTED to cause
+  // (normally zero — reclassifying a row doesn't change the note's grand
+  // total — except the cy_sources dedup below, which intentionally removes a
+  // pre-existing double-count once the two copies of the same ledger land
+  // under the same heading). No state is touched here so it can run in a
+  // tight loop for a bulk move without any setState-timing hazards.
+  const buildPromotedNote = useCallback((
+    noteType: string, cur: NCENoteData, customId: string, targetId: string,
+  ): { nextNote: NCENoteData; expectedDelta: { cy: number; py: number } } => {
       const config = NOTES_CONFIG.find(c => c.noteType === noteType);
 
       // Determine section of the target row
@@ -3220,6 +3236,11 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
       const movedRow = finalRows.find(r => r.id === customId);
       const targetIsStatic = !targetCustomRow; // only static heads carry cy_sources
       let finalCySources = cur.cy_sources;
+      // Total change this dedup is expected to cause — passed to the guard so
+      // it isn't mistaken for an accidental shift (see buildPromotedNote's doc
+      // comment above).
+      let expectedDeltaCy = 0;
+      let expectedDeltaPy = 0;
       if (movedRow && targetIsStatic && cur.cy_sources?.[targetId]?.length) {
         const childLedgers = new Set<string>();
         const lbl = (movedRow.label || "").trim().toLowerCase();
@@ -3246,6 +3267,8 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
                 newCy[targetId + "_st"] = Math.max(0, (newCy[targetId + "_st"] ?? 0) - aCy);
                 newPy[targetId + "_st"] = Math.max(0, (newPy[targetId + "_st"] ?? 0) - aPy);
               }
+              expectedDeltaCy -= aCy;
+              expectedDeltaPy -= aPy;
             }
             finalCy = newCy;
             finalPy = newPy;
@@ -3266,12 +3289,55 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
         py: finalPy,
         cy_sources: finalCySources,
       };
-      // Guarded auto-save: this is the path a manual/custom row takes when the
-      // user picks "Move to…" a heading (e.g. ICICI Car Loan from Loans on
-      // demand → Term loans). Persists only when the note total is unchanged.
-      return { ...prev, [noteType]: commitMoveGuarded(noteType, cur, nextNote, "Moved to selected heading") };
+      return { nextNote, expectedDelta: { cy: expectedDeltaCy, py: expectedDeltaPy } };
+  }, []);
+
+  // Guarded auto-save: this is the path a manual/custom row takes when the
+  // user picks "Move to…" a heading (e.g. ICICI Car Loan from Loans on
+  // demand → Term loans). Persists only when the note total is unchanged
+  // (barring the expected dedup shift above).
+  const handlePromoteCustomToStatic = useCallback((noteType: string, customId: string, targetId: string) => {
+    setNoteData(prev => {
+      const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
+      const { nextNote, expectedDelta } = buildPromotedNote(noteType, cur, customId, targetId);
+      const { note, blocked, delta } = commitMoveGuarded(noteType, cur, nextNote, "Moved to selected heading", expectedDelta);
+      if (blocked) {
+        queueMicrotask(() => toast.error(
+          `Move blocked — it would change the note total by ₹${Math.round(delta).toLocaleString("en-IN")}. Nothing was changed.`,
+        ));
+      }
+      return { ...prev, [noteType]: note };
     });
-  }, [commitMoveGuarded]);
+  }, [buildPromotedNote, commitMoveGuarded]);
+
+  // Bulk "Move to…" — moves every selected row in ONE state update so the
+  // reported outcome (toast) always matches what actually happened, instead
+  // of firing N independent moves and claiming success regardless of how
+  // many the guard silently reverted.
+  const handleBulkPromoteCustomToStatic = useCallback((noteType: string, customIds: string[], targetId: string) => {
+    setNoteData(prev => {
+      let cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
+      let movedCount = 0;
+      let blockedCount = 0;
+      let maxDelta = 0;
+      for (const customId of customIds) {
+        const { nextNote, expectedDelta } = buildPromotedNote(noteType, cur, customId, targetId);
+        const { note, blocked, delta } = commitMoveGuarded(noteType, cur, nextNote, "Moved to selected heading", expectedDelta);
+        if (blocked) { blockedCount++; maxDelta = Math.max(maxDelta, delta); }
+        else { cur = note; movedCount++; }
+      }
+      queueMicrotask(() => {
+        if (blockedCount === 0) {
+          toast.success(`Moved ${movedCount} row(s)`);
+        } else if (movedCount === 0) {
+          toast.error(`Move blocked for all ${blockedCount} row(s) — it would change the note total by up to ₹${Math.round(maxDelta).toLocaleString("en-IN")}. Nothing was changed.`);
+        } else {
+          toast.error(`Moved ${movedCount} row(s); ${blockedCount} could not be moved — the move would change the note total. Nothing changed for those rows.`);
+        }
+      });
+      return { ...prev, [noteType]: cur };
+    });
+  }, [buildPromotedNote, commitMoveGuarded]);
 
   // Shared helper: resolve the sectionTag for a given target row/custom-row id.
   const resolveSection = useCallback((
@@ -3360,10 +3426,16 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
         customRows: [...cur.customRows, newRow],
         ejectedLedgers: newEjectedLedgers,
       };
-      return { ...prev, [noteType]: commitMoveGuarded(
+      const { note, blocked, delta } = commitMoveGuarded(
         noteType, cur, nextNote,
         attachToId ? `"${ledger}" moved to heading` : `"${ledger}" moved to a separate row`,
-      )};
+      );
+      if (blocked) {
+        queueMicrotask(() => toast.error(
+          `Move blocked — it would change the note total by ₹${Math.round(delta).toLocaleString("en-IN")}. Nothing was changed.`,
+        ));
+      }
+      return { ...prev, [noteType]: note };
     });
   }, [commitMoveGuarded, resolveSection]);
 
@@ -3425,10 +3497,16 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
       // Record this ledger in ejectedLedgers so Re-sync skips it from auto-grouping
       const newEjectedLedgers = [...new Set([...(cur.ejectedLedgers ?? []), ledger])];
       const nextNote: NCENoteData = { ...cur, cy: newCy, py: newPy, customRows: [...updatedRows, newRow], ejectedLedgers: newEjectedLedgers };
-      return { ...prev, [noteType]: commitMoveGuarded(
+      const { note, blocked, delta } = commitMoveGuarded(
         noteType, cur, nextNote,
         attachToId ? `"${ledger}" moved to heading` : `"${ledger}" moved to its own row`,
-      )};
+      );
+      if (blocked) {
+        queueMicrotask(() => toast.error(
+          `Move blocked — it would change the note total by ₹${Math.round(delta).toLocaleString("en-IN")}. Nothing was changed.`,
+        ));
+      }
+      return { ...prev, [noteType]: note };
     });
   }, [commitMoveGuarded, resolveSection]);
 
@@ -3757,6 +3835,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
                       onHideStatic={id => handleHideStatic(sourceKey, id)}
                       onChangeStaticLabel={(id, lbl) => handleChangeStaticLabel(sourceKey, id, lbl)}
                       onPromote={(cid, sid) => handlePromoteCustomToStatic(sourceKey, cid, sid)}
+                      onBulkPromote={(cids, sid) => handleBulkPromoteCustomToStatic(sourceKey, cids, sid)}
                       onEjectSource={(rid, ledger, amt, attachToId?) => handleEjectSource(sourceKey, rid, ledger, amt, attachToId)}
                       onEjectCustomSource={(cid, ledger, amt, attachToId?) => handleEjectCustomSource(sourceKey, cid, ledger, amt, attachToId)}
                       onChangeSourceLabel={(rid, ledger, lbl) => handleChangeSourceLabel(sourceKey, rid, ledger, lbl)}
