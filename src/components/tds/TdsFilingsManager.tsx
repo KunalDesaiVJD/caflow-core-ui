@@ -1256,7 +1256,12 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                                   <input
                                     type="file"
                                     accept="application/pdf,.pdf"
-                                    className="hidden"
+                                    // display:none ("hidden") can make Chrome fail to commit the
+                                    // OS file picker's selection back onto the input at all — the
+                                    // dialog opens and completes normally but input.files stays
+                                    // empty and onChange never fires. sr-only keeps the element
+                                    // technically visible/interactive (just off-screen) instead.
+                                    className="sr-only"
                                     onChange={e => {
                                       const fl = e.target.files?.[0];
                                       if (fl) handleAttachAck(f, fl);
