@@ -1255,7 +1255,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                                   {ackUploading === f.id ? "Uploading…" : "📎 Attach ACK"}
                                   <input
                                     type="file"
-                                    accept="application/pdf"
+                                    accept="application/pdf,.pdf"
                                     className="hidden"
                                     onChange={e => {
                                       const fl = e.target.files?.[0];
