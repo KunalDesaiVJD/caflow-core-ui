@@ -564,9 +564,15 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       toast({ title: 'Login required', description: 'You must be logged in to attach files.', variant: 'destructive' });
       return;
     }
-    // b. PDF-only validation
-    if (file.type !== 'application/pdf') {
-      toast({ title: 'Only PDF files are allowed', variant: 'destructive' });
+    // b. PDF-only validation — the browser-reported MIME type isn't always
+    // literally "application/pdf" (files from a network drive, some
+    // antivirus/download-manager intercepts, or certain PDF generators
+    // commonly report "application/octet-stream" or an empty string for a
+    // genuine PDF — the OTHER ack-files storage bucket's own allowed_mime_types
+    // config already anticipates this exact quirk), so fall back to the file
+    // extension rather than rejecting a real PDF outright.
+    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+      toast({ title: 'Only PDF files are allowed', description: `"${file.name}" was not recognized as a PDF.`, variant: 'destructive' });
       return;
     }
     setAckUploading(filing.id);
