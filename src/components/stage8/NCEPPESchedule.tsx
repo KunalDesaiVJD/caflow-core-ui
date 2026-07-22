@@ -140,7 +140,9 @@ function calcDepreciation(r: AssetRow): number {
   );
   const post = Number(r.additions_post) || 0;
   const depn = base * (rate / 100) + post * (rate / 200);
-  return Math.round(depn * 100) / 100;
+  // Depreciation is disclosed in WHOLE RUPEES (Schedule III) — round to the
+  // nearest rupee, never paise.
+  return Math.round(depn);
 }
 
 /** Effective depreciation = the stored/entered figure (the column is now editable).
@@ -149,7 +151,7 @@ function calcDepreciation(r: AssetRow): number {
  *  value is r.depreciation, so the auditor can match Σ depreciation to the booked
  *  NCE_DEPR — which a pure rate formula can never hit to the rupee (the root cause
  *  of "PPE schedule won't save even though the net block ties"). */
-const effDep = (r: AssetRow): number => Math.round((Number(r.depreciation) || 0) * 100) / 100;
+const effDep = (r: AssetRow): number => Math.round(Number(r.depreciation) || 0);  // whole rupees (no paise)
 
 function calcClosing(r: AssetRow): number {
   return Math.round((calcRowTotal(r) - effDep(r)) * 100) / 100;
@@ -481,7 +483,7 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
         if (hasPyShell) b.opening_balance = r2((Number(b.opening_balance) || 0) + (net.py - sumOpen(list)));
         if (deprPlug != null) {                                   // absorb the GLOBAL depreciation residual here
           const allDep = r2(next.reduce((s, r) => s + effDep(r), 0));
-          b.depreciation = r2(effDep(b) + (deprPlug - allDep));
+          b.depreciation = Math.round(effDep(b) + (deprPlug - allDep));  // whole rupees
         }
         b.additions_pre = r2((Number(b.additions_pre) || 0) + (net.cy - sumClose(list)));  // ties closing last
       };
