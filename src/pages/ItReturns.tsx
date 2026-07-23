@@ -47,7 +47,7 @@ import { format, differenceInDays, isBefore, addDays, parse } from "date-fns";
 
 // ─── Constants ───
 const ITR_FORMS = ["ITR-1", "ITR-2", "ITR-3", "ITR-4", "ITR-5", "ITR-6", "ITR-7"];
-const FILING_STATUSES = ["Data Pending", "Data Received", "In Progress", "Ready for Review", "Pending Approval from Client", "Filed", "Verified", "Sent to CPC"];
+const FILING_STATUSES = ["Data Pending", "Data Received", "In Progress", "Ready for Review", "Reviewed", "Pending Approval from Client", "OTP/DSC Pending", "Filed", "Verified", "Sent to CPC"];
 const ASSESSMENT_YEARS = ["2026-27", "2025-26", "2024-25", "2023-24", "2022-23"];
 
 // 2026-06-25 — Switched the UI selector from AY to FY (V J Desai request).
@@ -64,7 +64,9 @@ const STATUS_COLORS: Record<string, string> = {
   "Data Received": "bg-cyan-500/15 text-cyan-600",
   "In Progress": "bg-amber-500/15 text-amber-600",
   "Ready for Review": "bg-purple-500/15 text-purple-600",
+  "Reviewed": "bg-violet-500/15 text-violet-600",
   "Pending Approval from Client": "bg-orange-500/15 text-orange-600",
+  "OTP/DSC Pending": "bg-rose-500/15 text-rose-600",
   "Filed": "bg-teal-500/15 text-teal-600",
   "Verified": "bg-emerald-500/15 text-emerald-600",
   "Sent to CPC": "bg-green-500/15 text-green-700",
@@ -110,6 +112,7 @@ interface ItrProfile {
   upload_by?: string | null;
   prepared_by?: string | null;
   checked_by?: string | null;
+  reviewed_by?: string | null;
   work_group_name?: string;
   client_email?: string;
   client_mobile?: string;
@@ -228,6 +231,7 @@ const ItReturns = () => {
   const [filterUploadBy, setFilterUploadBy] = useState("");
   const [filterPreparedBy, setFilterPreparedBy] = useState("");
   const [filterCheckedBy, setFilterCheckedBy] = useState("");
+  const [filterReviewedBy, setFilterReviewedBy] = useState("");
   const [filterResponsiblePerson, setFilterResponsiblePerson] = useState("");
   const [filterFiled, setFilterFiled] = useState<"" | "filed" | "not_filed">("");
   const [filterClientGroup, setFilterClientGroup] = useState("");
@@ -657,12 +661,13 @@ const ItReturns = () => {
       if (filterUploadBy && (p as any).upload_by !== filterUploadBy) return false;
       if (filterPreparedBy && (p as any).prepared_by !== filterPreparedBy) return false;
       if (filterCheckedBy && (p as any).checked_by !== filterCheckedBy) return false;
+      if (filterReviewedBy && (p as any).reviewed_by !== filterReviewedBy) return false;
       if (filterResponsiblePerson && p.client_responsible_person_id !== filterResponsiblePerson) return false;
       if (filterFiled === "filed" && (p.filing_status || "") !== "Filed") return false;
       if (filterFiled === "not_filed" && (p.filing_status || "") === "Filed") return false;
       return true;
     });
-  }, [profiles, clientGroupMap, search, filterStatus, filterForm, filterStaff, filterConstitution, filterWorkGroup, filterClientGroup, filterUploadBy, filterPreparedBy, filterCheckedBy, filterResponsiblePerson, filterFiled]);
+  }, [profiles, clientGroupMap, search, filterStatus, filterForm, filterStaff, filterConstitution, filterWorkGroup, filterClientGroup, filterUploadBy, filterPreparedBy, filterCheckedBy, filterReviewedBy, filterResponsiblePerson, filterFiled]);
 
   // ─── Status counts ───
   const statusCounts = useMemo(() => {
@@ -751,6 +756,12 @@ const ItReturns = () => {
       if (value === "Verified" && !(profile as any).checked_by) {
         autoPatch.checked_by = user.id;
       }
+      // Reviewed → stamps Reviewed By with the signed-in user (only if empty,
+      // so a manual override wins), mirroring the Prepared By / Checked By
+      // auto-fill behaviour.
+      if (value === "Reviewed" && !(profile as any).reviewed_by) {
+        autoPatch.reviewed_by = user.id;
+      }
       if (value === "Filed") {
         if (!(profile as any).date_filed) {
           autoPatch.date_filed = new Date().toISOString().slice(0, 10);
@@ -776,6 +787,7 @@ const ItReturns = () => {
       if (value === "Data Pending") {
         autoPatch.prepared_by       = null;
         autoPatch.checked_by        = null;
+        autoPatch.reviewed_by       = null;
         autoPatch.date_filed        = null;
         autoPatch.acknowledgment_no = null;
         autoPatch.upload_by         = null;
@@ -818,6 +830,7 @@ const ItReturns = () => {
           upload_by: profile.upload_by || null,
           prepared_by: profile.prepared_by || null,
           checked_by: profile.checked_by || null,
+          reviewed_by: (profile as any).reviewed_by || null,
           remarks: profile.remarks || null,
           ...patch,
         };
@@ -994,6 +1007,8 @@ const ItReturns = () => {
             setFilterPreparedBy={setFilterPreparedBy}
             filterCheckedBy={filterCheckedBy}
             setFilterCheckedBy={setFilterCheckedBy}
+            filterReviewedBy={filterReviewedBy}
+            setFilterReviewedBy={setFilterReviewedBy}
             filterResponsiblePerson={filterResponsiblePerson}
             setFilterResponsiblePerson={setFilterResponsiblePerson}
             filterFiled={filterFiled}
@@ -1033,6 +1048,7 @@ function FilingTab({
   filterUploadBy, setFilterUploadBy,
   filterPreparedBy, setFilterPreparedBy,
   filterCheckedBy, setFilterCheckedBy,
+  filterReviewedBy, setFilterReviewedBy,
   filterResponsiblePerson, setFilterResponsiblePerson,
   filterFiled, setFilterFiled,
   filterClientGroup, setFilterClientGroup,
@@ -1240,8 +1256,8 @@ function FilingTab({
             <SelectItem value="not_filed">Not Filed</SelectItem>
           </SelectContent>
         </Select>
-        {(search || filterStatus || filterForm || filterConstitution || filterWorkGroup || filterClientGroup || filterUploadBy || filterPreparedBy || filterCheckedBy || filterResponsiblePerson || filterFiled) && (
-          <Button variant="ghost" size="sm" onClick={() => { setSearch(""); setFilterStatus(""); setFilterForm(""); setFilterConstitution(""); setFilterWorkGroup(""); setFilterClientGroup(""); setFilterUploadBy(""); setFilterPreparedBy(""); setFilterCheckedBy(""); setFilterResponsiblePerson(""); setFilterFiled(""); }}>
+        {(search || filterStatus || filterForm || filterConstitution || filterWorkGroup || filterClientGroup || filterUploadBy || filterPreparedBy || filterCheckedBy || filterReviewedBy || filterResponsiblePerson || filterFiled) && (
+          <Button variant="ghost" size="sm" onClick={() => { setSearch(""); setFilterStatus(""); setFilterForm(""); setFilterConstitution(""); setFilterWorkGroup(""); setFilterClientGroup(""); setFilterUploadBy(""); setFilterPreparedBy(""); setFilterCheckedBy(""); setFilterReviewedBy(""); setFilterResponsiblePerson(""); setFilterFiled(""); }}>
             <X size={14} className="mr-1" /> Clear Filters
           </Button>
         )}
@@ -1360,6 +1376,7 @@ function FilingTab({
                       <TableHead className="min-w-[160px]">Status</TableHead>
                       <TableHead className="min-w-[130px]">Prepared By</TableHead>
                       <TableHead className="min-w-[130px]">Checked By</TableHead>
+                      <TableHead className="min-w-[130px]">Reviewed By</TableHead>
                       <TableHead className="min-w-[130px]">Filed Date</TableHead>
                       <TableHead className="min-w-[130px]">Upload By</TableHead>
                       <TableHead className="w-[80px]">Actions</TableHead>
@@ -1423,6 +1440,16 @@ function FilingTab({
                           {(staffUsers as StaffUser[]).map(u => <option key={u.id} value={u.id}>{u.name || u.id}</option>)}
                         </select>
                       </TableHead>
+                      <TableHead className="py-1 px-2">
+                        <select
+                          value={filterReviewedBy}
+                          onChange={e => setFilterReviewedBy(e.target.value)}
+                          className="h-6 text-[11px] w-full rounded border border-border bg-background px-1 cursor-pointer"
+                        >
+                          <option value="">All</option>
+                          {(staffUsers as StaffUser[]).map(u => <option key={u.id} value={u.id}>{u.name || u.id}</option>)}
+                        </select>
+                      </TableHead>
                       <TableHead className="py-1 px-2" />
                       <TableHead className="py-1 px-2">
                         <select
@@ -1440,8 +1467,8 @@ function FilingTab({
                   <TableBody>
                     {subTabProfiles.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
-                          No clients in this category.{filterConstitution || filterWorkGroup || filterStatus || filterPreparedBy || filterCheckedBy || filterUploadBy ? " (filters active)" : ""}
+                        <TableCell colSpan={10} className="text-center text-muted-foreground py-8">
+                          No clients in this category.{filterConstitution || filterWorkGroup || filterStatus || filterPreparedBy || filterCheckedBy || filterReviewedBy || filterUploadBy ? " (filters active)" : ""}
                         </TableCell>
                       </TableRow>
                     ) : pagedProfiles.map((p: ItrProfile) => (
@@ -1533,6 +1560,7 @@ const FIELD_LABELS: Record<string, string> = {
   filing_status:        "Status",
   prepared_by:          "Prepared By",
   checked_by:           "Checked By",
+  reviewed_by:          "Reviewed By",
   date_filed:           "Filed Date",
   upload_by:            "Upload By",
   acknowledgment_no:    "Ack No",
@@ -1808,6 +1836,11 @@ function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, onDelete
         {/* Checked By — auto-stamped when Status moves to "Verified" */}
         <TableCell className="text-xs text-muted-foreground px-2">
           {staffName(staffUsers, (p as any).checked_by)}
+        </TableCell>
+
+        {/* Reviewed By — auto-stamped when Status moves to "Reviewed" */}
+        <TableCell className="text-xs text-muted-foreground px-2">
+          {staffName(staffUsers, (p as any).reviewed_by)}
         </TableCell>
 
         {/* Filed Date — auto-stamped (today) when Status moves to "Filed" */}
