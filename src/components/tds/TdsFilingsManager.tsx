@@ -222,6 +222,117 @@ const splitClientName = (name: string): { main: string; parenthetical: string | 
   return { main: match[1], parenthetical: match[2] };
 };
 
+// Sentinel for the Prepared By filter's "Unassigned" bucket — preparer_id is
+// a real column that can be null, and "" can never collide with a uuid.
+const UNASSIGNED_PREPARER = "";
+
+/** Toolbar multi-select filter — search box, Select All, checkbox list,
+ *  Clear (N) footer. Same UX as AuditStatusFilters.tsx's StatusMultiSelectFilter,
+ *  generalised over {value,label} options so it works for both Status and
+ *  Prepared By here without duplicating the popover/list chrome twice. */
+function MultiSelectFilter({ label, options, selection, onChange }: {
+  label: string;
+  options: { value: string; label: string }[];
+  selection: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const visible = q ? options.filter(o => o.label.toLowerCase().includes(q)) : options;
+  const set = new Set(selection);
+  const allVisibleChecked = visible.length > 0 && visible.every(o => set.has(o.value));
+
+  const toggle = (v: string) => {
+    const next = new Set(set);
+    if (next.has(v)) next.delete(v); else next.add(v);
+    onChange([...next]);
+  };
+  const toggleAll = () => {
+    const next = new Set(set);
+    if (allVisibleChecked) visible.forEach(o => next.delete(o.value));
+    else visible.forEach(o => next.add(o.value));
+    onChange([...next]);
+  };
+
+  const triggerLabel =
+    selection.length === 0 ? label
+    : selection.length === 1 ? (options.find(o => o.value === selection[0])?.label ?? label)
+    : `${label} (${selection.length})`;
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button type="button" variant="outline" size="sm" className="h-8 text-xs w-44 justify-between font-normal gap-1">
+          <span className="truncate">{triggerLabel}</span>
+          <ChevronDown size={13} className="ml-1 shrink-0 opacity-60" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64 p-2">
+        <div className="relative">
+          <Input
+            autoFocus
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder={`Search ${label.toLowerCase()}…`}
+            className="h-7 text-xs pr-6"
+          />
+          {query && (
+            <button type="button" onClick={() => setQuery("")} className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+              <X size={11} />
+            </button>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={toggleAll}
+          className="mt-2 flex items-center gap-2 px-1.5 py-1 rounded text-[11px] font-medium hover:bg-muted w-full text-left"
+        >
+          <span className={cn(
+            "inline-flex items-center justify-center h-3.5 w-3.5 rounded border shrink-0",
+            allVisibleChecked ? "bg-indigo-600 border-indigo-600 text-white" : "border-input",
+          )}>
+            {allVisibleChecked && <span className="text-[9px] leading-none">✓</span>}
+          </span>
+          Select All {q && `(${visible.length})`}
+        </button>
+        <div className="max-h-56 overflow-y-auto pr-0.5 mt-1">
+          {visible.map(o => {
+            const checked = set.has(o.value);
+            return (
+              <button
+                key={o.value || "__unassigned"}
+                type="button"
+                onClick={() => toggle(o.value)}
+                className="w-full flex items-center gap-2 px-1.5 py-1 rounded text-[11px] hover:bg-muted text-left"
+              >
+                <span className={cn(
+                  "inline-flex items-center justify-center h-3.5 w-3.5 rounded border shrink-0",
+                  checked ? "bg-indigo-600 border-indigo-600 text-white" : "border-input",
+                )}>
+                  {checked && <span className="text-[9px] leading-none">✓</span>}
+                </span>
+                <span className="truncate">{o.label}</span>
+              </button>
+            );
+          })}
+          {visible.length === 0 && (
+            <div className="px-1.5 py-2 text-[11px] text-muted-foreground italic">No match for "{query}".</div>
+          )}
+        </div>
+        {selection.length > 0 && (
+          <button
+            type="button"
+            onClick={() => onChange([])}
+            className="mt-1.5 pt-1.5 flex items-center justify-center gap-1 w-full px-2 py-1 rounded text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted border-t border-border"
+          >
+            <X size={11} /> Clear ({selection.length})
+          </button>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId, onNavigateDataEntry, onNavigateStage1, hideHeader, fyFilter, quarterFilter, clientFilter, formFilter, preset, onFilingsChanged, isMaximized, onToggleMaximize, refreshKey }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -250,6 +361,13 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   // interactive element has keyboard focus; the floating "Searching: …"
   // indicator renders whenever it's non-empty.
   const [searchBuffer, setSearchBuffer] = useState("");
+  // Grid filter toolbar — Client name search, Status multi-select, Prepared
+  // By multi-select. Independent of (and composes with) the KPI-driven
+  // statusGroup above and the type-to-search buffer: all three narrow the
+  // SAME searchFiltered list further, they don't replace each other.
+  const [clientSearchQuery, setClientSearchQuery] = useState("");
+  const [statusMultiFilter, setStatusMultiFilter] = useState<string[]>([]);
+  const [preparedByMultiFilter, setPreparedByMultiFilter] = useState<string[]>([]);
 
   // Apply an external status-group preset (Dashboard KPI card click) — keyed
   // on `nonce` so re-clicking the same card re-applies it even with no value
@@ -388,17 +506,24 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   // Ack No, Prepared By, Filed By. Empty buffer = no-op.
   const searchFiltered = useMemo(() => {
     const q = searchBuffer.trim().toLowerCase();
-    if (!q) return filtered;
+    const clientQ = clientSearchQuery.trim().toLowerCase();
+    const statusSet = statusMultiFilter.length ? new Set(statusMultiFilter) : null;
+    const preparedBySet = preparedByMultiFilter.length ? new Set(preparedByMultiFilter) : null;
+    if (!q && !clientQ && !statusSet && !preparedBySet) return filtered;
     return filtered.filter(f => {
       const client = clients.find(c => c.id === f.client_id);
       const name = client?.name || deletedClients.get(f.client_id)?.name || "";
+      if (clientQ && !name.toLowerCase().includes(clientQ)) return false;
+      if (statusSet && !statusSet.has(f.work_status)) return false;
+      if (preparedBySet && !preparedBySet.has(f.preparer_id || UNASSIGNED_PREPARER)) return false;
+      if (!q) return true;
       const pan = client?.pan || "";
       const ackNo = f.acknowledgment_number || "";
       const preparedBy = users.find(u => u.id === f.preparer_id)?.name || "";
       const filedBy = users.find(u => u.id === f.checker_id)?.name || "";
       return [name, pan, ackNo, preparedBy, filedBy].some(v => v.toLowerCase().includes(q));
     });
-  }, [filtered, searchBuffer, clients, deletedClients, users]);
+  }, [filtered, searchBuffer, clientSearchQuery, statusMultiFilter, preparedByMultiFilter, clients, deletedClients, users]);
 
   // Global type-to-search capture — Excel/Tally style. Fires only when
   // keyboard focus isn't on a real interactive control (native inputs,
@@ -1009,8 +1134,53 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
 
       {/* View controls — FY/Quarter/Client/Form filters now live exclusively
           in the Dashboard's top-level header and flow down as props, so
-          there is a single source of truth and no duplicate filter UI here. */}
-      <div className="flex flex-wrap gap-3 items-end">
+          there is a single source of truth and no duplicate filter UI here.
+          The three below are a second, independent layer: they narrow the
+          grid FURTHER (composing with FY/Quarter/Client/Form/statusGroup via
+          searchFiltered), not replace them. */}
+      <div className="flex flex-wrap gap-2 items-end">
+        <div className="relative w-52">
+          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+          <Input
+            className="pl-7 h-8 text-xs pr-6"
+            placeholder="Search client…"
+            value={clientSearchQuery}
+            onChange={e => setClientSearchQuery(e.target.value)}
+          />
+          {clientSearchQuery && (
+            <button
+              type="button"
+              onClick={() => setClientSearchQuery("")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              aria-label="Clear client search"
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
+        <MultiSelectFilter
+          label="Status"
+          options={FILING_STATUSES.map(s => ({ value: s, label: statusLabel(s) }))}
+          selection={statusMultiFilter}
+          onChange={setStatusMultiFilter}
+        />
+        <MultiSelectFilter
+          label="Prepared By"
+          options={[
+            { value: UNASSIGNED_PREPARER, label: "Unassigned" },
+            ...users.map(u => ({ value: u.id, label: u.name || "Unnamed" })),
+          ]}
+          selection={preparedByMultiFilter}
+          onChange={setPreparedByMultiFilter}
+        />
+        {(clientSearchQuery || statusMultiFilter.length > 0 || preparedByMultiFilter.length > 0) && (
+          <Button
+            variant="outline" size="sm" className="h-8 text-xs gap-1.5 text-orange-600 border-orange-300 hover:bg-orange-50"
+            onClick={() => { setClientSearchQuery(""); setStatusMultiFilter([]); setPreparedByMultiFilter([]); }}
+          >
+            <X size={12} /> Clear Filters
+          </Button>
+        )}
         <div className="flex-1" />
         {onToggleMaximize && (
           <Button
