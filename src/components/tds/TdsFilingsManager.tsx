@@ -227,6 +227,14 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   const [filings, setFilings] = useState<TdsFiling[]>([]);
   const [deletedClients, setDeletedClients] = useState<Map<string, { name: string | null; deleted_at: string }>>(new Map()); // client_id -> { name, deleted_at }
   const [ackUploading, setAckUploading] = useState<string | null>(null);
+  // filing_id -> its ACK file <input>. Triggered via ref.click() from a plain
+  // clickable element (matching TdsDataEntry.tsx's confirmed-working Genius
+  // Excel import pattern) rather than a <label> wrapping the input directly —
+  // labels associated with a file input have been unreliable in the field
+  // for this specific upload (native file-picker selections never reached
+  // the input's change event), while the ref+click() trigger is proven
+  // working elsewhere in this exact module.
+  const ackFileInputRefs = useRef<Map<string, HTMLInputElement>>(new Map());
   // Map of filing_id → TdsAckFile (populated after each fetch)
   const [ackFiles, setAckFiles] = useState<Map<string, TdsAckFile>>(new Map());
   // Map of filing_id → VfStatus, for the "Validate & Finalise" summary column
@@ -1248,18 +1256,24 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                                   </button>
                                 </>
                               ) : (
-                                <label
+                                <div
                                   className={cn(
                                     "text-[9px] text-muted-foreground hover:text-primary cursor-pointer rounded border border-dashed border-transparent px-1 -mx-1 transition-colors",
                                     ackUploading === f.id && "opacity-50 pointer-events-none"
                                   )}
                                   title="Click to browse, or drag a PDF here"
-                                  // Drag-and-drop as a SECOND, independent path to the same
-                                  // handleAttachAck — it reads the file from the drop event's
-                                  // own dataTransfer, not from the <input>'s change event, so
-                                  // it works even in the (still-unexplained) cases where the
-                                  // native file-picker dialog doesn't hand the picked file back
-                                  // to the hidden input's change event.
+                                  // Click triggers the input via an explicit ref.click() call from
+                                  // this PLAIN element, matching TdsDataEntry.tsx's Genius Excel
+                                  // import (confirmed working elsewhere in this exact module) —
+                                  // NOT a <label> wrapping the input. A <label>-associated file
+                                  // input was unreliable for this specific upload in the field:
+                                  // the native file-picker dialog completed normally but the
+                                  // selection never reached the input's change event, across
+                                  // multiple machines/browsers/networks/local files/Incognito.
+                                  onClick={() => { if (ackUploading !== f.id) ackFileInputRefs.current.get(f.id)?.click(); }}
+                                  // Drag-and-drop as a second, independent path to the same
+                                  // handleAttachAck — it reads the file from the drop event's own
+                                  // dataTransfer, never touching the <input> at all.
                                   onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add("border-primary", "bg-primary/10"); }}
                                   onDragLeave={e => { e.currentTarget.classList.remove("border-primary", "bg-primary/10"); }}
                                   onDrop={e => {
@@ -1272,21 +1286,17 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                                 >
                                   {ackUploading === f.id ? "Uploading…" : "📎 Attach ACK (or drag PDF here)"}
                                   <input
+                                    ref={el => { if (el) ackFileInputRefs.current.set(f.id, el); else ackFileInputRefs.current.delete(f.id); }}
                                     type="file"
                                     accept="application/pdf,.pdf"
-                                    // display:none ("hidden") can make Chrome fail to commit the
-                                    // OS file picker's selection back onto the input at all — the
-                                    // dialog opens and completes normally but input.files stays
-                                    // empty and onChange never fires. sr-only keeps the element
-                                    // technically visible/interactive (just off-screen) instead.
-                                    className="sr-only"
+                                    className="hidden"
                                     onChange={e => {
                                       const fl = e.target.files?.[0];
                                       if (fl) handleAttachAck(f, fl);
                                       e.target.value = "";
                                     }}
                                   />
-                                </label>
+                                </div>
                               )}
                             </div>
                           </div>
