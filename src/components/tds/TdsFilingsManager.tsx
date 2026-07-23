@@ -25,11 +25,12 @@ import {
 import {
   HoverCard, HoverCardContent, HoverCardTrigger,
 } from "@/components/ui/hover-card";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { format, differenceInDays } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
   Download, ArrowRight, RefreshCw, Clock, AlertTriangle, ExternalLink, Info, Settings, Trash2, X,
-  Maximize2, Minimize2,
+  Maximize2, Minimize2, Search, ChevronDown,
 } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
