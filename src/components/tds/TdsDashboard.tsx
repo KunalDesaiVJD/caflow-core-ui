@@ -90,6 +90,9 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
 
   const [deletedClientIds, setDeletedClientIds] = useState<Set<string>>(new Set());
 
+  // Guards the full-page skeleton to first-load-only — see fetchAll below.
+  const hasLoadedRef = useRef(false);
+
   // KPI card click → filters the embedded Client Filing Summary table below
   const [kpiPreset, setKpiPreset] = useState<FilingsPreset | null>(null);
   const filingSummaryRef = useRef<HTMLDivElement>(null);
@@ -102,7 +105,23 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
   }, [isFilingSummaryMaximized]);
 
   const fetchAll = useCallback(async () => {
-    setLoading(true);
+    // Only show the full-page skeleton on the very first load. This
+    // component's own `if (loading) return <Skeleton/>` below is an early
+    // return that unmounts EVERYTHING beneath it — including the embedded
+    // <TdsFilingsManager> and every one of its per-row ACK-PDF file <input>s
+    // — so flipping `loading` back to true on every background refresh
+    // destroyed the ACK upload's file input the instant the native file
+    // picker closed and refocused the window (one of TdsFilings.tsx's
+    // refresh triggers: Realtime postgres_changes, window focus/
+    // visibilitychange, bfcache pageshow, and a 45s poll — all of which bump
+    // `refreshKey` and re-run this fetch via the effect below). This is the
+    // same class of bug already fixed one level down in
+    // TdsFilingsManager.tsx's own fetchFilings (commit d54ef352) — that fix
+    // only guarded TdsFilingsManager's internal row list, not this outer
+    // component unmounting TdsFilingsManager itself, which is why the ACK
+    // upload kept failing even after that fix landed.
+    const isBackgroundRefresh = hasLoadedRef.current;
+    if (!isBackgroundRefresh) setLoading(true);
     const firmId = await resolveFirmId();
 
     // Filings — high limit so counts/rows are never silently truncated as
@@ -126,7 +145,8 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
     }
     setDeletedClientIds(delIds);
     setFilings(allFilings);
-    setLoading(false);
+    hasLoadedRef.current = true;
+    if (!isBackgroundRefresh) setLoading(false);
   }, [resolveFirmId, isSuperadmin, fyFilter, clientFilter]);
 
   // Re-fetch when refreshKey changes (e.g. user returns from TDS Workspace to Dashboard)

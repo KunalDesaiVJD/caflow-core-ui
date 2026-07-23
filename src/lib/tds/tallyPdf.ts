@@ -36,6 +36,28 @@
  *     payments (To Axis Bank … Debit), plus Closing Balance and totals. Only the
  *     CREDIT entries are TDS deductions; everything else must be dropped or the
  *     bank payment reconciles against a deductee.
+ *  5. A COMPOUND (multi-ledger) Journal — the standard way Tally books "TDS on
+ *     Interest/Rent/Fees" — prints "(as per details)" as the row's own
+ *     particulars instead of a party name, e.g.:
+ *
+ *       20-May-26 By (as per details)         Journal   32   2,959.00
+ *                 Interest on Unsecured Loan  29,590.00 Dr
+ *                 Nikhilbhai Bhikhabhai Patel  2,959.00 Dr
+ *                 Nikhilbhai Bhikhabhai Patel 29,590.00 Cr
+ *                 BEING THE INTEREST PAID @ 6% (...) (29590@10%)
+ *
+ *     The real deductee is on the indented breakdown lines below, printed
+ *     TWICE (once against the TDS amount as "Dr", once against the gross as
+ *     "Cr") — never in the row itself. pdfjs also glues these indented
+ *     amounts to their trailing "Dr"/"Cr" into ONE text run ("2,959.00 Dr"),
+ *     which is too far left to be real Debit/Credit money and lands wherever
+ *     readBand's nearest-column fallback puts it — so without special
+ *     handling, "(as per details)" is taken literally as the party, and the
+ *     breakdown lines are dropped as if they were unrelated blank rows. This
+ *     is resolved (see `awaitingCompoundParty` below) by matching the
+ *     breakdown line whose Dr-side amount equals the row's own credit — that
+ *     is always the deductee, never the generic expense head above it,
+ *     regardless of what that head is called for a given section.
  *
  * Amount columns are told apart by RIGHT EDGE (Tally right-aligns figures), using
  * the Debit/Credit header labels as the reference — not a hard-coded x.
@@ -79,7 +101,20 @@ export interface TallyPdfParse {
 const BAND_TOL = 4;             // px: lines this close vertically are one entry
 const MARKER_RE = /^(by|to|dr|cr)$/i;
 const SKIP_PARTY_RE = /^(opening|closing)\s*balance$|^(grand\s*)?total$|carried\s*(over|forward)|brought\s*forward/i;
+const AS_PER_DETAILS_RE = /^\(as per details\)$/i;
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+// pdfjs frequently merges a token with the marker printed right after it on
+// the same baseline into ONE text run — "20-May-26" + "By" arrives as the
+// single string "20-May-26 By", and every compound-journal breakdown amount
+// arrives as "2,959.00 Dr" rather than "2,959.00" + "Dr". Peel that trailing
+// marker off before classifying the rest of the token, so the date column
+// never has to swallow a stray "By"/"To".
+const TRAILING_MARKER_RE = /^(.*\S)\s+(by|to|dr|cr)$/i;
+function stripTrailingMarker(s: string): { base: string; marker: string | null } {
+  const m = s.match(TRAILING_MARKER_RE);
+  return m ? { base: m[1], marker: m[2] } : { base: s, marker: null };
+}
 
 interface Anchors { date: number; particulars: number; vchType: number; vchNo: number; debitR: number; creditR: number; headerY: number; }
 
@@ -155,8 +190,14 @@ function readBand(band: PdfTextItem[], a: Anchors): BandFields {
   // the Debit right edge — so it holds for any client's margins.
   const moneyLeftBound = (a.vchNo + Math.min(a.debitR, a.creditR)) / 2;
   for (const it of band) {
-    const s = it.str.trim();
-    if (!s) continue;
+    const raw = it.str.trim();
+    if (!raw) continue;
+    // Peel off a marker pdfjs glued onto this run ("20-May-26 By", "2,959.00
+    // Dr") before classifying what's left — see stripTrailingMarker's own doc.
+    const { base, marker: trailingMarker } = stripTrailingMarker(raw);
+    if (trailingMarker) { out.marker = trailingMarker; sawNonParticulars = true; }
+    const s = base;
+    if (!s) continue;    // the whole run WAS just the marker
     const n = toNum(s);
     const right = it.x + it.w;
     const isMoney = n != null && /[\d]/.test(s) && /^[\d,.\s()-]+$/.test(s) && right >= moneyLeftBound;
@@ -212,8 +253,42 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
 
     const bands = toBands(items.filter((i) => i.y < a.headerY - 1));
     let current: TallyPdfRow | null = null;
+    // True while `current` is a compound-Journal row still literally holding
+    // "(as per details)" as its party — see the class comment (point 5) for
+    // why the real deductee has to be recovered from the breakdown lines
+    // that follow, rather than treating the header row's own text as final.
+    let awaitingCompoundParty = false;
     for (const band of bands) {
       const f = readBand(band, a);
+
+      if (awaitingCompoundParty) {
+        // readBand's nearest-column fallback has nowhere sensible to put a
+        // breakdown line's amount (it sits well left of the real Debit/
+        // Credit columns), so it lands in the Vch Type slot — a real Vch
+        // Type is always a word ("Journal"/"Payment"), never a number, so a
+        // numeric value there reliably marks this as a breakdown line, not
+        // a new entry.
+        const breakdownAmount = f.vchType != null ? toNum(f.vchType) : null;
+        if (breakdownAmount != null) {
+          // The deductee is whichever line repeats this row's own credit
+          // (the TDS amount) on its Dr side — the expense head above it
+          // (e.g. "Interest on Unsecured Loan") carries the GROSS amount
+          // instead, and the duplicate Cr line repeats the gross again, so
+          // matching on the row's own credit is what tells the two apart,
+          // for any expense head or section, not just this one client's.
+          if (
+            current && current.party && AS_PER_DETAILS_RE.test(current.party) &&
+            f.party && f.marker && /^dr$/i.test(f.marker) &&
+            current.credit != null && Math.abs(breakdownAmount - current.credit) < 0.005
+          ) {
+            current.party = f.party;
+          }
+          continue;   // breakdown line either way — never a new row
+        }
+        if (f.onlyParticulars) continue;   // narration ("BEING THE INTEREST…") — not a party continuation here
+        awaitingCompoundParty = false;     // anything else starts the NEXT real entry
+      }
+
       if (f.onlyParticulars) {
         // A wrapped party name — belongs to the entry above it.
         if (current && f.party) current.party = `${current.party ?? ""} ${f.party}`.replace(/\s+/g, " ").trim();
@@ -232,6 +307,7 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
         section: null,
       };
       all.push(current);
+      awaitingCompoundParty = !!(current.party && AS_PER_DETAILS_RE.test(current.party));
     }
   });
 
