@@ -1248,11 +1248,29 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                                   </button>
                                 </>
                               ) : (
-                                <label className={cn(
-                                  "text-[9px] text-muted-foreground hover:text-primary cursor-pointer",
-                                  ackUploading === f.id && "opacity-50 pointer-events-none"
-                                )}>
-                                  {ackUploading === f.id ? "Uploading…" : "📎 Attach ACK"}
+                                <label
+                                  className={cn(
+                                    "text-[9px] text-muted-foreground hover:text-primary cursor-pointer rounded border border-dashed border-transparent px-1 -mx-1 transition-colors",
+                                    ackUploading === f.id && "opacity-50 pointer-events-none"
+                                  )}
+                                  title="Click to browse, or drag a PDF here"
+                                  // Drag-and-drop as a SECOND, independent path to the same
+                                  // handleAttachAck — it reads the file from the drop event's
+                                  // own dataTransfer, not from the <input>'s change event, so
+                                  // it works even in the (still-unexplained) cases where the
+                                  // native file-picker dialog doesn't hand the picked file back
+                                  // to the hidden input's change event.
+                                  onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add("border-primary", "bg-primary/10"); }}
+                                  onDragLeave={e => { e.currentTarget.classList.remove("border-primary", "bg-primary/10"); }}
+                                  onDrop={e => {
+                                    e.preventDefault();
+                                    e.currentTarget.classList.remove("border-primary", "bg-primary/10");
+                                    if (ackUploading === f.id) return;
+                                    const fl = e.dataTransfer.files?.[0];
+                                    if (fl) handleAttachAck(f, fl);
+                                  }}
+                                >
+                                  {ackUploading === f.id ? "Uploading…" : "📎 Attach ACK (or drag PDF here)"}
                                   <input
                                     type="file"
                                     accept="application/pdf,.pdf"
