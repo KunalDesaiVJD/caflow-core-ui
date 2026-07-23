@@ -47,7 +47,7 @@ import { format, differenceInDays, isBefore, addDays, parse } from "date-fns";
 
 // ─── Constants ───
 const ITR_FORMS = ["ITR-1", "ITR-2", "ITR-3", "ITR-4", "ITR-5", "ITR-6", "ITR-7"];
-const FILING_STATUSES = ["Data Pending", "Data Received", "In Progress", "Ready for Review", "Reviewed", "Pending Approval from Client", "OTP/DSC Pending", "Filed", "Verified", "Sent to CPC"];
+const FILING_STATUSES = ["Data Pending", "Data Received", "In Progress", "Pending Approval from Client", "Ready for Review", "Verified", "Reviewed", "OTP/DSC Pending", "Filed", "Sent to CPC"];
 const ASSESSMENT_YEARS = ["2026-27", "2025-26", "2024-25", "2023-24", "2022-23"];
 
 // 2026-06-25 — Switched the UI selector from AY to FY (V J Desai request).
