@@ -235,6 +235,8 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   // the input's change event), while the ref+click() trigger is proven
   // working elsewhere in this exact module.
   const ackFileInputRefs = useRef<Map<string, HTMLInputElement>>(new Map());
+  // Guards the loading skeleton to first-load-only — see fetchFilings below.
+  const hasLoadedFilingsRef = useRef(false);
   // Map of filing_id → TdsAckFile (populated after each fetch)
   const [ackFiles, setAckFiles] = useState<Map<string, TdsAckFile>>(new Map());
   // Map of filing_id → VfStatus, for the "Validate & Finalise" summary column
@@ -292,7 +294,20 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   // simply READ the always-synced tds_filings table.
 
   const fetchFilings = useCallback(async () => {
-    setLoading(true);
+    // Only show the skeleton on the very first load. Realtime (tds_filings/
+    // client_services changes from ANY user), window focus, and a 45s poll
+    // all re-run this same fetch to keep the table live — but the loading
+    // skeleton row uses key={i} while real rows use key={f.id}, so flipping
+    // `loading` back to true on every one of those background refreshes
+    // unmounts and recreates EVERY row, including whatever <input type=file>
+    // a user is mid-native-dialog with at that exact moment (opening a file
+    // picker blurs the window; closing it refocuses it, which is one of the
+    // three refresh triggers) — this silently destroyed the ACK PDF upload's
+    // file input between the OS dialog closing and its change event firing.
+    // Data still refreshes live on every trigger as before; only the
+    // skeleton-driven remount is now first-load-only.
+    const isBackgroundRefresh = hasLoadedFilingsRef.current;
+    if (!isBackgroundRefresh) setLoading(true);
     const firmId = await resolveFirmId();
 
     // High limit so the filing list is never silently truncated (default cap 1000).
@@ -318,7 +333,8 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     }
     setDeletedClients(delMap);
     setFilings(allFilings);
-    setLoading(false);
+    hasLoadedFilingsRef.current = true;
+    if (!isBackgroundRefresh) setLoading(false);
     // Fetch ACK files + the Validate & Finalise status summary for all loaded filings
     const filingIds = allFilings.map(f => f.id);
     await Promise.all([fetchAckFiles(filingIds), fetchVfStatuses(filingIds)]);
