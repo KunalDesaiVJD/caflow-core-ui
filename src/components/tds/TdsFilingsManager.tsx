@@ -581,10 +581,17 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
 
   // Upload PDF → documents bucket → insert tds_ack_files record
   const handleAttachAck = async (filing: TdsFiling, file: File) => {
-    // a. Auth check
-    const { data: { user: authUser } } = await supabase.auth.getUser();
-    console.log('Auth user:', authUser?.id);
-    if (!authUser) {
+    // a. Auth check — read the already-in-scope `user` from useAuth() rather
+    // than calling supabase.auth.getUser() here. gotrue-js serialises all
+    // auth calls through one lock, and useAuth's own visibilitychange
+    // handler grabs that lock to refresh the session every time the tab
+    // regains visibility — which is exactly what happens the instant a
+    // native file-picker dialog closes. A getUser() call here would queue
+    // behind that refresh and could hang indefinitely, before setAckUploading
+    // ever ran, making the whole upload look like a dead click with zero
+    // feedback. `user` is the same lock-free value this file already trusts
+    // everywhere else (last_updated_by, preparer_id, etc.).
+    if (!user) {
       toast({ title: 'Login required', description: 'You must be logged in to attach files.', variant: 'destructive' });
       return;
     }
@@ -600,80 +607,92 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       return;
     }
     setAckUploading(filing.id);
-    // c. Upload to 'documents' bucket (public — no RLS on read)
-    const filePath = `ack/${filing.client_id}_${Date.now()}_${file.name}`;
-    const uploadResult = await supabase.storage.from('documents').upload(filePath, file);
-    console.log('Upload result:', uploadResult);
-    if (uploadResult.error) {
-      const msg = uploadResult.error.message || '';
-      console.log('Error details:', uploadResult.error);
-      const desc = msg.includes('Bucket not found') || msg.includes('does not exist')
-        ? 'Storage bucket not configured — ask admin to create "documents" bucket in Supabase'
-        : msg.includes('row-level security') || msg.toLowerCase().includes('rls')
-        ? 'Permission denied — contact admin to check storage RLS policies'
-        : msg;
-      toast({ title: 'Upload failed', description: desc, variant: 'destructive' });
-      setAckUploading(null);
-      return;
-    }
-    // d. Get public URL (works because bucket is public)
-    const { data: { publicUrl } } = supabase.storage.from('documents').getPublicUrl(filePath);
-    // e. Insert into tds_ack_files
-    const insertPayload = {
-      filing_id: filing.id,
-      client_id: filing.client_id,
-      firm_id: filing.firm_id || null,
-      file_name: file.name,
-      file_url: publicUrl,
-      user_id: authUser.id,
-    };
-    const insertResult = await (supabase.from('tds_ack_files' as any).insert(insertPayload).select('*').single());
-    console.log('Insert result:', insertResult);
-    if (insertResult.error) {
-      console.log('Error details:', insertResult.error);
-      toast({ title: 'Failed to save record', description: insertResult.error.message, variant: 'destructive' });
-      setAckUploading(null);
-      return;
-    }
-    // f. Update local map instantly (no full re-fetch needed)
-    setAckFiles(prev => {
-      const next = new Map(prev);
-      next.set(filing.id, insertResult.data as TdsAckFile);
-      return next;
-    });
-    // g. Auto-fill Ack No. from the receipt's own printed "e-Filing
-    // Acknowledgement Number". The write uses a DB-level compare-and-swap
-    // (.is("acknowledgment_number", null)) rather than trusting this stale
-    // `filing` snapshot — the Ack No. input stays enabled during upload, so
-    // the user could be typing a value by hand in this exact window; the
-    // CAS guarantees the auto-fill silently no-ops if the column is no
-    // longer null by the time it runs, instead of racing a manual entry.
-    let ackNo: string | null = null;
     try {
-      ackNo = await extractAckNumberFromFile(file);
-    } catch (e) {
-      console.error('Ack number extraction failed:', e);
-    }
-    if (ackNo && !filing.acknowledgment_number) {
-      const { data: casRows, error: casError } = await supabase.from("tds_filings").update({
-        acknowledgment_number: ackNo,
-        last_updated_by: user?.id,
-        last_updated_at: new Date().toISOString(),
-      }).eq("id", filing.id).is("acknowledgment_number", null).select("id");
-      if (!casError && casRows && casRows.length > 0) {
-        fetchFilings();
-        onFilingsChanged?.();
-        toast({ title: '✅ ACK file uploaded', description: `Ack No. auto-filled: ${ackNo}` });
-        setAckUploading(null);
+      // c. Upload to 'documents' bucket (public — no RLS on read). Sanitize
+      // the filename — TRACES-issued ACK receipts commonly contain spaces
+      // and parentheses, which the storage key otherwise carries verbatim.
+      const safeName = file.name.replace(/\s+/g, '_');
+      const filePath = `ack/${filing.client_id}_${Date.now()}_${safeName}`;
+      const uploadResult = await supabase.storage.from('documents').upload(filePath, file);
+      if (uploadResult.error) {
+        const msg = uploadResult.error.message || '';
+        const desc = msg.includes('Bucket not found') || msg.includes('does not exist')
+          ? 'Storage bucket not configured — ask admin to create "documents" bucket in Supabase'
+          : msg.includes('row-level security') || msg.toLowerCase().includes('rls')
+          ? 'Permission denied — contact admin to check storage RLS policies'
+          : msg;
+        toast({ title: 'Upload failed', description: desc, variant: 'destructive' });
         return;
       }
+      // d. Get public URL (works because bucket is public)
+      const { data: { publicUrl } } = supabase.storage.from('documents').getPublicUrl(filePath);
+      // e. Insert into tds_ack_files
+      const insertPayload = {
+        filing_id: filing.id,
+        client_id: filing.client_id,
+        firm_id: filing.firm_id || null,
+        file_name: file.name,
+        file_url: publicUrl,
+        user_id: user.id,
+      };
+      const insertResult = await (supabase.from('tds_ack_files' as any).insert(insertPayload).select('*').single());
+      if (insertResult.error) {
+        // The file already landed in storage — remove it so a failed DB
+        // write doesn't leave an orphaned object with nothing pointing to it.
+        await supabase.storage.from('documents').remove([filePath]).catch(() => {});
+        toast({ title: 'Failed to save record', description: insertResult.error.message, variant: 'destructive' });
+        return;
+      }
+      // f. Update local map instantly (no full re-fetch needed)
+      setAckFiles(prev => {
+        const next = new Map(prev);
+        next.set(filing.id, insertResult.data as TdsAckFile);
+        return next;
+      });
+      // g. Auto-fill Ack No. from the receipt's own printed "e-Filing
+      // Acknowledgement Number". The write uses a DB-level compare-and-swap
+      // (.is("acknowledgment_number", null)) rather than trusting this stale
+      // `filing` snapshot — the Ack No. input stays enabled during upload, so
+      // the user could be typing a value by hand in this exact window; the
+      // CAS guarantees the auto-fill silently no-ops if the column is no
+      // longer null by the time it runs, instead of racing a manual entry.
+      let ackNo: string | null = null;
+      try {
+        ackNo = await extractAckNumberFromFile(file);
+      } catch (e) {
+        console.error('Ack number extraction failed:', e);
+      }
+      if (ackNo && !filing.acknowledgment_number) {
+        const { data: casRows, error: casError } = await supabase.from("tds_filings").update({
+          acknowledgment_number: ackNo,
+          last_updated_by: user.id,
+          last_updated_at: new Date().toISOString(),
+        }).eq("id", filing.id).is("acknowledgment_number", null).select("id");
+        if (casError) {
+          toast({ title: '✅ ACK file uploaded', description: `Uploaded, but couldn't save the Ack No. automatically (${casError.message}) — please enter it manually.` });
+          return;
+        }
+        if (casRows && casRows.length > 0) {
+          fetchFilings();
+          onFilingsChanged?.();
+          toast({ title: '✅ ACK file uploaded', description: `Ack No. auto-filled: ${ackNo}` });
+          return;
+        }
+      }
+      toast(
+        !filing.acknowledgment_number
+          ? { title: '✅ ACK file uploaded', description: "Couldn't auto-read the acknowledgement number from this PDF — please enter it manually." }
+          : { title: '✅ ACK file uploaded' },
+      );
+    } catch (e: any) {
+      // Any thrown (not resolved-with-error) failure from an auth/storage/DB
+      // call above previously left this row stuck on "Uploading…" forever
+      // with no toast at all — this finally/catch guarantees the user always
+      // gets feedback and the row is never permanently unrecoverable.
+      toast({ title: 'Upload failed', description: e?.message || 'An unexpected error occurred — please try again.', variant: 'destructive' });
+    } finally {
+      setAckUploading(null);
     }
-    toast(
-      !filing.acknowledgment_number
-        ? { title: '✅ ACK file uploaded', description: "Couldn't auto-read the acknowledgement number from this PDF — please enter it manually." }
-        : { title: '✅ ACK file uploaded' },
-    );
-    setAckUploading(null);
   };
 
   // View: open public URL in new tab
