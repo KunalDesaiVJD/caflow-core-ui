@@ -247,14 +247,26 @@ export default function Checklist({ data, engagementId, onSaved }: Props) {
   const handlePreview = (file: ChecklistFile) => {
     if (!file.file_path) return;
     // The "documents" bucket is public, so getPublicUrl() works for all users
-    // with no auth round-trip needed. Open the URL directly in a new tab.
-    // NOTE: do NOT pass "noreferrer" — Chrome returns null for the window reference.
+    // with no auth round-trip needed.
     const { data } = supabase.storage.from("documents").getPublicUrl(file.file_path);
-    if (data?.publicUrl) {
-      window.open(data.publicUrl, "_blank");
-    } else {
+    const url = data?.publicUrl;
+    if (!url) {
       toast.error("Could not generate preview link — please try again");
+      return;
     }
+    // Open via a synthesized <a target="_blank"> click, NOT window.open().
+    // window.open("_blank") is silently blocked by ad-blocker extensions and
+    // strict browser popup settings on some PCs — nothing opens and no error is
+    // shown (the blocked call just returns null). A real anchor click is a direct
+    // user-gesture navigation that popup blockers allow, so the document opens
+    // reliably on every machine.
+    const a = document.createElement("a");
+    a.href = url;
+    a.target = "_blank";
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   };
 
   const handleDeleteFile = async (rowId: string, file: ChecklistFile) => {
