@@ -990,6 +990,18 @@ export function buildBreakup(
   // 2) Build linked rows
   const result: BreakupRow[] = [];
   const usedLedgers = new Set<string>();
+  // 2026-07-24 (V J Desai — Mill Power P&L PY mismatch): track which PY
+  // ledgers were consumed by a CY-side match so we can append PY-only
+  // ("CLOSED") ledgers at the end. Previously buildBreakup iterated only
+  // over CY ledgers, silently dropping every ledger that existed in the
+  // prior year's TB but not in the current year (e.g. accounts the client
+  // stopped using). Their PY balance vanished from the note's breakup
+  // sum, so the FS PY face read a smaller total than the COA mapping.
+  const usedPyLedgers = new Set<string>();
+  const markPyUsed = (name: string) => {
+    const k = (name || "").toLowerCase().trim();
+    if (k) usedPyLedgers.add(k);
+  };
 
   const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -1015,9 +1027,12 @@ export function buildBreakup(
   }
 
   /** Resolve PY amount for a ledger: prefer FY-1 closing balance, fall back
-   *  to current-year opening_balance (works for BS accounts; 0 for P&L). */
+   *  to current-year opening_balance (works for BS accounts; 0 for P&L).
+   *  Marks the PY ledger as consumed so PY-only ("CLOSED") ledgers are not
+   *  re-emitted by the tail loop below. */
   const resolvePY = (accountName: string, openingBalance: number): number => {
     const py = pyMap.get(accountName.toLowerCase().trim());
+    if (py) markPyUsed(py.account_name);
     return py ? present(py.balance) : present(openingBalance);
   };
 
@@ -1046,6 +1061,7 @@ export function buildBreakup(
       } else {
         // Template head with no matching ledger — check if it exists in PY TB
         const pyMatch = pyMap.get(head.toLowerCase().trim());
+        if (pyMatch) markPyUsed(pyMatch.account_name);
         result.push(carryUserMeta({
           description:   head,
           amount_cy:     0,
@@ -1071,6 +1087,31 @@ export function buildBreakup(
       linked_ledger: l.account_name,
       ...(sources && sources.length > 1 ? { sources } : {}),
     }, l.account_name));
+  }
+
+  // 3b) 2026-07-24 (V J Desai — Mill Power P&L PY mismatch): append every
+  //     PY-only ledger ("CLOSED" — present in the FY-1 TB but not in the
+  //     current-year TB) as a fresh row with amount_cy = 0 and amount_py
+  //     from the PY balance. Prior to this loop these ledgers vanished
+  //     from the breakup completely, so the note sum for the PY column
+  //     was smaller than the COA mapping's PY total for the same head,
+  //     which then propagated to the P&L / BS face. Root-cause fix, valid
+  //     for every corporate + non-corporate client because buildBreakup
+  //     is the single writer for `.breakup` across every note type.
+  for (const pl of (pyLedgers || [])) {
+    if (!pl || !pl.account_name) continue;
+    const key = pl.account_name.toLowerCase().trim();
+    if (usedPyLedgers.has(key)) continue;
+    const sources = (pl as TBLedgerWithSources)._sources;
+    result.push(carryUserMeta({
+      description:   pl.account_name,
+      amount_cy:     0,
+      amount_py:     present(pl.balance),
+      source:        "linked",
+      linked_ledger: pl.account_name,
+      ...(sources && sources.length > 1 ? { sources } : {}),
+    }, pl.account_name));
+    markPyUsed(pl.account_name);
   }
 
   // 4) Append manual rows at the end so the user's custom entries are visible
