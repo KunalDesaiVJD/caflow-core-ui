@@ -38,6 +38,32 @@ describe("scoreFinding", () => {
   });
 });
 
+describe("compliance findings are ranked on severity, not size", () => {
+  // The firm's own queries quote a median of Rs.8,260 and 73% are under Rs.50,000 — a Rs.420 TDS
+  // short-deduction, a Rs.26 kasar transfer. Scaling those by magnitude ranks them below every
+  // large balance and they never reach the shortlist, which is precisely the alignment failure.
+  it("puts a small TDS shortfall above a large dormant balance", () => {
+    const tds = f("TDS-210", 420, "HIGH");
+    const dormant = f("DORM-201", 8_000_000, "MEDIUM");
+    expect(scoreFinding(tds, PM)).toBeGreaterThan(scoreFinding(dormant, PM));
+  });
+
+  it("does not let size reorder two compliance findings", () => {
+    expect(scoreFinding(f("CASH-001", 200_000, "HIGH"), PM)).toBe(scoreFinding(f("CASH-001", 2_000, "HIGH"), PM));
+  });
+
+  it("still ranks balance-quality findings on size", () => {
+    expect(scoreFinding(f("DORM-201", 5_000_000), PM)).toBeGreaterThan(scoreFinding(f("DORM-201", 5_000), PM));
+  });
+
+  it("a small compliance breach reaches the shortlist ahead of bulk balance noise", () => {
+    const noise = Array.from({ length: 40 }, (_, i) => f("DORM-201", 900_000 + i));
+    const breach = f("TDS-210", 420, "HIGH");
+    const t = triage([...noise, breach], { maxQueries: 10, maxPerRule: 3, performanceMateriality: PM });
+    expect(t.queries).toContain(breach);
+  });
+});
+
 describe("triage — a capped, broad shortlist", () => {
   it("caps the shortlist and puts the remainder in notes", () => {
     const many = Array.from({ length: 200 }, (_, i) => f(`R${i % 20}`, 1_000_000 - i * 1_000));

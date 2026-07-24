@@ -52,6 +52,21 @@ const AGGREGATE_MAGNITUDE = 1.0;
 /** Used when no materiality is approved, so ranking still degrades sensibly instead of collapsing. */
 const NOMINAL_SCALE = 100_000;
 
+/**
+ * Rule families where size is NOT the measure of importance.
+ *
+ * Measured against the firm's own queries: of those quoting an amount, the MEDIAN is Rs.8,260 and
+ * 73% are under Rs.50,000 — a Rs.420 TDS short-deduction, a Rs.26 kasar transfer. An audit query is
+ * not a materiality judgement; a compliance breach is a breach at any size, and a bookkeeping
+ * oddity is a question at any size. Ranking these on magnitude buries exactly what the auditors
+ * raise, so they are scored on severity alone and compete on their own terms.
+ */
+const COMPLIANCE_PREFIXES = ["TDS", "CASH", "GST", "RC-", "PAY", "CUT", "JE", "MISC", "EXP-MISCLASS"];
+const isComplianceRule = (ruleId: string): boolean => {
+  const id = String(ruleId ?? "").toUpperCase();
+  return COMPLIANCE_PREFIXES.some((p) => id.startsWith(p));
+};
+
 const num = (v: unknown): number => {
   const x = Number(v ?? 0);
   return Number.isFinite(x) ? Math.abs(x) : 0;
@@ -63,6 +78,10 @@ const num = (v: unknown): number => {
  */
 export function scoreFinding(f: TriageFinding, performanceMateriality?: number | null): number {
   const sev = SEVERITY_WEIGHT[String(f.severity ?? "MEDIUM").toUpperCase()] ?? 2;
+  // Compliance findings are scored on severity alone. A Rs.420 TDS shortfall is the same breach as
+  // a Rs.4,20,000 one, and the firm raises both; scaling it by size would rank it below every large
+  // balance and it would never reach the shortlist.
+  if (isComplianceRule(f.rule_id)) return sev * (1 + AGGREGATE_MAGNITUDE);
   const scale = performanceMateriality && performanceMateriality > 0 ? performanceMateriality : NOMINAL_SCALE;
   const amt = num(f.amount);
   const magnitude = amt > 0
