@@ -201,10 +201,41 @@ const num = (v: unknown, fallback = 0): number => {
 
 const lc = (s: unknown): string => String(s ?? "").toLowerCase();
 
+/**
+ * Keyword matching, anchored to a word START.
+ *
+ * Plain substring matching was catastrophically imprecise on a real chart of accounts: the keyword
+ * "rent" matched 179 ledgers of which 72 were "Current …"/"Parent …", and "int" matched 1,192 of
+ * which 902 were Printing, Painting, Maintenance, Interior. Requiring the keyword to begin at a word
+ * boundary cuts those to 2 and 437 respectively, while still allowing deliberate stems — "consultanc"
+ * continues to match "Consultancy" and "Consultant", and "exp." still matches "Office Exp.".
+ *
+ * The remainder (Internet/Interior for "int") is what scope.exclude_keywords is for.
+ */
+const _kwRe = new Map<string, RegExp>();
+const kwRegex = (k: string): RegExp => {
+  let re = _kwRe.get(k);
+  if (!re) {
+    // escape regex metacharacters so keywords like "exp." or "creditors :" are literal
+    re = new RegExp(`(^|[^a-z0-9])${k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i");
+    _kwRe.set(k, re);
+  }
+  return re;
+};
+
 const kwMatch = (haystack: unknown, keywords: unknown): boolean => {
   const h = lc(haystack);
   const list = Array.isArray(keywords) ? keywords : [];
-  return list.some((k) => h.includes(lc(k)));
+  return list.some((k) => {
+    const kk = lc(k);
+    return kk !== "" && kwRegex(kk).test(h);
+  });
+};
+
+/** True when any exclusion keyword hits — used to suppress known homographs of a wanted term. */
+const kwExcluded = (haystack: unknown, scope: Record<string, unknown> | undefined): boolean => {
+  const ex = scope?.exclude_keywords;
+  return Array.isArray(ex) && ex.length > 0 && kwMatch(haystack, ex);
 };
 
 /** "Dr" | "Cr" from a balance_type/dr_cr field; defaults to Dr. */
@@ -1004,6 +1035,7 @@ const voucherInScope = (
   // explicit group scoping: scope.parent_group_keywords (alias: scope.group)
   const grpKw = (scope.parent_group_keywords ?? scope.group) as unknown;
   if (Array.isArray(grpKw) && grpKw.length && !kwMatch(`${grp} ${legGroups}`, grpKw)) return false;
+  if (kwExcluded(`${v.party_ledger ?? ""} ${v.ledger_name ?? ""} ${legNames}`, scope)) return false;
   const kw = scope.ledger_keywords;
   // ledger_keywords also matches the resolved parent_group so family words work on the voucher path (RC1)
   if (Array.isArray(kw) && kw.length && !kwMatch(`${v.party_ledger ?? ""} ${v.ledger_name ?? ""} ${v.narration ?? ""} ${grp} ${legNames} ${legGroups}`, kw)) return false;
@@ -1039,9 +1071,18 @@ const accountInScope = (r: TBRow, scope: Record<string, unknown> | undefined): b
   if (!scope) return true;
   if (scope.nonzero && num(r.closing_balance) === 0) return false;
   if (scope.side && sideOf(r.balance_type) !== sideOf(scope.side)) return false;
-  if (!familyInScope(r.parent_group, scope)) return false;
-  const grpKw = (scope.parent_group_keywords ?? scope.group) as unknown;
-  if (Array.isArray(grpKw) && grpKw.length && !kwMatch(r.parent_group ?? "", grpKw)) return false;
+  if (kwExcluded(`${r.ledger_name} ${r.parent_group ?? ""}`, scope)) return false;
+  // scope.ledger_any is OR-ed with the group test: a row qualifies when its GROUP says the right
+  // family or its NAME does. Group scoping alone misses the user-defined groups; name scoping alone
+  // misses the ledgers whose names carry no family word. Either signal is enough.
+  const anyKw = scope.ledger_any;
+  const nameSaysYes = Array.isArray(anyKw) && anyKw.length > 0
+    && kwMatch(`${r.ledger_name} ${r.parent_group ?? ""}`, anyKw);
+  if (!nameSaysYes) {
+    if (!familyInScope(r.parent_group, scope)) return false;
+    const grpKw = (scope.parent_group_keywords ?? scope.group) as unknown;
+    if (Array.isArray(grpKw) && grpKw.length && !kwMatch(r.parent_group ?? "", grpKw)) return false;
+  }
   const kw = scope.ledger_keywords;
   if (Array.isArray(kw) && kw.length && !kwMatch(`${r.ledger_name} ${r.parent_group ?? ""}`, kw)) return false;
   return true;

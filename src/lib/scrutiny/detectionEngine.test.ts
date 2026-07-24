@@ -985,6 +985,40 @@ describe("materiality — thresholds scale to the engagement, once a human appro
   });
 });
 
+describe("keyword matching is anchored to a word start", () => {
+  const r = (kw: string[], exclude?: string[]) => rule({
+    rule_id: "K-1", detection_level: "account",
+    detection_logic: { check: "expr", grain: "account", scope: { ledger_keywords: kw, ...(exclude ? { exclude_keywords: exclude } : {}) }, where: [{ field: "abs_closing", op: ">", value: 0 }] },
+    audit_query_template: "{account}",
+  });
+  const led = (n: string) => tb({ ledger_name: n, parent_group: "Indirect Expenses", closing_balance: 10000, balance_type: "Dr" });
+
+  // Plain substring matching made "rent" hit 72 of 179 ledgers wrongly ("Current Account",
+  // "Parent Co"), and "int" hit 902 of 1,192 wrongly (Printing, Painting, Maintenance).
+  it("does not match a keyword buried inside another word", () => {
+    const out = run(r(["rent"]), { tb: [led("Rent Paid"), led("Current Account"), led("Parent Co Recharge")] });
+    expect(out.map((f) => f.account)).toEqual(["Rent Paid"]);
+  });
+
+  // A stem still works, but it must genuinely be a prefix: "consultan" covers both spellings,
+  // whereas "consultanc" does not reach "Consultant" — worth knowing when writing keyword lists.
+  it("still matches deliberate stems at a word start", () => {
+    expect(run(r(["consultan"]), { tb: [led("Consultancy Charges"), led("Consultant Fees")] })).toHaveLength(2);
+    expect(run(r(["consultanc"]), { tb: [led("Consultant Fees")] })).toHaveLength(0);
+  });
+
+  it("keeps keywords that carry punctuation working", () => {
+    const out = run(r(["exp."]), { tb: [led("Office Exp."), led("Expenditure")] });
+    expect(out.map((f) => f.account)).toEqual(["Office Exp."]);
+  });
+
+  // Word-start alone still lets "int" reach Internet/Interior; that is what exclusions are for.
+  it("suppresses known homographs via exclude_keywords", () => {
+    const out = run(r(["int"], ["internet", "interior"]), { tb: [led("Interest on Loan"), led("Internet Charges"), led("Interior Work")] });
+    expect(out.map((f) => f.account)).toEqual(["Interest on Loan"]);
+  });
+});
+
 describe("canonical family scoping — the Tally-group to rule-scope connection", () => {
   // The firm's chart of accounts does not use the words the rules look for. Half of all ledgers sit
   // in user-defined groups ("Creditors : Labour", "Block A", "Site Expense") that no keyword list

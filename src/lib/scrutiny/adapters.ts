@@ -72,19 +72,31 @@ export function ruleFromRow(row: ScrutinyRuleRow): ScrutinyRule {
   const detection_logic = parseDetectionLogic(row.detection_logic);
 
   // Ledger-name connection: merge the rule's Tally-name synonyms into scope.ledger_keywords so
-  // generic handlers match real Tally ledger names. Only when the rule has NO parent_group/group
-  // condition — kwMatch over ledger_keywords is OR, so appending synonyms only WIDENS the match and
-  // never narrows a rule that already scopes by group (which would be an unwanted AND).
+  // generic handlers match the names this firm's books actually use.
+  //
+  // This used to apply ONLY to rules with no group condition, because ledger_keywords is ANDed with
+  // parent_group_keywords and adding synonyms to a group-scoped rule would NARROW it. The effect was
+  // that roughly thirty group-scoped rules — precisely the population where Tally naming chaos lives
+  // ("Creditors : Labour", "Block A", "Site Expense") — could never receive a naming hint at all.
+  //
+  // Now the synonyms are attached as scope.ledger_any instead when a group condition exists, which
+  // the engine ORs with the group test rather than ANDing. A rule therefore matches when the group
+  // says creditor OR the ledger name looks like one, which is what "connect Tally names to rules"
+  // actually requires.
   const syn = (row.keywords_ledger_synonyms ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
   if (syn.length) {
     const dl = detection_logic as unknown as Record<string, unknown>;
     const scope = (dl.scope && typeof dl.scope === "object" && !Array.isArray(dl.scope)) ? (dl.scope as Record<string, unknown>) : undefined;
-    if (!scope || (!scope.parent_group_keywords && !scope.group)) {
-      const sc = scope ?? {};
+    const sc = scope ?? {};
+    const grouped = Boolean(sc.parent_group_keywords || sc.group || sc.family);
+    if (grouped) {
+      const existing = Array.isArray(sc.ledger_any) ? (sc.ledger_any as unknown[]).map((s) => String(s).toLowerCase()) : [];
+      sc.ledger_any = [...new Set([...existing, ...syn])];
+    } else {
       const existing = Array.isArray(sc.ledger_keywords) ? (sc.ledger_keywords as unknown[]).map((s) => String(s).toLowerCase()) : [];
       sc.ledger_keywords = [...new Set([...existing, ...syn])];
-      dl.scope = sc;
     }
+    dl.scope = sc;
   }
 
   return {
