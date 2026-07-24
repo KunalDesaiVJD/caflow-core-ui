@@ -218,6 +218,21 @@ serve(async (req) => {
       | { materiality: number; performance: number; trivial: number }
       | null;
 
+    // ── Canonical group map ──
+    // The connection between the firm's chart of accounts and rule scopes. Scoping by ledger name
+    // or raw group text reaches barely half the books: only 15.6% of revenue-side ledgers contain
+    // the words the revenue rules look for, and 49% of all ledgers sit in user-defined groups
+    // ("Creditors : Labour", "Block A", "Site Expense"). Mapping group names onto ~20 canonical
+    // families reaches 96.8%. Absent map = rules fall back to keyword scoping, exactly as before.
+    const { data: gmRows } = await supabase
+      .from("tally_group_map")
+      .select("parent_group_norm, canonical_family")
+      .neq("canonical_family", "unmapped");
+    const groupMap: Record<string, string> = {};
+    for (const g of (gmRows ?? []) as { parent_group_norm: string; canonical_family: string }[]) {
+      groupMap[g.parent_group_norm] = g.canonical_family;
+    }
+
     // ── Run the interpreter ──
     const result = runDetection(
       rules,
@@ -227,6 +242,7 @@ serve(async (req) => {
         tbPY,
         fa,
         rp,
+        groupMap,
       },
       {
         financialYearStart: fyStartDate(financial_year),

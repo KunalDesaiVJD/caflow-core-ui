@@ -100,6 +100,17 @@ export interface ScrutinyData {
   fa?: FaAssetRow[];
   /** related-party names (related_parties.party_name) — enables the RPT checks. Empty = not captured. */
   rp?: string[];
+  /**
+   * Canonical group map: lowercased parent_group -> canonical family ("creditor", "debtor",
+   * "revenue", "fixed_asset", ...). This is the connection between the firm's chart of accounts
+   * and rule scopes.
+   *
+   * Scoping by ledger NAME or raw group text loses about half the books: only 15.6% of revenue-side
+   * ledgers contain the words the revenue rules look for, and 49% of all ledgers sit in
+   * user-defined groups ("Creditors : Labour", "Block A", "Site Expense") that no standard keyword
+   * list anticipates. Mapping the 737 distinct group names onto ~20 families reaches 96.8%.
+   */
+  groupMap?: Record<string, string>;
 }
 
 /** Approved engagement materiality. Absent until a human has signed it off. */
@@ -984,6 +995,12 @@ const voucherInScope = (
   const legs = scope.match_legs && Array.isArray(v.line_items) ? v.line_items : [];
   const legNames = legs.map((l) => l.ledger_name ?? "").join(" ");
   const legGroups = legs.map((l) => groupOf(l.ledger_name)).join(" ");
+  // canonical-family scoping — same mechanism as the account path, checked against the party's
+  // resolved group and, when match_legs is on, any leg's group.
+  if (Array.isArray(scope.family) && scope.family.length && _groupMap) {
+    const fams = [grp, ...legs.map((l) => groupOf(l.ledger_name))].map(familyOfGroup).filter(Boolean);
+    if (!fams.some((f) => (scope.family as unknown[]).some((x) => String(x).toLowerCase() === f))) return false;
+  }
   // explicit group scoping: scope.parent_group_keywords (alias: scope.group)
   const grpKw = (scope.parent_group_keywords ?? scope.group) as unknown;
   if (Array.isArray(grpKw) && grpKw.length && !kwMatch(`${grp} ${legGroups}`, grpKw)) return false;
@@ -993,10 +1010,36 @@ const voucherInScope = (
   return true;
 };
 
+/**
+ * Canonical group map for the run in progress, set by runDetection and cleared when it returns.
+ * A module-level slot rather than a parameter because scope resolution happens at nine call sites
+ * across the handlers; runDetection is synchronous and single-threaded, so there is no interleaving.
+ */
+let _groupMap: Record<string, string> | undefined;
+
+/** Canonical family of a parent_group ("Creditors : Labour" -> "creditor"), or "" if unmapped. */
+const familyOfGroup = (parentGroup: string | null | undefined): string =>
+  _groupMap ? (_groupMap[String(parentGroup ?? "").trim().toLowerCase()] ?? "") : "";
+
+/**
+ * scope.family matches on the CANONICAL family rather than on the group's literal text, so a rule
+ * written once reaches "Sundry Creditors", "Creditors : Labour", "Creditor for Salary" and the
+ * client-specific variants alike. Falls back to permitting the row when no map is loaded, so a run
+ * without the map behaves exactly as before rather than going silent.
+ */
+const familyInScope = (parentGroup: string | null | undefined, scope: Record<string, unknown>): boolean => {
+  const fam = scope.family;
+  if (!Array.isArray(fam) || !fam.length) return true;
+  if (!_groupMap) return true;
+  const f = familyOfGroup(parentGroup);
+  return f !== "" && fam.some((x) => String(x).toLowerCase() === f);
+};
+
 const accountInScope = (r: TBRow, scope: Record<string, unknown> | undefined): boolean => {
   if (!scope) return true;
   if (scope.nonzero && num(r.closing_balance) === 0) return false;
   if (scope.side && sideOf(r.balance_type) !== sideOf(scope.side)) return false;
+  if (!familyInScope(r.parent_group, scope)) return false;
   const grpKw = (scope.parent_group_keywords ?? scope.group) as unknown;
   if (Array.isArray(grpKw) && grpKw.length && !kwMatch(r.parent_group ?? "", grpKw)) return false;
   const kw = scope.ledger_keywords;
@@ -1891,6 +1934,7 @@ export function runDetection(
 ): DetectionResult {
   const handlers = opts.handlers ?? DEFAULT_HANDLERS;
   const emitAdvisory = opts.emitAdvisoryForUnhandled ?? true;
+  _groupMap = data.groupMap;
   const findings: ScrutinyFinding[] = [];
   const executed = new Set<string>();
   const unhandled: { rule_id: string; check: string }[] = [];
@@ -1954,6 +1998,8 @@ export function runDetection(
     const shortlist = new Set<ScrutinyFinding>(queries);
     for (const f of real) f.tier = shortlist.has(f) ? "query" : "note";
   }
+
+  _groupMap = undefined;
 
   return {
     findings,

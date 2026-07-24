@@ -36,8 +36,8 @@ const vch = (p: Partial<VoucherRow> & { amount: number; voucher_date: string }):
 });
 
 const FY: ScrutinyContext = { financialYearStart: "2025-04-01", financialYearEnd: "2026-03-31", today: "2026-03-31" };
-const run = (r: ScrutinyRule, data: { tb?: TBRow[]; vouchers?: VoucherRow[]; tbPY?: TBRow[]; fa?: FaAssetRow[]; rp?: string[] }, ctx: ScrutinyContext = FY) =>
-  runDetection([r], { tb: data.tb ?? [], vouchers: data.vouchers ?? [], tbPY: data.tbPY, fa: data.fa, rp: data.rp }, ctx, { emitAdvisoryForUnhandled: false }).findings;
+const run = (r: ScrutinyRule, data: { tb?: TBRow[]; vouchers?: VoucherRow[]; tbPY?: TBRow[]; fa?: FaAssetRow[]; rp?: string[]; groupMap?: Record<string, string> }, ctx: ScrutinyContext = FY) =>
+  runDetection([r], { tb: data.tb ?? [], vouchers: data.vouchers ?? [], tbPY: data.tbPY, fa: data.fa, rp: data.rp, groupMap: data.groupMap }, ctx, { emitAdvisoryForUnhandled: false }).findings;
 
 // ---- account-grain handlers ----------------------------------------------
 
@@ -982,6 +982,56 @@ describe("materiality — thresholds scale to the engagement, once a human appro
       detection_logic: { check: "no_movement", min_balance: 1_000_000, tolerance: 1 },
     });
     expect(run(plain, data, { ...FY, materiality: { materiality: 500_000, performance: 300_000, trivial: 25_000 } })).toHaveLength(0);
+  });
+});
+
+describe("canonical family scoping — the Tally-group to rule-scope connection", () => {
+  // The firm's chart of accounts does not use the words the rules look for. Half of all ledgers sit
+  // in user-defined groups ("Creditors : Labour", "Block A", "Site Expense") that no keyword list
+  // anticipates, so a rule written against "sundry creditors" reaches only part of the population.
+  const GROUP_MAP = {
+    "sundry creditors": "creditor",
+    "creditors : labour": "creditor",
+    "creditor for salary": "creditor",
+    "block a": "debtor",
+    "sundry debtors": "debtor",
+    "indirect expenses": "expense",
+  };
+  const r = rule({
+    rule_id: "CRED-X", category: "CRED", detection_level: "account",
+    detection_logic: { check: "expr", grain: "account", scope: { family: ["creditor"] }, where: [{ field: "abs_closing", op: ">", value: 0 }] },
+    audit_query_template: "{account} {amount}",
+  });
+  const data = { tb: [
+    tb({ ledger_name: "Ramesh Verma", parent_group: "Creditors : Labour", closing_balance: 500000, balance_type: "Cr" }),
+    tb({ ledger_name: "Acme Supplies", parent_group: "Sundry Creditors", closing_balance: 300000, balance_type: "Cr" }),
+    tb({ ledger_name: "Flat Buyer 101", parent_group: "Block A", closing_balance: 900000, balance_type: "Cr" }),
+    tb({ ledger_name: "Rent", parent_group: "Indirect Expenses", closing_balance: 100000, balance_type: "Dr" }),
+  ] };
+
+  it("reaches every creditor group, including the user-defined ones", () => {
+    const out = run(r, { ...data, groupMap: GROUP_MAP } as never);
+    expect(out.map((f) => f.account).sort()).toEqual(["Acme Supplies", "Ramesh Verma"]);
+  });
+
+  it("excludes other families even when the balance looks similar", () => {
+    const out = run(r, { ...data, groupMap: GROUP_MAP } as never);
+    expect(out.map((f) => f.account)).not.toContain("Flat Buyer 101");
+    expect(out.map((f) => f.account)).not.toContain("Rent");
+  });
+
+  // A run without the map must behave exactly as before rather than silently matching nothing.
+  it("is a no-op when no group map is loaded", () => {
+    const out = run(r, data as never);
+    expect(out).toHaveLength(4);
+  });
+
+  it("does not disturb rules that never opt in", () => {
+    const plain = rule({
+      rule_id: "Y", detection_level: "account",
+      detection_logic: { check: "expr", grain: "account", where: [{ field: "abs_closing", op: ">", value: 0 }] },
+    });
+    expect(run(plain, { ...data, groupMap: GROUP_MAP } as never)).toHaveLength(4);
   });
 });
 
