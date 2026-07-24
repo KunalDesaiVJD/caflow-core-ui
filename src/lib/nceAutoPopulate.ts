@@ -2436,6 +2436,31 @@ export async function nceAutoPopulate(
       }
     }
 
+    // ── Drop the "Auto-filled from COA total" placeholder if real data arrived ──
+    // The placeholder is decided EARLY inside each pattern branch above, BEFORE
+    // later population paths run — notably the cogs/inventory structured rows
+    // (pc_open_*/pc_close_*, filled further down in the Pattern-B branch). For the
+    // cogs note that left BOTH the placeholder AND the real Opening/Closing rows in
+    // the note, so the total came out exactly DOUBLE (MALBAR CORPORATION 2025-26:
+    // 6,60,90,000 instead of 3,30,45,000; PY 10,43,30,600 instead of 5,21,65,300).
+    // Now that every population path has run, re-check: if the note carries any
+    // other non-zero amount, a "this note is empty" placeholder is by definition
+    // wrong — drop it and every key it owns (bare + _lt/_st variants).
+    {
+      const AUTO_ID = "custom_auto_total";
+      if (autoRows.some(r => r.id === AUTO_ID)) {
+        const realData =
+          Object.entries(newCy).some(([k, v]) => !k.startsWith(AUTO_ID) && Math.abs(Number(v) || 0) > 0.005) ||
+          Object.entries(newPy).some(([k, v]) => !k.startsWith(AUTO_ID) && Math.abs(Number(v) || 0) > 0.005);
+        if (realData) {
+          for (const k of Object.keys(newCy)) if (k.startsWith(AUTO_ID)) delete newCy[k];
+          for (const k of Object.keys(newPy)) if (k.startsWith(AUTO_ID)) delete newPy[k];
+          const i = autoRows.findIndex(r => r.id === AUTO_ID);
+          if (i >= 0) autoRows.splice(i, 1);
+        }
+      }
+    }
+
     // ── Silent absorption: re-attach manual rows under matching auto-groups ──
     // When a manual row is attached to the same static parent as a multi-ledger
     // auto-group (e.g. parent_group "Unsecured Loans"), re-route the manual
