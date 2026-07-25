@@ -21,6 +21,7 @@ import { Save, Loader2, ClipboardCheck, Plus, Paperclip, Eye, Trash2, Ban } from
 import { toast } from "sonner";
 
 import { supabase } from "@/integrations/supabase/client";
+import { sanitizeStorageName } from "@/lib/storagePath";
 import { useChecklistSheetStorage } from "./hooks/useChecklistSheetStorage";
 import type { ChecklistFile } from "./hooks/useChecklistSheetStorage";
 import type { AuditWorksheetData }  from "./hooks/useAuditWorksheetData";
@@ -196,7 +197,15 @@ export default function Checklist({ data, engagementId, onSaved }: Props) {
 
       const def    = allDefs.find(d => d.id === rowId);
       const srNo   = def?.sr ?? 0;
-      const safeName = file.name.replace(/\s+/g, "_");
+      // 2026-07-24 (V J Desai — ACCUPANELS Kashindra loan PDF upload):
+      // Supabase Storage rejects non-ASCII characters in keys with an
+      // opaque "Invalid key" error. Filenames like "ICICI – Kashindra
+      // Project Loan.pdf" (en-dash U+2013) come through Word / macOS
+      // autocorrect on almost every corporate + non-corporate engagement.
+      // sanitizeStorageName strips them out; the original file.name is
+      // still persisted separately in the DB so the auditor sees the
+      // exact name they uploaded in the UI.
+      const safeName = sanitizeStorageName(file.name);
       // Use a UUID instead of a timestamp so two near-simultaneous uploads
       // (multi-tab / two users) of files with the same name cannot collide
       // and silently overwrite each other in Storage. Combined with

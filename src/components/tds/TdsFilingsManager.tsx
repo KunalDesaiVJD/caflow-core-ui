@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { isFilingTdsCompliant } from "@/lib/tdsQuarter";
 import { isPanException } from "@/lib/tdsPanVerification";
 import { extractAckNumberFromFile } from "@/lib/tds/ackPdf";
+import { sanitizeStorageName } from "@/lib/storagePath";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -757,9 +758,9 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     setAckUploading(filing.id);
     try {
       // c. Upload to 'documents' bucket (public — no RLS on read). Sanitize
-      // the filename — TRACES-issued ACK receipts commonly contain spaces
-      // and parentheses, which the storage key otherwise carries verbatim.
-      const safeName = file.name.replace(/\s+/g, '_');
+      // via the shared helper so non-ASCII characters (en-dashes, curly
+      // quotes, etc.) don't trigger Supabase's opaque "Invalid key" error.
+      const safeName = sanitizeStorageName(file.name);
       const filePath = `ack/${filing.client_id}_${Date.now()}_${safeName}`;
       const uploadResult = await supabase.storage.from('documents').upload(filePath, file);
       if (uploadResult.error) {
