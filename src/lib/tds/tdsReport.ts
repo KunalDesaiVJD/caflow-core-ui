@@ -16,6 +16,53 @@
  * window.document at module load). Keep it free of I/O and of renderer imports.
  */
 
+// ── Stage 1 shared helpers ────────────────────────────────────────────────────
+// Extracted out of TdsValidateFinalise.tsx (the only place Stage 1 used to
+// define them) so the new standalone multi-quarter Overview fetch
+// (tdsOverviewFetch.ts) can shape Stage 1 rows identically instead of forking
+// a second copy of this label/reason/error-type vocabulary. Pure refactor —
+// behavior is byte-identical to the original module-local versions.
+
+export const FIELD_LABELS: Record<string, string> = {
+  name: "Name", pan: "PAN", date: "Date", amount: "Amount",
+  tds: "TDS", interest: "Interest", section: "Section",
+};
+
+/** The one field-diff shape reasonFor() needs — structurally compatible with
+ *  TdsValidateFinalise.tsx's own (fuller) FieldDiff, so a real FieldDiff can be
+ *  passed here with no cast. */
+export interface ReconFieldDiffLike {
+  field: string;
+  matched: boolean;
+}
+
+/** The one ReconResult shape reasonFor()/errorTypeFor() need — structurally
+ *  compatible with TdsValidateFinalise.tsx's own (fuller) ReconResult, so a
+ *  real ReconResult can be passed here with no cast. */
+export interface ReconResultLike {
+  match_status: "matched" | "mismatched" | "office_only" | "imported_only";
+  field_diffs: ReconFieldDiffLike[] | null;
+}
+
+/** One-line reason a record is not a clean match, naming the exact field(s). */
+export function reasonFor(r: ReconResultLike): string {
+  if (r.match_status === "matched") return "All 7 fields match.";
+  if (r.match_status === "office_only") return "In Office Data only — no matching row in the imported client file.";
+  if (r.match_status === "imported_only") return "In the imported client file only — no matching Office Data record.";
+  const diffs = (r.field_diffs || []).filter(f => f.matched === false);
+  const labels = diffs.map(f => FIELD_LABELS[f.field] || f.field).join(", ") || "some fields";
+  return `Mismatch — ${labels} ${diffs.length > 1 ? "differ" : "difference"}.`;
+}
+
+/** Readable error-TYPE label for the ErrorTypeBreakdown chips — the closest thing
+ *  Stage-1 has to Stage-3's single "result" verdict, since a mismatch here is a
+ *  per-FIELD diff rather than one overall reason. */
+export function errorTypeFor(r: Pick<ReconResultLike, "match_status">): string {
+  if (r.match_status === "office_only") return "Office Data Only";
+  if (r.match_status === "imported_only") return "Imported Data Only";
+  return "Field Mismatch";
+}
+
 export interface ReportMeta {
   client: string;
   tan?: string | null;

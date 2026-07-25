@@ -13,7 +13,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { TdsExportMenu } from "./TdsExportMenu";
 import { ErrorTypeBreakdown, filterByErrorType } from "./ErrorTypeBreakdown";
-import { reportFileName, type StageReport, type ReportMeta, type OverviewReport, type AuditRow } from "@/lib/tds/tdsReport";
+import { reportFileName, FIELD_LABELS, reasonFor, errorTypeFor, type StageReport, type ReportMeta, type OverviewReport, type AuditRow } from "@/lib/tds/tdsReport";
 import { buildOverviewWorkbook, downloadWorkbook } from "@/lib/tds/tdsReportExcel";
 import { exportOverviewPdf } from "@/lib/tds/tdsReportPdf";
 import {
@@ -88,11 +88,6 @@ interface ReconResult {
   override_note?: string | null;
 }
 
-const FIELD_LABELS: Record<string, string> = {
-  name: "Name", pan: "PAN", date: "Date", amount: "Amount",
-  tds: "TDS", interest: "Interest", section: "Section",
-};
-
 const fmtVal = (v: unknown): string => {
   if (v === null || v === undefined || v === "") return "—";
   return String(v);
@@ -100,25 +95,6 @@ const fmtVal = (v: unknown): string => {
 
 /** All 7 compared fields, in fixed order. */
 const DIFF_FIELDS = ["name", "pan", "date", "amount", "tds", "interest", "section"] as const;
-
-/** One-line reason a record is not a clean match, naming the exact field(s). */
-function reasonFor(r: ReconResult): string {
-  if (r.match_status === "matched") return "All 7 fields match.";
-  if (r.match_status === "office_only") return "In Office Data only — no matching row in the imported client file.";
-  if (r.match_status === "imported_only") return "In the imported client file only — no matching Office Data record.";
-  const diffs = (r.field_diffs || []).filter(f => f.matched === false);
-  const labels = diffs.map(f => FIELD_LABELS[f.field] || f.field).join(", ") || "some fields";
-  return `Mismatch — ${labels} ${diffs.length > 1 ? "differ" : "difference"}.`;
-}
-
-/** Readable error-TYPE label for the ErrorTypeBreakdown chips — the closest thing
- *  Stage-1 has to Stage-3's single "result" verdict, since a mismatch here is a
- *  per-FIELD diff rather than one overall reason. */
-function errorTypeFor(r: ReconResult): string {
-  if (r.match_status === "office_only") return "Office Data Only";
-  if (r.match_status === "imported_only") return "Imported Data Only";
-  return "Field Mismatch";
-}
 
 /** Digital-signature text validation. The signature is an attestation typed by
  *  an authorized role (Firm Admin / Super Admin), never a password — it's

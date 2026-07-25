@@ -14,16 +14,23 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
   FileText, Users, Receipt, BarChart3, FileSpreadsheet,
   AlertTriangle, Award, Download, Printer, ArrowLeft,
-  ClipboardList, CalendarCheck, Shield,
+  ClipboardList, CalendarCheck, Shield, ShieldCheck, Loader2, Info,
 } from "lucide-react";
 import { exportToExcel } from "@/lib/exportUtils";
 import { generateGeniusExport } from "@/lib/genius-export";
 import { clientHasTdsForm, isFilingTdsCompliant, getDefaultTdsQuarter } from "@/lib/tdsQuarter";
+import { reportFileName } from "@/lib/tds/tdsReport";
+import { buildOverviewWorkbook, downloadWorkbook } from "@/lib/tds/tdsReportExcel";
+import { exportOverviewPdf } from "@/lib/tds/tdsReportPdf";
+import { fetchFilingReport, mergeQuarterlyReports, type QuarterReportInput } from "@/lib/tds/tdsOverviewFetch";
 
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null;
@@ -44,7 +51,7 @@ const TDS_FORMS = ["24Q", "26Q", "27Q", "27EQ"];
 const formatINR = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 const fmtDate = (d: string | null) => { if (!d) return "—"; try { return format(new Date(d), "dd/MM/yyyy"); } catch { return d; } };
 
-type ReportType = "filing-status" | "deductee-wise" | "challan-register" | "section-summary" | "annual-summary" | "non-filer" | "lower-cert" | "cross-quarter" | "genius-export" | null;
+type ReportType = "filing-status" | "deductee-wise" | "challan-register" | "section-summary" | "annual-summary" | "non-filer" | "lower-cert" | "cross-quarter" | "genius-export" | "overview-report" | null;
 
 const REPORT_CARDS: { key: ReportType; label: string; desc: string; icon: any; color: string }[] = [
   { key: "filing-status", label: "Filing Status Report", desc: "All clients, all forms, any period", icon: ClipboardList, color: "text-blue-600" },
@@ -56,6 +63,7 @@ const REPORT_CARDS: { key: ReportType; label: string; desc: string; icon: any; c
   { key: "lower-cert", label: "Lower Deduction Certificate", desc: "Register of lower deduction certs", icon: Shield, color: "text-purple-500" },
   { key: "cross-quarter", label: "Cross-Quarter Report", desc: "Same deductee across quarters", icon: FileText, color: "text-blue-500" },
   { key: "genius-export", label: "Genius Export", desc: "Generate XLS for Genius software", icon: FileSpreadsheet, color: "text-emerald-700" },
+  { key: "overview-report", label: "Overview Report", desc: "Stage 1-4 validation, consolidated across one, several, or every quarter", icon: ShieldCheck, color: "text-indigo-600" },
 ];
 
 export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
@@ -72,6 +80,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
   const [selForm, setSelForm] = useState("26Q");
   const [loading, setLoading] = useState(false);
   const [reportData, setReportData] = useState<any[]>([]);
+  const [exportingOverview, setExportingOverview] = useState(false);
 
   const toggleQuarter = (q: string) => {
     setSelQuarters(prev => prev.includes(q) ? prev.filter(x => x !== q) : [...prev, q]);
@@ -740,6 +749,114 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
     );
   };
 
+  // ── Overview Report — Stage 1-4 validation, one/several/all quarters combined.
+  // Independent of fetchReportData()/reportData above: this report reads the
+  // Stage 1-4 results tables directly (via tdsOverviewFetch.ts) rather than the
+  // filings/challans/deductees shape the other 9 cards share, and only runs when
+  // the user explicitly clicks Generate (an on-demand multi-round-trip fetch,
+  // not something to re-run on every filter keystroke).
+  const runOverviewReport = async (fmt: "xlsx" | "pdf") => {
+    if (selClient === "all") {
+      toast({ title: "Select a specific client", description: "The Overview Report is per-client — pick one client before generating it.", variant: "destructive" });
+      return;
+    }
+    if (selQuarters.length === 0) {
+      toast({ title: "Select at least one quarter", variant: "destructive" });
+      return;
+    }
+    const client = clients.find((c) => c.id === selClient);
+    if (!client) { toast({ title: "Client not found", variant: "destructive" }); return; }
+
+    setExportingOverview(true);
+    try {
+      const firmId = await resolveFirmId();
+      const perQuarter: QuarterReportInput[] = [];
+      const skipped: string[] = [];
+
+      // Resolve each selected quarter's own tds_filings row — same client+FY+
+      // quarter+form resolution pattern loadAll() uses in TdsValidateFinalise.tsx —
+      // then apply the same TDS-compliance gate every other TDS screen applies
+      // before a filing may surface anywhere.
+      for (const q of selQuarters) {
+        let fq = supabase.from("tds_filings").select("*")
+          .eq("client_id", selClient).eq("financial_year", selFy).eq("quarter", q);
+        if (!isSuperadmin && firmId) fq = fq.eq("firm_id", firmId);
+        const { data } = await fq;
+        const filing = (data || []).find((f: any) => (f.tds_forms || []).includes(selForm));
+        if (!filing || !isFilingTdsCompliant(filing as any, client)) { skipped.push(q); continue; }
+
+        const rep = await fetchFilingReport(filing as any, {
+          clientName: client.name || "—", clientTan: client.tan_number, formLabel: selForm,
+        });
+        if (!rep) { skipped.push(q); continue; }
+        perQuarter.push({ quarter: q, ...rep });
+      }
+
+      if (!perQuarter.length) {
+        toast({ title: "No data to report", description: `No filing/validation data found for ${selForm} ${selQuarters.join(", ")} ${selFy}.`, variant: "destructive" });
+        return;
+      }
+      if (skipped.length) {
+        toast({ title: `Skipped ${skipped.length} of ${selQuarters.length} quarter(s)`, description: `No filing or no validation data for: ${skipped.join(", ")}.` });
+      }
+
+      const { meta, stageReports, overview } = mergeQuarterlyReports(perQuarter);
+      if (fmt === "xlsx") await downloadWorkbook(buildOverviewWorkbook(overview, meta, stageReports), reportFileName(meta, "Validation Overview", "xlsx"));
+      else await exportOverviewPdf(overview, meta, stageReports);
+    } catch (e: any) {
+      toast({ title: "Export failed", description: e?.message || String(e), variant: "destructive" });
+    } finally {
+      setExportingOverview(false);
+    }
+  };
+
+  const renderOverviewReport = () => {
+    const clientMissing = selClient === "all";
+    const noQuarters = selQuarters.length === 0;
+    const blocked = clientMissing || noQuarters;
+    return (
+      <div className="space-y-3">
+        {clientMissing && (
+          <div className="flex items-center gap-2 p-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 text-sm text-amber-700 dark:text-amber-300">
+            <Info size={16} className="shrink-0" /> Select a specific client above — this report is per-client and can't combine multiple clients into one document.
+          </div>
+        )}
+        {!clientMissing && noQuarters && (
+          <div className="flex items-center gap-2 p-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 text-sm text-amber-700 dark:text-amber-300">
+            <Info size={16} className="shrink-0" /> Select at least one quarter above.
+          </div>
+        )}
+        <Card>
+          <CardContent className="p-5 space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Builds the same Stage 1 (data validation) · Stage 2 (PAN verification) · Stage 3 (Tally ledger) · Stage 4 (checker review)
+              report the Validate &amp; Finalise workspace produces for one filing — combined here across every quarter you select, into
+              one document. Same-titled sections are merged across quarters (each row tagged with its own Quarter), and the Overview
+              sheet carries one ready-to-file row per quarter, since each quarter is filed separately.
+            </p>
+            <div className="flex items-center gap-2">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button className="gap-2 font-semibold" disabled={blocked || exportingOverview}>
+                    {exportingOverview ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+                    {exportingOverview ? "Generating…" : "Generate Overview Report"}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  <DropdownMenuItem onClick={() => runOverviewReport("xlsx")} className="gap-2"><FileSpreadsheet size={14} /> Export to Excel (.xlsx)</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => runOverviewReport("pdf")} className="gap-2"><FileText size={14} /> Export to PDF (.pdf)</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <span className="text-xs text-muted-foreground">
+                {selQuarters.length > 0 ? `${selQuarters.length} quarter${selQuarters.length > 1 ? "s" : ""} selected: ${selQuarters.join(", ")}` : ""}
+              </span>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  };
+
   const renderReport = () => {
     switch (selectedReport) {
       case "filing-status": return renderFilingStatusReport();
@@ -751,6 +868,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
       case "lower-cert": return renderLowerCert();
       case "cross-quarter": return renderCrossQuarter();
       case "genius-export": return renderGeniusExport();
+      case "overview-report": return renderOverviewReport();
       default: return null;
     }
   };
@@ -872,7 +990,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
               {clients
                 .filter(c => {
                   // Form-scoped only for report types with a visible Form selector.
-                  if (selectedReport !== "genius-export" && selectedReport !== "cross-quarter") return true;
+                  if (selectedReport !== "genius-export" && selectedReport !== "cross-quarter" && selectedReport !== "overview-report") return true;
                   return clientHasTdsForm(c.tds_forms_applicable, selForm);
                 })
                 .map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
@@ -896,7 +1014,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
             ))}
           </div>
         </div>
-    {(selectedReport === "genius-export" || selectedReport === "cross-quarter") && (
+    {(selectedReport === "genius-export" || selectedReport === "cross-quarter" || selectedReport === "overview-report") && (
           <div className="space-y-1">
             <Label className="text-xs">Form</Label>
             <Select value={selForm} onValueChange={setSelForm}>
