@@ -1912,12 +1912,32 @@ export async function autoPopulateNotes(
       npatPy = Math.round((-revSumPy - expSumPy - taxSumPy) * 100) / 100;
     }
 
-    if (Math.abs(npat) > 0.005 || Math.abs(npatPy) > 0.005) {
+    // 2026-07-24 (V J Desai — Mill Power R&S profit): also persist total
+    // tax so plFaceNpat.ts / NoteBSLiab can subtract it from the note-level
+    // (formula-based) PBT to arrive at the face NPAT. Notes don't hold a
+    // dedicated tax row, and reaching back into COAMapping every render
+    // would be expensive; storing the pre-computed total here keeps the
+    // R&S "Profit for the year" line in exact sync with the P&L face XV.
+    const taxTotalCy = Math.round(taxSum * 100) / 100;
+    let taxTotalPy = 0;
+    if (pyTB && pyTB.length > 0) {
+      let sum = 0;
+      for (const ledger of pyTB) {
+        const code = mapping[ledger.account_name]?.code ?? "";
+        if (code.startsWith("PL_TAX")) sum += ledger.balance;
+      }
+      taxTotalPy = Math.round(sum * 100) / 100;
+    }
+    if (Math.abs(npat) > 0.005 || Math.abs(npatPy) > 0.005 || Math.abs(taxTotalCy) > 0.005 || Math.abs(taxTotalPy) > 0.005) {
       if (!out.pl.eps) out.pl.eps = {};
       out.pl.eps = {
         ...(out.pl.eps as any),
         ...(Math.abs(npat)   > 0.005 ? { npat }     : {}),
         ...(Math.abs(npatPy) > 0.005 ? { npat_py: npatPy } : {}),
+        // total_tax_cy/py are always rewritten so a stale tax figure from
+        // a previous TB never leaks into the face NPAT computation.
+        total_tax_cy: taxTotalCy,
+        total_tax_py: taxTotalPy,
       };
     }
   }

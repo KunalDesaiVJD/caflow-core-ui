@@ -101,10 +101,12 @@ export function computeFaceNpat(notes: Stage5Like, col: "cy" | "py"): number {
   const othExp     = readNote("other_expenses");
   const totExp     = costMat + purStock + cii + empBen + finCost + depre + othExp;
 
-  // Tax: current + deferred. Same headline path (stored positive).
-  const curTax = readNote("current_tax");
-  const defTax = readNote("deferred_tax");
-  const totTax = curTax + defTax;
+  // Tax: notes don't hold a dedicated current/deferred tax row, so
+  // autoPopulate persists the COA-summed total under pl.eps.total_tax_cy /
+  // total_tax_py. See notesAutoPopulate.ts (~L1915). This value is always
+  // rewritten on every autoPopulate so it never goes stale.
+  const eps = (pl.eps ?? {}) as Record<string, any>;
+  const totTax = col === "cy" ? num(eps.total_tax_cy) : num(eps.total_tax_py);
 
   return totRev - totExp - totTax;
 }
