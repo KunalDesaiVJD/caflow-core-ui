@@ -2204,7 +2204,20 @@ export async function nceAutoPopulate(
         // amount row on SHREE HARI ("Bajaj Housing Finance Limited", "SBI
         // Car Loan") in the LT note. With the new merged source, an orphan
         // means both sources are zero → ledger skipped → no empty row.
-        const keepForPy = wantsPerLedgerBreakup && Math.abs(pyAmtThisLedger) > 0.005;
+        // 2026-07-24 — extend the "keep a CY-zero ledger that still has a PY
+        // balance" rule to ALL Pattern-A notes, not only the per-ledger-breakup
+        // ones. MALBAR CORPORATION "Short-Term Provisions": "Unpaid Audit Fees"
+        // was settled in CY (CY closing 0) but carried a PY-shell balance of
+        // 5,000. It was dropped here (CY amt 0, keepForPy false for provisions),
+        // and the PY-only walk below ALSO skipped it (it's in `cySeen` because it
+        // exists in the CY TB) — so it vanished from BOTH paths and the
+        // "Auto-filled from COA total" placeholder backfilled the 5,000, losing
+        // the "Unpaid Audit Fees" breakup even though COA maps it to NCE_STP.
+        // Keeping it here (CY 0 / PY <amt>) restores the ledger row and removes
+        // the placeholder. Genuinely empty ledgers (CY and PY both zero) still
+        // fall through the `continue` below — no orphan blank rows. `provisions`
+        // is the only non-breakup Pattern-A note, so this only changes it.
+        const keepForPy = Math.abs(pyAmtThisLedger) > 0.005;
         if (Math.abs(amt) < 0.005 && !keepForPy) continue;
         // Skip ledgers the user has explicitly ejected to standalone rows
         if (ejectedSet.has(row.ledger_name)) continue;
