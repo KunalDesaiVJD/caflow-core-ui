@@ -21,7 +21,7 @@ import { ErrorTypeBreakdown, filterByErrorType } from "./ErrorTypeBreakdown";
 import type { StageReport, ReportMeta, AuditRow } from "@/lib/tds/tdsReport";
 import { makeDateNormaliser, normalizeName, canonicalSection, nameCompare } from "@/lib/tds/match";
 import {
-  reconcileTallyFull,
+  reconcileTallyFull, SPLIT_FOLD_CONFIDENCE,
   type OfficeTxn, type TallyRow, type TallyReconRow, type PartyMap, type TallyResult,
 } from "@/lib/tds/tallyRecon";
 
@@ -624,26 +624,31 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
   const pickRows = useMemo(() => {
     const sug = pickTarget?.tally_party ? normalizeName(pickTarget.tally_party) : null;
     const targetSection = canonicalSection(pickTarget?.office_section ?? null);
-    // Dedup by tally_row_index WITHIN each value-key before counting: Stage
-    // 3's split-entry grouping (tallyRecon.ts) can fold two or more
+    // Stage 3's split-entry grouping (tallyRecon.ts) can fold two or more
     // confirmed ResultRows onto the SAME physical ledger row (a single real
-    // payment Office Data recorded as multiple rows), which would otherwise
-    // inflate the claim count and wrongly hide an unrelated, genuinely free
-    // "twin" row that only coincidentally shares the same party+date+credit
-    // value. row_index isn't globally unique across files (see below), but
-    // two rows sharing BOTH the identical value key AND the identical
-    // row_index are — by construction of that fold — the same physical row.
-    const claimedRowIdx = new Map<string, Set<number | null>>();
+    // payment Office Data recorded as multiple rows) — every row in such a
+    // fold carries SPLIT_FOLD_CONFIDENCE, on both the anchor and its
+    // leftover siblings. Counting each of those rows as its own claim would
+    // inflate the total and wrongly hide an unrelated, genuinely free "twin"
+    // ledger row that only coincidentally shares the same party+date+credit
+    // value — so a whole fold group (same value key, all fold-tagged) counts
+    // as exactly ONE claim, no matter how many office rows it spans; every
+    // other confirmed row still counts individually, preserving the existing
+    // "twins" behaviour (two REAL distinct ledger rows sharing a value).
+    const claimedCounts = new Map<string, number>();
+    const foldGroupCounted = new Set<string>();
     for (const r of results || []) {
       if (r.id === pickTarget?.id || !r.tally_party || r.tally_date == null || r.tally_credit == null || isOpenRow(r)) continue;
       const rSection = confirmedRowSection(r);
       if (targetSection && rSection && rSection !== targetSection) continue;
       const key = `${normalizeName(r.tally_party)}|${r.tally_date}|${r.tally_credit}`;
-      const set = claimedRowIdx.get(key);
-      if (set) set.add(r.tally_row_index); else claimedRowIdx.set(key, new Set([r.tally_row_index]));
+      const isFold = r.result === "Matched" && r.confidence === SPLIT_FOLD_CONFIDENCE;
+      if (isFold) {
+        if (foldGroupCounted.has(key)) continue;
+        foldGroupCounted.add(key);
+      }
+      claimedCounts.set(key, (claimedCounts.get(key) || 0) + 1);
     }
-    const claimedCounts = new Map<string, number>();
-    for (const [k, set] of claimedRowIdx) claimedCounts.set(k, set.size);
     const rows = tallyRows
       .filter((t) => t.party && t.credit != null && Number(t.credit) !== 0)
       // A 194C deductee can never legitimately be booked under a 192B (or any

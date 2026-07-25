@@ -188,6 +188,14 @@ export function reconcileTallyFull(
 // single-rupee rounding artefact and nothing more.
 const SPLIT_FOLD_TOLERANCE = 1;
 
+// The confidence value applySplitEntryGrouping stamps on every row it folds
+// (both the anchor and its leftover siblings) — EXPORTED so a consumer can
+// recognise "this Matched row shares its ledger credit with sibling rows"
+// without re-parsing the reason text. No other Matched path in render()
+// below ever produces exactly this value (its tiers use 96/95/92/75/55), so
+// it doubles as a safe, explicit signature rather than a coincidence.
+export const SPLIT_FOLD_CONFIDENCE = 85;
+
 /**
  * SPLIT-ENTRY GROUPING — an office-side data-quality pattern, not a matching
  * rule: a single real payment sometimes lands in Office Data as TWO (or more)
@@ -282,14 +290,18 @@ function applySplitEntryGrouping(rows: TallyReconRow[], office: OfficeTxn[]): Ta
       patched[i] = {
         ...o, tally_row_index: anchor.tally_row_index, tally_party: anchor.tally_party,
         tally_date: anchor.tally_date, tally_credit: anchor.tally_credit,
-        result: "Matched", amount_basis: anchor.amount_basis, confidence: 85,
+        result: "Matched", amount_basis: anchor.amount_basis, confidence: SPLIT_FOLD_CONFIDENCE,
         mapped: anchor.mapped, reason: foldReason,
       };
     }
     // The anchor's own card must disclose the fold too — otherwise a checker
     // reading it in isolation sees an ordinary single-record match and has
-    // no signal this credit is shared with another office row.
-    patched[anchors[0]] = { ...anchor, reason: `${anchor.reason} ${foldReason}` };
+    // no signal this credit is shared with another office row. Also stamped
+    // with SPLIT_FOLD_CONFIDENCE (not just the leftovers) so a consumer that
+    // needs to recognise "every row in this fold shares one physical ledger
+    // credit" — e.g. the manual picker's claim-counting in TdsTallyRecon.tsx —
+    // can identify the WHOLE group, anchor included, not just its leftovers.
+    patched[anchors[0]] = { ...anchor, confidence: SPLIT_FOLD_CONFIDENCE, reason: `${anchor.reason} ${foldReason}` };
   }
   return patched;
 }
